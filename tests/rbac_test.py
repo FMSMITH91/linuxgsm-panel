@@ -1169,6 +1169,105 @@ def _check_vps_prep_refuses_panel_host():
           not _trapped[_trapped_at:], "reached: %r" % (_trapped[_trapped_at:],))
 
 
+def _check_host_routes_refuse_delegated_panel_host():
+    """A delegated MANAGE_REMOTES grant covering the panel host does not reach its host controls."""
+    # The /api/remote/<id>/… firewall, sshd, OS-update, reboot, fail2ban and Ubuntu Pro routes were
+    # gated on MANAGE_REMOTES + get_remote() alone — WHICH host, never WHICH KIND — while their
+    # panel-host twins (host_local, panel_backup) are superadmin-only and a shell there is refused
+    # (may_shell_on). A whole-host grant on the panel host is ordinary and delegable, so any such
+    # admin could re-open the panel port, delete UFW rules, move sshd or reboot the panel. Every
+    # action is a recorder here: a regressed guard records instead of touching this machine.
+    import panel.routes.close_port22 as _cp22_mod
+    import panel.routes.remote_security as _rsec_mod
+    import panel.routes.ubuntu_pro as _pro_mod
+    _hit = []
+
+    def _rec(name, ret):
+        return lambda *a, **k: (_hit.append(name) or ret)
+    _stubs = ((_rvps_mod, "remote_ufw_open_port", (True, "ok")),
+              (_rvps_mod, "remote_ufw_delete_rule", (True, "ok")),
+              (_rvps_mod, "remote_set_public_ssh", (True, "ok")),
+              (_rvps_mod, "change_ssh_port", (True, "ok")),
+              (_rvps_mod, "remote_os_run_updates", (True, "ok")),
+              (_rsec_mod, "remote_ufw_deny_ip", (True, "ok")),
+              (_rsec_mod, "remote_fail2ban_unban", (True, "ok")),
+              (_rsec_mod, "remote_security_log", "log"),
+              (_pro_mod, "pro_detach", (True, "ok")),
+              (_cp22_mod, "_tailnet_ssh_state", (True, True, True)),
+              (_cp22_mod, "remote_ufw_close_port_22", (True, "ok")))
+    _saved = [(_m, _n, getattr(_m, _n)) for _m, _n, _r in _stubs]
+    for _m, _n, _r in _stubs:
+        setattr(_m, _n, _rec(_n, _r))
+    with app.app_context():
+        _loc = RemoteServer.query.filter_by(is_local=True).first()
+        _made_local = _loc is None
+        if _made_local:
+            _loc = RemoteServer(name=tag + "-hostlvl-local", host="127.0.0.1", port=22,
+                                username="local", auth_method="local", auth_credential="",
+                                is_local=True)
+            db.session.add(_loc)
+            db.session.flush()
+        _grp = Group(name=tag + "_hostlvl", description="RBAC test panel-host grant (auto)",
+                     is_default=False)
+        _grp.set_permissions([auth.MANAGE_REMOTES])
+        _grp.servers.append(_loc)
+        db.session.add(_grp)
+        db.session.flush()
+        _u = User(username=tag + "_hostlvl", password_hash=auth.hash_password(secrets.token_hex(16)),
+                  display_name="hostlvl", is_superadmin=False, is_active=True)
+        _u.groups.append(_grp)
+        db.session.add(_u)
+        db.session.commit()
+        _loc_id, _uid = _loc.id, _u.id
+        _port_before = _loc.port
+    _probes = (("POST", "firewall/open", {"port": "5000", "protocol": "tcp"}),
+               ("POST", "firewall/delete-rule", {"num": 1}),
+               ("POST", "ssh-mode", {"mode": "off"}),
+               ("POST", "ssh-port", {"port": 2222}),
+               ("POST", "run-updates", {}),
+               ("POST", "reboot", {}),
+               ("POST", "security/block", {"ip": "198.51.100.9"}),
+               ("POST", "security/unban", {"jail": "sshd", "ip": "198.51.100.9"}),
+               ("GET", "security/log?which=ssh", None),
+               ("POST", "pro-detach", {}),
+               ("POST", "close-port-22", {}))
+    try:
+        _dc = client_as(_uid)
+        check("panel-host grant: (premise) the scoped admin can reach the host at all",
+              _dc.get("/api/remote/%d/uptime" % _loc_id).status_code == 200,
+              "the fixture's grant does not cover the panel host, so the refusals prove nothing")
+        _trapped_at = len(_trapped)
+        for _meth, _ep, _body in _probes:
+            _url = "/api/remote/%d/%s" % (_loc_id, _ep)
+            _rr = _dc.get(_url) if _meth == "GET" else _dc.post(_url, json=_body)
+            check("panel-host grant: %s is refused to a non-superadmin" % _ep,
+                  _rr.status_code == 403, "%s -> %d" % (_url, _rr.status_code))
+        check("panel-host grant: ...and none of them reached its action",
+              not _hit and not _trapped[_trapped_at:], repr((_hit, _trapped[_trapped_at:])))
+        with app.app_context():
+            check("panel-host grant: ...and the host's stored SSH port is unchanged",
+                  db.session.get(RemoteServer, _loc_id).port == _port_before)
+        # A superadmin still reaches them: refusing everyone would pass every check above.
+        _sc = client_as(admin_id)
+        _ro = _sc.post("/api/remote/%d/firewall/open" % _loc_id, json={"port": "5000"})
+        _rl = _sc.get("/api/remote/%d/security/log?which=ssh" % _loc_id)
+        check("panel-host grant: a superadmin still reaches the panel host's firewall and log "
+              "(positive control)",
+              _ro.status_code == 200 and _rl.status_code == 200
+              and _hit == ["remote_ufw_open_port", "remote_security_log"],
+              "%d/%d %r" % (_ro.status_code, _rl.status_code, _hit))
+    finally:
+        for _m, _n, _f in _saved:
+            setattr(_m, _n, _f)
+        with app.app_context():
+            for _row in (db.session.get(User, _uid),
+                         Group.query.filter_by(name=tag + "_hostlvl").first(),
+                         db.session.get(RemoteServer, _loc_id) if _made_local else None):
+                if _row is not None:
+                    db.session.delete(_row)
+            db.session.commit()
+
+
 def _check_tailscale_migrate_refuses_panel_host():
     """Tailscale migrate/finalize refuse the panel's own host, and still run for a remote one."""
     # migrate rewrites a host record onto Tailscale SSH and then deletes its public 22/tcp rule;
@@ -3502,6 +3601,7 @@ try:
     _check_retry_install_matches_its_route()
     _check_vps_prep_refuses_panel_host()
     _check_tailscale_migrate_refuses_panel_host()
+    _check_host_routes_refuse_delegated_panel_host()
     _check_vps_prep_allows_a_remote_host()
     _check_limited_user_server_actions()
     _check_legacy_super_admin_grant()
@@ -3639,7 +3739,7 @@ for _rule in app.url_map.iter_rules():
         if _nxt is None:
             break
         _fn = _nxt
-    _GUARDS = {"get_remote", "can_access_remote", "accessible_remote_ids"}
+    _GUARDS = {"get_remote", "get_host_remote", "can_access_remote", "accessible_remote_ids"}
     try:
         _tree = ast.parse(textwrap.dedent(inspect.getsource(_fn)))
     except (OSError, TypeError, SyntaxError):

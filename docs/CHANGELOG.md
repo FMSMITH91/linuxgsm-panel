@@ -935,6 +935,26 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **A delegated admin whose hosts include the panel's own no longer gets that host's controls.** The
+  firewall, SSH mode and port, OS updates, reboot, fail2ban (block, unban, auto-block, log) and
+  Ubuntu Pro actions under a host's Manage page checked only *which* hosts the account could reach,
+  never whether one of them was the panel host. The same actions on the panel host's own page are
+  superadmin-only, because that machine's firewall and sshd guard the panel itself. They now are
+  on every route: a non-superadmin gets a 403 on the panel host, and remote hosts are unchanged.
+- **You can no longer reset your own password or 2FA from the Users page.** That form asks for
+  neither your current password nor a code, so a borrowed session could hand itself a new password,
+  switch 2FA off and sign the real owner out everywhere. Use your Account page, which asks first.
+  Resetting *another* account's password or 2FA is unchanged.
+- **The login throttle can no longer be raced or reset.** A burst of simultaneous sign-in attempts
+  all got through before any of them was counted, and one successful sign-in from an address wiped
+  the failures before it — so anyone with an account of their own could keep guessing at another.
+  Attempts now count the moment they start (a success gives its place back), and earlier failures
+  stay counted after a success.
+- **The self-update no longer prunes old snapshots by splitting their names.** It ran as root over
+  a folder the panel's account owns, and a folder name containing a space made root delete whatever
+  path followed it. It now removes only folders named the way the updater names them.
+- **Editing an old Telegram message no longer runs its command again.** An edit arrives as a new
+  update, so fixing a typo in last week's `/stop` stopped the server a second time.
 - **The first-run wizard now needs a one-time setup token, so a stranger can no longer take a fresh
   install.** Until the first admin existed, anyone who reached the port could open the wizard and
   make themselves the superadmin, which is root on the panel's host. A default install opens that

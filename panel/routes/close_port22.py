@@ -5,7 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
 from panel.ops.ssh_manager import (_tailnet_ssh_state, remote_ufw_close_port_22)
-from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required)
+from panel.security.auth import (MANAGE_REMOTES, get_host_remote, log_action, permission_required)
 from panel.core.http import (_log_and_generic, _unreachable)
 
 # Word-for-word the refusal remote_set_public_ssh(..., "off") gives, because it is the same
@@ -21,7 +21,7 @@ def register(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_close_port_22(remote_id):
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         try:
             # This route removed the public SSH rule with NOTHING checked — the op itself checks
             # nothing either ("safe if Tailscale SSH is active" is a docstring, not a guard) — so a

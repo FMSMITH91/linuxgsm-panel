@@ -1653,6 +1653,25 @@ def get_remote(remote_id):
     return r
 
 
+def get_host_remote(remote_id):
+    """get_remote(), for a HOST-LEVEL action: firewall, sshd, OS updates, reboot, fail2ban, Pro.
+
+    get_remote() answers WHICH hosts a user may touch; this adds WHICH KIND. On the panel's own
+    host every one of those actions is superadmin-only on its dedicated page (host_local,
+    panel_backup), and a shell there is refused to anyone else (host_terminal.may_shell_on) —
+    because the firewall, sshd and fail2ban of that machine guard the panel itself. A whole-host
+    grant covering the panel host is an ordinary, delegable grant, so without this the
+    /api/remote/<id>/… twins of those routes handed the same controls to any MANAGE_REMOTES
+    holder whose group included it: re-open the panel port, delete UFW rules, move sshd, reboot.
+    Same test as ssh_manager.is_local_server, inlined to keep this module free of that import.
+    """
+    r = get_remote(remote_id)
+    if not current_user.is_superadmin and (
+            getattr(r, "is_local", False) or getattr(r, "auth_method", None) == "local"):
+        abort(403)
+    return r
+
+
 def get_game(server_id):
     # db.get_or_404, not Model.query.get_or_404: the Query.get* family is the legacy API and is
     # deprecated in Flask-SQLAlchemy 3.1 / SQLAlchemy 2.0. Same behaviour, same 404.
