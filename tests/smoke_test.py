@@ -1830,6 +1830,25 @@ try:
             g = Group.query.get(gid)
             check("edit_group kept only the valid host",
                   g is not None and [rs.id for rs in g.servers] == [remote_id])
+        # ...and ids no row can have: 5,000 digits (int() refuses past 4,300) and 2**64 (SQLite's
+        # driver refuses past 2**63-1) each answered a 500 from both routes.
+        for _hid in ("9" * 5000, str(2 ** 64)):
+            r = c.post("/groups/%d/edit" % gid,
+                       data={"name": gtag, "permissions": auth.VIEW_SERVERS,
+                             "servers": [_hid, str(remote_id)], "game_servers": [_hid]})
+            check("POST /groups/<id>/edit with an id of %d digits -> not 5xx" % len(_hid),
+                  r.status_code < 500, "got %d" % r.status_code)
+            r = c.post("/groups/add", data={"name": gtag + "_h%d" % len(_hid),
+                                            "servers": [_hid], "game_servers": [_hid]})
+            check("POST /groups/add with an id of %d digits -> not 5xx" % len(_hid),
+                  r.status_code < 500, "got %d" % r.status_code)
+        with app.app_context():
+            g = Group.query.get(gid)
+            check("edit_group with oversized ids still kept the valid host",
+                  g is not None and [rs.id for rs in g.servers] == [remote_id])
+            for _hg in Group.query.filter(Group.name.like(gtag + "_h%")).all():
+                db.session.delete(_hg)
+            db.session.commit()
 
     # ── A non-numeric port must not 5xx the settings/remote forms ──
     r = c.post("/remotes/%d/edit" % remote_id,
@@ -10063,6 +10082,21 @@ try:
               and "autoblock" in _abj3, str(_abj3)[:160])
     finally:
         _so_ab.fail2ban_top_ips = _ab_saved
+
+    # ── the Security tab's event times say they are UTC ───────────────────────────────────────
+    # AuditLog.timestamp is naive UTC and remote_manage.js renders it with `new Date(e.time)`,
+    # which reads an ISO date-time with no offset as the VIEWER's local time — every event was
+    # shown shifted by the viewer's UTC offset.
+    from datetime import datetime as _sev_dt
+    from panel.db.models import AuditLog as _sev_AL
+    with app.app_context():
+        db.session.add(_sev_AL(action="login_failed", username="sev-probe", target="sev-probe",
+                               timestamp=_sev_dt(2026, 9, 30, 14, 0, 0)))
+        db.session.commit()
+    _sev = [e for e in ((c.get("/api/panel/security/events").get_json() or {}).get("events") or [])
+            if e.get("user") == "sev-probe"]
+    check("security events: each time carries its UTC marker, so the browser does not read it "
+          "as local time", [e.get("time") for e in _sev] == ["2026-09-30T14:00:00Z"], repr(_sev))
 
     # The remote route is the same code with a different reader, and it had the same bug — so it
     # gets the same check rather than being taken on the strength of the panel-host one passing.

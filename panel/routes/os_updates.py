@@ -11,6 +11,7 @@ from panel.services.monitoring import (_MONITOR_HOST_WORKERS)
 import concurrent.futures
 import time
 from panel.core.clock import utcnow
+from panel.core.config import (load_config, update_config)
 from app import (_is_security_pkg, _log, _os_update_born, _os_update_note, _os_updates_for)
 
 _OS_UPDATE_EVERY = 24 * 3600
@@ -89,17 +90,12 @@ def register(app, supervise):
     # even with nobody watching. Half-hourly is plenty for a code update.
     def update_check_ticker():
         time.sleep(30)   # let boot settle before the first network fetch
-        last_logged_sha = None
+        # What the last notification named, as the PREVIOUS process left it: see _update_tick.
+        last_logged_sha = _announced_update()
         while True:
             try:
-                st = so.panel_update_status(force=True)
-                if st.get("update_available"):
-                    tgt = _update_target(st)
-                    if tgt and tgt != last_logged_sha:
-                        last_logged_sha = tgt
-                        _announce_panel_update(app, st, tgt)
-                else:
-                    last_logged_sha = None   # up to date — let a future update log again
+                last_logged_sha = _update_tick(app, so.panel_update_status(force=True),
+                                               last_logged_sha)
             except Exception:
                 app.logger.debug("update-check tick failed", exc_info=True)
             # Deliberately OUTSIDE that try. These two only ride this thread for its cadence and
@@ -192,6 +188,51 @@ def _forget_gone_hosts():
         del _os_update_state["hosts"][gone]
     for gone in [i for i in _os_update_seen.copy() if i not in ids]:
         _os_update_seen.pop(gone, None)   # same reason: a freed row id gets reused
+
+
+# config.json key: the commit the last "Panel update available" notification named ("" for none).
+_ANNOUNCED_KEY = "panel_update_announced"
+
+
+def _announced_update():
+    """The commit the last update notification named, as stored; "" when none (or unreadable)."""
+    try:
+        return str(load_config().get(_ANNOUNCED_KEY) or "")
+    except Exception:
+        return ""
+
+
+def _remember_announced_update(sha):
+    """Store `sha` as the commit last announced. Best-effort; written only when it changes."""
+    if _announced_update() == sha:
+        return
+    try:
+        update_config(lambda cfg: cfg.update({_ANNOUNCED_KEY: sha}))
+    except Exception:
+        _log.debug("could not record the announced panel update", exc_info=True)
+
+
+def _update_tick(app, st, last):
+    """One update-check tick's notification: announce a newly available commit once.
+
+    Returns the commit now announced, "" once the panel is not behind. `last` is what the previous
+    tick returned, and it is kept in config.json as well as in the loop — the loop's copy was all
+    there was, and it starts empty in every new process, so each restart re-sent "Panel update
+    available" for the very commit it had already announced, 30s after boot: a port change, a
+    reboot, a DB repair, a systemd restart after a crash, each one a fresh Telegram/Discord alert
+    about nothing new. The OS-update alert beside it was fixed for exactly this ("the identical
+    list, re-announced ~30 s after boot"); this one was not.
+    """
+    if st.get("update_available"):
+        tgt = _update_target(st)
+        if tgt and tgt != last:
+            _announce_panel_update(app, st, tgt)
+            _remember_announced_update(tgt)
+            return tgt
+        return last
+    if last:
+        _remember_announced_update("")   # up to date — let a future update announce again
+    return ""
 
 
 def _update_target(st):

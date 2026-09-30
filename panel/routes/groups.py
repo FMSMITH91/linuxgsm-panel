@@ -102,10 +102,10 @@ def register(app):
         # Same filter as edit_group: a new group must not be able to grant hosts or servers its
         # creator cannot reach, or the escalation is just one extra click away.
         group.servers = _selected_remotes(grantable_object_ids(
-            {int(i) for i in request.form.getlist("servers") if i.isdecimal()},
+            _posted_ids("servers"),
             set(), accessible_remote_ids(current_user)))
         group.game_servers = _selected_game_servers(grantable_object_ids(
-            {int(i) for i in request.form.getlist("game_servers") if i.isdecimal()},
+            _posted_ids("game_servers"),
             set(), {g.id for g in get_user_servers(current_user)}))
 
         db.session.add(group)
@@ -273,6 +273,29 @@ def _refuse_unmanageable(group, action, why):
                      "manage_groups", code=403)
 
 
+# The largest id a row can have: SQLite's INTEGER is a signed 64-bit value.
+_MAX_ROW_ID = 2 ** 63 - 1
+
+
+def _posted_ids(field):
+    """The row ids ticked in the form's `field`, as ints; anything that cannot be an id is skipped.
+
+    Was `{int(i) for i in getlist(field) if i.isdecimal()}` at four call sites, and isdecimal() is
+    not "an id". It is true for 5,000 ASCII digits, and int() refuses more than 4,300 of them
+    (Python's int_max_str_digits) with a ValueError nothing caught — so any MANAGE_GROUPS holder
+    turned /groups/add and /groups/<id>/edit into a 500 with one form field. A merely LARGE value
+    got further: a superadmin's ids pass grantable_object_ids unfiltered, and _selected_remotes
+    handed 2**64 to db.session.get, which raised OverflowError out of the SQLite driver — another
+    500. isdecimal() also accepts non-ASCII digits ('٣', '３'), which int() reads as ids nobody
+    ticked. ASCII digits, and a value that fits the column, are what an id is.
+    """
+    out = set()
+    for raw in request.form.getlist(field):
+        if raw.isascii() and raw.isdigit() and len(raw) <= 19 and int(raw) <= _MAX_ROW_ID:
+            out.add(int(raw))
+    return out
+
+
 def _rename_taken(group, new_name):
     """Whether renaming `group` to `new_name` would land on another group's name."""
     return new_name != group.name and Group.query.filter_by(name=new_name).first() is not None
@@ -285,10 +308,10 @@ def _apply_group_reach(group):
     # could grant their own group every host and server in the install — permissions unchanged,
     # so the escalation test still passed, while can_access_remote/can_access_server started
     # returning True for everything.
-    _keep_r = grantable_object_ids({int(i) for i in request.form.getlist("servers") if i.isdecimal()},
+    _keep_r = grantable_object_ids(_posted_ids("servers"),
                                    {r.id for r in (group.servers or [])},
                                    accessible_remote_ids(current_user))
-    _keep_g = grantable_object_ids({int(i) for i in request.form.getlist("game_servers") if i.isdecimal()},
+    _keep_g = grantable_object_ids(_posted_ids("game_servers"),
                                    {g.id for g in (group.game_servers or [])},
                                    {g.id for g in get_user_servers(current_user)})
     group.servers = _selected_remotes(_keep_r)

@@ -753,9 +753,13 @@ def server_reboot(delay_seconds=5):
     # straight into time.sleep() in a daemon thread: a non-numeric value killed that thread with a
     # TypeError AFTER the route had already answered success and written a server_reboot audit
     # entry — a reboot that is logged and never happens.
+    #
+    # OverflowError too: a JSON body is not limited to finite numbers — Python's json reads
+    # `Infinity` and `1e400` as float('inf'), and int() of that raises OverflowError, which this
+    # did not catch. POST {"delay": 1e400} answered a 500 instead of this sentence.
     try:
         delay = max(0, min(300, int(delay_seconds)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False, "The reboot delay must be a number of seconds (0-300)."
 
     # Schedule reboot in background

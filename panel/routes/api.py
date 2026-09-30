@@ -7,7 +7,8 @@ from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
 from panel.core.clock import (utcnow)
 from panel.core.panel_state import (_install_jobs, _install_lock)
-from panel.db.models import (GameServer, HostSample, MetricSample, db, rows_still_held)
+from panel.db.models import (GameServer, HostSample, MetricSample, db, rows_still_held,
+    still_held)
 from panel.db.prefs import (_apply_user_server_order, _effective_prefs)
 from panel.ops.ssh_manager import (_remote_listening_ports, get_server_status)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
@@ -29,7 +30,8 @@ import itertools
 import re
 import time
 from panel.core.http import (_log_and_generic)
-from app import (_cached_player_max, _cached_player_name, _log, resolve_free_port)
+from app import (_begin_install_reconcile, _cached_player_max, _cached_player_name,
+    _end_install_reconcile, _install_changed_during_check, _log, resolve_free_port)
 from panel.routes._shared import (_looks_installed, _maybe_resolve_public_ip,
     _notify_servers_changed)
 
@@ -681,8 +683,43 @@ def _install_row(sid, j, gs):
 
 
 def _reconcile_lost_install(app, gs):
-    """Settle an install whose live progress was lost, by asking the host whether it finished."""
+    """Settle an install whose live progress was lost, by asking the host whether it finished.
+
+    One ask at a time per server, shared with the reconcile ticker (app._begin_install_reconcile).
+    This endpoint is polled every 2.5s by each open page and the ask is a `details` over SSH that
+    can take most of its 30s timeout, so without the claim every poll stacked another full-tree
+    `du` on the game host behind the one still running. A poll that finds the check under way is
+    told so, as a running install, and polls again.
+    """
+    if not _begin_install_reconcile(gs.id):
+        return _install_being_checked(gs)
+    try:
+        return _settle_lost_install(app, gs)
+    finally:
+        _end_install_reconcile(gs.id)
+
+
+def _install_being_checked(gs):
+    """The install-status answer while the host is (or was just) being asked: keep polling."""
+    return jsonify({"status": "running", "step": 0, "total": 8, "percent": 0,
+                    "step_name": "Checking whether the install finished…",
+                    "message": "", "log": [], "elapsed": 0, "installed": bool(gs.installed)})
+
+
+def _settle_lost_install(app, gs):
+    """_reconcile_lost_install's work, once it holds the row's host check."""
+    status_before = gs.status
     verdict = _looks_installed(app, gs.remote, gs.short_name, gs.lgsm_name)
+    # The ask takes up to 30s. A row deleted meanwhile (its id perhaps already another server's),
+    # or one whose install was restarted or finished meanwhile, is not what the host was asked
+    # about: writing the verdict onto it raised StaleDataError for a deleted row — a 500 to the
+    # poll — or settled a server nobody had asked about. A restarted install has a job again, and
+    # the next poll reports it; "running" keeps the page polling for it.
+    if verdict is not None:
+        if not still_held(gs):
+            return jsonify({"status": "none"})
+        if _install_changed_during_check(gs, status_before):
+            return _install_being_checked(gs)
     if verdict is True:
         gs.installed = True
         gs.status = "offline"   # live metrics will flip it to online if it's running

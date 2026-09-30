@@ -481,3 +481,238 @@ finally:
         setattr(_sm_core, _n, _v)
     for _n, _v in _zhost_saved.items():
         setattr(_sm_hosts, _n, _v)
+
+
+# ═══ Second-pass review: background jobs, host-local routes, groups ═══════════════════════════════
+# Each block drives the function that was wrong. Nothing reaches a host: the one collaborator that
+# would (_shared._looks_installed) is stubbed on its definition site and put back in a `finally`,
+# and the database is a throwaway SQLite file.
+import os as _rv2os                                                                 # noqa: E402
+import tempfile as _rv2tmp                                                          # noqa: E402
+
+from panel.core import panel_state as _rv2state                                     # noqa: E402
+from panel.routes import _shared as _rv2shared                                      # noqa: E402
+from panel.routes import api as _rv2api                                             # noqa: E402
+from panel.routes import groups as _rv2groups                                       # noqa: E402
+from panel.routes import os_updates as _rv2osu                                      # noqa: E402
+
+_rv2_dir = _rv2tmp.mkdtemp(prefix="lgsm-unit-p17-rv2-")
+_rv2_app = _ZFlask("p17_second_pass")
+_rv2_app.config.update(SQLALCHEMY_DATABASE_URI="sqlite:///" + _rv2os.path.join(_rv2_dir, "p.db"),
+                       SQLALCHEMY_TRACK_MODIFICATIONS=False,
+                       SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"timeout": 5}})
+_rv2_app.logger.disabled = True
+_zmodels.db.init_app(_rv2_app)
+_rv2_db = _zmodels.db
+# api.py binds both names at import, so the stub goes on that module as well as on _shared.
+_rv2_saved = {(m, n): getattr(m, n) for m in (_rv2shared, _rv2api)
+              for n in ("_looks_installed", "_notify_servers_changed")}
+_rv2_calls = []
+
+
+def _rv2_stub(name, fn):
+    """Put `fn` in place of `name` wherever the reconcile code reaches it."""
+    for m in (_rv2shared, _rv2api):
+        setattr(m, name, fn)
+
+
+def _rv2_row(status, installed=False, name="rv2srv"):
+    """A fresh host and one game server on it, as the reconcile ticker's query would load it."""
+    r = _zmodels.RemoteServer(name="rv2host", host="192.0.2.61", username="root",
+                              auth_method="password", auth_credential="")
+    _rv2_db.session.add(r)
+    _rv2_db.session.flush()
+    gs = _zmodels.GameServer(remote_id=r.id, name=name, short_name=name, game_type="gmod",
+                             port=27015, status=status, installed=installed)
+    _rv2_db.session.add(gs)
+    _rv2_db.session.commit()
+    return gs
+
+
+def _rv2_stored(gid):
+    """(status, installed) as the database holds them now, past this session's identity map."""
+    with _rv2_db.engine.connect() as conn:
+        row = conn.exec_driver_sql("SELECT status, installed FROM game_server WHERE id = ?",
+                                   (gid,)).fetchone()
+    return (row[0], bool(row[1])) if row else None
+
+
+def _rv2_retry_during_read(gid, verdict):
+    """A _looks_installed that answers `verdict` after Retry started a new install mid-read."""
+    def _looks(app, remote, short, lgsm):
+        _rv2_calls.append(("looks", short))
+        with _rv2_db.engine.begin() as conn:          # retry_install's own commit, elsewhere
+            conn.exec_driver_sql("UPDATE game_server SET status = 'installing' WHERE id = ?",
+                                 (gid,))
+        with _rv2state._install_lock:                 # ...and its queued job
+            _rv2state._install_jobs[gid] = {"status": "running", "step": 0, "total": 8,
+                                            "started": 0, "updated": 0, "log": []}
+        return verdict
+    return _looks
+
+
+try:
+    _rv2_stub("_notify_servers_changed", lambda app: _rv2_calls.append(("notify",)))
+    with _rv2_app.app_context():
+        _rv2_db.create_all()
+
+        # ── the reconcile ticker must not settle an install that was restarted during its read ──
+        for _rv2v in (False, True):
+            _rv2gs = _rv2_row("failed", installed=True, name="rv2retry%d" % int(_rv2v))
+            del _rv2_calls[:]
+            _rv2_stub("_looks_installed", _rv2_retry_during_read(_rv2gs.id, _rv2v))
+            _zapp._reconcile_stranded_install(_rv2_app, _rv2gs)
+            eq("install reconcile: a Retry started while the host was being asked is left alone "
+               "(verdict %s): the row stays 'installing', installed untouched" % _rv2v,
+               _rv2_stored(_rv2gs.id), ("installing", True))
+            check("install reconcile: ...and nothing was broadcast about it (verdict %s)" % _rv2v,
+                  ("notify",) not in _rv2_calls, repr(_rv2_calls))
+            with _rv2state._install_lock:
+                _rv2state._install_jobs.pop(_rv2gs.id, None)
+            _rv2_db.session.rollback()
+
+        # Control: with nothing started meanwhile, the verdict still lands exactly as before.
+        _rv2gs = _rv2_row("failed", installed=True, name="rv2plain")
+        del _rv2_calls[:]
+        _rv2_stub("_looks_installed", lambda app, remote, short, lgsm: (
+            _rv2_calls.append(("looks", short)) or False))
+        _zapp._reconcile_stranded_install(_rv2_app, _rv2gs)
+        eq("install reconcile: an undisturbed 'not installed' verdict still settles the row "
+           "(control)", _rv2_stored(_rv2gs.id), ("failed", False))
+        check("install reconcile: ...and broadcasts it (control)", ("notify",) in _rv2_calls)
+
+        # ── one host check per server at a time, shared by the ticker and the status poll ───────
+        _rv2gs = _rv2_row("installing", installed=False, name="rv2busy")
+        del _rv2_calls[:]
+        check("install reconcile: a server's host check can be claimed",
+              _zapp._begin_install_reconcile(_rv2gs.id))
+        try:
+            check("install reconcile: ...but not twice",
+                  not _zapp._begin_install_reconcile(_rv2gs.id))
+            _zapp._reconcile_stranded_install(_rv2_app, _rv2gs)
+            with _rv2_app.test_request_context():
+                _rv2d = _rv2api._reconcile_lost_install(_rv2_app, _rv2gs).get_json()
+            check("install reconcile: while one check runs, the ticker and the status poll do not "
+                  "ask the host again", not [c for c in _rv2_calls if c[0] == "looks"],
+                  repr(_rv2_calls))
+            eq("install reconcile: ...and the poll is told the install is still being checked, so "
+               "it keeps polling", (_rv2d.get("status"), _rv2_stored(_rv2gs.id)),
+               ("running", ("installing", False)))
+        finally:
+            _zapp._end_install_reconcile(_rv2gs.id)
+        with _rv2_app.test_request_context():
+            _rv2d = _rv2api._reconcile_lost_install(_rv2_app, _rv2gs).get_json()
+        eq("install reconcile: once released, the poll asks the host and settles it (control)",
+           (_rv2d.get("status"), _rv2_stored(_rv2gs.id)), ("failed", ("failed", False)))
+        check("install reconcile: ...and releases the check when it is done",
+              _zapp._begin_install_reconcile(_rv2gs.id))
+        _zapp._end_install_reconcile(_rv2gs.id)
+
+        # ── the status poll must not write a verdict onto a row deleted during the read ─────────
+        _rv2gs = _rv2_row("installing", installed=False, name="rv2gone")
+        _rv2gid = _rv2gs.id
+
+        def _rv2_deleted_during_read(app, remote, short, lgsm):
+            with _rv2_db.engine.begin() as conn:
+                conn.exec_driver_sql("DELETE FROM game_server WHERE id = ?", (_rv2gid,))
+            return False
+        _rv2_stub("_looks_installed", _rv2_deleted_during_read)
+        del _rv2_calls[:]
+        try:
+            with _rv2_app.test_request_context():
+                _rv2d = _rv2api._reconcile_lost_install(_rv2_app, _rv2gs).get_json()
+            _rv2err = None
+        except Exception as _rv2e:              # StaleDataError: a 500 to the poll
+            _rv2err = _rv2e
+            _rv2_db.session.rollback()
+            _rv2d = {}
+        check("install status: a row deleted while the host was asked answers 'none', not a 500",
+              _rv2err is None and _rv2d.get("status") == "none" and ("notify",) not in _rv2_calls,
+              repr((_rv2err, _rv2d, _rv2_calls)))
+        check("install status: ...and its host check was released even so",
+              _zapp._begin_install_reconcile(_rv2gid))
+        _zapp._end_install_reconcile(_rv2gid)
+
+        # ── /groups: an id field that is not an id is skipped, never a 500 ──────────────────────
+        with _rv2_app.test_request_context(method="POST", data={
+                "servers": ["9" * 5000, str(2 ** 64), "٣", "12", " 7", "-3", "", "5"]}):
+            try:
+                _rv2ids = _rv2groups._posted_ids("servers")
+            except Exception as _rv2e:
+                _rv2ids = _rv2e
+        eq("groups: _posted_ids keeps only ASCII ids that fit SQLite's INTEGER (5,000 digits, "
+           "2**64 and an Arabic-Indic digit are skipped instead of raising or being misread)",
+           _rv2ids, {12, 5})
+        with _rv2_app.test_request_context(method="POST", data={"servers": [str(2 ** 63 - 1)]}):
+            eq("groups: ...the largest id a row can have still counts (control)",
+               _rv2groups._posted_ids("servers"), {2 ** 63 - 1})
+finally:
+    for (_rv2m, _rv2n), _rv2f in _rv2_saved.items():
+        setattr(_rv2m, _rv2n, _rv2f)
+    with _rv2state._install_lock:
+        for _rv2k in [k for k, j in _rv2state._install_jobs.items() if j.get("started") == 0]:
+            _rv2state._install_jobs.pop(_rv2k, None)
+    with _rv2_app.app_context():
+        _rv2_db.session.remove()
+        _rv2_db.engine.dispose()
+
+# ── a JSON number is not always finite ───────────────────────────────────────────────────────────
+# json reads `Infinity` and `1e400` as float('inf'); int() of that raises OverflowError, which the
+# reboot delay and the auto-block threshold did not catch — a 500 for a malformed body.
+_rv2_esc = SO._can_escalate
+try:
+    SO._can_escalate = lambda: True
+    try:
+        _rv2rb = SO.server_reboot(float("inf"))
+    except Exception as _rv2e:
+        _rv2rb = _rv2e
+    eq("server_reboot: an infinite delay is refused with the delay message, not raised (and no "
+       "reboot is scheduled)", _rv2rb,
+       (False, "The reboot delay must be a number of seconds (0-300)."))
+finally:
+    SO._can_escalate = _rv2_esc
+
+_rv2_cfg_path = _zcfgmod.CONFIG_FILE
+_rv2_cfg_snap = _rv2_cfg_path.read_bytes() if _rv2_cfg_path.exists() else None
+try:
+    if _rv2_cfg_path.exists():
+        _rv2_cfg_path.unlink()                    # a fresh install's config for what follows
+    _rv2_thr_before = _zmon._autoblock_threshold()
+    try:
+        _rv2thr = _zapp._maybe_set_threshold({"threshold": float("inf")})
+    except Exception as _rv2e:
+        _rv2thr = _rv2e
+    eq("autoblock threshold: an infinite value is ignored like any other non-number, not raised",
+       _rv2thr, _rv2_thr_before)
+
+    # ── the panel-update notification is sent once per commit, not once per process ─────────────
+    _rv2_sent = []
+    _rv2_ann = _rv2osu._announce_panel_update
+    _rv2osu._announce_panel_update = lambda app, st, tgt: _rv2_sent.append(tgt)
+    try:
+        _rv2st = {"update_available": True, "target_sha": "abc1234def"}
+        _rv2last = _rv2osu._announced_update()          # a first boot: nothing announced yet
+        _rv2last = _rv2osu._update_tick(None, _rv2st, _rv2last)
+        _rv2last = _rv2osu._update_tick(None, _rv2st, _rv2last)
+        eq("update check: a newly available commit is announced once within a process",
+           _rv2_sent, ["abc1234def"])
+        # A restart: the loop's own copy starts again from what config.json holds.
+        _rv2osu._update_tick(None, _rv2st, _rv2osu._announced_update())
+        eq("update check: ...and NOT again after a restart, for the same commit",
+           _rv2_sent, ["abc1234def"])
+        _rv2osu._update_tick(None, {"update_available": True, "target_sha": "fff0000aaa"},
+                             _rv2osu._announced_update())
+        eq("update check: a different commit is still announced (control)",
+           _rv2_sent, ["abc1234def", "fff0000aaa"])
+        _rv2osu._update_tick(None, {"update_available": False}, _rv2osu._announced_update())
+        _rv2osu._update_tick(None, _rv2st, _rv2osu._announced_update())
+        eq("update check: once up to date, a later update is announced again, restart or not",
+           _rv2_sent, ["abc1234def", "fff0000aaa", "abc1234def"])
+    finally:
+        _rv2osu._announce_panel_update = _rv2_ann
+finally:
+    if _rv2_cfg_snap is None:
+        if _rv2_cfg_path.exists():
+            _rv2_cfg_path.unlink()
+    else:
+        _rv2_cfg_path.write_bytes(_rv2_cfg_snap)

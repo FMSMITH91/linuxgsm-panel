@@ -980,6 +980,112 @@ def _autoblock_tick_host(rid, born):
         _log.debug("autoblock tick failed for remote %s", rid, exc_info=True)
 
 
+# ── Settling an install whose live progress was lost ─────────────────────────────────────────────
+# Two callers ask the host whether an install finished: the reconcile ticker (every 10 minutes, for
+# every "installing", "configuring" or "failed" row) and /api/server/<id>/install-status, when a row
+# says "installing" but no job holds its progress. Each asks with one `details` over SSH — a full
+# `du` of serverfiles, measured at 13s on a 6.5GB server against a 30s timeout.
+#
+# Nothing stopped them asking at once. The install-status poll runs on a 2.5s setInterval with no
+# in-flight guard (manage_servers.js watchInstall), so one open Game Servers page stacked a new
+# `details` every 2.5s behind the one still running: about five concurrent full-tree `du` runs on
+# the game host per open tab, plus the ticker's, all answering the same question. Only one asks
+# now; the others are told the check is under way and poll again.
+_install_reconciling = set()
+_install_reconciling_lock = threading.Lock()
+
+
+def _begin_install_reconcile(server_id):
+    """Claim the one host check for `server_id`. False when another caller already holds it."""
+    with _install_reconciling_lock:
+        if server_id in _install_reconciling:
+            return False
+        _install_reconciling.add(server_id)
+        return True
+
+
+def _end_install_reconcile(server_id):
+    """Release what _begin_install_reconcile claimed."""
+    with _install_reconciling_lock:
+        _install_reconciling.discard(server_id)
+
+
+def _install_job_live(server_id):
+    """Is an install job for this server running right now?"""
+    with _install_lock:
+        return (server_id in _install_jobs
+                and _install_jobs[server_id].get("status") == "running")
+
+
+def _install_changed_during_check(gs, status_before):
+    """Whether an install STARTED on `gs` while its host was being asked about the last one.
+
+    The answer the host gave is about the install that was lost, and the check takes up to 30s.
+    Retry on a failed row (manage_servers.retry_install) sets the row "installing" and queues a
+    fresh job in that window, and the verdict was then written over the install now running:
+    "failed" on a row whose files had not landed YET, or "installed/offline" on one whose earlier
+    attempt had got that far — which the status poll then flipped online/offline, ending the
+    progress row of an install still downloading. Both the job board and the stored status are
+    asked, fresh: the row object in hand still holds what was loaded before the check.
+    """
+    if _install_job_live(gs.id):
+        return True
+    try:
+        now = (db.session.query(GameServer.status)
+               .filter(GameServer.id == gs.id).scalar())
+    except Exception:
+        db.session.rollback()
+        return True          # cannot tell: leave the row to the next tick rather than guess
+    return now != status_before
+
+
+def _reconcile_stranded_install(app, gs):
+    """One row from the reconcile ticker's query: settle it against the host, if it can tell."""
+    if _install_job_live(gs.id):
+        return   # a genuinely in-progress install — leave it alone
+    if not _begin_install_reconcile(gs.id):
+        return   # the install-status poll is asking the host about this one right now
+    try:
+        _reconcile_checked_install(app, gs)
+    finally:
+        _end_install_reconcile(gs.id)
+
+
+def _reconcile_checked_install(app, gs):
+    """_reconcile_stranded_install's work, once it holds the row's host check."""
+    from panel.routes._shared import _looks_installed, _notify_servers_changed
+    status_before = gs.status
+    try:
+        verdict = _looks_installed(app, gs.remote, gs.short_name, gs.lgsm_name)
+    except Exception:
+        verdict = None
+    # None (host unreachable): leave it; the next tick retries. And a row deleted during the
+    # read, its id taken by another server, is not what the host was asked about — nor is one an
+    # install was started on while the host was being asked (see _install_changed_during_check).
+    if verdict is None or not still_held(gs) or _install_changed_during_check(gs, status_before):
+        return
+    if verdict is True:
+        gs.installed = True
+        gs.status = "offline"   # live metrics flip it to online if running
+        db.session.commit()
+        _notify_servers_changed(app)
+        app.logger.info("reconciled stranded install '%s' -> installed", gs.short_name)
+    elif verdict is False:
+        # Only when something ACTUALLY changed. "failed" is itself in the query's filter set
+        # (deliberately — see install_reconcile_ticker), so unlike the True branch this row comes
+        # back every tick, and writing the two values it already holds re-fired a
+        # `servers_changed` broadcast to every open dashboard — each one then re-requesting
+        # /api/servers and restarting its install-progress poller — and logged "reconciled
+        # stranded install 'X' -> failed" 144 times a day about a reconciliation that did not
+        # happen. _sync_toggles_from_cron compares before it commits for the same reason.
+        if gs.installed or gs.status != "failed":
+            gs.installed = False
+            gs.status = "failed"
+            db.session.commit()
+            _notify_servers_changed(app)
+            app.logger.info("reconciled stranded install '%s' -> failed", gs.short_name)
+
+
 def _prune_jobs(registry, lock, max_age=7200):
     """Drop job entries whose last update is older than max_age seconds (default 2h).
 
@@ -2249,7 +2355,12 @@ def _maybe_set_threshold(body):
             val = max(1, min(int(body.get("threshold")), 100000))
             update_config(lambda cfg: cfg.update({"autoblock_threshold": val}))
             log_action(current_user, "autoblock_threshold", target="all hosts", detail="%d attempts / 7d" % val)
-        except (TypeError, ValueError):
+        # OverflowError as well: a JSON body is not limited to finite numbers — Python's json reads
+        # `Infinity` and `1e400` as float('inf'), and int() of that raises OverflowError. Uncaught,
+        # both auto-block toggles (panel host and remote) answered a 500 for {"threshold": 1e400}
+        # instead of ignoring the value as they do "many" — and never applied the on/off switch
+        # sent in the same request.
+        except (TypeError, ValueError, OverflowError):
             _log.debug("ignoring a non-numeric autoblock threshold", exc_info=True)
     return _autoblock_threshold()
 
@@ -2509,8 +2620,8 @@ def register_routes(app):
     # Lazy, like every other panel.routes import here: those modules do
     # `from app import ...` at their top, so they can only be imported once
     # this module's own body has finished.
-    from panel.routes._shared import (_looks_installed, _notify_servers_changed,
-        _run_due_game_backups, _run_due_restarts, _run_pending_backups)
+    from panel.routes._shared import (_run_due_game_backups, _run_due_restarts,
+        _run_pending_backups)
 
     # ── Helpers ─────────────────────────────────────────────
 
@@ -2689,42 +2800,9 @@ def register_routes(app):
     # the row stayed "failed", and the server the operator had just repaired remained unusable.
     # A row that is genuinely dead costs one `details` per 10 minutes, against an empty
     # serverfiles, which is the cheap case.
-    def _reconcile_stranded_install(gs):
-        """One row from the reconcile ticker's query: settle it against the host, if it can tell."""
-        with _install_lock:
-            live = (gs.id in _install_jobs
-                    and _install_jobs[gs.id].get("status") == "running")
-        if live:
-            return   # a genuinely in-progress install — leave it alone
-        try:
-            verdict = _looks_installed(app, gs.remote, gs.short_name, gs.lgsm_name)
-        except Exception:
-            verdict = None
-        # None (host unreachable): leave it; the next tick retries. And a row deleted during the
-        # read, its id taken by another server, is not what the host was asked about.
-        if verdict is None or not still_held(gs):
-            return
-        if verdict is True:
-            gs.installed = True
-            gs.status = "offline"   # live metrics flip it to online if running
-            db.session.commit()
-            _notify_servers_changed(app)
-            app.logger.info("reconciled stranded install '%s' -> installed", gs.short_name)
-        elif verdict is False:
-            # Only when something ACTUALLY changed. "failed" is itself in the query's filter set
-            # (deliberately — see above), so unlike the True branch this row comes back every
-            # tick, and writing the two values it already holds re-fired a `servers_changed`
-            # broadcast to every open dashboard — each one then re-requesting /api/servers and
-            # restarting its install-progress poller — and logged "reconciled stranded install
-            # 'X' -> failed" 144 times a day about a reconciliation that did not happen.
-            # _sync_toggles_from_cron compares before it commits for the same reason.
-            if gs.installed or gs.status != "failed":
-                gs.installed = False
-                gs.status = "failed"
-                db.session.commit()
-                _notify_servers_changed(app)
-                app.logger.info("reconciled stranded install '%s' -> failed", gs.short_name)
-
+    # The per-row work is module level (_reconcile_stranded_install), so a check can drive one row
+    # of it; it also holds the row's host check against the install-status poll asking the same
+    # question at the same time.
     def install_reconcile_ticker():
         time.sleep(20)   # let boot settle; the per-server check is an SSH round trip
         while True:
@@ -2735,7 +2813,7 @@ def register_routes(app):
                         # Each check is an SSH round trip, so a later row can have been deleted
                         # (and its id taken) since the query: skipped without reading it.
                         if still_held(gs):
-                            _reconcile_stranded_install(gs)
+                            _reconcile_stranded_install(app, gs)
             except Exception:
                 app.logger.debug("install-reconcile tick failed", exc_info=True)
             time.sleep(600)
