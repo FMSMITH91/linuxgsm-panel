@@ -1017,6 +1017,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **CI's Semgrep job runs on PyJWT 2.15.** Every PyJWT 2.13 release has published advisories (the
+  worst critical, GHSA-ffc3-869f-jxw9), and semgrep 1.178.0 pins `~=2.13.0`, so no lockfile that
+  honours semgrep's own pin was safe and Dependabot could not open a fix. PyJWT is now pinned apart
+  from semgrep's lockfile and both are installed hash-checked with `--no-deps`. This touches CI only:
+  the panel does not use PyJWT.
 - **Group forms reject ids that cannot be real ids.** Anyone who could manage groups could make the
   add and edit pages fail with a server error by submitting an extremely long number as an id; such
   values, and non-ASCII digits that were being read as ids, are now ignored.

@@ -1,0 +1,5 @@
+# PyJWT for the Semgrep job, pinned apart from semgrep.txt: see semgrep.in for why. Regenerate
+# (run in python:3.11-slim):
+#   pip-compile --allow-unsafe --generate-hashes --no-annotate --strip-extras \
+#     --output-file=semgrep-pyjwt.txt semgrep-pyjwt.in
+pyjwt>=2.15.0
