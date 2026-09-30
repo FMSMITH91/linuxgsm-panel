@@ -191,6 +191,14 @@ jobs:
             echo "::error::Semgrep wrote no SARIF (exit ${rc:-0}) — the code was not scanned; see the summary."
             exit 1
           fi
+          # Semgrep writes the findings a `nosemgrep` comment suppresses into the SARIF too, marked
+          # `"suppressions": [{"kind": "inSource"}]`, and code scanning opened an alert for every one
+          # of them anyway: 26 triaged false positives became open alerts on the first upload, and
+          # each would have failed the alerts gate. Only unsuppressed results are uploaded; a
+          # suppression is still visible in the code, next to the reason written for it.
+          jq '.runs |= map(.results |= map(select((.suppressions // []) | length == 0)))' \
+            semgrep.sarif > semgrep.open.sarif
+          mv semgrep.open.sarif semgrep.sarif
       - name: Upload Semgrep results to code scanning
         uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         with:

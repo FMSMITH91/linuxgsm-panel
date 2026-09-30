@@ -2247,3 +2247,28 @@ finally:
 check("integration: an older helper without ufw-delete-num-if still deletes, via ufw-delete-num",
       _ir_sent == ["ufw-delete-num-if", "ufw-delete-num"] and _ir_res == (True, "Rule 1 deleted"),
       repr((_ir_sent, _ir_res)))
+
+# ── Semgrep's SARIF carries the nosemgrep-suppressed findings, and code scanning alerted on them ──
+# The workflow drops them before upload. Driven: the workflow's own jq line, on a SARIF shaped like
+# Semgrep 1.178's (a suppressed result carries "suppressions": [{"kind": "inSource"}]).
+import json as _sg_json  # noqa: E402
+import re as _sg_re  # noqa: E402
+import shutil as _sg_shutil  # noqa: E402
+import subprocess as _sg_sp  # noqa: E402
+_sg_wf = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
+    __file__)))), ".github", "workflows", "security-code.yml")).read()
+_sg_m = _sg_re.search(r"jq '([^']+)' \\\n\s+semgrep\.sarif > semgrep\.open\.sarif\n\s+mv semgrep\.open\.sarif "
+                      r"semgrep\.sarif", _sg_wf)
+check("semgrep upload: suppressed findings are filtered out of the SARIF before upload",
+      _sg_m is not None and _sg_wf.index("semgrep.open.sarif") < _sg_wf.index("sarif_file: semgrep.sarif"),
+      "no jq filter between the scan and upload-sarif")
+if _sg_m is not None and _sg_shutil.which("jq"):
+    _sg_in = {"runs": [{"tool": {"driver": {"name": "Semgrep"}}, "results": [
+        {"ruleId": "a", "suppressions": [{"kind": "inSource"}]},
+        {"ruleId": "b"},
+        {"ruleId": "c", "suppressions": []}]}]}
+    _sg_out = _sg_sp.run(["jq", _sg_m.group(1)], input=_sg_json.dumps(_sg_in), capture_output=True,
+                         text=True, timeout=30)
+    _sg_ids = [r["ruleId"] for r in _sg_json.loads(_sg_out.stdout)["runs"][0]["results"]]
+    check("semgrep upload: ...the filter drops only the suppressed result and keeps the run intact",
+          _sg_ids == ["b", "c"] and "tool" in _sg_json.loads(_sg_out.stdout)["runs"][0], repr(_sg_ids))
