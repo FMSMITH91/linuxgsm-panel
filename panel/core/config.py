@@ -233,32 +233,47 @@ def _create_key_once(path, gen_bytes):
         try:
             os.link(tmp, path)
         except FileExistsError:
-            try:
-                empty = os.path.getsize(path) == 0
-            except OSError:
-                empty = False
-            if empty:
-                os.replace(tmp, path)
+            _cfg_replace_if_empty(tmp, path)
         except OSError:
             # No hard links on this filesystem: the O_EXCL create as before — still create-once,
             # with the empty-read window back, which such a filesystem cannot avoid.
-            try:
-                xfd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                return      # someone else created it first; the caller re-reads it
-            try:
-                with open(tmp, "rb") as src:
-                    os.write(xfd, src.read())
-                os.fsync(xfd)
-            finally:
-                os.close(xfd)
+            _cfg_create_excl(tmp, path)
     finally:
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass            # renamed into place
-        except OSError:
-            _log.debug("_create_key_once: temp file not removed", exc_info=True)
+        _cfg_unlink_key_tmp(tmp)
+
+
+def _cfg_replace_if_empty(tmp, path):
+    """_create_key_once lost the link race: take the name over only if the winner's file is EMPTY."""
+    try:
+        empty = os.path.getsize(path) == 0
+    except OSError:
+        empty = False
+    if empty:
+        os.replace(tmp, path)
+
+
+def _cfg_create_excl(tmp, path):
+    """_create_key_once without hard links: O_EXCL-create `path` (0600) and copy `tmp` into it."""
+    try:
+        xfd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return      # someone else created it first; the caller re-reads it
+    try:
+        with open(tmp, "rb") as src:
+            os.write(xfd, src.read())
+        os.fsync(xfd)
+    finally:
+        os.close(xfd)
+
+
+def _cfg_unlink_key_tmp(tmp):
+    """Remove _create_key_once's temp file; gone already means it was renamed into place."""
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass            # renamed into place
+    except OSError:
+        _log.debug("_create_key_once: temp file not removed", exc_info=True)
 
 
 def _key_missing(path):
