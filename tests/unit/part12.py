@@ -3555,3 +3555,94 @@ else:
     _pb_skip("privileged: (driven) remote grant as the content account", "needs root and runuser")
 
 _pb_shutil.rmtree(_PB, ignore_errors=True)
+
+# ── 8. The update's snapshot and rollback act in the panel-owned tree AS ITS OWNER ────────────
+# install.sh's own lines, lifted out whole: the TREE_SUDO decision, [1/6]'s mkdir and code
+# snapshot with snapshot_ok, and the health-check rollback's wipe-and-unpack of code and data.
+_pb_inst = open(os.path.join(_pb_root, "install.sh"), encoding="utf-8").read()
+
+
+def _pb_between(start, end, include_end=False):
+    i = _pb_inst.index(start)
+    j = _pb_inst.index(end, i)
+    return _pb_inst[i:j + (len(end) if include_end else 0)]
+
+
+_pb_tree = _pb_between('    TREE_SUDO=""\n', '    info "[1/6] Snapshotting')
+_pb_snap = (_pb_between('    ${TREE_SUDO:-} mkdir -p -- "${BACKUP}"', "\n", include_end=True)
+            + [ln for ln in _pb_inst.splitlines() if ln.strip().startswith("${TREE_SUDO:-} tar -C "
+                                                                          '"${PANEL_DIR}" --ignore')][0]
+            + "\n" + [ln for ln in _pb_inst.splitlines() if ln.strip().startswith("snapshot_ok() {")][0]
+            + '\nsnapshot_ok "${BACKUP}/code.tgz" && echo SNAP_OK\n')
+_pb_rb = _pb_between('    ${TREE_SUDO:-} find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \\\n        ! -name data',
+                     "\n    install_deps || true")
+check("install.sh: the snapshot, snapshot_ok and both rollbacks go through TREE_SUDO",
+      "TREE_SUDO=\"sudo -u ${_tree_owner} env -C /\"" in _pb_tree
+      and _pb_snap.count("${TREE_SUDO:-}") == 4 and _pb_rb.count("${TREE_SUDO:-}") == 4
+      and _pb_inst.count('> "${BACKUP}/') == 0, _pb_snap + _pb_rb)
+_pb_ph = "set -euo pipefail\ndie() { echo \"DIE: $*\"; exit 1; }\nSNAP_GZ='gzip -1'\n"
+if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
+    _pb_up = tempfile.mkdtemp(prefix="lgsm-unit-pb-upd-")
+    os.chmod(_pb_up, 0o755)
+    _pb_pd = os.path.join(_pb_up, "panel")
+    _pb_rootdir = os.path.join(_pb_up, "rootonly")
+    os.makedirs(os.path.join(_pb_pd, "data"))
+    os.makedirs(_pb_rootdir)                                   # root's, 0755: daemon cannot write
+    with open(os.path.join(_pb_pd, "app.py"), "w") as _fh:
+        _fh.write("# app\n")
+    with open(os.path.join(_pb_pd, "data", "config.json"), "w") as _fh:
+        _fh.write('{"port": 5000}')
+    _pb_sec = os.path.join(_pb_up, "secret")
+    with open(_pb_sec, "w") as _fh:
+        _fh.write("ROOT-ONLY-SECRET")
+    os.chmod(_pb_sec, 0o600)
+    for _d, _ds, _fs in os.walk(_pb_pd):
+        for _n in [_d] + [os.path.join(_d, x) for x in _ds + _fs]:
+            os.lchown(_n, _pb_daemon.pw_uid, _pb_daemon.pw_gid)
+    os.link(_pb_sec, os.path.join(_pb_pd, "hl"))              # root's file, a second name in the tree
+    # data/.backups planted as a link to a directory the panel user cannot write.
+    os.symlink(_pb_rootdir, os.path.join(_pb_pd, "data", ".backups"))
+    os.lchown(os.path.join(_pb_pd, "data", ".backups"), _pb_daemon.pw_uid, _pb_daemon.pw_gid)
+    _pb_env = {"PANEL_DIR": _pb_pd, "BACKUP": os.path.join(_pb_pd, "data", ".backups", "20260101-000000")}
+    _r = _pb_run(_pb_ph + _pb_tree + _pb_snap, env=_pb_env)
+    check("install.sh [1/6]: a data/.backups linked to a root-owned directory gets nothing from root"
+          " (the mkdir runs as the panel user, and fails)",
+          os.listdir(_pb_rootdir) == [] and "SNAP_OK" not in _r.stdout, "%r %r" % (os.listdir(_pb_rootdir), _r.stdout))
+    os.unlink(os.path.join(_pb_pd, "data", ".backups"))
+    _r = _pb_run(_pb_ph + _pb_tree + _pb_snap, env=_pb_env)
+    _pb_tgz = os.path.join(_pb_env["BACKUP"], "code.tgz")
+    _pb_members, _pb_hl_body = [], b""
+    if os.path.exists(_pb_tgz):
+        import tarfile as _pb_tar
+        with _pb_tar.open(_pb_tgz) as _t:
+            _pb_members = _t.getnames()
+            _pb_hl_body = b"".join(_t.extractfile(m).read() for m in _t.getmembers()
+                                   if m.isfile() and m.name.endswith("hl"))
+    check("install.sh [1/6]: the snapshot is still made, and is the panel user's (control)",
+          "SNAP_OK" in _r.stdout and "./app.py" in _pb_members
+          and os.stat(_pb_tgz).st_uid == _pb_daemon.pw_uid, "%r %r" % (_r.stdout, _pb_members))
+    check("install.sh [1/6]: a hard link to a root-only file is NOT copied into the panel-readable "
+          "snapshot", b"ROOT-ONLY-SECRET" not in _pb_hl_body and _pb_members != [], repr(_pb_members))
+    # The rollback, from that snapshot plus a data snapshot: the tree comes back, as the owner's.
+    _pb_run("tar -C %s -czf %s/data.tgz ." % (os.path.join(_pb_pd, "data"), _pb_env["BACKUP"]))
+    os.remove(os.path.join(_pb_pd, "app.py"))
+    with open(os.path.join(_pb_pd, "newfile.py"), "w") as _fh:
+        _fh.write("# added by the failed version\n")
+    _r = _pb_run(_pb_ph + _pb_tree + _pb_rb + '\necho RB_DONE\n', env=_pb_env)
+    check("install.sh rollback: the previous code and data come back, unpacked as the panel user",
+          "RB_DONE" in _r.stdout and os.path.exists(os.path.join(_pb_pd, "app.py"))
+          and not os.path.exists(os.path.join(_pb_pd, "newfile.py"))
+          and os.stat(os.path.join(_pb_pd, "app.py")).st_uid == _pb_daemon.pw_uid
+          and os.path.exists(os.path.join(_pb_pd, "data", "config.json")),
+          "%r %r" % (_r.stdout, _r.stderr))
+    check("install.sh rollback: ...and root's file behind the hard link is untouched",
+          open(_pb_sec).read() == "ROOT-ONLY-SECRET" and os.stat(_pb_sec).st_uid == 0)
+    _pb_shutil.rmtree(_pb_up, ignore_errors=True)
+else:
+    _pb_skip("install.sh snapshot/rollback as the tree's owner (driven)", "needs root, sudo and daemon")
+# SECURITY.md documents the grant install.sh now writes, Defaults line included.
+_pb_secdoc = open(os.path.join(_pb_root, ".github", "SECURITY.md"), encoding="utf-8").read()
+check("docs: SECURITY.md shows the helper's Defaults! line exactly as install.sh writes it",
+      'Defaults!/usr/local/lib/linuxgsm-panel/panel-helper env_reset, secure_path="%s"'
+      % _pbh.CHILD_PATH in _pb_secdoc and "#!/usr/bin/python3 -I" in _pb_secdoc
+      and "after copying its own" not in _pb_secdoc)

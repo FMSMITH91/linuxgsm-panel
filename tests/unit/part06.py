@@ -2194,7 +2194,7 @@ _inst_txt = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
 _snap_fn = [ln for ln in _inst_txt.splitlines() if ln.strip().startswith("snapshot_ok() {")]
 check("install.sh: the snapshot check is a named function this test can run",
       len(_snap_fn) == 1, str(_snap_fn))
-_rb_start = '    if ! tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then'
+_rb_start = '    if ! ${TREE_SUDO:-} tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then'
 check("install.sh: the rollback's unpack is guarded, not bare",
       _rb_start in _inst_txt and 'tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"\n' not in _inst_txt)
 if _snap_fn and _rb_start in _inst_txt:

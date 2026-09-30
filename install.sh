@@ -2268,8 +2268,24 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     BACKUP_ROOT="${PANEL_DIR}/data/.backups"
     STAMP="$(date +%Y%m%d-%H%M%S)"
     BACKUP="${BACKUP_ROOT}/${STAMP}"
+    # Every snapshot, and every rollback, works INSIDE data/.backups and PANEL_DIR — both the panel
+    # user's on every update after the first. They ran as root: `mkdir -p` and a `> code.tgz`
+    # redirect followed a link the panel user had put at data/.backups or at the stamp (STAMP is a
+    # clock reading, so the name is predictable), which had root create and truncate a file of the
+    # panel's choosing; the snapshot tar read the tree as root, so a hard link there put a root-only
+    # file into an archive the panel can read; and the rollback's `find -exec rm -rf` and `tar -x`
+    # ran as root in a tree the panel can rearrange while they run, where tar writes through a
+    # directory swapped for a link. TREE_SUDO runs each of those steps as the tree's OWNER instead
+    # (from "/", which the owner can always enter), so the kernel refuses anything the panel user
+    # could not have done itself. Empty when this is not root, or root owns the tree (a per-user
+    # install, or a tree the fresh path has not chowned yet): the step then runs as before.
+    TREE_SUDO=""
+    if [[ "$(id -u)" -eq 0 ]]; then
+        _tree_owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+        [[ "${_tree_owner}" != "root" ]] && TREE_SUDO="sudo -u ${_tree_owner} env -C /"
+    fi
     info "[1/6] Snapshotting current version + database → ${BACKUP}"
-    mkdir -p "${BACKUP}"
+    ${TREE_SUDO:-} mkdir -p -- "${BACKUP}"
     # Compressor: pigz (parallel gzip) when present — ~3.5x faster than gzip on a multi-core box for
     # the same size — else gzip -1 (fastest single-core). The level barely matters here: the payload
     # is mostly already-compressed data (git packs + screenshots), so we pick speed. pigz/gzip both
@@ -2280,8 +2296,11 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     # landed in the panel dir at mode 600) must NEVER abort the whole update — plain tar would exit 2
     # here and `set -o pipefail` would kill the update. `|| true` also absorbs a compressor hiccup;
     # then we VERIFY the archive is non-empty, so a GENUINE failure (disk full, etc.) still aborts
-    # cleanly with a clear message instead of a cryptic exit code.
-    tar -C "${PANEL_DIR}" --ignore-failed-read --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/code.tgz" || true
+    # cleanly with a clear message instead of a cryptic exit code. Read as the owner (TREE_SUDO),
+    # a root-only file in the tree is exactly such an unreadable file: it is left out of the
+    # snapshot, which is the point — the panel can read the archive, so root must not put into it
+    # what the panel could not read itself (a hard link to /etc/shadow, say).
+    ${TREE_SUDO:-} tar -C "${PANEL_DIR}" --ignore-failed-read --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} tee "${BACKUP}/code.tgz" >/dev/null || true
     # `-s` only asks whether it is non-empty, and the failure this check names by name — the disk
     # filling mid-write — produces a TRUNCATED archive, which is non-empty. It passed, and the
     # rollback below then wiped PANEL_DIR and fed the truncated stream to tar. `tar -tz` reads the
@@ -2297,7 +2316,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     # the same pipeline whose status still has to be 0, because a TRUNCATED archive lists the
     # members it got to before tar failed. One line on purpose: tests/unit/part06.py extracts this
     # function by line and executes it, rather than reimplementing what it hopes it says.
-    snapshot_ok() { local _n; [[ -s "$1" ]] && _n="$(tar -tzf "$1" 2>/dev/null | wc -l)" && [[ "${_n}" -gt 0 ]]; }
+    snapshot_ok() { local _n; [[ -s "$1" ]] && _n="$(${TREE_SUDO:-} tar -tzf "$1" 2>/dev/null | wc -l)" && [[ "${_n}" -gt 0 ]]; }
     snapshot_ok "${BACKUP}/code.tgz" || die "Couldn't snapshot the current version (the backup is empty or unreadable) —
      update ABORTED, the panel is unchanged. Check free disk space with 'df -h' and try again."
     # …and the whole data dir (DB + encryption keys + config), since the app runs a
@@ -2353,9 +2372,9 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         [[ "${_DIE_SAID:-0}" -eq 1 ]] || warn "The update aborted unexpectedly${_why} with the panel stopped."
         if [[ "${_CODE_FETCHED}" -eq 1 ]] && [[ -f "${BACKUP}/code.tgz" ]]; then
             warn "Putting ${FROM_VER} back from the snapshot…"
-            find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \
+            ${TREE_SUDO:-} find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \
                 ! -name data ! -name venv -exec rm -rf {} + 2>/dev/null || true
-            tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz" 2>/dev/null || true
+            ${TREE_SUDO:-} tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz" 2>/dev/null || true
             install_deps || true
         fi
         [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree 2>/dev/null || true
@@ -2381,7 +2400,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     trap _update_window_abort ERR EXIT
 
     if [[ -d "${PANEL_DIR}/data" ]]; then
-        tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/data.tgz" || true
+        ${TREE_SUDO:-} tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} tee "${BACKUP}/data.tgz" >/dev/null || true
         # The service is stopped by now, so this die must put it back — the message promises the
         # panel is unchanged, and a panel that is down is not unchanged.
         if ! snapshot_ok "${BACKUP}/data.tgz"; then
@@ -2558,22 +2577,22 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     warn "Health check FAILED (last HTTP status: ${HEALTH_CODE}). Rolling back to ${FROM_VER}…"
     # Restore code (remove tracked files that the new version may have added, then unpack).
     # We only wipe app files, never data/ or venv (venv is rebuilt below anyway).
-    find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \
+    ${TREE_SUDO:-} find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \
         ! -name data ! -name venv -exec rm -rf {} + 2>/dev/null || true
     # Guarded, and it is the reason the guard matters: PANEL_DIR has just been emptied, so an
     # unpack that fails leaves a half-populated install. Bare, `set -e` killed the script right
     # here — past install_deps, past the service restart, and past BOTH die messages below — so
     # the operator (or the in-panel self-update, which only watches the log) got a dead panel and
     # no explanation at all. This says what happened and where the snapshot is.
-    if ! tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then
+    if ! ${TREE_SUDO:-} tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then
         die "Update FAILED, and so did the rollback: the code snapshot could not be unpacked.
      ${PANEL_DIR} is INCOMPLETE and the panel will not start. Restore it by hand from:
        ${BACKUP}/code.tgz
      (data/ and venv/ were not touched.)"
     fi
     if [[ -f "${BACKUP}/data.tgz" ]]; then
-        find "${PANEL_DIR}/data" -mindepth 1 -maxdepth 1 ! -name .backups -exec rm -rf {} + 2>/dev/null || true
-        if ! tar -C "${PANEL_DIR}/data" -xzf "${BACKUP}/data.tgz"; then
+        ${TREE_SUDO:-} find "${PANEL_DIR}/data" -mindepth 1 -maxdepth 1 ! -name .backups -exec rm -rf {} + 2>/dev/null || true
+        if ! ${TREE_SUDO:-} tar -C "${PANEL_DIR}/data" -xzf "${BACKUP}/data.tgz"; then
             die "Update FAILED, and so did the rollback: the data snapshot could not be unpacked.
      ${PANEL_DIR}/data is INCOMPLETE — the database and encryption keys are missing. Restore by hand from:
        ${BACKUP}/data.tgz"
