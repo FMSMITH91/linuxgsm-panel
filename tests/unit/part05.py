@@ -4009,13 +4009,16 @@ _REMOTE_EXPECTED = {
     ("journal-cron", ()):
         "journalctl _COMM=cron --since '-14 days' -o short-unix --no-pager 2>&1",
     ("content-game-remove", ("gmodcontent", "cstrike", "cssserver")):
-        "rm -rf /home/gmodcontent/serverfiles/cstrike ; rm -rf /home/gmodcontent/cssserver"
-        " ; rm -rf /home/gmodcontent/lgsm/config-lgsm/cssserver",
-    ("content-game-remove", ("srcds", "hl2", "-")): "rm -rf /home/srcds/serverfiles/hl2",
+        "runuser -u gmodcontent -- rm -rf /home/gmodcontent/serverfiles/cstrike"
+        " ; runuser -u gmodcontent -- rm -rf /home/gmodcontent/cssserver"
+        " ; runuser -u gmodcontent -- rm -rf /home/gmodcontent/lgsm/config-lgsm/cssserver",
+    ("content-game-remove", ("srcds", "hl2", "-")):
+        "runuser -u srcds -- rm -rf /home/srcds/serverfiles/hl2",
     ("content-cron-remove", ("gmodcontent",)):
         "rm -f /etc/cron.d/lgsm-gmod-content-gmodcontent",
     ("gmod-mount-read", ("gmodserver",)):
-        "cat /home/gmodserver/serverfiles/garrysmod/cfg/mount.cfg 2>/dev/null || true",
+        "runuser -u gmodserver -- cat /home/gmodserver/serverfiles/garrysmod/cfg/mount.cfg"
+        " 2>/dev/null || true",
     ("crontab-list", ("codserver",)): "crontab -u codserver -l 2>&1",
     ("user-create", ("codserver",)): "useradd -m -s /bin/bash codserver 2>&1",
     ("user-lock-password", ("codserver",)): "passwd -l codserver 2>&1",
@@ -5606,7 +5609,15 @@ try:
               repr(_err))
         _ran.clear()
         _helper.grp = _fake_grp(lambda _g: _FakeGrp("gmodserver"), lambda: [])
-        _rc_ok = _helper.do_gameuser_group(["gmodserver"], "")
+        # A GAME account now also has to hold a LinuxGSM install in its own home (the enrolment
+        # gate, driven against real sandbox homes in part12); this fake account has no home on
+        # this machine, so that one test is answered for it here.
+        _hli_saved = _helper._has_linuxgsm_install
+        _helper._has_linuxgsm_install = lambda _pw: True
+        try:
+            _rc_ok = _helper.do_gameuser_group(["gmodserver"], "")
+        finally:
+            _helper._has_linuxgsm_install = _hli_saved
         check("enrolment: ...and still enrols a plain game account",
               _rc_ok == 0 and len(_ran) == 2, "rc=%s ran=%s" % (_rc_ok, _ran))
     finally:

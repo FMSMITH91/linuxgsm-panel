@@ -4341,7 +4341,7 @@ try:
     check("install.sh: the fresh root path installs the recovery command BEFORE the chown",
           "install_recovery_command" in _su_fresh
           and _su_fresh.index("install_recovery_command")
-          < _su_fresh.index('chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"'),
+          < _su_fresh.index("_chown_panel_tree"),
           _su_fresh[:300])
 finally:
     _shutil.rmtree(_su_sb, ignore_errors=True)

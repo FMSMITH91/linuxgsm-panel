@@ -561,10 +561,14 @@ def _username(s):
 
 
 # Groups a content user's primary group is never called, and that would hand out privilege if it
-# were. See _content_grant_remote.
+# were. See _content_grant_remote. The same set as the helper's NEVER_ENROL_GROUPS, whose comment
+# says why each of the second row (incus onwards) is there: they were missed until a survey of
+# what Debian/Ubuntu packages create, and a group missing here is one a remote grant hands out.
 _NEVER_A_CONTENT_GROUP = frozenset({"root", "wheel", "sudo", "admin", "adm", "shadow", "docker",
                                     "lxd", "disk", "staff",
-                                    "incus-admin", "libvirt"})
+                                    "incus-admin", "libvirt",
+                                    "incus", "microk8s", "snap_microk8s", "lpadmin", "kmem",
+                                    "src", "systemd-journal", "syslog", "ssl-cert"})
 
 
 def _managed_user(s):
@@ -1083,12 +1087,19 @@ def _content_grant_remote(a):
     content_user, group, gmod_user, games = a[0], a[1], a[2], a[3:]
     if group in _NEVER_A_CONTENT_GROUP:
         raise VerbError("refusing to grant membership of that group")
+    # The chmods run AS THE CONTENT ACCOUNT, not as root. chmod follows a symlink named on its
+    # command line, and `chmod -R` walks into one that is its operand: the content account owns
+    # ~/serverfiles and everything under it, so `~/serverfiles/cstrike -> /etc` made root add
+    # g+rX to /etc and every file beneath it — the exact hole the helper closed with
+    # _chmod_nofollow, left open on every remote. As the owner, chmod can change only what the
+    # account already owns, which is all a content grant ever needs to touch. usermod stays root's.
+    as_cu = "runuser -u %s -- " % shlex.quote(content_user)
     parts = ["usermod -aG %s %s" % (shlex.quote(group), shlex.quote(gmod_user)),
              # Traversal outermost-first: the home, then serverfiles. The shell form skipped
              # serverfiles because it was created group-readable; it is created private now.
-             "chmod g+x %s" % shlex.quote(home_of(content_user)),
-             "chmod g+x %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR))]
-    parts += ["chmod -R g+rX %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR, g))
+             as_cu + "chmod g+x %s" % shlex.quote(home_of(content_user)),
+             as_cu + "chmod g+x %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR))]
+    parts += [as_cu + "chmod -R g+rX %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR, g))
               for g in games]
     return "; ".join(parts)
 
@@ -1441,8 +1452,15 @@ _REMOTE_ACTIONS = {
         "test -d %s/." % shlex.quote(content_path(a[0], CONTENT_SUBDIR, a[1]))),
     "content-script-present": lambda a: (
         "test -x %s" % shlex.quote(content_path(a[0], a[1]))),
+    # AS THE CONTENT ACCOUNT (runuser: util-linux, root-only, present wherever useradd is — unlike
+    # sudo, which a root-login host may not have). Every path here is inside that account's home,
+    # and rm follows a symlink in any component but the last: as root, `~/serverfiles -> /usr/share`
+    # or `~/lgsm -> /` from that account turned this into root deleting a directory named after the
+    # game (or the script) wherever the link pointed. The helper does this through descriptors
+    # that refuse a link (do_content_game_remove); a remote has no helper, so the kernel's own
+    # permission check is what this relies on — the account can only delete what it could anyway.
     "content-game-remove": lambda a: " ; ".join(
-        "rm -rf %s" % shlex.quote(p) for p in
+        "runuser -u %s -- rm -rf %s" % (shlex.quote(a[0]), shlex.quote(p)) for p in
         ([content_path(a[0], CONTENT_SUBDIR, a[1])] if a[2] == "-" else
          [content_path(a[0], CONTENT_SUBDIR, a[1]), content_path(a[0], a[2]),
           content_path(a[0], "lgsm", "config-lgsm", a[2])])),
@@ -1450,9 +1468,14 @@ _REMOTE_ACTIONS = {
         "rm -f %s" % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0])))),
     # The helper's read and its ceiling, with the same rc for a cut read — see the function.
     "f2b-log-lines": _f2b_log_lines_remote,
+    # AS THE GAME ACCOUNT, as the helper reads it (do_gmod_mount_read, _as_game_user). Every
+    # component of this path is inside that account's home, so as root `ln -s /etc/shadow
+    # ~/serverfiles/garrysmod/cfg/mount.cfg` had root print the remote host's password hashes into
+    # the panel — and the mount editor writes what it parsed back into that same account's
+    # mount.cfg. The helper closed this locally; the remote form was still `cat` as root.
     "gmod-mount-read": lambda a: (
-        "cat %s 2>/dev/null || true"
-        % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg")),
+        "runuser -u %s -- cat %s 2>/dev/null || true"
+        % (shlex.quote(a[0]), shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"))),
     "content-grant-read": _content_grant_remote,
     "restart-flags": lambda a: "ls -1d /home/*/.restart-pending 2>/dev/null || true",
     "nodesource-setup": _nodesource_setup_remote,

@@ -179,8 +179,19 @@ command -v curl >/dev/null 2>&1 || warn "curl not found — the health check wil
 ok "Python ${PY_MM} found"
 
 # Where is the source? Prefer the current checkout; otherwise we'll clone.
+#
+# NEVER on a self-update the panel started. The helper ran this installer from inside the panel's
+# own checkout, so "the directory I was started in" was a directory the panel user owns and can
+# swap for a link to any other tree of its own: that tree then read as the operator's clone, and
+# root tar-copied it into PANEL_DIR, extracting through whatever directory links the panel had
+# left there. Where root takes its OWN pieces from was already guarded (_operator_src requires
+# the running installer to be that tree's install.sh); the copy of the code was not. The helper
+# now starts the installer from "/", and a self-update means "update the checkout in place" in
+# any case, so the working directory is simply not consulted when PANEL_SELF_UPDATE is set.
 SRC=""
-if [[ -f "./app.py" ]] && [[ -f "./requirements.txt" ]]; then
+if [[ -n "${PANEL_SELF_UPDATE:-}" ]]; then
+    :   # the panel chose this run: fetch_code updates PANEL_DIR itself (see above)
+elif [[ -f "./app.py" ]] && [[ -f "./requirements.txt" ]]; then
     SRC="$(pwd)"
     ok "Using the current checkout as source: ${SRC}"
 fi
@@ -274,9 +285,15 @@ _epoch_version() {
 # Without a .git (a GitHub "Download ZIP" or `git archive` copy) the date comes from VERSION, where
 # export-subst left the commit's epoch. The bare placeholder reads as unknown; anything else is a
 # hand-kept version from before dates (an older snapshot), shown as it is.
+#
+# Read through _owner_read (it says why: as root this used to print any file a VERSION symlink
+# named, into a log the panel reads), and only its first 64 printable characters are shown. The
+# file is the panel user's, and "shown as it is" put its bytes on root's terminal: escape
+# sequences included, which setup_link_token already refuses to do for the same reason.
 _version_file() {
     local raw
-    raw="$(tr -d '[:space:]' 2>/dev/null < "${PANEL_DIR}/VERSION")" || raw=""
+    raw="$(_owner_read "${PANEL_DIR}/VERSION" | tr -d '[:space:]' | tr -cd '[:print:]')" || raw=""
+    raw="${raw:0:64}"   # a substring, not `| head -c`, whose early exit is a SIGPIPE under pipefail
     case "${raw}" in
         ''|\$Format:*) echo "unknown" ;;
         *[!0-9]*) echo "${raw}" ;;
@@ -298,11 +315,76 @@ panel_version() {
     _version_file
 }
 
-# Port the panel serves on (from data/config.json), default 5000.
+# Print at most 64 KiB of the file $1 inside PANEL_DIR, or nothing — read AS THE OWNER of
+# PANEL_DIR when this runs as root and that is someone else (the same rule, and the same
+# `stat -c %U`, as choose_and_record_port). The file is opened O_NOFOLLOW|O_NONBLOCK and must be a
+# regular file, so neither a link nor a FIFO in its place is read.
+#
+# Why each part. Every path under PANEL_DIR is the panel user's to rename, replace or link once
+# the first chown has run, and this installer runs as root on every update and self-update:
+#   * a symlink — root followed it. VERSION (read when there is no .git, which the panel user can
+#     delete) was printed into "Existing install detected ... (version <contents>)", and that
+#     line lands in data/self-update.log, which the panel reads back: any root-only file on the
+#     box, /etc/shadow or /root/.ssh/id_ed25519, handed to the panel with its whitespace stripped.
+#     config.json's port read followed one too. Reading as the owner makes the kernel refuse
+#     whatever the owner could not read itself — a link in a parent directory included, which
+#     O_NOFOLLOW alone would not catch;
+#   * a FIFO — open() blocks until a writer appears, so the root installer (and the panel's
+#     update, which waits on it for 30 minutes) simply stopped;
+#   * the size cap — /dev/zero is a character device and is refused, but a huge regular file
+#     would otherwise be read whole into a shell variable.
+_owner_read() {
+    local as_owner="" owner=""
+    if [[ "$(id -u)" -eq 0 ]]; then
+        owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+        [[ "${owner}" != "root" ]] && as_owner="sudo -u ${owner}"
+    fi
+    (cd / && ${as_owner} python3 -I - "$1" 2>/dev/null <<'OWNER_READ_PY') || true
+import os, stat, sys
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY)
+if not stat.S_ISREG(os.fstat(fd).st_mode):
+    sys.exit(1)
+sys.stdout.buffer.write(os.read(fd, 65536))
+OWNER_READ_PY
+}
+
+# Give PANEL_DIR to the panel user — every entry in it EXCEPT a file with more than one name.
+#
+# This was `chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"`, as root, over a tree the panel
+# user already owns on every run after the first. chown -R does not follow a SYMLINK it meets
+# (-P is its default, and each link's own owner is changed), but a HARD link is not a link to
+# chown: it is the target itself under a second name. With fs.protected_hardlinks=0 (the kernel's
+# own default; systemd's sysctl defaults turn it on, a host or container that does not boot through
+# them keeps 0) the panel user can `ln /etc/shadow ~/linuxgsm-panel/x`, and the next update handed
+# /etc/shadow to it. Every update, self-update and rollback runs this, and the panel can force the
+# fresh path too (by deleting its own app.py).
+#
+# find -P never follows a link, and -links 1 leaves out a regular file (or anything else) with a
+# second name; directories cannot be hard-linked, so every one of them is taken. -execdir runs
+# chown -h from inside the directory holding each entry, on "./name", so a directory swapped for a
+# link part-way through cannot redirect a path to somewhere else (PATH is fixed for it: find
+# refuses -execdir under a PATH with a relative entry). A git checkout and a venv hold no hard
+# links of their own, so nothing the panel needs is skipped; anything that is, keeps its owner and
+# is named in a warning. Returns find's status, so each caller keeps the failure handling the
+# `chown -R` there had.
+_chown_panel_tree() {
+    local skipped rc=0
+    env PATH=/usr/sbin:/usr/bin:/sbin:/bin find -P "${PANEL_DIR}" \( -type d -o -links 1 \) \
+        -execdir chown -h "${PANEL_USER}:${PANEL_USER}" -- {} + || rc=$?
+    skipped="$(find -P "${PANEL_DIR}" ! -type d ! -links 1 -print -quit 2>/dev/null || true)"
+    if [[ -n "${skipped}" ]]; then
+        warn "Left with its owner (a file with more than one name, which may be a system file):"
+        warn "  ${skipped//[^[:print:]]/?} — and any others like it under ${PANEL_DIR}."
+    fi
+    return "${rc}"
+}
+
+# Port the panel serves on (from data/config.json), default 5000. Read through _owner_read, for
+# the reasons given there; anything that is not a JSON object with an integer port reads as 5000.
 panel_port() {
     local cfg="${PANEL_DIR}/data/config.json"
     if [[ -f "${cfg}" ]]; then
-        python3 -I -c "import json;print(int(json.load(open('${cfg}')).get('port',5000)))" 2>/dev/null || echo 5000
+        _owner_read "${cfg}" | python3 -I -c "import json,sys;print(int(json.load(sys.stdin).get('port',5000)))" 2>/dev/null || echo 5000
     else
         echo 5000
     fi
@@ -680,8 +762,22 @@ fetch_code() {
         # --no-same-owner: as root, tar would otherwise give the copy SRC's owners. A fresh install
         # then chowns it to the panel user anyway; before that, stage_root_source reads the copy
         # directly only when every file in it is root's.
+        #
+        # The EXTRACTING tar runs as PANEL_DIR's owner when that is not root — an update from the
+        # operator's tree onto an install the panel user already owns. As root it wrote through
+        # whatever the panel user had left in the destination: a directory there swapped for a
+        # link (`panel -> /etc/cron.d`) between tar creating it and writing into it sent root's
+        # writes, root-owned, wherever the link pointed. As the owner the kernel refuses anything
+        # the panel user could not have written itself. The READING tar stays root's: the
+        # operator's tree need not be readable by the panel user.
+        local x_as=""
+        if [[ "$(id -u)" -eq 0 ]]; then
+            local x_owner
+            x_owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+            [[ "${x_owner}" != "root" ]] && x_as="sudo -u ${x_owner}"
+        fi
         tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . \
-            | tar -C "${PANEL_DIR}" --no-same-owner -xf -
+            | (cd / && ${x_as} tar -C "${PANEL_DIR}" --no-same-owner -xf -)
     elif [[ -d "${PANEL_DIR}/.git" ]]; then
         # The fresh clone below is shallow + single-branch (main only). Widen it so ANY branch is
         # fetchable and give it real history, so switching branches / updating on a branch works.
@@ -1138,6 +1234,9 @@ check_origin_trusted() {
 # panel-writable. That is what closes the window between staging and `install`.
 # Root-owned, outside the panel's checkout — see stage_root_source and SECURITY.md.
 HELPER_DIR="/usr/local/lib/linuxgsm-panel"
+# The PATH sudo gives the helper (write_sudoers_grant's Defaults line). The helper's own CHILD_PATH
+# is the same string, and a unit gate holds the two together.
+HELPER_SECURE_PATH="/usr/sbin:/usr/bin:/sbin:/bin"
 ROOT_GIT="${HELPER_DIR}/.source.git"
 ROOT_SRC_COMMIT=""
 ROOT_SRC_TRIED=0
@@ -1815,8 +1914,10 @@ root_tools_present() {
 # their daemon (`docker run -v /:/host`), disk through the raw block device, staff through
 # /usr/local, which root runs from. adm and shadow read logs and password hashes. None of these
 # needs a sudoers entry, so `sudo -l -U` reports the account as "not allowed" and it was enrolled:
-# the one-hop NOPASSWD:ALL this function exists to prevent. The first ten are the set
-# panel/security/privileged.py already refuses as _NEVER_A_CONTENT_GROUP.
+# the one-hop NOPASSWD:ALL this function exists to prevent. The list is the helper's
+# NEVER_ENROL_GROUPS and privileged.py's _NEVER_A_CONTENT_GROUP, all three one set (a unit gate);
+# the helper's comment says why incus, microk8s, lpadmin, kmem, src, systemd-journal, syslog and
+# ssl-cert joined it.
 #
 # When the root-owned helper is installed, IT answers — the same verdict that decides every other
 # enrolment (panel-helper's _escalation_verdict). Two deciders drifted: this one ran `sudo -l`, the
@@ -1827,7 +1928,7 @@ root_tools_present() {
 # failed placement), the old test stands.
 can_already_sudo() {
     _cas_user="$1"
-    _cas_groups="sudo|admin|wheel|root|adm|shadow|docker|lxd|disk|staff|incus-admin|libvirt"
+    _cas_groups="sudo|admin|wheel|root|adm|shadow|docker|lxd|disk|staff|incus-admin|libvirt|incus|microk8s|snap_microk8s|lpadmin|kmem|src|systemd-journal|syslog|ssl-cert"
     if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "${_cas_groups}"; then
         echo yes; return 0
     fi
@@ -1855,6 +1956,35 @@ CAS_PY
         *"may run the following"*)    echo yes ;;
         *"not allowed to run sudo"*)  echo no ;;
         *)                            echo unknown ;;
+    esac
+}
+
+# Why `$1` may NOT join GAME_GROUP, as one printable line; nothing when it may. The root-owned
+# helper's _enrolment_refusal answers, so the installer and the gameuser-group verb apply one rule
+# (see sync_game_user_group). Fails closed: no helper, or a helper that does not answer, is a
+# reason, never an empty line.
+enrolment_refusal() {
+    local out=""
+    if [[ ! -f "${HELPER_DIR}/panel-helper" ]]; then
+        echo "the root-owned helper that checks game accounts is not installed"
+        return 0
+    fi
+    # -I and from /, for the reason can_already_sudo gives. The reason is printed on root's
+    # terminal, so only printable characters of it are. The `cd` is in a subshell of its own:
+    # bash (5.2) will not parse `$(cd / && cmd <<EOF || ...` — the here-document and the `||`
+    # after an `&&` list inside a command substitution is a syntax error there.
+    out="$( (cd / && python3 -I - "${HELPER_DIR}/panel-helper" "$1" 2>/dev/null) <<'ER_PY' || echo "?"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("panel_helper", sys.argv[1])
+helper = importlib.util.module_from_spec(importlib.util.spec_from_loader("panel_helper", loader))
+loader.exec_module(helper)
+print("ok:" + helper._enrolment_refusal(sys.argv[2]))
+ER_PY
+)"
+    case "${out}" in
+        "ok:") return 0 ;;
+        ok:*) printf '%s\n' "${out#ok:}" | head -n 1 | tr -cd '[:print:]\n' ;;
+        *) echo "the helper could not check it" ;;
     esac
 }
 
@@ -1922,6 +2052,18 @@ sync_game_user_group() {
                 continue ;;
         esac
         if id -nG "${_gu}" 2>/dev/null | tr ' ' '\n' | grep -qx "${GAME_GROUP}"; then
+            continue
+        fi
+        # "Cannot reach root" is not "is a game account", and the group is a grant to BECOME its
+        # members. The marker test above is a home-directory test only, so a service account, or a
+        # person's login that happened to hold a serverfiles/ directory, was enrolled on that alone.
+        # Ask the helper the whole question the gameuser-group verb asks (_enrolment_refusal: an
+        # ordinary uid, only ordinary groups, not the panel's own account, and the install in its
+        # own home, read without following links). No helper to ask, no enrolment: this runs only
+        # under the narrow grant, which is written only when the helper is in place.
+        _why="$(enrolment_refusal "${_gu}")"
+        if [[ -n "${_why}" ]]; then
+            warn "Not enrolling '${_gu}' in ${GAME_GROUP}: ${_why}"
             continue
         fi
         if usermod -aG "${GAME_GROUP}" "${_gu}" >/dev/null 2>&1; then
@@ -2002,7 +2144,19 @@ write_sudoers_grant() {
         # account needs no helper — the panel does it for the file browser, the GMod content
         # mounts, the cron writers and the install flows, about 45 call sites — so it is granted
         # directly, but only for accounts in GAME_GROUP. `sudo -u root` stays refused.
+        #
+        # And a THIRD line, first: the environment the helper starts with is this file's to fix,
+        # not the host's. Nothing here said env_reset or secure_path, so the helper ran as root
+        # with whatever the host's global Defaults allowed through — Debian and Ubuntu ship both,
+        # but an image or an operator that relaxed them (`Defaults !env_reset`, an env_keep for a
+        # proxy, a secure_path with /usr/local/bin first) relaxed them for the privilege boundary
+        # too, and the helper's shebang used to ask that PATH for python3. A Defaults entry scoped
+        # to the command wins over the user and global ones for this command alone; measured with
+        # sudo 1.9.15, a `Defaults:<user> !env_reset, !secure_path` beside it still gives the
+        # helper a reset environment and exactly this PATH. It is rewritten on every run, like the
+        # two grants, so an existing host picks it up on its next update.
         {
+            echo "Defaults!${HELPER_DST} env_reset, secure_path=\"${HELPER_SECURE_PATH}\""
             echo "${PANEL_USER} ALL=(root) NOPASSWD: ${HELPER_DST}"
             echo "${PANEL_USER} ALL=(%${GAME_GROUP}) NOPASSWD: ALL"
         } > /etc/sudoers.d/linuxgsm-panel
@@ -2204,7 +2358,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
             tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz" 2>/dev/null || true
             install_deps || true
         fi
-        [[ "${RUN_AS_ROOT}" -eq 1 ]] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}" 2>/dev/null || true
+        [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree 2>/dev/null || true
         svc daemon-reload || true
         svc start linuxgsm-panel.service || true
         if [[ "${_DIE_SAID:-0}" -eq 1 ]]; then
@@ -2302,7 +2456,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         install_deps
         ok "Dependencies installed"
     fi
-    [[ "${RUN_AS_ROOT}" -eq 1 ]] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
+    [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree
 
     # Refresh the ROOT-OWNED copies to match the code we just fetched, BEFORE the service comes
     # back up — the new code may call verbs the installed helper does not know yet, and a stale
@@ -2426,7 +2580,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         fi
     fi
     install_deps || true
-    [[ "${RUN_AS_ROOT}" -eq 1 ]] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
+    [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree
     svc daemon-reload || true
     svc restart linuxgsm-panel.service || true
 
@@ -2533,7 +2687,7 @@ if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
     # .git or a local commit, or a host without network never gets, leaving no recovery command.
     install_recovery_command
     # Own everything as the service user, then run a system service AS that user.
-    chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
+    _chown_panel_tree
 
     # Passwordless sudo so the panel can manage the local host (game-server users,
     # apt, ufw). This is UNRESTRICTED root for the service user — see the trust-model
