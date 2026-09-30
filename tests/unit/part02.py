@@ -3564,8 +3564,11 @@ finally:
 _atg_mint_src = _totp_ast.parse(
     open(os.path.join(_p02_root, "panel", "routes", "auth_routes.py"), encoding="utf-8").read())
 _atg_said = []
+# The route and the module-level helpers it hands its refusals to (_auth_token_totp_refusal
+# flashes the 2FA ones): a sentence moved into a helper is still one the mint says.
 for _n in _totp_ast.walk(_atg_mint_src):
-    if not (isinstance(_n, _totp_ast.FunctionDef) and _n.name == "account_api_token_generate"):
+    if not (isinstance(_n, _totp_ast.FunctionDef)
+            and (_n.name == "account_api_token_generate" or _n.name.startswith("_auth_token_"))):
         continue
     for _c in _totp_ast.walk(_n):
         if (isinstance(_c, _totp_ast.Call)
