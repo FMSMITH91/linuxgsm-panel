@@ -355,8 +355,9 @@ def _tag_list_as_caller_and_superadmin():
 
 def _tag_list_counts_for_a_scoped_admin():
     """The tag list's server counts, for a scoped admin who may delete it and one who may not."""
-    # A MANAGE_SERVERS holder scoped to one host can DELETE the tag, which strips it from
-    # every server panel-wide — so the count they are shown is every server's. The Tags
+    # A MANAGE_SERVERS holder scoped to one host could DELETE the tag, which strips it from
+    # every server panel-wide — so the count they are shown is every server's (a delete is now
+    # refused while servers they can't access carry it; the count is how they see why). The Tags
     # card printed the length of the filtered ids: "0 server(s)" on a tag other hosts'
     # servers carry, one click from removing it (and its alert muting) from all of them.
     _tr_ci = next((t for t in (_ci.get("/api/tags").get_json() or {})["tags"]
@@ -384,10 +385,40 @@ def _check_tag_list_names_only_reachable():
     try:
         _tag_list_as_caller_and_superadmin()
         _tag_list_counts_for_a_scoped_admin()
+        _tag_delete_by_a_scoped_admin()
     finally:
         with app.app_context():
-            db.session.delete(db.session.get(_TagR, _tr_id))
+            _left = db.session.get(_TagR, _tr_id)
+            if _left is not None:
+                db.session.delete(_left)
+                db.session.commit()
+
+
+def _tag_delete_by_a_scoped_admin():
+    """A scoped MANAGE_SERVERS admin may delete a tag only when every server carrying it is theirs."""
+    # Tags are install-wide, and a delete strips one from every server — with its alert routing.
+    # MANAGE_SERVERS was the whole gate, so an admin scoped to one host deleted a tag servers on
+    # hosts they cannot see carried (and un-muted their alerts).
+    from panel.db.models import ServerTag as _TagD
+    _td = _ci.post("/api/tags/%d/delete" % _tr_id)
+    with app.app_context():
+        _still = db.session.get(_TagD, _tr_id) is not None
+    check("tag delete: a scoped admin cannot delete a tag a server they can't access carries",
+          _td.status_code == 403 and _still, "got %d, still there=%s" % (_td.status_code, _still))
+    with app.app_context():
+        _own = _TagD(name=tag + "tagown")
+        _own.servers.append(db.session.get(GameServer, accessible_id))
+        db.session.add(_own)
+        db.session.commit()
+        _own_id = _own.id
+    _td2 = _ci.post("/api/tags/%d/delete" % _own_id)
+    with app.app_context():
+        _gone = db.session.get(_TagD, _own_id) is None
+        if not _gone:
+            db.session.delete(db.session.get(_TagD, _own_id))
             db.session.commit()
+    check("tag delete: ...while one only on their own servers still deletes (positive control)",
+          _td2.status_code == 200 and _gone, "got %d, gone=%s" % (_td2.status_code, _gone))
 
 
 def _tailscale_page_as_scoped_admin():
@@ -404,6 +435,21 @@ def _tailscale_page_as_scoped_admin():
     _rts_api = _rts_json.dumps(cmr.get("/api/tailscale").get_json() or {})
     check("/api/tailscale: ...nor does its JSON carry it",
           not [x for x in _rts_leaks if x in _rts_api], repr([x for x in _rts_leaks if x in _rts_api]))
+    # ...nor may they probe the tailnet (or the LAN behind it) FROM the panel host, one address at
+    # a time, through the reachability check the page hides from them now. Trapped: nothing pings.
+    _cp_pinged = []
+    _cp_saved = _rts.check_peer_reachability
+    _rts.check_peer_reachability = lambda h: (_cp_pinged.append(h),
+                                                 {"reachable": True, "latency_ms": 1})[1]
+    try:
+        _cp = cmr.post("/api/tailscale/check-peer", json={"host": "100.64.0.9"})
+    finally:
+        _rts.check_peer_reachability = _cp_saved
+    check("check-peer: a scoped MANAGE_REMOTES admin cannot ping from the panel host (403)",
+          _cp.status_code == 403 and _cp_pinged == [],
+          "got %d, pinged=%r" % (_cp.status_code, _cp_pinged))
+    check("check-peer: ...and the page no longer offers them the box",
+          'id="peer-host"' not in _rts_html)
     _rts_admin = client_as(admin_id).get("/tailscale").get_data(as_text=True)
 
 

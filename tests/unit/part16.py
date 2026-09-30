@@ -347,7 +347,10 @@ try:
     _p9_patch(_ms16, "_close_game_firewall", lambda *a, **k: ("", False))
     _p9_patch(_p9_sm, "run_privileged", lambda *a, **k: ("", "", 0))
     _p9_patch(_p9_bk, "remove_game_schedule", lambda sid: None)
-    _SECRET16 = "Logging in user 'secret_steam_acct' to Steam Public...OK"
+    # The uninstall asks the host whether the account is root-capable before it deletes anything
+    # (privileged_accounts); here it is a plain game account, as the probe would find it.
+    _p9_patch(_ms16, "privileged_accounts", lambda remote, users: {})
+    _SECRET16 ="Logging in user 'secret_steam_acct' to Steam Public...OK"
     _cv = _p9_new_server(P9_HOST2, "secretgame", "csgo", 27400, name="p16-secret")
     _cv_remote = NS(host="192.0.2.11", name="p9-host2")
     _sh16._begin_action_tail(_p9, _cv, "update", "/home/secretgame/.panel-update.log", "secretgame")

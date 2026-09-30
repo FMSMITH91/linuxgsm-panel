@@ -2266,6 +2266,7 @@ try:
     # an Exception is raised. `boom` names steps that raise.
     import ast as _p9_ast           # noqa: E402
     import inspect as _p9_inspect   # noqa: E402
+    import re as _p9_re             # noqa: E402
     import shlex as _p9_shlex       # noqa: E402
     _ms = {}
     _ms_log = []
@@ -2298,6 +2299,13 @@ try:
         if cmd.startswith("id ") and "echo EXISTS" in cmd:
             st = _ms["acct"].get(_p9_shlex.split(cmd)[1], "NOTEXISTS")
             return ("", "timed out", -1) if st is None else (st, "", 0)
+        if "LGSM_ACCT_PROBE_DONE" in cmd:
+            # The uninstall's "is this account root on the host?" probe (privileged_accounts):
+            # every scripted account is a plain game account, in its own group only. Not logged —
+            # it is a read, and the step lists below are what these checks compare.
+            _users = _p9_re.findall(r'echo "NOACCT ([a-z0-9_-]+)"', cmd)
+            return ("".join("ACCT %s 1001 %s\n" % (u, u) for u in _users)
+                    + "LGSM_ACCT_PROBE_DONE\n", "", 0)
         if "wget" in cmd and "linuxgsm.sh" in cmd:
             _ms_log.append("lgsm")
             return _ms_next("lgsm")

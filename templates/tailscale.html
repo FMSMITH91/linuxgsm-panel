@@ -172,6 +172,8 @@
     </div>
 
     <!-- Peer Reachability Checker -->
+    {# ts_detail: the ping runs from the panel host, so it is superadmin-only (api_tailscale_check_peer). #}
+    {% if ts_detail %}
     <div class="card mb-3">
       <div class="card-header"><i class="bi bi-plug"></i> Peer Reachability Check</div>
       <div class="card-body">
@@ -188,6 +190,7 @@
         <div id="peer-result" class="small"></div>
       </div>
     </div>
+    {% endif %}
   </div>
 
   <!-- Right column: Serve/Funnel + Suggestion -->

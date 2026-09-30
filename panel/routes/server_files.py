@@ -22,7 +22,8 @@ from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, UPLOA
 from panel.ops import ssh_manager as _sm
 from panel.ops import socket_hooks as _socket_hooks
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
-    can_access_server, get_game, has_permission, log_action, server_access_required,
+    can_access_remote, can_access_server, get_game, has_permission, log_action,
+    server_access_required,
     superadmin_required)
 from panel.services import (lgsm_data)
 import re
@@ -36,7 +37,7 @@ from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_
 from panel.core.panel_state import (_console_backlog, _console_offsets, _console_partial,
     register_server_state)
 from panel.routes._shared import (_console_rows, _drain_action_output,
-    _host_timezone_cached, _server_action_buttons)
+    _host_timezone_cached, _json_int, _server_action_buttons)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -900,9 +901,19 @@ def _gmod_content_status(remote, gs, server_id):
 
 
 def _gmod_selection(body):
-    """(action, games) of a GMod content POST, keeping only games the panel knows."""
+    """(action, games) of a GMod content POST, keeping only games the panel knows.
+
+    (None, []) for a body that is not one: an action other than mount/uninstall, or games that
+    are not a list of strings. `body.get("games") or []` was iterated and hashed unchecked, so
+    {"games": 5} and {"games": [[1]]} were 500s; and any unknown action — a typo for "uninstall"
+    included — was quietly treated as "mount", which REWRITES mount.cfg to exactly the selection.
+    """
     action = body.get("action") or "mount"
-    sel = [g for g in (body.get("games") or []) if g in GMOD_CONTENT_GAMES]
+    games = body.get("games") or []
+    if (action not in ("mount", "uninstall") or not isinstance(games, list)
+            or not all(isinstance(g, str) for g in games)):
+        return None, []
+    sel = [g for g in games if g in GMOD_CONTENT_GAMES]
     return action, sel
 
 
@@ -1134,7 +1145,13 @@ def _register_config_editor(app):
                 rel = f"lgsm/config-lgsm/{gs.lgsm_name}/{gs.lgsm_name}.cfg"
                 ok, msg = write_file(gs.remote, gs.short_name, rel, data["raw"])
             else:
-                ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, data.get("settings") or {})
+                # The same rule for the other shape: `settings` is a key -> value map, and a list
+                # or a string reached the writer's .items() and came back as a 500.
+                settings = data.get("settings") or {}
+                if not isinstance(settings, dict):
+                    return jsonify({"success": False,
+                                    "message": "Settings must be a map of names to values."}), 400
+                ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, settings)
             log_action(current_user, "edit_config", target=gs.name, success=ok, server=gs)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
@@ -1481,6 +1498,29 @@ def _register_gmod_content(app):
             return _gmod_content_status(remote, gs, server_id)
         # POST: apply a selection (mutating). The MANAGE_SERVERS gate is at the top of the route.
         action, sel = _gmod_selection(_json_body())
+        if action is None:
+            return jsonify({"success": False, "message": (
+                "Send \"action\" as \"mount\" or \"uninstall\" and \"games\" as a list of game "
+                "names.")}), 400
+        # Content is HOST-wide: one content account and one ~/serverfiles that every GMod server on
+        # the host mounts from. This route was gated on MANAGE_SERVERS and access to ONE server,
+        # so an admin granted a single GMod server on a shared host could `rm` the content every
+        # other tenant's server mounts (their maps then load with ERROR textures), or start a 13GB
+        # SteamCMD download into the host's disk. Mounting what is already there only rewrites
+        # this server's own mount.cfg, so that stays theirs; removing content, or fetching content
+        # that is not on the host yet, needs the host.
+        if not (current_user.is_superadmin or can_access_remote(current_user, gs.remote_id)):
+            if action == "uninstall":
+                return jsonify({"success": False, "message": (
+                    "Removing content affects every Garry's Mod server on this host, so it needs "
+                    "access to the host, not just this server.")}), 403
+            _cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
+            _missing = [g for g in sel if g not in set((_cu or {}).get("present") or {})]
+            if _missing:
+                return jsonify({"success": False, "message": (
+                    "Not on this host yet: %s. Downloading content for every Garry's Mod server "
+                    "here needs access to the host — ask its admin to install it, then mount it "
+                    "here." % ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing))}), 403
         if action == "uninstall":
             return _gmod_uninstall_request(app, gs, remote, sel)
         return _gmod_apply_request(app, gs, remote, sel)
@@ -1714,9 +1754,11 @@ def _register_console_viewers(socketio):
         # f"console_{gs.id}" with a real int. A client that sent "3" passed the access check
         # (SQLAlchemy coerces the lookup) and then joined "console_3" as a string-derived room the
         # poller never pushes to — an authorised viewer with a permanently silent console.
-        try:
-            server_id = int(data.get("server_id"))
-        except (TypeError, ValueError):
+        # _json_int, and only off a dict: `{"server_id": Infinity}` raised OverflowError and a
+        # payload that is not an object at all (`emit("join_console", 5)`) raised AttributeError,
+        # both straight past `except (TypeError, ValueError)` into the socket's error handler.
+        server_id = _json_int(data.get("server_id")) if isinstance(data, dict) else None
+        if server_id is None:
             return
         if server_id <= 0:
             return
@@ -1747,9 +1789,11 @@ def _register_console_viewers(socketio):
         # entry survived, and the console poller went on paying an SSH round trip every two
         # seconds for a console nobody was watching — until the socket itself dropped, which is
         # the only other thing that clears it.
-        try:
-            server_id = int(data.get("server_id"))
-        except (TypeError, ValueError):
+        # _json_int, and only off a dict: `{"server_id": Infinity}` raised OverflowError and a
+        # payload that is not an object at all (`emit("join_console", 5)`) raised AttributeError,
+        # both straight past `except (TypeError, ValueError)` into the socket's error handler.
+        server_id = _json_int(data.get("server_id")) if isinstance(data, dict) else None
+        if server_id is None:
             return
         leave_room(f"console_{server_id}")
         with _viewers_lock:

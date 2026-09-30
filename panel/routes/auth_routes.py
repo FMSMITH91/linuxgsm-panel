@@ -22,6 +22,8 @@ import time
 from app import (LOGIN_MAX_FAILS, LOGIN_WINDOW, _LOGIN_BLOCK_LOGGED, _LOGIN_FAILS,
     _LOGIN_FAILS_LOCK, _authlog, _log, _log_ip, _maybe_alert_admin_bruteforce,
     _has_remember_cookie, _prune_login_fails, _qr_svg, _register_session, _session_label)
+from panel.routes._shared import (REAUTH_BLOCKED_MSG, reauth_password, reauth_release,
+    reauth_reserve)
 
 
 def register(app):
@@ -194,19 +196,22 @@ def _register_account(app):
             with success=False, the shape delete_group / uninstall_server / send_command already
             use, so it reads as a refusal in the audit list rather than as a mint.
 
-            Recorded but NOT rate-limited, and that is a decision: the same unthrottled password
-            oracle already sits behind account_change_password and account_2fa_disable, which any
-            session holder can hit, so a limit on this route alone moves the guessing one route
-            over instead of closing it — while adding a way to lock somebody out of minting their
-            own token. Each attempt costs a bcrypt compare, which is its own floor on the rate. A
-            real limit belongs on all three at once, beside the login and bearer-token throttles
-            in panel/security/auth.py; what was missing here was the record of the attempt, and
-            that is what this is.
+            It was recorded but NOT rate-limited, on the reasoning that the same unthrottled
+            password oracle sat behind account_change_password and account_2fa_disable, so a limit
+            on this route alone would only move the guessing one route over — and that the real
+            limit belonged on all of them at once. It is on all of them now: every route that
+            re-asks for the current password or a live code shares one per-account budget
+            (_shared.reauth_reserve), so a wrong guess here and one at the password change count
+            against the same allowance.
             """
             log_action(u, "api_token_generate", target=u.username, detail=why, success=False)
             return redirect(url_for("account"))
 
-        if not check_password(request.form.get("password", ""), u.password_hash):
+        _pw = reauth_password(u, request.form.get("password", ""))
+        if _pw == "throttled":
+            flash(REAUTH_BLOCKED_MSG, "danger")
+            return _refused("too many wrong passwords or codes")
+        if _pw != "ok":
             flash("Password incorrect — no API token was minted.", "danger")
             return _refused("wrong password")
         # Checked LAST, and in this order, for the reasons account_2fa_disable spells out: a
@@ -215,6 +220,12 @@ def _register_account(app):
         # what makes an observed code single-use rather than replayable for the rest of its window.
         code = (request.form.get("totp_code") or "").strip()
         if u.totp_enabled:
+            # The code is under the same per-account budget as the password: a failure keeps
+            # its slot, a match gives it back below.
+            _stamp = reauth_reserve(u)
+            if _stamp is None:
+                flash(REAUTH_BLOCKED_MSG, "danger")
+                return _refused("too many wrong passwords or codes")
             ok_2fa = False
             _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
             if _step is not None:
@@ -231,6 +242,7 @@ def _register_account(app):
             if not ok_2fa:
                 flash("That authenticator code didn't match — no API token was minted.", "danger")
                 return _refused("wrong authenticator code")
+            reauth_release(u, _stamp)
         token = u.generate_api_token()
         # The token, and with it the spent step / backup code. NOT redundant with the commit
         # inside log_action on the next line, even though that one happens to flush this same
@@ -330,8 +342,14 @@ def _register_2fa_and_profile(app):
             # ONE-WAY: recovery needs another superadmin's reset_2fa or shell access to the panel
             # host. Same idiom and same order as account_2fa_disable and account_change_password.
             _u = current_user._get_current_object()
-            if not check_password(request.form.get("password", ""), _u.password_hash):
-                flash("Password incorrect — two-factor authentication was not enabled.", "danger")
+            # Throttled per account and audited, as its mirror is (see account_2fa_disable).
+            _pw = reauth_password(_u, request.form.get("password", ""))
+            if _pw != "ok":
+                log_action(_u, "2fa_enabled", target=_u.username, success=False,
+                           detail=("refused: too many wrong passwords or codes"
+                                   if _pw == "throttled" else "refused: wrong password"))
+                flash(REAUTH_BLOCKED_MSG if _pw == "throttled" else
+                      "Password incorrect — two-factor authentication was not enabled.", "danger")
                 # Back to this page, not /account: the pending secret is still in the session, so
                 # the QR they have already scanned stays valid and they can simply try again.
                 return redirect(url_for("account_2fa_enable"))
@@ -433,8 +451,23 @@ def _register_sign_out_everywhere(app):
         if keep is None:
             # A legacy login (cookie from before per-session tracking) has no row to keep, so give
             # this device one now — otherwise the epoch bump signs it out, the exact thing this
-            # route promises not to do.
-            _register_session(user, remember)
+            # route promises not to do. And ONLY with one: the answer was ignored, so a failed
+            # insert still re-issued the cookie below, with no row behind it — a session the
+            # account page cannot list or revoke, minted by the button that exists to end them.
+            # The revocation is committed by now; this device is left signed out, and told.
+            try:
+                _row_ok = _register_session(user, remember)
+            except Exception:
+                db.session.rollback()
+                _row_ok = None
+            if not _row_ok:
+                log_action(user, "revoke_sessions", target=user.username,
+                           detail="signed out %d other session(s); this device could not be "
+                                  "re-registered and was signed out too" % n)
+                logout_user()
+                flash("Every other session was signed out, and so was this one — the panel could "
+                      "not register this device's new session. Please sign in again.", "warning")
+                return redirect(url_for("login"))
         else:
             user._sid = keep.sid
         # Re-issue THIS device's cookie against the new epoch. login_user also rewrites the

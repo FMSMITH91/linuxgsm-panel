@@ -99,6 +99,13 @@ app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-i
 # The refresh itself is driven directly, with its own stub, where it is tested.
 from panel.security import banlist as _smoke_banlist
 _smoke_banlist.refresh_soon = lambda *a, **k: None
+# An uninstall asks the HOST whether the account it is about to `userdel` is root-capable there
+# (privileged_accounts) and refuses when the host cannot answer. This suite's hosts are blackholed,
+# so every uninstall would stop at "couldn't check"; the probe is answered "a plain game account"
+# suite-wide, and the real one is driven — with the host's reply scripted — where it is tested.
+import panel.routes.manage_servers as _smoke_ms  # noqa: E402
+_smoke_priv_real = _smoke_ms.privileged_accounts
+_smoke_ms.privileged_accounts = lambda _remote, _users: {}
 app.config["SESSION_PROTECTION"] = None  # tests inject the session directly (no IP/UA fingerprint)
 app.config["SESSION_COOKIE_SECURE"] = False  # test client talks http://; Secure cookies wouldn't round-trip
 app.config["REMEMBER_COOKIE_SECURE"] = False
@@ -981,6 +988,51 @@ try:
     _al_dropped = [k for k in _al_keys if k not in _AKS_SMOKE]
     check("alerts: POST accepts every key the GET advertises (no provider is write-only-in-name)",
           not _al_dropped, "the write path would silently drop: %s" % _al_dropped)
+
+    # ── uninstall never stops, kills or deletes an account that is root on the host ───────────
+    # A row for the host's own sudo-capable login (which import used to adopt) made this route run
+    # `userdel -r -f` on it. The real privileged_accounts runs here; the host's reply is scripted,
+    # and run_privileged is trapped so nothing a check drives reaches a host.
+    from panel.db.models import GameServer as _UPGS
+    _smoke_ms.privileged_accounts = _smoke_priv_real
+    _up_saved = (_sm_core.run_command, _sm_core.run_privileged)
+    _up_verbs = []
+    _up_reply = ["ACCT upadmin 1000 upadmin adm sudo\nLGSM_ACCT_PROBE_DONE\n"]
+    try:
+        _sm_core.run_command = lambda _s, cmd, **_k: (
+            (_up_reply[0], "", 0) if "LGSM_ACCT_PROBE_DONE" in cmd else ("", "", 0))
+        _sm_core.run_privileged = lambda *a, **k: (_up_verbs.append(a[1:2]), ("", "", 0))[1]
+        with app.app_context():
+            _up_rm = RemoteServer.query.first()
+            _up = _UPGS(remote_id=_up_rm.id, name="upadmin", short_name="upadmin",
+                        game_type="gmod", port=28940, installed=True, status="offline")
+            _up_down = _UPGS(remote_id=_up_rm.id, name="updown", short_name="updown",
+                             game_type="gmod", port=28945, installed=True, status="offline")
+            db.session.add_all([_up, _up_down])
+            db.session.commit()
+            _up_id, _up_down_id = _up.id, _up_down.id
+        _up_r = c.post("/servers/%d/delete" % _up_id, json={},
+                       headers={"X-Requested-With": "XMLHttpRequest"}).get_json() or {}
+        _up_reply[0] = ""                      # the host stops answering
+        _up_d = c.post("/servers/%d/delete" % _up_down_id, json={},
+                       headers={"X-Requested-With": "XMLHttpRequest"})
+    finally:
+        _sm_core.run_command, _sm_core.run_privileged = _up_saved
+        _smoke_ms.privileged_accounts = lambda _remote, _users: {}
+    with app.app_context():
+        _up_gone = db.session.get(_UPGS, _up_id) is None
+        _up_down_kept = db.session.get(_UPGS, _up_down_id) is not None
+        if _up_down_kept:
+            db.session.delete(db.session.get(_UPGS, _up_down_id))
+            db.session.commit()
+    check("uninstall: a sudo-group account is NOT stopped, killed or deleted on the host",
+          _up_verbs == [], "verbs sent: %r" % (_up_verbs,))
+    check("uninstall: ...its row is removed from the panel, with a warning that says so",
+          _up_gone and _up_r.get("success") is True and _up_r.get("warn") is True
+          and "NOT deleted" in (_up_r.get("message") or ""), str(_up_r)[:200])
+    check("uninstall: a host that cannot answer the check keeps the row and touches nothing (409)",
+          _up_d.status_code == 409 and _up_down_kept and _up_verbs == [],
+          "got %d kept=%s" % (_up_d.status_code, _up_down_kept))
 
     # ── uninstall: a FAILED userdel must not delete the panel's row ───────────────────────────
     # This endpoint used to capture run_privileged's rc, hand it to log_action, and then delete the
@@ -2083,6 +2135,90 @@ try:
         check("host page: ...while a REMOTE's page keeps all of them (positive control)",
               'data-mtab-btn="security"' in _hp_rem and "Migrate to Tailscale SSH" in _hp_rem
               and "Pinned SSH host key" in _hp_rem, "the gate hides them on every host")
+        # A block or unban on the PANEL host through its row id is followed in the panel's own ban
+        # gate at once, as host_local's twins are; on a remote there is nothing of the panel's to
+        # refresh. Before, the gate kept serving a just-blocked address until its 90 s tick.
+        _hp_refresh = []
+        _hp_rs_saved = (_hp_rs.remote_ufw_deny_ip, _hp_rs.remote_fail2ban_unban,
+                        _hp_rs.tailnet_exempt_ips, _smoke_banlist.refresh_soon)
+        try:
+            _hp_rs.remote_ufw_deny_ip = lambda _r, _ip: (True, "blocked")
+            _hp_rs.remote_fail2ban_unban = lambda _r, _j, _ip: (True, "unbanned")
+            _hp_rs.tailnet_exempt_ips = lambda _r, _ips: set()
+            _smoke_banlist.refresh_soon = lambda *a, **k: _hp_refresh.append(a)
+            c.post("/api/remote/%d/security/block" % _hp_lid, json={"ip": "203.0.113.77"})
+            c.post("/api/remote/%d/security/unban" % _hp_lid,
+                   json={"jail": "sshd", "ip": "203.0.113.77"})
+            _hp_refresh_local = len(_hp_refresh)
+            c.post("/api/remote/%d/security/block" % remote_id, json={"ip": "203.0.113.78"})
+        finally:
+            (_hp_rs.remote_ufw_deny_ip, _hp_rs.remote_fail2ban_unban,
+             _hp_rs.tailnet_exempt_ips, _smoke_banlist.refresh_soon) = _hp_rs_saved
+        check("panel host security: block and unban refresh the panel's own ban gate at once",
+              _hp_refresh_local == 2, "refreshes=%r" % (_hp_refresh,))
+        check("panel host security: ...a block on a remote does not (it is not the panel's gate)",
+              len(_hp_refresh) == 2, "refreshes=%r" % (_hp_refresh,))
+        # The panel host's firewall is superadmin-only (get_host_remote) — the two game-port
+        # writes were still open to a delegated MANAGE_REMOTES admin whose group covered it.
+        import panel.routes.remote_vps as _hp_vps
+        _hp_fw = []
+        _hp_vps_saved = (_hp_vps.remote_ufw_allow_game_port, _hp_vps.remote_ufw_allow_game_ports,
+                         _hp_vps.detect_game_ports)
+        with app.app_context():
+            _hp_gs = GameServer(remote_id=_hp_lid, name="hpgame", short_name="hpgame",
+                                game_type="csgo", port=27990, installed=True, status="offline")
+            db.session.add(_hp_gs)
+            db.session.commit()
+            _hp_gsid = _hp_gs.id
+        try:
+            _hp_vps.remote_ufw_allow_game_port = lambda *a, **k: (_hp_fw.append("open"), (1, "x"))[1]
+            _hp_vps.remote_ufw_allow_game_ports = lambda *a, **k: (_hp_fw.append("sync"), ([], "x"))[1]
+            _hp_vps.detect_game_ports = lambda *a, **k: {"game_port": 27990, "open_ports": [27990],
+                                                         "ports": []}
+            _hp_go = mrc.post("/api/remote/%d/game-port/27990/open" % _hp_lid)
+            _hp_sy = mrc.post("/api/server/%d/sync-ports" % _hp_gsid)
+        finally:
+            (_hp_vps.remote_ufw_allow_game_port, _hp_vps.remote_ufw_allow_game_ports,
+             _hp_vps.detect_game_ports) = _hp_vps_saved
+            with app.app_context():
+                db.session.delete(db.session.get(GameServer, _hp_gsid))
+                db.session.commit()
+        # Rebooting the panel host marks its servers expected-offline first, as Reboot now on a
+        # remote does — else each one pushed "went offline unexpectedly" about the panel's own
+        # reboot. The reboot itself is stubbed; the mark is read from the monitor's own table.
+        from panel.ops import system_ops as _hp_so
+        from panel.core.panel_state import _expected_offline as _hp_expected
+        with app.app_context():
+            _hp_first_local = RemoteServer.query.filter_by(is_local=True).first().id
+            _hp_rg = GameServer(remote_id=_hp_first_local, name="hpreboot", short_name="hpreboot",
+                                game_type="csgo", port=27995, installed=True, status="online")
+            db.session.add(_hp_rg)
+            db.session.commit()
+            _hp_rgid = _hp_rg.id
+        _hp_so_saved = _hp_so.server_reboot
+        _hp_expected.pop(_hp_rgid, None)
+        try:
+            _hp_so.server_reboot = lambda d: (True, "Server will reboot in %s seconds." % d)
+            _hp_rb = c.post("/api/server-management/reboot", json={"delay": 10})
+            _hp_marked = _hp_rgid in _hp_expected
+            _hp_so.server_reboot = lambda d: (False, "Sudo access required for reboot.")
+            _hp_expected.pop(_hp_rgid, None)
+            c.post("/api/server-management/reboot", json={"delay": 10})
+            _hp_unmarked = _hp_rgid not in _hp_expected
+        finally:
+            _hp_so.server_reboot = _hp_so_saved
+            _hp_expected.pop(_hp_rgid, None)
+            with app.app_context():
+                db.session.delete(db.session.get(GameServer, _hp_rgid))
+                db.session.commit()
+        check("panel host reboot: its servers are marked expected-offline before it goes down",
+              _hp_rb.status_code == 200 and _hp_marked, "status=%d marked=%s"
+              % (_hp_rb.status_code, _hp_marked))
+        check("panel host reboot: ...and a refused reboot leaves no mark behind",
+              _hp_unmarked)
+        check("panel host firewall: a delegated admin cannot open a game port on it, nor sync one",
+              _hp_go.status_code == 403 and _hp_sy.status_code == 403 and _hp_fw == [],
+              "open=%d sync=%d calls=%r" % (_hp_go.status_code, _hp_sy.status_code, _hp_fw))
         # Known version and commit (see the footer's check) for the Updates card's header.
         import app as _hp_app
         _hp_vsaved = (_hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT)
@@ -4856,6 +4992,55 @@ try:
         _row = db.session.get(_TU, _td_id)
         check("2fa disable: ...and its backup codes are cleared with it",
               not (_row.backup_codes or ""), "codes left behind: %r" % (_row.backup_codes or "")[:40])
+        # The two refusals above are on the record now. A wrong password here wrote nothing, so a
+        # borrowed session guessing passwords against the control that strips 2FA left no trace.
+        from panel.db.models import AuditLog as _TDAL
+        _td_refusals = [(_a.detail or "") for _a in _TDAL.query.filter_by(
+            user_id=_td_id, action="2fa_disabled", success=False).all()]
+        check("2fa disable: each refusal is audited, with what was wrong",
+              any("wrong password" in _d for _d in _td_refusals)
+              and any("authenticator code" in _d for _d in _td_refusals), repr(_td_refusals))
+
+    # ── the current-password checks are throttled per ACCOUNT ─────────────────────────────────
+    # /login has always had a throttle; the routes that re-ask a signed-in user for the password
+    # (password change, 2FA off/on, API token, deleting a host) had none, so whoever held the
+    # session could guess at bcrypt speed until one worked — and a right guess at /account/password
+    # takes the account for good. One budget across all of them, the login throttle's.
+    from app import LOGIN_MAX_FAILS as _TH_MAX
+    with app.app_context():
+        _th = _TU(username="reauth_throttle", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                  display_name="throttle", is_superadmin=False, is_active=True)
+        db.session.add(_th)
+        db.session.commit()
+        _th_id = _th.id
+    _thc = client_as(_th_id)
+    for _i in range(_TH_MAX):
+        _thc.post("/account/2fa/disable" if _i % 2 else "/account/api-token/generate",
+                  data={"password": "guess-%d" % _i})
+    _th_r = _thc.post("/account/password", data={"current_password": "Str0ng!passw0rd",
+                                                 "new_password": "N3w!Strong-pass",
+                                                 "confirm_password": "N3w!Strong-pass"},
+                      follow_redirects=True)
+    with app.app_context():
+        _th_changed = auth.check_password("N3w!Strong-pass", db.session.get(_TU, _th_id).password_hash)
+    check("reauth throttle: after the budget of wrong guesses on OTHER routes, even the right "
+          "password is refused at /account/password",
+          not _th_changed and b"Too many wrong passwords" in _th_r.data,
+          "changed=%s body=%r" % (_th_changed, _th_r.data[-160:]))
+    with app.app_context():
+        _th_blocked = _TDAL.query.filter_by(user_id=_th_id, action="password_changed",
+                                           success=False).count()
+    check("reauth throttle: ...and the refusal is audited", _th_blocked == 1, "rows=%d" % _th_blocked)
+    _smoke_shared = sys.modules["panel.routes._shared"]
+    _smoke_shared._REAUTH_FAILS.pop(_th_id, None)       # the window, elapsed
+    _thc.post("/account/password", data={"current_password": "Str0ng!passw0rd",
+                                         "new_password": "N3w!Strong-pass",
+                                         "confirm_password": "N3w!Strong-pass"})
+    with app.app_context():
+        _th_changed2 = auth.check_password("N3w!Strong-pass",
+                                           db.session.get(_TU, _th_id).password_hash)
+    check("reauth throttle: once the window has passed, the right password works (control)",
+          _th_changed2)
 
     # ── Admin-issued passwords: generated, shown once, and forced to be replaced ──────────────
     # An admin creating an account, or resetting someone's password, hands over a credential TWO
@@ -5655,7 +5840,12 @@ try:
     # see the "root" check below for what that closes.
     from panel.routes import discover as _imp_mod
     _imp_orig = _imp_mod.discover_linuxgsm_servers
+    # The import also asks the host whether each selected account is root-capable before it adopts
+    # it (privileged_accounts). The fixture host is blackholed, so that question is answered here
+    # — "a plain game account" — for the checks about everything else, and driven for real below.
+    _imp_priv_orig = _imp_mod.privileged_accounts
     try:
+        _imp_mod.privileged_accounts = lambda _r, _users: {}
         _imp_mod.discover_linuxgsm_servers = lambda _s: [
             {"user": "importedcs", "lgsm_name": "csgoserver", "port": 27015,
              "backups": 0, "mods": 0, "cron": 0, "autostart": False}]
@@ -5683,6 +5873,58 @@ try:
         with app.app_context():
             _root_rows = GameServer.query.filter_by(remote_id=remote_id, short_name="root").count()
         check("import: ...and no row was written for it", _root_rows == 0, "rows=%d" % _root_rows)
+
+        # ── An account that is root on the host is never adopted ──
+        # "root" was the ONLY name import refused. The scan reports any account with a
+        # ~/linuxgsm.sh, including the host's own sudo-capable login, and every file, cron and
+        # console action on the row then runs AS that account — ~/.bashrc, authorized_keys and
+        # crontab writes as a sudoer are root on the host. The real privileged_accounts runs here;
+        # only the host's answer to its probe is scripted.
+        _imp_mod.privileged_accounts = _imp_priv_orig
+        _pa_saved = (_sm_core.run_command, _imp_mod._bg_cache_commands)
+        _pa_sent = []
+
+        def _pa_rc(_s, cmd, **_k):
+            _pa_sent.append(cmd)
+            if "LGSM_ACCT_PROBE_DONE" in cmd:
+                return ("ACCT adminacct 1000 adminacct adm sudo\nACCT plaingame 1001 plaingame\n"
+                        "LGSM_ACCT_PROBE_DONE\n", "", 0)
+            return ("", "", 0)
+        try:
+            _sm_core.run_command = _pa_rc
+            _imp_mod._bg_cache_commands = lambda *a, **k: None
+            _imp_mod.discover_linuxgsm_servers = lambda _s: [
+                {"user": _u, "lgsm_name": "csgoserver", "port": 27015, "backups": 0, "mods": 0,
+                 "cron": 0, "autostart": False} for _u in ("adminacct", "plaingame")]
+            _pa = (c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+                {"user": "adminacct", "game_type": "csgo", "port": 27020},
+                {"user": "plaingame", "game_type": "csgo", "port": 27021}]}).get_json() or {})
+            # A host that does not answer the probe: nothing is imported, whatever was selected.
+            _sm_core.run_command = lambda *a, **k: ("", "SSH command timed out", -1)
+            _pa_down = (c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+                {"user": "adminacct", "game_type": "csgo", "port": 27020}]}).get_json() or {})
+        finally:
+            _sm_core.run_command, _imp_mod._bg_cache_commands = _pa_saved
+            _imp_mod.privileged_accounts = lambda _r, _users: {}
+        check("import: an account in the host's sudo group is refused, with the reason; a plain "
+              "game account beside it is imported",
+              _pa.get("added") == ["plaingame"]
+              and [r.get("user") for r in _pa.get("refused") or []] == ["adminacct"]
+              and "sudo" in ((_pa.get("refused") or [{}])[0].get("reason") or ""), str(_pa)[:300])
+        check("import: ...one probe asked the host, before anything was written",
+              sum("LGSM_ACCT_PROBE_DONE" in _x for _x in _pa_sent) == 1, str(_pa_sent)[:200])
+        check("import: a host that cannot be asked imports nothing, and says why",
+              _pa_down.get("success") is False and "Couldn't check" in (_pa_down.get("message") or "")
+              and not _pa_down.get("added"), str(_pa_down)[:200])
+        with app.app_context():
+            _pa_rows = {g.short_name for g in GameServer.query.filter(
+                GameServer.remote_id == remote_id,
+                GameServer.short_name.in_(["adminacct", "plaingame"])).all()}
+            GameServer.query.filter(GameServer.remote_id == remote_id,
+                                    GameServer.short_name == "plaingame").delete()
+            db.session.commit()
+        check("import: ...and no row was ever written for the sudoer", _pa_rows == {"plaingame"},
+              str(_pa_rows))
 
         # An account imported on the panel's OWN host goes into the panel's game-account group —
         # the step create_game_user takes for an account the panel makes. The import used to add
@@ -5719,17 +5961,23 @@ try:
              _imp_mod._bg_cache_commands) = _imp_saved
         _ime = imp_en.get_json() or {}
         _ime_enrolled = sorted(_a for _v, _a in _imp_calls if _v == "gameuser-group")
-        check("import: each account imported on the panel's own host is put in the game group",
-              sorted(_ime.get("added") or []) == ["importedplain", "importedsudo"]
+        # The helper is asked about BOTH, and only the one it enrolled is imported. The refused one
+        # used to be imported anyway — its row was committed before the helper was asked — and the
+        # panel then drove, as a game account, an account the helper had just said can reach root.
+        check("import: each account imported on the panel's own host is put in the game group, "
+              "and the one the helper refuses is NOT imported",
+              sorted(_ime.get("added") or []) == ["importedplain"]
               and _ime_enrolled == [["importedplain"], ["importedsudo"]],
               "added=%s enrolled=%s" % (_ime.get("added"), _ime_enrolled))
         _ime_order = [_v for _v, _a in _imp_calls if _v in ("gameuser-group", "bg-cache")]
         check("import: ...BEFORE the background command-list read that runs as those accounts",
               _ime_order == ["gameuser-group", "gameuser-group", "bg-cache"], str(_ime_order))
-        _ime_ne = _ime.get("not_enrolled") or []
-        check("import: ...and the one the helper refuses is reported, with its reason; the other "
-              "is not", [_n.get("user") for _n in _ime_ne] == ["importedsudo"]
-              and "already run sudo" in (_ime_ne[0].get("reason") or ""), str(_ime_ne)[:160])
+        _ime_ne = _ime.get("refused") or []
+        check("import: ...and the one the helper refuses is reported as refused, with its reason; "
+              "the other is not", [_n.get("user") for _n in _ime_ne] == ["importedsudo"]
+              and "already run sudo" in (_ime_ne[0].get("reason") or "")
+              and not _ime.get("not_enrolled") and "importedsudo" in (_ime.get("skipped") or []),
+              str(_ime)[:260])
         # Autostart is turned on for imported servers, as an install does — but only where the
         # panel can write the account's crontab, so not for the account the helper refused.
         with app.app_context():
@@ -5740,12 +5988,22 @@ try:
                 GameServer.remote_id == remote_id,
                 GameServer.short_name.in_(["importedplain", "importedsudo"])).all()}
         _imp_as = set((_imp_bg_args[0][1].get("autostart_ids") if _imp_bg_args else None) or ())
-        check("import: the background step is asked to turn Autostart on for the enrolled account, "
-              "not the refused one",
+        check("import: ...no row was kept for the refused account",
+              "importedsudo" not in _imp_ids, str(_imp_ids))
+        check("import: the background step is asked to turn Autostart on for the enrolled account",
               _imp_as == {_imp_ids.get("importedplain")} and None not in _imp_as,
               "autostart_ids=%s ids=%s" % (sorted(_imp_as), _imp_ids))
         check("import: ...and the flag stays off until the cron line is actually written",
-              _imp_flags == {"importedplain": False, "importedsudo": False}, str(_imp_flags))
+              _imp_flags == {"importedplain": False}, str(_imp_flags))
+        # The background-step checks below drive two rows; the second is now written by hand,
+        # since the import (rightly) no longer keeps the account the helper refused.
+        with app.app_context():
+            _imp_second = GameServer(remote_id=remote_id, name="importedsudo",
+                                     short_name="importedsudo", game_type="csgo", port=27017,
+                                     installed=True, status="offline", autostart=False)
+            db.session.add(_imp_second)
+            db.session.commit()
+            _imp_ids["importedsudo"] = _imp_second.id
 
         # The background step itself, run synchronously (no worker outlives these stubs), against
         # every answer it can get: monitor present, absent, a failed command-list read, a failed
@@ -5810,6 +6068,7 @@ try:
             db.session.commit()
     finally:
         _imp_mod.discover_linuxgsm_servers = _imp_orig
+        _imp_mod.privileged_accounts = _imp_priv_orig
     imp_denied = client_as(mru_id).post("/api/remote/%d/import" % remote_id,
                                         json={"servers": [{"user": "x", "game_type": "csgo"}]})
     check("import: caller without manage_servers is denied",
@@ -10237,6 +10496,29 @@ try:
           "404 — renamed or mistyped, so the sweep never reached them: %s" % ", ".join(_typed_404))
     check("typed body: a number where a string belongs never 500s",
           not _typed_500, "; ".join(_typed_500[:6]))
+    # ...nor a number that is not one. Python's json reads `Infinity` (and 1e400) as a float, and
+    # int() of it raises OverflowError — past every `except (TypeError, ValueError)` that parsed an
+    # id or a port. Each of these answered 500. None of them reaches a host: every id or port here
+    # is refused before one would be used.
+    _inf = float("inf")
+    _inf_bodies = [
+        ("/api/servers/bulk-action", {"action": "start", "server_ids": [_inf]}),
+        ("/api/server/%d/tags" % gs_id, {"tag_ids": [_inf]}),
+        ("/api/account/ui-order", {"host_order": [_inf]}),
+        ("/api/remote/%d/firewall/open" % remote_id, {"port": _inf}),
+        ("/api/remote/%d/firewall/close" % remote_id, {"port": _inf}),
+        ("/api/remote/%d/firewall/limit" % remote_id, {"port": _inf}),
+        ("/api/remote/%d/firewall/delete-rule" % remote_id, {"num": _inf}),
+        ("/api/remote/%d/ssh-port" % remote_id, {"port": _inf}),
+        ("/api/server/%d/config" % gs_id, {"settings": [1]}),
+    ]
+    _inf_500 = []
+    for _path, _body in _inf_bodies:
+        _ir = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
+        if _ir.status_code >= 500 or _ir.status_code == 404:
+            _inf_500.append("%s -> %d" % (_path, _ir.status_code))
+    check("typed body: Infinity where an id or port belongs (and a list for a settings map) never "
+          "500s", not _inf_500, "; ".join(_inf_500))
     # ...and the sweep left nothing running. A POST to /api/panel/backup/full starts a real
     # background full backup, and a suite that walks endpoints for validation must not leave one
     # RUNNING behind it — that thread outlives this block and calls into whatever the tests below
@@ -12663,6 +12945,67 @@ try:
             check("gmod content: (control) once it finishes, the next job on that host is accepted",
                   (_gm_again.get_json() or {}).get("success") is True,
                   "got %d %r — the host stayed held" % (_gm_again.status_code, _gm_again.get_json()))
+
+            # ── content is the HOST's: a one-server admin may mount what is there, no more ────
+            # Uninstalling content removes it for every GMod server on the host (every tenant's),
+            # and fetching new content fills the host's disk; the route asked for MANAGE_SERVERS and
+            # access to ONE server. A MANAGE_SERVERS admin granted this server alone, not its host.
+            with app.app_context():
+                _gmg = Group(name="smoke-gmod-one")
+                _gmg.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_SERVERS])
+                _gmg.game_servers.append(db.session.get(GameServer, gs_id))
+                db.session.add(_gmg)
+                db.session.flush()
+                _gmu = User(username="gmodone", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                            is_superadmin=False, is_active=True)
+                _gmu.groups.append(_gmg)
+                db.session.add(_gmu)
+                db.session.commit()
+                _gmu_id = _gmu.id
+            _gm_one = client_as(_gmu_id)
+            _gm_calls = []
+            _gm_mod.install_gmod_content = lambda *a, **k: (_gm_calls.append("install"),
+                                                            (True, ["cstrike"], "x"))[1]
+            _gm_saved_un = _gm_mod.uninstall_gmod_content
+            _gm_mod.uninstall_gmod_content = lambda *a, **k: (_gm_calls.append("uninstall"),
+                                                              (True, ["cstrike"], "x"))[1]
+            try:
+                _gm_state.pop(gs_id, None)
+                _gm_u = _gm_one.post("/api/server/%d/gmod-content" % gs_id,
+                                     json={"action": "uninstall", "games": ["cstrike"]},
+                                     headers={"X-Requested-With": "XMLHttpRequest"})
+                _gm_mod.detect_content_user = lambda *a, **k: {"user": "gmodcontent", "present": {}}
+                _gm_d = _gm_one.post("/api/server/%d/gmod-content" % gs_id,
+                                     json={"games": ["cstrike"]},
+                                     headers={"X-Requested-With": "XMLHttpRequest"})
+                _gm_refused_calls = list(_gm_calls)   # before the control's worker runs
+                _gm_mod.detect_content_user = lambda *a, **k: {"user": "gmodcontent",
+                                                               "present": {"cstrike": 1}}
+                _gm_m = _gm_one.post("/api/server/%d/gmod-content" % gs_id,
+                                     json={"games": ["cstrike"]},
+                                     headers={"X-Requested-With": "XMLHttpRequest"})
+                _gm_settle()
+                _gm_bad = c.post("/api/server/%d/gmod-content" % gs_id,
+                                 json={"action": "unmount", "games": ["cstrike"]},
+                                 headers={"X-Requested-With": "XMLHttpRequest"})
+                _gm_bad2 = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": 5},
+                                  headers={"X-Requested-With": "XMLHttpRequest"})
+            finally:
+                _gm_mod.uninstall_gmod_content = _gm_saved_un
+                _gm_mod.detect_content_user = lambda *a, **k: {"user": "gmodcontent", "present": {}}
+            check("gmod content: a one-server admin cannot uninstall the host's shared content",
+                  _gm_u.status_code == 403 and "uninstall" not in _gm_refused_calls,
+                  "got %d %r calls=%r" % (_gm_u.status_code, _gm_u.get_json(), _gm_refused_calls))
+            check("gmod content: ...nor download content the host does not have yet",
+                  _gm_d.status_code == 403 and "install" not in _gm_refused_calls,
+                  "got %d %r calls=%r" % (_gm_d.status_code, _gm_d.get_json(), _gm_refused_calls))
+            check("gmod content: ...but may still mount content already on the host (control)",
+                  (_gm_m.get_json() or {}).get("success") is True,
+                  "got %d %r" % (_gm_m.status_code, _gm_m.get_json()))
+            check("gmod content: an unknown action is a 400, not a silent mount",
+                  _gm_bad.status_code == 400, "got %d" % _gm_bad.status_code)
+            check("gmod content: games that are not a list is a 400, not a 500",
+                  _gm_bad2.status_code == 400, "got %d" % _gm_bad2.status_code)
         finally:
             (_gm_mod.ensure_content_user, _gm_mod.install_gmod_content,
              _gm_mod.gmod_mount_setup) = _gm_saved2

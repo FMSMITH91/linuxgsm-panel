@@ -10,12 +10,12 @@ from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (close_connection, ssh_test_connection)
 from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, can_access_remote,
-    check_password, get_remote, log_action, permission_required)
+    get_remote, log_action, permission_required)
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, LINUX_USER_RE, MAX_PORT,
     MIN_PORT, SAFE_LABEL_RE, _port_or)
 from panel.core.panel_state import (forget_rows)
-from panel.routes._shared import (_begin_bootstrap)
+from panel.routes._shared import (REAUTH_BLOCKED_MSG, _begin_bootstrap, reauth_password)
 import logging
 
 _log = logging.getLogger("panel.routes.remotes")
@@ -346,10 +346,20 @@ def _register_remote_delete_and_test(app):
         # Re-authenticate: deleting a remote (and ALL its game servers) is destructive, so require
         # the operator to re-enter their own account password — a guard against an accidental or
         # hijacked click. Verified constant-time via bcrypt (check_password).
-        if not check_password(_json_body().get("password", ""), current_user.password_hash):
+        #
+        # Under the per-account re-authentication throttle, like the account page's checks: this
+        # is one more place a borrowed session could guess the password at bcrypt speed. And the
+        # value is type-checked there — `{"password": 5}` reached check_password's prehash, which
+        # raised, and the route answered 500.
+        _pw = reauth_password(current_user._get_current_object(), _json_body().get("password", ""))
+        if _pw != "ok":
+            _msg = REAUTH_BLOCKED_MSG if _pw == "throttled" else "Incorrect password."
+            log_action(current_user, "delete_remote", target=name, success=False,
+                       detail="refused: " + ("too many wrong passwords" if _pw == "throttled"
+                                             else "wrong password"))
             if _wants_json():
-                return jsonify({"success": False, "message": "Incorrect password."}), 403
-            flash("Incorrect password.", "danger")
+                return jsonify({"success": False, "message": _msg}), 403
+            flash(_msg, "danger")
             return redirect(url_for("manage_remotes"))
         # Delete associated game servers. This is a BULK delete, which bypasses the ORM entirely —
         # so every association row keyed on those game_server ids has to go by hand. This app never

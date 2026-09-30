@@ -227,7 +227,16 @@ def _register_tailscale_serve(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_tailscale_check_peer():
-        """Check if a host is reachable on the tailnet."""
+        """Check if a host is reachable on the tailnet.
+
+        Superadmins only, for the reason _sees_panel_host_tailnet gives. The ping runs FROM the
+        panel host, and MANAGE_REMOTES is granted per host: a delegated admin for one rented VPS
+        was hidden the panel host's tailnet peer list on the page above, and could then map it
+        anyway, and the LAN behind it, one address at a time through this box.
+        """
+        if not _sees_panel_host_tailnet(current_user):
+            return jsonify({"success": False,
+                            "message": "Only a super admin can probe from the panel host."}), 403
         data = _json_body()
         host = _json_str(data, "host")
         if not host:

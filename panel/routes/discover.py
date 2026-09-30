@@ -14,7 +14,8 @@ from panel.security.auth import (MANAGE_SERVERS, can_access_remote, get_remote, 
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (INSTANCE_NAME_RE)
 from app import (lgsm_name_to_game_type, load_game_list)
-from panel.routes._shared import (_bg_cache_commands)
+from panel.routes._shared import (_bg_cache_commands, _json_int, privileged_accounts)
+from panel.ops import ssh_manager as _sm
 
 
 # "Could not read" is not "nothing is there", and discover_linuxgsm_servers cannot tell its caller
@@ -131,12 +132,52 @@ def register(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("server discovery failed")}), 200
         discovered = _scanned_game_types(_found)
+        # The scan says the account holds a LinuxGSM install; it does not say the account is one
+        # the panel may BECOME. Ask the host, and take the ones it names out of what may be
+        # imported — see privileged_accounts for the host's login turned into root that this is.
+        refused = _privileged_selection(remote, items, discovered)
+        if refused is None:
+            return jsonify({"success": False, "message": (
+                "Couldn't check the selected accounts on %s — the host did not answer, and the "
+                "panel only imports an account it has confirmed is not an administrator or root "
+                "account. Nothing was imported; try again." % remote.name)}), 200
         added, skipped = _add_imported_rows(remote_id, items, discovered)
         not_enrolled = []
         if added:
-            not_enrolled = _finish_import(app, remote, remote_id, added)
-        return jsonify({"success": bool(added), "added": added, "skipped": skipped,
-                        "not_enrolled": not_enrolled})
+            added, not_enrolled = _finish_import(app, remote, remote_id, added)
+        # On the panel's own host an account the helper would not enrol was imported ANYWAY: the
+        # row was committed first, and only then was the helper asked. The helper refuses an
+        # account that can already reach root, so its refusal is the same verdict as the probe's
+        # and is now acted on the same way — _finish_import did not keep the row.
+        if _sm.is_local_server(remote):
+            refused += not_enrolled
+            not_enrolled = []
+        skipped += [r["user"] for r in refused if r["user"] not in skipped]
+        out = {"success": bool(added), "added": added, "skipped": skipped,
+               "not_enrolled": not_enrolled, "refused": refused}
+        if refused and not added:
+            out["message"] = "Not imported: " + "; ".join(
+                "%s (%s)" % (r["user"], r["reason"]) for r in refused) + "."
+        return jsonify(out)
+
+
+def _privileged_selection(remote, items, discovered):
+    """Refuse the selected accounts that are root-capable on the host; drop them from `discovered`.
+
+    -> [{"user", "reason"}] for the ones refused, or None when the host could not be asked. Only
+    accounts the scan reported are probed — a name it did not report is skipped anyway.
+    """
+    picked = [(str(it.get("user") or "")).strip() for it in items[:100] if isinstance(it, dict)]
+    picked = [u for u in dict.fromkeys(picked) if u in discovered]
+    verdict = privileged_accounts(remote, picked)
+    if verdict is None:
+        return None
+    refused = []
+    for user, why in verdict.items():
+        discovered.pop(user, None)
+        refused.append({"user": user,
+                        "reason": "it is not a game account the panel may run as: %s" % why})
+    return refused
 
 
 def _discovered_listing(found, existing, games):
@@ -246,22 +287,39 @@ def _import_refused(user, gt, rules):
 
 def _import_port(it):
     """The port a selected server named, or 27015 when it named none in range."""
-    try:
-        port = int(it.get("port") or 0)
-    except (TypeError, ValueError):
-        port = 0
+    # _json_int, not int(): `{"port": Infinity}` raised OverflowError past `except (TypeError,
+    # ValueError)` and 500'd the import after the scan had already run.
+    port = _json_int(it.get("port") or 0) or 0
     return port if 1 <= port <= 65535 else 27015
 
 
 def _finish_import(app, remote, remote_id, added):
-    """Commit and audit the imported rows, enrol their accounts, and fetch their command lists.
+    """Enrol the imported accounts, commit and audit their rows, and fetch their command lists.
 
-    Returns the accounts the helper would not enrol, each with its reason.
+    Returns (the accounts imported, the accounts the helper would not enrol, each with its reason).
+    On the panel's own host a refused account's row is dropped before the commit, so it is in the
+    second list and not the first.
+
+    Enrolment runs BEFORE the commit. It ran after, so on the panel host an account the helper
+    refused — one that can already reach root — was a committed GameServer row by the time the
+    refusal came back, and the panel went on driving it as a game account. Nothing between the
+    session.add and here queries the database, so the pending rows are not flushed (and no write
+    lock is held) while the helper runs.
     """
+    not_enrolled = _enrol_imported(remote, added)
+    if not_enrolled and _sm.is_local_server(remote):
+        drop = {n["user"] for n in not_enrolled}
+        for obj in list(db.session.new):
+            if (isinstance(obj, GameServer) and obj.remote_id == remote_id
+                    and obj.short_name in drop):
+                db.session.expunge(obj)
+        added = [u for u in added if u not in drop]
+    if not added:
+        db.session.rollback()
+        return added, not_enrolled
     db.session.commit()
     log_action(current_user, "import_servers", target=remote.name,
                detail="added=%s" % ",".join(added), remote=remote)
-    not_enrolled = _enrol_imported(remote, added)
     # Populate the imported servers' command lists so "Supported Commands" is ready
     # without a manual refresh (install caches these; import didn't).
     new_rows = GameServer.query.filter(
@@ -273,4 +331,4 @@ def _finish_import(app, remote, remote_id, added):
                        autostart_ids=[gs.id for gs in new_rows
                                       if gs.short_name not in refused],
                        births={gs.id: row_birth(gs) for gs in new_rows})
-    return not_enrolled
+    return added, not_enrolled

@@ -1282,3 +1282,210 @@ def _console_rows(lines, host_tz):
         rows.append({"t": clock.host_stamp_to_epoch(stamp, host_tz) if stamp else None,
                      "line": rest})
     return rows
+
+
+# ── JSON integers ───────────────────────────────────────────────────────────────────────────────
+
+def _json_int(value):
+    """An id or number a JSON body sent, as an int — or None for anything that is not one.
+
+    `int(x)` under `except (TypeError, ValueError)` was the idiom in a dozen handlers, and it is not
+    total: Python's json module accepts `Infinity` (and `1e400`, which is the same float), and
+    int(float("inf")) raises OverflowError, which none of them caught — so `{"ids": [Infinity]}` was
+    a 500 from the bulk action, the tag set, the discover import and the console socket. It also
+    TRUNCATED: 3.7 became server 3, a value nobody sent. A float is accepted only when it is a whole
+    finite number (JS sends 3 as 3, but a hand-built body may say 3.0); a bool is refused, although
+    it is an int to Python, because `true` is not an id. A string is parsed as int() always parsed
+    it here, and int() of a string never overflows.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None    # False for inf and nan
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+# ── Re-authentication throttle ──────────────────────────────────────────────────────────────────
+# The routes that ask a signed-in user for their CURRENT password (or a live second factor) again —
+# the password change, 2FA on and off, minting an API token, deleting a host — are a password
+# oracle for whoever holds the session: a borrowed tab, a stolen cookie. /login has had a throttle
+# since the start, and the bearer token has one; these had none, and most of them did not even
+# write an audit row on a wrong guess, so a cookie thief could try passwords against the account
+# at bcrypt speed, silently, until one worked — and a correct one is exactly what the password
+# change and the 2FA switch-off need to take the account over for good.
+#
+# Keyed on the ACCOUNT, not the address: the session is the attacker's foothold, and it is the
+# same session whichever address it is replayed from. The same budget and window as the login
+# throttle, and the same reserve-then-release shape, for the reason _login_throttled gives: bcrypt
+# runs in tpool and yields the hub, so counting a failure only after it would let a parallel burst
+# all read "under the limit". A check that passes gives its slot back.
+_REAUTH_FAILS = {}            # user id -> [time of each failed (or still in-flight) check]
+_REAUTH_LOCK = threading.Lock()
+REAUTH_BLOCKED_MSG = ("Too many wrong passwords or codes for this account. Wait a few minutes and "
+                      "try again.")
+
+
+def _reauth_key(user):
+    """The throttle's key for `user`: its id, or — for an object with none yet — the object."""
+    uid = getattr(user, "id", None)
+    return uid if uid is not None else ("unsaved", id(user))
+
+
+def reauth_reserve(user, now=None):
+    """Reserve one re-authentication attempt for `user`; its stamp, or None when throttled."""
+    from app import LOGIN_MAX_FAILS, LOGIN_WINDOW
+    now = time.time() if now is None else now
+    user_id = _reauth_key(user)
+    with _REAUTH_LOCK:
+        for uid in [k for k, v in _REAUTH_FAILS.items() if not v or now - v[-1] >= LOGIN_WINDOW]:
+            del _REAUTH_FAILS[uid]      # bounded to the accounts that failed recently
+        fails = [t for t in _REAUTH_FAILS.get(user_id, []) if now - t < LOGIN_WINDOW]
+        if len(fails) >= LOGIN_MAX_FAILS:
+            _REAUTH_FAILS[user_id] = fails
+            return None
+        fails.append(now)
+        _REAUTH_FAILS[user_id] = fails
+        return now
+
+
+def reauth_release(user, stamp):
+    """Give back the slot reauth_reserve handed out, for a check that PASSED."""
+    user_id = _reauth_key(user)
+    with _REAUTH_LOCK:
+        fails = _REAUTH_FAILS.get(user_id)
+        if fails and stamp in fails:
+            fails.remove(stamp)
+            if not fails:
+                _REAUTH_FAILS.pop(user_id, None)
+
+
+def reauth_password(user, password):
+    """Check `user`'s CURRENT password under the throttle: "ok", "wrong" or "throttled".
+
+    A throttled attempt is refused before bcrypt runs. A `password` that is not a string (a JSON
+    body can send 5) is a wrong password rather than a 500 — check_password's prehash raises on it.
+    """
+    from panel.security.auth import check_password
+    stamp = reauth_reserve(user)
+    if stamp is None:
+        return "throttled"
+    if not (isinstance(password, str) and check_password(password, user.password_hash)):
+        return "wrong"              # the slot stays spent: that is the count
+    reauth_release(user, stamp)
+    return "ok"
+
+
+# ── Accounts the panel must never adopt ─────────────────────────────────────────────────────────
+# Groups whose members are root, or one command from it, on a stock Linux host. sudo/wheel/admin
+# are the sudoers groups of Debian/Ubuntu, RHEL/Arch and older Ubuntu; root is gid 0; docker, lxd
+# and disk each hand out root outright (a privileged container, a raw block device).
+_ROOT_EQUIVALENT_GROUPS = frozenset({"sudo", "wheel", "admin", "root", "docker", "lxd", "disk"})
+_ACCOUNT_PROBE_END = "LGSM_ACCT_PROBE_DONE"
+
+
+def _account_probe_cmd(users):
+    """One shell command that reports, per account, its uid and groups — and any sudoers rule."""
+    import shlex as _shlex
+    parts = []
+    for u in users:
+        q = _shlex.quote(u)
+        parts.append(
+            'if uid=$(id -u %s 2>/dev/null); then echo "ACCT %s $uid $(id -Gn %s 2>/dev/null)"; '
+            # `sudo -l -U` needs root, so it is asked only when the probe IS root (a remote whose
+            # login escalates); otherwise the groups above are the evidence there is.
+            'if [ "$(id -u)" = 0 ] && LC_ALL=C sudo -n -l -U %s 2>/dev/null '
+            '| grep -q "may run the following"; then echo "SUDOERS %s"; fi; '
+            'else echo "NOACCT %s"; fi' % (q, u, q, q, u, u))
+    parts.append("echo %s" % _ACCOUNT_PROBE_END)
+    return "; ".join(parts)
+
+
+def _parse_account_probe(out, users):
+    """{user: "absent" | "ok" | <why it is refused>} from the probe's output; None if it didn't finish."""
+    lines = (out or "").splitlines()
+    if not any(ln.strip() == _ACCOUNT_PROBE_END for ln in lines):
+        return None
+    verdict = {}
+    for ln in lines:
+        words = ln.split()
+        if len(words) == 2 and words[0] == "NOACCT" and words[1] in users:
+            verdict.setdefault(words[1], "absent")
+        elif len(words) >= 3 and words[0] == "ACCT" and words[1] in users:
+            groups = set(words[3:]) & _ROOT_EQUIVALENT_GROUPS
+            if words[2] == "0":
+                verdict[words[1]] = "it is uid 0 (root)"
+            elif groups:
+                verdict[words[1]] = ("it is in the %s group, which can become root"
+                                     % ", ".join(sorted(groups)))
+            else:
+                verdict.setdefault(words[1], "ok")
+        elif len(words) == 2 and words[0] == "SUDOERS" and words[1] in users:
+            if verdict.get(words[1]) in (None, "ok"):     # uid 0 / a group already says more
+                verdict[words[1]] = "it has sudo rules of its own"
+    if any(u not in verdict for u in users):
+        return None                 # a line went missing: an unknown, not a clean bill
+    return verdict
+
+
+def privileged_accounts(remote, users):
+    """Which of `users` on `remote` the panel must refuse to adopt or delete.
+
+    -> {user: why} for each account that is the host's own login, the panel's own account, uid 0,
+    in a root-equivalent group, or (when the probe runs as root) holding sudo rules; or None when
+    the host could not be asked. An account that does not exist is not in the answer.
+
+    WHY. Import turned any account a discover scan found into a GameServer row, and the only name
+    it refused was "root" (game_idents_ok). Every file, cron and console action on that row then
+    runs AS the account — so a delegated MANAGE_SERVERS admin who imported the host's own SSH
+    login (`ubuntu`, in the sudo group, with a ~/linuxgsm.sh in its home) could write its
+    ~/.bashrc, authorized_keys or crontab and be root on the host at its next login or cron tick;
+    and uninstalling that row ran `userdel -r -f` on the host's login account. The helper refuses a
+    root-capable account on the PANEL host, but a remote host has no helper: enrol_game_user
+    returns None there without looking, and _destroyable_user refuses only uid 0 and the panel's
+    own account. So the route asks the host itself. Superadmins are refused too: nothing the panel
+    does through a game account is something the host's own login needs, and a superadmin who
+    really means it has the host's shell.
+    """
+    users = [u for u in dict.fromkeys(users) if u]
+    if not users:
+        return {}
+    refused = {}
+    # The login the panel signs in as, by NAME, whatever its groups say: it is the account whose
+    # authorized_keys the panel's own access rests on, and on a host whose sudoers grants it by
+    # name (cloud-init's 90-cloud-init-users) the group test below would not see it without root.
+    # Not linuxgsm_user: nothing reads that field any more (see _run_via_paramiko), and on an old
+    # single-account setup it names the very account that holds the servers — it gets the same
+    # group and sudoers test as any other account instead.
+    login = getattr(remote, "username", "") or ""
+    local = _sm.is_local_server(remote)
+    for u in users:
+        if u == "root":
+            refused[u] = "it is root"
+        elif u == login:
+            refused[u] = "it is the account the panel signs in to this host as"
+        elif local:
+            from panel.security.privileged import _is_panel_account
+            if _is_panel_account(u):
+                refused[u] = "it is the panel's own account"
+    rest = [u for u in users if u not in refused]
+    if not rest:
+        return refused
+    try:
+        out, _err, _rc = _sm.run_command(
+            remote, _account_probe_cmd(rest), timeout=20,
+            sudo=(False if local else bool(getattr(remote, "sudo_enabled", False))))
+    except Exception:
+        _log.debug("account privilege probe failed", exc_info=True)
+        return None
+    verdict = _parse_account_probe(out, rest)
+    if verdict is None:
+        return None
+    refused.update({u: v for u, v in verdict.items() if v not in ("ok", "absent")})
+    return refused

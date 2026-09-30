@@ -831,7 +831,31 @@ def _register_panel_host_os(app):
         """Reboot the server."""
         data = _json_body()
         delay = data.get("delay", 5)
-        success, msg = so.server_reboot(delay)
+        # OverflowError is the one server_reboot's clamp does not catch: `{"delay": Infinity}`.
+        if isinstance(delay, float) and not delay.is_integer():
+            return jsonify({"success": False,
+                            "message": "The reboot delay must be a number of seconds (0-300)."}), 400
+        # Through the same expected-offline path Reboot now on a remote host takes
+        # (monitoring._reboot_expecting_offline). This one called server_reboot bare, so every
+        # game server on the panel host was still "up" in the monitor's memory when the reboot
+        # verb ran — and the shutdown stops the games before it stops the panel, so a monitor pass
+        # in that window pushed "went offline unexpectedly" for each of them, about a reboot the
+        # panel had itself just made. No local host row (a panel with no servers on its own host)
+        # means nothing to mark, so it reboots as before.
+        from panel.services.monitoring import _reboot_expecting_offline
+        try:
+            _local = RemoteServer.query.filter_by(is_local=True).first()
+        except Exception:
+            # Marking is a courtesy to the alert channel; a reboot the operator asked for is not
+            # refused because the row could not be read.
+            import logging
+            logging.getLogger("panel").debug("reboot: no local host row to mark expected-offline",
+                                             exc_info=True)
+            _local = None
+        if _local is not None:
+            success, msg = _reboot_expecting_offline(_local, lambda _r: so.server_reboot(delay))
+        else:
+            success, msg = so.server_reboot(delay)
         if success:
             log_action(current_user, "server_reboot", target=LOCAL_HOST_LABEL, detail=f"delay={delay}s")
             return jsonify({"success": True, "message": msg})
