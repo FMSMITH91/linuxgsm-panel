@@ -442,7 +442,16 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
     # `or ()`: None means the scan failed. Treating that as 'no ports occupied' can suggest
     # a port that is actually taken — the install then fails with a clear error, which is
     # the same outcome this had before the scanner learned to say 'I could not read'.
-    occupied = set(_remote_listening_ports(remote) or ())
+    # Deliberately NOT resolve_free_port's refusal: this runs after the install, where refusing
+    # moves nothing and helps nobody, and the ports the panel itself configured (the siblings'
+    # below) are still avoided. But said in the log, so a later "Port N was unavailable" has a
+    # recorded reason rather than looking like the de-confliction never ran.
+    live = _remote_listening_ports(remote)
+    if live is None:
+        _log.warning("aux-port: could not read the listening ports on %s; SourceTV/client ports "
+                     "were checked against the panel's own servers only",
+                     getattr(remote, "name", "the host"))
+    occupied = set(live or ())
     occupied.add(int(main_port))
     _add_sibling_ports(occupied, remote, remote_id, skip_short_name=short_name)
     return {k: str(v) for k, v in _dedupe_aux_ports(have, occupied).items()}
@@ -2269,7 +2278,7 @@ def _selected_remotes(server_ids):
     for sid in server_ids:
         try:
             rid = int(sid)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
         if rid in seen:
             continue
@@ -2287,7 +2296,7 @@ def _selected_game_servers(ids):
     for sid in ids:
         try:
             gid = int(sid)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
         if gid in seen:
             continue

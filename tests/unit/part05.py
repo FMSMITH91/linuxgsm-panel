@@ -992,6 +992,7 @@ _VERB_SAMPLES = {
     "ufw-deny-ip": ["203.0.113.5", "panel-autoblock"],
     "ufw-delete-deny-ip": ["203.0.113.5"],
     "ufw-delete-num": ["3"],
+    "ufw-delete-num-if": ["3", "22/tcp ALLOW IN Anywhere # ssh"],
     "f2b-status": [],
     "f2b-status-jail": ["sshd"],
     "f2b-unban": ["sshd", "203.0.113.5"],
@@ -3825,6 +3826,7 @@ _BAD = {
     "ufw-delete-allow-app": ["OpenSSH; id", "Nginx", "openssh"],
     "ufw-default": ["allow; id", "drop"],
     "ufw-delete-num": ["0", "1; id", "-1", "abc"],
+    "ufw-delete-num-if": ["0", "1; id", "-1", "abc", "10000"],
     # The unit list is exhaustive on purpose: the panel may restart these six services and nothing
     # else, so a real service name it was never meant to touch is refused like an injection is.
     "service-restart": ["nginx", "docker", "ssh; id", "ssh.service", ""],
@@ -3901,6 +3903,17 @@ _BAD_VECTORS = [
     ("f2b-unban", ["sshd", "not-an-ip"]),
     ("ufw-allow-proto-port", ["tcp", "22", "a;b"]),
     ("ufw-default", ["allow", "sideways"]),
+    # The expected rule text is argument two: data the host compares, never a command, and still
+    # held to the characters ufw prints for the rules the panel makes, one space apart.
+    ("ufw-delete-num-if", ["3", ""]),
+    ("ufw-delete-num-if", ["3", "-oProxyCommand=x"]),
+    ("ufw-delete-num-if", ["3", "22/tcp ALLOW IN Anywhere; id"]),
+    ("ufw-delete-num-if", ["3", "22/tcp $(id)"]),
+    ("ufw-delete-num-if", ["3", "22/tcp  ALLOW IN Anywhere"]),
+    ("ufw-delete-num-if", ["3", " 22/tcp ALLOW IN Anywhere"]),
+    ("ufw-delete-num-if", ["3", "22/tcp ALLOW IN Anywhere "]),
+    ("ufw-delete-num-if", ["3", "22/tcp ALLOW\nIN Anywhere"]),
+    ("ufw-delete-num-if", ["3", "a" * 201]),
     ("apt-install", ["curl", "--reinstall"]),
     ("write-file", ["/etc/shadow"]),
     # The backup NAME is argument two, so _BAD above never reaches it — it pads position two
@@ -6487,6 +6500,12 @@ try:
         if verb == "ufw-delete-num":
             _cgp_rules.pop(int(list(args)[0]) - 1)
             return ("Rule deleted", "", 0)
+        if verb == "ufw-delete-num-if":        # the host re-checks the rule's text, then deletes
+            _n = int(list(args)[0])
+            if " ".join(_cgp_rules[_n - 1].split()) != list(args)[1]:
+                return ("", "moved", 3)
+            _cgp_rules.pop(_n - 1)
+            return ("Rule deleted", "", 0)
         return ("", "", 0)
     _sm_core.run_privileged = _cgp_priv
     try:
@@ -6500,7 +6519,8 @@ try:
           "by number (positive control)",
           _cgp_n == (2, "Port 27015: 2 rule(s) removed", [])
           and not any(r.startswith("27015") for r in _cgp_rules)
-          and [v for v, _a in _cgp_sent if v.startswith("ufw-delete")] == ["ufw-delete-num"] * 2,
+          and [v for v, _a in _cgp_sent if v.startswith("ufw-delete")]
+          == ["ufw-delete-num-if"] * 2,
           repr((_cgp_n, _cgp_sent, _cgp_rules)))
 finally:
     _sm_core.run_privileged = _cgp_saved

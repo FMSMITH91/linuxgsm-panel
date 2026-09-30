@@ -249,7 +249,13 @@ def _ufw_port_int(port):
     """Coerce a UFW port to a validated int (1-65535), or raise ValueError. Ports and
     protocols are interpolated straight into a root shell command, so they must never
     carry anything but a number / a known protocol keyword."""
-    p = int(port)   # rejects non-numeric ("abc", "22; rm -rf /") with ValueError
+    try:
+        p = int(port)   # rejects non-numeric ("abc", "22; rm -rf /") with ValueError
+    except OverflowError:
+        # int(float("inf")) raises OverflowError, not ValueError — and a JSON body can carry
+        # Infinity or 1e400 (Python's json parses both to inf). Every caller catches ValueError
+        # for "not a port", so an infinite one escaped them as a 500. Same answer as "abc".
+        raise ValueError("port out of range") from None
     if not (1 <= p <= 65535):
         raise ValueError("port out of range")
     return p
@@ -505,7 +511,7 @@ def remote_ufw_delete_rule(server, num, force=False, expect_key=None):
     rule `num` is still that rule in a fresh read."""
     try:
         n = int(num)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False, "Invalid rule number"
     if n < 1:
         return False, "Invalid rule number"
@@ -559,10 +565,41 @@ def _delete_rule_locked(server, n, force, expect_key):
             if n in g.get("nums", []) and g.get("protected"):
                 return False, g.get("protect_reason") or \
                     "This rule protects your access to the host and can't be removed here."
-    out, err, rc = _core.run_privileged(server, "ufw-delete-num", [n], timeout=15)
+        verb, args = _delete_verb(n, status, expect_key)
+    else:
+        verb, args = "ufw-delete-num", [n]
+    out, err, rc = _core.run_privileged(server, verb, args, timeout=15)
     if rc == 0:
         return True, f"Rule {n} deleted"
+    if verb == "ufw-delete-num-if" and rc == _priv.UFW_RULE_MOVED:
+        return False, ("Rule %d changed on the host while it was being removed (someone else "
+                       "edited the firewall), so nothing was removed. Refresh and try again." % n)
     return False, err or out or "Failed to delete rule"
+
+
+def _delete_verb(n, status, expect_key):
+    """(verb, args) that deletes rule `n` — re-checked on the host itself when there is a key.
+
+    ufw_lock serialises the PANEL's ufw changes on a host, so nothing the panel does can move rule
+    n between the read above and the delete. A `ufw` somebody types on the host can: it renumbers
+    the rules, and `ufw delete n` then removes whatever sits at n by the time it runs — possibly the
+    rule the guard above refused to delete. So when the caller named the rule it means
+    (expect_key), the delete goes as ufw-delete-num-if with the text rule n had in that read, and
+    the host deletes n only if it still reads that — the check and the delete in one root
+    invocation (tools/panel-helper do_ufw_delete_num_if, or its shell form over SSH).
+
+    A rule whose text the verb's strict validator refuses (a hand-made rule with a comment outside
+    the characters the panel writes) falls back to the plain delete, still under the lock and
+    still checked above: refusing it outright would make such a rule undeletable from the panel.
+    """
+    if expect_key is None:
+        return "ufw-delete-num", [n]
+    text = next((" ".join((r.get("detail") or "").split()) for r in status.get("rules", [])
+                 if str(r.get("num")) == str(n)), None)
+    try:
+        return "ufw-delete-num-if", _priv.check_args("ufw-delete-num-if", [n, text])
+    except _priv.VerbError:
+        return "ufw-delete-num", [n]
 
 
 def _game_rule_comment(name, default="Game"):
@@ -2602,11 +2639,11 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
     from datetime import datetime, timedelta
     try:
         limit = max(1, min(int(limit or 20), 100))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         limit = 20
     try:
         days = max(1, min(int(days or 7), 90))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         days = 7
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")   # panel clock; no shell input
     # The remote twin of system_ops.fail2ban_top_ips, which #118 converted. Same split: the verb
@@ -3012,7 +3049,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
     Works for a remote (over SSH) and the panel host itself. Returns (ok, message)."""
     try:
         new_port = int(new_port)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False, "Enter a valid port number."
     if not (1 <= new_port <= 65535):
         return False, "Port must be between 1 and 65535."

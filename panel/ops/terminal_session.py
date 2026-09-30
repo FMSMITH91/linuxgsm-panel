@@ -326,14 +326,10 @@ class Session:
 
     def resize(self, cols, rows):
         """Follow the browser's window. Without this, anything full-screen draws to the wrong box."""
-        try:
-            cols, rows = int(cols), int(rows)
-        except (TypeError, ValueError):
+        size = _term_size(cols, rows)
+        if size is None:
             return
-        # Clamped: these reach an ioctl and a remote request, and a terminal 60000 columns wide is
-        # not a size anybody's window is.
-        cols = max(20, min(cols, 500))
-        rows = max(5, min(rows, 200))
+        cols, rows = size
         if self._closed:
             return
         try:
@@ -598,6 +594,22 @@ def _register(sess, user_key):
         _sessions[sess.sid] = sess
 
 
+def _term_size(cols, rows):
+    """(cols, rows) as ints clamped to a window's range, or None when either is not a number.
+
+    OverflowError as well as TypeError/ValueError: the size is JSON off the socket, and int() of
+    the Infinity or 1e400 it can carry raises OverflowError — which resize() did not catch, so it
+    escaped into the socket handler. Clamped because both reach an ioctl and a remote pty request,
+    and a terminal 60000 columns wide is not a size anybody's window is; the paramiko open passed
+    them to invoke_shell unclamped, which the resize right after it would have clamped anyway.
+    """
+    try:
+        cols, rows = int(cols), int(rows)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(20, min(cols, 500)), max(5, min(rows, 200))
+
+
 def open_session(sid, server, is_local, user_key, on_output, on_exit, cols=80, rows=24):
     """Start a shell and return its Session. Raises TerminalError with text fit to show a user."""
     label = "local" if is_local else getattr(server, "name", "remote")
@@ -728,7 +740,8 @@ def _open_paramiko(sess, server, cols, rows):
     if client is None:
         raise TerminalError("That host has no SSH connection.")
     sess._client = client
-    chan = client.invoke_shell(term="xterm-256color", width=int(cols), height=int(rows))
+    cols, rows = _term_size(cols, rows) or (80, 24)
+    chan = client.invoke_shell(term="xterm-256color", width=cols, height=rows)
     chan.settimeout(0.0)
     sess._chan = chan
     sess._pump = threading.Thread(target=_pump_channel, args=(sess,), daemon=True)

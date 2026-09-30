@@ -346,6 +346,9 @@ try:
           repr((_nt_unr10, _nt_rej10, _nt_blk10)))
 
     # ── Telegram reads: a failed read is None, not an empty inbox ──────────────────────────────
+    # Through _OPENER, as _post is: the default urlopen followed a 3xx off api.telegram.org with
+    # the bot token in the URL (see telegram_get_updates). A stub on urlopen is therefore not
+    # called at all any more, which is the point.
     _urls10 = []
 
     def _urlopen10(payload):
@@ -356,35 +359,38 @@ try:
             return _Resp10(200, payload)
         return _f
 
-    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": true, "result": [{"update_id": 7}]}')
+    def _TgOpener10(payload):
+        return type("_TgOp10", (), {"open": staticmethod(_urlopen10(payload))})()
+
+    _n10._OPENER = _TgOpener10(b'{"ok": true, "result": [{"update_id": 7}]}')
     _upd10 = _n10.telegram_get_updates(_TG10, offset=8, timeout=1)
     check("notify telegram updates: a good read returns the result list, asking from the offset",
           _upd10 == [{"update_id": 7}] and _urls10 and "offset=8" in _urls10[-1]
           and _urls10[-1].startswith("https://api.telegram.org/bot%s/getUpdates?" % _TG10),
           repr((_upd10, _urls10[-1:])))
-    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": false, "description": "Conflict"}')
+    _n10._OPENER = _TgOpener10(b'{"ok": false, "description": "Conflict"}')
     _upd_bad10 = _n10.telegram_get_updates(_TG10, timeout=1)
-    _n10.urllib.request.urlopen = _urlopen10(urllib.error.URLError("down"))
+    _n10._OPENER = _TgOpener10(urllib.error.URLError("down"))
     _upd_down10 = _n10.telegram_get_updates(_TG10, timeout=1)
     check("notify telegram updates: a refused or failed poll is None, never an empty list",
           _upd_bad10 is None and _upd_down10 is None
           and _n10.telegram_get_updates("bad-token") is None,
           repr((_upd_bad10, _upd_down10)))
-    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": true, "result": {"username": "panelbot"}}')
+    _n10._OPENER = _TgOpener10(b'{"ok": true, "result": {"username": "panelbot"}}')
     _me10 = _n10.telegram_get_me(_TG10)
-    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": true, "result": {}}')
+    _n10._OPENER = _TgOpener10(b'{"ok": true, "result": {}}')
     _me_none10 = _n10.telegram_get_me(_TG10)
     # A refusal is not an answer, whatever else came back with it.
-    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": false, "result": {"username": "stale"}}')
+    _n10._OPENER = _TgOpener10(b'{"ok": false, "result": {"username": "stale"}}')
     _me_refused10 = _n10.telegram_get_me(_TG10)
-    _n10.urllib.request.urlopen = _urlopen10(b"not json")
+    _n10._OPENER = _TgOpener10(b"not json")
     _me_bad10 = _n10.telegram_get_me(_TG10)
     check("notify telegram getMe: the bot's name, or None when it could not be read",
           _me10 == "panelbot" and _me_none10 is None and _me_bad10 is None
           and _me_refused10 is None
           and _n10.telegram_get_me("") is None,
           repr((_me10, _me_none10, _me_bad10)))
-    _n10.urllib.request.urlopen = _n10_urlopen_saved
+    _n10._OPENER = _n10_saved["_OPENER"]
 
     (_cl10, _q10) = _sender10(200, _n10.telegram_set_commands, _TG10, True)
     (_set10, _q2_10) = _sender10(200, _n10.telegram_set_commands, _TG10)

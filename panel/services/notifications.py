@@ -128,7 +128,7 @@ def get_thresholds():
         lo, hi = _THRESHOLD_BOUNDS[k]
         try:
             out[k] = min(hi, max(lo, int(t.get(k, dflt))))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             out[k] = dflt
     return out
 
@@ -226,7 +226,7 @@ def _submitted_thresholds(thresholds):
             lo, hi = _THRESHOLD_BOUNDS[k]
             try:
                 th[k] = min(hi, max(lo, int(thresholds[k])))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 _log.debug("ignoring non-numeric threshold %r; keeping %r", k, th[k])
     return th
 
@@ -519,11 +519,16 @@ def telegram_get_updates(token, offset=None, timeout=25):
     try:
         # _tg_api_url builds the URL on the fixed api.telegram.org host.
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        with urllib.request.urlopen(req, timeout=timeout + 10) as resp:  # nosec B310 - https, host-literal
+        # _OPENER, as _post uses: the default urlopen FOLLOWS a 3xx, off api.telegram.org to
+        # wherever it points (http:// included), with the bot token in the path of the URL that
+        # asked — the one thing _post's comment above says no provider needs. A 3xx is now an
+        # HTTPError, a URLError, so this answers None like any other failed poll.
+        with _OPENER.open(req, timeout=timeout + 10) as resp:  # nosec B310 - https, host-literal, no redirects
             data = json.loads(resp.read(2_000_000).decode("utf-8", "replace"))
         return (data.get("result") or []) if data.get("ok") else None
-    except (urllib.error.URLError, OSError, ValueError):
-        _log.debug("telegram getUpdates failed", exc_info=True)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        # The class, not exc_info: a URLError renders the URL, and this one carries the bot token.
+        _log.debug("telegram getUpdates failed (%s)", e.__class__.__name__)
         return None
 
 
@@ -539,12 +544,13 @@ def telegram_get_me(token):
     try:
         # _tg_api_url builds the URL on the fixed api.telegram.org host.
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - https, host-literal
+        with _OPENER.open(req, timeout=15) as resp:  # nosec B310 - https, host-literal, no redirects
             data = json.loads(resp.read(200_000).decode("utf-8", "replace"))
         name = (data.get("result") or {}).get("username") if data.get("ok") else None
         return str(name) if name else None
-    except (urllib.error.URLError, OSError, ValueError, AttributeError):
-        _log.debug("telegram getMe failed", exc_info=True)
+    except (urllib.error.URLError, OSError, ValueError, AttributeError) as e:
+        # _OPENER and the class name for the reasons telegram_get_updates gives.
+        _log.debug("telegram getMe failed (%s)", e.__class__.__name__)
         return None
 
 

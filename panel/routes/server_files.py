@@ -37,7 +37,7 @@ from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_
 from panel.core.panel_state import (_console_backlog, _console_offsets, _console_partial,
     register_server_state)
 from panel.routes._shared import (_console_rows, _drain_action_output,
-    _host_timezone_cached, _json_int, _server_action_buttons)
+    _host_timezone_cached, _json_int, _server_action_buttons, game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -957,6 +957,22 @@ def _gmod_apply_request(app, gs, remote, sel):
                                "Restart the server afterwards to load the changes."})
 
 
+def _write_refused(gs, action, detail=""):
+    """A refusal response when `gs`'s game account may not be written as, else None.
+
+    Every file-manager and cron WRITE asks this before it touches the host: a row imported before
+    the import refused root-capable accounts can name the host's own sudo login, and a write as
+    it (~/.bashrc, authorized_keys, a crontab line) is root on the host. See
+    _shared.game_account_write_refusal — cached, and closed when the host cannot answer.
+    """
+    why = game_account_write_refusal(gs.remote, gs.short_name)
+    if why is None:
+        return None
+    log_action(current_user, action, target=gs.name, detail=("refused: " + why)[:250],
+               success=False, server=gs)
+    return jsonify({"success": False, "message": why}), 409
+
+
 def _store_upload(gs, reldir, f, data, overwrite):
     """Write an uploaded file onto the host and audit it: the upload route's answer."""
     ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data,
@@ -1135,6 +1151,9 @@ def _register_config_editor(app):
             except Exception:
                 return jsonify({"error": _log_and_generic("request failed")}), 500
         data = _json_body()
+        refused = _write_refused(gs, "edit_config")
+        if refused is not None:
+            return refused
         try:
             if data.get("raw") is not None:
                 # A file's contents must be a STRING. A number or a list reached write_file and
@@ -1262,6 +1281,9 @@ def _register_file_editor(app):
         # An intentionally empty file is "", which is text, and still saves.
         if not isinstance(data.get("content"), str):
             return jsonify({"success": False, "message": "The file contents must be text."}), 400
+        refused = _write_refused(gs, "edit_file", rel)
+        if refused is not None:
+            return refused
         try:
             ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"])
             log_action(current_user, "edit_file", target=gs.name, detail=rel, success=ok,
@@ -1281,6 +1303,9 @@ def _register_file_removal(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         rel = _json_body().get("path", "")
+        refused = _write_refused(gs, "delete_file", rel)
+        if refused is not None:
+            return refused
         try:
             ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
             log_action(current_user, "delete_file", target=gs.name, detail=rel, success=ok,
@@ -1413,6 +1438,9 @@ def _register_cron_jobs(app):
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
         data = _json_body()
+        refused = _write_refused(gs, "cron_add")
+        if refused is not None:
+            return refused
         try:
             ok, msg = add_cron_job(gs.remote, gs.short_name, data.get("schedule"),
                                    data.get("command"), gs.lgsm_name)
@@ -1432,6 +1460,9 @@ def _register_cron_jobs(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         data = _json_body()
+        refused = _write_refused(gs, "cron_update")
+        if refused is not None:
+            return refused
         try:
             ok, msg = update_cron_job(gs.remote, gs.short_name, data.get("raw") or "",
                                       data.get("schedule"), data.get("command"), gs.lgsm_name)
@@ -1452,6 +1483,9 @@ def _register_cron_actions(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         data = _json_body()
+        refused = _write_refused(gs, "cron_delete")
+        if refused is not None:
+            return refused
         try:
             ok, msg = _sm.delete_cron_job(gs.remote, gs.short_name, data.get("raw") or "", gs.lgsm_name)
             if ok:
@@ -1471,6 +1505,9 @@ def _register_cron_actions(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         raw = _json_body().get("raw") or ""
+        refused = _write_refused(gs, "cron_run_now")
+        if refused is not None:
+            return refused
         try:
             ok, msg = run_cron_job_now(gs.remote, gs.short_name, raw, gs.lgsm_name)
             log_action(current_user, "cron_run_now", target=gs.name, success=ok, server=gs)
@@ -1547,6 +1584,9 @@ def _register_uploads(app):
         # direct API call, or a file that appeared between the check and this write — gets a 409
         # conflict rather than silently replacing someone's config.
         overwrite = request.form.get("overwrite") == "1"
+        refused = _write_refused(gs, "upload_file", reldir)
+        if refused is not None:
+            return refused
         try:
             return _store_upload(gs, reldir, f, data, overwrite)
         except Exception:

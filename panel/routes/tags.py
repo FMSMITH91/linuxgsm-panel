@@ -13,7 +13,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (_valid_hex_color, password_problem)
 from app import (_has_remember_cookie, _log, _register_session, _tag_json)
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _json_int, reauth_password, reauth_release,
-    reauth_reserve)
+    reauth_reserve, spend_totp_step)
 
 
 def register(app):
@@ -137,7 +137,7 @@ def _spend_second_factor(u, code, back, mismatch):
     ok_2fa = False
     _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
     if _step is not None:
-        if not _spend_totp_step(u, _step):
+        if not spend_totp_step(u, _step):
             flash("That code has already been used — wait for your authenticator to show "
                   "the next one.", "danger")
             return redirect(back)
@@ -162,33 +162,6 @@ def _reregister_session(u, remember):
         db.session.rollback()
         _log.warning("could not register a session row on re-login", exc_info=True)
         return None
-
-
-def _spend_totp_step(u, step):
-    """Record `step` as `u`'s last spent authenticator step, unless one at least as new is. -> bool.
-
-    ONE conditional UPDATE, not a read, a compare and a write. The check was `step <= the
-    last_totp_step this request loaded`, then an assignment committed with the rest of the change:
-    two requests carrying the same observed code both loaded the old value, both passed, and one
-    code was spent twice — the exact replay last_totp_step exists to stop, won by sending the two
-    requests together. The database now decides: the row is written only while its stored step is
-    older, and a request whose UPDATE matched nothing lost the race (or replayed) and is refused.
-    The write joins the caller's transaction and commits with it; SQLite holds the second writer
-    until the first commits, so it then sees the new step.
-    """
-    from sqlalchemy import or_, update
-    from sqlalchemy.orm.attributes import set_committed_value
-    from panel.db.models import User
-    res = db.session.execute(
-        update(User).where(User.id == u.id,
-                           or_(User.last_totp_step.is_(None), User.last_totp_step < step))
-        .values(last_totp_step=step).execution_options(synchronize_session=False))
-    if res.rowcount != 1:
-        return False
-    # The loaded object agrees with the row without being marked dirty, so the caller's commit
-    # does not write the step a second time (unconditionally) behind the guarded UPDATE.
-    set_committed_value(u, "last_totp_step", step)
-    return True
 
 
 def _remember_this_device(u):

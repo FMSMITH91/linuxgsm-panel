@@ -108,7 +108,8 @@ detached OS update, Tailscale's join, the panel's own restore/self-update, the V
 steps, running a LinuxGSM action as the game user, enrolling a game account in the group the
 grant names, installing a game's dependencies, reading the pending-restart flags, freeing
 Steam's per-account crash-dump slots, configuring NodeSource's repository on a remote with its
-signing key pinned and installing gamedig on a remote from its hash-locked lockfile** — 103 verbs. (`tests/unit_test.py` asserts
+signing key pinned, installing gamedig on a remote from its hash-locked lockfile and deleting a
+ufw rule by number only while it is still the rule that was checked** — 104 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section

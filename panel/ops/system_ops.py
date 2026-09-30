@@ -3011,7 +3011,7 @@ def fail2ban_top_ips(limit=20, days=7):
     limit = max(1, min(int(limit or 20), 100))
     try:
         days = max(1, min(int(days or 7), 90))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         days = 7
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     # Was a five-stage zcat|awk|grep|awk|sort|head pipeline running as root, with the cutoff date
@@ -3040,7 +3040,7 @@ def _f2b_cutoff(days):
     from datetime import datetime, timedelta
     try:
         days = max(1, min(int(days or 7), 90))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         days = 7
     return (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
@@ -3169,7 +3169,7 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     whitelisted (never banned). Idempotent. Returns (ok, message)."""
     try:
         web_port = int(web_port)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False, "Invalid web port."
     if not (1 <= web_port <= 65535):
         return False, "Invalid web port."
@@ -3239,7 +3239,7 @@ def ensure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     install fail2ban (that's the installer's job) — no-ops when it isn't present. Returns (ok, msg)."""
     try:
         web_port = int(web_port)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False, "Invalid web port."
     st = panel_fail2ban_status()
     if not st.get("installed"):

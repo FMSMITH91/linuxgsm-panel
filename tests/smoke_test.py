@@ -106,6 +106,11 @@ _smoke_banlist.refresh_soon = lambda *a, **k: None
 import panel.routes.manage_servers as _smoke_ms  # noqa: E402
 _smoke_priv_real = _smoke_ms.privileged_accounts
 _smoke_ms.privileged_accounts = lambda _remote, _users: {}
+# The file-manager and cron WRITE routes ask the same question for the rows imported before import
+# asked it (_shared.game_account_write_refusal, which looks privileged_accounts up in _shared).
+# Answered the same way suite-wide; the gate itself is driven below with the host's reply scripted.
+import panel.routes._shared as _smoke_shared  # noqa: E402
+_smoke_shared.privileged_accounts = lambda _remote, _users: {}
 app.config["SESSION_PROTECTION"] = None  # tests inject the session directly (no IP/UA fingerprint)
 app.config["SESSION_COOKIE_SECURE"] = False  # test client talks http://; Secure cookies wouldn't round-trip
 app.config["REMEMBER_COOKIE_SECURE"] = False
@@ -1098,6 +1103,14 @@ try:
             if verb == "ufw-delete-num":
                 del self.rules[int(args[0]) - 1]
                 return ("Rule deleted", "", 0)
+            if verb == "ufw-delete-num-if":      # the host's own re-check, then the delete
+                rows = self.priv(server, "ufw-status")[0].splitlines()
+                got = [" ".join(r.split("]", 1)[1].split()) for r in rows
+                       if r.startswith("[") and int(r[1:r.index("]")]) == int(args[0])]
+                if got != [args[1]]:
+                    return ("ufw-delete-num-if: rule moved", "", 3)
+                del self.rules[int(args[0]) - 1]
+                return ("Rule deleted", "", 0)
             if verb in ("ufw-delete-allow-port", "ufw-delete-allow-proto-port"):
                 to = args[0] if verb == "ufw-delete-allow-port" else "%s/%s" % (args[1], args[0])
                 self.rules = [r for r in self.rules if not (r[0] == to and r[1] == "ALLOW")]
@@ -1186,8 +1199,12 @@ try:
             if verb == "ufw-status":
                 return (self.HDR + "".join("[%2d] %s\n" % (i, r)
                                            for i, r in enumerate(self.rows(), 1)), "", 0)
-            if verb == "ufw-delete-num":
+            if verb in ("ufw-delete-num", "ufw-delete-num-if"):
                 n = int(args[0])
+                rows = self.rows()
+                if verb == "ufw-delete-num-if" and not (
+                        1 <= n <= len(rows) and " ".join(rows[n - 1].split()) == args[1]):
+                    return ("ufw-delete-num-if: rule moved", "", 3)   # the host's own re-check
                 fam, i = (self.v4, n - 1) if n <= len(self.v4) else (self.v6, n - 1 - len(self.v4))
                 del fam[i]
                 return ("Rule deleted", "", 0)

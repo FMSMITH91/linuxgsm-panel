@@ -774,6 +774,17 @@ def _rulenum(s):
     return str(s)
 
 
+# One rule's text from `ufw status numbered`, whitespace collapsed to single spaces — the helper's
+# UFW_RULE_TEXT_RE, character for character (a unit test compares them). See v_ufw_rule_text there.
+UFW_RULE_TEXT_RE = r"[A-Za-z0-9(][A-Za-z0-9_.,:/()#-]*(?: [A-Za-z0-9_.,:/()#-]+)*"
+
+
+def _ufw_rule_text(s):
+    if not isinstance(s, str) or len(s) > 200 or not re.fullmatch(UFW_RULE_TEXT_RE, s):
+        raise VerbError("not a ufw rule")
+    return s
+
+
 def _choice(*allowed):
     def check(s):
         if str(s) not in allowed:
@@ -1070,6 +1081,9 @@ _ARGV = {
                     + (["comment", a[1]] if a[1] else []), None),
     "ufw-delete-deny-ip": ([_cidr], lambda a: [UFW, "delete", "deny", "from", a[0]], None),
     "ufw-delete-num": ([_rulenum], lambda a: [UFW, "delete", a[0]], "y\n"),
+    # Rule <n> is deleted only while it still reads <text>, checked and deleted in one root run —
+    # the helper does it itself (do_ufw_delete_num_if); a remote gets the shell form below.
+    "ufw-delete-num-if": ([_rulenum, _ufw_rule_text], lambda a: [], None),
 }
 
 
@@ -1302,6 +1316,32 @@ def _f2b_log_lines_remote(a):
             "print }'" % (F2B_LOG_GLOB, shlex.quote(a[0]), F2B_LOG_MAX_BYTES))
 
 
+# The exit status of a ufw-delete-num-if that found rule <n> changed and deleted nothing — the
+# helper's UFW_RULE_MOVED. ufw itself exits 0 or 1, so this cannot be mistaken for its answer.
+UFW_RULE_MOVED = 3
+
+
+def _ufw_delete_num_if_remote(a):
+    """The remote form of ufw-delete-num-if: read, compare and delete in one shell on the host.
+
+    The awk is the helper's _ufw_numbered_rule: the line whose "[ n]" is n, the prefix dropped and
+    every run of whitespace collapsed to one space (`$1 = $1` rebuilds the record with single
+    spaces and no ends). A failed read keeps ufw's own status — 127 is "ufw is not installed" to
+    the callers. The number passed _rulenum and the text _ufw_rule_text, and the text is quoted
+    anyway, so neither can be anything but data to the shell.
+    """
+    return ("r=$(ufw status numbered 2>&1); rc=$?; "
+            "[ \"$rc\" = 0 ] || { printf '%%s\\n' \"$r\"; exit \"$rc\"; }; "
+            "t=$(printf '%%s\\n' \"$r\" | awk -v n=%s "
+            "'match($0, /^[ \\t]*\\[[ \\t]*[0-9]+\\]/) { k = substr($0, RSTART, RLENGTH); "
+            "gsub(/[^0-9]/, \"\", k); if (k + 0 == n + 0) { "
+            "sub(/^[ \\t]*\\[[ \\t]*[0-9]+\\][ \\t]*/, \"\"); $1 = $1; print; exit } }'); "
+            "if [ \"$t\" = %s ]; then yes | ufw delete %s 2>&1; "
+            "else echo 'ufw-delete-num-if: rule %s is no longer the rule that was checked; "
+            "nothing was deleted'; exit %d; fi"
+            % (a[0], shlex.quote(a[1]), a[0], a[0], UFW_RULE_MOVED))
+
+
 # The remote renderings of the SECRET_STDIN verbs, naming the mktemp file "$f" that holds the secret.
 _SECRET_REMOTE = {
     "pro-attach": lambda a: "pro attach --attach-config \"$f\"",
@@ -1478,6 +1518,7 @@ _REMOTE_ACTIONS = {
         % (shlex.quote(a[0]), shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"))),
     "content-grant-read": _content_grant_remote,
     "restart-flags": lambda a: "ls -1d /home/*/.restart-pending 2>/dev/null || true",
+    "ufw-delete-num-if": _ufw_delete_num_if_remote,
     "nodesource-setup": _nodesource_setup_remote,
     "gamedig-install": _gamedig_install_remote,
 }

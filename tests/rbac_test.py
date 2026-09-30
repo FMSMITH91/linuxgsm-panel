@@ -58,6 +58,12 @@ app = create_app()
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
 app.config["SESSION_PROTECTION"] = None  # tests inject the session directly (no IP/UA fingerprint)
 app.config["SESSION_COOKIE_SECURE"] = False  # test client talks http://; Secure cookies wouldn't round-trip
+# File-manager and cron writes first ask the host whether the game account can become root there
+# (_shared.game_account_write_refusal -> privileged_accounts), and refuse when it cannot answer.
+# This suite's hosts are not real, so every account is answered "a plain game account", as
+# smoke_test does; the gate itself is driven in unit part18 with the host's reply scripted.
+import panel.routes._shared as _rbac_shared  # noqa: E402
+_rbac_shared.privileged_accounts = lambda _remote, _users: {}
 results = []
 
 
@@ -4224,6 +4230,9 @@ def _ax_names(expr, var):
 _AX_ACTION_FROM_CALLER = {
     "_record_backup_outcome",   # its callers pass "scheduled_backup" / "queued_backup"
     "audit_bot_action",         # the chat bots pass "moderate_say" (server=) / "panel_self_update"
+    "_write_refused",           # server_files' write routes pass edit_config / edit_file /
+                                # delete_file / upload_file / cron_add / cron_update / cron_delete /
+                                # cron_run_now — each the action that route audits on success
 }
 _ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
 _ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)

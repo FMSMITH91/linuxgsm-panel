@@ -123,7 +123,7 @@ def _validate_port(key, value):
         return value                    # optional columns (query_port) may legitimately be unset
     try:
         n = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ValueError("%s must be a number, got %r" % (key, value))
     if not (_MIN_PORT <= n <= _MAX_PORT):
         raise ValueError("%s must be between %d and %d, got %d" % (key, _MIN_PORT, _MAX_PORT, n))

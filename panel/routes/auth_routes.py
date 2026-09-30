@@ -7,7 +7,6 @@ import re
 from contextlib import (suppress)
 from flask import (flash, g, jsonify, redirect, render_template, request, session, url_for)
 from flask_login import (current_user, login_required, login_user, logout_user)
-from sqlalchemy import or_
 from panel.core import (i18n)
 from panel.core.clock import (utcnow)
 from panel.core.config import (decrypt_secret, encrypt_secret)
@@ -23,7 +22,7 @@ from app import (LOGIN_MAX_FAILS, LOGIN_WINDOW, _LOGIN_BLOCK_LOGGED, _LOGIN_FAIL
     _LOGIN_FAILS_LOCK, _authlog, _log, _log_ip, _maybe_alert_admin_bruteforce,
     _has_remember_cookie, _prune_login_fails, _qr_svg, _register_session, _session_label)
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, reauth_password, reauth_release,
-    reauth_reserve)
+    reauth_reserve, spend_totp_step)
 
 
 def register(app):
@@ -231,7 +230,7 @@ def _register_account(app):
             if _step is not None:
                 # A compare-and-swap, for the reason _login_totp_code gives: two mints with one
                 # code could otherwise both pass a read-then-write.
-                if _step <= (u.last_totp_step or 0) or not _spend_totp_step(u, _step):
+                if _step <= (u.last_totp_step or 0) or not spend_totp_step(u, _step):
                     db.session.rollback()
                     flash("That code has already been used — wait for your authenticator to show "
                           "the next one.", "danger")
@@ -364,9 +363,19 @@ def _register_2fa_and_profile(app):
             _enrol_step = (verify_totp_step(secret, request.form.get("totp_code", ""))
                            if secret else None)
             if _enrol_step is not None:
+                # Spent through the same compare-and-swap as every other live-code route, not the
+                # plain assignment this was: that wrote the step unconditionally, so two enrolment
+                # POSTs with one code both passed the totp_enabled check above, both turned 2FA on
+                # and each rendered its OWN set of backup codes — only the later commit's set was
+                # stored, and the holder of the other page was left keeping codes that never work.
+                # Now exactly one wins; the other is told the code is spent and keeps the QR.
+                if not spend_totp_step(_u, _enrol_step):
+                    db.session.rollback()
+                    flash("That code has already been used — wait for your authenticator to show "
+                          "the next one.", "danger")
+                    return redirect(url_for("account_2fa_enable"))
                 current_user.totp_secret = encrypt_secret(secret)
                 current_user.totp_enabled = True
-                current_user.last_totp_step = _enrol_step      # spend it, in the same commit
                 codes = generate_backup_codes()
                 current_user.set_backup_codes(codes)
                 db.session.commit()
@@ -759,22 +768,11 @@ def _login_totp_code(attempt, u, entered):
     # the requests interleave — the shape _claim_invite uses for the same reason.
     if _step <= (u.last_totp_step or 0):
         return _login_totp_replayed(attempt, u)
-    if not _spend_totp_step(u, _step):
+    if not spend_totp_step(u, _step):
         db.session.rollback()
         return _login_totp_replayed(attempt, u)   # another request spent this step first
     db.session.commit()
     return _login_succeed(attempt, u, bool(session.get("_2fa_remember")))
-
-
-def _spend_totp_step(u, step):
-    """Record TOTP timestep `step` as spent for `u`, atomically; False if it (or a later one) was.
-
-    Uncommitted: the caller commits it with whatever else the code unlocks, or rolls back.
-    """
-    return bool(db.session.query(User)
-                .filter(User.id == u.id,
-                        or_(User.last_totp_step.is_(None), User.last_totp_step < step))
-                .update({"last_totp_step": step}, synchronize_session=False))
 
 
 def _login_totp_replayed(attempt, u):

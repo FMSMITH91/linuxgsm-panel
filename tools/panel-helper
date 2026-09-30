@@ -1175,6 +1175,22 @@ def v_rulenum(s):
     return s
 
 
+# One rule's text as `ufw status numbered` prints it after the "[ n]", every run of whitespace
+# collapsed to one space: "22/tcp ALLOW IN Anywhere # ssh", "Anywhere on tailscale0 ALLOW IN
+# Anywhere (v6)". The characters are what ufw puts there for the rules the panel makes (ports and
+# ranges, addresses and networks, actions, interfaces, app profiles, and comments from the panel's
+# own [A-Za-z0-9 _.-] set). It starts with a letter, digit or "(" so it can never read as an option.
+# A rule someone typed by hand with a comment outside this set is refused here; the panel then
+# deletes it the older way (see hosts._delete_rule_locked). Mirrors privileged._ufw_rule_text.
+UFW_RULE_TEXT_RE = r"[A-Za-z0-9(][A-Za-z0-9_.,:/()#-]*(?: [A-Za-z0-9_.,:/()#-]+)*"
+
+
+def v_ufw_rule_text(s):
+    if len(s) > 200 or not re.fullmatch(UFW_RULE_TEXT_RE, s):
+        raise ValueError("not a ufw rule")
+    return s
+
+
 def v_choice(*allowed):
     def check(s):
         if s not in allowed:
@@ -2089,6 +2105,9 @@ VERBS = {
         [v_rulenum],
         lambda a: [UFW, "delete", a[0]],
         "y\n"),
+    # ufw-delete-num, but only while rule <n> is still <text>: the read and the delete in ONE root
+    # invocation (do_ufw_delete_num_if). Mirrors privileged.py.
+    "ufw-delete-num-if": ([v_rulenum, v_ufw_rule_text], lambda a: [], None),
 }
 
 
@@ -2195,6 +2214,60 @@ def do_f2b_sshd_ports(args, content):
         os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))
         os.replace(tmp, path)
     return 0
+
+
+# The exit status of a ufw-delete-num-if whose rule is no longer the one it was told to expect.
+# Not one ufw uses (it exits 0 or 1), so the panel can tell "moved, nothing deleted" from "failed".
+UFW_RULE_MOVED = 3
+
+
+def _ufw_numbered_rule(listing, n):
+    """Rule `n`'s text in a `ufw status numbered` listing, whitespace collapsed; None if absent.
+
+    The panel parses the same listing with the same pattern (firewall._UFW_NUMBERED_RE) and
+    collapses the text the same way before it sends it here as the rule it expects.
+    """
+    for line in listing.splitlines():
+        m = re.match(r"^\s*\[\s*(\d+)\]\s*((?:\S.*)?)$", line)
+        if m and int(m.group(1)) == n:
+            return " ".join(m.group(2).split())
+    return None
+
+
+def do_ufw_delete_num_if(args, content):
+    """`ufw delete <n>` only if rule <n> still reads <text> -- the check and the delete in one run.
+
+    ufw numbers are POSITIONS: every insert above a rule renumbers it. The panel re-reads the
+    firewall, checks rule n is the rule the operator picked (and not the one keeping SSH open),
+    and deletes n, all under its per-host ufw_lock -- which serialises the panel's OWN changes, but
+    not a `ufw` somebody types on the host between the panel's read and its delete. That shifted
+    the numbers under the check and `ufw delete n` removed whatever sat at n by then. Here the read
+    and the delete are the same root process, microseconds apart instead of an SSH round trip, and
+    a rule that moved is left alone: exit UFW_RULE_MOVED, nothing deleted.
+    """
+    n, expected = args
+    try:
+        ufw = resolve(UFW)
+    except FileNotFoundError:
+        print("panel-helper: the tool for ufw-delete-num-if is not installed", file=sys.stderr)
+        return 127
+    st = subprocess.run([ufw, "status", "numbered"],      # nosec B603 - fixed argv
+                        shell=False, env=_clean_env(), capture_output=True, text=True, timeout=60)
+    if st.returncode != 0:
+        sys.stdout.write(st.stdout[-2000:])
+        sys.stderr.write(st.stderr[-500:])
+        return st.returncode
+    if _ufw_numbered_rule(st.stdout, int(n)) != expected:
+        sys.stderr.write("ufw-delete-num-if: rule %s is no longer the rule that was checked; "
+                         "nothing was deleted\n" % n)
+        return UFW_RULE_MOVED
+    # `ufw delete <n>` asks "Proceed (y|n)?"; answered on stdin, as ufw-delete-num's is.
+    d = subprocess.run([ufw, "delete", n],                # nosec B603 - n passed v_rulenum
+                       shell=False, input="y\n", env=_clean_env(), capture_output=True,
+                       text=True, timeout=60)
+    sys.stdout.write(d.stdout or "")
+    sys.stderr.write(d.stderr or "")
+    return d.returncode
 
 
 def do_reboot_delayed(args, content):
@@ -4304,6 +4377,7 @@ ACTIONS = {
     "sshd-discard-backup": do_sshd_discard_backup,
     "f2b-set-sshd-ports": do_f2b_sshd_ports,
     "reboot-delayed": do_reboot_delayed,
+    "ufw-delete-num-if": do_ufw_delete_num_if,
     "content-scan": do_content_scan,
     "content-dir-create": do_content_dir_create,
     "content-game-present": do_content_game_present,

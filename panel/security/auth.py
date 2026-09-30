@@ -542,7 +542,7 @@ def can_access_remote(user, remote_id):
         return True
     try:
         rid = int(remote_id)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False
     for group in _groups_with_grants(user):
         for rs in group.servers or []:

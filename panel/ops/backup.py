@@ -1235,7 +1235,7 @@ def get_game_schedule(sid):
     def _clamp(v, lo, hi, dflt):
         try:
             return max(lo, min(hi, int(v)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return dflt
     return {
         "interval_days": (_clamp(entry["interval_days"], 0, MAX_INTERVAL_DAYS, d["interval_days"])

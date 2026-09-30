@@ -1382,6 +1382,39 @@ def reauth_password(user, password):
     return "ok"
 
 
+def spend_totp_step(u, step):
+    """Record `step` as `u`'s last spent authenticator step, unless one at least as new is. -> bool.
+
+    ONE conditional UPDATE, not a read, a compare and a write. The check was `step <= the
+    last_totp_step this request loaded`, then an assignment committed with the rest of the change:
+    two requests carrying the same observed code both loaded the old value, both passed, and one
+    code was spent twice — the exact replay last_totp_step exists to stop, won by sending the two
+    requests together. The database now decides: the row is written only while its stored step is
+    older, and a request whose UPDATE matched nothing lost the race (or replayed) and is refused.
+    The write joins the caller's transaction and commits with it; SQLite holds the second writer
+    until the first commits, so it then sees the new step.
+
+    The ONE copy. Two review passes each added their own — auth_routes for login and the API-token
+    mint, tags for the password change and the 2FA switch-off — and they had already drifted: only
+    this one told the loaded object about the write, so after the other the request went on
+    holding the stale step it had loaded. Every route that accepts a live authenticator code
+    (login, the mint, the password change, 2FA off, and 2FA enrolment) spends it here.
+    """
+    from sqlalchemy import or_, update
+    from sqlalchemy.orm.attributes import set_committed_value
+    from panel.db.models import User
+    res = db.session.execute(
+        update(User).where(User.id == u.id,
+                           or_(User.last_totp_step.is_(None), User.last_totp_step < step))
+        .values(last_totp_step=step).execution_options(synchronize_session=False))
+    if res.rowcount != 1:
+        return False
+    # The loaded object agrees with the row without being marked dirty, so the caller's commit
+    # does not write the step a second time (unconditionally) behind the guarded UPDATE.
+    set_committed_value(u, "last_totp_step", step)
+    return True
+
+
 # ── Accounts the panel must never adopt ─────────────────────────────────────────────────────────
 # Groups whose members are root, or one command from it, on a stock Linux host. sudo/wheel/admin
 # are the sudoers groups of Debian/Ubuntu, RHEL/Arch and older Ubuntu; root is gid 0; docker, lxd
@@ -1489,3 +1522,56 @@ def privileged_accounts(remote, users):
         return None
     refused.update({u: v for u, v in verdict.items() if v not in ("ok", "absent")})
     return refused
+
+
+# ── Writing as a game account that can become root ──────────────────────────────────────────────
+# privileged_accounts closed the door on IMPORTING (and userdel-ing) a root-capable account, but a
+# row imported before that check existed is still in the database, and every file-manager and cron
+# write on it runs AS that account: saving ~/.bashrc, ~/.ssh/authorized_keys or a crontab line
+# through the file browser is root on the host at the account's next login or cron tick, for any
+# delegated admin who can manage that server's files. The import check could not reach those rows,
+# so the WRITE routes ask too.
+#
+# Cached per (host, login, account) for a short while, because each answer is an SSH round trip
+# and an editor saves often. Only a definite answer is cached: a host that could not be asked is
+# asked again next time, and the write is refused meanwhile (fail closed — "couldn't check" must
+# never read as "it's a plain account"). A minute is short enough that an account put into sudo on
+# the host is refused within it, and the refusal needs the host's own root to have happened.
+_ACCOUNT_VERDICT_TTL = 60.0
+_ACCOUNT_VERDICTS = {}        # (remote id, host, login, account) -> (expires at, why or "")
+_ACCOUNT_VERDICTS_LOCK = threading.Lock()
+
+
+def game_account_write_refusal(remote, user, now=None):
+    """Why a write as `user` on `remote` is refused, or None when it is a plain game account.
+
+    -> a message for the operator; None only when the host confirmed `user` is not root-capable
+    (see privileged_accounts). A host that cannot be asked is refused, not waved through.
+    """
+    now = time.monotonic() if now is None else now
+    key = (getattr(remote, "id", None), getattr(remote, "host", None),
+           getattr(remote, "username", None), user)
+    with _ACCOUNT_VERDICTS_LOCK:
+        hit = _ACCOUNT_VERDICTS.get(key)
+        if hit is not None and hit[0] > now:
+            why = hit[1]
+            return (_privileged_write_msg(user, why) if why else None)
+    verdict = privileged_accounts(remote, [user])
+    if verdict is None:
+        return ("Couldn't check whether the '%s' account can become root on this host, and the "
+                "panel only writes files or scheduled tasks as an account it has confirmed is not "
+                "an administrator or root account. Nothing was changed; try again when the host "
+                "answers." % user)
+    why = verdict.get(user) or ""
+    with _ACCOUNT_VERDICTS_LOCK:
+        for k in [k for k, v in _ACCOUNT_VERDICTS.items() if v[0] <= now]:
+            del _ACCOUNT_VERDICTS[k]            # bounded to the accounts asked about recently
+        _ACCOUNT_VERDICTS[key] = (now + _ACCOUNT_VERDICT_TTL, why)
+    return _privileged_write_msg(user, why) if why else None
+
+
+def _privileged_write_msg(user, why):
+    return ("Refused: the '%s' account on this host can become root (%s), so the panel does not "
+            "write its files or scheduled tasks — that would be root on the host. This server was "
+            "imported before the panel refused such accounts; remove it from the panel and run the "
+            "game under a plain account." % (user, why))

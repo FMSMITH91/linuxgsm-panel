@@ -333,6 +333,11 @@ try:
     _p9_patch(_p9_sm, "shell_as_game_user", _p9_shell_as)
     # Rendering reads Tailscale state for the nav; that is a host command.
     _p9_patch(_p9_ts, "get_tailscale_info", lambda force_refresh=False: NS(dns_name=None))
+    # Every file-manager and cron WRITE first asks the host whether the game account can become
+    # root there (_shared.game_account_write_refusal -> privileged_accounts). Its probe is a host
+    # command; here every account is a plain game account, as smoke_test answers it. The gate
+    # itself is driven, with the host's reply scripted, in part18.
+    _p9_patch(_p9_sh, "privileged_accounts", lambda remote, users: {})
     # Notifications are recorded, never sent.
     _P9_NOTIFIED = []
     _p9_patch(_p9_notif, "notify",

@@ -220,7 +220,7 @@ def _register_terminal_page(app):
                                local_user=_ts.panel_account())
 
 
-def _register_terminal_open(socketio):
+def _register_terminal_open(app, socketio):
     """The term_open event, which starts a shell for this socket."""
     # ── socket events ─────────────────────────────────────────────────────────────────────────
     def _send(sid, data):
@@ -236,7 +236,12 @@ def _register_terminal_open(socketio):
         if why is not None:
             emit("term_error", {"message": why})
             return
-        _ts.close_for_sid(sid, "")          # one shell per socket
+        # One shell per socket — and the one being replaced gets its terminal_close row. This was
+        # a bare close_for_sid: the previous shell (perhaps root, on another host) went away with
+        # a terminal_open in the audit log and no close, so the trail showed a session still open
+        # that was not, and its _sid_host/_sid_access entries stayed behind for the next open (a
+        # new open that then FAILED left this socket looking like it still held the old host).
+        _close_and_audit(app, sid, "replaced by a new terminal on the same connection")
         try:
             _ts.open_session(sid, remote, bool(remote.is_local),
                              user_key=current_user.id,
@@ -367,7 +372,7 @@ def _register_terminal_io(app, socketio):
 def register(app, socketio, supervise):
     _ts.start_idle_sweeper(supervise)
     _register_terminal_page(app)
-    _register_terminal_open(socketio)
+    _register_terminal_open(app, socketio)
     _register_terminal_io(app, socketio)
 
     # A browser that closed without term_close must still take the shell with it — but NOT via a
