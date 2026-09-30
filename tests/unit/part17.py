@@ -716,3 +716,43 @@ finally:
             _rv2_cfg_path.unlink()
     else:
         _rv2_cfg_path.write_bytes(_rv2_cfg_snap)
+
+# ── Codacy splits: the legs of _create_key_once and _set_corrupt_db_aside no other check reaches ──
+# A filesystem without hard links takes _create_key_once's O_EXCL fallback; and a second corrupt
+# copy in the same second must not reuse the first one's aside name (or its -wal/-shm).
+import time as _ck17time                                                            # noqa: E402
+
+_ck17_dir = _rv2tmp.mkdtemp()
+_ck17_link = _rv2os.link
+
+
+def _ck17_no_link(*_a, **_k):
+    raise PermissionError(1, "Operation not permitted")
+
+
+try:
+    _ck17_kp = _rv2os.path.join(_ck17_dir, "k")
+    _rv2os.link = _ck17_no_link
+    try:
+        _zcfgmod._create_key_once(_ck17_kp, lambda: b"FIRST")
+        _zcfgmod._create_key_once(_ck17_kp, lambda: b"SECOND")
+    finally:
+        _rv2os.link = _ck17_link
+    with open(_ck17_kp, "rb") as _ck17f:
+        eq("key file, no hard links: created once with its bytes, never overwritten",
+           _ck17f.read(), b"FIRST")
+    eq("key file, no hard links: 0600", _rv2os.stat(_ck17_kp).st_mode & 0o777, 0o600)
+    eq("key file, no hard links: no temp file is left behind",
+       [n for n in _rv2os.listdir(_ck17_dir) if n.startswith(".key-")], [])
+
+    _ck17_db = _rv2os.path.join(_ck17_dir, "p.db")
+    _ck17_now = int(_ck17time.time())
+    for _ck17s in range(_ck17_now, _ck17_now + 6):
+        open("%s.corrupt-%d-wal" % (_ck17_db, _ck17s), "w").close()
+    _ck17_aside = _zmodels._db_aside_name(_ck17_db)
+    check("corrupt aside: a name whose -wal is taken gets a -1 suffix, not the taken name",
+          any(_ck17_aside == "%s.corrupt-%d-1" % (_ck17_db, _s)
+              for _s in range(_ck17_now, _ck17_now + 6)), repr(_ck17_aside))
+finally:
+    _rv2os.link = _ck17_link
+    __import__("shutil").rmtree(_ck17_dir, ignore_errors=True)
