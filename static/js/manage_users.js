@@ -106,5 +106,6 @@ window.copyCredential = function(){
   var pw = document.getElementById('cred-pw');
   if (!pw) return;
   if (window.copyText) copyText(pw.value, 'Password copied');
-  else if (navigator.clipboard) navigator.clipboard.writeText(pw.value);
+  // Best-effort: if the copy is refused, the password is still on screen to copy by hand.
+  else if (navigator.clipboard) navigator.clipboard.writeText(pw.value).catch(function(){ /* see above */ });
 };

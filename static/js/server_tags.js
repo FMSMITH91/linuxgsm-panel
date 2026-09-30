@@ -89,6 +89,7 @@
     var name = (nameEl.value || '').trim();
     if (!name){ nameEl.focus(); return; }
     btn.disabled = true;
+    var done = function(){ btn.disabled = false; };
     fetch(mp() + '/api/tags', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({name: name,
@@ -107,7 +108,7 @@
         if (window.toast) toast('Tag created', 'success');
       })
       .catch(function(err){ if (window.toast) toast(err.message || 'Could not create that tag', 'danger'); })
-      .then(function(){ btn.disabled = false; });
+      .then(done, done);   // re-enabled even if the toast throws
   };
 
   function deleteTag(tag){

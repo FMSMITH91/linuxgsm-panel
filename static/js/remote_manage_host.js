@@ -554,7 +554,8 @@ function runDiagnostics(){
     loadAutoUpd();    // refresh automatic-security-updates status
   }).catch(function(){
     if(msg) msg.innerHTML='<span class="text-danger">Diagnostics failed — check the panel logs.</span>';
-  }).finally(function(){ if(btn) btn.disabled=false; });
+  }).finally(function(){ if(btn) btn.disabled=false; })
+  .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 function loadIntegrity(){
@@ -620,7 +621,8 @@ function _repairPanel(){
       if(msg) msg.innerHTML='<span class="text-danger">Repair request failed.</span>';
     }).finally(function(){
       if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-arrow-counterclockwise"></i> Restore all from installed version'; }
-    });
+    })
+    .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 // ── Database maintenance (panel host only) ──────────────────────────
@@ -658,7 +660,8 @@ function optimizeDb(){
       }
       loadDbStats();
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Optimize request failed.</span>'; })
-    .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-stars"></i> Optimize database'; } });
+    .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-stars"></i> Optimize database'; } })
+    .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 function checkDbHealth(){
   var btn=document.getElementById('diag-dbhealth-btn');
@@ -678,7 +681,8 @@ function checkDbHealth(){
       out.innerHTML='<span class="text-warning">Could not run the health check right now.</span>';
     }
   }).catch(function(){ if(out) out.innerHTML='<span class="text-danger">Health check request failed.</span>'; })
-  .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-heart-pulse"></i> Check health'; } });
+  .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-heart-pulse"></i> Check health'; } })
+  .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 // Repair a flagged database on-demand: stops the panel, repairs offline, restarts (~1 min).
@@ -695,7 +699,8 @@ function repairDb(){
               ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+(window.escapeHtml?escapeHtml(d.message||'Repair started.'):(d.message||'Repair started.'))+'</span>'
               : '<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Failed.'):(d.message||'Failed.'))+'</span>'; }
         }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
-        .finally(function(){ if(rb){ rb.disabled=false; rb.innerHTML='<i class="bi bi-wrench-adjustable"></i> Repair database'; } });
+        .finally(function(){ if(rb){ rb.disabled=false; rb.innerHTML='<i class="bi bi-wrench-adjustable"></i> Repair database'; } })
+        .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
     }});
 }
 
@@ -730,7 +735,8 @@ function _enableAutoUpdates(){
       }
       loadAutoUpd();
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
-    .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-shield-plus"></i> Enable automatic security updates'; } });
+    .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-shield-plus"></i> Enable automatic security updates'; } })
+    .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 // Generate a shareable debug report — show it for review, then let the admin download
@@ -751,6 +757,7 @@ function genDebugReport(){
     gh.style.display='';
     if(msg) msg.innerHTML='<span class="text-success">Report ready — review it below before sharing.</span>';
   }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
-    .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-clipboard2-data"></i> Generate debug report'; } });
+    .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-clipboard2-data"></i> Generate debug report'; } })
+    .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 

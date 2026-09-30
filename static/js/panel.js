@@ -542,7 +542,8 @@ window._uproAttach = function(){ if (window.UPro) UPro.attach(); };
 window._uproDetach = function(){ if (window.UPro) UPro.detach(); };
 window._uproService = function(name, action){ if (window.UPro) UPro.service(name, action); };
 window._clickUpload = function(){ var i = document.getElementById('upload-input'); if (i) i.click(); };
-window._copyDataU = function(el){ var u = el && el.dataset ? el.dataset.u : ''; if (window.copyText) copyText(u, 'Copied'); else if (navigator.clipboard) navigator.clipboard.writeText(u); };
+// Best-effort copy: if the clipboard refuses, the value is still on screen to copy by hand.
+window._copyDataU = function(el){ var u = el && el.dataset ? el.dataset.u : ''; if (window.copyText) copyText(u, 'Copied'); else if (navigator.clipboard) navigator.clipboard.writeText(u).catch(function(){ /* see above */ }); };
 window._showTsKeyAdv = function(){ var e = document.getElementById('ts-key-adv'); if (e) e.style.display = 'block'; return false; };
 window._sayOnEnter = function(e){ if (e && e.key === 'Enter'){ e.preventDefault(); if (window.announceSay) announceSay(); } };
 window._acctSignOutAll = function(){

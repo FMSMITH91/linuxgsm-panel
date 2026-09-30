@@ -96,8 +96,8 @@ function tsDoServe(){
   b.disabled=true; m.innerHTML='<i class="bi bi-arrow-repeat"></i> Configuring HTTPS…';
   tsApi('serve',{method:'POST'}).then(function(d){
     if(!d.success){ m.innerHTML='<span class="text-danger">'+tsEsc(d.message||'Failed')+'</span>'; b.disabled=false; return; }  // nosemgrep - tsEsc is window.escapeHtml
-    tsRefresh();
+    void tsRefresh();   // tsRefresh catches its own failure and says so in the box
   }).catch(function(){ m.innerHTML='<span class="text-danger">Request failed.</span>'; b.disabled=false; });
 }
 
-tsRefresh();
+void tsRefresh();   // tsRefresh catches its own failure and says so in the box

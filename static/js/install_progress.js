@@ -135,6 +135,7 @@
   function settle(id) {
     if (settling[id]) return;
     settling[id] = true;
+    var release = function () { delete settling[id]; };
     fetch(MOUNT + '/api/server/' + id + '/install-status')
       .then(function (r) {
         return r.json().then(function (s) { return { kind: outcome(r.ok, s), s: s || {} }; });
@@ -166,7 +167,7 @@
         pagePanel([]);   // the page panel only ever shows what is RUNNING
       })
       .catch(function () { dropDashRow(id); })
-      .then(function () { delete settling[id]; });
+      .then(release, release);   // released even if dropDashRow throws
   }
 
   function stop() { if (timer) { clearInterval(timer); timer = null; } }

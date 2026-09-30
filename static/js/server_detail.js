@@ -215,7 +215,8 @@ function announceSay(){
     .finally(function(){
       _saying = false; inp.disabled = false;
       if (hadFocus && document.activeElement === document.body) inp.focus();
-    });
+    })
+    .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 function runCustomCommand(wrap, btn){
@@ -238,7 +239,8 @@ function runCustomCommand(wrap, btn){
   }).then(function(r){return r.json();}).then(function(d){
     window.toast(d.message || (d.success?'Done':'Failed'), d.success?'success':'danger');
   }).catch(function(){ window.toast('Command failed','danger'); })
-  .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });  // nosemgrep
+  .finally(function(){ btn.disabled = false; btn.innerHTML = orig; })  // nosemgrep
+  .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 document.addEventListener('click', function(e){
@@ -706,7 +708,8 @@ function loadMoreConsole(btn) {
       if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
     })
     .catch(function(){ if (window.toast) toast('Could not load more console output', 'danger'); })
-    .finally(function(){ if (btn) { btn.disabled = false; btn.innerHTML = orig; } });  // nosemgrep
+    .finally(function(){ if (btn) { btn.disabled = false; btn.innerHTML = orig; } })  // nosemgrep
+    .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 // Ctrl/Cmd+A inside the console selects the CONSOLE, not the whole page.
@@ -777,7 +780,8 @@ function toggleAutostart(el) {
   .then(r => r.json())
   .then(d => { if (!d.success) { el.checked = !el.checked; if(window.toast) toast(d.message || 'Failed to update autostart', 'danger'); } })
   .catch(() => { el.checked = !el.checked; })
-  .finally(() => { el.disabled = false; });
+  .finally(() => { el.disabled = false; })
+  .catch(() => { /* the catch above already flipped the toggle back; this only stops a throwing cleanup going unhandled */ });
 }
 
 // ── The daily restart's time, and whose clock it is ──────────────────────────────────────────
@@ -870,7 +874,8 @@ function setDailyRestartTime(el) {
     if (window.toast) toast(t('Daily restart time saved'), 'success');
   })
   .catch(() => { if (window.toast) toast('Could not reach the panel', 'danger'); })
-  .finally(() => { el.disabled = false; });   // nosemgrep
+  .finally(() => { el.disabled = false; })   // nosemgrep
+  .catch(() => { /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 function toggleDailyRestart(el) {
@@ -885,7 +890,8 @@ function toggleDailyRestart(el) {
     else if (typeof toast === 'function') { toast(el.checked ? 'Daily restart (when empty) enabled' : 'Daily restart disabled', 'success'); }
   })
   .catch(() => { el.checked = !el.checked; })
-  .finally(() => { el.disabled = false; });
+  .finally(() => { el.disabled = false; })
+  .catch(() => { /* the catch above already flipped the toggle back; this only stops a throwing cleanup going unhandled */ });
 }
 
 function toggleNotifyEmpty(el) {
@@ -903,7 +909,8 @@ function toggleNotifyEmpty(el) {
     }
   })
   .catch(() => { el.checked = !el.checked; })
-  .finally(() => { el.disabled = false; });
+  .finally(() => { el.disabled = false; })
+  .catch(() => { /* the catch above already flipped the toggle back; this only stops a throwing cleanup going unhandled */ });
 }
 
 var connectAddr = '';
@@ -997,7 +1004,8 @@ function pollStats() {
       if (statsChart && readable) _pushStatsPoint(m);
     })
     .catch(() => {})
-    .finally(_scheduleStats);
+    .finally(_scheduleStats)
+    .catch(() => { /* background poll, quiet like the catch above: this only stops a throwing re-arm going unhandled */ });
 }
 
 // The connect address, and the one-click join link (steam://connect/…) for games that support it.
@@ -1412,7 +1420,8 @@ function disableLogTimestamps(btn) {
         toast(t('Stamping is off. Restart the server to restore the live console.'), 'success');
       })
       .catch(function () { toast(t('Could not reach the panel'), 'danger'); })
-      .finally(function () { btn.disabled = false; });   // nosemgrep
+      .finally(function () { btn.disabled = false; })   // nosemgrep
+      .catch(function () { /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
     }
   });
 }

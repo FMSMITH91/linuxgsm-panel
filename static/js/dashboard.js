@@ -630,7 +630,8 @@ function _runAction(id, action, btn) {
     setTimeout(refreshStatus, 1500);
   })
   .catch(() => toast('Action failed', 'danger'))
-  .finally(() => { btn.disabled = false; btn.innerHTML = original; });  // nosemgrep
+  .finally(() => { btn.disabled = false; btn.innerHTML = original; })  // nosemgrep
+  .catch(() => { /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 // ── Bulk actions ──────────────────────────────────────────────
@@ -705,7 +706,8 @@ function bulkAction(action) {
         setTimeout(refreshStatus, 1500);
       })
       .catch(() => toast('Bulk action failed', 'danger'))
-      .finally(() => { btns.forEach(function (b) { b.disabled = false; }); });
+      .finally(() => { btns.forEach(function (b) { b.disabled = false; }); })
+      .catch(() => { /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
   };
   // Restart joined stop and update here: it disconnects every player on every selected server, so
   // the one action that skipped the prompt was also the easiest to fire by accident.

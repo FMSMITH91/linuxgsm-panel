@@ -4394,6 +4394,182 @@ check(_ul_fin >= 0 and ".catch(" in _ul_after,
       "panel update: the post-restart log read handles a failure AFTER finish, not only before it",
       _ul_after[:160] or "(could not find the update-log read)")
 
+
+# ── every promise chain statement ends in a rejection handler ─────────────────────────────────
+# SonarCloud javascript:S9383, file-wide. The one-site check above caught one chain; 34 more sat
+# in static/js: .catch(h).finally(cleanup) (a cleanup that throws is unhandled), .catch(h).then(c)
+# (the same, for c), and chains with no handler at all — uploadFiles left "Checking N file(s)…" on
+# screen for good when its conflict step threw, and _walkEntry's Promise.all(...).then(resolve)
+# left a whole dropped folder pending when one sub-walk rejected.
+#
+# A chain STATEMENT (its value thrown away) must end in .catch(...) or a two-argument .then(ok, err),
+# or be marked `void` — the form for a call to a helper whose own chain already ends in a catch.
+# Read from the AST, so a chain that spans lines, or a `.catch(` in a comment, is judged by what
+# the code does. Two parts: chains rooted at fetch / Promise.x / navigator.clipboard.x anywhere,
+# and bare calls to a function in the SAME file that returns a promise (found by following its own
+# `return`s, so tsRefresh -> tsApi -> fetch is found without a list to keep up to date).
+def _pc_member_name(node):
+    return ((node.get("property") or {}).get("name")
+            if node.get("type") == "MemberExpression" and not node.get("computed") else None)
+
+
+def _pc_chain_root(node):
+    """The innermost call of a().b().c() — the call the chain starts from."""
+    while (node.get("type") == "CallExpression"
+           and (node.get("callee") or {}).get("type") == "MemberExpression"
+           and ((node.get("callee") or {}).get("object") or {}).get("type") in ("CallExpression",
+                                                                                 "NewExpression")):
+        node = node["callee"]["object"]
+    return node
+
+
+def _pc_is_promise(node, helpers):
+    """Whether an expression's value is a promise: a chain rooted at fetch(...), window.fetch(...),
+    Promise.x(...), new Promise(...), navigator.clipboard.x(...) or a call to a known helper."""
+    if node.get("type") == "ConditionalExpression":
+        return _pc_is_promise(node.get("consequent") or {}, helpers) or \
+            _pc_is_promise(node.get("alternate") or {}, helpers)
+    if node.get("type") == "LogicalExpression":
+        return _pc_is_promise(node.get("right") or {}, helpers)
+    if node.get("type") not in ("CallExpression", "NewExpression"):
+        return False
+    root = _pc_chain_root(node)
+    callee = root.get("callee") or {}
+    if root.get("type") == "NewExpression":
+        return callee.get("type") == "Identifier" and callee.get("name") == "Promise"
+    if callee.get("type") == "Identifier":
+        return callee.get("name") == "fetch" or callee.get("name") in helpers
+    obj = callee.get("object") or {}
+    if obj.get("type") == "Identifier" and obj.get("name") == "Promise":
+        return True
+    if obj.get("type") == "Identifier" and obj.get("name") == "window":
+        return _pc_member_name(callee) == "fetch" or _pc_member_name(callee) in helpers
+    return ((obj.get("object") or {}).get("name") == "navigator"
+            and _pc_member_name(obj) == "clipboard")
+
+
+def _pc_handled(node):
+    if node.get("type") == "UnaryExpression" and node.get("operator") == "void":
+        return True
+    if node.get("type") != "CallExpression":
+        return False
+    last = _pc_member_name(node.get("callee") or {})
+    return last == "catch" or (last == "then" and len(node.get("arguments") or []) >= 2)
+
+
+def _pc_own_returns(fn):
+    """The argument of every `return` in fn's own body — not in the callbacks nested inside it."""
+    if fn.get("type") == "ArrowFunctionExpression" and fn.get("expression"):
+        return [fn.get("body") or {}]
+    out = []
+
+    def walk(n):
+        if isinstance(n, list):
+            for v in n:
+                walk(v)
+        elif isinstance(n, dict):
+            if n.get("type") in ("FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"):
+                return
+            if n.get("type") == "ReturnStatement" and n.get("argument"):
+                out.append(n["argument"])
+            for v in n.values():
+                walk(v)
+    walk(fn.get("body"))
+    return out
+
+
+def _pc_named_functions(tree):
+    """(name, function node) for `function f`, `var f = function`, and `x.f = function`."""
+    out = []
+
+    def walk(n):
+        if isinstance(n, list):
+            for v in n:
+                walk(v)
+            return
+        if not isinstance(n, dict):
+            return
+        t = n.get("type")
+        if t == "FunctionDeclaration" and n.get("id"):
+            out.append((n["id"].get("name"), n))
+        elif t == "VariableDeclarator" and (n.get("init") or {}).get("type") in (
+                "FunctionExpression", "ArrowFunctionExpression"):
+            out.append(((n.get("id") or {}).get("name"), n["init"]))
+        elif t == "AssignmentExpression" and (n.get("right") or {}).get("type") in (
+                "FunctionExpression", "ArrowFunctionExpression"):
+            left = n.get("left") or {}
+            out.append((left.get("name") if left.get("type") == "Identifier" else _pc_member_name(left),
+                        n["right"]))
+        for v in n.values():
+            walk(v)
+    walk(tree)
+    return [(name, fn) for name, fn in out if name]
+
+
+def _pc_statements(tree):
+    """Every ExpressionStatement's value-carrying expressions, with its line."""
+    out = []
+
+    def walk(n):
+        if isinstance(n, list):
+            for v in n:
+                walk(v)
+            return
+        if not isinstance(n, dict):
+            return
+        if n.get("type") == "ExpressionStatement":
+            e = n.get("expression") or {}
+            line = ((n.get("loc") or {}).get("start") or {}).get("line")
+            for x in (e.get("expressions") or [] if e.get("type") == "SequenceExpression" else [e]):
+                out.append((line, x))
+        for v in n.values():
+            walk(v)
+    walk(tree)
+    return out
+
+
+if not esprima:
+    skip("static/js: every promise chain statement ends in .catch / .then(ok, err) / void",
+         "esprima not installed")
+else:
+    _pc_seen, _pc_helpers_seen, _pc_bare = 0, set(), []
+    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+        try:
+            _pc_tree = esprima.parseScript(_p.read_text(encoding="utf-8"), {"loc": True}).toDict()
+        except Exception:
+            continue      # the parse gate above is what reports an unparseable file
+        _pc_fns = _pc_named_functions(_pc_tree)
+        _pc_helpers, _grew = set(), True
+        while _grew:      # to a fixed point: a helper that returns another helper's chain is one too
+            _grew = False
+            for _name, _fn in _pc_fns:
+                if _name not in _pc_helpers and any(_pc_is_promise(_r, _pc_helpers)
+                                                    for _r in _pc_own_returns(_fn)):
+                    _pc_helpers.add(_name)
+                    _grew = True
+        _pc_helpers.discard("fetch")      # panel.js wraps window.fetch: fetch is judged on its own
+        _pc_helpers_seen |= _pc_helpers
+        for _line, _e in _pc_statements(_pc_tree):
+            if _pc_is_promise(_e, set()):
+                _pc_seen += 1
+            if _pc_is_promise(_e, _pc_helpers) and not _pc_handled(_e):
+                _root = _pc_chain_root(_e) if _e.get("type") == "CallExpression" else _e
+                _c = _root.get("callee") or {}
+                _obj = _c.get("object") or {}
+                _what = _c.get("name") or ("%s.%s" % (_obj.get("name") or _pc_member_name(_obj),
+                                                      _pc_member_name(_c)) if _pc_member_name(_c)
+                                           else _e.get("type"))
+                _pc_bare.append("%s:%s (%s)" % (_p.name, _line, _what))
+    # Positive controls: the walk saw chains to judge, and the helper search follows returns.
+    check(_pc_seen >= 20, "sweep: the promise-chain scan found fetch/Promise/clipboard chains",
+          "found %d chain statements — the check below judged nothing" % _pc_seen)
+    check({"tsApi", "tsRefresh", "_bkRestore"} <= _pc_helpers_seen,
+          "sweep: the promise-chain scan finds helpers that return a chain (tsRefresh, _bkRestore)",
+          "found %s" % sorted(_pc_helpers_seen))
+    check(not _pc_bare,
+          "static/js: every promise chain statement ends in .catch / .then(ok, err) / void",
+          "%d with no rejection handler: %s" % (len(_pc_bare), "; ".join(_pc_bare[:8])))
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]
