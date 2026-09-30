@@ -2760,3 +2760,303 @@ finally:
 
 for _n, _was in _p7_quiet.items():
     _p7_logging.getLogger(_n).disabled = _was
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Sign-in and session binding (panel/security/auth.py, app._register_session, auth_routes)
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Driven through the real user_loader on a throwaway app with an in-memory database: what a cookie
+# is ACCEPTED as is the only thing these checks are about, so they ask load_user itself.
+from types import SimpleNamespace as _p10_NS  # noqa: E402
+
+from flask import Flask as _P10Flask, session as _p10_session  # noqa: E402
+
+import app as _p10_app  # noqa: E402
+from panel.db.models import User as _P10User, UserSession as _P10Sess, db as _p10_db  # noqa: E402
+from panel.routes import _shared as _p10_shared  # noqa: E402
+from panel.routes import auth_routes as _p10_ar  # noqa: E402
+from panel.routes import server_files as _p10_sf  # noqa: E402
+from panel.security import auth as _p10_auth  # noqa: E402
+
+_p10a = _P10Flask("p10_auth")
+_p10a.config.update(SECRET_KEY="p10-auth", SQLALCHEMY_DATABASE_URI="sqlite://",
+                    SQLALCHEMY_TRACK_MODIFICATIONS=False, TESTING=True,
+                    SESSION_PROTECTION="strong")
+_p10_db.init_app(_p10a)
+_p10_auth.init_auth(_p10a)
+_p10_load = _p10_auth.login_manager._user_callback
+_P10_UA = "Mozilla/5.0 (p10) Firefox/140.0"
+
+
+def _p10_call(fn, *a, **k):
+    """fn(*a, **k), or 'raised <Type>: <msg>' — so a regression fails by name."""
+    try:
+        return fn(*a, **k)
+    except Exception as e:  # noqa: BLE001 - a regression fails by name
+        return "raised %s: %s" % (type(e).__name__, e)
+
+
+def _p10_as(ip, ua=_P10_UA, bind=None, path="/"):
+    """A pushed request context from `ip` with `ua`; `bind` pre-seeds the Flask session's _bind."""
+    ctx = _p10a.test_request_context(path, headers={"User-Agent": ua},
+                                     environ_base={"REMOTE_ADDR": ip})
+    ctx.push()
+    if bind is not None:
+        _p10_session["_bind"] = bind
+    return ctx
+
+
+def _p10_loads(login_id, ip, ua=_P10_UA):
+    """Whether load_user accepts `login_id` from `ip`/`ua` in a FRESH (cookie-less) session.
+
+    A fresh session is what flask-login restores a remember cookie into: that is the replay.
+    """
+    ctx = _p10_as(ip, ua)
+    try:
+        return _p10_load(login_id) is not None
+    finally:
+        _p10_db.session.rollback()
+        ctx.pop()
+
+
+def _p10_fixture():
+    """One user, and login-session rows recorded from an IPv4 client, an IPv6 one and none."""
+    _p10_db.drop_all()
+    _p10_db.create_all()
+    u = _P10User(username="p10user", password_hash="x", is_active=True)
+    _p10_db.session.add(u)
+    _p10_db.session.commit()
+    for sid, ip, ua in (("p10-v4", "203.0.113.9", _P10_UA),
+                        ("p10-v6", "2001:db8:1:2::10", _P10_UA),
+                        ("p10-norow", "", "")):
+        _p10_db.session.add(_P10Sess(user_id=u.id, sid=sid, ip=ip, user_agent=ua, remember=True))
+    _p10_db.session.commit()
+    return u.id
+
+
+def _p10_remember_cookie_binding(uid):
+    lid = "%d:0:p10-v4" % uid
+    check("session binding: a remember cookie restored from its own client is accepted (control)",
+          _p10_loads(lid, "203.0.113.9"))
+    # The finding: an empty session used to be bound to whoever sent it, so a remember cookie
+    # copied off the victim's machine worked from any other one.
+    check("session binding: a remember cookie replayed from ANOTHER address, session cookie "
+          "dropped, is refused under strong", not _p10_loads(lid, "198.51.100.7"))
+    check("session binding: ...and from the same address with another browser (User-Agent)",
+          not _p10_loads(lid, "203.0.113.9", ua="curl/8.5"))
+    lid6 = "%d:0:p10-v6" % uid
+    check("session binding: an IPv6 client whose privacy address rotated inside its /64 still "
+          "signs in", _p10_loads(lid6, "2001:db8:1:2::abcd"))
+    check("session binding: ...but not from another /64", not _p10_loads(lid6, "2001:db8:1:3::10"))
+    _p10a.config["SESSION_PROTECTION"] = "basic"
+    try:
+        check("session binding: 'basic' does not bind, so a roaming client stays signed in",
+              _p10_loads(lid, "198.51.100.7"))
+    finally:
+        _p10a.config["SESSION_PROTECTION"] = "strong"
+    # A row that recorded no client (written outside a request) keeps the old first-use binding
+    # rather than refusing everyone: the Flask session's _bind is then the only record there is.
+    ctx = _p10_as("198.51.100.7")
+    try:
+        _ok = _p10_load("%d:0:p10-norow" % uid) is not None
+        _bound = _p10_session.get("_bind") == _p10_auth.session_fingerprint()
+    finally:
+        _p10_db.session.rollback()
+        ctx.pop()
+    check("session binding: a row with no recorded client falls back to binding on first use",
+          _ok and _bound, repr((_ok, _bound)))
+    # ...and the Flask-session binding still refuses a session cookie replayed with its _bind.
+    ctx = _p10_as("198.51.100.7", bind="0" * 32)
+    try:
+        _cookie_ok = _p10_load("%d:0:p10-norow" % uid) is not None
+    finally:
+        _p10_db.session.rollback()
+        ctx.pop()
+    check("session binding: a session cookie bound to another client is still refused",
+          not _cookie_ok)
+
+
+def _p10_legacy_bare_id(uid):
+    check("legacy cookie: a bare '<id>' is accepted while the account's auth_epoch is 0 (control)",
+          _p10_loads(str(uid), "203.0.113.9"))
+    with _p10a.app_context():
+        check("legacy cookie: the console poller agrees (control)",
+              _p10_sf._login_id_still_accepted(str(uid)) is not None)
+        u = _p10_db.session.get(_P10User, uid)
+        u.auth_epoch = 1                     # a password change / sign out everywhere / reset
+        _p10_db.session.commit()
+    check("legacy cookie: a bare '<id>' is REFUSED once the epoch has moved (it survived password "
+          "changes and sign-out-everywhere)", not _p10_loads(str(uid), "203.0.113.9"))
+    with _p10a.app_context():
+        check("legacy cookie: ...and the console poller refuses it too",
+              _p10_sf._login_id_still_accepted(str(uid)) is None)
+        u = _p10_db.session.get(_P10User, uid)
+        u.auth_epoch = 0
+        _p10_db.session.commit()
+
+
+def _p10_register_session_retry(uid):
+    real = _p10_app.db
+    calls = []
+
+    def _flaky_commit():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        real.session.commit()
+
+    ctx = _p10_as("203.0.113.9")
+    try:
+        u = _p10_db.session.get(_P10User, uid)
+        _p10_app.db = _p10_NS(session=_p10_NS(add=real.session.add, commit=_flaky_commit,
+                                              rollback=real.session.rollback))
+        sid = _p10_call(_p10_app._register_session, u, False)
+    finally:
+        _p10_app.db = real
+        _p10_db.session.rollback()
+        ctx.pop()
+    with _p10a.app_context():
+        row = _P10Sess.query.filter_by(sid=str(sid or "-")).first()
+        row_ip = row.ip if row is not None else None
+    check("register session: a lock on the first write is retried, and the row is written",
+          bool(sid) and len(calls) == 2 and row_ip == "203.0.113.9", repr((sid, calls, row_ip)))
+
+
+def _p10_login_refused_without_row(uid):
+    saved = {n: getattr(_p10_ar, n) for n in ("_register_session", "login_user",
+                                                "render_template", "log_action")}
+    logged_in = []
+    ctx = _p10_as("203.0.113.9", path="/login")
+    try:
+        _p10_ar._register_session = lambda *a, **k: None
+        _p10_ar.login_user = lambda *a, **k: logged_in.append(a)
+        _p10_ar.render_template = lambda name, **kw: "rendered:" + name
+        _p10_ar.log_action = lambda *a, **k: None
+        u = _p10_db.session.get(_P10User, uid)
+        out = _p10_call(_p10_ar._login_succeed,
+                        _p10_NS(ip="203.0.113.9", key="203.0.113.9", now=0), u, True)
+        _uid_in_session = _p10_session.get("_user_id")
+    finally:
+        for n, v in saved.items():
+            setattr(_p10_ar, n, v)
+        _p10_db.session.rollback()
+        ctx.pop()
+    check("login: a sign-in whose session row cannot be recorded is refused, not issued an "
+          "unregistered '<id>:<epoch>' cookie",
+          out == "rendered:login.html" and not logged_in and _uid_in_session is None,
+          repr((out, logged_in, _uid_in_session)))
+
+
+def _p10_held_chunked_body(uid):
+    with _p10a.test_request_context("/", method="POST", headers={"Transfer-Encoding": "chunked"},
+                                    environ_overrides={"wsgi.input_terminated": True},
+                                    input_stream=_p7_io.BytesIO(b'{"a": 1}')):
+        _chunked = _p10_auth._request_has_body()
+    with _p10a.test_request_context("/", method="POST", data=b"x"):
+        _sized = _p10_auth._request_has_body()
+    with _p10a.test_request_context("/", method="GET"):
+        _none = _p10_auth._request_has_body()
+    check("held body: a CHUNKED body (no Content-Length) counts as a body to read before "
+          "authorizing, like a sized one; a request with no body does not",
+          _chunked is True and _sized is True and _none is False, repr((_chunked, _sized, _none)))
+    # Driven: the pre-read happens in the hook itself, for a signed-in request.
+    with _p10a.app_context():
+        _p10_db.session.add(_P10Sess(user_id=uid, sid="p10-chunk", ip="127.0.0.1",
+                                     user_agent=_P10_UA))
+        _p10_db.session.commit()
+    body = _p7_io.BytesIO(b'{"a": 1}')
+    ctx = _p10a.test_request_context("/", method="POST",
+                                     headers={"Transfer-Encoding": "chunked", "User-Agent": _P10_UA},
+                                     environ_base={"REMOTE_ADDR": "127.0.0.1"},
+                                     environ_overrides={"wsgi.input_terminated": True},
+                                     input_stream=body)
+    ctx.push()
+    try:
+        # Permanent, as every panel login is — flask-login's own "strong" clears a non-permanent
+        # session that carries no identifier, before the panel's loader is ever asked.
+        _p10_session.permanent = True
+        _p10_session["_user_id"] = "%d:0:p10-chunk" % uid
+        _res = _p10_call(_p10_auth.authorize_after_body)
+        _consumed = body.tell() == len(b'{"a": 1}')
+    finally:
+        _p10_db.session.rollback()
+        ctx.pop()
+    check("held body: authorize_after_body reads a signed-in request's chunked body before any "
+          "check runs", _res is None and _consumed, repr((_res, _consumed)))
+
+
+def _p10_totp_step_race(uid):
+    """Two sign-ins with one authenticator code: the second has read the step before the first
+    committed. Staged in one transaction — the row already holds the spent step while the object
+    this request loaded still says 0, which is what the loser of that race is holding."""
+    saved = {n: getattr(_p10_ar, n) for n in ("verify_totp_step", "_login_fail",
+                                                "_login_succeed")}
+    seen = []
+    ctx = _p10_as("203.0.113.9", path="/login")
+    try:
+        _p10_ar.verify_totp_step = lambda secret, code: 1000
+        _p10_ar._login_fail = lambda attempt, msg, **kw: seen.append(("refused", kw.get("reason")))
+        _p10_ar._login_succeed = lambda attempt, u, remember: seen.append(("signed in", None))
+        u = _p10_db.session.get(_P10User, uid)
+        u.last_totp_step = 0
+        _p10_db.session.commit()
+        u = _p10_db.session.get(_P10User, uid)
+        _ = u.last_totp_step                               # loaded: 0, as the racing request read it
+        _p10_db.session.query(_P10User).filter(_P10User.id == uid).update(
+            {"last_totp_step": 1000}, synchronize_session=False)   # ...the winner's spend
+        _p10_call(_p10_ar._login_totp_code, _p10_NS(), u, "123456")
+        _p10_db.session.rollback()
+        _p10_ar.verify_totp_step = lambda secret, code: 1001
+        u = _p10_db.session.get(_P10User, uid)
+        _p10_call(_p10_ar._login_totp_code, _p10_NS(), u, "654321")
+        _p10_db.session.expire_all()
+        _stored = _p10_db.session.get(_P10User, uid).last_totp_step
+    finally:
+        for n, v in saved.items():
+            setattr(_p10_ar, n, v)
+        _p10_db.session.rollback()
+        ctx.pop()
+    check("2FA login: a code whose step another sign-in spent after this one read it is refused "
+          "(the spend is a compare-and-swap, not read-then-write)",
+          seen[:1] == [("refused", "replayed 2FA code")], repr(seen))
+    check("2FA login: ...while the next step still signs in and is recorded (control)",
+          seen[1:] == [("signed in", None)] and _stored == 1001, repr((seen, _stored)))
+
+
+def _p10_monitor_needs_restart():
+    check("monitor: LinuxGSM `monitor` (it restarts a crashed or unresponsive server) needs "
+          "RESTART_SERVER, not the view-only console permission",
+          _p10_auth._perm_for_action("monitor") == _p10_auth.RESTART_SERVER
+          and _p10_auth._perm_for_action("details") == _p10_auth.VIEW_CONSOLE)
+    saved = (_p10_shared.current_user, _p10_shared.get_user_permissions)
+    gs = _p10_NS(get_commands=lambda: [{"cmd": "monitor", "desc": "Monitor"},
+                                       {"cmd": "details", "desc": "Details"}],
+                 supports_update=True)
+    try:
+        _p10_shared.current_user = _p10_NS(is_superadmin=False)
+        _p10_shared.get_user_permissions = lambda u: {_p10_auth.VIEW_CONSOLE}
+        _view = [m["cmd"] for m in _p10_shared._server_action_buttons(None, gs)[1]]
+        _p10_shared.get_user_permissions = lambda u: {_p10_auth.VIEW_CONSOLE,
+                                                      _p10_auth.RESTART_SERVER}
+        _restart = [m["cmd"] for m in _p10_shared._server_action_buttons(None, gs)[1]]
+    finally:
+        _p10_shared.current_user, _p10_shared.get_user_permissions = saved
+    check("monitor: the maintenance menu hides the button from a view-only user and shows it to "
+          "one who may restart", _view == ["details"] and _restart == ["monitor", "details"],
+          repr((_view, _restart)))
+
+
+try:
+    with _p10a.app_context():
+        _p10_uid = _p10_fixture()
+    _p10_remember_cookie_binding(_p10_uid)
+    _p10_legacy_bare_id(_p10_uid)
+    _p10_register_session_retry(_p10_uid)
+    _p10_login_refused_without_row(_p10_uid)
+    _p10_held_chunked_body(_p10_uid)
+    _p10_totp_step_race(_p10_uid)
+    _p10_monitor_needs_restart()
+except Exception as e:  # noqa: BLE001 - a harness failure must fail by name, not end the suite
+    import traceback as _p10_tb  # noqa: E402
+    check("auth: the part10 sign-in harness ran to the end", False,
+          "raised %s: %s @ %s" % (type(e).__name__, e, _p10_tb.format_exc()[-600:]))

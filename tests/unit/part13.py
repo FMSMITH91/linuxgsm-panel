@@ -4100,7 +4100,8 @@ try:
                          "5 failed logins for super admin 'boss' from 203.0.113.66 in the last 5 min.")],
               repr(_bf10))
 
-        # Session bookkeeping: a row per login, and a failed write is not a failed login.
+        # Session bookkeeping: a row per login, and a row that cannot be written is reported as
+        # None, which _login_succeed turns into a refused sign-in (never an unregistered cookie).
         _su10 = _User10.query.filter_by(username="boss").first()
         with _dbapp10.test_request_context("/login", headers={"User-Agent": "UA/1.0",
                                                               "Cookie": "remember_token=abc"},
@@ -4118,7 +4119,7 @@ try:
               and _srow10 is not None and _srow10.remember is True
               and _srow10.user_agent == "UA/1.0" and _srow10.ip == "203.0.113.9",
               repr((_sid10, _srow10 and (_srow10.remember, _srow10.ip))))
-        check("app sessions: a session row that cannot be written returns None and the login goes on",
+        check("app sessions: a session row that cannot be written (twice) returns None and tags no sid",
               _sid_fail10 is None and not hasattr(_su2_10, "_sid"), repr(_sid_fail10))
 
         # Setup-wizard ownership.

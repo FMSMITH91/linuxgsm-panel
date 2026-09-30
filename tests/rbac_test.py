@@ -208,10 +208,21 @@ def _run_fixture_rows():
 
 
 def client_as(user_id=None):
+    # "<id>:<current auth_epoch>", read at the moment the client is made. It was a bare "<id>" —
+    # the pre-epoch legacy cookie — which auth._load_legacy_user used to accept whatever the
+    # account's epoch; it now accepts one only while the epoch is still 0 (a bare id predates
+    # epochs, so any bump revoked it). This suite bumps epochs along the way (sign out everywhere,
+    # logout's fallback), and a bare id would then stop working for every later client_as. The
+    # epoch form keeps this helper meaning what it always meant: a client signed in NOW, with no
+    # per-device row. Checks that need the legacy form build it themselves.
     c = app.test_client()
     if user_id is not None:
+        with app.app_context():
+            _u = db.session.get(User, user_id)
+            _login_id = ("%d:%d" % (user_id, _u.auth_epoch or 0) if _u is not None
+                         else str(user_id))
         with c.session_transaction() as s:
-            s["_user_id"] = str(user_id)
+            s["_user_id"] = _login_id
             s["_fresh"] = True
     return c
 
@@ -3539,7 +3550,7 @@ def _hb_current_login_refusals(hb_uid, sid):
 
 def _check_held_body_current_login_cookie(hb_uid):
     """A login's "<uid>:<epoch>:<sid>" cookie: its device revoked, or signed out everywhere."""
-    # client_as() writes the legacy "<uid>" id, which only _load_legacy_user reads. Every login
+    # client_as() writes "<uid>:<epoch>" with no session sid, so no UserSession row is asked. Every login
     # today carries "<uid>:<epoch>:<sid>" (User.get_id): a UserSession lookup and an auth_epoch
     # compare, and nothing above drives those with a body held back.
     _sid = tag + "_hbsid_"

@@ -7,6 +7,7 @@ import re
 from contextlib import (suppress)
 from flask import (flash, g, jsonify, redirect, render_template, request, session, url_for)
 from flask_login import (current_user, login_required, login_user, logout_user)
+from sqlalchemy import or_
 from panel.core import (i18n)
 from panel.core.clock import (utcnow)
 from panel.core.config import (decrypt_secret, encrypt_secret)
@@ -217,11 +218,13 @@ def _register_account(app):
             ok_2fa = False
             _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
             if _step is not None:
-                if _step <= (u.last_totp_step or 0):
+                # A compare-and-swap, for the reason _login_totp_code gives: two mints with one
+                # code could otherwise both pass a read-then-write.
+                if _step <= (u.last_totp_step or 0) or not _spend_totp_step(u, _step):
+                    db.session.rollback()
                     flash("That code has already been used — wait for your authenticator to show "
                           "the next one.", "danger")
                     return _refused("replayed authenticator code")
-                u.last_totp_step = _step
                 ok_2fa = True
             elif u.use_backup_code(code):
                 ok_2fa = True
@@ -624,8 +627,16 @@ def _login_succeed(attempt, user, remember):
     if _lang:
         session["lang"] = _lang
     session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
-    _register_session(user, remember)   # server-side row (sets user._sid) BEFORE
-    login_user(user, remember=remember)   # login_user, so get_id embeds the sid
+    # Server-side row (sets user._sid) BEFORE login_user, so get_id embeds the sid. A login whose
+    # row could not be written is REFUSED, not issued without one: the "<id>:<epoch>" cookie that
+    # fell out of it never expired server-side, never appeared on the account page, and was bound
+    # to no client (see _register_session). Not a failed login either — the password was right —
+    # so nothing is counted against the throttle; the person is simply asked to try again.
+    if not _register_session(user, remember):
+        flash("Signing in could not be completed just now — please try again in a moment.",
+              "danger")
+        return render_template("login.html")
+    login_user(user, remember=remember)
     # The client this session belongs to, for "strong" protection (auth.py
     # _session_binding_ok) — flask-login's own strong mode never fires on a permanent
     # session, and this one is permanent.
@@ -704,14 +715,40 @@ def _login_totp_code(attempt, u, entered):
     # observed once be replayed for the rest of that window. Refuse any step
     # already spent — committed BEFORE the session is granted so a crash
     # between the two can't leave the step unspent.
+    #
+    # The spend is a compare-and-swap in the database, not the Python compare below followed by
+    # an assignment. That pair was a read-then-write: two POSTs carrying the same code could both
+    # read the old step before either committed, and both sign in — one code, two sessions, which
+    # is exactly what single-use exists to prevent. Today nothing between the read and the commit
+    # yields to another greenlet, so the one eventlet process happens to serialise them; that is
+    # a property of which calls sit in between (and of there being one worker), not of this code.
+    # The conditional UPDATE is decided by SQLite under its write lock, so exactly one wins however
+    # the requests interleave — the shape _claim_invite uses for the same reason.
     if _step <= (u.last_totp_step or 0):
-        return _login_fail(attempt, "That code has already been used — wait for your "
-                                    "authenticator to show the next one.",
-                           attempted=u.username, reason="replayed 2FA code",
-                           two_factor=True)
-    u.last_totp_step = _step
+        return _login_totp_replayed(attempt, u)
+    if not _spend_totp_step(u, _step):
+        db.session.rollback()
+        return _login_totp_replayed(attempt, u)   # another request spent this step first
     db.session.commit()
     return _login_succeed(attempt, u, bool(session.get("_2fa_remember")))
+
+
+def _spend_totp_step(u, step):
+    """Record TOTP timestep `step` as spent for `u`, atomically; False if it (or a later one) was.
+
+    Uncommitted: the caller commits it with whatever else the code unlocks, or rolls back.
+    """
+    return bool(db.session.query(User)
+                .filter(User.id == u.id,
+                        or_(User.last_totp_step.is_(None), User.last_totp_step < step))
+                .update({"last_totp_step": step}, synchronize_session=False))
+
+
+def _login_totp_replayed(attempt, u):
+    """Refuse an authenticator code whose timestep has already been spent."""
+    return _login_fail(attempt, "That code has already been used — wait for your "
+                                "authenticator to show the next one.",
+                       attempted=u.username, reason="replayed 2FA code", two_factor=True)
 
 
 def _login_password(attempt):

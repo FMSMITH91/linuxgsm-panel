@@ -221,7 +221,8 @@ def _server_action_buttons(app, gs):
     actions = _lifecycle_actions(_can, supports_update)
 
     maint_perm = {
-        "monitor": VIEW_CONSOLE, "details": VIEW_CONSOLE, "check-update": VIEW_CONSOLE,
+        # monitor can restart the server: auth.ACTION_PERMISSION_MAP, which the route enforces.
+        "monitor": RESTART_SERVER, "details": VIEW_CONSOLE, "check-update": VIEW_CONSOLE,
         "postdetails": VIEW_CONSOLE, "test-alert": VIEW_CONSOLE,
         "validate": UPDATE_SERVER, "backup": UPDATE_SERVER, "force-update": UPDATE_SERVER,
         "update-lgsm": UPDATE_SERVER, "mods-update": UPDATE_SERVER, "fastdl": UPDATE_SERVER,

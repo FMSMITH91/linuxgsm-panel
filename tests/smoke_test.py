@@ -159,9 +159,19 @@ def _console_window_stub(text):
 
 
 def client_as(user_id):
+    # "<id>:<current auth_epoch>", read at the moment the client is made. It was a bare "<id>" —
+    # the pre-epoch legacy cookie — which auth._load_legacy_user used to accept whatever the
+    # account's epoch; it now accepts one only while the epoch is still 0 (a bare id predates
+    # epochs, so any bump revoked it). This suite bumps epochs along the way (sign out everywhere,
+    # logout's fallback), and a bare id would then stop working for every later client_as. The
+    # epoch form keeps this helper meaning what it always meant: a client signed in NOW, with no
+    # per-device row. Checks that need the legacy form build it themselves.
     c = app.test_client()
+    with app.app_context():
+        _u = db.session.get(User, user_id)
+        _login_id = "%d:%d" % (user_id, _u.auth_epoch or 0) if _u is not None else str(user_id)
     with c.session_transaction() as s:
-        s["_user_id"] = str(user_id)
+        s["_user_id"] = _login_id
         s["_fresh"] = True
     return c
 
@@ -6002,6 +6012,13 @@ try:
         epoch_before = db.session.get(User, admin_id).auth_epoch or 0
         n_before = UserSession.query.filter_by(user_id=admin_id).count()
     check("session: two devices signed in before the sweep", n_before == 2, "rows=%d" % n_before)
+    # A pre-epoch cookie too: a bare "<id>", which auth._load_legacy_user used to accept on
+    # is_active alone — so it outlived this button, a password change and an admin's reset.
+    _bare = app.test_client()
+    with _bare.session_transaction() as _bs:
+        _bs["_user_id"] = str(admin_id)
+        _bs["_fresh"] = True
+    _bare_before = _bare.get("/api/auth/ping").status_code
     _rev = s1.post("/account/sessions/revoke", follow_redirects=False)
     with app.app_context():
         n_all = UserSession.query.filter_by(user_id=admin_id).count()
@@ -6019,6 +6036,14 @@ try:
     check("session: the other device was signed out",
           _kicked.status_code in (301, 302, 303) and "/login" in (_kicked.headers.get("Location") or ""),
           "status=%d" % _kicked.status_code)
+    _bare_after = _bare.get("/api/auth/ping").status_code
+    check("session: a bare pre-epoch '<id>' cookie is signed out by it too (it used to survive "
+          "every epoch bump)",
+          _bare_after == 401 and (epoch_before != 0 or _bare_before == 200),
+          "before %d, after %d (epoch was %d)" % (_bare_before, _bare_after, epoch_before))
+    # The admin's epoch just moved, so the suite's own admin client (client_as, "<id>:<epoch>")
+    # is one of the cookies it revoked. Re-issue it for everything below.
+    c = client_as(admin_id)
     _sess_after = ((s1.get("/api/account/sessions").get_json() or {}).get("sessions", []))
     check("session: the survivor is listed, and flagged as this device",
           len(_sess_after) == 1 and _sess_after[0].get("current"), "n=%d" % len(_sess_after))
@@ -6178,7 +6203,7 @@ try:
           "no-cache" in (_page.headers.get("Cache-Control") or ""),
           "Cache-Control: %s" % (_page.headers.get("Cache-Control") or "(none)"))
 
-    # A legacy cookie (client_as injects a plain _user_id with no sid, like a pre-feature login) is
+    # A legacy cookie (client_as injects a _user_id with no sid, like a pre-feature login) is
     # adopted on first list — so you never see an empty list while logged in.
     lc = client_as(deleg_id)
     lsess = ((lc.get("/api/account/sessions").get_json() or {}).get("sessions", []))
@@ -10725,7 +10750,9 @@ try:
               not _cv_mismatch, "disagree (id, inactive, still_accepted, load_user): %r"
               % (_cv_mismatch,))
         check("console socket: (control) ...and both accept exactly the valid ones",
-              _cv_accepted == [(_cv_cases[i], False) for i in (0, 2, 4)],
+              # The bare "<id>" (4) only while the epoch is still 0: a pre-epoch cookie is one
+              # that any epoch bump revoked (auth._load_legacy_user).
+              _cv_accepted == [(_cv_cases[i], False) for i in ((0, 2, 4) if _cv_ep == 0 else (0, 2))],
               "accepted by both: %r" % (_cv_accepted,))
     finally:
         for _c in _cv_clients:
@@ -12174,6 +12201,9 @@ try:
         _tok_c.post("/account/sessions/revoke")
         check("api token: 'sign out everywhere' also revokes the API token", _bearer() != 200,
               "status=%s" % _bearer())
+        # ...and every older smoke_admin cookie with it, the suite's own `c` included (a bare
+        # "<id>" used to survive this; see the pre-epoch cookie check above). Re-issued.
+        c = client_as(admin_id)
 
     # The OTHER control that takes an account back. "Sign out everywhere" is asserted above; the
     # password change was only ever claimed — in the mint's own rationale, which now rests on both

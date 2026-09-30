@@ -208,8 +208,20 @@ def _register_session(user, remember=None):
     (letting load_user validate it and the account page revoke it individually). Also drops this
     user's expired sessions. `remember` records which cookie keeps this login alive, which is what
     decides when the row expires — a plain login dies with the session cookie (hours), a "remember
-    me" one with the remember cookie (days). Returns the sid, or None on failure — login still
-    proceeds either way, the cookie just falls back to epoch-only (not individually revocable)."""
+    me" one with the remember cookie (days). Returns the sid, or None when the row could not be
+    written even on a second try.
+
+    The row also records the client — its address and User-Agent — which is what "strong" session
+    protection binds the login to (auth._session_row_binding_ok). It is the ONLY copy of that
+    binding a remember cookie can be checked against: the one in the Flask session is gone the
+    moment that cookie is dropped.
+
+    None used to be shrugged off: "login still proceeds, the cookie just falls back to epoch-only".
+    That cookie ("<id>:<epoch>") names no row, so nothing expires it server-side (the idle expiry
+    lives on the row), the account page cannot list or revoke it, and it is bound to no client at
+    all. One momentary SQLite lock at sign-in minted a login that only a password change could
+    end. So the write is tried twice, and a caller that is signing someone in refuses the sign-in
+    on None rather than issuing that cookie (_login_succeed)."""
     from panel.db.models import UserSession, prune_expired_sessions
     sid = secrets.token_urlsafe(24)
     if remember is None:
@@ -218,14 +230,22 @@ def _register_session(user, remember=None):
         # as a plain one would expire the row hours before the login itself actually dies.
         remember = _has_remember_cookie()
     prune_expired_sessions(user.id)   # commits (or rolls back) on its own
-    try:
-        db.session.add(UserSession(user_id=user.id, sid=sid, remember=bool(remember),
-                                   ip=(client_ip() or "")[:64],
-                                   user_agent=(request.headers.get("User-Agent", "") or "")[:300]))
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        return None
+    for _try in (1, 2):
+        # Twice, in a fresh transaction each time: the failure this is for is a lock held for a
+        # moment (a backup, a WAL checkpoint), and the busy timeout has already waited once.
+        try:
+            db.session.add(UserSession(
+                user_id=user.id, sid=sid, remember=bool(remember),
+                ip=(client_ip() or "")[:64],
+                user_agent=(request.headers.get("User-Agent", "") or "")[:300]))
+            db.session.commit()
+            break
+        except Exception:
+            db.session.rollback()
+            if _try == 2:
+                _log.warning("could not record a login session (twice); refusing to issue an "
+                             "unregistered one", exc_info=True)
+                return None
     user._sid = sid
     return sid
 

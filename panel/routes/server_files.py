@@ -292,10 +292,16 @@ def _login_id_still_accepted(login_id):
 
 
 def _legacy_login_user(s):
-    """The active User a pre-epoch login id (the bare user id) names, or None."""
+    """The active User a pre-epoch login id (the bare user id) names, or None.
+
+    Only while that account's auth_epoch is still 0, as auth._load_legacy_user: a bare id predates
+    epochs, so once a password change or "sign out everywhere" has moved the epoch it is one of the
+    cookies that bump revoked.
+    """
     from panel.db.models import User
     user = db.session.get(User, int(s)) if s.isdecimal() else None
-    return user if user is not None and user.is_active else None
+    ok = user is not None and user.is_active and (user.auth_epoch or 0) == 0
+    return user if ok else None
 
 
 def _epoch_login_user(s):
