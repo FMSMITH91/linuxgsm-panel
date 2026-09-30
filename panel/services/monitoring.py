@@ -797,6 +797,44 @@ def _monitor_server(remote, gs, probe, ports):
     return False
 
 
+def _mon_server_went_down(remote, gs, up, prev_up, muted):
+    """The down leg of _server_transition (prev_up True, now down): alert and answer what to record."""
+    misses = _monitor_state["server_misses"]
+    # The panel's own stop/restart is already accounted for locally — check that FIRST so
+    # an intentional stop keeps its existing semantics and costs no SSH round trip.
+    expected = time.time() - _expected_offline.get(gs.id, 0) <= _EXPECT_OFFLINE_WINDOW
+    if expected:
+        misses.pop(gs.id, None)
+        # Same reasoning as the maintenance branch below, which this leg was missing:
+        # the down-transition is deliberately never told, so recording False here made
+        # the NEXT sweep read False -> True and push "Server back online" for an outage
+        # the operator was never notified of — on roughly half the restarts of a
+        # slow-booting game, which is what trains people to ignore the channel.
+        # Keeping the previous value also preserves the case that matters: if the
+        # restart never comes back, _EXPECT_OFFLINE_WINDOW expires and the sweeps after it
+        # report a genuine "went offline unexpectedly" from prev_up=True (once confirmed).
+        return prev_up
+    # Not declared down until the port has been shut for _DOWN_CONFIRM_SWEEPS sweeps in a
+    # row (see there). Until then the server stays recorded as up, so the sweep that
+    # finds it listening again has nothing to announce. Counted BEFORE the maintenance
+    # probe, so a single missed scan does not cost that SSH round trip either; once
+    # confirmed, the count is kept through maintenance, so a server still down when
+    # LinuxGSM's update finishes is reported on the next sweep.
+    misses[gs.id] = misses.get(gs.id, 0) + 1
+    if misses[gs.id] < _DOWN_CONFIRM_SWEEPS:
+        return prev_up
+    if _lgsm_maintenance_running(remote, gs):
+        # A scheduled LinuxGSM update/restart is running: the port is SUPPOSED to be shut.
+        # Leave the recorded state untouched so neither this pass nor the recovery pass
+        # alerts — otherwise suppressing "offline" would just produce "back online".
+        return _IN_MAINTENANCE
+    misses.pop(gs.id, None)          # declared: recorded False from here on
+    if not muted:
+        notifications.notify("server_down", "Server offline",
+                             "%s on %s went offline unexpectedly." % (gs.name, remote.display_name))
+    return up
+
+
 def _server_transition(remote, gs, up, prev_up, muted):
     """Alert on one server's up/down transition and answer what to record for it.
 
@@ -804,50 +842,15 @@ def _server_transition(remote, gs, up, prev_up, muted):
     _EXPECT_OFFLINE_WINDOW, or for a down not yet confirmed by _DOWN_CONFIRM_SWEEPS sweeps; or
     _IN_MAINTENANCE when LinuxGSM's own maintenance has the port shut.
     """
-    recorded = up      # what this pass writes to the transition state (not always `up`)
     misses = _monitor_state["server_misses"]
     if up or prev_up is not True:
         misses.pop(gs.id, None)
     if prev_up is True and not up:
-        # The panel's own stop/restart is already accounted for locally — check that FIRST so
-        # an intentional stop keeps its existing semantics and costs no SSH round trip.
-        expected = time.time() - _expected_offline.get(gs.id, 0) <= _EXPECT_OFFLINE_WINDOW
-        if expected:
-            misses.pop(gs.id, None)
-        else:
-            # Not declared down until the port has been shut for _DOWN_CONFIRM_SWEEPS sweeps in a
-            # row (see there). Until then the server stays recorded as up, so the sweep that
-            # finds it listening again has nothing to announce. Counted BEFORE the maintenance
-            # probe, so a single missed scan does not cost that SSH round trip either; once
-            # confirmed, the count is kept through maintenance, so a server still down when
-            # LinuxGSM's update finishes is reported on the next sweep.
-            misses[gs.id] = misses.get(gs.id, 0) + 1
-            if misses[gs.id] < _DOWN_CONFIRM_SWEEPS:
-                return prev_up
-        if not expected and _lgsm_maintenance_running(remote, gs):
-            # A scheduled LinuxGSM update/restart is running: the port is SUPPOSED to be shut.
-            # Leave the recorded state untouched so neither this pass nor the recovery pass
-            # alerts — otherwise suppressing "offline" would just produce "back online".
-            return _IN_MAINTENANCE
-        if expected:
-            # Same reasoning as the maintenance branch above, which this leg was missing:
-            # the down-transition is deliberately never told, so recording False here made
-            # the NEXT sweep read False -> True and push "Server back online" for an outage
-            # the operator was never notified of — on roughly half the restarts of a
-            # slow-booting game, which is what trains people to ignore the channel.
-            # Keeping the previous value also preserves the case that matters: if the
-            # restart never comes back, _EXPECT_OFFLINE_WINDOW expires and the sweeps after it
-            # report a genuine "went offline unexpectedly" from prev_up=True (once confirmed).
-            recorded = prev_up
-        else:
-            misses.pop(gs.id, None)          # declared: recorded False from here on
-            if not muted:
-                notifications.notify("server_down", "Server offline",
-                                     "%s on %s went offline unexpectedly." % (gs.name, remote.display_name))
-    elif prev_up is False and up and not muted:
+        return _mon_server_went_down(remote, gs, up, prev_up, muted)
+    if prev_up is False and up and not muted:
         notifications.notify("server_up", "Server back online",
                              "%s on %s is back online." % (gs.name, remote.display_name))
-    return recorded
+    return up
 
 
 def _forget_deleted_rows(remote_ids, server_ids):
