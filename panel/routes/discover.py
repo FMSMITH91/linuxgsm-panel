@@ -335,8 +335,11 @@ def _discover_drop_unenrolled(remote_id, added, not_enrolled):
 
 
 def _discover_cache_imported(app, remote_id, added, not_enrolled):
-    """Populate the imported servers' command lists so "Supported Commands" is ready
-    without a manual refresh (install caches these; import didn't)."""
+    """Populate the imported servers' command lists.
+
+    So "Supported Commands" is ready without a manual refresh (install caches these; import
+    didn't).
+    """
     new_rows = GameServer.query.filter(
         GameServer.remote_id == remote_id, GameServer.short_name.in_(added)).all()
     refused = {n["user"] for n in not_enrolled}
