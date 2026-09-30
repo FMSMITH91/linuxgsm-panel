@@ -86,10 +86,11 @@ for _attr, _fns in _WATCHED.items():
 
 # The parts, in order: each runs its checks as it is imported. Named, never globbed, so that the
 # gate below can tell a part left off this list from one that ran.
-# part16, part17 and part18 run BEFORE part15, which must stay last: it ends the run with a look for
+# part16 to part19 run BEFORE part15, which must stay last: it ends the run with a look for
 # threads left running, and that look has to come after every part that could have started one.
+# part19 comes right after part18, whose app, client and row helpers it imports.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
-          "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18",
+          "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part15")
 
 
