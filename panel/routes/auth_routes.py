@@ -184,64 +184,22 @@ def _register_account(app):
         # exactly as in account_2fa_disable.
         u = current_user._get_current_object()
 
-        def _refused(why):
-            """Refuse, and SAY SO in the audit log.
-
-            log_action fired on the mint alone, so the one thing this gate produces that is worth
-            watching — somebody in a borrowed session trying passwords against it, which is now
-            the only way past it — left no trace anywhere, while the mint they were aiming at
-            left a tidy one. A gate whose refusals are invisible tells you afterwards that
-            nothing happened, which is exactly what it looks like when something did. Recorded
-            with success=False, the shape delete_group / uninstall_server / send_command already
-            use, so it reads as a refusal in the audit list rather than as a mint.
-
-            It was recorded but NOT rate-limited, on the reasoning that the same unthrottled
-            password oracle sat behind account_change_password and account_2fa_disable, so a limit
-            on this route alone would only move the guessing one route over — and that the real
-            limit belonged on all of them at once. It is on all of them now: every route that
-            re-asks for the current password or a live code shares one per-account budget
-            (_shared.reauth_reserve), so a wrong guess here and one at the password change count
-            against the same allowance.
-            """
-            log_action(u, "api_token_generate", target=u.username, detail=why, success=False)
-            return redirect(url_for("account"))
-
         _pw = reauth_password(u, request.form.get("password", ""))
         if _pw == "throttled":
             flash(REAUTH_BLOCKED_MSG, "danger")
-            return _refused("too many wrong passwords or codes")
+            return _auth_token_refused(u, "too many wrong passwords or codes")
         if _pw != "ok":
             flash("Password incorrect — no API token was minted.", "danger")
-            return _refused("wrong password")
+            return _auth_token_refused(u, "wrong password")
         # Checked LAST, and in this order, for the reasons account_2fa_disable spells out: a
         # one-time backup code must never be spent on an otherwise-invalid request, and a TOTP
         # code stays valid for ~90s, so verify_totp_STEP plus the last_totp_step comparison is
         # what makes an observed code single-use rather than replayable for the rest of its window.
         code = (request.form.get("totp_code") or "").strip()
         if u.totp_enabled:
-            # The code is under the same per-account budget as the password: a failure keeps
-            # its slot, a match gives it back below.
-            _stamp = reauth_reserve(u)
-            if _stamp is None:
-                flash(REAUTH_BLOCKED_MSG, "danger")
-                return _refused("too many wrong passwords or codes")
-            ok_2fa = False
-            _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
-            if _step is not None:
-                # A compare-and-swap, for the reason _login_totp_code gives: two mints with one
-                # code could otherwise both pass a read-then-write.
-                if _step <= (u.last_totp_step or 0) or not spend_totp_step(u, _step):
-                    db.session.rollback()
-                    flash("That code has already been used — wait for your authenticator to show "
-                          "the next one.", "danger")
-                    return _refused("replayed authenticator code")
-                ok_2fa = True
-            elif u.use_backup_code(code):
-                ok_2fa = True
-            if not ok_2fa:
-                flash("That authenticator code didn't match — no API token was minted.", "danger")
-                return _refused("wrong authenticator code")
-            reauth_release(u, _stamp)
+            _why = _auth_token_totp_refusal(u, code)
+            if _why is not None:
+                return _auth_token_refused(u, _why)
         token = u.generate_api_token()
         # The token, and with it the spent step / backup code. NOT redundant with the commit
         # inside log_action on the next line, even though that one happens to flush this same
@@ -271,6 +229,61 @@ def _register_account(app):
         log_action(current_user, "api_token_revoke", target=current_user.username)
         flash("API token revoked.", "success")
         return redirect(url_for("account"))
+
+
+def _auth_token_refused(u, why):
+    """Refuse an API-token mint, and SAY SO in the audit log.
+
+    log_action fired on the mint alone, so the one thing this gate produces that is worth
+    watching — somebody in a borrowed session trying passwords against it, which is now
+    the only way past it — left no trace anywhere, while the mint they were aiming at
+    left a tidy one. A gate whose refusals are invisible tells you afterwards that
+    nothing happened, which is exactly what it looks like when something did. Recorded
+    with success=False, the shape delete_group / uninstall_server / send_command already
+    use, so it reads as a refusal in the audit list rather than as a mint.
+
+    It was recorded but NOT rate-limited, on the reasoning that the same unthrottled
+    password oracle sat behind account_change_password and account_2fa_disable, so a limit
+    on this route alone would only move the guessing one route over — and that the real
+    limit belonged on all of them at once. It is on all of them now: every route that
+    re-asks for the current password or a live code shares one per-account budget
+    (_shared.reauth_reserve), so a wrong guess here and one at the password change count
+    against the same allowance.
+    """
+    log_action(u, "api_token_generate", target=u.username, detail=why, success=False)
+    return redirect(url_for("account"))
+
+
+def _auth_token_totp_refusal(u, code):
+    """Check the API-token mint's authenticator (or backup) code for a 2FA account.
+
+    Returns None when the code is good (its reserved budget slot handed back), else the audit
+    reason for the refusal — the flash telling the user why has already been queued.
+    """
+    # The code is under the same per-account budget as the password: a failure keeps
+    # its slot, a match gives it back below.
+    _stamp = reauth_reserve(u)
+    if _stamp is None:
+        flash(REAUTH_BLOCKED_MSG, "danger")
+        return "too many wrong passwords or codes"
+    ok_2fa = False
+    _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
+    if _step is not None:
+        # A compare-and-swap, for the reason _login_totp_code gives: two mints with one
+        # code could otherwise both pass a read-then-write.
+        if _step <= (u.last_totp_step or 0) or not spend_totp_step(u, _step):
+            db.session.rollback()
+            flash("That code has already been used — wait for your authenticator to show "
+                  "the next one.", "danger")
+            return "replayed authenticator code"
+        ok_2fa = True
+    elif u.use_backup_code(code):
+        ok_2fa = True
+    if not ok_2fa:
+        flash("That authenticator code didn't match — no API token was minted.", "danger")
+        return "wrong authenticator code"
+    reauth_release(u, _stamp)
+    return None
 
 
 def _register_language(app):
