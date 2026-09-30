@@ -10,7 +10,7 @@ from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top_ips,
     remote_fail2ban_unban, remote_security_log, remote_ufw_close_port, remote_ufw_deny_ip,
     remote_ufw_open_port, remote_ufw_undeny_ip, tailnet_exempt_ips)
-from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required,
+from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action, permission_required,
     superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
@@ -103,7 +103,7 @@ def _register_blocking(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_security_block(remote_id):
         """UFW-block (all ports, permanent) an IP on a remote host."""
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         ip = _json_str(_json_body(), "ip")
         unblock = bool(_json_body().get("unblock"))
         if not unblock and tailnet_exempt_ips(remote, {ip}):
@@ -133,7 +133,7 @@ def _register_blocking(app):
         admin scoped to one VPS could move it for every host, to 3 (mass-blocking) or to a huge
         value (disabling it everywhere). Confirmed by driving both routes as such a user.
         """
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         enabled = bool(_json_body().get("enabled"))
         if current_user.is_superadmin:
             _maybe_set_threshold(_json_body())
@@ -166,7 +166,7 @@ def _register_whitelist_and_log(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_security_unban(remote_id):
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         d = _json_body()
         jail, banned_ip = _json_str(d, "jail"), _json_str(d, "ip")
         try:
@@ -184,7 +184,7 @@ def _register_whitelist_and_log(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_security_log(remote_id):
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         which = request.args.get("which", "ssh")
         if which not in ("fail2ban", "ssh"):
             return jsonify({"text": "", "error": "unknown log"}), 400

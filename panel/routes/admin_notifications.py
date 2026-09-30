@@ -3,7 +3,7 @@
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
-from flask_login import (current_user, login_required, login_user)
+from flask_login import (current_user, login_required)
 from panel.core import (i18n)
 from panel.core.config import (encrypt_secret, load_config, update_config)
 from panel.core.clock import utcnow
@@ -19,7 +19,7 @@ from datetime import (timedelta)
 from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body, _json_str)
 from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
                                    password_problem, username_problem)
-from app import (_has_remember_cookie, _new_user_language, _register_session)
+from app import (_new_user_language)
 
 
 def register(app):
@@ -212,7 +212,7 @@ def _register_user_edits(app):
         # A user with only MANAGE_USERS must not be able to touch a superadmin account, nor
         # grant/revoke superadmin — either would be a privilege escalation (e.g. resetting a
         # superadmin's password and logging in as them, or promoting themselves).
-        _refused = _edit_user_refusal(user, want_superadmin)
+        _refused = _edit_user_refusal(user, want_superadmin) or _self_reset_refusal(user)
         if _refused:
             return _form_err(_refused, "manage_users")
 
@@ -248,7 +248,7 @@ def _register_user_edits(app):
             return _form_err("That change would leave no active superadmin — aborted.", "manage_users")
 
         _pending_audit = []      # (action, target, detail) — written after the commit below
-        new_password, _self_remember = _apply_resets(user, _pending_audit)
+        new_password = _apply_resets(user, _pending_audit)
 
         # Update groups. Through grantable_groups, not straight from the form: a delegated
         # MANAGE_USERS admin could otherwise edit their OWN account and tick a privileged group,
@@ -262,12 +262,6 @@ def _register_user_edits(app):
         user.groups = grantable_groups(group_ids, existing=list(user.groups or []))
 
         db.session.commit()
-        if _self_remember is not None:
-            # The self-reset re-login — see the branch above. After the commit, so a rollback on
-            # any guard between here and there cannot leave this device holding a session for an
-            # epoch the database never took.
-            _register_session(user, _self_remember)
-            login_user(user, remember=_self_remember)
         _audit_user_edit(user, _old_username, _pending_audit)
         if new_password:
             notifications.notify("account_change", "Password reset",
@@ -479,6 +473,24 @@ def _edit_user_refusal(user, want_superadmin):
     return None
 
 
+def _self_reset_refusal(user):
+    """Why the signed-in admin may not reset their OWN password or 2FA here, or None.
+
+    /account/password and /account/2fa/disable ask for the current password (and the second
+    factor) before changing either. This form asks for neither, and can_administer_user(me, me)
+    is always true — so a borrowed or stolen session of any MANAGE_USERS holder could tick both
+    boxes on its own row, be handed a fresh password, clear 2FA, and sign the real owner out
+    everywhere: a permanent takeover through the one door the re-auth did not guard. Resets on
+    this page are for OTHER accounts; your own goes through the Account page.
+    """
+    if user.id != current_user.id:
+        return None
+    if request.form.get("reset_password") == "on" or request.form.get("reset_2fa") == "on":
+        return ("To change your own password or two-factor settings, use your Account page — "
+                "it asks for your current password first.")
+    return None
+
+
 def _apply_rename(user):
     """Rename `user` when the edit form asks to; returns the refusal, or None."""
     _new_username = (request.form.get("username") or "").strip()
@@ -511,15 +523,15 @@ def _apply_profile_fields(user):
 
 
 def _apply_resets(user, _pending_audit):
-    """The edit form's password and 2FA resets; returns (the new password or None, _self_remember)."""
+    """The edit form's password and 2FA resets on ANOTHER account; returns the new password or None.
+
+    Never the signed-in admin's own account — _self_reset_refusal turned that away before this
+    runs — so the user whose password this generates is always someone who must then change it.
+    """
     # Reset the password on request. Generated, never typed by the admin — same reasoning as
     # add_user. Resetting is an explicit tick, not a blank field that means "keep": an edit that
     # only renames someone must not quietly invalidate their login.
     new_password = None
-    # Set only on a SELF-reset, to which cookie keeps this login alive — see the note in the
-    # branch below. None means "not a self-reset"; False is a real answer, so the check after
-    # the commit is `is not None`.
-    _self_remember = None
     if request.form.get("reset_password") == "on":
         new_password = generate_password()
         # set_password, not a bare assignment: the outgoing password joins the history, so a
@@ -536,30 +548,8 @@ def _apply_resets(user, _pending_audit):
         # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
         # could leave themselves a key that survived the victim's whole recovery.
         user.revoke_api_token()
-        # Only when the password now belongs to two people. An admin resetting their OWN
-        # password knows it because they chose to see it, and has nobody to take it back from;
-        # forcing them through a change screen would protect nothing.
-        if user.id != current_user.id:
-            user.must_change_password = True
-        else:
-            # ...and a self-reset must not sign the admin out before they can READ the password
-            # it just generated. The epoch bump above kills every cookie for this account
-            # including the one that made this request — load_user compares the cookie's epoch
-            # and returns None the moment they differ — and panel.js runs
-            # refreshSection('#users-list') BEFORE it opens the credential modal, so the next
-            # request lands milliseconds later, is answered 401 + X-Auth-Required, and
-            # sessionExpired() replaces the tab with /login. Only the bcrypt hash is stored, so
-            # the password was gone; on a single-superadmin install (the common one) the
-            # account was then reachable only through manage.py reset-password on the host.
-            # Carry THIS device across the bump the way account_change_password already does
-            # (panel/routes/tags.py:396-403): note which cookie keeps this login alive now, and
-            # re-register + re-login after the commit below.
-            from panel.db.models import UserSession
-            _sid = getattr(current_user, "_sid", None)
-            _cur_sess = (UserSession.query.filter_by(sid=_sid, user_id=user.id).first()
-                         if _sid else None)
-            _self_remember = (bool(_cur_sess.remember) if _cur_sess is not None
-                              else _has_remember_cookie())
+        # The password now belongs to two people: the admin who saw it, and its owner.
+        user.must_change_password = True
         # DEFERRED, not written here. log_action commits, and a commit in the middle of a
         # handler makes every later guard unable to undo what came before it — see the lockout
         # note above, and the group-id parse below, which could 500 after this branch had
@@ -572,7 +562,7 @@ def _apply_resets(user, _pending_audit):
         user.totp_secret = None
         user.backup_codes = ""
         _pending_audit.append(("2fa_reset", user.username, ""))   # deferred — see above
-    return new_password, _self_remember
+    return new_password
 
 
 def _audit_user_edit(user, _old_username, _pending_audit):

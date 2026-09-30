@@ -6,7 +6,7 @@ from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
 from panel.ops.ssh_manager import (_PRO_SERVICES, pro_attach, pro_detach, pro_service,
     remote_live_metrics)
-from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required)
+from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action, permission_required)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_pro_status_cached)
 
@@ -36,7 +36,7 @@ def _register_pro_changes(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_pro_attach(remote_id):
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         token = _json_str(_json_body(), "token")
         # ConnectionError -> 200 + unreachable, like this module's own pro-status already does.
         # A host that is switched off is a normal condition for this panel, and these three had no
@@ -56,7 +56,7 @@ def _register_pro_changes(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_pro_service(remote_id):
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         data = _json_body()
         service = _json_str(data, "service")
         action = _json_str(data, "action")
@@ -81,7 +81,7 @@ def _register_pro_changes(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_pro_detach(remote_id):
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         try:
             ok, msg = pro_detach(remote)
         except ConnectionError:

@@ -2337,9 +2337,20 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         # installer 30 minutes. gamedig is not something the panel needs in order to start, and a
         # rolled-back update leaves the tree the host already had alone.
         install_gamedig
-        # Prune old snapshots, keep the most recent few.
+        # Prune old snapshots, keep the most recent few. This runs as ROOT over a directory the
+        # panel user owns, so it touches only names in the STAMP shape this script creates, and
+        # never through word splitting: `ls | xargs rm -rf` split each name on whitespace, and a
+        # snapshot the panel named "x /etc" had root delete /etc. STAMP sorts chronologically as
+        # text, so newest-first is a reverse glob order, not mtimes the owner can set.
         if [[ -d "${BACKUP_ROOT}" ]]; then
-            ls -1dt "${BACKUP_ROOT}"/*/ 2>/dev/null | tail -n +"$((KEEP_BACKUPS+1))" | xargs -r rm -rf
+            _snaps=()
+            for _snap in "${BACKUP_ROOT}"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+                [[ -d "${_snap}" && ! -L "${_snap}" ]] && _snaps+=("${_snap}")
+            done
+            for (( _i = ${#_snaps[@]} - 1 - KEEP_BACKUPS; _i >= 0; _i-- )); do
+                rm -rf -- "${_snaps[_i]}"
+            done
+            unset _snaps _snap _i
         fi
         echo ""
         ok "Update complete: ${FROM_VER} → ${TO_VER}"

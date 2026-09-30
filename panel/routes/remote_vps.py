@@ -25,7 +25,7 @@ from panel.ops import ssh_manager as _sm
 from panel.ops.ssh_manager import hosts as _fw_hosts
 from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     accessible_remote_ids, can_access_remote, get_game,
-    get_remote, has_permission, log_action, permission_required, server_access_required)
+    get_host_remote, get_remote, has_permission, log_action, permission_required, server_access_required)
 import collections
 import threading
 import time
@@ -247,7 +247,7 @@ def _register_firewall_rules(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_firewall_open(remote_id):
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         data = _json_body()
         port = data.get("port", "")
         proto = data.get("protocol", "tcp")
@@ -268,7 +268,7 @@ def _register_firewall_rules(app):
         The gap this fills: every other allow here opens a port to the internet, so a port that
         only you or only your LAN should reach had no way to say so.
         """
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         data = _json_body()
         source = _json_str(data, "source")
         port = data.get("port", "")
@@ -295,7 +295,7 @@ def _register_firewall_rules(app):
         UFW has done this since forever and the panel has used it on every bootstrap to harden
         SSH — it just had no way to ask for it on a port you choose.
         """
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         data = _json_body()
         port = data.get("port", "")
         proto = data.get("protocol", "tcp")
@@ -312,7 +312,7 @@ def _register_firewall_rules(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_firewall_close(remote_id):
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         data = _json_body()
         port = data.get("port", "")
         proto = data.get("protocol", "tcp")
@@ -329,7 +329,7 @@ def _register_firewall_rules(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_firewall_delete_rule(remote_id):
         """Delete a UFW rule by its number (the reliable way to remove any rule)."""
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         num = _json_body().get("num")
         # The rule's identity, when the page sends it: the number is a position, and anything
         # inserted since the page re-read the firewall (the auto-block inserts at 1) moves it onto
@@ -365,7 +365,7 @@ def _register_ssh_settings(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_ssh_mode(remote_id):
         """Set public SSH via UFW: allow / limit / off (tailnet-only)."""
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         mode = _json_body().get("mode", "")
         success, msg = remote_set_public_ssh(remote, mode)
         log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success,
@@ -383,7 +383,7 @@ def _register_ssh_settings(app):
         """
         if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
             return jsonify({"success": False, "message": "You don't have access to that host."}), 403
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         body = _json_body()
         try:
             new_port = int(body.get("port"))
@@ -430,7 +430,7 @@ def _register_panel_port(app):
         Refuses unless Tailscale Serve is configured — otherwise this would remove your only way
         into the panel.
         """
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         if not remote.is_local:
             return jsonify({"success": False, "message": "Only applies to the panel host."}), 400
         cfg = load_config()
@@ -722,7 +722,7 @@ def _register_os_update_checks(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_run_updates(remote_id):
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         success, msg = remote_os_run_updates(remote)
         log_action(current_user, "remote_os_update", target=remote.name, success=success,
                    remote=remote)
@@ -736,7 +736,7 @@ def _register_os_update_jobs(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_os_update_start(remote_id):
         """Start a detached, watchable OS update; the popup polls .../os-update/status for live output."""
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         try:
             ok, msg = remote_os_update_start(remote)
             if ok:
@@ -831,7 +831,7 @@ def _register_reboot(app):
         The schedule is when_empty=true: it reboots once every game server on the host is empty.
         An explicit 'now' supersedes any pending when-empty request.
         """
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         when_empty = bool((_json_body() or {}).get("when_empty"))
         if when_empty:
             with _rwe_lock:
@@ -870,7 +870,7 @@ def _register_reboot(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_reboot_cancel(remote_id):
         """Cancel a pending 'reboot when empty' for this host."""
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)
         with _rwe_lock:
             had = _reboot_when_empty.pop(remote_id, None)
         if had:

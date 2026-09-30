@@ -115,7 +115,10 @@ def _tg_offset_after(updates, offset):
 
 def _tg_route_update(app, token, authorized, bot_username, upd):
     """Dispatch one polled update when it is a command, from the authorised chat, for THIS bot."""
-    msg = upd.get("message") or upd.get("edited_message") or {}
+    # "message" only. An edit arrives as a NEW update carrying the old message, so dispatching
+    # "edited_message" ran the command again: fixing a typo in last week's `/stop codserver`, or
+    # anyone editing an old `/update`, stopped the server or restarted the panel a second time.
+    msg = upd.get("message") or {}
     text = (msg.get("text") or "").strip()
     chat = str((msg.get("chat") or {}).get("id") or "")
     if not text.startswith("/"):

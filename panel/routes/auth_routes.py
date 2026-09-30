@@ -5,7 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 import collections
 import re
 from contextlib import (suppress)
-from flask import (flash, jsonify, redirect, render_template, request, session, url_for)
+from flask import (flash, g, jsonify, redirect, render_template, request, session, url_for)
 from flask_login import (current_user, login_required, login_user, logout_user)
 from panel.core import (i18n)
 from panel.core.clock import (utcnow)
@@ -47,14 +47,21 @@ def _register_sign_in(app):
             refused = _login_throttled(attempt)
             if refused is not None:
                 return refused
+            # _login_throttled reserved this attempt a place in the failure count; only an
+            # attempt that FAILED keeps it. Released in a finally, so a success, the 2FA prompt,
+            # an expired prompt and an exception all give it back.
+            g._login_failed = False
+            try:
+                # ── Step 2: the 2FA code for a login that passed the password step ──
+                pending_id = session.get("_2fa_pending")
+                if pending_id and request.form.get("totp_code"):
+                    return _login_second_factor(attempt, pending_id)
 
-            # ── Step 2: the 2FA code for a login that passed the password step ──
-            pending_id = session.get("_2fa_pending")
-            if pending_id and request.form.get("totp_code"):
-                return _login_second_factor(attempt, pending_id)
-
-            # ── Step 1: username + password ──
-            return _login_password(attempt)
+                # ── Step 1: username + password ──
+                return _login_password(attempt)
+            finally:
+                if not g.get("_login_failed"):
+                    _release_login_slot(attempt)
 
         return render_template("login.html")
 
@@ -526,11 +533,18 @@ def _login_throttled(attempt):
     with _LOGIN_FAILS_LOCK:
         _prune_login_fails(now)   # keep the map bounded to recently-active IPs
         fails = [t for t in _LOGIN_FAILS.get(_tk, []) if now - t < LOGIN_WINDOW]
+        blocked = len(fails) >= LOGIN_MAX_FAILS
+        if not blocked:
+            # RESERVE the attempt as a failure now, in the same critical section as the count.
+            # The failure used to be recorded only after bcrypt, which runs in tpool and yields
+            # the hub — so a burst of parallel POSTs all read "under the limit" before any of
+            # them had failed, and each got a full password guess. Counting in-flight attempts
+            # caps a burst at LOGIN_MAX_FAILS; login() gives the slot back unless it failed.
+            fails.append(now)
         if fails:
             _LOGIN_FAILS[_tk] = fails
         else:
             _LOGIN_FAILS.pop(_tk, None)
-        blocked = len(fails) >= LOGIN_MAX_FAILS
     if not blocked:
         return None
     with _LOGIN_FAILS_LOCK:
@@ -546,11 +560,22 @@ def _login_throttled(attempt):
     return render_template("login.html")
 
 
+def _release_login_slot(attempt):
+    """Give back the failure-count slot _login_throttled reserved for an attempt that did not fail."""
+    with _LOGIN_FAILS_LOCK:
+        fails = _LOGIN_FAILS.get(attempt.tk)
+        if fails and attempt.now in fails:
+            fails.remove(attempt.now)
+            if not fails:
+                _LOGIN_FAILS.pop(attempt.tk, None)
+
+
 def _login_fail(attempt, msg, attempted=None, reason="login failed", **kw):
     """Count, log and audit one failed sign-in, and show the login page again with `msg`."""
     ip, _tk, now = attempt
-    with _LOGIN_FAILS_LOCK:
-        _LOGIN_FAILS.setdefault(_tk, []).append(now)   # throttle counter (resets on success)
+    # The throttle counter already holds this attempt (_login_throttled reserved it); keeping it
+    # is what counts the failure.
+    g._login_failed = True
     _authlog.warning("panel login failed from %s", _log_ip(ip))    # fail2ban tails data/auth.log
     # This failure may be the one that has fail2ban ban `ip`. When it came through a
     # proxy (Tailscale Funnel, say) the firewall rule never sees that client, so the
@@ -562,7 +587,7 @@ def _login_fail(attempt, msg, attempted=None, reason="login failed", **kw):
     who = ((attempted if attempted is not None else request.form.get("username", "")) or "").strip()[:64] or "(blank)"
     # Attempt number = failed logins from THIS IP within the window, counted from the
     # audit log — so it keeps climbing per IP (across different usernames) and, unlike the
-    # in-memory throttle counter, isn't reset by a successful login or a panel restart.
+    # in-memory throttle counter, isn't reset by a panel restart.
     try:
         from panel.db.models import AuditLog
         from datetime import timedelta
@@ -581,9 +606,11 @@ def _login_fail(attempt, msg, attempted=None, reason="login failed", **kw):
 
 def _login_succeed(attempt, user, remember):
     """Establish the authenticated session for `user` and redirect to a same-site ?next= path."""
-    ip, _tk = attempt.ip, attempt.tk
-    with _LOGIN_FAILS_LOCK:
-        _LOGIN_FAILS.pop(_tk, None)   # clear on success
+    ip = attempt.ip
+    # The failures before this success STAY counted. Clearing the whole bucket here let anyone
+    # with an account of their own reset the throttle between guesses at somebody else's password
+    # (7 guesses, one real sign-in, repeat) from one address, forever. This attempt's own reserved
+    # slot is given back by login()'s finally.
     # Drop everything the pre-login session carried before establishing the
     # authenticated one. Session fixation: an attacker who can get a victim to browse
     # with a cookie value of the attacker's choosing otherwise ends up holding a

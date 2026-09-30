@@ -7827,6 +7827,24 @@ check("telegram: a priming poll that did not answer leaves the bot UNPRIMED",
       "if latest is None:" in _tg_prime and "continue" in _tg_prime.split("if latest is None:")[1].split("primed = True")[0],
       _tg_prime)
 
+# ── an EDITED message is not a new command ─────────────────────────────────────────────────────
+# Telegram delivers an edit as a fresh update carrying the old text under "edited_message", and
+# _tg_route_update dispatched it like a new one: fixing a typo in last week's `/stop codserver`
+# stopped the server again. Driven through the router with the dispatcher stubbed.
+_tge_calls = []
+_tge_saved = _tgm._tg_dispatch
+try:
+    _tgm._tg_dispatch = lambda *a, **k: _tge_calls.append(a[3])
+    _tge_msg = {"text": "/stop codserver", "chat": {"id": 42}, "from": {"id": 7}}
+    _tgm._tg_route_update(None, "1:tok", "42", "PanelBot", {"update_id": 1, "edited_message": _tge_msg})
+    check("telegram: an edited message does not run its command again", _tge_calls == [],
+          repr(_tge_calls))
+    _tgm._tg_route_update(None, "1:tok", "42", "PanelBot", {"update_id": 2, "message": _tge_msg})
+    check("telegram: ...while a new message still does (control)",
+          _tge_calls == ["/stop codserver"], repr(_tge_calls))
+finally:
+    _tgm._tg_dispatch = _tge_saved
+
 # ── /console must not print the "not running" sentinel as console output ──────────────────────
 # `echo NO_SESSION` goes to STDOUT, so out == "NO_SESSION" and the `if not rows` guard could never
 # fire: the command that exists to answer "why did the start fail?" answered NO_SESSION. rc was

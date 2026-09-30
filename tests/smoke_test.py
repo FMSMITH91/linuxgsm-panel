@@ -4108,6 +4108,53 @@ try:
     check("login: brute-force lockout blocks after %d failures" % LOGIN_MAX_FAILS, _locked)
     _LOGIN_FAILS.clear()   # isolate: don't leave 127.0.0.1 locked for anything else
 
+    # ...and a successful sign-in from the same address does NOT wipe the failures before it.
+    # Clearing the bucket on success let anyone with an account of their own reset the throttle
+    # between guesses at someone else's password: seven guesses, one real sign-in, repeat. On a
+    # throwaway account, so no session row is left on the ones later checks count.
+    with app.app_context():
+        _tr_u = User(username="smoke_throttle_own", display_name="t", is_superadmin=False,
+                     is_active=True, password_hash=auth.hash_password("Str0ng!passw0rd"))
+        db.session.add(_tr_u)
+        db.session.commit()
+    _tr = app.test_client()
+    for _ in range(LOGIN_MAX_FAILS - 1):
+        _tr.post("/login", data={"username": "smoke_admin", "password": "wrong"})
+    _tr_own = app.test_client().post("/login", data={"username": "smoke_throttle_own",
+                                                     "password": "Str0ng!passw0rd"})
+    check("login: (premise) the attacker's own account signs in", _tr_own.status_code == 302,
+          "status %d" % _tr_own.status_code)
+    _tr.post("/login", data={"username": "smoke_admin", "password": "wrong"})
+    _tr_next = _tr.post("/login", data={"username": "smoke_admin", "password": "wrong"})
+    check("login: a successful sign-in in between does not reset the failure count",
+          b"Too many failed attempts" in _tr_next.data,
+          "%d failures with one success among them, and still not locked" % LOGIN_MAX_FAILS)
+    _LOGIN_FAILS.clear()
+
+    # ...and a burst of parallel attempts cannot all read "under the limit". The failure used to be
+    # recorded only after bcrypt, which yields the hub, so N in-flight POSTs each got a guess. The
+    # throttle now reserves a slot as it admits one: admitting LOGIN_MAX_FAILS + 3 attempts that
+    # have not finished yet must stop at LOGIN_MAX_FAILS.
+    from panel.routes.auth_routes import (_LoginAttempt, _login_throttled, _release_login_slot)
+    import time as _br_time
+    _burst_at = _br_time.time()
+    with app.test_request_context("/login", method="POST"):
+        _admitted = [
+            _login_throttled(_LoginAttempt("203.0.113.44", "203.0.113.44", _burst_at + _k * 1e-3))
+            is None for _k in range(LOGIN_MAX_FAILS + 3)]
+    check("login: in-flight attempts count against the throttle (a burst is capped)",
+          _admitted.count(True) == LOGIN_MAX_FAILS and not any(_admitted[LOGIN_MAX_FAILS:]),
+          repr(_admitted))
+    # ...and one that did not fail hands its slot back, so a person signing in is not charged.
+    _LOGIN_FAILS.clear()
+    _ok_try = _LoginAttempt("203.0.113.45", "203.0.113.45", _burst_at)
+    with app.test_request_context("/login", method="POST"):
+        _login_throttled(_ok_try)
+    _release_login_slot(_ok_try)
+    check("login: an attempt that did not fail gives its reserved slot back",
+          "203.0.113.45" not in _LOGIN_FAILS, repr(_LOGIN_FAILS.get("203.0.113.45")))
+    _LOGIN_FAILS.clear()
+
     # ...and it cannot be stepped around with a per-request X-Real-IP.
     #
     # The throttle keys on client_ip() and has no second dimension, so whoever chooses that string
@@ -4926,9 +4973,11 @@ try:
         check("edit: ...and leaves the password working",
               auth.check_password(_reissued, db.session.get(User, _hu_id).password_hash))
 
-    # Resetting your OWN password from the Users page: you already know it, and there is nobody to
-    # take it back from, so it does not flag you out of your own panel. On a THROWAWAY superadmin —
-    # resetting the account the rest of this suite logs in with would break every later sign-in.
+    # Resetting your OWN password or 2FA from the Users page is refused. /account/password and
+    # /account/2fa/disable ask for the current password first; this form asks for nothing, so a
+    # borrowed session of any MANAGE_USERS holder could otherwise mint itself a new password, clear
+    # 2FA and sign the real owner out everywhere. On a THROWAWAY superadmin — the account the rest
+    # of this suite logs in with must keep its password whichever way this goes.
     c.post("/users/add", data={"username": "selfrst", "display_name": "Self Reset",
                                "is_superadmin": "on"},
            headers={"X-Requested-With": "XMLHttpRequest"})
@@ -4936,71 +4985,35 @@ try:
         _sr = User.query.filter_by(username="selfrst").first()
         _sr_id = _sr.id
         _sr.must_change_password = False   # pretend they have already set their own
+        _sr.totp_enabled = True
+        _sr.totp_secret = "JBSWY3DPEHPK3PXP"
+        _sr_hash, _sr_epoch = _sr.password_hash, _sr.auth_epoch
         db.session.commit()
-    _selfrst = client_as(_sr_id).post(
-        "/users/%d/edit" % _sr_id,
-        data={"display_name": "Self Reset", "is_active": "on", "is_superadmin": "on",
-              "reset_password": "on"},
-        headers={"X-Requested-With": "XMLHttpRequest"})
-    _sj = _selfrst.get_json() or {}
-    check("self-reset: still issues a generated password",
-          bool((_sj.get("credential") or {}).get("password")), str(_sj)[:120])
-    with app.app_context():
-        check("self-reset: ...but does not force yourself through the change screen",
-              db.session.get(User, _sr_id).must_change_password is False)
-
-    # ...and it must not sign THIS device out before the password can be read. The reset bumps
-    # auth_epoch, which is exactly what makes every other cookie for the account stop matching —
-    # and it stopped matching the one that made the request too. panel.js runs
-    # refreshSection('#users-list') BEFORE showCredential(), so that next request arrived
-    # milliseconds later, was answered 401 + X-Auth-Required, and sessionExpired() replaced the tab
-    # with /login while the generated password (only its hash is stored) was still behind the
-    # modal. On a single-superadmin install that ends at manage.py reset-password.
-    #
-    # Driven through a REAL epoch-tagged cookie: client_as() injects a bare "<id>", which
-    # load_user's legacy branch accepts on the id alone, so this bug is invisible to it.
-    def _epoch_client(uid):
-        """A client holding the cookie flask-login actually issues: '<id>:<epoch>:<sid>'."""
-        import secrets as _ec_secrets
-        from panel.db.models import UserSession as _ECUS
+    for _field in ("reset_password", "reset_2fa"):
+        _selfrst = client_as(_sr_id).post(
+            "/users/%d/edit" % _sr_id,
+            data={"display_name": "Self Reset", "is_active": "on", "is_superadmin": "on",
+                  _field: "on"},
+            headers={"X-Requested-With": "XMLHttpRequest"})
+        _sj = _selfrst.get_json() or {}
+        check("self-reset (%s): refused" % _field,
+              _selfrst.status_code == 400 and not _sj.get("credential"), str(_sj)[:120])
         with app.app_context():
-            _u = db.session.get(User, uid)
-            _sid = _ec_secrets.token_urlsafe(24)
-            db.session.add(_ECUS(user_id=uid, sid=_sid, remember=False, ip="", user_agent=""))
-            db.session.commit()
-            _val = "%d:%d:%s" % (uid, _u.auth_epoch or 0, _sid)
-        _cl = app.test_client()
-        with _cl.session_transaction() as _s:
-            _s["_user_id"] = _val
-            _s["_fresh"] = True
-        return _cl
-
-    _sr_this = _epoch_client(_sr_id)      # the browser doing the reset
-    _sr_other = _epoch_client(_sr_id)     # the same account signed in somewhere else
-    check("self-reset: (premise) an epoch-tagged cookie is accepted before the reset",
-          _sr_this.get("/users").status_code == 200,
-          "the fixture client could not load /users, so the checks below prove nothing")
-    _selfrst2 = _sr_this.post(
+            _sr = db.session.get(User, _sr_id)
+            check("self-reset (%s): ...and nothing changed" % _field,
+                  _sr.password_hash == _sr_hash and _sr.auth_epoch == _sr_epoch
+                  and _sr.totp_enabled is True,
+                  "the refused self-reset still touched the password, the epoch or 2FA")
+    # ...while an ordinary self-edit (no reset) still goes through.
+    _selfedit = client_as(_sr_id).post(
         "/users/%d/edit" % _sr_id,
-        data={"display_name": "Self Reset", "is_active": "on", "is_superadmin": "on",
-              "reset_password": "on"},
+        data={"display_name": "Self Renamed", "is_active": "on", "is_superadmin": "on"},
         headers={"X-Requested-With": "XMLHttpRequest"})
-    _sj2 = _selfrst2.get_json() or {}
-    check("self-reset: ...still hands back a generated password (positive control)",
-          bool((_sj2.get("credential") or {}).get("password")), str(_sj2)[:120])
-    # The request panel.js fires immediately afterwards, from the same browser.
-    _sr_after = _sr_this.get("/users", headers={"X-Requested-With": "XMLHttpRequest"})
-    check("self-reset: ...and does not sign this device out before the password can be read",
-          _sr_after.status_code == 200 and "X-Auth-Required" not in _sr_after.headers,
-          "the refresh panel.js fires after the reset answered %d %r — the credential modal opens "
-          "and the tab navigates to /login" % (_sr_after.status_code,
-                                               _sr_after.headers.get("X-Auth-Required")))
-    # ...while every OTHER session for that account really is revoked, which is what the bump is for.
-    _sr_elsewhere = _sr_other.get("/users", headers={"X-Requested-With": "XMLHttpRequest"})
-    check("self-reset: ...while the account's other devices ARE signed out",
-          _sr_elsewhere.status_code in (302, 401),
-          "a reset left another device signed in (%d) — the epoch bump revoked nothing"
-          % _sr_elsewhere.status_code)
+    with app.app_context():
+        check("self-edit: an edit without a reset is still allowed",
+              _selfedit.status_code == 200
+              and db.session.get(User, _sr_id).display_name == "Self Renamed",
+              "status %d" % _selfedit.status_code)
 
     # ── An install that predates the `sha256$` format signs in, and is upgraded in place ──
     # Every existing installation hits this branch on its first login after the hash format
@@ -11914,8 +11927,11 @@ try:
         _parked = [u.id for u in User.query.filter(User.is_superadmin.is_(True),
                                                    User.is_active.is_(False)).all()]
     _sc = client_as(_sole_id)
+    # No "reset_password" alongside it any more: resetting your OWN password from this form is
+    # refused outright (see the self-reset checks), so that refusal would answer first and this
+    # would pass without ever reaching the lockout guard.
     _lr = _sc.post("/users/%d/edit" % _sole_id,
-                   data={"username": "smoke_sole", "reset_password": "on"},   # superadmin UNticked
+                   data={"username": "smoke_sole"},   # superadmin UNticked
                    headers={"X-Requested-With": "XMLHttpRequest"})
     with app.app_context():
         _left = User.query.filter_by(is_superadmin=True, is_active=True).count()
@@ -11925,12 +11941,20 @@ try:
         check("edit user: ...and the row is unchanged, not half-committed",
               _row.is_superadmin and _row.is_active,
               "is_superadmin=%s is_active=%s" % (_row.is_superadmin, _row.is_active))
-        check("edit user: the refusal is reported as one", _lr.status_code == 400,
-              "got %d" % _lr.status_code)
+        check("edit user: the refusal is reported as one", _lr.status_code == 400
+              and "no active superadmin" in (_lr.get_json() or {}).get("message", ""),
+              "got %d %s" % (_lr.status_code, _lr.get_data(as_text=True)[:120]))
     # A junk group id is a refusal, not a 500 — and must not have committed a password reset that
     # the 500 then prevented anyone from ever seeing.
-    _jr = _sc.post("/users/%d/edit" % _sole_id,
-                   data={"username": "smoke_sole", "is_superadmin": "on", "is_active": "on",
+    # On ANOTHER account: a self-reset is refused before this parse is reached.
+    with app.app_context():
+        _jt = User(username="smoke_junkgrp", display_name="J", is_superadmin=False, is_active=True,
+                   password_hash=auth.hash_password("Str0ng!passw0rd"))
+        db.session.add(_jt)
+        db.session.commit()
+        _jt_id = _jt.id
+    _jr = _sc.post("/users/%d/edit" % _jt_id,
+                   data={"username": "smoke_junkgrp", "is_active": "on",
                          "groups": "abc", "reset_password": "on"},
                    headers={"X-Requested-With": "XMLHttpRequest"})
     check("edit user: a non-numeric group id does not 500", _jr.status_code < 500,
@@ -11942,9 +11966,10 @@ try:
             _u = db.session.get(User, _i)
             if _u:
                 _u.is_active = True
-        _s = db.session.get(User, _sole_id)
-        if _s:
-            db.session.delete(_s)
+        for _gone in (_sole_id, _jt_id):
+            _s = db.session.get(User, _gone)
+            if _s:
+                db.session.delete(_s)
         db.session.commit()
 
     # ── Renaming a group onto an existing name is a 400, not a 500 ─────────────────────
