@@ -13,6 +13,7 @@ from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin
     panel_update_requested, queue_panel_update, sender_id, spend_update_check,
     update_rate_reply)
 from panel.db.models import (LOCAL_HOST_LABEL)
+import functools
 import logging
 import time
 
@@ -108,6 +109,67 @@ def _parse_dc_command(text):
     return parts[0].split("@")[0].lower() if parts else ""
 
 
+def _dc_on_message(app, _tok, msg_channel, author_is_bot, content, author=None):
+    """Handle one Gateway message for the session opened with bot token `_tok`."""
+    # Ignore our own (and every other bot's) messages.
+    if author_is_bot:
+        return
+    # RE-READ the gate on every message, the way the Telegram twin re-reads it on every
+    # poll. It used to be frozen into this closure's default args at IDENTIFY time, and
+    # a Gateway session is deliberately long-lived — heartbeat every ~41s, reconnect
+    # only on op 7/9 or a dropped socket. So unticking "Accept commands from this
+    # channel" (or moving the bot to a locked-down channel) changed the settings page
+    # and nothing else: the old channel kept control, and the next `!stop codserver`
+    # posted there still stopped the server, for minutes or for days, with no bound the
+    # panel could put on it. Revocation has to take effect at the next message, not at
+    # the next socket drop.
+    _dc = notifications._cfg().get("discord") or {}
+    _chan = _dc_gate_channel(_dc, msg_channel, content)
+    if not _chan:
+        return
+    text = content.strip()
+    # ...and the SENDER, for anything that changes state: everyone who can post in the
+    # channel is "the authorised channel". author.id is Discord's, not the sender's to
+    # choose. Re-read per message like the rest of the gate. See _tg_route_update.
+    refusal = command_refusal("discord", _parse_dc_command(text), _command_arg(text),
+                              author, notifications.command_users(_dc))
+    if refusal:
+        _log.info("discord: refused a command from user %s, who is not on the allowed "
+                  "list", sender_id(author) or "?")
+        _dc_reply(_tok, _chan, refusal)
+        return
+    _dc_dispatch(app, _tok, _chan, text, author)
+
+
+def _dc_gate_channel(_dc, msg_channel, content):
+    """The authorised channel id when this message passes the channel gate, else ''."""
+    if not (_dc.get("enabled") and _dc.get("accept_commands")):
+        return ""
+    _chan = (_dc.get("channel_id") or "").strip()
+    if not _chan or msg_channel != _chan:
+        return ""
+    if (content or "")[:1] not in ("!", "/"):
+        return ""
+    return _chan
+
+
+def _dc_watch_token():
+    """The bot token when commands are switched on and fully configured, else ''."""
+    cfg = notifications._cfg()
+    dc = cfg.get("discord") or {}
+    bot_token = decrypt_secret(dc.get("bot_token") or "")
+    channel = (dc.get("channel_id") or "").strip()
+    if not (dc.get("enabled") and dc.get("accept_commands") and bot_token and channel):
+        return ""
+    return bot_token
+
+
+def _dc_fatal_holds(fatal, fatal_gen, bot_token):
+    """True while the last fatal close still holds for this token and settings generation."""
+    return bool(fatal and fatal[0] == bot_token and _clock() - fatal[1] < _DC_FATAL_RETRY
+                and fatal_gen == notifications.discord_settings_generation())
+
+
 def _discord_command_watch(app):
     """Keep a Discord Gateway session open and honour commands from the authorised channel only.
 
@@ -122,11 +184,8 @@ def _discord_command_watch(app):
     while True:
         wait = backoff
         try:
-            cfg = notifications._cfg()
-            dc = cfg.get("discord") or {}
-            bot_token = decrypt_secret(dc.get("bot_token") or "")
-            channel = (dc.get("channel_id") or "").strip()
-            if not (dc.get("enabled") and dc.get("accept_commands") and bot_token and channel):
+            bot_token = _dc_watch_token()
+            if not bot_token:
                 # Switched off: forget a fatal close and the backoff, so switching it back on (the
                 # page's advice after fixing the intent in the Portal) connects at once.
                 if fatal:
@@ -134,50 +193,15 @@ def _discord_command_watch(app):
                 fatal, backoff = None, _DC_CMD_BACKOFF
                 time.sleep(_DC_CMD_BACKOFF)
                 continue
-            if (fatal and fatal[0] == bot_token and _clock() - fatal[1] < _DC_FATAL_RETRY
-                    and fatal_gen == notifications.discord_settings_generation()):
+            if _dc_fatal_holds(fatal, fatal_gen, bot_token):
                 time.sleep(_DC_CMD_BACKOFF)       # a config read, no IDENTIFY: cheap to repeat
                 continue
             if fatal:
                 fatal = None                      # a new token, or time to try the old one again
                 notifications.set_discord_gateway_problem("")
-
-            def _on_message(msg_channel, author_is_bot, content, author=None, _tok=bot_token):
-                # Ignore our own (and every other bot's) messages.
-                if author_is_bot:
-                    return
-                # RE-READ the gate on every message, the way the Telegram twin re-reads it on every
-                # poll. It used to be frozen into this closure's default args at IDENTIFY time, and
-                # a Gateway session is deliberately long-lived — heartbeat every ~41s, reconnect
-                # only on op 7/9 or a dropped socket. So unticking "Accept commands from this
-                # channel" (or moving the bot to a locked-down channel) changed the settings page
-                # and nothing else: the old channel kept control, and the next `!stop codserver`
-                # posted there still stopped the server, for minutes or for days, with no bound the
-                # panel could put on it. Revocation has to take effect at the next message, not at
-                # the next socket drop.
-                _dc = notifications._cfg().get("discord") or {}
-                if not (_dc.get("enabled") and _dc.get("accept_commands")):
-                    return
-                _chan = (_dc.get("channel_id") or "").strip()
-                if not _chan or msg_channel != _chan:
-                    return
-                if (content or "")[:1] not in ("!", "/"):
-                    return
-                text = content.strip()
-                # ...and the SENDER, for anything that changes state: everyone who can post in the
-                # channel is "the authorised channel". author.id is Discord's, not the sender's to
-                # choose. Re-read per message like the rest of the gate. See _tg_route_update.
-                refusal = command_refusal("discord", _parse_dc_command(text), _command_arg(text),
-                                          author, notifications.command_users(_dc))
-                if refusal:
-                    _log.info("discord: refused a command from user %s, who is not on the allowed "
-                              "list", sender_id(author) or "?")
-                    _dc_reply(_tok, _chan, refusal)
-                    return
-                _dc_dispatch(app, _tok, _chan, text, author)
-
             started = _clock()
-            code = notifications.discord_gateway_run(bot_token, _on_message)   # returns when the socket drops
+            code = notifications.discord_gateway_run(   # returns when the socket drops
+                bot_token, functools.partial(_dc_on_message, app, bot_token))
             fatal, backoff = _dc_after_session(bot_token, code, _clock() - started, backoff)
             fatal_gen = notifications.discord_settings_generation()
             wait = backoff
