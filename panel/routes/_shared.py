@@ -18,7 +18,8 @@ from panel.core.http import (_json_str)
 from panel.core.validation import (NOT_AN_IP, unzoned_ip_or_network)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
     _game_backup_status, register_remote_state, register_server_state)
-from panel.db.models import (GameServer, RemoteServer, db)
+from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, claim_row, db, row_birth,
+    still_held)
 from panel.ops import (backup as bk)
 from panel.ops.ssh_manager import (get_server_status, mod_restart_decision, player_count as
     sm_player_count, remote_bootstrap_vps, remote_public_ip, run_game_backup)
@@ -59,7 +60,7 @@ def _begin_bootstrap(app, remote_id, opts, actor_id):
     return True, "Bootstrap started."
 
 
-def _bg_cache_commands(app, server_ids, autostart_ids=()):
+def _bg_cache_commands(app, server_ids, autostart_ids=(), births=None):
     """Fetch + cache each server's LinuxGSM command list in the background.
 
     That way the "Supported Commands" panel is populated without the user hitting refresh. Install
@@ -72,15 +73,21 @@ def _bg_cache_commands(app, server_ids, autostart_ids=()):
     it lives here rather than in the request. monitor restarts a server that should be running (it
     has a start lockfile) and leaves a deliberately stopped one down, so this never starts a server
     the operator stopped. The flag is set only once the cron line is written.
+
+    `births` is {id: models.row_birth} of the rows the caller chose. The ids are looked up one
+    after another, each after the last one's SSH, so a server deleted meanwhile answered with the
+    server that took its id: it was handed the deleted one's command list, and Autostart was
+    switched on for it — a cron line on a server nobody asked that of.
     """
     _app = app
     autostart_ids = set(autostart_ids)
+    births = dict(births or {})
 
     def _run():
         with _app.app_context():
             for sid in server_ids:
                 try:
-                    gs = db.session.get(GameServer, sid)
+                    gs = claim_row(GameServer, sid, births.get(sid, _NO_BIRTH))
                     if not gs:
                         continue
                     cmds = _sm.list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
@@ -196,7 +203,7 @@ def _server_action_buttons(app, gs):
 
     all_commands = gs.get_commands()
     if not all_commands:
-        _maybe_cache_commands(app, gs.id)
+        _maybe_cache_commands(app, gs)
     # Some games aren't SteamCMD-based (the Call of Duty family) and have NO `update` command.
     # GameServer.supports_update is the ONE place that decides this; it used to be decided a
     # second time here as `(not cmd_set) or ("update" in cmd_set)`, which disagreed with the model
@@ -228,7 +235,7 @@ def _server_action_buttons(app, gs):
     return actions, maintenance, all_commands, supports_update
 
 
-def _record_backup_outcome(app, sid, gname, ok, reason, action, title):
+def _record_backup_outcome(app, sid, gname, ok, reason, action, title, born=_NO_BIRTH):
     """Audit an unattended backup's outcome, and alert when it failed.
 
     run_game_backup does not RAISE for a backup that fails: it returns (False, reason, False), and
@@ -243,9 +250,13 @@ def _record_backup_outcome(app, sid, gname, ok, reason, action, title):
     So: one audit row per unattended backup (success=ok, so /logs' failures filter shows it), and
     the alert on every failure rather than only on an exception. Server-scoped, so a muting tag
     still applies — the Tags UI promises muting keeps a server out of the alert channel.
+
+    `born` (models.row_birth) is the server the backup was for. A backup runs for minutes; by id
+    alone, a server deleted meanwhile was answered by the one that took its id, which then had
+    the row filed under it and its tags deciding the alert.
     """
     try:
-        _bk_gs = db.session.get(GameServer, sid)
+        _bk_gs = claim_row(GameServer, sid, born)
         log_action(None, action, target=gname, detail=(reason or "")[:500], success=bool(ok),
                    server=_bk_gs)
         if ok:
@@ -350,8 +361,16 @@ def _marked_backup(sid, *args, runner=None, **kwargs):
 
 
 def _back_up_if_due(app, target):
-    """Back up one scheduled target if its OWN schedule is due. The caller holds the backup lock."""
-    sid, remote, short, lgsm, gname, gtype, port, qtype = target
+    """Back up one scheduled target if its OWN schedule is due. The caller holds the backup lock.
+
+    The targets are read once and backed up one after another, minutes each, so each is checked
+    to still be its server (models.row_birth) before it is touched and before anything is
+    recorded for it: the clock and the status are keyed by the id, which a deleted server's
+    successor takes.
+    """
+    sid, remote, short, lgsm, gname, gtype, port, qtype, born = target
+    if claim_row(GameServer, sid, born) is None:
+        return   # deleted since the list was read
     sched = bk.get_game_schedule(sid)
     if sched["interval_days"] <= 0:
         return   # backups off for this server
@@ -375,6 +394,8 @@ def _back_up_if_due(app, target):
     ok, reason, was_skipped = _marked_backup(sid, remote, short, lgsm, keep,
                                              game_type=gtype, port=port,
                                              query_type=qtype)
+    if claim_row(GameServer, sid, born) is None:
+        return   # deleted while it was being archived: nothing below is its any more
     if was_skipped:
         # Players online — leave the clock untouched so it stays "due" and we
         # retry on the next hourly tick, backing up once the server empties.
@@ -390,7 +411,7 @@ def _back_up_if_due(app, target):
     # raise, and the clock was just recorded so this server will not be retried
     # for a whole interval. See _record_backup_outcome.
     _record_backup_outcome(app, sid, gname, ok, reason,
-                           "scheduled_backup", "Scheduled backup failed")
+                           "scheduled_backup", "Scheduled backup failed", born)
 
 
 def _run_due_game_backups(app):
@@ -409,17 +430,17 @@ def _run_due_game_backups(app):
             # run_game_backup reads None as EMPTY and runs LinuxGSM `backup`, which stops the
             # server with its players on it. Every backup and player-count caller passes it.
             targets = [(gs.id, gs.remote, gs.short_name, gs.lgsm_name, gs.name, gs.game_type, gs.port,
-                        gs.query_type)
+                        gs.query_type, row_birth(gs))
                        for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
             for target in targets:
-                sid, gname = target[0], target[4]
+                sid, gname, born = target[0], target[4], target[8]
                 try:
                     _back_up_if_due(app, target)
                 except Exception as e:
                     app.logger.warning("scheduled backup of %s failed", gname, exc_info=True)
                     _record_backup_outcome(app, sid, gname, False,
                                            "backup error (%s)" % type(e).__name__,
-                                           "scheduled_backup", "Scheduled backup failed")
+                                           "scheduled_backup", "Scheduled backup failed", born)
     finally:
         _full_backup_lock.release()
 
@@ -428,11 +449,15 @@ def _back_up_queued(app, gs):
     """Back up one queued server if it is empty now; still busy, it stays queued.
 
     Backed up (or genuinely failed) clears its backup_pending. The caller holds the backup lock.
+    Nothing is recorded once the server was deleted while it was archived (models.still_held):
+    the flag, the clock, the status and the audit row would be the next server's with that id.
     """
     ok, reason, was_skipped = _marked_backup(
         gs.id, gs.remote, gs.short_name, gs.lgsm_name,
         bk.get_game_schedule(gs.id)["keep"],
         game_type=gs.game_type, port=gs.port, query_type=gs.query_type)
+    if not still_held(gs):
+        return
     if was_skipped:
         # Still players on: stays queued. Clear the running mark set above.
         _game_backup_status[gs.id] = {"running": False, "ok": None, "busy": True,
@@ -480,15 +505,20 @@ def _run_pending_backups(app):
             # archives a server's own retention override said to retain.
             pending = GameServer.query.filter_by(installed=True, backup_pending=True).all()
             for gs in pending:
-                if not gs.remote_id or _button_backup_running(gs.id):
+                # Deleted since the list was read (each backup takes minutes): skipped, and its
+                # object is not read, since it would reload from whatever row took the id.
+                if not still_held(gs):
+                    continue
+                sid, gname, born = gs.id, gs.name, row_birth(gs)
+                if not gs.remote_id or _button_backup_running(sid):
                     continue   # (a Backup-button run in flight: stays queued, see the ticker)
                 try:
                     _back_up_queued(app, gs)
                 except Exception as e:
-                    app.logger.warning("queued backup of %s failed", gs.name, exc_info=True)
-                    _record_backup_outcome(app, gs.id, gs.name, False,
+                    app.logger.warning("queued backup of %s failed", gname, exc_info=True)
+                    _record_backup_outcome(app, sid, gname, False,
                                            "backup error (%s)" % type(e).__name__,
-                                           "queued_backup", "Queued backup failed")
+                                           "queued_backup", "Queued backup failed", born)
     finally:
         _full_backup_lock.release()
 
@@ -651,6 +681,12 @@ def _run_due_restarts(app):
         # A cancelled action's failure count must not carry over — see _forget_unqueued_failures.
         _forget_unqueued_failures(pending)
         for gs in pending:
+            # Each server's action takes up to a minute and a half, so a later one can have been
+            # deleted, and its id taken, by the time it comes up: skipped, and its object is not
+            # read, since it would reload from the other row (models.RowReplaced).
+            if not still_held(gs):
+                continue
+            gname = gs.name
             # Don't restart/stop a server that's being backed up right now — the backup already
             # stops+starts it, and racing it could fail the backup. Leave it queued for next tick.
             # Both ways a backup can be running: the runners' flag, and the Backup button's long
@@ -660,7 +696,9 @@ def _run_due_restarts(app):
             try:
                 _settle_queued_action(app, gs)
             except Exception:
-                app.logger.debug("pending restart/stop of %s failed", gs.name, exc_info=True)
+                # A refused write leaves the session needing a rollback before the next server.
+                db.session.rollback()
+                app.logger.debug("pending restart/stop of %s failed", gname, exc_info=True)
 
 
 def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
@@ -800,17 +838,18 @@ def _settle_bootstrapped_row(remote_id, created, pinned, learned, success):
     return True
 
 
-def _maybe_cache_commands(app, server_id):
+def _maybe_cache_commands(app, gs):
     """Kick off a background command-list fetch for a server whose cache is empty.
 
     At most once every few minutes, so reloading the page can't stack SSH calls. Lets servers
     imported before auto-caching existed self-heal the first time they're viewed.
     """
     now = time.time()
+    server_id = gs.id
     if now - _cmd_fetch_attempts.get(server_id, 0) < 300:
         return
     _cmd_fetch_attempts[server_id] = now
-    _bg_cache_commands(app, [server_id])
+    _bg_cache_commands(app, [server_id], births={server_id: row_birth(gs)})
 
 
 # ── Module state the route modules own ─────────────────────────────────────────────────────────
@@ -839,8 +878,10 @@ _bootstrap_jobs = register_remote_state({}, _bootstrap_lock)
 #
 # `socketio` deliberately stays inside register_routes: it is constructed FROM the app and is the
 # one genuinely per-app object in that set.
-_cmd_fetch_attempts = {}       # server_id -> last background command-fetch time (rate-limits lazy refetch)
-_pubip_resolve_attempts = {}   # remote_id -> last background public-IP resolve time
+# Registered like every other map keyed by a row id, so a server or host that takes a deleted
+# one's id does not inherit its rate limit.
+_cmd_fetch_attempts = register_server_state({})     # server_id -> last background command-fetch time
+_pubip_resolve_attempts = register_remote_state({})  # remote_id -> last background public-IP resolve time
 
 # Hoisted for the second wave of sections: the file browser and the API routes both call
 # these, and "Manage Game Servers" defines neither. Same rule as the first ten — each closed

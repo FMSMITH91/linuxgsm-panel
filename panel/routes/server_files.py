@@ -6,7 +6,8 @@ from flask import (Response, flash, jsonify, redirect, render_template, request,
 from flask_login import (current_user, login_required)
 from flask_socketio import (SocketIO, emit, join_room, leave_room)
 from panel.core import (terminal)
-from panel.db.models import (GameServer, RemoteServer, db)
+from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth,
+    taken_by_another)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, UPLOAD_EXISTS,
     add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
     gmod_current_mounts, gmod_mount_setup, install_gmod_content, lgsm_game_config,
@@ -89,15 +90,21 @@ def _release_gmod_content_host(remote_id):
         _gmod_content_busy_hosts.discard(remote_id)
 
 
-def _publish_gmod_job(server_id, remote_id, state):
+def _publish_gmod_job(server_id, remote_id, state, born=_NO_BIRTH):
     """A content worker's last step: release the host, THEN publish the job's terminal state.
 
     In that order so a poller that sees the job finish can start the next one at once — the other
     way round left a moment where the card said "done" and the next apply was refused as busy.
     `state` None means the worker left without recording one (its host was deleted mid-job), which
     used to leave the card spinning on "running" for ever.
+
+    Not published once another server holds the id (`born` is the job's server, models.row_birth):
+    a content download runs for up to two hours, and the server that took a deleted one's id was
+    shown the deleted one's outcome ("Mounted: … restart the server to apply").
     """
     _release_gmod_content_host(remote_id)
+    if taken_by_another(GameServer, server_id, born):
+        return
     _gmod_content_apply_state[server_id] = state or {
         "status": "error", "msg": "The host is no longer registered with the panel.",
         "ts": time.time()}
@@ -782,7 +789,7 @@ def _uninstall_gmod_selection(remote, gmod_user, games):
     return {"status": _st, "msg": _msg, "ts": time.time()}
 
 
-def _bg_gmod_content_apply(app, server_id, remote_id, gmod_user, games):
+def _bg_gmod_content_apply(app, server_id, remote_id, gmod_user, games, born=_NO_BIRTH):
     """Apply a GMod content selection in the background (a download can take many minutes).
 
     Ensure a content user, fetch any missing games, then rewrite the server's mount.cfg to exactly
@@ -797,7 +804,7 @@ def _bg_gmod_content_apply(app, server_id, remote_id, gmod_user, games):
         with _app.app_context():
             try:
                 remote = db.session.get(RemoteServer, remote_id)
-                if not remote:
+                if not remote or taken_by_another(GameServer, server_id, born):
                     return
                 _result[0] = _apply_gmod_selection(remote, gmod_user, games)
             except Exception:
@@ -806,12 +813,12 @@ def _bg_gmod_content_apply(app, server_id, remote_id, gmod_user, games):
                     "status": "error", "msg": "Content setup failed — check the server logs.",
                     "ts": time.time()}
             finally:
-                _publish_gmod_job(server_id, remote_id, _result[0])
+                _publish_gmod_job(server_id, remote_id, _result[0], born)
 
     _start_gmod_content_worker(remote_id, _run)
 
 
-def _bg_gmod_content_uninstall(app, server_id, remote_id, gmod_user, games):
+def _bg_gmod_content_uninstall(app, server_id, remote_id, gmod_user, games, born=_NO_BIRTH):
     """Uninstall content from the host (host-wide) in the background.
 
     Then drop the removed games from THIS server's mounts. Result is stashed for the status poll.
@@ -825,7 +832,7 @@ def _bg_gmod_content_uninstall(app, server_id, remote_id, gmod_user, games):
         with _app.app_context():
             try:
                 remote = db.session.get(RemoteServer, remote_id)
-                if not remote:
+                if not remote or taken_by_another(GameServer, server_id, born):
                     return
                 _result[0] = _uninstall_gmod_selection(remote, gmod_user, games)
             except Exception:
@@ -834,7 +841,7 @@ def _bg_gmod_content_uninstall(app, server_id, remote_id, gmod_user, games):
                     "status": "error", "msg": "Uninstall failed — check the server logs.",
                     "ts": time.time()}
             finally:
-                _publish_gmod_job(server_id, remote_id, _result[0])
+                _publish_gmod_job(server_id, remote_id, _result[0], born)
 
     _start_gmod_content_worker(remote_id, _run)
 
@@ -904,7 +911,7 @@ def _gmod_uninstall_request(app, gs, remote, sel):
     """Start removing `sel` from the host, unless a content job already holds it."""
     if not _claim_gmod_content_host(remote.id):
         return _gmod_busy()
-    _bg_gmod_content_uninstall(app, gs.id, remote.id, gs.short_name, sel)
+    _bg_gmod_content_uninstall(app, gs.id, remote.id, gs.short_name, sel, row_birth(gs))
     log_action(current_user, "gmod_content_uninstall", target=gs.name, detail=",".join(sel),
                server=gs)
     return jsonify({"success": True, "games": sel,
@@ -925,7 +932,7 @@ def _gmod_apply_request(app, gs, remote, sel):
             "reachable and reload this card.")}), 409
     if not _claim_gmod_content_host(remote.id):
         return _gmod_busy()
-    _bg_gmod_content_apply(app, gs.id, remote.id, gs.short_name, sel)
+    _bg_gmod_content_apply(app, gs.id, remote.id, gs.short_name, sel, row_birth(gs))
     log_action(current_user, "gmod_content", target=gs.name, detail=(",".join(sel) or "(none)"),
                server=gs)
     return jsonify({"success": True, "games": sel,

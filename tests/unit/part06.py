@@ -199,6 +199,149 @@ finally:
     _sm_core._HELPER_STATE.update(_orig_helper_state)
 
 
+# ── the panel host's own Firewall card, on a row with sudo_enabled off ────────────────────────
+# remote_ufw_status is the one caller that passes sudo=None, and run_privileged used to read that
+# as the ROW's sudo_enabled on the panel host too. The real test panel's own row has it off (a
+# probe script inserted it; the panel creates that row with it on), so the read ran `ufw status
+# numbered` as the panel's account beside the helper its sudoers grant allows, and
+# GET /api/remote/1/firewall answered permission_denied. sudo_enabled is a remote's SSH setting:
+# on the panel host a sudo=None read always escalates, and a remote still honours the row, over
+# paramiko and over the Tailscale ssh CLI alike (each transport reads the row itself).
+import shlex as _shlex_phf  # noqa: E402
+
+_PHF_LOCAL = NS(is_local=True, auth_method="key", sudo_enabled=False, linuxgsm_user="",
+                host="127.0.0.1", port=22, username="root", id=9601, name="this-host")
+_PHF_REMOTE_OFF = NS(is_local=False, auth_method="key", sudo_enabled=False, linuxgsm_user="",
+                     host="h", port=22, username="root", id=9602, name="r-off")
+_PHF_REMOTE_ON = NS(is_local=False, auth_method="key", sudo_enabled=True, linuxgsm_user="",
+                    host="h", port=22, username="admin", id=9603, name="r-on")
+_PHF_TS_OFF = NS(is_local=False, auth_method="tailscale", sudo_enabled=False, linuxgsm_user="",
+                 host="box.ts.net", port=22, username="root", id=9604, name="ts-off")
+_PHF_TS_ON = NS(is_local=False, auth_method="tailscale", sudo_enabled=True, linuxgsm_user="",
+                host="box.ts.net", port=22, username="admin", id=9605, name="ts-on")
+_PHF_HELPER = ["sudo", "-n", _priv.HELPER_PATH, "ufw-status", "numbered"]
+_PHF_LISTING = ("Status: active\n\n     To                         Action      From\n"
+                "     --                         ------      ----\n"
+                "[ 1] Anywhere on tailscale0     ALLOW IN    Anywhere\n")
+_phf_argvs, _phf_shell, _phf_wire = [], [], []
+
+
+def _phf_exec_argv(argv, timeout=30, stdin_text=None):
+    """The host as it answers: the helper lists the rules, ufw run as the panel's account refuses."""
+    _phf_argvs.append(list(argv))
+    if list(argv[:3]) == _PHF_HELPER[:3]:
+        return _PHF_LISTING, "", 0
+    return "", "ERROR: You need to be root to run this script", 1
+
+
+class _PhfChan:
+    """A finished paramiko exec channel with nothing to read."""
+    def shutdown_write(self):
+        return None
+
+    def settimeout(self, _t):
+        return None
+
+    def recv_ready(self):
+        return False
+
+    def recv_stderr_ready(self):
+        return False
+
+    def recv(self, _n):
+        return b""
+
+    def recv_stderr(self, _n):
+        return b""
+
+    def exit_status_ready(self):
+        return True
+
+    def recv_exit_status(self):
+        return 0
+
+
+class _PhfStd:
+    channel = _PhfChan()
+
+    def write(self, _t):
+        return None
+
+    def flush(self):
+        return None
+
+
+def _phf_exec_command(cmd, timeout=None):
+    _phf_wire.append(cmd)
+    return _PhfStd(), _PhfStd(), _PhfStd()
+
+
+_phf_saved = (_sm_core._run_local, _sm_core._exec_local_argv, _sm_core.get_connection,
+              _sm_firewall._annotate_firewall_protection, dict(_sm_core._HELPER_STATE))
+_phf_ts_saved = (_sm_core.subprocess, _sm_core._collect_capped, _sm_core._resolve_ts_host,
+                 _sm_core._ssh_mux_opts)
+_phf_ts_argvs = []
+try:
+    _sm_core._exec_local_argv = _phf_exec_argv
+    _sm_core._run_local = lambda cmd, timeout=30, sudo=False, **k: (
+        _phf_shell.append((cmd, sudo)), ("", "", 0))[1]
+    _sm_core.get_connection = lambda s, **k: NS(exec_command=_phf_exec_command)
+    # The lock-out annotations read tailscale and sshd state; what is under test is the status.
+    _sm_firewall._annotate_firewall_protection = lambda s, enabled, groups: groups
+    _sm_core._HELPER_STATE["present"] = True
+    _sm_core.run_privileged(_PHF_LOCAL, "ufw-status", ["numbered"], timeout=5, sudo=None)
+    eq("panel-host firewall: a local row with sudo_enabled off still reads ufw through the helper",
+       _phf_argvs[-1:], [_PHF_HELPER])
+    _phf_argvs.clear()
+    _phf_st = _sm_firewall.remote_ufw_status(_PHF_LOCAL)
+    check("panel-host firewall: the card's own reader gets the rules, not permission_denied",
+          _phf_st.get("installed") is True and _phf_st.get("enabled") is True
+          and len(_phf_st.get("rules") or []) == 1 and not _phf_st.get("permission_denied")
+          and _phf_argvs == [_PHF_HELPER], repr((_phf_st, _phf_argvs)))
+    # Positive control: an EXPLICIT sudo=False is still the tool itself, unescalated.
+    _phf_argvs.clear()
+    _sm_core.run_privileged(_PHF_LOCAL, "ufw-status", ["numbered"], timeout=5, sudo=False)
+    check("panel-host firewall: an explicit sudo=False still runs the tool directly, no sudo",
+          len(_phf_argvs) == 1 and _phf_argvs[0][0] != "sudo"
+          and _phf_argvs[0][1:] == ["status", "numbered"], repr(_phf_argvs))
+    # No helper yet: the pre-helper escalated shell form, as every other verb takes there.
+    _sm_core._HELPER_STATE["present"] = False
+    _phf_argvs.clear()
+    _sm_core.run_privileged(_PHF_LOCAL, "ufw-status", ["numbered"], timeout=5, sudo=None)
+    check("panel-host firewall: with no helper, it is the escalated shell form, not ufw as the panel",
+          _phf_argvs == [] and _phf_shell[-1:] == [(_priv.remote_command("ufw-status", ["numbered"]),
+                                                    True)], repr((_phf_argvs, _phf_shell[-1:])))
+    # A REMOTE still honours its row: off sends the bare command, on the `sudo bash -c` form.
+    _sm_core._HELPER_STATE["present"] = True
+    _sm_firewall.remote_ufw_status(_PHF_REMOTE_OFF)
+    _sm_firewall.remote_ufw_status(_PHF_REMOTE_ON)
+    eq("panel-host firewall: a remote's sudo_enabled still decides whether its ufw read escalates",
+       [c.startswith("sudo bash -c ") for c in _phf_wire], [False, True])
+    eq("panel-host firewall: ...and the unescalated one is the bare ufw read (the gate has a subject)",
+       _phf_wire[:1], [_priv.remote_command("ufw-status", ["numbered"])])
+    # ...and over Tailscale, whose transport (_run_via_ssh_cli) does its own defaulting from the
+    # row rather than paramiko's. The remote command is the last word of the ssh argv it builds.
+    _sm_core.subprocess = NS(Popen=lambda argv, **k: (_phf_ts_argvs.append(list(argv)),
+                                                      NS(kill=lambda: None))[1],
+                             PIPE="PIPE", DEVNULL="DEVNULL")
+    _sm_core._collect_capped = lambda p, t, kill, threads, stdin_bytes=None: (b"", b"", 0, False)
+    _sm_core._resolve_ts_host = lambda s: s.host
+    _sm_core._ssh_mux_opts = lambda: []
+    _sm_firewall.remote_ufw_status(_PHF_TS_OFF)
+    _sm_firewall.remote_ufw_status(_PHF_TS_ON)
+    _phf_ts_cmd = _priv.remote_command("ufw-status", ["numbered"])
+    eq("panel-host firewall: a Tailscale remote's sudo_enabled decides its ufw read the same way",
+       [a[-1] for a in _phf_ts_argvs],
+       [_phf_ts_cmd, "sudo bash -c " + _shlex_phf.quote(_phf_ts_cmd)])
+finally:
+    (_sm_core._run_local, _sm_core._exec_local_argv, _sm_core.get_connection,
+     _sm_firewall._annotate_firewall_protection) = _phf_saved[:4]
+    (_sm_core.subprocess, _sm_core._collect_capped, _sm_core._resolve_ts_host,
+     _sm_core._ssh_mux_opts) = _phf_ts_saved
+    _sm_core._HELPER_STATE.clear()
+    _sm_core._HELPER_STATE.update(_phf_saved[4])
+
+
 # ── the REMOTE fail2ban top-IPs report ────────────────────────────────────────────────────────
 # The remote twin of system_ops.fail2ban_top_ips. #118 converted the local one; this copy still
 # carried the five-stage root pipeline, which is how two copies of one behaviour drift. It shares
@@ -231,14 +374,14 @@ try:
           str(_rt_args[:1]))
     check("remote top-IPs: that cutoff is one privileged.py would accept",
           _priv.check_args("f2b-log-lines", _rt_args[0][1]) == _rt_args[0][1], str(_rt_args[:1]))
-    # The auto-block reconcile's read. A log answer that FILLS the transport ceiling was cut (the
-    # transports keep the oldest bytes), and a partial tally undercounts recent offenders — whom the
-    # reconcile then RELEASES. At the ceiling it must answer None ("unread"), which the reconcile
-    # treats as "leave every block where it is".
+    # The auto-block reconcile's read. A cut read keeps the oldest bytes, and a partial tally
+    # undercounts recent offenders — whom the reconcile then RELEASES. Cut, which the remote form
+    # answers with rc 3 at the helper's ceiling, must answer None ("unread"), which the reconcile
+    # treats as "leave every block where it is". (The exact ceiling, end to end: part16.)
     _ac_line = "2026-09-03 10:00:00 x [sshd] Found 203.0.113.5\n"
-    _ac_full = _ac_line * (_sm_core._MAX_OUTPUT_BYTES // len(_ac_line) + 1)
-    _sm_core.run_privileged = lambda *a, **k: (_ac_full[:_sm_core._MAX_OUTPUT_BYTES], "", 0)
-    check("remote attempt counts: a log read cut at the output ceiling is unread, not a partial tally",
+    _sm_core.run_privileged = lambda *a, **k: (
+        _ac_line * 1000, "f2b-log-lines: the log passed 8323072 bytes; truncated", 3)
+    check("remote attempt counts: a log read cut at the ceiling (rc 3) is unread, not a partial tally",
           _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7) is None,
           "a cut read was tallied — the reconcile would release the offenders it undercounts")
     _sm_core.run_privileged = lambda *a, **k: (_RAW, "", 0)
@@ -249,6 +392,18 @@ try:
     _sm_core.run_privileged = lambda *a, **k: ("", "SSH command timed out", -1)
     check("remote attempt counts: a failed read is unread too",
           _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7) is None, "")
+    # ...and the answer the old LENGTH test got wrong: rc 0 and exactly the ceiling, which the
+    # remote form prints (plus awk's closing newline) for a complete log. Anything within 64 KB of
+    # the transport's cap was called cut, so this read was None and that host's auto-block held.
+    _ac_max = getattr(_priv, "F2B_LOG_MAX_BYTES", _sm_core._MAX_OUTPUT_BYTES - 65536)
+    _ac_one = "2026-09-03 10:00:00 x [sshd] Found 203.0.113.5 -"
+    _ac_k = _ac_max // (len(_ac_one) + 1)
+    _ac_pad = "x" * (_ac_max - _ac_k * (len(_ac_one) + 1) + 1)     # the last line, to the byte
+    _ac_exact = [_ac_one] * (_ac_k - 1) + [_ac_one + _ac_pad]
+    _sm_core.run_privileged = lambda *a, **k: ("\n".join(_ac_exact) + "\n", "", 0)
+    eq("remote attempt counts: an rc-0 answer of exactly the ceiling is tallied in full, not unread",
+       (len("\n".join(_ac_exact)), _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7)),
+       (_ac_max, {"203.0.113.5": _ac_k}))
 finally:
     _sm_core.run_privileged, _sm_hosts.remote_fail2ban_overview = _orig_rt_rp, _orig_rt_ov
 
@@ -5819,6 +5974,17 @@ check("gitleaks: the allowlist clears install.sh's NodeSource fingerprint assign
       "assignments %r, allowlist %r" % (_gl_fpr, _gl_rxs))
 check("gitleaks: the fingerprint exemption is that one value, not every NODESOURCE_KEY_FPR",
       not any(re.search(_rx, 'NODESOURCE_KEY_FPR="' + "0" * 40 + '"') for _rx in _gl_rxs))
+# part13 assigns a wrapper to _persist_host_key, and generic-api-key read the assignment as a
+# credential (PR #371). The finding's MATCH, as gitleaks reported it, is the whole assignment; the
+# allowlist clears that and nothing wider. The same name given any other value must still be found.
+_gl_pin_match = "_sm_core._persist_host_key = _pl_traced_persist10"
+_gl_pin_src = open(os.path.join(_root, "tests", "unit", "part13.py"), encoding="utf-8").read()
+check("gitleaks: the pin-trace assignment the allowlist clears is still in part13 (it has a subject)",
+      _gl_pin_match in _gl_pin_src)
+check("gitleaks: the allowlist clears part13's pin-trace assignment",
+      any(re.search(_rx, _gl_pin_match) for _rx in _gl_rxs), repr(_gl_rxs[-2:]))
+check("gitleaks: ...and only that value: the same name given a key-shaped value is still found",
+      not any(re.search(_rx, "_persist_host_key = " + "Zq8" * 8) for _rx in _gl_rxs))
 # The JS coverage walk typed a sequential stand-in Ubuntu Pro token that generic-api-key reads as a
 # credential. The tree types a non-secret value now; the allowlist clears the old literal, which is
 # still in the PR's range (13e3441), and nothing wider: a different token in that field, or the same

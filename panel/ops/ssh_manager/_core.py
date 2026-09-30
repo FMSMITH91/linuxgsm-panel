@@ -11,6 +11,7 @@ import select
 import shlex
 import signal
 import socket
+import sqlite3
 import stat
 import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 import tempfile
@@ -822,9 +823,16 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
         return run_command(server, _priv.remote_command(verb, args, merge_stderr=merge_stderr),
                            timeout=timeout, sudo=sudo, **_secret_kw)
 
-    # sudo=None means "whatever this host is configured for", the same defaulting run_command does.
-    # A host with sudo disabled runs the tool directly — still argv, still no shell, just no root.
-    use_sudo = sudo if sudo is not None else getattr(server, "sudo_enabled", False)
+    # sudo=None ESCALATES here: this is a privileged verb on the panel's own machine, and the row's
+    # sudo_enabled is not consulted. That field is a REMOTE's SSH setting (whether the account the
+    # panel signs in as may `sudo bash -c`), and run_command already ignores it on this host. It
+    # used to decide this branch, so a local row with it off — the panel creates that row with it
+    # on, but the real test panel's was inserted by a probe script without it — sent `ufw status
+    # numbered` straight to ufw as the panel's account, beside a helper the sudoers grant lets it
+    # run, and the host's Firewall card answered permission_denied. Escalating means the helper
+    # where it is installed and the pre-helper `sudo bash -c` form below where it is not. Only an
+    # explicit sudo=False runs the tool directly — still argv, no root.
+    use_sudo = True if sudo is None else sudo
     if not use_sudo:
         return _exec_local_argv(_priv.tool_argv(verb, args), timeout=timeout,
                                 stdin_text=_priv.stdin_for(verb, args))
@@ -1117,10 +1125,12 @@ def _persist_host_key(server, keystr):
     hold the caller's `server` object, so writing through `server` itself would commit nothing.
     When the row written is not `server`, the key is set on `server` as its COMMITTED value: the
     caller sees the pin, and its session is not left dirty with a write it would autoflush later.
+
+    The write never waits for SQLite's write lock: when another write holds it, the pin is not
+    stored and the connection is refused. See _pinlock_take.
     """
     from contextlib import nullcontext
     from flask import has_app_context
-    from panel.db.models import RemoteServer, db
     if getattr(server, "id", None) is None:
         return False                       # no row to store it on
     if has_app_context():
@@ -1133,23 +1143,92 @@ def _persist_host_key(server, keystr):
         return False
     try:
         with ctx:
-            try:
-                row = db.session.get(RemoteServer, server.id)
-                if row is None:
-                    return False           # the host was deleted mid-connect: nothing to pin
-                if not _pin_row_matches(row, server, keystr):
-                    return False
-                row.host_key = keystr
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
-                raise
+            row = _pinlock_write_row(server, keystr)
     except Exception:
         _log.warning("host-key pin: could not store the key for %s",
                      getattr(server, "name", "a host"), exc_info=True)
         return False
+    if row is None:
+        return False
     if row is not server:
         _mirror_pin(server, keystr)
+    return True
+
+
+def _pinlock_write_row(server, keystr):
+    """Store `keystr` on `server`'s row in this context's session: the row written, else None.
+
+    None when the row is gone (the host was deleted mid-connect), when it is not the row `server`
+    connected with (_pin_row_matches), and when another connection holds the write lock at this
+    moment (_pinlock_take never waits for it). Any failure rolls the session back and raises.
+
+    The row is read and checked under no_autoflush, so that when this call began the transaction
+    and then declines to write, the transaction holds nothing but reads and is ended at once: a
+    caller's session must not be left holding the write lock over a pin that was never written.
+    Only a transaction this call began is ended. When the caller's own writes already held the lock
+    (began is False), ending it at the DBAPI level would throw away the rows the caller has flushed
+    while its session still counts them as written, so its commit would store nothing and raise
+    nothing.
+    """
+    from panel.db.models import RemoteServer, db
+    sess = db.session()
+    try:
+        began = _pinlock_take(sess)
+        if began is None:
+            _log.warning("host-key pin: another write holds the database; not pinning %s, and "
+                         "refusing this connection (the next one tries again)",
+                         getattr(server, "name", "a host"))
+            return None
+        with sess.no_autoflush:
+            row = sess.get(RemoteServer, server.id)
+            usable = row is not None and _pin_row_matches(row, server, keystr)
+        if not usable:
+            if began:
+                sess.connection().connection.dbapi_connection.rollback()
+            return None
+        row.host_key = keystr
+        sess.commit()
+        return row
+    except Exception:
+        sess.rollback()
+        raise
+
+
+def _pinlock_take(sess):
+    """Take SQLite's write lock on `sess`'s connection now or not at all, and never wait for it.
+
+    True when this call began the write transaction, False when the connection was already in one
+    (its own writes hold the lock, so there is nothing to take), None when another connection
+    holds it.
+
+    Why never wait. SQLite waits out a lock in C: its busy handler sleeps in the calling OS
+    thread, and under eventlet every green thread shares that one, so a pin that waited there
+    stopped the whole hub (the console, every request, and whoever held the lock) for the busy
+    timeout, 15 s. When the holder was a green thread (another request, a background loop, the
+    pool's caller), it could not commit during that wait, and the pin failed at the end of it
+    anyway. Waiting with green sleeps instead is no better. It lets the other green threads run,
+    and any of them that writes meanwhile meets the same lock and waits for it in C. When the
+    holder is a request waiting on this pin's pool worker, it cannot commit until the pin gives
+    up, so that other write stopped the hub for its own full busy timeout and then failed.
+    Measured: the longest hub gap was the whole busy timeout both ways. So the busy timeout is 0
+    for this one attempt, and it is put back before anything else uses the connection. A pin that
+    cannot be written at once refuses the connection, as a pin that cannot be written at all
+    always has (_pin_first_contact). The host stays unpinned, so its next connection is first
+    contact again, and tries again.
+    """
+    raw = sess.connection().connection.dbapi_connection
+    if getattr(raw, "in_transaction", True):
+        return False
+    budget_ms = int(raw.execute("PRAGMA busy_timeout").fetchone()[0])
+    raw.execute("PRAGMA busy_timeout = 0")
+    try:
+        raw.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError as exc:
+        if "database is locked" not in str(exc):
+            raise
+        return None
+    finally:
+        raw.execute("PRAGMA busy_timeout = %d" % budget_ms)
     return True
 
 

@@ -2,12 +2,12 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
-import functools
 from types import SimpleNamespace
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.panel_state import (_install_jobs, _install_lock, forget_rows)
-from panel.db.models import (GameServer, RemoteServer, db)
+from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, RowReplaced, claim_row,
+    db, row_birth, same_row)
 from panel.ops import (backup as bk)
 from panel.services import (lgsm_data)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
@@ -716,13 +716,17 @@ def _picked_content_games(game_type):
 
 
 def _queue_install_job(gs, content_games):
-    """Put the install job on the board, queued, for the progress widget to find."""
+    """Put the install job on the board, queued, for the progress widget to find.
+
+    The entry also carries the row's identity ("born", its created_at): the job looks its row up
+    by id again from the worker thread, and after a delete that id can belong to another row.
+    """
     with _install_lock:
         _install_jobs[gs.id] = {
             "status": "running", "step": 0, "total": (9 if content_games else 8),
             "step_name": "Queued",
             "message": "", "log": [], "started": time.time(), "updated": time.time(),
-            "name": gs.name,
+            "name": gs.name, "born": row_birth(gs),
         }
 
 
@@ -758,19 +762,23 @@ def _install_job_runner(app):
         """
         content_games = content_games or []
         _app = app
-        _p = functools.partial(_job_progress, gs_id)
-        _fail = functools.partial(_job_fail, app, gs_id)
+        # Taken NOW, on the request's thread: the entry _queue_install_job just registered, and
+        # with it the row's identity. Everything this run reports goes into THAT entry and onto
+        # THAT row, never into whatever holds the id by the time a step finishes.
+        with _install_lock:
+            run = _InstallRun(app, gs_id, _install_jobs.get(gs_id))
+        _fail = run.fail
         # Everything the step helpers below need to know about this run, and how it reports.
         job = SimpleNamespace(app=app, gs_id=gs_id, remote_id=remote_id, short_name=short_name,
                               game_type=game_type, lgsm_name=lgsm_name, final_port=final_port,
-                              content_games=content_games, p=_p, fail=_fail,
-                              finish=functools.partial(_job_finish, app, gs_id))
+                              content_games=content_games, p=run.progress, fail=_fail,
+                              finish=run.finish, run=run)
 
         def _run():
             try:
                 with _app.app_context():
                     remote = db.session.get(RemoteServer, remote_id)
-                    gs = db.session.get(GameServer, gs_id)
+                    gs = run.first_load()
                     if not remote or not gs:
                         return
                     # Hard stop before any destructive root command below: an empty short_name
@@ -795,7 +803,7 @@ def _install_job_runner(app):
                     #    home against ANY existing account without a linuxgsm.sh — every ordinary
                     #    login on the host — ignored both return codes and the useradd's, and went
                     #    on to install as whatever account was left.
-                    _p(1, "Preparing user account")
+                    run.progress(1, "Preparing user account")
                     _acct_ok, _acct_why, _acct_retry = prepare_install_account(
                         remote, remote_id, short_name, fresh)
                     if not _acct_ok:
@@ -814,6 +822,10 @@ def _install_job_runner(app):
                     # heals it instead of it sitting stuck.
                     gs.installed = True; gs.status = "configuring"; db.session.commit()
                     _configure_and_start(job, remote, gs)
+            except (_InstallAbandoned, RowReplaced):
+                # The server was deleted mid-install (its host with it, perhaps). Nothing is
+                # recorded: the entry and the row that would take it may be another server's now.
+                _log.info("install job for server #%s stopped: the server was deleted", gs_id)
             except Exception as e:
                 # Go through _fail so an unexpected crash leaves the same recoverable state as
                 # every other failure: a reason on the row, status "failed", and the dashboard
@@ -826,86 +838,134 @@ def _install_job_runner(app):
     return _run_install_job
 
 
-def _job_progress(gs_id, step, name, status="running", message=""):
-    """Move install job `gs_id` to `step` in the live job record, and log the step."""
-    with _install_lock:
-        j = _install_jobs.get(gs_id)
-        if j is None:
-            return
-        j["step"], j["step_name"], j["status"], j["updated"] = step, name, status, time.time()
-        if message:
-            j["message"] = message
-        j["log"].append(f"[{step}/{j['total']}] {name}")
+class _InstallAbandoned(Exception):
+    """The row an install job was started for is gone, or another row holds its id now."""
 
 
-def _job_fail(app, gs_id, name, detail="", retryable=True, explained=False):
-    """Record a failed install — in the live job AND on the row.
+class _InstallRun:
+    """One install job's identity: the progress entry it registered and the row it was for.
 
-    The job dict is in memory, so until now the reason existed only until the panel
-    restarted or the operator navigated away, and the Game Servers row said "Failed" and
-    nothing else. That is the state the user is left in: no reason, no retry, nothing to
-    act on. Persisting it is what lets the row say why and offer the right next step.
-
-    `retryable` is False only for a cause nothing about trying again changes — today
-    that is a game LinuxGSM caps at an older Ubuntu than the host runs. The row then
-    offers Remove instead of Retry. A cause the operator can act on (free a dump slot,
-    add a Steam account, let the Windows-prime workaround run) stays retryable: its
-    message tells them what to do, and Retry is how they do it. See
-    INSTALL_FAILURE_FINAL.
-
-    `explained` means `name` IS the whole explanation, so the raw tail is not appended to
-    it on the row. It matters because the tail is the tool's own last word, and the tool
-    is sometimes wrong: LinuxGSM ends an "Invalid platform" failure with "Check
-    steamcmdforcewindows setting and system architecture", which points at the host, and
-    the host is not the problem (the app publishes no Linux launch configuration — proven
-    on the test box). Appending that after the correct sentence undoes it. The tail still
-    goes to the live job, which is where the unabridged output belongs.
+    SQLite hands a deleted server's id to the next server created. Deleting a host deletes its
+    servers with it, whatever they are doing — so a delegated admin's install, still running,
+    wrote its progress into the NEXT install's entry (flipping it to "failed" or "done"), and its
+    failure or success onto the next server's row. Each step now reports into the entry it
+    registered, checks the row it was started for is still there (and stops the install when it
+    is not, rather than running more root steps for a server the panel no longer has), and
+    writes a result only onto that row. The ORM objects the steps hold are covered by the
+    models' identity guard (models.RowReplaced).
     """
-    # Strip the ANSI before it goes anywhere. LinuxGSM and SteamCMD colour their output,
-    # and the last 300 bytes of a failed install is nearly all escape sequences — which is
-    # what the operator was shown, verbatim:
-    #
-    #   info...\x1b[0mOK \x1b[0mERROR! Failed to install app '222860' (Invalid platform)
-    #   \x1b[0mUnloading Steam API...\x1b[0mOK \x1b[0m\x1b[31mFailure!\x1b[0m Installing…
-    #
-    # The panel has had strip_escapes since the console was written; this path just never
-    # called it. Collapse the whitespace too: the raw tail arrives full of \r and column
-    # padding that turns one sentence into five ragged lines in a corner card.
-    detail = readable_reason(detail)
-    with _install_lock:
-        j = _install_jobs.get(gs_id)
-        cur = j["step"] if j else 0
-    _job_progress(gs_id, cur, name, status="failed", message=detail)
-    try:
-        _row = db.session.get(GameServer, gs_id)
-        if _row is not None:
-            record_install_failure(_row, name, detail, retryable, explained)
-            db.session.commit()
-    except Exception:
-        _log.debug("could not record the install failure on the row", exc_info=True)
-    # Tell every open dashboard immediately, rather than leaving the explanation to appear
-    # whenever someone happens to reload.
-    _notify_servers_changed(app)
 
+    def __init__(self, app, gs_id, entry):
+        self.app, self.gs_id, self.entry = app, gs_id, entry
+        self.born = entry.get("born", _NO_BIRTH) if entry is not None else _NO_BIRTH
 
-def _job_finish(app, gs_id, msg, warn=False):
-    """Mark install job `gs_id` done with `msg`; `warn` is done, but with a caveat."""
-    # A install that got here worked, whatever happened on an earlier attempt — clear the
-    # recorded reason, or a retried server keeps showing the failure it recovered from.
-    try:
-        _row = db.session.get(GameServer, gs_id)
-        if _row is not None and (_row.install_error or not _row.install_retryable):
-            _row.install_error, _row.install_retryable = "", True
-            db.session.commit()
-    except Exception:
-        _log.debug("could not clear the install failure on the row", exc_info=True)
-    _notify_servers_changed(app)   # a finished install clears a banner as surely as one appears
-    with _install_lock:
-        j = _install_jobs.get(gs_id)
-        if j is not None:
-            j["status"], j["step"] = "done", j["total"]
-            j["step_name"], j["message"], j["updated"] = "Complete", msg, time.time()
-            j["warn"] = bool(warn)   # done, but with a caveat (e.g. installed yet didn't start)
+    def job(self):
+        """Our entry in _install_jobs, or None once it is not the one registered. Hold the lock."""
+        j = _install_jobs.get(self.gs_id)
+        return j if self.entry is None or j is self.entry else None
+
+    def first_load(self):
+        """The worker's first load: the row, or None when it is not the one the job was for.
+
+        A job queued without an entry (the retry closure driven directly) takes its identity
+        from this load.
+        """
+        gs = claim_row(GameServer, self.gs_id, self.born)
+        if gs is not None and self.born is _NO_BIRTH:
+            self.born = row_birth(gs)
+        return gs
+
+    def row(self):
+        """The row this install is for, or None when it is gone or another row took its id."""
+        return same_row(GameServer, self.gs_id, self.born)
+
+    def _set(self, step, name, status="running", message=""):
+        with _install_lock:
+            j = self.job()
+            if j is None:
+                return
+            j["step"], j["step_name"], j["status"], j["updated"] = step, name, status, time.time()
+            if message:
+                j["message"] = message
+            j["log"].append(f"[{step}/{j['total']}] {name}")
+
+    def progress(self, step, name, status="running", message=""):
+        """Move this job to `step` in its live record, and log the step.
+
+        Raises _InstallAbandoned when the row is gone: every step reports here before it runs.
+        """
+        if self.row() is None:
+            raise _InstallAbandoned("server #%s is no longer the one this install was for"
+                                    % self.gs_id)
+        self._set(step, name, status, message)
+
+    def fail(self, name, detail="", retryable=True, explained=False):
+        """Record a failed install — in the live job AND on the row.
+
+        The job dict is in memory, so until now the reason existed only until the panel
+        restarted or the operator navigated away, and the Game Servers row said "Failed" and
+        nothing else. That is the state the user is left in: no reason, no retry, nothing to
+        act on. Persisting it is what lets the row say why and offer the right next step.
+
+        `retryable` is False only for a cause nothing about trying again changes — today
+        that is a game LinuxGSM caps at an older Ubuntu than the host runs. The row then
+        offers Remove instead of Retry. A cause the operator can act on (free a dump slot,
+        add a Steam account, let the Windows-prime workaround run) stays retryable: its
+        message tells them what to do, and Retry is how they do it. See
+        INSTALL_FAILURE_FINAL.
+
+        `explained` means `name` IS the whole explanation, so the raw tail is not appended to
+        it on the row. It matters because the tail is the tool's own last word, and the tool
+        is sometimes wrong: LinuxGSM ends an "Invalid platform" failure with "Check
+        steamcmdforcewindows setting and system architecture", which points at the host, and
+        the host is not the problem (the app publishes no Linux launch configuration — proven
+        on the test box). Appending that after the correct sentence undoes it. The tail still
+        goes to the live job, which is where the unabridged output belongs.
+        """
+        # Strip the ANSI before it goes anywhere. LinuxGSM and SteamCMD colour their output,
+        # and the last 300 bytes of a failed install is nearly all escape sequences — which is
+        # what the operator was shown, verbatim:
+        #
+        #   info...\x1b[0mOK \x1b[0mERROR! Failed to install app '222860' (Invalid platform)
+        #   \x1b[0mUnloading Steam API...\x1b[0mOK \x1b[0m\x1b[31mFailure!\x1b[0m Installing…
+        #
+        # The panel has had strip_escapes since the console was written; this path just never
+        # called it. Collapse the whitespace too: the raw tail arrives full of \r and column
+        # padding that turns one sentence into five ragged lines in a corner card.
+        detail = readable_reason(detail)
+        with _install_lock:
+            j = self.job()
+            cur = j["step"] if j else 0
+        self._set(cur, name, status="failed", message=detail)
+        try:
+            _row = self.row()
+            if _row is not None:
+                record_install_failure(_row, name, detail, retryable, explained)
+                db.session.commit()
+        except Exception:
+            _log.debug("could not record the install failure on the row", exc_info=True)
+        # Tell every open dashboard immediately, rather than leaving the explanation to appear
+        # whenever someone happens to reload.
+        _notify_servers_changed(self.app)
+
+    def finish(self, msg, warn=False):
+        """Mark this job done with `msg`; `warn` is done, but with a caveat."""
+        # A install that got here worked, whatever happened on an earlier attempt — clear the
+        # recorded reason, or a retried server keeps showing the failure it recovered from.
+        try:
+            _row = self.row()
+            if _row is not None and (_row.install_error or not _row.install_retryable):
+                _row.install_error, _row.install_retryable = "", True
+                db.session.commit()
+        except Exception:
+            _log.debug("could not clear the install failure on the row", exc_info=True)
+        _notify_servers_changed(self.app)   # a finished install clears a banner as surely as one appears
+        with _install_lock:
+            j = self.job()
+            if j is not None:
+                j["status"], j["step"] = "done", j["total"]
+                j["step_name"], j["message"], j["updated"] = "Complete", msg, time.time()
+                j["warn"] = bool(warn)   # done, but with a caveat (e.g. installed yet didn't start)
 
 
 def _job_crashed(job, e):
@@ -914,7 +974,7 @@ def _job_crashed(job, e):
     By then the app context _run opened has already been exited, so this pushes one of its own.
     """
     app = _app = job.app
-    gs_id, _fail = job.gs_id, job.fail
+    _fail = job.fail
     app.logger.exception("install job failed")
     try:
         # ...and PUSH the context to do it in. `with _app.app_context():` sits INSIDE
@@ -934,7 +994,7 @@ def _job_crashed(job, e):
     except Exception:
         _log.debug("could not record the unexpected install failure", exc_info=True)
         with _install_lock:
-            j = _install_jobs.get(gs_id)
+            j = job.run.job()
             if j is not None:
                 j["status"], j["message"], j["updated"] = "failed", str(e), time.time()
 
@@ -1960,17 +2020,23 @@ def _close_game_firewall(remote, gs):
     meant to take — one that would not go, a DENY or LIMIT or source-restricted rule it leaves on
     purpose, one on SSH's or the panel's port — and says so when the firewall could not be read.
     It used to count the deletes and nothing else, so a rule that stayed open read as a clean
-    uninstall.
+    uninstall. It also names any rule with NO comment still on the server's own block — the
+    Firewall page's rate limit is one, `ufw limit` writes no comment — except on a port another
+    server still holds, which that server still needs. Named by the step that runs last, from its
+    own last read, so a rule the legacy sweep takes is never named as left. Its own ports include
+    every port a public allow tagged with its name was on — a Query port can sit outside the
+    game's span — which the name cleanup hands on (`tagged`) when the sweep is the one to name.
     """
     count, left = 0, []
     try:
-        count, _, left = remote_ufw_close_by_name(remote, gs.short_name)
-        # Then an UNTAGGED allow on its game port — what a panel that did not tag its rules yet
-        # left — but only when no other server on the host has that port in its block: then the
-        # rule is at least as likely to be theirs. SSH and the panel's port are refused below it.
-        if gs.port and gs.port not in sibling_port_blocks(
-                GameServer.query.filter_by(remote_id=remote.id).all(), gs):
-            legacy, _, legacy_left = remote_ufw_close_game_port(remote, gs.port, legacy=True)
+        own, sweep, held = _uninstall_port_plan(remote, gs)
+        tagged = set()
+        count, _, left = remote_ufw_close_by_name(remote, gs.short_name,
+                                                  ports=None if sweep else own, held=held,
+                                                  tagged=tagged)
+        if sweep:
+            legacy, _, legacy_left = remote_ufw_close_game_port(
+                remote, gs.port, legacy=True, ports=sorted((set(own) | tagged) - held))
             count += legacy
             left = left + legacy_left
     except Exception:
@@ -1979,6 +2045,23 @@ def _close_game_firewall(remote, gs):
     notes = ([" %d firewall rule(s) removed." % count] if count > 0 else [])
     notes += [" " + n for i, n in enumerate(left) if n not in left[:i]]
     return "".join(notes), bool(left)
+
+
+def _uninstall_port_plan(remote, gs):
+    """What an uninstall's firewall cleanup covers.
+
+    -> (its own ports, whether the sweep runs, the ports another server holds).
+
+    Its own ports are `gs`'s block — its port and the rest of its game's span — less every port
+    another server on the host holds. The legacy sweep takes an UNTAGGED allow on the game port —
+    what a panel that did not tag its rules yet left — only when no other server on the host has
+    that port in its block: then the rule is at least as likely to be theirs. SSH and the panel's
+    port are refused below it. The held ports are returned too: a tagged port outside the block
+    is its own only when no other server holds it.
+    """
+    held = set(sibling_port_blocks(GameServer.query.filter_by(remote_id=remote.id).all(), gs))
+    block = range(gs.port, gs.port + _port_span(gs.game_type)) if gs.port else ()
+    return [p for p in block if p not in held], bool(gs.port) and gs.port not in held, held
 
 
 def _forget_game_server(server_id):

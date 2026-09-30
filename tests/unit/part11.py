@@ -1337,6 +1337,201 @@ try:
                     "Left in place on SSH's or the panel's own port: 22, 2222/tcp."]
           and _r[1] == "4 rule(s) removed for probeA. " + " ".join(_r[2]), "result=%r" % (_r,))
 
+    # ── what is left on the uninstalled server's own ports, with NO name on it, is named ──────
+    # Defect, from the VPS: the Firewall page's rate limit (remote_ufw_limit_port) writes an
+    # UNTAGGED `N/tcp LIMIT` (the ufw-limit-port verb takes no comment), splitting the server's
+    # tagged bare allow into that LIMIT and a tagged `N/udp` allow. Uninstall removed the udp half
+    # and reported a clean result, and the port stayed open, rate limited, with nobody told.
+    # _Ufw36L adds the two verbs the limit uses, as ufw 0.36's set_rule does them, and outbound
+    # rows as the VPS printed them; the first check proves it prints the VPS's own table.
+    class _Ufw36L(_Ufw36):
+        @staticmethod
+        def _row(r, v6):
+            to, action, frm, comment = r
+            if not action.endswith(" OUT"):
+                return _Ufw36._row(r, v6)
+            if v6:
+                to, frm = to + " (v6)", frm + " (v6)"
+            return "%-26s %-11s %-26s (out)" % (to, action, frm)
+
+        def limit(self, a):
+            """`ufw limit <spec>`: a rule differing only in action or comment is REPLACED in place,
+            by one with no comment; otherwise the limit is appended."""
+            same = [r for r in self.v4 + self.v6 if r[0] == a[0] and r[2] == "Anywhere"
+                    and not r[1].endswith(" OUT")]
+            if not same:
+                self.add(a[0], "LIMIT")
+                return ("Rule added\nRule added (v6)", "", 0)
+            for r in same:
+                r[1], r[3] = "LIMIT", ""
+            return ("Rule updated\nRule updated (v6)", "", 0)
+
+        def delete_allow(self, a):
+            """`ufw delete allow <spec>` with no comment: every public inbound ALLOW on the spec."""
+            n = len(self.v4) + len(self.v6)
+            for fam in (self.v4, self.v6):
+                fam[:] = [r for r in fam if not (r[0] == a[0] and r[1:3] == ["ALLOW", "Anywhere"])]
+            if n == len(self.v4) + len(self.v6):
+                return ("Could not delete non-existent rule", "", 1)
+            return ("Rule deleted\nRule deleted (v6)", "", 0)
+
+        def verbs(self):
+            return dict(super().verbs(), **{"ufw-limit-port": self.limit,
+                                            "ufw-delete-allow-port": self.delete_allow})
+
+    def _own_ports_cbn(*a, **k):
+        """remote_ufw_close_by_name with `ports`; a signature that lacks it reads as a result."""
+        try:
+            return tuple(_H.remote_ufw_close_by_name(*a, **k))
+        except TypeError as e:
+            return ("no such signature", str(e), None)
+
+    def _own_ports_cgp(*a, **k):
+        """remote_ufw_close_game_port with `ports`, likewise."""
+        try:
+            return tuple(_H.remote_ufw_close_game_port(*a, **k))
+        except TypeError as e:
+            return ("no such signature", str(e), None)
+
+    # The VPS's scenario L: probeL's port opened as an install opens it, its tcp rate limited from
+    # the Firewall page, an untagged limit on another port, and an OUTBOUND rule on the number.
+    _u = _Ufw36L(*_VPS_BASE)
+    _w = _wire(verbs=_u.verbs())
+    _H.remote_ufw_allow_game_ports(_p8_srv(), [47856], "probeL")
+    _lim = _H.remote_ufw_limit_port(_p8_srv(), 47856, "tcp")
+    _u.add("47858/tcp", "LIMIT")
+    _u.add("47856/tcp", "ALLOW OUT")
+    eq("ufw 0.36.2 fixture: an install's allow, the Firewall page's limit and an outbound rule "
+       "print exactly as the VPS printed them",
+       (_lim[0], _u.status(None)[0].splitlines()[4:]), (True, [
+           "[ 1] Anywhere on tailscale0     ALLOW IN    Anywhere                  ",
+           "[ 2] 28960                      ALLOW IN    Anywhere                   # codserver",
+           "[ 3] 27015                      ALLOW IN    Anywhere                   # gmodserver",
+           "[ 4] 22/tcp                     ALLOW IN    Anywhere                   # SSH panel",
+           "[ 5] 47856/tcp                  LIMIT IN    Anywhere                  ",
+           "[ 6] 47856/udp                  ALLOW IN    Anywhere                   # probeL",
+           "[ 7] 47858/tcp                  LIMIT IN    Anywhere                  ",
+           "[ 8] 47856/tcp                  ALLOW OUT   Anywhere                   (out)",
+           "[ 9] Anywhere (v6) on tailscale0 ALLOW IN    Anywhere (v6)             ",
+           "[10] 28960 (v6)                 ALLOW IN    Anywhere (v6)              # codserver",
+           "[11] 27015 (v6)                 ALLOW IN    Anywhere (v6)              # gmodserver",
+           "[12] 22/tcp (v6)                ALLOW IN    Anywhere (v6)              # SSH panel",
+           "[13] 47856/tcp (v6)             LIMIT IN    Anywhere (v6)             ",
+           "[14] 47856/udp (v6)             ALLOW IN    Anywhere (v6)              # probeL",
+           "[15] 47858/tcp (v6)             LIMIT IN    Anywhere (v6)             ",
+           "[16] 47856/tcp (v6)             ALLOW OUT   Anywhere (v6)              (out)"]))
+    _r = _own_ports_cbn(_p8_srv(), "probeL", ports=[47856])
+    check("own ports: an untagged LIMIT left on the server's own port is NAMED in what is left — "
+          "and not deleted",
+          _r == (2, "2 rule(s) removed for probeL. Left in place on its port: 47856/tcp LIMIT.",
+                 ["Left in place on its port: 47856/tcp LIMIT."])
+          and "47856/tcp LIMIT IN Anywhere" in _u.left()
+          and "47856/tcp (v6) LIMIT IN Anywhere (v6)" in _u.left(),
+          "result=%r left=%r" % (_r, _u.left()))
+    check("own ports: ...while a rule on another port, and an outbound rule on the same number, "
+          "are not named",
+          "47858" not in str(_r) and "OUT" not in str(_r), repr(_r))
+    _u = _Ufw36L(*_VPS_BASE + (("47857", "ALLOW", "Anywhere", "probeM"),
+                               ("47858/tcp", "LIMIT", "Anywhere", "")))
+    _w = _wire(verbs=_u.verbs())
+    eq("own ports: a clean cleanup names nothing (control)",
+       _own_ports_cbn(_p8_srv(), "probeM", ports=[47857]), (2, "2 rule(s) removed for probeM", []))
+    # Which rules on the block are named: none with a name on it (another server's or service's —
+    # whoever named it still needs it), none on SSH's port, and every other one that still admits
+    # or refuses traffic to it — a range covering it, a rule from one network.
+    _u = _Ufw36L(*_VPS_BASE + (("47856", "ALLOW", "Anywhere", "probeN"),
+                               ("47856/udp", "ALLOW", "Anywhere", "voicebridge"),
+                               ("47850:47860/udp", "DENY", "Anywhere", ""),
+                               ("47855,47857/tcp", "DENY", "Anywhere", ""),
+                               ("47857/tcp", "ALLOW", "10.0.0.0/8", ""),
+                               ("22", "ALLOW", "Anywhere", "")))
+    _w = _wire(verbs=_u.verbs())
+    _r = _own_ports_cbn(_p8_srv(), "probeN", ports=[22, 47856, 47857])
+    check("own ports: a range or a list covering the block and a rule from one network are named; "
+          "another name's rule and SSH's port are not",
+          _r[2] == ["Left in place on its ports: 47850:47860/udp DENY, 47855,47857/tcp DENY, "
+                    "47857/tcp from some addresses."]
+          and _r[0] == 2, "result=%r" % (_r,))
+    eq("own ports: ...and a caller that passes no ports is answered as before",
+       _own_ports_cbn(_p8_srv(), "probeN"), (0, "0 rule(s) removed for probeN", []))
+    # A block that starts on SSH's port (a server imported onto 22, as smoke's fwsshsrv is): the
+    # sweep is refused there, but the rest of the block is still read and named, and 22 never is.
+    _u = _Ufw36L(*_VPS_BASE + (("22", "ALLOW", "Anywhere", ""),
+                               ("23/tcp", "LIMIT", "Anywhere", "")))
+    _w = _wire(verbs=_u.verbs())
+    eq("own ports (legacy sweep): on SSH's port nothing is taken, and the block's other port is "
+       "still named",
+       _own_ports_cgp(_p8_srv(), 22, legacy=True, ports=[22, 23]),
+       (0, "Port 22: 0 rule(s) removed. Left in place on its port: 23/tcp LIMIT.",
+        ["Left in place on its port: 23/tcp LIMIT."]))
+    eq("own ports: ...and a tagged cleanup given ports does not name SSH's port either",
+       _own_ports_cgp(_p8_srv(), 23, "probeX", ports=[22, 23]),
+       (0, "Port 23: 0 rule(s) removed. Left in place on its port: 23/tcp LIMIT.",
+        ["Left in place on its port: 23/tcp LIMIT."]))
+    # The legacy sweep runs LAST when it runs, and names the block from its own last read: the
+    # untagged allow it takes is gone, so it is not named as left, and one that would not go is
+    # named once — as still open — not a second time as left in place.
+    _u = _Ufw36L(*_VPS_BASE + (("47856", "ALLOW", "Anywhere", ""),))
+    _w = _wire(verbs=_u.verbs())
+    _H.remote_ufw_limit_port(_p8_srv(), 47856, "tcp")
+    _r = _own_ports_cgp(_p8_srv(), 47856, legacy=True, ports=[47856])
+    check("own ports (legacy sweep): the untagged allow it takes goes, and only the LIMIT is named",
+          _r == (2, "Port 47856: 2 rule(s) removed. Left in place on its port: 47856/tcp LIMIT.",
+                 ["Left in place on its port: 47856/tcp LIMIT."])
+          and not any("47856/udp" in r for r in _u.left()), "result=%r left=%r" % (_r, _u.left()))
+    _u = _Ufw36L(*_VPS_BASE + (("47856/udp", "ALLOW", "Anywhere", ""),
+                               ("47856/tcp", "LIMIT", "Anywhere", "")))
+    _u.hook = lambda u, n: n % 2 == 0 and u.add("Anywhere", "DENY", "203.0.113.%d" % n,
+                                                "panel-autoblock", top=True)
+    _w = _wire(verbs=_u.verbs())
+    _r = _own_ports_cgp(_p8_srv(), 47856, legacy=True, ports=[47856])
+    check("own ports (legacy sweep): a rule it could not remove is named once, as still open",
+          _r[0] == 0 and _r[2] == [
+              "Still open, as it could not be removed: 47856/udp — remove it from the host's "
+              "Firewall page.", "Left in place on its port: 47856/tcp LIMIT."], "result=%r" % (_r,))
+    # A port the server's own tagged allow was on is its own too, inside its game's span or not:
+    # the install tags the ports LinuxGSM reports, and Rust's Query port (28017 by LinuxGSM's
+    # default) sits outside the 2-port span the panel reserves. A limit there was the item's defect
+    # again: neither removed nor named. Unless another server holds the port — then it is theirs.
+    _OWN_Q = _VPS_BASE + (("47840", "ALLOW", "Anywhere", "probeR"),
+                          ("47842/udp", "ALLOW", "Anywhere", "probeR"),
+                          ("47842/tcp", "LIMIT", "Anywhere", ""),
+                          ("47844/tcp", "LIMIT", "Anywhere", ""))
+    _u = _Ufw36L(*_OWN_Q)
+    _w = _wire(verbs=_u.verbs())
+    _own_seen = set()
+    _r = _own_ports_cbn(_p8_srv(), "probeR", ports=[47840, 47841], tagged=_own_seen)
+    check("own ports: a port its own tagged allow was on, outside its game's span, is its own too "
+          "— the untagged LIMIT there is named",
+          _r == (4, "4 rule(s) removed for probeR. Left in place on its ports: 47842/tcp LIMIT.",
+                 ["Left in place on its ports: 47842/tcp LIMIT."])
+          and "47842/tcp LIMIT IN Anywhere" in _u.left(), "result=%r left=%r" % (_r, _u.left()))
+    check("own ports: ...and the ports its tagged allows were on are handed back, for a sweep that "
+          "names what is left instead", _own_seen == {47840, 47842}, repr(_own_seen))
+    _u = _Ufw36L(*_OWN_Q)
+    _w = _wire(verbs=_u.verbs())
+    eq("own ports: ...unless another server holds that port: its LIMIT there is that server's",
+       _own_ports_cbn(_p8_srv(), "probeR", ports=[47840, 47841], held={47842}),
+       (4, "4 rule(s) removed for probeR", []))
+    # Which rules the answer names, and how. A rule on one interface and one to one of the host's
+    # addresses (ufw prints the destination before the port) keep the port open as surely. And the
+    # answer goes to whoever may uninstall the server, while reading the host's rules takes Manage
+    # Remotes: an operator's allow from a home address, or an interface's name, is not theirs.
+    _u = _Ufw36L(*_VPS_BASE + (("47856", "ALLOW", "Anywhere", "probeS"),
+                               ("47857 on eth1", "ALLOW", "Anywhere", ""),
+                               ("47857/tcp", "ALLOW", "198.51.100.7", "")))
+    _u.v4.append(["203.0.113.10 47856/tcp", "LIMIT", "Anywhere", ""])
+    _w = _wire(verbs=_u.verbs())
+    _r = _own_ports_cbn(_p8_srv(), "probeS", ports=[47856, 47857])
+    check("own ports: a rule on one interface, one from one address and one to one of the host's "
+          "addresses are named too",
+          _r[0] == 2 and _r[2] == ["Left in place on its ports: 47857 on one interface, 47857/tcp "
+                                   "from some addresses, 47856/tcp LIMIT to one address."],
+          "result=%r" % (_r,))
+    check("own ports: ...naming no interface, source or destination — those are the host's, which "
+          "only Manage Remotes reads",
+          not any(s in str(_r) for s in ("eth1", "198.51.100.7", "203.0.113.10")), repr(_r))
+
     # ── "Open all ports" never reports a port open that an existing rule still blocks ─────────
     # Defect: the VPS's scenario c4. With `deny 47824/tcp` in place the bare allow went in after it
     # and 47824 was reported opened: only BARE rules were looked at, and TCP still met the DENY.

@@ -879,6 +879,59 @@ def _user_from_bearer(req):
     return user
 
 
+# ─── Authorization is decided after the body has arrived ─────────────────────────────────────
+# A request's body is read when something first touches request.form, request.files or
+# get_json(), and for most requests that is the VIEW — after @login_required, the permission
+# decorators and the inline checks have all said yes. Under eventlet that read is a green socket
+# read the client controls, so a client could send the headers, hold the body back, and wait while
+# its token was revoked, its account deactivated or its group's permission removed. When the body
+# landed the action ran anyway, on the answer given before any of that. csrf.protect() reads a FORM
+# body in before_request, which closed this for a browser's form post by accident; a Bearer request
+# with no cookie skips csrf.protect(), and a JSON body is never read by it at all, because the CSRF
+# token of a fetch rides a header. So every API call and every in-page JSON fetch was open.
+#
+# The body of a signed-in request is therefore read HERE, before any check, and the identity the
+# request has loaded is then forgotten, so the first check ahead loads it again — token, active
+# flag, session, groups, permissions — from the rows as they are now. One place, not a re-check in
+# each of the 80-odd views that read a body.
+#
+# get_data(parse_form_data=True) reads the body the way the view would. A form goes through
+# werkzeug's parser, which spools a file part to a temporary file past 500 KB — exactly what the
+# upload route's own request.files does — so an upload streams to disk instead of into memory.
+# Anything else is read as bytes: MAX_CONTENT_LENGTH caps it, and the view's get_json() would have
+# read the same bytes. A request that is not signed in is left alone. It has no authorization to go
+# stale, and reading 50 MB for a client about to be answered 401 is not a cost anyone should be
+# able to impose for free.
+
+def _heldbody_forget_identity():
+    """Drop what this request has loaded about who is asking, so the next check reads it afresh.
+
+    expire_all() because a re-load does not by itself re-read. The session's identity map is weak,
+    so once flask-login's copy is dropped the old User is usually freed and the next lookup builds
+    a new one. But anything still holding it (a signal receiver, a log record, a traceback) makes
+    the lookup hand back that same object, with its old is_superadmin and its old groups.
+    """
+    from flask import g as _flask_g
+    _flask_g.pop("_login_user", None)                  # flask-login's per-request user
+    _flask_g.pop("_groups_with_grants_cache", None)    # _groups_with_grants' per-request memo
+    db.session.expire_all()                            # the rows behind both: flags, groups, grants
+
+
+def authorize_after_body():
+    """before_request: read a signed-in request's body before anything authorizes it.
+
+    See the note above. Registered right after the CSRF hook and before every other hook that
+    reads current_user, so no decision about the request is made on the identity loaded here.
+    """
+    if not request.content_length:
+        return None                          # no body follows the headers: nothing to hold back
+    if not current_user.is_authenticated:
+        return None
+    request.get_data(parse_form_data=True)
+    _heldbody_forget_identity()
+    return None
+
+
 # ─── API-token brute-force throttle ───────────────────────────────────────────────────────────
 # /login has been throttled for a long time; the bearer-token path had nothing, and it is the
 # panel's other way in. Tokens are 192 bits, so guessing one is not realistic — but that is a
@@ -1537,11 +1590,17 @@ def _audit_ref(model, obj):
         return None
     from sqlalchemy import inspect as _sa_inspect
     from sqlalchemy.exc import NoInspectionAvailable
+    from panel.db.models import replaced_since_loaded
     try:
         ident = _sa_inspect(obj).identity
     except NoInspectionAvailable:
         return None
     if not ident:
+        return None
+    # ...nor under a row that took the id since `obj` was loaded. A worker audits its outcome
+    # minutes after it loaded its server; resolved by id alone, the row was filed under whichever
+    # server holds the id by then, and shown to that server's viewers.
+    if replaced_since_loaded(obj):
         return None
     return db.select(model.id).where(model.id == ident[0]).scalar_subquery()
 

@@ -6,7 +6,8 @@ from flask import (Response, abort, jsonify, request, send_file)
 from flask_login import (current_user, login_required)
 from panel.core.panel_state import (_full_backup_lock, _game_backup_status)
 from sqlalchemy.orm import (joinedload)
-from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer, db)
+from panel.db.models import (_NO_BIRTH, GameServer, LOCAL_HOST_LABEL, RemoteServer, claim_row,
+    db, row_birth, still_held, taken_by_another)
 from panel.ops import (backup as bk, system_ops as so)
 from panel.ops.ssh_manager import (backup_disk_info, delete_game_backup, list_game_backups,
     run_game_backup, stream_game_backup)
@@ -36,10 +37,13 @@ class _FullBackupTally:
         self.keep_unread = False   # config.json unreadable: pruned to the maximum, not the setting
 
     def failed(self, gs, text):
-        """Count a failure; it is alertable unless the server's tags mute its alerts."""
+        """Count a failure; it is alertable unless the server's tags mute its alerts.
+
+        `gs` None is a server that is no longer there to have tags: alertable.
+        """
         self.fail_n += 1
         self.failures.append(text)
-        if not notifications.alerts_muted(gs):
+        if gs is None or not notifications.alerts_muted(gs):
             self.alertable.append(self.failures[-1])
 
     def summary(self):
@@ -62,7 +66,11 @@ class _FullBackupTally:
 
 
 def _full_backup_server(gs, force, defer, tally):
-    """Back up one server as part of a full run, recording the outcome in `tally`."""
+    """Back up one server as part of a full run, recording the outcome in `tally`.
+
+    Nothing is recorded for a server deleted while it was archived: its status entry and its
+    backup_pending flag would be the next server's with that id (models.still_held).
+    """
     # game_prune_keep, not get_game_schedule: with config.json unreadable the
     # latter answers the default keep, and the prune deleted past the server's
     # own retention.
@@ -75,6 +83,13 @@ def _full_backup_server(gs, force, defer, tally):
         gs.id, gs.remote, gs.short_name, gs.lgsm_name, _keep,
         game_type=gs.game_type, port=gs.port, force=force,
         query_type=gs.query_type, runner=run_game_backup)
+    if still_held(gs):
+        _record_full_backup_outcome(gs, (ok, reason, was_skipped), defer, tally)
+
+
+def _record_full_backup_outcome(gs, result, defer, tally):
+    """One server's outcome in a full run: its status entry, its queue flag, the tally."""
+    ok, reason, was_skipped = result
     # ...and the outcome replaces the mark, which would otherwise hold the
     # restart sweep off this server for good.
     _game_backup_status[gs.id] = {
@@ -95,6 +110,31 @@ def _full_backup_server(gs, force, defer, tally):
         tally.ok_n += 1
     else:
         tally.failed(gs, "%s: %s" % (gs.name, reason or "failed"))
+
+
+def _full_backup_next(app, gs, modes, tally):
+    """The full run's loop body for one server of the list it read at the start.
+
+    The list is read once and each archive takes minutes. A server deleted since is skipped
+    without reading its object, which would reload from the row that took its id
+    (models.RowReplaced).
+    """
+    force, defer = modes
+    if not still_held(gs):
+        return
+    gname = gs.name
+    if _button_backup_running(gs.id):
+        # That run holds no lock this one can see: run_game_backup would take its
+        # backup.lock for an orphan once it is 5 minutes old and start a second
+        # archive of the same files. It is being backed up; say so, move on.
+        tally.in_flight.append(gname)
+        return
+    try:
+        _full_backup_server(gs, force, defer, tally)
+    except Exception as e:
+        tally.failed(gs if still_held(gs) else None,
+                     "%s: backup error (%s)" % (gname, type(e).__name__))
+        app.logger.warning("full backup of %s failed", gname, exc_info=True)
 
 
 def _run_full_backup(app, force=False, defer=False):
@@ -126,17 +166,7 @@ def _run_full_backup(app, force=False, defer=False):
         with app.app_context():
             servers = [gs for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
             for gs in servers:
-                if _button_backup_running(gs.id):
-                    # That run holds no lock this one can see: run_game_backup would take its
-                    # backup.lock for an orphan once it is 5 minutes old and start a second
-                    # archive of the same files. It is being backed up; say so, move on.
-                    tally.in_flight.append(gs.name)
-                    continue
-                try:
-                    _full_backup_server(gs, force, defer, tally)
-                except Exception as e:
-                    tally.failed(gs, "%s: backup error (%s)" % (gs.name, type(e).__name__))
-                    app.logger.warning("full backup of %s failed", gs.name, exc_info=True)
+                _full_backup_next(app, gs, (force, defer), tally)
         summary = tally.summary()
         # The recorded summary keeps EVERY failure (it is the operator's record); the alert
         # carries only the servers whose tags haven't muted them, and is skipped entirely when
@@ -222,6 +252,48 @@ def _game_backup_row(gs, gb, hdisk):
             "host": host_label,
             "est_backup": _est_one,  # largest existing backup = worst-case next size
             "disk": {"free": hdisk["free"], "total": hdisk["total"]}}, done_bytes
+
+
+def _back_up_one_now(app, server_id, gname, opts, born):
+    """The on-demand backup worker's body: run it, move the clock, return the status to show.
+
+    `born` is the row the request saw (models.row_birth). The archive takes minutes; the clock is
+    moved only if the server is still that one when it ends — it is config.json keyed by the id,
+    and the server that took a deleted one's id inherited it.
+    """
+    keep, force = opts
+    # This module's own lookup when the request had no identity to hand over (claim_row's
+    # fallback, through the names the tests stub here).
+    g = (db.session.get(GameServer, server_id) if born is _NO_BIRTH
+         else claim_row(GameServer, server_id, born))
+    if not g or not g.remote:
+        return {"running": False, "ok": False, "msg": "server is no longer available",
+                "ts": time.time()}
+    ok, reason, was_skipped = run_game_backup(
+        g.remote, g.short_name, g.lgsm_name, keep,
+        game_type=g.game_type, port=g.port, force=force,
+        query_type=g.query_type)
+    if ok and not was_skipped and still_held(g):
+        # Move this server's schedule clock, exactly as the scheduled path does.
+        # record_game_backup is what game_backup_due measures against, and it was
+        # called from ONE place — so a backup taken by hand left the scheduler
+        # believing none had happened, and the hourly ticker archived the same
+        # server again within the hour. Not recorded when SKIPPED: the ticker
+        # deliberately leaves the clock alone there so the server stays due and is
+        # retried once it empties.
+        _record_game_clock(app, server_id, gname)
+    return {"running": False, "ok": (None if was_skipped else ok), "busy": was_skipped,
+            "msg": (reason or ("Backed up" if ok else "failed")), "ts": time.time()}
+
+
+def _publish_backup_status(app, server_id, born, status):
+    """Show an on-demand backup's outcome on its server's card — unless the id is another's now."""
+    if status is None:
+        return
+    with app.app_context():
+        if taken_by_another(GameServer, server_id, born):
+            return
+    _game_backup_status[server_id] = status
 
 
 def register(app):
@@ -353,7 +425,7 @@ def _register_game_backup(app):
             keep, keep_read = bk.game_prune_keep(server_id)
             gname = gs.name   # plain string for logging; the ORM objects are re-fetched in the worker
             _game_backup_status[server_id] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
-            _start_backup_worker(server_id, gname, keep, force)
+            _start_backup_worker(server_id, gname, (keep, force), row_birth(gs))
         except Exception:
             _full_backup_lock.release()
             _game_backup_status[server_id] = {"running": False, "ok": False,
@@ -366,45 +438,26 @@ def _register_game_backup(app):
                                       " config.json could not be read, so no older backup within "
                                       "the maximum retention (%d) will be pruned." % bk.MAX_FULL_KEEP)})
 
-    def _start_backup_worker(server_id, gname, keep, force):
+    def _start_backup_worker(server_id, gname, opts, born=_NO_BIRTH):
         def _worker():
             # Re-fetch inside a fresh app context: the request's DB session is gone by the time this
             # thread runs, so ORM objects captured outside would raise DetachedInstanceError the
             # moment run_command touches the remote's connection attributes.
+            status = None
             try:
                 with app.app_context():
-                    g = db.session.get(GameServer, server_id)
-                    if not g or not g.remote:
-                        _game_backup_status[server_id] = {"running": False, "ok": False,
-                                                          "msg": "server is no longer available",
-                                                          "ts": time.time()}
-                        return
-                    ok, reason, was_skipped = run_game_backup(
-                        g.remote, g.short_name, g.lgsm_name, keep,
-                        game_type=g.game_type, port=g.port, force=force,
-                        query_type=g.query_type)
-                    if ok and not was_skipped:
-                        # Move this server's schedule clock, exactly as the scheduled path does.
-                        # record_game_backup is what game_backup_due measures against, and it was
-                        # called from ONE place — so a backup taken by hand left the scheduler
-                        # believing none had happened, and the hourly ticker archived the same
-                        # server again within the hour. Not recorded when SKIPPED: the ticker
-                        # deliberately leaves the clock alone there so the server stays due and is
-                        # retried once it empties.
-                        _record_game_clock(app, server_id, gname)
-                _game_backup_status[server_id] = {"running": False,
-                                                  "ok": (None if was_skipped else ok),
-                                                  "busy": was_skipped,
-                                                  "msg": (reason or ("Backed up" if ok else "failed")),
-                                                  "ts": time.time()}
+                    status = _back_up_one_now(app, server_id, gname, opts, born)
             except Exception as e:
                 app.logger.warning("on-demand backup of %s failed", gname, exc_info=True)
-                _game_backup_status[server_id] = {"running": False, "ok": False,
-                                                  "msg": "backup error (%s) — check the host is reachable "
-                                                         "and has free disk space" % type(e).__name__,
-                                                  "ts": time.time()}
+                status = {"running": False, "ok": False,
+                          "msg": "backup error (%s) — check the host is reachable "
+                                 "and has free disk space" % type(e).__name__,
+                          "ts": time.time()}
             finally:
-                _full_backup_lock.release()
+                try:
+                    _publish_backup_status(app, server_id, born, status)
+                finally:
+                    _full_backup_lock.release()
 
         threading.Thread(target=_worker, daemon=True).start()
 

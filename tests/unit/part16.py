@@ -22,6 +22,11 @@ HOW THE APP IS BUILT. Not again: this part drives part12's Flask app, its databa
 helpers, and re-arms part12's tripwire and deferred-thread queue for its own duration. Everything
 it replaces is restored in the finally at the bottom, and it ends by asserting that no route it
 drove reached a transport and no worker it queued was left unrun.
+
+IDS ARE REUSED HERE ON PURPOSE. The models now create these tables with AUTOINCREMENT, so no fresh
+database reuses an id; an install whose tables were made before that does until its rebuild runs.
+The fixes below are for those installs, so part16 rebuilds part12's remote_server and game_server
+without AUTOINCREMENT for its own duration (idreuse_support), and gives it back at the end.
 """
 import io as _io16
 import json as _json16
@@ -32,7 +37,8 @@ from datetime import datetime as _dt16
 from types import SimpleNamespace as NS
 
 from unit import REPO_ROOT as _REPO16
-from unit.part01 import check, eq  # noqa: F401
+from unit import idreuse_support as _reuse16
+from unit.part01 import check, eq, skip  # noqa: F401
 from unit.part05 import _helper, _helper_path
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_HOST2, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED,
                          _P9Thread, _p9, _p9_app, _p9_auth, _p9_banlist, _p9_bk, _p9_cfg,
@@ -129,6 +135,12 @@ def _drop_server(sid):
 
 
 try:
+    with _p9.app_context():
+        _reuse16.reuse_ids(db, ("remote_server", "game_server"))
+        _reuse16_on = (_reuse16.plain_rowids(db, "remote_server")
+                       and _reuse16.plain_rowids(db, "game_server"))
+    check("part16: its hosts and servers reuse a deleted row's id (the schema before AUTOINCREMENT)",
+          _reuse16_on)
     for _m in _saved16_threading:
         _m.threading = _p9_threading(_P9Thread)
     for _m in _saved16_time:
@@ -695,6 +707,11 @@ finally:
     _p9_state._os_update_state["hosts"].update(_saved16_osu[1])
     try:
         with _p9.app_context():
+            _reuse16_back = _reuse16.put_back(db)
+    except Exception as _e16b:  # noqa: BLE001 - reported by the check below
+        _reuse16_back = repr(_e16b)
+    try:
+        with _p9.app_context():
             db.session.remove()
             db.engine.dispose()
     except Exception:  # nosec B110 - best-effort cleanup of a throwaway database
@@ -708,6 +725,8 @@ finally:
     except OSError:  # nosec B110 - best-effort cleanup of the runner's throwaway config
         pass
 
+check("part16: its two tables are given AUTOINCREMENT back by the panel's own migration",
+      _reuse16_back == ["remote_server", "game_server"], repr(_reuse16_back))
 check("part16: no route under test reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP16_START, repr(_P9_TRIPPED[_TRIP16_START:][:6]))
 check("part16: every deferred worker was run (none left to leak into a later check)",
@@ -722,8 +741,11 @@ check("part16: every deferred worker was run (none left to leak into a later che
 # their answer is capped at the transport. The PANEL host's helper built the whole list in memory,
 # and its _run_verb collected whatever the verb printed.
 _F2B16_DIR = _tf16.mkdtemp(prefix="lgsm-unit-f2b-")
-_F2B16_LINE = ("2026-09-28 10:00:00,123 fail2ban.filter [1]: INFO [sshd] Found "
-               "2001:db8::%x - 2026-09-28 10:00:00")
+# Dated YESTERDAY, not a fixed day: the readers keep only the last `days` (7) counted back from
+# now, so a fixed date made every check below fail once it was a week old (review, 2026-09-29).
+_F2B16_DAY = (_dt16.now() - __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%d")
+_F2B16_LINE = (_F2B16_DAY + " 10:00:00,123 fail2ban.filter [1]: INFO [sshd] Found "
+               "2001:db8::%x - " + _F2B16_DAY + " 10:00:00")
 _f2b16_saved = (_helper.F2B_LOG_GLOB, sys.stdout, sys.stderr)
 
 
@@ -939,6 +961,259 @@ check("f2b ceiling: ...one byte past the cap is unread (None), and one byte unde
       _ex16.get("cap+1", (0, 0, 0))[2] is None
       and _ex16.get("cap-1", (0, 0, None))[2] == {_EX16_IP: _ex16["cap-1"][0]},
       repr((_ex16_got("cap+1"), _ex16_got("cap-1"))))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# ...and on a REMOTE host, where there is no helper: the shell form stops at the same ceiling
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A remote is sent privileged.py's rendering of f2b-log-lines, and its answer was judged by LENGTH:
+# remote_fail2ban_attempt_counts called anything within 64 KB of the transport's cap cut, so a
+# complete log just under it was thrown away, and remote top-ips tallied whatever arrived. The
+# rendering now stops at the helper's ceiling itself and exits 3, and both readers decide from the
+# rc. Driven end to end: the real run_privileged and rendering, run by the local transport's own
+# shell executor over a sandboxed log (no sudo, nothing privileged), in a UTF-8 locale so a byte
+# count that is really a character count shows; and under each awk this machine has, because a
+# remote runs whichever one it has (Ubuntu's default is mawk).
+import shutil as _shutil16  # noqa: E402
+
+from panel.ops.ssh_manager import hosts as _hosts16  # noqa: E402
+from panel.security import privileged as _privm16  # noqa: E402
+
+_RF16_MAX = getattr(_privm16, "F2B_LOG_MAX_BYTES", _EX16_MAX)
+_RF16_DIR = _tf16.mkdtemp(prefix="lgsm-unit-f2b-remote-")
+_RF16_GLOB = os.path.join(_RF16_DIR, "fail2ban.log*")
+_RF16_SRV = NS(name="f2b-remote16", host="192.0.2.16", port=22, username="lgsm", is_local=False,
+               auth_method="key", sudo_enabled=True)
+_RF16_OTHER = []
+_RF16_FEW = [_F2B16_LINE % i for i in range(3)] + ["2026-08-01 old line [sshd] Found 1.2.3.4",
+                                                    "2026-09-20 00:00:00 nothing of interest"]
+
+
+def _rf16_write(lines):
+    """Write the sandboxed fail2ban.log; the number of lines."""
+    with open(os.path.join(_RF16_DIR, "fail2ban.log"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return len(lines)
+
+
+def _rf16_transport(awk=None):
+    """A run_command for _core that runs the f2b rendering locally over _RF16_DIR.
+
+    With `awk` in place of the rendering's own when given. Anything else it is sent is refused and
+    recorded.
+    """
+    def _run(server, command, timeout=30, sudo=None, stdin_text=None):
+        if _privm16.F2B_LOG_GLOB not in command:
+            _RF16_OTHER.append(command[:60])
+            return "", "not under test", 1
+        cmd = command.replace(_privm16.F2B_LOG_GLOB, _RF16_GLOB)
+        if awk:
+            cmd = cmd.replace(" awk ", " %s " % awk, 1)
+        return _core16._exec_local_shell("export LC_ALL=C.UTF-8; " + cmd, timeout=timeout)
+    return _run
+
+
+def _rf16_read(awk=None):
+    """The rendering's own answer over the current log: (rc, bytes of stdout, stderr)."""
+    out, err, rc = _rf16_transport(awk)(_RF16_SRV, _privm16.remote_command(
+        "f2b-log-lines", ["2026-09-01"], merge_stderr=False))
+    return rc, len(out.encode("utf-8")), err
+
+
+class _Rec16(object):
+    """system_ops' logger, keeping the warnings."""
+
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, msg, *a, **k):
+        self.warnings.append(msg % a if a else msg)
+
+    def __getattr__(self, name):
+        return lambda *a, **k: None
+
+
+_rf16 = {}
+_RF16_AWKS = [a for a in ("gawk", "mawk") if _shutil16.which(a)]
+_rf16_saved = (_core16.run_command, _p9_so._log, _hosts16.remote_fail2ban_overview,
+               _hosts16.remote_ufw_blocked_ips)
+try:
+    for _rfawk16 in [None] + _RF16_AWKS:
+        _rfk16 = _rf16_write(_ex16_lines(_RF16_MAX))
+        _rfexact16 = _rf16_read(_rfawk16)
+        _rf16_write(_ex16_lines(_RF16_MAX + 1))
+        _rfover16 = _rf16_read(_rfawk16)
+        _rf16_write(_ex16_lines(_RF16_MAX - 1))
+        _rfunder16 = _rf16_read(_rfawk16)
+        # One byte past the ceiling in BYTES, and exactly at it in characters: " - " (3 bytes) is
+        # swapped for a space and an e-acute (3 bytes, 2 characters), after the tallied address.
+        _rfmb16 = _ex16_lines(_RF16_MAX + 1)
+        _rfmb16[0] = _rfmb16[0].replace(" - ", " \u00e9", 1)
+        _rf16_write(_rfmb16)
+        _rfmulti16 = _rf16_read(_rfawk16)
+        _rf16_write(_RF16_FEW)
+        _rffew16 = _rf16_transport(_rfawk16)(_RF16_SRV, _privm16.remote_command(
+            "f2b-log-lines", ["2026-09-01"], merge_stderr=False))
+        _rf16_write(["2026-09-20 00:00:00 nothing of interest"])
+        _rfquiet16 = _rf16_read(_rfawk16)
+        _rf16[_rfawk16 or "awk"] = (_rfexact16, _rfover16, _rfunder16, _rfmulti16, _rffew16,
+                                    _rfquiet16)
+
+    # The two readers, through the real run_privileged and the shipped rendering.
+    _core16.run_command = _rf16_transport()
+    _hosts16.remote_fail2ban_overview = lambda server: {"jails": []}   # annotations: not under test
+    _hosts16.remote_ufw_blocked_ips = lambda server, shadowed=None: {}
+    for _rfname16, _rfn16 in (("exact", _RF16_MAX), ("over", _RF16_MAX + 1)):
+        _rfk16 = _rf16_write(_ex16_lines(_rfn16))
+        _p9_so._log = _Rec16()
+        _rf16[_rfname16] = (_rfk16, _hosts16.remote_fail2ban_attempt_counts(_RF16_SRV, days=7),
+                            _hosts16.remote_fail2ban_top_ips(_RF16_SRV, limit=20, days=7),
+                            list(_p9_so._log.warnings))
+    _rf16_write(_RF16_FEW)
+    _rf16["few"] = (3, _hosts16.remote_fail2ban_attempt_counts(_RF16_SRV, days=7), None, [])
+    _core16.run_command = lambda server, command, timeout=30, sudo=None, stdin_text=None: (
+        "", "SSH command timed out", -1)
+    _rf16["failed"] = (0, _hosts16.remote_fail2ban_attempt_counts(_RF16_SRV, days=7),
+                       _hosts16.remote_fail2ban_top_ips(_RF16_SRV, limit=20, days=7), [])
+finally:
+    (_core16.run_command, _p9_so._log, _hosts16.remote_fail2ban_overview,
+     _hosts16.remote_ufw_blocked_ips) = _rf16_saved
+    _shutil16.rmtree(_RF16_DIR, ignore_errors=True)
+
+eq("f2b remote: the rendering's ceiling is the helper's (they cannot drift)",
+   getattr(_privm16, "F2B_LOG_MAX_BYTES", None), getattr(_helper, "F2B_LOG_MAX_BYTES", 0))
+for _rfawk16 in ["awk"] + _RF16_AWKS:
+    _rfe16, _rfo16, _rfu16, _rfm16, _rff16, _rfq16 = _rf16.get(
+        _rfawk16, ((None, 0, ""),) * 4 + (("", "", None), (None, 0, "")))
+    check("f2b remote (%s): exactly the ceiling is complete (rc 0, every byte)" % _rfawk16,
+          _rfe16[:2] == (0, _RF16_MAX), repr(_rfe16))
+    check("f2b remote (%s): one byte past it is cut (rc 3), says so, and stops at it" % _rfawk16,
+          _rfo16[0] == 3 and _rfo16[1] <= _RF16_MAX and "truncated" in _rfo16[2],
+          repr(_rfo16)[:200])
+    check("f2b remote (%s): one byte under it is complete (rc 0)" % _rfawk16,
+          _rfu16[:2] == (0, _RF16_MAX - 1), repr(_rfu16))
+    check("f2b remote (%s): the ceiling counts bytes, as the helper does, not characters"
+          % _rfawk16, _rfm16[0] == 3, repr(_rfm16)[:200])
+    check("f2b remote (%s): an ordinary log is read exactly as before (control)" % _rfawk16,
+          tuple(_rff16) == ("\n".join(_RF16_FEW[:3]), "", 0), repr(_rff16)[:200])
+    check("f2b remote (%s): a quiet log is a complete, empty read (rc 0)" % _rfawk16,
+          tuple(_rfq16) == (0, 0, ""), repr(_rfq16))
+for _rfawk16 in ("gawk", "mawk"):
+    if _rfawk16 not in _RF16_AWKS:
+        skip("f2b remote (%s): the rendering under %s" % (_rfawk16, _rfawk16),
+             "%s is not installed here" % _rfawk16)
+_rx16 = _rf16.get("exact", (0, "missing", "missing", []))
+_ro16 = _rf16.get("over", (0, "missing", "missing", []))
+check("f2b remote: attempt counts tally a log of exactly the ceiling (it was 'within 64 KB': None)",
+      _rx16[1] == {_EX16_IP: _rx16[0]}, repr(_rx16[1])[:200])
+check("f2b remote: ...and top-ips ranks it",
+      isinstance(_rx16[2], list)
+      and [(r["ip"], r["attempts"]) for r in _rx16[2]] == [(_EX16_IP, _rx16[0])],
+      repr(_rx16[2])[:200])
+check("f2b remote: one byte past the ceiling, both are unread (None), never a partial tally",
+      _ro16[1] is None and _ro16[2] is None, repr((_ro16[1], _ro16[2]))[:200])
+check("f2b remote: ...and each says why (a warning, as the panel host's readers give)",
+      len(_ro16[3]) == 2 and all("ceiling" in w for w in _ro16[3]) and not _rx16[3],
+      repr((_ro16[3], _rx16[3])))
+eq("f2b remote: an ordinary log is tallied (control)",
+   _rf16.get("few", (0, None))[1], {"2001:db8::0": 1, "2001:db8::1": 1, "2001:db8::2": 1})
+check("f2b remote: a failed read is still unread (None), for both",
+      _rf16.get("failed", (0, 0, 0))[1:3] == (None, None), repr(_rf16.get("failed")))
+check("f2b remote: nothing but the fail2ban read reached the stand-in transport",
+      not _RF16_OTHER, repr(_RF16_OTHER[:3]))
+# The fixtures above are dated from the clock (_F2B16_DAY) because the readers keep only the last 7
+# days counted back from now; a fixed date made them fail once it was a week old. Said by name.
+check("f2b remote: (guard) the fixtures' day is inside the readers' 7-day window",
+      _F2B16_DAY >= _p9_so._f2b_cutoff(7),
+      "%s is before the readers' cutoff %s" % (_F2B16_DAY, _p9_so._f2b_cutoff(7)))
+
+# ...and the remote form keeps the helper's LINES, not only its ceiling. Its byte count decides
+# where a remote says "cut", so a filter that kept more or fewer lines than do_f2b_log_lines would
+# cut a remote at another point than the panel host for the same log, and tally other events; the
+# ceiling check above compares only the constant. One rotated family (a plain log, a plain .1 and
+# a .gz) with Found and Ban lines for several jails, the Unban and Restore Ban lines neither keeps,
+# lines ON the cutoff day (kept: the comparison is >=) and the day before. The helper's own read is
+# the reference, and what the reader gets from the rendering must be exactly it, under each awk
+# (the transport strips the output, awk's closing newline with it, as the SSH ones do). Valid UTF-8
+# and no leading blanks: there the two differ by design (the helper counts a bad byte as U+FFFD's
+# three; awk's $1 skips leading blanks), as the grep form did.
+import gzip as _gz16  # noqa: E402
+from datetime import timedelta as _tdfp16  # noqa: E402
+
+# (days before now, time, the rest of the line, kept by the helper), per file of the family. One
+# "now" for every date, so a run that crosses midnight cannot shift some of them and not others.
+_FP16_NOW = _dt16.now()
+_FP16_FAMILY = {
+    "fail2ban.log": [
+        (2, "10:00:00,000", "filter         [812]: INFO    [nginx-http-auth] Found 192.0.2.44", 1),
+        (2, "10:00:01,000", "filter         [812]: INFO    [my_jail.v2] Found 192.0.2.44", 1),
+        (2, "10:00:02,000", "filter         [812]: INFO    [sshd] Ignore 10.0.0.1 by ip", 0),
+        (2, "10:00:03,000", "actions        [812]: WARNING [sshd] 203.0.113.5 already banned", 0),
+        (0, "08:00:00,000", "actions        [812]: NOTICE  [recidive] Ban 203.0.113.5", 1)],
+    "fail2ban.log.1": [
+        (3, "06:00:00,000", "server         [812]: INFO    Jail 'sshd' started", 0),
+        (3, "06:10:00,000", "filter         [812]: INFO    [panel-auth] Found 2001:db8::77", 1),
+        (3, "06:10:05,000", "actions        [812]: NOTICE  [panel-auth] Ban 2001:db8::77", 1),
+        (3, "06:20:00,000", "actions        [812]: NOTICE  [sshd] Unban 203.0.113.50", 0),
+        (3, "06:30:00,000", "actions        [812]: NOTICE  [recidive] Restore Ban 192.0.2.7", 0)],
+    "fail2ban.log.2.gz": [
+        (4, "23:59:59,900", "filter         [812]: INFO    [sshd] Found 203.0.113.99", 0),
+        (4, "23:59:59,950", "actions        [812]: NOTICE  [sshd] Ban 203.0.113.99", 0),
+        (3, "00:00:00,000", "filter         [812]: INFO    [sshd] Found 203.0.113.50", 1),
+        (3, "00:00:01,000", "actions        [812]: NOTICE  [sshd] Ban 203.0.113.50", 1)],
+}
+
+
+def _fp16_line(days, when, rest):
+    """A fail2ban log line `days` before now, as fail2ban writes one."""
+    day = (_FP16_NOW - _tdfp16(days=days)).strftime("%Y-%m-%d")
+    return "%s %s fail2ban.%s" % (day, when, rest)
+
+
+def _fp16_write_family():
+    """Write _FP16_FAMILY into _RF16_DIR; the lines the helper keeps, in its (sorted) file order."""
+    os.makedirs(_RF16_DIR, exist_ok=True)
+    kept = []
+    for name in sorted(_FP16_FAMILY):
+        lines = [(_fp16_line(d, t, r), k) for d, t, r, k in _FP16_FAMILY[name]]
+        data = ("\n".join(text for text, _k in lines) + "\n").encode("utf-8")
+        opener = _gz16.open if name.endswith(".gz") else open
+        with opener(os.path.join(_RF16_DIR, name), "wb") as fh:
+            fh.write(data)
+        kept += [text for text, k in lines if k]
+    return kept
+
+
+def _fp16_helper(cutoff):
+    """The helper's do_f2b_log_lines over _RF16_DIR, run in this process: (rc, stdout, stderr)."""
+    saved = (_helper.F2B_LOG_GLOB, sys.stdout, sys.stderr)
+    out, err = _io16.StringIO(), _io16.StringIO()
+    _helper.F2B_LOG_GLOB, sys.stdout, sys.stderr = _RF16_GLOB, out, err
+    try:
+        rc = _helper.do_f2b_log_lines([cutoff], "")
+    finally:
+        _helper.F2B_LOG_GLOB, sys.stdout, sys.stderr = saved
+    return rc, out.getvalue(), err.getvalue()
+
+
+_fp16 = {}
+_FP16_KEPT = []
+_FP16_CUT = (_FP16_NOW - _tdfp16(days=3)).strftime("%Y-%m-%d")
+try:
+    _FP16_KEPT = _fp16_write_family()
+    _fp16["helper"] = _fp16_helper(_FP16_CUT)
+    for _fpawk16 in ["awk"] + _RF16_AWKS:
+        _fpout16, _fperr16, _fprc16 = _rf16_transport(None if _fpawk16 == "awk" else _fpawk16)(
+            _RF16_SRV, _privm16.remote_command("f2b-log-lines", [_FP16_CUT], merge_stderr=False))
+        _fp16[_fpawk16] = (_fprc16, _fpout16, _fperr16)
+finally:
+    _shutil16.rmtree(_RF16_DIR, ignore_errors=True)
+_FP16_REF = _fp16.get("helper", (None, None, None))
+eq("f2b parity: (premise) the helper keeps the cutoff day's lines, the .gz's too, and drops the "
+   "day before, Unban and Restore Ban", _FP16_REF, (0, "\n".join(_FP16_KEPT), ""))
+for _fpawk16 in ["awk"] + _RF16_AWKS:
+    eq("f2b parity (%s): the remote rendering prints exactly the helper's lines" % _fpawk16,
+       _fp16.get(_fpawk16), (0, _FP16_REF[1], ""))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

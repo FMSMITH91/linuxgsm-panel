@@ -55,6 +55,11 @@ regexes = [
   # because the PR range still carries the old literal (commit 13e3441, flows.py). Matched with
   # its field name so a real token typed into any other field still turns the gate red.
   '''upro-token', 'C1234567890abcdef''',
+  # part13's pin write-lock gate traces _persist_host_key by assigning a wrapper function to it.
+  # generic-api-key reads `..._key = <identifier>` as a credential and the identifier's entropy as
+  # a secret's; the value is a test function's name. Matched as that exact assignment, so any other
+  # value assigned to the name (and every real key anywhere) still turns the gate red.
+  '''_persist_host_key = _pl_traced_persist10''',
 ]
 # No `paths` exemptions. There was one — '''README\.md''' — and gitleaks' path patterns are
 # unanchored searches, so it took every README in the repo (the root one, static/js/,

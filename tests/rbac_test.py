@@ -2474,8 +2474,11 @@ def _check_audit_recycled_server_id():
     with app.app_context():
         db.session.delete(db.session.get(GameServer, _ax["sX"]))
         db.session.commit()
-        _y = GameServer(remote_id=_ax["hA"], name=tag + "_heir", short_name="rbaxheir",
-                        game_type="cs2", port=27119, installed=True, status="offline")
+        # WITH the freed id: game_server has AUTOINCREMENT now, so a plain INSERT no longer takes
+        # it — but every install whose table predates that does, until its rebuild runs.
+        _y = GameServer(id=_ax["sX"], remote_id=_ax["hA"], name=tag + "_heir",
+                        short_name="rbaxheir", game_type="cs2", port=27119, installed=True,
+                        status="offline")
         db.session.add(_y)
         db.session.commit()
         _ax["sY"] = _y.id
@@ -2483,7 +2486,7 @@ def _check_audit_recycled_server_id():
         _liz_g.game_servers.append(_y)
         db.session.commit()
         _detached = db.session.get(_AXL, _ax["rows"]["gone_sX"]).game_server_id is None
-    check("audit scope: (premise) SQLite handed the deleted server's id to the next one",
+    check("audit scope: (premise) the next server holds the deleted server's id",
           _ax["sY"] == _ax["sX"], "ids %s / %s — the check below is not about reuse"
           % (_ax["sX"], _ax["sY"]))
     check("audit scope: a deleted server's rows are detached from its id",
@@ -3061,6 +3064,425 @@ def _check_delete_user_ordinary_and_self():
           not _unexpected, "reached: %r" % (_unexpected,))
 
 
+# ── A body held back is authorized when it ARRIVES, not when the headers did ──────────────────────
+# A route's checks ran before its body was read, and the body is read where the view first touches
+# request.form, request.files or get_json(): under eventlet, a socket read the client controls. So
+# a client could send the headers, hold the body, and wait while its token was revoked, its account
+# deactivated or its group's permission removed, and the action then ran on the answer given
+# before. csrf.protect() never covered it: a Bearer request with no cookie skips it, and it does
+# not read a JSON body at all. _HeldBody stands in for that client. Its first read, wherever the
+# panel makes it, commits the change the real request would be waiting through, from its own app
+# context, as an admin's request on another greenlet would.
+import io as _hb_io  # noqa: E402
+import json as _hb_json  # noqa: E402
+import panel.routes.server_files as _hb_sf  # noqa: E402
+
+
+class _HeldBody(_hb_io.BytesIO):
+    """A request body whose first read runs `on_arrival`: the moment a held-back body lands."""
+
+    def __init__(self, data, on_arrival):
+        super().__init__(data)
+        self._on_arrival = on_arrival
+        self.arrived = False
+
+    def _arrive(self):
+        if not self.arrived:
+            self.arrived = True
+            self._on_arrival()
+
+    def read(self, *a):
+        self._arrive()
+        return super().read(*a)
+
+    def read1(self, *a):
+        self._arrive()
+        return super().read1(*a)
+
+    def readinto(self, b):
+        self._arrive()
+        return super().readinto(b)
+
+    def readline(self, *a):
+        self._arrive()
+        return super().readline(*a)
+
+
+def _hb_fixture():
+    """A MANAGE_SERVERS user on the granted host, with an API token: (user id, group id, token)."""
+    with app.app_context():
+        grp = Group(name=tag + "_hb", description="RBAC held body (auto)", is_default=False)
+        grp.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_SERVERS])
+        grp.servers.append(db.session.get(RemoteServer, granted_remote))
+        db.session.add(grp)
+        db.session.flush()
+        u = User(username=tag + "_hb", display_name=tag + "_hb", is_superadmin=False,
+                 is_active=True, password_hash=auth.hash_password(secrets.token_hex(16)))
+        u.groups.append(grp)
+        db.session.add(u)
+        tok = u.generate_api_token()
+        db.session.commit()
+        return u.id, grp.id, tok
+
+
+def _hb_user(uid_, **fields):
+    """Commit `fields` onto the user from its own app context; return its row's auth state."""
+    with app.app_context():
+        u = db.session.get(User, uid_)
+        for k, v in fields.items():
+            setattr(u, k, v)
+        db.session.commit()
+        return {"token": u.api_token, "active": u.is_active, "sa": u.is_superadmin,
+                "must_change": u.must_change_password}
+
+
+def _hb_new_token(uid_):
+    """Mint the user a fresh token (the revoke case clears it) and return the plaintext."""
+    with app.app_context():
+        tok = db.session.get(User, uid_).generate_api_token()
+        db.session.commit()
+        return tok
+
+
+def _hb_perms(gid, perms=None):
+    """Set the group's permissions (if given) from its own app context; return what is stored."""
+    with app.app_context():
+        grp = db.session.get(Group, gid)
+        if perms is not None:
+            grp.set_permissions(perms)
+            db.session.commit()
+        return sorted(grp.get_permissions())
+
+
+def _hb_tag_made(name):
+    from panel.db.models import ServerTag
+    with app.app_context():
+        return ServerTag.query.filter_by(name=name).first() is not None
+
+
+def _hb_post_tag(client, name, on_arrival, headers=None):
+    """POST /api/tags with its JSON body held back until `on_arrival` has run: (response, read?)."""
+    body = _HeldBody(_hb_json.dumps({"name": name}).encode(), on_arrival)
+    r = client.post("/api/tags", input_stream=body, content_type="application/json",
+                    headers=headers or {})
+    return r, body.arrived
+
+
+def _check_held_json_body_with_a_token(hb_uid, tok):
+    """Bearer + JSON: a token revoked, or an account deactivated, while the body is held."""
+    _bearer = {"Authorization": "Bearer %s" % tok}
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbok", lambda: None, _bearer)
+    check("held body: (control) a Bearer JSON request whose body arrives late still works",
+          read and r.status_code == 200 and _hb_tag_made(tag + "_hbok"),
+          "the control failed (read=%s, %d) — the refusals below prove nothing"
+          % (read, r.status_code))
+    # Each refusal also asserts its premise — the body was read, and the change had landed by the
+    # end — so a window that never opened cannot pass as a refusal.
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbrev",
+                           lambda: _hb_user(hb_uid, api_token=None), _bearer)
+    check("held body: a token revoked while its body is held back is refused, and makes nothing",
+          read and _hb_user(hb_uid)["token"] is None
+          and r.status_code == 401 and not _hb_tag_made(tag + "_hbrev"),
+          "a revoked token still created a tag (read=%s, %d)" % (read, r.status_code))
+    _bearer = {"Authorization": "Bearer %s" % _hb_new_token(hb_uid)}
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbdeact",
+                           lambda: _hb_user(hb_uid, is_active=False), _bearer)
+    check("held body: an account deactivated while its body is held back is refused",
+          read and _hb_user(hb_uid)["active"] is False
+          and r.status_code == 401 and not _hb_tag_made(tag + "_hbdeact"),
+          "a deactivated account's token still created a tag (read=%s, %d)" % (read, r.status_code))
+    _hb_user(hb_uid, is_active=True)
+    return _bearer
+
+
+def _check_held_body_not_read_when_signed_out():
+    """Not signed in: nothing can go stale, so a client about to get a 401 is not read."""
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbanon", lambda: None,
+                           {"Authorization": "Bearer lgsm_" + "0" * 48})
+    check("held body: a request that is not signed in is refused WITHOUT its body being read",
+          not read and r.status_code == 401 and not _hb_tag_made(tag + "_hbanon"),
+          "read=%s, %d — an unauthenticated client could make the panel buffer 50 MB per request"
+          % (read, r.status_code))
+
+
+def _check_held_json_body_demoted(hb_uid, hb_gid, bearer):
+    """Bearer + JSON: a group permission, or the superadmin flag, removed mid-body."""
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbdemote",
+                           lambda: _hb_perms(hb_gid, [auth.VIEW_SERVERS]), bearer)
+    check("held body: a permission removed while the body is held back is refused",
+          read and _hb_perms(hb_gid) == [auth.VIEW_SERVERS]
+          and r.status_code == 403 and not _hb_tag_made(tag + "_hbdemote"),
+          "the group lost MANAGE_SERVERS and the tag was created anyway (read=%s, %d)"
+          % (read, r.status_code))
+    # A superadmin demoted mid-body. The flag is not in the token lookup's WHERE, so only a fresh
+    # read of the row can see it change. The group still lacks MANAGE_SERVERS from the case above,
+    # so the flag is the only grant in play.
+    _hb_user(hb_uid, is_superadmin=True)
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbsa",
+                           lambda: _hb_user(hb_uid, is_superadmin=False), bearer)
+    check("held body: a SUPERADMIN demoted while the body is held back is refused",
+          read and _hb_user(hb_uid)["sa"] is False
+          and r.status_code == 403 and not _hb_tag_made(tag + "_hbsa"),
+          "the stale is_superadmin still created a tag (read=%s, %d)" % (read, r.status_code))
+    _hb_perms(hb_gid, [auth.VIEW_SERVERS, auth.MANAGE_SERVERS])
+
+
+def _check_held_body_meets_the_password_gate(hb_uid, bearer):
+    """The password gate is a before_request check too, so the body must be in hand before it."""
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbpw",
+                           lambda: _hb_user(hb_uid, must_change_password=True), bearer)
+    check("held body: an account told to change its password mid-body meets the password gate",
+          read and _hb_user(hb_uid)["must_change"] is True
+          and r.status_code == 403 and r.headers.get("X-Password-Change-Required") == "1"
+          and not _hb_tag_made(tag + "_hbpw"),
+          "the gate ran on the identity loaded before the body (read=%s, %d)"
+          % (read, r.status_code))
+    _hb_user(hb_uid, must_change_password=False)
+
+
+def _check_held_body_row_kept_alive(hb_uid, hb_gid, bearer):
+    """The re-load re-reads the row even when something still holds the one loaded first."""
+    # The superadmin case passes without expire_all() today only because nothing else references the
+    # first-loaded User: the session's identity map is weak, so dropping flask-login's copy frees
+    # the row and the re-load builds a new one. Anything that keeps it alive — a signal receiver, a
+    # log record's args, a traceback — turns that re-load into a REUSE of the stale object, and the
+    # old is_superadmin answers again. A receiver on flask-login's own signal stands in for it.
+    from flask_login.signals import user_loaded_from_request
+    _kept = []
+
+    def _keep(_sender, user=None, **_kw):
+        _kept.append(user)
+
+    _hb_perms(hb_gid, [auth.VIEW_SERVERS])
+    _hb_user(hb_uid, is_superadmin=True)
+    user_loaded_from_request.connect(_keep, weak=False)
+    try:
+        r, read = _hb_post_tag(app.test_client(), tag + "_hbkept",
+                               lambda: _hb_user(hb_uid, is_superadmin=False), bearer)
+    finally:
+        user_loaded_from_request.disconnect(_keep)
+    check("held body: a demoted superadmin is refused even while the first-loaded row is held",
+          read and _kept and _hb_user(hb_uid)["sa"] is False
+          and r.status_code == 403 and not _hb_tag_made(tag + "_hbkept"),
+          "the loaded rows were not expired, so the re-load reused the stale one (read=%s, kept=%d,"
+          " %d)" % (read, len(_kept), r.status_code))
+    _hb_perms(hb_gid, [auth.VIEW_SERVERS, auth.MANAGE_SERVERS])
+
+
+def _check_held_json_body_with_a_cookie(hb_uid):
+    """A signed-in browser's fetch: csrf.protect() does not read a JSON body, so it was open too."""
+    r, read = _hb_post_tag(client_as(hb_uid), tag + "_hbcok", lambda: None)
+    check("held body: (control) a session's JSON request whose body arrives late still works",
+          read and r.status_code == 200 and _hb_tag_made(tag + "_hbcok"),
+          "the control failed (read=%s, %d)" % (read, r.status_code))
+    r, read = _hb_post_tag(client_as(hb_uid), tag + "_hbcdeact",
+                           lambda: _hb_user(hb_uid, is_active=False))
+    check("held body: a SESSION whose account is deactivated mid-body is refused too",
+          read and _hb_user(hb_uid)["active"] is False
+          and r.status_code == 401 and not _hb_tag_made(tag + "_hbcdeact"),
+          "a deactivated account's session still created a tag (read=%s, %d)"
+          % (read, r.status_code))
+    _hb_user(hb_uid, is_active=True)
+
+
+def _check_held_body_with_csrf_on(hb_uid):
+    """With CSRF on, as in production: a fetch and a form post from a session both still work."""
+    # The suite runs with CSRF off, so nothing above drives the order production has: csrf.protect()
+    # parses a FORM body first, and the hook then finds it already read. A fetch's JSON body it does
+    # not read, so there the hook is the first reader.
+    import re as _hb_re
+    c = client_as(hb_uid)
+    _m = _hb_re.search(r'window\.CSRF = "([^"]+)"', c.get("/account").get_data(as_text=True))
+    app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        r_json = c.post("/api/tags", json={"name": tag + "_hbcsrf"},
+                        headers={"X-CSRFToken": _m.group(1) if _m else ""})
+        r_form = c.post("/account/profile", data={"display_name": tag + " csrf form",
+                                                  "csrf_token": _m.group(1) if _m else ""})
+    finally:
+        app.config["WTF_CSRF_ENABLED"] = False
+    with app.app_context():
+        _shown = db.session.get(User, hb_uid).display_name
+    check("held body: with CSRF on, a session's fetch still works (the hook reads its JSON)",
+          _m and r_json.status_code == 200 and _hb_tag_made(tag + "_hbcsrf"),
+          "token found=%s, %d" % (bool(_m), r_json.status_code))
+    check("held body: ...and a form post csrf.protect() has already parsed keeps its fields",
+          _m and r_form.status_code == 302 and _shown == tag + " csrf form",
+          "got %d, display_name=%r" % (r_form.status_code, _shown))
+
+
+def _hb_upload_recorder(seen):
+    """A stand-in for server_files._store_upload that records how the upload reached the view."""
+    from flask import jsonify, request as _rq
+
+    def _store(gs, reldir, f, data, overwrite):
+        seen.append({"raw_body_in_memory": len(getattr(_rq, "_cached_data", None) or b""),
+                     "spooled_to_disk": getattr(f.stream, "_rolled", None), "size": len(data)})
+        return jsonify({"success": True})
+    return _store
+
+
+def _check_held_upload(hb_uid, bearer):
+    """An upload still streams to disk, and one whose token goes mid-body stores nothing."""
+    from werkzeug.datastructures import FileStorage
+    from werkzeug.test import encode_multipart
+    url, seen = "/api/server/%d/upload" % accessible_id, []
+    _saved = _hb_sf._store_upload
+    _hb_sf._store_upload = _hb_upload_recorder(seen)
+    try:
+        r = app.test_client().post(url, headers=bearer, content_type="multipart/form-data", data={
+            "path": "", "file": (_hb_io.BytesIO(b"x" * 600000), "big.cfg")})
+        check("held body: (control) a Bearer multipart upload still works",
+              r.status_code == 200 and len(seen) == 1 and seen[0]["size"] == 600000,
+              "got %d, %r" % (r.status_code, seen))
+        check("held body: ...and still STREAMS: the file part is spooled to disk, and the raw "
+              "body is never held in memory",
+              seen[:1] and seen[0]["spooled_to_disk"] is True
+              and seen[0]["raw_body_in_memory"] == 0, repr(seen))
+        _bd, _mp = encode_multipart({"path": "", "file": FileStorage(
+            _hb_io.BytesIO(b"echo held\n"), filename="held.cfg")})
+        _held = _HeldBody(_mp, lambda: _hb_user(hb_uid, api_token=None))
+        r = app.test_client().post(url, headers=bearer, input_stream=_held,
+                                   content_type="multipart/form-data; boundary=%s" % _bd)
+        check("held body: an upload whose token is revoked mid-body is refused, and stores nothing",
+              _held.arrived and _hb_user(hb_uid)["token"] is None
+              and r.status_code == 401 and len(seen) == 1,
+              "the upload was stored after its token was revoked (read=%s, %d, %r)"
+              % (_held.arrived, r.status_code, seen))
+    finally:
+        _hb_sf._store_upload = _saved
+
+
+def _check_held_body_forgets_the_grants_memo(hb_uid):
+    """Forgetting the identity drops _groups_with_grants' per-request memo, under its real name."""
+    with app.test_request_context("/"):
+        from flask import g as _hb_g
+        auth._groups_with_grants(db.session.get(User, hb_uid))
+        _primed = "_groups_with_grants_cache" in _hb_g
+        auth._heldbody_forget_identity()
+        check("held body: re-loading the identity also drops the per-request grants memo",
+              _primed and "_groups_with_grants_cache" not in _hb_g,
+              "primed=%s — a stale memo would answer the checks ahead with the old groups"
+              % _primed)
+
+
+def _check_held_body_refused_by_csrf_unread(hb_uid):
+    """With CSRF on, a session's JSON post with no token is refused before its body is read."""
+    # The body hook runs AFTER the CSRF hook, so a cross-site JSON post that hook refuses is never
+    # read. csrf.protect() parses a form body itself to find its token, so only a non-form body
+    # shows the order: registered ahead of the CSRF hook, the body hook would read this one first.
+    c = client_as(hb_uid)
+    _signed_in = c.get("/account").status_code == 200
+    app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        r, read = _hb_post_tag(c, tag + "_hbnocsrf", lambda: None)
+    finally:
+        app.config["WTF_CSRF_ENABLED"] = False
+    check("held body: with CSRF on, a session's JSON post with no CSRF token is refused unread",
+          _signed_in and r.status_code == 400 and not read and not _hb_tag_made(tag + "_hbnocsrf"),
+          "signed in=%s, read=%s, %d — the body was read before the CSRF check refused it"
+          % (_signed_in, read, r.status_code))
+
+
+def _hb_login_session(hb_uid, sid):
+    """Register a login-session row for the user; return the cookie id a login today carries."""
+    from panel.db.models import UserSession
+    with app.app_context():
+        db.session.add(UserSession(user_id=hb_uid, sid=sid, ip="", user_agent=""))
+        db.session.commit()
+        u = db.session.get(User, hb_uid)
+        u._sid = sid
+        return u.get_id()
+
+
+def _hb_login_state(hb_uid, sid, drop=False, bump_epoch=False):
+    """Revoke the login (drop) or sign out everywhere (bump_epoch), committed from its own app
+    context; return (auth_epoch, whether the login-session row is still there)."""
+    from panel.db.models import UserSession
+    with app.app_context():
+        u = db.session.get(User, hb_uid)
+        if drop:
+            UserSession.query.filter_by(sid=sid).delete()
+        if bump_epoch:
+            u.auth_epoch = (u.auth_epoch or 0) + 1
+        db.session.commit()
+        return u.auth_epoch or 0, UserSession.query.filter_by(sid=sid).count() == 1
+
+
+def _hb_client_for_login(login_id):
+    """A client whose session carries `login_id` exactly as flask-login stores it at login."""
+    c = app.test_client()
+    with c.session_transaction() as s:
+        s["_user_id"] = login_id
+        s["_fresh"] = True
+    return c
+
+
+def _hb_current_login_refusals(hb_uid, sid):
+    """Its device revoked, then everywhere signed out, each while a body is held back."""
+    _ep0 = _hb_login_state(hb_uid, sid + "x")[0]
+    c = _hb_client_for_login(_hb_login_session(hb_uid, sid + "rev"))
+    r, read = _hb_post_tag(c, tag + "_hbmrev",
+                           lambda: _hb_login_state(hb_uid, sid + "rev", drop=True))
+    check("held body: a login whose device is signed out while its body is held back is refused",
+          read and _hb_login_state(hb_uid, sid + "rev")[1] is False
+          and r.status_code == 401 and not _hb_tag_made(tag + "_hbmrev"),
+          "a revoked device's cookie still created a tag (read=%s, %d)" % (read, r.status_code))
+    c = _hb_client_for_login(_hb_login_session(hb_uid, sid + "ep"))
+    r, read = _hb_post_tag(c, tag + "_hbmep",
+                           lambda: _hb_login_state(hb_uid, sid + "ep", bump_epoch=True))
+    check("held body: a login signed out everywhere while its body is held back is refused",
+          read and _hb_login_state(hb_uid, sid + "ep")[0] == _ep0 + 1
+          and r.status_code == 401 and not _hb_tag_made(tag + "_hbmep"),
+          "a cookie from before the epoch bump still created a tag (read=%s, %d)"
+          % (read, r.status_code))
+
+
+def _check_held_body_current_login_cookie(hb_uid):
+    """A login's "<uid>:<epoch>:<sid>" cookie: its device revoked, or signed out everywhere."""
+    # client_as() writes the legacy "<uid>" id, which only _load_legacy_user reads. Every login
+    # today carries "<uid>:<epoch>:<sid>" (User.get_id): a UserSession lookup and an auth_epoch
+    # compare, and nothing above drives those with a body held back.
+    _sid = tag + "_hbsid_"
+    try:
+        c = _hb_client_for_login(_hb_login_session(hb_uid, _sid + "ok"))
+        r, read = _hb_post_tag(c, tag + "_hbmok", lambda: None)
+        check("held body: (control) a current login's cookie whose body arrives late still works",
+              read and r.status_code == 200 and _hb_tag_made(tag + "_hbmok"),
+              "the control failed (read=%s, %d) — the refusals below prove nothing"
+              % (read, r.status_code))
+        _hb_current_login_refusals(hb_uid, _sid)
+    finally:
+        from panel.db.models import UserSession
+        with app.app_context():
+            UserSession.query.filter(UserSession.sid.like(_sid + "%")).delete(
+                synchronize_session=False)
+            db.session.commit()
+
+
+def _check_held_bodies():
+    """Every held-body case, then the tags they may have made."""
+    hb_uid, hb_gid, tok = _hb_fixture()
+    try:
+        bearer = _check_held_json_body_with_a_token(hb_uid, tok)
+        _check_held_body_not_read_when_signed_out()
+        _check_held_json_body_demoted(hb_uid, hb_gid, bearer)
+        _check_held_body_meets_the_password_gate(hb_uid, bearer)
+        _check_held_body_row_kept_alive(hb_uid, hb_gid, bearer)
+        _check_held_json_body_with_a_cookie(hb_uid)
+        _check_held_body_with_csrf_on(hb_uid)
+        _check_held_upload(hb_uid, bearer)
+        _check_held_body_forgets_the_grants_memo(hb_uid)
+        _check_held_body_refused_by_csrf_unread(hb_uid)
+        _check_held_body_current_login_cookie(hb_uid)
+    finally:
+        from panel.db.models import ServerTag
+        with app.app_context():
+            for _t in ServerTag.query.filter(ServerTag.name.like(tag + "_hb%")).all():
+                db.session.delete(_t)
+            db.session.commit()
+
+
 def _check_superadmin_full_access():
     """A superadmin still has full access."""
     global code, p
@@ -3112,6 +3534,7 @@ try:
     _check_delete_user_offers_only_allowed()
     _check_users_page_reach_and_sa_delete()
     _check_delete_user_ordinary_and_self()
+    _check_held_bodies()
     _check_superadmin_full_access()
 finally:
     for _m, _n, _f in _traps_saved:
@@ -3339,6 +3762,15 @@ check("redeem_invite refuses an invite whose creator lost their authority",
 # until you follow _run_action, and both whitelist endpoints log inside _whitelist_mutate. A
 # shallow check would accuse all three.
 #
+# And resolved to the function each call REALLY reaches, by tests/audit_callgraph.py. It followed
+# callees by BARE NAME, so a view counted as audited when any function sharing a name with one of
+# its callees logged. `subprocess.run` matched a function named `run` that logs, so a route that
+# reached a subprocess passed (POST /setup and /setup/restart wrote no row and passed that way);
+# the wizard's Tailscale routes passed on system_ops._run, named like two workers that log. Now a
+# call counts only when that exact function, found through its imports, module attributes and
+# scopes, reaches log_action. One the walk cannot resolve counts as silent, so a route that logs
+# only through it fails here and has to be read.
+#
 # The listed endpoints genuinely have nothing to audit; each says why, so a real gap cannot hide
 # among them.
 _NO_AUDIT_OK = {
@@ -3348,53 +3780,244 @@ _NO_AUDIT_OK = {
     "api_server_upload_check",       # pre-flight check before an upload; changes nothing
     "api_tailscale_check_peer",      # connectivity probe; changes nothing
     "set_language",                  # the viewer's own UI language; usable pre-login
-    "test_remote",                   # SSH reachability probe; changes nothing
+    # SSH reachability probe. It records is_online / last_seen, and pins the key it met on a host
+    # with no pin yet, exactly as that host's next connection from anywhere in the panel would
+    # (_persist_host_key), and none of those write a row either.
+    "test_remote",
     "notifications_test",            # sends one test notification to the configured channel
 }
-_calls, _logs_direct = {}, set()
-for _f in pathlib.Path(_ROOT, "panel").rglob("*.py"):
-    try:
-        _tree = ast.parse(_f.read_text(encoding="utf-8"))
-    except (SyntaxError, OSError):
-        continue
-    _stack = []
+import importlib.util as _aud_iu  # noqa: E402
+# Loaded by path: tests/ is not a package, so a regular `tests` package installed by some
+# dependency would be imported instead of it.
+_aud_spec = _aud_iu.spec_from_file_location("audit_callgraph",
+                                            os.path.join(_ROOT, "tests", "audit_callgraph.py"))
+_aud_cg = _aud_iu.module_from_spec(_aud_spec)
+_aud_spec.loader.exec_module(_aud_cg)
 
-    class _V(ast.NodeVisitor):
-        def visit_FunctionDef(self, n):
-            _stack.append(n.name)
-            self.generic_visit(n)
-            _stack.pop()
-        visit_AsyncFunctionDef = visit_FunctionDef   # noqa: N815 - the name ast.NodeVisitor dispatches on
 
-        def visit_Call(self, n):
-            _nm = getattr(n.func, "id", getattr(n.func, "attr", None))
-            if _stack and _nm:
-                if _nm == "log_action":
-                    _logs_direct.add(_stack[-1])
-                else:
-                    _calls.setdefault(_stack[-1], set()).add(_nm)
-            self.generic_visit(n)
-    _V().visit(_tree)
-_logs = set(_logs_direct)
-for _ in range(6):                       # transitive: a view logs if what it calls logs
-    _grew = False
-    for _fn, _callees in _calls.items():
-        if _fn not in _logs and (_callees & _logs):
-            _logs.add(_fn)
-            _grew = True
-    if not _grew:
-        break
-_unaudited, _seen_ep = [], set()
-for _rule in app.url_map.iter_rules():
-    if not (_rule.methods & {"POST", "PUT", "DELETE", "PATCH"}) or _rule.endpoint in _seen_ep:
-        continue
-    _seen_ep.add(_rule.endpoint)
-    if _rule.endpoint not in _logs and _rule.endpoint not in _NO_AUDIT_OK:
-        _unaudited.append("%s (%s)" % (_rule, _rule.endpoint))
+def _aud_views():
+    """{endpoint: view function, unwrapped} for every endpoint that accepts a mutating method."""
+    out = {}
+    for _r in app.url_map.iter_rules():
+        if _r.methods & {"POST", "PUT", "DELETE", "PATCH"} and _r.endpoint not in out:
+            out[_r.endpoint] = (str(_r), inspect.unwrap(app.view_functions[_r.endpoint]))
+    return out
+
+
+def _aud_key(graph, view):
+    """The call-graph key of a view function: its module, __qualname__ and first line."""
+    code = getattr(view, "__code__", None)
+    if code is None:
+        return None
+    return graph.function_key(getattr(view, "__module__", ""), view.__qualname__,
+                              code.co_firstlineno)
+
+
+_aud_graph = _aud_cg.CallGraph.from_tree(_ROOT, sorted(
+    {*pathlib.Path(_ROOT, "panel").rglob("*.py"), *pathlib.Path(_ROOT).glob("*.py")}))
+_aud_eps = _aud_views()
+_unaudited, _aud_indirect = [], []
+for _ep, (_rule_s, _view) in sorted(_aud_eps.items()):
+    _k = _aud_key(_aud_graph, _view)
+    if _k is not None and len(_aud_graph.chain(_k)) > 2:
+        _aud_indirect.append(_ep)
+    if _ep not in _NO_AUDIT_OK and (_k is None or not _aud_graph.logs(_k)):
+        _unaudited.append("%s (%s%s)" % (_rule_s, _ep, "" if _k else ", source not found"))
+check("audit gate: the scan found mutating endpoints to check", len(_aud_eps) > 40,
+      "only %d mutating endpoints seen" % len(_aud_eps))
+check("audit gate: a view that logs only through a helper is followed into it (control)",
+      {"api_server_action", "api_panel_security_whitelist"} <= set(_aud_indirect),
+      repr(_aud_indirect))
 check("every mutating endpoint writes an audit entry (or is listed as having nothing to audit)",
       not _unaudited,
       "; ".join(sorted(_unaudited)[:5]) + " — call log_action(), or add the endpoint to "
       "_NO_AUDIT_OK with the reason it has nothing to record")
+_aud_stale = sorted(_e for _e in _NO_AUDIT_OK if _e not in _aud_eps
+                    or _aud_key(_aud_graph, _aud_eps[_e][1]) is None
+                    or _aud_graph.logs(_aud_key(_aud_graph, _aud_eps[_e][1])))
+check("audit gate: every _NO_AUDIT_OK entry is a mutating endpoint that really writes no row",
+      not _aud_stale, repr(_aud_stale))
+
+# The resolver itself, on modules made for it: each route's only candidate for an audit row is a
+# function whose NAME matches one that logs. By bare name every one of them was audited.
+_AUD_FIXTURE = {
+    "panel.security.auth": ("def log_action(user, action, **kw):\n    return None\n", False),
+    "fx": ("", True),
+    "fx.logs": ("from panel.security.auth import log_action\n"
+                "def _run(cmd=None):\n    log_action(None, 'x')\n", False),
+    "fx.quiet": ("def _run(cmd=None):\n    return cmd\n", False),
+    "fx.pkg": ("from fx.pkg import a, b\n_MODULES = (a, b)\n"
+               "def __getattr__(name):\n    return None\n", True),
+    "fx.pkg.a": ("def helper():\n    return 1\n", False),
+    "fx.pkg.b": ("from fx import logs\ndef helper():\n    logs._run()\n"
+                 "def only_here():\n    logs._run()\n", False),
+    "fx.routes": (textwrap.dedent('''
+        import threading
+        from fx import quiet as so, logs, pkg
+        from fx.quiet import _run as _quiet_run
+        from panel.security import auth
+
+        def by_module_attr():
+            so._run("ls")
+
+        def by_from_import():
+            _quiet_run("ls")
+
+        def by_shadowing_parameter(logs):
+            logs._run()
+
+        def by_first_pep562_module():
+            pkg.helper()
+
+        def by_pep562_module():
+            pkg.only_here()
+
+        def by_real_worker():
+            logs._run()
+
+        def by_thread_target():
+            threading.Thread(target=logs._run).start()
+
+        def by_module_log_action():
+            auth.log_action(None, "y")
+
+        class Svc:
+            def work(self):
+                logs._run()
+
+            def go(self):
+                self.work()
+
+        def register(app):
+            def _inner():
+                logs._run()
+
+            def by_closure():
+                _inner()
+            return by_closure
+        '''), False),
+}
+_aud_fx = _aud_cg.CallGraph(_AUD_FIXTURE)
+_aud_fx_logs = {q: _aud_fx.logs(_aud_fx.function_key("fx.routes", q)) for q in (
+    "by_module_attr", "by_from_import", "by_shadowing_parameter", "by_first_pep562_module",
+    "by_real_worker", "by_thread_target", "by_module_log_action", "by_pep562_module", "Svc.go",
+    "register.<locals>.by_closure")}
+check("audit gate: a call that only shares its name with a function that logs is not an audit row",
+      not any(_aud_fx_logs[q] for q in ("by_module_attr", "by_from_import",
+                                         "by_shadowing_parameter", "by_first_pep562_module")),
+      repr(_aud_fx_logs))
+check("audit gate: ...while the function that does log is followed however it is reached (control)",
+      all(_aud_fx_logs[q] for q in ("by_real_worker", "by_thread_target", "by_module_log_action",
+                                    "by_pep562_module", "Svc.go", "register.<locals>.by_closure")),
+      repr(_aud_fx_logs))
+# The rest of Python's scope rules, each of which stops a same-named but unrelated name from
+# counting as an audit row: a local, a `for` / `with ... as` / `except ... as` name shadows the
+# global; a method does not see its class body's names; and a nested def's calls are its own until
+# something calls it. And the rest of what the resolver follows, each a way a real route could
+# reach its logging helper: a class whose __init__ logs, an alias, a submodule's attribute, a
+# relative import, and a star import — which binds only the names Python binds (__all__'s, else
+# the public ones), so a `_run` is never one.
+_AUD_FIXTURE_SCOPES = dict(_AUD_FIXTURE, **{
+    "fx.starsrc": ("from fx.logs import log_action\n"
+                   "def record():\n    log_action(None, 's')\n"
+                   "def _hidden():\n    log_action(None, 'h')\n", False),
+    "fx.starall": ("from fx.logs import log_action\n__all__ = ('_listed',)\n"
+                   "def _listed():\n    log_action(None, 'l')\n"
+                   "def unlisted():\n    log_action(None, 'u')\n", False),
+    "fx.scopes": (textwrap.dedent('''
+        import fx.logs
+        from fx import logs, quiet
+        from .logs import _run as _rel_run
+        from fx.starsrc import *
+        from fx.starall import *
+
+        _alias_run = logs._run
+
+        def make():
+            return quiet
+
+        def by_shadowing_local():
+            logs = make()
+            logs._run()
+
+        def by_shadowing_with():
+            with open("x") as logs:
+                logs._run()
+
+        def by_shadowing_for():
+            for logs in ():
+                logs._run()
+
+        def by_shadowing_except():
+            try:
+                make()
+            except Exception as logs:
+                logs._run()
+
+        def by_unused_nested():
+            def _w():
+                logs._run()
+            return 1
+
+        def by_star_private():
+            _hidden()
+
+        def by_star_unlisted():
+            unlisted()
+
+        class K:
+            def logs(self):
+                return None
+
+            def m(self):
+                logs._run()
+
+        class Rec:
+            def __init__(self):
+                logs._run()
+
+        def by_class_init():
+            Rec()
+
+        def by_module_alias():
+            _alias_run()
+
+        def by_local_alias():
+            fn = logs._run
+            fn()
+
+        def by_submodule_attr():
+            fx.logs._run()
+
+        def by_relative_import():
+            _rel_run()
+
+        def by_star_import():
+            record()
+
+        def by_star_all():
+            _listed()
+        '''), False),
+})
+_aud_fx2 = _aud_cg.CallGraph(_AUD_FIXTURE_SCOPES)
+_aud_fx2_logs = {q: _aud_fx2.logs(_aud_fx2.function_key("fx.scopes", q)) for q in (
+    "by_shadowing_local", "by_shadowing_with", "by_shadowing_for", "by_shadowing_except",
+    "by_unused_nested", "by_star_private", "by_star_unlisted", "K.m", "by_class_init",
+    "by_module_alias", "by_local_alias", "by_submodule_attr", "by_relative_import",
+    "by_star_import", "by_star_all")}
+check("audit gate: a local, loop, with or except name that shadows a logging module is not an "
+      "audit row",
+      not any(_aud_fx2_logs[q] for q in ("by_shadowing_local", "by_shadowing_with",
+                                          "by_shadowing_for", "by_shadowing_except")),
+      repr(_aud_fx2_logs))
+check("audit gate: ...nor a nested def nothing calls, nor a name a star import does not bind",
+      not any(_aud_fx2_logs[q] for q in ("by_unused_nested", "by_star_private",
+                                          "by_star_unlisted")), repr(_aud_fx2_logs))
+check("audit gate: ...while a method reads its module's names, not its class's, and a class call, "
+      "an alias, a submodule, a relative and a star import are followed (control)",
+      all(_aud_fx2_logs[q] for q in ("K.m", "by_class_init", "by_module_alias", "by_local_alias",
+                                    "by_submodule_attr", "by_relative_import", "by_star_import",
+                                    "by_star_all")), repr(_aud_fx2_logs))
 # ── an audit row about a server or host names it by ID ─────────────────────────────────────────
 # audit_scope decides who reads a row from AuditLog.game_server_id / remote_id, which log_action
 # records only from its server= / remote= arguments. A call whose target is a server's or a host's

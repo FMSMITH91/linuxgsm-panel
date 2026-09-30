@@ -167,11 +167,13 @@ finally:
 # holds re-fired a `servers_changed` broadcast to every open dashboard — each one re-requesting
 # /api/servers and restarting its install-progress poller — and logged "reconciled stranded
 # install 'X' -> failed" 144 times a day for a reconciliation that did not happen. Read as
-# structure: the ticker is a closure inside create_app(), so nothing can call it from here.
+# structure: the ticker is a closure inside create_app(), so nothing can call it from here. Its
+# per-row body is _reconcile_stranded_install, a closure beside it.
 import ast as _rt_ast                                                              # noqa: E402
 _rt_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
 _rt_fn = next((n for n in _rt_ast.walk(_rt_ast.parse(_rt_src))
-               if isinstance(n, _rt_ast.FunctionDef) and n.name == "install_reconcile_ticker"), None)
+               if isinstance(n, _rt_ast.FunctionDef) and n.name == "_reconcile_stranded_install"),
+              None)
 check("reconcile ticker: the function was located for the gate", _rt_fn is not None)
 _rt_false = next((n for n in _rt_ast.walk(_rt_fn or _rt_ast.parse(""))
                   if isinstance(n, _rt_ast.If) and isinstance(n.test, _rt_ast.Compare)

@@ -264,6 +264,30 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The panel host's own Firewall card could say "permission denied" with the helper installed.**
+  Its rule list was the one firewall read that followed the host row's "sudo" setting, which is a
+  remote's SSH option, and on the panel's own host it also decided whether to use the helper. The
+  panel creates its own host's row with that setting on and never shows it for that row, but a row
+  with it off (one written into the database directly, as the test panel's was) ran `ufw status`
+  as the panel's account, which ufw refuses, so the card listed no rules and no rule could be
+  deleted from it, while Server Management read the same firewall fine. On the panel's own host
+  that setting is no longer read: the rule list is read as root like every other firewall action,
+  through the helper where it is installed. A remote still follows its own setting.
+- **On a remote host, a fail2ban log just under the 8 MB read limit is counted again.** The panel
+  guessed that a remote host's log had been cut short whenever it came within 64 KB of that limit,
+  and treated a complete log as unread, so auto-blocking on that host held still. The remote read
+  now stops at the limit itself and says when it had to, as the panel's own host already did, and
+  only a log that really was cut is treated as unread. A cut log on a remote host now shows as
+  unreadable on the Security card, rather than as a smaller count.
+- **Storing a host's first SSH key pin no longer freezes the panel while the database is busy.**
+  The pin is written by whichever part of the panel made the first contact, often a background
+  worker. When another write held the database at that moment, the pin waited inside SQLite, and
+  that wait stops the whole panel: the console, every page, and the other write too, which then
+  could not finish. After up to 15 seconds the pin failed and the connection was refused anyway.
+  Measured with a 3-second wait: a write that would have finished half a second later still froze
+  the panel for all 3 seconds. The pin no longer waits for the database at all. If another write
+  holds it at that moment, the key is not stored and that one connection is refused straight away,
+  as it was at the end of the wait, and the next connection to the host tries again.
 - **On Python 3.13 and later (Ubuntu 26.04), a closed terminal could keep its slot until the panel
   restarted.** If the terminal's output reader was still busy a second after the close, for
   instance still handing output to the browser, the close stopped partway. The session stayed on
@@ -935,6 +959,18 @@ CI-verified commit regardless of this file — this changelog is for humans.
   was also never shown, because finishing redirected to the login page. It is shown now. It says
   where the panel still answers and offers **Restart now**; nothing restarts on its own, since that
   would cut off an operator who is not on the tailnet.
+- **The setup wizard's own steps are on the audit log.** Creating the first superadmin, the bind
+  address and port it saves, a host added at its last step, finishing setup and **Restart now**
+  wrote no row, so the one flow that runs before anyone can sign in left no record of what it did.
+  Each now writes one, by the account signed in to drive the wizard (a superadmin may, once the
+  first one exists), or by "setup wizard" when no one is signed in. **Restart now** writes its row
+  before the restart is scheduled, since the restart can stop the panel before a later write
+  lands, and a restart that could not be scheduled writes a second row saying why. The test that
+  should have caught this matched functions by name, and counted these as audited because other
+  functions with the same names log. It now follows each call to the function it really reaches.
+  The Tailscale Serve the wizard sets up on the way out is audited too, and is stored as set up
+  only when Serve accepted it: its result was ignored, so a Serve that failed left the firewall
+  page treating the tailnet as the way in, and the public web port's rule unprotected.
 - **Tailscale migrate and finalize refuse the panel's own host**, like the other Tailscale actions on
   the Hosts page. They rewrite a remote's record and firewall; migrate also deletes its public
   22/tcp rule.
@@ -981,8 +1017,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   stored with a zone before the whitelist refused them still exempts its address from the
   auto-block and the ban gate, as it did before (fail2ban's `ignoreip` leaves it out, as it always
   has); remove it and add the address without the `%zone` to have fail2ban skip it too. Audit IPs
-  that an older version stored with a zone lose it as they age: each is reduced to its `/64`,
-  including the rows that version had already reduced with the zone's text kept.
+  that an older version stored with a zone lose it at the first start after the update, whatever
+  their age and whether or not IP ageing is on: an address keeps the address alone, a row that
+  version had already reduced keeps its `/64` without the zone's text, and one that is no address
+  at all is blanked.
 - **A `"*"` in `socketio_cors_origins` is ignored.** It let a page on another port of the panel's
   address, or on a sibling tailnet node — both same-site, so the session cookie is sent — open the
   console and the terminal as whoever visited it. If you had set it, set `site_domain` or list the
@@ -1025,6 +1063,18 @@ CI-verified commit regardless of this file — this changelog is for humans.
   now claims the invite only if it is unexpired, and re-reads the minter after the claim, while it
   holds the database's write lock, before creating the account. The password is hashed before
   that lock is taken, so other writers wait less.
+- **A signed-in request is authorized once its body has arrived, not before.** Every check that a
+  token, an account or a permission is still good ran before the request's body was read, and the
+  body is read only when the route first asks for it. So a client could send the headers, hold the
+  body back while its API token was revoked, its account deactivated or its permission removed, and
+  the action still ran once the body arrived. That was open for every API call made with an
+  `Authorization: Bearer` token and for every in-page request with a JSON body from a signed-in
+  browser: the CSRF check, which reads a form's body early, skips the first and does not read the
+  second's JSON. (A browser's form posts were already safe: that check reads them first.) The panel
+  now reads the whole body of a signed-in request before any check, then looks up who is asking
+  again, so the checks see the token, the account and its permissions as they are when the body
+  lands. An upload still streams to a temporary file rather than into memory, and a request that is
+  not signed in is still refused without its body being read.
 - **A delegated log viewer sees the rows about their own servers and hosts, chosen by id, not by
   name.** `/logs` matched a row to a viewer's servers and hosts by the row's target name, and
   names are not unique. The same game installed on two hosts gets the same name by default, so a
@@ -1077,6 +1127,16 @@ CI-verified commit regardless of this file — this changelog is for humans.
     "Open all ports" no longer says a port is open when a DENY for TCP or UDP still blocks it. It
     adds an allow only for the protocol no rule covers yet, and names the rule it left each
     protocol to (for example `27015/tcp DENY`).
+  - Uninstall also names a rule with no name on it that is still on the server's own ports. The
+    rate limit from the Firewall page is one: `ufw limit` writes no comment, so the limit on a game
+    port carries no server's name. It was neither removed nor mentioned, so the port stayed open,
+    rate limited, after an uninstall that reported a clean result. The rule is still left in place,
+    but the message now names it (for example `Left in place on its port: 27015/tcp LIMIT`) and the
+    result is a warning. A port another server on the host still uses is left out. The server's
+    ports include every port its own rules were on, so a Query port outside the game's usual range
+    (Rust's 28017) is covered, and a rule on one interface or to one address is named too. The
+    message says only the port and what the rule does, not the address or interface it names:
+    whoever may uninstall the server is not always someone who may read the host's firewall.
 - **Root `apt` installs only the packages LinuxGSM lists for the game.** A game's install step
   passed whatever package names LinuxGSM's output reported missing to a root `apt-get install`.
   A name is now kept only when LinuxGSM's dependency list for that game and distro names it, the
@@ -1102,6 +1162,26 @@ CI-verified commit regardless of this file — this changelog is for humans.
   created. A host bootstrap whose id was taken mid-run no longer writes onto the host that took it.
   If the taking host's first SSH contact is stalled, the stale worker no longer pins its own key
   onto it or aims its remaining root steps there.
+- **A deleted host, game server, user or group's id is no longer given to the next one, and work
+  still running for a deleted row no longer lands on the row that took its id.** The hosts, game
+  servers, users, groups, custom commands, tags, global bans, invites and login sessions tables now
+  use SQLite's AUTOINCREMENT, so a new row never gets an id a deleted one had. A Global Bans page
+  left open while its newest ban was removed and another added no longer removes the new ban, and
+  lifts it on every server, when Remove is pressed. An existing install's tables are rebuilt once,
+  at the first start after this update, with every row and id kept. A table that cannot be copied
+  without losing something is left as it was and logged, and the next start tries again. The next id
+  also starts above any id something still points at, such as an audit row or a tag left behind by a
+  deleted server. Work that holds a row through a long step also checks it is still the same row
+  before writing or acting, for any table not rebuilt yet. An install whose host was deleted mid-run
+  now stops at its next step instead of running it on the host that took the id, and no longer marks
+  that host's new server failed. Starts, stops and restarts, an update's mods restart, bulk actions,
+  the command list cache, a cross-server ban, a GMod content job, and the on-demand, full, scheduled
+  and queued backups no longer write their result to, audit it under, or act on the server that took
+  the id. The monitor, the player count poll, the metric history, the dashboard's status poll and
+  the daily OS-update check no longer apply what they found for a deleted row to its successor, and
+  an open terminal on a deleted host is closed rather than kept by the host that took its id. The
+  hourly auto-block no longer adds or removes firewall rules on a host that took the id of a deleted
+  host that had it on.
 - **Unbounded reads and rows are capped.**
   - The fail2ban log read stops at 8 MB, and a tally cut short is shown as unread rather than as
     a smaller count.

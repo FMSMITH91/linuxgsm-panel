@@ -100,8 +100,8 @@ from flask_login import (current_user)
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException
 
-from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, client_ip,
-    configure_proxy_trust, get_user_permissions, init_auth, log_action,
+from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, authorize_after_body,
+    client_ip, configure_proxy_trust, get_user_permissions, init_auth, log_action,
     strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
@@ -132,7 +132,8 @@ from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SE
 from panel.core.panel_state import (_expected_offline, _install_jobs, _install_lock,
     _last_sample_prune, _monitor_state, _os_update_seen, _player_counts)
 from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupState, User, db,
-    init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample)
+    init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, RowReplaced, claim_row,
+    row_birth, still_held)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, list_game_backups, game_engine as
     sm_game_engine, set_game_priority_bulk, lgsm_get_values, remote_set_fail2ban_ignoreip,
@@ -557,7 +558,9 @@ def _metrics_history_watch(app):
 def _still_in_db(row):
     """Re-read `row` from the database. False when it has been deleted since it was loaded (by
     another session: a request deleting a host commits on its own), or cannot be read at all.
-    Refreshing also drops any relationship loaded earlier, so `gs.remote` is read afresh too."""
+    Refreshing also drops any relationship loaded earlier, so `gs.remote` is read afresh too.
+    False as well once another row has taken its id: the refresh raises models.RowReplaced
+    rather than turning `row` into that row."""
     try:
         db.session.refresh(row)
         return True
@@ -819,16 +822,42 @@ def _fan_out_global_ban(app, steamid, unban=False):
     done, offline, failed = [], [], []
     with app.app_context():
         for gs in _valve_game_servers():
+            target = _valve_ban_target(gs)
+            if target is None:
+                continue
+            remote, name, lgsm = target
             try:
-                ensure_persistent_bans(gs.remote, gs.short_name, gs.lgsm_name)
-                ok, why = console_steamid_ban(gs.remote, gs.short_name, gs.lgsm_name, steamid,
-                                              unban=unban)
-                (done if ok else (offline if why == "offline" else failed)).append(gs.short_name)
+                ensure_persistent_bans(remote, name, lgsm)
+                ok, why = console_steamid_ban(remote, name, lgsm, steamid, unban=unban)
+                (done if ok else (offline if why == "offline" else failed)).append(name)
+            except RowReplaced:
+                _log.debug("global-ban fan-out: %s was deleted during the pass", name)
             except Exception:
-                failed.append(getattr(gs, "short_name", "?"))
-                _log.debug("global-ban fan-out failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+                failed.append(name)
+                _log.debug("global-ban fan-out failed for %s", name, exc_info=True)
         _log_ban_fanout("global_ban_apply" if not unban else "global_ban_lift",
                         steamid, done, offline, failed)
+
+
+def _valve_ban_target(gs):
+    """(remote, short_name, lgsm_name) of a server a ban pass loaded; None once it is not that row.
+
+    A pass takes seconds per server, and the first SSH contact with a host commits the pass's own
+    session (the host-key pin, ssh_manager._core._persist_host_key), which expires every server
+    the pass loaded. A later server deleted after that, its id taken, then reloaded from the other
+    row and raised models.RowReplaced — out of the `except` too, whose getattr(gs, "short_name",
+    "?") read the row again — so the pass stopped there: every server after it missed the ban, and
+    no outcome row was written. So a server no longer held is skipped, and its names are read once,
+    here, for the calls, the tally and the log.
+    """
+    try:
+        # Inside the try as well: still_held reloads the row once it has checked the id, and the
+        # id can be taken between the two.
+        if not still_held(gs):
+            return None
+        return gs.remote, gs.short_name, gs.lgsm_name
+    except RowReplaced:
+        return None
 
 
 def _log_ban_fanout(action, steamid, done, offline, failed):
@@ -854,23 +883,33 @@ def _sync_global_bans(app):
     can appear."""
     with app.app_context():
         bans = [b.steamid for b in GlobalBan.query.all()]
-        done, offline, failed = [], [], []
+        tally = ([], [], [])     # done, offline, failed
         for gs in _valve_game_servers():
-            try:
-                ensure_persistent_bans(gs.remote, gs.short_name, gs.lgsm_name)
-            except Exception:
-                _log.debug("persistent-ban setup failed for %s", getattr(gs, "short_name", "?"),
-                           exc_info=True)
-            for sid in bans:
-                try:
-                    ok, why = console_steamid_ban(gs.remote, gs.short_name, gs.lgsm_name, sid)
-                    (done if ok else (offline if why == "offline" else failed)).append(
-                        "%s/%s" % (gs.short_name, sid))
-                except Exception:
-                    failed.append("%s/%s" % (getattr(gs, "short_name", "?"), sid))
-                    _log.debug("global-ban sync failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+            target = _valve_ban_target(gs)     # see there: a server deleted during the pass
+            if target is not None:
+                _sync_bans_onto(target, bans, tally)
         if bans:
-            _log_ban_fanout("global_ban_sync", "%d ban(s)" % len(bans), done, offline, failed)
+            _log_ban_fanout("global_ban_sync", "%d ban(s)" % len(bans), *tally)
+
+
+def _sync_bans_onto(target, bans, tally):
+    """_sync_global_bans for one server: every SteamID in `bans`, each outcome into `tally`."""
+    remote, name, lgsm = target
+    done, offline, failed = tally
+    try:
+        ensure_persistent_bans(remote, name, lgsm)
+    except Exception:
+        _log.debug("persistent-ban setup failed for %s", name, exc_info=True)
+    for sid in bans:
+        try:
+            ok, why = console_steamid_ban(remote, name, lgsm, sid)
+            (done if ok else (offline if why == "offline" else failed)).append("%s/%s" % (name, sid))
+        except RowReplaced:
+            _log.debug("global-ban sync: %s was deleted during the pass", name)
+            return
+        except Exception:
+            failed.append("%s/%s" % (name, sid))
+            _log.debug("global-ban sync failed for %s", name, exc_info=True)
 
 
 def _local_remote_id():
@@ -900,17 +939,45 @@ def _autoblock_watch(app):
         if not host_ids:
             continue
         with app.test_request_context():
-            for rid in host_ids:
-                try:
-                    remote = RemoteServer.query.get(rid)
-                    if remote:
-                        a, r = _autoblock_reconcile(remote)
-                        if a or r:
-                            log_action(None, "autoblock_reconcile", target=remote.name,
-                                       detail="+%d blocked, -%d released" % (a, r), actor="system",
-                                       remote=remote)
-                except Exception:
-                    _log.debug("autoblock tick failed for remote %s", rid, exc_info=True)
+            for rid, born in _autoblock_births(host_ids).items():
+                _autoblock_tick_host(rid, born)
+
+
+def _autoblock_births(host_ids):
+    """{id: row_birth} of the opted-in hosts that exist, as the tick finds them; {} when unreadable.
+
+    Read once, at the top of the tick: the identity each host is reconciled under (see
+    _autoblock_tick_host). A failed read skips this tick rather than ending the thread.
+    """
+    try:
+        return {r.id: row_birth(r) for r in
+                RemoteServer.query.filter(RemoteServer.id.in_(list(host_ids))).all()}
+    except Exception:
+        db.session.rollback()
+        _log.debug("autoblock tick: the opted-in hosts could not be read", exc_info=True)
+        return {}
+
+
+def _autoblock_tick_host(rid, born):
+    """One host's hourly reconcile, when `rid` still names the host that was opted in.
+
+    `rid` is from the tick's snapshot of autoblock_hosts, and every host before it costs tens of
+    seconds of SSH. A host deleted in that time has its id dropped from the list
+    (remotes._forget_deleted_remote_config) but not from the snapshot, and the next host added
+    takes the id: loaded by id alone, it had `ufw deny` rules added and released on a machine whose
+    operator never turned auto-block on. `born` (models.row_birth, from the snapshot) is the host
+    that was opted in, so this does not depend on that best-effort config write having landed.
+    """
+    try:
+        remote = claim_row(RemoteServer, rid, born)
+        if remote is None:
+            return
+        a, r = _autoblock_reconcile(remote)
+        if a or r:
+            log_action(None, "autoblock_reconcile", target=remote.name,
+                       detail="+%d blocked, -%d released" % (a, r), actor="system", remote=remote)
+    except Exception:
+        _log.debug("autoblock tick failed for remote %s", rid, exc_info=True)
 
 
 def _prune_jobs(registry, lock, max_age=7200):
@@ -1336,6 +1403,14 @@ def create_app():
                 and not any(request.cookies.get(_c) for _c in _auth_cookies)):
             return   # genuinely cookie-less API-token request: CSRF cannot apply
         csrf.protect()   # session/cookie request: full CSRF enforcement (no-op on safe methods)
+
+    # A signed-in request's body is read HERE, before any check authorizes it, and who is asking is
+    # then loaded again — so a token revoked, an account deactivated or a permission removed while a
+    # client held its body back is what the checks ahead see (auth.authorize_after_body). After the
+    # CSRF hook, so a JSON or text post that hook refuses costs no read (csrf.protect() parses a
+    # FORM body itself, to find its token, so a refused form post is read either way); before the
+    # password gate below, which is itself one of those checks.
+    app.before_request(authorize_after_body)
 
     # ── An unhandled exception on a JSON endpoint must answer JSON ───────────────────────────
     # There was no errorhandler anywhere in this project, so an exception in a route came back as
@@ -2614,6 +2689,42 @@ def register_routes(app):
     # the row stayed "failed", and the server the operator had just repaired remained unusable.
     # A row that is genuinely dead costs one `details` per 10 minutes, against an empty
     # serverfiles, which is the cheap case.
+    def _reconcile_stranded_install(gs):
+        """One row from the reconcile ticker's query: settle it against the host, if it can tell."""
+        with _install_lock:
+            live = (gs.id in _install_jobs
+                    and _install_jobs[gs.id].get("status") == "running")
+        if live:
+            return   # a genuinely in-progress install — leave it alone
+        try:
+            verdict = _looks_installed(app, gs.remote, gs.short_name, gs.lgsm_name)
+        except Exception:
+            verdict = None
+        # None (host unreachable): leave it; the next tick retries. And a row deleted during the
+        # read, its id taken by another server, is not what the host was asked about.
+        if verdict is None or not still_held(gs):
+            return
+        if verdict is True:
+            gs.installed = True
+            gs.status = "offline"   # live metrics flip it to online if running
+            db.session.commit()
+            _notify_servers_changed(app)
+            app.logger.info("reconciled stranded install '%s' -> installed", gs.short_name)
+        elif verdict is False:
+            # Only when something ACTUALLY changed. "failed" is itself in the query's filter set
+            # (deliberately — see above), so unlike the True branch this row comes back every
+            # tick, and writing the two values it already holds re-fired a `servers_changed`
+            # broadcast to every open dashboard — each one then re-requesting /api/servers and
+            # restarting its install-progress poller — and logged "reconciled stranded install
+            # 'X' -> failed" 144 times a day about a reconciliation that did not happen.
+            # _sync_toggles_from_cron compares before it commits for the same reason.
+            if gs.installed or gs.status != "failed":
+                gs.installed = False
+                gs.status = "failed"
+                db.session.commit()
+                _notify_servers_changed(app)
+                app.logger.info("reconciled stranded install '%s' -> failed", gs.short_name)
+
     def install_reconcile_ticker():
         time.sleep(20)   # let boot settle; the per-server check is an SSH round trip
         while True:
@@ -2621,38 +2732,10 @@ def register_routes(app):
                 with app.app_context():
                     for gs in GameServer.query.filter(
                             GameServer.status.in_(("installing", "configuring", "failed"))).all():
-                        with _install_lock:
-                            live = (gs.id in _install_jobs
-                                    and _install_jobs[gs.id].get("status") == "running")
-                        if live:
-                            continue   # a genuinely in-progress install — leave it alone
-                        try:
-                            verdict = _looks_installed(app, gs.remote, gs.short_name, gs.lgsm_name)
-                        except Exception:
-                            verdict = None
-                        if verdict is True:
-                            gs.installed = True
-                            gs.status = "offline"   # live metrics flip it to online if running
-                            db.session.commit()
-                            _notify_servers_changed(app)
-                            app.logger.info("reconciled stranded install '%s' -> installed", gs.short_name)
-                        elif verdict is False:
-                            # Only when something ACTUALLY changed. "failed" is itself in the
-                            # query's filter set (deliberately — see above), so unlike the True
-                            # branch this row comes back every tick, and writing the two values it
-                            # already holds re-fired a `servers_changed` broadcast to every open
-                            # dashboard — each one then re-requesting /api/servers and restarting
-                            # its install-progress poller — and logged "reconciled stranded install
-                            # 'X' -> failed" 144 times a day about a reconciliation that did not
-                            # happen. _sync_toggles_from_cron compares before it commits for the
-                            # same reason.
-                            if gs.installed or gs.status != "failed":
-                                gs.installed = False
-                                gs.status = "failed"
-                                db.session.commit()
-                                _notify_servers_changed(app)
-                                app.logger.info("reconciled stranded install '%s' -> failed", gs.short_name)
-                        # None (host unreachable): leave it; the next tick retries.
+                        # Each check is an SSH round trip, so a later row can have been deleted
+                        # (and its id taken) since the query: skipped without reading it.
+                        if still_held(gs):
+                            _reconcile_stranded_install(gs)
             except Exception:
                 app.logger.debug("install-reconcile tick failed", exc_info=True)
             time.sleep(600)

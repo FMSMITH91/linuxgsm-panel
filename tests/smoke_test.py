@@ -204,6 +204,151 @@ def cleanup():
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
         except OSError:
             pass
+
+
+# ── audit IPs: an older version's IPv6 zone text goes at startup, whatever the row's age ────────
+# anonymise_audit_ips rewrites a zoned audit IP only once its row is past the retention window, and
+# never with ageing off (audit_ip_retention_days 0), so the text stayed on every younger row. The
+# update path (_run_light_migrations -> _unzone_audit_ips) now rewrites every row holding a '%'.
+# Replayed as the update runs it, with an audit_log index dropped so the index build has to take
+# SQLite's write lock: a rewrite left uncommitted there waits out the 15 s busy timeout, and the
+# upgrade dies at startup on every install that holds such a row. Called from the audit-ip section.
+_AZ_ZONED = {   # stored -> what the startup leaves
+    "fe80::1c2d:3e4f:5a6b:7c8d%eth0": "fe80::1c2d:3e4f:5a6b:7c8d",               # an address
+    "2001:db8::1%x $(id)": "2001:db8::1",                                        # ...free text
+    "2001:db8:77::%x panel login failed from 203.0.113.9/64": "2001:db8:77::/64",  # reduced
+    "%not an address": "",                                                       # no address
+    "203.0.113.9%x": "",                                                         # IPv4: no zones
+}
+# Rows without a '%' are not this cleanup's, however they read: non-canonical and junk included.
+_AZ_CLEAN = ("198.51.100.43", "2001:0DB8::0001", "198.51.100.0/24", "2001:db8:1:2::/64",
+             "not-an-ip", "")
+
+
+def _az_ips():
+    """{id: ip_address} for the whole audit_log as stored (raw SQL, so no identity map is stale)."""
+    from sqlalchemy import text as _t
+    return dict(db.session.execute(_t("SELECT id, ip_address FROM audit_log")).all())
+
+
+def _az_add_young_rows(values):
+    """One audit row a day old per value in `values`; {id: stored ip}."""
+    from datetime import timedelta as _td
+    from panel.core.clock import utcnow as _now
+    from panel.db.models import AuditLog as _AL
+    rows = [_AL(username="zone_young", action="smoke_audit_zone", ip_address=v,
+                timestamp=_now() - _td(days=1)) for v in values]
+    db.session.add_all(rows)
+    db.session.commit()
+    return {r.id: r.ip_address for r in rows}
+
+
+def _az_ts_index():
+    """audit_log's declared timestamp index, and whether the database has it now."""
+    from sqlalchemy import inspect as _insp
+    from panel.db.models import AuditLog as _AL
+    ix = next(i for i in _AL.__table__.indexes if list(i.columns.keys()) == ["timestamp"])
+    return ix, ix.name in {i["name"] for i in _insp(db.engine).get_indexes("audit_log")}
+
+
+def _az_replay_upgrade(drop=True):
+    """The update's migrations, the timestamp index dropped first: (it was gone, error or None)."""
+    from panel.db.models import _run_light_migrations
+    ix = _az_ts_index()[0]
+    if drop:
+        ix.drop(db.engine, checkfirst=True)
+    gone = not _az_ts_index()[1]
+    try:
+        _run_light_migrations()                             # <- the update path
+        return gone, None
+    except Exception as e:   # a locked or failed upgrade is this check's finding, not a crash
+        db.session.rollback()
+        ix.create(db.engine, checkfirst=True)
+        return gone, "%s: %s" % (type(e).__name__, str(e)[:160])
+
+
+def _az_run_cleanup():
+    """Young zoned and clean rows, the upgrade replayed, then a second start: each read, by name."""
+    from panel.db.models import anonymise_audit_ips, _unzone_audit_ips
+    with app.app_context():
+        r = {"added": _az_add_young_rows(list(_AZ_ZONED) + list(_AZ_CLEAN))}
+        r["zoned"] = {i: v for i, v in r["added"].items() if "%" in v}
+        r["before"] = _az_ips()
+        r["aged_off"] = (anonymise_audit_ips(0), _az_ips())
+        r["gone"], r["err"] = _az_replay_upgrade()
+        r["after"], r["has_ix"] = _az_ips(), _az_ts_index()[1]
+        r["err_again"] = _az_replay_upgrade(drop=False)[1]      # a second start
+        r["again"], r["n_again"] = _az_ips(), _unzone_audit_ips()
+    return r
+
+
+def _az_others(ips, zoned):
+    """An {id: ip} read without the zoned fixture rows."""
+    return {i: v for i, v in ips.items() if i not in zoned}
+
+
+def _check_audit_zone_cleanup_on_upgrade():
+    """A young zoned audit IP loses its zone at startup, with ageing off; nothing else changes."""
+    r = _az_run_cleanup()
+    check("audit-ip zone: (premise) with ageing off, the ageing leaves the young zoned rows be",
+          r["aged_off"] == (0, r["before"]) and len(r["zoned"]) == len(_AZ_ZONED), repr(r["zoned"]))
+    check("audit-ip zone: the upgrade runs, its rewrite committed before the index build",
+          r["gone"] and r["err"] is None,
+          r["err"] or "the index was not dropped, so nothing had to be built")
+    check("audit-ip zone: ...and it builds the audit_log index it found missing", r["has_ix"])
+    got = {v: r["after"].get(i) for i, v in r["zoned"].items()}
+    check("audit-ip zone: a YOUNG zoned row loses the zone at startup: an address keeps the "
+          "address, a reduced row its /64, and one that is no address is blanked",
+          got == _AZ_ZONED, repr(got))
+    _check_audit_zone_rest_and_rerun(r)
+
+
+def _check_audit_zone_rest_and_rerun(r):
+    """...every other row is as it was, the clean fixtures included; a second start does nothing."""
+    rest, rest_before = _az_others(r["after"], r["zoned"]), _az_others(r["before"], r["zoned"])
+    clean = _az_others(r["added"], r["zoned"])
+    check("audit-ip zone: ...and every other row is untouched, clean ones in any spelling included",
+          rest == rest_before and {i: rest.get(i) for i in clean} == clean,
+          repr(sorted(set(rest.items()) ^ set(rest_before.items()))))
+    check("audit-ip zone: a second start changes nothing",
+          (r["err_again"], r["n_again"]) == (None, 0) and r["again"] == r["after"],
+          r["err_again"] or "%d rewritten again" % r["n_again"])
+
+
+def _check_audit_zone_failure_is_logged():
+    """A rewrite that fails is rolled back and logged, the startup goes on, the next one cleans."""
+    import logging as _logging
+    from panel.db import models as _m
+    seen = []
+    handler = _logging.Handler()
+    handler.emit = lambda r: seen.append(r.getMessage())
+    log = _logging.getLogger("panel.models")
+    saved = (_m.unzoned_ip_or_network, log.propagate)
+
+    def _boom(value):
+        raise RuntimeError("stand-in parse failure")
+    with app.app_context():
+        rid = next(iter(_az_add_young_rows(["fe80::99%eth0"])))
+        _m.unzoned_ip_or_network, log.propagate = _boom, False     # quiet: no traceback on stderr
+        log.addHandler(handler)
+        try:
+            _m._run_light_migrations()
+            err = None
+        except Exception as e:   # the finding, not a crash
+            db.session.rollback()
+            err = "%s: %s" % (type(e).__name__, e)
+        finally:
+            _m.unzoned_ip_or_network, log.propagate = saved
+            log.removeHandler(handler)
+        stuck = _az_ips().get(rid)
+        _m._run_light_migrations()
+        fixed = _az_ips().get(rid)
+    check("audit-ip zone: a rewrite that fails does not stop the startup, is undone, and says so",
+          err is None and stuck == "fe80::99%eth0" and any("zone text" in s for s in seen),
+          repr((err, stuck, seen)))
+    check("audit-ip zone: ...and the next start cleans that row", fixed == "fe80::99", repr(fixed))
+
+
 try:
     # ── Fixtures: a superadmin, one remote host, one game server on it ──
     with app.app_context():
@@ -953,6 +1098,126 @@ try:
                 if _left: db.session.delete(_left); db.session.commit()
     finally:
         _sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user = _uf_saved
+
+    # ── uninstall names a rule with no name on it that is still on the server's own ports ─────
+    # The Firewall page's rate limit writes an UNTAGGED `N/tcp LIMIT` (ufw-limit-port takes no
+    # comment) and moves the server's other protocol onto a tagged `N/udp` allow. Uninstall took
+    # the udp allow and answered a clean "uninstalled": the port stayed open, rate limited, and
+    # nobody was told. The host below prints `ufw status numbered` as ufw 0.36.2 did on the test
+    # VPS (each public rule twice, its (v6) twin in a second block, one numbering); the route, both
+    # cleanups and the status parser are real.
+    class _Ufw36Table:
+        HDR = ("Status: active\n\n     To                         Action      From\n"
+               "     --                         ------      ----\n")
+
+        def __init__(self, *rules):
+            self.v4 = [list(r) for r in rules]
+            self.v6 = [list(r) for r in rules]
+
+        def rows(self):
+            return (["%-26s %-11s %-26s%s" % (t, a + " IN", "Anywhere", " # " + c if c else "")
+                     for t, a, c in self.v4]
+                    + ["%-26s %-11s %-26s%s" % (t + " (v6)", a + " IN", "Anywhere (v6)",
+                                                " # " + c if c else "") for t, a, c in self.v6])
+
+        def priv(self, server, verb, args=(), *a, **k):
+            if verb == "ufw-status":
+                return (self.HDR + "".join("[%2d] %s\n" % (i, r)
+                                           for i, r in enumerate(self.rows(), 1)), "", 0)
+            if verb == "ufw-delete-num":
+                n = int(args[0])
+                fam, i = (self.v4, n - 1) if n <= len(self.v4) else (self.v6, n - 1 - len(self.v4))
+                del fam[i]
+                return ("Rule deleted", "", 0)
+            return ("", "", 0)
+
+        def left(self):
+            return [tuple(r) for r in self.v4 + self.v6]
+
+    _ul_saved = (_sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user)
+    try:
+        _sm_core.run_command = lambda *a, **k: ("", "", 0)
+        _sm_core.run_as_game_user = lambda *a, **k: ("", "", 0)
+        _UL_BASE = (("28960", "ALLOW", "codserver"), ("27015", "ALLOW", "gmodserver"),
+                    ("22/tcp", "ALLOW", "SSH panel"))
+        # (name, game, port, a sibling (name, game, port) or None, rules, the sentence expected
+        # in the answer or None for a clean uninstall, text that must NOT be in the answer)
+        for _ul_name, _ul_game, _ul_port, _ul_sib, _ul_rules, _ul_named, _ul_not in (
+                # What remote_ufw_limit_port leaves on the server's tagged bare allow, and another
+                # port's untagged limit. The legacy sweep runs (no one else holds 27060).
+                ("fwlimit", "gmod", 27060, None,
+                 (("27060/tcp", "LIMIT", ""), ("27060/udp", "ALLOW", "fwlimit"),
+                  ("27062/tcp", "LIMIT", "")),
+                 "Left in place on its port: 27060/tcp LIMIT.", "27062"),
+                # ...and on a legacy UNTAGGED bare allow: its udp half is the sweep's to take, so
+                # it goes and is not named; only the LIMIT is.
+                ("fwlegacy", "gmod", 27074, None,
+                 (("27074/tcp", "LIMIT", ""), ("27074/udp", "ALLOW", "")),
+                 "Left in place on its port: 27074/tcp LIMIT.", "27074/udp"),
+                ("fwclean", "gmod", 27064, None,
+                 (("27064", "ALLOW", "fwclean"), ("27066/tcp", "LIMIT", "")), None, "27066"),
+                # 27068 is still in fwsib's block: a limit there is fwsib's concern, not left.
+                ("fwshared", "gmod", 27068, ("fwsib", "rust", 27067),
+                 (("27068", "ALLOW", "fwshared"), ("27068/tcp", "LIMIT", "")), None, "27068"),
+                # No legacy sweep (fwsib2 holds 27070), so the name cleanup names the block's
+                # other port, and not the one fwsib2 still holds.
+                ("fwq", "rust", 27070, ("fwsib2", "gmod", 27070),
+                 (("27070", "ALLOW", "fwq"), ("27071", "ALLOW", "fwq"), ("27070/tcp", "LIMIT", ""),
+                  ("27071/tcp", "LIMIT", "")),
+                 "Left in place on its port: 27071/tcp LIMIT.", "27070/tcp"),
+                # A port its own tagged allow was on is its own too, outside the game's span: the
+                # install tags LinuxGSM's Query port, and Rust's (28017) is beyond the 2-port span.
+                # The legacy sweep names what is left, so the name cleanup hands the port on.
+                ("fwrq", "rust", 27080, None,
+                 (("27080", "ALLOW", "fwrq"), ("27082/udp", "ALLOW", "fwrq"),
+                  ("27082/tcp", "LIMIT", ""), ("27084/tcp", "LIMIT", "")),
+                 "Left in place on its ports: 27082/tcp LIMIT.", "27084"),
+                # ...but not one another server holds: the allocator reserves only the span, so the
+                # next Rust server can be given the first one's tagged Query port as its game port.
+                ("fwrh", "rust", 27086, ("fwsib3", "rust", 27088),
+                 (("27086", "ALLOW", "fwrh"), ("27088/udp", "ALLOW", "fwrh"),
+                  ("27088/tcp", "LIMIT", "")), None, "27088"),
+                # The same with no sweep (fwsib4 holds 27092): the name cleanup names it, less what
+                # fwsib4 holds.
+                ("fwrn", "rust", 27092, ("fwsib4", "gmod", 27092),
+                 (("27092", "ALLOW", "fwrn"), ("27094/udp", "ALLOW", "fwrn"),
+                  ("27094/tcp", "LIMIT", ""), ("27092/tcp", "LIMIT", "")),
+                 "Left in place on its ports: 27094/tcp LIMIT.", "27092/tcp")):
+            _ul = _Ufw36Table(*(_UL_BASE + _ul_rules))
+            _sm_core.run_privileged = _ul.priv
+            with app.app_context():
+                _rm = RemoteServer.query.first()
+                _tmp = _UGS(remote_id=_rm.id, name=_ul_name, short_name=_ul_name,
+                            game_type=_ul_game, port=_ul_port, installed=True, status="offline")
+                _sib = (_UGS(remote_id=_rm.id, name=_ul_sib[0], short_name=_ul_sib[0],
+                             game_type=_ul_sib[1], port=_ul_sib[2], installed=True,
+                             status="offline") if _ul_sib else None)
+                db.session.add_all([_tmp] + ([_sib] if _sib else [])); db.session.commit()
+                _tid, _sid = _tmp.id, (_sib.id if _sib else None)
+            _uj = c.post("/servers/%d/delete" % _tid, json={},
+                         headers={"X-Requested-With": "XMLHttpRequest"}).get_json() or {}
+            _um = _uj.get("message", "")
+            if _ul_named:
+                check("uninstall %s: an untagged rule left on its own port is named in the answer, "
+                      "and the answer warns" % _ul_name,
+                      _uj.get("success") is True and _um.count(_ul_named) == 1
+                      and _uj.get("warn") is True, repr(_uj))
+            else:
+                check("uninstall %s: a clean uninstall still does not warn" % _ul_name,
+                      _uj.get("success") is True and _uj.get("warn") is False
+                      and "Left in place" not in _um, repr(_uj))
+            check("uninstall %s: ...a rule on another port, or on one another server still "
+                  "holds, is not named" % _ul_name,
+                  _ul_not not in _um, repr(_um))
+            check("uninstall %s: ...every LIMIT stays — named, never deleted" % _ul_name,
+                  all(r in _ul.left() for r in _ul_rules if r[1] == "LIMIT")
+                  and not any(r[2] == _ul_name for r in _ul.left()), repr(_ul.left()))
+            with app.app_context():
+                for _x in (_tid, _sid):
+                    _left = _UGS.query.get(_x) if _x else None
+                    if _left: db.session.delete(_left); db.session.commit()
+    finally:
+        _sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user = _ul_saved
 
     # ── a queued "stop/restart when empty" must not be thrown away ────────────────────────────
     # The deferred sweep asks get_server_status and treats "offline" as "already stopped, nothing
@@ -5051,6 +5316,8 @@ try:
                   "fe80::1c2d:3e4f:5a6b:7c8d%eth0": "fe80::/64", "%not an address/64": ""},
               repr(_zn_got))
         check("audit-ip: ...and a second run rewrites none of them again", _anon(90) == 0)
+        _check_audit_zone_cleanup_on_upgrade()
+        _check_audit_zone_failure_is_logged()
 
     # ── one server table: /servers/manage folded into the dashboard ──────────────────────────
     # The two pages showed seven of the same eight columns and shared no code at all — doAction vs

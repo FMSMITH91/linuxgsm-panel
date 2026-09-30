@@ -799,6 +799,70 @@ def _left_on_purpose(status, comment, removable, protected):
             + _naming("Left in place on SSH's or the panel's own port", on_host))
 
 
+def _rule_port_words(g):
+    """Rule group `g`'s port column split in words: a destination address, when ufw prints one, then
+    the port (`203.0.113.10 27015/tcp`). [] for a rule with no port column."""
+    return str(g.get("port_label") or g.get("port_num") or "").split()
+
+
+def _rule_names_port_in(g, ports):
+    """Does inbound rule group `g` name one of `ports`?
+
+    Alone, in a range or in a list; for either protocol, from any source, on any interface, and to
+    any address — ufw prints a destination before the port, `203.0.113.10 27015/tcp`, which the
+    port pattern (anchored at the start) never matched, so such a rule was never named."""
+    if g.get("direction", "IN") != "IN":
+        return False
+    words = str(g.get("port_num", "")).split()
+    for item in (words[-1] if words else "").split(","):
+        m = _UFW_PORT_ITEM_RE.match(item)
+        if m and any(int(m.group(1)) <= p <= int(m.group(2) or m.group(1)) for p in ports):
+            return True
+    return False
+
+
+def _unnamed_rule_label(g):
+    """A rule with no name on it, as an uninstall's answer names it: its port and what it does.
+
+    Not the address it admits from, nor its interface or destination — said only as "from some
+    addresses", "on one interface", "to one address". That answer goes to whoever may uninstall the
+    server (Uninstall servers plus that server), while reading the host's rules takes Manage
+    Remotes (the Firewall page): an operator's allow from a home address is not theirs to read."""
+    words = _rule_port_words(g) or ["?"]
+    parts = [words[-1]]
+    if g.get("action", "ALLOW") != "ALLOW":
+        parts.append(g["action"])
+    if g.get("iface"):
+        parts.append("on one interface")
+    elif g.get("scope", "Any address") != "Any address":
+        parts.append("from some addresses")
+    if len(words) > 1:
+        parts.append("to one address")
+    return " ".join(parts)
+
+
+def _left_on_own_ports(status, ports, protected, taken):
+    """Sentences naming each rule with no comment left on `ports` that `taken` did not mean to take.
+
+    [] when there is none, or no ports were given. `ports` are the uninstalled server's own block,
+    less any port another server still holds; SSH's and the panel's (`protected`) are never its
+    own. A rule nobody's name is on is not the panel's to delete, but it is still what keeps the
+    port open once the server is gone: the Firewall page's rate limit writes an untagged
+    `27015/tcp LIMIT` (`ufw limit` sends no comment, and replaces the server's tagged allow with
+    it), and the cleanup neither took nor named it, so the port stayed open under a clean
+    "uninstalled". A rule carrying a name has an owner who still needs it; one carrying this
+    server's name is named by the cleanup already. Each is named by _unnamed_rule_label, once."""
+    ports = set(ports) - set(protected)
+    if not ports:
+        return []
+    stray = [g for g in status.get("groups", [])
+             if not g.get("comment") and not taken(g) and _rule_names_port_in(g, ports)]
+    labels = list(dict.fromkeys(map(_unnamed_rule_label, stray)))
+    if not labels:
+        return []
+    return ["Left in place on its port%s: %s." % ("s" if len(ports) > 1 else "", ", ".join(labels))]
+
+
 def _port_of(g):
     """The one port a _is_panel_allow group is on, as an int."""
     return int(str(g["port_num"]).strip())
@@ -814,7 +878,7 @@ def _with_notes(message, notes):
     return message + ("." + "".join(" " + n for n in notes) if notes else "")
 
 
-def remote_ufw_close_by_name(server, name):
+def remote_ufw_close_by_name(server, name, ports=None, held=(), tagged=None):
     """Delete the ALLOW rules tagged with a game server's name (its comment). Used on uninstall so
     multi-port games are fully cleaned up. -> (rules removed, message, what is left).
 
@@ -833,18 +897,35 @@ def remote_ufw_close_by_name(server, name):
     tagged with a server — guarded only by the last-way-in check.
 
     The third value names, as sentences, every rule carrying the name that is still there — ones
-    that would not go, and ones left on purpose — or that the firewall could not be read. Empty
-    means the server's rules are gone; the message says the same things."""
+    that would not go, and ones left on purpose — or that the firewall could not be read. With
+    `ports` (the server's own block), it also names every rule with no comment still on one of them
+    (_left_on_own_ports), from the same last read — and on every port a public allow carrying the
+    name was on, which is the server's too: the install tags the ports LinuxGSM reports, and a
+    Query port can sit outside the game's span (Rust's 28017, beyond 28015-28016). Less `held`,
+    the ports another server on the host holds, whose rules are that server's. `ports` None (the
+    default) names none of that; any other value turns it on, an empty block included, so a caller
+    whose later step names what is left passes None. Empty means the server's rules are gone; the
+    message says the same things.
+
+    `tagged`, a set when given, receives the ports those tagged allows were on, as this read them,
+    for a later step that names what is left instead (the uninstall's legacy sweep)."""
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "")[:60]
     if not comment:
         return 0, "no name", []
     protected = protected_host_ports(server)
+    seen = set() if tagged is None else tagged
 
     def removable(g):
-        return g.get("comment") == comment and _is_panel_allow(g) and _port_of(g) not in protected
+        if g.get("comment") != comment or not _is_panel_allow(g):
+            return False
+        seen.add(_port_of(g))
+        return _port_of(g) not in protected
 
     deleted, status = _delete_picked_rules(server, removable, 256)
-    left = _still_there(status, removable) + _left_on_purpose(status, comment, removable, protected)
+    own = () if ports is None else (set(ports) | seen) - set(held)
+    left = (_still_there(status, removable)
+            + _left_on_purpose(status, comment, removable, protected)
+            + _left_on_own_ports(status, own, protected, removable))
     return deleted, _with_notes(f"{deleted} rule(s) removed for {comment}", left), left
 
 
@@ -902,7 +983,7 @@ def _is_game_rule_for(g, port, comment, legacy):
                  or (legacy and not g.get("comment"))))
 
 
-def remote_ufw_close_game_port(server, port, name="", legacy=False):
+def remote_ufw_close_game_port(server, port, name="", legacy=False, ports=()):
     """Remove THIS server's rules on `port`. -> (rules removed, message, what is left).
 
     Which rules are this server's: an inbound public ALLOW on exactly `port` (bare, /tcp or /udp)
@@ -932,22 +1013,24 @@ def remote_ufw_close_game_port(server, port, name="", legacy=False):
     A delete refused because the rule MOVED (an insert between the read and the delete) is read
     again and retried; it used to be given up at once, leaving the rule open with nothing said.
     The third value names, as sentences, a rule of this server's that is still there after its
-    tries, or that the firewall could not be read; empty means none is left."""
+    tries, or that the firewall could not be read; empty means none is left. With `ports` (the
+    server's own block, when this is an uninstall's last step), it also names every rule with no
+    comment still on one of them that this did not mean to take (_left_on_own_ports)."""
     try:
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
         return 0, "Invalid port", []
     comment = _game_rule_comment(name, "")
-    if legacy and port in protected_host_ports(server):
-        legacy = False
-    if not comment and not legacy:
+    protected = protected_host_ports(server) if legacy or ports else set()
+    legacy = legacy and port not in protected
+    if not comment and not legacy and not ports:
         return 0, f"Port {port}: no rule here is known to be this server's", []
 
     def mine(g):
         return _is_game_rule_for(g, port, comment, legacy)
 
     deleted, status = _delete_picked_rules(server, mine, 64)
-    left = _still_there(status, mine)
+    left = _still_there(status, mine) + _left_on_own_ports(status, ports, protected, mine)
     return deleted, _with_notes(f"Port {port}: {deleted} rule(s) removed", left), left
 
 
@@ -2485,18 +2568,13 @@ def remote_fail2ban_attempt_counts(server, days=7):
     from panel.ops import system_ops as _so
     out, _, rc = _core.run_privileged(server, "f2b-log-lines", [_so._f2b_cutoff(days)], timeout=25,
                                       merge_stderr=False)
-    if rc != 0:
-        _core._log.debug("remote attempt counts: the fail2ban log read failed (rc=%s)", rc)
-        return None
-    # An answer AT the transport's output ceiling is a cut answer, and the transports keep the
-    # FIRST bytes — the oldest days. A partial tally undercounts the recent offenders, and the
-    # auto-block reconcile RELEASES any block whose IP falls below the threshold, so on a busy host
-    # (7 days of fail2ban log over 8 MB) a cut read unblocked the attackers it was built to hold.
-    # Tailscale and local hosts only acquired that ceiling with the memory-exhaustion fix; paramiko
-    # always had it. Unread, not partial: the reconcile leaves everything as it is on None.
-    if len((out or "").encode("utf-8", "replace")) >= _core._MAX_OUTPUT_BYTES - 65536:
-        _core._log.warning("remote attempt counts: the fail2ban log filled the transport's read "
-                           "limit; treated as unread so no block is released on a partial tally")
+    # A cut read keeps the FIRST bytes — the oldest days — so its tally undercounts the recent
+    # offenders, and the auto-block reconcile RELEASES any block whose IP falls below the threshold:
+    # on a busy host a cut read unblocked the attackers it was built to hold. Unread, not partial.
+    # Decided from the rc, as on the panel host: the remote form stops at the helper's own ceiling
+    # and exits 3 (privileged._f2b_log_lines_remote). It was the answer's length — anything within
+    # 64 KB of the transport's cap — which also threw away a complete log just under it.
+    if _so._f2b_unread(rc, "remote attempt counts"):
         return None
     return _so._tally_f2b_events(out)[0]
 
@@ -2521,10 +2599,10 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
     # None, not [], when the read FAILED — see system_ops.fail2ban_top_ips for why the two have to
     # be distinguishable. On a local or Tailscale-SSH host a timeout does not raise: the transport
     # returns ("", "...timed out", -1), so without the rc this looked exactly like "no offenders".
+    # rc 3 is a read cut at the ceiling: unread too, and said so, as fail2ban_top_ips answers it.
     out, _, rc = _core.run_privileged(server, "f2b-log-lines", [cutoff], timeout=25,
                                       merge_stderr=False)
-    if rc != 0:
-        _core._log.debug("remote top-ips: the fail2ban log read failed (rc=%s)", rc)
+    if _so._f2b_unread(rc, "remote top-ips"):
         return None
     out = _so._tally_f2b_lines(out, limit)
     banned = set()

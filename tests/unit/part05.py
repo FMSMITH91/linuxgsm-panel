@@ -1460,18 +1460,16 @@ for _v, _a in (("content-game-present", ["gmodcontent", "cstrike"]),
     check("privileged: %s can actually FAIL (it does not end in a succeeding ||)" % _v,
           "||" not in _sh, _sh)
 
-# f2b-log-lines ends in a grep, and grep exits 1 when it matches NOTHING. Both callers answer None
-# on a non-zero rc ("the log could not be read"), so a quiet, healthy host reported a failed read
-# forever and _autoblock_reconcile — which skips its tick on None — never released that host's
-# expired auto-blocks. `|| [ $? -eq 1 ]` accepts grep's no-match status and only that one.
-_f2b_sh = _priv.remote_command("f2b-log-lines", ["2026-09-02"])
-check("privileged: f2b-log-lines treats 'no matching lines' as success",
-      "[ $? -eq 1 ]" in _f2b_sh, _f2b_sh)
-# ...and prove it by RUNNING the rendered pipeline, rather than trusting the string. Three cases:
-# lines present, no lines (a quiet week), and a genuine grep failure.
+# f2b-log-lines used to end in a grep, and grep exits 1 when it matches NOTHING. Both callers answer
+# None on a non-zero rc ("the log could not be read"), so a quiet, healthy host reported a failed
+# read forever and _autoblock_reconcile — which skips its tick on None — never released that host's
+# expired auto-blocks. It ends in the awk that filters now (and stops at the helper's ceiling — see
+# part16), which exits 0 on no matches and non-zero on a real failure. Proved by RUNNING the
+# rendered pipeline, rather than trusting the string. Three cases: lines present, no lines (a quiet
+# week), and a genuine failure of the last command.
 import shutil as _f2b_shutil                                                       # noqa: E402
 import tempfile as _f2b_tmp                                                        # noqa: E402
-if _f2b_shutil.which("bash") and _f2b_shutil.which("grep") and _f2b_shutil.which("awk"):
+if _f2b_shutil.which("bash") and _f2b_shutil.which("zcat") and _f2b_shutil.which("awk"):
     # Run the SHIPPED rendering, not a copy of it: take the real command and point its log glob
     # at a temp dir. A hand-written copy of the pipeline would keep passing if the rendering
     # regressed, which is the one thing these checks exist to catch.
@@ -1493,17 +1491,19 @@ if _f2b_shutil.which("bash") and _f2b_shutil.which("grep") and _f2b_shutil.which
               _f2b_rc(_busy) == 0, str(_f2b_rc(_busy)))
         check("privileged: f2b pipeline — a QUIET host exits 0 too (it used to exit 1)",
               _f2b_rc(_quiet) == 0, str(_f2b_rc(_quiet)))
-        # ...and the guard must not have been bought by swallowing every status: a grep that
-        # genuinely FAILS (exit >= 2) still has to come back non-zero.
-        _bad_cmd = _priv.remote_command("f2b-log-lines", ["2026-09-01"]).replace(
-            _priv.F2B_LOG_GLOB, _quiet).replace(
-            "grep -E '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+'", "grep -E '['")
-        check("privileged: f2b pipeline — a real grep failure is still non-zero",
-              _sub.run(["bash", "-c", _bad_cmd], stdout=_sub.DEVNULL,
-                       stderr=_sub.DEVNULL).returncode != 0,
-              "an unreadable/failed read must not read as 'no bans'")
+        # ...and the guard must not have been bought by swallowing every status: an awk that
+        # genuinely FAILS (here, a program it cannot parse) still has to come back non-zero.
+        _good_cmd = _priv.remote_command("f2b-log-lines", ["2026-09-01"]).replace(
+            _priv.F2B_LOG_GLOB, _quiet)
+        _bad_cmd = _good_cmd.replace(
+            "/\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+/", "/[/")
+        check("privileged: f2b pipeline — a real failure of the last command is still non-zero",
+              _bad_cmd != _good_cmd
+              and _sub.run(["bash", "-c", _bad_cmd], stdout=_sub.DEVNULL,
+                           stderr=_sub.DEVNULL).returncode != 0,
+              "an unreadable/failed read must not read as 'no bans' (or the break did not land)")
 else:
-    skip("privileged: f2b pipeline exit statuses", "bash/grep/awk not available")
+    skip("privileged: f2b pipeline exit statuses", "bash/zcat/awk not available")
 
 # ── Steam's ten crash-dump slots, and the panel filling them ────────────────────────────────────
 # Steam will only use a crash-dump directory the running user OWNS, and it tries exactly ten names:

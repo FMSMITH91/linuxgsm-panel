@@ -7,7 +7,7 @@ from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
 from panel.core.clock import (utcnow)
 from panel.core.panel_state import (_install_jobs, _install_lock)
-from panel.db.models import (GameServer, HostSample, MetricSample, db)
+from panel.db.models import (GameServer, HostSample, MetricSample, db, rows_still_held)
 from panel.db.prefs import (_apply_user_server_order, _effective_prefs)
 from panel.ops.ssh_manager import (_remote_listening_ports, get_server_status)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
@@ -227,7 +227,7 @@ def _register_server_status(app):
         # It was invisible until the stats endpoint stopped persisting a status it could not read:
         # while that wrote "offline" for every server on a failed sample, the scan above agreed and
         # nothing was ever dirty, so the commit never fired. The perf budget was being met by a bug.
-        _apply_status_flips(flip)
+        _apply_status_flips(flip, servers)
 
         return jsonify(data)
 
@@ -624,9 +624,22 @@ def _server_row(gs, flipped):
     }
 
 
-def _apply_status_flips(flip):
-    """Write the flipped statuses as one UPDATE per status, then commit."""
+def _flips_still_held(flip, servers):
+    """`flip` without the ids whose row is no longer the one in `servers` the scan was for."""
+    flipped = set(flip["online"]) | set(flip["offline"])
+    live = {gs.id for gs in rows_still_held([gs for gs in servers if gs.id in flipped])}
+    return {st: [i for i in ids if i in live] for st, ids in flip.items()}
+
+
+def _apply_status_flips(flip, servers):
+    """Write the flipped statuses as one UPDATE per status, then commit.
+
+    Only onto the rows the scan was for: this is a bulk UPDATE by id, which no ORM check sees, and
+    the scans take seconds — a server deleted meanwhile, its id taken, had its successor's status
+    set from the old server's port. `servers` are the rows the flips were computed from.
+    """
     if flip["online"] or flip["offline"]:
+        flip = _flips_still_held(flip, servers)
         for _st, _ids in flip.items():
             if _ids:
                 # synchronize_session=False: nothing in the session needs reconciling — the

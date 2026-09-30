@@ -472,9 +472,11 @@ _UFW_NUMBERED_RE = re.compile(r"^\s*\[\s*(\d+)\]\s*((?:\S.*)?)$")
 
 def remote_ufw_status(server):
     """Get UFW status and rules from the remote server."""
-    # sudo=None keeps this host's own setting, as it always did — this is the one ufw read that
-    # never forced escalation. `|| echo NOTINSTALLED` is gone with the shell; a missing tool is
-    # rc 127 from both transports, which is what the check below now leads with.
+    # sudo=None keeps a REMOTE's own sudo setting, as it always did — this is the one ufw read that
+    # never forced escalation there. On the panel's own host it always escalates, whatever the row
+    # says: the helper, or the pre-helper sudo form where there is none (see run_privileged).
+    # `|| echo NOTINSTALLED` is gone with the shell; a missing tool is rc 127 from both
+    # transports, which is what the check below now leads with.
     out, err, rc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15, sudo=None)
     # rc 127 ALONE. The substring tests that stood beside it also read `out` — the whole
     # `ufw status numbered` listing, every rule's `# comment` included — and those comments are
