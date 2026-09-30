@@ -490,11 +490,7 @@ def _register_install(app):
         remote = gs.remote
         if remote is None:
             return _form_err("That server's host is gone.", "manage_servers")
-        # The same selection the original install was given, revalidated on the way out so an
-        # edited row cannot widen it — and the same step count derived from it, rather than a
-        # hardcoded 8 that made the retry's progress bar wrong for exactly these servers.
-        _retry_content = ([g for g in (gs.content_games or "").split(",")
-                           if g in GMOD_CONTENT_GAMES] if gs.game_type == "gmod" else [])
+        _retry_content = _ms_retry_content(gs)
         # Queued BEFORE the row says "installing", and refused while an uninstall holds the row:
         # an uninstall checks for a live install once and then spends minutes on SSH, and a retry
         # started in that window installed into the account it was about to delete.
@@ -509,6 +505,17 @@ def _register_install(app):
         log_action(current_user, "retry_install", target=gs.name, server=gs)
         return _form_ok(f"Installing {gs.short_name} again. "
                         f"Progress is shown in the corner while it runs.", "manage_servers")
+
+
+def _ms_retry_content(gs):
+    """The GMod content selection a retry re-runs the install with.
+
+    The same selection the original install was given, revalidated on the way out so an
+    edited row cannot widen it — and the same step count derived from it, rather than a
+    hardcoded 8 that made the retry's progress bar wrong for exactly these servers.
+    """
+    return ([g for g in (gs.content_games or "").split(",")
+             if g in GMOD_CONTENT_GAMES] if gs.game_type == "gmod" else [])
 
 
 def _install_form_refusal(remote, game_type, server_name):
