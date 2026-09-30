@@ -1620,10 +1620,7 @@ eq("ci-gate (by design): ...and a skipped run of a check beside its failing run 
 # Self-heal, backup codes, the game-list lock, key files, db_maintenance's corruption test
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # Driven against temp files of their own; none of it touches part12's app or database.
-import shutil as _sh16h                                                             # noqa: E402
 import sqlite3 as _sq16h                                                            # noqa: E402
-import threading as _th16h                                                          # noqa: E402
-import time as _time16h                                                             # noqa: E402
 
 import db_maintenance as _dbm16h                                                    # noqa: E402
 from panel.core import config as _cfg16h                                            # noqa: E402
@@ -1675,7 +1672,7 @@ _H16_GARBAGE = b"garbage, not sqlite " * 60
 try:
     # ── 1. a LOCKED database is not a corrupt one ──────────────────────────────────────────────
     _h16_live = _h16_db("locked.db", rows=30)
-    _sh16h.copy2(_h16_db("older.db", rows=5), _h16_live + ".backup")   # an OLDER, smaller backup
+    _shutil16.copy2(_h16_db("older.db", rows=5), _h16_live + ".backup")   # an OLDER, smaller backup
     _h16_before = _h16_bytes(_h16_live)
     _h16_holder = _sq16h.connect(_h16_live, isolation_level=None)
     _h16_holder.execute("BEGIN EXCLUSIVE")            # another process mid-write
@@ -1719,7 +1716,7 @@ try:
 
     # ── 3. a genuinely corrupt database: -wal and -shm move WITH it, the backup comes back ─────
     _h16_bad = _h16_db("bad.db", rows=8)
-    _sh16h.copy2(_h16_bad, _h16_bad + ".backup")
+    _shutil16.copy2(_h16_bad, _h16_bad + ".backup")
     _h16_write(_h16_bad, _H16_GARBAGE)
     _h16_write(_h16_bad + "-wal", b"WAL-FRAMES-" * 40)
     _h16_write(_h16_bad + "-shm", b"SHM" * 40)
@@ -1742,7 +1739,7 @@ try:
     _h16_real_replace = os.replace
     for _h16_case, _h16_fail_on in (("the database itself", ""), ("its -wal", "-wal")):
         _h16_p = os.path.join(_H16_DIR, "stuck%d.db" % len(_h16_fail_on))
-        _sh16h.copy2(_h16_db("good%d.db" % len(_h16_fail_on), rows=3), _h16_p + ".backup")
+        _shutil16.copy2(_h16_db("good%d.db" % len(_h16_fail_on), rows=3), _h16_p + ".backup")
         _h16_write(_h16_p, _H16_GARBAGE)
         _h16_write(_h16_p + "-wal", b"uncheckpointed" * 20)
         _h16_snap = (_h16_bytes(_h16_p), _h16_bytes(_h16_p + "-wal"))
@@ -1765,7 +1762,7 @@ try:
 
     # ── 5. the offline CLI never heals ──────────────────────────────────────────────────────────
     _h16_cli = os.path.join(_H16_DIR, "cli.db")
-    _sh16h.copy2(_h16_db("clibk.db", rows=2), _h16_cli + ".backup")
+    _shutil16.copy2(_h16_db("clibk.db", rows=2), _h16_cli + ".backup")
     _h16_write(_h16_cli, _H16_GARBAGE)
     os.environ[_m16h.NO_SELF_HEAL_ENV] = "1"
     try:
@@ -1845,7 +1842,7 @@ _h16_eng = _ce16h("sqlite:///" + os.path.join(_H16_DIR, "codes.db"))
 db.metadata.create_all(_h16_eng)
 _h16_codes = ["aaaaa-bbbbb", "ccccc-ddddd", "eeeee-fffff"]
 with _S16h(_h16_eng) as _s16h:
-    _u16h = User(username="codes16", password_hash="x", display_name="codes16", is_active=True)
+    _u16h = User(username="codes16", password_hash="x", display_name="codes16", is_active=True)  # nosec B106 - a fixture row, never logged in
     _u16h.set_backup_codes(_h16_codes)
     _s16h.add(_u16h)
     _s16h.commit()
@@ -1891,7 +1888,7 @@ finally:
 
 # ── 9. the game list is not read under a lock held across a fetch ─────────────────────────────
 _h16_saved_lg = (_lg16h._load_serverlist, dict(_lg16h._mem))
-_h16_entered, _h16_release = _th16h.Event(), _th16h.Event()
+_h16_entered, _h16_release = _thr16.Event(), _thr16.Event()
 _h16_calls = []
 
 
@@ -1908,16 +1905,16 @@ _h16_res = {}
 try:
     _lg16h._load_serverlist = _h16_slow_load
     _lg16h._mem.clear()
-    _lg16h._mem["serverlist"] = (_time16h.time() - 1, [{"shortname": "stale"}])   # due a re-read
-    _h16_t = _th16h.Thread(target=lambda: _h16_res.setdefault("t", _lg16h.serverlist()))
+    _lg16h._mem["serverlist"] = (_time16.time() - 1, [{"shortname": "stale"}])   # due a re-read
+    _h16_t = _thr16.Thread(target=lambda: _h16_res.setdefault("t", _lg16h.serverlist()))
     _h16_t.start()
     _h16_entered.wait(5)
     _h16_free = _lg16h._lock.acquire(blocking=False)
     if _h16_free:
         _lg16h._lock.release()
-    _h16_t0 = _time16h.monotonic()
+    _h16_t0 = _time16.monotonic()
     _h16_res["meanwhile"] = _lg16h.serverlist()
-    _h16_took = _time16h.monotonic() - _h16_t0
+    _h16_took = _time16.monotonic() - _h16_t0
     check("game list: the lock is FREE while a re-read is out on the network", _h16_free is True)
     check("game list: ...and another request is served the copy it has at once, not after the "
           "fetch", _h16_res["meanwhile"] == [{"shortname": "stale"}] and _h16_took < 1.0,
@@ -1934,4 +1931,4 @@ finally:
     _lg16h._mem.clear()
     _lg16h._mem.update(_h16_saved_lg[1])
     _lg16h._inflight.clear()
-_sh16h.rmtree(_H16_DIR, ignore_errors=True)
+_shutil16.rmtree(_H16_DIR, ignore_errors=True)

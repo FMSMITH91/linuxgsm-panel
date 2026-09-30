@@ -596,18 +596,28 @@ def _wf14_code(name):
     return "\n".join(_l for _l in _wf14(name).splitlines() if not _l.lstrip().startswith("#"))
 
 
+def _indent14(ln):
+    """How many columns `ln` is indented."""
+    return len(ln) - len(ln.lstrip())
+
+
+def _wf14_block(lines, j):
+    """The lines under line `j` that are indented deeper than it (blank lines kept)."""
+    body = []
+    for ln in lines[j + 1:]:
+        if ln.strip() and _indent14(ln) <= _indent14(lines[j]):
+            break
+        body.append(ln)
+    return body
+
+
 def _wf14_run(text, step_name):
     """The `run: |` body of the step named `step_name`, dedented."""
     lines = text.splitlines()
     i = next(n for n, ln in enumerate(lines) if ln.strip() == "- name: " + step_name)
     j = next(n for n in range(i + 1, len(lines)) if lines[n].strip() == "run: |")
-    ind = len(lines[j]) - len(lines[j].lstrip())
-    body = []
-    for ln in lines[j + 1:]:
-        if ln.strip() and len(ln) - len(ln.lstrip()) <= ind:
-            break
-        body.append(ln)
-    cut = min(len(ln) - len(ln.lstrip()) for ln in body if ln.strip())
+    body = _wf14_block(lines, j)
+    cut = min(_indent14(ln) for ln in body if ln.strip())
     return "\n".join(ln[cut:] for ln in body) + "\n"
 
 
@@ -641,7 +651,8 @@ _FULL14 = [("checks (ubuntu-24.04 · py3.12)", "success"), ("coverage", "success
 def _ci14(payload_or_exc, sha="a" * 40, diff=None):
     """_remote_ci_state(sha) over a stubbed GitHub answer and (optionally) a stubbed diff.
 
-    Returns (state, the unknown-reason it left)."""
+    Returns (state, the unknown-reason it left).
+    """
     saved = (_so14._repo_slug, _so14.urllib.request.urlopen, _so14._git)
     try:
         _so14._repo_slug = lambda: "o/r"
@@ -888,7 +899,8 @@ try:
                   '  *code-scanning/analyses*) echo "${NEWEST:-}" ;;\n'
                   '  *check-runs*) : ;;\n'
                   'esac\n')
-    os.chmod(os.path.join(_bin14, "gh"), 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
+    os.chmod(os.path.join(_bin14, "gh"), 0o700)
 
     def _cqa14(step, **env):
         out = os.path.join(_sb14, "out")
@@ -896,7 +908,7 @@ try:
         summ = os.path.join(_sb14, "summary")
         for p in (out, log, summ):
             open(p, "w").close()
-        p = _sp14.run(["bash", "-c", _wf14_run(_cqa_raw14, step)], capture_output=True, text=True,
+        p = _sp14.run(["bash", "-c", _wf14_run(_cqa_raw14, step)], capture_output=True, text=True,  # nosec B603 B607 - the workflow's own step
                       env=dict(os.environ, PATH=_bin14 + os.pathsep + os.environ["PATH"],
                                GH_LOG=log, GITHUB_OUTPUT=out, GITHUB_STEP_SUMMARY=summ,
                                GITHUB_REPOSITORY="o/r", **env))
@@ -967,14 +979,15 @@ try:
     os.makedirs(_dbin)
     with open(os.path.join(_dbin, "gh"), "w") as _fh:
         _fh.write('#!/bin/sh\ncat "$RUNS"\n')      # the --jq result: one check run per line
-    os.chmod(os.path.join(_dbin, "gh"), 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
+    os.chmod(os.path.join(_dbin, "gh"), 0o700)
 
     def _dep14(runs):
         rf = os.path.join(_dsb14, "runs")
         with open(rf, "w") as fh:
             fh.write("".join(_json14.dumps({"name": n, "status": s, "conclusion": c}) + "\n"
                              for n, s, c in runs))
-        p = _sp14.run(["bash", "-c", "set -euo pipefail\n" + _dep_loop14 + "echo WAITED-OK\n"],
+        p = _sp14.run(["bash", "-c", "set -euo pipefail\n" + _dep_loop14 + "echo WAITED-OK\n"],  # nosec B603 B607 - the workflow's own loop
                       capture_output=True, text=True,
                       env=dict(os.environ, PATH=_dbin + os.pathsep + os.environ["PATH"], RUNS=rf,
                                HEAD_SHA="f" * 40, GITHUB_REPOSITORY="o/r"))
@@ -1137,9 +1150,9 @@ _sw14_saved = (_so14._git, _so14._is_git_checkout, _so14._remote_ci_state, _so14
                _so14._update_in_progress)
 _SW14 = ["1" * 40, "2" * 40, "3" * 40]     # main's first-parent line, tip first
 _sw14_cfg = {}
+from panel.core import config as _cfg14  # noqa: E402
+_sw14_cfg_saved = (_cfg14.load_config, _cfg14.update_config)
 try:
-    from panel.core import config as _cfg14
-    _sw14_cfg_saved = (_cfg14.load_config, _cfg14.update_config)
     _cfg14.load_config = lambda: dict(_sw14_cfg)
     _cfg14.update_config = lambda fn: fn(_sw14_cfg)
     _so14._is_git_checkout = lambda: True

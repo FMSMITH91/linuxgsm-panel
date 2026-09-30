@@ -110,7 +110,7 @@ def free_port():
 def http_ok(url, timeout=2):
     """Say whether `url` (on loopback) answers 200."""
     try:
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- loopback only (the panel or the browser the harness started)
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- loopback only
         with urllib.request.urlopen(url, timeout=timeout) as r:  # nosec B310 - loopback only
             return r.status == 200
     except OSError:

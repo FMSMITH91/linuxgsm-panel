@@ -511,14 +511,14 @@ _CFG_PARAM_REF_RE = re.compile(r"\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-
 
 
 def _cfg_dq_escape(val):
-    """`val` escaped for the inside of a bash double-quoted string, `${name}` / `$name` kept live.
+    r"""`val` escaped for the inside of a bash double-quoted string, `${name}` / `$name` kept live.
 
     LinuxGSM SOURCES its cfg files as bash, as the game account, on every start, update and
     monitor run. The writer escaped `"` and nothing else, so a value was live shell: a password
     with a backslash at the end escaped the closing quote and broke the whole file (LinuxGSM then
     failed to start the server with a syntax error nothing on the page explained), `$1x` and
     `a$b` lost the part after the `$`, and `$(…)` or a backtick ran a command from the cron
-    monitor every five minutes. `\\`, `"`, backtick and every `$` that does not begin a plain
+    monitor every five minutes. `\`, `"`, backtick and every `$` that does not begin a plain
     parameter reference are escaped now; _parse_cfg undoes exactly this, so the settings form
     reads back what it saved.
     """
@@ -744,9 +744,11 @@ def _is_protected_path(relpath, selfname):
 
 
 def _protected_top_names(selfname):
-    """The top-level entries of a game home _is_protected_path protects by name (plus `lgsm`,
-    which it protects with everything under it). One list, for it and for delete_path's host-side
-    check, so the two cannot disagree."""
+    """The top-level entries of a game home that _is_protected_path protects by name.
+
+    Plus `lgsm`, which it protects with everything under it. One list, for it and for
+    delete_path's host-side check, so the two cannot disagree.
+    """
     return {"serverfiles", "linuxgsm.sh", selfname or "",
             ".ssh", ".bashrc", ".profile", ".bash_logout", ".bash_history", ".wget-hsts"} - {""}
 
@@ -755,8 +757,9 @@ _PROTECTED_MARK = "__PROTECTED__"
 
 
 def _protected_resolved(user, ap, selfname, inner):
-    """Prefix `inner` with delete_path's protected-path check, made ON THE HOST against the path
-    `rm` will actually remove.
+    """Prefix `inner` with delete_path's protected-path check, made ON THE HOST.
+
+    The check is made against the path `rm` will actually remove.
 
     _is_protected_path reads the TEXT of the path, and _guarded only asks whether the resolved
     path stays inside the home. Neither sees a symlinked DIRECTORY on the way: with `x -> lgsm`
@@ -1187,6 +1190,27 @@ def _ssh_download_argv(server, shell):
         return None
 
 
+def _hand_path_to_ssh(p, feed):
+    """Write the path to the ssh reader's stdin and close it, so the remote `cat` sees EOF."""
+    try:
+        p.stdin.write(feed)
+        p.stdin.close()
+    except OSError:
+        # ssh died before it could take the path — a dead host, a refused key. The read in
+        # _stream_argv then sees EOF and the download ends empty, which is what every other
+        # unreachable-host path in this module does.
+        _core._log.debug("download: could not hand the path to ssh", exc_info=True)
+
+
+def _close_and_wait(p):
+    """Close the reader's stdout and reap it. -> its exit status."""
+    try:
+        p.stdout.close()
+    except Exception:  # nosec B110
+        pass
+    return p.wait()
+
+
 def _stream_argv(argv, rel, chunk, ok=(0,)):
     """Yield the stdout of `argv` in `chunk`-sized blocks, handing the SSH form the path on stdin."""
     # stdin is a pipe only for the SSH form, which expects the path there. The local forms
@@ -1196,14 +1220,7 @@ def _stream_argv(argv, rel, chunk, ok=(0,)):
     p = subprocess.Popen(argv, stdout=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; argv[0] is a literal
                          stdin=subprocess.PIPE if feed is not None else subprocess.DEVNULL)
     if feed is not None:
-        try:
-            p.stdin.write(feed)
-            p.stdin.close()
-        except OSError:
-            # ssh died before it could take the path — a dead host, a refused key. The
-            # read below then sees EOF and the download ends empty, which is what every
-            # other unreachable-host path in this module does.
-            _core._log.debug("download: could not hand the path to ssh", exc_info=True)
+        _hand_path_to_ssh(p, feed)
     at_eof, rc = False, None
     try:
         while True:
@@ -1213,11 +1230,7 @@ def _stream_argv(argv, rel, chunk, ok=(0,)):
                 break
             yield b
     finally:
-        try:
-            p.stdout.close()
-        except Exception:  # nosec B110
-            pass
-        rc = p.wait()
+        rc = _close_and_wait(p)
     # A reader that failed partway (the host dropped, the helper refused) used to end the stream
     # quietly, and the browser saved the truncated file under a 200. See _core.StreamFailed.
     if at_eof and rc not in ok:

@@ -1730,8 +1730,7 @@ import contextlib as _ctxlib18
 import io as _io18
 import math as _math18
 import shutil as _shutil18b
-import subprocess as _sp18
-import tempfile as _tmp18b
+import subprocess as _sp18  # nosec B404 - runs sh and jq on fixed argvs, on this suite's fixtures
 import time as _time18
 import urllib.error as _ue18
 import urllib.request as _ur18
@@ -1761,23 +1760,11 @@ check("totp spend: login, the mint, the password change and 2FA off all use ONE 
       and not hasattr(_ar18, "_spend_totp_step") and not hasattr(_tags18, "_spend_totp_step"),
       repr((getattr(_ar18, "spend_totp_step", None), getattr(_tags18, "spend_totp_step", None))))
 
-_rows18b = {"users": [], "hosts": [], "groups": []}
-_mine18_hosts_before = len(_mine18["hosts"])
-_real_opener18 = _notif18._OPENER
-try:
-    # part18's tripwire again, for this block: nothing below may reach a host.
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part18's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
-    _p9_patch(_p9.socketio, "emit", lambda event, data=None, **k: None)
-
-    # ── 1b. 2FA enrolment spends its code through that same swap ─────────────────────────────
-    # It assigned the step unconditionally, so two enrolment POSTs with one code both turned 2FA on
-    # and each rendered its own backup codes — only one set was ever stored.
+# ── 1b. 2FA enrolment spends its code through that same swap ─────────────────────────────
+# It assigned the step unconditionally, so two enrolment POSTs with one code both turned 2FA on
+# and each rendered its own backup codes — only one set was ever stored.
+def _p18b_enrol():
+    """Section 1b: 2FA enrolment spends its code through the shared swap."""
     with _ctx18():
         _en18 = User(username="p18_enrol", password_hash=_auth18.hash_password("Str0ng!passw0rd"),
                      is_superadmin=False, is_active=True)
@@ -1794,13 +1781,13 @@ try:
     with _ctx18():                          # the racing request already spent this step
         db.session.get(User, _en18_id).last_totp_step = _en18_step or 0
         db.session.commit()
-    _enc18.post("/account/2fa/enable", data={"password": "Str0ng!passw0rd",
+    _enc18.post("/account/2fa/enable", data={"password": "Str0ng!passw0rd",  # nosec B105 - a fixture password
                                              "totp_code": _en18_code})
     with _ctx18():
         _en18_after = db.session.get(User, _en18_id).totp_enabled
         db.session.get(User, _en18_id).last_totp_step = 0      # the next step arrives
         db.session.commit()
-    _en18_ok = _enc18.post("/account/2fa/enable", data={"password": "Str0ng!passw0rd",
+    _en18_ok = _enc18.post("/account/2fa/enable", data={"password": "Str0ng!passw0rd",  # nosec B105 - a fixture password
                                                         "totp_code": _en18_code})
     with _ctx18():
         _en18_row = db.session.get(User, _en18_id)
@@ -1811,26 +1798,51 @@ try:
           _en18_ok.status_code == 200 and _en18_done == (True, _en18_step),
           repr((_en18_ok.status_code, _en18_done, _en18_step)))
 
-    # ── 2. file and cron writes as a root-capable account are refused ─────────────────────────
-    # A row imported before import refused such accounts still reached the write routes: a
-    # ~/.bashrc, authorized_keys or crontab written as the host's sudo login is root on the host.
+
+# ── 2. file and cron writes as a root-capable account are refused ─────────────────────────
+# A row imported before import refused such accounts still reached the write routes: a
+# ~/.bashrc, authorized_keys or crontab written as the host's sudo login is root on the host.
+_wg18_probes, _wg18_writes = [], []     # the account probes the host was asked; the writes made
+_wg18_reply = {"out": ""}               # what the host answers a probe with ("" = it timed out)
+
+
+def _wg18_run(remote, cmd, **k):
+    if "LGSM_ACCT_PROBE_DONE" in cmd:
+        _wg18_probes.append(cmd)
+        return (_wg18_reply["out"], "", 0) if _wg18_reply["out"] else ("", "timed out", -1)
+    return ("", "", 0)
+
+
+def _wg18_rec(name):
+    def _f(*a, **k):
+        _wg18_writes.append(name)
+        return True, ""
+    return _f
+
+
+def _wg18_all(sid):
+    """Every write route once, as the admin: [(route, status)]."""
+    out = []
+    for _path, _body in (("/api/server/%d/file", {"path": ".bashrc", "content": "x"}),
+                         ("/api/server/%d/config", {"raw": "x"}),
+                         ("/api/server/%d/delete-path", {"path": ".ssh"}),
+                         ("/api/server/%d/cron", {"schedule": "* * * * *", "command": "x"}),
+                         ("/api/server/%d/cron/update", {"raw": "x", "schedule": "* * * * *",
+                                                        "command": "x"}),
+                         ("/api/server/%d/cron/delete", {"raw": "x"}),
+                         ("/api/server/%d/cron/run", {"raw": "x"})):
+        out.append((_path.split("/")[-1], _A18.post(_path % sid, json=_body).status_code))
+    _up = _A18.post("/api/server/%d/upload" % sid, content_type="multipart/form-data",
+                    data={"path": ".ssh", "file": (_io18.BytesIO(b"k"), "authorized_keys")})
+    out.append(("upload", _up.status_code))
+    return out
+
+
+def _p18b_write_gate():
+    """Section 2: file and cron writes as a root-capable account are refused."""
     _wg18_host = _host18("p18-wg-host", "192.0.2.170")
     _wg18_admin = _server18(_wg18_host, "adminacct", 27700)
     _wg18_plain = _server18(_wg18_host, "plaingame", 27701)
-    _wg18_probes, _wg18_writes = [], []
-    _wg18_reply = {"out": ""}
-
-    def _wg18_run(remote, cmd, **k):
-        if "LGSM_ACCT_PROBE_DONE" in cmd:
-            _wg18_probes.append(cmd)
-            return (_wg18_reply["out"], "", 0) if _wg18_reply["out"] else ("", "timed out", -1)
-        return ("", "", 0)
-
-    def _wg18_rec(name):
-        def _f(*a, **k):
-            _wg18_writes.append(name)
-            return True, ""
-        return _f
     _p9_patch(_p9_sm, "run_command", _wg18_run)
     for _n18 in ("write_file", "add_cron_job", "update_cron_job", "run_cron_job_now",
                  "delete_path", "upload_file"):
@@ -1840,23 +1852,13 @@ try:
     _sh18._ACCOUNT_VERDICTS.clear()
     _wg18_reply["out"] = ("ACCT adminacct 1000 adminacct adm sudo\nACCT plaingame 1001 plaingame\n"
                           "LGSM_ACCT_PROBE_DONE\n")
+    _p18b_write_gate_refused(_wg18_admin)
+    _p18b_write_gate_plain(_wg18_host, _wg18_plain)
+    _p18b_write_gate_down(_wg18_plain)
 
-    def _wg18_all(sid):
-        """Every write route once, as the admin: [(route, status)]."""
-        out = []
-        for _path, _body in (("/api/server/%d/file", {"path": ".bashrc", "content": "x"}),
-                             ("/api/server/%d/config", {"raw": "x"}),
-                             ("/api/server/%d/delete-path", {"path": ".ssh"}),
-                             ("/api/server/%d/cron", {"schedule": "* * * * *", "command": "x"}),
-                             ("/api/server/%d/cron/update", {"raw": "x", "schedule": "* * * * *",
-                                                            "command": "x"}),
-                             ("/api/server/%d/cron/delete", {"raw": "x"}),
-                             ("/api/server/%d/cron/run", {"raw": "x"})):
-            out.append((_path.split("/")[-1], _A18.post(_path % sid, json=_body).status_code))
-        _up = _A18.post("/api/server/%d/upload" % sid, content_type="multipart/form-data",
-                        data={"path": ".ssh", "file": (_io18.BytesIO(b"k"), "authorized_keys")})
-        out.append(("upload", _up.status_code))
-        return out
+
+def _p18b_write_gate_refused(_wg18_admin):
+    """Section 2: every write as the sudo-group account is refused, and audited."""
     _wg18_refused = _wg18_all(_wg18_admin)
     _wg18_w_admin = list(_wg18_writes)
     check("write gate: every file and cron write as a sudo-group account is refused (409)",
@@ -1868,6 +1870,10 @@ try:
     check("write gate: the refusal is audited, with why",
           bool(_wg18_aud) and _wg18_aud[-1].success is False
           and "can become root" in _wg18_aud[-1].detail, repr(_wg18_aud[-1:]))
+
+
+def _p18b_write_gate_plain(_wg18_host, _wg18_plain):
+    """Section 2: a plain account's writes go through, on a verdict cached for a short while."""
     _wg18_probes_before = len(_wg18_probes)
     _wg18_ok = _wg18_all(_wg18_plain)
     check("write gate: a plain game account's writes still go through (positive control)",
@@ -1883,7 +1889,10 @@ try:
             _wg18_remote, "plaingame", now=_time18.monotonic() + _sh18._ACCOUNT_VERDICT_TTL + 1)
     check("write gate: ...for a short while only: past the TTL the host is asked again",
           len(_wg18_probes) == _wg18_n + 1, "%d probes" % (len(_wg18_probes) - _wg18_n))
-    # A host that cannot answer: refused, and not cached as a clean bill.
+
+
+def _p18b_write_gate_down(_wg18_plain):
+    """Section 2: a host that cannot answer is refused, and not cached as a clean bill."""
     _sh18._ACCOUNT_VERDICTS.clear()
     _wg18_reply["out"] = ""
     del _wg18_writes[:]
@@ -1897,7 +1906,10 @@ try:
           repr((_wg18_down.status_code, _wg18_down2.status_code, _wg18_writes)))
     _sh18._ACCOUNT_VERDICTS.clear()
 
-    # ── 3. OverflowError: Infinity / 1e400 are numbers to Python's json ───────────────────────
+
+# ── 3. OverflowError: Infinity / 1e400 are numbers to Python's json ───────────────────────
+def _p18b_overflow():
+    """Section 3: Infinity and 1e400 parse as "not a number" everywhere."""
     _inf18 = float("inf")
 
     def _raises18b(fn, *a, **k):
@@ -1938,7 +1950,10 @@ try:
                     "_apply_user_order": None, "can_access_remote": False,
                     "_selected_remotes": None, "_selected_game_servers": None}, repr(_ov18))
 
-    # ── 4. the panel host's own row: edit and delete are superadmin-only ──────────────────────
+
+# ── 4. the panel host's own row: edit and delete are superadmin-only ──────────────────────
+def _p18b_panel_host_rows():
+    """Section 4: the panel host, a granted host, and a delegated admin. -> their ids."""
     with _ctx18():
         _ph18 = RemoteServer(name="p18-panel-host", host="127.0.0.1", port=22, username="local",
                              auth_method="local", auth_credential="", is_local=True,
@@ -1961,11 +1976,17 @@ try:
         _rows18b["hosts"] += [_ph18_id, _pr18_id]
         _rows18b["users"].append(_du18_id)
         _rows18b["groups"].append(_dg18_id)
+    return _ph18_id, _pr18_id, _du18_id
+
+
+def _p18b_panel_host():
+    """Section 4: the panel host's own row is superadmin-only."""
+    _ph18_id, _pr18_id, _du18_id = _p18b_panel_host_rows()
     _D18 = _p9_client(_du18_id)
     _ph18_edit = _D18.post("/remotes/%d/edit" % _ph18_id,
                            data={"name": "p18-renamed", "host": "127.0.0.1", "ssh_port": "22",
                                  "ssh_user": "local"})
-    _ph18_del = _D18.post("/remotes/%d/delete" % _ph18_id, json={"password": "Str0ng!passw0rd"},
+    _ph18_del = _D18.post("/remotes/%d/delete" % _ph18_id, json={"password": "Str0ng!passw0rd"},  # nosec B105 - a fixture password
                           headers=_XHR18)
     with _ctx18():
         _ph18_row = db.session.get(RemoteServer, _ph18_id)
@@ -1992,7 +2013,10 @@ try:
           and _ph18_name2 == "p18-panel-host-2",
           repr((_pr18_edit.status_code, _pr18_name, _ph18_name2)))
 
-    # ── 6. ufw-delete-num-if: the check and the delete in one root run ────────────────────────
+
+# ── 6. ufw-delete-num-if: the check and the delete in one root run ────────────────────────
+def _p18b_ufw_helper():
+    """Section 6: the helper verb ufw-delete-num-if. -> the listing it was driven with."""
     _ud18_listing = ("Status: active\n\n     To                         Action      From\n"
                      "     --                         ------      ----\n"
                      "[ 1] 22/tcp                     ALLOW IN    Anywhere                   # ssh\n"
@@ -2023,19 +2047,24 @@ try:
           _ud18_ok == 0 and _ud18_runs[-1] == ["delete", "1"], repr((_ud18_ok, _ud18_runs)))
     check("ufw-delete-num-if: the helper and the panel hold the rule text to the same pattern",
           _helper18.UFW_RULE_TEXT_RE == _priv18.UFW_RULE_TEXT_RE)
+    return _ud18_listing
 
-    # The remote rendering, run for real under this machine's sh and awk with a fake ufw on PATH.
+
+# The remote rendering, run for real under this machine's sh and awk with a fake ufw on PATH.
+def _p18b_ufw_remote(_ud18_listing):
+    """Section 6: the verb's remote rendering, under this machine's sh and awk."""
     if _shutil18b.which("awk") and _shutil18b.which("sh"):
-        _ufd18 = _tmp18b.mkdtemp(prefix="p18-ufw-")
+        _ufd18 = _tf18.mkdtemp(prefix="p18-ufw-")
         with open(os.path.join(_ufd18, "ufw"), "w") as _fh18:
             _fh18.write("#!/bin/sh\nif [ \"$1\" = status ]; then cat <<'L'\n%sL\nexit 0; fi\n"
                         "if [ \"$1\" = delete ]; then read a; echo \"deleted $2 $a\"; exit 0; fi\n"
                         "exit 1\n" % _ud18_listing)
-        os.chmod(os.path.join(_ufd18, "ufw"), 0o755)  # nosec B103 - a throwaway fake tool
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
+        os.chmod(os.path.join(_ufd18, "ufw"), 0o700)
         _renv18 = dict(os.environ, PATH=_ufd18 + ":" + os.environ.get("PATH", ""))
 
         def _remote18(n, text):
-            r = _sp18.run(["sh", "-c", _priv18.remote_command("ufw-delete-num-if", [n, text])],
+            r = _sp18.run(["sh", "-c", _priv18.remote_command("ufw-delete-num-if", [n, text])],  # nosec B603 B607 - sh, a fixed argv, the verb's own rendering
                           env=_renv18, capture_output=True, text=True, timeout=30)
             return r.returncode, r.stdout.strip()
         _rr18 = (_remote18("1", "22/tcp ALLOW IN Anywhere # ssh"),
@@ -2050,7 +2079,10 @@ try:
         _skip18("remote ufw-delete-num-if: the rendering under sh and awk",
                 "sh or awk is not installed here")
 
-    # The panel side: a keyed delete sends the rule's text; one it cannot express falls back.
+
+# The panel side: a keyed delete sends the rule's text; one it cannot express falls back.
+def _p18b_ufw_panel():
+    """Section 6: the panel side of a keyed ufw delete."""
     _pd18_sent = []
     _pd18_rules = [{"num": "1", "detail": "22/tcp  ALLOW IN  Anywhere  # ssh"},
                    {"num": "2", "detail": "27015  ALLOW IN  Anywhere  # it's mine"}]
@@ -2083,7 +2115,10 @@ try:
     check("ufw delete: ...and when the host finds the rule moved, nothing is reported deleted",
           _pd18_c[0] is False and "changed on the host" in _pd18_c[1], repr(_pd18_c))
 
-    # ── 7b. a second term_open on one socket writes the replaced shell's close row ────────────
+
+# ── 7b. a second term_open on one socket writes the replaced shell's close row ────────────
+def _p18b_terminal():
+    """Section 7b: a second term_open on one socket audits the shell it replaced."""
     _t18a = _host18("p18-term-a", "192.0.2.172")
     _t18b = _host18("p18-term-b", "192.0.2.173")
     _p9_patch(_ht18b._ts, "open_session", lambda sid, remote, is_local, **k: None)
@@ -2108,7 +2143,10 @@ try:
           _t18_on == [_t18b], repr(_t18_on))
     _forget_sids18(_t18_sids)
 
-    # ── 7c. the Telegram reads refuse a redirect, as _post does ───────────────────────────────
+
+# ── 7c. the Telegram reads refuse a redirect, as _post does ───────────────────────────────
+def _p18b_telegram():
+    """Section 7c: the Telegram reads refuse a redirect."""
     _tg18_tok = "123456789:" + "A" * 30
     _tg18_opened, _tg18_urlopen = [], []
 
@@ -2139,6 +2177,31 @@ try:
     check("telegram reads: the opener they use is the one that refuses redirects",
           any(isinstance(h, _notif18._NoRedirect) for h in _real_opener18.handlers),
           repr(_real_opener18.handlers))
+
+
+_rows18b = {"users": [], "hosts": [], "groups": []}
+_mine18_hosts_before = len(_mine18["hosts"])
+_real_opener18 = _notif18._OPENER
+# The sections above are functions, run here in order under the tripwire; the finally below undoes
+# every patch and removes every row they made, whichever of them raised.
+try:
+    # part18's tripwire again, for this block: nothing below may reach a host.
+    _p9_patch(_p9_core, "get_connection",
+              _p9_trip("paramiko", exc=ConnectionError("refused by part18's tripwire")))
+    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
+    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
+    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
+    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+    _p9_patch(_p9.socketio, "emit", lambda event, data=None, **k: None)
+    _p18b_enrol()
+    _p18b_write_gate()
+    _p18b_overflow()
+    _p18b_panel_host()
+    _p18b_ufw_remote(_p18b_ufw_helper())
+    _p18b_ufw_panel()
+    _p18b_terminal()
+    _p18b_telegram()
 finally:
     _p9_restore_all()
     _sh18._ACCOUNT_VERDICTS.clear()
@@ -2165,14 +2228,13 @@ finally:
 # that lock held, and every other writer sat in SQLite's hub-blocking busy handler. The bcrypt work
 # must come BEFORE the spend in both routes — checked on the source order of the two bodies.
 import inspect as _ir_inspect  # noqa: E402
-from panel.routes import tags as _ir_tags, auth_routes as _ir_auth  # noqa: E402
-_ir_pw = _ir_inspect.getsource(_ir_tags)
+_ir_pw = _ir_inspect.getsource(_tags18)
 _ir_pw = _ir_pw[_ir_pw.index("def account_change_password"):]
 check("integration: the password change hashes the new password before spending the second factor",
       "_new_hash = hash_password(new)" in _ir_pw
       and _ir_pw.index("_new_hash = hash_password(new)") < _ir_pw.index("_spend_second_factor(")
       and "u.set_password(_new_hash)" in _ir_pw, _ir_pw[:200])
-_ir_en = _ir_inspect.getsource(_ir_auth)
+_ir_en = _ir_inspect.getsource(_ar18)
 _ir_en = _ir_en[_ir_en.index("_enrol_step = ("):]
 check("integration: 2FA enrolment hashes its backup codes before spending the step",
       _ir_en.index("set_backup_codes(codes)") < _ir_en.index("spend_totp_step(_u, _enrol_step)"),
@@ -2197,8 +2259,8 @@ _ir_calls, _, _ = _bf_watch([4014], hours=0.2)
 check("integration: ...while with no save it holds (control)", len(_ir_calls) == 1,
       "%d sessions" % len(_ir_calls))
 _ir_gen = _bf_n.discord_settings_generation()
+_ir_saved_cfg = _bf_n._cfg
 try:
-    _ir_saved_cfg = _bf_n._cfg
     _ir_store = {}
     _bf_n._cfg = lambda: {}
     _ir_saver = getattr(_bf_n, "update_config", None)
@@ -2218,13 +2280,13 @@ check("integration: save_settings bumps the generation the hold is keyed on",
 
 # (3) A panel-host helper installed before ufw-delete-num-if existed answers "unknown verb" (rc 2):
 # the delete falls back to ufw-delete-num, still under the lock and after the guard.
-from panel.ops.ssh_manager import hosts as _ir_hosts, firewall as _ir_fw, _core as _ir_core  # noqa: E402
+from panel.ops.ssh_manager import _core as _ir_core  # noqa: E402
 _ir_rules = [{"num": "1", "detail": "22/tcp  ALLOW IN  Anywhere  # ssh"}]
 _ir_sent = []
 
 
 def _ir_status(_s):
-    g = _ir_fw._group_ufw_rules(_ir_rules)
+    g = _fw18._group_ufw_rules(_ir_rules)
     return {"installed": True, "enabled": True, "rules": _ir_rules,
             "groups": [dict(x, protected=False) for x in g]}
 
@@ -2236,14 +2298,14 @@ def _ir_old_helper(s, verb, args=(), **k):
     return ("Rule deleted", "", 0)
 
 
-_ir_saved = (_ir_fw.remote_ufw_status, _ir_core.run_privileged)
+_ir_saved = (_fw18.remote_ufw_status, _ir_core.run_privileged)
 try:
-    _ir_fw.remote_ufw_status = _ir_status
+    _fw18.remote_ufw_status = _ir_status
     _ir_core.run_privileged = _ir_old_helper
     _ir_key = _ir_status(None)["groups"][0]["key"]
-    _ir_res = _ir_hosts.remote_ufw_delete_rule(NS(), 1, expect_key=_ir_key)
+    _ir_res = _hosts18.remote_ufw_delete_rule(NS(), 1, expect_key=_ir_key)
 finally:
-    _ir_fw.remote_ufw_status, _ir_core.run_privileged = _ir_saved
+    _fw18.remote_ufw_status, _ir_core.run_privileged = _ir_saved
 check("integration: an older helper without ufw-delete-num-if still deletes, via ufw-delete-num",
       _ir_sent == ["ufw-delete-num-if", "ufw-delete-num"] and _ir_res == (True, "Rule 1 deleted"),
       repr((_ir_sent, _ir_res)))
@@ -2253,8 +2315,6 @@ check("integration: an older helper without ufw-delete-num-if still deletes, via
 # Semgrep 1.178's (a suppressed result carries "suppressions": [{"kind": "inSource"}]).
 import json as _sg_json  # noqa: E402
 import re as _sg_re  # noqa: E402
-import shutil as _sg_shutil  # noqa: E402
-import subprocess as _sg_sp  # noqa: E402
 _sg_wf = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
     __file__)))), ".github", "workflows", "security-code.yml")).read()
 _sg_m = _sg_re.search(r"jq '([^']+)' \\\n\s+semgrep\.sarif > semgrep\.open\.sarif\n\s+mv semgrep\.open\.sarif "
@@ -2262,12 +2322,12 @@ _sg_m = _sg_re.search(r"jq '([^']+)' \\\n\s+semgrep\.sarif > semgrep\.open\.sari
 check("semgrep upload: suppressed findings are filtered out of the SARIF before upload",
       _sg_m is not None and _sg_wf.index("semgrep.open.sarif") < _sg_wf.index("sarif_file: semgrep.sarif"),
       "no jq filter between the scan and upload-sarif")
-if _sg_m is not None and _sg_shutil.which("jq"):
+if _sg_m is not None and _shutil18b.which("jq"):
     _sg_in = {"runs": [{"tool": {"driver": {"name": "Semgrep"}}, "results": [
         {"ruleId": "a", "suppressions": [{"kind": "inSource"}]},
         {"ruleId": "b"},
         {"ruleId": "c", "suppressions": []}]}]}
-    _sg_out = _sg_sp.run(["jq", _sg_m.group(1)], input=_sg_json.dumps(_sg_in), capture_output=True,
+    _sg_out = _sp18.run(["jq", _sg_m.group(1)], input=_sg_json.dumps(_sg_in), capture_output=True,  # nosec B603 B607 - jq, the workflow's own filter
                          text=True, timeout=30)
     _sg_ids = [r["ruleId"] for r in _sg_json.loads(_sg_out.stdout)["runs"][0]["results"]]
     check("semgrep upload: ...the filter drops only the suppressed result and keeps the run intact",

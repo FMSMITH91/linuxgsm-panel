@@ -703,7 +703,7 @@ class _BfStop(BaseException):
 
 def _bf_dc_messages(msgs, allowed):
     """Run one Gateway session delivering `msgs` [(author, text)]; returns (dispatched, replies)."""
-    cfg = {"discord": {"enabled": True, "accept_commands": True, "bot_token": "enc",
+    cfg = {"discord": {"enabled": True, "accept_commands": True, "bot_token": "enc",  # nosec B105 - a fixture token
                        "channel_id": "999", "command_users": list(allowed)}}
     ran, said = [], []
 
@@ -776,10 +776,12 @@ check("discord gateway: frames read through recv_data still reach the handler; a
 
 
 def _bf_watch(codes, hours=24.0, lasted=0.0, on_sleep=None):
-    """Run the Discord watcher over simulated time, the Gateway answering from `codes` (the last
-    repeats). Returns (session start times, sleeps, warnings logged)."""
+    """Run the Discord watcher over simulated time, the Gateway answering from `codes`.
+
+    The last code repeats. Returns (session start times, sleeps, warnings logged).
+    """
     now = [0.0]
-    cfg = {"discord": {"enabled": True, "accept_commands": True, "bot_token": "enc",
+    cfg = {"discord": {"enabled": True, "accept_commands": True, "bot_token": "enc",  # nosec B105 - a fixture token
                        "channel_id": "999"}}
     calls, sleeps, script = [], [], list(codes)
 
@@ -846,7 +848,7 @@ check("discord watch: unticking and re-ticking Accept commands retries a fatal c
 def _bf_new_token(n, cfg):
     """Save a different bot token on the 3rd sleep."""
     if n == 3:
-        cfg["discord"]["bot_token"] = "enc2"
+        cfg["discord"]["bot_token"] = "enc2"  # nosec B105 - a fixture token, the one the save put in
 
 
 _bf_calls, _, _ = _bf_watch([4004], hours=0.2, on_sleep=_bf_new_token)
@@ -961,7 +963,7 @@ def _bf_wait_idle(timeout=5.0):
     return False
 
 
-_bf_cfg = {"telegram": {"enabled": True, "chat_id": "1", "token": ""}, "events": {"server_up": True}}
+_bf_cfg = {"telegram": {"enabled": True, "chat_id": "1", "token": ""}, "events": {"server_up": True}}  # nosec B105 - an empty fixture token
 with _bf_patched(_bf_n, _cfg=lambda: _bf_cfg, send_telegram=_bf_slow_tg,
                  send_discord=lambda *a: (True, ""), send_ntfy=lambda *a: (True, "")):
     _bf_threads0 = _bf_threading.active_count()

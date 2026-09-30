@@ -1986,20 +1986,7 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
             "account. Nothing was changed; try again when the host is reachable."
             % (short_name, remote.display_name), False, "danger", 409)
     if short_name in _priv:
-        # The ROW goes, the host is not touched: the row is the mistake, and the account is
-        # somebody's login. Keeping the row would leave a server nobody can remove.
-        log_action(current_user, "uninstall_server", target=gs.name, server=gs,
-                   detail="removed from the panel only — the account was left on the host: "
-                          "%s" % _priv[short_name])
-        db.session.delete(gs)
-        db.session.commit()
-        _forget_game_server(server_id)
-        _notify_servers_changed(app)
-        return _index_reply(
-            "'%s' was removed from the panel, but the '%s' account on %s was NOT deleted or "
-            "stopped: %s. Remove its LinuxGSM files by hand if you meant to."
-            % (name, short_name, remote.display_name, _priv[short_name]), True, "warning",
-            warn=True)
+        return _remove_row_only(app, gs, remote, server_id, name, _priv[short_name])
 
     try:
         # Stop the game server and kill any lingering processes BEFORE deleting the user.
@@ -2063,6 +2050,27 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
         _em = _log_and_generic("uninstall failed")
         log_action(current_user, "uninstall_server", target=name, success=False, server=gs)
         return _index_reply(_em, False, "danger", 500)
+
+
+def _remove_row_only(app, gs, remote, server_id, name, why):
+    """Uninstall a server whose account is root-capable: the ROW goes, the host is not touched.
+
+    The row is the mistake, and the account is somebody's login. Keeping the row would leave a
+    server nobody can remove.
+    """
+    short_name = gs.short_name
+    log_action(current_user, "uninstall_server", target=gs.name, server=gs,
+               detail="removed from the panel only — the account was left on the host: "
+                      "%s" % why)
+    db.session.delete(gs)
+    db.session.commit()
+    _forget_game_server(server_id)
+    _notify_servers_changed(app)
+    return _index_reply(
+        "'%s' was removed from the panel, but the '%s' account on %s was NOT deleted or "
+        "stopped: %s. Remove its LinuxGSM files by hand if you meant to."
+        % (name, short_name, remote.display_name, why), True, "warning",
+        warn=True)
 
 
 def _index_reply(message, success, category, code=None, warn=False):

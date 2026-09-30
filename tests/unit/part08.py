@@ -590,7 +590,7 @@ finally:
 # Each block drives the real function through a recording transport (or, where the fix IS a shell
 # script, runs that script in bash against a stand-in `crontab` / a temporary home) and asserts on
 # what reached the host — not on the text of the code.
-import subprocess as _rv_sp  # noqa: E402
+import subprocess as _rv_sp  # noqa: E402  # nosec B404 - runs bash on this suite's own fixed scripts
 import tempfile as _rv_tf  # noqa: E402
 import threading as _rv_th  # noqa: E402
 import time as _rv_time  # noqa: E402
@@ -758,7 +758,8 @@ with open(os.path.join(_rv_ct, "crontab"), "w", encoding="utf-8") as _fh:
               '  cat "$CT_STORE"; exit 0\n'
               'fi\n'
               'cp "$1" "$CT_STORE" && echo installed >> "$CT_STORE.log"\n')
-os.chmod(os.path.join(_rv_ct, "crontab"), 0o755)
+# nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
+os.chmod(os.path.join(_rv_ct, "crontab"), 0o700)
 
 
 def _rv_crontab(mode, existing, call, tmpdir=None):
@@ -773,7 +774,7 @@ def _rv_crontab(mode, existing, call, tmpdir=None):
         held.append(_rv_held_elsewhere(_sm_core.crontab_lock(server, user)))
         env = dict(os.environ, PATH=_rv_ct + ":" + os.environ.get("PATH", ""), CT_MODE=mode,
                    CT_STORE=store, TMPDIR=tmpdir or _rv_ct)
-        p = _rv_sp.run(["bash", "-c", sh], capture_output=True, text=True, env=env, timeout=20)
+        p = _rv_sp.run(["bash", "-c", sh], capture_output=True, text=True, env=env, timeout=20)  # nosec B603 B607 - bash on the script under test
         return p.stdout, p.stderr, p.returncode
     saved = _sm_core.shell_as_game_user
     _sm_core.shell_as_game_user = _shell
@@ -887,7 +888,7 @@ _sm_files._apply_cfg_updates(_rv_lines, _rv_vals)
 _rv_cfg = "\n".join(_rv_lines) + "\n"
 with open(os.path.join(_rv_dir, "x.cfg"), "w", encoding="utf-8") as _fh:
     _fh.write(_rv_cfg)
-_rv_p = _rv_sp.run(["bash", "-c", 'source "$1" && printf "%s\\0" "$a" "$b" "$c" "$d" "$e"', "_",
+_rv_p = _rv_sp.run(["bash", "-c", 'source "$1" && printf "%s\\0" "$a" "$b" "$c" "$d" "$e"', "_",  # nosec B603 B607 - bash, a fixed argv, on a fixture file
                     os.path.join(_rv_dir, "x.cfg")], capture_output=True, text=True, timeout=10)
 _rv_got = _rv_p.stdout.split("\0")[:5]
 check("_apply_cfg_updates: bash sources every value as typed — no command runs, ${port}/$ip live",
@@ -1038,7 +1039,7 @@ os.symlink(".", os.path.join(_rv_home, "dot"))
 
 
 def _rv_home_shell(server, user, sh, timeout=30, selfname=None):
-    p = _rv_sp.run(["bash", "-c", sh.replace("/home/zz9", _rv_home)], capture_output=True,
+    p = _rv_sp.run(["bash", "-c", sh.replace("/home/zz9", _rv_home)], capture_output=True,  # nosec B603 B607 - bash, a fixed argv, on the script under test
                    text=True, timeout=20)
     return p.stdout, p.stderr, p.returncode
 

@@ -565,7 +565,7 @@ _gh_shutil.rmtree(_gh_dir, ignore_errors=True)
 # Route-level behaviour (import/uninstall refusals, tag delete, GMod content, check-peer) is driven
 # in smoke_test / rbac_test; these are the helpers those routes rest on.
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-import subprocess as _rv_sub  # noqa: E402
+import subprocess as _rv_sub  # noqa: E402  # nosec B404 - runs bash on the panel's own probe command
 from types import SimpleNamespace as _RvNS  # noqa: E402
 
 import panel.routes._shared as _rv_sh  # noqa: E402
@@ -576,7 +576,6 @@ import panel.routes.remote_vps as _rv_vps  # noqa: E402
 import panel.routes.server_detail as _rv_sd  # noqa: E402
 import panel.routes.server_files as _rv_sf  # noqa: E402
 import panel.routes.tags as _rv_tags  # noqa: E402
-import panel.routes._shared as _rv_shared  # noqa: E402
 from panel.ops.ssh_manager import GMOD_CONTENT_GAMES as _RV_GMOD  # noqa: E402
 from panel.security.auth import hash_password as _rv_hash  # noqa: E402
 
@@ -629,7 +628,7 @@ check("gmod content: a well-formed body keeps only known games; the default acti
 
 # ── the account probe: real shell, real `id` ────────────────────────────────────────────────────
 _rv_probe_users = ["root", "nobody", "lgsmnosuchacct"]
-_rv_out = _rv_sub.run(["bash", "-c", _rv_sh._account_probe_cmd(_rv_probe_users)],
+_rv_out = _rv_sub.run(["bash", "-c", _rv_sh._account_probe_cmd(_rv_probe_users)],  # nosec B603 B607 - bash, a fixed argv, the probe on fixed names
                       capture_output=True, text=True, timeout=60).stdout
 _rv_verdict = _rv_sh._parse_account_probe(_rv_out, _rv_probe_users)
 check("account probe (real shell): uid 0 is refused, a plain account is ok, a missing one absent",
@@ -781,7 +780,7 @@ from panel.security.auth import check_password as _rv_check_pw  # noqa: E402
 
 _rv_tmpdir = _gh_tmp.mkdtemp(prefix="lgsm-rv-acct-")
 _rv_app = _rv_flask.Flask("rv_acct")
-_rv_app.config.update(SECRET_KEY="rv-unit", LOGIN_DISABLED=True,
+_rv_app.config.update(SECRET_KEY="rv-unit", LOGIN_DISABLED=True,  # nosec B106 - a throwaway test app's key
                       SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_rv_tmpdir, "rv.db"),
                       SQLALCHEMY_TRACK_MODIFICATIONS=False)
 _rv_db.init_app(_rv_app)
@@ -803,15 +802,15 @@ with _rv_app.app_context():
     # (a) the authenticator step is spent by ONE conditional UPDATE
     _rv_a = _RvUser.query.filter_by(username="rvcas").first()
     _rv_b = _rv_db.session.get(_RvUser, _rv_a.id)    # same row; think "the other request"
-    _rv_first = _rv_shared.spend_totp_step(_rv_a, 101)
+    _rv_first = _rv_sh.spend_totp_step(_rv_a, 101)
     _rv_db.session.commit()
     # The other request loaded last_totp_step=100 before the first committed; its stale in-memory
     # value would have passed the old `step <= u.last_totp_step` compare.
     from sqlalchemy.orm.attributes import set_committed_value as _rv_scv  # noqa: E402
     _rv_scv(_rv_b, "last_totp_step", 100)
-    _rv_second = _rv_shared.spend_totp_step(_rv_b, 101)
-    _rv_older = _rv_shared.spend_totp_step(_rv_b, 99)
-    _rv_newer = _rv_shared.spend_totp_step(_rv_b, 102)
+    _rv_second = _rv_sh.spend_totp_step(_rv_b, 101)
+    _rv_older = _rv_sh.spend_totp_step(_rv_b, 99)
+    _rv_newer = _rv_sh.spend_totp_step(_rv_b, 102)
     _rv_db.session.commit()
     _rv_stored = _rv_db.session.execute(
         _rv_db.text("SELECT last_totp_step FROM user WHERE id = :i"), {"i": _rv_a.id}).scalar()
@@ -865,7 +864,7 @@ try:
                                        RuntimeError("database is locked")))):
             _rv_row = _RvUser.query.filter_by(username="rvpw").first()
             _rv_row.password_hash = _rv_hash(_RV_PW)
-            _rv_row.password_history = ""
+            _rv_row.password_history = ""  # nosec B105 - clears a fixture row's history, not a password
             _rv_db.session.commit()
             del _rv_calls[:]
             _rv_patch(_rv_tags, _RvProxy(_rv_row), _rv_reg)
@@ -886,7 +885,7 @@ try:
         # control: a row written -> signed back in
         _rv_row = _RvUser.query.filter_by(username="rvpw").first()
         _rv_row.password_hash = _rv_hash(_RV_PW)
-        _rv_row.password_history = ""
+        _rv_row.password_history = ""  # nosec B105 - clears a fixture row's history, not a password
         _rv_db.session.commit()
         del _rv_calls[:]
         _rv_patch(_rv_tags, _RvProxy(_rv_row), lambda u, r=None: "sid-ok")

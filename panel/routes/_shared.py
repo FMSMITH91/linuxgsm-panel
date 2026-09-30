@@ -1440,6 +1440,33 @@ def _account_probe_cmd(users):
     return "; ".join(parts)
 
 
+def _fold_acct_line(verdict, words):
+    """Fold an `ACCT <user> <uid> <groups...>` line: uid 0 or a root group refuses, else "ok"."""
+    groups = set(words[3:]) & _ROOT_EQUIVALENT_GROUPS
+    if words[2] == "0":
+        verdict[words[1]] = "it is uid 0 (root)"
+    elif groups:
+        verdict[words[1]] = ("it is in the %s group, which can become root"
+                             % ", ".join(sorted(groups)))
+    else:
+        verdict.setdefault(words[1], "ok")
+
+
+def _fold_probe_line(verdict, words, users):
+    """Fold one line of the probe's output, split into words, into `verdict`."""
+    if len(words) < 2 or words[1] not in users:
+        return
+    kind, user = words[0], words[1]
+    if kind == "ACCT" and len(words) >= 3:
+        _fold_acct_line(verdict, words)
+    elif len(words) != 2:
+        return
+    elif kind == "NOACCT":
+        verdict.setdefault(user, "absent")
+    elif kind == "SUDOERS" and verdict.get(user) in (None, "ok"):   # uid 0 / a group says more
+        verdict[user] = "it has sudo rules of its own"
+
+
 def _parse_account_probe(out, users):
     """{user: "absent" | "ok" | <why it is refused>} from the probe's output; None if it didn't finish."""
     lines = (out or "").splitlines()
@@ -1447,24 +1474,44 @@ def _parse_account_probe(out, users):
         return None
     verdict = {}
     for ln in lines:
-        words = ln.split()
-        if len(words) == 2 and words[0] == "NOACCT" and words[1] in users:
-            verdict.setdefault(words[1], "absent")
-        elif len(words) >= 3 and words[0] == "ACCT" and words[1] in users:
-            groups = set(words[3:]) & _ROOT_EQUIVALENT_GROUPS
-            if words[2] == "0":
-                verdict[words[1]] = "it is uid 0 (root)"
-            elif groups:
-                verdict[words[1]] = ("it is in the %s group, which can become root"
-                                     % ", ".join(sorted(groups)))
-            else:
-                verdict.setdefault(words[1], "ok")
-        elif len(words) == 2 and words[0] == "SUDOERS" and words[1] in users:
-            if verdict.get(words[1]) in (None, "ok"):     # uid 0 / a group already says more
-                verdict[words[1]] = "it has sudo rules of its own"
+        _fold_probe_line(verdict, ln.split(), users)
     if any(u not in verdict for u in users):
         return None                 # a line went missing: an unknown, not a clean bill
     return verdict
+
+
+def _refused_by_name(remote, users, local):
+    """{user: why} for the accounts refused without asking the host: root, its login, the panel's own."""
+    # The login the panel signs in as, by NAME, whatever its groups say: it is the account whose
+    # authorized_keys the panel's own access rests on, and on a host whose sudoers grants it by
+    # name (cloud-init's 90-cloud-init-users) the group test in the probe would not see it without
+    # root. Not linuxgsm_user: nothing reads that field any more (see _run_via_paramiko), and on an
+    # old single-account setup it names the very account that holds the servers — it gets the same
+    # group and sudoers test as any other account instead.
+    login = getattr(remote, "username", "") or ""
+    refused = {}
+    for u in users:
+        if u == "root":
+            refused[u] = "it is root"
+        elif u == login:
+            refused[u] = "it is the account the panel signs in to this host as"
+        elif local:
+            from panel.security.privileged import _is_panel_account
+            if _is_panel_account(u):
+                refused[u] = "it is the panel's own account"
+    return refused
+
+
+def _probe_accounts(remote, users, local):
+    """The host's own verdict on `users` (see _parse_account_probe); None when it could not be asked."""
+    try:
+        out, _err, _rc = _sm.run_command(
+            remote, _account_probe_cmd(users), timeout=20,
+            sudo=(False if local else bool(getattr(remote, "sudo_enabled", False))))
+    except Exception:
+        _log.debug("account privilege probe failed", exc_info=True)
+        return None
+    return _parse_account_probe(out, users)
 
 
 def privileged_accounts(remote, users):
@@ -1489,35 +1536,12 @@ def privileged_accounts(remote, users):
     users = [u for u in dict.fromkeys(users) if u]
     if not users:
         return {}
-    refused = {}
-    # The login the panel signs in as, by NAME, whatever its groups say: it is the account whose
-    # authorized_keys the panel's own access rests on, and on a host whose sudoers grants it by
-    # name (cloud-init's 90-cloud-init-users) the group test below would not see it without root.
-    # Not linuxgsm_user: nothing reads that field any more (see _run_via_paramiko), and on an old
-    # single-account setup it names the very account that holds the servers — it gets the same
-    # group and sudoers test as any other account instead.
-    login = getattr(remote, "username", "") or ""
     local = _sm.is_local_server(remote)
-    for u in users:
-        if u == "root":
-            refused[u] = "it is root"
-        elif u == login:
-            refused[u] = "it is the account the panel signs in to this host as"
-        elif local:
-            from panel.security.privileged import _is_panel_account
-            if _is_panel_account(u):
-                refused[u] = "it is the panel's own account"
+    refused = _refused_by_name(remote, users, local)
     rest = [u for u in users if u not in refused]
     if not rest:
         return refused
-    try:
-        out, _err, _rc = _sm.run_command(
-            remote, _account_probe_cmd(rest), timeout=20,
-            sudo=(False if local else bool(getattr(remote, "sudo_enabled", False))))
-    except Exception:
-        _log.debug("account privilege probe failed", exc_info=True)
-        return None
-    verdict = _parse_account_probe(out, rest)
+    verdict = _probe_accounts(remote, rest, local)
     if verdict is None:
         return None
     refused.update({u: v for u, v in verdict.items() if v not in ("ok", "absent")})
@@ -1551,11 +1575,9 @@ def game_account_write_refusal(remote, user, now=None):
     now = time.monotonic() if now is None else now
     key = (getattr(remote, "id", None), getattr(remote, "host", None),
            getattr(remote, "username", None), user)
-    with _ACCOUNT_VERDICTS_LOCK:
-        hit = _ACCOUNT_VERDICTS.get(key)
-        if hit is not None and hit[0] > now:
-            why = hit[1]
-            return (_privileged_write_msg(user, why) if why else None)
+    why = _cached_account_verdict(key, now)
+    if why is not None:
+        return _privileged_write_msg(user, why) if why else None
     verdict = privileged_accounts(remote, [user])
     if verdict is None:
         return ("Couldn't check whether the '%s' account can become root on this host, and the "
@@ -1563,11 +1585,23 @@ def game_account_write_refusal(remote, user, now=None):
                 "an administrator or root account. Nothing was changed; try again when the host "
                 "answers." % user)
     why = verdict.get(user) or ""
+    _store_account_verdict(key, now, why)
+    return _privileged_write_msg(user, why) if why else None
+
+
+def _cached_account_verdict(key, now):
+    """The cached why ("" for a plain account) for `key` while it is fresh; None when there is none."""
+    with _ACCOUNT_VERDICTS_LOCK:
+        hit = _ACCOUNT_VERDICTS.get(key)
+        return hit[1] if hit is not None and hit[0] > now else None
+
+
+def _store_account_verdict(key, now, why):
+    """Cache a definite answer for `key`, dropping the ones that have expired."""
     with _ACCOUNT_VERDICTS_LOCK:
         for k in [k for k, v in _ACCOUNT_VERDICTS.items() if v[0] <= now]:
             del _ACCOUNT_VERDICTS[k]            # bounded to the accounts asked about recently
         _ACCOUNT_VERDICTS[key] = (now + _ACCOUNT_VERDICT_TTL, why)
-    return _privileged_write_msg(user, why) if why else None
 
 
 def _privileged_write_msg(user, why):
