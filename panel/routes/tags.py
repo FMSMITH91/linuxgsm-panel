@@ -542,6 +542,13 @@ def _register_account_routes(app):
         # since single-use was introduced; this — the panel's other route that accepts a live code —
         # was still asking the yes/no question. The step is committed below with the new password.
         # A consumed backup code, like the spent step, is committed below alongside the password.
+        # The new hash BEFORE the second factor is spent. Spending it is an immediate conditional
+        # UPDATE (spend_totp_step / the backup-code swap), which opens SQLite's write transaction on
+        # the spot — so hashing after it held the database's write lock for the whole bcrypt run in
+        # tpool, and any other greenlet that wrote meanwhile (the monitor sweep, _touch_session,
+        # log_action) sat in SQLite's C busy handler, which blocks the hub: the lock holder could not
+        # resume to commit, and everything stalled for the full busy timeout before failing "locked".
+        _new_hash = hash_password(new)
         if u.totp_enabled:
             refused = _spend_second_factor(u, code, _back,
                                            "That authenticator code didn't match — password not changed.")
@@ -551,7 +558,7 @@ def _register_account_routes(app):
                 return refused
 
         # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- password_problem() checked it above
-        u.set_password(hash_password(new))   # remembers the outgoing one; see password_reused
+        u.set_password(_new_hash)   # remembers the outgoing one; see password_reused
         # Whatever it was before, the password is now the account holder's own and nobody else's —
         # which is the entire condition the forced-change gate is waiting on.
         _was_forced = bool(u.must_change_password)

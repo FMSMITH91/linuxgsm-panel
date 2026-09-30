@@ -569,6 +569,12 @@ def _delete_rule_locked(server, n, force, expect_key):
     else:
         verb, args = "ufw-delete-num", [n]
     out, err, rc = _core.run_privileged(server, verb, args, timeout=15)
+    if verb == "ufw-delete-num-if" and rc == 2 and "unknown verb" in (err or ""):
+        # A panel-host helper installed before ufw-delete-num-if existed (the root pieces are
+        # refreshed by install.sh, which may not have run yet). Delete the way it did before: still
+        # under ufw_lock, and the guard above has already matched the rule.
+        verb, args = "ufw-delete-num", [n]
+        out, err, rc = _core.run_privileged(server, verb, args, timeout=15)
     if rc == 0:
         return True, f"Rule {n} deleted"
     if verb == "ufw-delete-num-if" and rc == _priv.UFW_RULE_MOVED:

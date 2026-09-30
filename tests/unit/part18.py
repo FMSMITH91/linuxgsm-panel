@@ -2157,3 +2157,93 @@ finally:
             if _h18 is not None:
                 db.session.delete(_h18)
         db.session.commit()
+
+
+# ── integration review: three interactions between the review fixes ──────────────────────────────
+# (1) The TOTP and backup-code spends became immediate conditional UPDATEs, which open SQLite's
+# write transaction on the spot. The password change and 2FA enrolment then ran bcrypt (tpool) with
+# that lock held, and every other writer sat in SQLite's hub-blocking busy handler. The bcrypt work
+# must come BEFORE the spend in both routes — checked on the source order of the two bodies.
+import inspect as _ir_inspect  # noqa: E402
+from panel.routes import tags as _ir_tags, auth_routes as _ir_auth  # noqa: E402
+_ir_pw = _ir_inspect.getsource(_ir_tags)
+_ir_pw = _ir_pw[_ir_pw.index("def account_change_password"):]
+check("integration: the password change hashes the new password before spending the second factor",
+      "_new_hash = hash_password(new)" in _ir_pw
+      and _ir_pw.index("_new_hash = hash_password(new)") < _ir_pw.index("_spend_second_factor(")
+      and "u.set_password(_new_hash)" in _ir_pw, _ir_pw[:200])
+_ir_en = _ir_inspect.getsource(_ir_auth)
+_ir_en = _ir_en[_ir_en.index("_enrol_step = ("):]
+check("integration: 2FA enrolment hashes its backup codes before spending the step",
+      _ir_en.index("set_backup_codes(codes)") < _ir_en.index("spend_totp_step(_u, _enrol_step)"),
+      _ir_en[:300])
+
+# (2) The Discord bot's hold after a fatal close is lifted by ANY save of the settings, not only by
+# the watcher happening to read an "off" config: an untick-save-tick-save inside one 15 s poll left
+# the config unchanged by the time it was read, and the hold stood for six hours.
+from unit.part07 import _bf_watch, _bf_n  # noqa: E402
+
+
+def _ir_quick_resave(n, cfg):
+    """Save the settings twice within one poll (off, then on again): the config reads the same."""
+    if n == 3:
+        _bf_n._discord_saves[0] += 2
+
+
+_ir_calls, _, _ = _bf_watch([4014], hours=0.2, on_sleep=_ir_quick_resave)
+check("integration: a settings save inside one poll still lifts the Discord fatal-close hold",
+      len(_ir_calls) == 2, "%d sessions" % len(_ir_calls))
+_ir_calls, _, _ = _bf_watch([4014], hours=0.2)
+check("integration: ...while with no save it holds (control)", len(_ir_calls) == 1,
+      "%d sessions" % len(_ir_calls))
+_ir_gen = _bf_n.discord_settings_generation()
+try:
+    _ir_saved_cfg = _bf_n._cfg
+    _ir_store = {}
+    _bf_n._cfg = lambda: {}
+    _ir_saver = getattr(_bf_n, "update_config", None)
+    try:
+        _bf_n.update_config = lambda fn: fn(_ir_store)
+        _bf_n.save_settings(telegram={}, discord={}, events={})
+    except Exception:  # nosec B110 - only the generation bump is under test here
+        pass
+    finally:
+        if _ir_saver is not None:
+            _bf_n.update_config = _ir_saver
+finally:
+    _bf_n._cfg = _ir_saved_cfg
+check("integration: save_settings bumps the generation the hold is keyed on",
+      _bf_n.discord_settings_generation() == _ir_gen + 1,
+      "%d -> %d" % (_ir_gen, _bf_n.discord_settings_generation()))
+
+# (3) A panel-host helper installed before ufw-delete-num-if existed answers "unknown verb" (rc 2):
+# the delete falls back to ufw-delete-num, still under the lock and after the guard.
+from panel.ops.ssh_manager import hosts as _ir_hosts, firewall as _ir_fw, _core as _ir_core  # noqa: E402
+_ir_rules = [{"num": "1", "detail": "22/tcp  ALLOW IN  Anywhere  # ssh"}]
+_ir_sent = []
+
+
+def _ir_status(_s):
+    g = _ir_fw._group_ufw_rules(_ir_rules)
+    return {"installed": True, "enabled": True, "rules": _ir_rules,
+            "groups": [dict(x, protected=False) for x in g]}
+
+
+def _ir_old_helper(s, verb, args=(), **k):
+    _ir_sent.append(verb)
+    if verb == "ufw-delete-num-if":
+        return ("", "panel-helper: unknown verb 'ufw-delete-num-if'", 2)
+    return ("Rule deleted", "", 0)
+
+
+_ir_saved = (_ir_fw.remote_ufw_status, _ir_core.run_privileged)
+try:
+    _ir_fw.remote_ufw_status = _ir_status
+    _ir_core.run_privileged = _ir_old_helper
+    _ir_key = _ir_status(None)["groups"][0]["key"]
+    _ir_res = _ir_hosts.remote_ufw_delete_rule(NS(), 1, expect_key=_ir_key)
+finally:
+    _ir_fw.remote_ufw_status, _ir_core.run_privileged = _ir_saved
+check("integration: an older helper without ufw-delete-num-if still deletes, via ufw-delete-num",
+      _ir_sent == ["ufw-delete-num-if", "ufw-delete-num"] and _ir_res == (True, "Rule 1 deleted"),
+      repr((_ir_sent, _ir_res)))

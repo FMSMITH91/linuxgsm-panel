@@ -262,6 +262,7 @@ def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None):
     round-trips the real secret back). There is no global master switch — a channel's own enable
     toggle is what turns its alerts on/off.
     """
+    _discord_saves[0] += 1
     cur = _cfg()
     cur_tg = cur.get("telegram") or {}
     cur_dc = cur.get("discord") or {}
@@ -672,6 +673,16 @@ _WS_OP_TEXT, _WS_OP_BINARY, _WS_OP_CLOSE = 0x1, 0x2, 0x8
 # Written by the watcher in bots/discord.py, which is the only thing that knows; a one-element
 # holder so it is shared without a `global`.
 _gateway_problem = [""]
+# Bumped by every save of the notification settings. The Discord bot's hold after a fatal close is
+# keyed on it as well as on the token: the page tells the admin to fix the intent in the Portal and
+# then turn "Accept commands" off and on, and a quick untick-save-tick-save inside one 15-second
+# poll never showed the loop an "off" config — so the hold stayed for its full six hours.
+_discord_saves = [0]
+
+
+def discord_settings_generation():
+    """How many times the notification settings have been saved in this process."""
+    return _discord_saves[0]
 
 
 def set_discord_gateway_problem(text):

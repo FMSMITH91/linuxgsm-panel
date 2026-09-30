@@ -118,6 +118,7 @@ def _discord_command_watch(app):
     """
     backoff = _DC_CMD_BACKOFF
     fatal = None      # (bot token, when) of the last fatal close, while it still holds
+    fatal_gen = None  # the settings generation at that close: any save since lifts the hold
     while True:
         wait = backoff
         try:
@@ -133,7 +134,8 @@ def _discord_command_watch(app):
                 fatal, backoff = None, _DC_CMD_BACKOFF
                 time.sleep(_DC_CMD_BACKOFF)
                 continue
-            if fatal and fatal[0] == bot_token and _clock() - fatal[1] < _DC_FATAL_RETRY:
+            if (fatal and fatal[0] == bot_token and _clock() - fatal[1] < _DC_FATAL_RETRY
+                    and fatal_gen == notifications.discord_settings_generation()):
                 time.sleep(_DC_CMD_BACKOFF)       # a config read, no IDENTIFY: cheap to repeat
                 continue
             if fatal:
@@ -177,6 +179,7 @@ def _discord_command_watch(app):
             started = _clock()
             code = notifications.discord_gateway_run(bot_token, _on_message)   # returns when the socket drops
             fatal, backoff = _dc_after_session(bot_token, code, _clock() - started, backoff)
+            fatal_gen = notifications.discord_settings_generation()
             wait = backoff
         except Exception:
             _log.debug("discord command-watch tick failed", exc_info=True)

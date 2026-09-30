@@ -369,6 +369,13 @@ def _register_2fa_and_profile(app):
                 # and each rendered its OWN set of backup codes — only the later commit's set was
                 # stored, and the holder of the other page was left keeping codes that never work.
                 # Now exactly one wins; the other is told the code is spent and keeps the QR.
+                #
+                # The eight backup-code hashes (~2-3s of bcrypt in tpool) are made BEFORE the spend:
+                # the spend is an immediate UPDATE that takes SQLite's write lock, and holding it
+                # across that bcrypt run froze every other writer in SQLite's hub-blocking busy
+                # handler until the busy timeout. Wasted on a refused spend, which is rare.
+                codes = generate_backup_codes()
+                current_user.set_backup_codes(codes)
                 if not spend_totp_step(_u, _enrol_step):
                     db.session.rollback()
                     flash("That code has already been used — wait for your authenticator to show "
@@ -376,8 +383,6 @@ def _register_2fa_and_profile(app):
                     return redirect(url_for("account_2fa_enable"))
                 current_user.totp_secret = encrypt_secret(secret)
                 current_user.totp_enabled = True
-                codes = generate_backup_codes()
-                current_user.set_backup_codes(codes)
                 db.session.commit()
                 session.pop("_2fa_setup_secret", None)
                 log_action(current_user, "2fa_enabled", target=current_user.username)
