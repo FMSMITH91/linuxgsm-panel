@@ -519,21 +519,10 @@ def _register_panel_port(app):
             if ok else f"Couldn't remove every rule for port {port}; check the firewall page.")})
 
 
-def _rv_may_sync_ports(gs):
-    """Whether the caller may write THIS server's host firewall from sync-ports.
-
-    MANAGE_REMOTES on the host, and on the PANEL host, a superadmin. Every firewall write there is
-    superadmin-only (get_host_remote), because that firewall guards the panel itself; the five
-    /firewall/* routes and game-port/open take it through get_host_remote, but sync-ports is keyed
-    on a SERVER, and a delegated MANAGE_REMOTES admin whose group covered the panel host could
-    still put allow rules on it from there. Same inline test get_host_remote uses.
-    """
-    _panel_host = (getattr(gs.remote, "is_local", False)
-                   or getattr(gs.remote, "auth_method", None) == "local")
-    return (current_user.is_superadmin
-            or (has_permission(current_user, MANAGE_REMOTES)
-                and can_access_remote(current_user, gs.remote_id)
-                and not _panel_host))
+def _rv_on_panel_host(gs):
+    """Whether this server lives on the PANEL host (the inline test get_host_remote uses)."""
+    return (getattr(gs.remote, "is_local", False)
+            or getattr(gs.remote, "auth_method", None) == "local")
 
 
 def _rv_sync_ports_run(gs):
@@ -615,7 +604,16 @@ def _register_game_ports(app):
         panel's, is neither opened nor stored (withheld_game_ports).
         """
         gs = get_game(server_id)
-        if not _rv_may_sync_ports(gs):
+        # ...and on the PANEL host, a superadmin. Every firewall write there is superadmin-only
+        # (get_host_remote), because that firewall guards the panel itself; the five /firewall/*
+        # routes and game-port/open above take it through get_host_remote, but this one is keyed
+        # on a SERVER, and a delegated MANAGE_REMOTES admin whose group covered the panel host
+        # could still put allow rules on it from here. Same inline test get_host_remote uses.
+        _panel_host = _rv_on_panel_host(gs)
+        if not (current_user.is_superadmin
+                or (has_permission(current_user, MANAGE_REMOTES)
+                    and can_access_remote(current_user, gs.remote_id)
+                    and not _panel_host)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         try:
             return _rv_sync_ports_run(gs)
