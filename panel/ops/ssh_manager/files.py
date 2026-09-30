@@ -1070,6 +1070,11 @@ def delete_path(server, user, relpath, selfname=None):
     out, e, rc = _core.shell_as_game_user(
         server, user, _guarded(user, ap, _protected_resolved(user, ap, selfname, inner)),
         timeout=30)
+    return _files_delete_outcome(out, e, rc)
+
+
+def _files_delete_outcome(out, e, rc):
+    """delete_path's (ok, message) from what its guarded host-side `rm -rf` printed."""
     if _OUTSIDE_HOME in (out or ""):
         return False, "Refusing to delete this path"
     if _PROTECTED_MARK in (out or ""):
