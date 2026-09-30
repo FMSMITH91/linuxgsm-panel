@@ -689,8 +689,8 @@ def _load_legacy_user(s):
     legacy = db.session.get(User, int(s)) if s.isdecimal() else None
     if legacy is None or not legacy.is_active or (legacy.auth_epoch or 0) != 0:
         return None                                  # see _user_for_cookie_id on is_active
-    if not _session_binding_ok():
-        return None
+    if not _session_binding_ok(bind_unbound=False):
+        return None                                  # no row, so an unbound session has no proof
     return legacy
 
 
@@ -823,7 +823,10 @@ def init_auth(app):
                         "load_user: could not verify session %s — denying this request",
                         (sid or "")[:8], exc_info=True)
                 return None
-        if not _session_binding_ok():
+        # With a sid, the row has already vouched for this client (or recorded none to check), so
+        # an unbound session may be bound to it. Without one there is no row, and an unbound
+        # session is exactly what a replayed remember cookie arrives in — see _session_binding_ok.
+        if not _session_binding_ok(bind_unbound=bool(sid)):
             return None                               # "strong": replayed from another client
         return user
 
@@ -1579,7 +1582,7 @@ def _session_row_binding_ok(sess):
     return hmac.compare_digest(here.encode("utf-8", "replace"), there.encode("utf-8", "replace"))
 
 
-def _session_binding_ok():
+def _session_binding_ok(bind_unbound=True):
     """Whether this request's session is used from the client it was bound to ("strong" only).
 
     SESSION_PROTECTION="strong" was inert. flask-login only clears a session on an identifier
@@ -1590,13 +1593,21 @@ def _session_binding_ok():
 
     So the binding is kept in the session as "_bind" (set at login) and compared here. A session
     from before this check has none and is bound on its first request instead of being logged out
-    by the upgrade. "basic" and off skip it.
+    by the upgrade (a login with a per-device sid only, now — see below). "basic" and off skip it.
 
     A session with no "_bind" is also what flask-login makes when it restores a login from the
     remember cookie, so binding on first use here would bind a replayed remember cookie to the
     replayer. For any login carrying a session sid, load_user asks _session_row_binding_ok first,
-    which checks the client against the server-side row; this TOFU binding is only the last word for
-    a login with no row to ask (a cookie from before per-device sessions).
+    which checks the client against the server-side row, and only then lets an unbound session be
+    bound here.
+
+    A login with NO sid — a cookie from before per-device sessions, "<id>:<epoch>" or a bare
+    "<id>" — has no row to ask, and binding it on first use was the same hole: its remember cookie,
+    replayed without the session cookie, was bound to the replayer. So load_user passes
+    bind_unbound=False for those, and an unbound session is refused rather than bound. What that
+    costs is one sign-in: a session that already carries its "_bind" keeps working, and the
+    person whose session cookie had expired signs in again and gets a per-device login, which is
+    checked against its row from then on. "basic" and off are unchanged.
     """
     try:
         if current_app.config.get("SESSION_PROTECTION") != "strong":
@@ -1609,6 +1620,8 @@ def _session_binding_ok():
     fp = session_fingerprint()
     bound = session.get("_bind")
     if not bound:
+        if not bind_unbound:
+            return False
         session["_bind"] = fp
         return True
     return hmac.compare_digest(str(bound), fp)

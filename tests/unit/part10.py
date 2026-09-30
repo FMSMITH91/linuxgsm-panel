@@ -2806,12 +2806,16 @@ def _p10_as(ip, ua=_P10_UA, bind=None, path="/"):
     return ctx
 
 
-def _p10_loads(login_id, ip, ua=_P10_UA):
+def _p10_loads(login_id, ip, ua=_P10_UA, bound=False):
     """Whether load_user accepts `login_id` from `ip`/`ua` in a FRESH (cookie-less) session.
 
     A fresh session is what flask-login restores a remember cookie into: that is the replay.
+    `bound`: the session instead already carries its "_bind", taken from this same client — a
+    session cookie that came back with the request.
     """
     ctx = _p10_as(ip, ua)
+    if bound:
+        _p10_session["_bind"] = _p10_auth.session_fingerprint()
     try:
         return _p10_load(login_id) is not None
     finally:
@@ -2878,7 +2882,7 @@ def _p10_remember_cookie_binding(uid):
 
 def _p10_legacy_bare_id(uid):
     check("legacy cookie: a bare '<id>' is accepted while the account's auth_epoch is 0 (control)",
-          _p10_loads(str(uid), "203.0.113.9"))
+          _p10_loads(str(uid), "203.0.113.9", bound=True))
     with _p10a.app_context():
         check("legacy cookie: the console poller agrees (control)",
               _p10_sf._login_id_still_accepted(str(uid)) is not None)
@@ -2886,13 +2890,44 @@ def _p10_legacy_bare_id(uid):
         u.auth_epoch = 1                     # a password change / sign out everywhere / reset
         _p10_db.session.commit()
     check("legacy cookie: a bare '<id>' is REFUSED once the epoch has moved (it survived password "
-          "changes and sign-out-everywhere)", not _p10_loads(str(uid), "203.0.113.9"))
+          "changes and sign-out-everywhere)", not _p10_loads(str(uid), "203.0.113.9", bound=True))
     with _p10a.app_context():
         check("legacy cookie: ...and the console poller refuses it too",
               _p10_sf._login_id_still_accepted(str(uid)) is None)
         u = _p10_db.session.get(_P10User, uid)
         u.auth_epoch = 0
         _p10_db.session.commit()
+
+
+def _p10_sidless_cookie_binding(uid):
+    """A login with no per-device sid has no row to check the client against."""
+    lid = "%d:0" % uid
+    check("sid-less cookie: a session that already carries its binding keeps working (control)",
+          _p10_loads(lid, "203.0.113.9", bound=True))
+    check("sid-less cookie: ...and a bound one replayed from another address is still refused",
+          not _p10_bound_elsewhere(lid))
+    # The finding: its remember cookie, restored into an EMPTY session, was bound to whoever sent
+    # it. Refused now; the person signs in once more and gets a per-device login.
+    check("sid-less cookie: an '<id>:<epoch>' restored into an unbound session is refused under "
+          "strong (it used to be bound to the replayer)", not _p10_loads(lid, "198.51.100.7"))
+    check("sid-less cookie: ...and a bare pre-epoch '<id>' the same way",
+          not _p10_loads(str(uid), "198.51.100.7"))
+    _p10a.config["SESSION_PROTECTION"] = "basic"
+    try:
+        check("sid-less cookie: 'basic' is unchanged — accepted, unbound, from anywhere",
+              _p10_loads(lid, "198.51.100.7"))
+    finally:
+        _p10a.config["SESSION_PROTECTION"] = "strong"
+
+
+def _p10_bound_elsewhere(lid):
+    """Whether load_user accepts `lid` in a session bound to some other client."""
+    ctx = _p10_as("198.51.100.7", bind="0" * 32)
+    try:
+        return _p10_load(lid) is not None
+    finally:
+        _p10_db.session.rollback()
+        ctx.pop()
 
 
 def _p10_register_session_retry(uid):
@@ -3051,6 +3086,7 @@ try:
         _p10_uid = _p10_fixture()
     _p10_remember_cookie_binding(_p10_uid)
     _p10_legacy_bare_id(_p10_uid)
+    _p10_sidless_cookie_binding(_p10_uid)
     _p10_register_session_retry(_p10_uid)
     _p10_login_refused_without_row(_p10_uid)
     _p10_held_chunked_body(_p10_uid)
