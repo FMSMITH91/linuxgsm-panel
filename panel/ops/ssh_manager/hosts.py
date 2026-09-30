@@ -1,7 +1,6 @@
 """SSH connection manager for remote LinuxGSM servers.
 Also supports local execution for running on the panel's own machine."""
 import ipaddress as _ipaddress
-import os
 import re
 import socket
 from panel.core import clock, terminal
@@ -512,6 +511,20 @@ def remote_ufw_delete_rule(server, num, force=False, expect_key=None):
         return False, "Invalid rule number"
     if expect_key is not None and not isinstance(expect_key, str):
         return False, "Invalid rule identity"
+    # The check below and the `ufw delete n` are two commands, and n is a position. The expect_key
+    # re-read closed the gap between the PAGE's read and this one, but not the one between this
+    # read and the delete: the auto-block reconcile inserts its denies at 1 from its own thread,
+    # so an insert landing there moved every rule down one and `ufw delete n` removed whatever
+    # now sat at n — the rule ABOVE the one that was checked, which can be the protected rule
+    # keeping SSH open, deleted by a request the guard had just approved. Both run under the host's
+    # ufw_lock now (run_privileged takes it for every ufw change, the auto-block's inserts
+    # included), and this holds it from the read to the delete.
+    with _core.ufw_lock(server):
+        return _delete_rule_locked(server, n, force, expect_key)
+
+
+def _delete_rule_locked(server, n, force, expect_key):
+    """remote_ufw_delete_rule's guard and delete. Called with the host's ufw_lock held."""
     if not force or expect_key is not None:
         # The guard reads the firewall to find out which rules are load-bearing. If that read
         # FAILS it returns no groups — and iterating nothing marked nothing protected, so every
@@ -2508,12 +2521,15 @@ def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
     # drift. It used to delete any deny for the address first, whoever wrote it (see
     # system_ops._ufw_deny_with for what that cost); a rule the panel did not write is left alone.
     from panel.ops import system_ops as _so
-    shadowed = {}
-    existing = (remote_ufw_blocked_ips(server, shadowed) or {}).get(ip)
-    return _so._ufw_deny_with(
-        ip, tag, existing,
-        lambda verb, args: _core.run_privileged(server, verb, args, timeout=20),
-        shadowed.get(ip))
+    # Read and write under the host's ufw_lock: what _ufw_deny_with decides (replace, re-tag,
+    # leave) is decided from this read, and it deletes and inserts by what the read found.
+    with _core.ufw_lock(server):
+        shadowed = {}
+        existing = (remote_ufw_blocked_ips(server, shadowed) or {}).get(ip)
+        return _so._ufw_deny_with(
+            ip, tag, existing,
+            lambda verb, args: _core.run_privileged(server, verb, args, timeout=20),
+            shadowed.get(ip))
 
 
 def remote_ufw_undeny_ip(server, ip):
@@ -2945,6 +2961,39 @@ def _socket_listen_lines(ports, bind_addr):
     return body
 
 
+def _open_ssh_port_rule(server, port, old_ports):
+    """Step 1 of change_ssh_port: let `port`/tcp through ufw. (added, refusal).
+
+    `added` is True only when THIS call put the allow there, which is what makes it the revert's
+    to delete. Nothing is opened when:
+      * sshd already serves `port` (it is in `old_ports`): whatever lets it in today is what the
+        panel's own connection is using, and re-allowing would rewrite a LIMIT into an ALLOW;
+      * the first public rule a TCP connection to it meets already allows it (ALLOW or LIMIT, a
+        bare `N`, `N/tcp` or a range): the operator's rule stays as it is.
+    `refusal` is a message when that first rule DENIES or REJECTS it: the move would have
+    "succeeded" (the listening check does not go through the firewall) onto a port nobody can
+    reach, and the advice that follows is to close the old one. Nothing has been changed by then.
+
+    A firewall that cannot be read, or an inactive one (which lists no rules, stored ones
+    included), is opened as it always was — but NOT counted as added: a rule that may have been
+    there before is not one to delete on the way out.
+    """
+    if str(port) in old_ports:
+        return False, None
+    with _core.ufw_lock(server):
+        before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
+        known = brc == 0 and firewall._ufw_is_active(before or "")
+        first = _ufw_first_public_rule(before, port, "tcp") if known else None
+        if first is not None:
+            if first["action"] in ("ALLOW", "LIMIT"):
+                return False, None
+            return False, ("Port %d/tcp is blocked by the firewall rule `%s`, so SSH moved there "
+                           "would be unreachable — remove or change that rule first. Nothing was "
+                           "changed." % (port, first["detail"]))
+        ok, _ = remote_ufw_open_port(server, port, "tcp", comment="SSH (panel)")
+        return bool(ok and known), None
+
+
 def change_ssh_port(server, new_port, bind_addr=""):
     """Move this host's sshd onto `new_port`, optionally restricting it to a single `bind_addr` IP
     (for hosts with several IPs), WITHOUT risking a lockout.
@@ -3056,8 +3105,21 @@ def change_ssh_port(server, new_port, bind_addr=""):
                            "not take it and the panel could not tell sshd from that service "
                            "afterwards. Pick a free port — nothing was changed." % new_port)
 
-    # 1. Open the new port in the firewall FIRST (best-effort; a host without UFW just no-ops).
-    remote_ufw_open_port(server, new_port, "tcp", comment="SSH (panel)")
+    # 1. Open the new port in the firewall FIRST (best-effort; a host without UFW just no-ops) —
+    #    unless a rule for it is already there, and remember whether THIS step added one: that is
+    #    the only rule the revert may take away.
+    #
+    #    It used to open unconditionally and the revert closed `new_port/tcp` unconditionally. On a
+    #    bind-address change that keeps port 22, or a move onto a port sshd already serves
+    #    ([22, 2222] -> 2222), that rule existed before any of this — it is the one the panel's own
+    #    connection comes in on — and a failed bind deleted it on the way out, under a message
+    #    saying "Your existing SSH still works". And the open itself was not harmless there: ufw
+    #    REPLACES a rule that differs only in action or comment (see remote_ufw_allow_game_ports),
+    #    so `allow 22/tcp` turned the bootstrap's `LIMIT 22/tcp` into a plain ALLOW, silently
+    #    dropping the brute-force brake, whether the move succeeded or not.
+    _ufw_added, _ufw_refused = _open_ssh_port_rule(server, new_port, old_ports)
+    if _ufw_refused:
+        return False, _ufw_refused
 
     # 2. Snapshot any existing drop-in (so a failed bind change restores the EXACT prior state),
     #    then write the new one. Ubuntu 22.04/24.04 Include /etc/ssh/sshd_config.d/*.conf by default.
@@ -3092,8 +3154,9 @@ def change_ssh_port(server, new_port, bind_addr=""):
         # ...and close the hole step 1 opened. It only restored the drop-in before, so every revert
         # path left a public ALLOW for a port nothing serves — including the step-3 path, whose
         # message says "sshd rejected the new config — nothing changed". Best-effort, like the
-        # open: a host without UFW no-ops either way.
-        remote_ufw_close_port(server, new_port, "tcp")
+        # open: a host without UFW no-ops either way. ONLY a rule step 1 added (see there).
+        if _ufw_added:
+            remote_ufw_close_port(server, new_port, "tcp")
         _restart_ssh_listener(server, socket_mode)
         return False, msg
 
@@ -3511,10 +3574,11 @@ def _ssh_test_login(client, host, port, username, auth_method, credential):
             allow_agent=False, look_for_keys=False,
         )
     else:
-        key_path = credential or os.path.expanduser("~/.ssh/id_rsa")
+        # The same keys get_connection offers (_core.key_login_kwargs): a named key only, never
+        # the agent — so the Test button cannot pass on a key the real connection would not use.
         client.connect(
-            host, port=port, username=username,
-            key_filename=key_path, timeout=10,
+            host, port=port, username=username, timeout=10,
+            **_core.key_login_kwargs(credential),
         )
     return None
 

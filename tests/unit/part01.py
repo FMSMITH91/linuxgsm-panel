@@ -1464,7 +1464,9 @@ def _cr_drive(fn, *a, **kw):
         _fh.write(_CR_TAB)
     if os.path.exists(_dst):
         os.remove(_dst)
-    pipeline = pipeline.replace("crontab -l 2>/dev/null", "cat %s" % _cr_shlex.quote(_src))
+    # `E=$(crontab -l 2>&1 >"$L")` since the rewrite keeps the listing's stderr to tell "no
+    # crontab for" from a failed read (_core._rewrite_crontab).
+    pipeline = pipeline.replace("crontab -l 2>&1", "cat %s 2>&1" % _cr_shlex.quote(_src))
     pipeline = pipeline.replace('crontab "$T"', 'cp "$T" %s' % _cr_shlex.quote(_dst))
     _r = _cr_sub.run(["bash", "-c", pipeline], capture_output=True, text=True)
     return (open(_dst, encoding="utf-8").read() if os.path.exists(_dst) else None), _r.stderr

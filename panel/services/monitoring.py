@@ -37,7 +37,7 @@ from panel.ops.ssh_manager import (
     remote_fail2ban_attempt_counts, remote_reboot,
     remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
     run_privileged,
-    server_live_metrics, tailnet_exempt_ips,
+    server_live_metrics, tailnet_exempt_ips, ufw_lock,
     console_status as sm_console_status,
     game_engine as sm_game_engine,
     get_server_status as sm_get_server_status,
@@ -1063,9 +1063,17 @@ def _autoblock_host_io(remote):
         counts = so.fail2ban_attempt_counts(days=7)
         blocked = so.ufw_blocked_ips()
 
+        # The panel host's writers run through system_ops, not ssh_manager.run_privileged, so they
+        # take the host's ufw_lock here: a delete-by-number on this host (remote_ufw_delete_rule on
+        # the local row) holds it from its check to its delete, and an insert at 1 in between is
+        # exactly what it must not see.
         def deny(ip):
-            return so.ufw_deny_ip(ip, tag=_AUTOBLOCK_TAG)
-        undeny = so.ufw_undeny_ip
+            with ufw_lock(remote):
+                return so.ufw_deny_ip(ip, tag=_AUTOBLOCK_TAG)
+
+        def undeny(ip):
+            with ufw_lock(remote):
+                return so.ufw_undeny_ip(ip)
     else:
         counts = remote_fail2ban_attempt_counts(remote, days=7)
         blocked = remote_ufw_blocked_ips(remote)

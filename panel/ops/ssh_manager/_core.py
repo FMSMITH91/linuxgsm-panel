@@ -259,6 +259,66 @@ def _register_remote_cache_invalidation():
 _register_remote_cache_invalidation()
 
 
+# Per-host (and per-account) locks for the READ-MODIFY-WRITE sequences that span more than one
+# command on the host. Each of these used to be two round trips with nothing between them:
+#
+#   * ufw. A rule NUMBER is a position, and the auto-block reconcile (monitoring, its own green
+#     thread) inserts its denies at position 1. remote_ufw_delete_rule read the firewall, decided
+#     rule n was not the one keeping SSH open, and then ran `ufw delete n` — a second command, by
+#     which time an insert could have moved the protected rule onto n. Every ufw MUTATION through
+#     run_privileged now takes the host's lock, and the delete holds it across its read and its
+#     delete, so nothing the panel does can renumber the rules in between.
+#   * crontab. `crontab -l | filter > tmp; crontab tmp` replaces the WHOLE crontab, and the
+#     Scheduled Tasks page runs cron.upgrade_managed_cron_tracking on every load (and the daily job
+#     for every server) while an operator may be adding, editing or toggling a job on the same
+#     account: two rewrites that both read before either wrote left only the second one's view, so
+#     an added job vanished or a deleted one came back. Keyed by (host, account).
+#
+# RLocks, because the outer holder calls helpers that take the same lock again (the delete's read
+# and delete; the cron upgrade's read and _rewrite_crontab). Green under eventlet's monkey_patch,
+# like _conn_lock: a waiter parks its greenlet rather than blocking the hub. The panel is one
+# process, so a process-local lock is the whole of it — a hand-typed `ufw` or `crontab -e` on the
+# host is outside any lock the panel could hold.
+_host_locks = {}
+_host_locks_guard = threading.Lock()
+
+
+def _host_lock_key(server):
+    """What identifies `server` for a host lock: the panel's own host is one host however many
+    rows name it; a remote is its row id, or its address for an unsaved row."""
+    if is_local_server(server):
+        return ("local",)
+    rid = getattr(server, "id", None)
+    return ("remote", rid) if rid is not None else ("addr", getattr(server, "host", None),
+                                                     getattr(server, "port", None))
+
+
+def _host_lock(kind, server, *extra):
+    key = (kind,) + _host_lock_key(server) + tuple(extra)
+    with _host_locks_guard:
+        lk = _host_locks.get(key)
+        if lk is None:
+            lk = _host_locks[key] = threading.RLock()
+        return lk
+
+
+def ufw_lock(server):
+    """The lock every ufw change on `server` is made under (see _host_locks above)."""
+    return _host_lock("ufw", server)
+
+
+def crontab_lock(server, user):
+    """The lock every read-modify-write of `user`'s crontab on `server` is made under."""
+    return _host_lock("crontab", server, user)
+
+
+# The ufw verbs that CHANGE the rule list (every ufw verb but the read). Each is run under the
+# host's ufw_lock by run_privileged, so a caller holding that lock across a read and a delete by
+# number knows the numbers it read are still the numbers.
+def _ufw_mutating(verb):
+    return verb.startswith("ufw-") and verb != "ufw-status"
+
+
 def _signal_process_tree(p):
     """SIGKILL a Popen and its entire process group, so no grandchildren are left orphaned.
 
@@ -814,6 +874,14 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
     and narrowing under that would break every privileged action rather than secure anything. The
     installer prints which one it wrote; SECURITY.md carries the full account.
     """
+    if _ufw_mutating(verb):
+        with ufw_lock(server):
+            return _run_privileged(server, verb, args, timeout, merge_stderr, sudo)
+    return _run_privileged(server, verb, args, timeout, merge_stderr, sudo)
+
+
+def _run_privileged(server, verb, args, timeout, merge_stderr, sudo):
+    """run_privileged's body — every transport. See run_privileged."""
     # A verb with a SECRET argument (privileged.SECRET_STDIN) sends it on stdin on every path
     # below, and no command line carries it. Passed only when there is one, so a transport stubbed
     # without the keyword still sees exactly the call it always did.
@@ -999,7 +1067,18 @@ def _connect_client(client, server):
 
 def _connect_by_auth_method(client, server, cred, timeout):
     """client.connect() for a password, Tailscale or key login — whichever the server row uses."""
-    if server.auth_method == "password" and cred:
+    if server.auth_method == "password":
+        if not cred:
+            # A password remote with no usable password must FAIL here, not fall through to the key
+            # branch below and sign in with the panel account's own ~/.ssh/id_rsa — a different
+            # credential, on a host the operator authorised only a password for. decrypt_secret()
+            # answers "" both for "nothing stored" and for "stored but not decryptable" (a restored
+            # backup under a different cred_key), so this was also how that failure stayed hidden:
+            # the host went on answering on the panel's key. hosts._ssh_test_login already refused
+            # this for the Test button; the connection every other operation uses did not.
+            raise ConnectionError("No usable SSH password is stored for %s. If the panel was "
+                                  "restored from a backup, its credential key may not match."
+                                  % getattr(server, "host", "this host"))
         client.connect(
             server.host,
             port=server.port or 22,
@@ -1021,14 +1100,30 @@ def _connect_by_auth_method(client, server, cred, timeout):
             look_for_keys=True,
         )
     else:
-        key_path = cred or os.path.expanduser("~/.ssh/id_rsa")
         client.connect(
             server.host,
             port=server.port or 22,
             username=server.username,
-            key_filename=key_path,
             timeout=timeout,
+            **key_login_kwargs(cred),
         )
+
+
+def key_login_kwargs(cred):
+    """paramiko connect() keywords for a KEY login with stored credential `cred` (a key path).
+
+    paramiko's defaults are allow_agent=True and look_for_keys=True, so a key login used to try,
+    after the named file, any agent the panel process could reach and every ~/.ssh/id_* the panel
+    account holds: a mistyped or stale path still signed in, with some other key, and nothing said
+    which. A NAMED key is now the only key offered. A blank path keeps its documented meaning — the
+    panel account's own keys — which is the one case where looking in ~/.ssh is what was asked for;
+    the agent is never consulted (the panel runs as a service, and an agent that happens to be
+    reachable is not a credential anybody configured for this host).
+    """
+    if cred:
+        return {"key_filename": cred, "allow_agent": False, "look_for_keys": False}
+    return {"key_filename": os.path.expanduser("~/.ssh/id_rsa"), "allow_agent": False,
+            "look_for_keys": True}
 
 
 def _tailscale_connect_host(server):
@@ -1499,6 +1594,53 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
 # streams its log back while the action runs rather than `cat`ing it at the end.
 _MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 _DRAIN_IDLE_FLOOR = 300
+
+# The same idle limit for a STREAMED download over paramiko (the backup and file-browser
+# downloads): a read that sees nothing for this long raises socket.timeout and ends the response.
+# Those exec_command calls had no timeout at all, so a host that went quiet mid-download — the case
+# the paragraph above describes — held the request's green thread and its channel for good.
+STREAM_IDLE_TIMEOUT = _DRAIN_IDLE_FLOOR
+# How long to wait for the exit status once the stream has hit EOF. sshd sends it with the close,
+# so this is only ever reached by a host that dropped between the two.
+_STREAM_STATUS_WAIT = 30
+
+
+class StreamFailed(IOError):
+    """A streamed download's reader exited non-zero: what was sent is not the whole file.
+
+    Raised from INSIDE a response generator, after the headers have gone, on purpose: the WSGI
+    server then drops the connection mid-body, and the browser reports a failed download. Ending
+    the generator quietly instead is how a truncated file used to be saved under a 200.
+    """
+
+
+def stream_channel(out, chunk, what, ok=(0,)):
+    """Yield `out` (a paramiko exec_command stdout) in `chunk` blocks, then check the exit status.
+
+    The channel is closed however the stream ends — at EOF, on a read timeout, or when the consumer
+    stops early (a download the browser cancelled, or stream_path's size cap) — which the loops
+    this replaced never did: every download left its channel open on the pooled transport. At EOF
+    an exit status outside `ok` (or none at all) raises StreamFailed (see there).
+    """
+    chan = out.channel
+    rc, at_eof = None, False
+    try:
+        while True:
+            b = out.read(chunk)
+            if not b:
+                at_eof = True
+                break
+            yield b
+        if chan.status_event.wait(_STREAM_STATUS_WAIT):
+            rc = chan.exit_status
+    finally:
+        try:
+            chan.close()
+        except Exception:  # nosec B110
+            _log.debug("%s: closing the channel failed", what, exc_info=True)
+    if at_eof and rc not in ok:
+        _log.warning("%s: the remote reader exited %s — aborting the download", what, rc)
+        raise StreamFailed("%s failed (exit %s)" % (what, rc))
 
 
 def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES, idle_limit=None):
@@ -2616,12 +2758,18 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     contain one.
     """
     env_pre = ""
+    # `filt_ok` is the highest exit status that still means the filter did its job: grep answers 1
+    # when it selected no line (every line filtered out — a legitimate empty result), cat and awk
+    # answer 0 and nothing else; a write error (ENOSPC) is 2 from grep and awk, 1 from cat.
     if drop_line is not None:
         env_pre = "CRON_DROP=%s; export CRON_DROP; " % _quote(str(drop_line).strip())
-        filt = _CRON_DROP_AWK
+        filt, filt_ok = _CRON_DROP_AWK, 0
+    elif grep_args:
+        filt, filt_ok = f"grep {grep_args} ", 1
     else:
-        filt = f"grep {grep_args} " if grep_args else "cat "
-    appends = "".join(f'printf \'%s\\n\' {_quote(ln)} >> "$T"; ' for ln in (add_lines or []))
+        filt, filt_ok = "cat ", 0
+    appends = "".join(f'printf \'%s\\n\' {_quote(ln)} >> "$T" || exit 1; '
+                      for ln in (add_lines or []))
     # Validated and quoted HERE, for the reason run_as_game_user spells out above: the model's
     # @validates hook fires on ASSIGNMENT and never on a row loaded from the database, so a row
     # written before that validator existed — or restored from a tampered backup — reaches this
@@ -2634,9 +2782,30 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     # No `-u`, and no root. `crontab -l` and `crontab <file>` run AS the account operate on that
     # account's own crontab, which is exactly what all five callers want — so this ran as ROOT for
     # no reason at all.
+    # EVERY STEP BEFORE THE INSTALL IS CHECKED, and a failed one installs nothing.
+    #
+    # This was `T=$(mktemp); crontab -l 2>/dev/null | filter > "$T"; printf … >> "$T"; crontab "$T"`
+    # with no pipefail and no check on any write. A `crontab -l` that FAILED (a timeout under a
+    # loaded cron daemon, a PAM refusal) looked exactly like "no crontab" once stderr was thrown
+    # away, and a write that failed (/tmp full, mktemp refused, so "$T" was empty and the
+    # redirection went nowhere) left a short or empty file — which `crontab "$T"` then installed as
+    # the account's WHOLE crontab and reported success. Every job on the account, the operator's
+    # own included, gone from a toggle of Autostart.
+    #
+    # Now: the listing's stderr is kept, and a non-zero `crontab -l` is accepted only when it says
+    # "no crontab for" (what `crontab -l` prints for an account that genuinely has none, the same
+    # marker cron.list_cron_jobs reads); the filter runs from the saved listing, where grep's exit
+    # 1 means "every line filtered out" and only 2 is a failure; each append is checked. The
+    # tempfiles go whatever happens (the trap).
     pipeline = (
-        f'{env_pre}{extra_pre}T=$(mktemp); crontab -l 2>/dev/null | {filt}> "$T"; '
-        f'{appends}crontab "$T"; RC=$?; rm -f "$T"; exit $RC'
+        f'{env_pre}{extra_pre}'
+        'L=$(mktemp) || exit 1; T=$(mktemp) || { rm -f "$L"; exit 1; }; '
+        "trap 'rm -f \"$L\" \"$T\"' EXIT; "
+        'E=$(crontab -l 2>&1 >"$L") || case "$E" in '
+        '*"no crontab for"*) : >"$L" || exit 1 ;; '
+        '*) printf "could not read the crontab: %s\\n" "$E" >&2; exit 1 ;; esac; '
+        f'{filt}<"$L" >"$T"; [ $? -le {filt_ok} ] || {{ echo "could not filter the crontab" >&2; exit 1; }}; '
+        f'{appends}crontab "$T"'
     )
     # It WAS a hand-built `sudo bash -c …` passed with sudo=False — the exact shape SECURITY.md
     # records as gone ("_sudo_sh | 0 — the route is gone"), and invisible to all three escalation
@@ -2652,7 +2821,11 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     #
     # It stays a shell pipeline because `crontab -l | filter > tmp; crontab tmp` is genuinely a
     # pipeline, but every value interpolated into it is validated and quoted.
-    out, err, rc = shell_as_game_user(server, user, pipeline, timeout=20)
+    #
+    # Under the account's crontab_lock: this replaces the whole crontab, so two rewrites that
+    # overlap lose whichever wrote first (see _host_locks).
+    with crontab_lock(server, user):
+        out, err, rc = shell_as_game_user(server, user, pipeline, timeout=20)
     return rc == 0, (err or out or "")
 
 

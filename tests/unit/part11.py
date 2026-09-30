@@ -2340,7 +2340,11 @@ try:
     _SS_BOTH = _SS_22 + "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n"
 
     def _csp_wire(**v):
-        base = {"sshd-socket-active": ("inactive", "", 3), "sshd-effective-config": ("port 22\n", "", 0),
+        # An active ufw that opens 22 only: the new port is one step 1 ADDS, so it is also the one
+        # the revert closes (change_ssh_port closes only a rule it added).
+        base = {"ufw-status": ("Status: active\n\n     To     Action     From\n"
+                               "[ 1] 22/tcp                     ALLOW IN    Anywhere\n", "", 0),
+                "sshd-socket-active": ("inactive", "", 3), "sshd-effective-config": ("port 22\n", "", 0),
                 "listening-sockets": [(_SS_22, "", 0), (_SS_BOTH, "", 0)]}
         base.update(v)
         return _wire(verbs=base)
@@ -3466,7 +3470,8 @@ try:
         def _p(argv, stdout=None, stdin=None):
             _p_obj = NS(argv=list(argv), stdout=_fl_popen_factory.out, stdin=_fl_popen_factory.inp,
                         waited=[])
-            _p_obj.wait = lambda: _p_obj.waited.append(True)
+            # Reaped, and exited 0 like a real Popen.wait(): the stream now reads the status.
+            _p_obj.wait = lambda: _p_obj.waited.append(True) or 0
             _popen.append(_p_obj)
             return _p_obj
         _fl_popen_factory.out, _fl_popen_factory.inp = stdout, stdin
@@ -3518,7 +3523,12 @@ try:
         def _gc(server, force_new=False, pooled=True):
             _in = _FlIn(in_raises)
             _fl_exec["in"] = _in
-            return NS(exec_command=lambda cmd: (_in, _FlPipe(out_bytes), None))
+            # A channel that has exited 0: the stream checks the exit status at EOF and closes the
+            # channel (_core.stream_channel), and passes an idle timeout to exec_command.
+            _out = _FlPipe(out_bytes)
+            _out.channel = NS(status_event=NS(wait=lambda _t=None: True), exit_status=0,
+                              close=lambda: None)
+            return NS(exec_command=lambda cmd, timeout=None: (_in, _out, None))
         return _gc
     _sm_core.get_connection = _fl_conn(b"hello world")
     _got = b"".join(_F.stream_path(_p8_srv(auth_method="key"), "cs2server", "serverfiles/a.txt", chunk=3))
