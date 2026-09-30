@@ -1607,3 +1607,323 @@ eq("ci-gate (by design): main's real mix of success, skipped and neutral runs is
    _ci16_ok, "passing")
 eq("ci-gate (by design): ...and a skipped run of a check beside its failing run still fails",
    _ci16_bad, "failing")
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Self-heal, backup codes, the game-list lock, key files, db_maintenance's corruption test
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Driven against temp files of their own; none of it touches part12's app or database.
+import shutil as _sh16h                                                             # noqa: E402
+import sqlite3 as _sq16h                                                            # noqa: E402
+import threading as _th16h                                                          # noqa: E402
+import time as _time16h                                                             # noqa: E402
+
+import db_maintenance as _dbm16h                                                    # noqa: E402
+from panel.core import config as _cfg16h                                            # noqa: E402
+from panel.db import models as _m16h                                                # noqa: E402
+from panel.services import lgsm_data as _lg16h                                      # noqa: E402
+
+_H16_DIR = _tf16.mkdtemp(prefix="heal16-")
+# manage.py (imported by earlier parts) sets this for the whole process; these checks are about the
+# service's own startup, so it is cleared for them and put back after.
+_h16_env = os.environ.pop(_m16h.NO_SELF_HEAL_ENV, None)
+_h16_defaults = _m16h._quick_check_patiently.__defaults__
+_m16h._quick_check_patiently.__defaults__ = (3, 0.01)
+
+
+def _h16_db(name, rows=50):
+    p = os.path.join(_H16_DIR, name)
+    c = _sq16h.connect(p)
+    c.execute("CREATE TABLE x (a INTEGER)")
+    c.executemany("INSERT INTO x VALUES (?)", [(i,) for i in range(rows)])
+    c.commit()
+    c.close()
+    return p
+
+
+def _h16_bytes(p):
+    try:
+        with open(p, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _h16_rows(p):
+    c = _sq16h.connect(p)
+    try:
+        return c.execute("SELECT COUNT(*) FROM x").fetchone()[0]
+    except _sq16h.Error as e:
+        return "unreadable: %s" % e
+    finally:
+        c.close()
+
+
+def _h16_write(p, body):
+    with open(p, "wb") as f:
+        f.write(body)
+
+
+_H16_GARBAGE = b"garbage, not sqlite " * 60
+try:
+    # ── 1. a LOCKED database is not a corrupt one ──────────────────────────────────────────────
+    _h16_live = _h16_db("locked.db", rows=30)
+    _sh16h.copy2(_h16_db("older.db", rows=5), _h16_live + ".backup")   # an OLDER, smaller backup
+    _h16_before = _h16_bytes(_h16_live)
+    _h16_holder = _sq16h.connect(_h16_live, isolation_level=None)
+    _h16_holder.execute("BEGIN EXCLUSIVE")            # another process mid-write
+    _h16_real_connect = _sq16h.connect
+    _sq16h.connect = lambda p, *a, **k: _h16_real_connect(p, *a, **dict(k, timeout=0.05))
+    try:
+        try:
+            _h16_qc = _m16h._db_quick_check(_h16_live)
+        except _sq16h.OperationalError as _e:
+            _h16_qc = "raised: %s" % _e
+        try:
+            _m16h._ensure_db_healthy(_h16_live)
+            _h16_heal = "returned"
+        except _sq16h.OperationalError as _e:
+            _h16_heal = "raised: %s" % _e
+    finally:
+        _sq16h.connect = _h16_real_connect
+        _h16_holder.execute("ROLLBACK")
+        _h16_holder.close()
+    check("self-heal: quick_check on a LOCKED database raises instead of answering 'corrupt'",
+          str(_h16_qc).startswith("raised:") and "locked" in str(_h16_qc), repr(_h16_qc))
+    check("self-heal: ...and startup fails on it rather than 'healing' it into the older backup",
+          str(_h16_heal).startswith("raised:"), repr(_h16_heal))
+    _h16_aside = [n for n in os.listdir(_H16_DIR) if n.startswith("locked.db.corrupt-")]
+    check("self-heal: ...the live database is untouched: same bytes, same 30 rows, nothing aside",
+          _h16_bytes(_h16_live) == _h16_before and _h16_rows(_h16_live) == 30 and not _h16_aside,
+          repr((_h16_rows(_h16_live), _h16_aside)))
+
+    # ── 2. a database that cannot be OPENED is not a corrupt one either ─────────────────────────
+    _h16_dir_db = os.path.join(_H16_DIR, "isdir.db")
+    os.makedirs(os.path.join(_h16_dir_db, "keep"))    # non-empty, so getsize() is not 0
+    try:
+        _m16h._ensure_db_healthy(_h16_dir_db)
+        _h16_open = "returned"
+    except _sq16h.DatabaseError as _e:
+        _h16_open = "raised: %s" % _e
+    check("self-heal: 'unable to open database file' fails startup and moves nothing aside",
+          _h16_open.startswith("raised:") and os.path.isdir(os.path.join(_h16_dir_db, "keep"))
+          and not [n for n in os.listdir(_H16_DIR) if n.startswith("isdir.db.corrupt-")],
+          _h16_open)
+
+    # ── 3. a genuinely corrupt database: -wal and -shm move WITH it, the backup comes back ─────
+    _h16_bad = _h16_db("bad.db", rows=8)
+    _sh16h.copy2(_h16_bad, _h16_bad + ".backup")
+    _h16_write(_h16_bad, _H16_GARBAGE)
+    _h16_write(_h16_bad + "-wal", b"WAL-FRAMES-" * 40)
+    _h16_write(_h16_bad + "-shm", b"SHM" * 40)
+    check("self-heal: a garbage file IS corruption (control)",
+          _m16h._db_quick_check(_h16_bad) is False)
+    _m16h._ensure_db_healthy(_h16_bad)
+    _h16_as = sorted(n for n in os.listdir(_H16_DIR) if n.startswith("bad.db.corrupt-"))
+    _h16_main = [n for n in _h16_as if not n.endswith(("-wal", "-shm"))]
+    _h16_base = os.path.join(_H16_DIR, _h16_main[0]) if len(_h16_main) == 1 else ""
+    check("self-heal: the corrupt file's -wal and -shm are MOVED aside beside it, not deleted",
+          # The -shm is only an index SQLite rebuilds from the -wal (the read-only check maps it,
+          # which grows it), so it is held to "moved", the -wal to its exact bytes.
+          bool(_h16_base) and _h16_bytes(_h16_base + "-wal") == b"WAL-FRAMES-" * 40
+          and os.path.exists(_h16_base + "-shm"), repr(_h16_as))
+    check("self-heal: ...nothing of them is left beside the restored database, which is the backup",
+          not os.path.exists(_h16_bad + "-wal") and not os.path.exists(_h16_bad + "-shm")
+          and _h16_rows(_h16_bad) == 8, repr(_h16_rows(_h16_bad)))
+
+    # ── 4. a move aside that FAILS restores nothing ────────────────────────────────────────────
+    _h16_real_replace = os.replace
+    for _h16_case, _h16_fail_on in (("the database itself", ""), ("its -wal", "-wal")):
+        _h16_p = os.path.join(_H16_DIR, "stuck%d.db" % len(_h16_fail_on))
+        _sh16h.copy2(_h16_db("good%d.db" % len(_h16_fail_on), rows=3), _h16_p + ".backup")
+        _h16_write(_h16_p, _H16_GARBAGE)
+        _h16_write(_h16_p + "-wal", b"uncheckpointed" * 20)
+        _h16_snap = (_h16_bytes(_h16_p), _h16_bytes(_h16_p + "-wal"))
+
+        def _h16_replace(src, dst, _fail=_h16_p + _h16_fail_on):
+            if str(src) == _fail:
+                raise PermissionError("denied")
+            return _h16_real_replace(src, dst)
+        os.replace = _h16_replace
+        try:
+            _m16h._ensure_db_healthy(_h16_p)      # logs; never raises for a corrupt file
+        finally:
+            os.replace = _h16_real_replace
+        check("self-heal: when moving %s aside fails, the backup is NOT copied over the files, "
+              "which are left exactly as they were" % _h16_case,
+              (_h16_bytes(_h16_p), _h16_bytes(_h16_p + "-wal")) == _h16_snap
+              and not [n for n in os.listdir(_H16_DIR)
+                       if n.startswith(os.path.basename(_h16_p) + ".corrupt-")],
+              repr(sorted(n for n in os.listdir(_H16_DIR) if n.startswith("stuck"))))
+
+    # ── 5. the offline CLI never heals ──────────────────────────────────────────────────────────
+    _h16_cli = os.path.join(_H16_DIR, "cli.db")
+    _sh16h.copy2(_h16_db("clibk.db", rows=2), _h16_cli + ".backup")
+    _h16_write(_h16_cli, _H16_GARBAGE)
+    os.environ[_m16h.NO_SELF_HEAL_ENV] = "1"
+    try:
+        _m16h._ensure_db_healthy(_h16_cli)
+    finally:
+        os.environ.pop(_m16h.NO_SELF_HEAL_ENV, None)
+    check("self-heal: with the CLI's flag set nothing is moved or restored",
+          _h16_bytes(_h16_cli) == _H16_GARBAGE
+          and not [n for n in os.listdir(_H16_DIR) if n.startswith("cli.db.corrupt-")])
+    with open(os.path.join(_REPO16, "manage.py"), encoding="utf-8") as _f:
+        _h16_msrc = _f.read()
+    check("self-heal: manage.py sets that flag BEFORE it builds the app",
+          "os.environ[NO_SELF_HEAL_ENV] = \"1\"" in _h16_msrc
+          and _h16_msrc.index("os.environ[NO_SELF_HEAL_ENV]") < _h16_msrc.index("app = create_app()"))
+
+    # ── 6. db_maintenance: unreachable is not damaged, and the aside keeps the WAL ──────────────
+    _h16_ic_dir = _dbm16h.integrity_check(_h16_dir_db)
+    check("dbm: a database that cannot be opened is reported as unreadable, not as damaged",
+          _h16_ic_dir[0] is False and _dbm16h.check_unreachable(_h16_ic_dir[1]), repr(_h16_ic_dir))
+    _h16_garbage = os.path.join(_H16_DIR, "dbm-garbage.db")
+    _h16_write(_h16_garbage, _H16_GARBAGE)
+    _h16_ic_bad = _dbm16h.integrity_check(_h16_garbage)
+    check("dbm: ...and a garbage file IS damaged (control)",
+          _h16_ic_bad[0] is False and not _dbm16h.check_unreachable(_h16_ic_bad[1]),
+          repr(_h16_ic_bad))
+    _h16_rep_calls = []
+    _h16_real_repair = _dbm16h.repair
+    _dbm16h.repair = lambda *a, **k: (_h16_rep_calls.append(a), (False, "not really"))[1]
+    _h16_stdout, sys.stdout = sys.stdout, _io16.StringIO()
+    try:
+        _h16_rc = _dbm16h.run_update_maintenance(_h16_dir_db, _h16_dir_db + ".backup")
+        _h16_rc_bad = _dbm16h.run_update_maintenance(_h16_garbage, _h16_garbage + ".backup")
+    finally:
+        sys.stdout = _h16_stdout
+        _dbm16h.repair = _h16_real_repair
+    check("dbm/update: a database it could not READ aborts the update (2) without repairing it",
+          _h16_rc == 2 and all(c[0] != _h16_dir_db for c in _h16_rep_calls),
+          repr((_h16_rc, _h16_rep_calls)))
+    check("dbm/update: ...while a damaged one is still sent to repair (control)",
+          [c[0] for c in _h16_rep_calls] == [_h16_garbage] and _h16_rc_bad == 2,
+          repr((_h16_rc_bad, _h16_rep_calls)))
+    _h16_wdb = _h16_db("walled.db", rows=4)
+    _h16_write(_h16_wdb + "-wal", b"committed-but-not-checkpointed" * 10)
+    _h16_ad = _dbm16h._aside(_h16_wdb)
+    check("dbm/aside: the forensic copy carries the -wal, under the name SQLite opens it by",
+          bool(_h16_ad) and _h16_bytes(_h16_ad) == _h16_bytes(_h16_wdb)
+          and _h16_bytes(_h16_ad + "-wal") == b"committed-but-not-checkpointed" * 10,
+          repr(_h16_ad))
+finally:
+    _m16h._quick_check_patiently.__defaults__ = _h16_defaults
+    if _h16_env is not None:
+        os.environ[_m16h.NO_SELF_HEAL_ENV] = _h16_env
+
+# ── 7. key files appear with their content ─────────────────────────────────────────────────────
+_h16_kp = os.path.join(_H16_DIR, "a_key")
+_h16_seen = []
+_cfg16h._create_key_once(_h16_kp,
+                         lambda: (_h16_seen.append(os.path.exists(_h16_kp)), b"KEY-1")[1])
+check("key file: nobody can see it before its content is in it (it is linked into place full)",
+      _h16_seen == [False] and _h16_bytes(_h16_kp) == b"KEY-1",
+      repr((_h16_seen, _h16_bytes(_h16_kp))))
+_cfg16h._create_key_once(_h16_kp, lambda: b"KEY-2")
+check("key file: ...still created exactly once (control)", _h16_bytes(_h16_kp) == b"KEY-1")
+_h16_write(_h16_kp, b"")                         # what a crash between create and write left
+_cfg16h._create_key_once(_h16_kp, lambda: b"KEY-3")
+check("key file: an EMPTY one is replaced — nothing can have been signed with it",
+      _h16_bytes(_h16_kp) == b"KEY-3" and _cfg16h._key_missing(os.path.join(_H16_DIR, "nope")),
+      repr(_h16_bytes(_h16_kp)))
+check("key file: no temp file is left behind",
+      not [n for n in os.listdir(_H16_DIR) if n.startswith(".key-")])
+
+# ── 8. backup codes: one code, one use — however the requests interleave ──────────────────────
+from sqlalchemy import create_engine as _ce16h                                      # noqa: E402
+from sqlalchemy.orm import Session as _S16h                                         # noqa: E402
+
+_h16_eng = _ce16h("sqlite:///" + os.path.join(_H16_DIR, "codes.db"))
+db.metadata.create_all(_h16_eng)
+_h16_codes = ["aaaaa-bbbbb", "ccccc-ddddd", "eeeee-fffff"]
+with _S16h(_h16_eng) as _s16h:
+    _u16h = User(username="codes16", password_hash="x", display_name="codes16", is_active=True)
+    _u16h.set_backup_codes(_h16_codes)
+    _s16h.add(_u16h)
+    _s16h.commit()
+    _h16_uid = _u16h.id
+
+
+def _h16_remaining():
+    with _S16h(_h16_eng) as _s:
+        return _s.get(User, _h16_uid).backup_codes_remaining
+
+
+# Two requests that both READ the list before either wrote it: the second session's copy of the
+# row is loaded first, then the first spends and commits — the window the bcrypt yield opened.
+_h16_sa, _h16_sb = _S16h(_h16_eng), _S16h(_h16_eng)
+try:
+    _ua16h, _ub16h = _h16_sa.get(User, _h16_uid), _h16_sb.get(User, _h16_uid)
+    _h16_stale = _ub16h.backup_codes                  # loaded, stale from here on
+    _h16_a1 = _ua16h.use_backup_code(_h16_codes[0])
+    _h16_sa.commit()
+    _h16_b1 = _ub16h.use_backup_code(_h16_codes[0])
+    _h16_sb.commit()
+    check("backup codes: the SAME code spent by two interleaved requests works exactly once",
+          _h16_a1 is True and _h16_b1 is False, repr((_h16_a1, _h16_b1)))
+    check("backup codes: ...and the refused one did not resurrect it (2 left)",
+          _h16_remaining() == 2, repr(_h16_remaining()))
+    _ua16h, _ub16h = _h16_sa.get(User, _h16_uid), _h16_sb.get(User, _h16_uid)
+    _h16_stale = _ub16h.backup_codes
+    _h16_a2 = _ua16h.use_backup_code(_h16_codes[1])
+    _h16_sa.commit()
+    _h16_b2 = _ub16h.use_backup_code(_h16_codes[2])
+    _h16_sb.commit()
+    check("backup codes: two DIFFERENT codes interleaved both work (control)",
+          _h16_a2 is True and _h16_b2 is True, repr((_h16_a2, _h16_b2)))
+    check("backup codes: ...and neither write put the other's spent code back (0 left)",
+          _h16_remaining() == 0, repr(_h16_remaining()))
+    check("backup codes: ...the spent codes stay spent",
+          not _ua16h.use_backup_code(_h16_codes[1]) and not _ub16h.use_backup_code(_h16_codes[2])
+          and not _ub16h.use_backup_code(_h16_codes[0]))
+finally:
+    _h16_sa.close()
+    _h16_sb.close()
+    _h16_eng.dispose()
+
+# ── 9. the game list is not read under a lock held across a fetch ─────────────────────────────
+_h16_saved_lg = (_lg16h._load_serverlist, dict(_lg16h._mem))
+_h16_entered, _h16_release = _th16h.Event(), _th16h.Event()
+_h16_calls = []
+
+
+def _h16_slow_load(allow_fetch):
+    _h16_calls.append(allow_fetch)
+    if len(_h16_calls) == 1:                      # the first re-read is the one "stuck on GitHub"
+        _h16_entered.set()
+        _h16_release.wait(10)
+        return [{"shortname": "old"}], _lg16h.SERVERLIST
+    return [{"shortname": "new"}], _lg16h.SERVERLIST
+
+
+_h16_res = {}
+try:
+    _lg16h._load_serverlist = _h16_slow_load
+    _lg16h._mem.clear()
+    _lg16h._mem["serverlist"] = (_time16h.time() - 1, [{"shortname": "stale"}])   # due a re-read
+    _h16_t = _th16h.Thread(target=lambda: _h16_res.setdefault("t", _lg16h.serverlist()))
+    _h16_t.start()
+    _h16_entered.wait(5)
+    _h16_free = _lg16h._lock.acquire(blocking=False)
+    if _h16_free:
+        _lg16h._lock.release()
+    _h16_t0 = _time16h.monotonic()
+    _h16_res["meanwhile"] = _lg16h.serverlist()
+    _h16_took = _time16h.monotonic() - _h16_t0
+    check("game list: the lock is FREE while a re-read is out on the network", _h16_free is True)
+    check("game list: ...and another request is served the copy it has at once, not after the "
+          "fetch", _h16_res["meanwhile"] == [{"shortname": "stale"}] and _h16_took < 1.0,
+          repr((_h16_res["meanwhile"], _h16_took)))
+    _lg16h.refresh(force=False)                   # a newer copy lands while the slow one is out
+    _h16_release.set()
+    _h16_t.join(10)
+    check("game list: a slow re-read that finishes after a refresh does not put its older copy "
+          "back", _lg16h._mem.get("serverlist", (0, None))[1] == [{"shortname": "new"}]
+          and _lg16h.serverlist() == [{"shortname": "new"}], repr(_lg16h._mem.get("serverlist")))
+finally:
+    _h16_release.set()
+    _lg16h._load_serverlist = _h16_saved_lg[0]
+    _lg16h._mem.clear()
+    _lg16h._mem.update(_h16_saved_lg[1])
+    _lg16h._inflight.clear()
+_sh16h.rmtree(_H16_DIR, ignore_errors=True)

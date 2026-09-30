@@ -278,14 +278,67 @@ class User(UserMixin, db.Model):
         except (ValueError, TypeError):
             return False
         from panel.security.auth import run_off_hub   # lazy: auth imports this module
+        match = None
         for h in hashes:
             try:
                 if run_off_hub(bcrypt.checkpw, code.encode(), h.encode()):
-                    hashes.remove(h)
-                    self.backup_codes = json.dumps(hashes)
-                    return True
+                    match = h
+                    break
             except (ValueError, TypeError):
                 continue
+        if match is None:
+            return False
+        return self._spend_backup_hash(match, self.backup_codes, hashes)
+
+    def _spend_backup_hash(self, match, old_blob, hashes):
+        """Remove `match` from the stored list, conditionally on the list not having changed.
+
+        The read-check-write was not atomic. Each bcrypt compare above runs in a worker thread
+        (run_off_hub), so the greenlet YIELDS between reading backup_codes and writing it back, and
+        a second request for the same account ran in that gap: both read the same list, both found
+        the same code, both wrote "the list minus it" — one backup code, two logins. Two DIFFERENT
+        codes lost an update instead: each wrote its own list minus only its own code, and the
+        second commit put the first request's spent code back.
+
+        So the write is a compare-and-swap on the whole blob, the pattern _claim_invite uses for
+        invites: UPDATE ... WHERE backup_codes = <what we read>. When it touches no row, somebody
+        spent a code in between; re-read — the UPDATE already holds SQLite's write lock, so that
+        read is the committed list and nobody can change it before our commit — and spend `match`
+        from THAT, or refuse if it is no longer there. No second bcrypt: the hash is already known.
+
+        A transient User (not in a session — the unit checks build them) has no row to race over
+        and keeps the plain attribute write. Caller still commits.
+        """
+        from sqlalchemy import inspect as _sa_inspect
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import set_committed_value
+        state = _sa_inspect(self)
+        if not state.persistent:
+            hashes.remove(match)
+            self.backup_codes = json.dumps(hashes)
+            return True
+        sess = state.session
+        tbl = User.__table__
+        for _attempt in range(2):
+            remaining = list(hashes)
+            remaining.remove(match)
+            new_blob = json.dumps(remaining)
+            res = sess.execute(tbl.update()
+                               .where(tbl.c.id == self.id, tbl.c.backup_codes == old_blob)
+                               .values(backup_codes=new_blob))
+            if res.rowcount:
+                # Already written; mark it so the flush does not write it a second time.
+                set_committed_value(self, "backup_codes", new_blob)
+                return True
+            old_blob = sess.execute(select(tbl.c.backup_codes)
+                                    .where(tbl.c.id == self.id)).scalar()
+            try:
+                hashes = json.loads(old_blob or "[]")
+            except (ValueError, TypeError):
+                hashes = []
+            if not isinstance(hashes, list) or match not in hashes:
+                set_committed_value(self, "backup_codes", old_blob)
+                return False
         return False
 
     def set_password(self, new_hash):
@@ -1625,26 +1678,73 @@ def _silent_remove(p):
         return   # nothing to clean up (missing or not removable) — not an error
 
 
-def _db_quick_check(path):
-    """True if the SQLite file passes PRAGMA quick_check (i.e. not corrupt).
+# What SQLite says about a file whose CONTENT is bad, as opposed to a file it could not get at.
+# Only these count as corruption. The self-heal used to treat EVERY sqlite3.DatabaseError as one,
+# and OperationalError is a DatabaseError: "database is locked" (another process mid-write — the
+# service itself, when manage.py ran beside it), "unable to open database file" (a permission or a
+# missing directory) and a transient "disk I/O error" all moved a perfectly good panel.db aside and
+# put yesterday's backup in its place — silently losing every write since, on a file that had
+# nothing wrong with it.
+_CORRUPT_DB_MARKERS = ("malformed", "not a database", "file is encrypted")
+_CORRUPT_DB_CODES = ("SQLITE_CORRUPT", "SQLITE_NOTADB")
+# Set by the offline CLI (manage.py) before it builds the app: it runs BESIDE the live service, and
+# the self-heal renames panel.db out from under a process that holds it open. Only the service's
+# own startup may heal.
+NO_SELF_HEAL_ENV = "LGSM_PANEL_NO_DB_SELF_HEAL"
 
-    A missing/empty file counts as healthy — a fresh DB will just be created. Any
-    open/read error (a malformed image, "file is not a database", I/O error from a
-    bad drive) counts as NOT healthy.
+
+def _is_corruption_error(exc):
+    """True when `exc` says the database file's CONTENT is damaged, not that it was unreachable."""
+    if getattr(exc, "sqlite_errorname", "") in _CORRUPT_DB_CODES:
+        return True
+    msg = str(exc).lower()
+    return any(m in msg for m in _CORRUPT_DB_MARKERS)
+
+
+def _db_quick_check(path):
+    """True if the SQLite file passes PRAGMA quick_check, False if it is corrupt.
+
+    A missing/empty file counts as healthy — a fresh DB will just be created. False only for a
+    quick_check that answers something other than "ok", or an error that says the image itself is
+    bad (malformed, not a database). Anything else — locked, busy, unable to open, an I/O error —
+    is RE-RAISED: it says nothing about the file's content, and the caller must not remedy a
+    corruption it has not seen.
     """
     import os
+    import pathlib
     import sqlite3
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return True
     try:
-        con = sqlite3.connect(path, timeout=10)
+        # READ-ONLY. A read-write connection to a file whose header is not SQLite's DELETES the
+        # -wal and -shm beside it when it closes ("file is not a database" is the corruption this
+        # exists to find) — so the check itself destroyed the committed-but-not-checkpointed
+        # transactions that _set_corrupt_db_aside then moves aside to keep. mode=ro leaves them.
+        con = sqlite3.connect(pathlib.Path(path).absolute().as_uri() + "?mode=ro",
+                              timeout=10, uri=True)
         try:
             row = con.execute("PRAGMA quick_check").fetchone()
             return bool(row) and row[0] == "ok"
         finally:
             con.close()
-    except sqlite3.DatabaseError:
-        return False
+    except sqlite3.DatabaseError as e:
+        if _is_corruption_error(e):
+            return False
+        raise
+
+
+def _quick_check_patiently(path, attempts=3, pause=2.0):
+    """_db_quick_check, retried while the file is locked or busy; the last error is re-raised."""
+    import sqlite3
+    import time as _t
+    for i in range(attempts):
+        try:
+            return _db_quick_check(path)
+        except sqlite3.OperationalError:
+            if i == attempts - 1:
+                raise
+            _t.sleep(pause)
+    return _db_quick_check(path)   # attempts < 1: one plain try
 
 
 def _ensure_db_healthy(path=None):
@@ -1652,20 +1752,34 @@ def _ensure_db_healthy(path=None):
 
     Runs BEFORE the ORM opens the DB. If the live DB is healthy, refresh a rolling
     known-good backup (SQLite's online backup — consistent even mid-write). If it's
-    corrupt, restore that backup — moving the corrupt file aside first so nothing is
-    destroyed — so the panel comes back on the last good data instead of failing to
-    boot. Best-effort: it never raises, so it can't itself block startup.
+    corrupt, restore that backup — moving the corrupt file (and its -wal/-shm) aside first so
+    nothing is destroyed — so the panel comes back on the last good data instead of failing to
+    boot.
+
+    A database that cannot be CHECKED (locked, busy, unable to open) is not a corrupt one: that
+    fails startup with the error, rather than being "healed" into the last backup. With
+    LGSM_PANEL_NO_DB_SELF_HEAL set (manage.py) it does nothing at all.
     """
+    import os
+    import sqlite3
     from panel.core.config import DB_PATH
+    if os.environ.get(NO_SELF_HEAL_ENV):
+        return
     path = path or str(DB_PATH)
     backup = path + ".backup"
     try:
-        if _db_quick_check(path):
+        healthy = _quick_check_patiently(path)
+    except sqlite3.DatabaseError as e:
+        _log.error("database at %s could not be checked (%s) — refusing to start rather than "
+                   "treat it as corrupt", path, e)
+        raise
+    try:
+        if healthy:
             _refresh_rolling_backup(path, backup)
             return
         _set_corrupt_db_aside(path, backup)
     except Exception:
-        _log.exception("database self-heal check failed (continuing startup)")
+        _log.exception("database self-heal failed (continuing startup)")
 
 
 def _refresh_rolling_backup(path, backup):
@@ -1704,28 +1818,57 @@ def _refresh_rolling_backup(path, backup):
 
 
 def _set_corrupt_db_aside(path, backup):
-    """Move the CORRUPT database at `path` aside, then restore `backup` over it if that is healthy.
+    """Move the CORRUPT database at `path` aside with its -wal/-shm, then restore `backup` if healthy.
 
-    Raises what os/shutil raise beyond the aside move itself; _ensure_db_healthy catches it.
+    Raises when the move aside fails — and then restores nothing; _ensure_db_healthy catches it.
+
+    THE COMPANIONS MOVE WITH IT. They were deleted: "drop the corrupt DB's stale WAL/SHM". A WAL
+    holds COMMITTED transactions not yet checkpointed into the main file, so the copy "preserved for
+    forensics/recovery" was missing exactly the newest writes, and they were gone for good. They go
+    to the same timestamped name (<aside>-wal), which is where SQLite looks for them, so the aside
+    opens as the database it was.
+
+    AND NOTHING IS RESTORED IF THE MOVE FAILED. The OSError from os.replace was logged at debug and
+    the function went on to delete the WAL and copy the backup over `path` — overwriting the only
+    copy of the "corrupt" file it had just failed to preserve. A companion that will not move is
+    the same failure: left in place it would be replayed over the restored backup. Everything
+    already moved is put back first, so the next start sees the files as they were.
     """
     import os
     import shutil
     import time as _t
-    # Corrupt — always move the bad file aside (preserved for forensics/recovery,
-    # never deleted), then either restore the last good backup or let the app
-    # build a fresh DB. Either way the panel starts instead of crash-looping.
-    aside = "%s.corrupt-%d" % (path, int(_t.time()))
+    # Decide on the backup BEFORE touching anything: a backup that cannot be checked right now
+    # (raises) must stop us while the live files are still where they were.
+    restore = os.path.exists(backup) and _db_quick_check(backup)
+    stamp = "%s.corrupt-%d" % (path, int(_t.time()))
+    aside, n = stamp, 0
+    while any(os.path.lexists(aside + ext) for ext in ("", "-wal", "-shm")):
+        n += 1
+        aside = "%s-%d" % (stamp, n)
+    moved = []
     try:
-        os.replace(path, aside)
+        for ext in ("", "-wal", "-shm"):
+            if ext and not os.path.lexists(path + ext):
+                continue
+            os.replace(path + ext, aside + ext)
+            moved.append(ext)
     except OSError:
-        _log.debug("couldn't move it (perms) — fall through; a fresh DB gets created", exc_info=True)
-    # Drop the corrupt DB's stale WAL/SHM so they aren't replayed over a new file.
-    for ext in ("-wal", "-shm"):
-        _silent_remove(path + ext)
-    if os.path.exists(backup) and _db_quick_check(backup):
+        for ext in reversed(moved):
+            try:
+                os.replace(aside + ext, path + ext)
+            except OSError:
+                _log.error("could not put %s back after a failed move aside", path + ext)
+        _log.error("database at %s is corrupt but could not be moved aside — NOT restoring the "
+                   "backup over it; fix the permissions and restart, or run the repair tool", path)
+        raise
+    if restore:
         _log.error("database at %s is corrupt — restored last good backup "
                    "(corrupt copy saved to %s)", path, aside)
-        shutil.copy2(backup, path)
+        # Copy beside it and rename, so a copy cut short never leaves a half-written panel.db.
+        tmp = path + ".restoring"
+        _silent_remove(tmp)
+        shutil.copy2(backup, tmp)
+        os.replace(tmp, path)
     else:
         _log.error("database at %s is corrupt and no healthy backup exists — moved "
                    "it aside (%s) so the panel can start fresh; use the recovery "

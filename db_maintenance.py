@@ -16,6 +16,7 @@ Every function is best-effort and never raises; each returns a (ok, message) tup
 """
 import logging
 import os
+import pathlib
 import re
 import secrets
 import shutil
@@ -122,25 +123,52 @@ def _copy_to_new_file(src, dst):
         os.close(sfd)
 
 
+# What SQLite says about a file whose CONTENT is damaged. Anything else it raises — "database is
+# locked", "unable to open database file", a disk I/O error — is about getting AT the file, and says
+# nothing about what is in it. The panel's own self-heal (models._is_corruption_error) draws the
+# same line; this module cannot import it (see _paths), so the list is repeated.
+_CORRUPT_MARKERS = ("malformed", "not a database", "file is encrypted")
+_UNREACHABLE_PREFIX = "cannot open database"
+_UNREADABLE = "database file is unreadable"
+
+
+def _is_corruption_error(exc):
+    if getattr(exc, "sqlite_errorname", "") in ("SQLITE_CORRUPT", "SQLITE_NOTADB"):
+        return True
+    return any(m in str(exc).lower() for m in _CORRUPT_MARKERS)
+
+
+def check_unreachable(detail):
+    """True when integrity_check's `detail` says the file could not be READ, not that it is damaged."""
+    return detail == _UNREADABLE or str(detail).startswith(_UNREACHABLE_PREFIX)
+
+
 def integrity_check(path):
     """Return (ok, detail); ok=True when PRAGMA integrity_check reports 'ok'.
 
-    A missing or empty file counts as healthy (a fresh DB will just be created). An
-    unopenable/malformed image is NOT healthy. Never raises.
+    A missing or empty file counts as healthy (a fresh DB will just be created). A malformed
+    image is NOT healthy. A file that could not be read at all — locked, busy, unopenable — is not
+    healthy either, but its detail starts "cannot open database" (check_unreachable), so a caller
+    deciding whether to REPAIR can tell "damaged" from "not checked". Never raises.
     """
     try:
         if not os.path.exists(path) or os.path.getsize(path) == 0:
             return True, "no database yet"
     except OSError:
-        return False, "database file is unreadable"
+        return False, _UNREADABLE
     try:
-        con = sqlite3.connect(path, timeout=15)  # NOSONAR - the configured db path, not agent input
+        # Read-only, so the check cannot destroy what repair() keeps: a read-write connection to a
+        # file whose header is not SQLite's deletes its -wal and -shm on close (see _aside).
+        con = sqlite3.connect(pathlib.Path(path).absolute().as_uri() + "?mode=ro",  # NOSONAR - the configured db path, not agent input
+                              timeout=15, uri=True)
         try:
             rows = con.execute("PRAGMA integrity_check").fetchall()
         finally:
             con.close()
     except sqlite3.DatabaseError as e:
-        return False, "cannot open database (%s)" % type(e).__name__
+        if _is_corruption_error(e):
+            return False, "database is damaged (%s)" % type(e).__name__
+        return False, "%s (%s)" % (_UNREACHABLE_PREFIX, type(e).__name__)
     msgs = [str(r[0]) for r in rows] if rows else []
     if msgs == ["ok"]:
         return True, "ok"
@@ -192,7 +220,7 @@ def _fmt_bytes(n):
 
 
 def _aside(path):
-    """Copy (not move) the flagged DB aside; return the aside path (or '' on failure).
+    """Copy (not move) the flagged DB — and its -wal — aside; return the aside path ('' on failure).
 
     The original stays in place as the rebuild source and as a forensic/recovery copy.
 
@@ -203,16 +231,31 @@ def _aside(path):
     on path and backup, so a single panel-db-repair call wrote panel.db's bytes (chosen by the
     same user) to any root path — /etc/cron.d included. A planted name is now skipped, and the
     fallback names carry a random part so planting cannot exhaust them either.
+
+    THE WAL GOES WITH IT, as <aside>-wal — the name SQLite looks for beside <aside>. It holds
+    committed transactions not yet checkpointed into the main file, and both repair branches end by
+    deleting path's -wal; the backup branch restores OVER path without ever reading it. So the
+    "original kept" copy was missing the newest writes, and after a backup restore they existed
+    nowhere at all.
     """
     base = "%s.corrupt-%d" % (path, int(time.time()))
     for attempt in range(8):
         dst = base if attempt == 0 else "%s-%s" % (base, secrets.token_hex(4))
         try:
             _copy_to_new_file(path, dst)
-            return dst
         except FileExistsError:
             continue
         except OSError:
+            return ""
+        try:
+            if os.path.exists(path + "-wal"):
+                _copy_to_new_file(path + "-wal", dst + "-wal")
+            return dst
+        except FileExistsError:
+            _silent_rm(dst)          # a planted <aside>-wal: take the next name, as for dst itself
+            continue
+        except OSError:
+            _silent_rm(dst)
             return ""
     return ""
 
@@ -549,6 +592,15 @@ def run_update_maintenance(path=None, backup=None):
     ok, detail = integrity_check(path)
     if ok:
         print("  [1/3] health check: ok")
+    elif check_unreachable(detail):
+        # NOT a repair. Every sqlite3.DatabaseError read as "problems found", and "database is
+        # locked" is one: something still holding the file (a manage.py run, a straggling
+        # process the stop did not reach) sent a healthy database into repair(), whose rebuild
+        # could not read it either — so it fell through to restoring the rolling backup over it,
+        # losing everything written since that backup was taken. Stop, and touch nothing.
+        print("  [1/3] health check: could not read the database (%s)" % detail)
+        print("  ABORT: the database could not be checked — leaving your data untouched")
+        return 2
     else:
         print("  [1/3] health check: PROBLEMS FOUND (%s)" % detail)
         print("        repairing (your original is copied aside first)…")
