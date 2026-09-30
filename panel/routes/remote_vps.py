@@ -519,6 +519,45 @@ def _register_panel_port(app):
             if ok else f"Couldn't remove every rule for port {port}; check the firewall page.")})
 
 
+def _rv_may_sync_ports(gs):
+    """Whether the caller may write THIS server's host firewall from sync-ports.
+
+    MANAGE_REMOTES on the host, and on the PANEL host, a superadmin. Every firewall write there is
+    superadmin-only (get_host_remote), because that firewall guards the panel itself; the five
+    /firewall/* routes and game-port/open take it through get_host_remote, but sync-ports is keyed
+    on a SERVER, and a delegated MANAGE_REMOTES admin whose group covered the panel host could
+    still put allow rules on it from there. Same inline test get_host_remote uses.
+    """
+    _panel_host = (getattr(gs.remote, "is_local", False)
+                   or getattr(gs.remote, "auth_method", None) == "local")
+    return (current_user.is_superadmin
+            or (has_permission(current_user, MANAGE_REMOTES)
+                and can_access_remote(current_user, gs.remote_id)
+                and not _panel_host))
+
+
+def _rv_sync_ports_run(gs):
+    """Detect the server's ports, open what may be opened, audit it, and report what landed."""
+    info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
+    gp, to_open, refused = _ports_to_sync(gs, info)
+    # Report what the firewall ACTUALLY took, not what was asked for. The return value
+    # used to be discarded on the reasoning that "the firewall page reports a partially
+    # applied rule set" — but this said "Ports 27015, 27016 opened." and wrote an audit
+    # row with success=True whether or not a single rule landed. An audit row that
+    # records an action which did not happen is worse than no row.
+    opened, _ = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
+    opened = sorted(set(opened or []))
+    missed = [p for p in to_open if p not in set(opened)]
+    ok = not (missed or refused)
+    log_action(current_user, "sync_ports", target=gs.name, success=ok,
+               detail=_sync_ports_detail(opened, missed, refused), server=gs)
+    msg = _sync_ports_message(opened, missed, refused)
+    return jsonify({"success": ok, "message": msg,
+                    "ports": info.get("ports", []), "open_ports": opened,
+                    "requested_ports": to_open, "failed_ports": missed,
+                    "refused_ports": refused, "game_port": gp})
+
+
 def _register_game_ports(app):
     """Game ports: open one, or sync a server's ports into the firewall."""
     @app.route("/api/remote/<int:remote_id>/game-port/<int:port>/open", methods=["POST"])
@@ -576,38 +615,10 @@ def _register_game_ports(app):
         panel's, is neither opened nor stored (withheld_game_ports).
         """
         gs = get_game(server_id)
-        # ...and on the PANEL host, a superadmin. Every firewall write there is superadmin-only
-        # (get_host_remote), because that firewall guards the panel itself; the five /firewall/*
-        # routes and game-port/open above take it through get_host_remote, but this one is keyed
-        # on a SERVER, and a delegated MANAGE_REMOTES admin whose group covered the panel host
-        # could still put allow rules on it from here. Same inline test get_host_remote uses.
-        _panel_host = (getattr(gs.remote, "is_local", False)
-                       or getattr(gs.remote, "auth_method", None) == "local")
-        if not (current_user.is_superadmin
-                or (has_permission(current_user, MANAGE_REMOTES)
-                    and can_access_remote(current_user, gs.remote_id)
-                    and not _panel_host)):
+        if not _rv_may_sync_ports(gs):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        ok = False     # set before the try, so no path can read it unset (CodeQL alert 512)
         try:
-            info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
-            gp, to_open, refused = _ports_to_sync(gs, info)
-            # Report what the firewall ACTUALLY took, not what was asked for. The return value
-            # used to be discarded on the reasoning that "the firewall page reports a partially
-            # applied rule set" — but this said "Ports 27015, 27016 opened." and wrote an audit
-            # row with success=True whether or not a single rule landed. An audit row that
-            # records an action which did not happen is worse than no row.
-            opened, _ = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
-            opened = sorted(set(opened or []))
-            missed = [p for p in to_open if p not in set(opened)]
-            ok = not (missed or refused)
-            log_action(current_user, "sync_ports", target=gs.name, success=ok,
-                       detail=_sync_ports_detail(opened, missed, refused), server=gs)
-            msg = _sync_ports_message(opened, missed, refused)
-            return jsonify({"success": ok, "message": msg,
-                            "ports": info.get("ports", []), "open_ports": opened,
-                            "requested_ports": to_open, "failed_ports": missed,
-                            "refused_ports": refused, "game_port": gp})
+            return _rv_sync_ports_run(gs)
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
