@@ -1817,6 +1817,39 @@ def _refresh_rolling_backup(path, backup):
             _silent_remove(tmp)
 
 
+def _db_aside_name(path):
+    """A timestamped `<path>.corrupt-<epoch>[-n]` name that no file (nor its -wal/-shm) holds yet."""
+    import os
+    import time as _t
+    stamp = "%s.corrupt-%d" % (path, int(_t.time()))
+    aside, n = stamp, 0
+    while any(os.path.lexists(aside + ext) for ext in ("", "-wal", "-shm")):
+        n += 1
+        aside = "%s-%d" % (stamp, n)
+    return aside
+
+
+def _db_move_aside(path, aside):
+    """Move `path` and its -wal/-shm to `aside`; on any failure put back what moved, then raise."""
+    import os
+    moved = []
+    try:
+        for ext in ("", "-wal", "-shm"):
+            if ext and not os.path.lexists(path + ext):
+                continue
+            os.replace(path + ext, aside + ext)
+            moved.append(ext)
+    except OSError:
+        for ext in reversed(moved):
+            try:
+                os.replace(aside + ext, path + ext)
+            except OSError:
+                _log.error("could not put %s back after a failed move aside", path + ext)
+        _log.error("database at %s is corrupt but could not be moved aside — NOT restoring the "
+                   "backup over it; fix the permissions and restart, or run the repair tool", path)
+        raise
+
+
 def _set_corrupt_db_aside(path, backup):
     """Move the CORRUPT database at `path` aside with its -wal/-shm, then restore `backup` if healthy.
 
@@ -1836,31 +1869,11 @@ def _set_corrupt_db_aside(path, backup):
     """
     import os
     import shutil
-    import time as _t
     # Decide on the backup BEFORE touching anything: a backup that cannot be checked right now
     # (raises) must stop us while the live files are still where they were.
     restore = os.path.exists(backup) and _db_quick_check(backup)
-    stamp = "%s.corrupt-%d" % (path, int(_t.time()))
-    aside, n = stamp, 0
-    while any(os.path.lexists(aside + ext) for ext in ("", "-wal", "-shm")):
-        n += 1
-        aside = "%s-%d" % (stamp, n)
-    moved = []
-    try:
-        for ext in ("", "-wal", "-shm"):
-            if ext and not os.path.lexists(path + ext):
-                continue
-            os.replace(path + ext, aside + ext)
-            moved.append(ext)
-    except OSError:
-        for ext in reversed(moved):
-            try:
-                os.replace(aside + ext, path + ext)
-            except OSError:
-                _log.error("could not put %s back after a failed move aside", path + ext)
-        _log.error("database at %s is corrupt but could not be moved aside — NOT restoring the "
-                   "backup over it; fix the permissions and restart, or run the repair tool", path)
-        raise
+    aside = _db_aside_name(path)
+    _db_move_aside(path, aside)
     if restore:
         _log.error("database at %s is corrupt — restored last good backup "
                    "(corrupt copy saved to %s)", path, aside)
