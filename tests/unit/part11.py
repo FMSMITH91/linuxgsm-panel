@@ -2777,7 +2777,7 @@ _rv.register(_rv_app)
 _rv_app.logger.disabled = True
 _rv_client = _rv_app.test_client()
 
-_RV_NAMES = ("current_user", "get_remote", "get_game", "GameServer", "db", "log_action", "load_config",
+_RV_NAMES = ("current_user", "get_remote", "get_host_remote", "get_game", "GameServer", "db", "log_action", "load_config",
              "change_ssh_port", "close_connection", "remote_ufw_open_port", "remote_ufw_allow_from",
              "remote_ufw_limit_port", "remote_ufw_close_port", "remote_ufw_delete_rule",
              "remote_ufw_status", "remote_ufw_allow_game_port", "remote_ufw_allow_game_ports",
@@ -2845,6 +2845,7 @@ try:
         _rv_remotes[r.id] = r
         return r
     _rv.get_remote = lambda rid: _rv_remotes[rid]
+    _rv.get_host_remote = lambda rid: _rv_remotes[rid]   # the panel-host refusal is rbac_test's
     _rv.GameServer = NS(query=_RvQuery(_rv_games))
     _rv.db = NS(session=NS(commit=lambda: _rv_db.__setitem__("commit", _rv_db["commit"] + 1),
                            rollback=lambda: _rv_db.__setitem__("rollback", _rv_db["rollback"] + 1)))
