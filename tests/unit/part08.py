@@ -593,6 +593,7 @@ finally:
 import subprocess as _rv_sp  # noqa: E402
 import tempfile as _rv_tf  # noqa: E402
 import threading as _rv_th  # noqa: E402
+import time as _rv_time  # noqa: E402
 import shutil as _rv_sh  # noqa: E402
 
 from unit.part01 import _sm_hosts  # noqa: E402
@@ -723,7 +724,10 @@ def _rv_status(server):
                                                              ["198.51.100.8", "auto-block"]))
     t.start()
     _rv_thr.append(t)
-    t.join(0.3)
+    # Give it the time to reach the lock and block. A sleep, not t.join(0.3): once eventlet has
+    # patched threading (the suite runs it both ways), a join that times out RAISES
+    # eventlet.timeout.Timeout instead of returning — on Python 3.14 that ended the whole run.
+    _rv_time.sleep(0.3)
     _rv_order.append("read")
     return {"installed": True, "enabled": True,
             "groups": [{"key": "k3", "nums": [3], "protected": False}]}

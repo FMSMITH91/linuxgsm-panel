@@ -1073,12 +1073,10 @@ def _stream_backup_argv(argv, chunk):
     """
     p = subprocess.Popen(argv, stdout=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; the remote path is _quote()d above
                          stdin=subprocess.DEVNULL)
-    at_eof, rc = False, None
     try:
         while True:
             b = p.stdout.read(chunk)
             if not b:
-                at_eof = True
                 break
             yield b
     finally:
@@ -1087,7 +1085,9 @@ def _stream_backup_argv(argv, chunk):
         except Exception:  # nosec B110 - the pipe is already closed when the child exited
             pass           # first; closing it twice is the normal path, not a failure.
         rc = p.wait()
-    if at_eof and rc != 0:
+    # Reached only after the read loop hit EOF: a client abort (GeneratorExit at the yield) or a
+    # failed read leaves through the finally above with its own exception, and is not judged here.
+    if rc != 0:
         _core._log.warning("backup download: the reader exited %s — aborting the download",
                            rc)
         raise _core.StreamFailed("backup download failed (exit %s)" % rc)

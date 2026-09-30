@@ -287,10 +287,11 @@ def _host_lock_key(server):
     """What identifies `server` for a host lock: the panel's own host is one host however many
     rows name it; a remote is its row id, or its address for an unsaved row."""
     if is_local_server(server):
-        return ("local",)
+        return ("local", None, None)
     rid = getattr(server, "id", None)
-    return ("remote", rid) if rid is not None else ("addr", getattr(server, "host", None),
-                                                     getattr(server, "port", None))
+    if rid is not None:
+        return ("remote", rid, None)
+    return ("addr", getattr(server, "host", None), getattr(server, "port", None))
 
 
 def _host_lock(kind, server, *extra):
