@@ -1126,3 +1126,87 @@ finally:
     _so14._update_launched.clear()
     _so14._update_launched.update(_launched14)
     _shutil14.rmtree(_ss14_dir, ignore_errors=True)
+
+
+# ── 9. a branch SWITCH to main goes through the same gate ─────────────────────────────────────
+# It launched with an empty target, and install.sh resets an empty target to the branch's tip: so
+# switching (back) to main installed main's newest commit, verified or not — the one way around the
+# gate. Now: the newest verified commit of main's own line, or a refusal saying why. Another branch
+# is still the testing escape hatch, and says it installs an unverified tip.
+_sw14_saved = (_so14._git, _so14._is_git_checkout, _so14._remote_ci_state, _so14._launch_installer,
+               _so14._update_in_progress)
+_SW14 = ["1" * 40, "2" * 40, "3" * 40]     # main's first-parent line, tip first
+_sw14_cfg = {}
+try:
+    from panel.core import config as _cfg14
+    _sw14_cfg_saved = (_cfg14.load_config, _cfg14.update_config)
+    _cfg14.load_config = lambda: dict(_sw14_cfg)
+    _cfg14.update_config = lambda fn: fn(_sw14_cfg)
+    _so14._is_git_checkout = lambda: True
+    _so14._update_in_progress = lambda: False
+    _sw14_git = []
+
+    def _sw_git(args, timeout=45):
+        _sw14_git.append(args)
+        if args[0] == "ls-remote":
+            return ("x\trefs/heads/%s" % args[-1].split("/")[-1], "", 0)
+        if args[0] == "rev-list":
+            return ("\n".join(_SW14), "", 0)
+        return ("", "", 0)
+    _so14._git = _sw_git
+    _sw14_launch = []
+    _so14._launch_installer = lambda target_ref="", branch="", started_msg=None: (
+        _sw14_launch.append((target_ref, branch, started_msg)), (True, started_msg))[1]
+
+    def _sw14_run(branch, states, reason=""):
+        _sw14_launch.clear()
+        _sw14_git.clear()
+        _sw14_cfg.clear()
+
+        def _ci(sha):
+            st = states.get(sha, "pending")
+            _so14._ci_unknown_why["reason"] = reason if st == "unknown" else ""
+            return st
+        _so14._remote_ci_state = _ci
+        return _so14.panel_switch_branch(branch), list(_sw14_launch), dict(_sw14_cfg)
+
+    _s_ok = _sw14_run("main", {_SW14[0]: "pending", _SW14[1]: "passing"})
+    check("switch-branch: to main installs main's newest VERIFIED commit (pinned), not its tip",
+          _s_ok[0][0] is True and _s_ok[1] and _s_ok[1][0][:2] == (_SW14[1], "main")
+          and _SW14[1][:7] in _s_ok[0][1] and _s_ok[2].get("panel_branch") == "main",
+          repr(_s_ok))
+    check("switch-branch: ...having fetched main into its remote-tracking ref first",
+          ["fetch", "--quiet", "--no-tags", "origin",
+           "+refs/heads/main:refs/remotes/origin/main"] in _sw14_git, repr(_sw14_git[:3]))
+    _s_pend = _sw14_run("main", {})
+    _s_fail = _sw14_run("main", {s: "failing" for s in _SW14})
+    _s_unk = _sw14_run("main", {_SW14[0]: "unknown"}, reason=_so14._CI_WHY_NO_SLUG)
+    check("switch-branch: ...and refuses, launching nothing and keeping the tracked branch, when "
+          "nothing is verified yet, everything failed, or the checks can't be read — saying which",
+          all(r[0][0] is False and not r[1] and "panel_branch" not in r[2]
+              for r in (_s_pend, _s_fail, _s_unk))
+          and "finished its automated checks" in _s_pend[0][1]
+          and "passed its automated checks" in _s_fail[0][1]
+          and _so14._CI_WHY_NO_SLUG in _s_unk[0][1],
+          repr((_s_pend[0], _s_fail[0], _s_unk[0])))
+    _so14._update_in_progress = lambda: True
+    _s_busy = _sw14_run("main", {_SW14[0]: "passing"})
+    _so14._update_in_progress = lambda: False
+    check("switch-branch: ...and never while an update is being installed",
+          _s_busy[0][0] is False and not _s_busy[1] and "being installed" in _s_busy[0][1],
+          repr(_s_busy[0]))
+    _s_dev = _sw14_run("dev", {})
+    check("switch-branch: another branch is still the testing escape hatch — its tip, unpinned — "
+          "and the message says it is unverified",
+          _s_dev[0][0] is True and _s_dev[1] and _s_dev[1][0][:2] == ("", "dev")
+          and "unverified" in _s_dev[0][1] and not any(a[0] == "fetch" for a in _sw14_git),
+          repr(_s_dev))
+finally:
+    (_so14._git, _so14._is_git_checkout, _so14._remote_ci_state, _so14._launch_installer,
+     _so14._update_in_progress) = _sw14_saved
+    _cfg14.load_config, _cfg14.update_config = _sw14_cfg_saved
+_rmh14 = open(os.path.join(_root, "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
+check("switch-branch (UI): the confirm dialog says which it installs — main's newest verified "
+      "version, or another branch's tip as UNVERIFIED",
+      "It installs the newest version of main that has passed its automated checks." in _rmh14
+      and "UNVERIFIED: this installs the newest commit on" in _rmh14, "")

@@ -1852,6 +1852,40 @@ def list_panel_branches():
     return branches, branch
 
 
+def _verified_branch_target(branch):
+    """The newest commit of `branch` that passed the CI gate, for a SWITCH to it: (sha, "") or
+    ("", why not). Call under _update_lock (it fetches the ref a status check fetches).
+
+    Not _compute_update_status: that walks HEAD..tip and skips commits that do not contain HEAD,
+    because an update moves a checkout forward. A switch comes from another branch, so HEAD says
+    nothing about which of the branch's commits may be installed; the walk is the branch's own
+    first-parent line from its tip, judged by the same _remote_ci_state (required checks and all),
+    newest first, and 'unknown' ends it exactly as it ends an update's."""
+    ref = _REMOTE_TRACKING + branch
+    _, _, frc = _git(["fetch", "--quiet", "--no-tags", "origin",
+                      "+refs/heads/%s:%s" % (branch, ref)], timeout=45)
+    _, _, xrc = _git(["show-ref", "--verify", "--quiet", ref])
+    if frc != 0 or xrc != 0:
+        return "", ("Couldn't fetch '%s' from the update source, so there is no verified version "
+                    "to switch to." % branch)
+    revs, _, _ = _git(["rev-list", "--first-parent", "-n", "25", ref])
+    states = []
+    for sha in [c for c in (revs or "").split() if c]:
+        _ci_unknown_why["reason"] = ""
+        st = _remote_ci_state(sha)
+        if st == "passing":
+            return sha, ""
+        if st == "unknown":
+            return "", ("Not switched: '%s' couldn't be verified — %s." %
+                        (branch, _ci_unknown_why["reason"] or _CI_WHY_UNREACHABLE))
+        states.append(st)
+    if "pending" in states:
+        return "", ("Not switched: no version of '%s' has finished its automated checks yet. Try "
+                    "again once they've passed (usually a few minutes)." % branch)
+    return "", ("Not switched: none of the recent versions of '%s' passed its automated checks."
+                % branch)
+
+
 def panel_switch_branch(branch):
     """Point the panel at a different branch and check it out, with the SAME snapshot / health-check
     / auto-rollback safety as a normal update. Superadmin-gated at the route. Returns (ok, message)."""
@@ -1867,6 +1901,28 @@ def panel_switch_branch(branch):
     if rc != 0 or ("refs/heads/" + branch) not in [
             ln.split("\t", 1)[-1].strip() for ln in (out or "").splitlines()]:
         return False, "Branch '%s' doesn't exist on the remote." % branch
+    # WHICH commit of that branch. The switch always launched with an empty target, and install.sh
+    # resets an empty target to the branch's tip — so switching (back) to main installed main's
+    # newest commit whether or not its checks had finished, or passed: the one path around the CI
+    # gate panel_self_update enforces. A branch the gate covers now gets the gate's answer (the
+    # newest verified commit, or a refusal saying why); any other branch is the explicit testing
+    # escape hatch it always was, and the messages say it installs an unverified tip.
+    target = ""
+    if branch == _DEFAULT_BRANCH:
+        if _update_in_progress():
+            return False, "An update is being installed right now — switch once it has finished."
+        with _update_lock:
+            target, why = _verified_branch_target(branch)
+        if not target:
+            return False, why
+        msg = ("Switching to '%s' at %s, its newest version that passed its automated checks — the "
+               "panel is backing up, checking it out and verifying it restarts cleanly (auto-rollback "
+               "if it doesn't). This takes up to a minute." % (branch, target[:7]))
+    else:
+        msg = ("Switching to '%s' — this installs that branch's newest commit AS IT IS: branches "
+               "other than %s are not checked by the panel's update gate, so it is unverified code, "
+               "for testing. The panel is backing up and verifying it restarts cleanly "
+               "(auto-rollback if it doesn't). This takes up to a minute." % (branch, _DEFAULT_BRANCH))
     try:
         from panel.core import config as _cfg
         _previous = (_cfg.load_config().get("panel_branch") or "").strip()
@@ -1874,10 +1930,9 @@ def panel_switch_branch(branch):
     except Exception:
         _log.exception("switch-branch: could not save tracked branch")
         return False, "Could not save the branch selection."
-    msg = ("Switching to '%s' — the panel is backing up, checking out that branch and verifying it "
-           "restarts cleanly (auto-rollback if it doesn't). This takes up to a minute." % branch)
-    # target_ref empty → install.sh resets to the tip of PANEL_BRANCH.
-    ok, launch_msg = _launch_installer(target_ref="", branch=branch, started_msg=msg)
+    # target_ref empty (a non-gated branch only) → install.sh resets to the tip of PANEL_BRANCH. A
+    # pin is honoured only on that branch's first-parent line, which is where the walk found it.
+    ok, launch_msg = _launch_installer(target_ref=target, branch=branch, started_msg=msg)
     if not ok:
         # Put the tracked branch back. The config write above happens BEFORE the launch, and the
         # launch really can fail ("install.sh is missing, so the panel can't self-update safely").
