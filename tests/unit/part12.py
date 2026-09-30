@@ -333,6 +333,11 @@ try:
     _p9_patch(_p9_sm, "shell_as_game_user", _p9_shell_as)
     # Rendering reads Tailscale state for the nav; that is a host command.
     _p9_patch(_p9_ts, "get_tailscale_info", lambda force_refresh=False: NS(dns_name=None))
+    # Every file-manager and cron WRITE first asks the host whether the game account can become
+    # root there (_shared.game_account_write_refusal -> privileged_accounts). Its probe is a host
+    # command; here every account is a plain game account, as smoke_test answers it. The gate
+    # itself is driven, with the host's reply scripted, in part18.
+    _p9_patch(_p9_sh, "privileged_accounts", lambda remote, users: {})
     # Notifications are recorded, never sent.
     _P9_NOTIFIED = []
     _p9_patch(_p9_notif, "notify",
@@ -2266,6 +2271,7 @@ try:
     # an Exception is raised. `boom` names steps that raise.
     import ast as _p9_ast           # noqa: E402
     import inspect as _p9_inspect   # noqa: E402
+    import re as _p9_re             # noqa: E402
     import shlex as _p9_shlex       # noqa: E402
     _ms = {}
     _ms_log = []
@@ -2298,6 +2304,13 @@ try:
         if cmd.startswith("id ") and "echo EXISTS" in cmd:
             st = _ms["acct"].get(_p9_shlex.split(cmd)[1], "NOTEXISTS")
             return ("", "timed out", -1) if st is None else (st, "", 0)
+        if "LGSM_ACCT_PROBE_DONE" in cmd:
+            # The uninstall's "is this account root on the host?" probe (privileged_accounts):
+            # every scripted account is a plain game account, in its own group only. Not logged —
+            # it is a read, and the step lists below are what these checks compare.
+            _users = _p9_re.findall(r'echo "NOACCT ([a-z0-9_-]+)"', cmd)
+            return ("".join("ACCT %s 1001 %s\n" % (u, u) for u in _users)
+                    + "LGSM_ACCT_PROBE_DONE\n", "", 0)
         if "wget" in cmd and "linuxgsm.sh" in cmd:
             _ms_log.append("lgsm")
             return _ms_next("lgsm")
@@ -2938,3 +2951,711 @@ check("part12: nothing in this part created the checkout's own data/panel.db",
 check("part12: every deferred worker was run (none left to leak into a later check)",
       not _p9_queue,
       "%d left: %s" % (len(_p9_queue), [getattr(f, "__qualname__", f) for f, _a, _k in _p9_queue]))
+
+
+# ══ Privilege boundary: who may join the game-account group, the helper's environment, and the
+#    root installer's reads and chowns inside the panel-owned tree ═════════════════════════════
+# Every check below drives the real code: the helper loaded from tools/panel-helper (part05's
+# module), and install.sh / uninstall.sh functions lifted out whole and run under bash. The host's
+# own passwd, group, sudoers, doas and polkit files are never consulted: each is pointed at a
+# sandbox made here and put back afterwards.
+import grp as _pb_real_grp                                                        # noqa: E402
+import pwd as _pb_real_pwd                                                        # noqa: E402
+import shutil as _pb_shutil                                                       # noqa: E402
+import stat as _pb_stat                                                           # noqa: E402
+import subprocess as _pb_sp  # nosec B404 - bash and python on sandbox fixtures   # noqa: E402
+import sys as _pb_sys                                                             # noqa: E402
+
+from unit.part01 import skip as _pb_skip                                         # noqa: E402
+from unit.part05 import _helper as _pbh, _root as _pb_root                       # noqa: E402
+from unit.part06 import _inst_shfn as _pb_shfn                                   # noqa: E402
+from panel.security import privileged as _pb_priv                                # noqa: E402
+
+_PB = tempfile.mkdtemp(prefix="lgsm-unit-pb-")
+_PB_HOME = os.path.join(_PB, "home")
+os.makedirs(_PB_HOME)
+_PB_ROOT = os.geteuid() == 0
+# The uid a sandbox home can really carry: as root any uid can be given one; otherwise only this
+# process's own (a CI runner's 1001 is inside 1000..60000; anything else skips the home checks).
+_PB_GAME_UID = 1001 if _PB_ROOT else os.getuid()
+_PB_HOMES_OK = 1000 <= _PB_GAME_UID <= 60000
+
+
+def _pb_run(script, env=None, cwd=None, timeout=30):
+    r = _pb_sp.run(["bash", "-c", script], capture_output=True, text=True, check=False,  # nosec B603 B607 - fixture script
+                   timeout=timeout, cwd=cwd, env=dict(os.environ, **(env or {})))
+    return r
+
+
+# ── 1. gameuser-group: only a real GAME account joins the group the second sudoers line names ─
+class _PbGr:
+    def __init__(self, name, gid, mem=()):
+        self.gr_name, self.gr_gid, self.gr_mem = name, gid, list(mem)
+
+
+_pb_accounts = {}          # name -> (uid, gid, home)
+_pb_groups = {}            # name -> _PbGr
+
+
+def _pb_account(name, uid, gid=None, home=None, groups=(), install=None):
+    """A fake account; `install` makes a LinuxGSM marker in its sandbox home."""
+    gid = uid if gid is None else gid
+    home = home or os.path.join(_PB_HOME, name)
+    _pb_accounts[name] = (uid, gid, home)
+    _pb_groups.setdefault(name, _PbGr(name, gid))
+    for g in groups:
+        _pb_groups[g].gr_mem.append(name)
+    if install is not None and not os.path.lexists(home):
+        os.makedirs(home)
+        if install == "lgsm":
+            os.makedirs(os.path.join(home, "lgsm", "config-lgsm"))
+        elif install == "script":
+            open(os.path.join(home, "linuxgsm.sh"), "w").close()
+        if _PB_ROOT:
+            for d, dirs, files in os.walk(home):
+                for n in [d] + [os.path.join(d, x) for x in dirs + files]:
+                    os.lchown(n, uid, gid)
+
+
+def _pb_getpwnam(name):
+    if name not in _pb_accounts:
+        raise KeyError(name)
+    uid, gid, home = _pb_accounts[name]
+    return NS(pw_name=name, pw_uid=uid, pw_gid=gid, pw_dir=home)
+
+
+def _pb_getpwuid(uid):
+    for n, (u, _g, _h) in _pb_accounts.items():
+        if u == uid:
+            return _pb_getpwnam(n)
+    raise KeyError(uid)
+
+
+def _pb_getgrgid(gid):
+    for g in _pb_groups.values():
+        if g.gr_gid == gid:
+            return g
+    raise KeyError(gid)
+
+
+def _pb_getgrnam(name):
+    if name not in _pb_groups:
+        raise KeyError(name)
+    return _pb_groups[name]
+
+
+_pb_groups.update({"users": _PbGr("users", 100), "cdrom": _PbGr("cdrom", 24),
+                   "microk8s": _PbGr("microk8s", 1500), "friends": _PbGr("friends", 1600),
+                   "doasers": _PbGr("doasers", 1601), "polgrp": _PbGr("polgrp", 1602),
+                   "lgsmpanel-games": _PbGr("lgsmpanel-games", 1700), "sudo": _PbGr("sudo", 27)})
+_G = _PB_GAME_UID
+_pb_account("lgsmpanel", 998)
+_pb_account("gamer", _G, install="lgsm")
+_pb_account("scripted", _G, gid=_G + 20, install="script")
+_pb_account("alice", _G, gid=_G + 1, install="")                     # a person: a home, no install
+_pb_account("postgres", 114, install="lgsm")                          # service account, below UID_MIN
+_pb_account("nobody", 65534, install="lgsm")                          # above UID_MAX
+_pb_account("cdromer", _G, gid=_G + 2, groups=("cdrom",), install="lgsm")
+_pb_account("k8s", _G, gid=_G + 3, groups=("microk8s",), install="lgsm")
+_pb_account("friendly", _G, gid=_G + 4, groups=("users", "friends"), install="lgsm")
+_pb_account("linked", _G, gid=_G + 5, home=os.path.join(_PB_HOME, "linked"))
+os.symlink(os.path.join(_PB_HOME, "gamer"), os.path.join(_PB_HOME, "linked"))
+_pb_account("markerlink", _G, gid=_G + 6, install="")
+os.symlink(os.path.join(_PB_HOME, "gamer", "lgsm"), os.path.join(_PB_HOME, "markerlink", "lgsm"))
+_pb_account("doasme", _G, gid=_G + 7, groups=("doasers",), install="lgsm")
+_pb_account("polme", _G, gid=_G + 8, groups=("polgrp",), install="lgsm")
+_pb_account("pklame", _G, gid=_G + 9, install="lgsm")
+_pb_account("member", _G, gid=_G + 10, groups=("lgsmpanel-games",), install="")
+_pb_account("sudomember", _G, gid=_G + 11, groups=("lgsmpanel-games", "sudo"), install="lgsm")
+
+_pb_policy = os.path.join(_PB, "policy")
+os.makedirs(os.path.join(_pb_policy, "sudoers.d"))
+os.makedirs(os.path.join(_pb_policy, "rules.d"))
+os.makedirs(os.path.join(_pb_policy, "pkla", "50-local.d"))
+open(os.path.join(_pb_policy, "sudoers"), "w").close()
+with open(os.path.join(_pb_policy, "login.defs"), "w") as _fh:
+    _fh.write("# test\nUID_MIN\t\t 1000\nUID_MAX\t\t60000\nGID_MIN\t\t 1000\nGID_MAX\t\t60000\n")
+with open(os.path.join(_pb_policy, "doas.conf"), "w") as _fh:
+    _fh.write("# admins\npermit persist setenv { PATH=/bin } :doasers as root\ndeny steam\n")
+with open(os.path.join(_pb_policy, "rules.d", "60-units.rules"), "w") as _fh:
+    _fh.write('polkit.addRule(function(action, subject) {\n'
+              '  if (action.id == "org.freedesktop.systemd1.manage-units" &&\n'
+              '      subject.isInGroup("polgrp")) { return polkit.Result.YES; }\n});\n')
+with open(os.path.join(_pb_policy, "pkla", "50-local.d", "units.pkla"), "w") as _fh:
+    _fh.write("[let pklame manage units]\nIdentity=unix-user:pklame\n"
+              "Action=org.freedesktop.systemd1.manage-units\nResultAny=yes\n"
+              "[friendly may ask]\nIdentity=unix-group:friends\nAction=x\nResultAny=auth_admin\n")
+with open(os.path.join(_PB, "panel.conf"), "w") as _fh:
+    _fh.write("panel_dir=%s\n" % os.path.join(_PB_HOME, "lgsmpanel", "linuxgsm-panel"))
+
+_pb_saved = {k: getattr(_pbh, k) for k in (
+    "pwd", "grp", "HOME_ROOT", "LOGIN_DEFS", "DOAS_CONFS", "POLKIT_RULE_DIRS", "POLKIT_PKLA_DIRS",
+    "SUDOERS_FILE", "SUDOERS_DIR", "NSSWITCH_FILE", "PANEL_CONF", "subprocess", "resolve",
+    "_escalation_verdict")}
+_pb_sudo_uid = os.environ.get("SUDO_UID")
+_pb_calls = []
+
+
+def _pb_fake_run(argv, *a, **k):
+    _pb_calls.append(list(argv))
+    if os.path.basename(argv[0]) == "useradd":
+        _pb_account(argv[-1], 2000 + len(_pb_accounts), install="")
+    return NS(returncode=0, stdout="", stderr=b"" if k.get("capture_output") and not k.get("text") else "")
+
+
+try:
+    _pbh.pwd = NS(getpwnam=_pb_getpwnam, getpwuid=_pb_getpwuid)
+    _pbh.grp = NS(getgrgid=_pb_getgrgid, getgrnam=_pb_getgrnam,
+                  getgrall=lambda: list(_pb_groups.values()))
+    _pbh.HOME_ROOT = _PB_HOME
+    _pbh.LOGIN_DEFS = os.path.join(_pb_policy, "login.defs")
+    _pbh.DOAS_CONFS = (os.path.join(_pb_policy, "doas.conf"),)
+    _pbh.POLKIT_RULE_DIRS = (os.path.join(_pb_policy, "rules.d"),)
+    _pbh.POLKIT_PKLA_DIRS = (os.path.join(_pb_policy, "pkla"),)
+    _pbh.SUDOERS_FILE = os.path.join(_pb_policy, "sudoers")
+    _pbh.SUDOERS_DIR = os.path.join(_pb_policy, "sudoers.d")
+    _pbh.NSSWITCH_FILE = os.path.join(_pb_policy, "no-nsswitch")
+    _pbh.PANEL_CONF = os.path.join(_PB, "panel.conf")
+    _pbh.subprocess = NS(run=_pb_fake_run, PIPE=_pb_sp.PIPE, STDOUT=_pb_sp.STDOUT,
+                         DEVNULL=_pb_sp.DEVNULL, TimeoutExpired=_pb_sp.TimeoutExpired)
+    _pbh.resolve = lambda n: "/usr/sbin/" + n
+    os.environ["SUDO_UID"] = "998"            # invoked by the panel's own account
+
+    _pb_why = {n: _pbh._enrolment_refusal(n) for n in (
+        "gamer", "scripted", "friendly", "alice", "postgres", "nobody", "lgsmpanel", "cdromer",
+        "k8s", "doasme", "polme", "pklame", "linked", "markerlink", "ghost")}
+    if _PB_HOMES_OK:
+        check("enrol gate: a LinuxGSM account with an ordinary uid and ordinary groups is accepted"
+              " (lgsm/config-lgsm, or linuxgsm.sh; `users` and a gid>=GID_MIN group are fine)",
+              _pb_why["gamer"] == "" and _pb_why["scripted"] == "" and _pb_why["friendly"] == "",
+              repr({k: _pb_why[k] for k in ("gamer", "scripted", "friendly")}))
+        check("enrol gate: a person's login account with no LinuxGSM install is REFUSED",
+              "no LinuxGSM install" in _pb_why["alice"], repr(_pb_why["alice"]))
+        check("enrol gate: a home that is a symlink to a game account's home is refused",
+              "no LinuxGSM install" in _pb_why["linked"], repr(_pb_why["linked"]))
+        check("enrol gate: ...and so is a marker (~/lgsm) that is a symlink into another home",
+              "no LinuxGSM install" in _pb_why["markerlink"], repr(_pb_why["markerlink"]))
+        check("enrol gate: a system group (gid < GID_MIN, e.g. cdrom) is refused: allowlist, not "
+              "denylist", "system group cdrom" in _pb_why["cdromer"], repr(_pb_why["cdromer"]))
+        check("enrol gate: ...and microk8s is refused by NAME even as an ordinary gid",
+              "microk8s" in _pb_why["k8s"], repr(_pb_why["k8s"]))
+    else:
+        _pb_skip("enrol gate: home-directory checks", "this uid (%d) is not an ordinary one" % _G)
+    check("enrol gate: service accounts and nobody are refused by uid, whatever their home holds",
+          "outside this host's range" in _pb_why["postgres"]
+          and "outside this host's range" in _pb_why["nobody"],
+          repr((_pb_why["postgres"], _pb_why["nobody"])))
+    check("enrol gate: the panel's own account is refused", _pb_why["lgsmpanel"] != "",
+          repr(_pb_why["lgsmpanel"]))
+    check("enrol gate: an account that does not exist is refused", _pb_why["ghost"] != "")
+    check("enrol gate: a doas `permit :group` for one of its groups is 'can reach root'",
+          "doas" in _pb_why["doasme"] and "reach root" in _pb_why["doasme"], repr(_pb_why["doasme"]))
+    check("enrol gate: a polkit rule naming one of its groups is 'can reach root'",
+          "polkit rule" in _pb_why["polme"], repr(_pb_why["polme"]))
+    check("enrol gate: a .pkla granting it 'yes' is 'can reach root' (an auth_admin one is not)",
+          "polkit authority" in _pb_why["pklame"] and "polkit" not in _pb_why["friendly"],
+          repr((_pb_why["pklame"], _pb_why["friendly"])))
+    check("enrol gate: _escalation_verdict itself says yes for doas and polkit (install.sh evicts)",
+          _pbh._escalation_verdict("doasme")[0] == "yes"
+          and _pbh._escalation_verdict("polme")[0] == "yes"
+          and _pbh._escalation_verdict("k8s")[0] == "yes", "")
+    with open(os.path.join(_pb_policy, "doas.conf"), "a") as _fh:
+        _fh.write('permit "odd name"\n')
+    check("enrol gate: a doas rule it cannot parse is 'unknown', never 'no'",
+          _pbh._escalation_verdict("gamer")[0] == "unknown", repr(_pbh._escalation_verdict("gamer")))
+    with open(os.path.join(_pb_policy, "doas.conf"), "w") as _fh:
+        _fh.write("permit persist :doasers\n")
+
+    # The verb, and its two legitimate callers.
+    import io as _pb_io
+    _pb_stderr_saved = _pbh.sys.stderr
+    try:
+        _pbh.sys.stderr = _pb_io.StringIO()
+        del _pb_calls[:]
+        _pb_rc_alice = _pbh.do_gameuser_group(["alice"], "")
+        _pb_calls_alice = list(_pb_calls)
+        del _pb_calls[:]
+        _pb_rc_pg = _pbh.do_gameuser_group(["postgres"], "")
+        _pb_calls_pg = list(_pb_calls)
+        del _pb_calls[:]
+        _pb_rc_gamer = _pbh.do_gameuser_group(["gamer"], "")
+        _pb_calls_gamer = list(_pb_calls)
+        del _pb_calls[:]
+        _pb_rc_member = _pbh.do_gameuser_group(["member"], "")
+        _pb_rc_sudomember = _pbh.do_gameuser_group(["sudomember"], "")
+        _pb_errtext = _pbh.sys.stderr.getvalue()
+        # user-create enrols what it has just created, so create_game_user's gameuser-group call
+        # right after finds a member; a name that is a privileged group is created, not enrolled.
+        del _pb_calls[:]
+        _pb_rc_uc = _pbh.main(["panel-helper", "user-create", "newbie"])
+        _pb_calls_uc = [os.path.basename(c[0]) for c in _pb_calls]
+        del _pb_calls[:]
+        _pb_rc_uc2 = _pbh.main(["panel-helper", "user-create", "lxd"])
+        _pb_calls_uc2 = [os.path.basename(c[0]) for c in _pb_calls]
+        _pb_uc_err = _pbh.sys.stderr.getvalue()
+    finally:
+        _pbh.sys.stderr = _pb_stderr_saved
+    if _PB_HOMES_OK:
+        check("gameuser-group: a login account with no install is refused and nothing runs",
+              _pb_rc_alice == 1 and not _pb_calls_alice, "rc=%s ran=%s" % (_pb_rc_alice, _pb_calls_alice))
+        check("gameuser-group: an imported LinuxGSM account is enrolled (groupadd -f, usermod -aG)",
+              _pb_rc_gamer == 0 and [os.path.basename(c[0]) for c in _pb_calls_gamer]
+              == ["groupadd", "usermod"] and _pb_calls_gamer[1][-1] == "gamer",
+              "rc=%s ran=%s" % (_pb_rc_gamer, _pb_calls_gamer))
+        check("gameuser-group: an existing member needs no install (the content account's tree may"
+              " be empty), but one that has since gained sudo is still refused",
+              _pb_rc_member == 0 and _pb_rc_sudomember == 1
+              and "sudomember in lgsmpanel-games: it can already reach root" in _pb_errtext,
+              "member=%s sudomember=%s %r" % (_pb_rc_member, _pb_rc_sudomember, _pb_errtext[-200:]))
+    check("gameuser-group: postgres (a service uid) is refused and nothing runs",
+          _pb_rc_pg == 1 and not _pb_calls_pg, "rc=%s ran=%s" % (_pb_rc_pg, _pb_calls_pg))
+    check("user-create: the account it has just made is enrolled in the same run",
+          _pb_rc_uc == 0 and _pb_calls_uc == ["useradd", "groupadd", "usermod"], repr(_pb_calls_uc))
+    check("user-create: ...but a name that is a root-equivalent group is created and NOT enrolled",
+          _pb_rc_uc2 == 0 and _pb_calls_uc2 == ["useradd"]
+          and "created lxd but did not enrol it" in _pb_uc_err, repr((_pb_calls_uc2, _pb_uc_err[-160:])))
+finally:
+    for _k, _v in _pb_saved.items():
+        setattr(_pbh, _k, _v)
+    if _pb_sudo_uid is None:
+        os.environ.pop("SUDO_UID", None)
+    else:
+        os.environ["SUDO_UID"] = _pb_sudo_uid
+
+check("enrol gate: the helper's, install.sh's and privileged.py's root-equivalent groups include "
+      "the ones the survey added",
+      {"microk8s", "lpadmin", "kmem", "incus", "systemd-journal", "ssl-cert"}
+      <= set(_pbh.NEVER_ENROL_GROUPS) & set(_pb_priv._NEVER_A_CONTENT_GROUP)
+      and set(_pbh.NEVER_A_CONTENT_GROUP) == set(_pbh.NEVER_ENROL_GROUPS))
+
+# install.sh asks the helper the same question before it enrols anyone, and fails closed.
+_pb_inst = open(os.path.join(_pb_root, "install.sh"), encoding="utf-8").read()
+_pb_er = _pb_shfn("enrolment_refusal")
+_pb_sync = _pb_shfn("sync_game_user_group")
+check("install.sh: the backfill asks enrolment_refusal before usermod -aG",
+      "enrolment_refusal" in _pb_sync
+      and _pb_sync.index("enrolment_refusal") < _pb_sync.index('usermod -aG "${GAME_GROUP}"'))
+_pb_hd = os.path.join(_PB, "helperdir")
+os.makedirs(_pb_hd)
+_r = _pb_run(_pb_er + 'enrolment_refusal root; echo "[$?]"', env={"HELPER_DIR": _pb_hd})
+check("install.sh enrolment_refusal: with no helper to ask, it refuses (fails closed)",
+      "helper that checks game accounts is not installed" in _r.stdout, _r.stdout + _r.stderr)
+_pb_shutil.copy(os.path.join(_pb_root, "tools", "panel-helper"), os.path.join(_pb_hd, "panel-helper"))
+_r = _pb_run(_pb_er + 'enrolment_refusal root; enrolment_refusal no-such-account-pb',
+             env={"HELPER_DIR": _pb_hd})
+_pb_lns = _r.stdout.splitlines()
+check("install.sh enrolment_refusal: the helper's reason comes back, one line per account (root"
+      " is refused; a missing account is not an account)",
+      len(_pb_lns) == 2 and _pb_lns[0] and "not an account on this host" in _pb_lns[1],
+      _r.stdout + _r.stderr)
+with open(os.path.join(_pb_hd, "panel-helper"), "w") as _fh:
+    _fh.write("raise SystemExit(3)\n")
+_r = _pb_run(_pb_er + 'enrolment_refusal root', env={"HELPER_DIR": _pb_hd})
+check("install.sh enrolment_refusal: a helper that does not answer is a refusal, not a pass",
+      "could not check it" in _r.stdout, _r.stdout + _r.stderr)
+
+# ── 2. The helper's interpreter and the environment its children get ─────────────────────────
+_pb_first = open(os.path.join(_pb_root, "tools", "panel-helper"), encoding="utf-8").readline()
+check("helper: the shebang names /usr/bin/python3 outright, isolated (-I), not `env python3`",
+      _pb_first.strip() == "#!/usr/bin/python3 -I", repr(_pb_first))
+_pb_env_saved = dict(os.environ)
+try:
+    os.environ.update({"BASH_ENV": "/tmp/pb-evil", "PATH": "/tmp/pb-evil:/usr/bin",
+                       "PYTHONPATH": "/tmp/pb", "http_proxy": "http://pb.invalid",
+                       "SUDO_UID": "998", "FOO": "1"})
+    _pb_ce = _pbh._clean_env(DEBIAN_FRONTEND="noninteractive")
+    check("helper _clean_env: a fixed PATH and locale, sudo's identity kept, nothing else inherited",
+          _pb_ce["PATH"] == "/usr/sbin:/usr/bin:/sbin:/bin" and _pb_ce["SUDO_UID"] == "998"
+          and _pb_ce["DEBIAN_FRONTEND"] == "noninteractive"
+          and not {"BASH_ENV", "PYTHONPATH", "http_proxy", "FOO"} & set(_pb_ce), repr(_pb_ce))
+    _pb_su = _pbh._self_update_env("-", "-")
+    check("helper: the root-run installer's environment is built, not copied (no BASH_ENV)",
+          "BASH_ENV" not in _pb_su and "FOO" not in _pb_su and _pb_su["PANEL_SELF_UPDATE"] == "1"
+          and _pb_su["PATH"] == _pbh.CHILD_PATH and _pb_su.get("SUDO_UID") == "998", repr(_pb_su))
+    _pb_dbr = _pbh._db_repair_as(NS(pw_uid=1234, pw_gid=1234, pw_name="x", pw_dir="/home/x"))
+    check("helper: the db repair child gets a clean environment with the account's HOME",
+          _pb_dbr["env"]["HOME"] == "/home/x" and "FOO" not in _pb_dbr["env"], repr(_pb_dbr["env"]))
+    _pb_seen = []
+    _pb_sub_saved, _pb_res_saved = _pbh.subprocess, _pbh.resolve
+    try:
+        _pbh.subprocess = NS(run=lambda argv, **k: (_pb_seen.append(k.get("env")),
+                                                    NS(returncode=0, stdout="", stderr=""))[1],
+                             TimeoutExpired=_pb_sp.TimeoutExpired)
+        _pbh.resolve = lambda n: "/usr/bin/" + n
+        _pbh.main(["panel-helper", "apt-install", "curl"])
+    finally:
+        _pbh.subprocess, _pbh.resolve = _pb_sub_saved, _pb_res_saved
+    check("helper main: a table verb's tool runs with the clean environment (+DEBIAN_FRONTEND)",
+          len(_pb_seen) == 1 and _pb_seen[0] and "BASH_ENV" not in _pb_seen[0]
+          and "FOO" not in _pb_seen[0] and _pb_seen[0].get("DEBIAN_FRONTEND") == "noninteractive",
+          repr(_pb_seen))
+finally:
+    os.environ.clear()
+    os.environ.update(_pb_env_saved)
+# _scrub_environ, as the __main__ block runs it: in a child, so this process keeps its own.
+_r = _pb_sp.run([_pb_sys.executable, "-I", "-c",
+                 "import importlib.machinery as m, importlib.util as u, os, sys\n"
+                 "l = m.SourceFileLoader('h', sys.argv[1])\n"
+                 "h = u.module_from_spec(u.spec_from_loader('h', l)); l.exec_module(h)\n"
+                 "h._scrub_environ(); print(sorted(os.environ.items()))",
+                 os.path.join(_pb_root, "tools", "panel-helper")],
+                capture_output=True, text=True, check=False, timeout=30,
+                env={"BASH_ENV": "/x", "FOO": "1", "SUDO_UID": "5", "PATH": "/tmp:/usr/bin"})
+check("helper: the __main__ block scrubs its own environment before any verb runs",
+      "_scrub_environ()" in open(os.path.join(_pb_root, "tools", "panel-helper"), encoding="utf-8")
+      .read().split('if __name__ == "__main__":')[1][:80]
+      and "BASH_ENV" not in _r.stdout and "FOO" not in _r.stdout
+      and "('PATH', '/usr/sbin:/usr/bin:/sbin:/bin')" in _r.stdout and "('SUDO_UID', '5')" in _r.stdout,
+      _r.stdout + _r.stderr)
+# install.sh writes the Defaults line for the helper, first, and visudo accepts the file.
+_pb_wsg = _pb_shfn("write_sudoers_grant")
+_pb_blk = _pb_wsg[_pb_wsg.index("        {\n            echo \"Defaults!"):]
+_pb_blk = _pb_blk[:_pb_blk.index("} > /etc/sudoers.d/linuxgsm-panel") + 1]
+_pb_sud = os.path.join(_PB, "linuxgsm-panel.sudoers")
+check("install.sh: the helper's PATH in sudoers is the helper's own CHILD_PATH",
+      'HELPER_SECURE_PATH="%s"' % _pbh.CHILD_PATH in _pb_inst)
+_r = _pb_run(_pb_blk + " > " + _pb_sud,
+             env={"HELPER_DST": "/usr/local/lib/linuxgsm-panel/panel-helper", "PANEL_USER": "lgsmpanel",
+                  "GAME_GROUP": "lgsmpanel-games",
+                  "HELPER_SECURE_PATH": "/usr/sbin:/usr/bin:/sbin:/bin"})
+_pb_lines = open(_pb_sud, encoding="utf-8").read().splitlines() if os.path.exists(_pb_sud) else []
+check("install.sh: the grant opens with `Defaults!<helper> env_reset, secure_path=...`",
+      _pb_lines[:1] == ['Defaults!/usr/local/lib/linuxgsm-panel/panel-helper env_reset, '
+                        'secure_path="/usr/sbin:/usr/bin:/sbin:/bin"'] and len(_pb_lines) == 3,
+      repr(_pb_lines))
+_pb_visudo = _pb_shutil.which("visudo") or ("/usr/sbin/visudo" if os.path.exists("/usr/sbin/visudo") else "")
+if _pb_visudo and _PB_ROOT:
+    _r = _pb_sp.run([_pb_visudo, "-cf", _pb_sud], capture_output=True, text=True, check=False)  # nosec B603 - fixed argv
+    check("install.sh: ...and visudo -cf accepts the three lines", _r.returncode == 0,
+          _r.stdout + _r.stderr)
+else:
+    _pb_skip("install.sh: visudo accepts the grant", "no visudo, or not root")
+check("helper: the sudoers parser skips the Defaults! line (it is no user specification)",
+      len(_pbh._sudoers_matching_rules(_pb_lines, "lgsmpanel", {"lgsmpanel"}, 998, {998})) == 2)
+
+# ── 3. Hard links: never chmod'd (content-grant-read) or chowned (install.sh) as root ─────────
+_pb_cg = os.path.join(_PB, "chmod")
+os.makedirs(_pb_cg)
+_pb_victim = os.path.join(_PB, "victim-file")
+with open(_pb_victim, "w") as _fh:
+    _fh.write("secret")
+os.chmod(_pb_victim, 0o600)
+os.link(_pb_victim, os.path.join(_pb_cg, "hl"))
+with open(os.path.join(_pb_cg, "plain"), "w") as _fh:
+    _fh.write("x")
+os.chmod(os.path.join(_pb_cg, "plain"), 0o600)
+_pb_dfd = os.open(_pb_cg, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    _pbh._chmod_nofollow("hl", _pb_stat.S_IRGRP, dir_fd=_pb_dfd)
+    _pbh._chmod_nofollow("plain", _pb_stat.S_IRGRP, dir_fd=_pb_dfd)
+finally:
+    os.close(_pb_dfd)
+check("helper _chmod_nofollow: a hard-linked file (a second name for, say, /etc/shadow) is left "
+      "alone", _pb_stat.S_IMODE(os.stat(_pb_victim).st_mode) == 0o600,
+      oct(os.stat(_pb_victim).st_mode))
+check("helper _chmod_nofollow: ...while a file with one name still gets g+r (control)",
+      _pb_stat.S_IMODE(os.stat(os.path.join(_pb_cg, "plain")).st_mode) == 0o640)
+_pb_inst_code = "\n".join(_ln for _ln in _pb_inst.splitlines() if not _ln.lstrip().startswith("#"))
+check("install.sh: no recursive chown of the panel tree is left (comments aside)",
+      'chown -R "${PANEL_USER}' not in _pb_inst_code and _pb_inst_code.count("_chown_panel_tree") == 5)
+try:
+    _pb_daemon = _pb_real_pwd.getpwnam("daemon")
+    _pb_real_grp.getgrnam("daemon")
+except KeyError:
+    _pb_daemon = None
+if _PB_ROOT and _pb_daemon is not None:
+    _pb_pd = os.path.join(_PB, "chown", "panel")
+    os.makedirs(os.path.join(_pb_pd, "sub"))
+    for _n in ("plain", "sub/deep"):
+        open(os.path.join(_pb_pd, _n), "w").close()
+    _pb_v2 = os.path.join(_PB, "chown", "rootfile")
+    open(_pb_v2, "w").close()
+    os.link(_pb_v2, os.path.join(_pb_pd, "sub", "hl"))
+    os.symlink(_pb_v2, os.path.join(_pb_pd, "sl"))
+    _r = _pb_run("set -euo pipefail\nwarn() { echo \"WARN $*\"; }\n"
+                 + _pb_shfn("_chown_panel_tree") + "_chown_panel_tree",
+                 env={"PANEL_DIR": _pb_pd, "PANEL_USER": "daemon"})
+    _pb_own = {n: os.lstat(os.path.join(_pb_pd, n)).st_uid
+               for n in ("", "sub", "plain", "sub/deep", "sub/hl", "sl")}
+    check("install.sh _chown_panel_tree: the tree, its directories and single-name files are "
+          "the panel user's, a link is chowned as a link",
+          _r.returncode == 0 and all(_pb_own[n] == _pb_daemon.pw_uid
+                                     for n in ("", "sub", "plain", "sub/deep", "sl")),
+          "%r %s" % (_pb_own, _r.stderr))
+    check("install.sh _chown_panel_tree: ...but a hard link is NOT, nor its target, and it says so",
+          _pb_own["sub/hl"] == 0 and os.stat(_pb_v2).st_uid == 0 and "sub/hl" in _r.stdout,
+          "%r %r" % (_pb_own, _r.stdout))
+else:
+    _pb_skip("install.sh _chown_panel_tree: driven", "needs root and a daemon account")
+
+# ── 4. The self-update installer runs from "/", and ignores its working directory ─────────────
+_pb_seen = []
+_pb_sub_saved = _pbh.subprocess
+try:
+    _pbh.subprocess = NS(run=lambda argv, **k: (_pb_seen.append(k), NS(returncode=0))[1],
+                         STDOUT=_pb_sp.STDOUT, TimeoutExpired=_pb_sp.TimeoutExpired)
+    _pbh._run_installer_to(None, "/home/lgsmpanel/linuxgsm-panel", {})
+finally:
+    _pbh.subprocess = _pb_sub_saved
+check("helper self-update: the root installer starts in /, not in the panel-owned checkout",
+      len(_pb_seen) == 1 and _pb_seen[0].get("cwd") == "/", repr(_pb_seen))
+_pb_src_blk = _pb_inst[_pb_inst.index('SRC=""\nif [[ -n "${PANEL_SELF_UPDATE:-}" ]]'):]
+_pb_src_blk = _pb_src_blk[:_pb_src_blk.index("\nfi\n") + 4]
+_pb_ck = os.path.join(_PB, "checkout")
+os.makedirs(_pb_ck)
+for _n in ("app.py", "requirements.txt"):
+    open(os.path.join(_pb_ck, _n), "w").close()
+_pb_src = "ok() { :; }\nPANEL_SELF_UPDATE=\"${PSU:-}\"\n" + _pb_src_blk + 'echo "SRC=[${SRC}]"'
+_r1 = _pb_run(_pb_src, cwd=_pb_ck)
+_r2 = _pb_run(_pb_src, cwd=_pb_ck, env={"PSU": "1"})
+check("install.sh: an operator run from a checkout uses it as the source (control)",
+      "SRC=[%s]" % os.path.realpath(_pb_ck) in _r1.stdout or "SRC=[%s]" % _pb_ck in _r1.stdout,
+      _r1.stdout + _r1.stderr)
+check("install.sh: ...but a panel self-update never takes its working directory as the source",
+      "SRC=[]" in _r2.stdout, _r2.stdout + _r2.stderr)
+_pb_fc = _pb_shfn("fetch_code")
+check("install.sh fetch_code: the extracting tar runs as PANEL_DIR's owner when that is not root",
+      'x_as="sudo -u ${x_owner}"' in _pb_fc and '${x_as} tar -C "${PANEL_DIR}" --no-same-owner -xf -'
+      in _pb_fc, _pb_fc[:200])
+
+# ── 5. Root reads a file in the panel's tree as its owner: no link, no FIFO ──────────────────
+_pb_rd = os.path.join(_PB, "reads", "panel")
+os.makedirs(os.path.join(_pb_rd, "data"))
+_pb_secret = os.path.join(_PB, "reads", "secret")
+with open(_pb_secret, "w") as _fh:
+    _fh.write('{"port": 7777}\nroot:$6$hash:1\n')
+os.chmod(_pb_secret, 0o600)
+_pb_ver_sh = ("set -euo pipefail\n" + _pb_shfn("_owner_read") + _pb_shfn("panel_port")
+              + _pb_shfn("_epoch_version") + _pb_shfn("_version_file"))
+_pb_cfg = os.path.join(_pb_rd, "data", "config.json")
+with open(_pb_cfg, "w") as _fh:
+    _fh.write('{"port": 5123}')
+with open(os.path.join(_pb_rd, "VERSION"), "w") as _fh:
+    _fh.write("0.9-hand\x1b]0;pwned\x07\n")
+_r = _pb_run(_pb_ver_sh + "panel_port; _version_file", env={"PANEL_DIR": _pb_rd})
+check("install.sh panel_port/_version_file: a real config and VERSION still read (control), with "
+      "a terminal escape in VERSION stripped", _r.stdout.split("\n")[:2] == ["5123", "0.9-hand]0;pwned"],
+      repr(_r.stdout))
+os.remove(_pb_cfg)
+os.symlink(_pb_secret, _pb_cfg)
+os.remove(os.path.join(_pb_rd, "VERSION"))
+os.symlink(_pb_secret, os.path.join(_pb_rd, "VERSION"))
+_r = _pb_run(_pb_ver_sh + "panel_port; _version_file", env={"PANEL_DIR": _pb_rd})
+check("install.sh: a config.json or VERSION symlinked to a root-only file is not read through "
+      "(port 5000, version unknown; nothing of the file printed)",
+      _r.stdout.split("\n")[:2] == ["5000", "unknown"] and "7777" not in _r.stdout
+      and "hash" not in _r.stdout, repr(_r.stdout))
+os.remove(_pb_cfg)
+os.mkfifo(_pb_cfg)
+try:
+    # _owner_read itself, past panel_port's [[ -f ]]: the file can become a FIFO after that test.
+    _r = _pb_run(_pb_ver_sh + '_owner_read "${PANEL_DIR}/data/config.json"; echo "[done]"',
+                 env={"PANEL_DIR": _pb_rd}, timeout=20)
+    _pb_fifo_ok = _r.stdout.strip() == "[done]"
+except _pb_sp.TimeoutExpired:
+    _pb_fifo_ok = False
+check("install.sh _owner_read: a FIFO in place of config.json is refused, not waited on",
+      _pb_fifo_ok)
+if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
+    os.remove(_pb_cfg)
+    _pb_shutil.copy(_pb_secret, _pb_cfg)                      # a REAL file, root's, mode 0600
+    os.chmod(_PB, 0o755)
+    os.chmod(os.path.join(_PB, "reads"), 0o755)
+    os.chown(_pb_rd, _pb_daemon.pw_uid, -1)
+    os.chmod(_pb_rd, 0o755)
+    os.chmod(os.path.join(_pb_rd, "data"), 0o755)
+    _r = _pb_run(_pb_ver_sh + "panel_port", env={"PANEL_DIR": _pb_rd})
+    check("install.sh panel_port: as root, a panel-owned tree is read AS ITS OWNER (a root-only "
+          "file there is not read)", _r.stdout.strip() == "5000", repr(_r.stdout + _r.stderr))
+    os.chmod(_PB, 0o700)
+else:
+    _pb_skip("install.sh panel_port: read as the owner", "needs root, sudo and a daemon account")
+# uninstall.sh reads config.json the same way, and takes the sudo grants away first.
+_pb_un = open(os.path.join(_pb_root, "uninstall.sh"), encoding="utf-8").read()
+_pb_cr = _pb_un[_pb_un.index("_conf_read() {"):]
+_pb_cr = _pb_cr[:_pb_cr.index("\n}\n") + 3]
+_r = _pb_run("set -euo pipefail\n" + _pb_cr + '_conf_read "$F"; echo "[rc=$?]"',
+             env={"PANEL_DIR": _pb_rd, "F": os.path.join(_pb_rd, "VERSION")}, timeout=20)
+check("uninstall.sh _conf_read: a symlinked config.json is not followed",
+      "hash" not in _r.stdout and "[rc=0]" in _r.stdout, repr(_r.stdout))
+check("uninstall.sh: no python open() of a path in the panel's tree is left",
+      "open('${PANEL_DIR}" not in _pb_un)
+check("uninstall.sh: the sudoers grants and the game group go BEFORE the panel's files are removed",
+      _pb_un.index("rm -f /etc/sudoers.d/linuxgsm-panel") < _pb_un.index('rm -rf "${PANEL_DIR}"')
+      and "groupdel lgsmpanel-games" in _pb_un)
+
+# ── 6. tailscale-up-login never writes through something planted at its /run log ─────────────
+_pb_log = os.path.join(_PB, "ts-up.log")
+_pb_tsv = os.path.join(_PB, "ts-victim")
+with open(_pb_tsv, "w") as _fh:
+    _fh.write("keep")
+
+
+class _PbOs:
+    """os, with unlink planting a symlink straight after it runs (the race O_EXCL closes)."""
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    @staticmethod
+    def unlink(p):
+        try:
+            os.unlink(p)
+        finally:
+            os.symlink(_pb_tsv, p)
+
+
+_pb_ts_saved = (_pbh.os, _pbh.TS_UP_LOG, _pbh.TS_UP_POLL_SECONDS, _pbh.subprocess, _pbh.resolve)
+_pb_popen = []
+try:
+    _pbh.TS_UP_LOG, _pbh.TS_UP_POLL_SECONDS = _pb_log, 0
+    _pbh.resolve = lambda n: "/usr/bin/" + n
+    _pbh.subprocess = NS(Popen=lambda *a, **k: _pb_popen.append(a), DEVNULL=_pb_sp.DEVNULL,
+                         STDOUT=_pb_sp.STDOUT)
+    _pb_rc_plain = _pbh.do_tailscale_up_login(["no", "-"], "")
+    _pb_plain_mode = _pb_stat.S_IMODE(os.lstat(_pb_log).st_mode)
+    _pbh.os = _PbOs()
+    try:
+        _pbh.do_tailscale_up_login(["no", "-"], "")
+        _pb_raced = "wrote through it"
+    except OSError as _e:
+        _pb_raced = type(_e).__name__
+finally:
+    (_pbh.os, _pbh.TS_UP_LOG, _pbh.TS_UP_POLL_SECONDS, _pbh.subprocess, _pbh.resolve) = _pb_ts_saved
+check("helper tailscale-up-login: the log is created fresh, 0600 (control)",
+      _pb_rc_plain == 0 and _pb_plain_mode == 0o600 and len(_pb_popen) == 1,
+      "rc=%s mode=%o" % (_pb_rc_plain, _pb_plain_mode))
+check("helper tailscale-up-login: a symlink planted at the log path after the unlink is refused, "
+      "and its target is not truncated", _pb_raced == "FileExistsError"
+      and open(_pb_tsv, encoding="utf-8").read() == "keep", _pb_raced)
+
+# ── 7. Remote content renderings act AS the content account, not as root ─────────────────────
+_pb_rg = _pb_priv.remote_command("content-grant-read", ["cu", "cu", "gm", "cstrike"])
+_pb_rr = _pb_priv.remote_command("content-game-remove", ["cu", "cstrike", "cssserver"])
+check("privileged: the remote content grant's chmods run as the content account (a link in its "
+      "tree cannot aim root's chmod -R), usermod stays root's",
+      _pb_rg.startswith("usermod -aG cu gm; ")
+      and all(p.startswith("runuser -u cu -- chmod ") for p in _pb_rg.split("; ")[1:])
+      and _pb_rg.count("runuser -u cu -- chmod") == 3, _pb_rg)
+check("privileged: ...and the remote content removal's rm -rf runs as that account too",
+      _pb_rr.count("runuser -u cu -- rm -rf ") == 3 and "; rm -rf" not in _pb_rr, _pb_rr)
+_pb_rm = _pb_priv.remote_command("gmod-mount-read", ["gm"])
+check("privileged: ...and the remote mount.cfg read is the game account's (a link to /etc/shadow "
+      "there is read with its rights, not root's)",
+      _pb_rm.startswith("runuser -u gm -- cat /home/gm/serverfiles/garrysmod/cfg/mount.cfg"), _pb_rm)
+# Driven, where it can be: the rendered grant as root against a content tree whose game directory
+# is a link to a root-owned one. root's chmod -R used to follow it; the account's cannot touch it.
+if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("runuser"):
+    _pb_ct = tempfile.mkdtemp(prefix="lgsm-unit-pb-ct-")
+    os.chmod(_pb_ct, 0o755)
+    _pb_rootdir = os.path.join(_pb_ct, "rootdir")
+    os.makedirs(_pb_rootdir)
+    with open(os.path.join(_pb_rootdir, "f"), "w") as _fh:
+        _fh.write("x")
+    os.chmod(os.path.join(_pb_rootdir, "f"), 0o600)
+    _pb_game = os.path.join(_pb_ct, "tree")
+    os.makedirs(_pb_game)
+    os.chown(_pb_game, _pb_daemon.pw_uid, -1)
+    os.symlink(_pb_rootdir, os.path.join(_pb_game, "cstrike"))
+    os.lchown(os.path.join(_pb_game, "cstrike"), _pb_daemon.pw_uid, -1)
+    _pb_cmd = _pb_rg.split("; ")[-1].replace("/home/cu/serverfiles/cstrike",
+                                             os.path.join(_pb_game, "cstrike")).replace("-u cu", "-u daemon")
+    _r = _pb_run(_pb_cmd)
+    check("privileged: (driven) the remote grant's chmod -R through a link to a root-owned tree "
+          "changes nothing there", _pb_stat.S_IMODE(os.stat(os.path.join(_pb_rootdir, "f")).st_mode)
+          == 0o600, "%s -> %o" % (_pb_cmd, os.stat(os.path.join(_pb_rootdir, "f")).st_mode))
+    _pb_shutil.rmtree(_pb_ct, ignore_errors=True)
+else:
+    _pb_skip("privileged: (driven) remote grant as the content account", "needs root and runuser")
+
+_pb_shutil.rmtree(_PB, ignore_errors=True)
+
+# ── 8. The update's snapshot and rollback act in the panel-owned tree AS ITS OWNER ────────────
+# install.sh's own lines, lifted out whole: the TREE_SUDO decision, [1/6]'s mkdir and code
+# snapshot with snapshot_ok, and the health-check rollback's wipe-and-unpack of code and data.
+_pb_inst = open(os.path.join(_pb_root, "install.sh"), encoding="utf-8").read()
+
+
+def _pb_between(start, end, include_end=False):
+    i = _pb_inst.index(start)
+    j = _pb_inst.index(end, i)
+    return _pb_inst[i:j + (len(end) if include_end else 0)]
+
+
+_pb_tree = _pb_between('    TREE_SUDO=""\n', '    info "[1/6] Snapshotting')
+_pb_snap = (_pb_between('    ${TREE_SUDO:-} mkdir -p -- "${BACKUP}"', "\n", include_end=True)
+            + [ln for ln in _pb_inst.splitlines() if ln.strip().startswith("${TREE_SUDO:-} tar -C "
+                                                                          '"${PANEL_DIR}" --ignore')][0]
+            + "\n" + [ln for ln in _pb_inst.splitlines() if ln.strip().startswith("snapshot_ok() {")][0]
+            + '\nsnapshot_ok "${BACKUP}/code.tgz" && echo SNAP_OK\n')
+_pb_rb = _pb_between('    ${TREE_SUDO:-} find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \\\n        ! -name data',
+                     "\n    install_deps || true")
+check("install.sh: the snapshot, snapshot_ok and both rollbacks go through TREE_SUDO",
+      "TREE_SUDO=\"sudo -u ${_tree_owner} env -C /\"" in _pb_tree
+      and _pb_snap.count("${TREE_SUDO:-}") == 4 and _pb_rb.count("${TREE_SUDO:-}") == 4
+      and _pb_inst.count('> "${BACKUP}/') == 0, _pb_snap + _pb_rb)
+_pb_ph = "set -euo pipefail\ndie() { echo \"DIE: $*\"; exit 1; }\nSNAP_GZ='gzip -1'\n"
+if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
+    _pb_up = tempfile.mkdtemp(prefix="lgsm-unit-pb-upd-")
+    os.chmod(_pb_up, 0o755)
+    _pb_pd = os.path.join(_pb_up, "panel")
+    _pb_rootdir = os.path.join(_pb_up, "rootonly")
+    os.makedirs(os.path.join(_pb_pd, "data"))
+    os.makedirs(_pb_rootdir)                                   # root's, 0755: daemon cannot write
+    with open(os.path.join(_pb_pd, "app.py"), "w") as _fh:
+        _fh.write("# app\n")
+    with open(os.path.join(_pb_pd, "data", "config.json"), "w") as _fh:
+        _fh.write('{"port": 5000}')
+    _pb_sec = os.path.join(_pb_up, "secret")
+    with open(_pb_sec, "w") as _fh:
+        _fh.write("ROOT-ONLY-SECRET")
+    os.chmod(_pb_sec, 0o600)
+    for _d, _ds, _fs in os.walk(_pb_pd):
+        for _n in [_d] + [os.path.join(_d, x) for x in _ds + _fs]:
+            os.lchown(_n, _pb_daemon.pw_uid, _pb_daemon.pw_gid)
+    os.link(_pb_sec, os.path.join(_pb_pd, "hl"))              # root's file, a second name in the tree
+    # data/.backups planted as a link to a directory the panel user cannot write.
+    os.symlink(_pb_rootdir, os.path.join(_pb_pd, "data", ".backups"))
+    os.lchown(os.path.join(_pb_pd, "data", ".backups"), _pb_daemon.pw_uid, _pb_daemon.pw_gid)
+    _pb_env = {"PANEL_DIR": _pb_pd, "BACKUP": os.path.join(_pb_pd, "data", ".backups", "20260101-000000")}
+    _r = _pb_run(_pb_ph + _pb_tree + _pb_snap, env=_pb_env)
+    check("install.sh [1/6]: a data/.backups linked to a root-owned directory gets nothing from root"
+          " (the mkdir runs as the panel user, and fails)",
+          os.listdir(_pb_rootdir) == [] and "SNAP_OK" not in _r.stdout, "%r %r" % (os.listdir(_pb_rootdir), _r.stdout))
+    os.unlink(os.path.join(_pb_pd, "data", ".backups"))
+    _r = _pb_run(_pb_ph + _pb_tree + _pb_snap, env=_pb_env)
+    _pb_tgz = os.path.join(_pb_env["BACKUP"], "code.tgz")
+    _pb_members, _pb_hl_body = [], b""
+    if os.path.exists(_pb_tgz):
+        import tarfile as _pb_tar
+        with _pb_tar.open(_pb_tgz) as _t:
+            _pb_members = _t.getnames()
+            _pb_hl_body = b"".join(_t.extractfile(m).read() for m in _t.getmembers()
+                                   if m.isfile() and m.name.endswith("hl"))
+    check("install.sh [1/6]: the snapshot is still made, and is the panel user's (control)",
+          "SNAP_OK" in _r.stdout and "./app.py" in _pb_members
+          and os.stat(_pb_tgz).st_uid == _pb_daemon.pw_uid, "%r %r" % (_r.stdout, _pb_members))
+    check("install.sh [1/6]: a hard link to a root-only file is NOT copied into the panel-readable "
+          "snapshot", b"ROOT-ONLY-SECRET" not in _pb_hl_body and _pb_members != [], repr(_pb_members))
+    # The rollback, from that snapshot plus a data snapshot: the tree comes back, as the owner's.
+    _pb_run("tar -C %s -czf %s/data.tgz ." % (os.path.join(_pb_pd, "data"), _pb_env["BACKUP"]))
+    os.remove(os.path.join(_pb_pd, "app.py"))
+    with open(os.path.join(_pb_pd, "newfile.py"), "w") as _fh:
+        _fh.write("# added by the failed version\n")
+    _r = _pb_run(_pb_ph + _pb_tree + _pb_rb + '\necho RB_DONE\n', env=_pb_env)
+    check("install.sh rollback: the previous code and data come back, unpacked as the panel user",
+          "RB_DONE" in _r.stdout and os.path.exists(os.path.join(_pb_pd, "app.py"))
+          and not os.path.exists(os.path.join(_pb_pd, "newfile.py"))
+          and os.stat(os.path.join(_pb_pd, "app.py")).st_uid == _pb_daemon.pw_uid
+          and os.path.exists(os.path.join(_pb_pd, "data", "config.json")),
+          "%r %r" % (_r.stdout, _r.stderr))
+    check("install.sh rollback: ...and root's file behind the hard link is untouched",
+          open(_pb_sec).read() == "ROOT-ONLY-SECRET" and os.stat(_pb_sec).st_uid == 0)
+    _pb_shutil.rmtree(_pb_up, ignore_errors=True)
+else:
+    _pb_skip("install.sh snapshot/rollback as the tree's owner (driven)", "needs root, sudo and daemon")
+# SECURITY.md documents the grant install.sh now writes, Defaults line included.
+_pb_secdoc = open(os.path.join(_pb_root, ".github", "SECURITY.md"), encoding="utf-8").read()
+check("docs: SECURITY.md shows the helper's Defaults! line exactly as install.sh writes it",
+      'Defaults!/usr/local/lib/linuxgsm-panel/panel-helper env_reset, secure_path="%s"'
+      % _pbh.CHILD_PATH in _pb_secdoc and "#!/usr/bin/python3 -I" in _pb_secdoc
+      and "after copying its own" not in _pb_secdoc)

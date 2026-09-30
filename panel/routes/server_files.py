@@ -22,7 +22,8 @@ from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, UPLOA
 from panel.ops import ssh_manager as _sm
 from panel.ops import socket_hooks as _socket_hooks
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
-    can_access_server, get_game, has_permission, log_action, server_access_required,
+    can_access_remote, can_access_server, get_game, has_permission, log_action,
+    server_access_required,
     superadmin_required)
 from panel.services import (lgsm_data)
 import re
@@ -36,7 +37,7 @@ from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_
 from panel.core.panel_state import (_console_backlog, _console_offsets, _console_partial,
     register_server_state)
 from panel.routes._shared import (_console_rows, _drain_action_output,
-    _host_timezone_cached, _server_action_buttons)
+    _host_timezone_cached, _json_int, _server_action_buttons, game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -292,10 +293,16 @@ def _login_id_still_accepted(login_id):
 
 
 def _legacy_login_user(s):
-    """The active User a pre-epoch login id (the bare user id) names, or None."""
+    """The active User a pre-epoch login id (the bare user id) names, or None.
+
+    Only while that account's auth_epoch is still 0, as auth._load_legacy_user: a bare id predates
+    epochs, so once a password change or "sign out everywhere" has moved the epoch it is one of the
+    cookies that bump revoked.
+    """
     from panel.db.models import User
     user = db.session.get(User, int(s)) if s.isdecimal() else None
-    return user if user is not None and user.is_active else None
+    ok = user is not None and user.is_active and (user.auth_epoch or 0) == 0
+    return user if ok else None
 
 
 def _epoch_login_user(s):
@@ -894,9 +901,19 @@ def _gmod_content_status(remote, gs, server_id):
 
 
 def _gmod_selection(body):
-    """(action, games) of a GMod content POST, keeping only games the panel knows."""
+    """(action, games) of a GMod content POST, keeping only games the panel knows.
+
+    (None, []) for a body that is not one: an action other than mount/uninstall, or games that
+    are not a list of strings. `body.get("games") or []` was iterated and hashed unchecked, so
+    {"games": 5} and {"games": [[1]]} were 500s; and any unknown action — a typo for "uninstall"
+    included — was quietly treated as "mount", which REWRITES mount.cfg to exactly the selection.
+    """
     action = body.get("action") or "mount"
-    sel = [g for g in (body.get("games") or []) if g in GMOD_CONTENT_GAMES]
+    games = body.get("games") or []
+    if (action not in ("mount", "uninstall") or not isinstance(games, list)
+            or not all(isinstance(g, str) for g in games)):
+        return None, []
+    sel = [g for g in games if g in GMOD_CONTENT_GAMES]
     return action, sel
 
 
@@ -938,6 +955,22 @@ def _gmod_apply_request(app, gs, remote, sel):
     return jsonify({"success": True, "games": sel,
                     "message": "Applying mount changes — a download can take a while for large games. "
                                "Restart the server afterwards to load the changes."})
+
+
+def _write_refused(gs, action, detail=""):
+    """A refusal response when `gs`'s game account may not be written as, else None.
+
+    Every file-manager and cron WRITE asks this before it touches the host: a row imported before
+    the import refused root-capable accounts can name the host's own sudo login, and a write as
+    it (~/.bashrc, authorized_keys, a crontab line) is root on the host. See
+    _shared.game_account_write_refusal — cached, and closed when the host cannot answer.
+    """
+    why = game_account_write_refusal(gs.remote, gs.short_name)
+    if why is None:
+        return None
+    log_action(current_user, action, target=gs.name, detail=("refused: " + why)[:250],
+               success=False, server=gs)
+    return jsonify({"success": False, "message": why}), 409
 
 
 def _store_upload(gs, reldir, f, data, overwrite):
@@ -1118,6 +1151,9 @@ def _register_config_editor(app):
             except Exception:
                 return jsonify({"error": _log_and_generic("request failed")}), 500
         data = _json_body()
+        refused = _write_refused(gs, "edit_config")
+        if refused is not None:
+            return refused
         try:
             if data.get("raw") is not None:
                 # A file's contents must be a STRING. A number or a list reached write_file and
@@ -1128,7 +1164,13 @@ def _register_config_editor(app):
                 rel = f"lgsm/config-lgsm/{gs.lgsm_name}/{gs.lgsm_name}.cfg"
                 ok, msg = write_file(gs.remote, gs.short_name, rel, data["raw"])
             else:
-                ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, data.get("settings") or {})
+                # The same rule for the other shape: `settings` is a key -> value map, and a list
+                # or a string reached the writer's .items() and came back as a 500.
+                settings = data.get("settings") or {}
+                if not isinstance(settings, dict):
+                    return jsonify({"success": False,
+                                    "message": "Settings must be a map of names to values."}), 400
+                ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, settings)
             log_action(current_user, "edit_config", target=gs.name, success=ok, server=gs)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
@@ -1239,6 +1281,9 @@ def _register_file_editor(app):
         # An intentionally empty file is "", which is text, and still saves.
         if not isinstance(data.get("content"), str):
             return jsonify({"success": False, "message": "The file contents must be text."}), 400
+        refused = _write_refused(gs, "edit_file", rel)
+        if refused is not None:
+            return refused
         try:
             ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"])
             log_action(current_user, "edit_file", target=gs.name, detail=rel, success=ok,
@@ -1258,6 +1303,9 @@ def _register_file_removal(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         rel = _json_body().get("path", "")
+        refused = _write_refused(gs, "delete_file", rel)
+        if refused is not None:
+            return refused
         try:
             ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
             log_action(current_user, "delete_file", target=gs.name, detail=rel, success=ok,
@@ -1390,6 +1438,9 @@ def _register_cron_jobs(app):
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
         data = _json_body()
+        refused = _write_refused(gs, "cron_add")
+        if refused is not None:
+            return refused
         try:
             ok, msg = add_cron_job(gs.remote, gs.short_name, data.get("schedule"),
                                    data.get("command"), gs.lgsm_name)
@@ -1409,6 +1460,9 @@ def _register_cron_jobs(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         data = _json_body()
+        refused = _write_refused(gs, "cron_update")
+        if refused is not None:
+            return refused
         try:
             ok, msg = update_cron_job(gs.remote, gs.short_name, data.get("raw") or "",
                                       data.get("schedule"), data.get("command"), gs.lgsm_name)
@@ -1429,6 +1483,9 @@ def _register_cron_actions(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         data = _json_body()
+        refused = _write_refused(gs, "cron_delete")
+        if refused is not None:
+            return refused
         try:
             ok, msg = _sm.delete_cron_job(gs.remote, gs.short_name, data.get("raw") or "", gs.lgsm_name)
             if ok:
@@ -1448,6 +1505,9 @@ def _register_cron_actions(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         raw = _json_body().get("raw") or ""
+        refused = _write_refused(gs, "cron_run_now")
+        if refused is not None:
+            return refused
         try:
             ok, msg = run_cron_job_now(gs.remote, gs.short_name, raw, gs.lgsm_name)
             log_action(current_user, "cron_run_now", target=gs.name, success=ok, server=gs)
@@ -1475,6 +1535,29 @@ def _register_gmod_content(app):
             return _gmod_content_status(remote, gs, server_id)
         # POST: apply a selection (mutating). The MANAGE_SERVERS gate is at the top of the route.
         action, sel = _gmod_selection(_json_body())
+        if action is None:
+            return jsonify({"success": False, "message": (
+                "Send \"action\" as \"mount\" or \"uninstall\" and \"games\" as a list of game "
+                "names.")}), 400
+        # Content is HOST-wide: one content account and one ~/serverfiles that every GMod server on
+        # the host mounts from. This route was gated on MANAGE_SERVERS and access to ONE server,
+        # so an admin granted a single GMod server on a shared host could `rm` the content every
+        # other tenant's server mounts (their maps then load with ERROR textures), or start a 13GB
+        # SteamCMD download into the host's disk. Mounting what is already there only rewrites
+        # this server's own mount.cfg, so that stays theirs; removing content, or fetching content
+        # that is not on the host yet, needs the host.
+        if not (current_user.is_superadmin or can_access_remote(current_user, gs.remote_id)):
+            if action == "uninstall":
+                return jsonify({"success": False, "message": (
+                    "Removing content affects every Garry's Mod server on this host, so it needs "
+                    "access to the host, not just this server.")}), 403
+            _cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
+            _missing = [g for g in sel if g not in set((_cu or {}).get("present") or {})]
+            if _missing:
+                return jsonify({"success": False, "message": (
+                    "Not on this host yet: %s. Downloading content for every Garry's Mod server "
+                    "here needs access to the host — ask its admin to install it, then mount it "
+                    "here." % ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing))}), 403
         if action == "uninstall":
             return _gmod_uninstall_request(app, gs, remote, sel)
         return _gmod_apply_request(app, gs, remote, sel)
@@ -1501,6 +1584,9 @@ def _register_uploads(app):
         # direct API call, or a file that appeared between the check and this write — gets a 409
         # conflict rather than silently replacing someone's config.
         overwrite = request.form.get("overwrite") == "1"
+        refused = _write_refused(gs, "upload_file", reldir)
+        if refused is not None:
+            return refused
         try:
             return _store_upload(gs, reldir, f, data, overwrite)
         except Exception:
@@ -1708,9 +1794,11 @@ def _register_console_viewers(socketio):
         # f"console_{gs.id}" with a real int. A client that sent "3" passed the access check
         # (SQLAlchemy coerces the lookup) and then joined "console_3" as a string-derived room the
         # poller never pushes to — an authorised viewer with a permanently silent console.
-        try:
-            server_id = int(data.get("server_id"))
-        except (TypeError, ValueError):
+        # _json_int, and only off a dict: `{"server_id": Infinity}` raised OverflowError and a
+        # payload that is not an object at all (`emit("join_console", 5)`) raised AttributeError,
+        # both straight past `except (TypeError, ValueError)` into the socket's error handler.
+        server_id = _json_int(data.get("server_id")) if isinstance(data, dict) else None
+        if server_id is None:
             return
         if server_id <= 0:
             return
@@ -1741,9 +1829,11 @@ def _register_console_viewers(socketio):
         # entry survived, and the console poller went on paying an SSH round trip every two
         # seconds for a console nobody was watching — until the socket itself dropped, which is
         # the only other thing that clears it.
-        try:
-            server_id = int(data.get("server_id"))
-        except (TypeError, ValueError):
+        # _json_int, and only off a dict: `{"server_id": Infinity}` raised OverflowError and a
+        # payload that is not an object at all (`emit("join_console", 5)`) raised AttributeError,
+        # both straight past `except (TypeError, ValueError)` into the socket's error handler.
+        server_id = _json_int(data.get("server_id")) if isinstance(data, dict) else None
+        if server_id is None:
             return
         leave_room(f"console_{server_id}")
         with _viewers_lock:

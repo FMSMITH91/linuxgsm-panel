@@ -139,9 +139,14 @@ def _fetch_release(tag, name):
 
 
 def _write_cache(name, text):
-    """Write the cache atomically, so a crash mid-write cannot leave a half a game list behind."""
+    """Write the cache atomically, so a crash mid-write cannot leave a half a game list behind.
+
+    The temp name is this writer's own. Fetches no longer run under _lock, so two readers can
+    refetch the same file at once; with one shared "<name>.tmp", one's os.replace took the file
+    the other was still writing, and the other's replace then failed on a missing name.
+    """
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = cache_path(name).with_suffix(".tmp")
+    tmp = cache_path("%s.%d.%d.tmp" % (name, os.getpid(), threading.get_ident()))
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, cache_path(name))
 
@@ -188,6 +193,12 @@ def _text(name, allow_fetch=True):
 # A refetch that failed is tried again after this long, not a week later. The copy it fell back to
 # is served meanwhile.
 _RETRY_SECONDS = 3600
+# Keys whose re-read is running right now, outside _lock (see _memoised).
+_inflight = set()
+# Bumped (under _lock) whenever the memo is dropped because the files under it were rewritten —
+# refresh(), refresh_deps(). A re-read that began before the bump read the OLD file, and must not
+# store it: _age() would now report the NEW file's age, and the old list would be kept a week.
+_generation = [0]
 
 
 def _memoised(key, load, allow_fetch):
@@ -204,18 +215,45 @@ def _memoised(key, load, allow_fetch):
     _RETRY_SECONDS. A stale file read with fetching NOT allowed (status()) is not kept, so the next
     read that may fetch still does. A re-read that comes back EMPTY keeps serving the copy it had —
     a stale list beats no list — rather than emptying the install menu of a running panel.
+
+    `load()` runs OUTSIDE _lock. serverlist() and deps() held the lock across it, and it can be a
+    GitHub fetch with a 10-second timeout: with GitHub unreachable, every request that needed the
+    game list — the dashboard, the install page, every one of them — queued behind that one fetch,
+    for up to ten seconds each, once an hour. Now the lock covers only the memo itself: a caller
+    that finds a copy being re-read by someone else is served that copy at once, and the result
+    is stored compare-and-set — only if the memo is still the one this call saw, so a slow re-read
+    never overwrites a newer copy (a refresh(), or another caller's) that landed meanwhile.
     """
-    hit = _mem.get(key)
-    if hit is not None and time.time() < hit[0]:
-        return hit[1]
-    value, name = load()
+    with _lock:
+        hit = _mem.get(key)
+        if hit is not None and (time.time() < hit[0] or key in _inflight):
+            return hit[1]
+        _inflight.add(key)
+        gen = _generation[0]
+    try:
+        value, name = load()
+        age = _age(name) if value else None
+    except BaseException:
+        with _lock:
+            _inflight.discard(key)
+        raise
+    with _lock:
+        _inflight.discard(key)
+        cur = _mem.get(key)
+        if cur is not None and cur is not hit:
+            return cur[1]
+        if gen != _generation[0]:
+            return value if value else (hit[1] if hit is not None else value)
+        return _memo_store(key, hit, value, age, allow_fetch)
+
+
+def _memo_store(key, hit, value, age, allow_fetch):
+    """_memoised's store, under _lock: keep `value` (or `hit`'s copy when it is empty) and return it."""
     if not value:
         if hit is None:
             return value
         value = hit[1]
         age = None
-    else:
-        age = _age(name)
     if age is not None and age < MAX_AGE_SECONDS:
         _mem[key] = (time.time() + MAX_AGE_SECONDS - age, value)
     elif allow_fetch:
@@ -241,8 +279,7 @@ def serverlist(allow_fetch=True):
     derives something from it (app.load_game_list) can tell a re-read (a new object) from a
     repeat.
     """
-    with _lock:
-        return _memoised("serverlist", lambda: _load_serverlist(allow_fetch), allow_fetch)
+    return _memoised("serverlist", lambda: _load_serverlist(allow_fetch), allow_fetch)
 
 
 def deps(os_slug=None, allow_fetch=True):
@@ -264,8 +301,7 @@ def deps(os_slug=None, allow_fetch=True):
             text, source = _text(DEPS, allow_fetch), DEPS
         return _parse_deps(text), source
 
-    with _lock:
-        return _memoised("deps:" + name, _load, allow_fetch)
+    return _memoised("deps:" + name, _load, allow_fetch)
 
 
 def _parse_deps(text):
@@ -315,6 +351,7 @@ def refresh_deps(os_slug=None):
             _write_cache(name, fresh)
             _last_error.pop(name, None)
             _mem.pop("deps:" + name, None)
+            _generation[0] += 1
         except OSError as e:
             _last_error[name] = "could not write the cache (%s)" % e.__class__.__name__
     return _parse_deps(fresh)
@@ -381,20 +418,26 @@ def refresh(force=True):
     the list is unchanged.
     """
     ok = True
+    # The fetches OUTSIDE _lock, as in _memoised: this held it across two of them, so a Retry
+    # pressed while GitHub was unreachable stalled every page that read the game list for up to
+    # twenty seconds. The memo is dropped after the new files are written, so the serverlist()
+    # below reads them — and a re-read already running when it was dropped cannot put its older
+    # copy back (_memoised stores only over the memo it saw).
+    if force:
+        for n in (SERVERLIST, DEPS):
+            fresh = _fetch(n)
+            if fresh is None:
+                ok = False
+                continue
+            try:
+                _write_cache(n, fresh)
+                _last_error.pop(n, None)
+            except OSError as e:
+                _last_error[n] = "could not write the cache (%s)" % e.__class__.__name__
+                ok = False
     with _lock:
         _mem.clear()
-        if force:
-            for n in (SERVERLIST, DEPS):
-                fresh = _fetch(n)
-                if fresh is None:
-                    ok = False
-                    continue
-                try:
-                    _write_cache(n, fresh)
-                    _last_error.pop(n, None)
-                except OSError as e:
-                    _last_error[n] = "could not write the cache (%s)" % e.__class__.__name__
-                    ok = False
+        _generation[0] += 1
     return ok and bool(serverlist())
 
 

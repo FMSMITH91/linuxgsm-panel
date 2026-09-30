@@ -875,6 +875,16 @@ try:
             del self.rules[n - 1]
             return ("Rule deleted", "", 0)
 
+        def delete_num_if(self, a):
+            """ufw-delete-num-if, as the helper does it: rule n's text, re-read, must match."""
+            rows = self.status(None)[0].splitlines()
+            got = [" ".join(r.split("]", 1)[1].split()) for r in rows
+                   if r.startswith("[") and int(r[1:r.index("]")]) == int(a[0])]
+            if got != [a[1]]:
+                return ("ufw-delete-num-if: rule %s is no longer the rule that was checked"
+                        % a[0], "", 3)
+            return self.delete_num(a[:1])
+
         def spec_delete(self, to):
             left = [r for r in self.rules if not (r["to"] == to and r["action"] == "ALLOW")]
             gone, self.rules = len(self.rules) - len(left), left
@@ -896,6 +906,7 @@ try:
 
         def verbs(self):
             return {"ufw-status": self.status, "ufw-delete-num": self.delete_num,
+                    "ufw-delete-num-if": self.delete_num_if,
                     "ufw-allow-port": self.allow,
                     "ufw-delete-allow-port": lambda a: self.spec_delete(a[0]),
                     "ufw-delete-allow-proto-port": lambda a: self.spec_delete("%s/%s" % (a[1], a[0]))}
@@ -930,7 +941,8 @@ try:
           and not any(t in ("27015", "27015/tcp") for t, _a, _c in _fu.left()),
           "result=%r left=%r" % (_r, _fu.left()))
     check("ufw close game port: ...each by NUMBER, against a fresh read, never by spec",
-          [v for v, _a in _w.verbs_called() if v.startswith("ufw-delete")] == ["ufw-delete-num"] * 2,
+          [v for v, _a in _w.verbs_called() if v.startswith("ufw-delete")]
+          == ["ufw-delete-num-if"] * 2,
           repr(_w.verbs_called()))
     _fu = _FakeUfw(*_CGP_RULES)
     _w = _wire(verbs=_fu.verbs())
@@ -938,13 +950,15 @@ try:
     check("ufw close game port: an untagged ALLOW on an SSH port is never taken as the server's — "
           "the operator's `allow 22` stays",
           ("22", "ALLOW", "") in _fu.left() and not _w.verbs_called("ufw-delete-num")
+          and not _w.verbs_called("ufw-delete-num-if")
           and not [v for v in _w.verbs_called() if v[0] in _SPEC_DELETES],
           "result=%r left=%r" % (_r, _fu.left()))
     _fu = _FakeUfw(*_CGP_RULES)
     _w = _wire(verbs=_fu.verbs())
     _r = _cgp(_p8_srv(port=2222), 27020, "gamea", legacy=True)
     check("ufw close game port: ...and an untagged LIMIT is not an allow the panel left",
-          ("27020/tcp", "LIMIT", "") in _fu.left() and not _w.verbs_called("ufw-delete-num"),
+          ("27020/tcp", "LIMIT", "") in _fu.left() and not _w.verbs_called("ufw-delete-num")
+          and not _w.verbs_called("ufw-delete-num-if"),
           "result=%r left=%r" % (_r, _fu.left()))
     _w = _wire(verbs={"ufw-status": ("", "SSH command timed out", -1)})
     _r = _cgp(_p8_srv(), 27015, "gamea", legacy=True)
@@ -1188,6 +1202,14 @@ try:
             del self.v6[n - 1 - len(self.v4)]
             return ("Rule deleted (v6)", "", 0)
 
+        def delete_num_if(self, a):
+            """ufw-delete-num-if: rule n's text must still be the text the panel sent."""
+            rows, n = self.rows(), int(a[0])
+            if not (1 <= n <= len(rows) and " ".join(rows[n - 1].split()) == a[1]):
+                return ("ufw-delete-num-if: rule %d is no longer the rule that was checked" % n,
+                        "", 3)
+            return self.delete_num(a[:1])
+
         def allow(self, a):
             to, comment = a[0], (a[1] if len(a) > 1 else "")
             same = [r for r in self.v4 + self.v6 if r[0] == to and r[2] == "Anywhere"]
@@ -1205,7 +1227,7 @@ try:
 
         def verbs(self):
             return {"ufw-status": self.status, "ufw-delete-num": self.delete_num,
-                    "ufw-allow-port": self.allow}
+                    "ufw-delete-num-if": self.delete_num_if, "ufw-allow-port": self.allow}
 
     # The VPS's baseline rules, then the two probeH allows it tagged for scenario h.
     _VPS_BASE = (("Anywhere on tailscale0", "ALLOW", "Anywhere", ""),
@@ -1270,7 +1292,8 @@ try:
     _r = _cbn3(_p8_srv(), "probeH")
     check("close by name: a rule that keeps moving is tried three times against a fresh read, not "
           "forever — then the cleanup stops",
-          _u.reads == 13 and not _w.verbs_called("ufw-delete-num"),
+          _u.reads == 13 and not _w.verbs_called("ufw-delete-num")
+          and not _w.verbs_called("ufw-delete-num-if"),
           "reads=%d deletes=%r" % (_u.reads, _w.verbs_called("ufw-delete-num")))
     check("close by name: ...and what stayed open is NAMED in the result, not counted as removed",
           _r[0] == 0 and _r[2] == ["Still open, as it could not be removed: 47826, 47827 — remove "
@@ -2340,7 +2363,11 @@ try:
     _SS_BOTH = _SS_22 + "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n"
 
     def _csp_wire(**v):
-        base = {"sshd-socket-active": ("inactive", "", 3), "sshd-effective-config": ("port 22\n", "", 0),
+        # An active ufw that opens 22 only: the new port is one step 1 ADDS, so it is also the one
+        # the revert closes (change_ssh_port closes only a rule it added).
+        base = {"ufw-status": ("Status: active\n\n     To     Action     From\n"
+                               "[ 1] 22/tcp                     ALLOW IN    Anywhere\n", "", 0),
+                "sshd-socket-active": ("inactive", "", 3), "sshd-effective-config": ("port 22\n", "", 0),
                 "listening-sockets": [(_SS_22, "", 0), (_SS_BOTH, "", 0)]}
         base.update(v)
         return _wire(verbs=base)
@@ -3466,7 +3493,8 @@ try:
         def _p(argv, stdout=None, stdin=None):
             _p_obj = NS(argv=list(argv), stdout=_fl_popen_factory.out, stdin=_fl_popen_factory.inp,
                         waited=[])
-            _p_obj.wait = lambda: _p_obj.waited.append(True)
+            # Reaped, and exited 0 like a real Popen.wait(): the stream now reads the status.
+            _p_obj.wait = lambda: _p_obj.waited.append(True) or 0
             _popen.append(_p_obj)
             return _p_obj
         _fl_popen_factory.out, _fl_popen_factory.inp = stdout, stdin
@@ -3518,7 +3546,12 @@ try:
         def _gc(server, force_new=False, pooled=True):
             _in = _FlIn(in_raises)
             _fl_exec["in"] = _in
-            return NS(exec_command=lambda cmd: (_in, _FlPipe(out_bytes), None))
+            # A channel that has exited 0: the stream checks the exit status at EOF and closes the
+            # channel (_core.stream_channel), and passes an idle timeout to exec_command.
+            _out = _FlPipe(out_bytes)
+            _out.channel = NS(status_event=NS(wait=lambda _t=None: True), exit_status=0,
+                              close=lambda: None)
+            return NS(exec_command=lambda cmd, timeout=None: (_in, _out, None))
         return _gc
     _sm_core.get_connection = _fl_conn(b"hello world")
     _got = b"".join(_F.stream_path(_p8_srv(auth_method="key"), "cs2server", "serverfiles/a.txt", chunk=3))

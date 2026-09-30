@@ -557,3 +557,363 @@ check("GHSA-hh39 load: every watched column is flagged on BOTH models — a host
       _gh_all_exc is None and not _gh_missing and len(_gh_warned) == len(_gh_want),
       "raised=%r missing=%r warned=%r" % (_gh_all_exc, _gh_missing, _gh_warned))
 _gh_shutil.rmtree(_gh_dir, ignore_errors=True)
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Route-layer review fixes: accounts the panel must never adopt, JSON numbers that are not ints,
+# the re-authentication throttle, the uninstall/retry hold and the one-restore-at-a-time lock.
+# Route-level behaviour (import/uninstall refusals, tag delete, GMod content, check-peer) is driven
+# in smoke_test / rbac_test; these are the helpers those routes rest on.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+import subprocess as _rv_sub  # noqa: E402  # nosec B404 - runs bash on the panel's own probe command
+from types import SimpleNamespace as _RvNS  # noqa: E402
+
+import panel.routes._shared as _rv_sh  # noqa: E402
+import panel.routes.discover as _rv_disc  # noqa: E402
+import panel.routes.host_terminal as _rv_ht  # noqa: E402
+import panel.routes.manage_servers as _rv_ms  # noqa: E402
+import panel.routes.remote_vps as _rv_vps  # noqa: E402
+import panel.routes.server_detail as _rv_sd  # noqa: E402
+import panel.routes.server_files as _rv_sf  # noqa: E402
+import panel.routes.tags as _rv_tags  # noqa: E402
+from panel.ops.ssh_manager import GMOD_CONTENT_GAMES as _RV_GMOD  # noqa: E402
+from panel.security.auth import hash_password as _rv_hash  # noqa: E402
+
+_RV_INF, _RV_NAN = float("inf"), float("nan")
+
+# ── _json_int: Infinity is valid JSON to Python, and int() of it is an OverflowError ─────────────
+check("json int: Infinity, -Infinity and NaN are not ints (no OverflowError / ValueError)",
+      [_rv_sh._json_int(v) for v in (_RV_INF, -_RV_INF, _RV_NAN)] == [None, None, None])
+check("json int: a whole float is its int; a fractional one is refused rather than truncated",
+      (_rv_sh._json_int(3.0), _rv_sh._json_int(3.7), _rv_sh._json_int(1e300) == int(1e300))
+      == (3, None, True))
+check("json int: ints and numeric strings pass; true, lists, dicts and junk do not",
+      [_rv_sh._json_int(v) for v in (5, "12", " 7 ", True, [1], {"a": 1}, "x", None)]
+      == [5, 12, 7, None, None, None, None, None])
+
+# ...and every route that parsed ids or ports with int() now goes through it (or catches it).
+check("bulk action ids: Infinity and 3.5 are dropped, the real ids kept (was a 500)",
+      _rv_sd._bulk_server_ids([_RV_INF, "2", 3.5, 4, True]) == [2, 4],
+      repr(_rv_sd._bulk_server_ids([_RV_INF, "2", 3.5, 4, True])))
+check("tag ids: Infinity is dropped from a tag set and a layout order (was a 500)",
+      _rv_tags._int_ids([_RV_INF, 1, "2"]) == [1, 2]
+      and _rv_tags._clean_ids([_RV_INF, 1, 1, 2, _RV_NAN], {1, 2}) == [1, 2])
+check("discover import: a port of Infinity falls back to the default instead of raising",
+      (_rv_disc._import_port({"port": _RV_INF}), _rv_disc._import_port({"port": 28015}),
+       _rv_disc._import_port({"port": 27015.5})) == (27015, 28015, 27015))
+check("firewall routes: a port of Infinity or 22.5 is no port; 22.0 is 22; a string passes as sent",
+      [_rv_vps._fw_port_arg(v) for v in (_RV_INF, 22.5, 22.0, True, None, [22], "27015:27020", 80)]
+      == ["", "", 22, "", "", "", "27015:27020", 80])
+check("firewall routes: a protocol that is not text is stringified (refused), never dropped to BOTH",
+      (_rv_vps._fw_proto_arg(5), _rv_vps._fw_proto_arg(None), _rv_vps._fw_proto_arg("udp"))
+      == ("5", "tcp", "udp"))
+check("firewall audit: a rule number or port of Infinity is named as not one, not raised",
+      (_rv_vps._fw_audit_rule_number(_RV_INF), _rv_vps._fw_audit_rule(_RV_INF, "tcp")[0])
+      == (_rv_vps._FW_AUDIT_NOT_A_RULE, _rv_vps._FW_AUDIT_NOT_A_PORT))
+check("terminal socket: Infinity or a non-object payload gives the default size, not a raise",
+      (_rv_ht._term_dim({"cols": _RV_INF}, "cols", 80), _rv_ht._term_dim([1], "rows", 24),
+       _rv_ht._term_dim({"cols": "132"}, "cols", 80), _rv_ht._term_payload(5)) == (80, 24, 132, {}))
+
+# ── GMod content POST: games must be a list of names, the action one of two ─────────────────────
+_rv_g1 = list(_RV_GMOD)[0]
+check("gmod content: games that are not a list of strings is refused (was a 500)",
+      [_rv_sf._gmod_selection(b) for b in ({"games": 5}, {"games": [[1]]}, {"games": "css"})]
+      == [(None, [])] * 3)
+check("gmod content: an unknown action is refused, not treated as mount (which rewrites mount.cfg)",
+      _rv_sf._gmod_selection({"action": "unintsall", "games": [_rv_g1]}) == (None, []))
+check("gmod content: a well-formed body keeps only known games; the default action is mount",
+      (_rv_sf._gmod_selection({"action": "uninstall", "games": [_rv_g1, "bogus"]}),
+       _rv_sf._gmod_selection({}))
+      == (("uninstall", [_rv_g1]), ("mount", [])))
+
+# ── the account probe: real shell, real `id` ────────────────────────────────────────────────────
+_rv_probe_users = ["root", "nobody", "lgsmnosuchacct"]
+_rv_out = _rv_sub.run(["bash", "-c", _rv_sh._account_probe_cmd(_rv_probe_users)],  # nosec B603 B607 - bash, a fixed argv, the probe on fixed names
+                      capture_output=True, text=True, timeout=60).stdout
+_rv_verdict = _rv_sh._parse_account_probe(_rv_out, _rv_probe_users)
+check("account probe (real shell): uid 0 is refused, a plain account is ok, a missing one absent",
+      _rv_verdict is not None and "uid 0" in _rv_verdict.get("root", "")
+      and _rv_verdict.get("nobody") == "ok" and _rv_verdict.get("lgsmnosuchacct") == "absent",
+      repr((_rv_out, _rv_verdict)))
+_RV_END = _rv_sh._ACCOUNT_PROBE_END
+check("account probe: a root-equivalent group is refused, named in the reason",
+      "sudo" in (_rv_sh._parse_account_probe("ACCT ubuntu 1000 ubuntu adm sudo\n%s\n" % _RV_END,
+                                             ["ubuntu"]) or {}).get("ubuntu", ""))
+check("account probe: docker, lxd and wheel count too — each is root in one step",
+      all("group" in (_rv_sh._parse_account_probe("ACCT g 1001 g %s\n%s\n" % (grp, _RV_END),
+                                                  ["g"]) or {}).get("g", "")
+          for grp in ("docker", "lxd", "wheel", "admin", "disk")))
+check("account probe: sudo rules of its own are refused even outside the groups",
+      "sudo rules" in (_rv_sh._parse_account_probe(
+          "ACCT g 1001 g\nSUDOERS g\n%s\n" % _RV_END, ["g"]) or {}).get("g", ""))
+check("account probe: no end marker, or an account with no line, is an UNKNOWN (None), not clean",
+      _rv_sh._parse_account_probe("ACCT g 1001 g\n", ["g"]) is None
+      and _rv_sh._parse_account_probe("ACCT g 1001 g\n%s\n" % _RV_END, ["g", "h"]) is None
+      and _rv_sh._parse_account_probe("", ["g"]) is None)
+
+# ── privileged_accounts: the host's login by name, and the host's answer ───────────────────────
+_rv_remote = _RvNS(username="ubuntu", linuxgsm_user="", is_local=False, auth_method="key",
+                   sudo_enabled=False, id=4242)
+_rv_sent = []
+_rv_rc_saved = _sm_core.run_command
+
+
+def _rv_fake_rc(remote, cmd, timeout=30, sudo=None, stdin_text=None):
+    _rv_sent.append((cmd, sudo))
+    return ("ACCT gm1 1001 gm1 docker\nNOACCT gm2\nACCT gm3 1003 gm3 lgsmpanel-games\n%s\n"
+            % _RV_END, "", 0)
+
+
+try:
+    _sm_core.run_command = _rv_fake_rc
+    _rv_pa = _rv_sh.privileged_accounts(_rv_remote, ["ubuntu", "root", "gm1", "gm2", "gm3"])
+    check("privileged accounts: the host's own SSH login and root are refused by name, unprobed",
+          _rv_pa is not None and set(_rv_pa) >= {"ubuntu", "root"}
+          and not any("ubuntu" in c or "'root'" in c or " root " in c for c, _s in _rv_sent),
+          repr((_rv_pa, _rv_sent)))
+    check("privileged accounts: a docker member is refused; a plain game account and an absent one "
+          "are not", _rv_pa is not None and "gm1" in _rv_pa and "gm2" not in _rv_pa
+          and "gm3" not in _rv_pa, repr(_rv_pa))
+    check("privileged accounts: one probe for them all, and not escalated on a host without sudo",
+          len(_rv_sent) == 1 and _rv_sent[0][1] is False, repr(_rv_sent))
+    _sm_core.run_command = lambda *a, **k: ("", "SSH command timed out", -1)
+    check("privileged accounts: a host that did not answer is None (refuse), not an empty verdict",
+          _rv_sh.privileged_accounts(_rv_remote, ["gm1"]) is None)
+
+    def _rv_raise(*a, **k):
+        raise ConnectionError("down")
+    _sm_core.run_command = _rv_raise
+    check("privileged accounts: a transport that raises is None too",
+          _rv_sh.privileged_accounts(_rv_remote, ["gm1"]) is None)
+    check("privileged accounts: nothing asked is nothing refused, with no probe at all",
+          _rv_sh.privileged_accounts(_rv_remote, []) == {})
+finally:
+    _sm_core.run_command = _rv_rc_saved
+
+# ── the re-authentication throttle: per account, reserve-then-release ──────────────────────────
+from app import LOGIN_MAX_FAILS as _RV_MAX  # noqa: E402
+_rv_pw_hash = _rv_hash("Str0ng!passw0rd")
+_rv_u1 = _RvNS(id=-901, password_hash=_rv_pw_hash)
+_rv_u2 = _RvNS(id=-902, password_hash=_rv_pw_hash)
+_rv_answers = [_rv_sh.reauth_password(_rv_u1, "wrong guess") for _ in range(_RV_MAX)]
+check("reauth: each wrong current password is 'wrong' up to the login budget",
+      _rv_answers == ["wrong"] * _RV_MAX, repr(_rv_answers))
+check("reauth: ...and past it even the RIGHT password is refused unchecked ('throttled')",
+      _rv_sh.reauth_password(_rv_u1, "Str0ng!passw0rd") == "throttled")
+check("reauth: the budget is the ACCOUNT's — another account is not throttled by it",
+      _rv_sh.reauth_password(_rv_u2, "Str0ng!passw0rd") == "ok"
+      and -902 not in _rv_sh._REAUTH_FAILS, repr(_rv_sh._REAUTH_FAILS.get(-902)))
+check("reauth: a password that is not a string is a wrong one, not a 500",
+      _rv_sh.reauth_password(_rv_u2, 5) == "wrong" and _rv_sh.reauth_password(_rv_u2, None) == "wrong")
+_rv_stamp = _rv_sh.reauth_reserve(_rv_u2)
+_rv_sh.reauth_release(_rv_u2, _rv_stamp)
+check("reauth: a passed check gives its slot back (two failures stay, the pass does not)",
+      len(_rv_sh._REAUTH_FAILS.get(-902, [])) == 2, repr(_rv_sh._REAUTH_FAILS.get(-902)))
+check("reauth: the window ages failures out, as the login throttle's does",
+      _rv_sh.reauth_reserve(_rv_u1, now=_rv_sh.time.time() + 10 ** 6) is not None)
+for _rv_k in (-901, -902):
+    _rv_sh._REAUTH_FAILS.pop(_rv_k, None)
+
+# ── uninstall holds the row; retry cannot queue an install into it meanwhile ─────────────────────
+_rv_gs = _RvNS(id=-777001, name="rv-hold")
+try:
+    check("uninstall hold: the first claim takes the row",
+          _rv_ms._claim_uninstall(_rv_gs.id) is True)
+    check("uninstall hold: ...a retry cannot queue an install while it is held, and queues nothing",
+          _rv_ms._queue_install_job(_rv_gs, []) is False
+          and _rv_gs.id not in _rv_ms._install_jobs)
+    check("uninstall hold: ...and a second uninstall of it is refused",
+          _rv_ms._claim_uninstall(_rv_gs.id) is False)
+    _rv_ms._release_uninstall(_rv_gs.id)
+    check("uninstall hold: once released, the install queues (positive control)",
+          _rv_ms._queue_install_job(_rv_gs, []) is True)
+    check("uninstall hold: ...and an uninstall cannot claim a row whose install is running",
+          _rv_ms._claim_uninstall(_rv_gs.id) is False)
+finally:
+    _rv_ms._release_uninstall(_rv_gs.id)
+    with _rv_ms._install_lock:
+        _rv_ms._install_jobs.pop(_rv_gs.id, None)
+
+# ── one restore at a time ───────────────────────────────────────────────────────────────────────
+_rv_staged = []
+_rv_stage_saved = _gh_bk._stage_archive
+_gh_bk._stage_archive = lambda src: (_rv_staged.append(src), None)[1]
+try:
+    with _gh_bk._restore_lock:
+        _rv_rr = _gh_bk.restore_backup("panel-backup-20260101-000000-manual.tar.gz")
+    check("restore: a second restore while one holds the stage is refused, touching nothing",
+          _rv_rr[0] is False and "already in progress" in _rv_rr[1] and _rv_staged == [],
+          repr((_rv_rr, _rv_staged)))
+    check("restore: ...and the lock is free again afterwards (a refused restore does not hold it)",
+          _gh_bk._restore_lock.acquire(blocking=False) and (_gh_bk._restore_lock.release() or True))
+    _rv_rr2 = _gh_bk.restore_backup("panel-backup-20260101-000000-nosuch.tar.gz")
+    check("restore: ...a restore that fails releases it too (positive control: it ran, and said so)",
+          _rv_rr2[0] is False and "already in progress" not in _rv_rr2[1]
+          and _gh_bk._restore_lock.acquire(blocking=False)
+          and (_gh_bk._restore_lock.release() or True), repr(_rv_rr2))
+finally:
+    _gh_bk._stage_archive = _rv_stage_saved
+
+# ── a block/unban on the PANEL host through its row id refreshes the panel's own ban gate ────────
+import panel.routes.remote_security as _rv_rs  # noqa: E402
+_rv_refreshes = []
+_rv_rs_saved = _rv_rs._banlist.refresh_soon
+_rv_rs._banlist.refresh_soon = lambda *a, **k: _rv_refreshes.append(a)
+try:
+    _rv_rs._follow_in_panel_gate(_RvNS(is_local=True, auth_method="local"), True)
+    _rv_rs._follow_in_panel_gate(_RvNS(is_local=True, auth_method="local"), False)
+    _rv_rs._follow_in_panel_gate(_RvNS(is_local=False, auth_method="key"), True)
+finally:
+    _rv_rs._banlist.refresh_soon = _rv_rs_saved
+check("panel host bans: a successful block/unban there refreshes the gate at once (delay 0); a "
+      "failed one, or one on a remote, does not", _rv_refreshes == [(0,)], repr(_rv_refreshes))
+
+
+# ── account routes on a real (temp) database: the step CAS, and no row-less re-login ───────────
+# A bare Flask app on a SQLite file in a temp dir — not create_app, which opens the checkout's own
+# data/. The views are called directly inside a request context; what they would do to the
+# browser (flash, redirect, login_user, logout_user) and the audit writer are recorded instead.
+import flask as _rv_flask  # noqa: E402
+import panel.routes.auth_routes as _rv_ar  # noqa: E402
+from panel.db.models import User as _RvUser, db as _rv_db  # noqa: E402
+from panel.security.auth import check_password as _rv_check_pw  # noqa: E402
+
+_rv_tmpdir = _gh_tmp.mkdtemp(prefix="lgsm-rv-acct-")
+_rv_app = _rv_flask.Flask("rv_acct")
+_rv_app.config.update(SECRET_KEY="rv-unit", LOGIN_DISABLED=True,  # nosec B106 - a throwaway test app's key
+                      SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_rv_tmpdir, "rv.db"),
+                      SQLALCHEMY_TRACK_MODIFICATIONS=False)
+_rv_db.init_app(_rv_app)
+_rv_tags.register(_rv_app)
+_rv_ar.register(_rv_app)
+_rv_change = _rv_app.view_functions["account_change_password"]
+_rv_revoke = _rv_app.view_functions["account_revoke_sessions"]
+_RV_PW = "Str0ng!passw0rd"
+
+with _rv_app.app_context():
+    _rv_db.create_all()
+    _rv_db.session.add_all([
+        _RvUser(username="rvcas", password_hash=_rv_hash(_RV_PW), is_active=True,
+                last_totp_step=100),
+        _RvUser(username="rvpw", password_hash=_rv_hash(_RV_PW), is_active=True),
+        _RvUser(username="rvrev", password_hash=_rv_hash(_RV_PW), is_active=True)])
+    _rv_db.session.commit()
+
+    # (a) the authenticator step is spent by ONE conditional UPDATE
+    _rv_a = _RvUser.query.filter_by(username="rvcas").first()
+    _rv_b = _rv_db.session.get(_RvUser, _rv_a.id)    # same row; think "the other request"
+    _rv_first = _rv_sh.spend_totp_step(_rv_a, 101)
+    _rv_db.session.commit()
+    # The other request loaded last_totp_step=100 before the first committed; its stale in-memory
+    # value would have passed the old `step <= u.last_totp_step` compare.
+    from sqlalchemy.orm.attributes import set_committed_value as _rv_scv  # noqa: E402
+    _rv_scv(_rv_b, "last_totp_step", 100)
+    _rv_second = _rv_sh.spend_totp_step(_rv_b, 101)
+    _rv_older = _rv_sh.spend_totp_step(_rv_b, 99)
+    _rv_newer = _rv_sh.spend_totp_step(_rv_b, 102)
+    _rv_db.session.commit()
+    _rv_stored = _rv_db.session.execute(
+        _rv_db.text("SELECT last_totp_step FROM user WHERE id = :i"), {"i": _rv_a.id}).scalar()
+check("totp step: the first spend of a step wins", _rv_first is True)
+check("totp step: the same step again is refused by the database, whatever the loaded row said",
+      _rv_second is False, repr(_rv_second))
+check("totp step: an older step is refused; a newer one is spent (positive control)",
+      _rv_older is False and _rv_newer is True and _rv_stored == 102,
+      repr((_rv_older, _rv_newer, _rv_stored)))
+
+# (b) no session is issued without its row
+_rv_calls = []
+_rv_ar_saved = {k: getattr(_rv_ar, k) for k in ("current_user", "_register_session", "login_user",
+                                                 "logout_user", "flash", "redirect", "url_for",
+                                                 "log_action")}
+_rv_tg_saved = {k: getattr(_rv_tags, k) for k in ("current_user", "_register_session", "login_user",
+                                                   "logout_user", "flash", "redirect", "url_for",
+                                                   "log_action")}
+
+
+def _rv_patch(mod, user, reg):
+    mod.current_user = user
+    mod._register_session = reg
+    mod.login_user = lambda u, remember=False: _rv_calls.append("login_user")
+    mod.logout_user = lambda: _rv_calls.append("logout_user")
+    mod.flash = lambda msg, cat="message": _rv_calls.append(("flash", cat))
+    mod.redirect = lambda loc: "REDIRECT:" + loc
+    mod.url_for = lambda ep, **kw: "/" + ep
+    mod.log_action = lambda *a, **k: _rv_calls.append(("audit", k.get("detail", "")))
+
+
+class _RvProxy:
+    """What current_user is to these views: the row, reachable through _get_current_object()."""
+
+    def __init__(self, row):
+        self._row = row
+
+    def __getattr__(self, name):
+        return getattr(self._row, name)
+
+    def _get_current_object(self):
+        return self._row
+
+
+_RV_NEW = "N3w!Strong-pass"
+try:
+    with _rv_app.app_context():
+        # the password change, with the re-registration failing (None, and a raise)
+        for _rv_label, _rv_reg in (("returns None", lambda u, r=None: None),
+                                   ("raises", lambda u, r=None: (_ for _ in ()).throw(
+                                       RuntimeError("database is locked")))):
+            _rv_row = _RvUser.query.filter_by(username="rvpw").first()
+            _rv_row.password_hash = _rv_hash(_RV_PW)
+            _rv_row.password_history = ""  # nosec B105 - clears a fixture row's history, not a password
+            _rv_db.session.commit()
+            del _rv_calls[:]
+            _rv_patch(_rv_tags, _RvProxy(_rv_row), _rv_reg)
+            with _rv_app.test_request_context("/account/password", method="POST", data={
+                    "current_password": _RV_PW, "new_password": _RV_NEW,
+                    "confirm_password": _RV_NEW}):
+                _rv_out = _rv_change()
+            _rv_changed = _rv_check_pw(
+                _RV_NEW, _RvUser.query.filter_by(username="rvpw").first().password_hash)
+            check("password change: re-registration that %s signs this device OUT, never in "
+                  "without a row" % _rv_label,
+                  "login_user" not in _rv_calls and "logout_user" in _rv_calls
+                  and _rv_out == "REDIRECT:/login", repr((_rv_out, _rv_calls)))
+            check("password change: ...the change itself stands, and it is audited as such "
+                  "(%s)" % _rv_label,
+                  _rv_changed and any(c[0] == "audit" and "could not be signed back in" in c[1]
+                                      for c in _rv_calls if isinstance(c, tuple)), repr(_rv_calls))
+        # control: a row written -> signed back in
+        _rv_row = _RvUser.query.filter_by(username="rvpw").first()
+        _rv_row.password_hash = _rv_hash(_RV_PW)
+        _rv_row.password_history = ""  # nosec B105 - clears a fixture row's history, not a password
+        _rv_db.session.commit()
+        del _rv_calls[:]
+        _rv_patch(_rv_tags, _RvProxy(_rv_row), lambda u, r=None: "sid-ok")
+        with _rv_app.test_request_context("/account/password", method="POST", data={
+                "current_password": _RV_PW, "new_password": _RV_NEW, "confirm_password": _RV_NEW}):
+            _rv_change()
+        check("password change: ...while a written row still signs the device back in (control)",
+              "login_user" in _rv_calls and "logout_user" not in _rv_calls, repr(_rv_calls))
+
+        # sign out everywhere, from a legacy (row-less) login
+        _rv_rrow = _RvUser.query.filter_by(username="rvrev").first()
+        del _rv_calls[:]
+        _rv_patch(_rv_ar, _RvProxy(_rv_rrow), lambda u, r=None: None)
+        with _rv_app.test_request_context("/account/sessions/revoke", method="POST"):
+            _rv_rout = _rv_revoke()
+        check("sign out everywhere: a legacy login whose new row could not be written is signed "
+              "out, not re-issued a row-less cookie",
+              "login_user" not in _rv_calls and "logout_user" in _rv_calls
+              and _rv_rout == "REDIRECT:/login", repr((_rv_rout, _rv_calls)))
+        del _rv_calls[:]
+        _rv_patch(_rv_ar, _RvProxy(_rv_rrow), lambda u, r=None: "sid-ok")
+        with _rv_app.test_request_context("/account/sessions/revoke", method="POST"):
+            _rv_revoke()
+        check("sign out everywhere: ...while a written row keeps this device signed in (control)",
+              "login_user" in _rv_calls and "logout_user" not in _rv_calls, repr(_rv_calls))
+finally:
+    for _k, _v in _rv_ar_saved.items():
+        setattr(_rv_ar, _k, _v)
+    for _k, _v in _rv_tg_saved.items():
+        setattr(_rv_tags, _k, _v)
+    _gh_shutil.rmtree(_rv_tmpdir, ignore_errors=True)

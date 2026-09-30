@@ -107,16 +107,25 @@ def _register_notifications(app):
         dc_webhook = _json_str(f, "discord_webhook")
         dc_bot_token = _json_str(f, "discord_bot_token")
         nt_token = _json_str(f, "ntfy_token")
+        # Who may run the bots' state-changing commands. save_settings validates these itself (it
+        # is the sink); parsing here as well is only so an entry that is not an id is SHOWN, not
+        # silently dropped — a typo would otherwise be the unexplained reason someone can't /stop.
+        tg_users = f.get("telegram_command_users", "")
+        dc_users = f.get("discord_command_users", "")
+        rejected = (notifications.parse_command_users(tg_users)[1]
+                    + notifications.parse_command_users(dc_users)[1])
         notifications.save_settings(
             telegram={"enabled": bool(f.get("telegram_enabled")),
                       "chat_id": f.get("telegram_chat_id", ""),
                       "accept_commands": bool(f.get("telegram_accept_commands")),
+                      "command_users": tg_users,
                       "token": (tg_token or None)},
             discord={"enabled": bool(f.get("discord_enabled")),
                      "webhook": (dc_webhook or None),
                      "bot_token": (dc_bot_token or None),
                      "channel_id": f.get("discord_channel_id", ""),
-                     "accept_commands": bool(f.get("discord_accept_commands"))},
+                     "accept_commands": bool(f.get("discord_accept_commands")),
+                     "command_users": dc_users},
             ntfy={"enabled": bool(f.get("ntfy_enabled")),
                   "server": f.get("ntfy_server", ""),
                   "topic": f.get("ntfy_topic", ""),
@@ -127,6 +136,9 @@ def _register_notifications(app):
         )
         log_action(current_user, "notifications_update", target="panel")
         flash("Notification settings saved.", "success")
+        if rejected:
+            flash("These weren't saved as allowed users, because a user ID is digits only: %s"
+                  % ", ".join(rejected[:10]), "warning")
         return redirect(url_for("notifications_settings"))
 
     @app.route("/api/notifications/test", methods=["POST"])

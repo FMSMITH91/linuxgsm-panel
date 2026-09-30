@@ -1,4 +1,13 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
+# The interpreter is named OUTRIGHT, and isolated. This was `#!/usr/bin/env python3`, which asks
+# PATH which python3 to run -- as root, for a file whose whole job is to be the privilege boundary.
+# sudo's secure_path normally decides that PATH, but "normally" was the entire argument: a sudoers
+# policy without secure_path (or with the operator's own directory at its front) handed the choice
+# of root's interpreter to whoever could write there, and -I was not given, so PYTHON* variables
+# and a user site-packages directory were honoured too. /usr/bin/python3 is the distro's own, and
+# -I (isolated: no PYTHON* variables, no user site, no script directory on sys.path) is the one
+# argument a Linux shebang can carry. install.sh also writes `Defaults!<this file> env_reset,
+# secure_path=...`, and main() below throws the inherited environment away; each covers the others.
 """The panel's privileged helper — the only thing on this host that should be granted sudo.
 
 WHY THIS EXISTS
@@ -104,6 +113,43 @@ TOOLS = {
     "sh_installer": ("/bin/sh", "/usr/bin/sh"),
     "curl": ("/usr/bin/curl", "/bin/curl"),
 }
+# The ENTIRE environment a child of this helper starts with. Every child used to get
+# `dict(os.environ)` -- whatever sudo let through -- and the ones with no env= at all inherited it
+# anyway. The installer run for a self-update, apt, curl, tailscale and db_maintenance all ran as
+# root with variables the panel had a hand in: env_reset is the sudoers policy's to set, not this
+# file's, and a policy without it (or with an env_keep a distro or an operator widened) handed
+# over BASH_ENV and SHELLOPTS for the root-run installer, CURL_HOME and proxies for curl,
+# APT_CONFIG for apt, and the version-control variables for everything under them.
+# TOOLS above already refuses to let PATH pick a binary; this is the same rule for everything else
+# in the environment. The SUDO_* identity is kept because sudo sets it and verbs read it (who
+# invoked us); nothing a caller chooses survives. A verb that genuinely needs more says so where it
+# builds its child (DEBIAN_FRONTEND for apt, HOME for an account a child drops to).
+CHILD_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+_KEPT_IDENTITY = ("SUDO_UID", "SUDO_GID", "SUDO_USER")
+
+
+def _clean_env(**extra):
+    """A fresh, minimal environment for a child process: fixed PATH and locale, root's HOME, the
+    SUDO_* identity sudo set, and `extra`. Never a copy of os.environ."""
+    env = {"PATH": CHILD_PATH, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "HOME": "/root"}
+    for key in _KEPT_IDENTITY:
+        if key in os.environ:
+            env[key] = os.environ[key]
+    env.update(extra)
+    return env
+
+
+def _scrub_environ():
+    """Replace this process's own environment with _clean_env(), before any verb runs.
+
+    Every subprocess.run here without an explicit env= inherits os.environ, and so does anything
+    this interpreter consults itself (TMPDIR for tempfile, for one). Called from the __main__ block
+    only, so a test that imports this file keeps its own environment."""
+    clean = _clean_env()
+    os.environ.clear()
+    os.environ.update(clean)
+
+
 UFW = "ufw"
 F2B = "fail2ban-client"
 SYSTEMCTL = "systemctl"
@@ -1129,6 +1175,22 @@ def v_rulenum(s):
     return s
 
 
+# One rule's text as `ufw status numbered` prints it after the "[ n]", every run of whitespace
+# collapsed to one space: "22/tcp ALLOW IN Anywhere # ssh", "Anywhere on tailscale0 ALLOW IN
+# Anywhere (v6)". The characters are what ufw puts there for the rules the panel makes (ports and
+# ranges, addresses and networks, actions, interfaces, app profiles, and comments from the panel's
+# own [A-Za-z0-9 _.-] set). It starts with a letter, digit or "(" so it can never read as an option.
+# A rule someone typed by hand with a comment outside this set is refused here; the panel then
+# deletes it the older way (see hosts._delete_rule_locked). Mirrors privileged._ufw_rule_text.
+UFW_RULE_TEXT_RE = r"[A-Za-z0-9(][A-Za-z0-9_.,:/()#-]*(?: [A-Za-z0-9_.,:/()#-]+)*"
+
+
+def v_ufw_rule_text(s):
+    if len(s) > 200 or not re.fullmatch(UFW_RULE_TEXT_RE, s):
+        raise ValueError("not a ufw rule")
+    return s
+
+
 def v_choice(*allowed):
     def check(s):
         if s not in allowed:
@@ -1158,7 +1220,257 @@ PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root", "docker", "lxd", "disk")
 # member of one of these on every update, so a group only it knew about was enrolled again by the
 # next import or install here and taken away by the next update. Kept apart from PRIVILEGED_GROUPS
 # because _caller_reaches_root reads that one, and a panel user in adm does not reach root.
-NEVER_ENROL_GROUPS = PRIVILEGED_GROUPS + ("adm", "shadow", "staff", "incus-admin", "libvirt")
+#
+# The second row was missing, and each of them reaches root or root's secrets without sudo:
+# incus (Incus's own socket group on some packagings, as lxd is LXD's), microk8s and snap_microk8s
+# (`microk8s kubectl` schedules a privileged pod with / mounted), lpadmin (CUPS administration,
+# which includes pointing cupsd's own root-run configuration at files), kmem (/dev/mem and
+# /dev/kmem), src (/usr/src, where DKMS builds kernel modules as root), systemd-journal and syslog
+# (every log on the box, the panel's own included -- adm's reason), and ssl-cert (the host's TLS
+# private keys). Found by surveying what Debian/Ubuntu packages create, not by one report: a group
+# a package adds for "manage this daemon" is almost always this shape. The enrolment gate below
+# also refuses every OTHER system group (gid below GID_MIN), so this list is what stays refused
+# even where an operator created one of these by hand as an ordinary group.
+NEVER_ENROL_GROUPS = PRIVILEGED_GROUPS + ("adm", "shadow", "staff", "incus-admin", "libvirt",
+                                          "incus", "microk8s", "snap_microk8s", "lpadmin", "kmem",
+                                          "src", "systemd-journal", "syslog", "ssl-cert")
+
+# System groups (gid below GID_MIN) an account may hold and still be enrolled. `users` is the one
+# Debian's adduser (bookworm and later, Ubuntu 24.04) adds every new account to, and it grants
+# nothing. Everything else below GID_MIN was made by a package or the base system for a purpose,
+# which is exactly what a game account has no business carrying into the panel's grant.
+ENROL_SAFE_SYSTEM_GROUPS = ("users",)
+
+# Where the enrolment gate reads the rest of the host's policy. Module-level so a test can point
+# each at a sandbox, like SUDOERS_FILE below.
+LOGIN_DEFS = "/etc/login.defs"
+DOAS_CONFS = ("/etc/doas.conf", "/usr/local/etc/doas.conf")
+POLKIT_RULE_DIRS = ("/etc/polkit-1/rules.d", "/run/polkit-1/rules.d",
+                    "/usr/local/share/polkit-1/rules.d", "/usr/share/polkit-1/rules.d")
+POLKIT_PKLA_DIRS = ("/etc/polkit-1/localauthority", "/var/lib/polkit-1/localauthority")
+
+
+def _login_defs():
+    """UID_MIN/UID_MAX/GID_MIN/GID_MAX from login.defs, with shadow-utils' own defaults for any
+    that are missing (1000 and 60000). useradd reads the same file to number an ordinary account,
+    so this is the host's own answer to "which uids are people and game servers, not services"."""
+    out = {"UID_MIN": 1000, "UID_MAX": 60000, "GID_MIN": 1000, "GID_MAX": 60000}
+    try:
+        with open(LOGIN_DEFS, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                words = line.split()
+                if len(words) >= 2 and words[0] in out and words[1].isdigit():
+                    out[words[0]] = int(words[1])
+    except OSError:
+        pass                          # no login.defs: useradd itself falls back to the same values
+    return out
+
+
+def _unreadable(exc):
+    """Re-raise `exc` unless this process is not root. An unreadable policy file is "could not
+    tell" for root -- the only way this helper is ever run, and the only way it can enrol anyone
+    -- but an unprivileged import of this file (the unit suite, on a host whose polkit rules are
+    0750) would otherwise read every account as unknowable."""
+    if os.geteuid() == 0:
+        raise exc
+
+
+def _doas_verdict(user, names):
+    """("yes", why) if a doas.conf `permit` rule names `user` or one of its groups, else None.
+    Raises OSError/ValueError when a file cannot be read or a permit rule cannot be parsed.
+
+    doas is sudo's OpenBSD cousin, packaged for Debian and Ubuntu (opendoas), and it is a second
+    policy file _escalation_verdict never looked at: `permit nopass :steam` in /etc/doas.conf made
+    every member of steam root with one hop, and the sudoers parse above called it clean. Any
+    permit counts -- `as <target>` included, because the target can be root or can be widened
+    later, and a false refusal costs only this account."""
+    for path in DOAS_CONFS:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            _unreadable(e)
+            continue
+        for raw in text.replace("\\\n", " ").splitlines():
+            line = re.sub(r"#.*", "", raw)
+            line = re.sub(r"\{[^}]*\}", " ", line)      # setenv { ... } names variables, not people
+            words = line.split()
+            if not words or words[0] != "permit":
+                continue
+            words = [w for w in words[1:] if w not in ("nopass", "nolog", "persist", "keepenv",
+                                                       "setenv")]
+            if not words or '"' in words[0] or "\\" in words[0]:
+                raise ValueError("a doas rule in %s could not be read" % path)
+            ident = words[0]
+            if ident == user or (ident.startswith(":") and ident[1:] in names):
+                return "yes", "a doas rule in %s permits it" % path
+    return None
+
+
+def _polkit_verdict(user, names):
+    """("yes", why) if a polkit rule names `user` or one of its groups, else None. Raises OSError
+    when a rules directory exists and cannot be read.
+
+    polkit is a third way to root that neither sudoers nor doas shows: a JavaScript rule returning
+    polkit.Result.YES for `subject.isInGroup("steam")` on org.freedesktop.systemd1.manage-units lets
+    steam start any unit, as root, without a password. The rules are programs, so this cannot
+    evaluate them; it asks the question it CAN answer -- does any rule mention this account or one
+    of its groups by name at all? -- and treats yes as "can reach root". The stock rules name only
+    sudo, admin and wheel, which the group list refuses anyway, so an ordinary game account passes.
+    The older .pkla files are read properly: an Identity naming the account or a group, in an
+    entry whose Result* grants "yes" without authentication."""
+    wanted = {user} | set(names)
+    for d in POLKIT_RULE_DIRS:
+        try:
+            entries = sorted(os.listdir(d))
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            _unreadable(e)
+            continue
+        for name in entries:
+            if not name.endswith(".rules"):
+                continue
+            path = os.path.join(d, name)
+            try:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError as e:
+                _unreadable(e)
+                continue
+            quoted = {a or b for a, b in re.findall(r'"([^"\\\n]*)"|\'([^\'\\\n]*)\'', text)}
+            # adminIdentities spells them "unix-group:sudo" / "unix-user:alice".
+            quoted |= {q.split(":", 1)[1] for q in quoted
+                       if q.startswith(("unix-group:", "unix-user:"))}
+            hit = sorted(quoted & wanted)
+            if hit:
+                return "yes", "the polkit rule %s names %s" % (path, hit[0])
+    for top in POLKIT_PKLA_DIRS:
+        if not os.path.isdir(top):
+            continue
+        for root, _dirs, files in os.walk(top, onerror=_unreadable):
+            for name in sorted(files):
+                if not name.endswith(".pkla"):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    with open(path, encoding="utf-8", errors="replace") as fh:
+                        text = fh.read()
+                except OSError as e:
+                    _unreadable(e)
+                    continue
+                for section in re.split(r"^\s*\[", text, flags=re.M):
+                    ids, grants = set(), False
+                    for line in section.splitlines():
+                        k, _, v = line.partition("=")
+                        k, v = k.strip(), v.strip()
+                        if k == "Identity":
+                            ids |= {x.strip() for x in v.split(";") if x.strip()}
+                        elif k.startswith("Result") and v == "yes":
+                            grants = True
+                    named = ({"unix-user:" + user}
+                             | {"unix-group:" + g for g in names}) & ids
+                    if grants and named:
+                        return "yes", "the polkit authority %s grants %s" % (path, sorted(named)[0])
+    return None
+
+
+def _has_linuxgsm_install(pw):
+    """True if `pw`'s home, at the path the panel itself addresses (home_of), holds a LinuxGSM
+    instance or a Steam content tree -- the markers install.sh's sync and lgsm-discover use.
+
+    Read without following a link anywhere: the home is opened O_NOFOLLOW and must be the
+    account's own directory, and each marker is lstat'd relative to it. An account that does not
+    own its home, or whose home is a link to somebody else's, has not got an install of its own."""
+    try:
+        home = home_of(pw.pw_name)
+        fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except (OSError, ValueError):
+        return False
+    try:
+        if os.fstat(fd).st_uid != pw.pw_uid:
+            return False
+        for parts, want in ((("lgsm", "config-lgsm"), stat.S_ISDIR),
+                            (("serverfiles",), stat.S_ISDIR),
+                            (("linuxgsm.sh",), stat.S_ISREG)):
+            dfd = fd
+            try:
+                for i, part in enumerate(parts):
+                    st = os.stat(part, dir_fd=dfd, follow_symlinks=False)
+                    if i < len(parts) - 1:
+                        if not stat.S_ISDIR(st.st_mode):
+                            raise NotADirectoryError(part)
+                        nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                      dir_fd=dfd)
+                        if dfd != fd:
+                            os.close(dfd)
+                        dfd = nfd
+                if want(st.st_mode):
+                    return True
+            except OSError:
+                continue
+            finally:
+                if dfd != fd:
+                    os.close(dfd)
+        return False
+    finally:
+        os.close(fd)
+
+
+def _enrolment_refusal(user, need_install=True):
+    """"" if `user` may be put in GAME_GROUP, else why not, in words for the operator.
+
+    Enrolment is a GRANT: the panel's second sudoers line lets it become any member, with no
+    helper in between. So the question is not "is this account dangerous?" but "is this account a
+    game server?", and it used to be asked the first way only -- v_managed_user refuses uid 0 and
+    _escalation_verdict refuses sudo and a short list of groups, so every other account on the host
+    passed: a colleague's login account, postgres, www-data, nobody. The panel could then become
+    any of them, read what they can read, and run as them.
+
+    So an account is enrolled only when ALL of these hold:
+      * it exists, with a uid in the host's range for ordinary accounts (UID_MIN..UID_MAX from
+        login.defs -- service accounts such as www-data and postgres sit below it, nobody above);
+      * it is not the panel's own account (_is_panel_account);
+      * it cannot already reach root (_escalation_verdict: sudo, doas, polkit, and the
+        root-equivalent groups);
+      * every group it is in is either GAME_GROUP, `users`, or an ordinary (gid >= GID_MIN) group
+        not in NEVER_ENROL_GROUPS -- an allowlist, so a group nobody thought to list is refused;
+      * and, when `need_install`, its own home holds a LinuxGSM install (lgsm/config-lgsm or
+        linuxgsm.sh) or a Steam content tree (serverfiles). That is what makes it a GAME account.
+        user-create's enrolment passes False: the helper has just created that account itself, so
+        it is a game account by construction and its home is still the skeleton."""
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        return "it is not an account on this host"
+    verdict, why = _escalation_verdict(user)
+    if verdict == "yes":
+        return "it can already reach root (%s)" % why
+    if verdict != "no":
+        return "could not confirm it cannot reach root (%s)" % why
+    defs = _login_defs()
+    if not defs["UID_MIN"] <= pw.pw_uid <= defs["UID_MAX"]:
+        return ("its uid %d is outside this host's range for ordinary accounts (%d-%d), so it is "
+                "a system account, not a game server's" % (pw.pw_uid, defs["UID_MIN"],
+                                                            defs["UID_MAX"]))
+    if _is_panel_account(user):
+        return "it is the panel's own account"
+    try:
+        held = [grp.getgrgid(pw.pw_gid)] + [g for g in grp.getgrall() if user in g.gr_mem]
+    except Exception:
+        return "the group database did not answer"
+    for g in held:
+        if g.gr_name == GAME_GROUP or g.gr_name in ENROL_SAFE_SYSTEM_GROUPS:
+            continue
+        if g.gr_name in NEVER_ENROL_GROUPS or g.gr_gid < defs["GID_MIN"]:
+            return ("it is in the system group %s; a game account holds only its own group"
+                    % g.gr_name)
+    if need_install and not _has_linuxgsm_install(pw):
+        return ("its home holds no LinuxGSM install (%s/lgsm/config-lgsm or linuxgsm.sh), so "
+                "it is not a game server's account" % home_of(user))
+    return ""
 
 
 def _groups_of(user):
@@ -1225,6 +1537,14 @@ def _escalation_verdict(user):
     privileged = sorted(names & set(NEVER_ENROL_GROUPS))
     if privileged:
         return "yes", "it is in %s" % ", ".join(privileged)
+    # sudo is not the only policy that hands out root. doas and polkit were never read, so an
+    # account doas permits, or a polkit rule grants systemd's manage-units to, was "no" here.
+    try:
+        other = _doas_verdict(user, names) or _polkit_verdict(user, names)
+    except (OSError, ValueError) as e:
+        return "unknown", "the doas or polkit policy could not be read (%s)" % e
+    if other:
+        return other
     try:
         pw = pwd.getpwnam(user)
     except KeyError:
@@ -1785,6 +2105,9 @@ VERBS = {
         [v_rulenum],
         lambda a: [UFW, "delete", a[0]],
         "y\n"),
+    # ufw-delete-num, but only while rule <n> is still <text>: the read and the delete in ONE root
+    # invocation (do_ufw_delete_num_if). Mirrors privileged.py.
+    "ufw-delete-num-if": ([v_rulenum, v_ufw_rule_text], lambda a: [], None),
 }
 
 
@@ -1891,6 +2214,60 @@ def do_f2b_sshd_ports(args, content):
         os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))
         os.replace(tmp, path)
     return 0
+
+
+# The exit status of a ufw-delete-num-if whose rule is no longer the one it was told to expect.
+# Not one ufw uses (it exits 0 or 1), so the panel can tell "moved, nothing deleted" from "failed".
+UFW_RULE_MOVED = 3
+
+
+def _ufw_numbered_rule(listing, n):
+    """Rule `n`'s text in a `ufw status numbered` listing, whitespace collapsed; None if absent.
+
+    The panel parses the same listing with the same pattern (firewall._UFW_NUMBERED_RE) and
+    collapses the text the same way before it sends it here as the rule it expects.
+    """
+    for line in listing.splitlines():
+        m = re.match(r"^\s*\[\s*(\d+)\]\s*((?:\S.*)?)$", line)
+        if m and int(m.group(1)) == n:
+            return " ".join(m.group(2).split())
+    return None
+
+
+def do_ufw_delete_num_if(args, content):
+    """`ufw delete <n>` only if rule <n> still reads <text> -- the check and the delete in one run.
+
+    ufw numbers are POSITIONS: every insert above a rule renumbers it. The panel re-reads the
+    firewall, checks rule n is the rule the operator picked (and not the one keeping SSH open),
+    and deletes n, all under its per-host ufw_lock -- which serialises the panel's OWN changes, but
+    not a `ufw` somebody types on the host between the panel's read and its delete. That shifted
+    the numbers under the check and `ufw delete n` removed whatever sat at n by then. Here the read
+    and the delete are the same root process, microseconds apart instead of an SSH round trip, and
+    a rule that moved is left alone: exit UFW_RULE_MOVED, nothing deleted.
+    """
+    n, expected = args
+    try:
+        ufw = resolve(UFW)
+    except FileNotFoundError:
+        print("panel-helper: the tool for ufw-delete-num-if is not installed", file=sys.stderr)
+        return 127
+    st = subprocess.run([ufw, "status", "numbered"],      # nosec B603 - fixed argv
+                        shell=False, env=_clean_env(), capture_output=True, text=True, timeout=60)
+    if st.returncode != 0:
+        sys.stdout.write(st.stdout[-2000:])
+        sys.stderr.write(st.stderr[-500:])
+        return st.returncode
+    if _ufw_numbered_rule(st.stdout, int(n)) != expected:
+        sys.stderr.write("ufw-delete-num-if: rule %s is no longer the rule that was checked; "
+                         "nothing was deleted\n" % n)
+        return UFW_RULE_MOVED
+    # `ufw delete <n>` asks "Proceed (y|n)?"; answered on stdin, as ufw-delete-num's is.
+    d = subprocess.run([ufw, "delete", n],                # nosec B603 - n passed v_rulenum
+                       shell=False, input="y\n", env=_clean_env(), capture_output=True,
+                       text=True, timeout=60)
+    sys.stdout.write(d.stdout or "")
+    sys.stderr.write(d.stderr or "")
+    return d.returncode
 
 
 def do_reboot_delayed(args, content):
@@ -2136,7 +2513,7 @@ def _os_update_detached():
             os.dup2(devnull, fd)
         if devnull > 2:
             os.close(devnull)         # dup2 kept the copies; this one would leak
-        env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+        env = _clean_env(DEBIAN_FRONTEND="noninteractive")
         apt = resolve("apt-get")
         with open(OS_UPDATE_LOG, "w", encoding="utf-8") as log:
             log.write("=== OS update started %s ===\n"
@@ -2213,7 +2590,7 @@ def _db_repair_as(account):
         if not _drop_to(account):
             raise OSError("could not become %s" % account.pw_name)
 
-    return {"preexec_fn": _become_owner, "env": dict(os.environ, HOME=account.pw_dir)}
+    return {"preexec_fn": _become_owner, "env": _clean_env(HOME=account.pw_dir)}
 
 
 def _db_reclaim_files(dir_fd, name, uid, gid):
@@ -2575,10 +2952,14 @@ def _self_update_env(ref, branch):
     PANEL_BRANCH: root then verifies its own pieces (this helper, db_maintenance, the installer,
     gamedig's lockfile and install script) against main only, and withholds them on any other
     branch. An operator running install.sh as
-    root chooses the branch themselves, and root follows it. Set AFTER copying os.environ, so no
+    root chooses the branch themselves, and root follows it. Set AFTER building the base, so no
     value the panel hands sudo can remove it — this verb is the panel's only way to run the
-    installer as root, so there is no route on which the panel looks like the operator."""
-    env = dict(os.environ)
+    installer as root, so there is no route on which the panel looks like the operator.
+
+    The base is _clean_env(), not a copy of os.environ: this is root starting bash, and bash acts
+    on BASH_ENV, SHELLOPTS and exported functions from its environment before the script's first
+    line. SUDO_UID survives it, which install.sh's _panel_started_run also reads."""
+    env = _clean_env()
     env["PANEL_UPDATE_REF"] = "" if ref == "-" else ref
     env["PANEL_BRANCH"] = "" if branch == "-" else branch
     # A panel update must never apply host OS packages or reboot the box — that would take every
@@ -2635,10 +3016,20 @@ def _run_installer_to(log, panel_dir, env):
     cannot be verified, a hold — never flips the panel's boot id, so without it the card could not
     tell a finished run from a slow one: the [ERROR] was in the log, and after three minutes the
     card said "Still working — reload the page to check." The wrapper script _launch_installer
-    writes for the path without the helper ends on the same line."""
+    writes for the path without the helper ends on the same line.
+
+    From "/", not from `panel_dir`. The installer's first decision is "is there an app.py where I
+    am standing? then that directory is my SOURCE", and standing in the panel's checkout made
+    root treat the panel-owned tree as an operator's clone. Worse, chdir() follows a symlink: the
+    panel user owns the home that holds the checkout, so it could swap the checkout for a link to
+    another tree of its own, and the installer's `pwd` (physical) then no longer matched
+    PANEL_DIR -- the one test that kept the two apart -- and root tar-copied that tree into
+    PANEL_DIR, extracting through whatever directory links waited there. install.sh now also
+    ignores its working directory whenever PANEL_SELF_UPDATE is set; `panel_dir` stays a
+    parameter only because it is what the callers already hold."""
     try:
         rc = subprocess.run([resolve("bash_installer"), INSTALLER_PATH],  # nosec B603 - fixed path
-                            cwd=panel_dir, env=env, stdout=log, stderr=subprocess.STDOUT,
+                            cwd="/", env=env, stdout=log, stderr=subprocess.STDOUT,
                             check=False, timeout=1800).returncode
     except subprocess.TimeoutExpired:
         return "124 (the installer was stopped after 30 minutes)"
@@ -3045,21 +3436,34 @@ def do_gameuser_group(args, content):
 
     So membership of this group is a privilege boundary, and the group name is a literal here
     rather than an argument: a caller that could name the group could name one that root is in.
-    The ACCOUNT is still checked -- v_managed_user refuses uid 0 -- so this cannot be used to put
-    a root-equivalent account inside the panel's reach either.
+    The ACCOUNT is checked by _enrolment_refusal. It used to be checked only for being able to
+    reach root, which is the wrong question for a grant: any other account on the host -- a
+    colleague's login, postgres, www-data, nobody -- passed, and the panel could then become it.
+    Now it must look like what the panel manages: an ordinary uid, only ordinary groups, and a
+    LinuxGSM install (or content tree) in its own home. The two callers still work: an imported
+    server has its install by definition, and an account the panel just created was enrolled by
+    user-create itself (_enrol_created_account), so the call create_game_user makes right after
+    finds it already a member.
 
     `groupadd -f` succeeds when the group already exists, and `usermod -aG` is append-only, so
     running this for an account that is already a member is a no-op."""
     user = args[0]
-    verdict, why = _escalation_verdict(user)
-    if verdict == "yes":
-        sys.stderr.write("refusing to enrol %s in %s: it can already reach root (%s)\n"
-                         % (user, GAME_GROUP, why))
+    try:
+        member = GAME_GROUP in _groups_of(user)
+    except Exception:
+        member = False
+    # A member is not asked for an install again -- it was let in by one of the two routes above,
+    # and a content account's tree may not be downloaded yet -- but every other test still applies:
+    # an account that has since gained sudo is refused here, as it always was.
+    reason = _enrolment_refusal(user, need_install=not member)
+    if reason:
+        sys.stderr.write("refusing to enrol %s in %s: %s\n" % (user, GAME_GROUP, reason))
         return 1
-    if verdict != "no":
-        sys.stderr.write("refusing to enrol %s in %s: could not confirm it cannot reach root (%s)\n"
-                         % (user, GAME_GROUP, why))
-        return 1
+    return _enrol(user)
+
+
+def _enrol(user):
+    """groupadd -f GAME_GROUP, then usermod -aG it for `user`. The caller has already decided."""
     rc = subprocess.run([resolve("groupadd"), "-f", GAME_GROUP],      # nosec B603 - fixed argv
                         shell=False, capture_output=True, timeout=30).returncode
     if rc != 0:
@@ -3174,7 +3578,7 @@ def do_steamcmd_install(args, content):
                          % r.stderr[:200])
         # Carry on anyway: on a host where the licence was already accepted the install still
         # works, and refusing here would turn a cosmetic failure into no steamcmd at all.
-    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+    env = _clean_env(DEBIAN_FRONTEND="noninteractive")
     apt = resolve(APT)
     for pkgs in (["steamcmd", "steamcmd:i386"], ["steamcmd"]):
         r = subprocess.run([apt, "install", "-y"] + pkgs,     # nosec B603 - fixed argv
@@ -3306,7 +3710,9 @@ def do_tailscale_install(args, content):
     except FileNotFoundError:
         # First install on this host, or /run was cleared by a reboot. Nothing to remove.
         pass
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    # O_NOFOLLOW beside O_EXCL: O_EXCL already refuses a symlink at the name, and saying so
+    # explicitly keeps the two /run opens in this file (see tailscale-up-login) identical.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(fd, "wb") as fh:
             # --proto =https: -L follows redirects, and nothing checks this body before root runs
@@ -3391,7 +3797,13 @@ def do_tailscale_up_login(args, content):
         pass                      # first run on this host, or /run was cleared by a reboot
     argv = ts_up_argv(ssh, routes)
     argv[0] = resolve("tailscale")
-    fd = os.open(TS_UP_LOG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_EXCL | O_NOFOLLOW, after the unlink above, as tailscale-install does. This was O_CREAT |
+    # O_TRUNC, which opens whatever already sits at the name: a symlink there made root truncate
+    # its target and stream `tailscale up` into it, and a FIFO parked this verb on the open. /run
+    # is root's, so only root can plant either -- but "nobody else can write there" is a property
+    # of the directory, and the open should not depend on it. A name that reappears between the
+    # unlink and here fails the open instead of being written through.
+    fd = os.open(TS_UP_LOG, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         subprocess.Popen(argv, shell=False,  # nosec B603 - argv from validated pieces
                          stdin=subprocess.DEVNULL, stdout=fd, stderr=subprocess.STDOUT,
@@ -3790,11 +4202,21 @@ def _chmod_nofollow(path, add, x_if_user=False, dir_fd=None):
 
     O_NOFOLLOW makes the kernel refuse the open instead. O_NONBLOCK so a FIFO cannot park root
     forever, and non-regular, non-directory entries are left alone — a device or socket has no
-    content to share and no business being chmod'd by this."""
+    content to share and no business being chmod'd by this.
+
+    Nor a regular file with more than one name. O_NOFOLLOW stops a SYMLINK, not a HARD link: a
+    hard link is the target itself under a second name, and on a host with
+    fs.protected_hardlinks=0 (the kernel's own default; systemd's sysctl defaults turn it on, and a
+    host or container that does not boot through them keeps 0) the content account can `ln /etc/shadow
+    ~/serverfiles/cstrike/x` and have root add g+r to /etc/shadow itself. The link count is read
+    from the descriptor, so the file checked is the file chmod'd. A game's own files are never
+    hard-linked in a LinuxGSM tree, so nothing that should be shared is skipped."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
     try:
         st = os.fstat(fd)
         if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+            return
+        if stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
             return
         mode = stat.S_IMODE(st.st_mode) | add
         # g+rX: read for everything, execute only where a user already has it. That is what
@@ -3809,7 +4231,9 @@ def _chmod_nofollow(path, add, x_if_user=False, dir_fd=None):
 # Mirrors panel/security/privileged.py _NEVER_A_CONTENT_GROUP; root never imports panel code.
 NEVER_A_CONTENT_GROUP = frozenset({"root", "wheel", "sudo", "admin", "adm", "shadow", "docker",
                                    "lxd", "disk", "staff",
-                                   "incus-admin", "libvirt"})
+                                   "incus-admin", "libvirt",
+                                   "incus", "microk8s", "snap_microk8s", "lpadmin", "kmem",
+                                   "src", "systemd-journal", "syslog", "ssl-cert"})
 
 
 def do_content_grant_read(args, content):
@@ -3953,6 +4377,7 @@ ACTIONS = {
     "sshd-discard-backup": do_sshd_discard_backup,
     "f2b-set-sshd-ports": do_f2b_sshd_ports,
     "reboot-delayed": do_reboot_delayed,
+    "ufw-delete-num-if": do_ufw_delete_num_if,
     "content-scan": do_content_scan,
     "content-dir-create": do_content_dir_create,
     "content-game-present": do_content_game_present,
@@ -4088,7 +4513,7 @@ def main(argv):
             return 1
 
     argv = build(checked)
-    env = dict(os.environ)
+    env = _clean_env()
     if verb in NONINTERACTIVE:
         env["DEBIAN_FRONTEND"] = "noninteractive"
     try:
@@ -4104,8 +4529,28 @@ def main(argv):
         return 124
     sys.stdout.write(p.stdout or "")
     sys.stderr.write(p.stderr or "")
+    if verb == "user-create" and p.returncode == 0:
+        _enrol_created_account(checked[0])
     return p.returncode
 
 
+def _enrol_created_account(user):
+    """Put an account user-create has JUST made in GAME_GROUP, when _enrolment_refusal allows it.
+
+    This is how the panel's own accounts reach the grant now that gameuser-group asks for a
+    LinuxGSM install: useradd has just succeeded, so the name did not exist a moment ago and this
+    helper made it -- a game account by construction, with an empty skeleton home the install flow
+    fills next. Every other test still applies (a name that collides with a privileged group, such
+    as `docker` on a host where that group does not exist yet, is created but NOT enrolled).
+    Never changes user-create's own exit status: the account exists either way, and the panel's
+    gameuser-group call right after reports a refusal in its own words."""
+    reason = _enrolment_refusal(user, need_install=False)
+    if reason:
+        sys.stderr.write("created %s but did not enrol it in %s: %s\n" % (user, GAME_GROUP, reason))
+        return 1
+    return _enrol(user)
+
+
 if __name__ == "__main__":
+    _scrub_environ()
     sys.exit(main(sys.argv))

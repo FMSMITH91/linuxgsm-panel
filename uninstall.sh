@@ -98,8 +98,31 @@ echo ""
 
 # ── Read the panel's OWN port + Tailscale flag before we delete its config ──
 PANEL_PORT=""; TS_DONE=0; TS_MOUNT=""; TS_CONF_UNREAD=0
+# config.json, read the way install.sh's _owner_read reads a file in the panel's tree: AS THE
+# OWNER of PANEL_DIR when this runs as root and that is someone else, opened O_NOFOLLOW|O_NONBLOCK,
+# and only if it is a regular file. On a system install data/ is the panel user's, and root used
+# to `open()` the path — following a link the panel had put there (to any root-only file, whose
+# port- and mount-shaped contents then drove what this script removed), and blocking forever on a
+# FIFO, which hung the uninstall before it had stopped anything. Read ONCE, into a variable, so the
+# three questions below are asked of the same bytes.
+_conf_read() {
+    local as_owner="" owner=""
+    if [[ "$(id -u)" -eq 0 ]]; then
+        owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+        [[ "${owner}" != "root" ]] && id "${owner}" >/dev/null 2>&1 && as_owner="sudo -u ${owner}"
+    fi
+    (cd / && ${as_owner} python3 -I - "$1" 2>/dev/null <<'CONF_READ_PY') || true
+import os, stat, sys
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY)
+if not stat.S_ISREG(os.fstat(fd).st_mode):
+    sys.exit(1)
+sys.stdout.buffer.write(os.read(fd, 1048576))
+CONF_READ_PY
+}
+CONF_JSON=""
 if [[ -f "${PANEL_DIR}/data/config.json" ]]; then
-    PANEL_PORT="$(python3 -I -c "import json;print(int(json.load(open('${PANEL_DIR}/data/config.json')).get('port',5000)))" 2>/dev/null || echo "")"
+    CONF_JSON="$(_conf_read "${PANEL_DIR}/data/config.json")"
+    PANEL_PORT="$(printf '%s' "${CONF_JSON}" | python3 -I -c "import json,sys;print(int(json.load(sys.stdin).get('port',5000)))" 2>/dev/null || echo "")"
     # The mount the panel published ITSELF at (config.py defaults "tailscale_mount" to "/"). Read
     # here, beside the port, because data/config.json is deleted a few lines below — and validated
     # with the same shape the panel validates it with (privileged.py's _ts_mount), so a value that
@@ -115,11 +138,12 @@ if [[ -f "${PANEL_DIR}/data/config.json" ]]; then
     # VerbError and returns "That isn't a usable mount point." without calling the CLI); empty
     # here is what mirrors that. A "/" that the config genuinely RECORDS still reads back as "/"
     # and is still removed.
-    TS_MOUNT="$(python3 -I -c "import json,re;m=str(json.load(open('${PANEL_DIR}/data/config.json')).get('tailscale_mount') or '/');print(m if m == '/' or re.fullmatch(r'(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,31}){1,3}', m) else '')" 2>/dev/null || echo "")"
+    TS_MOUNT="$(printf '%s' "${CONF_JSON}" | python3 -I -c "import json,re,sys;m=str(json.load(sys.stdin).get('tailscale_mount') or '/');print(m if m == '/' or re.fullmatch(r'(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,31}){1,3}', m) else '')" 2>/dev/null || echo "")"
     # The config file is HERE and we could not get a mount out of it — worth saying so below,
     # because `tailscale_setup_done` is read out of the same unreadable file by the grep after it.
     [[ -n "${TS_MOUNT}" ]] || TS_CONF_UNREAD=1
-    if grep -q '"tailscale_setup_done": true' "${PANEL_DIR}/data/config.json" 2>/dev/null; then TS_DONE=1; fi
+    # A pattern match, not `printf | grep -q`: grep's early exit is a SIGPIPE under pipefail.
+    if [[ "${CONF_JSON}" == *'"tailscale_setup_done": true'* ]]; then TS_DONE=1; fi
 fi
 
 # ── Stop + remove the service ──
@@ -146,6 +170,25 @@ rm -rf "${UNIT_FILE}.d"
 svc daemon-reload >/dev/null 2>&1 || true
 if [[ "${MODE}" = "system" ]]; then systemctl reset-failed linuxgsm-panel.service >/dev/null 2>&1 || true; fi
 ok "Service stopped and removed"
+
+# ── The sudo grants go FIRST, the moment nothing needs them ──
+# They used to be removed near the END, after the panel's files, the firewall rule, Tailscale and
+# the host-wide pieces. Every one of those steps can stop this script (`set -e`, a file `rm -rf`
+# cannot remove, a Ctrl-C at a slow step), and each such stop left the panel's account holding its
+# passwordless grants on a host where the operator had asked for the panel to be gone — the one
+# thing an uninstall most has to take away. The service is stopped by now, so nothing legitimate
+# is using them.
+#
+# Both files — the narrow grant, and the opt-in password-required one the host terminal uses
+# (PANEL_TERMINAL_SUDO=1). Leaving the second behind would leave a general sudo rule naming an
+# account that no longer exists — and that name is reusable. And the group the narrow grant's
+# second line names: without that line it grants nothing, but its members would be inside the grant
+# again the moment a reinstall wrote the line back, having been checked by nothing since.
+if [[ "${MODE}" = "system" ]]; then
+    rm -f /etc/sudoers.d/linuxgsm-panel /etc/sudoers.d/00-linuxgsm-panel-terminal
+    groupdel lgsmpanel-games >/dev/null 2>&1 || true
+    ok "Removed the sudoers entries and the game-account group (game accounts themselves untouched)"
+fi
 
 # The sudo the cleanups need when this is a per-user uninstall. Computed here rather than beside
 # the root-owned removals further down, because the firewall rule below is the FIRST root-owned
@@ -413,11 +456,7 @@ elif [[ -d /usr/local/lib/linuxgsm-panel ]] || [[ -f /etc/cron.d/lgsm-node-tools
 fi
 
 if [[ "${MODE}" = "system" ]]; then
-    # Both of them: the narrow grant, and the opt-in password-required one the host terminal uses
-    # (PANEL_TERMINAL_SUDO=1). Leaving the second behind would leave a general sudo rule naming an
-    # account that no longer exists — and that name is reusable.
-    rm -f /etc/sudoers.d/linuxgsm-panel /etc/sudoers.d/00-linuxgsm-panel-terminal
-    ok "Removed the sudoers entries"
+    # (The sudoers entries went straight after the service stopped — see there.)
 
     # Host-wide kernel tuning the installer applied for the panel's sake (vm.swappiness). Re-apply
     # the remaining sysctl config so the host goes back to its own values now, not at next boot.

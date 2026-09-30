@@ -60,10 +60,15 @@ class _GhChan(_gh_io.BytesIO):
         pass
 
 
+class _GhOut(_gh_io.BytesIO):
+    # A channel that has exited 0: the download streams check the exit status at EOF and close it.
+    channel = NS(status_event=NS(wait=lambda _t=None: True), exit_status=0, close=lambda: None)
+
+
 class _GhClient:
-    def exec_command(self, cmd):
+    def exec_command(self, cmd, timeout=None):
         _gh_sent.append(("exec", cmd))
-        return _GhChan(), _gh_io.BytesIO(b""), _gh_io.BytesIO(b"")
+        return _GhChan(), _GhOut(b""), _gh_io.BytesIO(b"")
 
 
 import panel.routes._shared as _gh_shared  # noqa: E402
@@ -578,3 +583,484 @@ finally:
     for _gh_mod, _gh_attr, _gh_val in _GH_SAVED:
         setattr(_gh_mod, _gh_attr, _gh_val)
     _gh_ps._action_output.pop(9104, None)
+
+
+# ── ssh_manager review fixes (change_ssh_port's firewall, ufw/crontab locks, crontab rewrite,
+#    password-auth fallthrough, cfg quoting, download streams, symlinked delete) ────────────────
+# Each block drives the real function through a recording transport (or, where the fix IS a shell
+# script, runs that script in bash against a stand-in `crontab` / a temporary home) and asserts on
+# what reached the host — not on the text of the code.
+import subprocess as _rv_sp  # noqa: E402  # nosec B404 - runs bash on this suite's own fixed scripts
+import tempfile as _rv_tf  # noqa: E402
+import threading as _rv_th  # noqa: E402
+import time as _rv_time  # noqa: E402
+import shutil as _rv_sh  # noqa: E402
+
+from unit.part01 import _sm_hosts  # noqa: E402
+
+
+def _rv_held_elsewhere(lk):
+    """True when another thread cannot take `lk` right now (someone holds it)."""
+    got = []
+
+    def _try():
+        ok = lk.acquire(blocking=False)
+        got.append(ok)
+        if ok:
+            lk.release()
+    t = _rv_th.Thread(target=_try)
+    t.start()
+    t.join()
+    return got == [False]
+
+
+# 1. change_ssh_port: step 1 opens only what is not already let in, and the revert closes only what
+#    step 1 added. Every exit below is the sshd-validate failure, i.e. the revert path.
+_RV_UFW = ("Status: active\n\n     To                         Action      From\n"
+           "     --                         ------      ----\n%s")
+
+
+def _rv_ufw_rows(*rows):
+    return _RV_UFW % "".join("[%2d] %-26s %-11s Anywhere\n" % (i + 1, to, act)
+                             for i, (to, act) in enumerate(rows))
+
+
+def _rv_move(old_ports, new_port, bind="", status=None, status_rc=0):
+    sent = []
+
+    def _priv(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
+        sent.append((verb, list(args)))
+        if verb == "ufw-status":
+            return (status or "", "", status_rc)
+        if verb == "listening-sockets":
+            return ("tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
+        if verb == "sshd-validate":
+            return ("", "bad config", 1)
+        return ("", "", 0)
+    saved = (_sm_core.run_privileged, _sm_core.write_root_file, _sm_hosts._sshd_socket_activated,
+             _sm_hosts._sshd_current_ports, _sm_hosts._restart_ssh_listener)
+    _sm_core.run_privileged = _priv
+    _sm_core.write_root_file = lambda *a, **k: sent.append(("write",)) or ("", "", 0)
+    _sm_hosts._sshd_socket_activated = lambda s: False
+    _sm_hosts._sshd_current_ports = lambda s: list(old_ports)
+    _sm_hosts._restart_ssh_listener = lambda *a, **k: None
+    try:
+        res = _sm_hosts.change_ssh_port(NS(id=8801, host="203.0.113.5", port=22, is_local=False,
+                                           auth_method="key"), new_port, bind)
+    finally:
+        (_sm_core.run_privileged, _sm_core.write_root_file, _sm_hosts._sshd_socket_activated,
+         _sm_hosts._sshd_current_ports, _sm_hosts._restart_ssh_listener) = saved
+    ufw = [s for s in sent if s[0].startswith("ufw-") and s[0] != "ufw-status"]
+    return res, ufw, sent
+
+
+_rv_r, _rv_ufw, _ = _rv_move(["22"], 22, bind="203.0.113.5",
+                             status=_rv_ufw_rows(("22/tcp", "LIMIT IN")))
+check("change_ssh_port: a failed bind change on the port SSH already uses neither re-allows it "
+      "(LIMIT kept) nor deletes it on the revert", _rv_r[0] is False and _rv_ufw == [],
+      repr((_rv_r, _rv_ufw)))
+_rv_r, _rv_ufw, _ = _rv_move(["22", "2222"], 2222, status=_rv_ufw_rows(("22/tcp", "LIMIT IN"),
+                                                                        ("2222/tcp", "LIMIT IN")))
+check("change_ssh_port: moving onto a port sshd already serves touches no ufw rule, reverted "
+      "or not", _rv_r[0] is False and _rv_ufw == [], repr((_rv_r, _rv_ufw)))
+_rv_r, _rv_ufw, _ = _rv_move(["22"], 2022, status=_rv_ufw_rows(("22/tcp", "ALLOW IN")))
+check("change_ssh_port: a new port with no rule is allowed, and the revert closes exactly that",
+      _rv_ufw == [("ufw-allow-proto-port", ["tcp", "2022", "SSH panel"]),
+                  ("ufw-delete-allow-proto-port", ["tcp", "2022"])], repr(_rv_ufw))
+_rv_r, _rv_ufw, _ = _rv_move(["22"], 2022, status=_rv_ufw_rows(("22/tcp", "ALLOW IN"),
+                                                               ("2022/tcp", "ALLOW IN")))
+check("change_ssh_port: a new port an existing rule already allows is left to it — not "
+      "re-allowed, not deleted on the revert", _rv_ufw == [], repr(_rv_ufw))
+_rv_r, _rv_ufw, _rv_sent = _rv_move(["22"], 2022, status=_rv_ufw_rows(("22/tcp", "ALLOW IN"),
+                                                                      ("2022/tcp", "DENY IN")))
+check("change_ssh_port: a port the firewall DENIES is refused before anything is written",
+      _rv_r[0] is False and "blocked by the firewall rule" in _rv_r[1] and _rv_ufw == []
+      and ("write",) not in _rv_sent, repr((_rv_r, _rv_sent)))
+_rv_r, _rv_ufw, _ = _rv_move(["22"], 2022, status="Status: inactive\n")
+check("change_ssh_port: on an inactive (unlistable) ufw the port is opened but the revert does "
+      "not delete a rule that may have been there", _rv_ufw == [
+          ("ufw-allow-proto-port", ["tcp", "2022", "SSH panel"])], repr(_rv_ufw))
+
+
+# 2. ufw: every change runs under the host's ufw_lock, and remote_ufw_delete_rule holds it from its
+#    guard's read to the delete — an insert from another thread lands after, not between.
+_rv_srv = NS(id=8802, host="203.0.113.6", port=22, is_local=False, auth_method="key",
+             username="admin")
+_rv_seen = []
+_rv_saved_rc = _sm_core.run_command
+
+
+def _rv_rc(server, cmd, timeout=30, sudo=None, stdin_text=None):
+    _rv_seen.append(_rv_held_elsewhere(_sm_core.ufw_lock(server)))
+    return ("", "", 0)
+
+
+_sm_core.run_command = _rv_rc
+try:
+    _sm_core.run_privileged(_rv_srv, "ufw-deny-ip", ["198.51.100.7", "panel-block"])
+    _sm_core.run_privileged(_rv_srv, "ufw-status", ["numbered"])
+finally:
+    _sm_core.run_command = _rv_saved_rc
+check("run_privileged: a ufw change runs under the host's ufw_lock; the read does not",
+      _rv_seen == [True, False], repr(_rv_seen))
+
+_rv_order = []
+_rv_thr = []
+_rv_saved = (_sm_core.run_privileged, _sm_hosts.firewall.remote_ufw_status)
+
+
+def _rv_priv2(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
+    if _sm_core._ufw_mutating(verb):
+        with _sm_core.ufw_lock(server):
+            _rv_order.append(verb)
+    else:
+        _rv_order.append(verb)
+    return ("", "", 0)
+
+
+def _rv_status(server):
+    # The auto-block inserting at 1 from its own thread, mid-check: it must wait for the delete.
+    t = _rv_th.Thread(target=lambda: _sm_core.run_privileged(server, "ufw-deny-ip",
+                                                             ["198.51.100.8", "auto-block"]))
+    t.start()
+    _rv_thr.append(t)
+    # Give it the time to reach the lock and block. A sleep, not t.join(0.3): once eventlet has
+    # patched threading (the suite runs it both ways), a join that times out RAISES
+    # eventlet.timeout.Timeout instead of returning — on Python 3.14 that ended the whole run.
+    _rv_time.sleep(0.3)
+    _rv_order.append("read")
+    return {"installed": True, "enabled": True,
+            "groups": [{"key": "k3", "nums": [3], "protected": False}]}
+
+
+_sm_core.run_privileged = _rv_priv2
+_sm_hosts.firewall.remote_ufw_status = _rv_status
+try:
+    _rv_del = _sm_hosts.remote_ufw_delete_rule(_rv_srv, 3, expect_key="k3")
+finally:
+    for _t in _rv_thr:
+        _t.join(5)
+    _sm_core.run_privileged, _sm_hosts.firewall.remote_ufw_status = _rv_saved
+check("remote_ufw_delete_rule: an insert racing the guard lands AFTER the delete, never between",
+      _rv_del[0] is True and _rv_order == ["read", "ufw-delete-num", "ufw-deny-ip"],
+      repr((_rv_del, _rv_order)))
+
+
+# 3 + 4. The crontab rewrite, run for real in bash against a stand-in `crontab`.
+_rv_ct = _rv_tf.mkdtemp(prefix="rv_ct_")
+with open(os.path.join(_rv_ct, "crontab"), "w", encoding="utf-8") as _fh:
+    _fh.write('#!/bin/sh\n'
+              'if [ "$1" = "-l" ]; then\n'
+              '  case "$CT_MODE" in\n'
+              '    fail) echo "crontab: cannot talk to cron" >&2; exit 1 ;;\n'
+              '    none) echo "no crontab for zz8" >&2; exit 1 ;;\n'
+              '  esac\n'
+              '  cat "$CT_STORE"; exit 0\n'
+              'fi\n'
+              'cp "$1" "$CT_STORE" && echo installed >> "$CT_STORE.log"\n')
+# nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
+os.chmod(os.path.join(_rv_ct, "crontab"), 0o700)
+
+
+def _rv_crontab(mode, existing, call, tmpdir=None):
+    store = os.path.join(_rv_ct, "store")
+    with open(store, "w", encoding="utf-8") as fh:
+        fh.write(existing)
+    if os.path.exists(store + ".log"):
+        os.unlink(store + ".log")
+    held = []
+
+    def _shell(server, user, sh, timeout=30, selfname=None):
+        held.append(_rv_held_elsewhere(_sm_core.crontab_lock(server, user)))
+        env = dict(os.environ, PATH=_rv_ct + ":" + os.environ.get("PATH", ""), CT_MODE=mode,
+                   CT_STORE=store, TMPDIR=tmpdir or _rv_ct)
+        p = _rv_sp.run(["bash", "-c", sh], capture_output=True, text=True, env=env, timeout=20)  # nosec B603 B607 - bash on the script under test
+        return p.stdout, p.stderr, p.returncode
+    saved = _sm_core.shell_as_game_user
+    _sm_core.shell_as_game_user = _shell
+    try:
+        res = call()
+    finally:
+        _sm_core.shell_as_game_user = saved
+    with open(store, encoding="utf-8") as fh:
+        now = fh.read()
+    return res, now, os.path.exists(store + ".log"), held
+
+
+_rv_srv3 = NS(id=8803, host="203.0.113.7", port=22, is_local=False, auth_method="key")
+_rv_res, _rv_now, _rv_inst, _rv_held = _rv_crontab(
+    "fail", "0 1 * * * keep-me\n",
+    lambda: _sm_core._rewrite_crontab(_rv_srv3, "zz8", "", ["*/5 * * * * added"]))
+check("_rewrite_crontab: a crontab -l that FAILED installs nothing and reports failure",
+      _rv_res[0] is False and not _rv_inst and _rv_now == "0 1 * * * keep-me\n"
+      and "could not read the crontab" in _rv_res[1], repr((_rv_res, _rv_now, _rv_inst)))
+check("_rewrite_crontab: the rewrite runs under the account's crontab_lock", _rv_held == [True],
+      repr(_rv_held))
+_rv_res, _rv_now, _rv_inst, _ = _rv_crontab(
+    "none", "", lambda: _sm_core._rewrite_crontab(_rv_srv3, "zz8", "", ["*/5 * * * * added"]))
+check("_rewrite_crontab: an account with no crontab gets one with just the new line",
+      _rv_res[0] is True and _rv_inst and _rv_now == "*/5 * * * * added\n", repr((_rv_res, _rv_now)))
+_rv_res, _rv_now, _rv_inst, _ = _rv_crontab(
+    "ok", "0 1 * * * a\n0 2 * * * b\n",
+    lambda: _sm_core._rewrite_crontab(_rv_srv3, "zz8", "-vE '^'", ["0 3 * * * c"]))
+check("_rewrite_crontab: a filter that drops EVERY line (grep exit 1) still installs the rest",
+      _rv_res[0] is True and _rv_now == "0 3 * * * c\n", repr((_rv_res, _rv_now)))
+_rv_res, _rv_now, _rv_inst, _ = _rv_crontab(
+    "ok", "0 1 * * * a\n  0 2 * * * b\n",
+    lambda: _sm_core._rewrite_crontab(_rv_srv3, "zz8", "", [], drop_line="0 2 * * * b"))
+check("_rewrite_crontab: drop_line still removes the one line, everything else kept",
+      _rv_res[0] is True and _rv_now == "0 1 * * * a\n", repr((_rv_res, _rv_now)))
+_rv_res, _rv_now, _rv_inst, _ = _rv_crontab(
+    "ok", "0 1 * * * keep-me\n",
+    lambda: _sm_core._rewrite_crontab(_rv_srv3, "zz8", "", ["x"]),
+    tmpdir=os.path.join(_rv_ct, "no-such-dir"))
+check("_rewrite_crontab: no tempfile (mktemp failed) installs nothing",
+      _rv_res[0] is False and not _rv_inst and _rv_now == "0 1 * * * keep-me\n",
+      repr((_rv_res, _rv_now, _rv_inst)))
+
+# The upgrade's read and rewrite are one step under the same lock.
+_rv_upg = []
+_rv_saved_up = (_sm_core.run_privileged, _sm_core._rewrite_crontab)
+
+
+def _rv_up_priv(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
+    _rv_upg.append(("read", _rv_held_elsewhere(_sm_core.crontab_lock(server, "zz8"))))
+    return ("*/5 * * * * /home/zz8/zz8 monitor > /dev/null 2>&1\n", "", 0)
+
+
+def _rv_up_write(server, user, *a, **k):
+    _rv_upg.append(("write", _rv_held_elsewhere(_sm_core.crontab_lock(server, user))))
+    return True, ""
+
+
+_sm_core.run_privileged, _sm_core._rewrite_crontab = _rv_up_priv, _rv_up_write
+try:
+    _sm_cron.upgrade_managed_cron_tracking(_rv_srv3, "zz8", "zz8")
+finally:
+    _sm_core.run_privileged, _sm_core._rewrite_crontab = _rv_saved_up
+check("upgrade_managed_cron_tracking: the crontab read and its rewrite both run under the lock",
+      _rv_upg == [("read", True), ("write", True)], repr(_rv_upg))
+_rv_sh.rmtree(_rv_ct, ignore_errors=True)
+
+
+# 5. A password remote with no usable password never signs in with the panel's own key; a named
+#    key is the only key offered.
+class _RvClient:
+    def __init__(self):
+        self.kw = None
+
+    def connect(self, host, **kw):
+        self.kw = kw
+
+
+_rv_cl = _RvClient()
+try:
+    _sm_core._connect_by_auth_method(_rv_cl, NS(auth_method="password", host="203.0.113.8",
+                                                port=22, username="root"), "", 5)
+    _rv_err = None
+except ConnectionError as _e:
+    _rv_err = str(_e)
+check("_connect_by_auth_method: password auth with an empty credential raises and never connects",
+      bool(_rv_err) and "No usable SSH password" in _rv_err and _rv_cl.kw is None,
+      repr((_rv_err, _rv_cl.kw)))
+_rv_cl = _RvClient()
+_sm_core._connect_by_auth_method(_rv_cl, NS(auth_method="key", host="203.0.113.8", port=22,
+                                            username="root"), "/srv/keys/vps", 5)
+check("_connect_by_auth_method: a named key is the only key — no agent, no ~/.ssh search",
+      _rv_cl.kw["key_filename"] == "/srv/keys/vps" and _rv_cl.kw["allow_agent"] is False
+      and _rv_cl.kw["look_for_keys"] is False, repr(_rv_cl.kw))
+_rv_cl = _RvClient()
+_sm_core._connect_by_auth_method(_rv_cl, NS(auth_method="key", host="203.0.113.8", port=22,
+                                            username="root"), "", 5)
+check("_connect_by_auth_method: a blank key path means the panel's own keys, still no agent",
+      _rv_cl.kw["allow_agent"] is False and _rv_cl.kw["look_for_keys"] is True
+      and _rv_cl.kw["key_filename"] == os.path.expanduser("~/.ssh/id_rsa"), repr(_rv_cl.kw))
+
+
+# 6. LinuxGSM cfg values: written so bash reads back exactly what was typed (bar ${name}/$name
+#    references), and _parse_cfg reads back what was written.
+_rv_dir = _rv_tf.mkdtemp(prefix="rv_cfg_")
+_rv_flag = os.path.join(_rv_dir, "pwned")
+_rv_vals = {"a": 'p$1s$$`id`"q\\', "b": "$(touch %s)" % _rv_flag, "c": "-port ${port} +ip $ip",
+            "d": "x${port@P}y", "e": "trail\\"}
+_rv_lines = ['port="27015"', 'ip="0.0.0.0"']
+_sm_files._apply_cfg_updates(_rv_lines, _rv_vals)
+_rv_cfg = "\n".join(_rv_lines) + "\n"
+with open(os.path.join(_rv_dir, "x.cfg"), "w", encoding="utf-8") as _fh:
+    _fh.write(_rv_cfg)
+_rv_p = _rv_sp.run(["bash", "-c", 'source "$1" && printf "%s\\0" "$a" "$b" "$c" "$d" "$e"', "_",  # nosec B603 B607 - bash, a fixed argv, on a fixture file
+                    os.path.join(_rv_dir, "x.cfg")], capture_output=True, text=True, timeout=10)
+_rv_got = _rv_p.stdout.split("\0")[:5]
+check("_apply_cfg_updates: bash sources every value as typed — no command runs, ${port}/$ip live",
+      _rv_p.returncode == 0 and _rv_got == [_rv_vals["a"], _rv_vals["b"], "-port 27015 +ip 0.0.0.0",
+                                             _rv_vals["d"], _rv_vals["e"]]
+      and not os.path.exists(_rv_flag), repr((_rv_p.returncode, _rv_got, _rv_p.stderr)))
+_rv_parsed = _sm_files._parse_cfg(_rv_cfg)
+check("_parse_cfg: reads back what _apply_cfg_updates wrote (so a re-save does not re-escape)",
+      [_rv_parsed.get(k) for k in "abcde"] == [_rv_vals[k] for k in "abcde"], repr(_rv_parsed))
+_rv_sh.rmtree(_rv_dir, ignore_errors=True)
+
+
+# 7 + 8. Download streams: a reader that failed aborts the response at EOF; tar's "file changed"
+#    exit 1 does not; the channel is closed and has an idle timeout; stdin/ConnectTimeout/-n.
+class _RvProc:
+    def __init__(self, chunks, rc):
+        self._c, self._rc, self.stdout = list(chunks), rc, self
+
+    def read(self, _n):
+        return self._c.pop(0) if self._c else b""
+
+    def close(self):
+        pass
+
+    def wait(self):
+        return self._rc
+
+
+def _rv_drain(gen, take=None):
+    out = []
+    try:
+        for b in gen:
+            out.append(b)
+            if take is not None and len(out) >= take:
+                gen.close()
+                break
+        return out, None
+    except _sm_core.StreamFailed as e:
+        return out, e
+
+
+_rv_kw = {}
+_rv_saved_popen = _sm_files.subprocess.Popen
+_sm_files.subprocess.Popen = lambda argv, **k: _rv_kw.update(k) or _RvProc([b"ab", b"cd"], 1)
+try:
+    _rv_o1 = _rv_drain(_sm_files._stream_argv(["x"], "f", 2))
+    _rv_o2 = _rv_drain(_sm_files._stream_argv(["x"], "f", 2, ok=(0, 1)))
+    _rv_o3 = _rv_drain(_sm_files._stream_argv(["x"], "f", 2), take=1)
+finally:
+    _sm_files.subprocess.Popen = _rv_saved_popen
+check("files._stream_argv: a reader exiting non-zero at EOF raises StreamFailed (download aborts)",
+      _rv_o1[0] == [b"ab", b"cd"] and isinstance(_rv_o1[1], _sm_core.StreamFailed), repr(_rv_o1))
+check("files._stream_argv: tar's exit 1 (a file changed while read) is a whole archive",
+      _rv_o2 == ([b"ab", b"cd"], None), repr(_rv_o2))
+check("files._stream_argv: a consumer that stops early (the size cap) is not a failure",
+      _rv_o3 == ([b"ab"], None), repr(_rv_o3))
+
+_rv_kw = {}
+_sm_cron.subprocess.Popen = lambda argv, **k: _rv_kw.update(k) or _RvProc([b"zz"], 255)
+try:
+    _rv_o4 = _rv_drain(_sm_cron._stream_backup_argv(["ssh"], 2))
+finally:
+    _sm_cron.subprocess.Popen = _rv_saved_popen
+check("cron._stream_backup_argv: stdin is DEVNULL and a failed read aborts the download",
+      _rv_kw.get("stdin") == _rv_sp.DEVNULL and isinstance(_rv_o4[1], _sm_core.StreamFailed),
+      repr((_rv_kw, _rv_o4)))
+
+
+class _RvChan:
+    def __init__(self, rc):
+        self.exit_status, self.closed = rc, False
+        self.status_event = _rv_th.Event()
+        self.status_event.set()
+
+    def close(self):
+        self.closed = True
+
+    def shutdown_write(self):
+        pass
+
+
+class _RvOut:
+    def __init__(self, chunks, chan):
+        self._c, self.channel = list(chunks), chan
+
+    def read(self, _n):
+        return self._c.pop(0) if self._c else b""
+
+
+class _RvIn:
+    def __init__(self, chan):
+        self.channel = chan
+
+    def write(self, _d):
+        pass
+
+    def flush(self):
+        pass
+
+
+class _RvSsh:
+    def __init__(self, rc):
+        self.chan, self.timeout = _RvChan(rc), "unset"
+
+    def exec_command(self, cmd, timeout=None):
+        self.timeout = timeout
+        return _RvIn(self.chan), _RvOut([b"12", b"34"], self.chan), None
+
+
+_rv_saved_gc = _sm_core.get_connection
+_rv_c, _rv_c0 = _RvSsh(1), _RvSsh(0)
+_sm_core.get_connection = lambda s: _rv_c
+try:
+    _rv_o5 = _rv_drain(_sm_files._stream_paramiko(_rv_srv, "cat", "f", 2))
+    _sm_core.get_connection = lambda s: _rv_c0
+    _rv_o6 = _rv_drain(_sm_cron.stream_game_backup(_rv_srv, "zz8", "zz8-2026-01-01-000000.tar.zst"))
+finally:
+    _sm_core.get_connection = _rv_saved_gc
+check("files._stream_paramiko: idle timeout set, channel closed, a failed exit aborts the stream",
+      _rv_c.timeout == _sm_core.STREAM_IDLE_TIMEOUT and _rv_c.chan.closed
+      and isinstance(_rv_o5[1], _sm_core.StreamFailed), repr((_rv_c.timeout, _rv_o5)))
+check("cron.stream_game_backup (paramiko): idle timeout, channel closed, a clean exit streams all",
+      _rv_c0.timeout == _sm_core.STREAM_IDLE_TIMEOUT and _rv_c0.chan.closed
+      and _rv_o6 == ([b"12", b"34"], None), repr((_rv_c0.timeout, _rv_o6)))
+
+_rv_ts = NS(id=8804, host="box.ts.net", port=22, username="admin", auth_method="tailscale",
+            is_local=False)
+_rv_saved_ts = _sm_core._resolve_ts_host
+_sm_core._resolve_ts_host = lambda s: s.host
+try:
+    _rv_a1 = _sm_cron._backup_read_argv(_rv_ts, "zz8", "n.tar.zst", "/home/zz8/lgsm/backup/n.tar.zst")
+    _rv_a2 = _sm_files._ssh_download_argv(_rv_ts, "cat")
+finally:
+    _sm_core._resolve_ts_host = _rv_saved_ts
+check("backup ssh argv: -n (reads no stdin) and a ConnectTimeout",
+      "-n" in _rv_a1 and any(a.startswith("ConnectTimeout=") for a in _rv_a1), repr(_rv_a1))
+check("download ssh argv: a ConnectTimeout (and no -n: the path goes on stdin)",
+      "-n" not in _rv_a2 and any(a.startswith("ConnectTimeout=") for a in _rv_a2), repr(_rv_a2))
+
+
+# 9. delete_path through a symlinked directory: the protected check is made on the host, on the
+#    real parent + the name, in the same command as the rm. Run for real in a temporary "home".
+_rv_home = _rv_tf.mkdtemp(prefix="rv_home_")
+os.makedirs(os.path.join(_rv_home, "lgsm", "config-lgsm", "zz9server"))
+os.makedirs(os.path.join(_rv_home, "junk"))
+os.symlink("lgsm", os.path.join(_rv_home, "x"))
+os.symlink(".", os.path.join(_rv_home, "dot"))
+
+
+def _rv_home_shell(server, user, sh, timeout=30, selfname=None):
+    p = _rv_sp.run(["bash", "-c", sh.replace("/home/zz9", _rv_home)], capture_output=True,  # nosec B603 B607 - bash, a fixed argv, on the script under test
+                   text=True, timeout=20)
+    return p.stdout, p.stderr, p.returncode
+
+
+_rv_saved_sh = _sm_core.shell_as_game_user
+_sm_core.shell_as_game_user = _rv_home_shell
+try:
+    _rv_d1 = _sm_files.delete_path(_rv_srv, "zz9", "x/config-lgsm", selfname="zz9server")
+    _rv_d2 = _sm_files.delete_path(_rv_srv, "zz9", "dot/lgsm", selfname="zz9server")
+    _rv_d3 = _sm_files.delete_path(_rv_srv, "zz9", "x", selfname="zz9server")
+    _rv_d4 = _sm_files.delete_path(_rv_srv, "zz9", "junk", selfname="zz9server")
+finally:
+    _sm_core.shell_as_game_user = _rv_saved_sh
+_rv_lgsm_ok = os.path.isdir(os.path.join(_rv_home, "lgsm", "config-lgsm", "zz9server"))
+check("delete_path: lgsm/ reached through a symlinked directory is refused as protected",
+      _rv_d1[0] is False and _rv_d2[0] is False and "protected" in _rv_d1[1]
+      and "protected" in _rv_d2[1] and _rv_lgsm_ok, repr((_rv_d1, _rv_d2, _rv_lgsm_ok)))
+check("delete_path: deleting the symlink itself removes the link, never the tree it points at",
+      _rv_d3 == (True, "Deleted") and not os.path.lexists(os.path.join(_rv_home, "x"))
+      and _rv_lgsm_ok, repr(_rv_d3))
+check("delete_path: an ordinary directory is still deleted",
+      _rv_d4 == (True, "Deleted") and not os.path.exists(os.path.join(_rv_home, "junk")),
+      repr(_rv_d4))
+_rv_sh.rmtree(_rv_home, ignore_errors=True)

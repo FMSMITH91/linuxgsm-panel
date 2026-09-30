@@ -47,10 +47,20 @@
             Lets you run the panel from Telegram — only messages from the Chat ID above are honoured.
             Send /help in the chat for the list.
           </div>
+          <label class="form-label small mb-1 mt-2" for="notifications-telegram_command_users">Users who may run commands</label>
+          <input id="notifications-telegram_command_users" type="text" name="telegram_command_users" class="form-control form-control-sm" autocomplete="off"
+                 maxlength="1200" value="{{ settings.telegram.command_users }}" placeholder="e.g. 123456789, 987654321">
+          <div class="small text-secondary mt-1">
+            Numeric Telegram user IDs, separated by commas. Only these users can run the commands that
+            change something or reach a server — /start, /stop, /restart, /backup, /update, /console,
+            /say and /players. Anyone in the chat can use /status, /servers, /hosts, /connect and
+            /help. Left empty, nobody can run the others. The bot tells anyone it turns away what
+            their ID is.
+          </div>
           <div class="small text-warning mt-1">
             <i class="bi bi-exclamation-triangle"></i>
-            If that Chat ID is a group, every member of it can run these commands — including /start,
-            /stop and /restart. Use a private chat for server control.
+            Anonymous group admins all share one Telegram ID, so allowing that ID allows every
+            anonymous admin of the group.
           </div>
         </div>
       </div>
@@ -100,11 +110,21 @@
             channel → Copy Channel ID. Type !help in that channel for the command list (Discord
             reserves the slash prefix for its own menu, so the bot uses an exclamation mark).
           </div>
-          <div class="small text-warning mt-1">
-            <i class="bi bi-exclamation-triangle"></i>
-            Everyone who can post in that channel can run these commands — including !start, !stop
-            and !restart. Use a private, admin-only channel for server control.
+          <label class="form-label small mb-1 mt-2" for="notifications-discord_command_users">Users who may run commands</label>
+          <input id="notifications-discord_command_users" type="text" name="discord_command_users" class="form-control form-control-sm" autocomplete="off"
+                 maxlength="1200" value="{{ settings.discord.command_users }}" placeholder="e.g. 112233445566778899">
+          <div class="small text-secondary mt-1">
+            Numeric Discord user IDs, separated by commas (with Developer Mode on, right-click a user
+            → Copy User ID). Only these users can run the commands that change something or reach a
+            server — !start, !stop, !restart, !backup, !update, !console, !say and !players. Anyone
+            who can post in the channel can use !status, !servers, !hosts, !connect and !help. Left
+            empty, nobody can run the others.
           </div>
+          {% if settings.discord.gateway_problem %}
+          <div class="small text-danger mt-1" role="status">
+            <i class="bi bi-x-octagon"></i> {{ settings.discord.gateway_problem }}
+          </div>
+          {% endif %}
           <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["discord_bot", "@self"]'>
             <i class="bi bi-send"></i> Send test (bot)
           </button>

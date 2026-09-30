@@ -3274,6 +3274,15 @@ check("a.rel = 'noopener noreferrer'" in _upd,
 check(_upd.count("else if(d.message)") == 0,
       "js: the update card has no third 'behind but not installable' state",
       "a message-only branch is back")
+# ...EXCEPT the two that do not pass by the next glance, each keyed on its own flag rather than on
+# any message: the newer commit's checks cannot be read at all (unverified_reason — an origin the
+# panel does not recognise, a private repository, GitHub unreachable; it used to be offered as
+# installable), and an update being installed right now (update_running). A pending CI run still
+# lands on the up-to-date line.
+check("else if((d.unverified_reason || d.update_running) && d.message){" in _upd
+      and "createTextNode(' '+d.message)" in _upd,
+      "js: ...except an update that cannot be verified, or one being installed, which says so as text",
+      "renderUpdate has no branch for unverified_reason / update_running")
 check("You\\'re up to date" in _upd and "Update available:" in _upd,
       "js: ...just the two it is asked for")
 
@@ -4385,14 +4394,19 @@ check(_un_fn and "d.warn ? 'warning' : 'success'" in _un_fn,
 
 # SonarCloud javascript:S9383 (PR #369): the post-restart update-log read ended in .then(finish), so
 # a finish that threw was an unhandled rejection and the "Restarting…" line stayed up for good.
+# The post-restart read is now the ONE status read (the watcher polls the log, which already carries
+# boot_id, so the log is not read again): finish is reached through `.then(function(s){ finish(s,
+# l); })`, and the same rule holds for it.
 _ul_src = _js_code_only((ROOT / "static" / "js" / "remote_manage_host.js").read_text(encoding="utf-8"))
-_ul_at = _ul_src.find("fetch(MOUNT+'/api/panel/update-log')")
-_ul_fin = _ul_src.find(".then(finish)", _ul_at) if _ul_at >= 0 else -1
+_ul_at = _ul_src.find("fetch(MOUNT+'/api/panel/update-status')",
+                      _ul_src.find("function watchPanelRestart"))
+_ul_fin = _ul_src.find(".then(function(s){ finish(s, l); })", _ul_at) if _ul_at >= 0 else -1
 # From .then(finish) to the next ';' — the statement's end when nothing handles finish failing.
-_ul_after = _ul_src[_ul_fin:_ul_src.find(";", _ul_fin)] if _ul_fin >= 0 else ""
+_ul_end = _ul_fin + len(".then(function(s){ finish(s, l); })")
+_ul_after = _ul_src[_ul_end:_ul_src.find(";", _ul_end)] if _ul_fin >= 0 else ""
 check(_ul_fin >= 0 and ".catch(" in _ul_after,
-      "panel update: the post-restart log read handles a failure AFTER finish, not only before it",
-      _ul_after[:160] or "(could not find the update-log read)")
+      "panel update: the post-restart status read handles a failure AFTER finish, not only before it",
+      _ul_after[:160] or "(could not find the post-restart status read)")
 
 
 # ── every promise chain statement ends in a rejection handler ─────────────────────────────────
@@ -4569,6 +4583,141 @@ else:
     check(not _pc_bare,
           "static/js: every promise chain statement ends in .catch / .then(ok, err) / void",
           "%d with no rejection handler: %s" % (len(_pc_bare), "; ".join(_pc_bare[:8])))
+
+
+# ── pollers stop when there is nothing left to poll for, and the update watcher polls cheaply ────
+# DRIVEN, in Node with a stub DOM, fetch and timers (the files are loaded whole, as the page does):
+#   * watchInstall / watchBootstrap: when the row or card was gone, the tick returned and left its
+#     interval running — a status request every 2.5s / 3s for the life of the page;
+#   * watchPanelRestart polled /api/panel/update-status every 1.5s for the whole update, and each
+#     one could be a full status check: a `git fetch` of the ref install.sh fetches (a lost race on
+#     its lock aborted the update) plus anonymous GitHub requests (60 an hour, gone in ~90s). It
+#     now polls the update log, which carries boot_id, and reads the status ONCE, after the restart.
+# Without Node the same properties are checked on the source (never skipped: a skip fails CI).
+_NODE_HARNESS = r"""
+const vm = require('vm'), fs = require('fs');
+function mkEl(){ return {style:{}, className:'', innerHTML:'', textContent:'', disabled:false, dataset:{},
+  children:[], appendChild(c){ this.children.push(c); return c; }, setAttribute(){}, getAttribute(){ return null; },
+  classList:{add(){}, remove(){}, toggle(){}}, querySelector(){ return null; }, querySelectorAll(){ return []; },
+  addEventListener(){}}; }
+function load(file){
+  const t = {next:1, live:{}, cleared:[]}, fetched = [], els = {};
+  const ctx = {console, Promise, JSON, Date, Math, String, Number, Array, Object, RegExp, Error,
+    encodeURIComponent, parseInt, isNaN, MOUNT:'', REMOTE_ID:1, fetched, els, t,
+    setInterval(fn){ const id = t.next++; t.live[id] = fn; return id; },
+    clearInterval(id){ t.cleared.push(id); delete t.live[id]; },
+    setTimeout(){ return 0; }, clearTimeout(){}, pollWhenVisible(){ return 0; },
+    escapeHtml: s => String(s), toast(){}, confirmDialog(){},
+    location:{reload(){ ctx.reloaded = true; }},
+    respond: () => ({ok:true, json:() => ({})}),
+    fetch(url){ fetched.push(String(url)); try { return Promise.resolve(ctx.respond(String(url))); }
+                catch(e){ return Promise.reject(e); } },
+    document:{getElementById: id => els[id] || null, querySelector: () => null,
+      querySelectorAll: () => [], addEventListener(){}, createElement: () => mkEl(),
+      createTextNode: s => ({textContent:s}), hidden:false, body: mkEl()}};
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync(file, 'utf8'), ctx, {filename: file});
+  return ctx;
+}
+const flush = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r)); };
+(async () => {
+  const root = process.argv[2], out = {};
+  // watchInstall: the row is gone.
+  let c = load(root + '/static/js/manage_servers.js');
+  c.respond = () => ({ok:true, json:() => ({status:'running', percent:10, elapsed:1})});
+  c.watchInstall('7'); await flush();
+  out.install_gone = {timers: Object.keys(c._instTimers).length, live: Object.keys(c.t.live).length};
+  c = load(root + '/static/js/manage_servers.js');
+  c.respond = () => ({ok:true, json:() => ({status:'running', percent:10, elapsed:1})});
+  c.els['install-row-8'] = mkEl();
+  c.watchInstall('8'); await flush();
+  out.install_there = {timers: Object.keys(c._instTimers).length, live: Object.keys(c.t.live).length};
+  // watchBootstrap: the card is gone.
+  c = load(root + '/static/js/manage_remotes.js');
+  c.respond = () => ({ok:true, json:() => ({status:'running', step_name:'x', percent:5, elapsed:1})});
+  c.watchBootstrap('3'); await flush();
+  out.boot_gone = {timers: Object.keys(c._bsTimers).length, live: Object.keys(c.t.live).length};
+  c = load(root + '/static/js/manage_remotes.js');
+  c.respond = () => ({ok:true, json:() => ({status:'running', step_name:'x', percent:5, elapsed:1})});
+  c.els['bootstrap-card-4'] = mkEl();
+  c.watchBootstrap('4'); await flush();
+  out.boot_there = {timers: Object.keys(c._bsTimers).length, live: Object.keys(c.t.live).length};
+  // watchPanelRestart: same process for 5 ticks, then down for one, then a new one.
+  c = load(root + '/static/js/remote_manage_host.js');
+  let boot = 'B1', down = false;
+  c.respond = url => {
+    if (url.indexOf('/api/panel/update-log') >= 0) {
+      if (down) throw new Error('connection refused');
+      return {ok:true, json:() => ({lines:['[2/6] x'], finished:false, outcome:'running', boot_id: boot})};
+    }
+    if (url.indexOf('/api/panel/update-status') >= 0)
+      return {ok:true, json:() => ({current_sha:'bbbbbbb', branch:'main', boot_id: boot})};
+    return {ok:true, json:() => ({})};
+  };
+  c.fetched.length = 0;
+  const msg = mkEl();
+  c.watchPanelRestart('B1', msg, 'Update complete', {current_sha:'aaaaaaa', branch:'main'}, '');
+  const tick = async () => { for (const fn of Object.values(c.t.live)) fn(); await flush(); };
+  for (let i = 0; i < 5; i++) await tick();
+  const st = () => c.fetched.filter(u => u.indexOf('/api/panel/update-status') >= 0).length;
+  out.restart = {status_while_running: st(), log_polls: c.fetched.length};
+  down = true; await tick();
+  out.restart.restarting_shown = /Restarting the panel/.test(msg.innerHTML);
+  out.restart.status_while_down = st();
+  down = false; boot = 'B2'; await tick();
+  out.restart.status_after_flip = st();
+  out.restart.done = /Update complete/.test(msg.innerHTML) && Object.keys(c.t.live).length === 0;
+  console.log(JSON.stringify(out));
+})().catch(e => { console.log(JSON.stringify({error: String(e && e.stack || e)})); });
+"""
+import os as _os_ta  # noqa: E402
+import shutil as _sh_ta  # noqa: E402
+import subprocess as _sp_ta  # nosec B404 - runs node on the suite's own harness  # noqa: E402
+import tempfile as _tf_ta  # noqa: E402
+_node = _sh_ta.which("node")
+if _node:
+    with _tf_ta.NamedTemporaryFile("w", suffix=".js", delete=False) as _nh:
+        _nh.write(_NODE_HARNESS)
+    try:
+        _nr = _sp_ta.run([_node, _nh.name, str(ROOT)], capture_output=True, text=True, timeout=60)
+    finally:
+        _os_ta.unlink(_nh.name)
+    try:
+        _nres = json.loads((_nr.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _nres = {"error": (_nr.stdout + _nr.stderr)[-600:]}
+    check("error" not in _nres, "js (node): the poller harness ran", repr(_nres)[:600])
+    check(_nres.get("install_gone") == {"timers": 0, "live": 0}
+          and _nres.get("install_there") == {"timers": 1, "live": 1},
+          "js (node): watchInstall stops its interval when the install row is gone (and keeps it "
+          "while the row is there)", repr((_nres.get("install_gone"), _nres.get("install_there"))))
+    check(_nres.get("boot_gone") == {"timers": 0, "live": 0}
+          and _nres.get("boot_there") == {"timers": 1, "live": 1},
+          "js (node): watchBootstrap stops its interval when the bootstrap card is gone (and keeps it "
+          "while the card is there)", repr((_nres.get("boot_gone"), _nres.get("boot_there"))))
+    _nrs = _nres.get("restart") or {}
+    check(_nrs.get("status_while_running") == 0 and _nrs.get("log_polls", 0) >= 5
+          and _nrs.get("status_while_down") == 0 and _nrs.get("restarting_shown") is True,
+          "js (node): the update watcher polls only the update log while the update runs — never the "
+          "status check that fetches from git and GitHub — and says 'Restarting' while it is down",
+          repr(_nrs))
+    check(_nrs.get("status_after_flip") == 1 and _nrs.get("done") is True,
+          "js (node): ...and reads the status exactly once, after boot_id flips, to judge the outcome",
+          repr(_nrs))
+else:
+    _ms_src = (ROOT / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8")
+    _mr_src = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
+    check("if (!row) { stopInstall(id); return; }" in _ms_src,
+          "js (no node): watchInstall stops its interval when the install row is gone", "")
+    check("if (!card) { stopWatch(remoteId); return; }" in _mr_src,
+          "js (no node): watchBootstrap stops its interval when the bootstrap card is gone", "")
+    _wpr2 = _js_code_only(_js_function_body(_rh, "watchPanelRestart"))
+    _wpr2_iv = _wpr2[_wpr2.index("setInterval("):]
+    _wpr2_flip = _wpr2_iv[_wpr2_iv.index("l.boot_id!==beforeBoot"):]
+    check(_wpr2_iv.count("/api/panel/update-status") == 1
+          and "/api/panel/update-status" in _wpr2_flip,
+          "js (no node): the update watcher reads the status only after boot_id flips", _wpr2_iv[:300])
 
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)

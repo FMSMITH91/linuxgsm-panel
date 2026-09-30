@@ -58,6 +58,12 @@ app = create_app()
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
 app.config["SESSION_PROTECTION"] = None  # tests inject the session directly (no IP/UA fingerprint)
 app.config["SESSION_COOKIE_SECURE"] = False  # test client talks http://; Secure cookies wouldn't round-trip
+# File-manager and cron writes first ask the host whether the game account can become root there
+# (_shared.game_account_write_refusal -> privileged_accounts), and refuse when it cannot answer.
+# This suite's hosts are not real, so every account is answered "a plain game account", as
+# smoke_test does; the gate itself is driven in unit part18 with the host's reply scripted.
+import panel.routes._shared as _rbac_shared  # noqa: E402
+_rbac_shared.privileged_accounts = lambda _remote, _users: {}
 results = []
 
 
@@ -208,10 +214,21 @@ def _run_fixture_rows():
 
 
 def client_as(user_id=None):
+    # "<id>:<current auth_epoch>", read at the moment the client is made. It was a bare "<id>" —
+    # the pre-epoch legacy cookie — which auth._load_legacy_user used to accept whatever the
+    # account's epoch; it now accepts one only while the epoch is still 0 (a bare id predates
+    # epochs, so any bump revoked it). This suite bumps epochs along the way (sign out everywhere,
+    # logout's fallback), and a bare id would then stop working for every later client_as. The
+    # epoch form keeps this helper meaning what it always meant: a client signed in NOW, with no
+    # per-device row. Checks that need the legacy form build it themselves.
     c = app.test_client()
     if user_id is not None:
+        with app.app_context():
+            _u = db.session.get(User, user_id)
+            _login_id = ("%d:%d" % (user_id, _u.auth_epoch or 0) if _u is not None
+                         else str(user_id))
         with c.session_transaction() as s:
-            s["_user_id"] = str(user_id)
+            s["_user_id"] = _login_id
             s["_fresh"] = True
     return c
 
@@ -344,8 +361,9 @@ def _tag_list_as_caller_and_superadmin():
 
 def _tag_list_counts_for_a_scoped_admin():
     """The tag list's server counts, for a scoped admin who may delete it and one who may not."""
-    # A MANAGE_SERVERS holder scoped to one host can DELETE the tag, which strips it from
-    # every server panel-wide — so the count they are shown is every server's. The Tags
+    # A MANAGE_SERVERS holder scoped to one host could DELETE the tag, which strips it from
+    # every server panel-wide — so the count they are shown is every server's (a delete is now
+    # refused while servers they can't access carry it; the count is how they see why). The Tags
     # card printed the length of the filtered ids: "0 server(s)" on a tag other hosts'
     # servers carry, one click from removing it (and its alert muting) from all of them.
     _tr_ci = next((t for t in (_ci.get("/api/tags").get_json() or {})["tags"]
@@ -373,10 +391,40 @@ def _check_tag_list_names_only_reachable():
     try:
         _tag_list_as_caller_and_superadmin()
         _tag_list_counts_for_a_scoped_admin()
+        _tag_delete_by_a_scoped_admin()
     finally:
         with app.app_context():
-            db.session.delete(db.session.get(_TagR, _tr_id))
+            _left = db.session.get(_TagR, _tr_id)
+            if _left is not None:
+                db.session.delete(_left)
+                db.session.commit()
+
+
+def _tag_delete_by_a_scoped_admin():
+    """A scoped MANAGE_SERVERS admin may delete a tag only when every server carrying it is theirs."""
+    # Tags are install-wide, and a delete strips one from every server — with its alert routing.
+    # MANAGE_SERVERS was the whole gate, so an admin scoped to one host deleted a tag servers on
+    # hosts they cannot see carried (and un-muted their alerts).
+    from panel.db.models import ServerTag as _TagD
+    _td = _ci.post("/api/tags/%d/delete" % _tr_id)
+    with app.app_context():
+        _still = db.session.get(_TagD, _tr_id) is not None
+    check("tag delete: a scoped admin cannot delete a tag a server they can't access carries",
+          _td.status_code == 403 and _still, "got %d, still there=%s" % (_td.status_code, _still))
+    with app.app_context():
+        _own = _TagD(name=tag + "tagown")
+        _own.servers.append(db.session.get(GameServer, accessible_id))
+        db.session.add(_own)
+        db.session.commit()
+        _own_id = _own.id
+    _td2 = _ci.post("/api/tags/%d/delete" % _own_id)
+    with app.app_context():
+        _gone = db.session.get(_TagD, _own_id) is None
+        if not _gone:
+            db.session.delete(db.session.get(_TagD, _own_id))
             db.session.commit()
+    check("tag delete: ...while one only on their own servers still deletes (positive control)",
+          _td2.status_code == 200 and _gone, "got %d, gone=%s" % (_td2.status_code, _gone))
 
 
 def _tailscale_page_as_scoped_admin():
@@ -393,6 +441,21 @@ def _tailscale_page_as_scoped_admin():
     _rts_api = _rts_json.dumps(cmr.get("/api/tailscale").get_json() or {})
     check("/api/tailscale: ...nor does its JSON carry it",
           not [x for x in _rts_leaks if x in _rts_api], repr([x for x in _rts_leaks if x in _rts_api]))
+    # ...nor may they probe the tailnet (or the LAN behind it) FROM the panel host, one address at
+    # a time, through the reachability check the page hides from them now. Trapped: nothing pings.
+    _cp_pinged = []
+    _cp_saved = _rts.check_peer_reachability
+    _rts.check_peer_reachability = lambda h: (_cp_pinged.append(h),
+                                                 {"reachable": True, "latency_ms": 1})[1]
+    try:
+        _cp = cmr.post("/api/tailscale/check-peer", json={"host": "100.64.0.9"})
+    finally:
+        _rts.check_peer_reachability = _cp_saved
+    check("check-peer: a scoped MANAGE_REMOTES admin cannot ping from the panel host (403)",
+          _cp.status_code == 403 and _cp_pinged == [],
+          "got %d, pinged=%r" % (_cp.status_code, _cp_pinged))
+    check("check-peer: ...and the page no longer offers them the box",
+          'id="peer-host"' not in _rts_html)
     _rts_admin = client_as(admin_id).get("/tailscale").get_data(as_text=True)
 
 
@@ -3539,7 +3602,7 @@ def _hb_current_login_refusals(hb_uid, sid):
 
 def _check_held_body_current_login_cookie(hb_uid):
     """A login's "<uid>:<epoch>:<sid>" cookie: its device revoked, or signed out everywhere."""
-    # client_as() writes the legacy "<uid>" id, which only _load_legacy_user reads. Every login
+    # client_as() writes "<uid>:<epoch>" with no session sid, so no UserSession row is asked. Every login
     # today carries "<uid>:<epoch>:<sid>" (User.get_id): a UserSession lookup and an auth_epoch
     # compare, and nothing above drives those with a body held back.
     _sid = tag + "_hbsid_"
@@ -4166,6 +4229,10 @@ def _ax_names(expr, var):
 # Calls whose action is a parameter, with where the real names come from.
 _AX_ACTION_FROM_CALLER = {
     "_record_backup_outcome",   # its callers pass "scheduled_backup" / "queued_backup"
+    "audit_bot_action",         # the chat bots pass "moderate_say" (server=) / "panel_self_update"
+    "_write_refused",           # server_files' write routes pass edit_config / edit_file /
+                                # delete_file / upload_file / cron_add / cron_update / cron_delete /
+                                # cron_run_now — each the action that route audits on success
 }
 _ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
 _ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)

@@ -48,7 +48,13 @@ def _parse_cfg(text):
         if m:
             key, val = m.group(1), m.group(2).strip()
             if len(val) >= 2 and val[0] in "\"'" and val[-1] == val[0]:
-                val = val[1:-1]
+                dq, val = val[0] == '"', val[1:-1]
+                if dq:
+                    # What bash makes of a double-quoted value: `\` before one of \ " ` $ is
+                    # removed, before anything else it stays. The inverse of _cfg_dq_escape, so a
+                    # value the form saved reads back as typed (it used to come back with its
+                    # escaping, and saving it again escaped the escapes).
+                    val = re.sub(r'\\([\\"`$])', r"\1", val)
             out[key] = val
     return out
 
@@ -497,13 +503,41 @@ def _read_instance_cfg_lines(server, user, selfname, inst):
     return _cur.splitlines()
 
 
+# A parameter reference LinuxGSM's own configs write inside a value — `${port}`, `$ip` in
+# startparameters — which a value saved from the settings form must keep live. Nothing else that
+# starts with `$` is: `$(…)` and `$((…))` run, and `${x@P}` / `${x:-$(…)}` run too, so only the
+# plain braced or bare NAME form is let through.
+_CFG_PARAM_REF_RE = re.compile(r"\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _cfg_dq_escape(val):
+    r"""`val` escaped for the inside of a bash double-quoted string, `${name}` / `$name` kept live.
+
+    LinuxGSM SOURCES its cfg files as bash, as the game account, on every start, update and
+    monitor run. The writer escaped `"` and nothing else, so a value was live shell: a password
+    with a backslash at the end escaped the closing quote and broke the whole file (LinuxGSM then
+    failed to start the server with a syntax error nothing on the page explained), `$1x` and
+    `a$b` lost the part after the `$`, and `$(…)` or a backtick ran a command from the cron
+    monitor every five minutes. `\`, `"`, backtick and every `$` that does not begin a plain
+    parameter reference are escaped now; _parse_cfg undoes exactly this, so the settings form
+    reads back what it saved.
+    """
+    out, i = [], 0
+    for m in _CFG_PARAM_REF_RE.finditer(val):
+        out.append(re.sub(r'([\\"`$])', r"\\\1", val[i:m.start()]))
+        out.append(m.group(0))
+        i = m.end()
+    out.append(re.sub(r'([\\"`$])', r"\\\1", val[i:]))
+    return "".join(out)
+
+
 def _apply_cfg_updates(lines, updates):
     """Set each valid key in `lines` IN PLACE: replace its uncommented line, else append one."""
     for key, val in (updates or {}).items():
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\Z", key or ""):
             continue
-        val = str(val).replace('"', '\\"').replace("\n", " ")
-        newline = f'{key}="{val}"'
+        val = str(val).replace("\r", " ").replace("\n", " ")
+        newline = f'{key}="{_cfg_dq_escape(val)}"'
         pat = re.compile(r"^\s*" + re.escape(key) + r"\s*=")
         replaced = False
         for i, ln in enumerate(lines):
@@ -704,12 +738,49 @@ def _is_protected_path(relpath, selfname):
     if top == "lgsm":
         return True
     # Critical top-level entries (deleting these bricks the server or your login).
-    if len(parts) == 1 and r in {
-        "serverfiles", "linuxgsm.sh", selfname or "",
-        ".ssh", ".bashrc", ".profile", ".bash_logout", ".bash_history", ".wget-hsts",
-    }:
+    if len(parts) == 1 and r in _protected_top_names(selfname):
         return True
     return False
+
+
+def _protected_top_names(selfname):
+    """The top-level entries of a game home that _is_protected_path protects by name.
+
+    Plus `lgsm`, which it protects with everything under it. One list, for it and for
+    delete_path's host-side check, so the two cannot disagree.
+    """
+    return {"serverfiles", "linuxgsm.sh", selfname or "",
+            ".ssh", ".bashrc", ".profile", ".bash_logout", ".bash_history", ".wget-hsts"} - {""}
+
+
+_PROTECTED_MARK = "__PROTECTED__"
+
+
+def _protected_resolved(user, ap, selfname, inner):
+    """Prefix `inner` with delete_path's protected-path check, made ON THE HOST.
+
+    The check is made against the path `rm` will actually remove.
+
+    _is_protected_path reads the TEXT of the path, and _guarded only asks whether the resolved
+    path stays inside the home. Neither sees a symlinked DIRECTORY on the way: with `x -> lgsm`
+    (or `x -> .`) planted in the home by the game account, a mod, or anything else running as it,
+    "x/config-lgsm" is not protected by name, resolves inside the home, and `rm -rf` walked the
+    link and removed the LinuxGSM config tree — or "x/lgsm", the whole control tree.
+
+    The parent is resolved with `cd -P`/`pwd -P` and the last component is NOT: `rm` removes a
+    symlink itself rather than what it points at, so the path that matters is "real parent + the
+    name as given". The same check as _is_protected_path runs on that, in the same command as the
+    delete, so nothing can be re-pointed between them.
+    """
+    home = f"/home/{user}"
+    hq = _core._quote(home)
+    names = "|".join(_core._quote(n) for n in sorted(_protected_top_names(selfname)))
+    return (f"d=$(cd -P -- {_core._quote(_pp.dirname(ap))} 2>/dev/null && pwd -P) "
+            "|| { echo 'No such directory' >&2; exit 1; }; "
+            f't="$d"/{_core._quote(_pp.basename(ap))}; '
+            f'case "$t" in {hq}/*) r=${{t#{hq}/}} ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; '
+            f'case "$r" in lgsm|lgsm/*|{names}) echo {_PROTECTED_MARK}; exit 8 ;; esac; '
+            + inner)
 
 
 def browse_dir(server, user, relpath="", selfname=None):
@@ -990,12 +1061,19 @@ def delete_path(server, user, relpath, selfname=None):
     refusal = _delete_refusal(user, relpath, selfname, ap)
     if refusal:
         return False, refusal
-    inner = f"rm -rf -- {_core._quote(ap)} && echo __OK__"
+    # `"$t"`: the path _protected_resolved checked — the real parent plus this name — so what is
+    # removed is exactly what was judged.
+    inner = 'rm -rf -- "$t" && echo __OK__'
     # The most destructive of the six, so it gets the same host-side resolution check: a symlink
-    # under the home dir must not turn `rm -rf` loose on whatever it points at.
-    out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=30)
+    # under the home dir must not turn `rm -rf` loose on whatever it points at — nor on a
+    # protected tree reached through a symlinked directory (_protected_resolved).
+    out, e, rc = _core.shell_as_game_user(
+        server, user, _guarded(user, ap, _protected_resolved(user, ap, selfname, inner)),
+        timeout=30)
     if _OUTSIDE_HOME in (out or ""):
         return False, "Refusing to delete this path"
+    if _PROTECTED_MARK in (out or ""):
+        return False, "This file/folder is protected — deleting it would break the server."
     if rc == 0 and "__OK__" in (out or ""):
         return True, "Deleted"
     return False, e or out or "Delete failed"
@@ -1098,8 +1176,12 @@ def _ssh_download_argv(server, shell):
     The login and host are stored data handed to ssh as an argument — see
     _core.ssh_destination. A refusal ends the download empty, as a refused path does.
     """
+    # ConnectTimeout: without it a host that stops answering mid-dial held the download, and its
+    # green thread, for the kernel's TCP connect timeout. (No -n: this ssh carries the path on
+    # stdin — see _remote_read_command.)
     try:
         return ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=%d" % _core._ssh_connect_timeout(),
                 "-p", _core._ssh_port_arg(server), _core.SSH_DEST_SEP,
                 _core.ssh_destination(server.username, _core._resolve_ts_host(server)),
                 shell]
@@ -1108,7 +1190,28 @@ def _ssh_download_argv(server, shell):
         return None
 
 
-def _stream_argv(argv, rel, chunk):
+def _hand_path_to_ssh(p, feed):
+    """Write the path to the ssh reader's stdin and close it, so the remote `cat` sees EOF."""
+    try:
+        p.stdin.write(feed)
+        p.stdin.close()
+    except OSError:
+        # ssh died before it could take the path — a dead host, a refused key. The read in
+        # _stream_argv then sees EOF and the download ends empty, which is what every other
+        # unreachable-host path in this module does.
+        _core._log.debug("download: could not hand the path to ssh", exc_info=True)
+
+
+def _close_and_wait(p):
+    """Close the reader's stdout and reap it. -> its exit status."""
+    try:
+        p.stdout.close()
+    except Exception:  # nosec B110
+        pass
+    return p.wait()
+
+
+def _stream_argv(argv, rel, chunk, ok=(0,)):
     """Yield the stdout of `argv` in `chunk`-sized blocks, handing the SSH form the path on stdin."""
     # stdin is a pipe only for the SSH form, which expects the path there. The local forms
     # take it in argv (helper) or already resolved (the pre-helper fallback), and get
@@ -1117,58 +1220,56 @@ def _stream_argv(argv, rel, chunk):
     p = subprocess.Popen(argv, stdout=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; argv[0] is a literal
                          stdin=subprocess.PIPE if feed is not None else subprocess.DEVNULL)
     if feed is not None:
-        try:
-            p.stdin.write(feed)
-            p.stdin.close()
-        except OSError:
-            # ssh died before it could take the path — a dead host, a refused key. The
-            # read below then sees EOF and the download ends empty, which is what every
-            # other unreachable-host path in this module does.
-            _core._log.debug("download: could not hand the path to ssh", exc_info=True)
+        _hand_path_to_ssh(p, feed)
+    at_eof, rc = False, None
     try:
         while True:
             b = p.stdout.read(chunk)
             if not b:
+                at_eof = True
                 break
             yield b
     finally:
-        try:
-            p.stdout.close()
-        except Exception:  # nosec B110
-            pass
-        p.wait()
+        rc = _close_and_wait(p)
+    # A reader that failed partway (the host dropped, the helper refused) used to end the stream
+    # quietly, and the browser saved the truncated file under a 200. See _core.StreamFailed.
+    if at_eof and rc not in ok:
+        _core._log.warning("download: the reader exited %s — aborting the download", rc)
+        raise _core.StreamFailed("download failed (exit %s)" % rc)
 
 
-def _stream_paramiko(server, shell, rel, chunk):
+def _stream_paramiko(server, shell, rel, chunk, ok=(0,)):
     """Yield a paramiko remote's download — same fixed command, same path-on-stdin."""
     client = _core.get_connection(server)
-    _in, out, _err = client.exec_command(shell)
+    # An idle timeout, the channel closed however the stream ends, and the exit status checked at
+    # EOF — see _core.stream_channel for what each of those cost when missing.
+    _in, out, _err = client.exec_command(shell, timeout=_core.STREAM_IDLE_TIMEOUT)
     try:
         _in.write(rel)
         _in.flush()
         _in.channel.shutdown_write()   # the remote `cat` needs EOF before it will return
     except Exception:
         _core._log.debug("download: could not hand the path to the remote shell", exc_info=True)
-    while True:
-        b = out.read(chunk)
-        if not b:
-            break
-        yield b
+    yield from _core.stream_channel(out, chunk, "download", ok=ok)
 
 
 def _download_blocks(server, user, rel, ap, as_tar, chunk):
     """Yield the raw download bytes over whichever transport this host uses."""
     shell = _remote_read_command(user, as_tar)
+    # The reader exit statuses that mean the download is whole: 0, and for an archive also 1 —
+    # GNU tar exits 1 when a file changed while it was being read (a running server's live logs,
+    # every time), and that archive is complete and valid.
+    ok = (0, 1) if as_tar else (0,)
     if _core.is_local_server(server):
         argv = _local_download_argv(user, rel, ap, as_tar)
     elif getattr(server, "auth_method", "") == "tailscale":
         argv = _ssh_download_argv(server, shell)
     else:
-        yield from _stream_paramiko(server, shell, rel, chunk)
+        yield from _stream_paramiko(server, shell, rel, chunk, ok=ok)
         return
     if argv is None:
         return
-    yield from _stream_argv(argv, rel, chunk)
+    yield from _stream_argv(argv, rel, chunk, ok=ok)
 
 
 def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):

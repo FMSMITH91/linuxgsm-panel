@@ -39,7 +39,14 @@ with warnings.catch_warnings():
     from panel.core.validation import password_problem   # noqa: E402
     from panel.db.models import db, User                     # noqa: E402
     from panel.security import auth                                      # noqa: E402
+    from panel.db.models import NO_SELF_HEAL_ENV                         # noqa: E402
 
+# No database self-heal from here. create_app() runs it, and this CLI is run beside the LIVE
+# service — which holds panel.db open. A check that could not get the file (locked mid-write) was
+# read as corruption, and the "remedy" renamed panel.db out from under the running panel and put
+# the rolling backup in its place. Healing belongs to the service's own startup, when nothing else
+# has the file; a corrupt database here just makes this command fail, with SQLite's error.
+os.environ[NO_SELF_HEAL_ENV] = "1"
 app = create_app()
 
 

@@ -96,7 +96,9 @@ jobs:
       # the intentional best-effort try/except pattern. B105 (hardcoded secrets), eval,
       # unsafe deserialization, weak crypto, etc. stay ON — so real signal surfaces.
       # tests/ is excluded (its fixture passwords are not secrets; Gitleaks scans the
-      # whole repo for real ones). Non-blocking: findings are tracked as alerts, not gates.
+      # whole repo for real ones). This step does not fail on findings (`|| true`: Bandit exits 1
+      # on any): they become code-scanning alerts, and an open alert fails "Open code-scanning
+      # alerts" (codeql-alerts.yml, which waits for this workflow) — that is where Bandit gates.
       - name: Bandit (SARIF)
         # `-r .` walks *.py ONLY, so tools/panel-helper — Python with a shebang and no extension —
         # was invisible to it. That file is the ROOT-OWNED end of the sudo boundary: the one place
@@ -132,10 +134,14 @@ jobs:
     name: Deep SAST (Semgrep)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write   # upload SARIF to the Security tab (code scanning), as Bandit does
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # Semgrep scans the working tree; no step here needs the job token.
+          # Semgrep scans the working tree. The job token can write code-scanning alert state;
+          # only upload-sarif needs it, and it is handed that directly (see the Bandit job).
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -146,9 +152,16 @@ jobs:
       # Registry rulesets, fetched anonymously (no Semgrep account/token needed):
       # general security-audit + Python + Flask + command-injection + secrets. This
       # catches real code vulns (injection, SSRF, path traversal, unsafe redirects,
-      # weak crypto, template XSS, etc.). Informational — the findings go to the job
-      # summary so a false positive never blocks an alpha build, but they're surfaced
-      # on every push/PR and weekly.
+      # weak crypto, template XSS, etc.).
+      #
+      # GATING, through code scanning. This used to be informational: `|| true` and the findings
+      # printed to the job summary only, which nothing reads — while the panel's update gate
+      # (system_ops._remote_ci_state) said in its docstring that Semgrep gated. It did not. The
+      # findings now go to code scanning as SARIF (category semgrep), like Bandit's, so an open
+      # one fails "Open code-scanning alerts" on main (codeql-alerts.yml, which waits for this
+      # workflow too) and on a PR (codeql.yml's pr-alerts), and the panel does not offer the
+      # commit. A false positive is dismissed in the Security tab, or marked `nosemgrep` in the
+      # code as before; it never needs the gate turned off. The summary is kept for reading.
       #
       # Every finding has been triaged: the real ones were fixed, and each false positive
       # carries a `nosemgrep: <rule> -- <reason>` comment above it, so what this prints is
@@ -162,7 +175,8 @@ jobs:
             --config p/command-injection --config p/secrets \
             --exclude-rule generic.html-templates.security.var-in-script-tag.var-in-script-tag \
             --exclude venv --exclude .github --exclude data --exclude tests \
-            --metrics=off > semgrep.txt 2>&1 || true
+            --sarif-output=semgrep.sarif \
+            --metrics=off > semgrep.txt 2>&1 || rc=$?
           {
             echo '### 🛡️ Semgrep SAST';
             echo '';
@@ -170,3 +184,23 @@ jobs:
             tail -c 12000 semgrep.txt 2>/dev/null || echo '(semgrep produced no output — it did not run)';
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
+          # Findings do not fail THIS step (Semgrep exits 0 on them without --error); they gate
+          # through code scanning. A scan that did not complete does fail it: a missing SARIF
+          # would otherwise upload nothing, and nothing reads as clean.
+          if [ ! -s semgrep.sarif ]; then
+            echo "::error::Semgrep wrote no SARIF (exit ${rc:-0}) — the code was not scanned; see the summary."
+            exit 1
+          fi
+          # Semgrep writes the findings a `nosemgrep` comment suppresses into the SARIF too, marked
+          # `"suppressions": [{"kind": "inSource"}]`, and code scanning opened an alert for every one
+          # of them anyway: 26 triaged false positives became open alerts on the first upload, and
+          # each would have failed the alerts gate. Only unsuppressed results are uploaded; a
+          # suppression is still visible in the code, next to the reason written for it.
+          jq '.runs |= map(.results |= map(select((.suppressions // []) | length == 0)))' \
+            semgrep.sarif > semgrep.open.sarif
+          mv semgrep.open.sarif semgrep.sarif
+      - name: Upload Semgrep results to code scanning
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep

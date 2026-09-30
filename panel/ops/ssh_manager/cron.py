@@ -552,18 +552,25 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
     except ValueError:
         _core._log.warning("cron upgrade: refusing a port that is not a number for %s", user)
         return False
-    out, _, rc = _core.run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
-    # Only a crontab that was READ is rewritten. The rewrite below replaces the whole crontab with
-    # what _upgrade_cron_lines kept, so a listing cut short by a dropped connection — whatever
-    # lines arrived before it failed — would be installed as the account's entire crontab.
-    if rc != 0:
-        return False
-    upgrade = _cron_upgrade_pass(server, user, selfname, game_type, port)
-    new_lines, changed = _upgrade_cron_lines(out, upgrade)
-    if not changed:
-        return False
-    # Replace the whole crontab: drop everything (grep -vE '^' matches every line), re-add ours.
-    ok, _ = _core._rewrite_crontab(server, user, "-vE '^'", new_lines)
+    # The read and the rewrite are ONE step under the account's crontab lock. The rewrite installs
+    # new_lines as the WHOLE crontab — lines computed from the listing read here — and this runs on
+    # every Scheduled Tasks page load. An add, edit or delete landing between the two was
+    # overwritten by this pass's older view: an added job vanished and a deleted one came back,
+    # each reported as success by the request that made it.
+    with _core.crontab_lock(server, user):
+        out, _, rc = _core.run_privileged(server, "crontab-list", [user], timeout=10,
+                                          merge_stderr=False)
+        # Only a crontab that was READ is rewritten. The rewrite below replaces the whole crontab
+        # with what _upgrade_cron_lines kept, so a listing cut short by a dropped connection —
+        # whatever lines arrived before it failed — would be installed as the entire crontab.
+        if rc != 0:
+            return False
+        upgrade = _cron_upgrade_pass(server, user, selfname, game_type, port)
+        new_lines, changed = _upgrade_cron_lines(out, upgrade)
+        if not changed:
+            return False
+        # Replace the whole crontab: drop everything (grep -vE '^' matches every line), re-add ours.
+        ok, _ = _core._rewrite_crontab(server, user, "-vE '^'", new_lines)
     return ok
 
 
@@ -1024,12 +1031,9 @@ def stream_game_backup(server, user, name, chunk=262144):
 
     # paramiko remote
     client = _core.get_connection(server)
-    _in, out, _err = client.exec_command(_core.game_user_exec_cmd(user, ["cat", path]))
-    while True:
-        b = out.read(chunk)
-        if not b:
-            break
-        yield b
+    _in, out, _err = client.exec_command(_core.game_user_exec_cmd(user, ["cat", path]),
+                                         timeout=_core.STREAM_IDLE_TIMEOUT)
+    yield from _core.stream_channel(out, chunk, "backup download")
 
 
 def _backup_read_argv(server, user, name, path):
@@ -1043,8 +1047,12 @@ def _backup_read_argv(server, user, name, path):
                 if _core.helper_present() else _as_user_argv(user, "cat", path))
     # The login and host are stored data handed to ssh as an argument — see
     # _core.ssh_destination. A refusal ends the download empty, like every other here.
+    # -n: this ssh reads nothing, and without it ssh forwards whatever its stdin is — which was the
+    # panel's own (see _stream_backup_argv). ConnectTimeout: a host that stops answering mid-dial
+    # held the download request, and its green thread, for the kernel's TCP timeout.
     try:
-        return ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+        return ["ssh", "-T", "-n", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=%d" % _core._ssh_connect_timeout(),
                 "-p", _core._ssh_port_arg(server), _core.SSH_DEST_SEP,
                 _core.ssh_destination(server.username, _core._resolve_ts_host(server)),
                 _core.game_user_exec_cmd(user, ["cat", path])]
@@ -1054,8 +1062,17 @@ def _backup_read_argv(server, user, name, path):
 
 
 def _stream_backup_argv(argv, chunk):
-    """Yield the stdout of `argv` in `chunk`-sized blocks, then reap the child."""
-    p = subprocess.Popen(argv, stdout=subprocess.PIPE)  # nosec B603  # nosemgrep - argv list, no shell; the remote path is _quote()d above
+    """Yield the stdout of `argv` in `chunk`-sized blocks, then reap the child.
+
+    stdin is DEVNULL: it was inherited, so the helper verb or ssh got the panel's own stdin (a
+    helper verb reads its stdin to EOF — _stream_argv in files.py says the same). And the child's
+    exit status is READ: it was not, so a read that failed partway (the host dropped, the helper
+    refused, the file vanished) ended the stream early and the browser saved a truncated archive
+    under a 200. A non-zero exit at EOF now raises, which aborts the response mid-body — the
+    download shows as failed instead of as a corrupt file.
+    """
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; the remote path is _quote()d above
+                         stdin=subprocess.DEVNULL)
     try:
         while True:
             b = p.stdout.read(chunk)
@@ -1067,7 +1084,13 @@ def _stream_backup_argv(argv, chunk):
             p.stdout.close()
         except Exception:  # nosec B110 - the pipe is already closed when the child exited
             pass           # first; closing it twice is the normal path, not a failure.
-        p.wait()
+        rc = p.wait()
+    # Reached only after the read loop hit EOF: a client abort (GeneratorExit at the yield) or a
+    # failed read leaves through the finally above with its own exception, and is not judged here.
+    if rc != 0:
+        _core._log.warning("backup download: the reader exited %s — aborting the download",
+                           rc)
+        raise _core.StreamFailed("backup download failed (exit %s)" % rc)
 
 
 def _ensure_backup_headroom(server, user, keep):

@@ -264,6 +264,88 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Checking a lost install asks the host once, not once per poll.** When the panel restarted
+  mid-install, the Game Servers page asked the host whether the install had finished every 2.5
+  seconds, each time with a full `du` of the game files that can take up to 30 seconds — one open
+  page stacked about five on the host. There is now one check per server at a time, and the page is
+  told it is under way.
+- **Retrying a failed install can no longer be overwritten by the background check.** Pressing Retry
+  while the panel was still checking the earlier failed install could mark the new install "failed"
+  (or "installed") while it was downloading. The check now leaves a server alone if an install
+  started, or the server was removed, while it waited on the host.
+- **Security tab event times are shown in your own time zone correctly.** Recent security events
+  were read as local time instead of UTC, so every ban and failed login appeared shifted by your UTC
+  offset.
+- **"Panel update available" is sent once per update, not after every restart.**
+- **Malformed numbers no longer cause server errors.** A reboot delay or auto-block threshold of
+  `Infinity`/`1e400` now gets the normal "not a number" handling instead of a 500.
+- **A scheduled-task change can no longer be lost or undone by another one.** Crontab changes for an
+  account now run one at a time.
+- **A failed crontab read no longer wipes the account's scheduled tasks.** If the crontab could not
+  be read, or a temporary file could not be written (a full `/tmp`), the panel installed an empty or
+  partial crontab and reported success. Now nothing is installed and the error is shown.
+- **LinuxGSM config values with `$`, backticks, backslashes or quotes are saved as typed.** They
+  were written unescaped into a file LinuxGSM runs as shell code: a trailing backslash broke the
+  config, `$` mangled passwords, and `$(…)` ran as a command. References like `${port}` still work.
+- **Broken downloads now fail instead of saving a truncated file.** Downloads that go quiet time
+  out, SSH connections are always closed afterwards, and the SSH commands have a connect timeout.
+- **A locked database is no longer "repaired" into yesterday's backup.** The startup self-heal
+  treated any SQLite error as corruption, including "database is locked" and "unable to open
+  database file", replacing a busy but healthy panel.db with the rolling backup. Only real
+  corruption triggers the heal now; anything else stops startup with the error.
+- **The self-heal keeps the newest writes of a corrupt database.** Its -wal and -shm used to be
+  deleted (the check itself deleted them too). They are now moved aside with the corrupt file, and
+  if moving aside fails nothing is restored over it.
+- **`manage.py` no longer runs the database self-heal** beside the live service.
+- **The updater no longer repairs a database it could not read.** A locked or unopenable panel.db
+  counted as damaged; the update now aborts and leaves the data alone. The repair's saved original
+  now also includes its -wal.
+- **A GitHub outage no longer stalls every page that shows the game list.** The game and package
+  lists are refetched outside the lock; other requests are served the copy already held.
+- **The session and credential keys can no longer be read half-written** on a fresh install by a
+  racing process.
+- **Uninstalling removes the panel's sudo grants first,** right after the service stops, and deletes
+  the `lgsmpanel-games` group.
+- **A FIFO in place of the panel's `config.json` no longer hangs the installer or the uninstaller.**
+- **The Tailscale login log is created fresh** (`O_EXCL|O_NOFOLLOW`, 0600) instead of being
+  truncated through whatever sat at its path.
+- **SECURITY.md describes the sudo grant install.sh actually writes,** including the helper's
+  `Defaults!` line, its fixed interpreter and environment, and the rules for which accounts may join
+  the game-account group.
+- **A sign-in that can't be recorded is refused instead of going through half-registered.** If the
+  per-device session row could not be written (a momentary database lock), the login went ahead with
+  a cookie nothing could expire, list or revoke. The write is retried once, and if it still fails
+  the person is asked to try again.
+- **One missed probe no longer pages you.** A host or server is now declared down only after two
+  failed checks in a row; the dashboard still shows each check as it happens.
+- **A burst of alerts arrives as one message instead of dozens.** Alerts go through one bounded
+  queue with a single sender, and whatever piles up is sent as one message per channel — no more
+  fifty messages at once running into Telegram's rate limit.
+- **Changing your password, or signing out everywhere from an older login, never leaves an untracked
+  session.** If the new session record can't be written, the device is signed out and asked to sign
+  in again.
+- **`Infinity` in a JSON body no longer causes a server error** (bulk actions, tag sets, discovery
+  import, firewall rules, the SSH port change, backup settings, and the console and terminal
+  sockets).
+- **Bad Garry's Mod content and config requests get a clear error** instead of a 500 or a silent
+  mount.
+- **Retry can't start an install into a server that is being uninstalled.**
+- **Only one panel restore runs at a time.** Two concurrent restores could combine the database from
+  one backup with the encryption key from another.
+- **Rebooting the panel host no longer sends "server went offline" alerts.**
+- **Blocking or unbanning an address on the panel host takes effect at once** in the panel's own ban
+  check.
+- **Clicking Update no longer risks aborting the update it started.** The progress card re-checked
+  for updates every 1.5 seconds, each check fetching the same git ref the installer was fetching and
+  using up GitHub's hourly limit. Checks now run one at a time, none run while an update is
+  installing, and the card watches only the update log.
+- **Install and bootstrap progress stop polling once their row is gone.**
+- **"Still working — reload the page to check." stays put** instead of being overwritten by a slow
+  poll.
+- **`Infinity` or `1e400` in a request no longer causes a server error** in firewall ports, terminal
+  sizes, rule numbers and several other numeric inputs.
+- **Opening a second terminal on the same connection now records that the first one closed.**
+- **A failed port scan while setting up a Source server's extra ports is now logged.**
 - **The panel host's own Firewall card could say "permission denied" with the helper installed.**
   Its rule list was the one firewall read that followed the host row's "sudo" setting, which is a
   remote's SSH option, and on the panel's own host it also decided whether to use the helper. The
@@ -935,6 +1017,147 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **Group forms reject ids that cannot be real ids.** Anyone who could manage groups could make the
+  add and edit pages fail with a server error by submitting an extremely long number as an id; such
+  values, and non-ASCII digits that were being read as ids, are now ignored.
+- **Moving SSH to another port no longer deletes the firewall rule your current SSH depends on.** If
+  the move failed, the panel always removed the allow rule for the new port — and when that port was
+  one SSH already used (a bind-address change on port 22, or moving to a port sshd already listened
+  on) that was the rule the panel's own connection came in on, while the message said "your existing
+  SSH still works". Opening the port also turned the bootstrap's rate-limited SSH rule into a plain
+  allow. The panel now opens only a port no rule already lets in, removes only a rule it added, and
+  refuses a port a firewall rule blocks before changing anything.
+- **Deleting a firewall rule by number can no longer hit a different rule.** Rule numbers shift
+  whenever the auto-block adds a deny at the top, and that could happen between the safety check and
+  the delete. Firewall changes on a host now run one at a time, and the delete holds its place from
+  the check to the delete.
+- **A password-login host with no usable stored password no longer signs in with the panel's own SSH
+  key.** The connection now fails with a clear message, as the Test button already did. A key-login
+  host uses only the key it names: no SSH agent, and no other keys from `~/.ssh`.
+- **The file browser can no longer delete LinuxGSM's files through a symlinked folder.** The
+  protected-path check is now made on the host against the real location, in the same command as the
+  delete.
+- **A backup code now works exactly once, even when two sign-ins race.** The code is now spent with
+  a conditional update that only succeeds if nobody changed the list in between.
+- **Only real game accounts can join the panel's game-account group.** The panel's sudoers line lets
+  it become any member of `lgsmpanel-games`, but the helper enrolled any account that couldn't
+  already reach root: a colleague's login, `postgres`, `www-data`, `nobody`. An account now needs an
+  ordinary uid (login.defs' range), only ordinary groups, not to be the panel's own account, and a
+  LinuxGSM install or content tree in its own home. Accounts the panel creates are enrolled as
+  they're made. The root-equivalence check now also reads doas and polkit, and refuses microk8s,
+  lpadmin, kmem, incus, src, systemd-journal, syslog and ssl-cert.
+- **The privileged helper no longer takes its interpreter or environment from the caller.** It runs
+  `/usr/bin/python3 -I`, it and every tool it starts get a fixed minimal environment, and the
+  installer adds `Defaults!<helper> env_reset, secure_path=…` to the grant.
+- **Root no longer reads files in the panel's directory through symlinks.** Without a `.git`, the
+  installer printed `VERSION` into the update log as root, so a `VERSION` symlink handed any
+  root-only file (`/etc/shadow`, SSH keys) to the panel. The installer and uninstaller now read the
+  version and `config.json` as the panel's own user, refusing links and FIFOs.
+- **Hard links can no longer steer root's chown or chmod** on hosts with `fs.protected_hardlinks=0`.
+- **The self-update installer no longer runs inside the panel's checkout.**
+- **Remote GMod content and mount operations run as the game account, not root.** The remote chmod,
+  removal and `mount.cfg` read followed symlinks the game account controlled; a linked `mount.cfg`
+  printed the remote host's `/etc/shadow` into the panel.
+- **An update from a local checkout unpacks as the panel's user,** so directory links in the panel's
+  tree can't redirect root's writes.
+- **Update snapshots and rollbacks no longer run as root inside the panel's own files.** An update
+  created `data/.backups/<stamp>` and wrote the snapshot archives there as root, read the panel's
+  directory as root to build them, and unpacked them as root on rollback — so a symlink the panel
+  placed could redirect root's writes, and a hard link could copy a root-only file into an archive
+  the panel can read. These steps now run as the panel directory's owner. Rollback works as before.
+- **A stolen "remember me" cookie no longer works from someone else's machine.** With "strong"
+  session protection, dropping the session cookie and keeping the remember cookie gave a fresh
+  session with no binding, which was then bound to whoever sent it. Every per-device login is now
+  checked against the address and browser its session record noted at sign-in (IPv6 by its /64, as
+  before).
+- **Old pre-upgrade login cookies now die with a password change or "sign out everywhere".** A
+  cookie carrying only the account number was accepted whatever the account's epoch; it is now
+  accepted only by an account whose sessions have never been revoked, and the live console's
+  re-check follows the same rule.
+- **A request body sent in chunks is read before the request is authorized, like any other.**
+- **"Monitor" now needs the restart permission.** LinuxGSM's `monitor` restarts a crashed or
+  unresponsive server, but it required only view-console, so a view-only user could restart a
+  server. The maintenance menu now hides it from them too.
+- **An authenticator code can no longer sign in twice by racing itself.** The spent-code record is
+  updated in one conditional database write, so two sign-ins (or two API-token mints) with the same
+  code cannot both pass.
+- **Chat bots now check who sent a command, not just which chat it came from.** Any member of the
+  configured Telegram group, or anyone who could post in the Discord channel, could stop and restart
+  servers, self-update the panel with `/update`, read the live console and `/say` in-game, and the
+  audit log named them only by a username they could change. Each bot now has "Users who may run
+  commands" on the Notifications page (numeric Telegram/Discord user IDs, up to 50). Anyone in the
+  chat can still use `/status`, `/servers`, `/hosts`, `/connect` and `/help`; everything else,
+  including `/console`, `/say` and `/players`, runs only for a listed user. **With the list empty
+  nobody can run those** — the bot replies with the sender's own ID and where to add it. Audit rows
+  record the sender's numeric ID, and a panel update or `/say` from chat now writes an audit row at
+  all.
+- **The Discord bot no longer risks getting its token reset by reconnecting forever.** It
+  reconnected 15 seconds after every session end, including when Discord had refused the token
+  (4004) or the Message Content intent (4014) — about 5,400 attempts a day against Discord's limit
+  of 1,000. A fatal close code now stops the bot, says why in the log and on the Notifications page,
+  and it stays stopped until the token or "Accept commands" changes (retrying every 6 hours). Other
+  disconnects back off up to 15 minutes.
+- **A stolen remember cookie from before per-device sessions no longer works from another machine.**
+  An older login with no per-device record has nothing on the server to check its client against;
+  when its remember cookie came back without a session cookie, "strong" protection tied the fresh
+  session to whoever sent it. It is now refused, and the person signs in once more to get a
+  per-device login. Sessions that are already bound keep working, and "basic" and off are unchanged.
+- **Discovery import no longer adopts an account that is root on its host.** Import accepted any
+  account a scan found except one named "root", so a delegated admin could import the host's own SSH
+  login (in the sudo group) and then, through the file manager or cron, write its `.bashrc`,
+  `authorized_keys` or crontab — root on that host. Import now asks the host, and refuses the login
+  account, uid 0, members of sudo/wheel/admin/root/docker/lxd/disk, and accounts with sudo rules. If
+  the host can't be asked, nothing is imported. On the panel's own host, an account the helper
+  refuses to enrol is no longer imported anyway.
+- **Uninstall never deletes a host's administrator account.** Uninstalling a row for a root-capable
+  account ran `userdel -r -f` on it; now the panel row is removed and the account is left alone,
+  with a warning. If the host can't answer the check, nothing is changed.
+- **Garry's Mod shared content needs access to the host.** An admin granted a single GMod server
+  could remove content every GMod server on the host mounts, or start large downloads onto the
+  host's disk.
+- **Deleting a tag needs access to every server that carries it.** Tags are install-wide and drive
+  alert routing.
+- **Current-password and 2FA-code checks are throttled per account and audited.** Password change,
+  turning 2FA on or off, minting an API token and deleting a host share the login throttle's budget,
+  and every failed attempt is in the audit log.
+- **Tailscale peer check is superadmin-only.** It pinged arbitrary addresses from the panel host for
+  any Manage Remotes holder.
+- **The panel host's firewall can't be changed through the game-port routes by a delegated admin.**
+  "Open game port" and "Sync ports" follow the same superadmin-only rule as the panel host's other
+  firewall writes.
+- **An update whose checks could not be read is no longer installed.** When the panel couldn't read
+  GitHub (offline, a private repository, or an origin address it didn't recognise), it treated the
+  newest commit as verified and offered it. It now offers nothing and the update card says why.
+  Origins using GitHub's SSH-over-443 address (`ssh://git@ssh.github.com:443/…`) are now recognised.
+- **An update isn't offered until its code-scanning check has run.** A code commit must now carry
+  all of CI, CodeQL and the alerts check; the alerts check now reports on the commit it actually
+  judged, not whatever main's newest commit was, and waits for both code-scanning uploads.
+- **Semgrep findings now block an update.** They were only printed to a job summary; they now go to
+  code scanning like Bandit's.
+- **Auto-deploy waits for the security checks, not only CI,** and refuses a commit that failed any
+  of them.
+- **Switching the panel back to main no longer skips the update checks.** Branch switching always
+  installed the newest commit on the chosen branch — for main, possibly one whose checks were still
+  running or had failed. Switching to main now installs its newest version that passed its checks,
+  and says why when there isn't one. Switching to any other branch still installs that branch's
+  newest commit, and the panel now says clearly that this is unverified code for testing.
+- **File and cron writes are refused for a game account that can become root on its host.** Import
+  now refuses such accounts, but a server row imported earlier (for example for the host's own sudo
+  login) could still have its `~/.bashrc`, `authorized_keys` or crontab written from the file
+  manager. Every file-manager and cron write now asks the host first; the answer is cached for a
+  minute, and if the host can't answer, nothing is written.
+- **Only a superadmin can edit or delete the panel host's own entry.** A delegated admin whose group
+  included the panel host could rename it, change its SSH user, or delete it, removing every game
+  server on that machine from the panel.
+- **A firewall rule is deleted by number only while it is still the rule that was checked.** The
+  check and the delete now happen in one root step on the host (new helper verb
+  `ufw-delete-num-if`), so a `ufw` command typed on the host in between can no longer make a
+  different rule — possibly the one keeping SSH open — be deleted.
+- **Telegram polling no longer follows redirects.** The bot's message and name lookups followed a
+  redirect off api.telegram.org with the bot token in the URL; they now refuse redirects like the
+  send path, and failures no longer log the URL.
+- **Enabling 2FA spends its code the same way sign-in does.** Two enrolment submissions with the
+  same code could both succeed, each showing its own backup codes while only one set was saved.
 - **A delegated admin whose hosts include the panel's own no longer gets that host's controls.** The
   firewall, SSH mode and port, OS updates, reboot, fail2ban (block, unban, auto-block, log) and
   Ubuntu Pro actions under a host's Manage page checked only *which* hosts the account could reach,

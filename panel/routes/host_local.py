@@ -461,8 +461,14 @@ def _register_panel_security_misc(app):
                     "fail2ban_unban"]
             rows = (AuditLog.query.filter(AuditLog.action.in_(acts))
                     .order_by(AuditLog.id.desc()).limit(50).all())
+            # "Z": AuditLog.timestamp is naive UTC (clock.utcnow), and the Security tab renders this
+            # with `new Date(e.time)` — which reads an ISO date-time with no offset as LOCAL time.
+            # Every event was shown shifted by the viewer's UTC offset (a ban at 14:00 UTC read
+            # 14:00 in New York, four hours before it happened), on the card an admin lines up
+            # against fail2ban's and sshd's own logs. Every other feed here says UTC the same way
+            # (the history charts, the sessions list, the |datetime filter).
             return jsonify({"events": [
-                {"time": (r.timestamp.isoformat() if r.timestamp else ""), "action": r.action,
+                {"time": (r.timestamp.isoformat() + "Z" if r.timestamp else ""), "action": r.action,
                  "user": r.username, "target": r.target, "detail": r.detail, "ip": r.ip_address}
                 for r in rows]})
         except Exception:

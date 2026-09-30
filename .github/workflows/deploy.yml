@@ -88,8 +88,10 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      checks: read     # the verify step waits for the commit's security checks, not only CI
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 20 of these minutes may be the verify step waiting for the checks CI does not include.
+    timeout-minutes: 50
     steps:
       # The installer root runs on a system install comes from the commit CI just verified, carried
       # to the host inside the SSH session — not from the host's own checkout (the system-install
@@ -118,6 +120,7 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # reads the commit's check runs (checks: read)
         run: |
           set -euo pipefail
           # The job's `if` compared head_branch with 'main' IGNORING CASE (GitHub's expressions
@@ -199,8 +202,44 @@ jobs:
               echo "::error::${HEAD_SHA}'s install.sh predates root's source floor, so it is not shipped; nothing was deployed."
               exit 1
           fi
+          # ...and it passed EVERYTHING the panel's own update gate requires, not only CI. This job
+          # is triggered by CI's completion, and deployed on that alone: the security scans, CodeQL
+          # and the code-scanning alerts check ("Open code-scanning alerts", posted a minute or two
+          # after CodeQL finishes) could still be running, or go on to fail, and the host already
+          # had the commit — one the self-updating panels would never have been offered. So wait
+          # (up to 20 minutes) for the same set system_ops._remote_ci_state waits for: every check
+          # on the commit completed and none failed, and each REQUIRED name present and not merely
+          # skipped. The two lists are system_ops' _CI_REQUIRED and _CI_IGNORE; a unit test holds
+          # them equal. A name ending in "(" is a prefix, for a matrix job.
+          REQUIRED=("checks (" "coverage" "js coverage" "gamedig lockfile (" "Analyze (" "Open code-scanning alerts")
+          IGNORED='["deploy", "Upload coverage to Codacy", "Code-scanning alerts gate"]'
+          waited_until=$(( $(date +%s) + 20 * 60 ))
+          while :; do
+              runs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+                          --jq '.check_runs[] | {name, status, conclusion}' \
+                      | jq -s --argjson ign "${IGNORED}" '[.[] | select(.name as $n | ($ign | index($n)) == null)]')"
+              bad="$(jq -r '[.[] | select(.status == "completed" and ((.conclusion // "") | IN("failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"))) | .name] | join(", ")' <<< "${runs}")"
+              if [ -n "${bad}" ]; then
+                  echo "::error::${HEAD_SHA} failed a check (${bad}); nothing was deployed."
+                  exit 1
+              fi
+              open="$(jq '[.[] | select(.status != "completed")] | length' <<< "${runs}")"
+              missing=()
+              for req in "${REQUIRED[@]}"; do
+                  jq -e --arg r "${req}" 'any(.[]; (.conclusion // "") != "skipped" and (.name == $r or (($r | endswith("(")) and (.name | startswith($r)))))' \
+                      <<< "${runs}" >/dev/null || missing+=("${req}")
+              done
+              if [ "${open}" = "0" ] && [ "${#missing[@]}" -eq 0 ]; then
+                  break
+              fi
+              if [ "$(date +%s)" -ge "${waited_until}" ]; then
+                  echo "::error::${HEAD_SHA}'s checks did not all pass within 20 minutes (${open} still running; missing: ${missing[*]:-none}); nothing was deployed."
+                  exit 1
+              fi
+              sleep 30
+          done
           echo "installer=${INSTALLER}" >> "${GITHUB_OUTPUT:?}"
-          echo "Verified ${HEAD_SHA} on main (tip $(git rev-parse --short "${MAIN}"))."
+          echo "Verified ${HEAD_SHA} on main (tip $(git rev-parse --short "${MAIN}")), and every check it must pass has."
 
       - name: Join the tailnet
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0

@@ -3,15 +3,17 @@
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
 from flask import (flash, jsonify, redirect, request, url_for)
-from flask_login import (current_user, login_required, login_user)
+from flask_login import (current_user, login_required, login_user, logout_user)
 from panel.core.config import (update_config)
 from panel.db.models import (db)
 from panel.db.prefs import (_clean_panel_map)
-from panel.security.auth import (_can_edit_tags, check_password, get_game, get_user_servers,
+from panel.security.auth import (_can_edit_tags, get_game, get_user_servers,
     hash_password, log_action, server_access_required, verify_totp_step)
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (_valid_hex_color, password_problem)
 from app import (_has_remember_cookie, _log, _register_session, _tag_json)
+from panel.routes._shared import (REAUTH_BLOCKED_MSG, _json_int, reauth_password, reauth_release,
+    reauth_reserve, spend_totp_step)
 
 
 def register(app):
@@ -25,23 +27,21 @@ def register(app):
 
 
 def _int_ids(raw):
-    """Parse the first 100 entries of `raw` as ints, skipping any that are not numeric."""
-    ids = []
-    for ident in raw[:100]:
-        try:
-            ids.append(int(ident))
-        except (TypeError, ValueError):
-            continue
-    return ids
+    """Parse the first 100 entries of `raw` as ints, skipping any that are not numeric.
+
+    Through _json_int: `int(Infinity)` raised OverflowError past `except (TypeError, ValueError)`,
+    so `{"tag_ids": [Infinity]}` was a 500 (and _clean_ids' layout save swallowed the same raise
+    into "save layout failed").
+    """
+    return [n for n in (_json_int(ident) for ident in raw[:100]) if n is not None]
 
 
 def _clean_ids(raw, allowed):
     """Ids from `raw`, keeping only ones in `allowed`, deduped, order preserved."""
     out, seen = [], set()
     for ident in (raw or [])[:200]:
-        try:
-            num = int(ident)
-        except (TypeError, ValueError):
+        num = _json_int(ident)
+        if num is None:
             continue
         if num in allowed and num not in seen:
             seen.add(num)
@@ -125,22 +125,43 @@ def _spend_second_factor(u, code, back, mismatch):
     (verify_totp_STEP + last_totp_step is what makes it single use; the caller commits the step);
     otherwise a valid one-time backup code is consumed. `mismatch` is the message flashed when
     neither matches.
+
+    Under the per-account re-authentication throttle (see _shared.reauth_reserve): a wrong code is
+    a counted failure like a wrong password, since whoever passed the password step here is the
+    person a 2FA guess would help.
     """
+    stamp = reauth_reserve(u)
+    if stamp is None:
+        flash(REAUTH_BLOCKED_MSG, "danger")
+        return redirect(back)
     ok_2fa = False
     _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
     if _step is not None:
-        if _step <= (u.last_totp_step or 0):
+        if not spend_totp_step(u, _step):
             flash("That code has already been used — wait for your authenticator to show "
                   "the next one.", "danger")
             return redirect(back)
-        u.last_totp_step = _step
         ok_2fa = True
     elif u.use_backup_code(code):
         ok_2fa = True
     if not ok_2fa:
         flash(mismatch, "danger")
         return redirect(back)
+    reauth_release(u, stamp)
     return None
+
+
+def _reregister_session(u, remember):
+    """_register_session for a device being signed back in: truthy only when its row was written.
+
+    Falsy on a None answer or a raise, which is how the caller knows not to call login_user.
+    """
+    try:
+        return _register_session(u, remember)
+    except Exception:
+        db.session.rollback()
+        _log.warning("could not register a session row on re-login", exc_info=True)
+        return None
 
 
 def _remember_this_device(u):
@@ -248,6 +269,17 @@ def _register_tag_changes(app):
         tag = db.session.get(ServerTag, tag_id)
         if not tag:
             return jsonify({"success": False, "message": "Tag not found."}), 404
+        # Tags are INSTALL-WIDE, and deleting one strips it from every server that carries it —
+        # with its alert routing (notify=False mutes a tag's servers). MANAGE_SERVERS alone let a
+        # delegated admin scoped to one host delete a tag twelve servers on hosts they cannot see
+        # carried, and turn those servers' muted alerts back on (or their routed ones off). Only
+        # when every server carrying it is one they can access — or for a superadmin.
+        if not current_user.is_superadmin:
+            _mine = {gs.id for gs in get_user_servers(current_user)}
+            if any(s.id not in _mine for s in tag.servers):
+                return jsonify({"success": False, "message": (
+                    "That tag is also on servers you don't have access to, so it can't be deleted "
+                    "from here. Remove it from your own servers instead, or ask a super admin.")}), 403
         name = tag.name
         try:
             tag.servers = []          # drop the association rows explicitly, then the tag itself
@@ -414,8 +446,16 @@ def _register_account_routes(app):
         # The real row, not the proxy — same as the password change below, because
         # last_totp_step and the backup-code list are written here.
         u = current_user._get_current_object()
-        if not check_password(request.form.get("password", ""), u.password_hash):
-            flash("Password incorrect — two-factor authentication was not changed.", "danger")
+        # Throttled per account, and every refusal AUDITED. A wrong password here wrote nothing,
+        # so somebody in a borrowed session guessing passwords against the one control that
+        # strips the second factor left no trace — see _shared.reauth_reserve.
+        _pw = reauth_password(u, request.form.get("password", ""))
+        if _pw != "ok":
+            log_action(u, "2fa_disabled", target=u.username, success=False,
+                       detail=("refused: too many wrong passwords or codes" if _pw == "throttled"
+                               else "refused: wrong password"))
+            flash(REAUTH_BLOCKED_MSG if _pw == "throttled" else
+                  "Password incorrect — two-factor authentication was not changed.", "danger")
             return redirect(url_for("account"))
         # Checked LAST, and in this order, for the same reasons the password change gives: a
         # one-time backup code must never be spent on an otherwise-invalid request, and a TOTP
@@ -429,6 +469,8 @@ def _register_account_routes(app):
                 "That authenticator code didn't match — two-factor authentication was not "
                 "turned off.")
             if refused is not None:
+                log_action(u, "2fa_disabled", target=u.username, success=False,
+                           detail="refused: authenticator code not accepted")
                 return refused
         u.totp_enabled = False
         u.totp_secret = None
@@ -466,8 +508,16 @@ def _register_account_routes(app):
         # below returns to whichever page they came from.
         _back = url_for("force_password_change") if u.must_change_password else url_for("account")
 
-        if not check_password(old, u.password_hash):
-            flash("Your current password is incorrect.", "danger")
+        # Throttled per account and audited — see account_2fa_disable. This is the check a stolen
+        # session guesses against to take the account for good: a correct guess sets a password
+        # the owner does not know and signs every other session out.
+        _pw = reauth_password(u, old)
+        if _pw != "ok":
+            log_action(u, "password_changed", target=u.username, success=False,
+                       detail=("refused: too many wrong passwords or codes" if _pw == "throttled"
+                               else "refused: wrong current password"))
+            flash(REAUTH_BLOCKED_MSG if _pw == "throttled" else
+                  "Your current password is incorrect.", "danger")
             return redirect(_back)
         if new != confirm:
             flash("The new passwords don't match.", "danger")
@@ -492,14 +542,23 @@ def _register_account_routes(app):
         # since single-use was introduced; this — the panel's other route that accepts a live code —
         # was still asking the yes/no question. The step is committed below with the new password.
         # A consumed backup code, like the spent step, is committed below alongside the password.
+        # The new hash BEFORE the second factor is spent. Spending it is an immediate conditional
+        # UPDATE (spend_totp_step / the backup-code swap), which opens SQLite's write transaction on
+        # the spot — so hashing after it held the database's write lock for the whole bcrypt run in
+        # tpool, and any other greenlet that wrote meanwhile (the monitor sweep, _touch_session,
+        # log_action) sat in SQLite's C busy handler, which blocks the hub: the lock holder could not
+        # resume to commit, and everything stalled for the full busy timeout before failing "locked".
+        _new_hash = hash_password(new)
         if u.totp_enabled:
             refused = _spend_second_factor(u, code, _back,
                                            "That authenticator code didn't match — password not changed.")
             if refused is not None:
+                log_action(u, "password_changed", target=u.username, success=False,
+                           detail="refused: authenticator code not accepted")
                 return refused
 
         # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- password_problem() checked it above
-        u.set_password(hash_password(new))   # remembers the outgoing one; see password_reused
+        u.set_password(_new_hash)   # remembers the outgoing one; see password_reused
         # Whatever it was before, the password is now the account holder's own and nobody else's —
         # which is the entire condition the forced-change gate is waiting on.
         _was_forced = bool(u.must_change_password)
@@ -518,7 +577,19 @@ def _register_account_routes(app):
         _remember = _remember_this_device(u)
         UserSession.query.filter_by(user_id=u.id).delete()   # epoch bump killed them all; clear rows
         db.session.commit()
-        _register_session(u, _remember)          # fresh session row for THIS device
+        # A fresh session row for THIS device, and only with one is it signed back in. The return
+        # value was ignored, so a failed insert (a locked database) still ran login_user: a cookie
+        # with no UserSession row behind it — one the account page cannot list or revoke, and
+        # which "sign out everywhere" can reach only through the epoch. The password change itself
+        # is committed by now, so it stands; this device is simply signed out and says so.
+        if not _reregister_session(u, _remember):
+            log_action(u, "password_changed", target=u.username,
+                       detail="changed; this device could not be signed back in")
+            logout_user()
+            flash("Your password has been changed and every session was signed out, including "
+                  "this one — the panel could not sign this device back in. Please sign in again "
+                  "with your new password.", "warning")
+            return redirect(url_for("login"))
         login_user(u, remember=_remember)        # refresh THIS session (new epoch + sid) so we stay in
         log_action(u, "password_changed", target=u.username)
         if _was_forced:

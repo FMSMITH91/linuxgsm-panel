@@ -168,11 +168,12 @@ finally:
 # /api/servers and restarting its install-progress poller — and logged "reconciled stranded
 # install 'X' -> failed" 144 times a day for a reconciliation that did not happen. Read as
 # structure: the ticker is a closure inside create_app(), so nothing can call it from here. Its
-# per-row body is _reconcile_stranded_install, a closure beside it.
+# per-row body is app._reconcile_stranded_install, whose work — once it holds the row's host check
+# — is _reconcile_checked_install; that is where the verdict branches live.
 import ast as _rt_ast                                                              # noqa: E402
 _rt_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
 _rt_fn = next((n for n in _rt_ast.walk(_rt_ast.parse(_rt_src))
-               if isinstance(n, _rt_ast.FunctionDef) and n.name == "_reconcile_stranded_install"),
+               if isinstance(n, _rt_ast.FunctionDef) and n.name == "_reconcile_checked_install"),
               None)
 check("reconcile ticker: the function was located for the gate", _rt_fn is not None)
 _rt_false = next((n for n in _rt_ast.walk(_rt_fn or _rt_ast.parse(""))
@@ -1906,12 +1907,19 @@ finally:
     _so._git = _orig_rslug_git
 
 # _remote_ci_state maps GitHub's Actions API response to passing/pending/failing, and
-# never raises on a network/parse error (returns 'unknown', treated leniently).
+# never raises on a network/parse error (returns 'unknown' — which is NOT installable any more;
+# see part14).
+#
+# These fixtures pin how the checks that EXIST are judged, so they carry only a few names. The
+# gate now also requires a named set to be present (_CI_REQUIRED) before a code commit passes;
+# that is tested on its own in part14, and is switched off here so these stay about conclusions.
 import io as _io
 import json
 _orig_ci_slug = _so._repo_slug
 _orig_urlopen = _so.urllib.request.urlopen
+_orig_ci_expected = _so._ci_suite_expected
 try:
+    _so._ci_suite_expected = lambda sha, runs: False
     _so._repo_slug = lambda: "o/r"
 
     def _fake_open(payload):
@@ -2035,6 +2043,7 @@ try:
 finally:
     _so._repo_slug = _orig_ci_slug
     _so.urllib.request.urlopen = _orig_urlopen
+    _so._ci_suite_expected = _orig_ci_expected
 
 # panel_self_update ENFORCES the CI gate server-side (not just by hiding the button), and
 # re-checks fresh so it also catches a bad commit that landed between page-load and click.

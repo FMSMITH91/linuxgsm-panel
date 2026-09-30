@@ -220,7 +220,7 @@ def _register_terminal_page(app):
                                local_user=_ts.panel_account())
 
 
-def _register_terminal_open(socketio):
+def _register_terminal_open(app, socketio):
     """The term_open event, which starts a shell for this socket."""
     # ── socket events ─────────────────────────────────────────────────────────────────────────
     def _send(sid, data):
@@ -236,13 +236,18 @@ def _register_terminal_open(socketio):
         if why is not None:
             emit("term_error", {"message": why})
             return
-        _ts.close_for_sid(sid, "")          # one shell per socket
+        # One shell per socket — and the one being replaced gets its terminal_close row. This was
+        # a bare close_for_sid: the previous shell (perhaps root, on another host) went away with
+        # a terminal_open in the audit log and no close, so the trail showed a session still open
+        # that was not, and its _sid_host/_sid_access entries stayed behind for the next open (a
+        # new open that then FAILED left this socket looking like it still held the old host).
+        _close_and_audit(app, sid, "replaced by a new terminal on the same connection")
         try:
             _ts.open_session(sid, remote, bool(remote.is_local),
                              user_key=current_user.id,
                              on_output=_send, on_exit=_exited,
-                             cols=(data or {}).get("cols", 80),
-                             rows=(data or {}).get("rows", 24))
+                             cols=_term_dim(data, "cols", 80),
+                             rows=_term_dim(data, "rows", 24))
         except _ts.TerminalError as e:
             emit("term_error", {"message": str(e)})
             return
@@ -256,6 +261,23 @@ def _register_terminal_open(socketio):
         emit("term_ready", {"host": remote.display_name})
 
 
+def _term_payload(data):
+    """A socket event's payload as a dict. `(data or {}).get` raised on a list or a number."""
+    return data if isinstance(data, dict) else {}
+
+
+def _term_dim(data, key, default):
+    """A terminal width/height from an event payload: an int, or `default` when it is not one.
+
+    The session's own parse catches TypeError/ValueError and not the OverflowError that
+    int(float("inf")) raises — `{"cols": Infinity}` is valid JSON to Python.
+    """
+    try:
+        return int(_term_payload(data).get(key, default))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def _terminal_target(data):
     """(remote_id, remote, None) for the host a term_open names and the caller may open a shell on.
 
@@ -263,9 +285,11 @@ def _terminal_target(data):
     """
     if not _may_use_terminal():
         return None, None, "You don't have permission to open a terminal."
+    # OverflowError too: `{"remote_id": Infinity}` is valid JSON to Python, and int() of it
+    # raised straight past this. A payload that is not an object at all is "no host named".
     try:
-        remote_id = int((data or {}).get("remote_id"))
-    except (TypeError, ValueError):
+        remote_id = int(_term_payload(data).get("remote_id"))
+    except (TypeError, ValueError, OverflowError):
         return None, None, "No host was named."
     # Per-host access, exactly as the page route checks it — a socket event is not covered by
     # the route's decorators and must ask again.
@@ -327,7 +351,7 @@ def _register_terminal_io(app, socketio):
             return
         sess = _ts.get(request.sid)
         if sess is not None:
-            sess.write((data or {}).get("data", ""))
+            sess.write(_term_payload(data).get("data", ""))
 
     @socketio.on("term_resize")
     def on_term_resize(data):
@@ -338,7 +362,7 @@ def _register_terminal_io(app, socketio):
             return
         sess = _ts.get(request.sid)
         if sess is not None:
-            sess.resize((data or {}).get("cols", 80), (data or {}).get("rows", 24))
+            sess.resize(_term_dim(data, "cols", 80), _term_dim(data, "rows", 24))
 
     @socketio.on("term_close")
     def on_term_close(_data=None):
@@ -348,7 +372,7 @@ def _register_terminal_io(app, socketio):
 def register(app, socketio, supervise):
     _ts.start_idle_sweeper(supervise)
     _register_terminal_page(app)
-    _register_terminal_open(socketio)
+    _register_terminal_open(app, socketio)
     _register_terminal_io(app, socketio)
 
     # A browser that closed without term_close must still take the shell with it — but NOT via a

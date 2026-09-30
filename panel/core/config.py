@@ -211,20 +211,66 @@ def _create_key_once(path, gen_bytes):
     through to read the winner's key. This prevents two callers each generating a different key
     and clobbering the other — which, for cred_key, would silently make already-encrypted secrets
     undecryptable.
+
+    The file APPEARS WITH ITS CONTENT, the way ensure_setup_token's does: written to a private
+    temp file, then hard-linked into place (which, like O_EXCL, fails when the name exists). The
+    O_EXCL create made the name first and wrote the key after, so a racer that lost the create and
+    re-read at once read an EMPTY file — and on a fresh install there is exactly that race: the
+    installer runs `manage.py setup-token` (create_app -> get_secret_key) while the service starts.
+    The loser took "" as its Flask SECRET_KEY (no session could be signed for the life of that
+    process) or handed Fernet an empty key (ValueError on every credential save). A crash between
+    the create and the write left the same empty file behind for good; an empty file is therefore
+    replaced here — nothing can have been signed or encrypted with an empty key.
     """
+    path = str(path)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".key-")   # 0600, owner only
     try:
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        return  # someone else created it first; the caller re-reads it
-    try:
-        os.write(fd, gen_bytes())
-        os.fsync(fd)
+        try:
+            os.write(fd, gen_bytes())
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            try:
+                empty = os.path.getsize(path) == 0
+            except OSError:
+                empty = False
+            if empty:
+                os.replace(tmp, path)
+        except OSError:
+            # No hard links on this filesystem: the O_EXCL create as before — still create-once,
+            # with the empty-read window back, which such a filesystem cannot avoid.
+            try:
+                xfd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                return      # someone else created it first; the caller re-reads it
+            try:
+                with open(tmp, "rb") as src:
+                    os.write(xfd, src.read())
+                os.fsync(xfd)
+            finally:
+                os.close(xfd)
     finally:
-        os.close(fd)
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass            # renamed into place
+        except OSError:
+            _log.debug("_create_key_once: temp file not removed", exc_info=True)
+
+
+def _key_missing(path):
+    """True when a key file is absent or EMPTY (see _create_key_once for how an empty one arises)."""
+    try:
+        return os.path.getsize(path) == 0
+    except OSError:
+        return True
 
 
 def get_secret_key():
-    if not SECRET_FILE.exists():
+    if _key_missing(SECRET_FILE):
         import secrets
         _create_key_once(SECRET_FILE, lambda: secrets.token_hex(32).encode())
     _chmod600(SECRET_FILE)  # tighten perms on existing installs too
@@ -313,7 +359,7 @@ def _cred_fernet():
     # Create-once (atomic, race-safe): two concurrent first-time credential saves must not each
     # generate a different key and clobber the other — that would leave the first-saved secret
     # encrypted with a key the file no longer holds, i.e. permanently undecryptable.
-    if not CRED_KEY_FILE.exists():
+    if _key_missing(CRED_KEY_FILE):
         _create_key_once(CRED_KEY_FILE, Fernet.generate_key)
     return Fernet(CRED_KEY_FILE.read_bytes().strip())
 

@@ -346,6 +346,9 @@ try:
           repr((_nt_unr10, _nt_rej10, _nt_blk10)))
 
     # ── Telegram reads: a failed read is None, not an empty inbox ──────────────────────────────
+    # Through _OPENER, as _post is: the default urlopen followed a 3xx off api.telegram.org with
+    # the bot token in the URL (see telegram_get_updates). A stub on urlopen is therefore not
+    # called at all any more, which is the point.
     _urls10 = []
 
     def _urlopen10(payload):
@@ -356,35 +359,38 @@ try:
             return _Resp10(200, payload)
         return _f
 
-    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": true, "result": [{"update_id": 7}]}')
+    def _TgOpener10(payload):
+        return type("_TgOp10", (), {"open": staticmethod(_urlopen10(payload))})()
+
+    _n10._OPENER = _TgOpener10(b'{"ok": true, "result": [{"update_id": 7}]}')
     _upd10 = _n10.telegram_get_updates(_TG10, offset=8, timeout=1)
     check("notify telegram updates: a good read returns the result list, asking from the offset",
           _upd10 == [{"update_id": 7}] and _urls10 and "offset=8" in _urls10[-1]
           and _urls10[-1].startswith("https://api.telegram.org/bot%s/getUpdates?" % _TG10),
           repr((_upd10, _urls10[-1:])))
-    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": false, "description": "Conflict"}')
+    _n10._OPENER = _TgOpener10(b'{"ok": false, "description": "Conflict"}')
     _upd_bad10 = _n10.telegram_get_updates(_TG10, timeout=1)
-    _n10.urllib.request.urlopen = _urlopen10(urllib.error.URLError("down"))
+    _n10._OPENER = _TgOpener10(urllib.error.URLError("down"))
     _upd_down10 = _n10.telegram_get_updates(_TG10, timeout=1)
     check("notify telegram updates: a refused or failed poll is None, never an empty list",
           _upd_bad10 is None and _upd_down10 is None
           and _n10.telegram_get_updates("bad-token") is None,
           repr((_upd_bad10, _upd_down10)))
-    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": true, "result": {"username": "panelbot"}}')
+    _n10._OPENER = _TgOpener10(b'{"ok": true, "result": {"username": "panelbot"}}')
     _me10 = _n10.telegram_get_me(_TG10)
-    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": true, "result": {}}')
+    _n10._OPENER = _TgOpener10(b'{"ok": true, "result": {}}')
     _me_none10 = _n10.telegram_get_me(_TG10)
     # A refusal is not an answer, whatever else came back with it.
-    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": false, "result": {"username": "stale"}}')
+    _n10._OPENER = _TgOpener10(b'{"ok": false, "result": {"username": "stale"}}')
     _me_refused10 = _n10.telegram_get_me(_TG10)
-    _n10.urllib.request.urlopen = _urlopen10(b"not json")
+    _n10._OPENER = _TgOpener10(b"not json")
     _me_bad10 = _n10.telegram_get_me(_TG10)
     check("notify telegram getMe: the bot's name, or None when it could not be read",
           _me10 == "panelbot" and _me_none10 is None and _me_bad10 is None
           and _me_refused10 is None
           and _n10.telegram_get_me("") is None,
           repr((_me10, _me_none10, _me_bad10)))
-    _n10.urllib.request.urlopen = _n10_urlopen_saved
+    _n10._OPENER = _n10_saved["_OPENER"]
 
     (_cl10, _q10) = _sender10(200, _n10.telegram_set_commands, _TG10, True)
     (_set10, _q2_10) = _sender10(200, _n10.telegram_set_commands, _TG10)
@@ -1968,13 +1974,19 @@ try:
               and _db10.session.get(_RS10, _ids10["rb"]).is_online is False, "")
         _second10 = _sweep10({"reachable": False},
                              dict(_UP10, disk=95, load_mem=(250, None)))
-        check("monitor pass: a host going down and one coming back each alert once",
-              "remote_unreachable" in _second10 and "remote_recovered" in _second10,
+        # A host that comes back is announced at once; one that stops answering is DECLARED down
+        # only on the second failed sweep in a row (monitoring._DOWN_CONFIRM_SWEEPS). This check
+        # used to expect "remote_unreachable" from this single failed probe — the blip-pages
+        # behaviour that the confirmation removed; the third sweep below is where it now fires.
+        check("monitor pass: a host coming back alerts at once, one failed probe does not yet",
+              "remote_unreachable" not in _second10 and "remote_recovered" in _second10,
               repr(_second10))
         check("monitor pass: a full disk and a sustained CPU load alert; an unread memory figure "
               "does not", "disk_low" in _second10 and _second10.count("high_load") == 1,
               repr(_alerts10))
         _third10 = _sweep10({"reachable": False}, dict(_UP10, disk=96, load_mem=(260, None)))
+        check("monitor pass: ...and the second failed sweep in a row declares the host unreachable",
+              _third10.count("remote_unreachable") == 1, repr(_third10))
         check("monitor pass: an alert already raised is not repeated while the condition holds",
               "disk_low" not in _third10 and "high_load" not in _third10, repr(_third10))
         _sweep10({"reachable": False}, dict(_UP10, disk=80, load_mem=(100, None)))
@@ -1982,7 +1994,11 @@ try:
         check("monitor pass: once well below the line, disk and load RE-ARM and alert again",
               "disk_low" in _rearm10 and "high_load" in _rearm10, repr(_rearm10))
 
-        # Servers on beta: gmod1 goes down unexpectedly, then comes back; gmod3 is muted.
+        # Servers on beta: gmod1 goes down unexpectedly, then comes back; gmod3 is muted. The down
+        # takes TWO sweeps with the port shut (monitoring._DOWN_CONFIRM_SWEEPS); one used to alert.
+        _down_once10 = _sweep10({"reachable": False}, dict(_UP10, ports=set()))
+        check("monitor pass: one sweep with the port shut is not yet an outage",
+              "server_down" not in _down_once10, repr(_down_once10))
         _down10 = _sweep10({"reachable": False}, dict(_UP10, ports=set()))
         check("monitor pass: a server that stops listening alerts 'offline' — unless muted",
               [a for a in _alerts10 if a[0] == "server_down"]
@@ -2005,7 +2021,9 @@ try:
               repr((_exp10, _exp_back10)))
         # LinuxGSM's own maintenance: the down is suppressed and so is the recovery.
         _mon10._lgsm_maintenance_running = lambda r, gs: True
-        _mt10 = _sweep10({"reachable": False}, dict(_UP10, ports={27017}))
+        # Two sweeps: the first only counts a miss and never reaches the maintenance probe.
+        _mt10 = (_sweep10({"reachable": False}, dict(_UP10, ports={27017}))
+                 + _sweep10({"reachable": False}, dict(_UP10, ports={27017})))
         _mon10._lgsm_maintenance_running = lambda r, gs: False
         _mt_back10 = _sweep10({"reachable": False}, dict(_UP10))
         check("monitor pass: a scheduled LinuxGSM update is neither 'offline' nor 'back online'",
@@ -4100,7 +4118,8 @@ try:
                          "5 failed logins for super admin 'boss' from 203.0.113.66 in the last 5 min.")],
               repr(_bf10))
 
-        # Session bookkeeping: a row per login, and a failed write is not a failed login.
+        # Session bookkeeping: a row per login, and a row that cannot be written is reported as
+        # None, which _login_succeed turns into a refused sign-in (never an unregistered cookie).
         _su10 = _User10.query.filter_by(username="boss").first()
         with _dbapp10.test_request_context("/login", headers={"User-Agent": "UA/1.0",
                                                               "Cookie": "remember_token=abc"},
@@ -4118,7 +4137,7 @@ try:
               and _srow10 is not None and _srow10.remember is True
               and _srow10.user_agent == "UA/1.0" and _srow10.ip == "203.0.113.9",
               repr((_sid10, _srow10 and (_srow10.remember, _srow10.ip))))
-        check("app sessions: a session row that cannot be written returns None and the login goes on",
+        check("app sessions: a session row that cannot be written (twice) returns None and tags no sid",
               _sid_fail10 is None and not hasattr(_su2_10, "_sid"), repr(_sid_fail10))
 
         # Setup-wizard ownership.

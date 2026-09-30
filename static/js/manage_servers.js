@@ -186,7 +186,10 @@ function watchInstall(id) {
       .then(r => r.json())
       .then(s => {
         var row = document.getElementById('install-row-' + id);
-        if (!row) return;
+        // The row is gone (the server was deleted, or the table re-rendered without it): stop.
+        // This returned and left the interval running, one status request every 2.5s for the
+        // life of the page, with nothing ever to paint.
+        if (!row) { stopInstall(id); return; }
         if (s.status === 'none') { row.style.display = 'none'; stopInstall(id); return; }
         row.style.display = '';
         var step = document.getElementById('inst-step-' + id);

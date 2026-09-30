@@ -80,7 +80,13 @@ ACTION_PERMISSION_MAP = {
     "start": START_SERVER,
     "stop": STOP_SERVER,
     "update": UPDATE_SERVER,
-    "monitor": VIEW_CONSOLE,
+    # RESTART_SERVER, not VIEW_CONSOLE. LinuxGSM's `monitor` is not a status read: when a server
+    # that should be running is not, it starts it again, and when the server's query check fails it
+    # RESTARTS it (kicking everyone on it) — it is the command the auto-start/crash-recovery cron
+    # runs. Mapped to the read-only console permission, a view-only moderator could restart a
+    # server from the maintenance menu that the permission table says they may only watch. It
+    # stays in READONLY_ACTIONS below only for how its output is shown; this map is asked first.
+    "monitor": RESTART_SERVER,
     "install": INSTALL_SERVER,
     "uninstall": UNINSTALL_SERVER,
 }
@@ -536,7 +542,7 @@ def can_access_remote(user, remote_id):
         return True
     try:
         rid = int(remote_id)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False
     for group in _groups_with_grants(user):
         for rs in group.servers or []:
@@ -671,10 +677,20 @@ def _load_legacy_user(s):
 
     Legacy cookie issued before epochs existed — accept by plain id (one-time, until they next log
     in and get an epoch-tagged cookie).
+
+    ...and ONLY while the account's auth_epoch is still 0, the value every account had when such a
+    cookie could be issued. This path checked is_active and the client binding and never the
+    epoch, which is the one thing every account-recovery control works through: a password change,
+    "sign out everywhere", an admin's reset and logout's fallback all bump it. So a pre-epoch
+    remember cookie — the longest-lived credential the panel ever issued, captured before the
+    upgrade — survived every one of them. An account whose epoch has moved has been told, by
+    somebody, that every older cookie is dead; a cookie that names no epoch is one of those.
     """
     legacy = db.session.get(User, int(s)) if s.isdecimal() else None
-    if legacy is None or not legacy.is_active or not _session_binding_ok():
+    if legacy is None or not legacy.is_active or (legacy.auth_epoch or 0) != 0:
         return None                                  # see _user_for_cookie_id on is_active
+    if not _session_binding_ok(bind_unbound=False):
+        return None                                  # no row, so an unbound session has no proof
     return legacy
 
 
@@ -781,6 +797,8 @@ def init_auth(app):
                     # is exactly the wrong thing to tell someone checking for intruders.
                     _drop_expired_session(sess)
                     return None
+                if _session_row_binding_ok(sess) is False:
+                    return None                       # "strong": not the client that signed in
                 user._sid = sid                       # keep it so get_id re-embeds it on cookie refresh
                 _touch_session(sess, now)
             except Exception:
@@ -805,7 +823,10 @@ def init_auth(app):
                         "load_user: could not verify session %s — denying this request",
                         (sid or "")[:8], exc_info=True)
                 return None
-        if not _session_binding_ok():
+        # With a sid, the row has already vouched for this client (or recorded none to check), so
+        # an unbound session may be bound to it. Without one there is no row, and an unbound
+        # session is exactly what a replayed remember cookie arrives in — see _session_binding_ok.
+        if not _session_binding_ok(bind_unbound=bool(sid)):
             return None                               # "strong": replayed from another client
         return user
 
@@ -917,13 +938,34 @@ def _heldbody_forget_identity():
     db.session.expire_all()                            # the rows behind both: flags, groups, grants
 
 
+def _request_has_body():
+    """Whether a body may follow this request's headers — one the view could read later.
+
+    Content-Length alone missed a CHUNKED body. `Transfer-Encoding: chunked` carries no length, so
+    content_length is None and authorize_after_body returned early, while the view's get_json()
+    still read the body wherever the server de-chunks it (werkzeug's own server and gunicorn set
+    wsgi.input_terminated, and werkzeug then hands the view the whole stream). The held-back-body
+    window this hook closes was open again for anyone who chunked their request.
+
+    Under the panel's own eventlet server it happened to be shut: eventlet de-chunks but does not
+    set wsgi.input_terminated, so werkzeug gives the view an EMPTY stream for a request with no
+    Content-Length. That is an accident of one server, not a property of this code. Reading the
+    body when Transfer-Encoding is present costs nothing there (werkzeug reads the same empty
+    stream the view would have) and is the read that matters everywhere else.
+    """
+    if request.content_length:
+        return True
+    env = request.environ
+    return bool(env.get("wsgi.input_terminated") or env.get("HTTP_TRANSFER_ENCODING"))
+
+
 def authorize_after_body():
     """before_request: read a signed-in request's body before anything authorizes it.
 
     See the note above. Registered right after the CSRF hook and before every other hook that
     reads current_user, so no decision about the request is made on the identity loaded here.
     """
-    if not request.content_length:
+    if not _request_has_body():
         return None                          # no body follows the headers: nothing to hold back
     if not current_user.is_authenticated:
         return None
@@ -1501,7 +1543,46 @@ def session_fingerprint():
                           .encode("utf-8", "replace")).hexdigest()[:32]
 
 
-def _session_binding_ok():
+def _session_row_binding_ok(sess):
+    """Is this request from the client login-session row `sess` was created for ("strong" only)?
+
+    True or False, or None when the row records no client (written outside a request, or its
+    address cannot be decrypted with this host's key) — the caller then falls back to the binding
+    kept in the Flask session, _session_binding_ok.
+
+    The Flask session's "_bind" cannot answer this for a REMEMBER cookie. Drop the session cookie,
+    keep remember_token, and flask-login restores the login into a fresh, empty session: no
+    "_bind", so _session_binding_ok bound it to whoever sent that first request. A remember cookie
+    copied off a victim's machine therefore worked from any other one — the exact replay "strong"
+    exists to refuse, on the credential that lives longest (remember_days). The login-session row
+    has recorded the client since per-device sessions were added (_register_session stores its
+    address and User-Agent at sign-in), and the row, unlike the session cookie, cannot be dropped
+    by the client. So the sid the cookie carries is checked against the client its row names.
+
+    The same fingerprint as session_fingerprint(), with the same leniency: an IPv6 client by its
+    /64 (throttle_key), so a rotating privacy address is not a new client. The User-Agent is cut to
+    the 300 characters the row keeps. A roaming client (a phone moving networks) is signed out on
+    the move, exactly as "_bind" already signs it out — that is "strong"; "basic" is the setting
+    for users who roam, and skips this.
+    """
+    try:
+        if current_app.config.get("SESSION_PROTECTION") != "strong":
+            return True
+        from flask import has_request_context
+        if not has_request_context():
+            return True
+    except RuntimeError:
+        return True                    # no app context: nothing to bind against
+    row_ip = str(sess.ip or "")
+    if not row_ip:
+        return None
+    ua = (request.headers.get("User-Agent", "") or "")[:300]
+    here = "%s|%s" % (throttle_key((client_ip() or "")[:64]), ua)
+    there = "%s|%s" % (throttle_key(row_ip), str(sess.user_agent or ""))
+    return hmac.compare_digest(here.encode("utf-8", "replace"), there.encode("utf-8", "replace"))
+
+
+def _session_binding_ok(bind_unbound=True):
     """Whether this request's session is used from the client it was bound to ("strong" only).
 
     SESSION_PROTECTION="strong" was inert. flask-login only clears a session on an identifier
@@ -1512,7 +1593,21 @@ def _session_binding_ok():
 
     So the binding is kept in the session as "_bind" (set at login) and compared here. A session
     from before this check has none and is bound on its first request instead of being logged out
-    by the upgrade. "basic" and off skip it.
+    by the upgrade (a login with a per-device sid only, now — see below). "basic" and off skip it.
+
+    A session with no "_bind" is also what flask-login makes when it restores a login from the
+    remember cookie, so binding on first use here would bind a replayed remember cookie to the
+    replayer. For any login carrying a session sid, load_user asks _session_row_binding_ok first,
+    which checks the client against the server-side row, and only then lets an unbound session be
+    bound here.
+
+    A login with NO sid — a cookie from before per-device sessions, "<id>:<epoch>" or a bare
+    "<id>" — has no row to ask, and binding it on first use was the same hole: its remember cookie,
+    replayed without the session cookie, was bound to the replayer. So load_user passes
+    bind_unbound=False for those, and an unbound session is refused rather than bound. What that
+    costs is one sign-in: a session that already carries its "_bind" keeps working, and the
+    person whose session cookie had expired signs in again and gets a per-device login, which is
+    checked against its row from then on. "basic" and off are unchanged.
     """
     try:
         if current_app.config.get("SESSION_PROTECTION") != "strong":
@@ -1525,6 +1620,8 @@ def _session_binding_ok():
     fp = session_fingerprint()
     bound = session.get("_bind")
     if not bound:
+        if not bind_unbound:
+            return False
         session["_bind"] = fp
         return True
     return hmac.compare_digest(str(bound), fp)

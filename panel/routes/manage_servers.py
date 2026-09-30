@@ -35,7 +35,8 @@ from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN
     SAFE_LABEL_RE, _port_or)
 from app import (PortScanUnreadable, _extract_start_error, _log, _port_span, _prune_jobs,
     _resolve_source_aux_ports, game_os_unsupported, load_game_list, resolve_free_port)
-from panel.routes._shared import (_looks_installed, _notify_servers_changed, _record_game_clock)
+from panel.routes._shared import (_looks_installed, _notify_servers_changed, _record_game_clock,
+    privileged_accounts)
 
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
 # row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
@@ -192,6 +193,10 @@ def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
 # retry creates it afresh, or remove the server). Rebuilding it automatically after a restart
 # would need this evidence persisted on the GameServer row, not a guess from the host.
 _accounts_created = set()
+
+# GameServer ids an uninstall is working on, from its checks to its row delete. Guarded by
+# _install_lock, which _queue_install_job takes too — see _claim_uninstall.
+_uninstalling = set()
 
 
 def host_account_state(remote, name):
@@ -485,15 +490,19 @@ def _register_install(app):
         remote = gs.remote
         if remote is None:
             return _form_err("That server's host is gone.", "manage_servers")
-        gs.status = "installing"
-        gs.install_error, gs.install_retryable = "", True
-        db.session.commit()
         # The same selection the original install was given, revalidated on the way out so an
         # edited row cannot widen it — and the same step count derived from it, rather than a
         # hardcoded 8 that made the retry's progress bar wrong for exactly these servers.
         _retry_content = ([g for g in (gs.content_games or "").split(",")
                            if g in GMOD_CONTENT_GAMES] if gs.game_type == "gmod" else [])
-        _queue_install_job(gs, _retry_content)
+        # Queued BEFORE the row says "installing", and refused while an uninstall holds the row:
+        # an uninstall checks for a live install once and then spends minutes on SSH, and a retry
+        # started in that window installed into the account it was about to delete.
+        if not _queue_install_job(gs, _retry_content):
+            return _form_err("That server is being uninstalled.", "manage_servers")
+        gs.status = "installing"
+        gs.install_error, gs.install_retryable = "", True
+        db.session.commit()
         _run_install_job(gs.id, remote.id, gs.short_name, gs.game_type, gs.lgsm_name, gs.port,
                          _retry_content)
         _notify_servers_changed(app)   # the corner progress widget picks it up from here
@@ -720,14 +729,21 @@ def _queue_install_job(gs, content_games):
 
     The entry also carries the row's identity ("born", its created_at): the job looks its row up
     by id again from the worker thread, and after a delete that id can belong to another row.
+
+    False, and nothing queued, while an uninstall of this row holds it (see _claim_uninstall):
+    asked under the same lock the uninstall's claim takes, so the check and the queueing are one
+    step and a retry cannot slip in between an uninstall's checks and its `userdel`.
     """
     with _install_lock:
+        if gs.id in _uninstalling:
+            return False
         _install_jobs[gs.id] = {
             "status": "running", "step": 0, "total": (9 if content_games else 8),
             "step_name": "Queued",
             "message": "", "log": [], "started": time.time(), "updated": time.time(),
             "name": gs.name, "born": row_birth(gs),
         }
+    return True
 
 
 def _install_job_running(server_id):
@@ -1873,72 +1889,21 @@ def _register_uninstall_and_edit(app):
             # on "You do not have permission to do that." /servers/manage is itself only
             # a 302 to index, so this changes nothing for anyone who could reach it.
             return _index_reply(_m, False, "warning", 409)
-        remote = gs.remote
-        short_name = gs.short_name
-        selfname = gs.lgsm_name
 
+        # Held for the whole host-side sequence, and retry_install refuses while it is. The
+        # _install_job_running test above ran ONCE, and everything after it yields on SSH for up
+        # to a couple of minutes (a graceful stop alone may take 60s): a Retry pressed in that
+        # window passed its own check — no live job — and started an install into the account
+        # this was about to `userdel -r -f`, then lost its row to the delete below. The claim
+        # re-asks about a live job under the same lock the retry queues its job under, so the
+        # two cannot both win.
+        if not _claim_uninstall(server_id):
+            return _index_reply("'%s' is already being uninstalled or installed — wait for that "
+                                "to finish." % name, False, "warning", 409)
         try:
-            # Stop the game server and kill any lingering processes BEFORE deleting the user.
-            # Otherwise userdel removes the user + home while the game process is still running —
-            # leaving it orphaned under a now-deleted uid: not manageable from the panel, and still
-            # eating CPU/RAM and holding its port. Graceful LinuxGSM stop first, then a hard kill of
-            # anything left, then delete.
-            _stop_game_processes(remote, short_name, selfname)
-
-            # Close ALL of this server's firewall rules (multi-port games tag every
-            # rule with the server name), then also the legacy single-port cleanup.
-            fw_note, fw_left = _close_game_firewall(remote, gs)
-
-            # Remove LinuxGSM user and home.
-            #
-            # THE EXIT CODE DECIDES WHETHER THE ROW GOES. run_privileged RETURNS rc rather than
-            # raising, and this used to feed it to log_action and nothing else — so a userdel that
-            # FAILED still deleted the panel's row and still answered "Server 'x' uninstalled."
-            # The account, its home and every game file stayed on the host, now with no row to
-            # manage them from, the firewall rules already removed, and the next install of that
-            # game colliding with the surviving user. The audit log was the only trace.
-            #
-            # userdel's codes, which is why this is not a bare `rc == 0`:
-            #   0   removed
-            #   6   no such user — already gone, so there is nothing to orphan and the row SHOULD go
-            #   12  the account was removed but its home could not be — partial, worth saying out loud
-            #   *   the account is still there; keeping the row is what lets the operator retry
-            # Free this account's Steam crash-dump slot while its name still resolves. Steam has
-            # ten of them per host and `userdel` leaves the directory behind, so without this each
-            # uninstall permanently costs the host one slot — and at ten, SteamCMD stops working
-            # for every server on it, installed or not.
-            try:
-                _sm.run_privileged(remote, "steam-dumps-sweep", [short_name], timeout=20)
-            except Exception:
-                _log.debug("uninstall: steam dumps sweep failed", exc_info=True)
-            out, err, rc = _sm.run_privileged(remote, "user-delete-force", [short_name], timeout=30)
-            _gone = rc in (0, 6, 12)
-            log_action(current_user, "uninstall_server", target=gs.name, success=_gone, server=gs)
-            if not _gone:
-                _em = ("Could not remove the '%s' account on %s, so '%s' has been left in place — "
-                       "nothing was deleted from the panel. %s"
-                       % (short_name, remote.display_name, name,
-                          (err or out or "userdel exited %d" % rc).strip()[:200]))
-                return _index_reply(_em, False, "danger", 500)
-            if rc == 12:
-                fw_note += (" The account was removed but its home directory could not be — "
-                            "check /home/%s on the host." % short_name)
-
-            # Remove from DB
-            db.session.delete(gs)
-            db.session.commit()
-            # Clean up this server's per-server backup schedule + status so nothing is orphaned
-            # (and can't be inherited if SQLite reuses the row id for a future server).
-            _forget_game_server(server_id)
-            _notify_servers_changed(app)   # row disappears live on other sessions
-            _m = f"Server '{name}' uninstalled.{fw_note}"
-            # A rule left open is not a clean uninstall: shown as a warning, not a green "done".
-            return _index_reply(_m, True, "warning" if fw_left else "success", warn=fw_left)
-
-        except Exception:
-            _em = _log_and_generic("uninstall failed")
-            log_action(current_user, "uninstall_server", target=name, success=False, server=gs)
-            return _index_reply(_em, False, "danger", 500)
+            return _uninstall_claimed(app, gs, gs.remote, server_id, name)
+        finally:
+            _release_uninstall(server_id)
 
     @app.route("/servers/<int:server_id>/edit", methods=["POST"])
     @login_required
@@ -1985,6 +1950,127 @@ def _register_uninstall_and_edit(app):
         db.session.commit()
         log_action(current_user, "edit_server", target=gs.name, server=gs)
         return _form_ok(f"Server '{gs.name}' updated.", "manage_servers")
+
+
+def _claim_uninstall(server_id):
+    """True, and the server is now held, unless an uninstall or an install of it is running."""
+    with _install_lock:
+        if server_id in _uninstalling or (
+                server_id in _install_jobs and _install_jobs[server_id].get("status") == "running"):
+            return False
+        _uninstalling.add(server_id)
+        return True
+
+
+def _release_uninstall(server_id):
+    """Drop the hold _claim_uninstall took."""
+    with _install_lock:
+        _uninstalling.discard(server_id)
+
+
+def _uninstall_claimed(app, gs, remote, server_id, name):
+    """The host side of an uninstall and the row delete, with the server held."""
+    short_name = gs.short_name
+    selfname = gs.lgsm_name
+    # Never stop, kill or `userdel -r -f` an account that is root on the host. Import used to
+    # adopt any account a scan found (see privileged_accounts), including the host's own SSH
+    # login, and a row made that way made this route delete the host's login account and its
+    # home. _destroyable_user refuses only uid 0 and the panel's own account, and on a remote
+    # host it is the only check there is. Asked of the host at the moment of the delete, so a
+    # row imported before the import check existed is covered too.
+    _priv = privileged_accounts(remote, [short_name])
+    if _priv is None:
+        return _index_reply(
+            "Couldn't check the '%s' account on %s — the host did not answer, and the panel "
+            "only deletes an account it has confirmed is not an administrator or root "
+            "account. Nothing was changed; try again when the host is reachable."
+            % (short_name, remote.display_name), False, "danger", 409)
+    if short_name in _priv:
+        return _remove_row_only(app, gs, remote, server_id, name, _priv[short_name])
+
+    try:
+        # Stop the game server and kill any lingering processes BEFORE deleting the user.
+        # Otherwise userdel removes the user + home while the game process is still running —
+        # leaving it orphaned under a now-deleted uid: not manageable from the panel, and still
+        # eating CPU/RAM and holding its port. Graceful LinuxGSM stop first, then a hard kill of
+        # anything left, then delete.
+        _stop_game_processes(remote, short_name, selfname)
+
+        # Close ALL of this server's firewall rules (multi-port games tag every
+        # rule with the server name), then also the legacy single-port cleanup.
+        fw_note, fw_left = _close_game_firewall(remote, gs)
+
+        # Remove LinuxGSM user and home.
+        #
+        # THE EXIT CODE DECIDES WHETHER THE ROW GOES. run_privileged RETURNS rc rather than
+        # raising, and this used to feed it to log_action and nothing else — so a userdel that
+        # FAILED still deleted the panel's row and still answered "Server 'x' uninstalled."
+        # The account, its home and every game file stayed on the host, now with no row to
+        # manage them from, the firewall rules already removed, and the next install of that
+        # game colliding with the surviving user. The audit log was the only trace.
+        #
+        # userdel's codes, which is why this is not a bare `rc == 0`:
+        #   0   removed
+        #   6   no such user — already gone, so there is nothing to orphan and the row SHOULD go
+        #   12  the account was removed but its home could not be — partial, worth saying out loud
+        #   *   the account is still there; keeping the row is what lets the operator retry
+        # Free this account's Steam crash-dump slot while its name still resolves. Steam has
+        # ten of them per host and `userdel` leaves the directory behind, so without this each
+        # uninstall permanently costs the host one slot — and at ten, SteamCMD stops working
+        # for every server on it, installed or not.
+        try:
+            _sm.run_privileged(remote, "steam-dumps-sweep", [short_name], timeout=20)
+        except Exception:
+            _log.debug("uninstall: steam dumps sweep failed", exc_info=True)
+        out, err, rc = _sm.run_privileged(remote, "user-delete-force", [short_name], timeout=30)
+        _gone = rc in (0, 6, 12)
+        log_action(current_user, "uninstall_server", target=gs.name, success=_gone, server=gs)
+        if not _gone:
+            _em = ("Could not remove the '%s' account on %s, so '%s' has been left in place — "
+                   "nothing was deleted from the panel. %s"
+                   % (short_name, remote.display_name, name,
+                      (err or out or "userdel exited %d" % rc).strip()[:200]))
+            return _index_reply(_em, False, "danger", 500)
+        if rc == 12:
+            fw_note += (" The account was removed but its home directory could not be — "
+                        "check /home/%s on the host." % short_name)
+
+        # Remove from DB
+        db.session.delete(gs)
+        db.session.commit()
+        # Clean up this server's per-server backup schedule + status so nothing is orphaned
+        # (and can't be inherited if SQLite reuses the row id for a future server).
+        _forget_game_server(server_id)
+        _notify_servers_changed(app)   # row disappears live on other sessions
+        _m = f"Server '{name}' uninstalled.{fw_note}"
+        # A rule left open is not a clean uninstall: shown as a warning, not a green "done".
+        return _index_reply(_m, True, "warning" if fw_left else "success", warn=fw_left)
+
+    except Exception:
+        _em = _log_and_generic("uninstall failed")
+        log_action(current_user, "uninstall_server", target=name, success=False, server=gs)
+        return _index_reply(_em, False, "danger", 500)
+
+
+def _remove_row_only(app, gs, remote, server_id, name, why):
+    """Uninstall a server whose account is root-capable: the ROW goes, the host is not touched.
+
+    The row is the mistake, and the account is somebody's login. Keeping the row would leave a
+    server nobody can remove.
+    """
+    short_name = gs.short_name
+    log_action(current_user, "uninstall_server", target=gs.name, server=gs,
+               detail="removed from the panel only — the account was left on the host: "
+                      "%s" % why)
+    db.session.delete(gs)
+    db.session.commit()
+    _forget_game_server(server_id)
+    _notify_servers_changed(app)
+    return _index_reply(
+        "'%s' was removed from the panel, but the '%s' account on %s was NOT deleted or "
+        "stopped: %s. Remove its LinuxGSM files by hand if you meant to."
+        % (name, short_name, remote.display_name, why), True, "warning",
+        warn=True)
 
 
 def _index_reply(message, success, category, code=None, warn=False):

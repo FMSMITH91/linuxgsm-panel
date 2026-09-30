@@ -753,9 +753,13 @@ def server_reboot(delay_seconds=5):
     # straight into time.sleep() in a daemon thread: a non-numeric value killed that thread with a
     # TypeError AFTER the route had already answered success and written a server_reboot audit
     # entry — a reboot that is logged and never happens.
+    #
+    # OverflowError too: a JSON body is not limited to finite numbers — Python's json reads
+    # `Infinity` and `1e400` as float('inf'), and int() of that raises OverflowError, which this
+    # did not catch. POST {"delay": 1e400} answered a 500 instead of this sentence.
     try:
         delay = max(0, min(300, int(delay_seconds)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False, "The reboot delay must be a number of seconds (0-300)."
 
     # Schedule reboot in background
@@ -1036,7 +1040,14 @@ def _repo_slug():
         return None
     # \Z where this had `\s*$`: the URL is stripped, so nothing but its end can follow, and `\s*`
     # there only let the lazy repo name re-scan a run of blanks from each of its characters.
-    m = re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?\Z", url.strip())
+    #
+    # `(?::\d+)?` — a PORT after the host. GitHub's documented SSH-over-HTTPS form is
+    # ssh://git@ssh.github.com:443/owner/repo.git (for hosts whose firewall blocks port 22), and
+    # the pattern read "443/owner" as the owner, failed on the rest, and returned None. None is
+    # "no repository to ask", so the CI gate could never read a check on such a host — which used
+    # to mean every commit was 'unknown' and installable, silently. The group is optional and
+    # backtracks, so a scp-style `git@github.com:123/repo` still names owner 123.
+    m = re.search(r"github\.com(?::\d+)?[/:]([^/]+/[^/]+?)(?:\.git)?/?\Z", url.strip())
     return m.group(1) if m else None
 
 
@@ -1049,26 +1060,99 @@ _CI_BAD = {"failure", "timed_out", "cancelled", "action_required", "startup_fail
 # commit even when the run is for a pull request, so without this a PR whose coverage upload
 # failed (no artifact, a Codacy outage, an expired token) marked main's tip failing, and no panel
 # was offered it until the next merge. tests/unit ties this name to the workflow's job name.
-_CI_IGNORE = {"deploy", "Upload coverage to Codacy"}
+#
+# "Code-scanning alerts gate" is codeql-alerts.yml's job, and the same kind of misfiled run: it
+# judges ONE commit (the head of the CodeQL run that triggered it) and GitHub files the job under
+# whatever main's tip is when it runs. Its verdict reaches the commit it is about as a check run
+# the job posts itself, named "Open code-scanning alerts" (see _CI_REQUIRED); the job's own run
+# says nothing about the commit it lands on.
+_CI_IGNORE = {"deploy", "Upload coverage to Codacy", "Code-scanning alerts gate"}
+# Checks a commit must CARRY before it can be 'passing', when it changed anything the CI and
+# CodeQL workflows run for (see _ci_suite_expected). "Every check that exists is green" was the
+# rule, and it is only a rule about the checks that exist so far. "Open code-scanning alerts" is
+# posted after CodeQL completes, a minute or two after everything else has gone green, so for
+# that minute a commit with a new alert read 'passing' and was installed. The same holds for any
+# check that has not registered yet. So the set is named, and a commit missing any of it is
+# 'pending'.
+#
+# A name ending in "(" is a PREFIX, for a matrix job: `checks (ubuntu-24.04 · py3.12)`. The
+# matrix changes (a Python is added, an image retired) and the panel judging a NEW commit is
+# running the OLD code, so an exact matrix name would strand every installed panel on its version
+# the day the matrix moved. The same is true of renaming any job here: it holds every panel back
+# until it is updated by hand. tests/unit holds this list to the workflow files, and deploy.yml's
+# verify step carries the same list (a unit test holds the two equal).
+_CI_REQUIRED = ("checks (", "coverage", "js coverage", "gamedig lockfile (", "Analyze (",
+                "Open code-scanning alerts")
+# ci.yml's and codeql.yml's shared paths-ignore (a unit test holds the three equal): a commit
+# that changed only these runs neither workflow, so none of _CI_REQUIRED will ever appear on it.
+_CI_PATHS_IGNORED_FILES = {"LICENSE", ".gitignore", ".gitattributes", ".editorconfig"}
+
+
+def _ci_path_ignored(path):
+    """True for a path ci.yml and codeql.yml do not run for ('**/*.md', 'docs/**', and the files)."""
+    return path.endswith(".md") or path.startswith("docs/") or path in _CI_PATHS_IGNORED_FILES
+
+
+def _ci_name_matches(required, name):
+    """Whether check-run `name` is the _CI_REQUIRED entry `required` (a trailing '(' is a prefix)."""
+    return name == required or (required.endswith("(") and name.startswith(required))
+
+
+def _ci_suite_expected(sha, runs):
+    """Whether `sha` must carry every check in _CI_REQUIRED before it can pass.
+
+    Yes when any of them is already on it (the suite ran: the rest is on its way), and yes when
+    the commit changed a path the suite runs for. A docs-only commit runs neither CI nor CodeQL,
+    and demanding their checks of it would hold it 'pending' for ever. Fails SAFE: a diff the
+    checkout cannot produce (a root commit, one not fetched) expects the whole suite."""
+    if any(_ci_name_matches(req, r.get("name") or "") for r in runs for req in _CI_REQUIRED):
+        return True
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha or ""):
+        return True
+    out, _, rc = _git(["diff", "--name-only", sha + "^1", sha, "--"], timeout=20)
+    if rc != 0:
+        return True
+    return any(not _ci_path_ignored(f.strip()) for f in (out or "").splitlines() if f.strip())
+
+
+# Why the last _remote_ci_state answer was 'unknown', in words for the update card. Written by
+# _remote_ci_state, read by _compute_update_status straight after its call; both run under
+# _update_lock (panel_update_status), so one computation's reason is never another's.
+_ci_unknown_why = {"reason": ""}
+_CI_WHY_NO_SLUG = ("this panel's origin is not a github.com repository address it recognises, "
+                   "so its automated checks cannot be looked up")
+_CI_WHY_NOT_FOUND = ("GitHub did not show this repository's automated checks (a private "
+                     "repository cannot be checked without a token)")
+_CI_WHY_UNREACHABLE = "GitHub could not be reached to read its automated checks"
 
 
 def _remote_ci_state(sha):
     """Best-effort: have ALL of the remote commit `sha`'s checks passed on GitHub yet?
 
     Returns 'passing' | 'pending' | 'failing' | 'unknown'. The panel offers an update only once
-    EVERY check on the commit has completed successfully — CI plus the security scans (CodeQL,
-    Bandit, Semgrep, Gitleaks, pip-audit) and Lighthouse — so "check for updates" never surfaces
-    a commit while anything is still running or after any check failed. (The `deploy` action is
-    ignored: it's the deployment, not a verification.) Reads GitHub's public check-runs API
-    anonymously (the production panel has no token); any network/parse error → 'unknown', which
-    the caller treats leniently so an API hiccup never hides a real update. GitHub's rate limit is
-    not a hiccup — it is 'pending' (see the handler below).
+    EVERY check on the commit has completed successfully AND the commit carries the checks it is
+    expected to (_CI_REQUIRED) — CI, CodeQL, and the code-scanning alerts check, which is where
+    CodeQL's, Bandit's and Semgrep's findings gate (all three upload to code scanning); plus
+    pip-audit, Gitleaks and Lighthouse, which fail their own checks. So "check for updates" never
+    surfaces a commit while anything is still running, before a late check has appeared, or after
+    any check failed. (The _CI_IGNORE checks are ignored: they are not verifications.) Reads
+    GitHub's public check-runs API anonymously (the production panel has no token).
 
-    Registration timing isn't a problem in practice: every check here is push-triggered, so they
-    all register within seconds of the push — long before CI (minutes) completes — so seeing
-    'all completed' really does mean all of them, not just the fast ones."""
+    'unknown' means the checks could not be READ — no github.com origin, GitHub unreachable, a
+    404 from a private repository — and is NOT installable: the caller stops and says why (the
+    reason is left in _ci_unknown_why). It used to be accepted "so an API hiccup never hides a
+    real update", and what that bought was the reverse: the walk takes the tip first, so any
+    panel that could not read GitHub — including every panel whose origin the slug pattern did
+    not recognise, permanently and without a word — was offered the one commit nobody had
+    verified. GitHub's rate limit is not 'unknown' but 'pending' (see the handler below).
+
+    Registration timing: the push-triggered checks all register within seconds of the push, long
+    before CI (minutes) completes. The one that does not is "Open code-scanning alerts", posted
+    after CodeQL finishes — which is why presence is REQUIRED rather than inferred."""
+    _ci_unknown_why["reason"] = ""
     slug = _repo_slug()
     if not slug:
+        _ci_unknown_why["reason"] = _CI_WHY_NO_SLUG
         return "unknown"
     # PAGED. One page of 100 was "enough for now", and the failure mode if it ever stopped being
     # enough is the wrong one: a check that did not fit on page 1 is simply not seen, so a commit
@@ -1093,17 +1177,21 @@ def _remote_ci_state(sha):
     except urllib.error.HTTPError as e:
         # GitHub ANSWERED, and the answer was not the checks. 403 and 429 are its anonymous rate
         # limit (60 requests an hour per IP), which this gate's own polling reaches during a red
-        # streak on main: every recompute re-queries the tip and each commit under it. HTTPError
-        # is a URLError, so it used to land below as 'unknown' — which the caller accepts as
-        # installable — and from then on a tip CI had marked FAILING was offered and installed.
-        # A limit that lasts the rest of the hour is not an outage; it means "not verified yet".
+        # streak on main: every recompute re-queries the tip and each commit under it. A limit
+        # that lasts the rest of the hour is not an outage; it means "not verified yet".
+        # 404 (and 401) is a private repository asked anonymously: 'unknown', with that reason.
         _log.debug("CI-gate: GitHub answered HTTP %s for %s", e.code, sha, exc_info=True)
-        return "pending" if e.code in (403, 429) else "unknown"
+        if e.code in (403, 429):
+            return "pending"
+        _ci_unknown_why["reason"] = (_CI_WHY_NOT_FOUND if e.code in (401, 404)
+                                     else _CI_WHY_UNREACHABLE)
+        return "unknown"
     except (urllib.error.URLError, ValueError, OSError, http.client.HTTPException):
         # HTTPException: a truncated body (IncompleteRead) is not an OSError, and escaped this
         # function entirely.
         _log.debug("CI-gate: couldn't read check-runs for %s", sha, exc_info=True)
-        return "unknown"     # a partial read must not be judged: 'unknown' is treated leniently
+        _ci_unknown_why["reason"] = _CI_WHY_UNREACHABLE
+        return "unknown"     # a partial read must not be judged
     runs = [r for r in runs if r.get("name") not in _CI_IGNORE]
     if not runs:
         return "pending"  # push landed but no checks have registered yet
@@ -1111,6 +1199,13 @@ def _remote_ci_state(sha):
         return "pending"  # at least one check still queued/running
     if any((r.get("conclusion") or "") in _CI_BAD for r in runs):
         return "failing"  # every check finished, but one didn't pass
+    # Every check that EXISTS passed; now the ones that must exist. A SKIPPED run does not count
+    # as present: main's tip carries skipped workflow_run runs filed there for other events (a
+    # fork PR's), and "skipped" judged nothing.
+    if _ci_suite_expected(sha, runs):
+        judged = [r.get("name") or "" for r in runs if r.get("conclusion") != "skipped"]
+        if not all(any(_ci_name_matches(req, n) for n in judged) for req in _CI_REQUIRED):
+            return "pending"  # a check it must carry has not appeared yet
     return "passing"
 
 
@@ -1255,7 +1350,7 @@ def _compute_update_status():
     # never what a merge brought in through its second parent. A pull request merged with a merge
     # commit brings all of its commits into the branch's ancestry, including an intermediate one
     # whose change was reverted before the merge. That commit was never the branch's tip, the CI
-    # state the walk asks about is its pull-request run (or none: "unknown" is accepted), and a walk
+    # state the walk asks about is its pull-request run (or none: "unknown", accepted then), and a walk
     # over plain ancestry offered it as the verified target while the merge was still being
     # checked. install.sh honours a pin only on the first-parent line too, so the two agree on what
     # can be installed.
@@ -1301,11 +1396,20 @@ def _compute_update_status():
     # go on to fail). But if the TIP is still verifying while an EARLIER commit has already
     # passed, offer that earlier verified commit instead of blocking entirely. So: walk the
     # commits we're behind by, newest first, and update to the first one that's passed CI.
-    # 'unknown' (API unreachable) counts as acceptable so a transient API error never hides a
-    # legitimate update. Capped so a long-offline panel can't fire dozens of API calls.
+    # Capped so a long-offline panel can't fire dozens of API calls.
+    #
+    # 'unknown' (the checks could not be READ) is NOT acceptable, and it ends the walk. It used to
+    # count as passing "so a transient API error never hides a legitimate update" — and since the
+    # walk starts at the tip, every panel that could not read GitHub was offered the tip, the one
+    # commit nobody had verified: a panel offline from api.github.com, one on a private fork, and
+    # one whose origin _repo_slug did not recognise, which was that way permanently and silently.
+    # The walk stops rather than going on down: whatever stopped one read stops the next (another
+    # 8-second timeout each, up to 25 of them), and the card says why instead (below).
     revs, _, _ = _git(["rev-list", "--first-parent", "-n", "25", "HEAD.." + ref])
     commits = [c for c in (revs or "").split() if c]
+    _ci_unknown_why["reason"] = ""
     tip_state = _remote_ci_state(commits[0]) if commits else "unknown"
+    unknown_why = _ci_unknown_why["reason"] if tip_state == "unknown" else ""
     # Only a commit that CONTAINS this checkout is an update to it, while the checkout is on the
     # branch — install.sh moves such a checkout only forward, and holds rather than move it
     # sideways (see _choose_update_target). After a foxtrot push (main fast-forwarded onto a branch
@@ -1327,13 +1431,23 @@ def _compute_update_status():
     # about each of them on every recheck while the merge was in CI spent the hour's limit, which
     # then read as "pending" for the merge itself once it had passed.
     target_sha, target_state, newer_unverified = None, tip_state, 0
+    unreadable = False
     for idx, sha in enumerate(commits):
         if not _contains_head(sha):
             continue
-        st = tip_state if idx == 0 else _remote_ci_state(sha)
-        if st in ("passing", "unknown"):
+        if idx == 0:
+            st = tip_state
+        else:
+            _ci_unknown_why["reason"] = ""
+            st = _remote_ci_state(sha)
+            if st == "unknown":
+                unknown_why = _ci_unknown_why["reason"]
+        if st == "passing":
             target_sha, target_state, newer_unverified = sha, st, idx
             break   # newest verified commit — anything above it is still unverified
+        if st == "unknown":
+            unreadable = True
+            break   # the checks cannot be read: nothing below can be verified either
 
     if not target_sha:
         # Nothing in range has cleared CI. Do NOT offer an update here, because the installer will
@@ -1354,13 +1468,25 @@ def _compute_update_status():
         #
         # ci_state and behind_tip are still reported for the API and the tests; only the card's
         # wording is deliberately silent.
+        #
+        # EXCEPT when the checks could not be read at all. That is not a state that passes in a
+        # few minutes: an origin the panel does not recognise, or a private repository, stays
+        # that way, and a silent card would sit on "You're up to date" while the install fell
+        # further behind for good. So this one says so, and why. ci_state is 'unknown' for it.
         full_tip = commits[0] if commits else ""
         tip_ver = version_for_commit(ref)
-        return {**base, "update_available": False, "ci_state": tip_state,
-                "behind": behind_n, "behind_tip": behind_n,
-                "target_sha": full_tip,
-                "remote_version": tip_ver or "?",
-                "changes": _runtime_changelog("HEAD.." + ref)[:10]}
+        out = {**base, "update_available": False,
+               "ci_state": "unknown" if unreadable else tip_state,
+               "behind": behind_n, "behind_tip": behind_n,
+               "target_sha": full_tip,
+               "remote_version": tip_ver or "?",
+               "changes": _runtime_changelog("HEAD.." + ref)[:10]}
+        if unreadable:
+            out["unverified_reason"] = unknown_why or _CI_WHY_UNREACHABLE
+            out["message"] = ("A newer version exists, but it couldn't be verified: %s. It will "
+                              "be offered once its automated checks can be confirmed."
+                              % out["unverified_reason"])
+        return out
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
     behind_target = behind_n - newer_unverified   # commits from HEAD up to & including the target
@@ -1397,16 +1523,99 @@ def _compute_update_status():
     }
 
 
+# ONE status computation at a time. Each is a `git fetch` of refs/heads/<branch> into
+# refs/remotes/origin/<branch> plus up to 25 anonymous GitHub requests, and nothing serialised
+# them: the update card's restart watcher asked for the status every 1.5 seconds, the badge, the
+# bots and the card itself on top, and each miss started its own. Two fetches of the same ref
+# collide on its lock ("cannot lock ref"), and the second one fails — the card cached THAT for
+# five minutes as "Couldn't reach the update source". A caller that arrives while one is running
+# waits for it and takes its answer (see panel_update_status).
+_update_lock = threading.Lock()
+# When this process last launched the installer. Until the new run's log exists (the launcher
+# replaces it a moment after _launch_installer returns), this is the only witness that a run is
+# under way. See _update_in_progress.
+_update_launched = {"ts": 0.0, "log": ""}
+_UPDATE_LAUNCH_GRACE = 120
+# A log that has not been written for this long, with no exit line, is a run that died (a reboot
+# mid-update, the unit killed) — not one in progress. install.sh writes a line at every step, and
+# none of its steps is silent this long, so a live run always looks live.
+_UPDATE_STALE_LOG = 20 * 60
+
+
+def _update_in_progress():
+    """Whether a self-update (or branch switch) is running right now.
+
+    Read from the run's own log, which outlives the panel's restart: it exists, was written
+    recently, and has no "=== installer exit N ===" line yet. Before that log exists, the launch
+    this process made in the last _UPDATE_LAUNCH_GRACE seconds counts. Cheap: a stat and a read of
+    the log's tail, no git and no network."""
+    now = time.time()
+    path = _update_log_path()
+    # The launch counts only for the log it was made for (a launch under another PANEL_DIR, as the
+    # tests make, says nothing about this one).
+    launched = (_update_launched["ts"] if _update_launched.get("log") == path else 0.0)
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        return (now - launched) < _UPDATE_LAUNCH_GRACE
+    if mtime < launched - 1:
+        return (now - launched) < _UPDATE_LAUNCH_GRACE   # the previous run's log
+    if (now - mtime) > _UPDATE_STALE_LOG:
+        return False
+    try:
+        return not panel_update_log().get("finished")
+    except Exception:
+        return False
+
+
+def _update_running_status():
+    """The status to answer with while an update is running — computed WITHOUT git fetch or GitHub.
+
+    install.sh fetches `+refs/heads/<branch>:refs/remotes/origin/<branch>` too, into the same ref,
+    and the restart watcher on the update card used to ask for a full status every 1.5 seconds for
+    the whole of the run. Each of those was a fetch of that ref (when the five-minute cache was
+    cold, and _launch_installer had just emptied it) and GitHub requests: a fetch that took the
+    ref's lock first made install.sh's fetch fail and the UPDATE abort; the anonymous API limit
+    (60 an hour) was spent in about a minute and a half, and every check after that read
+    'pending' for the rest of the hour. And the failure was then cached for five minutes.
+
+    So nothing is fetched or asked while a run is going, and nothing here is cached: once it ends
+    the next call computes afresh. update_available is False (an install is not allowed while one
+    is running — the invariant _compute_update_status keeps). current_sha and branch are what the
+    card's watcher compares after the restart; read with rev-parse only, never `git status`, which
+    may take the index lock the installer's reset needs."""
+    sha, _, _ = _git(["rev-parse", "--short", "HEAD"], timeout=10)
+    return {"git": True, "update_available": False, "update_running": True,
+            "current_version": panel_version(), "current_sha": sha.strip(),
+            "branch": _tracked_branch(),
+            "message": "An update is being installed right now — check again once it has finished."}
+
+
 def panel_update_status(force=False):
     """Whether the panel is behind its GitHub remote. Cached ~5 min (each check does
-    a network `git fetch`) unless `force` is set."""
-    now = time.time()
-    if not force and _update_cache["data"] is not None and (now - _update_cache["ts"]) < _UPDATE_TTL:
+    a network `git fetch`) unless `force` is set.
+
+    Single-flight (_update_lock): a caller that arrives while another computation is running waits
+    for it and returns ITS answer — with force too, since a status computed while this caller
+    waited is as fresh as the one it would compute. And while an update is running nothing is
+    computed at all (see _update_running_status)."""
+    if _update_in_progress():
+        return _update_running_status()
+    if not force and _update_cache["data"] is not None and \
+            (time.time() - _update_cache["ts"]) < _UPDATE_TTL:
         return _update_cache["data"]
-    data = _compute_update_status()
-    _update_cache["ts"] = now
-    _update_cache["data"] = data
-    return data
+    seen = _update_cache.get("seq", 0)
+    with _update_lock:
+        if _update_cache.get("seq", 0) != seen and _update_cache["data"] is not None:
+            return _update_cache["data"]      # finished while this caller waited for the lock
+        if _update_in_progress():             # an update was launched while it waited
+            return _update_running_status()
+        now = time.time()
+        data = _compute_update_status()
+        _update_cache["ts"] = now
+        _update_cache["data"] = data
+        _update_cache["seq"] = seen + 1
+        return data
 
 
 def panel_self_update():
@@ -1427,8 +1636,10 @@ def panel_self_update():
     # Enforce the CI gate server-side, not just by hiding the button. Re-check fresh so we
     # also catch the race where a newer, unverified commit landed between page-load and the
     # click. Refuse to pull onto a commit whose CI is still running or has FAILED — updating
-    # to it could bring up an unstable panel. 'unknown' (GitHub unreachable) stays allowed so
-    # a transient API outage can't lock the admin out of a legitimate update.
+    # to it could bring up an unstable panel. 'unknown' (the checks could not be read) is refused
+    # too: it used to be allowed "so an API outage can't lock the admin out", which installed the
+    # unverified tip on every panel that could not read GitHub. It has no target, so the
+    # update_available test below refuses it, with the status's own reason.
     try:
         st = panel_update_status(force=True)
     except Exception:
@@ -1444,6 +1655,9 @@ def panel_self_update():
                            "automated checks. It'll be offered once a fixed version passes CI.")
         return False, ("This update is still being verified — its checks are running. "
                        "Try again once they've passed (usually a couple of minutes).")
+    if st.get("behind", 0) > 0 and st.get("ci_state") == "unknown":
+        return False, (st.get("message") or "This update couldn't be verified, so it wasn't "
+                       "started: its automated checks could not be read from GitHub.")
     installer = os.path.join(PANEL_DIR, "install.sh")
     if not os.path.isfile(installer):
         return False, "install.sh is missing, so the panel can't self-update safely."
@@ -1464,6 +1678,18 @@ def panel_self_update():
     # Follow whatever branch the panel is tracking (default 'main'); the launcher passes it to
     # install.sh so a panel that has switched branches keeps updating on THAT branch.
     return _launch_installer(target_ref=target_ref, branch=_tracked_branch())
+
+
+def _mark_update_launched():
+    """Record a launch that succeeded, so the status check stands down for the run.
+
+    This used to be only `_update_cache["ts"] = 0.0`, "so the badge re-checks after the restart"
+    — which made the very next status request a full recompute, a `git fetch` of the same ref
+    install.sh was about to fetch, while the update card polled every 1.5 seconds. Now
+    panel_update_status answers from _update_running_status until the run's log says it ended; the
+    cache is still emptied, so the first status after that is computed afresh."""
+    _update_launched.update(ts=time.time(), log=_update_log_path())
+    _update_cache["ts"] = 0.0
 
 
 def _launch_installer(target_ref="", branch="", started_msg=None):
@@ -1529,7 +1755,7 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         out, err, rc = _run_verb("panel-self-update",
                                  [target_ref or "-", branch or "-"], timeout=20)
         if rc == 0:
-            _update_cache["ts"] = 0.0
+            _mark_update_launched()
             return True, (started_msg or
                           ("Update started — the panel is backing up, updating, and verifying it "
                            "restarts cleanly. If the new version fails to come up it rolls back "
@@ -1571,7 +1797,7 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
             _log.error("self-update launcher failed: rc=%s %s",
                        _r.returncode, (_r.stderr or "")[:200])
             return False, "Could not start the updater — check the panel logs."
-        _update_cache["ts"] = 0.0   # invalidate so the badge re-checks after the restart
+        _mark_update_launched()
         return True, (started_msg or
                       ("Update started — the panel is backing up, updating, and verifying it "
                        "restarts cleanly. If the new version fails to come up it rolls back "
@@ -1626,6 +1852,40 @@ def list_panel_branches():
     return branches, branch
 
 
+def _verified_branch_target(branch):
+    """The newest commit of `branch` that passed the CI gate, for a SWITCH to it: (sha, "") or
+    ("", why not). Call under _update_lock (it fetches the ref a status check fetches).
+
+    Not _compute_update_status: that walks HEAD..tip and skips commits that do not contain HEAD,
+    because an update moves a checkout forward. A switch comes from another branch, so HEAD says
+    nothing about which of the branch's commits may be installed; the walk is the branch's own
+    first-parent line from its tip, judged by the same _remote_ci_state (required checks and all),
+    newest first, and 'unknown' ends it exactly as it ends an update's."""
+    ref = _REMOTE_TRACKING + branch
+    _, _, frc = _git(["fetch", "--quiet", "--no-tags", "origin",
+                      "+refs/heads/%s:%s" % (branch, ref)], timeout=45)
+    _, _, xrc = _git(["show-ref", "--verify", "--quiet", ref])
+    if frc != 0 or xrc != 0:
+        return "", ("Couldn't fetch '%s' from the update source, so there is no verified version "
+                    "to switch to." % branch)
+    revs, _, _ = _git(["rev-list", "--first-parent", "-n", "25", ref])
+    states = []
+    for sha in [c for c in (revs or "").split() if c]:
+        _ci_unknown_why["reason"] = ""
+        st = _remote_ci_state(sha)
+        if st == "passing":
+            return sha, ""
+        if st == "unknown":
+            return "", ("Not switched: '%s' couldn't be verified — %s." %
+                        (branch, _ci_unknown_why["reason"] or _CI_WHY_UNREACHABLE))
+        states.append(st)
+    if "pending" in states:
+        return "", ("Not switched: no version of '%s' has finished its automated checks yet. Try "
+                    "again once they've passed (usually a few minutes)." % branch)
+    return "", ("Not switched: none of the recent versions of '%s' passed its automated checks."
+                % branch)
+
+
 def panel_switch_branch(branch):
     """Point the panel at a different branch and check it out, with the SAME snapshot / health-check
     / auto-rollback safety as a normal update. Superadmin-gated at the route. Returns (ok, message)."""
@@ -1641,6 +1901,28 @@ def panel_switch_branch(branch):
     if rc != 0 or ("refs/heads/" + branch) not in [
             ln.split("\t", 1)[-1].strip() for ln in (out or "").splitlines()]:
         return False, "Branch '%s' doesn't exist on the remote." % branch
+    # WHICH commit of that branch. The switch always launched with an empty target, and install.sh
+    # resets an empty target to the branch's tip — so switching (back) to main installed main's
+    # newest commit whether or not its checks had finished, or passed: the one path around the CI
+    # gate panel_self_update enforces. A branch the gate covers now gets the gate's answer (the
+    # newest verified commit, or a refusal saying why); any other branch is the explicit testing
+    # escape hatch it always was, and the messages say it installs an unverified tip.
+    target = ""
+    if branch == _DEFAULT_BRANCH:
+        if _update_in_progress():
+            return False, "An update is being installed right now — switch once it has finished."
+        with _update_lock:
+            target, why = _verified_branch_target(branch)
+        if not target:
+            return False, why
+        msg = ("Switching to '%s' at %s, its newest version that passed its automated checks — the "
+               "panel is backing up, checking it out and verifying it restarts cleanly (auto-rollback "
+               "if it doesn't). This takes up to a minute." % (branch, target[:7]))
+    else:
+        msg = ("Switching to '%s' — this installs that branch's newest commit AS IT IS: branches "
+               "other than %s are not checked by the panel's update gate, so it is unverified code, "
+               "for testing. The panel is backing up and verifying it restarts cleanly "
+               "(auto-rollback if it doesn't). This takes up to a minute." % (branch, _DEFAULT_BRANCH))
     try:
         from panel.core import config as _cfg
         _previous = (_cfg.load_config().get("panel_branch") or "").strip()
@@ -1648,10 +1930,9 @@ def panel_switch_branch(branch):
     except Exception:
         _log.exception("switch-branch: could not save tracked branch")
         return False, "Could not save the branch selection."
-    msg = ("Switching to '%s' — the panel is backing up, checking out that branch and verifying it "
-           "restarts cleanly (auto-rollback if it doesn't). This takes up to a minute." % branch)
-    # target_ref empty → install.sh resets to the tip of PANEL_BRANCH.
-    ok, launch_msg = _launch_installer(target_ref="", branch=branch, started_msg=msg)
+    # target_ref empty (a non-gated branch only) → install.sh resets to the tip of PANEL_BRANCH. A
+    # pin is honoured only on that branch's first-parent line, which is where the walk found it.
+    ok, launch_msg = _launch_installer(target_ref=target, branch=branch, started_msg=msg)
     if not ok:
         # Put the tracked branch back. The config write above happens BEFORE the launch, and the
         # launch really can fail ("install.sh is missing, so the panel can't self-update safely").
@@ -2730,7 +3011,7 @@ def fail2ban_top_ips(limit=20, days=7):
     limit = max(1, min(int(limit or 20), 100))
     try:
         days = max(1, min(int(days or 7), 90))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         days = 7
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     # Was a five-stage zcat|awk|grep|awk|sort|head pipeline running as root, with the cutoff date
@@ -2759,7 +3040,7 @@ def _f2b_cutoff(days):
     from datetime import datetime, timedelta
     try:
         days = max(1, min(int(days or 7), 90))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         days = 7
     return (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
@@ -2888,7 +3169,7 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     whitelisted (never banned). Idempotent. Returns (ok, message)."""
     try:
         web_port = int(web_port)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False, "Invalid web port."
     if not (1 <= web_port <= 65535):
         return False, "Invalid web port."
@@ -2958,7 +3239,7 @@ def ensure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     install fail2ban (that's the installer's job) — no-ops when it isn't present. Returns (ok, msg)."""
     try:
         web_port = int(web_port)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False, "Invalid web port."
     st = panel_fail2ban_status()
     if not st.get("installed"):
@@ -3318,7 +3599,9 @@ def github_repo_url():
     forked). Falls back to the canonical repo. No trailing slash, so callers can append a path."""
     try:
         out, _, rc = _git(["config", "--get", "remote.origin.url"])
-        m = re.search(r"github\.com[:/]([^/\s]+/[^/\s.]+)", out.strip()) if rc == 0 else None
+        # (?::\d+)? as in _repo_slug: ssh://git@ssh.github.com:443/o/r linked to github.com/443/o.
+        m = (re.search(r"github\.com(?::\d+)?[:/]([^/\s]+/[^/\s.]+)", out.strip())
+             if rc == 0 else None)
         return "https://github.com/%s" % m.group(1) if m else _CANONICAL_REPO
     except Exception:
         return _CANONICAL_REPO

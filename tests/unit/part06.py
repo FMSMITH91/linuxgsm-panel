@@ -2194,7 +2194,7 @@ _inst_txt = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
 _snap_fn = [ln for ln in _inst_txt.splitlines() if ln.strip().startswith("snapshot_ok() {")]
 check("install.sh: the snapshot check is a named function this test can run",
       len(_snap_fn) == 1, str(_snap_fn))
-_rb_start = '    if ! tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then'
+_rb_start = '    if ! ${TREE_SUDO:-} tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then'
 check("install.sh: the rollback's unpack is guarded, not bare",
       _rb_start in _inst_txt and 'tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"\n' not in _inst_txt)
 if _snap_fn and _rb_start in _inst_txt:
@@ -4341,7 +4341,7 @@ try:
     check("install.sh: the fresh root path installs the recovery command BEFORE the chown",
           "install_recovery_command" in _su_fresh
           and _su_fresh.index("install_recovery_command")
-          < _su_fresh.index('chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"'),
+          < _su_fresh.index("_chown_panel_tree"),
           _su_fresh[:300])
 finally:
     _shutil.rmtree(_su_sb, ignore_errors=True)
@@ -7832,9 +7832,12 @@ check("telegram: a priming poll that did not answer leaves the bot UNPRIMED",
 # _tg_route_update dispatched it like a new one: fixing a typo in last week's `/stop codserver`
 # stopped the server again. Driven through the router with the dispatcher stubbed.
 _tge_calls = []
-_tge_saved = _tgm._tg_dispatch
+_tge_saved = (_tgm._tg_dispatch, _tgm._tg_command_users)
 try:
     _tgm._tg_dispatch = lambda *a, **k: _tge_calls.append(a[3])
+    # /stop needs its sender on the allowed list now (commands.OPEN_COMMANDS); user 7 is on it, so
+    # this still isolates the edited-message rule.
+    _tgm._tg_command_users = lambda: frozenset({"7"})
     _tge_msg = {"text": "/stop codserver", "chat": {"id": 42}, "from": {"id": 7}}
     _tgm._tg_route_update(None, "1:tok", "42", "PanelBot", {"update_id": 1, "edited_message": _tge_msg})
     check("telegram: an edited message does not run its command again", _tge_calls == [],
@@ -7843,7 +7846,7 @@ try:
     check("telegram: ...while a new message still does (control)",
           _tge_calls == ["/stop codserver"], repr(_tge_calls))
 finally:
-    _tgm._tg_dispatch = _tge_saved
+    _tgm._tg_dispatch, _tgm._tg_command_users = _tge_saved
 
 # ── /console must not print the "not running" sentinel as console output ──────────────────────
 # `echo NO_SESSION` goes to STDOUT, so out == "NO_SESSION" and the `if not rows` guard could never
@@ -7942,8 +7945,10 @@ for _rt_bot, _rt_mod, _rt_pfx, _rt_reply, _rt_run in (
         for _h, _fn in _rt_saved.items():
             setattr(_rt_mod, _h, _fn)
 for _rt_bot in ("telegram", "discord"):
+    # /say also takes origin=: the sender it is audited under (commands.audit_bot_action).
     _rt_want = {_cmd: [(_helper_name, _args,
-                        ["fence"] if _rt_bot == "discord" and _cmd in ("players", "console") else [])]
+                        ["fence"] if _rt_bot == "discord" and _cmd in ("players", "console")
+                        else ["origin"] if _cmd == "say" else [])]
                 for _cmd, _tail, _helper_name, _args in _rt_cases}
     _rt_have = {_cmd: _rt_got.get((_rt_bot, _cmd)) for _cmd in _rt_want}
     check("bots: the %s router answers each reply-only command with ITS helper, once" % _rt_bot,
@@ -8480,6 +8485,19 @@ try:
     _dp_genv = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                     GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
                     GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+    # The verify step now also waits for the commit's check runs (`gh api …/check-runs`, see
+    # deploy.yml). These checks are about WHICH commit is shipped, so `gh` answers with every
+    # required check passed; part14 drives the waiting itself.
+    _dp_ghbin = os.path.join(_dp_sb, "gh-bin")
+    os.makedirs(_dp_ghbin)
+    with open(os.path.join(_dp_ghbin, "gh"), "w") as _dp_f:
+        _dp_f.write("#!/bin/sh\nfor n in 'checks (x)' coverage 'js coverage' 'gamedig lockfile (22)' "
+                    "'Analyze (python)' 'Open code-scanning alerts'; do\n"
+                    "  printf '{\"name\":\"%s\",\"status\":\"completed\",\"conclusion\":\"success\"}\\n'"
+                    " \"$n\"\ndone\n")
+    os.chmod(os.path.join(_dp_ghbin, "gh"), 0o755)
+    _dp_genv["PATH"] = _dp_ghbin + os.pathsep + _dp_genv.get("PATH", "")
+    _dp_genv["GITHUB_REPOSITORY"] = "o/r"     # set on every runner; the step reads it under set -u
 
     def _dp_git(*a):
         return _sh_sub.run(["git", "-C", _dp_runner, *a], capture_output=True, text=True,
@@ -9217,7 +9235,7 @@ finally:
 # (--no-ff) brings every one of its commits into main's ancestry, including an intermediate one
 # whose change was reverted before the merge: never main's tip, never what main's CI ran. The
 # update check's walk offered such a commit as the verified target while the merge was still being
-# checked (its CI state is its pull-request run's, or none — and "unknown" is accepted), and
+# checked (its CI state is its pull-request run's, or none — and "unknown" was then accepted), and
 # install.sh's pin checks accepted it. Main's own line is its FIRST-PARENT history.
 #
 # The fixture: main is A, then M (a --no-ff merge of a pull request E-F-G, where F reverts E), then
@@ -9771,8 +9789,8 @@ try:
           in _inst, "update_noop_line is not what the no-op branch ends on")
 
     # The panel's update check, for real against a clone at A. The tip and the merge are still being
-    # verified; the pull request's commits carry their PR runs' state, or none ("unknown", which the
-    # walk accepts so an API outage cannot hide an update).
+    # verified; the pull request's commits carry their PR runs' state, or none ("unknown" — which
+    # the walk no longer accepts, and stops at; none of them is on the first-parent line walked).
     _fp_so = _fp_clone("panel", _fp_a)
     _fp_saved = (SO.PANEL_DIR, SO._tracked_branch, SO._remote_ci_state)
     _fp_env_saved = {_k: os.environ.get(_k) for _k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")}

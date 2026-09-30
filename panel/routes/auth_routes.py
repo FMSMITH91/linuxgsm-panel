@@ -21,6 +21,8 @@ import time
 from app import (LOGIN_MAX_FAILS, LOGIN_WINDOW, _LOGIN_BLOCK_LOGGED, _LOGIN_FAILS,
     _LOGIN_FAILS_LOCK, _authlog, _log, _log_ip, _maybe_alert_admin_bruteforce,
     _has_remember_cookie, _prune_login_fails, _qr_svg, _register_session, _session_label)
+from panel.routes._shared import (REAUTH_BLOCKED_MSG, reauth_password, reauth_release,
+    reauth_reserve, spend_totp_step)
 
 
 def register(app):
@@ -193,19 +195,22 @@ def _register_account(app):
             with success=False, the shape delete_group / uninstall_server / send_command already
             use, so it reads as a refusal in the audit list rather than as a mint.
 
-            Recorded but NOT rate-limited, and that is a decision: the same unthrottled password
-            oracle already sits behind account_change_password and account_2fa_disable, which any
-            session holder can hit, so a limit on this route alone moves the guessing one route
-            over instead of closing it — while adding a way to lock somebody out of minting their
-            own token. Each attempt costs a bcrypt compare, which is its own floor on the rate. A
-            real limit belongs on all three at once, beside the login and bearer-token throttles
-            in panel/security/auth.py; what was missing here was the record of the attempt, and
-            that is what this is.
+            It was recorded but NOT rate-limited, on the reasoning that the same unthrottled
+            password oracle sat behind account_change_password and account_2fa_disable, so a limit
+            on this route alone would only move the guessing one route over — and that the real
+            limit belonged on all of them at once. It is on all of them now: every route that
+            re-asks for the current password or a live code shares one per-account budget
+            (_shared.reauth_reserve), so a wrong guess here and one at the password change count
+            against the same allowance.
             """
             log_action(u, "api_token_generate", target=u.username, detail=why, success=False)
             return redirect(url_for("account"))
 
-        if not check_password(request.form.get("password", ""), u.password_hash):
+        _pw = reauth_password(u, request.form.get("password", ""))
+        if _pw == "throttled":
+            flash(REAUTH_BLOCKED_MSG, "danger")
+            return _refused("too many wrong passwords or codes")
+        if _pw != "ok":
             flash("Password incorrect — no API token was minted.", "danger")
             return _refused("wrong password")
         # Checked LAST, and in this order, for the reasons account_2fa_disable spells out: a
@@ -214,20 +219,29 @@ def _register_account(app):
         # what makes an observed code single-use rather than replayable for the rest of its window.
         code = (request.form.get("totp_code") or "").strip()
         if u.totp_enabled:
+            # The code is under the same per-account budget as the password: a failure keeps
+            # its slot, a match gives it back below.
+            _stamp = reauth_reserve(u)
+            if _stamp is None:
+                flash(REAUTH_BLOCKED_MSG, "danger")
+                return _refused("too many wrong passwords or codes")
             ok_2fa = False
             _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
             if _step is not None:
-                if _step <= (u.last_totp_step or 0):
+                # A compare-and-swap, for the reason _login_totp_code gives: two mints with one
+                # code could otherwise both pass a read-then-write.
+                if _step <= (u.last_totp_step or 0) or not spend_totp_step(u, _step):
+                    db.session.rollback()
                     flash("That code has already been used — wait for your authenticator to show "
                           "the next one.", "danger")
                     return _refused("replayed authenticator code")
-                u.last_totp_step = _step
                 ok_2fa = True
             elif u.use_backup_code(code):
                 ok_2fa = True
             if not ok_2fa:
                 flash("That authenticator code didn't match — no API token was minted.", "danger")
                 return _refused("wrong authenticator code")
+            reauth_release(u, _stamp)
         token = u.generate_api_token()
         # The token, and with it the spent step / backup code. NOT redundant with the commit
         # inside log_action on the next line, even though that one happens to flush this same
@@ -327,8 +341,14 @@ def _register_2fa_and_profile(app):
             # ONE-WAY: recovery needs another superadmin's reset_2fa or shell access to the panel
             # host. Same idiom and same order as account_2fa_disable and account_change_password.
             _u = current_user._get_current_object()
-            if not check_password(request.form.get("password", ""), _u.password_hash):
-                flash("Password incorrect — two-factor authentication was not enabled.", "danger")
+            # Throttled per account and audited, as its mirror is (see account_2fa_disable).
+            _pw = reauth_password(_u, request.form.get("password", ""))
+            if _pw != "ok":
+                log_action(_u, "2fa_enabled", target=_u.username, success=False,
+                           detail=("refused: too many wrong passwords or codes"
+                                   if _pw == "throttled" else "refused: wrong password"))
+                flash(REAUTH_BLOCKED_MSG if _pw == "throttled" else
+                      "Password incorrect — two-factor authentication was not enabled.", "danger")
                 # Back to this page, not /account: the pending secret is still in the session, so
                 # the QR they have already scanned stays valid and they can simply try again.
                 return redirect(url_for("account_2fa_enable"))
@@ -343,11 +363,26 @@ def _register_2fa_and_profile(app):
             _enrol_step = (verify_totp_step(secret, request.form.get("totp_code", ""))
                            if secret else None)
             if _enrol_step is not None:
-                current_user.totp_secret = encrypt_secret(secret)
-                current_user.totp_enabled = True
-                current_user.last_totp_step = _enrol_step      # spend it, in the same commit
+                # Spent through the same compare-and-swap as every other live-code route, not the
+                # plain assignment this was: that wrote the step unconditionally, so two enrolment
+                # POSTs with one code both passed the totp_enabled check above, both turned 2FA on
+                # and each rendered its OWN set of backup codes — only the later commit's set was
+                # stored, and the holder of the other page was left keeping codes that never work.
+                # Now exactly one wins; the other is told the code is spent and keeps the QR.
+                #
+                # The eight backup-code hashes (~2-3s of bcrypt in tpool) are made BEFORE the spend:
+                # the spend is an immediate UPDATE that takes SQLite's write lock, and holding it
+                # across that bcrypt run froze every other writer in SQLite's hub-blocking busy
+                # handler until the busy timeout. Wasted on a refused spend, which is rare.
                 codes = generate_backup_codes()
                 current_user.set_backup_codes(codes)
+                if not spend_totp_step(_u, _enrol_step):
+                    db.session.rollback()
+                    flash("That code has already been used — wait for your authenticator to show "
+                          "the next one.", "danger")
+                    return redirect(url_for("account_2fa_enable"))
+                current_user.totp_secret = encrypt_secret(secret)
+                current_user.totp_enabled = True
                 db.session.commit()
                 session.pop("_2fa_setup_secret", None)
                 log_action(current_user, "2fa_enabled", target=current_user.username)
@@ -430,8 +465,23 @@ def _register_sign_out_everywhere(app):
         if keep is None:
             # A legacy login (cookie from before per-session tracking) has no row to keep, so give
             # this device one now — otherwise the epoch bump signs it out, the exact thing this
-            # route promises not to do.
-            _register_session(user, remember)
+            # route promises not to do. And ONLY with one: the answer was ignored, so a failed
+            # insert still re-issued the cookie below, with no row behind it — a session the
+            # account page cannot list or revoke, minted by the button that exists to end them.
+            # The revocation is committed by now; this device is left signed out, and told.
+            try:
+                _row_ok = _register_session(user, remember)
+            except Exception:
+                db.session.rollback()
+                _row_ok = None
+            if not _row_ok:
+                log_action(user, "revoke_sessions", target=user.username,
+                           detail="signed out %d other session(s); this device could not be "
+                                  "re-registered and was signed out too" % n)
+                logout_user()
+                flash("Every other session was signed out, and so was this one — the panel could "
+                      "not register this device's new session. Please sign in again.", "warning")
+                return redirect(url_for("login"))
         else:
             user._sid = keep.sid
         # Re-issue THIS device's cookie against the new epoch. login_user also rewrites the
@@ -624,8 +674,16 @@ def _login_succeed(attempt, user, remember):
     if _lang:
         session["lang"] = _lang
     session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
-    _register_session(user, remember)   # server-side row (sets user._sid) BEFORE
-    login_user(user, remember=remember)   # login_user, so get_id embeds the sid
+    # Server-side row (sets user._sid) BEFORE login_user, so get_id embeds the sid. A login whose
+    # row could not be written is REFUSED, not issued without one: the "<id>:<epoch>" cookie that
+    # fell out of it never expired server-side, never appeared on the account page, and was bound
+    # to no client (see _register_session). Not a failed login either — the password was right —
+    # so nothing is counted against the throttle; the person is simply asked to try again.
+    if not _register_session(user, remember):
+        flash("Signing in could not be completed just now — please try again in a moment.",
+              "danger")
+        return render_template("login.html")
+    login_user(user, remember=remember)
     # The client this session belongs to, for "strong" protection (auth.py
     # _session_binding_ok) — flask-login's own strong mode never fires on a permanent
     # session, and this one is permanent.
@@ -704,14 +762,29 @@ def _login_totp_code(attempt, u, entered):
     # observed once be replayed for the rest of that window. Refuse any step
     # already spent — committed BEFORE the session is granted so a crash
     # between the two can't leave the step unspent.
+    #
+    # The spend is a compare-and-swap in the database, not the Python compare below followed by
+    # an assignment. That pair was a read-then-write: two POSTs carrying the same code could both
+    # read the old step before either committed, and both sign in — one code, two sessions, which
+    # is exactly what single-use exists to prevent. Today nothing between the read and the commit
+    # yields to another greenlet, so the one eventlet process happens to serialise them; that is
+    # a property of which calls sit in between (and of there being one worker), not of this code.
+    # The conditional UPDATE is decided by SQLite under its write lock, so exactly one wins however
+    # the requests interleave — the shape _claim_invite uses for the same reason.
     if _step <= (u.last_totp_step or 0):
-        return _login_fail(attempt, "That code has already been used — wait for your "
-                                    "authenticator to show the next one.",
-                           attempted=u.username, reason="replayed 2FA code",
-                           two_factor=True)
-    u.last_totp_step = _step
+        return _login_totp_replayed(attempt, u)
+    if not spend_totp_step(u, _step):
+        db.session.rollback()
+        return _login_totp_replayed(attempt, u)   # another request spent this step first
     db.session.commit()
     return _login_succeed(attempt, u, bool(session.get("_2fa_remember")))
+
+
+def _login_totp_replayed(attempt, u):
+    """Refuse an authenticator code whose timestep has already been spent."""
+    return _login_fail(attempt, "That code has already been used — wait for your "
+                                "authenticator to show the next one.",
+                       attempted=u.username, reason="replayed 2FA code", two_factor=True)
 
 
 def _login_password(attempt):

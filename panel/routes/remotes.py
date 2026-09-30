@@ -10,12 +10,12 @@ from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (close_connection, ssh_test_connection)
 from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, can_access_remote,
-    check_password, get_remote, log_action, permission_required)
+    get_host_remote, get_remote, log_action, permission_required)
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, LINUX_USER_RE, MAX_PORT,
     MIN_PORT, SAFE_LABEL_RE, _port_or)
 from panel.core.panel_state import (forget_rows)
-from panel.routes._shared import (_begin_bootstrap)
+from panel.routes._shared import (REAUTH_BLOCKED_MSG, _begin_bootstrap, reauth_password)
 import logging
 
 _log = logging.getLogger("panel.routes.remotes")
@@ -117,11 +117,14 @@ def _server_order_without(prefs, remote_id, gone):
 # The ways of signing in to a host that prove the REQUESTER controls it. Only a password does:
 # ssh_test_connection and _core.get_connection offer it with allow_agent=False and
 # look_for_keys=False, so a login that succeeds used the requester's credential and nothing else.
-# "key" is not key material — the credential field is a PATH ON THE PANEL HOST, a blank one falls
-# back to the panel user's ~/.ssh/id_rsa (hosts.ssh_test_connection, _core.get_connection), and
-# paramiko's defaults then try the agent and every ~/.ssh/id_* as well, so even a bogus path signs
-# in with whatever the panel holds. "tailscale" is the panel node's own tailnet identity. A login
-# that succeeds with either proves the PANEL can reach the host, not that the person asking may.
+# "key" is not key material — the credential field is a PATH ON THE PANEL HOST: whichever of the
+# panel account's own keys it names signs in, and a blank one means the panel account's own
+# ~/.ssh keys (_core.key_login_kwargs, used by hosts.ssh_test_connection and _core.get_connection).
+# A NAMED path is the only key offered now — paramiko's agent and ~/.ssh/id_* fallbacks are off, so
+# a bogus path no longer signs in with some other key — but the key is still the PANEL's, picked
+# by path, not something the requester holds. "tailscale" is the panel node's own tailnet
+# identity. A login that succeeds with either proves the PANEL can reach the host, not that the
+# person asking may.
 _REQUESTER_HELD_AUTH = frozenset({"password"})
 
 
@@ -282,7 +285,12 @@ def _register_remote_edit(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def edit_remote(remote_id):
-        remote = get_remote(remote_id)
+        # get_host_remote, not get_remote: the panel's own row is superadmin-only, as every other
+        # host-level action on it is (see get_host_remote). A whole-host grant that includes the
+        # panel host is an ordinary delegable grant, and through it a delegated admin could rename
+        # the row, change its SSH user or turn its sudo off — the row every panel-host action and
+        # every game server on this machine runs through.
+        remote = get_host_remote(remote_id)
         # A BLANK field is not an edit. `.get(key, default)` only falls back when the key is
         # ABSENT, and the edit form posts all three of these every time — without `required`,
         # unlike the add form above it (templates/manage_remotes.html:25/29 have it, :193/:197 do
@@ -334,7 +342,10 @@ def _register_remote_delete_and_test(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def delete_remote(remote_id):
-        remote = get_remote(remote_id)
+        # get_host_remote for the reason edit_remote gives, and a sharper one: deleting the panel's
+        # own row bulk-deletes EVERY game server on this machine from the panel (below), and only a
+        # superadmin can put the row back (_delegated_add_refusal refuses is_local to anyone else).
+        remote = get_host_remote(remote_id)
         name = remote.name
         # The id off the ROW, not off the URL — the same number either way, but only one of them
         # is request text. api_server_version already does this and says why: `<int:remote_id>`
@@ -346,10 +357,20 @@ def _register_remote_delete_and_test(app):
         # Re-authenticate: deleting a remote (and ALL its game servers) is destructive, so require
         # the operator to re-enter their own account password — a guard against an accidental or
         # hijacked click. Verified constant-time via bcrypt (check_password).
-        if not check_password(_json_body().get("password", ""), current_user.password_hash):
+        #
+        # Under the per-account re-authentication throttle, like the account page's checks: this
+        # is one more place a borrowed session could guess the password at bcrypt speed. And the
+        # value is type-checked there — `{"password": 5}` reached check_password's prehash, which
+        # raised, and the route answered 500.
+        _pw = reauth_password(current_user._get_current_object(), _json_body().get("password", ""))
+        if _pw != "ok":
+            _msg = REAUTH_BLOCKED_MSG if _pw == "throttled" else "Incorrect password."
+            log_action(current_user, "delete_remote", target=name, success=False,
+                       detail="refused: " + ("too many wrong passwords" if _pw == "throttled"
+                                             else "wrong password"))
             if _wants_json():
-                return jsonify({"success": False, "message": "Incorrect password."}), 403
-            flash("Incorrect password.", "danger")
+                return jsonify({"success": False, "message": _msg}), 403
+            flash(_msg, "danger")
             return redirect(url_for("manage_remotes"))
         # Delete associated game servers. This is a BULK delete, which bypasses the ORM entirely —
         # so every association row keyed on those game_server ids has to go by hand. This app never

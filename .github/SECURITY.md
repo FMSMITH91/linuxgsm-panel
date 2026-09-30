@@ -74,7 +74,7 @@ pieces are installed**, and the installer tells you which one it wrote:
 
 | condition | grant |
 |---|---|
-| helper + root-owned `db_maintenance.py` + root-owned installer all present | `ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper` |
+| helper + root-owned `db_maintenance.py` + root-owned installer all present | `ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper`, plus the game-account line and the helper's `Defaults!` line below |
 | any of them missing | `ALL=(ALL) NOPASSWD:ALL` — unchanged, and the panel falls back to the pre-helper path |
 
 For most of this project's life it was unconditionally the second row, and this document said
@@ -95,7 +95,11 @@ the panel's own checkout — the checkout belongs to the panel user and `git pul
 on every self-update, so a helper living there would be panel-writable by design. It takes a
 verb and already-separated arguments, re-validates every argument against its own table, and
 execs a fixed argument vector. There is no shell in it, and the only program it can run is
-one it names: `bash` does not resolve.
+one it names: `bash` does not resolve. Nor does it take its interpreter or environment from the
+caller: the shebang is `#!/usr/bin/python3 -I` (not `env python3`, which asked PATH), it replaces
+its own environment with a fixed minimal one before any verb runs, and every tool it starts gets
+that same environment — `PATH=/usr/sbin:/usr/bin:/sbin:/bin`, a C.UTF-8 locale, root's `HOME` and
+sudo's `SUDO_*` identity, plus what one verb needs (`DEBIAN_FRONTEND` for apt).
 
 Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log reads
 (`journalctl` / `tail`), cron and user management, the sshd port change, the deferred reboot,
@@ -104,7 +108,8 @@ detached OS update, Tailscale's join, the panel's own restore/self-update, the V
 steps, running a LinuxGSM action as the game user, enrolling a game account in the group the
 grant names, installing a game's dependencies, reading the pending-restart flags, freeing
 Steam's per-account crash-dump slots, configuring NodeSource's repository on a remote with its
-signing key pinned and installing gamedig on a remote from its hash-locked lockfile** — 103 verbs. (`tests/unit_test.py` asserts
+signing key pinned, installing gamedig on a remote from its hash-locked lockfile and deleting a
+ufw rule by number only while it is still the rule that was checked** — 104 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
@@ -425,12 +430,21 @@ the delete does nothing on hosts today, it has to work for a host that is alread
 unreachable, and the same paths on a host that runs a panel of its own belong to that panel.
 
 **Every one of those is converted, and the grant has narrowed.** On an install where the three
-root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains two lines:
+root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains two grants, after a
+`Defaults` line for the helper:
 
 ```
+Defaults!/usr/local/lib/linuxgsm-panel/panel-helper env_reset, secure_path="/usr/sbin:/usr/bin:/sbin:/bin"
 <panel-user> ALL=(root)              NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper
 <panel-user> ALL=(%lgsmpanel-games)  NOPASSWD: ALL
 ```
+
+The `Defaults!` line makes the helper's starting environment this file's decision rather than the
+host's: a host whose global policy relaxed `env_reset` or `secure_path` (an image default, an
+`env_keep` for a proxy) no longer relaxes them for the privilege boundary. A command-scoped
+`Defaults` wins over user and global ones for that command; measured with sudo 1.9.15, a
+`Defaults:<panel-user> !env_reset, !secure_path` beside it still gives the helper a reset
+environment and exactly that PATH. It is rewritten on every install and update, like the grants.
 
 **Root is reachable only by running the helper.** In particular **not** `/bin/bash`, `/bin/sh`,
 `systemd-run`, the `tailscale` binary, or `sudo -u root` — each of those runs whatever argv you
@@ -449,18 +463,31 @@ to *become a game account* is granted, and bounded by a group instead:
 - membership is controlled by install.sh and by the `gameuser-group` verb, which takes the account
   as its only argument and holds the group name as a literal — a caller that could name the group
   could name one that root is in;
-- install.sh only enrols a home with a LinuxGSM instance (`lgsm/config-lgsm`) or a Steam content
-  tree (`serverfiles`). A person's account has neither, and must never be enrolled: the group is
-  the right for the panel to act as that account;
+- **only a game account is ever enrolled**, by either route (install.sh asks the helper the same
+  question the verb does, `_enrolment_refusal`). "Cannot reach root" was the only test once, and it
+  let in any other account on the host — a colleague's login, `postgres`, `www-data`, `nobody` —
+  which the panel could then become. An account now needs all of: a uid in `/etc/login.defs`'
+  `UID_MIN`..`UID_MAX` (service accounts sit below it, `nobody` above); not being the panel's own
+  account; only ordinary groups — an allowlist: the game group, `users`, or a group with gid ≥
+  `GID_MIN` that is not a root-equivalent one; and a LinuxGSM instance (`lgsm/config-lgsm` or
+  `linuxgsm.sh`) or a Steam content tree (`serverfiles`) in its own `/home/<name>`, checked without
+  following a symlink anywhere and with the home owned by the account. A person's account has none
+  of those, and must never be enrolled: the group is the right for the panel to act as that
+  account. An account the panel creates (`user-create`) is enrolled by that same verb as it is
+  made, under every test but the install one, since its home is still the skeleton;
 - **and no account that can already escalate is ever enrolled, by either route.** This is the
   check the whole split rests on: the grant says the panel may *become* a member, so a member who
   can run `sudo` makes it `NOPASSWD:ALL` with one extra hop — `sudo -u them bash -c 'sudo -i'`.
   It is also not an exotic case. Running LinuxGSM under your own sudo-capable account is an
   ordinary setup, it is what LinuxGSM's own documentation shows, and the panel's discovery scan
   exists to import exactly those installs — so such an account is a *likely* candidate for
-  enrolment, not an unlikely one. install.sh refuses one in `sudo`/`admin`/`wheel`/`root` or with
-  any `sudo -l -U` privileges and says so; the `gameuser-group` verb refuses the same, reading the
-  group database and the sudoers files itself, and treats anything it cannot parse as "can
+  enrolment, not an unlikely one. install.sh and the `gameuser-group` verb refuse one in a
+  root-equivalent group (`sudo`, `admin`, `wheel`, `root`, `docker`, `lxd`, `incus`,
+  `incus-admin`, `libvirt`, `disk`, `kmem`, `staff`, `src`, `microk8s`, `snap_microk8s`,
+  `lpadmin`, and the log- and secret-readers `adm`, `shadow`, `systemd-journal`, `syslog`,
+  `ssl-cert`), one any sudoers rule matches, one a `doas.conf` `permit` rule names (by account or
+  `:group`), and one a polkit rule or `.pkla` authority names — reading the group database and the
+  sudoers, doas and polkit files themselves, and treating anything they cannot parse as "can
   escalate". A false refusal costs one account the panel cannot drive, and is reported; a false
   accept costs root.
 
@@ -483,6 +510,17 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   refresh `${PANEL_DIR}/install.sh` with `git checkout` as the service user and run that with
   `sudo bash`. It now ships the verified commit's `install.sh` from the runner over SSH and runs
   that copy from a directory root created.
+
+  What the installer still has to do INSIDE the panel-owned tree on every update it does as that
+  tree's owner, or without following a link: it reads `VERSION` and `config.json` as the owner
+  (refusing links and FIFOs — a `VERSION` symlink once put any root-only file into the update log
+  the panel reads); it makes the update snapshot, verifies it and unpacks it on rollback as the
+  owner (`TREE_SUDO`), so a planted `data/.backups` link or a hard link in the tree cannot steer
+  root's writes or pull a root-only file into a panel-readable archive; an update from an
+  operator's clone is unpacked into the tree as the owner; and it hands the tree to the service
+  user with `find -P … -links 1 -execdir chown -h`, never `chown -R`, so a hard link to a system
+  file (on a host with `fs.protected_hardlinks=0`) is not given away. The helper's
+  `content-grant-read` skips hard-linked files for the same reason.
 
   *Which* commit is proved on the runner, not assumed from the trigger. The job's `if` checks the
   branch by its short name, and GitHub compares strings ignoring case, so any ref whose short name
@@ -576,8 +614,12 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   branch they chose. It stages from that branch's tip (also when the branch forked below the floor),
   and it leaves the floor on main. The panel cannot pass for the operator. Its only way to run the
   installer as root is the helper's `panel-self-update` verb, and the helper sets
-  `PANEL_SELF_UPDATE=1` in the environment it builds for the installer, after copying its own,
-  so nothing the panel hands sudo removes it. A run whose `SUDO_UID` is the panel's own account
+  `PANEL_SELF_UPDATE=1` in the environment it builds for the installer — from a fixed minimal
+  base, never a copy of its own — so nothing the panel hands sudo removes it. It starts the
+  installer from `/`, and the installer never takes its working directory as the install source
+  while `PANEL_SELF_UPDATE` is set: run from inside the panel-owned checkout, a checkout swapped
+  for a link to another panel-owned tree used to read as an operator's clone and be copied in by
+  root. A run whose `SUDO_UID` is the panel's own account
   also counts as the panel's. sudo sets that value and the narrow grant does not let the panel
   change it, and it covers an older helper running a newer installer. One consequence: the host
   terminal's password-gated sudo runs as the panel account, so an installer started there counts

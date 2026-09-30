@@ -177,6 +177,7 @@
   "The panel restarted, but its new version could not be read — reloading to check.": "Le panneau a redémarré, mais sa nouvelle version n'a pas pu être lue ; rechargement pour vérifier.",
   "The panel restarted on its previous version, so the change did not apply — see the log above.": "Le panneau a redémarré sur sa version précédente, donc le changement n'a pas été appliqué ; voir le journal ci-dessus.",
   "The panel restarted — reload the page to see its state.": "Le panneau a redémarré : rechargez la page pour voir son état.",
+  "It installs the newest version of main that has passed its automated checks.": "Il installe la version la plus récente de main qui a passé ses contrôles automatiques.",
   "The update stopped before the panel restarted.": "La mise à jour s'est arrêtée avant le redémarrage du panneau.",
   "See the log above for why.": "Voir le journal ci-dessus pour savoir pourquoi.",
   "Already up to date — nothing was installed.": "Déjà à jour ; rien n'a été installé.",

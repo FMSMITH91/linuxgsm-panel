@@ -19,6 +19,8 @@ from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, NOT_AN_IP, _
 from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
     _security_whitelist, _set_autoblock_host)
 from panel.routes._shared import (_whitelist_mutate)
+from panel.ops import ssh_manager as _sm
+from panel.security import banlist as _banlist
 import ipaddress as _ipaddress
 
 # Where a panel bound to a SPECIFIC address is still reached through the tailnet rather than the
@@ -96,6 +98,20 @@ def _register_ban_lists(app):
         return jsonify(dict(_settings, ips=_ips))
 
 
+def _follow_in_panel_gate(remote, ok):
+    """Re-read the ban list now when a block or unban on the PANEL host just succeeded.
+
+    The panel's own gate (banlist) refuses banned addresses on traffic UFW never sees — a
+    Tailscale Funnel or a reverse proxy. Its siblings in host_local (api_panel_security_block and
+    _unban) ask for a refresh at once; these routes reach the same host through its row id (the
+    Security tab of the panel host's own page) and did not, so a block made here left the address
+    served, and an unban left it refused, until the next 90 s tick. A remote host's bans are not in
+    the panel's gate at all, so nothing is asked there.
+    """
+    if ok and _sm.is_local_server(remote):
+        _banlist.refresh_soon(0)
+
+
 def _register_blocking(app):
     """Blocking an address on a host, and its auto-block switch."""
     @app.route("/api/remote/<int:remote_id>/security/block", methods=["POST"])
@@ -118,6 +134,7 @@ def _register_blocking(app):
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block",
                        target=canonical_ip(ip) or NOT_AN_IP, detail=remote.name, success=ok,
                        remote=remote)
+            _follow_in_panel_gate(remote, ok)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("block failed")}), 500
@@ -171,6 +188,7 @@ def _register_whitelist_and_log(app):
         jail, banned_ip = _json_str(d, "jail"), _json_str(d, "ip")
         try:
             ok, msg = remote_fail2ban_unban(remote, jail, banned_ip)
+            _follow_in_panel_gate(remote, ok)
             log_action(current_user, "fail2ban_unban", target=canonical_ip(banned_ip) or NOT_AN_IP,
                        detail="%s on %s — %s" % (jail, remote.name, msg), success=ok,
                        remote=remote)

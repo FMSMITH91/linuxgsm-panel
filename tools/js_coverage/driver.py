@@ -443,6 +443,9 @@ class Driver:
         The cookie is carried by hand: the panel marks it Secure, which a browser honours on
         loopback over plain HTTP and Python's cookie jar does not.
         """
+        # Semgrep's findings now gate through code scanning (security-code.yml), so each of its
+        # four loopback-only reads in this harness carries its reason, like the panel's own.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- the harness's own panel on loopback
         with urllib.request.urlopen(self.base + "/login", timeout=10) as r:  # nosec B310 - loopback
             page = r.read().decode("utf-8", "replace")
             cookies = [c.split(";", 1)[0] for c in r.headers.get_all("Set-Cookie") or []]
@@ -454,6 +457,7 @@ class Driver:
                                        "csrf_token": m.group(1)}).encode()
         req = urllib.request.Request(self.base + "/login", data=body, headers={
             "Cookie": "; ".join(cookies), "User-Agent": "js-coverage second session"})
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- the harness's own panel on loopback
         with urllib.request.urlopen(req, timeout=10) as r:  # nosec B310 - loopback only
             return r.status == 200
 

@@ -221,7 +221,8 @@ def _server_action_buttons(app, gs):
     actions = _lifecycle_actions(_can, supports_update)
 
     maint_perm = {
-        "monitor": VIEW_CONSOLE, "details": VIEW_CONSOLE, "check-update": VIEW_CONSOLE,
+        # monitor can restart the server: auth.ACTION_PERMISSION_MAP, which the route enforces.
+        "monitor": RESTART_SERVER, "details": VIEW_CONSOLE, "check-update": VIEW_CONSOLE,
         "postdetails": VIEW_CONSOLE, "test-alert": VIEW_CONSOLE,
         "validate": UPDATE_SERVER, "backup": UPDATE_SERVER, "force-update": UPDATE_SERVER,
         "update-lgsm": UPDATE_SERVER, "mods-update": UPDATE_SERVER, "fastdl": UPDATE_SERVER,
@@ -1281,3 +1282,330 @@ def _console_rows(lines, host_tz):
         rows.append({"t": clock.host_stamp_to_epoch(stamp, host_tz) if stamp else None,
                      "line": rest})
     return rows
+
+
+# ── JSON integers ───────────────────────────────────────────────────────────────────────────────
+
+def _json_int(value):
+    """An id or number a JSON body sent, as an int — or None for anything that is not one.
+
+    `int(x)` under `except (TypeError, ValueError)` was the idiom in a dozen handlers, and it is not
+    total: Python's json module accepts `Infinity` (and `1e400`, which is the same float), and
+    int(float("inf")) raises OverflowError, which none of them caught — so `{"ids": [Infinity]}` was
+    a 500 from the bulk action, the tag set, the discover import and the console socket. It also
+    TRUNCATED: 3.7 became server 3, a value nobody sent. A float is accepted only when it is a whole
+    finite number (JS sends 3 as 3, but a hand-built body may say 3.0); a bool is refused, although
+    it is an int to Python, because `true` is not an id. A string is parsed as int() always parsed
+    it here, and int() of a string never overflows.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None    # False for inf and nan
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+# ── Re-authentication throttle ──────────────────────────────────────────────────────────────────
+# The routes that ask a signed-in user for their CURRENT password (or a live second factor) again —
+# the password change, 2FA on and off, minting an API token, deleting a host — are a password
+# oracle for whoever holds the session: a borrowed tab, a stolen cookie. /login has had a throttle
+# since the start, and the bearer token has one; these had none, and most of them did not even
+# write an audit row on a wrong guess, so a cookie thief could try passwords against the account
+# at bcrypt speed, silently, until one worked — and a correct one is exactly what the password
+# change and the 2FA switch-off need to take the account over for good.
+#
+# Keyed on the ACCOUNT, not the address: the session is the attacker's foothold, and it is the
+# same session whichever address it is replayed from. The same budget and window as the login
+# throttle, and the same reserve-then-release shape, for the reason _login_throttled gives: bcrypt
+# runs in tpool and yields the hub, so counting a failure only after it would let a parallel burst
+# all read "under the limit". A check that passes gives its slot back.
+_REAUTH_FAILS = {}            # user id -> [time of each failed (or still in-flight) check]
+_REAUTH_LOCK = threading.Lock()
+REAUTH_BLOCKED_MSG = ("Too many wrong passwords or codes for this account. Wait a few minutes and "
+                      "try again.")
+
+
+def _reauth_key(user):
+    """The throttle's key for `user`: its id, or — for an object with none yet — the object."""
+    uid = getattr(user, "id", None)
+    return uid if uid is not None else ("unsaved", id(user))
+
+
+def reauth_reserve(user, now=None):
+    """Reserve one re-authentication attempt for `user`; its stamp, or None when throttled."""
+    from app import LOGIN_MAX_FAILS, LOGIN_WINDOW
+    now = time.time() if now is None else now
+    user_id = _reauth_key(user)
+    with _REAUTH_LOCK:
+        for uid in [k for k, v in _REAUTH_FAILS.items() if not v or now - v[-1] >= LOGIN_WINDOW]:
+            del _REAUTH_FAILS[uid]      # bounded to the accounts that failed recently
+        fails = [t for t in _REAUTH_FAILS.get(user_id, []) if now - t < LOGIN_WINDOW]
+        if len(fails) >= LOGIN_MAX_FAILS:
+            _REAUTH_FAILS[user_id] = fails
+            return None
+        fails.append(now)
+        _REAUTH_FAILS[user_id] = fails
+        return now
+
+
+def reauth_release(user, stamp):
+    """Give back the slot reauth_reserve handed out, for a check that PASSED."""
+    user_id = _reauth_key(user)
+    with _REAUTH_LOCK:
+        fails = _REAUTH_FAILS.get(user_id)
+        if fails and stamp in fails:
+            fails.remove(stamp)
+            if not fails:
+                _REAUTH_FAILS.pop(user_id, None)
+
+
+def reauth_password(user, password):
+    """Check `user`'s CURRENT password under the throttle: "ok", "wrong" or "throttled".
+
+    A throttled attempt is refused before bcrypt runs. A `password` that is not a string (a JSON
+    body can send 5) is a wrong password rather than a 500 — check_password's prehash raises on it.
+    """
+    from panel.security.auth import check_password
+    stamp = reauth_reserve(user)
+    if stamp is None:
+        return "throttled"
+    if not (isinstance(password, str) and check_password(password, user.password_hash)):
+        return "wrong"              # the slot stays spent: that is the count
+    reauth_release(user, stamp)
+    return "ok"
+
+
+def spend_totp_step(u, step):
+    """Record `step` as `u`'s last spent authenticator step, unless one at least as new is. -> bool.
+
+    ONE conditional UPDATE, not a read, a compare and a write. The check was `step <= the
+    last_totp_step this request loaded`, then an assignment committed with the rest of the change:
+    two requests carrying the same observed code both loaded the old value, both passed, and one
+    code was spent twice — the exact replay last_totp_step exists to stop, won by sending the two
+    requests together. The database now decides: the row is written only while its stored step is
+    older, and a request whose UPDATE matched nothing lost the race (or replayed) and is refused.
+    The write joins the caller's transaction and commits with it; SQLite holds the second writer
+    until the first commits, so it then sees the new step.
+
+    The ONE copy. Two review passes each added their own — auth_routes for login and the API-token
+    mint, tags for the password change and the 2FA switch-off — and they had already drifted: only
+    this one told the loaded object about the write, so after the other the request went on
+    holding the stale step it had loaded. Every route that accepts a live authenticator code
+    (login, the mint, the password change, 2FA off, and 2FA enrolment) spends it here.
+    """
+    from sqlalchemy import or_, update
+    from sqlalchemy.orm.attributes import set_committed_value
+    from panel.db.models import User
+    res = db.session.execute(
+        update(User).where(User.id == u.id,
+                           or_(User.last_totp_step.is_(None), User.last_totp_step < step))
+        .values(last_totp_step=step).execution_options(synchronize_session=False))
+    if res.rowcount != 1:
+        return False
+    # The loaded object agrees with the row without being marked dirty, so the caller's commit
+    # does not write the step a second time (unconditionally) behind the guarded UPDATE.
+    set_committed_value(u, "last_totp_step", step)
+    return True
+
+
+# ── Accounts the panel must never adopt ─────────────────────────────────────────────────────────
+# Groups whose members are root, or one command from it, on a stock Linux host. sudo/wheel/admin
+# are the sudoers groups of Debian/Ubuntu, RHEL/Arch and older Ubuntu; root is gid 0; docker, lxd
+# and disk each hand out root outright (a privileged container, a raw block device).
+_ROOT_EQUIVALENT_GROUPS = frozenset({"sudo", "wheel", "admin", "root", "docker", "lxd", "disk"})
+_ACCOUNT_PROBE_END = "LGSM_ACCT_PROBE_DONE"
+
+
+def _account_probe_cmd(users):
+    """One shell command that reports, per account, its uid and groups — and any sudoers rule."""
+    import shlex as _shlex
+    parts = []
+    for u in users:
+        q = _shlex.quote(u)
+        parts.append(
+            'if uid=$(id -u %s 2>/dev/null); then echo "ACCT %s $uid $(id -Gn %s 2>/dev/null)"; '
+            # `sudo -l -U` needs root, so it is asked only when the probe IS root (a remote whose
+            # login escalates); otherwise the groups above are the evidence there is.
+            'if [ "$(id -u)" = 0 ] && LC_ALL=C sudo -n -l -U %s 2>/dev/null '
+            '| grep -q "may run the following"; then echo "SUDOERS %s"; fi; '
+            'else echo "NOACCT %s"; fi' % (q, u, q, q, u, u))
+    parts.append("echo %s" % _ACCOUNT_PROBE_END)
+    return "; ".join(parts)
+
+
+def _fold_acct_line(verdict, words):
+    """Fold an `ACCT <user> <uid> <groups...>` line: uid 0 or a root group refuses, else "ok"."""
+    groups = set(words[3:]) & _ROOT_EQUIVALENT_GROUPS
+    if words[2] == "0":
+        verdict[words[1]] = "it is uid 0 (root)"
+    elif groups:
+        verdict[words[1]] = ("it is in the %s group, which can become root"
+                             % ", ".join(sorted(groups)))
+    else:
+        verdict.setdefault(words[1], "ok")
+
+
+def _fold_probe_line(verdict, words, users):
+    """Fold one line of the probe's output, split into words, into `verdict`."""
+    if len(words) < 2 or words[1] not in users:
+        return
+    kind, user = words[0], words[1]
+    if kind == "ACCT" and len(words) >= 3:
+        _fold_acct_line(verdict, words)
+    elif len(words) != 2:
+        return
+    elif kind == "NOACCT":
+        verdict.setdefault(user, "absent")
+    elif kind == "SUDOERS" and verdict.get(user) in (None, "ok"):   # uid 0 / a group says more
+        verdict[user] = "it has sudo rules of its own"
+
+
+def _parse_account_probe(out, users):
+    """{user: "absent" | "ok" | <why it is refused>} from the probe's output; None if it didn't finish."""
+    lines = (out or "").splitlines()
+    if not any(ln.strip() == _ACCOUNT_PROBE_END for ln in lines):
+        return None
+    verdict = {}
+    for ln in lines:
+        _fold_probe_line(verdict, ln.split(), users)
+    if any(u not in verdict for u in users):
+        return None                 # a line went missing: an unknown, not a clean bill
+    return verdict
+
+
+def _refused_by_name(remote, users, local):
+    """{user: why} for the accounts refused without asking the host: root, its login, the panel's own."""
+    # The login the panel signs in as, by NAME, whatever its groups say: it is the account whose
+    # authorized_keys the panel's own access rests on, and on a host whose sudoers grants it by
+    # name (cloud-init's 90-cloud-init-users) the group test in the probe would not see it without
+    # root. Not linuxgsm_user: nothing reads that field any more (see _run_via_paramiko), and on an
+    # old single-account setup it names the very account that holds the servers — it gets the same
+    # group and sudoers test as any other account instead.
+    login = getattr(remote, "username", "") or ""
+    refused = {}
+    for u in users:
+        if u == "root":
+            refused[u] = "it is root"
+        elif u == login:
+            refused[u] = "it is the account the panel signs in to this host as"
+        elif local:
+            from panel.security.privileged import _is_panel_account
+            if _is_panel_account(u):
+                refused[u] = "it is the panel's own account"
+    return refused
+
+
+def _probe_accounts(remote, users, local):
+    """The host's own verdict on `users` (see _parse_account_probe); None when it could not be asked."""
+    try:
+        out, _err, _rc = _sm.run_command(
+            remote, _account_probe_cmd(users), timeout=20,
+            sudo=(False if local else bool(getattr(remote, "sudo_enabled", False))))
+    except Exception:
+        _log.debug("account privilege probe failed", exc_info=True)
+        return None
+    return _parse_account_probe(out, users)
+
+
+def privileged_accounts(remote, users):
+    """Which of `users` on `remote` the panel must refuse to adopt or delete.
+
+    -> {user: why} for each account that is the host's own login, the panel's own account, uid 0,
+    in a root-equivalent group, or (when the probe runs as root) holding sudo rules; or None when
+    the host could not be asked. An account that does not exist is not in the answer.
+
+    WHY. Import turned any account a discover scan found into a GameServer row, and the only name
+    it refused was "root" (game_idents_ok). Every file, cron and console action on that row then
+    runs AS the account — so a delegated MANAGE_SERVERS admin who imported the host's own SSH
+    login (`ubuntu`, in the sudo group, with a ~/linuxgsm.sh in its home) could write its
+    ~/.bashrc, authorized_keys or crontab and be root on the host at its next login or cron tick;
+    and uninstalling that row ran `userdel -r -f` on the host's login account. The helper refuses a
+    root-capable account on the PANEL host, but a remote host has no helper: enrol_game_user
+    returns None there without looking, and _destroyable_user refuses only uid 0 and the panel's
+    own account. So the route asks the host itself. Superadmins are refused too: nothing the panel
+    does through a game account is something the host's own login needs, and a superadmin who
+    really means it has the host's shell.
+    """
+    users = [u for u in dict.fromkeys(users) if u]
+    if not users:
+        return {}
+    local = _sm.is_local_server(remote)
+    refused = _refused_by_name(remote, users, local)
+    rest = [u for u in users if u not in refused]
+    if not rest:
+        return refused
+    verdict = _probe_accounts(remote, rest, local)
+    if verdict is None:
+        return None
+    refused.update({u: v for u, v in verdict.items() if v not in ("ok", "absent")})
+    return refused
+
+
+# ── Writing as a game account that can become root ──────────────────────────────────────────────
+# privileged_accounts closed the door on IMPORTING (and userdel-ing) a root-capable account, but a
+# row imported before that check existed is still in the database, and every file-manager and cron
+# write on it runs AS that account: saving ~/.bashrc, ~/.ssh/authorized_keys or a crontab line
+# through the file browser is root on the host at the account's next login or cron tick, for any
+# delegated admin who can manage that server's files. The import check could not reach those rows,
+# so the WRITE routes ask too.
+#
+# Cached per (host, login, account) for a short while, because each answer is an SSH round trip
+# and an editor saves often. Only a definite answer is cached: a host that could not be asked is
+# asked again next time, and the write is refused meanwhile (fail closed — "couldn't check" must
+# never read as "it's a plain account"). A minute is short enough that an account put into sudo on
+# the host is refused within it, and the refusal needs the host's own root to have happened.
+_ACCOUNT_VERDICT_TTL = 60.0
+_ACCOUNT_VERDICTS = {}        # (remote id, host, login, account) -> (expires at, why or "")
+_ACCOUNT_VERDICTS_LOCK = threading.Lock()
+
+
+def game_account_write_refusal(remote, user, now=None):
+    """Why a write as `user` on `remote` is refused, or None when it is a plain game account.
+
+    -> a message for the operator; None only when the host confirmed `user` is not root-capable
+    (see privileged_accounts). A host that cannot be asked is refused, not waved through.
+    """
+    now = time.monotonic() if now is None else now
+    key = (getattr(remote, "id", None), getattr(remote, "host", None),
+           getattr(remote, "username", None), user)
+    why = _cached_account_verdict(key, now)
+    if why is not None:
+        return _privileged_write_msg(user, why) if why else None
+    verdict = privileged_accounts(remote, [user])
+    if verdict is None:
+        return ("Couldn't check whether the '%s' account can become root on this host, and the "
+                "panel only writes files or scheduled tasks as an account it has confirmed is not "
+                "an administrator or root account. Nothing was changed; try again when the host "
+                "answers." % user)
+    why = verdict.get(user) or ""
+    _store_account_verdict(key, now, why)
+    return _privileged_write_msg(user, why) if why else None
+
+
+def _cached_account_verdict(key, now):
+    """The cached why ("" for a plain account) for `key` while it is fresh; None when there is none."""
+    with _ACCOUNT_VERDICTS_LOCK:
+        hit = _ACCOUNT_VERDICTS.get(key)
+        return hit[1] if hit is not None and hit[0] > now else None
+
+
+def _store_account_verdict(key, now, why):
+    """Cache a definite answer for `key`, dropping the ones that have expired."""
+    with _ACCOUNT_VERDICTS_LOCK:
+        for k in [k for k, v in _ACCOUNT_VERDICTS.items() if v[0] <= now]:
+            del _ACCOUNT_VERDICTS[k]            # bounded to the accounts asked about recently
+        _ACCOUNT_VERDICTS[key] = (now + _ACCOUNT_VERDICT_TTL, why)
+
+
+def _privileged_write_msg(user, why):
+    return ("Refused: the '%s' account on this host can become root (%s), so the panel does not "
+            "write its files or scheduled tasks — that would be root on the host. This server was "
+            "imported before the panel refused such accounts; remove it from the panel and run the "
+            "game under a plain account." % (user, why))

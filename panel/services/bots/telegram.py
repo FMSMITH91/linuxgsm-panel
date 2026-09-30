@@ -9,17 +9,23 @@ from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin
     _panel_ver_label, _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
     _servers_text, _status_text, action_ack, update_outcome_text, working_ack,
-    UPDATE_RUNNING_REPLY, bot_update_status, panel_update_requested, queue_panel_update,
-    spend_update_check, update_rate_reply)
+    UPDATE_RUNNING_REPLY, audit_bot_action, bot_update_status, command_refusal,
+    panel_update_requested, queue_panel_update, sender_id, spend_update_check,
+    update_rate_reply)
+from panel.db.models import (LOCAL_HOST_LABEL)
 import logging
 import time
 
 # Same logger name app.py used, so existing log filters and greps keep working.
 _log = logging.getLogger("panel.app")
+# This bot's name in audit rows and refusals — a constant, so the command routers carry no
+# platform literal of their own (smoke_test compares the quoted words in the two routers).
+_PLATFORM = "telegram"
 # ── Telegram command bot ───────────────────────────────────────────────────────────────────────
 # Drive the panel from the configured Telegram chat: /update, /status, /servers, /help. Opt-in
 # (Notifications → Telegram → "Accept commands") and locked to the saved chat_id — no other chat is
-# honoured. Discord webhooks are send-only, so this is Telegram-only. Long-polls getUpdates.
+# honoured — and every command that changes anything to the allowed user ids beside it
+# (commands.OPEN_COMMANDS). Long-polls getUpdates.
 _TG_CMD_BACKOFF = 15
 # Commands run here, not on the long-poll thread — see commands.CommandWorker.
 _TG_WORKER = CommandWorker("telegram-commands")
@@ -128,7 +134,26 @@ def _tg_route_update(app, token, authorized, bot_username, upd):
         return
     if _tg_addressed_elsewhere(text, bot_username):
         return          # '/update@OtherBot' in the group is that bot's command
-    _tg_dispatch(app, token, authorized, text, msg.get("from"))
+    # The chat is not the whole gate: in a group every member is "the authorised chat". A command
+    # that changes anything also needs the SENDER's numeric id on the allowed list — see
+    # commands.OPEN_COMMANDS. Checked here, beside the chat check, so nothing that fails it ever
+    # reaches the worker or acks "working on it". `from` is Telegram's, not the sender's to set.
+    # (An anonymous group admin arrives as Telegram's shared GroupAnonymousBot id, so allowing that
+    # id would allow every anonymous admin — the settings page says so.)
+    sender = msg.get("from")
+    refusal = command_refusal("telegram", _parse_tg_command(text), _command_arg(text), sender,
+                              _tg_command_users())
+    if refusal:
+        _log.info("telegram: refused a command from user %s, who is not on the allowed list",
+                  sender_id(sender) or "?")
+        _tg_reply(token, authorized, refusal)
+        return
+    _tg_dispatch(app, token, authorized, text, sender)
+
+
+def _tg_command_users():
+    """The Telegram bot's allowed user ids, read afresh (a revocation bites at the next message)."""
+    return notifications.command_users(notifications._cfg().get("telegram") or {})
 
 
 def _telegram_command_watch(app):
@@ -206,7 +231,9 @@ def _tg_help_text():
             "/backup <name> — back a server up\n"
             "/update — update the panel itself\n"
             "/update <name> — update that ONE game server instead\n"
-            "/help — this message")
+            "/help — this message\n"
+            "Anyone here can use /status, /servers, /hosts, /connect and /help; the rest need "
+            "your user ID on the panel's allowed list.")
 
 
 def _tg_dispatch(app, token, chat_id, text, sender=None):
@@ -308,7 +335,7 @@ def _handle_telegram_command(app, token, chat_id, text, sender=None):
         "hosts": lambda: _hosts_text(app),
         "players": lambda: _players_text(app, arg),
         "console": lambda: _console_text(app, arg),
-        "say": lambda: _say_text(app, arg),
+        "say": lambda: _say_text(app, arg, origin=_bot_origin(_PLATFORM, sender)),
         "connect": lambda: _connect_text(app, arg),
     }
     if cmd == "help" or (cmd == "start" and not arg):
@@ -325,12 +352,12 @@ def _handle_telegram_command(app, token, chat_id, text, sender=None):
         if arg:
             _tg_server_action(app, token, chat_id, "update", arg, sender)
         else:
-            _telegram_do_update(app, token, chat_id)
+            _telegram_do_update(app, token, chat_id, sender)
     else:
         _tg_reply(token, chat_id, "Unknown command '%s'. Send /help." % cmd[:24])
 
 
-def _telegram_do_update(app, token, chat_id):
+def _telegram_do_update(app, token, chat_id, sender=None):
     # NOT force=True: a status seconds old is reused, and a forced check is spent from an hourly
     # allowance both bots share — each one can cost a GitHub request (see bot_update_status).
     try:
@@ -345,6 +372,9 @@ def _telegram_do_update(app, token, chat_id):
         _tg_reply(token, chat_id, update_rate_reply())
         return
     ok, msg = so.panel_self_update()   # detached + CI-gated; returns immediately, then restarts us
+    # Audited as the web button's own update is — see commands.audit_bot_action.
+    audit_bot_action(app, _bot_origin("telegram", sender), "panel_self_update", LOCAL_HOST_LABEL,
+                     detail=msg, success=ok)
     if not ok:
         _tg_reply(token, chat_id, "⚠️ Update not started: %s" % msg)
         return

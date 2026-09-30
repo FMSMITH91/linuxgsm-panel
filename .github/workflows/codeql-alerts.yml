@@ -25,9 +25,23 @@ name: Code-scanning alerts
 #
 #   CodeQL is path-filtered and skips docs-only pushes, so this skips them too — correctly: with no
 #   code change there is nothing for the alert set to have become.
+#
+#   "Security scan (code)" is a trigger too: Bandit and Semgrep upload their SARIF to code scanning
+#   from there, and the same race applies to them. Whichever of the two workflows finishes FIRST
+#   finds the other still running and posts nothing; the one that finishes second judges the
+#   settled alert set (see "Wait for the other uploader").
+#
+# WHERE THE VERDICT LANDS
+#   GitHub files a workflow_run job's check run under the default branch's NEWEST commit, not the
+#   commit that triggered it. So this job's own result said nothing about the commit it judged —
+#   it landed on whatever main's tip was by then — and the panel's update gate
+#   (panel/ops/system_ops.py, _remote_ci_state) could offer a commit whose alerts check had not
+#   even been judged. The verdict is therefore POSTED, as a check run named "Open code-scanning
+#   alerts", on the head_sha of the run that triggered this — and the gate requires that check to
+#   be present. The job itself is named differently, and the gate ignores it (_CI_IGNORE).
 on:
   workflow_run:
-    workflows: [ "CodeQL" ]
+    workflows: [ "CodeQL", "Security scan (code)" ]
     types: [ completed ]
   workflow_dispatch:
 
@@ -59,7 +73,12 @@ jobs:
     #   on that commit, so every install stopped being offered main's newest version until the
     #   next merge. f21a2f2 carries two such failures, from #177's runs. So the PR arm is gone:
     #   PRs are judged on the PR, and this judges main.
-    name: Open code-scanning alerts
+    #
+    #   NOT named "Open code-scanning alerts" any more: that is the name of the check this job
+    #   POSTS on the commit it judged (last step). The job's own run still lands on main's tip,
+    #   where it describes some other commit; the panel's gate ignores it by this name (_CI_IGNORE
+    #   in system_ops.py — a unit test holds the two equal), and deploy.yml's verify step too.
+    name: Code-scanning alerts gate
     #
     #   The workflow_dispatch arm is separate because on a manual run `github.event.workflow_run`
     #   is undefined: the property access yields null, `null == 'success'` is false, and the job
@@ -75,6 +94,8 @@ jobs:
     permissions:
       contents: read
       security-events: read
+      actions: read    # "Wait for the other uploader" lists the other workflow's runs
+      checks: write    # the verdict is posted as a check run on the judged commit
     steps:
       - name: Resolve which ref to judge
         id: ref
@@ -108,12 +129,46 @@ jobs:
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Fail if that ref has open code-scanning alerts
+      # Two workflows upload to code scanning for a push — CodeQL (codeql.yml) and Bandit + Semgrep
+      # (security-code.yml) — and each one's completion triggers this. The first to finish would
+      # judge an alert set the other has not reported into yet: the race this workflow exists to
+      # avoid, one uploader along. So a run that finds the OTHER workflow's run for the same commit
+      # still going posts nothing; that one's completion triggers the run that judges. A commit one
+      # of them never ran for (none found) does not wait. A manual run judges at once.
+      - name: Wait for the other uploader
+        id: settled
         if: steps.ref.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WR_SHA: ${{ github.event.workflow_run.head_sha }}
+          WR_NAME: ${{ github.event.workflow_run.name }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" != "workflow_run" ]; then
+            echo "judge=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for wf in codeql.yml security-code.yml; do
+            open="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?head_sha=${WR_SHA}&event=push&per_page=20" \
+                      --jq '[.workflow_runs[] | select(.status != "completed")] | length')"
+            if [ "${open}" != "0" ]; then
+              echo "judge=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::${wf} is still running for ${WR_SHA} (this run was for ${WR_NAME}); its completion judges this commit."
+              exit 0
+            fi
+          done
+          echo "judge=true" >> "$GITHUB_OUTPUT"
+
+      - name: Fail if that ref has open code-scanning alerts
+        id: judge
+        if: steps.ref.outputs.skip != 'true' && steps.settled.outputs.judge == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF: ${{ steps.ref.outputs.ref }}
           LABEL: ${{ steps.ref.outputs.label }}
+          # The commit being judged: the triggering run's head, or this run's own commit when run
+          # by hand.
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
           # ?state=open and ?ref= are both server-side; ask for the rows rather than paging all.
@@ -122,12 +177,21 @@ jobs:
           alerts="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&ref=${REF}&per_page=100" \
                      --jq '[.[] | {rule: .rule.id, sev: (.rule.security_severity_level // .rule.severity // "-"), path: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line}]')"
           n="$(printf '%s' "$alerts" | jq 'length')"
-          total="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/analyses?ref=${REF}&per_page=1" --jq 'length' || echo 0)"
+          # An analysis OF THIS COMMIT, not merely of the ref: "any analysis of main" was true of
+          # every commit after the first, so a commit whose own upload had not landed was judged
+          # on its predecessor's alerts.
+          total="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/analyses?ref=${REF}&sha=${SHA}&per_page=1" --jq 'length' || echo 0)"
+          # The alert list is the ref's CURRENT set, i.e. its newest analysis. When a later push
+          # has already been analysed, that set is the later commit's, not this one's: judged on
+          # it, a commit whose alert the later push fixed passed. It is not judged at all.
+          newest="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/analyses?ref=${REF}&per_page=1" --jq '.[0].commit_sha // ""' || echo "")"
           {
-            echo "### Open code-scanning alerts on ${LABEL}"
+            echo "### Open code-scanning alerts on ${LABEL} at \`${SHA:0:10}\`"
             echo ""
             if [ "${total}" -eq 0 ]; then
-              echo ":warning: CodeQL has uploaded no analysis for \`${REF}\`, so this proves nothing."
+              echo ":warning: Code scanning has no analysis of \`${SHA}\` on \`${REF}\`, so this proves nothing."
+            elif [ -n "${newest}" ] && [ "${newest}" != "${SHA}" ]; then
+              echo ":warning: \`${REF}\` has moved on: its alerts are now \`${newest:0:10}\`'s, so they say nothing about this commit."
             elif [ "$n" -eq 0 ]; then
               echo "None. :white_check_mark:"
             else
@@ -141,11 +205,45 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "${total}" -eq 0 ]; then
-            echo "::error::no CodeQL analysis for ${REF} — refusing to report it clean." >&2
+            echo "::error::no code-scanning analysis of ${SHA} on ${REF} — refusing to report it clean." >&2
             exit 1
+          fi
+          if [ -n "${newest}" ] && [ "${newest}" != "${SHA}" ]; then
+            # Neither clean nor dirty: SKIPPED. The update gate does not count a skipped check as
+            # present, so the commit is simply never offered — the later one is judged on its own.
+            echo "verdict=skipped" >> "$GITHUB_OUTPUT"
+            echo "::notice::${REF} has moved on to ${newest}; ${SHA} is not judged."
+            exit 0
           fi
           if [ "$n" -ne 0 ]; then
             echo "::error::${LABEL} has $n open code-scanning alert(s) — see the job summary." >&2
             exit 1
           fi
+          echo "verdict=success" >> "$GITHUB_OUTPUT"
           echo "No open code-scanning alerts on ${LABEL}."
+
+      # The verdict, on the commit it is about (see WHERE THE VERDICT LANDS at the top). Runs when
+      # the judge step FAILED too — a failure that is never posted leaves the commit merely
+      # unjudged, where a failing check says why.
+      - name: Post the verdict on the judged commit
+        if: >-
+          always() && steps.ref.outputs.skip != 'true' && steps.settled.outputs.judge == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          OUTCOME: ${{ steps.judge.outcome }}
+          VERDICT: ${{ steps.judge.outputs.verdict }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          case "${OUTCOME}:${VERDICT}" in
+            success:success) conclusion=success; title="No open code-scanning alerts" ;;
+            success:skipped) conclusion=skipped; title="Not judged: main has moved on" ;;
+            *)               conclusion=failure; title="Open code-scanning alerts, or no analysis to judge" ;;
+          esac
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/check-runs" \
+            -f name="Open code-scanning alerts" -f head_sha="${SHA}" \
+            -f status=completed -f conclusion="${conclusion}" \
+            -f details_url="${RUN_URL}" \
+            -f "output[title]=${title}" -f "output[summary]=See ${RUN_URL} for the list." >/dev/null
+          echo "Posted '${conclusion}' on ${SHA}."

@@ -51,7 +51,7 @@ def _apply_user_order(items, order, key=lambda o: o.id):
     for ident in (order or []):
         try:
             num = int(ident)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue                           # hand-edited blob: skip the junk, keep the rest
         # len(pos), NOT the loop index: positions must stay dense, or a skipped junk entry leaves a
         # gap and the len(pos) fallback below sorts un-ordered items AHEAD of ordered ones.

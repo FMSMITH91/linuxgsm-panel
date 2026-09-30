@@ -21,6 +21,7 @@ import subprocess  # nosec B404 - one call below: a systemd-run argv list, no sh
 import pathlib as _pathlib
 import tarfile
 import tempfile
+import threading
 import urllib.parse
 
 # Imported for the restore's privileged step only. system_ops does not import
@@ -505,8 +506,33 @@ def _service_restart_launcher(script_path):
     return ["sudo", "systemd-run", "--collect", "/bin/bash", script_path]
 
 
+# One restore at a time. Staging is a FIXED directory (DATA_DIR/.restore-stage — the helper's
+# restore verb takes no path, see _restore_validated), and _stage_archive begins by deleting it.
+# Two restores in flight — two tabs, a double-click, the wizard and the Backups page — therefore
+# shared one directory: the second's rmtree + extract ran while the first was between its extract
+# and its dispatch (the safety copy and the scrypt decrypt both yield), so the swap could install
+# panel.db from one archive beside cred_key from another. That pairing is the one that cannot be
+# undone: every stored SSH credential in the database is encrypted under a key no longer on disk.
+# Held across decrypt, validation, staging AND dispatch, and a second restore is REFUSED rather
+# than queued — the first one restarts the panel, and running the second after it would be a
+# restore nobody is watching. (What is left is the second or so between a dispatch returning and
+# the detached swap stopping the panel; a restart there is already under way.)
+_restore_lock = threading.Lock()
+
+
 def restore_backup(name, passphrase=None, skip_safety_backup=False):
-    """Restore a backup. Destructive; returns (ok, message).
+    """Restore a backup, unless another is in flight; see _restore_lock. Returns (ok, message)."""
+    if not _restore_lock.acquire(blocking=False):
+        return False, ("Another restore is already in progress. Wait for it to finish — the panel "
+                       "restarts when it does.")
+    try:
+        return _restore_backup_locked(name, passphrase, skip_safety_backup)
+    finally:
+        _restore_lock.release()
+
+
+def _restore_backup_locked(name, passphrase=None, skip_safety_backup=False):
+    """Restore a backup. Destructive; returns (ok, message). The caller holds _restore_lock.
 
     Take an automatic pre-restore safety backup, then swap the DB/config/keys into place and
     restart the panel — all from a DETACHED unit so it survives the panel stopping. The panel goes
@@ -1128,7 +1154,10 @@ def set_settings(enabled=None, keep_days=None):
         if keep_days is not None:
             try:
                 cfg["backup_keep_days"] = max(MIN_KEEP_DAYS, min(MAX_KEEP_DAYS, int(keep_days)))
-            except (TypeError, ValueError):
+            # OverflowError: the value arrives from a JSON body, where Python's json reads
+            # `Infinity` as a float whose int() raises it — past this except, out of update_config,
+            # and the settings save answered 500. Same for the two below.
+            except (TypeError, ValueError, OverflowError):
                 _log.debug("ignored invalid keep_days", exc_info=True)
     update_config(_mut)
     return get_settings()
@@ -1162,12 +1191,12 @@ def set_full_settings(interval_days=None, keep=None):
         if interval_days is not None:
             try:
                 cfg["full_backup_interval_days"] = max(0, min(MAX_INTERVAL_DAYS, int(interval_days)))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 _log.debug("ignored invalid full interval", exc_info=True)
         if keep is not None:
             try:
                 cfg["full_backup_keep"] = max(MIN_FULL_KEEP, min(MAX_FULL_KEEP, int(keep)))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 _log.debug("ignored invalid full keep", exc_info=True)
     update_config(_mut)
     return get_full_settings()
@@ -1206,7 +1235,7 @@ def get_game_schedule(sid):
     def _clamp(v, lo, hi, dflt):
         try:
             return max(lo, min(hi, int(v)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return dflt
     return {
         "interval_days": (_clamp(entry["interval_days"], 0, MAX_INTERVAL_DAYS, d["interval_days"])

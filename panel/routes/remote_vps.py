@@ -198,6 +198,33 @@ _FW_AUDIT_NOT_A_PROTOCOL = "(not a protocol)"
 _FW_AUDIT_NOT_A_RULE = "(not a rule number)"
 
 
+def _fw_port_arg(value):
+    """A firewall route's `port` as the firewall helpers may be handed it; "" when it is not one.
+
+    The helpers parse it with `int(port)` under `except (TypeError, ValueError)`, and Python's json
+    reads `Infinity` (or `1e400`) as a float whose int() raises OverflowError — so
+    `{"port": Infinity}` was a 500 from every firewall route. A whole finite float is its int, a
+    fractional one is not a port (int() truncated 22.9 to 22), and anything else that is not a
+    string or an int is not one either. "" is what the routes already refuse as "Port required".
+    """
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else ""
+    return value if isinstance(value, (int, str)) else ""
+
+
+def _fw_proto_arg(value, default="tcp"):
+    """A firewall route's `protocol` as text. `(protocol or "").strip()` raised on `5`.
+
+    Stringified rather than dropped: a dropped protocol reads as "" and _ufw_proto maps "" to BOTH,
+    which would widen the rule; "5" is refused as not a protocol, which is the honest answer.
+    """
+    if value is None:
+        return default
+    return value if isinstance(value, str) else str(value)
+
+
 def _fw_audit_rule(port, proto, ranges=False):
     """The (port, protocol) a firewall audit row names: each as validated, or a fixed text.
 
@@ -213,7 +240,7 @@ def _fw_audit_rule(port, proto, ranges=False):
         return (spec if _fw_hosts._UFW_PORT_SPEC_RE.match(spec) else _FW_AUDIT_NOT_A_PORT), kind
     try:
         return str(_fw_hosts._ufw_port_int(port)), kind
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return _FW_AUDIT_NOT_A_PORT, kind
 
 
@@ -224,7 +251,7 @@ def _fw_audit_rule_number(num):
     """
     try:
         n = int(num)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):     # OverflowError: {"num": Infinity}
         return _FW_AUDIT_NOT_A_RULE
     return str(n) if n >= 1 else _FW_AUDIT_NOT_A_RULE
 
@@ -249,8 +276,8 @@ def _register_firewall_rules(app):
     def api_remote_firewall_open(remote_id):
         remote = get_host_remote(remote_id)
         data = _json_body()
-        port = data.get("port", "")
-        proto = data.get("protocol", "tcp")
+        port = _fw_port_arg(data.get("port", ""))
+        proto = _fw_proto_arg(data.get("protocol", "tcp"))
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_open_port(remote, port, proto, data.get("comment", ""))
@@ -271,8 +298,8 @@ def _register_firewall_rules(app):
         remote = get_host_remote(remote_id)
         data = _json_body()
         source = _json_str(data, "source")
-        port = data.get("port", "")
-        proto = data.get("protocol", "tcp")
+        port = _fw_port_arg(data.get("port", ""))
+        proto = _fw_proto_arg(data.get("protocol", "tcp"))
         on = data.get("allow", True) is not False
         if not source or not port:
             return jsonify({"success": False, "message": "Source and port required"}), 400
@@ -297,8 +324,8 @@ def _register_firewall_rules(app):
         """
         remote = get_host_remote(remote_id)
         data = _json_body()
-        port = data.get("port", "")
-        proto = data.get("protocol", "tcp")
+        port = _fw_port_arg(data.get("port", ""))
+        proto = _fw_proto_arg(data.get("protocol", "tcp"))
         on = data.get("limit", True) is not False
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
@@ -314,8 +341,8 @@ def _register_firewall_rules(app):
     def api_remote_firewall_close(remote_id):
         remote = get_host_remote(remote_id)
         data = _json_body()
-        port = data.get("port", "")
-        proto = data.get("protocol", "tcp")
+        port = _fw_port_arg(data.get("port", ""))
+        proto = _fw_proto_arg(data.get("protocol", "tcp"))
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_close_port(remote, port, proto)
@@ -330,7 +357,7 @@ def _register_firewall_rules(app):
     def api_remote_firewall_delete_rule(remote_id):
         """Delete a UFW rule by its number (the reliable way to remove any rule)."""
         remote = get_host_remote(remote_id)
-        num = _json_body().get("num")
+        num = _fw_port_arg(_json_body().get("num"))   # the same int() in the helper: see there
         # The rule's identity, when the page sends it: the number is a position, and anything
         # inserted since the page re-read the firewall (the auto-block inserts at 1) moves it onto
         # another rule. The delete then happens only if `num` is still that rule.
@@ -387,7 +414,7 @@ def _register_ssh_settings(app):
         body = _json_body()
         try:
             new_port = int(body.get("port"))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):     # OverflowError: {"port": Infinity}
             return jsonify({"success": False, "message": "Enter a valid port number."}), 400
         if not (1 <= new_port <= 65535):
             return jsonify({"success": False, "message": "Port must be between 1 and 65535."}), 400
@@ -514,7 +541,7 @@ def _register_game_ports(app):
         one because its ports come from detect_game_ports() — but that is the game account's own
         config talking, so it is MANAGE_REMOTES-only now as well.)
         """
-        remote = get_remote(remote_id)
+        remote = get_host_remote(remote_id)   # the PANEL host's firewall: superadmins (see below)
         gs = GameServer.query.filter_by(remote_id=remote_id, port=port).first()
         if gs is None:
             return jsonify({"success": False,
@@ -549,9 +576,17 @@ def _register_game_ports(app):
         panel's, is neither opened nor stored (withheld_game_ports).
         """
         gs = get_game(server_id)
+        # ...and on the PANEL host, a superadmin. Every firewall write there is superadmin-only
+        # (get_host_remote), because that firewall guards the panel itself; the five /firewall/*
+        # routes and game-port/open above take it through get_host_remote, but this one is keyed
+        # on a SERVER, and a delegated MANAGE_REMOTES admin whose group covered the panel host
+        # could still put allow rules on it from here. Same inline test get_host_remote uses.
+        _panel_host = (getattr(gs.remote, "is_local", False)
+                       or getattr(gs.remote, "auth_method", None) == "local")
         if not (current_user.is_superadmin
                 or (has_permission(current_user, MANAGE_REMOTES)
-                    and can_access_remote(current_user, gs.remote_id))):
+                    and can_access_remote(current_user, gs.remote_id)
+                    and not _panel_host)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         ok = False     # set before the try, so no path can read it unset (CodeQL alert 512)
         try:

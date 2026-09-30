@@ -30,7 +30,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log,
     _mark_expected_offline)
 from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
-    _host_timezone_cached, _maybe_resolve_public_ip, _server_action_buttons)
+    _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons)
 
 
 def _summarise_action_output(detail):
@@ -242,10 +242,11 @@ def _bulk_server_ids(raw_ids):
     """The bulk endpoint's selected ids as ints, dropping what isn't one."""
     ids = []
     for sid in raw_ids[:100]:   # cap the batch — bounds the SSH fan-out per request
-        try:
-            ids.append(int(sid))
-        except (TypeError, ValueError):
-            continue
+        # _json_int, not int(): `[Infinity]` raised OverflowError past `except (TypeError,
+        # ValueError)` (a 500), and 3.7 was quietly server 3.
+        n = _json_int(sid)
+        if n is not None:
+            ids.append(n)
     return ids
 
 
