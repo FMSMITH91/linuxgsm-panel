@@ -3454,10 +3454,25 @@ class _AtgUser:
 
 
 _atg_saved = {_k: getattr(_atg_routes, _k) for _k in
-              ("current_user", "db", "log_action", "render_template", "flash", "redirect", "url_for")}
+              ("current_user", "db", "log_action", "render_template", "flash", "redirect", "url_for",
+               "_spend_totp_step")}
+
+
+def _atg_spend(user, step):
+    """_spend_totp_step against the stand-in: the same compare-and-swap, on the object."""
+    if (user.last_totp_step or 0) >= step:
+        return False
+    user.last_totp_step = step
+    return True
+
+
 try:
     _atg_routes.db = type("_AtgDb", (), {
-        "session": type("_AtgSess", (), {"commit": staticmethod(lambda: None)})()})()
+        "session": type("_AtgSess", (), {"commit": staticmethod(lambda: None),
+                                         "rollback": staticmethod(lambda: None)})()})()
+    # The spend is a conditional UPDATE on the user row (auth_routes._spend_totp_step), which has
+    # no table here; the stand-in answers the same question on the object this suite inspects.
+    _atg_routes._spend_totp_step = _atg_spend
     _atg_routes.log_action = lambda *a, **k: None
     _atg_routes.render_template = lambda _t, **kw: "TOKEN:%s" % (kw.get("new_token"),)
     _atg_routes.flash = lambda _m, _c="message": None
