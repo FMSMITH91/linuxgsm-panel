@@ -1968,13 +1968,19 @@ try:
               and _db10.session.get(_RS10, _ids10["rb"]).is_online is False, "")
         _second10 = _sweep10({"reachable": False},
                              dict(_UP10, disk=95, load_mem=(250, None)))
-        check("monitor pass: a host going down and one coming back each alert once",
-              "remote_unreachable" in _second10 and "remote_recovered" in _second10,
+        # A host that comes back is announced at once; one that stops answering is DECLARED down
+        # only on the second failed sweep in a row (monitoring._DOWN_CONFIRM_SWEEPS). This check
+        # used to expect "remote_unreachable" from this single failed probe — the blip-pages
+        # behaviour that the confirmation removed; the third sweep below is where it now fires.
+        check("monitor pass: a host coming back alerts at once, one failed probe does not yet",
+              "remote_unreachable" not in _second10 and "remote_recovered" in _second10,
               repr(_second10))
         check("monitor pass: a full disk and a sustained CPU load alert; an unread memory figure "
               "does not", "disk_low" in _second10 and _second10.count("high_load") == 1,
               repr(_alerts10))
         _third10 = _sweep10({"reachable": False}, dict(_UP10, disk=96, load_mem=(260, None)))
+        check("monitor pass: ...and the second failed sweep in a row declares the host unreachable",
+              _third10.count("remote_unreachable") == 1, repr(_third10))
         check("monitor pass: an alert already raised is not repeated while the condition holds",
               "disk_low" not in _third10 and "high_load" not in _third10, repr(_third10))
         _sweep10({"reachable": False}, dict(_UP10, disk=80, load_mem=(100, None)))
@@ -1982,7 +1988,11 @@ try:
         check("monitor pass: once well below the line, disk and load RE-ARM and alert again",
               "disk_low" in _rearm10 and "high_load" in _rearm10, repr(_rearm10))
 
-        # Servers on beta: gmod1 goes down unexpectedly, then comes back; gmod3 is muted.
+        # Servers on beta: gmod1 goes down unexpectedly, then comes back; gmod3 is muted. The down
+        # takes TWO sweeps with the port shut (monitoring._DOWN_CONFIRM_SWEEPS); one used to alert.
+        _down_once10 = _sweep10({"reachable": False}, dict(_UP10, ports=set()))
+        check("monitor pass: one sweep with the port shut is not yet an outage",
+              "server_down" not in _down_once10, repr(_down_once10))
         _down10 = _sweep10({"reachable": False}, dict(_UP10, ports=set()))
         check("monitor pass: a server that stops listening alerts 'offline' — unless muted",
               [a for a in _alerts10 if a[0] == "server_down"]
@@ -2005,7 +2015,9 @@ try:
               repr((_exp10, _exp_back10)))
         # LinuxGSM's own maintenance: the down is suppressed and so is the recovery.
         _mon10._lgsm_maintenance_running = lambda r, gs: True
-        _mt10 = _sweep10({"reachable": False}, dict(_UP10, ports={27017}))
+        # Two sweeps: the first only counts a miss and never reaches the maintenance probe.
+        _mt10 = (_sweep10({"reachable": False}, dict(_UP10, ports={27017}))
+                 + _sweep10({"reachable": False}, dict(_UP10, ports={27017})))
         _mon10._lgsm_maintenance_running = lambda r, gs: False
         _mt_back10 = _sweep10({"reachable": False}, dict(_UP10))
         check("monitor pass: a scheduled LinuxGSM update is neither 'offline' nor 'back online'",

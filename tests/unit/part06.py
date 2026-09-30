@@ -7832,9 +7832,12 @@ check("telegram: a priming poll that did not answer leaves the bot UNPRIMED",
 # _tg_route_update dispatched it like a new one: fixing a typo in last week's `/stop codserver`
 # stopped the server again. Driven through the router with the dispatcher stubbed.
 _tge_calls = []
-_tge_saved = _tgm._tg_dispatch
+_tge_saved = (_tgm._tg_dispatch, _tgm._tg_command_users)
 try:
     _tgm._tg_dispatch = lambda *a, **k: _tge_calls.append(a[3])
+    # /stop needs its sender on the allowed list now (commands.OPEN_COMMANDS); user 7 is on it, so
+    # this still isolates the edited-message rule.
+    _tgm._tg_command_users = lambda: frozenset({"7"})
     _tge_msg = {"text": "/stop codserver", "chat": {"id": 42}, "from": {"id": 7}}
     _tgm._tg_route_update(None, "1:tok", "42", "PanelBot", {"update_id": 1, "edited_message": _tge_msg})
     check("telegram: an edited message does not run its command again", _tge_calls == [],
@@ -7843,7 +7846,7 @@ try:
     check("telegram: ...while a new message still does (control)",
           _tge_calls == ["/stop codserver"], repr(_tge_calls))
 finally:
-    _tgm._tg_dispatch = _tge_saved
+    _tgm._tg_dispatch, _tgm._tg_command_users = _tge_saved
 
 # ── /console must not print the "not running" sentinel as console output ──────────────────────
 # `echo NO_SESSION` goes to STDOUT, so out == "NO_SESSION" and the `if not rows` guard could never
@@ -7942,8 +7945,10 @@ for _rt_bot, _rt_mod, _rt_pfx, _rt_reply, _rt_run in (
         for _h, _fn in _rt_saved.items():
             setattr(_rt_mod, _h, _fn)
 for _rt_bot in ("telegram", "discord"):
+    # /say also takes origin=: the sender it is audited under (commands.audit_bot_action).
     _rt_want = {_cmd: [(_helper_name, _args,
-                        ["fence"] if _rt_bot == "discord" and _cmd in ("players", "console") else [])]
+                        ["fence"] if _rt_bot == "discord" and _cmd in ("players", "console")
+                        else ["origin"] if _cmd == "say" else [])]
                 for _cmd, _tail, _helper_name, _args in _rt_cases}
     _rt_have = {_cmd: _rt_got.get((_rt_bot, _cmd)) for _cmd in _rt_want}
     check("bots: the %s router answers each reply-only command with ITS helper, once" % _rt_bot,

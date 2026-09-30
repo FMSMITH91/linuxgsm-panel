@@ -4177,6 +4177,7 @@ def _ax_names(expr, var):
 # Calls whose action is a parameter, with where the real names come from.
 _AX_ACTION_FROM_CALLER = {
     "_record_backup_outcome",   # its callers pass "scheduled_backup" / "queued_backup"
+    "audit_bot_action",         # the chat bots pass "moderate_say" (server=) / "panel_self_update"
 }
 _ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
 _ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)

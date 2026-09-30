@@ -11,7 +11,9 @@ config.encrypt_secret.
 """
 import json
 import logging
+import queue
 import re
+import struct
 import threading
 import time
 import urllib.error
@@ -60,6 +62,21 @@ _TG_TOKEN_RE = re.compile(r"^(\d{5,}):([A-Za-z0-9_-]{20,})\Z")   # (bot id):(sec
 # validate. A Discord channel id is a snowflake (digits only) and lands only in a charset-checked path.
 _DISCORD_BOT_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.\-]{40,120}\Z")
 _DISCORD_CHANNEL_RE = re.compile(r"^\d{5,25}\Z")
+
+# ── Who may run the command bots' state-changing commands ───────────────────────────────────────
+# The bots used to authorise by CHAT only: any member of the configured Telegram group, or anyone
+# who could post in the Discord channel, could /stop a server, /update (self-update and restart)
+# the panel, read /console and /say things in-game — and the audit row named them only by a
+# username they can change at will. A chat is not an identity. What the transport DOES vouch for
+# is the sender's numeric user id (Telegram `from.id`, Discord `author.id`): the sender cannot
+# choose it, and it survives a rename. So each bot keeps a list of those ids, and a command that
+# changes anything runs only for a sender on it (bots.commands.command_refusal).
+#
+# Digits only, no leading zero, at most 20 of them (a Discord snowflake is a 64-bit integer, a
+# Telegram id at most 52 bits), and at most _COMMAND_USERS_MAX entries: the list is read on every
+# command, and no chat has a legitimate need for a hundred operators.
+_COMMAND_USER_RE = re.compile(r"^[1-9]\d{0,19}\Z")
+_COMMAND_USERS_MAX = 50
 
 # ── ntfy ───────────────────────────────────────────────────────────────────────────────────────
 # ntfy is the one provider whose SERVER is chosen by the operator: the public ntfy.sh, or their own
@@ -124,16 +141,73 @@ def settings_for_form():
     nt = cfg.get("ntfy") or {}
     return {
         "telegram": {"enabled": bool(tg.get("enabled")), "chat_id": tg.get("chat_id") or "",
-                     "has_token": bool(tg.get("token")), "accept_commands": bool(tg.get("accept_commands"))},
+                     "has_token": bool(tg.get("token")), "accept_commands": bool(tg.get("accept_commands")),
+                     "command_users": ", ".join(sorted(command_users(tg)))},
         "discord": {"enabled": bool(dc.get("enabled")), "has_webhook": bool(dc.get("webhook")),
                     "has_bot_token": bool(dc.get("bot_token")), "channel_id": dc.get("channel_id") or "",
-                    "accept_commands": bool(dc.get("accept_commands"))},
+                    "accept_commands": bool(dc.get("accept_commands")),
+                    "command_users": ", ".join(sorted(command_users(dc))),
+                    # Why the command bot is not connected, when Discord told us — see
+                    # discord_gateway_problem. "" when there is nothing to report.
+                    "gateway_problem": discord_gateway_problem()},
         "ntfy": {"enabled": bool(nt.get("enabled")),
                  "server": nt.get("server") or NTFY_DEFAULT_SERVER,
                  "topic": nt.get("topic") or "", "has_token": bool(nt.get("token"))},
         "events": {k: event_enabled(cfg, k) for k in EVENTS},
         "thresholds": get_thresholds(),
     }
+
+
+def parse_command_users(value):
+    """Split a submitted list of user ids into (accepted, rejected).
+
+    `value` is the form's text (ids separated by commas, spaces or new lines) or an already-split
+    list. `accepted` is the valid ids in the order given, without repeats and at most
+    _COMMAND_USERS_MAX of them. `rejected` is every entry that is not a plain numeric id, cut to 24
+    characters, plus a note when the list hit the cap: the form shows it back, so a typo is never
+    the silent reason someone cannot run anything.
+    """
+    if isinstance(value, (list, tuple)):
+        raw = [str(v) for v in value]
+    else:
+        raw = re.split(r"[\s,;]+", str(value or "")[:4000])
+    accepted, rejected = [], []
+    for item in raw:
+        item = item.strip()
+        if not item:
+            continue
+        if not _COMMAND_USER_RE.match(item):
+            rejected.append(item[:24])
+        elif item not in accepted:
+            if len(accepted) >= _COMMAND_USERS_MAX:
+                rejected.append("(more than %d ids)" % _COMMAND_USERS_MAX)
+                break
+            accepted.append(item)
+    return accepted, rejected
+
+
+def command_users(platform_cfg):
+    """The allowed user ids stored for one bot, as a frozenset of digit strings.
+
+    Re-validated on READ, not only on save: the config file can be edited by hand or restored from
+    a backup, and what this returns is an authorisation decision.
+    """
+    stored = (platform_cfg or {}).get("command_users") or []
+    if not isinstance(stored, (list, tuple)):
+        return frozenset()
+    return frozenset(parse_command_users(stored)[0])
+
+
+def _submitted_command_users(form, stored):
+    """The ids to store: the stored list when the form did not send the field (None), else parsed.
+
+    None means "this caller does not manage the list" — the rule the secrets follow — so a caller
+    that omits the key cannot wipe who may run commands.
+    """
+    value = form.get("command_users")
+    if value is None:
+        return sorted(command_users(stored))
+    return parse_command_users(value)[0]
 
 
 def _kept_or_encrypted(submitted, stored, key):
@@ -157,19 +231,21 @@ def _submitted_thresholds(thresholds):
     return th
 
 
-def _telegram_record(form, token):
+def _telegram_record(form, token, stored=None):
     """Build the stored Telegram settings from the form and the already-resolved token."""
     return {"enabled": bool(form.get("enabled")),
             "chat_id": (form.get("chat_id") or "").strip()[:64], "token": token or "",
-            "accept_commands": bool(form.get("accept_commands"))}
+            "accept_commands": bool(form.get("accept_commands")),
+            "command_users": _submitted_command_users(form, stored or {})}
 
 
-def _discord_record(form, webhook, bot_token):
+def _discord_record(form, webhook, bot_token, stored=None):
     """Build the stored Discord settings from the form and the already-resolved secrets."""
     return {"enabled": bool(form.get("enabled")), "webhook": webhook or "",
             "bot_token": bot_token or "",
             "channel_id": (form.get("channel_id") or "").strip()[:32],
-            "accept_commands": bool(form.get("accept_commands"))}
+            "accept_commands": bool(form.get("accept_commands")),
+            "command_users": _submitted_command_users(form, stored or {})}
 
 
 def _ntfy_record(form, token):
@@ -199,8 +275,8 @@ def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None):
     nt_token = _kept_or_encrypted(ntfy.get("token"), cur_nt, "token")
     th = _submitted_thresholds(thresholds)
     notif = {
-        "telegram": _telegram_record(telegram, tg_token),
-        "discord": _discord_record(discord, dc_webhook, dc_bot_token),
+        "telegram": _telegram_record(telegram, tg_token, cur_tg),
+        "discord": _discord_record(discord, dc_webhook, dc_bot_token, cur_dc),
         "ntfy": _ntfy_record(ntfy, nt_token),
         "events": {k: bool(events.get(k, EVENTS[k][1])) for k in EVENTS},
         "thresholds": th,
@@ -583,6 +659,24 @@ DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 _DISCORD_INTENTS = (1 << 9) | (1 << 12) | (1 << 15)
 _ws_warned = [False]   # so a missing websocket-client dep is logged once, not every reconnect tick
 
+# WebSocket frame opcodes (RFC 6455 §5.2), for reading a close frame's status code.
+_WS_OP_TEXT, _WS_OP_BINARY, _WS_OP_CLOSE = 0x1, 0x2, 0x8
+
+# Why the command bot is not connected, in words for the settings page ("" when nothing is wrong).
+# Written by the watcher in bots/discord.py, which is the only thing that knows; a one-element
+# holder so it is shared without a `global`.
+_gateway_problem = [""]
+
+
+def set_discord_gateway_problem(text):
+    """Record (or, with "", clear) why the Discord command bot is not connected."""
+    _gateway_problem[0] = str(text or "")[:300]
+
+
+def discord_gateway_problem():
+    """Why the Discord command bot is not connected, or "" — shown on the Notifications page."""
+    return _gateway_problem[0]
+
 
 def _valid_discord_bot_token(token):
     return _DISCORD_BOT_TOKEN_RE.match(token or "") is not None
@@ -692,6 +786,31 @@ def _gateway_frame(ws, data, state, on_message):
     return True
 
 
+def _gateway_recv(ws, closed):
+    """Read one Gateway frame's text; "" when the far end closed, with its status in closed["code"].
+
+    recv() cannot be used for this: websocket-client answers a close frame by returning "" and
+    discarding the frame, and its two-byte status code with it. That code is the only place
+    Discord says WHY a session ended — 4004 "authentication failed", 4014 "disallowed intents" —
+    and without it every session end looked alike, so the watcher retried a revoked token or a
+    missing Message Content intent every 15 seconds for ever (see bots/discord.py).
+
+    A socket without recv_data (websocket-client always has it) is read with plain recv(), and
+    then no code is known.
+    """
+    recv_data = getattr(ws, "recv_data", None)
+    if recv_data is None:
+        return ws.recv()
+    opcode, data = recv_data()
+    if opcode == _WS_OP_CLOSE:
+        if isinstance(data, (bytes, bytearray)) and len(data) >= 2:
+            closed["code"] = struct.unpack("!H", bytes(data[:2]))[0]
+        return ""
+    if opcode in (_WS_OP_TEXT, _WS_OP_BINARY):
+        return data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else data
+    return ""
+
+
 def _gateway_close(ws):
     """Close the session's socket if it got one; a close that fails is logged, not raised."""
     try:
@@ -710,17 +829,23 @@ def discord_gateway_run(bot_token, on_message, _connect=None):
     Telegram poller gets, so the /update that restarted us is never re-run. Degrades to a no-op
     (logged) if websocket-client isn't installed. Never raises.
 
+    Returns the close code Discord ended the session with, or None when it did not send one (the
+    socket dropped, the heartbeat closed a zombie link, or op 7/9 asked for a reconnect). The
+    caller needs it to tell "try again" from "this can never work until someone fixes the
+    settings" — see bots/discord.py's _DC_FATAL_CLOSE.
+
     `_connect` is a seam for tests to inject a fake socket; production leaves it None.
     """
     if _connect is None:
         _connect = _gateway_connector()
         if _connect is None:
-            return
+            return None
     ws = None
     stop = {"v": False}
+    closed = {"code": None}
     try:
         ws = _connect()
-        hello = json.loads(ws.recv())
+        hello = json.loads(_gateway_recv(ws, closed))
         interval = float((hello.get("d") or {}).get("heartbeat_interval", 41250)) / 1000.0
         # The 40s given to create_connection is ALSO the timeout of every later recv(), and a
         # quiet guild sends nothing but heartbeat ACKs — the first of which comes a full interval
@@ -740,7 +865,7 @@ def discord_gateway_run(bot_token, on_message, _connect=None):
                          daemon=True).start()
 
         while True:
-            raw = ws.recv()
+            raw = _gateway_recv(ws, closed)
             if not raw or not _gateway_frame(ws, json.loads(raw), state, on_message):
                 break
     except Exception:
@@ -748,6 +873,7 @@ def discord_gateway_run(bot_token, on_message, _connect=None):
     finally:
         stop["v"] = True
         _gateway_close(ws)
+    return closed["code"]
 
 
 # ── public API ─────────────────────────────────────────────────
@@ -764,8 +890,136 @@ def _channel_senders(tg, dc, nt, text):
                                decrypt_secret(nt.get("token") or ""), text)))
 
 
+# ── Alert delivery: one bounded queue, one sender, bursts folded into one message ──────────────
+# notify() used to start a NEW THREAD PER ALERT, each sending on its own. Nothing bounded that:
+# a host with fifty game servers coming back after an outage produced fifty "back online" alerts
+# in one monitor pass, i.e. fifty concurrent threads, each making a request to every channel at
+# once. Telegram allows a bot about one message a second into a chat (twenty a minute into a
+# group) and answers the rest 429 — so most of the burst was refused and LOGGED as a failure,
+# while the operator's phone buzzed for the ones that got through.
+#
+# Now alerts go on a bounded queue and ONE sender thread drains it. Whatever has piled up by the
+# time the sender comes back for more is sent as a single message listing each alert, so a burst
+# costs a couple of requests per channel rather than one per alert. The sender is started when
+# there is work and exits when the queue is empty (no idle thread on a panel with alerts off), and
+# a queue that is full drops the alert with a WARNING instead of growing without bound behind a
+# provider that stopped answering.
+_ALERT_QUEUE_MAX = 200
+_ALERT_BATCH_MAX = 25          # alerts folded into one message at most
+_ALERT_TEXT_MAX = 1800         # under the smallest provider cap (Discord's 1900 in send_discord)
+_ALERT_LINE_MAX = 300          # one alert's line inside a folded message
+_alert_queue = queue.Queue(maxsize=_ALERT_QUEUE_MAX)
+_alert_lock = threading.Lock()
+_alert_sender = [False]        # True while a sender thread owns the queue
+
+
+def _alert_text(items):
+    """The message for one or more queued (event_key, title, body) alerts.
+
+    One alert reads exactly as it always has; several become one message with a line each.
+    """
+    if len(items) == 1:
+        _key, title, body = items[0]
+        return "🎮 LinuxGSM Panel — %s" % title + (("\n%s" % body) if body else "")
+    lines = ["🎮 LinuxGSM Panel — %d alerts" % len(items)]
+    for _key, title, body in items:
+        lines.append(("• %s%s" % (title, (": " + body) if body else ""))[:_ALERT_LINE_MAX])
+    return "\n".join(lines)
+
+
+def _alert_messages(items):
+    """Split `items` into messages that each fit _ALERT_TEXT_MAX: [(event keys, text)]."""
+    out, chunk = [], []
+    for item in items:
+        if chunk and len(_alert_text(chunk + [item])) > _ALERT_TEXT_MAX:
+            out.append(chunk)
+            chunk = []
+        chunk.append(item)
+    if chunk:
+        out.append(chunk)
+    return [(", ".join(sorted({k for k, _t, _b in c})), _alert_text(c)) for c in out]
+
+
+def _deliver_alerts(items):
+    """Send queued alerts to every enabled channel, CHECKING each result. Never raises.
+
+    The channel settings are read here, at send time: an alert queued a moment before a channel
+    was switched off is not sent to it.
+    """
+    cfg = _cfg()
+    tg = cfg.get("telegram") or {}
+    dc = cfg.get("discord") or {}
+    nt = cfg.get("ntfy") or {}
+    for keys, text in _alert_messages(items):
+        for _name, _enabled, _send in _channel_senders(tg, dc, nt, text):
+            if not _enabled:
+                continue
+            # Each result is CHECKED. They were called as bare statements, so a provider that
+            # refused every message left no trace at all — see _post's HTTPError branch. And each
+            # channel on its own: one sender that raises no longer stops the others.
+            try:
+                _ok, _why = _send()
+            except Exception:
+                _log.debug("notify send to %s failed", _name, exc_info=True)
+                continue
+            if not _ok:
+                _log.warning("notification to %s failed (%s): %s", _name, keys, _why)
+
+
+def _next_alert_batch():
+    """Take up to _ALERT_BATCH_MAX queued alerts; [] (and the sender stands down) when none.
+
+    The empty check and the stand-down happen under the same lock _queue_alert takes to decide
+    whether to start a sender, so an alert queued at that instant is never left without one.
+    """
+    with _alert_lock:
+        items = []
+        while len(items) < _ALERT_BATCH_MAX:
+            try:
+                items.append(_alert_queue.get_nowait())
+            except queue.Empty:
+                break
+        if not items:
+            _alert_sender[0] = False
+        return items
+
+
+def _drain_alerts():
+    """The sender thread: deliver batches until the queue is empty, then exit."""
+    while True:
+        items = _next_alert_batch()
+        if not items:
+            return
+        try:
+            _deliver_alerts(items)
+        except Exception:
+            # Never let one batch end the sender while it still owns the queue: the flag would
+            # stay set and no alert would ever be sent again.
+            _log.debug("notify delivery failed", exc_info=True)
+
+
+def _queue_alert(item):
+    """Queue one alert, starting the sender if none is running. Dropped (and logged) when full."""
+    try:
+        _alert_queue.put_nowait(item)
+    except queue.Full:
+        _log.warning("notification queue is full (%d waiting); an alert was dropped",
+                     _ALERT_QUEUE_MAX)
+        return
+    with _alert_lock:
+        if _alert_sender[0]:
+            return
+        _alert_sender[0] = True
+    try:
+        threading.Thread(target=_drain_alerts, daemon=True, name="notifications").start()
+    except Exception:
+        with _alert_lock:
+            _alert_sender[0] = False
+        _log.debug("notify could not start its sender", exc_info=True)
+
+
 def notify(event_key, title, body=""):
-    """Fire an alert for `event_key` to every enabled channel, in the background.
+    """Queue an alert for `event_key` to every enabled channel; it is sent in the background.
 
     No-op when notifications (or this event) are off, or no channel is configured. Never raises.
     """
@@ -773,24 +1027,7 @@ def notify(event_key, title, body=""):
         cfg = _cfg()
         if not event_enabled(cfg, event_key):
             return
-        text = "🎮 LinuxGSM Panel — %s" % title + (("\n%s" % body) if body else "")
-        tg = cfg.get("telegram") or {}
-        dc = cfg.get("discord") or {}
-        nt = cfg.get("ntfy") or {}
-
-        def _go():
-            # Each result is CHECKED. They were called as bare statements, so a provider that
-            # refused every message left no trace at all — see _post's HTTPError branch.
-            try:
-                for _name, _enabled, _send in _channel_senders(tg, dc, nt, text):
-                    if not _enabled:
-                        continue
-                    _ok, _why = _send()
-                    if not _ok:
-                        _log.warning("notification to %s failed (%s): %s", _name, event_key, _why)
-            except Exception:
-                _log.debug("notify send failed", exc_info=True)
-        threading.Thread(target=_go, daemon=True).start()
+        _queue_alert((event_key, str(title or ""), str(body or "")))
     except Exception:
         _log.debug("notify failed to dispatch", exc_info=True)
 

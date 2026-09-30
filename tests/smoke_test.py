@@ -7141,10 +7141,16 @@ try:
                   not any(k in _rec for k in ("server_down", "server_up", "remote_unreachable")),
                   "fired: %s" % _rec)
 
-            # A server that was up and is no longer listening -> server_down.
+            # A server that was up and is no longer listening -> server_down, once CONFIRMED: one
+            # sweep with the port shut used to alert, and a scan that missed it once paged
+            # "offline" then "back online" a minute later. It takes _DOWN_CONFIRM_SWEEPS in a row.
             _monmod._remote_listening_ports = lambda r: set()
             _rec.clear(); _monmod._monitor_pass()
-            check("monitor: server_down fires on an up->down transition", "server_down" in _rec)
+            check("monitor: one sweep with the port shut does not alert yet", "server_down" not in _rec,
+                  "fired: %s" % _rec)
+            for _ in range(_monmod._DOWN_CONFIRM_SWEEPS - 1):
+                _monmod._monitor_pass()
+            check("monitor: server_down fires on a confirmed up->down transition", "server_down" in _rec)
 
             # ...but a panel-issued stop (inside the expected-offline window) suppresses it.
             _reset_mon()
@@ -7206,7 +7212,11 @@ try:
                     _reset_mon()
                     _ps._monitor_state["servers"][_mon_id] = True
                     _monmod._remote_listening_ports = lambda r: set()
-                    _rw_bodies.clear(); _monmod._monitor_pass()
+                    # As many sweeps as it takes to CONFIRM a down, or the control below would
+                    # pass on the confirmation rule rather than on the reboot marks.
+                    _rw_bodies.clear()
+                    for _ in range(_monmod._DOWN_CONFIRM_SWEEPS):
+                        _monmod._monitor_pass()
                 finally:
                     _monmod.time = _rw_real_time
                 return [b for k, t, b in _rw_bodies if k == "server_down" and "mon-srv" in b]
@@ -7341,7 +7351,13 @@ try:
             db.session.commit()
             _monmod._host_reachable = lambda r: r.id != _r1_id
             _rec.clear(); _monmod._monitor_pass()
-            check("monitor: remote_unreachable fires when a host stops responding",
+            # One failed `echo ok` is a blip, not an outage: it used to page "Host unreachable"
+            # and then "Host back online" a minute later.
+            check("monitor: a single failed probe does not yet declare the host unreachable",
+                  "remote_unreachable" not in _rec, "fired: %s" % _rec)
+            for _ in range(_monmod._DOWN_CONFIRM_SWEEPS - 1):
+                _monmod._monitor_pass()
+            check("monitor: remote_unreachable fires when a host stops responding (confirmed)",
                   "remote_unreachable" in _rec)
             # ...and the COLUMN follows, not just this pass's memory. is_online was written only by
             # host creation (hardcoded True), the manual Test button and a successful bootstrap, so
@@ -7555,9 +7571,13 @@ try:
                 _ps._monitor_state["servers"][_mon_id] = True
                 _monmod._remote_listening_ports = lambda r: set()
                 _monmod._lgsm_maintenance_running = lambda remote, gs: _probes.append(gs.id) or True
-                _rec.clear(); _monmod._monitor_pass()
+                # Enough sweeps to CONFIRM the down, so the maintenance probe is what is tested —
+                # a single sweep is silent now whatever maintenance says.
+                _rec.clear()
+                for _ in range(_monmod._DOWN_CONFIRM_SWEEPS):
+                    _monmod._monitor_pass()
                 check("maintenance: a scheduled update does not alert as a crash",
-                      "server_down" not in _rec, str(_rec))
+                      "server_down" not in _rec and _mon_id in _probes, "%s probed=%s" % (_rec, _probes))
                 check("maintenance: the recorded state is left alone, so recovery is not an 'up' alert",
                       _ps._monitor_state["servers"].get(_mon_id) is True)
                 # Record bodies too: _rec holds only event KEYS, and the fixture has other servers
@@ -7592,7 +7612,9 @@ try:
                 _ps._monitor_state["servers"][_mon_id] = True
                 _monmod._remote_listening_ports = lambda r: set()
                 _monmod._lgsm_maintenance_running = lambda remote, gs: False
-                _rec.clear(); _monmod._monitor_pass()
+                _rec.clear()
+                for _ in range(_monmod._DOWN_CONFIRM_SWEEPS):
+                    _monmod._monitor_pass()
                 check("maintenance: a genuine crash still alerts", "server_down" in _rec, str(_rec))
             finally:
                 _monmod._lgsm_maintenance_running = _saved_maint
@@ -7612,7 +7634,9 @@ try:
             _reset_mon()
             _ps._monitor_state["servers"][_mon_id] = True
             _monmod._remote_listening_ports = lambda r: set()
-            _rec.clear(); _monmod._monitor_pass()
+            _rec.clear()
+            for _ in range(_monmod._DOWN_CONFIRM_SWEEPS):      # a CONFIRMED down, or this is vacuous
+                _monmod._monitor_pass()
             check("mute: a muted tag suppresses server_down", "server_down" not in _rec, str(_rec))
             _reset_mon()
             _ps._monitor_state["servers"][_mon_id] = False
@@ -7655,7 +7679,9 @@ try:
             _reset_mon()
             _ps._monitor_state["servers"][_mon_id] = True
             _monmod._remote_listening_ports = lambda r: set()
-            _rec.clear(); _monmod._monitor_pass()
+            _rec.clear()
+            for _ in range(_monmod._DOWN_CONFIRM_SWEEPS):
+                _monmod._monitor_pass()
             check("mute: removing the tag restores server_down", "server_down" in _rec, str(_rec))
             db.session.delete(_mute_tag); db.session.commit()
         finally:
@@ -9142,7 +9168,7 @@ try:
         _tg_upd = []
         _tg_saved_upd = _tgmod._telegram_do_update
         try:
-            _tgmod._telegram_do_update = lambda a, tok, chat: _tg_upd.append("panel")
+            _tgmod._telegram_do_update = lambda a, tok, chat, sender=None: _tg_upd.append("panel")
             _tg_acted.clear(); _tg_sent.clear()
             _tgmod._handle_telegram_command(app, "1:tok", "1", "/update smoke-cs")
             check("telegram: /update <name> updates THAT SERVER, not the panel",
@@ -9355,7 +9381,7 @@ try:
         _dcmod._dc_reply = lambda tok, chan, text: _dc_sent.append(text)
         _dcmod._dc_server_action = lambda a, tok, chan, action, arg, sender=None: _dc_acted.append(
             (action, arg))
-        _dcmod._discord_do_update = lambda a, tok, chan: _dc_upd.append("panel")
+        _dcmod._discord_do_update = lambda a, tok, chan, sender=None: _dc_upd.append("panel")
         _dcmod._handle_discord_command(app, "tok", "1", "!start smoke-cs")
         check("discord: !start <name> runs the start action", _dc_acted == [("start", "smoke-cs")],
               "acted=%s" % _dc_acted)

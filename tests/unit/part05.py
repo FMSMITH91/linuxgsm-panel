@@ -815,9 +815,12 @@ check("supported releases: each is tested on the Python that release ships", not
 # with actor=None — i.e. "system" — so the audit log showed the effect and nothing about the
 # cause. The origin string is what makes a bot-initiated action attributable.
 from panel.services.bots.commands import _bot_origin
-eq("bot origin: telegram sender by username", _bot_origin("telegram", {"username": "fred", "id": 7}), "telegram:fred")
+# The NUMERIC id leads and the username follows in brackets. These used to expect the username
+# alone ("telegram:fred") — a name the sender picks and can change, so the row could not be tied
+# to an account; the id is what the allowed-user list matches and what an admin revokes.
+eq("bot origin: telegram sender by numeric id, then username", _bot_origin("telegram", {"username": "fred", "id": 7}), "telegram:7 (fred)")
 eq("bot origin: falls back to the numeric id", _bot_origin("telegram", {"id": 4242}), "telegram:4242")
-eq("bot origin: discord is labelled as discord", _bot_origin("discord", {"username": "ann"}), "discord:ann")
+eq("bot origin: discord is labelled as discord", _bot_origin("discord", {"username": "ann", "id": "81"}), "discord:81 (ann)")
 eq("bot origin: an absent sender is still recorded, not blank",
    _bot_origin("telegram", None), "telegram:unknown")
 check("bot origin: capped so a hostile display name can't flood the audit column",

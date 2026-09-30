@@ -666,16 +666,43 @@ def _monitor_host(remote, probe, th, servers):
     return status_changed
 
 
+# How many sweeps in a row a host must fail to answer, or a server's port stay shut, before it is
+# DECLARED down and alerted on. It was one: a single `echo ok` that timed out — a busy box, a
+# dropped packet, sshd reloading — paged "Host unreachable", then "Host back online" a minute
+# later; a host whose link flapped alerted on every other sweep; and a game whose port scan
+# missed it once reported "went offline unexpectedly" followed by "back online". Two sweeps is a
+# minute of real outage before anyone is told, which is the trade a pager should make.
+#
+# Only the ALERT and the recorded transition state wait. The columns (is_online, gs.status) still
+# say what the last probe measured: they are what the dashboard and the bots show, and a probe
+# that failed is a fact about right now. What does not happen any more is a transition the
+# operator is told about and then told the reverse of a minute later.
+_DOWN_CONFIRM_SWEEPS = 2
+
+
 def _record_host_reachability(remote, reachable):
-    """Alert on a host going down or coming back, and record it; True if is_online changed."""
+    """Alert on a host going down or coming back, and record it; True if is_online changed.
+
+    Down is declared only after _DOWN_CONFIRM_SWEEPS failed probes in a row; until then the host
+    stays recorded as up, so a blip that clears is neither "unreachable" nor "back online".
+    """
     prev = _monitor_state["remotes"].get(remote.id)
-    if prev is True and not reachable:
-        notifications.notify("remote_unreachable", "Host unreachable",
-                             "%s stopped responding." % remote.display_name)
-    elif prev is False and reachable:
+    misses = _monitor_state["remote_misses"]
+    recorded = reachable
+    if reachable or prev is not True:
+        misses.pop(remote.id, None)
+    else:
+        misses[remote.id] = misses.get(remote.id, 0) + 1
+        if misses[remote.id] < _DOWN_CONFIRM_SWEEPS:
+            recorded = True                  # not declared yet: one more sweep to be sure
+        else:
+            misses.pop(remote.id, None)
+            notifications.notify("remote_unreachable", "Host unreachable",
+                                 "%s stopped responding." % remote.display_name)
+    if prev is False and reachable:
         notifications.notify("remote_recovered", "Host back online",
                              "%s is responding again." % remote.display_name)
-    _monitor_state["remotes"][remote.id] = reachable
+    _monitor_state["remotes"][remote.id] = recorded
     # ...and to the COLUMN, not just this pass's memory. is_online was written in exactly three
     # places — host creation (hardcoded True), the manual "Test connection" button, and a
     # successful bootstrap — so a host that went down stayed green forever and one whose single
@@ -774,13 +801,29 @@ def _server_transition(remote, gs, up, prev_up, muted):
     """Alert on one server's up/down transition and answer what to record for it.
 
     The answer is usually `up`; the previous value for a panel-issued stop still inside
-    _EXPECT_OFFLINE_WINDOW; or _IN_MAINTENANCE when LinuxGSM's own maintenance has the port shut.
+    _EXPECT_OFFLINE_WINDOW, or for a down not yet confirmed by _DOWN_CONFIRM_SWEEPS sweeps; or
+    _IN_MAINTENANCE when LinuxGSM's own maintenance has the port shut.
     """
     recorded = up      # what this pass writes to the transition state (not always `up`)
+    misses = _monitor_state["server_misses"]
+    if up or prev_up is not True:
+        misses.pop(gs.id, None)
     if prev_up is True and not up:
         # The panel's own stop/restart is already accounted for locally — check that FIRST so
         # an intentional stop keeps its existing semantics and costs no SSH round trip.
         expected = time.time() - _expected_offline.get(gs.id, 0) <= _EXPECT_OFFLINE_WINDOW
+        if expected:
+            misses.pop(gs.id, None)
+        else:
+            # Not declared down until the port has been shut for _DOWN_CONFIRM_SWEEPS sweeps in a
+            # row (see there). Until then the server stays recorded as up, so the sweep that
+            # finds it listening again has nothing to announce. Counted BEFORE the maintenance
+            # probe, so a single missed scan does not cost that SSH round trip either; once
+            # confirmed, the count is kept through maintenance, so a server still down when
+            # LinuxGSM's update finishes is reported on the next sweep.
+            misses[gs.id] = misses.get(gs.id, 0) + 1
+            if misses[gs.id] < _DOWN_CONFIRM_SWEEPS:
+                return prev_up
         if not expected and _lgsm_maintenance_running(remote, gs):
             # A scheduled LinuxGSM update/restart is running: the port is SUPPOSED to be shut.
             # Leave the recorded state untouched so neither this pass nor the recovery pass
@@ -793,12 +836,14 @@ def _server_transition(remote, gs, up, prev_up, muted):
             # the operator was never notified of — on roughly half the restarts of a
             # slow-booting game, which is what trains people to ignore the channel.
             # Keeping the previous value also preserves the case that matters: if the
-            # restart never comes back, _EXPECT_OFFLINE_WINDOW expires and the next sweep
-            # reports a genuine "went offline unexpectedly" from prev_up=True.
+            # restart never comes back, _EXPECT_OFFLINE_WINDOW expires and the sweeps after it
+            # report a genuine "went offline unexpectedly" from prev_up=True (once confirmed).
             recorded = prev_up
-        elif not muted:
-            notifications.notify("server_down", "Server offline",
-                                 "%s on %s went offline unexpectedly." % (gs.name, remote.display_name))
+        else:
+            misses.pop(gs.id, None)          # declared: recorded False from here on
+            if not muted:
+                notifications.notify("server_down", "Server offline",
+                                     "%s on %s went offline unexpectedly." % (gs.name, remote.display_name))
     elif prev_up is False and up and not muted:
         notifications.notify("server_up", "Server back online",
                              "%s on %s is back online." % (gs.name, remote.display_name))

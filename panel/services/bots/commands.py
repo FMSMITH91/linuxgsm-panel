@@ -10,9 +10,12 @@ from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import ssh_manager as _sm
 from panel.ops import system_ops as so
 from panel.ops.ssh_manager import (player_list)
+from panel.security.auth import (log_action)
+from panel.services import (notifications)
 import collections
 import logging
 import queue
+import re
 import threading
 import time
 
@@ -185,12 +188,15 @@ def _console_tail_reply(name, out, lines, fence):
     return "%s — last %d console line(s):\n%s" % (name, len(rows), fence(body) if fence else body)
 
 
-def _say_text(app, arg):
+def _say_text(app, arg, origin=None):
     """Announce a message in a server's chat: '<server> <message>'.
 
     The server is the FIRST word (a short name never contains a space), everything after it is the
     message — otherwise there is no way to tell where one ends and the other begins. _sm.moderate()
     sanitizes the text, so a message can't smuggle a second console command.
+
+    `origin` is the bot sender (_bot_origin) the announcement is audited under, as "moderate_say" —
+    the action the web page's own Say logs.
     """
     name, _, message = (arg or "").strip().partition(" ")
     if not name:
@@ -207,6 +213,8 @@ def _say_text(app, arg):
         except Exception:
             _log.debug("telegram say failed", exc_info=True)
             ok, msg = False, "the announcement failed"
+        audit_bot_action(app, origin or "chat bot", "moderate_say", gs.name,
+                         detail=message.strip()[:120], success=ok, server=gs)
         return "%s %s — %s" % ("✅" if ok else "⚠️", gs.name, msg or ("announced" if ok else "failed"))
 
 
@@ -490,6 +498,69 @@ def action_ack(action, name):
     return _ACTION_ACK.get(action, "🔄 %s — working on it…") % name
 
 
+def sender_id(sender):
+    """The sender's numeric user id as a string (Telegram `from.id`, Discord `author.id`), or "".
+
+    The one part of a chat sender the transport vouches for — see notifications'
+    _COMMAND_USER_RE for the shape, which this checks, so "" is also the answer for anything odd.
+    """
+    raw = str((sender or {}).get("id") or "").strip()
+    return raw if notifications._COMMAND_USER_RE.match(raw) else ""
+
+
+# ── Who may run what ───────────────────────────────────────────────────────────────────────────
+# Anyone in the authorised chat may run these: they read what the panel already knows, from its
+# own database, and change nothing — the version and counts, the server and host lists, the join
+# address a server's players are given anyway, and the help text. Everything else needs the sender
+# on the bot's allowed-user list (Notifications → "Users who may run commands"): /start, /stop,
+# /restart, /backup and both /updates change state; /say speaks in-game as the server; /console
+# reads the live console, which carries players' chat and IPs, RCON output and whatever a mod
+# prints; and /players queries the game over the network and, when that fails, types `status`
+# into its console. DEFAULT-DENY: a command added later is restricted until someone adds it here
+# on purpose, rather than open until someone remembers to restrict it.
+#
+# The open set used to be every command, because the only check was which CHAT a message came
+# from — any member of the group, or anyone who could post in the channel, could stop a server or
+# self-update the panel, and the audit row named them by a username they choose.
+OPEN_COMMANDS = frozenset(("help", "status", "servers", "hosts", "connect"))
+
+
+def is_open_command(cmd, arg):
+    """Whether anyone in the authorised chat may run `cmd` — see OPEN_COMMANDS.
+
+    An empty command word is open too: it answers "unknown command" or nothing at all. So is a
+    BARE /start, which on Telegram is the client's own "open the chat" and answers with help.
+    """
+    return not cmd or cmd in OPEN_COMMANDS or (cmd == "start" and not arg)
+
+
+def command_refusal(platform, cmd, arg, sender, allowed):
+    """The reply refusing `cmd` to `sender`, or None when they may run it.
+
+    `allowed` is the bot's allowed user ids (notifications.command_users). The reply tells the
+    sender their own id — the one thing an admin needs to allow them, and hard to find in either
+    client — and where the setting lives; it never names who IS allowed.
+    """
+    if is_open_command(cmd, arg):
+        return None
+    sid = sender_id(sender)
+    if sid and sid in allowed:
+        return None
+    p, where = ("/", "Telegram") if platform == "telegram" else ("!", "Discord")
+    # The command word is echoed only when it is a plain word: it is sender-chosen text, and
+    # Discord would render markdown in it.
+    what = ("%s%s" % (p, cmd)) if cmd.isalpha() and len(cmd) <= 24 else "that command"
+    yours = ("Your user ID is %s." % sid) if sid else "Your user ID couldn't be read."
+    if not allowed:
+        head = ("🔒 %s changes things, so only allowed users may run it — and none have been "
+                "allowed yet." % what)
+    else:
+        head = "🔒 Only allowed users may run %s, and you're not one of them." % what
+    return ("%s %s A super admin can add it under Notifications → %s → \"Users who may run "
+            "commands\". Anyone here can still use %sstatus, %sservers, %shosts, %sconnect and "
+            "%shelp." % (head, yours, where, p, p, p, p, p))
+
+
 def _bot_origin(platform, sender):
     """Audit-log actor string for a command that arrived over a chat bot.
 
@@ -497,10 +568,38 @@ def _bot_origin(platform, sender):
     with actor=None — i.e. as "system". The log showed that a server restarted but not that a chat
     message caused it, let alone which account sent it. Chat bots have no panel identity to map to,
     so the next best thing is to record the origin verbatim and let a human follow it up.
+
+    The NUMERIC id first, then the username in brackets for a reader. It used to be the username
+    alone (the id only when there was none) — a name the sender chooses and can change the moment
+    after, and on Discord one that another account can take once it is released — so the row
+    could not be tied to an account. The id is what the allowed-user list matches on, so it is
+    also what an admin needs to revoke someone. The username is cut to its own charset so it
+    cannot carry anything into the log.
     """
     sender = sender or {}
-    who = str(sender.get("username") or sender.get("id") or "unknown")
-    return ("%s:%s" % (platform, who))[:64]
+    name = re.sub(r"[^A-Za-z0-9_.]", "", str(sender.get("username") or ""))[:32]
+    return ("%s:%s%s" % (platform, sender_id(sender) or "unknown",
+                         (" (%s)" % name) if name else ""))[:64]
+
+
+def audit_bot_action(app, origin, action, target, detail="", success=True, server=None):
+    """Write an audit row for a chat-bot command that has no route of its own to log it.
+
+    Server actions are logged by run_action; the panel /update and /say were logged by nothing, so
+    a chat member could restart the panel onto new code, or speak in-game as the server, and the
+    audit log had no row for it at all. The web equivalents log "panel_self_update" and
+    "moderate_say"; these use the same actions with the bot origin as the actor.
+
+    log_action reads the client IP from a request, which a bot thread does not have, hence the
+    test_request_context (the reboot-when-empty watcher does the same). Best-effort: an audit write
+    that fails is logged here, never raised into the command.
+    """
+    try:
+        with app.test_request_context():
+            log_action(None, action, target=target, detail=detail, success=success,
+                       actor=origin, server=server)
+    except Exception:
+        _log.debug("bot audit write failed", exc_info=True)
 
 
 def _status_text(app):

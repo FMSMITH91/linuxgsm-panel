@@ -176,8 +176,12 @@ _server_peak_notified = register_server_state({})   # server_id -> ts of the las
 _last_sample_prune = [0.0]   # 1-element holder so _prune_metric_samples updates it without `global`
 
 # disk_pct / load_pct thresholds are user-configurable — see notifications.get_thresholds().
+# "remote_misses" / "server_misses": consecutive failed checks of a host/server still recorded as
+# up, which have not yet reached monitoring._DOWN_CONFIRM_SWEEPS (see _record_host_reachability).
 _monitor_state = {"remotes": register_remote_state({}), "servers": register_server_state({}),
-                  "disk": register_remote_state({}), "load": register_remote_state({})}
+                  "disk": register_remote_state({}), "load": register_remote_state({}),
+                  "remote_misses": register_remote_state({}),
+                  "server_misses": register_server_state({})}
 
 _expected_offline = register_server_state({})   # server_id -> ts the panel last stopped/restarted it
 
