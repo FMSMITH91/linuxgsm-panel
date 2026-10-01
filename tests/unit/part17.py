@@ -753,6 +753,26 @@ try:
     check("corrupt aside: a name whose -wal is taken gets a -1 suffix, not the taken name",
           any(_ck17_aside == "%s.corrupt-%d-1" % (_ck17_db, _s)
               for _s in range(_ck17_now, _ck17_now + 6)), repr(_ck17_aside))
+    # ...and the move aside itself USES that name: driven through _set_corrupt_db_aside (no
+    # backup), the db and its -wal land on the -1 name and the taken -wal files are not written.
+    with open(_ck17_db, "wb") as _ck17f:
+        _ck17f.write(b"CORRUPT")
+    with open(_ck17_db + "-wal", "wb") as _ck17f:
+        _ck17f.write(b"WAL")
+    _zmodels._set_corrupt_db_aside(_ck17_db, _ck17_db + ".no-backup")
+    _ck17_moved = [_s for _s in range(_ck17_now, _ck17_now + 6)
+                   if _rv2os.path.exists("%s.corrupt-%d-1" % (_ck17_db, _s))]
+    _ck17_got = []
+    for _ck17s in _ck17_moved:
+        for _ck17x in ("", "-wal"):
+            with open("%s.corrupt-%d-1%s" % (_ck17_db, _ck17s, _ck17x), "rb") as _ck17f:
+                _ck17_got.append(_ck17f.read())
+    check("corrupt db aside: the move uses the free -1 name, and no taken -wal is overwritten",
+          not _rv2os.path.exists(_ck17_db) and len(_ck17_moved) == 1
+          and _ck17_got == [b"CORRUPT", b"WAL"]
+          and all(_rv2os.path.getsize("%s.corrupt-%d-wal" % (_ck17_db, _s)) == 0
+                  for _s in range(_ck17_now, _ck17_now + 6)),
+          repr((_ck17_moved, _ck17_got, sorted(_rv2os.listdir(_ck17_dir)))))
 finally:
     _rv2os.link = _ck17_link
     __import__("shutil").rmtree(_ck17_dir, ignore_errors=True)

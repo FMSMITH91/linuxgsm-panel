@@ -537,14 +537,17 @@ def _rv_sync_ports_run(gs):
     opened, _ = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
     opened = sorted(set(opened or []))
     missed = [p for p in to_open if p not in set(opened)]
-    ok = not (missed or refused)
-    log_action(current_user, "sync_ports", target=gs.name, success=ok,
+    # The verdict lives in the reply itself rather than a local: CodeQL reported `success=ok`
+    # one line after `ok`'s only assignment as possibly unset (alerts 512 and 542), whatever
+    # came before it.
+    reply = {"success": not (missed or refused)}
+    log_action(current_user, "sync_ports", target=gs.name, success=reply["success"],
                detail=_sync_ports_detail(opened, missed, refused), server=gs)
-    msg = _sync_ports_message(opened, missed, refused)
-    return jsonify({"success": ok, "message": msg,
-                    "ports": info.get("ports", []), "open_ports": opened,
-                    "requested_ports": to_open, "failed_ports": missed,
-                    "refused_ports": refused, "game_port": gp})
+    reply.update({"message": _sync_ports_message(opened, missed, refused),
+                  "ports": info.get("ports", []), "open_ports": opened,
+                  "requested_ports": to_open, "failed_ports": missed,
+                  "refused_ports": refused, "game_port": gp})
+    return jsonify(reply)
 
 
 def _register_game_ports(app):
