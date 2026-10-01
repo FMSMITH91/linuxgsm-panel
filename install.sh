@@ -144,13 +144,22 @@ _venv_works() {
 }
 
 # If anything's missing, install it automatically on Debian/Ubuntu (this runs as
-# root for a root install, and via sudo otherwise).
-if ! _venv_works || ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+# root for a root install, and via sudo otherwise). On every run, so an update backfills what an
+# older install never got. Besides what this script needs (a venv, git, curl), the panel runs these
+# on its own host, and Ubuntu's minimal and cloud images leave them out (ubuntu-minimal has none of
+# the three; ubuntu-standard brings cron and wget, and only recommends ufw):
+#   wget  — every game install fetches linuxgsm.sh with it, BEFORE the game's own dependency step
+#   cron  — crontab: autostart/monitor, scheduled restarts and updates, the weekly gamedig repair
+#   ufw   — the Firewall page, auto-blocking, and the ports a game install opens. Installing the
+#           package does not turn the firewall on; the panel never enables it unasked.
+if ! _venv_works || ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1 \
+        || ! command -v wget >/dev/null 2>&1 || ! command -v crontab >/dev/null 2>&1 \
+        || ! command -v ufw >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
         SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO="sudo"
-        info "Installing prerequisites (python3-venv, python3-pip, git, curl)…"
+        info "Installing prerequisites (python3-venv, python3-pip, git, curl, wget, cron, ufw)…"
         ${SUDO} apt-get update -qq || true
-        ${SUDO} apt-get install -y python3-venv python3-pip git curl \
+        ${SUDO} apt-get install -y python3-venv python3-pip git curl wget cron ufw \
             || warn "apt-get reported an error — re-checking prerequisites anyway."
     fi
 fi
@@ -1104,8 +1113,7 @@ ensure_fail2ban() {
 # Run the panel (and its bursts: updates, backups, page-load probes) at LOW CPU/IO priority so it
 # yields to the game servers under contention — important on a 1-core VPS. Game servers autostart
 # via their own cron (nice 0), so they keep priority; the panel just waits its turn. Written as a
-# systemd DROP-IN so it applies on updates too (the main unit is only written on a fresh install)
-# and survives future unit changes.
+# systemd DROP-IN, so it stays the panel's own tuning whatever the main unit says.
 ensure_service_tuning() {
     local dir
     if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
@@ -1122,6 +1130,105 @@ IOSchedulingClass=best-effort
 IOSchedulingPriority=6
 PRIOEOF
     svc daemon-reload || true
+}
+
+# The panel's systemd unit. Written by a fresh install AND refreshed by every update: what an
+# install puts on a host is what an update keeps current. It used to be written on a fresh install
+# only, so a host kept whatever unit it was first given, and any change to the text below would
+# never have reached an existing install. Two unit layouts: a system service run as PANEL_USER
+# (root installs) and a systemd --user service (per-user installs).
+render_service_unit() {
+    if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
+        cat <<SERVICEEOF
+[Unit]
+Description=LinuxGSM Game Server Admin Panel
+After=network-online.target
+Wants=network-online.target
+# Keep auto-restarting no matter how many times it has crashed — a self-healing
+# appliance should keep trying to recover rather than give up and stay down.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=${PANEL_USER}
+WorkingDirectory=${PANEL_DIR}
+ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
+    else
+        cat <<SERVICEEOF
+[Unit]
+Description=LinuxGSM Game Server Admin Panel
+After=network-online.target
+Wants=network-online.target
+# Keep auto-restarting no matter how many times it has crashed — a self-healing
+# appliance should keep trying to recover rather than give up and stay down.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=${PANEL_DIR}
+ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
+SERVICEEOF
+    fi
+}
+
+# Write UNIT_FILE when its text differs from render_service_unit's (or it is missing), and leave it
+# untouched when it is the same, so an update with no unit change does not rewrite it. Written to a
+# temporary file beside it and renamed over it: systemd never reads half a unit. UNIT_CHANGED says
+# whether it wrote. A write that fails is a warning, not a stop: the unit already in place is intact
+# and the service keeps running on it.
+ensure_service_unit() {
+    UNIT_CHANGED=0
+    local tmp
+    mkdir -p "$(dirname "${UNIT_FILE}")" || { warn "Could not create $(dirname "${UNIT_FILE}")."; return 0; }
+    tmp="$(mktemp "${UNIT_FILE}.XXXXXX")" || { warn "Could not refresh ${UNIT_FILE}."; return 0; }
+    if ! render_service_unit > "${tmp}"; then
+        rm -f "${tmp}"; warn "Could not refresh ${UNIT_FILE}."; return 0
+    fi
+    if [[ -f "${UNIT_FILE}" ]] && cmp -s "${tmp}" "${UNIT_FILE}"; then
+        rm -f "${tmp}"; return 0
+    fi
+    chmod 0644 "${tmp}" 2>/dev/null || true
+    if mv -f "${tmp}" "${UNIT_FILE}"; then
+        UNIT_CHANGED=1
+    else
+        rm -f "${tmp}"; warn "Could not refresh ${UNIT_FILE}; the service keeps its current unit."
+    fi
+    return 0
+}
+
+# The update's own copy of the unit as it was before ensure_service_unit touched it, put back by a
+# rollback so the restored code runs under the unit it shipped with. Byte-exact: the trailing "x"
+# keeps $(…) from eating the file's final newlines.
+snapshot_service_unit() {
+    _UNIT_BEFORE=""
+    if [[ -f "${UNIT_FILE}" ]]; then
+        _UNIT_BEFORE="$(cat "${UNIT_FILE}" 2>/dev/null; printf x)"
+        _UNIT_BEFORE="${_UNIT_BEFORE%x}"
+    fi
+}
+
+restore_service_unit() {
+    [[ "${UNIT_CHANGED:-0}" -eq 1 && -n "${_UNIT_BEFORE:-}" ]] || return 0
+    if printf '%s' "${_UNIT_BEFORE}" > "${UNIT_FILE}.rollback" \
+            && chmod 0644 "${UNIT_FILE}.rollback" && mv -f "${UNIT_FILE}.rollback" "${UNIT_FILE}"; then
+        UNIT_CHANGED=0
+    else
+        rm -f "${UNIT_FILE}.rollback"; warn "Could not put the previous ${UNIT_FILE} back."
+    fi
+    return 0
 }
 
 # Prefer RAM over swap on small game hosts. The default vm.swappiness=60 makes the kernel swap out
@@ -2260,6 +2367,13 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         # gamedig is the same kind of piece: root-owned, outside the checkout, and a no-op when
         # its lockfile's tree is already in place.
         install_gamedig
+        # And the unit, like every other piece an install puts on the host. Not restarted for it:
+        # this branch changes nothing that is running, so a new unit applies at the next restart.
+        ensure_service_unit
+        if [[ "${UNIT_CHANGED:-0}" -eq 1 ]]; then
+            svc daemon-reload || true
+            ok "Service unit refreshed (${UNIT_FILE}); it applies the next time the panel restarts"
+        fi
         # A hold is NOT "up to date": the pinned commit was not installed (see update_noop_line).
         update_noop_line
         exit 0
@@ -2284,6 +2398,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         _tree_owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
         [[ "${_tree_owner}" != "root" ]] && TREE_SUDO="sudo -u ${_tree_owner} env -C /"
     fi
+    snapshot_service_unit
     info "[1/6] Snapshotting current version + database → ${BACKUP}"
     ${TREE_SUDO:-} mkdir -p -- "${BACKUP}"
     # Compressor: pigz (parallel gzip) when present — ~3.5x faster than gzip on a multi-core box for
@@ -2378,6 +2493,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
             install_deps || true
         fi
         [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree 2>/dev/null || true
+        restore_service_unit
         svc daemon-reload || true
         svc start linuxgsm-panel.service || true
         if [[ "${_DIE_SAID:-0}" -eq 1 ]]; then
@@ -2488,6 +2604,8 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     write_terminal_sudo_grant
 
     info "[5/6] Starting the service…"
+    ensure_service_unit     # the unit itself, as a fresh install of this version writes it
+    [[ "${UNIT_CHANGED:-0}" -eq 1 ]] && ok "Service unit refreshed (${UNIT_FILE})"
     ensure_service_tuning   # refresh the low-priority drop-in (existing installs get it on update)
     ensure_system_tuning    # prefer RAM over swap (applied on update too)
     svc daemon-reload || true
@@ -2600,6 +2718,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     fi
     install_deps || true
     [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree
+    restore_service_unit
     svc daemon-reload || true
     svc restart linuxgsm-panel.service || true
 
@@ -2715,53 +2834,13 @@ if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
     write_sudoers_grant
     write_terminal_sudo_grant
 
-    cat > "${UNIT_FILE}" <<SERVICEEOF
-[Unit]
-Description=LinuxGSM Game Server Admin Panel
-After=network-online.target
-Wants=network-online.target
-# Keep auto-restarting no matter how many times it has crashed — a self-healing
-# appliance should keep trying to recover rather than give up and stay down.
-StartLimitIntervalSec=0
-
-[Service]
-Type=simple
-User=${PANEL_USER}
-WorkingDirectory=${PANEL_DIR}
-ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
-Restart=always
-RestartSec=5
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
-SERVICEEOF
+    ensure_service_unit
     systemctl daemon-reload
     systemctl enable --now linuxgsm-panel.service
     SERVICE_HINT="sudo systemctl status linuxgsm-panel"
     LOG_HINT="sudo journalctl -u linuxgsm-panel -f"
 else
-    mkdir -p "${HOME}/.config/systemd/user"
-    cat > "${UNIT_FILE}" <<SERVICEEOF
-[Unit]
-Description=LinuxGSM Game Server Admin Panel
-After=network-online.target
-Wants=network-online.target
-# Keep auto-restarting no matter how many times it has crashed — a self-healing
-# appliance should keep trying to recover rather than give up and stay down.
-StartLimitIntervalSec=0
-
-[Service]
-Type=simple
-WorkingDirectory=${PANEL_DIR}
-ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
-Restart=always
-RestartSec=5
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=default.target
-SERVICEEOF
+    ensure_service_unit
     loginctl enable-linger "${PANEL_USER}" >/dev/null 2>&1 || warn "Could not enable linger (panel may not start on boot)."
     systemctl --user daemon-reload
     systemctl --user enable --now linuxgsm-panel.service

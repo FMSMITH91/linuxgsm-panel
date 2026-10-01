@@ -378,6 +378,93 @@ check("runtime-path: every file install.sh stages root-owned counts as a change 
       len(_srs_paths) >= 6 and all(_so._is_runtime_path(_q) for _q in _srs_paths),
       repr([(_q, _so._is_runtime_path(_q)) for _q in _srs_paths]))
 
+# ── every file in the repository is named: one a host runs, or one it does not ─────────────────
+# The owner's rule: "Update available" only when a file the host runs changes, and every such file
+# kept current. A file named on NEITHER side counts as runtime (a host must never miss it), so an
+# unnamed file would raise false updates instead: this fails the build until it is named. The tree
+# is walked, not asked of git: the throwaway tree tools/smoke-local.sh runs in has no .git. The
+# walk leaves out what .gitignore keeps out of the repository and what a run writes; on a checkout
+# it lists exactly `git ls-files` (measured: 326 and 326).
+import fnmatch as _cls_fnm  # noqa: E402
+
+_CLS_SKIP_DIRS = {".git", "data", "venv", ".venv", "env", "__pycache__", ".pytest_cache",
+                  "node_modules", ".idea", ".vscode", ".claude", "htmlcov", "serverfiles", "lgsm"}
+_CLS_SKIP_FILES = ("*.py[cod]", "*.db", "*.sqlite3", "*.secret", "secret_key", "linuxgsm.sh",
+                   "*.swp", "*.swo", "*~", ".DS_Store", "Thumbs.db", ".run.log", ".coverage",
+                   ".coverage.*", "coverage.xml")
+_cls_files = []
+for _cls_dp, _cls_dns, _cls_fns in os.walk(_root):
+    _cls_dns[:] = [_d for _d in _cls_dns
+                   if _d not in _CLS_SKIP_DIRS and not _d.endswith(".egg-info")]
+    _cls_files += [os.path.relpath(os.path.join(_cls_dp, _f), _root).replace(os.sep, "/")
+                   for _f in _cls_fns
+                   if not any(_cls_fnm.fnmatch(_f, _pat) for _pat in _CLS_SKIP_FILES)]
+_cls_unnamed = sorted(_f for _f in _cls_files if _so._path_class(_f) is None)
+check("runtime-path: every file in the repository is named as one a host runs or one it does not",
+      len(_cls_files) >= 300 and not _cls_unnamed,
+      "files=%d unnamed=%r (name each in panel/ops/system_ops.py: _RUNTIME_FILES/_RUNTIME_DIRS "
+      "if a host runs it, _NOISE_FILES/_NOISE_DIRS if not)" % (len(_cls_files), _cls_unnamed[:8]))
+check("runtime-path: ...and a file named on neither side counts as one a host runs (control)",
+      _so._path_class("a-new-file.cfg") is None and _so._is_runtime_path("a-new-file.cfg") is True
+      and _so._path_class("panel/x.py") == "runtime" and _so._path_class("tests/x.py") == "noise")
+
+# ...and the runtime side is complete. Every module the panel's entry points import, all the way
+# down (lazy imports inside functions too), is a file named runtime: a module moved under tools/ or
+# tests/ and imported from there would otherwise change without the host ever being told.
+_cls_mods = {}
+
+
+def _cls_resolve(mod):
+    """The repo files that importing dotted `mod` runs: each package __init__ and the module."""
+    parts, out = mod.split("."), []
+    for _i in range(1, len(parts) + 1):
+        _base = os.path.join(_root, *parts[:_i])
+        for _cand in (_base + ".py", os.path.join(_base, "__init__.py")):
+            if os.path.isfile(_cand):
+                out.append(os.path.relpath(_cand, _root).replace(os.sep, "/"))
+    return out
+
+
+_cls_todo = ["app.py", "manage.py", "db_maintenance.py"]
+while _cls_todo:
+    _cls_f = _cls_todo.pop()
+    if _cls_f in _cls_mods:
+        continue
+    with open(os.path.join(_root, _cls_f), encoding="utf-8") as _cls_fh:
+        _cls_tree = _rt_ast.parse(_cls_fh.read())
+    _cls_pkg = os.path.dirname(_cls_f).replace("/", ".")
+    _cls_names = []
+    for _cls_n in _rt_ast.walk(_cls_tree):
+        if isinstance(_cls_n, _rt_ast.Import):
+            _cls_names += [_a.name for _a in _cls_n.names]
+        elif isinstance(_cls_n, _rt_ast.ImportFrom):
+            _cls_b = _cls_n.module or ""
+            if _cls_n.level:
+                _cls_up = _cls_pkg.split(".")[:len(_cls_pkg.split(".")) - (_cls_n.level - 1)]
+                _cls_b = ".".join([_x for _x in _cls_up if _x] + ([_cls_b] if _cls_b else []))
+            _cls_names += [_cls_b] + ["%s.%s" % (_cls_b, _a.name) for _a in _cls_n.names]
+    _cls_mods[_cls_f] = sorted({_r for _m in _cls_names if _m for _r in _cls_resolve(_m)})
+    _cls_todo += _cls_mods[_cls_f]
+_cls_not_rt = sorted(_f for _f in _cls_mods if not _so._is_runtime_path(_f)
+                     or _so._path_class(_f) != "runtime")
+check("runtime-path: every module the panel imports, transitively, is named as one a host runs",
+      len(_cls_mods) >= 60 and not _cls_not_rt,
+      "modules=%d not runtime=%r" % (len(_cls_mods), _cls_not_rt))
+
+# ...and every repo file the installers and recovery tools read from the checkout.
+_cls_inst = set()
+for _cls_sh in ("install.sh", "uninstall.sh", "recover.sh", "reset-password.sh"):
+    with open(os.path.join(_root, _cls_sh), encoding="utf-8") as _cls_fh:
+        _cls_code = "\n".join(_l for _l in _cls_fh.read().splitlines()
+                              if not _l.lstrip().startswith("#"))
+    _cls_inst |= {_m for _m in _re_bk.findall(
+        r"\$\{?(?:PANEL_DIR|SRC)\}?/([A-Za-z0-9_][A-Za-z0-9_./-]*)", _cls_code)
+        if _m in set(_cls_files)}
+_cls_inst_bad = sorted(_f for _f in _cls_inst if _so._path_class(_f) != "runtime")
+check("runtime-path: every repo file the installers read from the checkout is named runtime",
+      len(_cls_inst) >= 5 and not _cls_inst_bad,
+      "read=%r not runtime=%r" % (sorted(_cls_inst), _cls_inst_bad))
+
 # ── panel fail2ban: input validation rejects bad port / path before touching the host ──
 check("panel-f2b: out-of-range port rejected", _so.configure_panel_fail2ban("/x", 70000)[0] is False)
 check("panel-f2b: zero port rejected", _so.configure_panel_fail2ban("/x", 0)[0] is False)

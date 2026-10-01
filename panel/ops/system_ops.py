@@ -1209,9 +1209,16 @@ def _remote_ci_state(sha):
     return "passing"
 
 
+# Every file in the repository is named on one side or the other: what a host RUNS
+# (_RUNTIME_DIRS, _RUNTIME_FILES), and what it does not (the noise lists below). Only a change to
+# the first raises "Update available" (the owner's rule). A path named on NEITHER side still counts
+# as runtime, so a host is never left behind on a file nobody classified, and a unit gate fails the
+# build for any tracked file that is unnamed, so an unclassified file cannot raise a false update
+# either. The gate also holds the runtime side complete: every module app.py, manage.py and
+# db_maintenance.py import, and every repo file the installers read, must be named runtime.
+_RUNTIME_DIRS = ("panel/", "static/", "templates/", "translations/")
 # Paths that DON'T affect the running panel — changes touching only these shouldn't raise the
-# "update available" badge (e.g. editing the README or a workflow). Denylist (not allowlist) so a
-# new kind of runtime file is never accidentally treated as noise: anything not listed here counts.
+# "update available" badge (e.g. editing the README or a workflow).
 _NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/", ".clusterfuzzlite/")
 # requirements.in is what requirements.txt is compiled FROM: neither the panel nor install.sh reads
 # it. A dependency reaches a host through requirements.txt, which tests/unit holds to lock every
@@ -1242,26 +1249,41 @@ _NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore"
 # together.
 _RUNTIME_EXCEPTIONS = {"tools/panel-helper", "tools/gamedig/package.json",
                        "tools/gamedig/package-lock.json", "tools/gamedig/install-gamedig.sh"}
+# The files outside _RUNTIME_DIRS that a host runs or reads: the panel's entry points, the
+# installers and recovery tools (install.sh re-stages recover.sh, db_maintenance.py and itself
+# root-owned on every update), the two lockfiles pip installs from, and VERSION (the version a
+# checkout without .git reports).
+_RUNTIME_FILES = {"app.py", "manage.py", "db_maintenance.py", "VERSION", "install.sh",
+                  "uninstall.sh", "recover.sh", "reset-password.sh", "requirements.txt",
+                  "requirements-bootstrap.txt"} | _RUNTIME_EXCEPTIONS
 
 
-def _is_runtime_path(path):
-    """True if this repo path affects the RUNNING panel (code, templates, static, requirements,
-    install.sh, …). Docs/CI/test-scaffolding paths return False."""
+def _path_class(path):
+    """'runtime' or 'noise' for a repo path named on either side; None for one named on neither."""
     p = path.strip()
     if p.startswith("./"):      # a literal "./" prefix only — NOT lstrip("./"), which would also
         p = p[2:]               # eat the leading dot of dotfiles/dotdirs (.github, .gitignore).
     if not p:
-        return False
-    if p in _RUNTIME_EXCEPTIONS:
-        return True             # checked FIRST: it sits inside a noise directory by design
+        return "noise"
+    if p in _RUNTIME_FILES:
+        return "runtime"        # checked FIRST: the helper and gamedig sit in a noise directory
     low = p.lower()
     if low.endswith(".md") or low == "license" or low.startswith("license."):
-        return False
-    if any(p.startswith(d) for d in _NOISE_DIRS):
-        return False
-    if p in _NOISE_FILES:
-        return False
-    return True
+        return "noise"
+    if any(p.startswith(d) for d in _NOISE_DIRS) or p in _NOISE_FILES:
+        return "noise"
+    if any(p.startswith(d) for d in _RUNTIME_DIRS):
+        return "runtime"
+    return None
+
+
+def _is_runtime_path(path):
+    """True if this repo path affects the RUNNING panel (code, templates, static, requirements,
+    install.sh, …). Docs/CI/test-scaffolding paths return False, and so does an empty one.
+
+    A path named on neither side counts as runtime: a host must never miss a change to a file it
+    runs because nobody classified it. The unit gate keeps every tracked file named."""
+    return _path_class(path) != "noise"
 
 
 def _update_touches_runtime(target_ref):

@@ -692,3 +692,104 @@ check("renovate: ...and the count catches a pinned download with no marker (cont
       len(_rn_uncovered(_rn_ctl)[0]) == 1 and _rn_uncovered(_rn_ctl)[1] == 0
       and _rn_uncovered(_rn_ctl.replace("# renovate:", "# pinned:"))[1] == 1,
       repr(_rn_uncovered(_rn_ctl)))
+
+
+# ── what an install puts on the host, an update keeps current ──────────────────────────────────
+# The owner's rule: "The files it installs should also be the files it keeps updated". The systemd
+# unit was the one piece a fresh install wrote and no update ever touched: a host kept whatever unit
+# it was first given. Every install step a fresh install runs (ensure_*, install_*, write_*) must be
+# run by the update path too; the only fresh-only writes allowed are named below with the reason.
+with open(os.path.join(_rn_root, "install.sh"), encoding="utf-8") as _iu_fh:
+    _iu_src = _iu_fh.read()
+
+
+def _iu_code(text):
+    """`text` with its comment lines dropped: an explanation naming a step is not a call to it."""
+    return "\n".join(_l for _l in text.splitlines() if not _l.lstrip().startswith("#"))
+
+
+def _iu_fn(name):
+    _i = _iu_src.index("\n%s() {" % name) + 1
+    return _iu_src[_i:_iu_src.index("\n}\n", _i) + 3]
+
+
+_iu_upd = _iu_code(_iu_src[_iu_src.index("\n# UPDATE PATH"):_iu_src.index("\n# FRESH INSTALL PATH")])
+_iu_fresh = _iu_code(_iu_src[_iu_src.index("\n# FRESH INSTALL PATH"):])
+_IU_STEP = _sg_re.compile(r"^\s*(?:\[\[[^\]\n]*\]\]\s*&&\s*)?((?:ensure|install|write)_[a-z0-9_]+)\b",
+                          _sg_re.M)
+_iu_fresh_steps = set(_IU_STEP.findall(_iu_fresh))
+_iu_upd_steps = set(_IU_STEP.findall(_iu_upd))
+check("install.sh: every install step a fresh install runs, an update runs as well",
+      len(_iu_fresh_steps) >= 10 and "ensure_service_unit" in _iu_fresh_steps
+      and _iu_fresh_steps <= _iu_upd_steps,
+      "fresh only: %r" % sorted(_iu_fresh_steps - _iu_upd_steps))
+# Written inline by a fresh install alone, on purpose: /etc/apt/apt.conf.d/20auto-upgrades turns
+# unattended OS updates on once, and from then on the panel's Auto-updates card owns the setting;
+# rewriting it on each update would undo the operator's choice. (The one-time OS upgrade, the
+# firewall rule and linger are commands, not files, and the Firewall page owns the rule.)
+_iu_inline = set(_sg_re.findall(r'(?:\btee|\bcat\s*>|>)\s*"?(/(?:etc|usr|var)/[^"\s;)]+)', _iu_fresh))
+check("install.sh: ...and the only system file a fresh install writes inline is 20auto-upgrades",
+      _iu_inline == {"/etc/apt/apt.conf.d/20auto-upgrades"}, repr(sorted(_iu_inline)))
+check("install.sh: no unit is written except through ensure_service_unit",
+      _iu_src.count('cat > "${UNIT_FILE}"') == 0
+      and _iu_code(_iu_src).count("ensure_service_unit") >= 4,
+      repr(_iu_code(_iu_src).count("ensure_service_unit")))
+
+# Where in the update it runs: the unit is snapshotted before the service is stopped, refreshed
+# before it is started again, and put back by BOTH rollbacks before their reload, so restored code
+# runs under the unit it shipped with. The no-op update refreshes it too, and reloads.
+_iu_snap, _iu_stop = _iu_upd.find("snapshot_service_unit"), _iu_upd.find('info "[1/6]')
+_iu_s5 = _iu_upd[_iu_upd.find('info "[5/6]'):]
+_iu_rb = [_m.start() for _m in _sg_re.finditer(r"restore_service_unit\n\s+svc daemon-reload", _iu_upd)]
+_iu_noop = _iu_upd[:_iu_upd.find("update_noop_line\n        exit 0")]
+check("install.sh: the update snapshots the unit first, refreshes it before the start, and both "
+      "rollbacks put it back before reloading",
+      0 <= _iu_snap < _iu_stop
+      and -1 < _iu_s5.find("ensure_service_unit") < _iu_s5.find("svc start linuxgsm-panel.service")
+      and len(_iu_rb) == 2
+      and "ensure_service_unit" in _iu_noop[-900:] and "svc daemon-reload" in _iu_noop[-900:],
+      repr((_iu_snap, _iu_stop, len(_iu_rb))))
+
+# Driven: the four functions in bash, on a unit in a scratch directory.
+_iu_dir = _tf18.mkdtemp()
+_iu_script = ("set -u\nwarn() { echo \"WARN $*\"; }\nok() { echo \"OK $*\"; }\n"
+              + "".join(_iu_fn(_n) for _n in ("render_service_unit", "ensure_service_unit",
+                                              "snapshot_service_unit", "restore_service_unit"))
+              + r'''
+U="$1/sys/linuxgsm-panel.service"; UNIT_FILE="$U"; RUN_AS_ROOT=1; PANEL_USER=lgsmpanel
+PANEL_DIR=/home/lgsmpanel/linuxgsm-panel
+ensure_service_unit; echo "fresh=${UNIT_CHANGED} mode=$(stat -c %a "$U")"
+grep -qx 'User=lgsmpanel' "$U" && grep -qx 'WantedBy=multi-user.target' "$U" && echo "root-unit"
+i1="$(stat -c %i:%Y "$U")"; sleep 1
+ensure_service_unit; echo "same=${UNIT_CHANGED} untouched=$([[ "$(stat -c %i:%Y "$U")" == "$i1" ]] && echo yes)"
+printf 'OLD UNIT\nno trailing newline' > "$U"
+snapshot_service_unit; ensure_service_unit; echo "changed=${UNIT_CHANGED}"
+grep -qx 'User=lgsmpanel' "$U" && echo "refreshed"
+restore_service_unit; echo "restored=$(cmp -s "$U" <(printf 'OLD UNIT\nno trailing newline') && echo exact)"
+ls "$1/sys" | grep -c '\.service\.' | sed 's/^/leftovers=/'
+UNIT_FILE="$1/user/linuxgsm-panel.service"; RUN_AS_ROOT=0
+ensure_service_unit; grep -q '^User=' "$UNIT_FILE" || echo "user-unit=$(grep -c 'WantedBy=default.target' "$UNIT_FILE")"
+mkdir -p "$1/ro"; UNIT_FILE="$1/ro/x.service"; echo keep > "$UNIT_FILE"; chmod 0555 "$1/ro"
+ensure_service_unit; echo "ro=${UNIT_CHANGED} kept=$(cat "$UNIT_FILE")"; chmod 0755 "$1/ro"
+''')
+try:
+    _iu_out = _sp18.run(["bash", "-c", _iu_script, "iu", _iu_dir],  # nosec B603 B607 - install.sh's own functions, in a scratch dir
+                        capture_output=True, text=True, timeout=60)
+    _iu_lines = _iu_out.stdout.split()
+finally:
+    _shutil18b.rmtree(_iu_dir, ignore_errors=True)
+check("install.sh unit (driven): written when missing, 0644, the root layout; NOT rewritten when "
+      "the text is the same",
+      "fresh=1" in _iu_lines and "mode=644" in _iu_lines and "root-unit" in _iu_lines
+      and "same=0" in _iu_lines and "untouched=yes" in _iu_lines,
+      repr((_iu_out.stdout, _iu_out.stderr[-300:])))
+check("install.sh unit (driven): ...replaced when it differs, and a rollback puts the old one back "
+      "byte for byte, leaving no temporary file",
+      "changed=1" in _iu_lines and "refreshed" in _iu_lines and "restored=exact" in _iu_lines
+      and "leftovers=0" in _iu_lines, repr(_iu_out.stdout))
+check("install.sh unit (driven): ...the per-user layout has no User= and starts with the session; "
+      "a unit it cannot write is warned about and left as it was",
+      "user-unit=1" in _iu_lines
+      and (os.geteuid() == 0   # root writes through a 0555 directory: nothing to refuse it
+           or ("ro=0" in _iu_lines and "kept=keep" in _iu_lines and "WARN" in _iu_out.stdout)),
+      repr(_iu_out.stdout))
