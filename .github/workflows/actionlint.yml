@@ -60,17 +60,18 @@ jobs:
       #     that does not exist upstream. That may well be a reasonable call for them; it is not a
       #     trust decision this repo needs to inherit for a gate that lints its own workflows.
       #
-      # Bump deliberately: update VERSION and SHA256 together. The checksum below was verified
-      # against the release's own actionlint_<v>_checksums.txt.
+      # Renovate proposes each bump (.github/renovate.json): VERSION (the release tag) and SHA256
+      # together, the checksum taken from the release's own actionlint_<v>_checksums.txt.
       - name: actionlint
         env:
-          VERSION: '1.7.12'
+          # renovate: datasource=github-release-attachments depName=rhysd/actionlint
+          VERSION: 'v1.7.12'
           SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
         run: |
           set -euo pipefail
-          TARBALL="actionlint_${VERSION}_linux_amd64.tar.gz"
+          TARBALL="actionlint_${VERSION#v}_linux_amd64.tar.gz"
           curl --proto '=https' -sSfL -o "/tmp/${TARBALL}" \
-            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/${TARBALL}"
+            "https://github.com/rhysd/actionlint/releases/download/${VERSION}/${TARBALL}"
           echo "${SHA256}  /tmp/${TARBALL}" | sha256sum -c -
           tar -xz -C /tmp -f "/tmp/${TARBALL}" actionlint
           /tmp/actionlint -version

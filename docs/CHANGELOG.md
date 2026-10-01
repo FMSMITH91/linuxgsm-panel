@@ -151,6 +151,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **Renovate proposes updates to the release binaries CI downloads.** gitleaks, actionlint and the
+  Codacy coverage reporter are pinned by tag and sha256, which Dependabot cannot see, so they were
+  bumped by hand. `.github/renovate.json` runs only a regex manager over those pins, and Dependabot
+  keeps everything else. A release must be 7 days old before it is proposed, and each proposal
+  carries the new tag and the new release's sha256 together. CI only; nothing on a panel changes.
 - **The version is now the date of the commit the panel runs.** It reads `2026.9.26`: the
   commit's date in UTC, with no leading zeros, and always beside the short commit (the footer, the
   update card, the Telegram and Discord messages and the installer's "Code updated" line), because

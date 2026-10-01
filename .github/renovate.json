@@ -1,0 +1,30 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Renovate keeps ONLY the sha256-pinned release downloads in the workflows current (gitleaks,",
+    "actionlint, the Codacy coverage reporter), which Dependabot cannot see. Everything else stays",
+    "with Dependabot (.github/dependabot.yml), so the two never propose the same update.",
+    "Each pin is marked in its step's env with a `# renovate: datasource=... depName=owner/repo`",
+    "line directly above the VERSION (the release tag) and SHA256 lines. The",
+    "github-release-attachments datasource finds the asset the current sha256 belongs to and",
+    "proposes the new tag together with that asset's new sha256. tests/unit/part19.py gates that",
+    "every pinned download is matched."
+  ],
+  "enabledManagers": ["custom.regex"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Workflow release downloads pinned by tag and sha256",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\\n\\s+[A-Z_]*VERSION: '(?<currentValue>[^'\\s]+)'\\n\\s+[A-Z_]*SHA256: '(?<currentDigest>[0-9a-f]{64})'"
+      ]
+    }
+  ],
+  "dependencyDashboard": false,
+  "minimumReleaseAge": "7 days",
+  "labels": ["ci"],
+  "prConcurrentLimit": 3,
+  "rebaseWhen": "conflicted",
+  "schedule": ["before 6am on monday"]
+}

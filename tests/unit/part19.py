@@ -626,3 +626,69 @@ if _sg_m is not None and _shutil18b.which("jq"):
     _sg_ids = [r["ruleId"] for r in _sg_json.loads(_sg_out.stdout)["runs"][0]["results"]]
     check("semgrep upload: ...the filter drops only the suppressed result and keeps the run intact",
           _sg_ids == ["b", "c"] and "tool" in _sg_json.loads(_sg_out.stdout)["runs"][0], repr(_sg_ids))
+
+
+# ── Renovate keeps the workflows' sha256-pinned downloads current, and nothing else ─────────────
+# gitleaks, actionlint and the Codacy coverage reporter are release binaries fetched by tag and
+# checked against a sha256. Dependabot cannot see them, so they were bumped by hand, or not at all.
+# .github/renovate.json runs ONE regex manager over the workflows (Dependabot keeps everything
+# else, so the two never propose the same update). Its github-release-attachments lookup fetches
+# releases/tags/<value>, so the value must be the exact tag the URL downloads: `v${VERSION}` in a
+# URL would have Renovate look up a tag that does not exist. And a pinned download nobody marked
+# would silently never be proposed, so every `sha256sum -c` in a workflow must have a match.
+import glob as _rn_glob  # noqa: E402
+
+_rn_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+with open(os.path.join(_rn_root, ".github", "renovate.json"), encoding="utf-8") as _rn_fh:
+    _rn_cfg = _sg_json.load(_rn_fh)
+_rn_mgrs = _rn_cfg.get("customManagers") or [{}]
+check("renovate: one regex manager over the workflows, no other manager, no dashboard, a release "
+      "age floor",
+      _rn_cfg.get("enabledManagers") == ["custom.regex"] and len(_rn_mgrs) == 1
+      and _rn_mgrs[0].get("customType") == "regex"
+      and _rn_mgrs[0].get("managerFilePatterns") == ["/^\\.github/workflows/[^/]+\\.ya?ml$/"]
+      and len(_rn_mgrs[0].get("matchStrings") or []) == 1
+      and _rn_cfg.get("dependencyDashboard") is False
+      and _sg_re.fullmatch(r"[1-9][0-9]* days", _rn_cfg.get("minimumReleaseAge") or "") is not None,
+      repr({k: _rn_cfg.get(k) for k in ("enabledManagers", "dependencyDashboard", "minimumReleaseAge")}))
+# Renovate's matchStrings are JavaScript (RE2) regexes: `(?<name>` is Python's `(?P<name>`.
+_rn_pat = _sg_re.compile(_sg_re.sub(r"\(\?<(?=[A-Za-z])", "(?P<",
+                                    (_rn_mgrs[0].get("matchStrings") or ["(?!)"])[0]))
+
+
+def _rn_uncovered(text):
+    """Renovate's matches in one workflow's text, and how many checksummed downloads they leave."""
+    _found = list(_rn_pat.finditer(text))
+    _sums = len([_l for _l in text.splitlines()
+                 if "sha256sum -c" in _l and not _l.lstrip().startswith("#")])
+    return _found, _sums - len(_found)
+
+
+_rn_deps, _rn_bad = [], []
+for _rn_wf in sorted(_rn_glob.glob(os.path.join(_rn_root, ".github", "workflows", "*.yml"))):
+    with open(_rn_wf, encoding="utf-8") as _rn_fh:
+        _rn_txt = _rn_fh.read()
+    _rn_found, _rn_left = _rn_uncovered(_rn_txt)
+    if _rn_left:
+        _rn_bad.append("%s: %d checksummed download(s) Renovate does not match"
+                       % (os.path.basename(_rn_wf), _rn_left))
+    for _rn_m in _rn_found:
+        _rn_deps.append(_rn_m.group("depName"))
+        _rn_dl = "https://github.com/%s/releases/download/${" % _rn_m.group("depName")
+        if _rn_m.group("datasource") != "github-release-attachments" or _rn_dl not in _rn_txt:
+            _rn_bad.append("%s: %s is not downloaded by the tag Renovate looks up"
+                           % (os.path.basename(_rn_wf), _rn_m.group("depName")))
+    if "/releases/download/v${" in _rn_txt:
+        _rn_bad.append("%s: a download URL adds `v` to its version" % os.path.basename(_rn_wf))
+check("renovate: every sha256-checked download in a workflow is matched, and fetched by the tag "
+      "Renovate looks up",
+      not _rn_bad and sorted(_rn_deps) == ["codacy/codacy-coverage-reporter", "gitleaks/gitleaks",
+                                            "rhysd/actionlint"],
+      repr((_rn_bad, _rn_deps)))
+_rn_ctl = ("          # renovate: datasource=github-release-attachments depName=o/r\n"
+           "          VERSION: 'v1.2.3'\n          SHA256: '%s'\n"
+           "        run: echo \"$SHA256  f\" | sha256sum -c -\n" % ("a" * 64))
+check("renovate: ...and the count catches a pinned download with no marker (control)",
+      len(_rn_uncovered(_rn_ctl)[0]) == 1 and _rn_uncovered(_rn_ctl)[1] == 0
+      and _rn_uncovered(_rn_ctl.replace("# renovate:", "# pinned:"))[1] == 1,
+      repr(_rn_uncovered(_rn_ctl)))
