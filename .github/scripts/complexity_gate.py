@@ -142,6 +142,16 @@ def run(base, cwd=None):
     return problems, files
 
 
+def _test_commit(d, env, files, msg):
+    """Write `files` into the scratch repository `d` and commit them as `msg`."""
+    for p, txt in files.items():
+        with open(os.path.join(d, p), "w", encoding="utf-8") as fh:
+            fh.write(txt)
+    for argv in (["add", "-A"], ["-c", "commit.gpgsign=false", "commit", "-qm", msg]):
+        subprocess.run(["git", *argv], cwd=d, env=env, capture_output=True,  # nosec B603 B607
+                       check=True)
+
+
 def self_test():
     """Build a repository, change it the ways that slipped past Codacy, and check each verdict."""
     simple = "def f(a):\n    return a\n"
@@ -174,19 +184,11 @@ def self_test():
         with tempfile.TemporaryDirectory() as d:
             env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
                        GIT_COMMITTER_EMAIL="t@t")
-
-            def commit(files, msg, d=d, env=env):
-                for p, txt in files.items():
-                    with open(os.path.join(d, p), "w", encoding="utf-8") as fh:
-                        fh.write(txt)
-                for argv in (["add", "-A"], ["-c", "commit.gpgsign=false", "commit", "-qm", msg]):
-                    subprocess.run(["git", *argv], cwd=d, env=env, capture_output=True,  # nosec B603 B607
-                                   check=True)
             subprocess.run(["git", "init", "-q", "-b", "main", d], capture_output=True,  # nosec B603 B607
                            check=True)
-            commit(before, "base")
+            _test_commit(d, env, before, "base")
             base = _git("rev-parse", "HEAD", cwd=d).stdout.strip()
-            commit(after, "head")
+            _test_commit(d, env, after, "head")
             here = os.getcwd()
             try:
                 problems, _files = run(base, cwd=d)
