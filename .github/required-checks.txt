@@ -1,0 +1,38 @@
+# The checks a pull request must pass before it can merge into main.
+#
+# GitHub enforces them through the protect-main ruleset's required_status_checks rule; this file is
+# the list that rule is set from, and tests/unit/part19.py holds it to the workflows: every Actions
+# check named here is a job of a workflow that runs on EVERY pull request (no path filter), so a
+# required check can never wait forever on a workflow that did not run, and every job of those
+# workflows is named here, so a new one is required or the build says so.
+#
+# When this list changes, set the rule from it (the app ids, read off the check runs: GitHub
+# Actions 15368, codacy-production 56611, sonarqubecloud 12526):
+#   gh api repos/FMSMITH91/linuxgsm-panel/rulesets/18871997 > rs.json, edit the
+#   required_status_checks rule's "required_status_checks" list, then PUT it back.
+#
+# Not here, on purpose: Aikido's checks (its pull-request suite often never starts, which would hold
+# every merge), the path-filtered workflows (Actionlint, Fuzz, ClusterFuzzLite, Dependency Review:
+# they run only when their files change), and Codacy's coverage checks.
+#
+# <app slug> | <check name>
+github-actions | checks (ubuntu-22.04 · py3.10)
+github-actions | checks (ubuntu-24.04 · py3.12)
+github-actions | checks (ubuntu-26.04 · py3.14)
+github-actions | coverage
+github-actions | js coverage
+github-actions | gamedig lockfile (node 18.19)
+github-actions | gamedig lockfile (node 22)
+github-actions | gamedig lockfile (node 24)
+github-actions | Analyze (python)
+github-actions | Analyze (javascript)
+github-actions | Analyze (actions)
+github-actions | Open code-scanning alerts (PR)
+github-actions | Dependency vulnerabilities (pip-audit)
+github-actions | Python security lint (Bandit)
+github-actions | Deep SAST (Semgrep)
+github-actions | Secret scanning (Gitleaks)
+github-actions | lighthouse
+github-actions | complexity (Codacy limits)
+codacy-production | Codacy Static Code Analysis
+sonarqubecloud | SonarCloud Code Analysis

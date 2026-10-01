@@ -15,13 +15,6 @@ on:
       - '.editorconfig'
   pull_request:
     branches: [ main ]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.gitattributes'
-      - '.editorconfig'
   workflow_dispatch:  # allow manual runs from the Actions tab
 
 # Least-privilege GITHUB_TOKEN: these jobs only read the repo.

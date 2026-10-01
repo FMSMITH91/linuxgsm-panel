@@ -18,13 +18,6 @@ on:
       - '.editorconfig'
   pull_request:
     branches: [ main ]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.gitattributes'
-      - '.editorconfig'
   workflow_dispatch:  # allow manual runs from the Actions tab
   # Weekly as well: push and PR runs only analyse code that changed hands, so newly published
   # CodeQL queries and query-pack fixes would otherwise not reach a week with no pushes.

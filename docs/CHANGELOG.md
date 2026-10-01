@@ -151,6 +151,18 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **A pull request cannot merge into main until its checks pass.** Before, only the secret scan
+  was required; tests, CodeQL, Codacy, SonarCloud, Bandit, Semgrep and pip-audit were waited for by
+  habit, not enforced. `.github/required-checks.txt` lists what main's ruleset now requires, and a
+  test holds it to the workflows: every one runs on every pull request (the four main workflows no
+  longer skip docs-only ones), and a new job is required or the build says why not.
+- **A new check catches what Codacy's pull-request check misses.** Codacy counts an issue as new
+  only on a changed line, and it files a function's complexity and length on its `def` line and a
+  file's length on line 1, so a function that grew past the limit passed as "0 new issues" and the
+  issue appeared on main (23 by 2026-09-30). `complexity (Codacy limits)` compares every changed
+  file before and after with Codacy's limits, files over 150 KB included (Codacy skips those), and
+  fails on what the change adds. It found one at once, in the update check's own new code, fixed
+  here.
 - **Renovate proposes updates to the release binaries CI downloads.** gitleaks, actionlint and the
   Codacy coverage reporter are pinned by tag and sha256, which Dependabot cannot see, so they were
   bumped by hand. `.github/renovate.json` runs only a regex manager over those pins, and Dependabot
