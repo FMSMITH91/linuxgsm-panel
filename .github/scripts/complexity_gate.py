@@ -120,36 +120,46 @@ def _default_base():
     return _git("merge-base", "HEAD", "origin/main").stdout.strip() or "HEAD~1"
 
 
-def changed_files(base):
-    out = _git("diff", "--name-only", "--diff-filter=AMR", base, "HEAD").stdout.split()
+def changed_files(base, cwd=None):
+    out = _git("diff", "--name-only", "--diff-filter=AMR", base, "HEAD", cwd=cwd).stdout.split()
     return [p for p in out if p.endswith((".py", ".js")) or p in PYTHON_NAMED]
+
+
+def _committed(rev, path, cwd=None):
+    """Return the text of `path` as committed at `rev`, or "" when it is not there.
+
+    Both sides are read from git, never the working tree: what is judged is what was committed, and
+    a symlink is its target's NAME (what git stores), not a file it points at.
+    """
+    shown = _git("show", "%s:%s" % (rev, path), cwd=cwd)
+    return shown.stdout if shown.returncode == 0 else ""
 
 
 def run(base, cwd=None):
     """(problems, files checked): every new violation, as (path, line, message)."""
-    if cwd:
-        os.chdir(cwd)
-    problems, files = [], changed_files(base)
+    problems, files = [], changed_files(base, cwd)
     for path in files:
-        try:
-            with open(path, encoding="utf-8") as fh:
-                head = fh.read()
-        except (OSError, UnicodeDecodeError):
+        head = _committed("HEAD", path, cwd)
+        if not head:
             continue
-        shown = _git("show", "%s:%s" % (base, path))
-        base_code = shown.stdout if shown.returncode == 0 else ""
-        problems += [(path, line, msg) for line, msg in new_violations(path, base_code, head)]
+        problems += [(path, line, msg)
+                     for line, msg in new_violations(path, _committed(base, path, cwd), head)]
     return problems, files
 
 
 def _test_commit(d, env, files, msg):
-    """Write `files` into the scratch repository `d` and commit them as `msg`."""
+    """Commit `files` ({path: text}) into the scratch repository `d` as `msg`.
+
+    Through git's object store and index alone: nothing is written to the working tree, which the
+    gate never reads.
+    """
     for p, txt in files.items():
-        with open(os.path.join(d, p), "w", encoding="utf-8") as fh:
-            fh.write(txt)
-    for argv in (["add", "-A"], ["-c", "commit.gpgsign=false", "commit", "-qm", msg]):
-        subprocess.run(["git", *argv], cwd=d, env=env, capture_output=True,  # nosec B603 B607
-                       check=True)
+        blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], input=txt, cwd=d,  # nosec B603 B607
+                              env=env, capture_output=True, text=True, check=True).stdout.strip()
+        subprocess.run(["git", "update-index", "--add", "--cacheinfo",  # nosec B603 B607
+                        "100644,%s,%s" % (blob, p)], cwd=d, env=env, capture_output=True, check=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", msg], cwd=d,  # nosec B603 B607
+                   env=env, capture_output=True, check=True)
 
 
 def self_test():
@@ -189,11 +199,7 @@ def self_test():
             _test_commit(d, env, before, "base")
             base = _git("rev-parse", "HEAD", cwd=d).stdout.strip()
             _test_commit(d, env, after, "head")
-            here = os.getcwd()
-            try:
-                problems, _files = run(base, cwd=d)
-            finally:
-                os.chdir(here)
+            problems, _files = run(base, cwd=d)
         if bool(problems) != should_fail:
             bad.append("%s: got %r" % (name, problems))
     for b in bad:
