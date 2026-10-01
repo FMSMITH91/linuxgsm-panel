@@ -191,13 +191,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **A panel bound to a public address with Tailscale Serve set up keeps serving its own HTTPS**, and
   Serve is pointed at it with `https+insecure`. A loopback bind, or an unset one proxied by Serve,
   is unchanged.
-- **The update card answers one question: is there something to install?** It showed a green tick
-  while the install was behind whenever the newer commits touched only docs or CI. It now offers an
-  update exactly when one would be allowed to install — still the newest commit that has passed CI —
-  and otherwise says "You're up to date" with the running SHA; a verified commit below a tip that is
-  still being checked is still offered. The commit count and the list come from the same set, and
-  when none of the commits change what the panel runs they are still listed, with a note that they
-  are docs, tests or tooling.
+- **The update card answers one question: is there something to install?** It shows "Update
+  available" or "You're up to date" (with the running SHA), and nothing else: no line saying a
+  commit is still being verified, could not be verified, could not be fetched, or is only docs. It
+  offers an update exactly when one would be allowed to install — still the newest commit that has
+  passed CI — and that changes a file the panel runs. A verified commit below a tip that is still
+  being checked is still offered, and the commit count and the list come from the same set. Commits
+  that touch only docs, CI, tests or tooling are not an update: they arrive with the next one that
+  is. (For eleven days they were offered too, and a CI-only merge put "Update available" on every
+  panel for an install that changed nothing.)
 - **The 2FA reset in Users → Edit is always visible**, disabled with a reason when the account has
   no 2FA to reset. It was hidden unless the account already had 2FA on, so an admin looking for it
   found an empty section and concluded the feature did not exist.
@@ -269,6 +271,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A docs, CI or test change no longer brings back "Panel update available" on Telegram or
+  Discord.** Merged on top of an update you had not installed yet, it moved the update's target
+  commit, and the alert went out again for the same change. It goes out once per change the panel
+  runs.
+- **A file the panel runs that was moved into `tools/` or `docs/` counts as a change.** Git names
+  only a rename's destination, so the move read as docs-only. The fuzz image's build files and the
+  JavaScript lint config, which nothing on a panel reads, no longer count as changes.
 - **Checking a lost install asks the host once, not once per poll.** When the panel restarted
   mid-install, the Game Servers page asked the host whether the install had finished every 2.5
   seconds, each time with a full `du` of the game files that can take up to 30 seconds — one open

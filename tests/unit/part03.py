@@ -328,8 +328,55 @@ try:
     _so._git = lambda args, timeout=45: ("", "err", 1)
     check("update-touches-runtime: unknown diff -> assume update (fail safe)",
           _so._update_touches_runtime("origin/main") is True)
+    _so._git = lambda args, timeout=45: ("", "git timed out", -1)
+    check("update-touches-runtime: ...a timed-out diff too",
+          _so._update_touches_runtime("origin/main") is True)
+    # git answered, and listed nothing: the two trees are the same (a change and its revert).
+    _so._git = lambda args, timeout=45: ("", "", 0)
+    check("update-touches-runtime: an empty diff git answered cleanly -> nothing to install",
+          _so._update_touches_runtime("origin/main") is False)
+    # A rename lists only its destination unless asked: a file the host runs moved into tools/
+    # read as docs-only. The diff must be asked for with --no-renames, which lists both sides.
+    _utr_args = []
+    _so._git = lambda args, timeout=45: (_utr_args.append(list(args))
+                                         or ("reset-password.sh\ntools/reset-password.sh\n", "", 0))
+    check("update-touches-runtime: a runtime file renamed into tools/ is still a change, because "
+          "the diff lists both sides of a rename",
+          _so._update_touches_runtime("origin/main") is True
+          and "--no-renames" in (_utr_args[0] if _utr_args else []), repr(_utr_args))
+    _so._git = lambda args, timeout=45: (_utr_args.append(list(args)) or ("", "", 0))
+    _so._runtime_changelog("HEAD..origin/main")
+    check("update-touches-runtime: ...and the changelog asks for both sides as well",
+          "--no-renames" in _utr_args[-1], repr(_utr_args[-1]))
 finally:
     _so._git = _orig_utr_git
+check("runtime-path: the fuzz image's build files and the JS lint config are noise; the files "
+      "beside them are not",
+      _so._is_runtime_path(".clusterfuzzlite/Dockerfile") is False
+      and _so._is_runtime_path(".clusterfuzzlite/build.sh") is False
+      and _so._is_runtime_path("static/js/.eslintrc.json") is False
+      and _so._is_runtime_path("static/js/remote_manage_host.js") is True
+      and _so._is_runtime_path("reset-password.sh") is True)
+# Every repo file install.sh stages root-owned (stage_root_source <repo path> <name>) is something
+# a host runs. Classified as noise, a commit changing only it is no longer offered as an update at
+# all, so the host would never get it. tools/panel-helper and tools/gamedig/* sit in a noise
+# directory, which is what _RUNTIME_EXCEPTIONS is for.
+with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
+        __file__)))), "install.sh"), encoding="utf-8") as _srs_fh:
+    _srs_src = _srs_fh.read()
+# Calls only: `$(stage_root_source <path> <name>)` or a line that starts with it. Comment lines are
+# dropped first, and their prose ("stage_root_source explains why") is not a call.
+_srs_code = "\n".join(_l for _l in _srs_src.splitlines() if not _l.lstrip().startswith("#"))
+_srs_paths = sorted(set(_re_bk.findall(
+    r'(?:\$\(|^\s*)stage_root_source\s+"?([A-Za-z0-9_${}-]*[./][A-Za-z0-9_./${}-]*)"?\s', _srs_code,
+    _re_bk.M)))
+_srs_paths = [_q.replace("${f}", _g) for _q in _srs_paths
+              for _g in (["package.json", "package-lock.json", "install-gamedig.sh"]
+                         if "${f}" in _q else [""])]
+_srs_paths = [_q for _q in _srs_paths if "$" not in _q]
+check("runtime-path: every file install.sh stages root-owned counts as a change the panel runs",
+      len(_srs_paths) >= 6 and all(_so._is_runtime_path(_q) for _q in _srs_paths),
+      repr([(_q, _so._is_runtime_path(_q)) for _q in _srs_paths]))
 
 # ── panel fail2ban: input validation rejects bad port / path before touching the host ──
 check("panel-f2b: out-of-range port rejected", _so.configure_panel_fail2ban("/x", 70000)[0] is False)
@@ -2122,11 +2169,15 @@ try:
     _so._is_git_checkout = lambda: True
     _so.panel_version = lambda: "1.0.0"
 
-    def _mk_git(behind, commits):
-        # commits: full SHAs, newest (tip) first.
+    def _mk_git(behind, commits, diff="app.py\n"):
+        # commits: full SHAs, newest (tip) first. `diff` is what HEAD..target changes: a file the
+        # panel runs unless a check says otherwise. (It answered "" before, and every "offers the
+        # verified commit" check passed only through the empty-diff fail-safe.)
         def _g(args, timeout=45):
             if args[0] == "fetch":
                 return ("", "", 0)
+            if args[0] == "diff":
+                return (diff, "", 0)
             if args[:3] == ["rev-parse", "--short", "HEAD"]:
                 return ("headabc", "", 0)
             if args[0] == "rev-list" and "--count" in args:
@@ -2160,6 +2211,11 @@ try:
           _r.get("remote_version") == "2026.9.10", repr(_r.get("remote_version")))
     eq("update-target: newer unverified counted", _r.get("newer_unverified"), 1)
     eq("update-target: behind is measured to the target, not the tip", _r["behind"], 2)
+    # ...and says nothing about the newer commits still in CI. The card shows "Update available" or
+    # "You're up to date" and no reason line (the owner's rule): the "N newer commits still being
+    # verified" note it used to carry is gone, and the count stays in newer_unverified for the API.
+    check("update-target: the offer carries no 'still being verified' message",
+          not _r.get("message") and _r.get("newer_unverified") == 1, repr(_r.get("message")))
 
     # tip passed → target is the tip, nothing pending above it.
     _so._remote_ci_state = lambda sha: "passing"
@@ -2184,21 +2240,52 @@ try:
           "available=%s behind=%s" % (_r_cur.get("update_available"), _r_cur.get("behind")))
     _so._git = _mk_git(3, _C)
 
-    # DOCS-ONLY commits still count as an update. The card is asked "am I up to date?", and
-    # answering "no newer commits run in the panel" left it showing a green tick while the install
-    # was several commits behind — which is what the operator sees and can check. What the commits
-    # happen to touch is not the question.
+    # DOCS-ONLY commits are NOT an update. #276 made them one ("am I up to date?"), and from then on
+    # every CI-only merge raised "Update available" on every panel, for an install that changed
+    # nothing the panel runs. The owner's rule: an update is offered only when a file the panel
+    # runs changes. The commits are still reported (behind, target), and docs_only says why.
     _o_touch = _so._update_touches_runtime
     try:
         _so._update_touches_runtime = lambda _ref: False
         _so._remote_ci_state = lambda sha: "passing"
         _r_docs = _so._compute_update_status()
-        check("update-target: docs-only commits are STILL an available update",
-              _r_docs["update_available"] is True,
+        check("update-target: docs-only commits are NOT an available update",
+              _r_docs["update_available"] is False,
               "available=%s docs_only=%s" % (_r_docs.get("update_available"),
                                              _r_docs.get("docs_only")))
-        check("update-target: ...and the card is told they are docs-only, for its own wording",
-              _r_docs.get("docs_only") is True)
+        check("update-target: ...and the status says why, and still reports how far behind",
+              _r_docs.get("docs_only") is True and _r_docs.get("behind") == 3
+              and _r_docs.get("target_sha") == "a" * 40 and not _r_docs.get("message"),
+              repr({k: _r_docs.get(k) for k in ("docs_only", "behind", "target_sha", "message")}))
+        _so._update_touches_runtime = lambda _ref: True
+        _r_run = _so._compute_update_status()
+        _so._update_touches_runtime = _o_touch
+        _so._git = _mk_git(3, _C, diff=".github/workflows/ci.yml\n.github/renovate.json\n"
+                                     "docs/CHANGELOG.md\ntests/unit/part19.py\n")
+        _r_real = _so._compute_update_status()
+        _so._git = _mk_git(3, _C)
+        check("update-target: ...judged on the real diff: a CI, docs and tests change is not one",
+              _r_real["update_available"] is False and _r_real.get("docs_only") is True,
+              repr({k: _r_real.get(k) for k in ("update_available", "docs_only")}))
+        _so._update_touches_runtime = lambda _ref: True
+        check("update-target: ...while a change to a file the panel runs IS one",
+              _r_run["update_available"] is True and _r_run.get("docs_only") is False,
+              repr({k: _r_run.get(k) for k in ("update_available", "docs_only")}))
+        # The opt-in test-branch mode answers the same way.
+        _cus_tb0 = _so._tracked_branch
+        try:
+            _so._tracked_branch = lambda: "dev"
+            _so._update_touches_runtime = lambda _ref: False
+            _r_dev_docs = _so._compute_update_status()
+            _so._update_touches_runtime = lambda _ref: True
+            _r_dev_run = _so._compute_update_status()
+        finally:
+            _so._tracked_branch = _cus_tb0
+        check("update-target: a test branch's docs-only commits are not an update either, and its "
+              "runtime ones are",
+              _r_dev_docs["update_available"] is False and _r_dev_docs.get("docs_only") is True
+              and _r_dev_run["update_available"] is True,
+              repr((_r_dev_docs.get("update_available"), _r_dev_run.get("update_available"))))
     finally:
         _so._update_touches_runtime = _o_touch
 

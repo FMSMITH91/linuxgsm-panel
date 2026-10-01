@@ -264,20 +264,8 @@ function renderUpdate(d){
   var btn=document.getElementById('pu-update-btn'); var changes=document.getElementById('pu-changes');
   var cur=document.getElementById('pu-current'); if(cur) cur.textContent=(d.current_version||'?')+(d.current_sha?' · '+d.current_sha:'');
   if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+escapeHtml(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
-  if(d.fetched===false){ st.innerHTML='<span class="text-secondary"><i class="bi bi-cloud-slash"></i> '+escapeHtml(d.message||'Couldn\'t reach the update source.')+'</span>'; btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
   if(d.update_available){
     st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>'+escapeHtml((d.remote_version||'?')+(d.remote_sha?' · '+d.remote_sha:''))+'</strong> ('+escapeHtml(String(d.behind))+' commit'+(d.behind===1?'':'s')+' behind).</span>';  // nosemgrep
-    // A verified target BELOW the tip carries a note saying so ("2 newer commits still being
-    // verified"). It used to be dropped, which made the offer look like the newest thing there is.
-    // Appended as a NODE rather than concatenated into the line above: adding an identifier to
-    // that expression changes what the HTML-sink check sees, and this text needs no markup.
-    if(d.message){
-      var note = document.createElement('span');
-      note.className = 'd-block text-secondary';
-      note.style.fontSize = '.85em';
-      note.textContent = d.message;
-      st.appendChild(note);
-    }
     btn.style.display='';
     var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
     // Each changelog line is "<short sha> <subject>". Link the sha to the commit so the entry can
@@ -311,38 +299,12 @@ function renderUpdate(d){
       }
       ul.appendChild(li);
     });
-    // When every commit in the update is docs, tests or tooling, say so rather than leaving the
-    // reader to wonder why a listed change does not alter anything. The count and this list are
-    // the same set now; before, the count came from the raw log and the list from the
-    // runtime-filtered one, so a tests-only update announced "1 commit behind" and showed nothing.
-    var note = document.getElementById('pu-changes-note');
-    if (note) {
-      note.textContent = d.docs_only
-        ? 'None of these change what the panel runs — they are docs, tests or tooling.' : '';
-      note.style.display = d.docs_only ? '' : 'none';
-    }
     changes.style.display=(d.changes&&d.changes.length)?'':'none';
-  } else if((d.unverified_reason || d.update_running) && d.message){
-    // Not installable, and the server says why in a way that does NOT pass in a few minutes: the
-    // newer commit's checks cannot be read at all (an origin the panel does not recognise, a
-    // private repository, GitHub unreachable), or an update is being installed right now. The
-    // first used to be offered as installable; left silent it would read "You're up to date" on a
-    // panel that can never be told otherwise. Text, not markup: the reason is the server's words.
-    var warn=document.createElement('span'), wi=document.createElement('i');
-    warn.className='text-warning'; wi.className='bi bi-'+(d.update_running?'arrow-repeat':'shield-exclamation');
-    warn.appendChild(wi); warn.appendChild(document.createTextNode(' '+d.message));
-    st.textContent=''; st.appendChild(warn);
-    btn.style.display='none'; changes.style.display='none';
   } else {
-    // Two states, nothing in between: there is an update to install, or there is not.
-    //
-    // This used to have a third branch, for "behind, but nothing installable" — a commit sitting in
-    // CI, or one that failed it. The card is glanced at, and that line appeared for a few minutes
-    // after every push, said nothing anyone could act on, and was gone by the next glance. The
-    // server now leaves `message` out for those states so they land here.
-    //
-    // It is not a claim that cannot be checked: the running SHA is printed right in this line, and
-    // ci_state / behind_tip are still in the API response for anything that wants them.
+    // Two states and nothing else (the owner's rule, given more than once): an update to install,
+    // or "You're up to date". No reason line in either: not "being verified", not "couldn't be
+    // verified", not "couldn't reach the update source", not "docs, tests or tooling". Each was
+    // added back after the rule was set; the server's reasons stay in the API response.
     st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> You\'re up to date'+(d.current_sha?' ('+escapeHtml(d.current_sha)+')':'')+'.</span>';  // nosemgrep
     btn.style.display='none'; changes.style.display='none';
   }

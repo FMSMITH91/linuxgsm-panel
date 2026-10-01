@@ -9467,8 +9467,17 @@ try:
     _fp_git("init", "-q", "-b", "main", _fx_up)
     _pad_history(_fx_up, _tsh_env)
 
+    # Each commit changes a file the panel would run (its own, so the merge below cannot conflict):
+    # an update whose commits change nothing a panel runs is not offered at all, and these checks
+    # are about WHICH commit is offered.
+    _fx_n = [0]
+
     def _fx_commit(msg):
-        _fp_git("-C", _fx_up, "commit", "-q", "--allow-empty", "-m", msg)
+        _fx_n[0] += 1
+        with open(os.path.join(_fx_up, "fx%d.py" % _fx_n[0]), "w", encoding="utf-8") as _fx_fh:
+            _fx_fh.write("# %s\n" % msg)
+        _fp_git("-C", _fx_up, "add", "fx%d.py" % _fx_n[0])
+        _fp_git("-C", _fx_up, "commit", "-q", "-m", msg)
         return _fp_git("-C", _fx_up, "rev-parse", "HEAD")
 
     _fx_b1, _fx_b2 = _fx_commit("B1"), _fx_commit("B2")
