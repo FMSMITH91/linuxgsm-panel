@@ -429,6 +429,83 @@ def _register_own_layout_reset(app):
             return jsonify({"success": False, "message": _log_and_generic("reset layout failed")}), 500
 
 
+def _pw_request_refusal(u, old, new, confirm, back):
+    """A password-change request's cheap checks, in order; the refusal redirect, or None."""
+    # Throttled per account and audited — see account_2fa_disable. This is the check a stolen
+    # session guesses against to take the account for good: a correct guess sets a password
+    # the owner does not know and signs every other session out.
+    _pw = reauth_password(u, old)
+    if _pw != "ok":
+        log_action(u, "password_changed", target=u.username, success=False,
+                   detail=("refused: too many wrong passwords or codes" if _pw == "throttled"
+                           else "refused: wrong current password"))
+        flash(REAUTH_BLOCKED_MSG if _pw == "throttled" else
+              "Your current password is incorrect.", "danger")
+        return redirect(back)
+    if new != confirm:
+        flash("The new passwords don't match.", "danger")
+        return redirect(back)
+    pw_err = password_problem(new)
+    if pw_err:
+        flash(pw_err, "danger")
+        return redirect(back)
+    # LAST of the free-ish checks, and deliberately after password_problem: this is up to four
+    # bcrypt comparisons, so a password that fails the cheap rules never pays for it. Covers the
+    # current password — which on the forced-change page is the one the admin handed over, so
+    # "set it to the password you were given" is refused here — and the last few before it.
+    if u.password_reused(new):
+        flash("That is a password you have used before — please choose a new one.", "danger")
+        return redirect(back)
+    return None
+
+
+def _pw_sign_out_others(u):
+    """After set_password: sign every other session out and commit; (was_forced, remember)."""
+    # Whatever it was before, the password is now the account holder's own and nobody else's —
+    # which is the entire condition the forced-change gate is waiting on.
+    _was_forced = bool(u.must_change_password)
+    u.must_change_password = False
+    u.auth_epoch = (u.auth_epoch or 0) + 1   # sign out every other session/remember cookie
+    # The API token too. It is a SECOND credential for the same account, and it did not
+    # answer to any of the controls that exist to take an account back: it carries no
+    # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
+    # every UserSession row and left it working. app.py's note that "cookie theft is also
+    # recoverable via sign out everywhere" was not true while one existed. Minting one
+    # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
+    # could leave themselves a key that survived the victim's whole recovery.
+    u.revoke_api_token()
+    from panel.db.models import UserSession
+    # Carry this device's "remember me" across the re-login (see _remember_this_device).
+    _remember = _remember_this_device(u)
+    UserSession.query.filter_by(user_id=u.id).delete()   # epoch bump killed them all; clear rows
+    db.session.commit()
+    return _was_forced, _remember
+
+
+def _pw_sign_back_in(u, remember, was_forced, back):
+    """Re-register THIS device's session after a password change and say where to go next."""
+    # A fresh session row for THIS device, and only with one is it signed back in. The return
+    # value was ignored, so a failed insert (a locked database) still ran login_user: a cookie
+    # with no UserSession row behind it — one the account page cannot list or revoke, and
+    # which "sign out everywhere" can reach only through the epoch. The password change itself
+    # is committed by now, so it stands; this device is simply signed out and says so.
+    if not _reregister_session(u, remember):
+        log_action(u, "password_changed", target=u.username,
+                   detail="changed; this device could not be signed back in")
+        logout_user()
+        flash("Your password has been changed and every session was signed out, including "
+              "this one — the panel could not sign this device back in. Please sign in again "
+              "with your new password.", "warning")
+        return redirect(url_for("login"))
+    login_user(u, remember=remember)        # refresh THIS session (new epoch + sid) so we stay in
+    log_action(u, "password_changed", target=u.username)
+    if was_forced:
+        flash("Password set — this account is yours now. Welcome.", "success")
+        return redirect(url_for("index"))
+    flash("Your password has been changed. Any other sessions were signed out.", "success")
+    return redirect(back)
+
+
 def _register_account_routes(app):
     """Account security: disable 2FA, change the password, dismiss the 2FA nag."""
     @app.route("/account/2fa/disable", methods=["POST"])
@@ -508,31 +585,9 @@ def _register_account_routes(app):
         # below returns to whichever page they came from.
         _back = url_for("force_password_change") if u.must_change_password else url_for("account")
 
-        # Throttled per account and audited — see account_2fa_disable. This is the check a stolen
-        # session guesses against to take the account for good: a correct guess sets a password
-        # the owner does not know and signs every other session out.
-        _pw = reauth_password(u, old)
-        if _pw != "ok":
-            log_action(u, "password_changed", target=u.username, success=False,
-                       detail=("refused: too many wrong passwords or codes" if _pw == "throttled"
-                               else "refused: wrong current password"))
-            flash(REAUTH_BLOCKED_MSG if _pw == "throttled" else
-                  "Your current password is incorrect.", "danger")
-            return redirect(_back)
-        if new != confirm:
-            flash("The new passwords don't match.", "danger")
-            return redirect(_back)
-        pw_err = password_problem(new)
-        if pw_err:
-            flash(pw_err, "danger")
-            return redirect(_back)
-        # LAST of the free-ish checks, and deliberately after password_problem: this is up to four
-        # bcrypt comparisons, so a password that fails the cheap rules never pays for it. Covers the
-        # current password — which on the forced-change page is the one the admin handed over, so
-        # "set it to the password you were given" is refused here — and the last few before it.
-        if u.password_reused(new):
-            flash("That is a password you have used before — please choose a new one.", "danger")
-            return redirect(_back)
+        refused = _pw_request_refusal(u, old, new, confirm, _back)
+        if refused is not None:
+            return refused
         # 2FA is checked LAST so a one-time backup code is never spent on an otherwise-invalid
         # request. A matching authenticator code passes; otherwise a valid backup code is consumed.
         #
@@ -559,44 +614,8 @@ def _register_account_routes(app):
 
         # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- password_problem() checked it above
         u.set_password(_new_hash)   # remembers the outgoing one; see password_reused
-        # Whatever it was before, the password is now the account holder's own and nobody else's —
-        # which is the entire condition the forced-change gate is waiting on.
-        _was_forced = bool(u.must_change_password)
-        u.must_change_password = False
-        u.auth_epoch = (u.auth_epoch or 0) + 1   # sign out every other session/remember cookie
-        # The API token too. It is a SECOND credential for the same account, and it did not
-        # answer to any of the controls that exist to take an account back: it carries no
-        # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
-        # every UserSession row and left it working. app.py's note that "cookie theft is also
-        # recoverable via sign out everywhere" was not true while one existed. Minting one
-        # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
-        # could leave themselves a key that survived the victim's whole recovery.
-        u.revoke_api_token()
-        from panel.db.models import UserSession
-        # Carry this device's "remember me" across the re-login (see _remember_this_device).
-        _remember = _remember_this_device(u)
-        UserSession.query.filter_by(user_id=u.id).delete()   # epoch bump killed them all; clear rows
-        db.session.commit()
-        # A fresh session row for THIS device, and only with one is it signed back in. The return
-        # value was ignored, so a failed insert (a locked database) still ran login_user: a cookie
-        # with no UserSession row behind it — one the account page cannot list or revoke, and
-        # which "sign out everywhere" can reach only through the epoch. The password change itself
-        # is committed by now, so it stands; this device is simply signed out and says so.
-        if not _reregister_session(u, _remember):
-            log_action(u, "password_changed", target=u.username,
-                       detail="changed; this device could not be signed back in")
-            logout_user()
-            flash("Your password has been changed and every session was signed out, including "
-                  "this one — the panel could not sign this device back in. Please sign in again "
-                  "with your new password.", "warning")
-            return redirect(url_for("login"))
-        login_user(u, remember=_remember)        # refresh THIS session (new epoch + sid) so we stay in
-        log_action(u, "password_changed", target=u.username)
-        if _was_forced:
-            flash("Password set — this account is yours now. Welcome.", "success")
-            return redirect(url_for("index"))
-        flash("Your password has been changed. Any other sessions were signed out.", "success")
-        return redirect(_back)
+        _was_forced, _remember = _pw_sign_out_others(u)
+        return _pw_sign_back_in(u, _remember, _was_forced, _back)
 
     @app.route("/account/2fa/dismiss-nag", methods=["POST"])
     @login_required

@@ -238,13 +238,18 @@ def _memoised(key, load, allow_fetch):
             _inflight.discard(key)
         raise
     with _lock:
-        _inflight.discard(key)
-        cur = _mem.get(key)
-        if cur is not None and cur is not hit:
-            return cur[1]
-        if gen != _generation[0]:
-            return value if value else (hit[1] if hit is not None else value)
-        return _memo_store(key, hit, value, age, allow_fetch)
+        return _lgd_settle(key, hit, value, age, gen, allow_fetch)
+
+
+def _lgd_settle(key, hit, value, age, gen, allow_fetch):
+    """_memoised's compare-and-set, under _lock: the copy to serve once `load()` has returned."""
+    _inflight.discard(key)
+    cur = _mem.get(key)
+    if cur is not None and cur is not hit:
+        return cur[1]
+    if gen != _generation[0]:
+        return value if value else (hit[1] if hit is not None else value)
+    return _memo_store(key, hit, value, age, allow_fetch)
 
 
 def _memo_store(key, hit, value, age, allow_fetch):

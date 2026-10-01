@@ -432,6 +432,19 @@ function panelUpdateEndedEarly(l, beforeBoot){
   return {cls:'text-warning', icon:'question-circle',
           text:'The updater finished without restarting the panel — see the log above.', detail:''};
 }
+// Whatever lines of the update log a poll brought back, shown.
+function rmhRenderLogLines(l){
+  if(l.lines && l.lines.length) renderPuLog(l.lines);
+}
+// The new process is live. ONE status read, for the commit and branch it runs, handed to finish
+// with the log that showed the restart.
+function rmhReadRestartedStatus(msg, finish, l){
+  fetch(MOUNT+'/api/panel/update-status').then(function(r){ return r.ok?r.json():null; })
+    .catch(function(){ return null; })
+    .then(function(s){ finish(s, l); })
+    // finish itself failing must not leave "Restarting…" up for good with nothing said.
+    .catch(function(){ msg.textContent='The panel restarted — reload the page to see its state.'; });
+}
 // Polls ONE cheap endpoint, the update log, which also carries boot_id. It used to poll
 // /api/panel/update-status as well, every 1.5 seconds for the whole run, and each of those could
 // be a full status check: a `git fetch` of the very ref install.sh fetches (a lost race on that
@@ -467,7 +480,7 @@ function watchPanelRestart(beforeBoot, msg, doneLabel, before, targetBranch){
       .then(function(l){
         // No answer: the panel is down between its old process and its new one.
         if(!l){ showRestarting(); return; }
-        if(l.lines && l.lines.length) renderPuLog(l.lines);
+        rmhRenderLogLines(l);
         var early = done ? null : panelUpdateEndedEarly(l, beforeBoot);
         if(early){
           done=true; clearInterval(iv);
@@ -488,12 +501,7 @@ function watchPanelRestart(beforeBoot, msg, doneLabel, before, targetBranch){
         }
         if(!done && l.boot_id && beforeBoot && l.boot_id!==beforeBoot){
           done=true; clearInterval(iv);
-          // The new process is live. ONE status read, for the commit and branch it runs.
-          fetch(MOUNT+'/api/panel/update-status').then(function(r){ return r.ok?r.json():null; })
-            .catch(function(){ return null; })
-            .then(function(s){ finish(s, l); })
-            // finish itself failing must not leave "Restarting…" up for good with nothing said.
-            .catch(function(){ msg.textContent='The panel restarted — reload the page to see its state.'; });
+          rmhReadRestartedStatus(msg, finish, l);
         }
       }).catch(showRestarting);
     // done too: a poll still in flight must not overwrite this line with a later verdict.

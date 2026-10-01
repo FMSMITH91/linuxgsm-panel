@@ -3146,7 +3146,7 @@ check(len(_pee) > 150
       "answered is the one that started it — failed and held say why",
       "panelUpdateEndedEarly is missing, or no longer requires both: %r" % _pee[:200])
 _wpr_log = _wpr[_wpr.find("fetch(MOUNT+'/api/panel/update-log')"):
-                _wpr.find("fetch(MOUNT+'/api/panel/update-status')")]
+                _wpr.find("rmhReadRestartedStatus(")]
 _wpr_early = _js_block_after(_wpr_log, "if(early){") or ""
 # The reason is up to two sentences of the installer's own text. Beside the buttons on a 375px phone
 # the status line was squeezed into a column 90px wide and 313px tall (measured in a browser); the
@@ -4399,7 +4399,7 @@ check(_un_fn and "d.warn ? 'warning' : 'success'" in _un_fn,
 # l); })`, and the same rule holds for it.
 _ul_src = _js_code_only((ROOT / "static" / "js" / "remote_manage_host.js").read_text(encoding="utf-8"))
 _ul_at = _ul_src.find("fetch(MOUNT+'/api/panel/update-status')",
-                      _ul_src.find("function watchPanelRestart"))
+                      _ul_src.find("function rmhReadRestartedStatus"))
 _ul_fin = _ul_src.find(".then(function(s){ finish(s, l); })", _ul_at) if _ul_at >= 0 else -1
 # From .then(finish) to the next ';' — the statement's end when nothing handles finish failing.
 _ul_end = _ul_fin + len(".then(function(s){ finish(s, l); })")
@@ -4715,8 +4715,11 @@ else:
     _wpr2 = _js_code_only(_js_function_body(_rh, "watchPanelRestart"))
     _wpr2_iv = _wpr2[_wpr2.index("setInterval("):]
     _wpr2_flip = _wpr2_iv[_wpr2_iv.index("l.boot_id!==beforeBoot"):]
-    check(_wpr2_iv.count("/api/panel/update-status") == 1
-          and "/api/panel/update-status" in _wpr2_flip,
+    # The read itself is rmhReadRestartedStatus; the watcher calls it once, after the flip.
+    _rrs2 = _js_code_only(_js_function_body(_rh, "rmhReadRestartedStatus"))
+    check("/api/panel/update-status" not in _wpr2 and _wpr2_iv.count("rmhReadRestartedStatus(") == 1
+          and "rmhReadRestartedStatus(" in _wpr2_flip
+          and _rrs2.count("/api/panel/update-status") == 1,
           "js (no node): the update watcher reads the status only after boot_id flips", _wpr2_iv[:300])
 
 passed = sum(1 for c, _, _ in results if c is True)

@@ -145,20 +145,25 @@ def register(app):
         not_enrolled = []
         if added:
             added, not_enrolled = _finish_import(app, remote, remote_id, added)
-        # On the panel's own host an account the helper would not enrol was imported ANYWAY: the
-        # row was committed first, and only then was the helper asked. The helper refuses an
-        # account that can already reach root, so its refusal is the same verdict as the probe's
-        # and is now acted on the same way — _finish_import did not keep the row.
-        if _sm.is_local_server(remote):
-            refused += not_enrolled
-            not_enrolled = []
-        skipped += [r["user"] for r in refused if r["user"] not in skipped]
-        out = {"success": bool(added), "added": added, "skipped": skipped,
-               "not_enrolled": not_enrolled, "refused": refused}
-        if refused and not added:
-            out["message"] = "Not imported: " + "; ".join(
-                "%s (%s)" % (r["user"], r["reason"]) for r in refused) + "."
-        return jsonify(out)
+        return jsonify(_discover_import_outcome(remote, added, skipped, not_enrolled, refused))
+
+
+def _discover_import_outcome(remote, added, skipped, not_enrolled, refused):
+    """The import route's JSON answer, once the selected rows are in (or are not)."""
+    # On the panel's own host an account the helper would not enrol was imported ANYWAY: the
+    # row was committed first, and only then was the helper asked. The helper refuses an
+    # account that can already reach root, so its refusal is the same verdict as the probe's
+    # and is now acted on the same way — _finish_import did not keep the row.
+    if _sm.is_local_server(remote):
+        refused += not_enrolled
+        not_enrolled = []
+    skipped += [r["user"] for r in refused if r["user"] not in skipped]
+    out = {"success": bool(added), "added": added, "skipped": skipped,
+           "not_enrolled": not_enrolled, "refused": refused}
+    if refused and not added:
+        out["message"] = "Not imported: " + "; ".join(
+            "%s (%s)" % (r["user"], r["reason"]) for r in refused) + "."
+    return out
 
 
 def _privileged_selection(remote, items, discovered):
@@ -308,20 +313,33 @@ def _finish_import(app, remote, remote_id, added):
     """
     not_enrolled = _enrol_imported(remote, added)
     if not_enrolled and _sm.is_local_server(remote):
-        drop = {n["user"] for n in not_enrolled}
-        for obj in list(db.session.new):
-            if (isinstance(obj, GameServer) and obj.remote_id == remote_id
-                    and obj.short_name in drop):
-                db.session.expunge(obj)
-        added = [u for u in added if u not in drop]
+        added = _discover_drop_unenrolled(remote_id, added, not_enrolled)
     if not added:
         db.session.rollback()
         return added, not_enrolled
     db.session.commit()
     log_action(current_user, "import_servers", target=remote.name,
                detail="added=%s" % ",".join(added), remote=remote)
-    # Populate the imported servers' command lists so "Supported Commands" is ready
-    # without a manual refresh (install caches these; import didn't).
+    _discover_cache_imported(app, remote_id, added, not_enrolled)
+    return added, not_enrolled
+
+
+def _discover_drop_unenrolled(remote_id, added, not_enrolled):
+    """Take the accounts the helper would not enrol out of the pending session; return the rest."""
+    drop = {n["user"] for n in not_enrolled}
+    for obj in list(db.session.new):
+        if (isinstance(obj, GameServer) and obj.remote_id == remote_id
+                and obj.short_name in drop):
+            db.session.expunge(obj)
+    return [u for u in added if u not in drop]
+
+
+def _discover_cache_imported(app, remote_id, added, not_enrolled):
+    """Populate the imported servers' command lists.
+
+    So "Supported Commands" is ready without a manual refresh (install caches these; import
+    didn't).
+    """
     new_rows = GameServer.query.filter(
         GameServer.remote_id == remote_id, GameServer.short_name.in_(added)).all()
     refused = {n["user"] for n in not_enrolled}
@@ -331,4 +349,3 @@ def _finish_import(app, remote, remote_id, added):
                        autostart_ids=[gs.id for gs in new_rows
                                       if gs.short_name not in refused],
                        births={gs.id: row_birth(gs) for gs in new_rows})
-    return added, not_enrolled

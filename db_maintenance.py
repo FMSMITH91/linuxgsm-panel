@@ -157,18 +157,28 @@ def integrity_check(path):
     except OSError:
         return False, _UNREADABLE
     try:
-        # Read-only, so the check cannot destroy what repair() keeps: a read-write connection to a
-        # file whose header is not SQLite's deletes its -wal and -shm on close (see _aside).
-        con = sqlite3.connect(pathlib.Path(path).absolute().as_uri() + "?mode=ro",  # NOSONAR - the configured db path, not agent input
-                              timeout=15, uri=True)
-        try:
-            rows = con.execute("PRAGMA integrity_check").fetchall()
-        finally:
-            con.close()
+        rows = _dbm_integrity_rows(path)
     except sqlite3.DatabaseError as e:
         if _is_corruption_error(e):
             return False, "database is damaged (%s)" % type(e).__name__
         return False, "%s (%s)" % (_UNREACHABLE_PREFIX, type(e).__name__)
+    return _dbm_integrity_verdict(rows)
+
+
+def _dbm_integrity_rows(path):
+    """The rows PRAGMA integrity_check returns for `path`, read over a read-only connection."""
+    # Read-only, so the check cannot destroy what repair() keeps: a read-write connection to a
+    # file whose header is not SQLite's deletes its -wal and -shm on close (see _aside).
+    con = sqlite3.connect(pathlib.Path(path).absolute().as_uri() + "?mode=ro",  # NOSONAR - the configured db path, not agent input
+                          timeout=15, uri=True)
+    try:
+        return con.execute("PRAGMA integrity_check").fetchall()
+    finally:
+        con.close()
+
+
+def _dbm_integrity_verdict(rows):
+    """integrity_check's (ok, detail) for the PRAGMA's `rows`."""
     msgs = [str(r[0]) for r in rows] if rows else []
     if msgs == ["ok"]:
         return True, "ok"

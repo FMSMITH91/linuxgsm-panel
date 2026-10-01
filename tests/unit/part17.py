@@ -716,3 +716,166 @@ finally:
             _rv2_cfg_path.unlink()
     else:
         _rv2_cfg_path.write_bytes(_rv2_cfg_snap)
+
+# ── Codacy splits: the legs of _create_key_once and _set_corrupt_db_aside no other check reaches ──
+# A filesystem without hard links takes _create_key_once's O_EXCL fallback; and a second corrupt
+# copy in the same second must not reuse the first one's aside name (or its -wal/-shm).
+import time as _ck17time                                                            # noqa: E402
+
+_ck17_dir = _rv2tmp.mkdtemp()
+_ck17_link = _rv2os.link
+
+
+def _ck17_no_link(*_a, **_k):
+    raise PermissionError(1, "Operation not permitted")
+
+
+try:
+    _ck17_kp = _rv2os.path.join(_ck17_dir, "k")
+    _rv2os.link = _ck17_no_link
+    try:
+        _zcfgmod._create_key_once(_ck17_kp, lambda: b"FIRST")
+        _zcfgmod._create_key_once(_ck17_kp, lambda: b"SECOND")
+    finally:
+        _rv2os.link = _ck17_link
+    with open(_ck17_kp, "rb") as _ck17f:
+        eq("key file, no hard links: created once with its bytes, never overwritten",
+           _ck17f.read(), b"FIRST")
+    eq("key file, no hard links: 0600", _rv2os.stat(_ck17_kp).st_mode & 0o777, 0o600)
+    eq("key file, no hard links: no temp file is left behind",
+       [n for n in _rv2os.listdir(_ck17_dir) if n.startswith(".key-")], [])
+
+    _ck17_db = _rv2os.path.join(_ck17_dir, "p.db")
+    _ck17_now = int(_ck17time.time())
+    for _ck17s in range(_ck17_now, _ck17_now + 6):
+        open("%s.corrupt-%d-wal" % (_ck17_db, _ck17s), "w").close()
+    _ck17_aside = _zmodels._db_aside_name(_ck17_db)
+    check("corrupt aside: a name whose -wal is taken gets a -1 suffix, not the taken name",
+          any(_ck17_aside == "%s.corrupt-%d-1" % (_ck17_db, _s)
+              for _s in range(_ck17_now, _ck17_now + 6)), repr(_ck17_aside))
+    # ...and the move aside itself USES that name: driven through _set_corrupt_db_aside (no
+    # backup), the db and its -wal land on the -1 name and the taken -wal files are not written.
+    with open(_ck17_db, "wb") as _ck17f:
+        _ck17f.write(b"CORRUPT")
+    with open(_ck17_db + "-wal", "wb") as _ck17f:
+        _ck17f.write(b"WAL")
+    _zmodels._set_corrupt_db_aside(_ck17_db, _ck17_db + ".no-backup")
+    _ck17_moved = [_s for _s in range(_ck17_now, _ck17_now + 6)
+                   if _rv2os.path.exists("%s.corrupt-%d-1" % (_ck17_db, _s))]
+    _ck17_got = []
+    for _ck17s in _ck17_moved:
+        for _ck17x in ("", "-wal"):
+            with open("%s.corrupt-%d-1%s" % (_ck17_db, _ck17s, _ck17x), "rb") as _ck17f:
+                _ck17_got.append(_ck17f.read())
+    check("corrupt db aside: the move uses the free -1 name, and no taken -wal is overwritten",
+          not _rv2os.path.exists(_ck17_db) and len(_ck17_moved) == 1
+          and _ck17_got == [b"CORRUPT", b"WAL"]
+          and all(_rv2os.path.getsize("%s.corrupt-%d-wal" % (_ck17_db, _s)) == 0
+                  for _s in range(_ck17_now, _ck17_now + 6)),
+          repr((_ck17_moved, _ck17_got, sorted(_rv2os.listdir(_ck17_dir)))))
+finally:
+    _rv2os.link = _ck17_link
+    __import__("shutil").rmtree(_ck17_dir, ignore_errors=True)
+
+
+# ── the config editor's write, and GMod's host-wide content gate, pinned branch by branch ─────────
+# Both were lifted out of their route bodies into module helpers (Codacy CCN). Neither branch set
+# was pinned: the smoke sweep only asks that a wrong-shaped config body is not a 500, and nothing
+# drove the refusal a server-only admin gets for content that is host-wide. Driven directly on a
+# bare app with the collaborators stubbed at panel.routes.server_files and restored in the finally.
+from types import SimpleNamespace as _sf17NS  # noqa: E402
+
+from panel.routes import server_files as _sf17  # noqa: E402
+
+_sf17_app = _ZFlask("p17-server-files")
+_sf17_app.logger.disabled = True
+_sf17_names = ("write_file", "lgsm_write_config", "log_action", "current_user", "can_access_remote",
+               "detect_content_user")
+_sf17_saved = {_sf17n: getattr(_sf17, _sf17n) for _sf17n in _sf17_names}
+_sf17_calls = []
+
+
+def _sf17_out(resp):
+    """(status, json) of a view's return value, bare or (response, status); (None, None) for None.
+
+    None is what a gate that let the request through returns, so a gate that stopped refusing
+    fails its check by name here instead of raising out of the whole suite.
+    """
+    if resp is None:
+        return None, None
+    body, code = resp if isinstance(resp, tuple) else (resp, 200)
+    return code, body.get_json()
+
+
+def _sf17_raise(*_a, **_k):
+    raise RuntimeError("write path fell over")
+
+
+try:
+    _sf17.write_file = lambda remote, short, rel, raw: (
+        _sf17_calls.append(("write", rel, raw)), (True, ""))[1]
+    _sf17.lgsm_write_config = lambda remote, short, lgsm, settings: (
+        _sf17_calls.append(("settings", dict(settings))), (False, ""))[1]
+    _sf17.log_action = lambda user, action, **kw: _sf17_calls.append(
+        ("audit", action, kw.get("target"), kw.get("success")))
+    _sf17_gs = _sf17NS(remote="R", short_name="sf17srv", lgsm_name="gmodserver", name="sf17",
+                       remote_id=7)
+    with _sf17_app.test_request_context():
+        # config: the two wrong shapes are refused with their reason, and nothing is written
+        for _sf17_body, _sf17_msg in (({"raw": 5}, "The file contents must be text."),
+                                      ({"settings": [1]}, "Settings must be a map of names to values.")):
+            del _sf17_calls[:]
+            eq("config write: %r is a 400 with its reason, nothing written or audited" % _sf17_body,
+               (_sf17_out(_sf17._sf_config_write(_sf17_gs, _sf17_body)), _sf17_calls),
+               ((400, {"success": False, "message": _sf17_msg}), []))
+        # ...raw text goes to the instance's own .cfg and is audited; "Saved" when the writer is silent
+        del _sf17_calls[:]
+        eq("config write: raw text is written to the instance's own LinuxGSM cfg, and audited",
+           (_sf17_out(_sf17._sf_config_write(_sf17_gs, {"raw": "a=\"1\"\n"})), _sf17_calls),
+           ((200, {"success": True, "message": "Saved"}),
+            [("write", "lgsm/config-lgsm/gmodserver/gmodserver.cfg", "a=\"1\"\n"),
+             ("audit", "edit_config", "sf17", True)]))
+        # ...no raw goes through the config writer, an absent map as {}; "Failed" on a silent no
+        del _sf17_calls[:]
+        eq("config write: no raw and no settings writes an empty map, and a silent failure says so",
+           (_sf17_out(_sf17._sf_config_write(_sf17_gs, {})), _sf17_calls),
+           ((200, {"success": False, "message": "Failed"}),
+            [("settings", {}), ("audit", "edit_config", "sf17", False)]))
+        _sf17.write_file = _sf17_raise
+        eq("config write: a writer that raises is a generic 500, never its text",
+           _sf17_out(_sf17._sf_config_write(_sf17_gs, {"raw": "x"})),
+           (500, {"success": False, "message": "Internal server error"}))
+
+        # gmod: host-wide content needs the host, for anyone who is not a superadmin
+        _sf17_access = []
+        _sf17.can_access_remote = lambda user, rid: (_sf17_access.append(rid), user.host)[1]
+        _sf17.detect_content_user = lambda remote, games: {"user": "gmc", "present": {"cstrike": 1}}
+        _sf17.current_user = _sf17NS(is_superadmin=False, host=False)
+        _sf17_r = _sf17._sf_gmod_host_refusal(_sf17_gs, "R", "uninstall", ["cstrike"])
+        eq("gmod content: a server-only admin may not uninstall host-wide content",
+           (_sf17_out(_sf17_r), _sf17_access),
+           ((403, {"success": False, "message": (
+               "Removing content affects every Garry's Mod server on this host, so it needs "
+               "access to the host, not just this server.")}), [7]))
+        _sf17_r = _sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["cstrike", "tf", "hl2mp"])
+        eq("gmod content: ...nor mount content the host does not have yet, named by label",
+           _sf17_out(_sf17_r),
+           (403, {"success": False, "message": (
+               "Not on this host yet: Team Fortress 2, Half-Life 2: Deathmatch. Downloading "
+               "content for every Garry's Mod server here needs access to the host — ask its "
+               "admin to install it, then mount it here.")}))
+        eq("gmod content: ...while mounting what the host already has stays theirs",
+           _sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["cstrike"]), None)
+        _sf17.detect_content_user = lambda remote, games: None
+        eq("gmod content: ...and an unreadable content account counts as nothing present",
+           _sf17_out(_sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["cstrike"]))[0], 403)
+        _sf17.current_user = _sf17NS(is_superadmin=False, host=True)
+        eq("gmod content: host access lifts the gate (uninstall)",
+           _sf17._sf_gmod_host_refusal(_sf17_gs, "R", "uninstall", ["cstrike"]), None)
+        del _sf17_access[:]
+        _sf17.current_user = _sf17NS(is_superadmin=True, host=False)
+        eq("gmod content: ...and so does being a superadmin, without asking about the host",
+           (_sf17._sf_gmod_host_refusal(_sf17_gs, "R", "mount", ["tf"]), _sf17_access), (None, []))
+finally:
+    for _sf17n, _sf17v in _sf17_saved.items():
+        setattr(_sf17, _sf17n, _sf17v)

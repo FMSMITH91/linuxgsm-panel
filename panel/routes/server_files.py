@@ -1136,6 +1136,39 @@ def _register_files_page(app):
                                host_timezone=_host_timezone_cached(gs.remote, app))
 
 
+def _sf_config_read(gs):
+    """GET /config: the instance's LinuxGSM config, or a generic 500."""
+    try:
+        return jsonify(lgsm_read_config(gs.remote, gs.short_name, gs.lgsm_name))
+    except Exception:
+        return jsonify({"error": _log_and_generic("request failed")}), 500
+
+
+def _sf_config_write(gs, data):
+    """POST /config: write the raw file or a settings map, audited; a 400 for the wrong shape."""
+    try:
+        if data.get("raw") is not None:
+            # A file's contents must be a STRING. A number or a list reached write_file and
+            # died on .encode() — deep in the write path, reported as a 500.
+            if not isinstance(data["raw"], str):
+                return jsonify({"success": False,
+                                "message": "The file contents must be text."}), 400
+            rel = f"lgsm/config-lgsm/{gs.lgsm_name}/{gs.lgsm_name}.cfg"
+            ok, msg = write_file(gs.remote, gs.short_name, rel, data["raw"])
+        else:
+            # The same rule for the other shape: `settings` is a key -> value map, and a list
+            # or a string reached the writer's .items() and came back as a 500.
+            settings = data.get("settings") or {}
+            if not isinstance(settings, dict):
+                return jsonify({"success": False,
+                                "message": "Settings must be a map of names to values."}), 400
+            ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, settings)
+        log_action(current_user, "edit_config", target=gs.name, success=ok, server=gs)
+        return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
+    except Exception:
+        return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+
+
 def _register_config_editor(app):
     """The instance's LinuxGSM config, and the game's own server config file."""
     @app.route("/api/server/<int:server_id>/config", methods=["GET", "POST"])
@@ -1146,35 +1179,12 @@ def _register_config_editor(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
-            try:
-                return jsonify(lgsm_read_config(gs.remote, gs.short_name, gs.lgsm_name))
-            except Exception:
-                return jsonify({"error": _log_and_generic("request failed")}), 500
+            return _sf_config_read(gs)
         data = _json_body()
         refused = _write_refused(gs, "edit_config")
         if refused is not None:
             return refused
-        try:
-            if data.get("raw") is not None:
-                # A file's contents must be a STRING. A number or a list reached write_file and
-                # died on .encode() — deep in the write path, reported as a 500.
-                if not isinstance(data["raw"], str):
-                    return jsonify({"success": False,
-                                    "message": "The file contents must be text."}), 400
-                rel = f"lgsm/config-lgsm/{gs.lgsm_name}/{gs.lgsm_name}.cfg"
-                ok, msg = write_file(gs.remote, gs.short_name, rel, data["raw"])
-            else:
-                # The same rule for the other shape: `settings` is a key -> value map, and a list
-                # or a string reached the writer's .items() and came back as a 500.
-                settings = data.get("settings") or {}
-                if not isinstance(settings, dict):
-                    return jsonify({"success": False,
-                                    "message": "Settings must be a map of names to values."}), 400
-                ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, settings)
-            log_action(current_user, "edit_config", target=gs.name, success=ok, server=gs)
-            return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
-        except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+        return _sf_config_write(gs, data)
 
     @app.route("/api/server/<int:server_id>/game-config")
     @login_required
@@ -1516,6 +1526,38 @@ def _register_cron_actions(app):
             return jsonify({"success": False, "message": _log_and_generic("cron run failed")}), 200
 
 
+def _sf_gmod_missing(remote, sel):
+    """The selected content games that are not on the host yet."""
+    _cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
+    return [g for g in sel if g not in set((_cu or {}).get("present") or {})]
+
+
+def _sf_gmod_host_refusal(gs, remote, action, sel):
+    """A 403 when a server-only admin asks for a host-wide content change, else None.
+
+    Content is HOST-wide: one content account and one ~/serverfiles that every GMod server on
+    the host mounts from. This route was gated on MANAGE_SERVERS and access to ONE server,
+    so an admin granted a single GMod server on a shared host could `rm` the content every
+    other tenant's server mounts (their maps then load with ERROR textures), or start a 13GB
+    SteamCMD download into the host's disk. Mounting what is already there only rewrites
+    this server's own mount.cfg, so that stays theirs; removing content, or fetching content
+    that is not on the host yet, needs the host.
+    """
+    if current_user.is_superadmin or can_access_remote(current_user, gs.remote_id):
+        return None
+    if action == "uninstall":
+        return jsonify({"success": False, "message": (
+            "Removing content affects every Garry's Mod server on this host, so it needs "
+            "access to the host, not just this server.")}), 403
+    _missing = _sf_gmod_missing(remote, sel)
+    if _missing:
+        return jsonify({"success": False, "message": (
+            "Not on this host yet: %s. Downloading content for every Garry's Mod server "
+            "here needs access to the host — ask its admin to install it, then mount it "
+            "here." % ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing))}), 403
+    return None
+
+
 def _register_gmod_content(app):
     """Garry's Mod content mounting: its status card, and applying or uninstalling content."""
     @app.route("/api/server/<int:server_id>/gmod-content", methods=["GET", "POST"])
@@ -1539,25 +1581,11 @@ def _register_gmod_content(app):
             return jsonify({"success": False, "message": (
                 "Send \"action\" as \"mount\" or \"uninstall\" and \"games\" as a list of game "
                 "names.")}), 400
-        # Content is HOST-wide: one content account and one ~/serverfiles that every GMod server on
-        # the host mounts from. This route was gated on MANAGE_SERVERS and access to ONE server,
-        # so an admin granted a single GMod server on a shared host could `rm` the content every
-        # other tenant's server mounts (their maps then load with ERROR textures), or start a 13GB
-        # SteamCMD download into the host's disk. Mounting what is already there only rewrites
-        # this server's own mount.cfg, so that stays theirs; removing content, or fetching content
-        # that is not on the host yet, needs the host.
-        if not (current_user.is_superadmin or can_access_remote(current_user, gs.remote_id)):
-            if action == "uninstall":
-                return jsonify({"success": False, "message": (
-                    "Removing content affects every Garry's Mod server on this host, so it needs "
-                    "access to the host, not just this server.")}), 403
-            _cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
-            _missing = [g for g in sel if g not in set((_cu or {}).get("present") or {})]
-            if _missing:
-                return jsonify({"success": False, "message": (
-                    "Not on this host yet: %s. Downloading content for every Garry's Mod server "
-                    "here needs access to the host — ask its admin to install it, then mount it "
-                    "here." % ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing))}), 403
+        # Content is HOST-wide: removing it, or fetching what is not on the host yet, needs the
+        # host (see _sf_gmod_host_refusal).
+        refused = _sf_gmod_host_refusal(gs, remote, action, sel)
+        if refused is not None:
+            return refused
         if action == "uninstall":
             return _gmod_uninstall_request(app, gs, remote, sel)
         return _gmod_apply_request(app, gs, remote, sel)

@@ -61,7 +61,7 @@ app.config["SESSION_COOKIE_SECURE"] = False  # test client talks http://; Secure
 # File-manager and cron writes first ask the host whether the game account can become root there
 # (_shared.game_account_write_refusal -> privileged_accounts), and refuse when it cannot answer.
 # This suite's hosts are not real, so every account is answered "a plain game account", as
-# smoke_test does; the gate itself is driven in unit part18 with the host's reply scripted.
+# smoke_test does; the gate itself is driven in unit part19 with the host's reply scripted.
 import panel.routes._shared as _rbac_shared  # noqa: E402
 _rbac_shared.privileged_accounts = lambda _remote, _users: {}
 results = []
