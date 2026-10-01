@@ -2625,6 +2625,9 @@ def _iw_run(scenario, panel_dir, backup, env=None):
         "ensure_service_tuning() { :; }",
         "ensure_system_tuning() { :; }",
         "install_recovery_command() { :; }",
+        # The unit is refreshed at [5/6] and put back by the trap's recovery; both write /etc.
+        "ensure_service_unit() { UNIT_CHANGED=0; echo 'ENSURE_UNIT'; }",
+        "restore_service_unit() { echo 'RESTORE_UNIT'; }",
         "FROM_VER='1.2.3'",
         "RUN_AS_ROOT=0",
         "PANEL_USER='nobody'",
@@ -2718,6 +2721,11 @@ try:
           "SVC start linuxgsm-panel.service" in _iw_out, _iw_out[-300:])
     check("install.sh: ...and tells the operator where the snapshot of the attempt is",
           _iw_bk in _iw_out, _iw_out[-300:])
+    # The unit a full update refreshes at [5/6] is put back by this recovery too, BEFORE the start,
+    # so the code it restores runs under the unit it shipped with.
+    check("install.sh: ...and puts the previous systemd unit back before starting the panel",
+          -1 < _iw_out.find("RESTORE_UNIT") < _iw_out.find("SVC start linuxgsm-panel.service"),
+          _iw_out[-300:])
     check("install.sh: ...and says what happened, instead of ending the script with no message",
           "aborted unexpectedly" in _iw_out and "WINDOW-COMPLETED" not in _iw_out and _iw_rc != 0,
           "rc=%d %s" % (_iw_rc, _iw_out[-300:]))
@@ -2772,6 +2780,9 @@ try:
     check("install.sh: a clean run reaches [5/6], starts the panel and hands over to the health check",
           _iw_rc == 0 and "WINDOW-COMPLETED" in _iw_out and "aborted unexpectedly" not in _iw_out,
           "rc=%d %s" % (_iw_rc, _iw_out[-300:]))
+    check("install.sh: ...refreshing the systemd unit before it starts the panel",
+          -1 < _iw_out.find("ENSURE_UNIT") < _iw_out.find("SVC start linuxgsm-panel.service")
+          and "RESTORE_UNIT" not in _iw_out, _iw_out[-300:])
 
     # CONTROL C — the window is full of `[ "${RUN_AS_ROOT}" -eq 1 ] && …` guards whose test fails
     # on every non-root install. A trap that treated those as aborts would break every `--user`

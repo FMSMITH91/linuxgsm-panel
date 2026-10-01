@@ -199,7 +199,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
   being checked is still offered, and the commit count and the list come from the same set. Commits
   that touch only docs, CI, tests or tooling are not an update: they arrive with the next one that
   is. (For eleven days they were offered too, and a CI-only merge put "Update available" on every
-  panel for an install that changed nothing.)
+  panel for an install that changed nothing.) Every file in the repository is named as one a host
+  runs or one it does not, and the build fails on a new file named as neither, so neither mistake
+  can slip in: a file a host runs never goes un-updated, and nothing else raises an update. The
+  build also checks that every module the panel imports and every file the installer reads is on
+  the runs side.
 - **The 2FA reset in Users → Edit is always visible**, disabled with a reason when the account has
   no 2FA to reset. It was hidden unless the account already had 2FA on, so an admin looking for it
   found an empty section and concluded the feature did not exist.
@@ -271,6 +275,16 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **An update keeps the panel's systemd unit current, as it does everything else the installer
+  put on the host.** The unit was written once, at install, and no update touched it again, so a
+  host kept whatever unit it was first given. It is now rewritten when its text differs from what
+  this version installs (and only then), and an update that rolls back puts the old one back. A
+  test fails the build if a fresh install ever runs a step an update does not.
+- **The installer installs wget, cron and ufw when they are missing.** Ubuntu's minimal and cloud
+  images leave them out, and the panel runs all three on its own host: every game install downloads
+  LinuxGSM with wget, autostart and scheduled tasks are cron jobs, and the Firewall page and
+  auto-blocking drive ufw. Installing ufw does not turn the firewall on. An update installs them
+  too, on a host that is missing them.
 - **A docs, CI or test change no longer brings back "Panel update available" on Telegram or
   Discord.** Merged on top of an update you had not installed yet, it moved the update's target
   commit, and the alert went out again for the same change. It goes out once per change the panel

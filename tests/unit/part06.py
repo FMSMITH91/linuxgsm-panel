@@ -2548,6 +2548,7 @@ try:
                     "check_origin_trusted() { :; }\ninstall_root_tools() { :; }\n"
                     "write_sudoers_grant() { :; }\nwrite_terminal_sudo_grant() { :; }\n"
                     "install_recovery_command() { :; }\n"
+                    "ensure_service_unit() { UNIT_CHANGED=0; }\n"
                     # the branch's last line is install.sh's own function, run as written
                     + _su_find("update_noop_line() {", "\n}\n") + "\n")
     _r = _su_with_cfg(_su_cfg310, "3.12", _su_noop_env + _su_noop + "echo FULL_UPDATE\n")
@@ -2609,8 +2610,22 @@ try:
                     "command() { [ \"$2\" = apt-get ] || [ \"$2\" = git ] || [ \"$2\" = curl ]; }\n")
     _r = _su_run(_su_pre, "", extra=_su_pre_shim + "_venv_works() { return 1; }\n").stdout
     check("install.sh: missing prerequisites are still one plain `sudo apt-get install`",
-          "SUDO apt-get install -y python3-venv python3-pip git curl\n" in _r and "SUDO env" not in _r
-          and "tzdata" not in _r, repr(_r))
+          "SUDO apt-get install -y python3-venv python3-pip git curl wget cron ufw\n" in _r
+          and "SUDO env" not in _r and "tzdata" not in _r, repr(_r))
+    # wget, cron and ufw are what the panel itself runs on its host, and Ubuntu's minimal images
+    # lack them: any ONE missing (the venv, git and curl all present) installs the set; a host that
+    # has every one of them runs no apt at all.
+    for _su_tool in ("wget", "crontab", "ufw"):
+        _r = _su_run(_su_pre, "", extra=_su_pre_shim.replace(
+            "command() { ", "command() { [ \"$2\" != %s ]; return; " % _su_tool)
+            + "_venv_works() { return 0; }\n").stdout
+        check("install.sh: a host missing only %s gets the prerequisites installed" % _su_tool,
+              "SUDO apt-get install -y python3-venv python3-pip git curl wget cron ufw\n" in _r,
+              repr(_r))
+    _r = _su_run(_su_pre, "", extra=_su_pre_shim.replace("command() { ", "command() { return 0; ")
+                 + "_venv_works() { return 0; }\n").stdout
+    check("install.sh: ...and a host with every prerequisite runs no apt for them", "SUDO" not in _r,
+          repr(_r))
     _r = _su_run(_su_tz.replace("/usr/share/zoneinfo/UTC", os.path.join(_su_sb, "no-zoneinfo")),
                  "", extra=_su_pre_shim).stdout
     check("install.sh: a host with no zone database gets tzdata alone, noninteractive, no upgrades",
@@ -9790,12 +9805,18 @@ try:
           and "OLD run" not in " ".join(_uc.get("lines", [])),
           "wrapper %r rc=%s; %r" % (_uc_wrapper, _uc_w.returncode, _uc_show(_uc)))
     # The last line of the caller's no-op branch is update_noop_line's, right before its exit 0.
-    # Anchored on install_gamedig, the root-owned piece the branch refreshes just before it (gamedig's
-    # own checks hold that it is there): its output must come BEFORE the line the card reads last.
+    # Anchored on install_gamedig, the root-owned piece the branch refreshes before it (gamedig's
+    # own checks hold that it is there), and on the systemd unit's refresh between the two: their
+    # output must come BEFORE the line the card reads last.
+    _uc_noop_tail = ("        # A hold is NOT \"up to date\": the pinned commit was not installed (see "
+                     "update_noop_line).\n        update_noop_line\n        exit 0\n    fi\n")
+    _uc_noop_at = _inst.find(_uc_noop_tail)
     check("install.sh: the update's no-op branch ends on update_noop_line, then exit 0",
-          "        install_gamedig\n        # A hold is NOT \"up to date\": the pinned commit "
-          "was not installed (see update_noop_line).\n        update_noop_line\n        exit 0\n    fi\n"
-          in _inst, "update_noop_line is not what the no-op branch ends on")
+          _uc_noop_at > 0
+          and -1 < _inst.rfind("        install_gamedig\n", 0, _uc_noop_at)
+          < _inst.rfind("        ensure_service_unit\n", 0, _uc_noop_at)
+          and _uc_noop_at - _inst.rfind("        install_gamedig\n", 0, _uc_noop_at) < 900,
+          "update_noop_line is not what the no-op branch ends on")
 
     # The panel's update check, for real against a clone at A. The tip and the merge are still being
     # verified; the pull request's commits carry their PR runs' state, or none ("unknown" — which
