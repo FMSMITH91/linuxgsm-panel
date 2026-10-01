@@ -3274,15 +3274,21 @@ check("a.rel = 'noopener noreferrer'" in _upd,
 check(_upd.count("else if(d.message)") == 0,
       "js: the update card has no third 'behind but not installable' state",
       "a message-only branch is back")
-# ...EXCEPT the two that do not pass by the next glance, each keyed on its own flag rather than on
-# any message: the newer commit's checks cannot be read at all (unverified_reason — an origin the
-# panel does not recognise, a private repository, GitHub unreachable; it used to be offered as
-# installable), and an update being installed right now (update_running). A pending CI run still
-# lands on the up-to-date line.
-check("else if((d.unverified_reason || d.update_running) && d.message){" in _upd
-      and "createTextNode(' '+d.message)" in _upd,
-      "js: ...except an update that cannot be verified, or one being installed, which says so as text",
-      "renderUpdate has no branch for unverified_reason / update_running")
+# ...and no reason line in either state: the owner's rule, given more than once and broken each
+# time a reason was added back ("N newer commits still being verified", "couldn't be verified",
+# "Couldn't reach the update source", "docs, tests or tooling"). Read on the code, comments
+# dropped: the only message the function may show is the not-a-git-checkout line, where there is no
+# update mechanism at all.
+_upd_code = _js_code_only(_upd)
+_upd_msg_lines = [ln for ln in _upd_code.splitlines() if "d.message" in ln]
+check(len(_upd_msg_lines) == 1 and "d.git===false" in _upd_msg_lines[0]
+      and not any(_w in _upd_code for _w in ("unverified_reason", "update_running", "d.fetched",
+                                             "docs_only", "cloud-slash", "being verified",
+                                             "createElement('span')")),
+      "js: ...and neither state carries a reason line",
+      repr((_upd_msg_lines, [_w for _w in ("unverified_reason", "update_running", "d.fetched",
+                                           "docs_only", "cloud-slash", "being verified",
+                                           "createElement('span')") if _w in _upd_code])))
 check("You\\'re up to date" in _upd and "Update available:" in _upd,
       "js: ...just the two it is asked for")
 

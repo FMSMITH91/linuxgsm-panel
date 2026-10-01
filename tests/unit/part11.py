@@ -3600,6 +3600,36 @@ check("panel update: ...and falls back to the tip only when no target was worked
       and _ou11._update_target({}) == "",
       repr((_ou11._update_target({"remote_sha": "bbbbbbb2222"}), _ou11._update_target({}))))
 
+# ── ...and is announced ONCE per change the panel runs, not once per commit on top of it ─────────
+# A docs or CI commit merged on top of an update not yet installed moves target_sha (the newest
+# verified commit), and the ticker de-duplicated on target_sha: it sent "Panel update available"
+# again, listing the same change. It de-duplicates on runtime_sha now, the newest commit in the
+# update that changes a file the panel runs.
+_ou11_sent2, _ou11_kept = [], []
+_ou11_saved2 = (_ou11_n.notify, _ou11._remember_announced_update)
+try:
+    _ou11_n.notify = lambda kind, title, body, *a, **k: _ou11_sent2.append(body)
+    _ou11._remember_announced_update = _ou11_kept.append      # never config.json from a test
+    _ou11_app = NS(logger=_ou11_logging.getLogger("ou11"))
+    _ou11_r = {"update_available": True, "target_sha": "r" * 40, "runtime_sha": "rrrrrrr",
+               "remote_version": "9.9", "behind": 1, "changes": ["rrrrrrr fix: a thing"]}
+    _ou11_last = _ou11._update_tick(_ou11_app, _ou11_r, "")
+    _ou11_d = dict(_ou11_r, target_sha="d" * 40, behind=2)   # a CI-only commit lands on top
+    _ou11_last2 = _ou11._update_tick(_ou11_app, _ou11_d, _ou11_last)
+    _ou11_n2 = dict(_ou11_d, target_sha="e" * 40, runtime_sha="eeeeeee",
+                    changes=["eeeeeee fix: another", "rrrrrrr fix: a thing"])
+    _ou11_last3 = _ou11._update_tick(_ou11_app, _ou11_n2, _ou11_last2)
+finally:
+    _ou11_n.notify, _ou11._remember_announced_update = _ou11_saved2
+check("panel update: a docs or CI commit on top of an un-installed update does not announce it "
+      "again; the next change the panel runs does",
+      len(_ou11_sent2) == 2 and _ou11_last == _ou11_last2 == "rrrrrrr" and _ou11_last3 == "eeeeeee"
+      and _ou11_kept == ["rrrrrrr", "eeeeeee"],
+      repr((len(_ou11_sent2), _ou11_last, _ou11_last2, _ou11_last3, _ou11_kept)))
+check("panel update: ...and with no runtime_sha (an older status), it keys on the target as before",
+      _ou11._announce_key({"target_sha": "aaaaaaa1111"}) == "aaaaaaa1111"
+      and _ou11._announce_key({}) == "")
+
 # ── the tripwire, checked last ──────────────────────────────────────────────────────────────────
 for _n, _fn in _p8_real.items():
     setattr(_sm_core, _n, _fn)

@@ -732,6 +732,8 @@ def _w14_git(args, timeout=45):
         return (_W14[0][:7], "", 0)
     if args[0] == "rev-list" and "-n" in args:
         return ("\n".join(_W14), "", 0)
+    if args[0] == "diff":
+        return ("app.py\n", "", 0)   # a change the panel runs: an empty diff is no update
     if args[0] == "log":
         return ("", "", 0)
     return ("", "", 0)

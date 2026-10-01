@@ -225,14 +225,26 @@ def _update_tick(app, st, last):
     """
     if st.get("update_available"):
         tgt = _update_target(st)
-        if tgt and tgt != last:
+        key = _announce_key(st)
+        if tgt and key != last:
             _announce_panel_update(app, st, tgt)
-            _remember_announced_update(tgt)
-            return tgt
+            _remember_announced_update(key)
+            return key
         return last
     if last:
         _remember_announced_update("")   # up to date — let a future update announce again
     return ""
+
+
+def _announce_key(st):
+    """Return the commit an update announcement is de-duplicated on.
+
+    That is the newest commit in the update that changes a file the panel runs (runtime_sha),
+    falling back to the target. Keyed on the target alone, a docs or CI commit merged on top of an
+    update not yet installed moved the target and sent "Panel update available" again, for the
+    same change.
+    """
+    return st.get("runtime_sha") or _update_target(st)
 
 
 def _update_target(st):

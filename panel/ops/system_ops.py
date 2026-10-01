@@ -1212,7 +1212,7 @@ def _remote_ci_state(sha):
 # Paths that DON'T affect the running panel — changes touching only these shouldn't raise the
 # "update available" badge (e.g. editing the README or a workflow). Denylist (not allowlist) so a
 # new kind of runtime file is never accidentally treated as noise: anything not listed here counts.
-_NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/")
+_NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/", ".clusterfuzzlite/")
 # requirements.in is what requirements.txt is compiled FROM: neither the panel nor install.sh reads
 # it. A dependency reaches a host through requirements.txt, which tests/unit holds to lock every
 # name in the .in, so a commit that changes only the .in changes nothing a host installs.
@@ -1222,7 +1222,8 @@ _NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/")
 # nor install.sh reads either, so a commit that only tunes the linting is not an update.
 _NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore",
                 ".pre-commit-config.yaml", "codecov.yml", ".flake8", "mypy.ini", "requirements.in",
-                "requirements-bootstrap.in", ".codacy.yaml", ".prospector.yaml"}
+                "requirements-bootstrap.in", ".codacy.yaml", ".prospector.yaml",
+                "static/js/.eslintrc.json"}
 # Files that live inside a noise directory but DO affect the running host, checked before the
 # directory rule. A denylist of directories cannot express "this one file matters".
 #
@@ -1266,14 +1267,34 @@ def _is_runtime_path(path):
 def _update_touches_runtime(target_ref):
     """Whether updating from HEAD to `target_ref` would change any file the panel actually uses.
     A pure-docs/CI/test diff returns False so the badge stops nagging about changes that don't
-    affect the panel. Fails safe: if we can't compute the diff, assume it matters."""
-    out, _, rc = _git(["diff", "--name-only", "HEAD.." + target_ref])
+    affect the panel. Fails safe: if we can't compute the diff, assume it matters.
+
+    --no-renames: git names only a rename's DESTINATION, so a file the host runs moved into tools/
+    or docs/ read as docs-only, though installing it removes that file. Both sides are listed now.
+    An empty listing git returned cleanly is two identical trees (a change and its revert): nothing
+    to install. A failed git call is non-zero (_git returns -1 on a timeout too), so that stays the
+    fail-safe case."""
+    out, _, rc = _git(["diff", "--no-renames", "--name-only", "HEAD.." + target_ref])
     if rc != 0:
         return True
     files = [f for f in (out or "").splitlines() if f.strip()]
-    if not files:
-        return True
     return any(_is_runtime_path(f) for f in files)
+
+
+def _no_runtime_update(base, target_sha, ci_state, behind, behind_tip):
+    """The status for a checkout that is behind only by docs, CI, test or tooling commits.
+
+    NOT an update: the badge, the card, the bots and the update notification all read
+    update_available, and nothing the panel runs would change. #276 (2026-09-19) made every commit
+    count ("am I running the latest?"), and from then on a CI-only merge raised "Update available"
+    on every panel, with an install that changed nothing. The owner's rule is the one restored: an
+    update is offered only when a file the panel runs changes. The first commit that does is
+    offered, with these behind it in the same pull. behind/target stay in the API for anything
+    that wants them; the card shows its up-to-date line, which prints the running commit.
+    """
+    return {**base, "update_available": False, "docs_only": True, "ci_state": ci_state,
+            "behind": behind, "behind_tip": behind_tip, "target_sha": target_sha,
+            "remote_version": version_for_commit(target_sha) or "?", "changes": []}
 
 
 def _runtime_changelog(rev_range, runtime_only=True):
@@ -1285,7 +1306,8 @@ def _runtime_changelog(rev_range, runtime_only=True):
     unfiltered count while listing the filtered one, so an update consisting of a tests-only
     commit announced itself and then had nothing to show. Reported from a live panel sitting one
     commit behind a change to tests/ and tools/."""
-    out, _, rc = _git(["log", "--no-decorate", "--format=%h%x09%s", "--name-only", rev_range])
+    out, _, rc = _git(["log", "--no-decorate", "--no-renames", "--format=%h%x09%s", "--name-only",
+                       rev_range])
     if rc != 0 or not out:
         return []
     header = re.compile(r"^([0-9a-f]{7,40})\t(.*)\Z")
@@ -1373,19 +1395,19 @@ def _compute_update_status():
     # show a permanent "verifying" and never apply. Offer the branch tip directly instead —
     # the snapshot + health-check + auto-rollback still guards against a branch that won't boot.
     if branch != _DEFAULT_BRANCH:
-        # docs_only is still REPORTED (the card can note it), but it no longer suppresses the
-        # badge: the question this card answers is "am I running the latest?", and the answer to
-        # that does not depend on what the newer commits happen to touch.
-        tgt_ver = version_for_commit(ref)
         rem_full, _, _ = _git(["rev-parse", ref])
+        # Nothing the panel runs changed: not an update, on a test branch either (see
+        # _no_runtime_update). Judged on the diff, which fails safe: unreadable reads as a change.
+        if not _update_touches_runtime(ref):
+            return _no_runtime_update(base, rem_full.strip() or ref, "unverified",
+                                      behind_n, behind_n)
+        tgt_ver = version_for_commit(ref)
         runtime_log = _runtime_changelog("HEAD.." + ref)
-        # Same fallback as the verified branch below, and docs_only reported here too — the card's
-        # "none of these change what the panel runs" note keys off it, and leaving it out of one
-        # of the two update branches meant the note appeared or not depending on which one the
-        # panel happened to be in.
+        # Same fallback as the verified branch below: what is counted is what is listed.
         rc_log = runtime_log or _runtime_changelog("HEAD.." + ref, runtime_only=False)
         return {**base, "update_available": True, "ci_state": "unverified",
-                "docs_only": not runtime_log,
+                "docs_only": False,
+                "runtime_sha": runtime_log[0].split(" ", 1)[0] if runtime_log else "",
                 "behind": len(rc_log) or behind_n, "behind_tip": behind_n,
                 "remote_version": tgt_ver or "?",
                 "target_sha": rem_full.strip(),
@@ -1492,34 +1514,33 @@ def _compute_update_status():
     behind_target = behind_n - newer_unverified   # commits from HEAD up to & including the target
     # Don't nag if everything between here and the verified target is docs/CI/tests only — those
     # changes don't affect the running panel. (A later commit with real code will move the target
-    # up and re-trigger the badge once it passes CI.)
-    # docs_only is reported, not used to suppress — see the branch case above.
-    _docs_only = not _update_touches_runtime(target_sha)
+    # up and re-trigger the badge once it passes CI.) See _no_runtime_update.
+    if not _update_touches_runtime(target_sha):
+        return _no_runtime_update(base, target_sha, target_state, behind_target, behind_n)
     tgt_ver = version_for_commit(target_sha)
     rc_log = _runtime_changelog(f"HEAD..{target_sha}")   # runtime commits only (drops docs/CI)
     # What is COUNTED and what is LISTED must be the same set. `len(rc_log) or behind_target` used
     # the filtered count when it had one and the raw count when it did not — so an update made
     # only of test or tooling commits said "1 commit behind" and then showed an empty list,
     # because `changes` stayed filtered. When nothing runtime changed, show the commits that DID
-    # change and let docs_only say what they are.
+    # change (a runtime diff whose commits each looked like noise, e.g. a change and its revert).
     shown_log = rc_log or _runtime_changelog(f"HEAD..{target_sha}", runtime_only=False)
-    msg = None
-    if newer_unverified > 0:
-        msg = ("Updating to the latest verified version — %d newer commit%s still being verified."
-               % (newer_unverified, "" if newer_unverified == 1 else "s"))
     return {
         **base,
         "update_available": True,
-        "docs_only": _docs_only,
+        "docs_only": False,
         "ci_state": target_state,
         "behind": len(shown_log) or behind_target,   # always the number of commits listed below
         "behind_tip": behind_n,
         "newer_unverified": newer_unverified,
+        # The newest commit in this update that changes a file the panel runs. The update
+        # notification is de-duplicated on it, not on target_sha: a docs or CI commit landing on
+        # top of an update not yet installed moves the target, and re-announced the same change.
+        "runtime_sha": rc_log[0].split(" ", 1)[0] if rc_log else "",
         "remote_version": tgt_ver or "?",
         "remote_sha": target_sha[:7],
         "target_sha": target_sha,
         "changes": shown_log[:10],
-        **({"message": msg} if msg else {}),
     }
 
 
