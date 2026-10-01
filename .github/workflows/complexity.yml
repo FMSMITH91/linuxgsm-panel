@@ -1,0 +1,46 @@
+name: Complexity
+
+# Codacy's size and complexity limits, checked on what a pull request CHANGES. Codacy's own
+# pull-request check counts an issue as new only on a line the pull request changed, and its
+# complexity and length issues sit on a function's def line or on line 1, so a function that grew
+# past the limit passed it as "0 new issues" and the issue appeared on main (23 of them by
+# 2026-09-30). See .github/scripts/complexity_gate.py.
+#
+# Pull requests ONLY, and in a workflow of its own: the panel's update gate reads every check run on
+# a main commit and requires each ci.yml job (system_ops._CI_REQUIRED), so a pull-request-only job
+# in ci.yml would sit "skipped" on main and hold every panel's updates back. This one never runs on
+# main. It is a required check for merging (.github/required-checks.txt), so it has no path filter.
+
+on:
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  complexity:
+    name: complexity (Codacy limits)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The pull request's merge commit and its first parent (the base it is judged against).
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - run: >-
+          python -m pip install --quiet --require-hashes --only-binary :all:
+          -r .github/ci-requirements/complexity.txt
+      # The gate proves it still tells a grown function from an old one before its verdict counts.
+      - name: Self-test
+        run: python .github/scripts/complexity_gate.py --self-test
+      - name: Codacy's limits on what this pull request changes
+        run: python .github/scripts/complexity_gate.py

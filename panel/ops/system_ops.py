@@ -1258,21 +1258,21 @@ _RUNTIME_FILES = {"app.py", "manage.py", "db_maintenance.py", "VERSION", "instal
                   "requirements-bootstrap.txt"} | _RUNTIME_EXCEPTIONS
 
 
+def _is_noise_path(p):
+    """Docs, licence, and the named noise directories and files (p already normalised)."""
+    low = p.lower()
+    return (low.endswith(".md") or low == "license" or low.startswith("license.")
+            or p.startswith(_NOISE_DIRS) or p in _NOISE_FILES)
+
+
 def _path_class(path):
     """'runtime' or 'noise' for a repo path named on either side; None for one named on neither."""
     p = path.strip()
     if p.startswith("./"):      # a literal "./" prefix only — NOT lstrip("./"), which would also
         p = p[2:]               # eat the leading dot of dotfiles/dotdirs (.github, .gitignore).
-    if not p:
-        return "noise"
-    if p in _RUNTIME_FILES:
-        return "runtime"        # checked FIRST: the helper and gamedig sit in a noise directory
-    low = p.lower()
-    if low.endswith(".md") or low == "license" or low.startswith("license."):
-        return "noise"
-    if any(p.startswith(d) for d in _NOISE_DIRS) or p in _NOISE_FILES:
-        return "noise"
-    if any(p.startswith(d) for d in _RUNTIME_DIRS):
+    if not p or (p not in _RUNTIME_FILES and _is_noise_path(p)):
+        return "noise"          # _RUNTIME_FILES FIRST: the helper and gamedig sit in a noise dir
+    if p in _RUNTIME_FILES or p.startswith(_RUNTIME_DIRS):
         return "runtime"
     return None
 

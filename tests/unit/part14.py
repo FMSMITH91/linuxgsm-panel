@@ -870,8 +870,11 @@ for _wfn in ("ci.yml", "codeql.yml", "security-code.yml"):
     _pi14[_wfn] = [sorted(re.findall(r"^      - '([^']+)'$", _blk, re.M))
                    for _blk in re.findall(r"    paths-ignore:\n((?:      - .*\n)+)", _t)]
 _pi14_all = {tuple(b) for v in _pi14.values() for b in v}
-check("update gate: ci.yml, codeql.yml and security-code.yml share one paths-ignore list",
-      len(_pi14_all) == 1 and all(len(v) == 2 for v in _pi14.values()), repr(_pi14))
+# One block each, on `push`: their `pull_request` triggers have no path filter, because their jobs
+# are checks a pull request must pass to merge (.github/required-checks.txt) and a required check
+# whose workflow did not run would hold the pull request forever.
+check("update gate: ci.yml, codeql.yml and security-code.yml share one paths-ignore list, on push",
+      len(_pi14_all) == 1 and all(len(v) == 1 for v in _pi14.values()), repr(_pi14))
 _pi14_list = list(next(iter(_pi14_all))) if len(_pi14_all) == 1 else []
 check("update gate: ...and it is the list _ci_path_ignored applies",
       sorted(p for p in _pi14_list if "*" not in p) == sorted(_so14._CI_PATHS_IGNORED_FILES)

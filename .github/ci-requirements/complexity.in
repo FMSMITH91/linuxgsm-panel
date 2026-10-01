@@ -1,0 +1,11 @@
+# The complexity job's tools (.github/workflows/complexity.yml): Lizard and Pylint, the two Codacy
+# runs whose findings its pull-request check misses (see .github/scripts/complexity_gate.py).
+# Wheels only, hash-checked.
+#
+# pip-compile turns this into complexity.txt: every package, exact versions AND hashes, installed
+# with `--require-hashes`. Dependabot keeps it current by re-running pip-compile on the Python its
+# header names (3.11). Edit THIS file, then regenerate (run in python:3.11-slim):
+#   pip-compile --allow-unsafe --generate-hashes --no-annotate --strip-extras \
+#     --output-file=complexity.txt complexity.in
+lizard
+pylint

@@ -793,3 +793,84 @@ check("install.sh unit (driven): ...the per-user layout has no User= and starts 
       and (os.geteuid() == 0   # root writes through a 0555 directory: nothing to refuse it
            or ("ro=0" in _iu_lines and "kept=keep" in _iu_lines and "WARN" in _iu_out.stdout)),
       repr(_iu_out.stdout))
+
+
+# ── the checks a pull request must pass to merge: required, and run on every pull request ──────
+# GitHub's protect-main ruleset requires the checks .github/required-checks.txt names. A required
+# check whose workflow skipped a pull request (a path filter) holds it forever, so every Actions
+# check named there must be a job of a workflow with an UNFILTERED pull_request trigger. And every
+# job of such a workflow is named, so a new job is required, or the build says why not.
+with open(os.path.join(_rn_root, ".github", "required-checks.txt"), encoding="utf-8") as _rq_fh:
+    _rq = [tuple(_p.strip() for _p in _l.split("|", 1)) for _l in _rq_fh.read().splitlines()
+           if _l.strip() and not _l.lstrip().startswith("#")]
+
+
+def _rq_on_pr(text):
+    """(has a pull_request trigger, that trigger carries a path filter)."""
+    _on = text[:text.index("\npermissions:")] if "\npermissions:" in text else text
+    _m = _sg_re.search(r"^  pull_request:\n((?:    .*\n)*)", _on, _sg_re.M)
+    return (_m is not None, bool(_m) and _sg_re.search(r"^    paths(-ignore)?:", _m.group(1), _sg_re.M)
+            is not None)
+
+
+_rq_jobs = {}   # workflow file -> [(job name template, matrix-free regex)]
+for _rq_wf in sorted(_rn_glob.glob(os.path.join(_rn_root, ".github", "workflows", "*.yml"))):
+    with open(_rq_wf, encoding="utf-8") as _rq_fh:
+        _rq_txt = _rq_fh.read()
+    _rq_body = _rq_txt[_rq_txt.index("\njobs:\n"):]
+    _rq_list = []
+    for _jm in _sg_re.finditer(r"^  ([A-Za-z0-9_-]+):\n((?:    .*\n|\n)*)", _rq_body, _sg_re.M):
+        _nm = _sg_re.search(r"^    name: (.+)$", _jm.group(2), _sg_re.M)
+        _tpl = _nm.group(1).strip() if _nm else _jm.group(1)
+        _rx = "".join("(.+?)" if _sg_re.fullmatch(r"\$\{\{[^}]*\}\}", _part) else _sg_re.escape(_part)
+                      for _part in _sg_re.split(r"(\$\{\{[^}]*\}\})", _tpl))
+        _rq_list.append((_tpl, _rx))
+    _rq_jobs[os.path.basename(_rq_wf)] = (_rq_txt, _rq_list)
+
+_rq_bad, _rq_hosts = [], set()
+for _app, _name in _rq:
+    if _app != "github-actions":
+        if _app not in ("codacy-production", "sonarqubecloud"):
+            _rq_bad.append("%s: not an app this list knows" % _app)
+        continue
+    _hits = [(_wf, _tpl, _m) for _wf, (_txt, _jl) in _rq_jobs.items() for _tpl, _rx in _jl
+             for _m in [_sg_re.fullmatch(_rx, _name)] if _m]
+    if not _hits:
+        _rq_bad.append("%r: no workflow job has this name" % _name)
+        continue
+    for _wf, _tpl, _m in _hits:
+        _txt = _rq_jobs[_wf][0]
+        _on_pr, _filtered = _rq_on_pr(_txt)
+        if not _on_pr or _filtered:
+            _rq_bad.append("%r: %s does not run on every pull request" % (_name, _wf))
+        # A matrix value named in the check must still be in the matrix: dropping ubuntu-22.04 or
+        # Python 3.10 from it renames the check, and the ruleset would wait for the old name.
+        for _val in _m.groups():
+            if _sg_re.search(r"[\s\x22'\[,]%s[\s\x22',\]]" % _sg_re.escape(_val), _txt) is None:
+                _rq_bad.append("%r: %s's matrix has no %r" % (_name, _wf, _val))
+        _rq_hosts.add(_wf)
+for _wf in sorted(_rq_hosts):
+    for _tpl, _rx in _rq_jobs[_wf][1]:
+        if not any(_a == "github-actions" and _sg_re.fullmatch(_rx, _n) for _a, _n in _rq):
+            _rq_bad.append("%s: job %r is not a required check" % (_wf, _tpl))
+check("required checks: each one is a job of a workflow that runs on every pull request, and "
+      "every job of those workflows is required",
+      len(_rq) >= 18 and not _rq_bad
+      and {"ci.yml", "codeql.yml", "security-code.yml", "security.yml", "lighthouse.yml",
+           "complexity.yml"} <= _rq_hosts,
+      repr((_rq_bad[:6], sorted(_rq_hosts))))
+check("required checks: ...and the list includes Codacy, SonarCloud, the tests, CodeQL's gate and the "
+      "complexity gate",
+      {("codacy-production", "Codacy Static Code Analysis"),
+       ("sonarqubecloud", "SonarCloud Code Analysis"),
+       ("github-actions", "Open code-scanning alerts (PR)"),
+       ("github-actions", "complexity (Codacy limits)")} <= set(_rq)
+      and sum(1 for _a, _n in _rq if _n.startswith("checks (")) >= 3, repr(_rq))
+# The complexity gate: its own pull-request-only workflow (never on main, where the update gate
+# would read a skipped job), hash-pinned tools, and its self-test before its verdict.
+_cx = _rq_jobs.get("complexity.yml", ("", []))[0]
+check("complexity gate: pull requests only, hash-pinned Lizard and Pylint, self-test first",
+      _rq_on_pr(_cx) == (True, False) and "\n  push:" not in _cx
+      and "-r .github/ci-requirements/complexity.txt" in _cx
+      and -1 < _cx.find("complexity_gate.py --self-test") < _cx.rfind("complexity_gate.py\n"),
+      _cx[-600:])
