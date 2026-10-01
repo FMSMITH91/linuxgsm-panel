@@ -346,9 +346,14 @@ def _prepare18(remote, remote_id, short_name, fresh):
     return True, "", False
 
 
+def _deps18(job, remote):
+    job.p(2, "Installing dependencies")
+    _inst18["cmds"].append(("deps", remote.host))
+
+
 def _lgsm18(job, remote):
-    job.p(2, "Downloading LinuxGSM")
-    _inst18["cmds"].append(remote.host)
+    job.p(3, "Downloading LinuxGSM")
+    _inst18["cmds"].append(("lgsm", remote.host))
     return False
 
 
@@ -751,6 +756,7 @@ try:
     _inst18 = {"cmds": [], "swap": True}
 
     _p9_patch(_ms18, "prepare_install_account", _prepare18)
+    _p9_patch(_ms18, "_install_dependencies", _deps18)
     _p9_patch(_ms18, "_install_linuxgsm", _lgsm18)
     _run_job18 = _ms18._install_job_runner(_p9)
     with _ctx18():
@@ -767,7 +773,7 @@ try:
           _ir18.status == "installing" and not _ir18.install_error and _ir18.installed is False,
           repr((_ir18.status, _ir18.install_error, _ir18.installed)))
     check("install: no step ran on the host that took the id (the job stopped at the next step)",
-          "192.0.2.182" not in _inst18["cmds"], repr(_inst18["cmds"]))
+          not any(_h == "192.0.2.182" for _s, _h in _inst18["cmds"]), repr(_inst18["cmds"]))
     with _p9_state._install_lock:
         _p9_state._install_jobs.pop(_is18, None)
     # Control: the same job with nothing deleted runs its next step, on its own host.
@@ -778,9 +784,12 @@ try:
         _ms18._queue_install_job(db.session.get(GameServer, _is18b), [])
     _run_job18(_is18b, _ih18b, "inst2server", "csgo", "csgoserver", 27511, [], fresh=True)
     _p9_drain()
-    check("install: with its row still there the job goes on to step 2, on its own host (control)",
-          _inst18["cmds"] == ["192.0.2.183"]
-          and (_p9_state._install_jobs.get(_is18b) or {}).get("step") == 2,
+    # ...dependencies first, THEN LinuxGSM: fetching LinuxGSM needs wget and LinuxGSM runs curl, and
+    # on a minimal host it is the dependency step that installs them.
+    check("install: with its row still there the job goes on to steps 2 and 3, on its own host, "
+          "dependencies before LinuxGSM (control)",
+          _inst18["cmds"] == [("deps", "192.0.2.183"), ("lgsm", "192.0.2.183")]
+          and (_p9_state._install_jobs.get(_is18b) or {}).get("step") == 3,
           repr((_inst18["cmds"], _p9_state._install_jobs.get(_is18b))))
     with _p9_state._install_lock:
         _p9_state._install_jobs.pop(_is18b, None)

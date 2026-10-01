@@ -833,9 +833,14 @@ def _install_job_runner(app):
                         _fail("Preparing user account", _acct_why, retryable=_acct_retry)
                         return
 
+                    # Dependencies BEFORE LinuxGSM: fetching it needs wget and LinuxGSM itself
+                    # runs curl, and on a minimal host (Ubuntu's minimal and cloud images have
+                    # neither) it was the dependency step that installed them — one step too late.
+                    # The step reads the panel's own copy of LinuxGSM's package lists, never the
+                    # script it is about to download, so nothing it needs comes from that step.
+                    _install_dependencies(job, remote)
                     if not _install_linuxgsm(job, remote):
                         return
-                    _install_dependencies(job, remote)
                     if not _install_game_files(job, remote, gs):
                         return
                     # Files have landed — the server IS installed, but it still needs configuring
@@ -1023,11 +1028,11 @@ def _job_crashed(job, e):
 
 
 def _install_linuxgsm(job, remote):
-    """Step 2 of the install job: fetch LinuxGSM and create the instance. -> False once it failed."""
+    """Step 3 of the install job: fetch LinuxGSM and create the instance. -> False once it failed."""
     short_name, game_type, lgsm_name = job.short_name, job.game_type, job.lgsm_name
     _p, _fail = job.p, job.fail
-    # 2. Download & set up LinuxGSM (canonical script name).
-    _p(2, "Downloading LinuxGSM")
+    # 3. Download & set up LinuxGSM (canonical script name), with wget and curl now on the host.
+    _p(3, "Downloading LinuxGSM")
     install_cmd = _sm.game_user_cmd(
         short_name, f"cd /home/{short_name} && "
                     f"wget -q -O linuxgsm.sh https://linuxgsm.sh && chmod +x linuxgsm.sh && "
@@ -1046,10 +1051,10 @@ def _install_linuxgsm(job, remote):
 
 
 def _install_dependencies(job, remote):
-    """Step 3 of the install job: the game's system packages, as root. Not fatal, never silent."""
+    """Step 2 of the install job: the game's system packages, as root. Not fatal, never silent."""
     short_name, game_type, _p = job.short_name, job.game_type, job.p
-    # 3. System dependencies (as root — the game user has no sudo).
-    _p(3, "Installing dependencies")
+    # 2. System dependencies (as root — the game user has no sudo).
+    _p(2, "Installing dependencies")
     try:
         deps_ok, deps_msg = install_game_dependencies(remote, game_type)
     except Exception:
@@ -1063,7 +1068,7 @@ def _install_dependencies(job, remote):
         # regardless (its pipeline ended in `echo deps-done`) — so on a host where
         # the whole step was REFUSED by sudo, nothing was written anywhere and the
         # install carried on to fail later looking like a bad download.
-        _p(3, "Installing dependencies", message=(
+        _p(2, "Installing dependencies", message=(
             "Some dependencies did not install — continuing; step 4 reports "
             "anything still missing. %s" % (deps_msg or "")[-200:]))
         _log.warning("install %s: dependency step failed: %s",

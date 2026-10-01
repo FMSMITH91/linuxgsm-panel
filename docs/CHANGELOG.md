@@ -275,6 +275,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Installing a game on a minimal host no longer fails at "Downloading LinuxGSM".** The install
+  fetched LinuxGSM with wget, and LinuxGSM runs curl, one step BEFORE the step that installs the
+  game's dependencies, wget and curl among them. Ubuntu's minimal and cloud images have neither, so
+  every game install on such a host (a remote, or the panel's own) failed there. Dependencies are
+  now step 2 and LinuxGSM step 3.
 - **An update keeps the panel's systemd unit current, as it does everything else the installer
   put on the host.** The unit was written once, at install, and no update touched it again, so a
   host kept whatever unit it was first given. It is now rewritten when its text differs from what
