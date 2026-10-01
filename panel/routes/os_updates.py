@@ -237,11 +237,13 @@ def _update_tick(app, st, last):
 
 
 def _announce_key(st):
-    """What an announcement is de-duplicated on: the newest commit in the update that changes a
-    file the panel runs (runtime_sha), falling back to the target.
+    """Return the commit an update announcement is de-duplicated on.
 
-    Keyed on the target alone, a docs or CI commit merged on top of an update not yet installed
-    moved the target and sent "Panel update available" again, for the same change."""
+    That is the newest commit in the update that changes a file the panel runs (runtime_sha),
+    falling back to the target. Keyed on the target alone, a docs or CI commit merged on top of an
+    update not yet installed moved the target and sent "Panel update available" again, for the
+    same change.
+    """
     return st.get("runtime_sha") or _update_target(st)
 
 
