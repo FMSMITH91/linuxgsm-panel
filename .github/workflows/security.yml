@@ -51,14 +51,16 @@ jobs:
           # actually decides the secret-scanning verdict was resolved from releases/latest at run
           # time and piped straight into tar. A behaviour change upstream (gitleaks has been
           # moving `detect` toward `git`/`dir`) would change what this gate scans with no commit
-          # here. Bump deliberately: update both the version and the sha256.
-          GITLEAKS_VERSION: '8.30.1'
+          # here. Renovate proposes each bump (.github/renovate.json), version and sha256 together,
+          # and the bump goes through CI like any other change. The version is the release TAG.
+          # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks
+          GITLEAKS_VERSION: 'v8.30.1'
           GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
         run: |
           set -euo pipefail
-          TARBALL="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          TARBALL="gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
           curl --proto '=https' -sSfL -o "/tmp/${TARBALL}" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${TARBALL}"
+            "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/${TARBALL}"
           echo "${GITLEAKS_SHA256}  /tmp/${TARBALL}" | sha256sum -c -
           tar -xz -C /tmp -f "/tmp/${TARBALL}" gitleaks
 
