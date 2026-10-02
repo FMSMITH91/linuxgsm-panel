@@ -235,12 +235,15 @@ class _Log23:
 
     def __init__(self):
         self.ino, self.data, self.stat_ok, self.fail_chunk = 900, "", True, False
+        self.unframed = False
 
     def read(self, _server, _user, sh, timeout=30, selfname=None):
         if sh.startswith("stat -c"):
             return ("%d %d" % (self.ino, len(self.data)) if self.stat_ok else ""), "", 0
         if self.fail_chunk:
             return "", "SSH command timed out", -1
+        if self.unframed:
+            return "a reply with no frame", "", 0
         a = int(sh.split("tail -c +", 1)[1].split(" ", 1)[0]) - 1
         n = int(sh.split("head -c ", 1)[1].split(";")[0])
         return ("B" + self.data[a:a + n] + "E"), "", 0
@@ -285,7 +288,11 @@ def _console23():
     check("console feed: a read that never ran is 'read-failed', and the offset does not move",
           all((not _has23(f4, last_fail="read-failed", streak=1),
                _ps23._console_offsets[_CSID23]["pos"] == len("old line\nnew line\n"))), repr(f4))
-    log.fail_chunk, log.ino, log.data = False, 901, "boot\n"
+    log.fail_chunk, log.unframed = False, True
+    f4b = tick()
+    check("console feed: a reply that ran but came back unframed is 'read-unframed'",
+          not _has23(f4b, last_fail="read-unframed", streak=2), repr(f4b))
+    log.unframed, log.ino, log.data = False, 901, "boot\n"
     f5 = tick()
     check("console feed: a rotated log is counted, and its first chunk still pushed",
           all((not _has23(f5, rotations=1, streak=0), pushed[-1] == "boot")), repr(f5))
@@ -776,11 +783,15 @@ def _jobs23(ids, res, text):
     _ps23._install_lock.acquire()
     try:
         busy = _text23(_section23(_s23.section_servers))
+        busy_brief = _text23(_section23(_h23.section_hosts_brief))
     finally:
         _ps23._install_lock.release()
     check("install jobs: a lock that stays busy is 'not read', never '0 running'",
           "**Install jobs**: not read (the install lock was busy for 1 s)" in busy
           and "0 running" not in busy, busy)
+    check("hosts brief: ...and the stranded count says it was not checked, never 'stranded 0'",
+          "(stranded: not checked (install lock busy))" in busy_brief
+          and "stranded 0" not in busy_brief, busy_brief)
     _patch23(_lgsm23, "status", _oserror23)
     bad = _text23(_section23(_s23.section_servers))
     check("game servers: a part that cannot be read says so by class; the rest still prints",
@@ -859,6 +870,10 @@ def _workers23():
                       "node-tools: every pass since start has failed (2)")
     check("workers: a dead or missing thread, a respawn, and all-failing passes are findings",
           not miss, "%r in %s" % (miss, found))
+    dead_lines = [ln for ln in res.lines if ln.startswith(("- autoblock:", "- reboot-when-empty:"))]
+    check("workers: a dead thread and a thread that is missing altogether both read NOT alive",
+          len(dead_lines) == 2 and all(ln.endswith("thread NOT alive") for ln in dead_lines),
+          repr(dead_lines))
     check("workers: the verdict names the dead workers and counts respawns",
           res.verdict == "**Background workers**: 2 NOT alive (reboot-when-empty, autoblock) · 1 "
                          "respawn", repr(res.verdict))
