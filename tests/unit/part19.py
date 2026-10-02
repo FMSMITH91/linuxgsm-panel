@@ -916,3 +916,43 @@ check("required checks: ...including SonarCloud's zero-new-issues job, Dependenc
       {("github-actions", "SonarCloud new issues"), ("github-actions", "Dependency Review"),
        ("github-actions", "actionlint"), ("github-actions", "fuzz the diff (address)")} <= set(_rq)
       and sum(1 for _a, _n in _rq if _n.startswith("fuzz (")) == 6, repr(_rq))
+
+
+# ── SonarCloud reads only UTF-8 ─────────────────────────────────────────────────────────────────
+# Its analysis warned "There are problems with file encoding" until every binary file was out of its
+# sources: excluding static/vendor/ was not enough (docs/screenshots/*.png were still in). A file
+# that is not UTF-8 and that no exclusion in .sonarcloud.properties covers brings the warning back.
+import fnmatch as _sq_fnm  # noqa: E402
+
+with open(os.path.join(_rn_root, ".sonarcloud.properties"), encoding="utf-8") as _sq_fh:
+    _sq_props = dict(_l.split("=", 1) for _l in _sq_fh.read().splitlines()
+                     if "=" in _l and not _l.lstrip().startswith("#"))
+_sq_excl = [_p.strip() for _p in _sq_props.get("sonar.exclusions", "").split(",") if _p.strip()]
+
+
+def _sq_excluded(path):
+    """Sonar's `**/` matches any depth, zero included: try the pattern with and without it."""
+    return any(_sq_fnm.fnmatchcase(path, _p) or (_p.startswith("**/")
+                                                 and _sq_fnm.fnmatchcase(path, _p[3:]))
+               for _p in _sq_excl)
+
+
+_sq_bad, _sq_walk = [], []
+for _sq_dp, _sq_dns, _sq_fns in os.walk(_rn_root):
+    _sq_dns[:] = [_d for _d in _sq_dns if _d not in (".git", "data", "venv", ".venv", "env",
+                                                     "__pycache__", ".pytest_cache", "node_modules",
+                                                     ".idea", ".vscode", ".claude")]
+    _sq_walk += [os.path.relpath(os.path.join(_sq_dp, _f), _rn_root).replace(os.sep, "/")
+                 for _f in _sq_fns if not _f.endswith((".pyc", ".db", ".run.log"))]
+for _sq_f in _sq_walk:
+    if _sq_f.startswith("tests/") or _sq_excluded(_sq_f):
+        continue
+    try:
+        with open(os.path.join(_rn_root, _sq_f), "rb") as _sq_fh:
+            _sq_fh.read().decode(_sq_props.get("sonar.sourceEncoding", "UTF-8").strip())
+    except UnicodeDecodeError:
+        _sq_bad.append(_sq_f)
+check("sonarcloud: every file left in its sources is UTF-8 (images and fonts excluded by type)",
+      len(_sq_walk) >= 300 and not _sq_bad and _sq_excluded("docs/screenshots/01-dashboard.png")
+      and _sq_excluded("a.png") and not _sq_excluded("panel/x.py"),
+      repr(_sq_bad[:6]))

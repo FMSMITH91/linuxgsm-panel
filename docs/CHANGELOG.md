@@ -154,7 +154,8 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **SonarCloud is told what it was guessing.** `.sonarcloud.properties` answers its three analysis
   warnings: the Python versions the panel supports (3.10 to 3.14), `tests/` as test code (it was
   running production rules on the suites), and UTF-8 throughout, with the vendored minified bundles
-  in `static/vendor/` left out of the analysis.
+  in `static/vendor/` and every image and font (the screenshots in `docs/` among them) left out of
+  the analysis. A test fails the build if a file that is not UTF-8 is ever left in it.
 - **Every scanner's verdict is a merge requirement, on every pull request.** Actionlint, Dependency
   Review and the two fuzzing workflows ran only when their files changed, so they could not be
   required, and a red one would not have held a merge. They run on every pull request now (the fuzz
