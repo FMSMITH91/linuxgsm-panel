@@ -91,7 +91,7 @@ for _attr, _fns in _WATCHED.items():
 # part19 comes right after part18, whose app, client and row helpers it imports.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
-          "part15")
+          "part22", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
