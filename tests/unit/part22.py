@@ -812,9 +812,12 @@ eq("R43: sign-ins counted per action over 24 h and 7 d",
    _q22r["signins"], [("login", 1, 1), ("login_failed", 5, 11)])
 check("R45: every account query runs on the real schema", all(
     isinstance(_q22r[k], list) for k in ("users", "invites", "sessions", "setup")), repr(_q22r))
-_acc22 = _nw22.account_counts(_q22r)
-eq("R45: the account numbers", (_acc22["active"], _acc22["supers"], _acc22["s2fa"], _acc22["mcp_tok"],
-                                _acc22["setup_done"]), (1, 1, 0, 1, True))
+try:
+    _acc22 = _nw22.account_counts(_q22r)
+except LookupError as _e22:     # the finding, named below rather than ending the part
+    _acc22 = {"error": repr(_e22)}
+eq("R45: the account numbers", tuple(_acc22.get(k) for k in ("active", "supers", "s2fa", "mcp_tok",
+                                                             "setup_done")), (1, 1, 0, 1, True))
 
 
 def _access(counts, funnel):
