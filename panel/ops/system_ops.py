@@ -3891,13 +3891,20 @@ def _helper_blob_note():
             }.get(piece.get("state"), "")
 
 
+def _helper_refused_remedy():
+    """What to do about a refused helper, worded by the install model (R9)."""
+    if not _is_system_service():
+        return "this is a per-user install: re-run install.sh as the panel's own account"
+    if origin_category() != "canonical-https" or _tracked_branch() != _DEFAULT_BRANCH:
+        return ("root withholds its pieces from this origin or branch by design (see Origin "
+                "under Install & privilege)")
+    return "remove or reorder the rule that matches after it, or re-run install.sh as root"
+
+
 def _diag_helper_refused(probe):
-    remedy = ("root withholds its pieces from this origin or branch by design (see Origin under "
-              "Install & privilege)" if (origin_category() != "canonical-https"
-                                         or _tracked_branch() != _DEFAULT_BRANCH)
-              else "remove or reorder the rule that matches after it, or re-run install.sh as root")
     return "fail", ("Installed, but sudo REFUSES it (%s). %s Every privileged action will wait "
-                    "for a password; %s." % (probe.get("refusal"), _sudoers_after_grant(), remedy))
+                    "for a password; %s." % (probe.get("refusal"), _sudoers_after_grant(),
+                                             _helper_refused_remedy()))
 
 
 def _diag_helper_verbs(probe):

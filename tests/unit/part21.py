@@ -349,6 +349,7 @@ def _probe_harness(first):
     _p21(_so21, "_helper_present", lambda: True)
     _p21(_so21, "origin_category", lambda: "canonical-https")
     _p21(_so21, "_tracked_branch", lambda: "main")
+    _p21(_so21, "_is_system_service", lambda: True)
     sd = os.path.join(_T21, "sudoers.d")
     os.makedirs(sd, exist_ok=True)
     for n in ("90-cloud-init-users", "linuxgsm-panel", "panel-extra", "zz-alice", "x.conf"):
@@ -396,6 +397,16 @@ def _b_helper_probe_2():
     named = _so21._diag_privileged_helper()
     check("helper check: a refusal that names the account is reduced to its class",
           _lv(named, "fail", "not in the sudoers file", absent=("alice",)), repr(named))
+    _p21(_so21, "origin_category", lambda: "fork")
+    withheld = _so21._diag_privileged_helper()
+    _p21(_so21, "_is_system_service", lambda: False)
+    per_user = _so21._diag_privileged_helper()
+    check("helper check: the remedy is worded by install model -- a system install with a reorder, "
+          "an untrusted origin as withheld by design, a per-user install as re-run as its account",
+          all([_lv(named, "fail", "reorder the rule"),
+               _lv(withheld, "fail", "withholds its pieces", absent=("reorder",)),
+               _lv(per_user, "fail", "per-user install", "panel's own account",
+                   absent=("withholds",))]), repr((named, withheld, per_user)))
     _so21._HELPER_PROBE.update(at=0.0, res=None)
     answer["r"] = _sp21.TimeoutExpired("sudo", 10)
     stall = _so21._diag_privileged_helper()
