@@ -517,6 +517,8 @@ with _patched(_inst22, ETC_GROUP=_grp22):
 check("R16: the fixed group name is install.sh's GAME_GROUP (lgsmpanel-games)",
       _priv22.GAME_GROUP == "lgsmpanel-games"
       and 'GAME_GROUP="%s"' % _priv22.GAME_GROUP in _install22)
+# Path prefixes that may carry an account name; none may appear in the printed line.
+_ABS_DIRS22 = tuple("/%s/" % d for d in ("home", "tmp", "usr", "opt", "srv", "root"))
 _interp22 = []
 for _exe22 in ("/srv/someacct/py/bin/python3", os.path.join(_so22.PANEL_DIR, "venv", "bin", "python3"),
                "/usr/bin/python3"):
@@ -525,8 +527,7 @@ for _exe22 in ("/srv/someacct/py/bin/python3", os.path.join(_so22.PANEL_DIR, "ve
 check("R16: the interpreter is '<panel>/venv/bin/...', 'system python' or 'other path', never an "
       "absolute path (an account name can be in one)",
       [i.split(",")[0] for i in _interp22] == ["other path", "<panel>/venv/bin/python3", "system python"]
-      and not any(d in i for i in _interp22 for d in ("/home/", "/tmp/", "/usr/", "/opt/", "/srv/",
-                                                      "/root/", _so22.PANEL_DIR)), repr(_interp22))
+      and not any(d in i for i in _interp22 for d in _ABS_DIRS22 + (_so22.PANEL_DIR,)), repr(_interp22))
 
 _vfake22 = _FakeSp22(stdout="Sudo version 1.9.15p5\nSudoers policy plugin\nLocal IP address and "
                             "netmask pairs:\n\t203.0.113.9/255.255.255.0\n")
