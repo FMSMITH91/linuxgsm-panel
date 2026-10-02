@@ -36,10 +36,13 @@ MAX_WORKERS = 4
 #   part "summary": also in the public summary/issue body, in this order.
 #   part "full": the full report only.
 # A section's function is `section` in panel/ops/debug_report/<module>.py.
+# The two Hosts sections are workers although they read the database: on a stale Tailscale cache
+# they make the report's one `tailscale status` read, which can take ~20 s cold, and a request
+# section is not bounded by the deadline. They need only the app context, which a worker has.
 SECTIONS = (
     ("header", "Header", "header", "worker", "header"),
     ("diagnostics", "Diagnostics", "diagnostics", "worker", "summary"),
-    ("hosts_brief", "Hosts & game servers", "hosts", "request", "summary"),
+    ("hosts_brief", "Hosts & game servers", "hosts", "worker", "summary"),
     ("process", "Panel process", "process", "worker", "full"),
     ("workers", "Background workers", "workers", "request", "full"),
     ("errors_since_start", "Errors since this process started", "errors", "request", "full"),
@@ -48,7 +51,7 @@ SECTIONS = (
     ("updates", "Updates", "updates", "worker", "full"),
     ("network", "Network & access", "network", "worker", "full"),
     ("access", "Sign-ins & accounts", "network", "request", "full"),
-    ("hosts", "Hosts", "hosts", "request", "full"),
+    ("hosts", "Hosts", "hosts", "worker", "full"),
     ("servers", "Game servers", "servers", "request", "full"),
     ("console", "Live console", "servers", "request", "full"),
     ("database", "Database", "data", "worker", "full"),

@@ -35,6 +35,10 @@ read() -> ("ok", dict) | ("absent", None) | ("error", "<ExceptionClass>"): info(
     Nones told apart.
 
 cached() -> the same dict built from whatever is already cached, or None; never runs the CLI.
+
+shared_read(ctx) / shared_info(ctx) -> read() / info() through the report's memo (key MEMO_KEY), so
+every section and the privacy pass share ONE reading per report. Sections call these, never read()
+or info() directly.
 """
 from panel.ops import tailscale_integration as ts
 
@@ -122,3 +126,18 @@ def cached():
         return as_dict(ti)
     except Exception:  # noqa: BLE001
         return None
+
+
+# The one memo key for the report's Tailscale reading (network's R36, hosts' R49, privacy's R72).
+MEMO_KEY = "tailscale_read"
+
+
+def shared_read(ctx):
+    """read(), once per report: every caller gets the same ("ok"|"absent"|"error", value)."""
+    return ctx.memo(MEMO_KEY, lambda: read())  # pylint: disable=unnecessary-lambda
+
+
+def shared_info(ctx):
+    """info() from the report's one reading: the dict, or None when absent or unreadable."""
+    state, val = shared_read(ctx)
+    return val if state == "ok" else None

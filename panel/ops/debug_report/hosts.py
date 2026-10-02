@@ -664,14 +664,15 @@ def ts_info(ctx):
     """The tailscale status, read without a new CLI call when one is recent.
 
     The integration's own cache when it is under 5 min old, else the report's single shared read
-    (_src_tailscale.info, memoised as 'tailscale', which B3's Network section uses too). No ping.
+    (_src_tailscale.shared_info, the reading the Network section and the privacy pass share). No
+    ping.
     """
     tsi = mod("panel.ops.tailscale_integration")
     cache = snap(getattr(tsi, "_cache", None) or {})
     if cache.get("info") is not None and time.time() - (cache.get("ts") or 0) <= 300:
         return cache["info"]
     src = mod("panel.ops.debug_report._src_tailscale")
-    return ctx.memo("tailscale", src.info)
+    return src.shared_info(ctx)
 
 
 def _peer_names(peer):

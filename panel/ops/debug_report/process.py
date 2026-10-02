@@ -178,7 +178,7 @@ def _service_findings(res, props, facts):
 
 def _service_lines(ctx, res, facts):
     """R15: one `systemctl show`, shared with R8 and R21 through the memo."""
-    unit = ctx.memo("systemd_unit", _src_systemd.unit_show)
+    unit = _src_systemd.shared(ctx)
     facts["unit"] = unit
     if unit.get("error"):
         rc = unit.get("rc")

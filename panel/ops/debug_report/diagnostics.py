@@ -10,9 +10,8 @@ ONE `systemctl show` (R8; Panel process and unit drift use the same one).
 from panel.ops.debug_report import _src_db, _src_systemd
 from panel.ops.debug_report._base import Result
 
-# The memo keys every section uses for the shared reads.
+# The memo key every section uses for the shared integrity check (systemd's is _src_systemd.MEMO_KEY).
 MEMO_DB_INTEGRITY = "db.integrity"
-MEMO_UNIT_SHOW = "systemd.unit_show"
 _ORDER = {"fail": 0, "warn": 1, "ok": 2}
 
 
@@ -24,7 +23,7 @@ def shared_integrity(ctx):
 
 def shared_unit(ctx):
     """The report's one `systemctl show` (R8, R15, R21)."""
-    return ctx.memo(MEMO_UNIT_SHOW, _src_systemd.unit_show)
+    return _src_systemd.shared(ctx)
 
 
 def section_diagnostics(ctx):

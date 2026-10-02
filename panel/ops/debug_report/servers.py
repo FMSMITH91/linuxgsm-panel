@@ -273,15 +273,25 @@ def _console_line(sid, maps, by_id, now):
     return " · ".join(words)
 
 
+def _watched_words(rs):
+    """' · watching 2 servers' from the poller's last pass, or '' when it recorded none."""
+    rec = rs.snapshot("console").get("poller|watched")
+    if not (isinstance(rec, tuple) and len(rec) == 2 and isinstance(rec[1], int)):
+        return ""
+    return " · watching %d server%s" % (rec[1], "" if rec[1] == 1 else "s")
+
+
 def _poller_line(now):
-    hb = mod("panel.core.runtime_stats").snapshot("heartbeat").get("console-poller")
-    respawns = mod("panel.core.runtime_stats").snapshot("respawn").get("console-poller", 0)
+    rs = mod("panel.core.runtime_stats")
+    hb = rs.snapshot("heartbeat").get("console-poller")
+    respawns = rs.snapshot("respawn").get("console-poller", 0)
     if not isinstance(hb, dict):
         return "- **Poller**: no pass recorded since panel start · respawned %d×" % respawns
     took = hb.get("took")
-    return "- **Poller**: last pass %s ago / every %s s%s · respawned %d×" % (
+    return "- **Poller**: last pass %s ago / every %s s%s%s · respawned %d×" % (
         ago(now - hb["at"]), hb.get("cadence") or "?",
-        " · took %.1f s" % took if isinstance(took, (int, float)) else "", respawns)
+        " · took %.1f s" % took if isinstance(took, (int, float)) else "", _watched_words(rs),
+        respawns)
 
 
 def section_console(ctx):

@@ -817,6 +817,7 @@ def _console_section23(ids):
     _restore_one23(_s23, "time")      # the poller's heartbeat is stamped with the real clock
     a, b = ids["a"], ids["b"]
     _console_state23(a, b)
+    _rs23.put("console", "poller|watched", 2)
     res = _section23(_s23.section_console)
     text = _text23(res)
     check("console: viewers, last push, rotations, partial line, backlog and the running action",
@@ -828,9 +829,9 @@ def _console_section23(ids):
     check("console: a console whose reads keep failing says how many and the last kind",
           not _missing23(text + found, "14 consecutive failed ticks (last: stat-unparseable) ← "
                                        "console frozen", "warn:gs %d:" % b), text + found)
-    check("console: the poller's own last pass beside its cadence",
+    check("console: the poller's own last pass beside its cadence, and how many it watches",
           not _missing23(text, "- **Poller**: last pass 0 s ago / every 2 s · took 0.3 s · "
-                               "respawned"), text)
+                               "watching 2 servers · respawned"), text)
     check("console: no path, console text or account in it", not _leaks23(text),
           repr(_leaks23(text)))
     _sf23._console_viewers.clear()

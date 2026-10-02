@@ -15,8 +15,7 @@ unit_show(timeout=5) -> dict
     Values carry paths (FragmentPath, DropInPaths, WorkingDirectory): callers compare them, and never
     print them.
 
-Use it through the report's memo, so the three sections share one call:
-    ctx.memo("systemd_unit", _src_systemd.unit_show)
+Sections read it through shared(ctx), the report's memo under MEMO_KEY, so the three share one call.
 """
 import os
 import subprocess  # nosec B404 - one fixed argv (systemctl show), no shell
@@ -102,3 +101,12 @@ def unit_show(timeout=5):
     if res["props"].get("LoadState") == "not-found" or not res["props"]:
         res["error"], res["why"] = "unreadable", "not-loaded"
     return res
+
+
+# The one memo key for the report's `systemctl show` (Diagnostics' R8, Panel process R15/R21).
+MEMO_KEY = "systemd.unit_show"
+
+
+def shared(ctx):
+    """unit_show(), once per report."""
+    return ctx.memo(MEMO_KEY, lambda: unit_show())  # pylint: disable=unnecessary-lambda

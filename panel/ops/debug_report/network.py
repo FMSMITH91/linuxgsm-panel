@@ -398,21 +398,8 @@ def auth_log_path():
 
 
 def panel_jail_health(auth_log, web_port, ignore_ips=None):
-    """{check: bool} of the panel jail FILE, compared exactly as ensure_panel_fail2ban compares it.
-
-    Kept identical to that self-heal's test so the report and the self-heal cannot disagree; the
-    integrator moves this into system_ops and has ensure_panel_fail2ban call it.
-    """
-    allports = so._panel_login_proxied()
-    want_action = so._F2B_PANEL_ALLPORTS_ACTION if allports else None
-    want_ignore = so._f2b_ignoreip_line(so._panel_f2b_ignore(ignore_ips)).split()
-    return {"port": so._panel_f2b_jail_port() == int(web_port),
-            "banaction": so._panel_f2b_jail_value("banaction") == want_action,
-            "logpath": so._panel_f2b_jail_value("logpath") == str(auth_log),
-            "backend": so._panel_f2b_jail_value("backend") == so._F2B_PANEL_BACKEND,
-            "ignoreip": (so._panel_f2b_jail_ignoreip() or []) == want_ignore,
-            "filter": so._panel_f2b_filter_current() == so._panel_f2b_filter_body(),
-            "allports": allports}
+    """{check: bool} of the panel jail FILE: system_ops.panel_jail_health, the self-heal's own test."""
+    return so.panel_jail_health(auth_log, web_port, ignore_ips)
 
 
 def _jail_file_text(cfg):
@@ -570,7 +557,7 @@ def _f2b_lines(res, facts, got, cfg, readable):
 def section_network(ctx):
     """R36, R40, R41: the three slow reads run side by side, each under the report's deadline."""
     res, facts = Result(), {}
-    got = bounded(ctx, (("tailscale", lambda: ctx.memo("tailscale_read", _src_tailscale.read)),
+    got = bounded(ctx, (("tailscale", lambda: _src_tailscale.shared_read(ctx)),
                         ("ufw", ufw_read), ("f2b", f2b_runtime)))
     cfg, readable = _load_cfg()
     parts = (("Tailscale", lambda: _tailscale_lines(ctx, res, facts, got["tailscale"])),

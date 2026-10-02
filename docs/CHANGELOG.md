@@ -151,6 +151,73 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **The debug report says what is wrong, covers far more of the panel, and is safer to post.** It
+  now opens with **At a glance**: every problem any section found, failures first, and the sections
+  that could not be read. Below that is one verdict line per area. Diagnostics are sorted worst
+  first. Each section heading says how long it took. A section that failed or ran out of time says
+  so in its heading. It is never left out or shown as "(none)", which read the same as "nothing
+  there". The whole report has a 20-second budget, and the header gives the time it took.
+
+  New sections cover:
+  - **the panel process**: systemd's own view of it (automatic restarts, memory, linger), how far
+    the event loop has lagged, what it is listening on against config.json, whether HTTPS really
+    started at boot, and unit-file drift from what install.sh writes;
+  - **background workers**: each loop's last pass beside how often it should run, and supervisor
+    restarts;
+  - **errors swallowed since start**;
+  - **install and privilege**: the install model, the helper asked through `sudo -n`, which sudo
+    answers, and root-owned pieces compared with the commit;
+  - **updates**: which checks hold an update, the last run judged by its exit status, the update
+    history, and installer warnings from the whole log;
+  - **network and access**: Tailscale, Serve and Funnel, proxy trust, a login-loop predictor for
+    the session cookie, UFW, fail2ban jail health, and sign-in counts held against auth.log;
+  - **hosts and game servers**: transport, reachability and the last probe error per host, Tailscale
+    peer state, game-server status from the database against the monitor, port collisions, and
+    stranded installs;
+  - **the live console**, per watched server;
+  - **the database**: pragmas, backups, a table census and an audit digest;
+  - **panel backups, notifications, dependencies** (from what is installed), and **Config**,
+    showing the file and what the process runs with;
+  - **a digest of journal errors** before the recent log, which keeps the newest and most important
+    lines instead of cutting at 8000 characters.
+
+  The header's commit is now the code this process is running, not the checkout. When the two
+  differ, the header says RESTART PENDING. "Open a GitHub issue" puts the "describe the problem"
+  prompt first, and its prefill is sized to the length of the encoded URL.
+
+  **Privacy.** Known names are replaced with tokens that are the same in every section, such as
+  `[host-3]`, `[server-5]` and `[user-2]`. This covers hosts, game servers, panel users, OS and SSH
+  accounts, tags, groups, Tailscale node, peer, tailnet and login names, and notification chat and
+  topic ids. IP addresses print as their class, such as `[ip:public]`. Paths print as `<panel>`,
+  `<data>` and `/home/[user]`, and a traceback frame keeps its module. A Privacy footer counts what
+  was replaced and says what the pass cannot cover. The old "contains no secrets" claim is gone, and
+  the report asks you to review it before posting. This closes leaks the old report had:
+  - Config printed bind_host, site_domain and site_title.
+  - The Data directory check printed the absolute path, and with it the account name.
+  - The log tail, the last update's installer output and the Discord gateway text were printed as
+    they were.
+
+  **Fixes the report brings with it.**
+  - **Security card (panel host).** A stopped fail2ban read as "no jails", and a UFW whose status
+    could not be read read as disabled. The card now says "Could not read fail2ban on this host".
+  - **Journal fallback.** It never ran, because journalctl prints "-- No entries --" and exits 0. It
+    could also run `sudo` without `-n`. It now reads the user journal, then the helper, then the
+    system journal filtered to the panel's own uid, and it never prompts.
+  - **Hub stall.** Generating the report froze the whole panel for as long as two SQLite integrity
+    checks took. Both ran on the event loop. It now runs one read-only check, off the loop and
+    bounded. A locked database is "not checked", no longer reported as damage.
+  - **Diagnostics corrections:**
+    - Service is read from systemd's state, not from a unit file existing.
+    - TLS says whether the panel uses its certificate, and a TLS start that failed at boot is a
+      failure.
+    - Database integrity says whether a restart would restore a backup or start EMPTY.
+    - Data directory shows its owner and mode, not its path.
+    - File integrity names the changed files and the paths hidden from git.
+    - Privileged helper tells "refused" from "timed out".
+    - A new **Host credentials** check says whether stored credentials decrypt.
+
+  The panel's own warnings, and the notification service's, now reach the journal as
+  `WARNING <logger>: <message>`.
 - **SonarCloud is told what it was guessing.** `.sonarcloud.properties` answers its three analysis
   warnings: the Python versions the panel supports (3.10 to 3.14), `tests/` as test code (it was
   running production rules on the suites), and UTF-8 throughout, with the vendored minified bundles

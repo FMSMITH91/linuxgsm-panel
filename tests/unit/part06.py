@@ -7220,8 +7220,9 @@ for _py in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursiv
 # The positive control for the gate below: an AST walk that matches nothing passes it vacuously.
 # The floor tracks the real count and moves with it — it went 30 -> 29 when
 # enable_unattended_upgrades stopped hand-rolling `printf … | sudo tee` and went through the write
-# verb like every other root-owned write in that module.
-check("shell: the _run() scan actually found the call sites", _shell_seen >= 29,
+# verb like every other root-owned write in that module, and 29 -> 27 when the debug report's uname
+# and journalctl reads moved from shell _run() to the argv runner _debug_run().
+check("shell: the _run() scan actually found the call sites", _shell_seen >= 27,
       "only %d matched — the scan stopped finding them, so the gate below proves nothing"
       % _shell_seen)
 check("shell: every _run() command is a literal or shlex.quote()d", not _shell_bad,

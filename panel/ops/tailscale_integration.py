@@ -48,6 +48,11 @@ class TailscaleInfo:
     serve_unreadable: bool = False
     funnel_enabled: bool = False
     peers: list = field(default_factory=list)  # List of peer dicts
+    # The parsed `tailscale status --json` and `tailscale debug prefs` this reading came from, or
+    # None when they were not read. Kept for the debug report (debug_report/_src_tailscale.py), which
+    # prints counts and booleans from them and never a value: no second CLI call for those fields.
+    status_json: Optional[dict] = None
+    prefs_json: Optional[dict] = None
 
 
 # Cache results to avoid hammering `tailscale` CLI on every page load
@@ -132,15 +137,26 @@ def _run_ts_json(args, timeout=5):
         return None
 
 
-def _read_route_all():
-    """The node's --accept-routes preference (RouteAll), or None when the prefs can't be read."""
+def _read_prefs_json():
+    """The parsed `tailscale debug prefs` dict, or None when the prefs can't be read."""
     out, _, rc = _run_ts(["debug", "prefs"])
     if rc != 0 or not out:
         return None
     try:
-        v = json.loads(out).get("RouteAll")
-    except (ValueError, AttributeError):
+        prefs = json.loads(out)
+    except ValueError:
         return None
+    return prefs if isinstance(prefs, dict) else None
+
+
+def _read_route_all():
+    """The node's --accept-routes preference (RouteAll), or None when the prefs can't be read."""
+    return _route_all_of(_read_prefs_json())
+
+
+def _route_all_of(prefs):
+    """RouteAll from a prefs dict, or None when there is none or it is not a bool."""
+    v = prefs.get("RouteAll") if isinstance(prefs, dict) else None
     return v if isinstance(v, bool) else None
 
 
@@ -186,7 +202,9 @@ def _read_status_json(info, status):
         info.hostname = self_data.get("HostName", "")
         dns = self_data.get("DNSName", "")
         info.dns_name = dns.rstrip(".") if dns else ""
-    info.accept_routes = _read_route_all()
+    info.status_json = status
+    info.prefs_json = _read_prefs_json()
+    info.accept_routes = _route_all_of(info.prefs_json)
     info.magic_dns_enabled = bool(info.dns_name)
 
     # Collect peers. Trust Tailscale's own `Online` field — it is authoritative.
@@ -212,6 +230,9 @@ def _peer_entry(peer_id, peer):
         "online": ts_online,
         "last_seen": last_seen_str,
         "relay": peer.get("Relay", ""),
+        # Whether the peer is reached directly (it has a current endpoint) rather than through a
+        # DERP relay. The endpoint itself (CurAddr, an address) is never kept.
+        "direct": bool(peer.get("CurAddr")),
     }
 
 

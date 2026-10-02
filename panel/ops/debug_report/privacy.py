@@ -313,7 +313,7 @@ def _tailscale_names(ctx, st, wait):
 
     def _read():
         try:
-            box["info"] = ctx.memo("tailscale", _src_tailscale.info)
+            box["info"] = _src_tailscale.shared_info(ctx)
         except Exception as exc:  # noqa: BLE001 - reported as a source error below
             box["error"] = type(exc).__name__
         finally:

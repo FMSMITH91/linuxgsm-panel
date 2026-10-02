@@ -21,13 +21,24 @@ CROSS-MODULE CONTRACTS (who writes, who reads):
   runtime_stats groups ("heartbeat" via beat(); the rest via bump()/put()):
     heartbeat   loop name -> {at, cadence, took, passes}           monitor loops etc. (R22)
     respawn     thread name -> count                               the supervisor (R22)
-    errors      "LEVEL|logger|template" -> count, put() last time  logging handler (R24)
-    privileged  "<verb>|<outcome token>" -> count                  _run_verb/_run_privileged (R25)
-    ci_walk     sha7 -> (time, {state, failing:[names], pending:[names]}); "ratelimit" (R31)
-    probe       "host:<id>" -> (time, {token, rc, ok_at, streak})  monitor probes (R48)
-    console     "gs:<id>|<counter>" -> count / put()               console poller (R56)
-    notify      "<channel>|<outcome>" -> count                     notification delivery (R63)
-    bangate     "<counter>" -> count                               ProxiedBanGate (R44)
+    loopfail    loop name -> count of passes that raised           every beating loop (R22)
+    errors      "LEVEL|logger|template" -> count                   logging handler (R24)
+    errors_last "LEVEL|logger|template" -> put(exception class)    logging handler (R24)
+    hub         "ticks", "lag_max" -> put()                        the hub-lag watch (R17)
+    hub_lag     "m<minute bucket>" -> put((minute, lag s))         the hub-lag watch (R17)
+    privileged  "<verb>|<outcome>", "via|<path>" -> count; "last|<outcome>" -> put(verb)  (R25)
+    ci_walk     sha7 -> put({state, failing, pending}); "walk", "ratelimit" -> put()     (R31)
+    console     "poller|watched" -> put(count)                     console poller (R56)
+    notify      "<channel>|<outcome>" -> count, "<channel>|last_http" -> put()  delivery (R63)
+    bangate     "refused" -> count, "last" -> put()                ProxiedBanGate (R44)
+  NOT runtime_stats, because a deleted row's id must be forgotten (register_*_state):
+    monitoring._probe_record      host id -> {ok, token, rc, at, ok_at, fail_since, streak} (R48)
+    server_files._console_feed    server id -> {ticks, fails, streak, last_fail, pushed_at,
+                                  rotations}                                               (R56)
+  Shared reads, one per report through ctx.memo (call these, never the raw reader):
+    _src_systemd.shared(ctx)          `systemctl show` (R8, R15, R21)
+    _src_tailscale.shared_read(ctx) / shared_info(ctx)   Tailscale status (R36, R49, R72)
+    diagnostics.shared_integrity(ctx) the one quick_check (R12, R57)
 """
 import threading
 import time

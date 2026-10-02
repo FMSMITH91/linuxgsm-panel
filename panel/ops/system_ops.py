@@ -3483,6 +3483,30 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
                    % (reason or "Check `fail2ban-client status linuxgsm-panel` and the panel logs."))
 
 
+# What panel_jail_health checks, each of which must hold for the panel jail to count as healthy.
+_PANEL_JAIL_CHECKS = ("port", "banaction", "logpath", "backend", "ignoreip", "filter")
+
+
+def panel_jail_health(auth_log, web_port, ignore_ips=None):
+    """{check: bool} of the panel jail FILE against what this install would write, plus
+    "allports" (whether the proxied all-ports banaction is the one wanted).
+
+    The one test ensure_panel_fail2ban's self-heal and the debug report's Network section share, so
+    the two cannot disagree. The ignoreip line is built exactly as _panel_f2b_jail_body builds it,
+    tailnet included, or a jail written without it would read as healthy and never be rewritten.
+    """
+    allports = _panel_login_proxied()
+    want_action = _F2B_PANEL_ALLPORTS_ACTION if allports else None
+    want_ignore = _f2b_ignoreip_line(_panel_f2b_ignore(ignore_ips)).split()
+    return {"port": _panel_f2b_jail_port() == int(web_port),
+            "banaction": _panel_f2b_jail_value("banaction") == want_action,
+            "logpath": _panel_f2b_jail_value("logpath") == str(auth_log),
+            "backend": _panel_f2b_jail_value("backend") == _F2B_PANEL_BACKEND,
+            "ignoreip": (_panel_f2b_jail_ignoreip() or []) == want_ignore,
+            "filter": _panel_f2b_filter_current() == _panel_f2b_filter_body(),
+            "allports": allports}
+
+
 def ensure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     """Idempotently make sure the panel-login jail is active on the CURRENT web port with the CURRENT
     whitelist. Safe to call on EVERY startup, after a port change, and after a whitelist edit: a
@@ -3500,17 +3524,9 @@ def ensure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     # Checking only the latter two let a jail that monitors NOTHING report itself as already
     # active, forever: this function is the only thing that would ever rewrite it, and it returned
     # early. Found on a host whose jail still carried a logpath from a previous install path.
-    allports = _panel_login_proxied()
-    want_action = _F2B_PANEL_ALLPORTS_ACTION if allports else None
-    # Built exactly as _panel_f2b_jail_body builds it — tailnet included — or a jail written
-    # without it would read as healthy and never be rewritten.
-    want_ignore = _f2b_ignoreip_line(_panel_f2b_ignore(ignore_ips)).split()
-    if (st.get("enabled") and _panel_f2b_jail_port() == web_port
-            and _panel_f2b_jail_value("banaction") == want_action
-            and _panel_f2b_jail_value("logpath") == str(auth_log)
-            and _panel_f2b_jail_value("backend") == _F2B_PANEL_BACKEND
-            and (_panel_f2b_jail_ignoreip() or []) == want_ignore
-            and _panel_f2b_filter_current() == _panel_f2b_filter_body()):
+    # panel_jail_health is the ONE test: the debug report prints the same answers.
+    if st.get("enabled") and all(panel_jail_health(auth_log, web_port, ignore_ips)[k]
+                                 for k in _PANEL_JAIL_CHECKS):
         return True, "panel-login jail already active on port %d" % web_port
     return configure_panel_fail2ban(auth_log, web_port, ignore_ips)
 
@@ -4098,8 +4114,9 @@ def _diag_service(unit):
     unit = _unit_or_read(unit)
     props = unit.get("props") or {}
     if unit.get("error") or not props:
+        # _src_systemd's `error` is always "unreadable"; its `why` names the failure.
         return "warn", "systemd state unreadable (%s).%s" % (
-            _unit_token(unit.get("error") or "no-answer"), both_note)
+            _unit_token(unit.get("why") or unit.get("error") or "no-answer"), both_note)
     scope = "user" if unit.get("scope") == "user" else "system"
     problems = _service_problems(scope, props)
     detail = _service_summary(scope, props)

@@ -342,7 +342,7 @@ eq("serve reason: tailscale's failure text becomes a fixed class, the message is
 def _svc(unit):
     res, facts = _b22.Result(), {"mainpid_is_me": False, "restarts": None}
     ctx = _ctx()
-    ctx._memo["systemd_unit"] = (True, unit)
+    ctx._memo[_sd22.MEMO_KEY] = (True, unit)
     _proc22._service_lines(ctx, res, facts)
     return res, facts
 
