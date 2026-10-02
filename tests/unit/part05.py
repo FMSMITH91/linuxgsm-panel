@@ -909,7 +909,7 @@ check("no module calls the datetime UTC helpers that are scheduled for removal",
 # Source gate: no unscoped DeprecationWarning suppression anywhere. `module=` or `message=` is fine;
 # a bare category filter silences the whole process.
 _blanket = []
-for _f in ("app.py", "auth.py", "models.py", "ssh_manager.py", "system_ops.py", "notifications.py"):
+for _f in ("app.py", "auth.py", "models.py", "ssh_manager.py", "system_ops.py", "panel/services/notifications.py"):
     for _fp1 in _modfiles(_f):
      for _i, _line in enumerate(open(_fp1, encoding="utf-8"), 1):
         if "filterwarnings" in _line and "DeprecationWarning" in _line \
