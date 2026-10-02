@@ -1,4 +1,4 @@
-"""Debug-report section(s): updates
+"""Debug-report section(s): updates.
 
 Owner: builder B2. cached update status (R30), CI gate detail (R31), tracked branch (R32), last run
 outcome (R33), history (R34), installer warnings (R35), redacted self-update log tail.
@@ -305,8 +305,10 @@ def _ok_outcome(upd, lines, category):
 
 
 def run_outcome(upd, mtime, category="unreadable", now=None):
-    """(level, outcome text) for a self-update log: the EXIT STATUS first, text markers second; a
-    log with no exit line that stopped being written _UPDATE_STALE_LOG ago is a run that DIED."""
+    """(level, outcome text) for a self-update log: the EXIT STATUS first, text markers second.
+
+    A log with no exit line that stopped being written _UPDATE_STALE_LOG ago is a run that DIED.
+    """
     so = _so()
     lines = upd.get("lines") or []
     if upd.get("exit_code") is None:

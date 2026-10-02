@@ -258,8 +258,10 @@ def _b_service():
 
 
 def _b_stub_quiet_diag():
-    """Stub the reads panel_diagnostics makes that are not under test here, and point data/ at a
-    temp dir (the checkout's own data/ is never read)."""
+    """Stub the reads panel_diagnostics makes that are not under test here.
+
+    data/ is pointed at a temp dir: the checkout's own data/ is never read.
+    """
     ddir = os.path.join(_T21, "diagdata")
     os.makedirs(ddir, exist_ok=True)
     _p21(_cfg21, "DATA_DIR", _pl21.Path(ddir))

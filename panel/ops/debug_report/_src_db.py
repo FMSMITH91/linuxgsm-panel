@@ -164,8 +164,10 @@ def _cache_key(path):
 
 
 def integrity(timeout=20):
-    """One quick_check of the panel database (and its backup when the main check fails). See the
-    module docstring for the shape. Never raises."""
+    """One quick_check of the panel database, and of its backup when the main file is damaged.
+
+    See the module docstring for the shape. Never raises.
+    """
     path = _db_path()
     key = _cache_key(path)
     if _cache["key"] == key and _cache["res"] is not None and \
@@ -188,8 +190,10 @@ def integrity(timeout=20):
 
 
 def run_ro(queries, timeout=10):
-    """Run `queries` ({name: (sql, params)}) on one read-only connection, off the hub. Never raises;
-    each answer is a list of row tuples or "error:<ExceptionClass>"."""
+    """Run `queries` ({name: (sql, params)}) on one read-only connection, off the hub.
+
+    Never raises: each answer is a list of row tuples or "error:<ExceptionClass>".
+    """
     if not queries:
         return {}
     path = _db_path()

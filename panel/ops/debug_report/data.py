@@ -1,4 +1,4 @@
-"""Debug-report section(s): database, backups
+"""Debug-report section(s): database, backups.
 
 Owner: builder B2. database: one integrity check off-hub, not-checked vs damaged, pragmas/backup/
 moved-aside/schema, table census and retention, audit digest (R57-R61). backups: panel backups and
@@ -309,8 +309,11 @@ def _guarded(res, label, fn, *args):
 
 
 def section_database(ctx):
-    """The database: health from the shared check, the file and its pragmas, the rolling backup and
-    any moved-aside copies, schema drift, volume against retention, and the audit digest."""
+    """The Database section of the report.
+
+    Health from the shared check, the file and its pragmas, the rolling backup and any moved-aside
+    copies, schema drift, volume against retention, and the audit digest.
+    """
     from panel.ops.debug_report import _src_db
     res = Result()
     _guarded(res, "health", _health_lines, ctx, res)
@@ -335,8 +338,10 @@ def section_database(ctx):
 
 # ── R62: panel backups and update snapshots ──────────────────────────────────────────────────────
 def _passphrase_state():
-    """(level, words) for the backup passphrase: readable or not, never its value. Decrypted only
-    when the key file exists (decrypting without it would CREATE a new cred_key)."""
+    """(level, words) for the backup passphrase: readable or not, never its value.
+
+    Decrypted only when the key file exists: decrypting without it would CREATE a new cred_key.
+    """
     from panel.core import config as cfg
     from panel.ops import backup as bk
     if not bk.get_settings().get("encrypt"):
@@ -412,8 +417,10 @@ _FULL_COUNTS_RE = re.compile(r"^(\d+) server\(s\) backed up(?:, (\d+) failed)?"
 
 
 def _full_line(res):
-    """Full backups from COUNTS parsed off the summary's fixed prefix. The summary itself names
-    game servers and carries their error text, so it is never printed."""
+    """Full backups from COUNTS parsed off the summary's fixed prefix.
+
+    The summary itself names game servers and carries their error text, so it is never printed.
+    """
     from panel.ops import backup as bk
     s = bk.get_full_settings()
     head = "- **Full (game-server) backups**: every %s d, keep %s" % (s["interval_days"], s["keep"])

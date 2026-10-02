@@ -1,4 +1,4 @@
-"""Debug-report section(s): root_pieces
+"""Debug-report section(s): root_pieces.
 
 Owner: builder B2. helper fresh check + privileged-call counters (R25), root-owned pieces vs the commit
 they belong to (R27), origin category (R28), host prerequisites (R29).
@@ -187,8 +187,10 @@ def _tip_line():
 
 
 def _launcher_line():
-    """What a self-update runs here: _launch_installer's own predicate, never _launch_installer
-    (which removes the update log and writes the wrapper)."""
+    """What a self-update runs here, by _launch_installer's own predicate.
+
+    Never _launch_installer itself, which removes the update log and writes the wrapper.
+    """
     so = _so()
     if so._is_system_service() and so._helper_present():
         return "the root-owned install.sh via `sudo -n panel-helper panel-self-update`"
@@ -224,8 +226,10 @@ def _origin_lines(res):
 
 # ── R29 ───────────────────────────────────────────────────────────────────────────────────────────
 def _search_path():
-    """The PATH the panel's own processes see, plus the helper's and cron's: a tool is missing
-    only when it is on none of the paths something here runs it from."""
+    """The PATH the panel's own processes see, plus the helper's and cron's.
+
+    A tool is missing only when it is on none of the paths something here runs it from.
+    """
     from panel.ops.ssh_manager import _core as smc
     parts = []
     for p in (os.environ.get("PATH", ""), _HELPER_SECURE_PATH, smc.CRON_TOOL_PATH):
