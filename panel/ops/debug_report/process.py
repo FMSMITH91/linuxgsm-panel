@@ -54,10 +54,12 @@ def hub_lag_loop(sleep, clock):
         lag_tick(state, clock() - t0 - _LAG_TICK)
 
 
-def start_hub_lag_watch():
+def start_hub_lag_watch(spawn=None):
     """Start the watch once per process, only under eventlet's thread patching. True if started now.
 
     Idempotent: unit parts share one process and a second create_app() must start nothing.
+    `spawn(fn, *args)` starts it; app.py passes one that goes through its own `threading`, so a suite
+    that records app.py's threads instead of starting them (part13) records this one too.
     """
     if _HUB_LAG["started"]:
         return False
@@ -67,7 +69,7 @@ def start_hub_lag_watch():
         if not patcher.is_monkey_patched("thread"):
             return False
         _HUB_LAG["started"] = True
-        (_SPAWN[0] or eventlet.spawn_n)(hub_lag_loop, eventlet.sleep, time.monotonic)
+        (_SPAWN[0] or spawn or eventlet.spawn_n)(hub_lag_loop, eventlet.sleep, time.monotonic)
         return True
     except Exception:  # noqa: BLE001 - a watch that cannot start is reported as not measured
         return False

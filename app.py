@@ -1402,10 +1402,15 @@ def _attach_debug_logging(app):
         _log.debug("debug-report log handlers not attached", exc_info=True)
 
 
+def _spawn_daemon(fn, *args):
+    """Start `fn(*args)` on a daemon thread from this module's `threading` (green once patched)."""
+    threading.Thread(target=fn, args=args, daemon=True, name="hub-lag-watch").start()
+
+
 def _start_hub_lag_watch():
     """The hub-lag greenlet (R17): once per process, only under eventlet's thread patching."""
     try:
-        _dr_process.start_hub_lag_watch()
+        _dr_process.start_hub_lag_watch(spawn=_spawn_daemon)
     except Exception:
         _log.debug("hub-lag watch not started", exc_info=True)
 

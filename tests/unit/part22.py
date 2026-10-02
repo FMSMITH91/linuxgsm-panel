@@ -304,11 +304,25 @@ with _patched(_proc22, _HUB_LAG={"started": False}, _SPAWN=[lambda *a: _spawned2
     _hs22b = _proc22.start_hub_lag_watch()
 check("hub lag: ...and never without thread patching (a CLI or test process)",
       _hs22b is False and not _spawned22)
-with _patched(_proc22, _HUB_LAG={"started": False}, _SPAWN=[lambda *a: _spawned22.append(a)]), \
-        _patched(_app22, _dr_process=_proc22):
+class _RecThreading22:
+    """Stands in for app.py's `threading`: records each Thread's target instead of starting it."""
+
+    started = []
+
+    class Thread:
+        def __init__(self, target=None, args=(), daemon=None, name=None):
+            self.target, self.args, self.daemon = target, args, daemon
+
+        def start(self):
+            _RecThreading22.started.append((self.target, self.daemon))
+
+
+with _patched(_proc22, _HUB_LAG={"started": False}, _SPAWN=[None]), \
+        _patched(_app22, _dr_process=_proc22, threading=_RecThreading22):
     _app22._start_hub_lag_watch()
-    _hs22c = _proc22._HUB_LAG["started"]
-check("hub lag: app.py's create_app hook starts it through the module", _hs22c is True)
+check("hub lag: app.py's create_app hook starts it on a daemon thread from app.py's own `threading` "
+      "(so a suite recording app.py's threads records this one, and never runs it)",
+      _RecThreading22.started == [(_proc22.hub_lag_loop, True)], repr(_RecThreading22.started))
 _clear_groups("hub", "hub_lag")
 
 # ══ process: Serve's boot outcome as a fixed reason ═════════════════════════════════════════════
@@ -1011,6 +1025,13 @@ _flask_default22 = list(_eapp22.logger.handlers)
 _auth_before22 = (list(_log22.getLogger("panel.auth").handlers), _log22.getLogger("panel.auth").propagate)
 _root_before22 = list(_log22.getLogger().handlers)
 _lvls22 = {n: _log22.getLogger(n).level for n in ("panel", "notifications")}
+# An earlier part's create_app (part13) may have attached them already: set those aside, so this
+# block starts from a process that has none, and put them back after.
+_pre22 = {n: [h for h in _log22.getLogger(n).handlers if getattr(h, _err22._MARK, None)]
+          for n in ("panel", "notifications")}
+for _n22, _hs22l in _pre22.items():
+    for _h22 in _hs22l:
+        _log22.getLogger(_n22).removeHandler(_h22)
 _clear_groups("errors", "errors_last")
 try:
     _added22 = _err22.attach_log_handlers(_eapp22.logger)
@@ -1074,6 +1095,9 @@ finally:
 _se22n = _err22.section_errors_since_start(_ctx())
 check("R24: with no counter attached the section says there is no capture (unread), never 'none'",
       "no error capture" in _text(_se22n) and _levels(_se22n) == ["unread"], _text(_se22n))
+for _n22, _hs22l in _pre22.items():       # what an earlier part had attached, put back
+    for _h22 in _hs22l:
+        _log22.getLogger(_n22).addHandler(_h22)
 _clear_groups("errors", "errors_last")
 _ll22 = []
 with _patched(_err22, attach_log_handlers=lambda lg=None: _ll22.append(lg)), \

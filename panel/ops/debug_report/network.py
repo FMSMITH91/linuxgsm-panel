@@ -579,7 +579,7 @@ def _request_lines(res, conf):
 SIGNIN_ACTIONS = ("login", "login_failed", "login_blocked", "api_token_blocked", "fail2ban_ban")
 AUTHLOG_MAX = 512 * 1024
 _AUTHLOG_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) panel (?:login|api token) "
-                         r"(?:failed|blocked) from (\S+)\s*$")
+                         r"(?:failed|blocked) from (\S+)\s*\Z")
 # The queries, whole literals: nothing is formatted into them, every value is a bound parameter.
 # The failed-login sources are classified IN SQL (the CASE below), so no address leaves the database.
 _SQL_SIGNINS = ("SELECT action, SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END), COUNT(*) "
