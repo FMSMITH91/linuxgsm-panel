@@ -919,22 +919,25 @@ check("required checks: ...including SonarCloud's zero-new-issues job, Dependenc
 
 
 # ── SonarCloud reads only UTF-8 ─────────────────────────────────────────────────────────────────
-# Its analysis warned "There are problems with file encoding" until every binary file was out of its
-# sources: excluding static/vendor/ was not enough (docs/screenshots/*.png were still in). A file
-# that is not UTF-8 and that no exclusion in .sonarcloud.properties covers brings the warning back.
+# Its analysis warned "There are problems with file encoding" until every file it indexes was UTF-8
+# by ITS test: ByteCharsetDetector.detect calls isUTF8(buf, rejectNulls=true), so a NUL byte fails a
+# file that is valid UTF-8. Excluding static/vendor/ was not enough (#382), nor were images (#383):
+# the culprit was a fuzz-corpus file with a NUL, under sonar.tests. Every file, sources and tests,
+# that no exclusion covers must decode, and hold no NUL.
 import fnmatch as _sq_fnm  # noqa: E402
 
 with open(os.path.join(_rn_root, ".sonarcloud.properties"), encoding="utf-8") as _sq_fh:
     _sq_props = dict(_l.split("=", 1) for _l in _sq_fh.read().splitlines()
                      if "=" in _l and not _l.lstrip().startswith("#"))
 _sq_excl = [_p.strip() for _p in _sq_props.get("sonar.exclusions", "").split(",") if _p.strip()]
+_sq_texcl = [_p.strip() for _p in _sq_props.get("sonar.test.exclusions", "").split(",") if _p.strip()]
 
 
-def _sq_excluded(path):
+def _sq_excluded(path, pats=None):
     """Sonar's `**/` matches any depth, zero included: try the pattern with and without it."""
     return any(_sq_fnm.fnmatchcase(path, _p) or (_p.startswith("**/")
                                                  and _sq_fnm.fnmatchcase(path, _p[3:]))
-               for _p in _sq_excl)
+               for _p in (_sq_excl if pats is None else pats))
 
 
 _sq_bad, _sq_walk = [], []
@@ -945,14 +948,19 @@ for _sq_dp, _sq_dns, _sq_fns in os.walk(_rn_root):
     _sq_walk += [os.path.relpath(os.path.join(_sq_dp, _f), _rn_root).replace(os.sep, "/")
                  for _f in _sq_fns if not _f.endswith((".pyc", ".db", ".run.log"))]
 for _sq_f in _sq_walk:
-    if _sq_f.startswith("tests/") or _sq_excluded(_sq_f):
+    if (_sq_excluded(_sq_f, _sq_texcl) if _sq_f.startswith("tests/") else _sq_excluded(_sq_f)):
         continue
+    with open(os.path.join(_rn_root, _sq_f), "rb") as _sq_fh:
+        _sq_b = _sq_fh.read()
     try:
-        with open(os.path.join(_rn_root, _sq_f), "rb") as _sq_fh:
-            _sq_fh.read().decode(_sq_props.get("sonar.sourceEncoding", "UTF-8").strip())
+        _sq_b.decode(_sq_props.get("sonar.sourceEncoding", "UTF-8").strip())
     except UnicodeDecodeError:
         _sq_bad.append(_sq_f)
-check("sonarcloud: every file left in its sources is UTF-8 (images and fonts excluded by type)",
+        continue
+    if b"\0" in _sq_b:
+        _sq_bad.append(_sq_f + " (NUL)")
+check("sonarcloud: every file it indexes, sources and tests, is UTF-8 by its rule: valid, and no NUL",
       len(_sq_walk) >= 300 and not _sq_bad and _sq_excluded("docs/screenshots/01-dashboard.png")
-      and _sq_excluded("a.png") and not _sq_excluded("panel/x.py"),
+      and _sq_excluded("a.png") and not _sq_excluded("panel/x.py")
+      and _sq_excluded("tests/fuzz/corpus/console/esc_control", _sq_texcl),
       repr(_sq_bad[:6]))
