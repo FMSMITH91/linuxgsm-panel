@@ -2532,7 +2532,7 @@ def _so7_panel_diagnostics():
         SO._git = lambda args, timeout=45: ("H app.py", "", 0)
         SO._HELPER_PROBE["res"] = None          # each call is a fresh `sudo -n` probe
         _sd_saved, _db_saved = _p7_srcsd.unit_show, _p7_srcdb.integrity
-        _p7_srcsd.unit_show = lambda timeout=5: _p7_unit()
+        _p7_srcsd.unit_show = lambda timeout=5: over.get("unit", _p7_unit)()
         if "integrity" in over:
             _p7_srcdb.integrity = over["integrity"]
         SO.os = _Over(os, path=_Over(os.path, exists=lambda p: (
@@ -2636,6 +2636,14 @@ def _so7_panel_diagnostics_3():
         _d4["Privileged helper"], _d4["File integrity"][1], _d5["TLS certificate"]),
        ("ok", True, ("warn", "Installed, but could not be queried."),
         "All panel files match the installed version (?).", ("warn", "Present but couldn't be parsed.")))
+    # A unit FILE on disk said "auto-starts on boot" whatever systemd thought of it. The unit file
+    # is there (_svc on) and systemd cannot be read: that is a warning saying so, never 'ok'.
+    _d8, _d8s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""},
+                         unit=lambda: {"scope": None, "props": {}, "error": "unreadable"})
+    check("so/diagnostics: a unit file on disk is not 'auto-starts on boot' -- systemd that cannot "
+          "be read is a warning", _d8.get("Service", ("", ""))[0] == "warn"
+          and _d8["Service"][1].startswith("systemd state unreadable")
+          and "auto-starts on boot" not in _d8["Service"][1], repr(_d8.get("Service")))
     _hv["exc"] = None
     _svc["on"] = False
 

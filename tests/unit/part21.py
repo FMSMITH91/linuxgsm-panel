@@ -98,6 +98,23 @@ def _fresh_integrity():
     _db21._cache.update(key=None, at=0.0, res=None)
 
 
+def _call21(fn, *args):
+    """fn(*args), or the exception it raised as a string -- so a check FAILS BY NAME on a raise."""
+    try:
+        return fn(*args)
+    except Exception as exc:  # noqa: BLE001 - returned for the check to see
+        return "raised %s" % type(exc).__name__
+
+
+def _join21(thread):
+    """Wait up to 10 s for `thread`. Under eventlet a join that times out RAISES (eventlet's
+    Timeout, a BaseException), which would end the whole suite instead of failing one check."""
+    try:
+        thread.join(10)
+    except BaseException:  # noqa: BLE001 - the check after this reports the thread did not finish
+        pass
+
+
 def _lv(pair, level, *subs, absent=()):
     """Whether a (level, text) answer has `level`, holds every one of `subs` and none of `absent`."""
     text = (pair or ("", ""))[1] or ""
@@ -644,7 +661,7 @@ def _d_counters():
           isinstance(after.get("last|refused"), tuple) and after["last|refused"][1] == "ufw-status"
           and "password" not in repr(after), repr(after.get("last|refused")))
     _p21(_rs21, "bump", _raiser(RuntimeError("stats broke")))
-    survived = _so21._run_verb("journal")
+    survived = _call21(_so21._run_verb, "journal")
     check("privileged counters: instrumentation that raises cannot change the call's answer",
           survived == ("lines", "", 0), repr(survived))
 
@@ -662,14 +679,20 @@ def _d_core_counters():
        "pre-helper shell paths too", delta,
        {"ufw-status|ok": 1, "ufw-status|failed": 1, "via|helper": 1, "via|shell": 1})
     check("privileged counters: note_privileged on a malformed answer does not raise",
-          _core21.note_privileged("x", "helper", None) is None, "")
+          _call21(_core21.note_privileged, "x", "helper", None) is None, "")
 
 
 def _d_fresh_helper():
+    helper = os.path.join(_T21, "panel-helper")
+    with open(helper, "w") as fh:
+        fh.write("#!/bin/sh\n")
+    os.chmod(helper, 0o755)                       # nosec B103 - a fixture the stat must find
+    _p21(_priv21, "HELPER_PATH", helper)
     _core21._HELPER_STATE["present"] = False
-    _core21.helper_on_disk()
-    check("helper fresh check: a stat that never writes the cached state the process is using",
-          _core21._HELPER_STATE["present"] is False, repr(_core21._HELPER_STATE))
+    on_disk = _core21.helper_on_disk()
+    check("helper fresh check: a stat that finds the helper never writes the cached state the "
+          "process is using", all([on_disk is True, _core21._HELPER_STATE["present"] is False]),
+          repr((on_disk, _core21._HELPER_STATE)))
     _p21(_core21, "helper_on_disk", lambda: True)
     _p21(_so21, "_HELPER_STATE", {"present": False})
     res = _rp21.section_root_pieces(_Ctx21())
@@ -799,7 +822,7 @@ def _e_tools():
 
     def _which(tool, path=None):
         asked.append((tool, path))
-        return None if tool == "wget" else "/usr/bin/" + tool
+        return None if tool in ("wget", "gamedig") else "/usr/bin/" + tool
     _p21(_rp21, "shutil", _Over21(_sh21, which=_which))
     # The service's own PATH, minimal (a systemd unit's can lack /usr/sbin and /usr/local/bin).
     _p21(_rp21, "os", _Over21(os, environ={"PATH": "/opt/p21-only"}))
@@ -845,7 +868,7 @@ def _f_cache():
     with _so21._update_lock:
         t = _th21.Thread(target=lambda: done.append(_upd21._cache_lines(_upd21.Result())))
         t.start()
-        t.join(10)
+        _join21(t)
     check("updates: reading the cache never waits on _update_lock (a check holds it across a fetch)",
           len(done) == 1, "blocked on the lock")
 
@@ -900,7 +923,7 @@ def _f_ci_record():
     _p21(_rs21, "put", _raiser(RuntimeError("stats broke")))
     _p21(_ur21, "urlopen", lambda req, timeout=8: _Resp21(list(_REQ21), hdr))
     check("CI gate: recording that raises cannot change or break the answer",
-          _so21._remote_ci_state("5" * 40) == "passing", "")
+          _call21(_so21._remote_ci_state, "5" * 40) == "passing", "")
 
 
 def _f_ci_rate_limited():
@@ -929,7 +952,7 @@ def _f_ci_no_deadlock():
     with _so21._update_lock:      # the status computation holds it across the whole walk
         t = _th21.Thread(target=lambda: out.append(_so21._remote_ci_state("6" * 40)))
         t.start()
-        t.join(10)
+        _join21(t)
     eq("CI gate: recording inside the walk never takes _update_lock (it is held, non-reentrant)",
        out, ["passing"])
 
