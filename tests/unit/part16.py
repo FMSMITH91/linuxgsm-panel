@@ -1348,7 +1348,7 @@ def _rv16_case(so, core, case):
         so._priv, so._helper_present, so.os, so.subprocess.Popen = saved
         core._READER_GRACE = saved_grace
     return {"got": [got[0][:40], len(got[0]), got[1][:40], len(got[1]), got[2]],
-            "took": round(took, 2), "open": _rv16_open_pipes(pipes),
+            "took": round(took, 2), "span": [t0, t0 + took], "open": _rv16_open_pipes(pipes),
             "reaped": _rv16_reaped(made[-1][0] if made else None), "communicate": len(comms),
             "holder": _rv16_holder(pidfile)}
 
@@ -1429,16 +1429,28 @@ _rv16_env = {k: v for k, v in os.environ.items() if k != "PYTEST_CURRENT_TEST"}
 _rv16_child = _sp16.Popen([sys.executable, "-c", _RV16_SRC], stdout=_sp16.PIPE,  # nosec B603
                           stderr=_sp16.PIPE, stdin=_sp16.DEVNULL, cwd=_REPO16, env=_rv16_env)
 import threading as _thr16  # noqa: E402
-_rv16_beat = {"last": _time16.monotonic(), "gap": 0.0, "run": True}
+_rv16_beat = {"last": _time16.monotonic(), "gaps": [], "run": True}
 
 
 def _rv16_heartbeat():
-    """Record the longest the hub went without running this greenlet."""
+    """Record each stretch of over 0.1s that the hub went without running this greenlet."""
     while _rv16_beat["run"]:
         _time16.sleep(0.02)
         now = _time16.monotonic()
-        _rv16_beat["gap"] = max(_rv16_beat["gap"], now - _rv16_beat["last"])
+        if now - _rv16_beat["last"] > 0.1:
+            _rv16_beat["gaps"].append((_rv16_beat["last"], now))
         _rv16_beat["last"] = now
+
+
+def _rv16_held_hub(gaps, runs):
+    """The longest the heartbeat went unrun INSIDE a _run_verb call: each gap cut to each call.
+
+    Only the calls. Between them the check runs its own gc.collect() (_rv16_open_pipes), on the
+    hub, over the whole suite's heap; that is not the panel's code, and on GitHub's 26.04 runner it
+    alone was a 2.35s gap that failed a correct tree.
+    """
+    return max([min(b, r["span"][1]) - max(a, r["span"][0]) for a, b in gaps
+                for r in runs.values()] + [0.0])
 
 
 _rv16_hb = _thr16.Thread(target=_rv16_heartbeat, daemon=True)
@@ -1539,13 +1551,17 @@ for _mode16 in ("eventlet", "threads"):
           "grace for all its pipes, then they are closed" % _mode16,
           _e16.get("got") == ["kept", 4, "", 0, 0] and _e16.get("took", 99) < 1.8
           and _e16.get("open") == 0 and _e16.get("holder") is True, repr(_e16))
-# What "kept running" can be told apart from: every timeout case above waits about 2s (its 1s
-# timeout, then the 1s reader grace), so a hub held through any one of those waits shows a gap of 2s
-# or more. Scheduling on a loaded machine is the other thing a gap measures: about 0.01-0.03s here
-# and on the test VPS, and 0.64-0.80s on GitHub's shared runners (PR #369, all three Pythons), where
-# a 0.5s bound failed a correct tree. 1.5s sits between the two.
+# What "kept running" can be told apart from. The process wait is green either way; what holds the
+# hub is a NATIVE Event waited in this greenlet, through the 1s reader grace each case above ends in
+# (the kill's, or the "exited" case's own). Collecting with threads=_real_threading in
+# _collect_verb_output held it 1.10s inside a call; this tree, 0.011s (dev machine). 0.5s sits
+# between. Measured INSIDE the calls only (_rv16_held_hub): the whole-window gap this used to be was
+# mostly the check's own gc.collect() between them -- six of 0.36-0.44s over 1.9M objects here --
+# and it failed a correct tree at 2.35s on GitHub's 26.04 runner (PR #385), while its 1.5s bound
+# passed that mutation at 1.45s.
+_rv16_held = _rv16_held_hub(_rv16_beat["gaps"], _RV16["eventlet"]["runs"])
 check("run_verb (eventlet): the rest of the panel kept running through every wait",
-      _rv16_beat["gap"] < 1.5, "the longest gap between heartbeats was %.2fs" % _rv16_beat["gap"])
+      _rv16_held < 0.5, "the longest gap between heartbeats inside a call was %.2fs" % _rv16_held)
 
 
 # ── the capped reader itself: eventlet's green read answers "" (a str) for a closed descriptor ──

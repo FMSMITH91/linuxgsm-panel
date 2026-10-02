@@ -155,8 +155,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   warnings: the Python versions the panel supports (3.10 to 3.14), `tests/` as test code (it was
   running production rules on the suites), and UTF-8 throughout, with the vendored minified bundles
   in `static/vendor/`, every image and font, and the fuzz corpus left out of the analysis. The
-  encoding warning was one corpus file holding a NUL byte on purpose: SonarCloud refuses any file
-  with a NUL as UTF-8. A test fails the build if a file it would refuse is ever left in its view.
+  encoding warning was two literal replacement characters (U+FFFD) in tests, which SonarCloud's
+  scanner reports as invalid in any file; they are written as `\ufffd` now. A test fails the build
+  if a file it reads is not UTF-8 or holds a U+FFFD or a NUL.
 - **Every scanner's verdict is a merge requirement, on every pull request.** Actionlint, Dependency
   Review and the two fuzzing workflows ran only when their files changed, so they could not be
   required, and a red one would not have held a merge. They run on every pull request now (the fuzz
