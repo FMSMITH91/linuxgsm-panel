@@ -16,11 +16,10 @@ on:
       # ...and the lint's OWN config: a malformed .github/actionlint.yaml makes actionlint
       # itself fail, so editing it must run the lint.
       - '.github/actionlint.yaml'
+  # Every pull request, unfiltered: it is a required check (.github/required-checks.txt), and a
+  # required check whose workflow did not run holds the pull request forever. It takes seconds.
   pull_request:
     branches: [ main ]
-    paths:
-      - '.github/workflows/**'
-      - '.github/actionlint.yaml'
 
 # Least-privilege default; the job below escalates only to post its check-run annotations.
 # Supersede rather than stack: Only the newest push's workflow lint is of any interest.

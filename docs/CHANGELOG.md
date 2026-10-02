@@ -151,6 +151,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **Every scanner's verdict is a merge requirement, on every pull request.** Actionlint, Dependency
+  Review and the two fuzzing workflows ran only when their files changed, so they could not be
+  required, and a red one would not have held a merge. They run on every pull request now (the fuzz
+  jobs pass at once when a change touches nothing they fuzz) and are required. And SonarCloud's free
+  plan keeps the "Sonar way" gate, which lets new code smells through: a new required check,
+  `SonarCloud new issues`, waits for SonarCloud's analysis of the pull request's head and fails on
+  anything new.
 - **A pull request cannot merge into main until its checks pass.** Before, only the secret scan
   was required; tests, CodeQL, Codacy, SonarCloud, Bandit, Semgrep and pip-audit were waited for by
   habit, not enforced. `.github/required-checks.txt` lists what main's ruleset now requires, and a

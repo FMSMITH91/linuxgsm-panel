@@ -874,3 +874,45 @@ check("complexity gate: pull requests only, hash-pinned Lizard and Pylint, self-
       and "-r .github/ci-requirements/complexity.txt" in _cx
       and -1 < _cx.find("complexity_gate.py --self-test") < _cx.rfind("complexity_gate.py\n"),
       _cx[-600:])
+# Fuzz and ClusterFuzzLite are required too, so they run on every pull request; a pull request that
+# changes nothing they fuzz passes at once. That is a scope step's job, first in each: it must list
+# what the old path filter listed (the harnesses' modules, the fuzz tree, what the job installs),
+# and every step that builds or fuzzes must wait on it.
+_sc_bad = []
+for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/system_ops.py",
+                                       "panel/core/terminal.py", "tests/fuzz/**", "requirements.txt",
+                                       ".github/ci-requirements/atheris.txt")),
+                         ("cflite_pr.yml", ("panel/ops/ssh_manager/**", "panel/ops/system_ops.py",
+                                            "panel/core/terminal.py", "tests/fuzz/**",
+                                            ".clusterfuzzlite/**", "requirements.txt"))):
+    _sc_txt = _rq_jobs.get(_sc_wf, ("", []))[0]
+    _sc_steps = _sc_txt[_sc_txt.find("    steps:\n"):]
+    _sc_at = _sc_steps.find("        id: scope\n")
+    _sc_list = _sc_steps[_sc_steps.find("scope=(", _sc_at):_sc_steps.find("            )", _sc_at)]
+    _sc_after = [_b for _b in _sc_steps[_sc_at:].split("\n      - ")[1:]
+                 if _sg_re.search(r"(uses: (actions/checkout|actions/setup-python|google/clusterfuzzlite)"
+                                  r"|^name: (Install|Fuzz))", _b, _sg_re.M)]
+    if _sc_at < 0 or _sc_steps.find("\n      - ") < _sc_at - 400:
+        _sc_bad.append("%s: no scope step first" % _sc_wf)
+    _sc_bad += ["%s: scope lacks %s" % (_sc_wf, _w) for _w in _sc_must if "'%s'" % _w not in _sc_list]
+    _sc_bad += ["%s: a step runs without the scope: %s" % (_sc_wf, _b.splitlines()[0])
+                for _b in _sc_after if "steps.scope.outputs.run == 'true'" not in _b]
+    if len(_sc_after) < 2:
+        _sc_bad.append("%s: read %d gated steps" % (_sc_wf, len(_sc_after)))
+check("fuzz workflows: a scope step first, listing what the path filter did, and every build or fuzz "
+      "step waits on it",
+      not _sc_bad, repr(_sc_bad))
+# SonarCloud's free-plan gate cannot be made "0 new issues", so a required job checks that itself:
+# pull requests only, self-test first, the pull request's number and head commit passed as env.
+_sn = _rq_jobs.get("sonar-new-issues.yml", ("", []))[0]
+check("SonarCloud new issues: pull requests only, self-test first, the head commit from the event",
+      _rq_on_pr(_sn) == (True, False) and "\n  push:" not in _sn
+      and -1 < _sn.find("sonar_new_issues.py --self-test") < _sn.find("sonar_new_issues.py --pr")
+      and "SHA: ${{ github.event.pull_request.head.sha }}" in _sn
+      and '--sha "$SHA"' in _sn and "${{ github.event.pull_request.head.sha }}\n" not in _sn.split(
+          "run:")[-1], _sn[-500:])
+check("required checks: ...including SonarCloud's zero-new-issues job, Dependency Review, actionlint "
+      "and every fuzz job",
+      {("github-actions", "SonarCloud new issues"), ("github-actions", "Dependency Review"),
+       ("github-actions", "actionlint"), ("github-actions", "fuzz the diff (address)")} <= set(_rq)
+      and sum(1 for _a, _n in _rq if _n.startswith("fuzz (")) == 6, repr(_rq))
