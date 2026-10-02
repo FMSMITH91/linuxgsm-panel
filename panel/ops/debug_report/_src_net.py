@@ -1,4 +1,4 @@
-"""This process's LISTEN sockets from /proc/net/tcp and tcp6, read once per report (R19, R38).
+"""The panel process's LISTEN sockets from /proc/net/tcp and tcp6, read once per report (R19, R38).
 
 Owner: builder B3.
 
@@ -81,7 +81,7 @@ def _listen_rows(table, family, inodes):
 
 
 def listening():
-    """This process's LISTEN sockets. Raises OSError when /proc/net/tcp cannot be read."""
+    """The LISTEN sockets this process holds. Raises OSError when /proc/net/tcp cannot be read."""
     inodes = _socket_inodes()
     rows = _listen_rows(PROC_NET_TCP[4], 4, inodes)
     try:

@@ -1,5 +1,6 @@
-"""The ONE `systemctl [--user] show linuxgsm-panel` per report, shared by R8 (Diagnostics' Service
-check), R15 (Panel process) and R21 (unit drift). Owner: builder B3.
+"""The ONE `systemctl [--user] show linuxgsm-panel` per report.
+
+Shared by R8 (Diagnostics' Service check), R15 (Panel process) and R21 (unit drift). Owner: builder B3.
 
 unit_show(timeout=5) -> dict
     {"scope": "user"|"system"|None, "props": {Name: value, ...}, "error": None|"<fixed reason>"}
@@ -50,8 +51,10 @@ def argv(which):
 
 
 def run(cmd, timeout):
-    """(stdout, stderr, rc) of `cmd`: stdin /dev/null, no shell, a hard timeout. Raises OSError or
-    subprocess.TimeoutExpired; a module function so the tests can stand in for it."""
+    """(stdout, stderr, rc) of `cmd`: stdin /dev/null, no shell, a hard timeout.
+
+    Raises OSError or subprocess.TimeoutExpired. A module function, so the tests can stand in for it.
+    """
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
     r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,  # nosec B603
                        timeout=timeout, check=False, env=dict(os.environ, LC_ALL="C"))

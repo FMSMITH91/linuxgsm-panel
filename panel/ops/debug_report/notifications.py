@@ -1,4 +1,4 @@
-"""Debug-report section(s): notifications
+"""Debug-report section(s): notifications.
 
 Owner: builder B3. channels as booleans, delivery counters, command-bot polling (R63).
 

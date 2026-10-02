@@ -1,4 +1,4 @@
-"""Debug-report section(s): network, access
+"""Debug-report section(s): network, access.
 
 Owner: builder B3. network: Tailscale/Serve/Funnel (R36), proxy trust (R37), this request (R38),
 cookies (R39), UFW (R40), fail2ban (R41). access: sign-ins/auth.log (R43), throttle and ban gate
@@ -380,8 +380,11 @@ def _jail_file_text(cfg):
 
 
 def f2b_runtime():
-    """At most three helper calls (status, the panel jail, sshd), 5 s each; after the first
-    timeout the rest are not made. {key: (rc, out) | "timeout" | "not-read"}."""
+    """{key: (rc, out) | "timeout" | "not-read"} from at most three helper calls, 5 s each.
+
+    The status, the panel jail and sshd; after the first timeout the rest are not made. None when
+    neither the helper nor root is available to make them.
+    """
     if not _may_escalate():
         return None
     out = {}
@@ -577,8 +580,12 @@ SIGNIN_ACTIONS = ("login", "login_failed", "login_blocked", "api_token_blocked",
 AUTHLOG_MAX = 512 * 1024
 _AUTHLOG_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) panel (?:login|api token) "
                          r"(?:failed|blocked) from (\S+)\s*$")
-# The class of an audit row's ip_address, worked out IN SQL so no address leaves the database.
-_IP_CLASS_SQL = (
+# The queries, whole literals: nothing is formatted into them, every value is a bound parameter.
+# The failed-login sources are classified IN SQL (the CASE below), so no address leaves the database.
+_SQL_SIGNINS = ("SELECT action, SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END), COUNT(*) "
+                "FROM audit_log WHERE action IN (?, ?, ?, ?, ?) AND timestamp >= ? GROUP BY action")
+_SQL_SOURCES = (
+    "SELECT cls, COUNT(DISTINCT ip_address) FROM (SELECT ip_address, "
     "CASE WHEN ip_address IS NULL OR ip_address IN ('', 'unknown') THEN 'unknown' "
     "WHEN ip_address IN ('::1') OR ip_address LIKE '127.%' OR ip_address LIKE '::ffff:127.%' "
     "THEN 'loopback' "
@@ -588,7 +595,19 @@ _IP_CLASS_SQL = (
     "WHEN ip_address LIKE '10.%' OR ip_address LIKE '192.168.%' OR ip_address LIKE 'fe80:%' "
     "OR ip_address LIKE 'fc%' OR ip_address LIKE 'fd%' OR (ip_address LIKE '172.%' AND "
     "CAST(substr(ip_address, 5, instr(substr(ip_address, 5), '.') - 1) AS INTEGER) "
-    "BETWEEN 16 AND 31) THEN 'private' ELSE 'public' END")
+    "BETWEEN 16 AND 31) THEN 'private' ELSE 'public' END AS cls "
+    "FROM audit_log WHERE action = 'login_failed' AND timestamp >= ?) GROUP BY cls")
+_SQL_USERS = ("SELECT COALESCE(SUM(is_active), 0), COALESCE(SUM(is_active AND is_superadmin), 0), "
+              "COALESCE(SUM(NOT is_active), 0), "
+              "COALESCE(SUM(is_active AND is_superadmin AND totp_enabled), 0), "
+              "COALESCE(SUM(is_active AND NOT is_superadmin AND totp_enabled), 0), "
+              "COALESCE(SUM(is_active AND must_change_password), 0), "
+              "COALESCE(SUM(is_active AND must_change_password AND api_token IS NOT NULL), 0), "
+              "COALESCE(SUM(is_active AND api_token IS NOT NULL), 0) FROM \"user\"")
+_SQL_INVITES = ("SELECT COUNT(*), COALESCE(SUM(grants_superadmin), 0) FROM invite WHERE "
+                "used_at IS NULL AND revoked_at IS NULL AND expires_at > ?")
+_SQL_SESSIONS = "SELECT COUNT(*), COALESCE(SUM(remember), 0) FROM user_session WHERE last_seen >= ?"
+_SQL_SETUP = "SELECT COALESCE(MAX(complete), 0) FROM setup_state"
 
 
 def _utc(seconds_ago):
@@ -597,28 +616,13 @@ def _utc(seconds_ago):
 
 def signin_queries():
     """The SQL for R43 and R45: counts and GROUP BYs only, never a value the report cannot print."""
-    acts = ",".join("'%s'" % a for a in SIGNIN_ACTIONS)
     day, week, now = _utc(86400), _utc(7 * 86400), _utc(0)
-    return {
-        "signins": ("SELECT action, SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END), COUNT(*) "
-                    "FROM audit_log WHERE action IN (%s) AND timestamp >= ? GROUP BY action" % acts,
-                    (day, week)),
-        "sources": ("SELECT cls, COUNT(DISTINCT ip_address) FROM (SELECT ip_address, %s AS cls "
-                    "FROM audit_log WHERE action = 'login_failed' AND timestamp >= ?) GROUP BY cls"
-                    % _IP_CLASS_SQL, (week,)),
-        "users": ("SELECT COALESCE(SUM(is_active), 0), COALESCE(SUM(is_active AND is_superadmin), 0), "
-                  "COALESCE(SUM(NOT is_active), 0), "
-                  "COALESCE(SUM(is_active AND is_superadmin AND totp_enabled), 0), "
-                  "COALESCE(SUM(is_active AND NOT is_superadmin AND totp_enabled), 0), "
-                  "COALESCE(SUM(is_active AND must_change_password), 0), "
-                  "COALESCE(SUM(is_active AND must_change_password AND api_token IS NOT NULL), 0), "
-                  "COALESCE(SUM(is_active AND api_token IS NOT NULL), 0) FROM \"user\"", ()),
-        "invites": ("SELECT COUNT(*), COALESCE(SUM(grants_superadmin), 0) FROM invite WHERE "
-                    "used_at IS NULL AND revoked_at IS NULL AND expires_at > ?", (now,)),
-        "sessions": ("SELECT COUNT(*), COALESCE(SUM(remember), 0) FROM user_session WHERE "
-                     "last_seen >= ?", (week,)),
-        "setup": ("SELECT COALESCE(MAX(complete), 0) FROM setup_state", ()),
-    }
+    return {"signins": (_SQL_SIGNINS, (day,) + SIGNIN_ACTIONS + (week,)),
+            "sources": (_SQL_SOURCES, (week,)),
+            "users": (_SQL_USERS, ()),
+            "invites": (_SQL_INVITES, (now,)),
+            "sessions": (_SQL_SESSIONS, (week,)),
+            "setup": (_SQL_SETUP, ())}
 
 
 def _db_counts(ctx):

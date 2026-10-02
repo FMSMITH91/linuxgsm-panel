@@ -1,4 +1,4 @@
-"""Debug-report section(s): install
+"""Debug-report section(s): install.
 
 Owner: builder B3. install model and privilege verdict (R16), which sudo (R26).
 
@@ -210,8 +210,11 @@ def _identity_lines(res, facts):
 
 # ── R26: which sudo answers ──────────────────────────────────────────────────────────────────────
 def run_version(path, timeout=5):
-    """The FIRST line of `<sudo> --version`, or raise. The rest is dropped at once: run as root,
-    classic sudo goes on to print the host's addresses. A module function, for the tests."""
+    """The FIRST line of `<sudo> --version`, or raise.
+
+    The rest is dropped at once: run as root, classic sudo goes on to print the host's addresses. A
+    module function, so the tests can stand in for it.
+    """
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
     r = subprocess.run([path, "--version"], stdin=subprocess.DEVNULL,  # nosec B603 - fixed argv
                        capture_output=True, text=True, timeout=timeout, check=False,

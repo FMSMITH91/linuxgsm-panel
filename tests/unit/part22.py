@@ -1,6 +1,8 @@
-"""Part 22 of the unit suite: the debug report's process, install, network, notifications and errors
-sections (builder B3), its shared sources (systemd, tailscale, /proc/net), and the runtime hooks
-app.py attaches for it: the log handlers and error counter, the hub-lag watch, the boot record.
+"""Part 22 of the unit suite: the debug report's process, install, network and notification sections.
+
+Builder B3's: those sections and the errors one, their shared sources (systemd, tailscale, /proc/net),
+and the runtime hooks app.py attaches for them: the log handlers and error counter, the hub-lag
+watch, the boot record.
 
 What is held here, besides each reader's answer: a section that cannot read something SAYS so
 (never "none", 0 or "inactive"), and nothing identifying is printed (no host, address, account,
@@ -21,7 +23,6 @@ import queue as _q22
 import shutil as _sh22
 import sqlite3 as _sql22
 import subprocess as _sp22  # nosec B404 - only its exception classes and constants are used here
-import sys
 import tempfile as _tf22
 import threading as _thr22
 import time as _time22
@@ -32,7 +33,6 @@ from flask import Flask as _Flask22
 import app as _app22
 from panel import REPO_ROOT as _ROOT22
 from panel.core import runtime_stats as _rs22
-from panel.core import config as _cfg22
 from panel.core import middleware as _mw22
 from panel.ops import system_ops as _so22
 from panel.ops import tailscale_integration as _ts22
@@ -957,14 +957,16 @@ class _FullQ22:
 with _patched(_notif22, _alert_queue=_FullQ22()):
     _notif22._queue_alert(("k", "t", "b"))
 eq("R63: an alert dropped on a full queue is counted", _rs22.snapshot("notify").get("queue|dropped"), 1)
-_FORM22 = {"telegram": {"enabled": True, "chat_id": "987654321", "has_token": True,
+_FORM22 = {"telegram": {"enabled": True, "chat_id": "987654321",
+                        "has_token": True,  # nosec B105 - a boolean the form returns, not a secret
                         "accept_commands": True, "command_users": "111, 222"},
-           "discord": {"enabled": True, "has_webhook": True, "has_bot_token": True,
+           "discord": {"enabled": True, "has_webhook": True,
+                       "has_bot_token": True,  # nosec B105 - a boolean the form returns, not a secret
                        "channel_id": "123456789012345678", "accept_commands": False,
                        "command_users": "", "gateway_problem": "Discord rejected the bot token "
                                                                "(close code 4004). Paste ..."},
            "ntfy": {"enabled": True, "server": "https://ntfy.secret.example", "topic": "my-topic-x9",
-                    "has_token": False},
+                    "has_token": False},  # nosec B105 - a boolean the form returns, not a secret
            "events": {"a": True, "b": False}, "thresholds": {"disk_pct": 90, "load_pct": 200,
                                                            "mem_pct": 90, "load_mins": 5}}
 with _patched(_notif22, settings_for_form=lambda: _FORM22):
@@ -1060,8 +1062,10 @@ check("R23: app.py's create_app hook attaches through the module, with Flask's l
 
 
 def _preformatted_log_calls():
-    """Logging calls in app.py and panel/ whose message is built before the call (an f-string, a
-    % or + expression, a .format()): its arguments would then be in the counter's key."""
+    """Logging calls in app.py and panel/ whose message is built before the call.
+
+    An f-string, a % or + expression, a .format(): its arguments would then be in the counter's key.
+    """
     bad = []
     methods = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
     root = str(_ROOT22)
@@ -1077,19 +1081,24 @@ def _preformatted_log_calls():
     return bad
 
 
-def _is_prebuilt_log(n, methods):
+def _log_message_arg(n, methods):
+    """The message argument of a call on a logger-named receiver, or None for any other node."""
     if not (isinstance(n, _ast22.Call) and isinstance(n.func, _ast22.Attribute)
             and n.func.attr in methods):
-        return False
+        return None
     recv = n.func.value
     name = getattr(recv, "id", None) or getattr(recv, "attr", None) or ""
     args = n.args[1:] if n.func.attr == "log" else n.args
-    if "log" not in name.lower() or not args:
-        return False
-    a = args[0]
-    return isinstance(a, _ast22.JoinedStr) or (
-        isinstance(a, _ast22.BinOp) and isinstance(a.op, (_ast22.Mod, _ast22.Add))) or (
-        isinstance(a, _ast22.Call) and isinstance(a.func, _ast22.Attribute) and a.func.attr == "format")
+    return args[0] if "log" in name.lower() and args else None
+
+
+def _is_prebuilt_log(n, methods):
+    a = _log_message_arg(n, methods)
+    if isinstance(a, _ast22.BinOp):
+        return isinstance(a.op, (_ast22.Mod, _ast22.Add))
+    if isinstance(a, _ast22.Call):
+        return isinstance(a.func, _ast22.Attribute) and a.func.attr == "format"
+    return isinstance(a, _ast22.JoinedStr)
 
 
 _pf22 = _preformatted_log_calls()

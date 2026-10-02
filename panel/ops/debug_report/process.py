@@ -1,4 +1,4 @@
-"""Debug-report section(s): process
+"""Debug-report section(s): process.
 
 Owner: builder B3. systemd state/restarts/memory (R15), resources/fds/cgroup (R18), eventlet hub (R17),
 listening vs config (R19), boot transport record (R20), unit drift (R21).
@@ -42,7 +42,7 @@ def lag_tick(state, lag):
             state["minute_max"] = lag
             runtime_stats.put("hub_lag", "m%d" % (minute % _LAG_BUCKETS), (minute, round(lag, 3)))
     except Exception:  # noqa: BLE001 - instrumentation never raises into its loop
-        pass
+        return
 
 
 def hub_lag_loop(sleep, clock):
@@ -138,7 +138,7 @@ def _app_module():
 
 # ── R15: the unit's state ────────────────────────────────────────────────────────────────────────
 def _account_name():
-    """This process's account name, for the linger lookup only. Never printed."""
+    """The account name of the process, for the linger lookup only. Never printed."""
     import pwd
     return pwd.getpwuid(os.geteuid()).pw_name
 
@@ -257,7 +257,7 @@ def _nofile():
 
 
 def _cgroup_path():
-    """This process's cgroup v2 path, or None on cgroup v1 / outside one."""
+    """The cgroup v2 path of the process, or None on cgroup v1 / outside one."""
     with open(os.path.join(PROC, "self", "cgroup"), encoding="ascii", errors="replace") as fh:
         for line in fh:
             if line.startswith("0::"):
@@ -381,8 +381,10 @@ def _eventlet_server(ctx):
 
 
 def _hub_counts(hub):
-    """'listeners read 14 / write 0 · timers 52 · tpool 20 threads, 0 queued' from internals that
-    are private: every read is a getattr with a default and a len()."""
+    """'listeners read 14 / write 0 · timers 52 · tpool 20 threads, 0 queued'.
+
+    The internals are private: every read is a getattr with a default and a len().
+    """
     try:
         listeners = getattr(hub, "listeners", {}) or {}
         timers = len(getattr(hub, "timers", ()) or ()) + len(getattr(hub, "next_timers", ()) or ())

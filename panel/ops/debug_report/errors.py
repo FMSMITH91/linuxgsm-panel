@@ -1,4 +1,4 @@
-"""Debug-report section(s): errors_since_start
+"""Debug-report section(s): errors_since_start.
 
 Owner: builder B3. The swallowed-error counter fed by the logging handler app.py attaches (R23, R24),
 read from runtime_stats.
@@ -42,15 +42,15 @@ _MARK = "_panel_debug_report"
 
 def _native_rlock():
     """An RLock from the real threading module, even after eventlet.monkey_patch()."""
-    patcher = sys.modules.get("eventlet.patcher")
-    if patcher is not None:
-        try:
-            return patcher.original("threading").RLock()
-        except Exception:  # noqa: BLE001 - fall back to the stdlib's below
-            pass
-    # eventlet not loaded: nothing has been patched, so the stdlib's lock is the native one.
     import threading
-    return threading.RLock()
+    patcher = sys.modules.get("eventlet.patcher")
+    if patcher is None:
+        # eventlet not loaded: nothing has been patched, so the stdlib's lock is the native one.
+        return threading.RLock()
+    try:
+        return patcher.original("threading").RLock()
+    except Exception:  # noqa: BLE001 - fall back to the stdlib's
+        return threading.RLock()
 
 
 class StderrHandler(logging.StreamHandler):
@@ -108,7 +108,7 @@ class ErrorCounter(logging.Handler):
             runtime_stats.bump("errors", key)
             runtime_stats.put("errors_last", key, _exc_class(record))
         except Exception:  # noqa: BLE001 - a counter must never raise into the code that logged
-            pass
+            return
 
 
 def _has(logger, kind):

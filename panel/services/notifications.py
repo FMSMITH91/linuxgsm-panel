@@ -539,8 +539,11 @@ def telegram_get_updates(token, offset=None, timeout=25):
 
 
 def _poll_counted(ok, code):
-    """Count one command-bot poll for the debug report (R63): ok/failed, and a failure's int HTTP
-    status (409 is a second poller on the same token). runtime_stats never raises."""
+    """Count one command-bot poll for the debug report (R63).
+
+    ok or failed, and a failure's int HTTP status (409 is a second poller on the same token).
+    runtime_stats never raises.
+    """
     if ok:
         runtime_stats.bump("notify", "telegram_poll|ok")
         runtime_stats.put("notify", "telegram_poll|last_ok", 1)
