@@ -27,11 +27,17 @@ from panel.ops.debug_report._base import Ctx, Result, LEVELS
 
 DEADLINE_S = 20.0
 
+# At most this many worker sections run at once (R3): each may hold a subprocess, and a report must
+# not fan a dozen reads out at the same moment on the panel's one process.
+MAX_WORKERS = 4
+
 # (key, title, module, mode, part)
+#   part "header": the report's header lines (assemble.py puts them at the top, not as a section).
 #   part "summary": also in the public summary/issue body, in this order.
 #   part "full": the full report only.
 # A section's function is `section` in panel/ops/debug_report/<module>.py.
 SECTIONS = (
+    ("header", "Header", "header", "worker", "header"),
     ("diagnostics", "Diagnostics", "diagnostics", "worker", "summary"),
     ("hosts_brief", "Hosts & game servers", "hosts", "request", "summary"),
     ("process", "Panel process", "process", "worker", "full"),
@@ -76,13 +82,21 @@ def _run_one(ctx, key, module):
         return ("error", time.monotonic() - t0, type(exc).__name__)
 
 
-def _run_worker(ctx, key, module, slot, done):
+def _run_worker(ctx, key, module, slot, done, gate):
+    """One worker section, once a slot under `gate` is free; past the deadline it never starts."""
+    t0 = time.monotonic()
     try:
-        if ctx.app is not None:
-            with ctx.app.app_context():
+        if not gate.acquire(timeout=max(0.0, ctx.remaining())):
+            slot[key] = ("timeout", time.monotonic() - t0, None)
+            return
+        try:
+            if ctx.app is not None:
+                with ctx.app.app_context():
+                    slot[key] = _run_one(ctx, key, module)
+            else:
                 slot[key] = _run_one(ctx, key, module)
-        else:
-            slot[key] = _run_one(ctx, key, module)
+        finally:
+            gate.release()
     except Exception as exc:  # noqa: BLE001 - the app context itself failed
         slot[key] = ("error", 0.0, type(exc).__name__)
     finally:
@@ -93,10 +107,11 @@ def _run_sections(ctx):
     """{key: (status, seconds, Result|class name)} for every section; a worker unfinished at the
     deadline is ("timeout", seconds_waited, None)."""
     results, waits = {}, []
+    gate = threading.BoundedSemaphore(MAX_WORKERS)
     for key, _title, module, mode, _part in SECTIONS:
         if mode == "worker":
             done = threading.Event()
-            threading.Thread(target=_run_worker, args=(ctx, key, module, results, done),
+            threading.Thread(target=_run_worker, args=(ctx, key, module, results, done, gate),
                              name="debug-report-" + key, daemon=True).start()
             waits.append((key, done))
     for key, _title, module, mode, _part in SECTIONS:
@@ -111,8 +126,12 @@ def _run_sections(ctx):
 
 
 def _build(app=None, request_info=None):
-    from panel.ops.debug_report import assemble
+    from panel.ops.debug_report import assemble, privacy
     ctx = Ctx(app=app, deadline_s=DEADLINE_S, request_info=request_info)
+    # The name map first, in this (request) greenlet, where the app context is: the log sections
+    # scrub their lines with it before selecting any, and they run as workers. It never raises: a
+    # map that could not be built is reported by privacy.findings and the footer.
+    privacy.prepare(ctx)
     return assemble.assemble(ctx, _run_sections(ctx))
 
 

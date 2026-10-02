@@ -1,18 +1,534 @@
-"""The report's privacy backstop: pseudonymise known names, classify IPs, normalise paths (R72, R73).
+"""The report's privacy pass: pseudonymise known names, classify IPs, normalise paths (R72, R73).
 
 Owner: builder B1. Sections are written never to print identifying values (see _base.py); this runs
-over the finished text anyway, because log lines and installer output are free text.
+over the finished text anyway, because log lines, installer output and other sections' detail are
+free text.
 
-scrub(ctx, text) -> text   applied by the assembler to the whole report and the summary.
-footer(ctx) -> [lines]     what was pseudonymised and what was kept, stated truthfully.
+prepare(ctx)              builds the in-memory name map once per report (request greenlet: DB reads).
+scrub(ctx, text) -> text  applied by the assembler to the whole report and the summary.
+scrub_lines(ctx, lines)   the same for a list of log lines, or None when the pass failed and the
+                          lines must be withheld.
+footer(ctx) -> [lines]    what was pseudonymised and what was kept, stated truthfully.
+findings(ctx)             At-a-glance findings when the pass ran incompletely.
+
+The order inside scrub: the checkout, data dir, virtualenv and home paths are normalised first (so a
+traceback frame keeps its module and loses the account), then the syslog host field, then the known
+names (longest first, case-insensitive, never inside a longer word), then the generic patterns that
+need no names (*.ts.net, login URLs, URL userinfo, IP addresses by class, long ids, SteamIDs,
+'@github' logins, SQLAlchemy bound parameters), and last system_ops._redact. The map is never
+logged or printed: only the tokens and counts are.
 """
+import ipaddress
+import os
+import re
+import sys
+import threading
+
+from panel.ops.debug_report._base import finding
+
+_MIN_NAME = 3
+# Names that are words of the report or of the platform. Pseudonymising them would mangle the
+# report ("Ubuntu 24.04" -> "[account-1] 24.04") and hide nothing: they identify no one.
+_STOP_WORDS = frozenset((
+    "root", "admin", "admins", "administrator", "ubuntu", "debian", "user", "users", "panel",
+    "server", "servers", "game", "games", "host", "hosts", "local", "localhost", "linuxgsm",
+    "linuxgsm-panel", "lgsmpanel", "lgsm", "lgsmpanel-games", "python", "python3", "systemd",
+    "sudo", "kernel", "default", "main", "test", "none", "null", "true", "false", "www-data",
+    "nobody", "daemon", "steam", "docker", "the", "and", "error", "warning", "info", "debug",
+    "status", "online", "offline", "running", "started", "stopped", "update", "updates",
+    "backup", "backups", "tailscale", "console", "database", "config", "network", "service",
+    "unknown", "system", "journal", "helper", "privileged", "operator", "everyone",
+))
+_TAILNET_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+
+_SYSLOG_HOST_RE = re.compile(r"^([A-Z][a-z]{2}[ \t]+\d{1,2}[ \t]+[\d:]{5,8}[ \t]+)(\S{1,255})([ \t])",
+                             re.M)
+_HOME_RE = re.compile(r"(/(?:home|srv|opt|var/home|Users))/(?!\[user\])[^/\s\"':;,)\]]{1,64}")
+_VENV_RE = re.compile(r"(?:/[^\s/\"':]{1,255}){0,32}/(?:site|dist)-packages(?=/)")
+_GENERIC = (
+    (re.compile(r"\[parameters: [^\n]*"), "[parameters: withheld]", "sql-params"),
+    (re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]{0,15}://)[^/\s@]{1,256}@"), r"\1[redacted]@", "url"),
+    (re.compile(r"(?:https?://)?login\.tailscale\.com[^\s)\"'>\]]*"), "[tailscale-url]", "url"),
+    (re.compile(r"(?<![\w.-])[\w-]{1,63}(?:\.[\w-]{1,63}){0,8}\.ts\.net\b"), "[ts-name]", "ts-name"),
+    (re.compile(r"(?<![\w.-])[\w.-]{1,64}@github\b"), "[login]", "login"),
+    (re.compile(r"STEAM_[0-5]:[01]:\d{1,12}|\[U:1:\d{1,12}\]"), "[steamid]", "steamid"),
+)
+_IPV4_RE = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d])")
+_IPV6_RE = re.compile(r"(?<![\w:.%])[0-9A-Fa-f:]{2,39}(?:(?<=:)\d{1,3}(?:\.\d{1,3}){3})?"
+                      r"(?:%[\w.-]{1,32})?")
+_LONG_ID_RE = re.compile(r"(?<!\d)\d{15,}(?!\d)")
+_WITHHELD = "_(withheld: pseudonymisation unavailable)_"
 
 
-def scrub(ctx, text):
-    """Not implemented yet: returns the text unchanged."""
+class _State(object):
+    """One report's name map, what it replaced (for the footer), and what failed."""
+
+    def __init__(self):
+        """Start empty: no names, nothing replaced, nothing failed."""
+        self.names = {}            # lowercased name -> token
+        self.kinds = {}            # lowercased name -> kind, for the footer's counts
+        self.counters = {}         # kind -> next sequential number (for names with no DB id)
+        self.stats = {}            # kind -> set of what was replaced (never printed)
+        self.source_errors = []    # (source, fixed reason or exception class)
+        self.pattern_error = None  # exception class when the generic pass itself failed
+        self.cred_key_missing = False
+        self.ts_done = False
+        self.lock = threading.Lock()
+
+    def add(self, name, kind, ident=None):
+        """Map `name` to a typed token; ident is a DB id when the name belongs to a row."""
+        if not isinstance(name, str):
+            return
+        key = name.strip().lower()
+        if not _usable_name(key) or key in self.names:
+            return
+        if ident is None:
+            ident = self.counters.get(kind, 0) + 1
+            self.counters[kind] = ident
+        self.names[key] = "[%s-%s]" % (kind, ident) if ident != "" else "[%s]" % kind
+        self.kinds[key] = kind
+
+    def hit(self, kind, value):
+        """Record that `value` of `kind` was replaced."""
+        self.stats.setdefault(kind, set()).add(value)
+
+
+def _usable_name(key):
+    """Whether a lowercased name is long enough, not a common word, and not an address."""
+    if len(key) < _MIN_NAME or key in _STOP_WORDS or "\n" in key:
+        return False
+    try:
+        ipaddress.ip_address(key)
+        return False                       # the IP rule classifies addresses
+    except ValueError:
+        return True
+
+
+# ── the name map ────────────────────────────────────────────────────────────────────────────────
+def prepare(ctx):
+    """The report's privacy state, built once (DB, OS and config names). Never raises."""
+    try:
+        return ctx.memo("privacy", lambda: _build(ctx))
+    except Exception as exc:  # noqa: BLE001 - an empty map, said in the footer and At a glance
+        name = type(exc).__name__
+        return ctx.memo("privacy_fallback", lambda: _failed_state(name))
+
+
+def _failed_state(name):
+    st = _State()
+    st.source_errors.append(("the name map", name))
+    return st
+
+
+def _build(ctx):
+    st = _State()
+    for source, fn in (("database names", _names_db), ("OS names", _names_os),
+                       ("config names", _names_config)):
+        try:
+            fn(ctx, st)
+        except Exception as exc:  # noqa: BLE001 - one source missing is said, never fatal
+            st.source_errors.append((source, type(exc).__name__))
+    return st
+
+
+class NoAppContext(LookupError):
+    """There is no Flask app to read the database through (a CLI or test caller)."""
+
+
+def _in_app(ctx, fn):
+    """fn() inside an app context: the current one, else ctx.app's; raises without either."""
+    from flask import has_app_context
+    if has_app_context():
+        return fn()
+    if ctx.app is None:
+        raise NoAppContext("no app")
+    with ctx.app.app_context():
+        return fn()
+
+
+def _names_db(ctx, st):
+    from panel.core import config as cfgmod
+    st.cred_key_missing = not cfgmod.CRED_KEY_FILE.exists()
+    _in_app(ctx, lambda: _read_db_names(st))
+    if st.cred_key_missing:
+        st.source_errors.append(("host addresses and accounts", "cred_key missing"))
+
+
+def _read_db_names(st):
+    from panel.db.models import Group, ServerTag, User, db
+    _read_host_names(st)
+    _read_server_names(st)
+    for model, col, kind in ((User, User.username, "user"), (ServerTag, ServerTag.name, "tag"),
+                             (Group, Group.name, "group")):
+        for ident, name in db.session.query(model.id, col):
+            st.add(name, kind, ident)
+
+
+def _read_host_names(st):
+    from panel.db.models import RemoteServer, db
+    if st.cred_key_missing:
+        # Reading the encrypted columns would call decrypt_secret, which CREATES a new cred_key
+        # when it is missing. Only the plain name column is read; the generic rules still apply.
+        for rid, name in db.session.query(RemoteServer.id, RemoteServer.name):
+            st.add(name, "host", rid)
+        return
+    for row in db.session.query(RemoteServer.id, RemoteServer.name, RemoteServer.host,
+                                RemoteServer.public_ip, RemoteServer.username,
+                                RemoteServer.linuxgsm_user):
+        for value in row[1:4]:
+            st.add(value, "host", row[0])
+        for value in row[4:]:
+            st.add(value, "account")
+
+
+def _read_server_names(st):
+    """Game-server names; a short name that is LinuxGSM's own ('<game>server') is vocabulary."""
+    from panel.db.models import GameServer, db
+    for sid, name, short, gtype in db.session.query(GameServer.id, GameServer.name,
+                                                     GameServer.short_name, GameServer.game_type):
+        common = {(gtype or "").lower(), (gtype or "").lower() + "server"}
+        for value in (name, short):
+            if (value or "").strip().lower() not in common:
+                st.add(value, "server", sid)
+
+
+def _names_os(_ctx, st):
+    import socket
+    host = socket.gethostname() or ""
+    for value in (host, host.split(".")[0]):
+        st.add(value, "panel-host", "")
+    for value in _etc_hosts_names(host):
+        st.add(value, "panel-host", "")
+    for value in _os_accounts():
+        st.add(value, "account")
+
+
+def _etc_hosts_names(host):
+    """The other names /etc/hosts gives this machine (on a line naming it, or on 127.0.1.1)."""
+    out = []
+    try:
+        with open("/etc/hosts", encoding="utf-8", errors="replace") as f:
+            lines = f.read(65536).splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        parts = line.split("#", 1)[0].split()
+        if len(parts) > 1 and (parts[0] == "127.0.1.1" or host in parts[1:]):
+            out.extend(parts[1:])
+    return out
+
+
+def _os_accounts():
+    """The panel's own account, every login account (uid 1000+), and the game-account group."""
+    import grp
+    import pwd
+    names = [pwd.getpwuid(os.getuid()).pw_name]
+    names += [p.pw_name for p in pwd.getpwall() if 1000 <= p.pw_uid < 65534]
+    try:
+        names += list(grp.getgrnam("lgsmpanel-games").gr_mem)
+    except KeyError:
+        pass                                # no game-account group on this host
+    return names
+
+
+def _names_config(_ctx, st):
+    from panel.core import config as cfgmod
+    cfg = cfgmod.load_config()
+    if cfgmod.is_unreadable(cfg):
+        raise ValueError("config.json unreadable")
+    if (cfg.get("site_title") or "") != cfgmod.DEFAULT_CONFIG.get("site_title"):
+        st.add(cfg.get("site_title"), "site-title", "")
+    st.add(cfg.get("site_domain"), "site-domain", "")
+    _names_notifications(st, cfg.get("notifications") or {})
+
+
+def _ids(value):
+    """A list of ids from a config value that is a list, or a comma/space separated string."""
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value]
+    return [v for v in re.split(r"[\s,]+", str(value or "")) if v]
+
+
+def _names_bot(st, conf, key):
+    if not isinstance(conf, dict):
+        return
+    for value in [conf.get(key)] + _ids(conf.get("command_users")):
+        st.add(str(value or ""), "id")
+    for secret in ("token", "bot_token", "webhook"):
+        st.add(str(conf.get(secret) or ""), "secret", "")
+
+
+def _names_ntfy(st, ntfy):
+    from urllib.parse import urlsplit
+    if not isinstance(ntfy, dict):
+        return
+    st.add(str(ntfy.get("topic") or ""), "ntfy-topic", "")
+    st.add(str(ntfy.get("token") or ""), "secret", "")
+    try:
+        st.add(urlsplit(str(ntfy.get("server") or "")).hostname or "", "ntfy-host", "")
+    except ValueError:
+        pass                            # not a URL: the generic rules still apply
+
+
+def _names_notifications(st, notif):
+    if not isinstance(notif, dict):
+        return
+    _names_bot(st, notif.get("telegram"), "chat_id")
+    _names_bot(st, notif.get("discord"), "channel_id")
+    _names_ntfy(st, notif.get("ntfy"))
+
+
+# Keys of tailscale data whose string values name a node, a person or the tailnet.
+_TS_KEYS = re.compile(r"(?i)name|host|dns|login|display|tailnet|suffix|user|domain|node|peer|owner")
+
+
+def _names_tailscale(info, st, key="", depth=0):
+    """Walk _src_tailscale.info()'s dict and map every identity-looking string in it."""
+    if depth > 6:
+        return
+    if isinstance(info, dict):
+        for k, v in list(info.items())[:2000]:
+            _names_tailscale(v, st, str(k), depth + 1)
+    elif isinstance(info, (list, tuple)):
+        for v in list(info)[:2000]:
+            _names_tailscale(v, st, key, depth + 1)
+    elif isinstance(info, str) and _TS_KEYS.search(key):
+        value = info.strip().rstrip(".")
+        st.add(value, "tailnet-name")
+        st.add(value.split(".")[0], "tailnet-name")
+
+
+def _tailscale_names(ctx, st, wait):
+    """Add Tailscale's names, from the report's one read when a section already made it.
+
+    The read is never forced here: when no section has made it, it runs in a thread waited on for
+    at most `wait` seconds, so a cold Tailscale cache cannot hold the report past its budget.
+    """
+    with st.lock:
+        if st.ts_done:
+            return
+        st.ts_done = True
+    from panel.ops.debug_report import _src_tailscale
+    box, done = {}, threading.Event()
+
+    def _read():
+        try:
+            box["info"] = ctx.memo("tailscale", _src_tailscale.info)
+        except Exception as exc:  # noqa: BLE001 - reported as a source error below
+            box["error"] = type(exc).__name__
+        finally:
+            done.set()
+
+    threading.Thread(target=_read, name="debug-report-tailscale-names", daemon=True).start()
+    if not done.wait(max(0.1, wait)):
+        st.source_errors.append(("tailscale names", "timed out"))
+    elif "error" in box:
+        st.source_errors.append(("tailscale names", box["error"]))
+    elif box.get("info") is not None:
+        _names_tailscale(box["info"], st)
+
+
+# ── the pass ────────────────────────────────────────────────────────────────────────────────────
+def _paths(text, st):
+    """The data dir, the virtualenv, the checkout and home directories as fixed placeholders."""
+    from panel.core import config as cfgmod
+    from panel.ops import system_ops as so
+    text = _replace_dir(text, str(cfgmod.DATA_DIR), "<data>")
+    if "-packages/" in text:
+        text = _VENV_RE.sub("<venv>", text)
+    if sys.prefix != sys.base_prefix:      # a virtualenv's own root (bin/python and the like)
+        text = _replace_dir(text, sys.prefix, "<venv>")
+    text = _replace_dir(text, so.PANEL_DIR, "<panel>")
+
+    def _home(m):
+        st.hit("home", m.group(0))
+        return m.group(1) + "/[user]"
+    return _HOME_RE.sub(_home, text)
+
+
+def _replace_dir(text, path, token):
+    """`text` with `path` (as given and as resolved) replaced by `token`, longest first."""
+    for variant in sorted({path, os.path.realpath(path)}, key=len, reverse=True):
+        if len(variant) > 1:
+            text = text.replace(variant, token)
     return text
 
 
+def _syslog_hosts(text, st):
+    def _host(m):
+        if m.group(2).startswith("["):
+            return m.group(0)
+        st.hit("panel-host", m.group(2).lower())
+        return m.group(1) + "[panel-host]" + m.group(3)
+    return _SYSLOG_HOST_RE.sub(_host, text)
+
+
+def _known_names(text, st):
+    """Every known name in `text` replaced by its token. Headings are fixed text and skipped."""
+    low = text.lower()
+    present = [n for n in st.names if n in low]
+    if not present:
+        return text
+    present.sort(key=len, reverse=True)
+    rx = re.compile(r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])" % "|".join(map(re.escape, present)),
+                    re.I)
+
+    def _sub(m):
+        key = m.group(0).lower()
+        st.hit(st.kinds.get(key, "name"), key)
+        return st.names.get(key, "[name]")
+
+    return "\n".join(ln if ln.startswith("#") else rx.sub(_sub, ln) for ln in text.split("\n"))
+
+
+def _ip_class(ip):
+    """The class an address prints as, or None for one kept as it is (loopback, unspecified)."""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_loopback or ip.is_unspecified:
+        return None
+    if any(ip.version == n.version and ip in n for n in _TAILNET_NETS):
+        return "tailnet"
+    for attr, cls in (("is_link_local", "link-local"), ("is_private", "private"),
+                      ("is_multicast", "multicast")):
+        if getattr(ip, attr):
+            return cls
+    return "public"
+
+
+def _ip_sub(st):
+    def _sub(m):
+        raw = m.group(0)
+        try:
+            ip = ipaddress.ip_address(raw.split("%", 1)[0])
+        except ValueError:
+            return raw
+        cls = _ip_class(ip)
+        if cls is None:
+            return raw
+        st.hit("ip:" + cls, str(ip))
+        return "[ip:%s]" % cls
+    return _sub
+
+
+def _generic(text, st):
+    for rx, repl, kind in _GENERIC:
+        if kind != "sql-params" and rx.search(text):
+            for m in rx.finditer(text):
+                st.hit(kind, m.group(0).lower())
+        text = rx.sub(repl, text)
+    sub = _ip_sub(st)
+    text = _IPV4_RE.sub(sub, text)
+    if ":" in text:
+        text = _IPV6_RE.sub(lambda m: sub(m) if m.group(0).count(":") >= 2 else m.group(0), text)
+
+    def _long(m):
+        st.hit("id", m.group(0))
+        return "[id]"
+    return _LONG_ID_RE.sub(_long, text)
+
+
+def scrub(ctx, text):
+    """`text` pseudonymised; when the pattern pass itself fails, every body is withheld."""
+    from panel.ops import system_ops as so
+    st = prepare(ctx)
+    try:
+        text = _paths(text, st)
+        text = _syslog_hosts(text, st)
+    except Exception as exc:  # noqa: BLE001 - nothing pattern-only is printed after this
+        st.pattern_error = type(exc).__name__
+        return _withhold(text)
+    try:
+        text = _known_names(text, st)
+    except Exception as exc:  # noqa: BLE001 - the generic rules below still run
+        st.source_errors.append(("name matching", type(exc).__name__))
+    try:
+        return so._redact(_generic(text, st))
+    except Exception as exc:  # noqa: BLE001 - withhold rather than print pattern-free text
+        st.pattern_error = type(exc).__name__
+        return _withhold(text)
+
+
+def scrub_lines(ctx, lines):
+    """`lines` scrubbed one for one, or None when they must be withheld (the pass failed)."""
+    out = scrub(ctx, "\n".join(lines)).split("\n")
+    if prepare(ctx).pattern_error or len(out) != len(lines):
+        return None
+    return out
+
+
+def _withhold(text):
+    """Headings kept, every other line replaced by one 'withheld' line per section."""
+    out = []
+    for line in text.split("\n"):
+        if line.startswith("#"):
+            out.extend([line, _WITHHELD])
+    return "\n".join(out) + "\n"
+
+
+def finish(ctx, wait):
+    """Before the final pass: add Tailscale's names (waiting at most `wait` s for them)."""
+    try:
+        _tailscale_names(ctx, prepare(ctx), wait)
+    except Exception as exc:  # noqa: BLE001 - reported in the footer
+        prepare(ctx).source_errors.append(("tailscale names", type(exc).__name__))
+
+
+# ── what the reader is told ─────────────────────────────────────────────────────────────────────
+def findings(ctx):
+    """At-a-glance findings for a pass that did not fully run."""
+    st = prepare(ctx)
+    out = []
+    if st.pattern_error:
+        out.append(finding("fail", "Privacy", "pattern redaction failed; section bodies withheld"))
+    if st.source_errors:
+        out.append(finding("warn", "Privacy", "some known names could not be read; only pattern "
+                                              "redaction covers them; review names before posting"))
+    return out
+
+
+_FOOTER_KINDS = (("host", "host"), ("server", "game server"), ("user", "panel user"),
+                 ("account", "OS or SSH account"), ("tag", "tag"), ("group", "group"),
+                 ("panel-host", "panel hostname"), ("tailnet-name", "Tailscale name"),
+                 ("ts-name", "*.ts.net name"), ("login", "@github login"),
+                 ("site-title", "site title"), ("site-domain", "site domain"),
+                 ("ntfy-topic", "ntfy topic"), ("ntfy-host", "ntfy server"),
+                 ("id", "long id"), ("steamid", "SteamID"), ("url", "URL credential or login link"),
+                 ("secret", "configured secret"), ("home", "home-directory path"))
+
+
+def _counts(st):
+    parts = []
+    for kind, label in _FOOTER_KINDS:
+        n = len(st.stats.get(kind, ()))
+        if n:
+            parts.append("%d %s%s" % (n, label, "" if n == 1 else "s"))
+    ips = {k[3:]: len(v) for k, v in st.stats.items() if k.startswith("ip:")}
+    if ips:
+        parts.append("%d IPs (%s)" % (sum(ips.values()), ", ".join(
+            "%d %s" % (n, cls) for cls, n in sorted(ips.items(), key=lambda kv: -kv[1]))))
+    return parts
+
+
 def footer(ctx):
-    """Not implemented yet."""
-    return []
+    """The Privacy section: what the pass replaced and kept, and what it could not cover."""
+    st = prepare(ctx)
+    parts = _counts(st)
+    lines = ["### Privacy",
+             "- **Pseudonymised**: %s. Loopback and unspecified addresses (0.0.0.0, ::) kept."
+             % ("; ".join(parts) if parts else "nothing matched a known name or pattern"),
+             "- Paths: the checkout prints as <panel>, the data directory as <data>, the "
+             "virtualenv as <venv>, home directories as /home/[user]. Tokens are the same in "
+             "every section; [host-N], [server-N], [user-N], [tag-N] and [group-N] carry the "
+             "row's database id."]
+    if st.pattern_error:
+        lines.append("- **Pattern redaction FAILED** (%s): every section body was withheld."
+                     % st.pattern_error)
+    for source, why in st.source_errors:
+        lines.append("- **Known-name pseudonymisation incomplete**: %s unavailable (%s); only "
+                     "pattern redaction covers them. Review host and server names before posting."
+                     % (source, why))
+    lines.append("- Not covered: names under %d characters, common words, and names deleted "
+                 "since (their addresses are still caught by the IP rule). This is a best-effort "
+                 "pass: review the report before posting it." % _MIN_NAME)
+    return lines

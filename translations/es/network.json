@@ -41,7 +41,7 @@
   "Blocked IPs": "IP bloqueadas",
   "Blocking an IP denies it on every port — SSH, the panel and all game servers.": "Bloquear una IP la deniega en todos los puertos: SSH, el panel y todos los servidores de juego.",
   "Bring Tailscale up and link this machine to your tailnet. You’ll get a login link to approve in your Tailscale account.": "Levanta Tailscale y vincula esta máquina a tu tailnet. Recibirás un enlace de acceso para aprobar en tu cuenta de Tailscale.",
-  "Builds a diagnostic report — version, health, OS and a redacted log tail (no secrets). Download it or open a pre-filled GitHub issue.": "Genera un informe de diagnóstico: versión, estado, sistema operativo y un extracto final del registro depurado (sin secretos). Descárgalo o abre una incidencia de GitHub ya rellenada.",
+  "Builds a diagnostic report — version, health, settings and a log tail, with names and addresses pseudonymised. Review it before sharing, then download it or open a pre-filled GitHub issue.": "Genera un informe de diagnóstico: versión, estado, ajustes y un extracto del registro, con nombres y direcciones seudonimizados. Revísalo antes de compartirlo; después descárgalo o abre una incidencia de GitHub ya rellenada.",
   "CPU ·": "CPU ·",
   "CPU:": "CPU:",
   "Change SSH port": "Cambiar el puerto SSH",
