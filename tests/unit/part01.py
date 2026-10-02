@@ -304,7 +304,7 @@ check("f2b: _valid_ip still answers a bool", _sm_hosts._valid_ip("10.0.0.1") is 
 # saved — so saving Settings once made the panel five times more permissive than documented.
 from panel.core import config as _cfgmod
 _CFG_READERS = "".join(_modsrc(m) for m in
-                       ("app", "ssh_manager", "system_ops", "notifications", "backup"))
+                       ("app", "ssh_manager", "system_ops", "panel/services/notifications.py", "backup"))
 check("config: every DEFAULT_CONFIG key has a reader",
       all(k in _CFG_READERS for k in _cfgmod.DEFAULT_CONFIG),
       str([k for k in _cfgmod.DEFAULT_CONFIG if k not in _CFG_READERS]))

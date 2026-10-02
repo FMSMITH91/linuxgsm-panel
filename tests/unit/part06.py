@@ -891,8 +891,8 @@ check("unicode: isdecimal() still accepts a non-ASCII DECIMAL digit, so nothing 
 # No module may guard an int() with isdigit() again.
 _isdigit_users = []
 for _f in ("app.py", "auth.py", "manage.py", "models.py", "system_ops.py", "ssh_manager.py",
-           "notifications.py", "backup.py", "db_maintenance.py", "tailscale_integration.py",
-           "config.py", "i18n.py", "privileged.py", "clock.py"):
+           "panel/services/notifications.py", "backup.py", "db_maintenance.py",
+           "tailscale_integration.py", "config.py", "i18n.py", "privileged.py", "clock.py"):
     # _modpath, not a root join with an exists() skip: when these modules moved under panel/
     # the old form silently matched nothing and still reported green.
     for _fp2 in _modfiles(_f):
@@ -924,8 +924,9 @@ except Exception as _e:
 # raised. A new escalation written as a shell string fails this test instead of going unnoticed.
 import ast as _ast
 
-_ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
-                     "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
+_ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py",
+                     "panel/services/notifications.py", "backup.py", "db_maintenance.py",
+                     "tailscale_integration.py", "manage.py"]
 _CEILING = {"sudo=True": 2, "_sudo_sh": 0}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
