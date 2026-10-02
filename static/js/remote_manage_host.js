@@ -751,9 +751,14 @@ function genDebugReport(){
     dl.href=URL.createObjectURL(new Blob([d.report],{type:'text/markdown'}));
     dl.download=d.filename; dl.style.display='';
     var gh=document.getElementById('diag-report-gh');
-    var body=d.summary+'\n\n---\n**Describe the problem here.** For the full log, attach the downloaded debug file.\n';
-    gh.href=d.issues_url+'?labels=debug&title='+encodeURIComponent('Debug report')+'&body='+encodeURIComponent(body.slice(0,6000));
-    gh.style.display='';
+    // The server sizes the issue body (the prompt first, then whole summary lines) to fit a GitHub
+    // new-issue URL, from the same pseudonymised summary shown here; nothing is cut in the browser.
+    // encodeURIComponent throws on a lone surrogate, so a body that cannot be encoded hides the
+    // link rather than failing the whole report.
+    var url='';
+    try { url=d.issues_url+'?labels=debug&title='+encodeURIComponent('Debug report')+'&body='+encodeURIComponent(d.issue_body||''); }
+    catch(e){ url=''; }
+    if(url && d.issue_body){ gh.href=url; gh.style.display=''; } else { gh.style.display='none'; }
     if(msg) msg.innerHTML='<span class="text-success">Report ready — review it below before sharing.</span>';
   }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
     .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-clipboard2-data"></i> Generate debug report'; } })

@@ -4541,15 +4541,52 @@ try:
             _dbm._run_maintenance = _rm_saved
 
         # ── Debug report: generates, and never leaks the session/credential secrets ──
+        # ...nor the names it is told about (R72): canary rows, and a canary journal handed to the
+        # report's one journal read, must come out pseudonymised in the report, the summary and the
+        # issue body, through the real app and database.
         from panel.ops.system_ops import generate_debug_report
-        _dr = generate_debug_report()
-        check("debug report: returns report/summary/issues_url/filename",
-              all(k in _dr for k in ("report", "summary", "issues_url", "filename")))
+        import panel.ops.system_ops as _dr_so
+        _dr_rem = RemoteServer(name="canary-host-7731", host="198.51.100.77", username="canarysshacct",
+                               auth_method="key", auth_credential="")
+        db.session.add(_dr_rem)
+        db.session.commit()
+        _dr_rid = _dr_rem.id
+        _dr_rows = [_dr_rem,
+                    GameServer(remote_id=_dr_rem.id, name="CanaryServer", short_name="canarysrv",
+                               game_type="csgo", port=27999),
+                    User(username="canaryadmin", password_hash="x")]  # nosec B106 - a fixture row
+        db.session.add_all(_dr_rows[1:])
+        db.session.commit()
+        _dr_journal = "\n".join(
+            "Oct 02 12:00:0%d canarybox python3[1234]: %s" % (_i, _b) for _i, _b in enumerate((
+                "install: host canary-host-7731 (198.51.100.77) unreachable",
+                "backup of CanaryServer failed for canaryadmin via canarysshacct",
+                "Open it at https://203.0.113.9:5000 or https://canarynode.tail7731ab.ts.net"))) + "\n"
+        _dr_run_saved = _dr_so._debug_run
+        _dr_so._debug_run = lambda argv, timeout=5, cap=None: (
+            (_dr_journal, "", 0) if "--user" in argv else ("", "", 1))
+        try:
+            _dr = generate_debug_report()
+        finally:
+            _dr_so._debug_run = _dr_run_saved
+            for _dr_row in reversed(_dr_rows):
+                db.session.delete(_dr_row)
+            db.session.commit()
+        check("debug report: returns report/summary/issue_body/issues_url/filename",
+              all(k in _dr for k in ("report", "summary", "issue_body", "issues_url", "filename")))
         check("debug report: issues_url is a github new-issue URL",
               _dr["issues_url"].startswith("https://github.com/")
               and _dr["issues_url"].endswith("/issues/new"))
-        check("debug report: includes a Last-update section (surfaces failed/rolled-back updates)",
-              "### Last update" in _dr["report"])
+        check("debug report: includes the Updates section (surfaces failed/rolled-back updates)",
+              "\n### Updates _(" in _dr["report"])
+        _dr_leaks = sorted({"%s in %s" % (_c, _k) for _k in ("report", "summary", "issue_body")
+                            for _c in ("canary-host-7731", "198.51.100.77", "CanaryServer", "canaryadmin",
+                                       "canarysshacct", "canarybox", "203.0.113.9", "canarynode",
+                                       "tail7731ab")
+                            if _c.lower() in _dr[_k].lower()})
+        check("debug report: seeded host, address, server, user, SSH account and journal host names are "
+              "pseudonymised in the report, the summary and the issue body",
+              not _dr_leaks and "[host-%d]" % _dr_rid in _dr["report"], "; ".join(_dr_leaks))
         for _sf in (SECRET_FILE, CRED_KEY_FILE):
             if _sf.exists():
                 _sv = _sf.read_text(errors="replace").strip()

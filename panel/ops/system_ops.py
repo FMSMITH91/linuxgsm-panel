@@ -3541,12 +3541,18 @@ def panel_diagnostics():
 # Config keys that are settings/behaviour, never secrets. Everything else in
 # config.json (secret_key, cred_key, credentials, host keys, TOTP, …) is excluded
 # by construction — this is a whitelist, not a "strip the secrets" blacklist.
+# Several of these are not printed as they are: panel/ops/debug_report/config_section.py prints
+# bind_host, site_domain, site_title and tailscale_mount as classes, and the list-valued keys
+# (trusted_proxies, trusted_proxy_users, security_whitelist, autoblock_hosts,
+# socketio_cors_origins) as counts, because their values name hosts, addresses and accounts.
 _DEBUG_CONFIG_KEYS = (
     "port", "bind_host", "use_https", "trust_proxy", "cookie_secure",
-    "tailscale_setup_done", "tailscale_auto_setup", "tailscale_mount",
+    "tailscale_setup_done", "tailscale_auto_setup", "tailscale_mount", "tailscale_use_funnel",
     "setup_complete", "remember_days", "session_lifetime_hours",
     "session_protection", "audit_log_retention_days", "audit_ip_retention_days",
-    "site_title", "site_domain",
+    "ssh_timeout", "site_title", "site_domain",
+    "trusted_proxies", "trusted_proxy_users", "security_whitelist", "autoblock_hosts",
+    "socketio_cors_origins",
 )
 
 
@@ -3589,7 +3595,34 @@ def _redact(text):
     # prefixed forms like auth_token, access_key) — redact the value, keep the key.
     text = re.sub(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
                   r"cred(?:ential)?|cookie|bearer)[\w-]*)(\s*[=:]\s*)\S+", r"\1\2[redacted]", text)
-    text = re.sub(r"\b[A-Za-z0-9+/_-]{28,}={0,2}\b", "[redacted]", text)
+    return _redact_long_tokens(text)
+
+
+_LONG_TOKEN_RE = re.compile(r"\b[A-Za-z0-9+/_-]{28,}={0,2}\b")
+# A traceback frame, '  File "<path>", line N'. Anchored and bounded, so it stays linear.
+_FRAME_RE = re.compile(r'^([ \t]*File ")([^"\n]{1,4096})(", line \d+)', re.M)
+# The only frame paths the long-token rule leaves alone: ones the report's privacy pass has already
+# normalised to the checkout (<panel>) or the virtualenv (<venv>), or the system's own Python. A
+# path run is not a token, and turning '<panel>/panel/ops/system_ops.py' into '/[redacted].py'
+# lost the module, the most useful part of a frame. Every other path still goes through the rule.
+_SAFE_FRAME_PATH_RE = re.compile(r"(?:<panel>|<venv>|/usr/lib/python3[\d.]*)/[\w./-]+\.py\Z")
+_HELD_FRAME_RE = re.compile("\x00(\\d+)\x00")
+
+
+def _redact_long_tokens(text):
+    """`text` with every 28+-character token run replaced by [redacted], except a safe frame path."""
+    text = text.replace("\x00", "")
+    held = []
+
+    def _hold(m):
+        if not _SAFE_FRAME_PATH_RE.match(m.group(2)):
+            return m.group(0)
+        held.append(m.group(2))
+        return "%s\x00%d\x00%s" % (m.group(1), len(held) - 1, m.group(3))
+
+    text = _LONG_TOKEN_RE.sub("[redacted]", _FRAME_RE.sub(_hold, text))
+    if held:
+        text = _HELD_FRAME_RE.sub(lambda m: held[int(m.group(1))], text)
     return text
 
 
@@ -3657,7 +3690,7 @@ def github_repo_url():
     """Web URL of wherever this checkout's origin points (upstream for most, a fork if they
     forked). Falls back to the canonical repo. No trailing slash, so callers can append a path."""
     try:
-        out, _, rc = _git(["config", "--get", "remote.origin.url"])
+        out, _, rc = _git(["config", "--get", "remote.origin.url"], timeout=5)
         # (?::\d+)? as in _repo_slug: ssh://git@ssh.github.com:443/o/r linked to github.com/443/o.
         m = (re.search(r"github\.com(?::\d+)?[:/]([^/\s]+/[^/\s.]+)", out.strip())
              if rc == 0 else None)
@@ -3672,143 +3705,66 @@ def _github_issues_url():
     return github_repo_url() + "/issues/new"
 
 
-def generate_debug_report():
-    """Build a diagnostic report an operator can attach to a GitHub issue. Whitelisted
-    fields only + a redacted log tail. Returns {report, summary, issues_url, filename}."""
-    import sys
-    import time as _t
-    import platform
-    from panel.core import config as _cfg
-    diag = panel_diagnostics()
-    ver = panel_version()
-    integ = panel_integrity()
-    sha = integ.get("current_sha") or "unknown"
-    ts = _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime())
+def _debug_run(argv, timeout=5, cap=2 * 1024 * 1024):
+    """(stdout, stderr, rc) of an UNPRIVILEGED argv for the debug report. Never raises.
 
-    # OS / runtime
-    osname = ""
+    No shell, stdin DEVNULL, its own session, and the transports' capped reader: at `timeout` the
+    whole process group is killed (_collect_capped), so a read the report gave up on is never left
+    running. rc -1 with stderr "timed out" / "could not start" for those two cases.
+    """
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    try:
+        # Both rule ids on ONE line (see _run_verb): the argv is a literal list in
+        # panel/ops/debug_report (journalctl, timedatectl), never text from a request.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        p = subprocess.Popen(list(argv), shell=False,  # nosec B603 - fixed argv, no shell
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        return "", "could not start", -1
+    try:
+        res = _smc._collect_capped(p, max(0.1, timeout), kill=lambda: _smc._signal_process_tree(p),
+                                   threads=threading, cap=cap)
+    except Exception:
+        _log.debug("debug-report read failed", exc_info=True)
+        return "", "could not start", -1
+    if res is None:
+        return "", "timed out", -1
+    out, err, rc, _truncated = res
+    return _smc._decode_output(out), _smc._decode_output(err), rc
+
+
+def _debug_os_name():
+    """The OS's PRETTY_NAME from /etc/os-release, else platform.system(). Never raises."""
+    import platform
     try:
         with open("/etc/os-release") as f:
             kv = dict(ln.strip().split("=", 1) for ln in f if "=" in ln)
-        osname = (kv.get("PRETTY_NAME", "") or kv.get("NAME", "")).strip('"')
-    except OSError:
-        osname = platform.system()
-    kernel, _, _ = _run("uname -r", timeout=5)
-    pyver = "%d.%d.%d" % sys.version_info[:3]
+        return (kv.get("PRETTY_NAME", "") or kv.get("NAME", "")).strip('"') or platform.system()
+    except (OSError, ValueError, UnicodeDecodeError):
+        return platform.system()
 
-    # Key dependency versions
-    deps = {}
+
+def _debug_report_context():
+    """(app, request_info) for the report: the running Flask app when there is one, and what kind
+    of request asked for it (booleans and a scheme only; panel/ops/debug_report reads the rest of
+    the request itself, under has_request_context, in its request-mode sections)."""
     try:
-        from importlib.metadata import version as _v, PackageNotFoundError
-        for pkg in ("flask", "flask-socketio", "python-socketio", "paramiko",
-                    "sqlalchemy", "cryptography", "eventlet"):
-            try:
-                deps[pkg] = _v(pkg)
-            except PackageNotFoundError:
-                continue  # optional dep not installed — just omit it from the report
-    except Exception:
-        _log.debug("importlib.metadata unavailable — deps section stays empty, non-fatal", exc_info=True)
+        from flask import current_app, has_app_context, has_request_context, request
+    except ImportError:
+        return None, {"from_request": False}
+    app = current_app._get_current_object() if has_app_context() else None
+    if not has_request_context():
+        return app, {"from_request": False}
+    return app, {"from_request": True, "scheme": "https" if request.is_secure else "http"}
 
-    # Whitelisted config + object counts
-    conf = {}
-    try:
-        c = _cfg.load_config()
-        conf = {k: c.get(k) for k in _DEBUG_CONFIG_KEYS if k in c}
-    except Exception:
-        _log.debug("config unreadable — omit the config section, non-fatal", exc_info=True)
-    counts = {}
-    try:
-        from panel.db.models import RemoteServer, GameServer
-        counts = {"remotes": RemoteServer.query.count(), "game_servers": GameServer.query.count()}
-    except Exception:
-        _log.debug("DB not queryable here — omit counts, non-fatal", exc_info=True)
-    # DB health first (PRAGMA integrity_check), then size/WAL/row stats — so a corrupt or
-    # flagged database is obvious near the top of the Database section of an issue report.
-    dbs = {}
-    try:
-        import db_maintenance
-        _db_ok, _db_detail = db_maintenance.integrity_check(str(_cfg.DB_PATH))
-        dbs["health"] = "ok" if _db_ok else ("PROBLEM — %s" % _db_detail)
-    except Exception:
-        _log.debug("db integrity_check unavailable for debug report, non-fatal", exc_info=True)
-    try:
-        from panel.db.models import database_stats
-        dbs.update(database_stats())
-    except Exception:
-        _log.debug("database_stats unavailable for debug report, non-fatal", exc_info=True)
 
-    def _tbl(d):
-        return "\n".join("- **%s**: %s" % (k, v) for k, v in d.items()) or "- (none)"
+def generate_debug_report():
+    """Build the diagnostic report an operator can attach to a GitHub issue.
 
-    diag_lines = "\n".join("- [%s] **%s** — %s" % (c["level"], c["name"], c["detail"])
-                           for c in diag.get("checks", []))
-    header = ("## LinuxGSM Panel debug report\n\n"
-              "- **Generated**: %s\n- **Panel version**: %s\n- **Commit**: %s\n"
-              "- **OS**: %s\n- **Kernel**: %s\n- **Python**: %s\n\n"
-              % (ts, ver, sha, osname or "?", kernel.strip() or "?", pyver))
-    summary = (header + "### Diagnostics\n%s\n\n### Counts\n%s\n"
-               % (diag_lines or "- (none)", _tbl(counts)))
-
-    # Redacted recent log (user service first, then system unit). Grab a generous window
-    # and collapse repeated tracebacks so one recurring benign error doesn't drown out the
-    # useful lines, then redact and keep the tail.
-    # Grab a wide window (400 lines) so a recent restart's shutdown AND startup lines both land in
-    # the report — that "before + after it came back up" context is usually what's needed.
-    log, _, _ = _run("journalctl --user -u linuxgsm-panel -n 400 --no-pager 2>/dev/null", timeout=10)
-    if not log.strip():
-        log, _, _ = _run_verb("journal", ["panel", "400"], timeout=10, merge_stderr=False)
-    if log.strip():
-        log_block = _redact(_dedupe_log_tracebacks(log))
-        if len(log_block) > 8000:                       # keep the tail, but never start mid-line
-            log_block = log_block[-8000:]
-            log_block = log_block[log_block.find("\n") + 1:]   # drop the partial first line
-    else:
-        log_block = "(no journal available)"
-
-    # Last self-update outcome (from data/self-update.log): explicitly surface a FAILED /
-    # rolled-back update — exactly the case an operator needs help diagnosing — plus the log
-    # tail so the failing step is visible.
-    try:
-        upd = panel_update_log()
-    except Exception:
-        upd = {"exists": False}
-    if upd.get("exists"):
-        u_lines = upd.get("lines", [])
-        u_text = "\n".join(u_lines)
-        if "could not confirm health" in u_text:
-            u_outcome = "FAILED — update broke health AND the automatic rollback couldn't confirm health"
-        elif "failed its health check and was rolled back" in u_text or "Rolling back" in u_text:
-            u_outcome = "FAILED — update failed its health check and was rolled back to the previous version"
-        elif "Update complete" in u_text or "Health check passed" in u_text:
-            u_outcome = "succeeded"
-        elif upd.get("outcome") == "failed":
-            # Stopped with an error and no health-check rollback: before the panel was stopped
-            # (the source unreachable, a pin that cannot be verified), or inside the stopped
-            # window, whose handler puts the old code back. Either used to read "unknown (in
-            # progress…)" for good. The reason is log text, so it is redacted like the log tail.
-            u_outcome = _redact("FAILED — the installer stopped (exit %s): %s" % (
-                upd.get("exit_code"), upd.get("reason") or "see the log below"))
-        elif upd.get("outcome") == "held":
-            u_outcome = _redact("NOT UPDATED — %s" % upd.get("reason"))
-        elif upd.get("outcome") == "current":
-            u_outcome = _redact("nothing to install — %s" % upd.get("reason"))
-        else:
-            u_outcome = "unknown (in progress, or the log doesn't show a final outcome)"
-        update_section = ("\n### Last update\n- **Outcome**: %s\n```\n%s\n```\n"
-                          % (u_outcome, _redact("\n".join(u_lines[-25:])) or "(empty)"))
-    else:
-        update_section = "\n### Last update\n- No panel update has been run through the panel yet.\n"
-
-    report = (summary
-              + "\n### Dependencies\n%s\n" % _tbl(deps)
-              + "\n### Database\n%s\n" % _tbl(dbs)
-              + "\n### Config (non-secret settings only)\n%s\n" % _tbl(conf)
-              + update_section
-              + "\n### Recent log (redacted)\n```\n%s\n```\n"
-              "\n<!-- This report was generated by the panel. It contains no secrets "
-              "(credentials, keys, tokens, and emails are excluded/redacted). Review "
-              "before sharing. -->\n" % log_block)
-
-    return {"report": report, "summary": summary,
-            "issues_url": _github_issues_url(),
-            "filename": "linuxgsm-panel-debug-%s-%s.md" % (sha, _t.strftime("%Y%m%d-%H%M%S"))}
+    A thin wrapper over panel.ops.debug_report.generate (see that package for the sections, the
+    privacy pass and the time budget). Returns {report, summary, issue_body, issues_url, filename}.
+    """
+    from panel.ops import debug_report
+    app, request_info = _debug_report_context()
+    return debug_report.generate(app=app, request_info=request_info)

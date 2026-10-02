@@ -1689,6 +1689,38 @@ _secret_keys = {"secret_key", "cred_key", "secret", "credentials", "auth_credent
                 "host_key", "totp_secret", "backup_codes", "password"}
 check("debug whitelist excludes every secret key",
       not (set(_so._DEBUG_CONFIG_KEYS) & _secret_keys))
+# R73: a traceback frame keeps its module once the privacy pass has normalised its path; a long token
+# on the same line is still redacted, and a path that was NOT normalised gets no exemption.
+_rd_frame = _rd('  File "<panel>/panel/ops/debug_report/config_section.py", line 3, in f '
+                'Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0Kk1Ll2Mm3Nn4')
+_rd_raw = _rd('  File "/srv/acct/linuxgsm-panel/panel/ops/debug_report/config_section.py", line 3')
+check("redact: a normalised frame path keeps its module, while a 40-character token beside it is redacted",
+      '"<panel>/panel/ops/debug_report/config_section.py", line 3' in _rd_frame
+      and "Aa1Bb2Cc3" not in _rd_frame and _rd_frame.endswith("[redacted]"), _rd_frame)
+check("redact: ...and a frame path that was not normalised is still redacted",
+      "debug_report/config_section" not in _rd_raw and "[redacted]" in _rd_raw, _rd_raw)
+# R65: what config.json says the panel is called, where it is and where it binds is printed as a
+# class, never as typed: canaries in those keys appear nowhere in the Config section.
+from panel.ops.debug_report import config_section as _dr_cs  # noqa: E402
+from panel.ops.debug_report._base import Ctx as _DrCtx  # noqa: E402
+_dr_lc = config.load_config
+config.load_config = lambda: dict(config.DEFAULT_CONFIG, site_title="CanaryTitle7731",
+                                  site_domain="canary7731.tail1234ab.ts.net", bind_host="198.51.100.77",
+                                  tailscale_mount="/canary7731 path", trusted_proxies=["203.0.113.77"],
+                                  trusted_proxy_users=["canaryproxyacct"],
+                                  security_whitelist=["198.51.100.78"], socketio_cors_origins=["*"])
+try:
+    _dr_cfg_text = "\n".join(_dr_cs.section_config(_DrCtx()).lines)
+finally:
+    config.load_config = _dr_lc
+check("debug report config: site_title, site_domain, bind_host, the mount and list entries print as "
+      "classes and counts, never their values",
+      not any(c in _dr_cfg_text for c in ("CanaryTitle7731", "canary7731", "198.51.100.7", "203.0.113.77",
+                                          "canaryproxyacct"))
+      and "- **site_title**: custom" in _dr_cfg_text and "- **site_domain**: set (a .ts.net name)" in _dr_cfg_text
+      and "- **bind_host**: file [ip:private]" in _dr_cfg_text and "- **tailscale_mount**: custom" in _dr_cfg_text
+      and "**trusted_proxies**: 1 entry" in _dr_cfg_text and "('*' listed and ignored: yes)" in _dr_cfg_text,
+      _dr_cfg_text)
 
 # ── parsers that were quadratic: the same answers, in linear time ────────────────────────────
 # SonarCloud's S8786 flagged these patterns as super-linear, and measured on this machine each one

@@ -88,10 +88,11 @@ for _attr, _fns in _WATCHED.items():
 # gate below can tell a part left off this list from one that ran.
 # part16 to part19 run BEFORE part15, which must stay last: it ends the run with a look for
 # threads left running, and that look has to come after every part that could have started one.
-# part19 comes right after part18, whose app, client and row helpers it imports.
+# part19 comes right after part18, whose app, client and row helpers it imports. part20 (the debug
+# report) builds its own app and imports only part01.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
-          "part15")
+          "part20", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
