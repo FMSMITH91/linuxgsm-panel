@@ -309,8 +309,16 @@ check("runtime-path: every file of tools/gamedig that install.sh places COUNTS",
       and all(_so._is_runtime_path("tools/gamedig/" + _n) is True
               for _n, _ in _priv_p3.GAMEDIG_FILES),
       repr([(_n, _so._is_runtime_path("tools/gamedig/" + _n)) for _n, _ in _priv_p3.GAMEDIG_FILES]))
-check("runtime-path: the exception list names a file that exists",
-      all((_os_p3 := __import__("os")).path.exists(f) for f in _so._RUNTIME_EXCEPTIONS))
+# Every single-file entry in .github/update-paths.txt names a file that exists: a stale one, or a
+# misspelt one, classifies nothing, and the file it meant falls to a broader entry.
+_up_rules = _so._local_update_rules()
+_up_single = [_e for _k in _so._RULE_KINDS for _e in _up_rules.get(_k, ())
+              if not _e.endswith("/") and not any(_c in _e for _c in "*?[")]
+check("runtime-path: every single-file entry in update-paths.txt names a file that exists",
+      len(_up_single) >= 20
+      and all((_os_p3 := __import__("os")).path.isfile(os.path.join(_root, _e))
+              for _e in _up_single),
+      repr([_e for _e in _up_single if not os.path.isfile(os.path.join(_root, _e))]))
 check("runtime-path: LICENSE is noise", _so._is_runtime_path("LICENSE") is False)
 check("runtime-path: dotfiles are noise", _so._is_runtime_path(".gitignore") is False)
 # Codacy's configuration is read by Codacy alone; a commit that changes only it (the Prospector
@@ -350,6 +358,81 @@ try:
           "--no-renames" in _utr_args[-1], repr(_utr_args[-1]))
 finally:
     _so._git = _orig_utr_git
+# ── the rules are DATA, read from the commit being offered ─────────────────────────────────────
+# They lived in system_ops.py, so naming a new tool's config file as noise (.sonarcloud.properties,
+# #382) changed a file the panel runs, and every panel was offered that one line as an update. Now
+# a commit's own .github/update-paths.txt decides what that commit changes.
+_UP_TEXT = open(os.path.join(_root, _so._UPDATE_PATHS_FILE), encoding="utf-8").read()
+check("update-paths: the rules file parses, and names itself noise",
+      _so._parse_update_paths(_UP_TEXT) is not None
+      and _so._path_class(_so._UPDATE_PATHS_FILE) == "noise")
+check("update-paths: system_ops holds no path list of its own (a list there is a runtime change)",
+      not any(hasattr(_so, _n) for _n in ("_NOISE_DIRS", "_NOISE_FILES", "_RUNTIME_DIRS",
+                                           "_RUNTIME_FILES", "_RUNTIME_EXCEPTIONS")))
+check("update-paths: a line that is not `<runtime|noise> <path>` rejects the whole file",
+      _so._parse_update_paths(_UP_TEXT + "\nnoise a b\n") is None
+      and _so._parse_update_paths(_UP_TEXT + "\nskip x\n") is None
+      and _so._parse_update_paths("# only a comment\n") is None
+      and _so._parse_update_paths("runtime x\nnoise y\n") == {"runtime": ["x"], "noise": ["y"]})
+check("update-paths: the most specific entry decides, and a tie is runtime",
+      _so._best_rule({"runtime": ["t/x"], "noise": ["t/"]}, "t/x") == "runtime"
+      and _so._best_rule({"runtime": ["s/"], "noise": ["s/.lint"]}, "s/.lint") == "noise"
+      and _so._best_rule({"runtime": ["p/"], "noise": ["*.md"]}, "p/a.md") == "noise"
+      and _so._best_rule({"runtime": ["a/b/"], "noise": ["a/"]}, "a/b/c") == "runtime"
+      and _so._best_rule({"runtime": ["d/"], "noise": ["d/"]}, "d/e") == "runtime"
+      and _so._best_rule({"runtime": ["*.cfg"], "noise": ["*.CFG"]}, "x.cfg") == "runtime"
+      and _so._best_rule({"runtime": ["d/"], "noise": ["e/"]}, "f") is None)
+
+
+def _up_git(diff_out, show, calls):
+    """A _git stand-in: `diff_out` for the diff or log, (show's stdout, rc) for `git show`."""
+    def git(args, timeout=45):
+        calls.append(list(args))
+        if args[0] == "show":
+            return show[0], "", show[1]
+        return diff_out, "", 0
+    return git
+
+
+_up_calls = []
+_up_newtool = _UP_TEXT + "\nnoise .newtool.yml\n"
+_up_saved_git, _up_saved_local = _so._git, dict(_so._LOCAL_RULES)
+try:
+    _so._git = _up_git(".github/update-paths.txt\n.newtool.yml\n", (_up_newtool, 0), _up_calls)
+    check("update-paths: a commit that only names a new tool's file as noise is NOT an update",
+          _so._update_touches_runtime("origin/main") is False
+          and ["show", "origin/main:" + _so._UPDATE_PATHS_FILE] in _up_calls, repr(_up_calls))
+    # The same diff, judged by this checkout's rules (which do not name .newtool.yml): an update.
+    _so._git = _up_git(".github/update-paths.txt\n.newtool.yml\n", ("", 128), [])
+    check("update-paths: ...because it reads the TARGET's rules: with them unreadable, the new "
+          "file is unnamed here and counts (fail safe)",
+          _so._update_touches_runtime("origin/main") is True)
+    _so._git = _up_git(".newtool.yml\n", (_up_newtool + "noise a b\n", 0), [])
+    check("update-paths: ...and a malformed target list is not read in part: the new file counts",
+          _so._update_touches_runtime("origin/main") is True)
+    _so._git = _up_git("app.py\n", (_up_newtool, 0), [])
+    check("update-paths: a runtime file in the same diff is still an update (control)",
+          _so._update_touches_runtime("origin/main") is True)
+    _up_log = "aaaaaaa\tname the new tool\n\n.newtool.yml\nbbbbbbb\tfix the panel\n\napp.py\n"
+    _so._git = _up_git(_up_log, (_up_newtool, 0), [])
+    _up_cl = _so._runtime_changelog("HEAD..origin/main")
+    _so._git = _up_git(_up_log, ("", 128), [])
+    _up_cl_local = _so._runtime_changelog("HEAD..origin/main")
+    check("update-paths: the update's commit list is filtered by the target's rules too",
+          _up_cl == ["bbbbbbb fix the panel"]
+          and _up_cl_local == ["aaaaaaa name the new tool", "bbbbbbb fix the panel"],
+          repr((_up_cl, _up_cl_local)))
+    # No rules at all, here or there: every path counts, so every diff is an update.
+    _so._LOCAL_RULES.clear()
+    _so._LOCAL_RULES["rules"] = {}
+    _so._git = _up_git("docs/x.md\n", ("", 128), [])
+    check("update-paths: with no readable rules anywhere, a diff is an update (fail safe)",
+          _so._update_touches_runtime("origin/main") is True)
+finally:
+    _so._git = _up_saved_git
+    _so._LOCAL_RULES.clear()
+    _so._LOCAL_RULES.update(_up_saved_local)
+
 check("runtime-path: the fuzz image's build files and the JS lint config are noise; the files "
       "beside them are not",
       _so._is_runtime_path(".clusterfuzzlite/Dockerfile") is False
@@ -360,7 +443,7 @@ check("runtime-path: the fuzz image's build files and the JS lint config are noi
 # Every repo file install.sh stages root-owned (stage_root_source <repo path> <name>) is something
 # a host runs. Classified as noise, a commit changing only it is no longer offered as an update at
 # all, so the host would never get it. tools/panel-helper and tools/gamedig/* sit in a noise
-# directory, which is what _RUNTIME_EXCEPTIONS is for.
+# directory, which is why .github/update-paths.txt names each of them `runtime`.
 with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
         __file__)))), "install.sh"), encoding="utf-8") as _srs_fh:
     _srs_src = _srs_fh.read()
@@ -402,8 +485,8 @@ for _cls_dp, _cls_dns, _cls_fns in os.walk(_root):
 _cls_unnamed = sorted(_f for _f in _cls_files if _so._path_class(_f) is None)
 check("runtime-path: every file in the repository is named as one a host runs or one it does not",
       len(_cls_files) >= 300 and not _cls_unnamed,
-      "files=%d unnamed=%r (name each in panel/ops/system_ops.py: _RUNTIME_FILES/_RUNTIME_DIRS "
-      "if a host runs it, _NOISE_FILES/_NOISE_DIRS if not)" % (len(_cls_files), _cls_unnamed[:8]))
+      "files=%d unnamed=%r (name each in .github/update-paths.txt: `runtime <path>` if a host "
+      "runs it, `noise <path>` if not)" % (len(_cls_files), _cls_unnamed[:8]))
 check("runtime-path: ...and a file named on neither side counts as one a host runs (control)",
       _so._path_class("a-new-file.cfg") is None and _so._is_runtime_path("a-new-file.cfg") is True
       and _so._path_class("panel/x.py") == "runtime" and _so._path_class("tests/x.py") == "noise")

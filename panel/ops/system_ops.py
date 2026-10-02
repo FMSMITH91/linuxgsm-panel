@@ -1,4 +1,5 @@
 """System operations for the local server — UFW, Tailscale SSH, OS updates, reboot."""
+import fnmatch
 import http.client
 import json
 import logging
@@ -1209,82 +1210,92 @@ def _remote_ci_state(sha):
     return "passing"
 
 
-# Every file in the repository is named on one side or the other: what a host RUNS
-# (_RUNTIME_DIRS, _RUNTIME_FILES), and what it does not (the noise lists below). Only a change to
-# the first raises "Update available" (the owner's rule). A path named on NEITHER side still counts
-# as runtime, so a host is never left behind on a file nobody classified, and a unit gate fails the
-# build for any tracked file that is unnamed, so an unclassified file cannot raise a false update
-# either. The gate also holds the runtime side complete: every module app.py, manage.py and
-# db_maintenance.py import, and every repo file the installers read, must be named runtime.
-_RUNTIME_DIRS = ("panel/", "static/", "templates/", "translations/")
-# Paths that DON'T affect the running panel — changes touching only these shouldn't raise the
-# "update available" badge (e.g. editing the README or a workflow).
-_NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/", ".clusterfuzzlite/")
-# requirements.in is what requirements.txt is compiled FROM: neither the panel nor install.sh reads
-# it. A dependency reaches a host through requirements.txt, which tests/unit holds to lock every
-# name in the .in, so a commit that changes only the .in changes nothing a host installs.
-# requirements-bootstrap.in is the same for pip's own lockfile, requirements-bootstrap.txt, which
-# install.sh does read, and which therefore counts.
-# .codacy.yaml and .prospector.yaml configure Codacy's analysis of the repository, and
-# .sonarcloud.properties SonarCloud's; neither the panel nor install.sh reads any of them, so a
-# commit that only tunes the analysis is not an update.
-_NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore",
-                ".pre-commit-config.yaml", "codecov.yml", ".flake8", "mypy.ini", "requirements.in",
-                "requirements-bootstrap.in", ".codacy.yaml", ".prospector.yaml",
-                "static/js/.eslintrc.json", ".sonarcloud.properties"}
-# Files that live inside a noise directory but DO affect the running host, checked before the
-# directory rule. A denylist of directories cannot express "this one file matters".
-#
-# tools/panel-helper is the reason this exists. It is the root-owned end of the sudo boundary, it
-# lives outside the panel's checkout once installed, and only install.sh — run as root — can
-# refresh it. The update badge is what tells the operator to do that. Classified as noise, a
-# commit that changed ONLY the helper raised no badge and appeared in no changelog, so the panel
-# moved on while the installed helper did not: it then answers an unknown verb with rc 2 and no
-# fallback, and the feature behind that verb fails silently. That is precisely the drift the
-# helper's own docstring warns about, and the signal for it was suppressed.
-#
-# tools/gamedig is the same kind of piece: install.sh installs its three files root-owned on
-# every host and runs the script, and every game account runs the tree it installs. A commit
-# that changed only them (every Dependabot bump of the lockfile) was listed as "docs, tests or
-# tooling" on the update card. privileged.GAMEDIG_FILES names them; a unit test holds the two
-# together.
-_RUNTIME_EXCEPTIONS = {"tools/panel-helper", "tools/gamedig/package.json",
-                       "tools/gamedig/package-lock.json", "tools/gamedig/install-gamedig.sh"}
-# The files outside _RUNTIME_DIRS that a host runs or reads: the panel's entry points, the
-# installers and recovery tools (install.sh re-stages recover.sh, db_maintenance.py and itself
-# root-owned on every update), the two lockfiles pip installs from, and VERSION (the version a
-# checkout without .git reports).
-_RUNTIME_FILES = {"app.py", "manage.py", "db_maintenance.py", "VERSION", "install.sh",
-                  "uninstall.sh", "recover.sh", "reset-password.sh", "requirements.txt",
-                  "requirements-bootstrap.txt"} | _RUNTIME_EXCEPTIONS
+# Which repository files a host RUNS, and which it does not, is DATA: .github/update-paths.txt,
+# read from the commit being offered (_update_rules). Only a change to a file it names `runtime`
+# raises "Update available" (the owner's rule). The lists were here once, and naming a new tool's
+# config file in them (.sonarcloud.properties, #382) was then a change to a file the panel runs:
+# every panel was offered that one line as an update. A file in .github/, the rules name
+# themselves noise, and a commit's own rules decide what that commit changes.
+_UPDATE_PATHS_FILE = ".github/update-paths.txt"
+_RULE_KINDS = ("runtime", "noise")      # runtime FIRST: on a tie it is the one kept
+_LOCAL_RULES = {}
 
 
-def _is_noise_path(p):
-    """Docs, licence, and the named noise directories and files (p already normalised)."""
-    low = p.lower()
-    return (low.endswith(".md") or low == "license" or low.startswith("license.")
-            or p.startswith(_NOISE_DIRS) or p in _NOISE_FILES)
+def _parse_update_paths(text):
+    """{'runtime': [...], 'noise': [...]} from update-paths.txt's text; None for text that is not.
+
+    One malformed line rejects the whole file: a list read in part could leave a file the host
+    runs named as noise by a broader entry."""
+    rules = {k: [] for k in _RULE_KINDS}
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) != 2 or parts[0] not in rules:
+            return None
+        rules[parts[0]].append(parts[1])
+    return rules if rules["runtime"] and rules["noise"] else None
 
 
-def _path_class(path):
-    """'runtime' or 'noise' for a repo path named on either side; None for one named on neither."""
+def _local_update_rules():
+    """This checkout's own rules; {} (every path unnamed, so every path counts) if unreadable."""
+    if "rules" not in _LOCAL_RULES:
+        try:
+            with open(os.path.join(PANEL_DIR, _UPDATE_PATHS_FILE), encoding="utf-8") as fh:
+                _LOCAL_RULES["rules"] = _parse_update_paths(fh.read()) or {}
+        except OSError:
+            _LOCAL_RULES["rules"] = {}
+    return _LOCAL_RULES["rules"]
+
+
+def _update_rules(ref):
+    """The rules as commit `ref` states them -- the commit an update would install -- or this
+    checkout's own when `ref`'s cannot be read. `ref` is validated by the callers, as for the diff."""
+    out, _, rc = _git(["show", "%s:%s" % (ref, _UPDATE_PATHS_FILE)])
+    return (_parse_update_paths(out) if rc == 0 else None) or _local_update_rules()
+
+
+def _rule_weight(entry, p):
+    """How specifically `entry` names path `p` (a file > a glob > a directory, then the longer);
+    None when it does not name it."""
+    if entry.endswith("/"):
+        return (0, len(entry)) if p.startswith(entry) else None
+    if any(c in entry for c in "*?["):
+        return (1, len(entry)) if fnmatch.fnmatchcase(p.lower(), entry.lower()) else None
+    return (2, 0) if p == entry else None
+
+
+def _best_rule(rules, p):
+    """The kind of the most specific entry naming `p`, runtime on a tie; None if none names it."""
+    best = None
+    for kind in _RULE_KINDS:
+        for entry in rules.get(kind, ()):
+            w = _rule_weight(entry, p)
+            if w is not None and (best is None or w > best[0]):
+                best = (w, kind)
+    return best[1] if best else None
+
+
+def _path_class(path, rules=None):
+    """'runtime' or 'noise' for a repo path the rules name; None for one they do not.
+
+    `rules` defaults to this checkout's own (_local_update_rules)."""
     p = path.strip()
-    if p.startswith("./"):      # a literal "./" prefix only — NOT lstrip("./"), which would also
+    if p.startswith("./"):      # a literal "./" prefix only -- NOT lstrip("./"), which would also
         p = p[2:]               # eat the leading dot of dotfiles/dotdirs (.github, .gitignore).
-    if not p or (p not in _RUNTIME_FILES and _is_noise_path(p)):
-        return "noise"          # _RUNTIME_FILES FIRST: the helper and gamedig sit in a noise dir
-    if p in _RUNTIME_FILES or p.startswith(_RUNTIME_DIRS):
-        return "runtime"
-    return None
+    if not p:
+        return "noise"
+    return _best_rule(_local_update_rules() if rules is None else rules, p)
 
 
-def _is_runtime_path(path):
+def _is_runtime_path(path, rules=None):
     """True if this repo path affects the RUNNING panel (code, templates, static, requirements,
     install.sh, …). Docs/CI/test-scaffolding paths return False, and so does an empty one.
 
     A path named on neither side counts as runtime: a host must never miss a change to a file it
     runs because nobody classified it. The unit gate keeps every tracked file named."""
-    return _path_class(path) != "noise"
+    return _path_class(path, rules) != "noise"
 
 
 def _update_touches_runtime(target_ref):
@@ -1301,7 +1312,10 @@ def _update_touches_runtime(target_ref):
     if rc != 0:
         return True
     files = [f for f in (out or "").splitlines() if f.strip()]
-    return any(_is_runtime_path(f) for f in files)
+    if not files:
+        return False
+    rules = _update_rules(target_ref)
+    return any(_is_runtime_path(f, rules) for f in files)
 
 
 def _no_runtime_update(base, target_sha, ci_state, behind, behind_tip):
@@ -1337,6 +1351,7 @@ def _runtime_changelog(rev_range, runtime_only=True):
     if not runtime_only:
         return [("%s %s" % (m.group(1), m.group(2)))
                 for m in (header.match(ln) for ln in out.splitlines()) if m]
+    rules = _update_rules(rev_range.split("..", 1)[-1])     # the commits' own: _update_rules
     result, cur, runtime = [], None, False
     for line in out.splitlines():
         m = header.match(line)
@@ -1344,7 +1359,7 @@ def _runtime_changelog(rev_range, runtime_only=True):
             if cur and runtime:
                 result.append(cur)
             cur, runtime = "%s %s" % (m.group(1), m.group(2)), False
-        elif line.strip() and _is_runtime_path(line):
+        elif line.strip() and _is_runtime_path(line, rules):
             runtime = True
     if cur and runtime:
         result.append(cur)

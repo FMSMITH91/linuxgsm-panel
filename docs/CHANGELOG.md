@@ -301,6 +301,14 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Adding a tool's settings file to the repository is no longer offered as a panel update.** The
+  update check decides which files the panel runs from a list, and that list lived in the panel's
+  own code. Naming SonarCloud's new settings file in it, as a file the panel does not run, was then
+  itself a change to the panel's code, and every panel was offered that one line as an update. The
+  list is now a data file, `.github/update-paths.txt`, read from the version being offered, and it
+  counts as a file the panel does not run. Naming a new tool's file there is not an update any more.
+  Anything the list does not name still counts as a change. A test fails the build if any file in
+  the repository is left unnamed.
 - **Installing a game on a minimal host no longer fails at "Downloading LinuxGSM".** The install
   fetched LinuxGSM with wget, and LinuxGSM runs curl, one step BEFORE the step that installs the
   game's dependencies, wget and curl among them. Ubuntu's minimal and cloud images have neither, so
