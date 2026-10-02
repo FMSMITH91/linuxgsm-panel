@@ -719,10 +719,14 @@ def _e_head_blobs_parse():
        ({"db_maintenance.py": "1" * 40, "install.sh": "2" * 40, "tools/panel-helper": "3" * 40},
         1, ["ls-tree", "HEAD", "--"]))
     _p21(_so21, "_git", lambda args, timeout=45: ("", "fatal", 128))
+    rdir = os.path.join(_T21, "rootdir-unknown")
+    os.makedirs(rdir)
+    with open(os.path.join(rdir, "install.sh"), "wb") as fh:
+        fh.write(b"#!/bin/bash\n")
+    _p21(_so21, "_root_dir", lambda: rdir)
+    states = {k: v["state"] for k, v in _so21.root_piece_state(force=True).items()}
     check("root pieces: a failed ls-tree is 'not compared', never 'differs'",
-          _so21._head_blobs() is None and all(
-              v["state"] in ("unknown", "missing", "unreadable")
-              for v in _so21.root_piece_state(force=True).values()), "")
+          all([_so21._head_blobs() is None, states.get("install.sh") == "unknown"]), repr(states))
 
 
 def _e_older_commit_and_conf():
@@ -797,6 +801,8 @@ def _e_tools():
         asked.append((tool, path))
         return None if tool == "wget" else "/usr/bin/" + tool
     _p21(_rp21, "shutil", _Over21(_sh21, which=_which))
+    # The service's own PATH, minimal (a systemd unit's can lack /usr/sbin and /usr/local/bin).
+    _p21(_rp21, "os", _Over21(os, environ={"PATH": "/opt/p21-only"}))
     gd = os.path.join(_T21, "gamedig", "current", "node_modules", ".bin")
     os.makedirs(gd)
     open(os.path.join(gd, "gamedig"), "w").close()
