@@ -1635,7 +1635,12 @@ try:
     try:
         _ul_so._update_log_path = lambda: _ul_path
         _ulj = c.get("/api/panel/update-log").get_json() or {}
-        from panel.ops.system_ops import generate_debug_report as _ul_gdr
+        # The report's Updates section, which reads the run's outcome (debug_report/updates.py).
+        from panel.ops.debug_report import updates as _ul_upd
+        from panel.ops.debug_report._base import Ctx as _UlCtx
+
+        def _ul_gdr():
+            return {"report": "\n".join(_ul_upd.section_updates(_UlCtx(app=app)).lines)}
         with app.app_context():
             _ul_rep = _ul_gdr()["report"]
         # ...and a hold (exit 0, install.sh's "Not updated" line), which is not "unknown" either.
@@ -1674,11 +1679,11 @@ try:
     check("debug report: a self-update that stopped before the panel restarted is reported as FAILED "
           "with its reason, not 'unknown (in progress…)'",
           "- **Outcome**: FAILED — the installer stopped (exit 1): Couldn't reach the update source" in _ul_rep,
-          _ul_rep[_ul_rep.find("### Last update"):][:300])
+          _ul_rep[_ul_rep.find("- **Outcome**"):][:300])
     check("debug report: ...an up-to-date run as nothing to install, not 'unknown (in progress…)'",
           "- **Outcome**: nothing to install — Already up to date (version 9.9.9)"
           in _ul_reps.get("current", ""),
-          _ul_reps.get("current", "")[_ul_reps.get("current", "").find("### Last update"):][:300])
+          _ul_reps.get("current", "")[_ul_reps.get("current", "").find("- **Outcome**"):][:300])
     check("debug report: ...and the reason in a stop's or a hold's outcome is redacted like the log",
           all("s3cr3tvalue123" not in _ul_reps.get(_k, "s3cr3tvalue123")
               and "ops@example.com" not in _ul_reps.get(_k, "ops@example.com") for _k in ("failed", "held"))
@@ -1690,7 +1695,7 @@ try:
     check("debug report: ...and a hold as NOT UPDATED, with install.sh's reason",
           "- **Outcome**: NOT UPDATED — Not updated: held at 0123456789, because the pinned commit "
           "could not be verified on main." in _ul_rep_held,
-          _ul_rep_held[_ul_rep_held.find("### Last update"):][:300])
+          _ul_rep_held[_ul_rep_held.find("- **Outcome**"):][:300])
 
     # change-port validation: out-of-range ports are refused BEFORE any save/restart, so
     # these are side-effect-free. (A valid port would restart the panel — not exercised here.)

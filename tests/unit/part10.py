@@ -2260,8 +2260,9 @@ def _so7_fail2ban_reads():
     SO._run_verb = _p7_verb_by({"f2b-status": ("", "", 1)})
     _jails_fail = SO._fail2ban_jails()
     SO._run, SO._run_verb = _so7_saved["_run"], _so7_saved["_run_verb"]
-    eq("so/_fail2ban_jails: only well-formed jail names; a failed read is none", (_jails, _jails_fail),
-       (["sshd", "linuxgsm-panel"], []))
+    # A failed read is None, not []: [] is "no jails configured", which a stopped fail2ban is not.
+    eq("so/_fail2ban_jails: only well-formed jail names; a failed read is None (unread), not none",
+       (_jails, _jails_fail), (["sshd", "linuxgsm-panel"], None))
     eq("so/fail2ban_overview: each readable jail's counts and banned IPs; an unreadable jail is left out",
        (_jd_bad, _ov), (None, {"installed": True, "jails": [
            {"jail": "sshd", "currently_banned": 2, "total_banned": 9, "total_failed": 40,
@@ -2488,6 +2489,7 @@ def _so7_panel_diagnostics():
     from cryptography.x509.oid import NameOID as _p7_oid  # noqa: E402
     from cryptography.hazmat.primitives import hashes as _p7_hashes, serialization as _p7_ser  # noqa: E402
     from cryptography.hazmat.primitives.asymmetric import ec as _p7_ec  # noqa: E402
+    from panel.ops.debug_report import _src_db as _p7_srcdb, _src_systemd as _p7_srcsd  # noqa: E402
     _p7_key = _p7_ec.generate_private_key(_p7_ec.SECP256R1())
 
     def _p7_cert(start_days, end_days):
@@ -2504,6 +2506,16 @@ def _so7_panel_diagnostics():
     _svc = {"on": False}
     _hv = {"res": None, "exc": None}
 
+    def _p7_unit():
+        # The shared `systemctl show` (debug_report._src_systemd), as a healthy system unit for
+        # this process, or as a bus that could not be read.
+        if not _svc["on"]:
+            return {"scope": None, "props": {}, "error": "unreadable"}
+        return {"scope": "system", "error": None,
+                "props": {"UnitFileState": "enabled", "ActiveState": "active",
+                          "SubState": "running", "MainPID": str(os.getpid()),
+                          "WorkingDirectory": _dg}}
+
     def _p7_diag(**over):
         """panel_diagnostics() with the given overrides; answers {check name: (level, detail)}."""
         _p7_cfgmod.DATA_DIR = _p7_pl.Path(over.get("data", os.path.join(_dg, "data")))
@@ -2516,15 +2528,25 @@ def _so7_panel_diagnostics():
         SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run([], _hv["res"], _hv["exc"]))
         SO.unattended_upgrades_status = over.get("ua", lambda: {"enabled": True, "detail": "on"})
         SO.PANEL_DIR = over.get("panel_dir", _dg)
+        # No path is hidden from git (the hidden-path check has its own checks in part21).
+        SO._git = lambda args, timeout=45: ("H app.py", "", 0)
+        SO._HELPER_PROBE["res"] = None          # each call is a fresh `sudo -n` probe
+        _sd_saved, _db_saved = _p7_srcsd.unit_show, _p7_srcdb.integrity
+        _p7_srcsd.unit_show = lambda timeout=5: over.get("unit", _p7_unit)()
+        if "integrity" in over:
+            _p7_srcdb.integrity = over["integrity"]
         SO.os = _Over(os, path=_Over(os.path, exists=lambda p: (
-            _svc["on"] if p.endswith("linuxgsm-panel.service") else os.path.exists(p))))
+            (_svc["on"] and p == "/etc/systemd/system/linuxgsm-panel.service")
+            if p.endswith("linuxgsm-panel.service") else os.path.exists(p))))
         try:
             _r = SO.panel_diagnostics()
         finally:
+            _p7_srcsd.unit_show, _p7_srcdb.integrity = _sd_saved, _db_saved
+            SO._HELPER_PROBE["res"] = None
             for _n in _cfg7_names:
                 setattr(_p7_cfgmod, _n, _cfg7_saved[_n])
             for _n in ("panel_integrity", "_helper_present", "subprocess", "unattended_upgrades_status",
-                       "PANEL_DIR", "os"):
+                       "PANEL_DIR", "os", "_git"):
                 setattr(SO, _n, _so7_saved[_n])
         return {c["name"]: (c["level"], c["detail"]) for c in _r["checks"]}, _r["summary"]
 
@@ -2539,12 +2561,14 @@ def _so7_panel_diagnostics():
     eq("so/diagnostics: every probe that cannot answer is a warning or a failure, never 'ok'",
        {k: _d1[k][0] for k in _d1} if isinstance(_d1, dict) else _d1,
        {"File integrity": "warn", "Data directory": "fail", "Database": "fail", "Encryption keys": "ok",
-        "Privileged helper": "warn", "Configuration": "fail", "Disk space": "warn", "Service": "warn",
-        "Automatic security updates": "warn"})
+        "Host credentials": "warn", "Privileged helper": "warn", "Configuration": "fail",
+        "Disk space": "warn", "Service": "warn", "Automatic security updates": "warn"})
     check("so/diagnostics: ...the summary is 'fail', and a missing cred_key is explained as normal",
           _d1s == "fail" and "created when the first" in _d1["Encryption keys"][1]
           and _d1["Privileged helper"][1] == "Installed, but its verb table could not be read."
-          and _d1["Configuration"][1] == "config.json could not be read or parsed.", repr(_d1))
+          and _d1["Configuration"][1] == "config.json could not be read or parsed."
+          and _d1["Service"][1].startswith("systemd state unreadable (unreadable)")
+          and _d1["Data directory"][1] == "data/ under the panel checkout does not exist.", repr(_d1))
     open(os.path.join(_dg, "data", "panel.db"), "w").close()               # empty database file
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(_p7_cert(-30, 5))
@@ -2560,7 +2584,7 @@ def _so7_panel_diagnostics_2():
           _d2["File integrity"] == ("fail", "3 panel file(s) differ from the installed version.")
           and _d2["Database"] == ("fail", "Database file is empty.")
           and _d2["Privileged helper"][0] == "fail" and ", ".join(_all_verbs[:4]) + ", …" in _d2["Privileged helper"][1]
-          and _d2["TLS certificate"] == ("warn", "Expires in 5 day(s).")
+          and _d2["TLS certificate"][0] == "warn" and _d2["TLS certificate"][1].endswith("Expires in 5 day(s).")
           and _d2["Service"][0] == "ok" and _d2["Data directory"][0] == "ok", repr(_d2))
     _p7_garbage(os.path.join(_dg, "data", "panel.db"))
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
@@ -2572,11 +2596,18 @@ def _so7_panel_diagnostics_2():
 
 def _so7_panel_diagnostics_3():
     global _d4s, _d5s, f
-    check("so/diagnostics: a clean tree, a current helper; a corrupt DB and an expired cert still fail",
+    from panel.ops.system_ops import _DB_DAMAGED_TEXT as _p7_dmg  # noqa: E402
+    # A file that is not a database at all is DAMAGE, read over a read-only connection off the hub
+    # (it used to be "Couldn't run the integrity check", from a read-write connect that raised), and
+    # with no rolling backup beside it a restart starts EMPTY -- the text says so rather than
+    # promising a restore. An expired cert this process was not seen to boot with is a warning:
+    # without the boot record nobody knows it is in use.
+    check("so/diagnostics: a clean tree, a current helper; a corrupt DB fails, an expired cert of unknown use warns",
           _d3["File integrity"] == ("ok", "All panel files match the installed version (abc1234).")
           and _d3["Privileged helper"] == ("ok", "Installed and current (%d verbs)." % len(_all_verbs))
-          and _d3["Database integrity"] == ("warn", "Couldn't run the integrity check.")
-          and _d3["TLS certificate"][0] == "fail" and _d3["TLS certificate"][1].startswith("Expired ")
+          and _d3["Database integrity"] == ("fail", _p7_dmg[None])
+          and _d3["TLS certificate"][0] == "warn" and "Expired " in _d3["TLS certificate"][1]
+          and "In use: unknown" in _d3["TLS certificate"][1]
           and _d3["Encryption keys"] == ("ok", "Session + credential keys present."), repr(_d3))
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(_p7_cert(-1, 100))
@@ -2585,29 +2616,34 @@ def _so7_panel_diagnostics_3():
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(b"-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n")
     _d5, _d5s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""})
-    _qc_real = sys.modules["sqlite3"]
-
-    class _P7QC:
-        def execute(self, _sql):
-            return self
-
-        def fetchone(self):
-            return ("*** in database main ***\nPage 7: btreeInitPage() returns error code 11",)
-
-        def close(self):
-            pass
-    sys.modules["sqlite3"] = _Over(_qc_real, connect=lambda *a, **k: _P7QC())
-    try:
-        _d6, _d6s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""})
-    finally:
-        sys.modules["sqlite3"] = _qc_real
-    eq("so/diagnostics: a database that opens but fails quick_check is a FAILURE, not a pass",
-       (_d6.get("Database integrity"), _d6s),
-       (("fail", "Corruption detected — the panel restores from backup automatically on restart."), "fail"))
+    # The card's own path reads the integrity check through debug_report._src_db (off the hub), and
+    # what a restart will do is worded by the state of the rolling backup.
+    _d6, _d6s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""},
+                         integrity=lambda timeout=20: {"state": "damaged", "backup": "ok"})
+    _d7, _d7s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""},
+                         integrity=lambda timeout=20: {"state": "not_checked", "backup": None,
+                                                       "detail_class": "OperationalError"})
+    eq("so/diagnostics: a damaged database with a healthy backup says a restart restores it; one that "
+       "could not be checked is a warning by class, never damage",
+       (_d6.get("Database integrity"), _d6s, _d7.get("Database integrity")),
+       (("fail", _p7_dmg["ok"]), "fail",
+        ("warn", "Couldn't run the integrity check (OperationalError).")))
+    check("so/diagnostics: ...and no wording promises a restore that may not happen",
+          "restores from backup automatically" not in repr((_d3, _d6, _d7))
+          and "starts EMPTY" in _p7_dmg[None], repr(_p7_dmg))
     eq("so/diagnostics: a valid cert, an unqueryable helper, and a cert that will not parse",
-       (_d4["TLS certificate"], _d4["Privileged helper"], _d4["File integrity"][1], _d5["TLS certificate"]),
-       (("ok", "Valid for 100 more day(s)."), ("warn", "Installed, but could not be queried."),
+       (_d4["TLS certificate"][0], _d4["TLS certificate"][1].endswith("Valid for 100 more day(s)."),
+        _d4["Privileged helper"], _d4["File integrity"][1], _d5["TLS certificate"]),
+       ("ok", True, ("warn", "Installed, but could not be queried."),
         "All panel files match the installed version (?).", ("warn", "Present but couldn't be parsed.")))
+    # A unit FILE on disk said "auto-starts on boot" whatever systemd thought of it. The unit file
+    # is there (_svc on) and systemd cannot be read: that is a warning saying so, never 'ok'.
+    _d8, _d8s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""},
+                         unit=lambda: {"scope": None, "props": {}, "error": "unreadable"})
+    check("so/diagnostics: a unit file on disk is not 'auto-starts on boot' -- systemd that cannot "
+          "be read is a warning", _d8.get("Service", ("", ""))[0] == "warn"
+          and _d8["Service"][1].startswith("systemd state unreadable")
+          and "auto-starts on boot" not in _d8["Service"][1], repr(_d8.get("Service")))
     _hv["exc"] = None
     _svc["on"] = False
 
