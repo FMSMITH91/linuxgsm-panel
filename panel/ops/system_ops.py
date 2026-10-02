@@ -1225,12 +1225,13 @@ _NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/", ".clusterfuz
 # name in the .in, so a commit that changes only the .in changes nothing a host installs.
 # requirements-bootstrap.in is the same for pip's own lockfile, requirements-bootstrap.txt, which
 # install.sh does read, and which therefore counts.
-# .codacy.yaml and .prospector.yaml configure Codacy's analysis of the repository; neither the panel
-# nor install.sh reads either, so a commit that only tunes the linting is not an update.
+# .codacy.yaml and .prospector.yaml configure Codacy's analysis of the repository, and
+# .sonarcloud.properties SonarCloud's; neither the panel nor install.sh reads any of them, so a
+# commit that only tunes the analysis is not an update.
 _NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore",
                 ".pre-commit-config.yaml", "codecov.yml", ".flake8", "mypy.ini", "requirements.in",
                 "requirements-bootstrap.in", ".codacy.yaml", ".prospector.yaml",
-                "static/js/.eslintrc.json"}
+                "static/js/.eslintrc.json", ".sonarcloud.properties"}
 # Files that live inside a noise directory but DO affect the running host, checked before the
 # directory rule. A denylist of directories cannot express "this one file matters".
 #
