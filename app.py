@@ -145,6 +145,10 @@ from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get
 from panel.ops import ssh_manager as _sm
 from panel.ops import tailscale_integration as ts
 from panel.ops import system_ops as so
+# The debug report's runtime hooks: the log handlers and error counter (R23, R24), the hub-lag watch
+# (R17) and Serve's boot outcome as a fixed reason (R20). Through the modules, at call time.
+from panel.ops.debug_report import errors as _dr_errors
+from panel.ops.debug_report import process as _dr_process
 from panel.ops import backup as bk
 from panel.services import lgsm_data
 
@@ -1386,9 +1390,38 @@ def _session_lifetimes(cfg):
     return hours * 3600, timedelta(days=days)
 
 
+def _attach_debug_logging(app):
+    """The stderr handler and the error counter (panel/ops/debug_report/errors.py), once per process.
+
+    After app.logger exists, so Flask has already added its own default handler. Best-effort: a
+    logging setup that fails must never stop the panel starting.
+    """
+    try:
+        _dr_errors.attach_log_handlers(app.logger)
+    except Exception:
+        _log.debug("debug-report log handlers not attached", exc_info=True)
+
+
+def _spawn_daemon(fn, *args):
+    """Start `fn(*args)` on a daemon thread from this module's `threading` (green once patched)."""
+    threading.Thread(target=fn, args=args, daemon=True, name="hub-lag-watch").start()
+
+
+def _start_hub_lag_watch():
+    """The hub-lag greenlet (R17): once per process, only under eventlet's thread patching."""
+    try:
+        _dr_process.start_hub_lag_watch(spawn=_spawn_daemon)
+    except Exception:
+        _log.debug("hub-lag watch not started", exc_info=True)
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
+    # The commit this process loaded at start, for the debug report's header (R4). app.config, not
+    # the module global alone: app.py runs as __main__ while the routes import a second copy.
+    app.config["PANEL_COMMIT"] = PANEL_COMMIT
+    _attach_debug_logging(app)
 
     # One-time nudge for installs still sitting on the previous, longer session defaults
     # (12h idle / 14d remember) → the tighter 8h / 3d. Only touches values left at the old
@@ -1842,6 +1875,7 @@ def create_app():
     # reads the raw X-Forwarded-For, before ProxyFix above rewrites anything.
     app.wsgi_app = ProxiedBanGate(app.wsgi_app)
 
+    _start_hub_lag_watch()
     return app
 
 
@@ -3032,6 +3066,52 @@ def _f2b_record_events(app, new_bans, unbans):
                              "%d IPs were just banned from the panel login at once." % len(new_bans))
 
 
+def _boot_ssl_args(app, cfg, host, port):
+    """The self-signed TLS arguments for socketio.run, recording what really started (R20).
+
+    app.config["BOOT_TLS"] is whether the panel serves TLS itself since boot; BOOT_TLS_ERROR the
+    exception CLASS when TLS was configured and failed to start (never its message: it carries
+    paths). The flow is the one this block always had: a failure prints and serves plain HTTP.
+    """
+    ssl_args = {}
+    app.config["BOOT_TLS_ERROR"] = None
+    if _effective_https(cfg):
+        cert_path = str(DATA_DIR / "ssl" / "cert.pem")
+        key_path = str(DATA_DIR / "ssl" / "key.pem")
+        try:
+            _ensure_self_signed_cert(cert_path, key_path, cfg.get("site_domain") or host)
+            ssl_args = {"certfile": cert_path, "keyfile": key_path}
+            print(f"  🔒 HTTPS enabled (self-signed) — https://{host}:{port}")
+            print("     Browsers will show a certificate warning; click through to proceed.")
+        except Exception as e:
+            app.config["BOOT_TLS_ERROR"] = type(e).__name__
+            print(f"  [!] Could not enable HTTPS ({e}); serving plain HTTP instead.")
+    app.config["BOOT_TLS"] = bool(ssl_args)
+    return ssl_args
+
+
+def _boot_serve(app, cfg, port):
+    """Re-point Tailscale Serve at the scheme being served, recording the outcome (R20).
+
+    app.config["BOOT_SERVE"]: "ok", "failed:<fixed reason class>" or "not attempted". The failure
+    message is raw tailscale stderr (a *.ts.net name, a login URL), so only its class is kept.
+    """
+    app.config["BOOT_SERVE"] = "not attempted"
+    if not cfg.get("tailscale_setup_done"):
+        return
+    try:
+        _ok, _msg = ts.setup_tailscale_serve(
+            port=port,
+            mount=cfg.get("tailscale_mount", "/") or "/",
+            funnel=cfg.get("tailscale_use_funnel", False),
+            backend_scheme=_ts_backend_scheme(cfg),
+        )
+        app.config["BOOT_SERVE"] = "ok" if _ok else "failed:" + _dr_process.serve_reason(_msg)
+    except Exception as e:
+        app.config["BOOT_SERVE"] = "failed:" + type(e).__name__
+        _log.debug("ignored non-fatal error", exc_info=True)
+
+
 def _ts_backend_scheme(cfg):
     """Loopback scheme Tailscale Serve must use to reach us — has to match how the panel
     is actually listening right now, or Serve 502s. When we're terminating self-signed
@@ -3134,6 +3214,9 @@ if __name__ == "__main__":
     # What this process really listens on, for pages that must not claim more than that: the
     # wizard's complete page (a stored loopback bind applies only from the next start).
     app.config["_BOOT_BIND"] = host
+    # The same, under the names the debug report reads (R19), with the port beside it.
+    app.config["BOOT_BIND"] = host
+    app.config["BOOT_PORT"] = port
     _scheme = "https" if _effective_https(cfg) else "http"
     print(f"LinuxGSM Panel starting on {host}:{port}")
     _proxy_bind_note = _trust_proxy_bind_warning(cfg, host)
@@ -3156,31 +3239,12 @@ if __name__ == "__main__":
 
     # Optional built-in HTTPS with a self-signed cert (for public, no-domain, no-proxy
     # setups). Browsers will warn about the self-signed cert — that's expected.
-    ssl_args = {}
-    if _effective_https(cfg):
-        cert_path = str(DATA_DIR / "ssl" / "cert.pem")
-        key_path = str(DATA_DIR / "ssl" / "key.pem")
-        try:
-            _ensure_self_signed_cert(cert_path, key_path, cfg.get("site_domain") or host)
-            ssl_args = {"certfile": cert_path, "keyfile": key_path}
-            print(f"  🔒 HTTPS enabled (self-signed) — https://{host}:{port}")
-            print("     Browsers will show a certificate warning; click through to proceed.")
-        except Exception as e:
-            print(f"  [!] Could not enable HTTPS ({e}); serving plain HTTP instead.")
+    ssl_args = _boot_ssl_args(app, cfg, host, port)
 
     # Self-heal Tailscale Serve's upstream scheme. If we flipped between self-signed HTTPS
     # and plain HTTP since Serve was configured (e.g. HTTPS during first-run setup, then
     # HTTP once Tailscale took over TLS on the next restart), re-point Serve at the scheme
     # we're actually listening on now. Idempotent when already correct; best-effort.
-    if cfg.get("tailscale_setup_done"):
-        try:
-            ts.setup_tailscale_serve(
-                port=port,
-                mount=cfg.get("tailscale_mount", "/") or "/",
-                funnel=cfg.get("tailscale_use_funnel", False),
-                backend_scheme=_ts_backend_scheme(cfg),
-            )
-        except Exception:
-            _log.debug("ignored non-fatal error", exc_info=True)
+    _boot_serve(app, cfg, port)
 
     app.socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)
