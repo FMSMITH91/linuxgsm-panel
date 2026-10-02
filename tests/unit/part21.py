@@ -99,6 +99,13 @@ def _fresh_integrity():
     _db21._cache.update(key=None, at=0.0, res=None)
 
 
+def _lv(pair, level, *subs, absent=()):
+    """Whether a (level, text) answer has `level`, holds every one of `subs` and none of `absent`."""
+    text = (pair or ("", ""))[1] or ""
+    return all([(pair or ("",))[0] == level] + [s in text for s in subs]
+               + [s not in text for s in absent])
+
+
 def _privileged_delta(before, after):
     return {k: after[k] - before.get(k, 0) for k in after
             if isinstance(after[k], int) and after[k] != before.get(k, 0)}
@@ -231,25 +238,23 @@ def _b_service():
         "notme": _so21._diag_service(_unit(MainPID="1")),
     }
     check("diagnostics Service: systemd that cannot be read is a warning saying so, never 'ok'",
-          got["unread"][0] == "warn" and got["unread"][1].startswith("systemd state unreadable"),
-          repr(got["unread"]))
+          _lv(got["unread"], "warn", "systemd state unreadable"), repr(got["unread"]))
     check("diagnostics Service: an enabled, running system unit that is this process is ok",
-          got["ok"][0] == "ok" and "MainPID is this process: yes" in got["ok"][1], repr(got["ok"]))
+          _lv(got["ok"], "ok", "MainPID is this process: yes"), repr(got["ok"]))
     check("diagnostics Service: a user unit with linger OFF warns that it does not start at boot",
-          got["linger"][0] == "warn" and "linger is OFF" in got["linger"][1], repr(got["linger"]))
+          _lv(got["linger"], "warn", "linger is OFF"), repr(got["linger"]))
     check("diagnostics Service: a unit whose WorkingDirectory is not this checkout warns, without "
           "printing the directory",
-          got["elsewhere"][0] == "warn" and "not this checkout" in got["elsewhere"][1]
-          and "alice" not in got["elsewhere"][1], repr(got["elsewhere"]))
+          _lv(got["elsewhere"], "warn", "not this checkout", absent=("alice",)), repr(got["elsewhere"]))
     check("diagnostics Service: a disabled unit, and a MainPID that is not this process, warn",
-          got["disabled"][0] == "warn" and "does not start at boot" in got["disabled"][1]
-          and got["notme"][0] == "warn" and "MainPID is not this process" in got["notme"][1],
+          all([_lv(got["disabled"], "warn", "does not start at boot"),
+               _lv(got["notme"], "warn", "MainPID is not this process")]),
           repr((got["disabled"], got["notme"])))
     for p in (_so21._USER_UNIT, _so21._SYSTEM_UNIT):
         open(p, "w").close()
     both = _so21._diag_service(_unit())
     check("diagnostics Service: a per-user AND a system unit both present warns of two installs",
-          both[0] == "warn" and "BOTH" in both[1] and _T21 not in both[1], repr(both))
+          _lv(both, "warn", "BOTH", absent=(_T21,)), repr(both))
 
 
 def _b_stub_quiet_diag():
@@ -317,18 +322,18 @@ def _b_no_paths_in_summary():
           data not in text and _T21 not in text and _so21.PANEL_DIR not in text, text)
 
 
-def _b_helper_probe():
+def _probe_harness(first):
+    """The helper check with `sudo -n` stubbed: (calls made, the answer to give next)."""
     _b_stub_quiet_diag()
     _p21(_so21, "_helper_present", lambda: True)
     _p21(_so21, "origin_category", lambda: "canonical-https")
     _p21(_so21, "_tracked_branch", lambda: "main")
     sd = os.path.join(_T21, "sudoers.d")
-    os.makedirs(sd)
+    os.makedirs(sd, exist_ok=True)
     for n in ("90-cloud-init-users", "linuxgsm-panel", "panel-extra", "zz-alice", "x.conf"):
         open(os.path.join(sd, n), "w").close()
     _p21(_so21, "_SUDOERS_D", sd)
-    calls = []
-    answer = {"r": _sp21.CompletedProcess([], 1, "", "sudo: a password is required\n")}
+    calls, answer = [], {"r": first}
 
     def _run(argv, **kw):
         calls.append((list(argv), kw))
@@ -338,41 +343,46 @@ def _b_helper_probe():
     _p21(_so21, "subprocess", _Over21(_sp21, run=_run))
     _p21(_so21, "os", _Over21(os, geteuid=lambda: 1000))
     _so21._HELPER_PROBE.update(at=0.0, res=None)
+    return calls, answer
+
+
+def _b_helper_probe():
+    calls, answer = _probe_harness(_sp21.CompletedProcess([], 1, "", "sudo: a password is required\n"))
     refused = _so21._diag_privileged_helper()
     argv, kw = calls[0] if calls else ([], {})
     eq("helper check: it runs `sudo -n <helper> --list-verbs`, as every real call is shaped",
        argv, ["sudo", "-n", _priv21.HELPER_PATH, "--list-verbs"])
     check("helper check: ...no shell, stdin closed, its own session, and a timeout of 10 s or less",
-          kw.get("shell") is False and kw.get("stdin") == _sp21.DEVNULL
-          and kw.get("start_new_session") is True and 0 < (kw.get("timeout") or 99) <= 10, repr(kw))
+          all([kw.get("shell") is False, kw.get("stdin") == _sp21.DEVNULL,
+               kw.get("start_new_session") is True, 0 < (kw.get("timeout") or 99) <= 10]), repr(kw))
     check("helper check: sudo refusing the helper is a FAILURE naming the refusal as a class and "
           "the sudoers.d files that sort after the grant, by count when not a known name",
-          refused[0] == "fail" and "a password is required" in refused[1]
-          and "2 other file(s)" in refused[1] and "alice" not in refused[1]
-          and "panel-extra" not in refused[1], repr(refused))
+          _lv(refused, "fail", "a password is required", "2 other file(s)",
+              absent=("alice", "panel-extra")), repr(refused))
     answer["r"] = _sp21.CompletedProcess([], 0, "\n".join(v + "\t1" for v in _priv21.verbs()), "")
     cached = _so21._diag_privileged_helper()
     check("helper check: the probe is cached (a refused `sudo -n` is logged every time it runs)",
-          len(calls) == 1 and cached == refused, repr((len(calls), cached)))
+          all([len(calls) == 1, cached == refused]), repr((len(calls), cached)))
     _so21._HELPER_PROBE["at"] = 0.0
     ok = _so21._diag_privileged_helper()
     check("helper check: ...and asked again once the cache is stale; a current table is ok",
-          len(calls) == 2 and ok[0] == "ok" and ok[1].startswith("Installed and current"), repr(ok))
-    _so21._HELPER_PROBE.update(at=0.0, res=None)
-    answer["r"] = _sp21.CompletedProcess([], 1, "", "sudo: alice is not in the sudoers file.\n")
+          all([len(calls) == 2, _lv(ok, "ok", "Installed and current")]), repr(ok))
+
+
+def _b_helper_probe_2():
+    _calls, answer = _probe_harness(
+        _sp21.CompletedProcess([], 1, "", "sudo: alice is not in the sudoers file.\n"))
     named = _so21._diag_privileged_helper()
     check("helper check: a refusal that names the account is reduced to its class",
-          named[0] == "fail" and "not in the sudoers file" in named[1] and "alice" not in named[1],
-          repr(named))
+          _lv(named, "fail", "not in the sudoers file", absent=("alice",)), repr(named))
     _so21._HELPER_PROBE.update(at=0.0, res=None)
     answer["r"] = _sp21.TimeoutExpired("sudo", 10)
     stall = _so21._diag_privileged_helper()
     check("helper check: sudo that does not answer is a stall (warn), NOT a refusal",
-          stall[0] == "warn" and "not a refusal" in stall[1], repr(stall))
+          _lv(stall, "warn", "not a refusal"), repr(stall))
     _p21(_so21, "os", _Over21(os, geteuid=lambda: 0))
     eq("helper check: as root the helper is run directly, without sudo",
        _so21._helper_probe_argv(), [_priv21.HELPER_PATH, "--list-verbs"])
-    _so21._HELPER_PROBE.update(at=0.0, res=None)
 
 
 def _b_helper_absent():
@@ -871,12 +881,21 @@ def _f_ci_record():
     e1 = (snap.get("1111111") or (0, {}))[1]
     e3 = (snap.get("3333333") or (0, {}))[1]
     check("CI gate: what held a commit is recorded -- failing, pending, and required-but-absent "
-          "check names", e1.get("failing") == ["checks (ubuntu)"] and e1.get("pending") == ["coverage"]
-          and e3.get("absent") == ["Open code-scanning alerts"], repr((e1, e3)))
+          "check names", all([e1.get("failing") == ["checks (ubuntu)"],
+                              e1.get("pending") == ["coverage"],
+                              e3.get("absent") == ["Open code-scanning alerts"]]), repr((e1, e3)))
     rate = (snap.get("ratelimit") or (0, {}))[1]
     check("CI gate: GitHub's X-RateLimit answer is recorded, and nothing else of the headers",
-          rate.get("remaining") == 41 and rate.get("limit") == 60 and "SECRET" not in repr(snap),
+          all([rate.get("remaining") == 41, rate.get("limit") == 60, "SECRET" not in repr(snap)]),
           repr(rate))
+    _p21(_rs21, "put", _raiser(RuntimeError("stats broke")))
+    _p21(_ur21, "urlopen", lambda req, timeout=8: _Resp21(list(_REQ21), hdr))
+    check("CI gate: recording that raises cannot change or break the answer",
+          _so21._remote_ci_state("5" * 40) == "passing", "")
+
+
+def _f_ci_rate_limited():
+    _p21(_so21, "_repo_slug", lambda: "o/r")
 
     def _http403(req, timeout=8):
         raise _ue21.HTTPError("u", 403, "rate limited", {"X-RateLimit-Remaining": "0",
@@ -885,15 +904,12 @@ def _f_ci_record():
     st403 = _so21._remote_ci_state("4" * 40)
     rate = (_rs21.snapshot("ci_walk").get("ratelimit") or (0, {}))[1]
     check("CI gate: a 403 is still 'pending', and its rate-limit answer is recorded",
-          st403 == "pending" and rate.get("code") == 403 and rate.get("remaining") == 0, repr(rate))
+          all([st403 == "pending", rate.get("code") == 403, rate.get("remaining") == 0]), repr(rate))
     res = _upd21.Result()
     _upd21._rate_lines(_rs21.snapshot("ci_walk"), res)
     check("CI gate: the report says 'pending' is the rate limit, not CI",
-          "the rate limit, not CI" in res.lines[0] and res.findings, repr(res.lines))
-    _p21(_rs21, "put", _raiser(RuntimeError("stats broke")))
-    _p21(_ur21, "urlopen", lambda req, timeout=8: _Resp21(list(_REQ21), hdr))
-    check("CI gate: recording that raises cannot change or break the answer",
-          _so21._remote_ci_state("5" * 40) == "passing", "")
+          all([res.lines, "the rate limit, not CI" in "".join(res.lines), res.findings]),
+          repr(res.lines))
 
 
 def _f_ci_no_deadlock():
@@ -972,15 +988,18 @@ def _f_run_outcome():
            for k, v in cases.items()}
     got["live"] = _upd21.run_outcome(cases["died"], now - 5, now=now)
     check("last run: the EXIT STATUS comes first -- exit 124 after 'Health check passed' FAILED",
-          got["124"][0] == "fail" and got["124"][1].startswith("FAILED — the installer was stopped "
-                                                               "after 30 minutes (exit 124)")
-          and "even though 'Health check passed'" in got["124"][1], repr(got["124"]))
+          _lv(got["124"], "fail", "FAILED — the installer was stopped after 30 minutes (exit 124)",
+              "even though 'Health check passed'"), repr(got["124"]))
     check("last run: exit 0 ('done') is a success, with or without the marker, never 'unknown'",
-          got["done"] == ("ok", "succeeded — Update complete: 2026.09.30 → 2026.10.01")
-          and got["bare"][1].startswith("succeeded") and "unknown" not in repr(got), repr(got))
+          all([got["done"] == ("ok", "succeeded — Update complete: 2026.09.30 → 2026.10.01"),
+               _lv(got["bare"], "ok", "succeeded"), "unknown" not in repr(got)]), repr(got))
     check("last run: no exit line in a log silent for 20 minutes is a run that DIED; a fresh one "
-          "is still running", got["died"][0] == "fail" and got["died"][1].startswith("DIED")
-          and got["live"] == ("ok", "running (no exit line yet)"), repr((got["died"], got["live"])))
+          "is still running", all([_lv(got["died"], "fail", "DIED — the log stopped at"),
+                                   got["live"] == ("ok", "running (no exit line yet)")]),
+          repr((got["died"], got["live"])))
+
+
+def _f_last_run_lines():
     log = os.path.join(_T21, "self-update.log")
     with open(log, "w") as fh:
         fh.write("=== panel self-update ===\n✓ Update complete: a → b\n=== installer exit 0 ===\n")
@@ -988,16 +1007,17 @@ def _f_run_outcome():
     _p21(_so21, "_update_log_path", lambda: log)
     res = _upd21.Result()
     _upd21._last_run_lines(res, "canonical-https")
+    first = res.lines[0] if res.lines else ""
     check("last run: dated from the log's mtime, with its exit status",
-          res.lines and res.lines[0].startswith("- **Last run**: %s" % _t21.strftime(
-              "%Y-%m-%d %H:%M UTC", _t21.gmtime(1790000000))) and "exit 0" in res.lines[0],
-          repr(res.lines))
+          all([first.startswith("- **Last run**: %s" % _t21.strftime(
+              "%Y-%m-%d %H:%M UTC", _t21.gmtime(1790000000))), "exit 0" in first]), repr(res.lines))
     _p21(_so21, "_update_log_path", lambda: os.path.join(_T21, "no-such.log"))
     res = _upd21.Result()
     _upd21._last_run_lines(res, "canonical-https")
+    first = res.lines[0] if res.lines else ""
     check("last run: no log says updates over SSH or deploy write none -- not 'no update was ever run'",
-          "updates run over SSH or by deploy do not write one" in res.lines[0]
-          and "has been run through the panel yet" not in res.lines[0], repr(res.lines))
+          all(["updates run over SSH or by deploy do not write one" in first,
+               "has been run through the panel yet" not in first]), repr(res.lines))
 
 
 def _f_history():
@@ -1061,9 +1081,9 @@ def _f_installer_said():
 
 
 # ══ G. Data: the database and the backups (R59-R62) ═════════════════════════════════════════════
-def _g_app():
-    app = _Flask21("p21data")
-    path = os.path.join(_T21, "data.db")
+def _g_app(name):
+    app = _Flask21("p21" + name.split(".")[0])
+    path = os.path.join(_T21, name)
     app.config.update(SQLALCHEMY_DATABASE_URI="sqlite:///" + path,
                       SQLALCHEMY_TRACK_MODIFICATIONS=False)
     db.init_app(app)
@@ -1082,8 +1102,16 @@ def _g_app():
     return app, path
 
 
+def _g_section(app):
+    with app.app_context():
+        res = _data21.section_database(_Ctx21())
+        db.session.remove()
+        db.engine.dispose()
+    return res, "\n".join(res.lines)
+
+
 def _g_database():
-    app, path = _g_app()
+    app, path = _g_app("data.db")
     _p21(_cfg21, "DB_PATH", _pl21.Path(path))
     _p21(_cfg21, "load_config", lambda: {"audit_ip_retention_days": 90})
     open(path + ".corrupt-1700000000", "w").close()
@@ -1091,42 +1119,42 @@ def _g_database():
     _p21(_db21, "integrity", lambda timeout=20: {"state": "damaged", "backup": "missing",
                                                  "detail": "Page 7: btreeInitPage() error 11",
                                                  "took": 0.12})
-    with app.app_context():
-        res = _data21.section_database(_Ctx21())
-        db.session.remove()
-        db.engine.dispose()
-    text = "\n".join(res.lines)
+    res, text = _g_section(app)
+    levels = [f["level"] for f in res.findings]
     check("database: a damaged file is DAMAGED (fail) with its first message, from the shared check",
-          "**health**: DAMAGED: Page 7: btreeInitPage() error 11" in text
-          and any(f["level"] == "fail" for f in res.findings), text[:400])
+          all(["**health**: DAMAGED: Page 7: btreeInitPage() error 11" in text, "fail" in levels]),
+          text[:400])
     check("database: moved-aside copies are listed by basename (once, not their -wal), no rolling "
-          "backup is a warning", "moved-aside copies**: 1 (data.db.corrupt-1700000000)" in text
-          and "rolling backup**: none on disk" in text and _T21 not in text, text)
+          "backup is a warning", all(["moved-aside copies**: 1 (data.db.corrupt-1700000000)" in text,
+                                      "rolling backup**: none on disk" in text, _T21 not in text]),
+          text)
     check("database: schema drift names a declared index that is missing",
           "missing declared indexes ix_metric_sample_server_ts" in text, text)
     check("database: metric_sample older than its retention is flagged (the prune has not run)",
-          "**metric_sample** 1 rows · oldest 40.0 d (retention 14 d ✗)" in text
-          and any("metric_sample is older" in f["text"] for f in res.findings), text)
+          all(["**metric_sample** 1 rows · oldest 40.0 d (retention 14 d ✗)" in text,
+               any("metric_sample is older" in f["text"] for f in res.findings)]), text)
     check("database: the audit digest prints action names only -- never a username, target, "
           "detail or address, and a malformed action name is dropped",
-          "login_failed ×1" in text and "panel_change_binding" in text and "bad action" not in text
-          and not any(s in text for s in ("zed_user", "hunter2", "198.51.100", "0.0.0.0:443")), text)
+          all(["login_failed ×1" in text, "panel_change_binding" in text, "bad action" not in text]
+              + [s not in text for s in ("zed_user", "hunter2", "198.51.100", "0.0.0.0:443")]), text)
+    eq("database: the network-and-security SQL has one placeholder per action",
+       _data21._NETSEC_SQL.count("?"), len(_data21._NETSEC_ACTIONS))
+
+
+def _g_database_unread():
+    app, path = _g_app("data2.db")
+    _p21(_cfg21, "DB_PATH", _pl21.Path(path))
+    _p21(_cfg21, "load_config", lambda: {"audit_ip_retention_days": 90})
     _p21(_db21, "integrity", lambda timeout=20: {"state": "not_checked", "backup": None,
                                                  "detail_class": "OperationalError", "took": 0.01})
     _p21(_db21, "run_ro", lambda queries, timeout=10: {k: "error:OperationalError" for k in queries})
-    with app.app_context():
-        res2 = _data21.section_database(_Ctx21())
-        db.session.remove()
-        db.engine.dispose()
-    t2 = "\n".join(res2.lines)
+    res, text = _g_section(app)
+    levels = [f["level"] for f in res.findings]
     check("database: a check that could not run is NOT CHECKED (warn), and tables that could not "
           "be counted say so -- never 0 rows",
-          "NOT CHECKED: could not be read (OperationalError)" in t2
-          and "**metric_sample**: could not count (OperationalError)" in t2 and " 0 rows" not in t2
-          and any(f["level"] == "warn" for f in res2.findings)
-          and not any(f["level"] == "fail" for f in res2.findings), t2)
-    eq("database: the network-and-security SQL has one placeholder per action",
-       _data21._NETSEC_SQL.count("?"), len(_data21._NETSEC_ACTIONS))
+          all(["NOT CHECKED: could not be read (OperationalError)" in text,
+               "**metric_sample**: could not count (OperationalError)" in text,
+               " 0 rows" not in text, "warn" in levels, "fail" not in levels]), text)
 
 
 def _g_backups():
@@ -1184,14 +1212,16 @@ def _run21():
     for fn in (_a_integrity_states, _a_integrity_read_only, _a_integrity_off_hub_and_cached,
                _a_run_ro, _a_run_ro_interrupted,
                _b_service, _b_shared_reads, _b_no_paths_in_summary, _b_helper_probe,
+               _b_helper_probe_2,
                _b_helper_absent, _b_file_integrity, _b_integrity_during_update, _b_tls,
                _b_host_credentials,
                _c_fail2ban, _c_callers_keep_meaning, _c_ufw, _c_route,
                _d_counters, _d_core_counters, _d_fresh_helper,
                _e_root_pieces, _e_head_blobs_parse, _e_older_commit_and_conf, _e_origin, _e_tools,
-               _f_cache, _f_ci_record, _f_ci_no_deadlock, _f_walk_recorded, _f_branch_and_checkout,
-               _f_run_outcome, _f_history, _f_installer_said,
-               _g_database, _g_backups, _g_snapshots):
+               _f_cache, _f_ci_record, _f_ci_rate_limited, _f_ci_no_deadlock, _f_walk_recorded,
+               _f_branch_and_checkout,
+               _f_run_outcome, _f_last_run_lines, _f_history, _f_installer_said,
+               _g_database, _g_database_unread, _g_backups, _g_snapshots):
         try:
             fn()
         except Exception as e:  # noqa: BLE001 - a harness failure must fail by name, not end the suite

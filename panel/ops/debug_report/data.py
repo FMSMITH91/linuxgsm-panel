@@ -150,6 +150,14 @@ def _aside_line(res):
     res.find("warn", "Database", "the self-heal has replaced a damaged database before")
 
 
+def _table_drift(insp, table):
+    """(missing 'table.column's, missing declared index names) of one table that exists."""
+    cols = {c["name"] for c in insp.get_columns(table.name)}
+    idx = {i["name"] for i in insp.get_indexes(table.name)}
+    return (["%s.%s" % (table.name, c.name) for c in table.columns if c.name not in cols],
+            [i.name for i in table.indexes if i.name and i.name not in idx])
+
+
 def _schema_drift():
     """(missing tables, missing columns, missing declared indexes, tables lacking AUTOINCREMENT)."""
     from sqlalchemy import inspect
@@ -157,15 +165,13 @@ def _schema_drift():
     from panel.db import models
     insp = inspect(models.db.engine)
     have_tables = set(insp.get_table_names())
-    m_tables, m_cols, m_idx = [], [], []
+    m_tables = [t.name for t in models.db.metadata.sorted_tables if t.name not in have_tables]
+    m_cols, m_idx = [], []
     for t in models.db.metadata.sorted_tables:
-        if t.name not in have_tables:
-            m_tables.append(t.name)
-            continue
-        cols = {c["name"] for c in insp.get_columns(t.name)}
-        m_cols += ["%s.%s" % (t.name, c.name) for c in t.columns if c.name not in cols]
-        idx = {i["name"] for i in insp.get_indexes(t.name)}
-        m_idx += [i.name for i in t.indexes if i.name and i.name not in idx]
+        if t.name in have_tables:
+            cols, idx = _table_drift(insp, t)
+            m_cols += cols
+            m_idx += idx
     with models.db.engine.connect() as conn:
         lacking = [m.__tablename__ for m in models._AUTOINCREMENT_MODELS
                    if id_sequence.lacks_autoincrement(conn, m.__tablename__)]
@@ -251,24 +257,33 @@ def _when(ts):
     return "%s ago" % ago(time.time() - t) if t is not None else "?"
 
 
+def _failed_text(rows):
+    return " · ".join("%s ×%s (last %s)" % (a, format(int(n), ","), _when(t))
+                      for a, n, t in rows if _ACTION_RE.match(str(a))) or "none recorded"
+
+
+def _netsec_text(rows):
+    return " · ".join("%s %s %s" % (a, _when(t), "ok" if s else "FAILED")
+                      for a, t, s in rows if _ACTION_RE.match(str(a))) or "none recorded"
+
+
+def _origin_text(rows):
+    return " · ".join("%s %s" % (o, format(int(n), ",")) for o, n in rows) or "none"
+
+
+def _digest_line(label, rows, render):
+    """One digest line: the rendered rows, or 'could not be read (Class)' -- never 'none'."""
+    if isinstance(rows, str):
+        return "  - %s: could not be read (%s)" % (label, rows.split(":", 1)[-1])
+    return "  - %s: %s" % (label, render(rows or []))
+
+
 def _digest_lines(got, res):
-    failed, netsec, origin = got.get("failed"), got.get("netsec"), got.get("origin")
     res.add("- **Audit log, last 7 days**:")
-    if isinstance(failed, str):
-        res.add("  - failed actions: could not be read (%s)" % failed.split(":", 1)[-1])
-    else:
-        res.add("  - failed actions: " + (" · ".join(
-            "%s ×%s (last %s)" % (a, format(int(n), ","), _when(t))
-            for a, n, t in failed if _ACTION_RE.match(str(a))) or "none recorded"))
-    if isinstance(netsec, str):
-        res.add("  - network & security changes: could not be read (%s)" % netsec.split(":", 1)[-1])
-    else:
-        res.add("  - network & security changes (newest first): " + (" · ".join(
-            "%s %s %s" % (a, _when(t), "ok" if s else "FAILED")
-            for a, t, s in netsec if _ACTION_RE.match(str(a))) or "none recorded"))
-    if isinstance(origin, list):
-        res.add("  - rows by origin: " + (" · ".join("%s %s" % (o, format(int(n), ","))
-                                                      for o, n in origin) or "none"))
+    res.add(_digest_line("failed actions", got.get("failed"), _failed_text))
+    res.add(_digest_line("network & security changes (newest first)", got.get("netsec"),
+                         _netsec_text))
+    res.add(_digest_line("rows by origin", got.get("origin"), _origin_text))
 
 
 def _retention_conf():
@@ -377,16 +392,19 @@ def _archives_line(res):
     except OSError as exc:
         res.add("- **Archives**: could not list data/backups (%s)" % type(exc).__name__)
         return
+    newest = max([mt for kind, _sz, mt in arch if kind == "daily"] or [0])
+    res.add("- **Archives**: %d (%s) · %s · disk free %.1f GB · newest daily %s" % (
+        len(arch), _kinds_text(arch), _mb(sum(sz for _k, sz, _m in arch)), free / 1073741824.0,
+        ("%s ago" % ago(time.time() - newest)) if newest else "never"))
+    if bk.get_settings().get("enabled") and time.time() - newest > 2 * _DAY:
+        res.find("warn", "Backups", "no daily panel backup in the last two days")
+
+
+def _kinds_text(arch):
     kinds = {}
     for kind, _sz, _mt in arch:
         kinds[kind] = kinds.get(kind, 0) + 1
-    daily = [mt for kind, _sz, mt in arch if kind == "daily"]
-    res.add("- **Archives**: %d (%s) · %s · disk free %.1f GB · newest daily %s" % (
-        len(arch), ", ".join("%d %s" % (n, k) for k, n in sorted(kinds.items())) or "none",
-        _mb(sum(sz for _k, sz, _m in arch)), free / 1073741824.0,
-        ("%s ago" % ago(time.time() - max(daily))) if daily else "never"))
-    if bk.get_settings().get("enabled") and (not daily or time.time() - max(daily) > 2 * _DAY):
-        res.find("warn", "Backups", "no daily panel backup in the last two days")
+    return ", ".join("%d %s" % (n, k) for k, n in sorted(kinds.items())) or "none"
 
 
 _FULL_COUNTS_RE = re.compile(r"^(\d+) server\(s\) backed up(?:, (\d+) failed)?"
