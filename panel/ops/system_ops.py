@@ -1225,7 +1225,7 @@ def _ci_note_rate(resp, seen):
 
         def _int(name):
             v = get(name)
-            return int(v) if v is not None and str(v).strip().isdigit() else None
+            return int(v) if v is not None and str(v).strip().isdecimal() else None
         seen["rate"] = {"code": getattr(resp, "code", None) or getattr(resp, "status", None),
                         "remaining": _int("X-RateLimit-Remaining"),
                         "limit": _int("X-RateLimit-Limit"), "reset": _int("X-RateLimit-Reset")}

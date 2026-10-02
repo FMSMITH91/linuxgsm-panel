@@ -835,13 +835,11 @@ def helper_on_disk():
         return False
 
 
-# The outcome tokens of a privileged call on THIS machine, for the debug report's counters.
-_PRIV_OUTCOMES = ("ok", "refused", "unknown_verb", "timeout", "failed")
-
-
 def privileged_outcome(path, out, err, rc):
-    """One fixed token for how a local privileged call ended. stderr is reduced to a class here
-    and never kept: a sudo refusal can name the account ("<user> is not in the sudoers file")."""
+    """One fixed token -- ok, refused, unknown_verb, timeout or failed -- for how a local
+    privileged call on THIS machine ended, for the debug report's counters. stderr is reduced to a
+    class here and never kept: a sudo refusal can name the account ("<user> is not in the sudoers
+    file")."""
     if rc == 0:
         return "ok"
     text = "%s\n%s" % (out or "", err or "")

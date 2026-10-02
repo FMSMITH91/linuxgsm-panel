@@ -176,8 +176,9 @@ def integrity(timeout=20):
         main, backup = _bounded(_integrity_job, (path,), timeout)
         state, cls, detail = _classify(main)
         res = {"state": "ok" if state == "absent" else state, "detail_class": cls,
-               "backup": _backup_state(backup), "detail": detail,
-               "took": time.monotonic() - t0}
+               # what a restart would do with the backup matters only for a DAMAGED file
+               "backup": _backup_state(backup) if state == "damaged" else None,
+               "detail": detail, "took": time.monotonic() - t0}
     except Exception as exc:  # noqa: BLE001 - a timeout or a failed hand-off is "not checked"
         res = {"state": "not_checked", "detail_class": type(exc).__name__, "backup": None,
                "detail": "", "took": time.monotonic() - t0}
