@@ -599,7 +599,8 @@ def _verb22(verb, args=(), timeout=30, merge_stderr=True):
     return _UFW22, "", 0
 
 
-with _patched(_so22, _run_verb=_verb22, _helper_present=lambda: False), \
+with _patched(_so22, _run_verb=_verb22, _helper_present=lambda: False,
+              _SUDO_PROBE={"at": 0.0, "ok": None}), \
         _patched(_nw22.os, geteuid=lambda: 1000):
     _ur22a = _nw22.ufw_read()
 with _patched(_so22, _run_verb=_verb22, _helper_present=lambda: True):
@@ -629,8 +630,52 @@ check("R40: a refused read is UNREADABLE, sudo refused, and a fail", "UNREADABLE
       in _text(_ut22r) and _levels(_ut22r) == ["fail"] and "inactive" not in _text(_ut22r),
       _text(_ut22r))
 _ut22n, _ = _ufw_text(("ok", {"state": "not-read"}))
-check("R40: not read without the helper says why", "not read (no helper; it would need sudo)"
-      in _text(_ut22n), _text(_ut22n))
+check("R40: not read without the helper says why", "not read (no helper, and passwordless sudo not "
+      "confirmed; it would need sudo)" in _text(_ut22n), _text(_ut22n))
+
+
+class _FakePopen22:
+    """subprocess for network.sudo_n_verb: records the argv and keywords; answers as told."""
+
+    DEVNULL, PIPE, TimeoutExpired = _sp22.DEVNULL, _sp22.PIPE, _sp22.TimeoutExpired
+
+    def __init__(self, answer):
+        self.calls, self.answer = [], answer
+
+    def Popen(self, argv, **kw):  # noqa: N802 - stands in for subprocess.Popen
+        self.calls.append((list(argv), kw))
+        return self
+
+
+def _sudo_n22(answer, fn):
+    """Run fn() with no helper, not root, and a CACHED passwordless-sudo probe."""
+    fake, verbs = _FakePopen22(answer), []
+    with _patched(_so22, _helper_present=lambda: False, _SUDO_PROBE={"at": 1.0, "ok": True},
+                  _run_verb=lambda *a, **k: verbs.append(a) or ("", "", 1),
+                  _collect_verb_output=lambda p, argv, timeout, *a, **k: fake.answer), \
+            _patched(_nw22, subprocess=fake), _patched(_nw22.os, geteuid=lambda: 1000):
+        return fn(), fake.calls, verbs
+
+
+_sn22, _snc22, _snv22 = _sudo_n22((_UFW22, "", 0), _nw22.ufw_read)
+check("R40: no helper but a CACHED passwordless sudo: one `sudo -n ufw status verbose` argv, stdin "
+      "/dev/null, never _run_verb's shell form (a sudo with no -n)",
+      _sn22["state"] == "ok" and len(_snc22) == 1 and _snc22[0][0][:2] == ["sudo", "-n"]
+      and _snc22[0][0][2:] == _priv22.tool_argv("ufw-status", ["verbose"])
+      and _snc22[0][1].get("stdin") == _sp22.DEVNULL and _snc22[0][1].get("shell") is False
+      and _snv22 == [], repr((_sn22, _snc22, _snv22)))
+_sn22r, _, _ = _sudo_n22(("", "sudo: a password is required", 1), _nw22.ufw_read)
+_sn22m, _, _ = _sudo_n22(("", "sudo: ufw: command not found", 1), _nw22.ufw_read)
+eq("R40: through `sudo -n`, a refusal is 'refused' and a missing tool 'not installed'",
+   (_sn22r["state"], _sn22m["state"]), ("refused", "not-installed"))
+_sf22, _sfc22, _sfv22 = _sudo_n22(("`- Jail list:\tsshd", "", 0), _nw22.f2b_runtime)
+check("R41: ...and fail2ban the same way: three `sudo -n fail2ban-client` argvs, no shell form",
+      len(_sfc22) == 3 and all(c[0][:2] == ["sudo", "-n"] for c in _sfc22) and _sfv22 == []
+      and _sf22["status"] == (0, "`- Jail list:\tsshd"), repr((_sf22, _sfc22)))
+with _patched(_so22, _helper_present=lambda: False, _SUDO_PROBE={"at": 1.0, "ok": False}), \
+        _patched(_nw22.os, geteuid=lambda: 1000):
+    eq("R40/R41: a cached REFUSAL (or no probe) reads nothing: no new sudo is tried",
+       (_nw22.may_read_privileged(), _nw22.priv_read("ufw-status", ["verbose"], 10)), (False, None))
 
 
 # ══ network: fail2ban (R41) ═════════════════════════════════════════════════════════════════════
@@ -653,7 +698,7 @@ _fr22b, _fc22b = _f2b_with([("Status\n`- Jail list:\tsshd", "", 0), ("x", "", 0)
 check("R41: at most three helper calls, 5 s each", len(_fc22b) == 3 and all(c[2] == 5 for c in _fc22b)
       and [c[0] for c in _fc22b] == ["f2b-status", "f2b-status-jail", "f2b-status-jail"], repr(_fc22b))
 _f2b_calls22 = []
-with _patched(_so22, _helper_present=lambda: False,
+with _patched(_so22, _helper_present=lambda: False, _SUDO_PROBE={"at": 0.0, "ok": None},
               _run_verb=lambda *a, **k: _f2b_calls22.append(a) or ("", "", 1)), \
         _patched(_nw22.os, geteuid=lambda: 1000):
     eq("R41: without the helper or root fail2ban is not read", (_nw22.f2b_runtime(), _f2b_calls22),
@@ -783,6 +828,14 @@ check("R38: this request as categories and booleans: no address, no header value
       "identity", "from a public peer" in _text(_rq22) and "X-Forwarded-For present: yes"
       in _text(_rq22) and not any(s in _text(_rq22) for s in ("8.8.4.4", "198.51.100", "alice",
                                                                 "Alice")), _text(_rq22))
+eq("R38: HSTS as app.py's after_request decides it: a proxy's https, or TLS that is not the panel's "
+   "own self-signed", [_nw22.hsts_expected(*a) for a in (("https", False, True), ("", True, False),
+                                                          ("", True, True), ("http", False, False))],
+   [True, True, False, False])
+with _patched(_nw22, _load_cfg=lambda: ({"x": 1}, True)), \
+        _patched(_app22, _effective_https=lambda cfg: cfg == {"x": 1}):
+    eq("R38: whether the panel serves its own TLS is asked of app.py's _effective_https, as the "
+       "header is", (_nw22._self_tls({"BOOT_TLS": False}),), (True,))
 _rq22n = _b22.Result()
 _nw22._request_lines(_rq22n, {})
 eq("R38: outside a request it says so", _rq22n.lines,
@@ -850,6 +903,13 @@ def _access(counts, funnel):
     return res
 
 
+_al22 = _b22.Result()
+with _patched(_nw22, _funnel_on=lambda: False):
+    _nw22._account_lines(_al22, _q22r)
+check("R45: the accounts are TWO lines (active and superadmins with the census; must-change-password "
+      "with a token and the setup token)", len(_al22.lines) == 2
+      and "1 holding an API token" in _al22.lines[1] and "1 active (1 superadmin" in _al22.lines[0],
+      repr(_al22.lines))
 _ac22 = _access(_q22r, True)
 check("R45: with Funnel on, the ONE aggregated posture finding; no username anywhere",
       [f["text"] for f in _ac22.findings] == ["Funnel is on and not every superadmin has 2FA"]
@@ -879,16 +939,26 @@ check("access: the counts go through _src_db.run_ro (off the hub), once per repo
 def _authlog_fixture():
     lines = []
     t = _time22.time()
-    for age, ip in ((600, "203.0.113.1"), (7200, "unknown"), (200000, "203.0.113.2")):
+    for age, ip, what in ((600, "203.0.113.1", "login failed"), (7200, "unknown", "login failed"),
+                          (200000, "203.0.113.2", "login failed"), (300, "203.0.113.1", "login blocked"),
+                          (310, "203.0.113.1", "login blocked"), (320, "8.8.4.4", "api token blocked")):
         stamp = _time22.strftime("%Y-%m-%d %H:%M:%S", _time22.localtime(t - age))
-        lines.append("%s panel login failed from %s" % (stamp, ip))
+        lines.append("%s panel %s from %s" % (stamp, what, ip))
     return _w("auth.log", "x" * (_nw22.AUTHLOG_MAX + 10) + "\n" + "\n".join(lines) + "\n")
 
 
 _as22 = _nw22.authlog_scan(_authlog_fixture())
-check("R43: auth.log is read from its last 512 KB: failures in 24 h, the last one's age, 'unknown'",
-      _as22["lines_24h"] == 2 and _as22["unknown"] == 1 and 590 < _as22["last_age"] < 700,
-      repr(_as22))
+check("R43: auth.log is read from its last 512 KB: failed sign-ins in 24 h apart from refusals, the "
+      "last line's age, 'unknown'", _as22["lines_24h"] == 2 and _as22["blocked_24h"] == 3
+      and _as22["unknown"] == 1 and 290 < _as22["last_age"] < 400, repr(_as22))
+_sg22f = {}
+_nw22._signin_lines(_b22.Result(), {"signins": [("login_failed", 2, 3), ("login_blocked", 4, 4),
+                                                ("api_token_blocked", 5, 5)], "sources": []}, _sg22f)
+_at22 = _nw22._authlog_text(_as22, True, _sg22f.get("audit_fail_24h"))
+check("R43: auth.log is held against login_failed ONLY (a refusal writes a line per request but one "
+      "audit row per window), so these agree", _sg22f == {"audit_fail_24h": 2}
+      and "2 failed-login lines in 24 h (audit log says 2 ✓) · 3 refusal lines" in _at22,
+      repr((_sg22f, _at22)))
 
 
 # ══ access: throttles and the ban gate (R44) ════════════════════════════════════════════════════

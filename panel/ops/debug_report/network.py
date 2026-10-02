@@ -14,6 +14,7 @@ the root-owned helper or as root: never the pre-helper `sudo` form, which has no
 import calendar
 import os
 import re
+import subprocess  # nosec B404 - one `sudo -n` argv built from privileged.py's verb table
 import sys
 import threading
 import time
@@ -34,6 +35,7 @@ STANDARD_JAILS = frozenset(("sshd", "recidive", "sshd-ddos", "dropbear", "selinu
                             "apache-badbots", "postfix", "dovecot", "vsftpd", "proftpd", "pure-ftpd"))
 F2B_TIMEOUT = 5
 UFW_TIMEOUT = 10
+NOT_READ = "not read (no helper, and passwordless sudo not confirmed; it would need sudo)"
 
 
 # ── running the slow reads side by side, each under the report's deadline ───────────────────────
@@ -64,8 +66,60 @@ def bounded(ctx, jobs, reserve=0.5):
 
 
 def _may_escalate():
-    """A privileged read may run: through the helper (sudo -n) or as root. Never plain sudo."""
+    """Whether _run_verb may make the read: through the helper (sudo -n) or as root.
+
+    Its third branch, the pre-helper shell form, is a `sudo` with no -n, so it is never reached
+    from here.
+    """
     return bool(so._helper_present()) or (hasattr(os, "geteuid") and os.geteuid() == 0)
+
+
+def _sudo_cached_ok():
+    """Whether system_ops' CACHED probe already found passwordless sudo.
+
+    Never probes: a failed probe counts toward pam_faillock.
+    """
+    probe = getattr(so, "_SUDO_PROBE", None) or {}
+    return probe.get("ok") is True
+
+
+def may_read_privileged():
+    """A privileged read can be made without a password prompt and without a new sudo probe."""
+    return _may_escalate() or _sudo_cached_ok()
+
+
+def sudo_n_verb(verb, args, timeout):
+    """(out, err, rc) of `sudo -n <the verb's tool argv>`: an argv, never a shell, never a prompt.
+
+    For the per-user install on an account with passwordless sudo and no helper, where _run_verb's
+    own fallback would be a plain `sudo` in a shell. Output is capped as _run_verb caps it.
+    """
+    from panel.security import privileged as _priv
+    try:
+        argv = ["sudo", "-n"] + _priv.tool_argv(verb, args)
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+        p = subprocess.Popen(argv, shell=False,  # nosec B603 - sudo -n plus privileged.py's argv
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, start_new_session=True)
+        out, err, rc = so._collect_verb_output(p, argv, timeout)
+    except subprocess.TimeoutExpired:
+        return "", "Command timed out", -1
+    except OSError:
+        return "", "Command not found", -1
+    except _priv.VerbError:
+        return "", "invalid argument", -1
+    if rc != 0 and "command not found" in (err or "").lower():
+        rc = 127
+    return (out or "").strip(), (err or "").strip(), rc
+
+
+def priv_read(verb, args, timeout):
+    """(out, err, rc) of a read-only privileged verb, or None when it may not be run at all."""
+    if _may_escalate():
+        return so._run_verb(verb, args, timeout=timeout, merge_stderr=False)
+    if _sudo_cached_ok():
+        return sudo_n_verb(verb, args, timeout)
+    return None
 
 
 def _load_cfg():
@@ -259,11 +313,11 @@ def ufw_classify(out, err, rc):
 
 
 def ufw_read():
-    """One `ufw status verbose` through the helper (or as root), classified. Not read otherwise."""
-    if not _may_escalate():
+    """One `ufw status verbose` (helper, root, or cached passwordless `sudo -n`), classified."""
+    got = priv_read("ufw-status", ["verbose"], UFW_TIMEOUT)
+    if got is None:
         return {"state": "not-read"}
-    out, err, rc = so._run_verb("ufw-status", ["verbose"], timeout=UFW_TIMEOUT, merge_stderr=False)
-    return ufw_classify(out, err, rc)
+    return ufw_classify(*got)
 
 
 def _src_kind(rule):
@@ -303,7 +357,7 @@ def _deny_text(u):
 
 
 _UFW_STATES = {
-    "not-read": "not read (no helper; it would need sudo)",
+    "not-read": NOT_READ,
     "not-installed": "not installed",
     "refused": "UNREADABLE, sudo refused (a password is required); see the sudoers.d order",
     "timeout": "UNREADABLE (timed out)",
@@ -385,23 +439,25 @@ def f2b_runtime():
     The status, the panel jail and sshd; after the first timeout the rest are not made. None when
     neither the helper nor root is available to make them.
     """
-    if not _may_escalate():
+    if not may_read_privileged():
         return None
     out = {}
     calls = (("status", "f2b-status", []), ("panel", "f2b-status-jail", [PANEL_JAIL]),
              ("sshd", "f2b-status-jail", ["sshd"]))
     stopped = False
     for key, verb, args in calls:
-        if stopped:
-            out[key] = "not-read"
-            continue
-        o, e, rc = so._run_verb(verb, args, timeout=F2B_TIMEOUT, merge_stderr=False)
-        err = (e or "").lower()
-        if rc == -1 and "timed out" in err:
-            out[key], stopped = "timeout", True
-            continue
-        out[key] = (127 if rc == -1 and "not found" in err else rc, o or "")
+        out[key] = "not-read" if stopped else _f2b_call(verb, args)
+        stopped = stopped or out[key] == "timeout"
     return out
+
+
+def _f2b_call(verb, args):
+    """(rc, out) of one fail2ban-client read, or "timeout"; a missing tool is rc 127."""
+    o, e, rc = priv_read(verb, args, F2B_TIMEOUT) or ("", "not read", -2)
+    err = (e or "").lower()
+    if rc == -1 and "timed out" in err:
+        return "timeout"
+    return (127 if rc == -1 and "not found" in err else rc, o or "")
 
 
 def jail_list(text):
@@ -504,7 +560,7 @@ def _f2b_lines(res, facts, got, cfg, readable):
         res.find("unread", AREA, "fail2ban could not be read")
         return
     if rt is None:
-        res.add("- **fail2ban**: not read (no helper; it would need sudo)")
+        res.add("- **fail2ban**: " + NOT_READ)
         facts["f2b"] = "not read"
         return
     _f2b_runtime_lines(res, facts, rt)
@@ -549,6 +605,25 @@ def _peer_text(env):
     return peer, "%s peer%s" % (cls, who)
 
 
+def _self_tls(conf):
+    """Whether the panel terminates TLS itself, asked as app.py's after_request asks it.
+
+    That is the current config through _effective_https; the boot record when that module is not
+    loaded.
+    """
+    mod = sys.modules.get("app")
+    if mod is not None and hasattr(mod, "_effective_https"):
+        cfg, readable = _load_cfg()
+        if readable:
+            return bool(mod._effective_https(cfg))
+    return bool(conf.get("BOOT_TLS"))
+
+
+def hsts_expected(forwarded_proto, is_secure, self_tls):
+    """app.py's HSTS rule: HTTPS from a proxy or Tailscale, never the panel's own self-signed TLS."""
+    return forwarded_proto == "https" or (bool(is_secure) and not self_tls)
+
+
 def _request_lines(res, conf):
     """R38: fixed booleans and categories only. Never a header's value or an address."""
     from flask import has_request_context, request
@@ -567,9 +642,8 @@ def _request_lines(res, conf):
     client = _src_net.addr_class(auth.client_ip())
     res.add("- **Client address as the panel keys it**: %s · forwarded headers believed: %s" % (
         client, _yn(auth._request_came_through_proxy(peer))))
-    hsts = env.get("HTTP_X_FORWARDED_PROTO", "") == "https" or (
-        request.is_secure and not conf.get("BOOT_TLS"))
-    res.add("- **HSTS on this response**: %s" % _yn(hsts))
+    res.add("- **HSTS on this response**: %s" % _yn(hsts_expected(
+        env.get("HTTP_X_FORWARDED_PROTO", ""), request.is_secure, _self_tls(conf))))
     if client == "loopback" and env.get("HTTP_X_FORWARDED_FOR"):
         res.find("warn", AREA, "this proxied request was keyed as loopback: every proxied client "
                                "shares one throttle bucket, and fail2ban ignores them")
@@ -578,8 +652,12 @@ def _request_lines(res, conf):
 # ── R43: sign-ins and auth.log ───────────────────────────────────────────────────────────────────
 SIGNIN_ACTIONS = ("login", "login_failed", "login_blocked", "api_token_blocked", "fail2ban_ban")
 AUTHLOG_MAX = 512 * 1024
-_AUTHLOG_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) panel (?:login|api token) "
-                         r"(?:failed|blocked) from (\S+)\s*\Z")
+# 'panel login failed from X' is written once per failed sign-in, so it is what the audit log's
+# login_failed rows can be held against. 'panel login blocked' and 'panel api token blocked' are
+# written on EVERY refused request while the audit log keeps one row per block window, so they are
+# counted apart and never compared.
+_AUTHLOG_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) panel (login failed|login blocked|"
+                         r"api token blocked) from (\S+)\s*\Z")
 # The queries, whole literals: nothing is formatted into them, every value is a bound parameter.
 # The failed-login sources are classified IN SQL (the CASE below), so no address leaves the database.
 _SQL_SIGNINS = ("SELECT action, SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END), COUNT(*) "
@@ -651,20 +729,31 @@ def _signin_lines(res, counts, facts):
         "%s %d/%d" % (label, by.get(a, (0, 0))[0], by.get(a, (0, 0))[1]) for a, label in labels))
     res.add("- **Failed-login sources, 7 d**: %d distinct (%s)" % (sum(src.values()), " · ".join(
         "%s %d" % (k, src.get(k, 0)) for k in ("public", "tailnet", "private", "loopback", "unknown"))))
-    facts["audit_fail_24h"] = sum(by.get(a, (0, 0))[0] for a in
-                                  ("login_failed", "login_blocked", "api_token_blocked"))
+    # Only login_failed: it is the one action with exactly one auth.log line per audit row.
+    facts["audit_fail_24h"] = by.get("login_failed", (0, 0))[0]
 
 
-def authlog_scan(path, now=None):
-    """{size, lines_24h, last_age, unknown} of auth.log's last 512 KB; raises OSError."""
-    now = time.time() if now is None else now
+def _authlog_tail(path):
+    """(size, the lines of the file's last AUTHLOG_MAX bytes); raises OSError."""
     size = os.path.getsize(path)
     with open(path, "rb") as fh:
         fh.seek(max(0, size - AUTHLOG_MAX))
         tail = fh.read(AUTHLOG_MAX).decode("utf-8", "replace").splitlines()
     if size > AUTHLOG_MAX and tail:
         tail = tail[1:]                      # the first line is cut mid-way
-    n24, unknown, last = 0, 0, None
+    return size, tail
+
+
+def authlog_scan(path, now=None):
+    """{size, lines_24h, blocked_24h, last_age, unknown} of auth.log's last 512 KB.
+
+    lines_24h counts 'login failed' lines only (one per failed sign-in); blocked_24h the refusals.
+    The stamps are the handler's local time, as logging writes them. Raises OSError.
+    """
+    now = time.time() if now is None else now
+    size, tail = _authlog_tail(path)
+    out = {"size": size, "lines_24h": 0, "blocked_24h": 0, "last_age": None, "unknown": 0}
+    last = None
     for line in tail:
         m = _AUTHLOG_RE.match(line)
         if not m:
@@ -674,10 +763,11 @@ def authlog_scan(path, now=None):
         except ValueError:
             continue
         last = at if last is None else max(last, at)
-        n24 += now - at <= 86400
-        unknown += m.group(2) == "unknown"
-    return {"size": size, "lines_24h": n24, "last_age": None if last is None else now - last,
-            "unknown": unknown}
+        key = "lines_24h" if m.group(2) == "login failed" else "blocked_24h"
+        out[key] += now - at <= 86400
+        out["unknown"] += m.group(3) == "unknown"
+    out["last_age"] = None if last is None else now - last
+    return out
 
 
 def _authlog_handler():
@@ -688,9 +778,9 @@ def _authlog_handler():
 def _authlog_text(scan, attached, want):
     agree = "" if want is None else " (audit log says %d %s)" % (
         want, "✓" if want == scan["lines_24h"] else "✗")
-    return ("handler attached %s · %d failure lines in 24 h%s · last line %s · %d KB · "
-            "'unknown' addresses: %d" % (
-                "✓" if attached else "✗", scan["lines_24h"], agree,
+    return ("handler attached %s · %d failed-login lines in 24 h%s · %d refusal lines · last line "
+            "%s · %d KB · 'unknown' addresses: %d" % (
+                "✓" if attached else "✗", scan["lines_24h"], agree, scan["blocked_24h"],
                 "never" if scan["last_age"] is None else ago(scan["last_age"]) + " ago",
                 scan["size"] // 1024, scan["unknown"]))
 
@@ -814,15 +904,15 @@ def _account_lines(res, counts):
         return
     others = c["active"] - c["supers"]
     res.add("- **Accounts**: %d active (%d superadmin, %d other) · %d deactivated · 2FA on: "
-            "superadmins %d/%d, others %d/%d" % (c["active"], c["supers"], others, c["off"],
-                                                  c["s2fa"], c["supers"], c["o2fa"], others))
-    res.add("- **Must change password**: %d (%d holding an API token, whose API calls get 403 "
-            "password_change_required)" % (c["mcp"], c["mcp_tok"]))
+            "superadmins %d/%d, others %d/%d · API tokens %d · sessions seen in 7 d %d (%d "
+            "remember-me) · open invites %d (%d grant superadmin)" % (
+                c["active"], c["supers"], others, c["off"], c["s2fa"], c["supers"], c["o2fa"],
+                others, c["tokens"], c["sessions"], c["remember"], c["invites"], c["invites_super"]))
     token_file = _cfg.SETUP_TOKEN_FILE.exists()
-    res.add("- **API tokens** %d · **sessions seen in 7 d** %d (%d remember-me) · **open invites** %d "
-            "(%d grant superadmin) · **setup token file present**: %s%s" % (
-                c["tokens"], c["sessions"], c["remember"], c["invites"], c["invites_super"],
-                _yn(token_file), " (and setup is complete)" if token_file and c["setup_done"] else ""))
+    res.add("- **Must change password**: %d (%d holding an API token, whose API calls get 403 "
+            "password_change_required) · **setup token file present**: %s%s" % (
+                c["mcp"], c["mcp_tok"], _yn(token_file),
+                " (and setup is complete)" if token_file and c["setup_done"] else ""))
     # Posture stays out of the public summary and At a glance (it tells an attacker which target is
     # weak), except this one aggregated line when the panel is on the public internet.
     if c["s2fa"] < c["supers"] and _funnel_on():
