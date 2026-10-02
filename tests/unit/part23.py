@@ -672,7 +672,7 @@ def _tailscale23():
     calls = []
     info = {"installed": True, "backend_state": "NeedsLogin",
             "peers": [{"hostname": "p23tsbox", "online": True, "direct": False, "os": "linux"}]}
-    _patch23(_srcts23, "info", lambda: calls.append(1) or info)
+    _patch23(_srcts23, "read", lambda: calls.append(1) or ("ok", info))
     _tsi23._cache.update({"ts": _time23.time() - 3600})
     ctx = _Ctx23(app=_app23)
     text = _text23(_section23(_h23.section_hosts, ctx))

@@ -159,9 +159,9 @@ def _env(journal="", cfg=None, sections=_SECTIONS20, diag_lines=None):
     _patch(SO, "panel_version", lambda: "9.9.9")
     _patch(config, "load_config", lambda: dict(cfg if cfg is not None else _cfg20()))
     _patch(PV, "_os_accounts", lambda: ["canarypanelacct"])
-    _patch(STS, "info", lambda: {"dns_name": "canarynode.tail7731ab.ts.net.",
-                                 "peers": [{"HostName": "canarypeer7731"}],
-                                 "tailnet_name": "canarytailnet7731"})
+    _patch(STS, "read", lambda: ("ok", {"dns_name": "canarynode.tail7731ab.ts.net.",
+                                        "peers": [{"HostName": "canarypeer7731"}],
+                                        "tailnet_name": "canarytailnet7731"}))
     _patch(DG, "section_diagnostics", lambda ctx: Result(
         lines=diag_lines if diag_lines is not None else
         ["- [warn] **X** — host canary-host-7731 at 198.51.100.77 for canaryadmin"],
@@ -551,6 +551,27 @@ def _p20_config_unreadable():
     check("debug report config: without an app the running values are unknown, never assumed",
           "- **port**: file 5000 · running value unknown (no app context)" in noapp
           and "- **Session cookie**: unknown (no app context) · cookie_secure override false" in noapp, noapp)
+    _p20_config_boot_record()
+
+
+def _p20_config_boot_record():
+    """An app that booted no record (create_app without app.py's __main__), and an unset bind."""
+    norec, _ = _config_text(dict(config.DEFAULT_CONFIG), SESSION_COOKIE_SECURE=True)
+    auto, _ = _config_text(dict(config.DEFAULT_CONFIG, bind_host=""), BOOT_BIND=_ANY4, BOOT_PORT=5000)
+    check("debug report config: an app with no boot record says so, and claims no restart pending",
+          "- **port**: file 5000 · running value unknown (no boot record)" in norec
+          and "- **bind_host**: file auto · running value unknown (no boot record)\n" in norec
+          and "RESTART PENDING" not in _p20_line(norec, "port") + _p20_line(norec, "bind_host"),
+          norec)
+    check("debug report config: an unset bind_host is resolved at boot, so the bind it picked is "
+          "shown and never called a restart pending",
+          _p20_line(auto, "bind_host") == "- **bind_host**: file auto · running all interfaces "
+                                            "(picked at boot)", auto)
+
+
+def _p20_line(text, key):
+    """The Config line for `key`, or ''."""
+    return next((ln for ln in text.split("\n") if ln.startswith("- **%s**:" % key)), "")
 
 
 # ── R68-R71, R73: the journal sections ──────────────────────────────────────────────────────────

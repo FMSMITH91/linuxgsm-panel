@@ -88,11 +88,13 @@ def _running(ctx, key):
 _NO_APP = object()
 
 
-def _both(label, file_txt, run_txt):
-    """'- **label**: file X · running Y' with RESTART PENDING when both are known and differ."""
+def _both(label, file_txt, run_txt, why="no app context"):
+    """'- **label**: file X · running Y' with RESTART PENDING when both are known and differ.
+
+    `run_txt` None is a running value that is not known; `why` says why, and nothing is compared.
+    """
     if run_txt is None:
-        run_txt = "running value unknown (no app context)"
-        return "- **%s**: file %s · %s" % (label, file_txt, run_txt)
+        return "- **%s**: file %s · running value unknown (%s)" % (label, file_txt, why)
     pending = " (RESTART PENDING)" if file_txt != run_txt else ""
     return "- **%s**: file %s · running %s%s" % (label, file_txt, run_txt, pending)
 
@@ -176,14 +178,31 @@ def _boot_bind(ctx):
     return None
 
 
+def _no_record(ctx):
+    """Why a boot-record value is unknown: no app at all, or an app that did not boot one."""
+    return "no app context" if ctx.app is None else "no boot record"
+
+
+def _bind_line(ctx, cfg):
+    """The bind_host line: the file against the boot record.
+
+    An unset bind_host is resolved at boot (loopback behind Tailscale Serve, else every
+    interface), so its running value is shown and never compared.
+    """
+    bind = _boot_bind(ctx)
+    stored = addr_class(cfg.get("bind_host"))
+    if bind is None:
+        return _both("bind_host", stored, None, _no_record(ctx))
+    if stored == "auto":
+        return "- **bind_host**: file auto · running %s (picked at boot)" % addr_class(bind)
+    return _both("bind_host", stored, addr_class(bind))
+
+
 def _bind_lines(ctx, cfg, res):
     port = _running(ctx, "BOOT_PORT")
     res.add(_both("port", _scalar(cfg.get("port")),
-                  None if port is _NO_APP else _scalar(port)))
-    bind = _boot_bind(ctx)
-    res.add(_both("bind_host", addr_class(cfg.get("bind_host")),
-                  None if ctx.app is None else ("unknown (no boot record)" if bind is None
-                                                else addr_class(bind))))
+                  None if port is _NO_APP else _scalar(port), _no_record(ctx)))
+    res.add(_bind_line(ctx, cfg))
     res.add("- **use_https**: file %s · the process serves TLS itself: %s"
             % (_scalar(cfg.get("use_https")), _tls_text(ctx)))
 
