@@ -107,8 +107,11 @@ def _call21(fn, *args):
 
 
 def _join21(thread):
-    """Wait up to 10 s for `thread`. Under eventlet a join that times out RAISES (eventlet's
-    Timeout, a BaseException), which would end the whole suite instead of failing one check."""
+    """Wait up to 10 s for `thread`, never raising.
+
+    Under eventlet a join that times out RAISES (eventlet's Timeout, a BaseException), which would
+    end the whole suite instead of failing one check.
+    """
     try:
         thread.join(10)
     except BaseException:  # noqa: BLE001 - the check after this reports the thread did not finish
