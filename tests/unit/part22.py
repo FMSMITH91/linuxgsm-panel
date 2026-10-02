@@ -944,7 +944,12 @@ def _authlog_fixture():
                           (310, "203.0.113.1", "login blocked"), (320, "8.8.4.4", "api token blocked")):
         stamp = _time22.strftime("%Y-%m-%d %H:%M:%S", _time22.localtime(t - age))
         lines.append("%s panel %s from %s" % (stamp, what, ip))
-    return _w("auth.log", "x" * (_nw22.AUTHLOG_MAX + 10) + "\n" + "\n".join(lines) + "\n")
+    # A failure 100 s old BEFORE the 512 KB of filler: a reader that does not stop at the last
+    # AUTHLOG_MAX bytes counts it.
+    early = "%s panel login failed from 203.0.113.3" % _time22.strftime(
+        "%Y-%m-%d %H:%M:%S", _time22.localtime(t - 100))
+    return _w("auth.log", early + "\n" + "x" * (_nw22.AUTHLOG_MAX + 10) + "\n" + "\n".join(lines)
+              + "\n")
 
 
 _as22 = _nw22.authlog_scan(_authlog_fixture())
