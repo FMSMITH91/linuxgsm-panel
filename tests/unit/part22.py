@@ -475,8 +475,12 @@ eq("R16: the privilege verdict for each install shape",
     "no helper installed; passwordl", "no helper and no passwordless "])
 
 
+_sudo_probes22 = []
+
+
 def _no_check_sudo(*_a, **_k):
-    raise AssertionError("_check_sudo was called")
+    _sudo_probes22.append(_a)
+    return False
 
 
 _pl22 = _b22.Result()
@@ -485,7 +489,8 @@ with _patched(_so22, _check_sudo=_no_check_sudo, _SUDO_PROBE={"at": 0.0, "ok": N
     _inst22._privilege_lines(_pl22, {})
 check("R16: an empty sudo probe cache prints 'not probed in this process', and _check_sudo is never "
       "called (each failed probe counts toward faillock)",
-      "`sudo -n true`**: not probed in this process" in _text(_pl22), _text(_pl22))
+      "`sudo -n true`**: not probed in this process" in _text(_pl22) and not _sudo_probes22,
+      repr((_text(_pl22), _sudo_probes22)))
 _pl22b = _b22.Result()
 with _patched(_so22, _check_sudo=_no_check_sudo,
               _SUDO_PROBE={"at": _time22.time() - 180, "ok": False}, _helper_present=lambda: False):
@@ -511,8 +516,10 @@ with _patched(_inst22, ETC_GROUP=_grp22):
 check("R16: the fixed group name is install.sh's GAME_GROUP (lgsmpanel-games)",
       _priv22.GAME_GROUP == "lgsmpanel-games"
       and 'GAME_GROUP="%s"' % _priv22.GAME_GROUP in _install22)
-check("R16: the interpreter line never prints the checkout's absolute path",
-      _so22.PANEL_DIR not in _inst22._interpreter(), _inst22._interpreter())
+check("R16: the interpreter line never prints an absolute path (an account name can be in one)",
+      not any(d in _inst22._interpreter() for d in ("/home/", "/tmp/", "/usr/", "/opt/", "/srv/",
+                                                     "/root/", _so22.PANEL_DIR)),
+      _inst22._interpreter())
 
 _vfake22 = _FakeSp22(stdout="Sudo version 1.9.15p5\nSudoers policy plugin\nLocal IP address and "
                             "netmask pairs:\n\t203.0.113.9/255.255.255.0\n")
@@ -623,8 +630,12 @@ check("R41: after the first fail2ban-client timeout, nothing more is asked (1+N 
 _fr22b, _fc22b = _f2b_with([("Status\n`- Jail list:\tsshd", "", 0), ("x", "", 0), ("y", "", 0)])
 check("R41: at most three helper calls, 5 s each", len(_fc22b) == 3 and all(c[2] == 5 for c in _fc22b)
       and [c[0] for c in _fc22b] == ["f2b-status", "f2b-status-jail", "f2b-status-jail"], repr(_fc22b))
-with _patched(_so22, _helper_present=lambda: False), _patched(_nw22.os, geteuid=lambda: 1000):
-    eq("R41: without the helper or root fail2ban is not read", _nw22.f2b_runtime(), None)
+_f2b_calls22 = []
+with _patched(_so22, _helper_present=lambda: False,
+              _run_verb=lambda *a, **k: _f2b_calls22.append(a) or ("", "", 1)), \
+        _patched(_nw22.os, geteuid=lambda: 1000):
+    eq("R41: without the helper or root fail2ban is not read", (_nw22.f2b_runtime(), _f2b_calls22),
+       (None, []))
 eq("R41: a status with no 'Jail list:' line is unreadable (None), not 'no jails'",
    (_nw22.jail_list("ERROR  Failed to access socket path"), _nw22.jail_list("`- Jail list:\t")),
    (None, []))

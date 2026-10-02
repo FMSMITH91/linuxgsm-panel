@@ -1000,7 +1000,7 @@ def _deliver_alerts(items):
                 _log.debug("notify send to %s failed", _name, exc_info=True)
                 runtime_stats.bump("notify", "%s|error" % _name)
                 continue
-            runtime_stats.bump("notify", "%s|%s" % (_name, delivery_outcome(_ok, _why)))
+            _count_delivery(_name, _ok, _why)
             if not _ok:
                 _log.warning("notification to %s failed (%s): %s", _name, keys, _why)
 
@@ -1021,6 +1021,14 @@ def delivery_outcome(ok, why):
         if any(n in low for n in needles):
             return word
     return "failed"
+
+
+def _count_delivery(name, ok, why):
+    """Count one channel's result for the debug report (R63). Never raises into the sender loop."""
+    try:
+        runtime_stats.bump("notify", "%s|%s" % (name, delivery_outcome(ok, why)))
+    except Exception:  # noqa: BLE001 - instrumentation must never change delivery
+        return
 
 
 def _next_alert_batch():
