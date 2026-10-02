@@ -228,7 +228,7 @@ def _note_probe(remote, ok, token, rc):
             "fail_since": None if ok else (prev.get("fail_since") or now),
             "streak": 0 if ok else int(prev.get("streak") or 0) + 1}
     except Exception:  # noqa: BLE001 - instrumentation must never raise into the monitor
-        pass
+        return
 
 
 _PLAYER_POLL_SECONDS = 45

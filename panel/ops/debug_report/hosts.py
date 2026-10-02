@@ -34,7 +34,9 @@ _STATUS_RE = re.compile(r"^[a-z_]{1,20}\Z")
 _OS_RE = re.compile(r"^[a-z0-9]{1,16}\Z")
 _SLUG_RE = re.compile(r"^[a-z0-9.-]{3,24}\Z")
 _TRANSPORTS = ("local", "tailscale", "key", "password")
-_T_LABEL = {"local": "panel host", "tailscale": "tailscale", "key": "key", "password": "password"}
+_T_LABEL = dict(zip(_TRANSPORTS, ("panel host", "tailscale", "key", "password")))
+_T_WORD = dict(zip(_TRANSPORTS, ("local (panel host)", None, "key (paramiko, pooled)",
+                                 "password (paramiko, pooled)")))
 _TAILNET_V4 = ipaddress.ip_network("100.64.0.0/10")
 _TAILNET_V6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
 _DOWN_SHOWN = 3        # down hosts named in the public block; the rest are counted
@@ -402,17 +404,19 @@ def mux_state():
     return True, "on"
 
 
+def _is_active(client):
+    """Whether a pooled client's transport is up: is_active() only, no transport I/O."""
+    try:
+        t = client.get_transport()
+        return bool(t is not None and t.is_active())
+    except Exception:  # noqa: BLE001 - a torn-down client counts as inactive
+        return False
+
+
 def _pool_counts():
-    """(clients, active) in the paramiko pool: is_active() only, no transport I/O."""
+    """(clients, active) in the paramiko pool."""
     clients = list(mod("panel.ops.ssh_manager._core")._connections.values())
-    active = 0
-    for c in clients:
-        try:
-            t = c.get_transport()
-            active += 1 if (t is not None and t.is_active()) else 0
-        except Exception:  # noqa: BLE001 - a torn-down client counts as inactive
-            pass
-    return len(clients), active
+    return len(clients), sum(1 for c in clients if _is_active(c))
 
 
 def _transport_word(row, mux):
@@ -420,8 +424,7 @@ def _transport_word(row, mux):
     if t == "tailscale":
         return "tailscale (system ssh, multiplexing %s)" % (
             "on" if mux[0] else "off" if mux[0] is False else "not set up yet")
-    return {"local": "local (panel host)", "key": "key (paramiko, pooled)",
-            "password": "password (paramiko, pooled)"}[t]
+    return _T_WORD[t]
 
 
 def _host_head(row, det, mux):
