@@ -563,6 +563,24 @@ with _patched(_inst22, NSSWITCH=_nss22):
     eq("R26: nsswitch's sudoers sources are fixed tokens only", _inst22.nss_sudoers(),
        ["files", "sss", "other"])
 
+_sudo_rs22 = _w("cargo/bin/sudo", "")
+_sudo_cl22 = _w("plain/sudo", "")
+
+
+def _sudo_line22(path):
+    res = _b22.Result()
+    with _patched(_inst22, shutil=type("Sh", (), {"which": staticmethod(lambda name: path)}),
+                  run_version=lambda p, timeout=5: "sudo 1.0", NSSWITCH=_nss22,
+                  SUDO_WS=os.path.join(_TMP22, "no-sudo.ws")):
+        _inst22._sudo_line(res)
+    return _text(res)
+
+
+_sl22rs, _sl22cl = _sudo_line22(_sudo_rs22), _sudo_line22(_sudo_cl22)
+check("R26: nsswitch's sudoers sources are printed when sudo-rs answers, and only then",
+      "sudo-rs" in _sl22rs and "nsswitch sudoers: files sss other (sudo-rs ignores the sss rules)"
+      in _sl22rs and "classic sudo" in _sl22cl and "nsswitch" not in _sl22cl, (_sl22rs, _sl22cl))
+
 
 # ══ network: UFW (R40) ══════════════════════════════════════════════════════════════════════════
 _UFW22 = """Status: active
@@ -625,6 +643,12 @@ check("R40: the posture prints counts, actions, ports and 'Anywhere' only: no ru
       "nothing)" in _text(_ut22)
       and not any(s in _text(_ut22) for s in ("203.0.113", "198.51.100", "192.0.2.99", "secret")),
       _text(_ut22))
+_ut22s, _ = _ufw_text(("ok", _nw22.ufw_classify(_UFW22.replace(
+    "27015/udp                  ALLOW IN    Anywhere",
+    "5000/tcp                   ALLOW IN    192.0.2.44                 # alice-laptop"), "", 0)))
+check("R40: a panel-port rule from one address says 'a specific source', never the address or its "
+      "comment", "panel port 5000: allowed from a specific source" in _text(_ut22s)
+      and "192.0.2.44" not in _text(_ut22s) and "alice" not in _text(_ut22s), _text(_ut22s))
 _ut22r, _uf22r = _ufw_text(("ok", {"state": "refused"}))
 check("R40: a refused read is UNREADABLE, sudo refused, and a fail", "UNREADABLE, sudo refused"
       in _text(_ut22r) and _levels(_ut22r) == ["fail"] and "inactive" not in _text(_ut22r),
@@ -1037,6 +1061,26 @@ with _patched(_notif22, _cfg=lambda: {}, _channel_senders=lambda tg, dc, nt, tex
 _nd22 = _rs22.snapshot("notify")
 eq("R63: delivery is counted per channel and outcome (a raising sender as 'error'; a channel that "
    "is off not at all)", {k: v for k, v in _nd22.items()}, {"telegram|rejected": 1, "discord|error": 1})
+
+
+
+class _BadStr22:
+    """A sender's detail whose str() raises: the counter must still not raise into the loop."""
+
+    def __str__(self):
+        raise RuntimeError("detail")
+
+
+_saved_notify22 = dict(_rs22._GROUPS.get("notify") or {})     # the counts the checks below read
+try:
+    _notif22._count_delivery("telegram", False, _BadStr22())
+    _cd22 = "no raise"
+except Exception as _e22:  # noqa: BLE001 - the finding, named below
+    _cd22 = repr(_e22)
+finally:
+    _rs22._GROUPS["notify"] = _saved_notify22
+eq("R63: counting a delivery never raises into the sender loop, whatever the detail is", _cd22,
+   "no raise")
 
 
 class _Opener22:
