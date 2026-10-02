@@ -6,6 +6,7 @@ from flask import (Response, flash, jsonify, redirect, render_template, request,
 from flask_login import (current_user, login_required)
 from flask_socketio import (SocketIO, emit, join_room, leave_room)
 from panel.core import (terminal)
+from panel.core import runtime_stats
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth,
     taken_by_another)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, UPLOAD_EXISTS,
@@ -405,6 +406,47 @@ def _console_whole_lines(server_id, raw):
 _CONSOLE_READ_CAP = 65536   # bytes per server per tick; a bigger backlog drains over later ticks
 _CONSOLE_PARTIAL_MAX = 65536   # longest unterminated line held back waiting for its end
 
+# What the console poller saw per server, for the debug report's Live console section (R56):
+# server_id -> {ticks, fails, streak, last_fail, pushed_at, rotations}. Counts, timestamps and
+# FIXED tokens only — never a log path, a line of output or who is watching. Registered, so a
+# deleted server's id is forgotten rather than reported for whatever server takes it next.
+#
+# Written from inside the poller, so every writer below swallows everything: a counter that
+# raised would end the tick it was counting. The poller's control flow is not touched by them.
+_console_feed = register_server_state({})
+
+
+def _feed_entry(server_id):
+    """A copy of this server's feed counters, to update and store back whole."""
+    cur = _console_feed.get(server_id)
+    return dict(cur) if isinstance(cur, dict) else {}
+
+
+def _feed_tick(server_id, fail=None):
+    """Count one finished tick of `server_id`: a success, or a failure with a fixed `fail` token."""
+    try:
+        f = _feed_entry(server_id)
+        f["ticks"] = f.get("ticks", 0) + 1
+        if fail is None:
+            f["streak"] = 0
+        else:
+            f["fails"] = f.get("fails", 0) + 1
+            f["streak"] = f.get("streak", 0) + 1
+            f["last_fail"] = fail
+        _console_feed[server_id] = f
+    except Exception:  # nosec B110 - instrumentation must never raise into the poller
+        pass
+
+
+def _feed_mark(server_id, key, counter=False):
+    """Stamp `key` with the time now, or (counter=True) add one to it. Never raises."""
+    try:
+        f = _feed_entry(server_id)
+        f[key] = f.get(key, 0) + 1 if counter else time.time()
+        _console_feed[server_id] = f
+    except Exception:  # nosec B110 - as above
+        pass
+
 
 def _console_tick(app, socketio, gs, server_id):
     """One poll of one server's console log: push whatever is new to its viewers.
@@ -432,13 +474,16 @@ def _console_tick(app, socketio, gs, server_id):
     remote = gs.remote
     stat = _console_log_stat(remote, gs, log_path)
     if stat is None:
+        _feed_tick(server_id, "stat-unparseable")
         return
     ino, size = stat
     start = _console_read_start(server_id, ino, size)
     if start is None:
+        _feed_tick(server_id)
         return
     state, pos = start
     if size <= pos:
+        _feed_tick(server_id)
         return
     diff = min(size - pos, _CONSOLE_READ_CAP)
     # tail -c +N | head -c diff: two reads, not one-per-byte. 'B' and 'E' are SENTINELS, not
@@ -458,11 +503,13 @@ def _console_tick(app, socketio, gs, server_id):
     # _drain_action_output makes in routes/_shared.py for the same reason.
     out = _console_whole_lines(server_id, out) if rc == 0 else None
     if out is None:
+        _feed_tick(server_id, "read-unframed" if rc == 0 else "read-failed")
         return
     _emit_console_lines(socketio, remote, server_id, out)
     # Advance by what was ACTUALLY READ. `head -c diff` emits exactly diff bytes (diff is clamped
     # to what the file holds), and this line is reached only past the frame check above.
     state["pos"] = pos + diff
+    _feed_tick(server_id)
 
 
 def _console_log_stat(remote, gs, log_path):
@@ -501,6 +548,7 @@ def _console_read_start(server_id, ino, size):
         pos = 0
         state["ino"], state["pos"] = ino, 0
         _console_partial.pop(server_id, None)
+        _feed_mark(server_id, "rotations", counter=True)
     return state, pos
 
 
@@ -516,6 +564,7 @@ def _emit_console_lines(socketio, remote, server_id, out):
         socketio.emit("console_output",
                       {"server_id": server_id, "data": out, "rows": rows, "ts": time.time()},
                       room=f"console_{server_id}")
+        _feed_mark(server_id, "pushed_at")
 
 
 def _forget_unwatched_consoles(watched_ids):
@@ -1893,6 +1942,7 @@ def _start_console_poller(app, socketio, supervise):
     def console_poller():
         while True:
             try:
+                _t0 = time.time()
                 with _viewers_lock:
                     active_ids = list(_console_viewers.keys())
                 # Before the early-out: a console whose last viewer just left must lose its offset
@@ -1912,12 +1962,17 @@ def _start_console_poller(app, socketio, supervise):
                                 # the operator to watch it for.
                                 _drain_action_output(app, gs.remote, server_id)
                                 _console_tick(app, socketio, gs, server_id)
-                            except Exception:  # nosec B112 - try/except/continue is the point:
+                            except Exception as exc:  # nosec B112 - try/except/continue is the point:
                                 # one unreadable console must not stop the poll for every OTHER
                                 # server. The next tick retries this one; the failure is visible
-                                # as a console that stops updating, not as a dead poller.
+                                # as a console that stops updating, not as a dead poller — and,
+                                # by its class, in the debug report's Live console section.
+                                _feed_tick(server_id, "raised:" + type(exc).__name__)
                                 continue
+                runtime_stats.beat("console-poller", 2, time.time() - _t0)
+                runtime_stats.put("console", "poller|watched", len(active_ids))
             except Exception:
+                runtime_stats.bump("loopfail", "console-poller")
                 app.logger.debug("console poller iteration failed", exc_info=True)
             time.sleep(2)
 

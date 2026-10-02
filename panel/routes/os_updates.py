@@ -2,6 +2,7 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
+from panel.core import runtime_stats
 from panel.core.panel_state import (_os_update_seen, _os_update_state)
 from panel.db.models import (RemoteServer, db, rows_still_held)
 from panel.ops import (system_ops as so)
@@ -94,9 +95,12 @@ def register(app, supervise):
         last_logged_sha = _announced_update()
         while True:
             try:
+                _t0 = time.time()
                 last_logged_sha = _update_tick(app, so.panel_update_status(force=True),
                                                last_logged_sha)
+                runtime_stats.beat("update-check", 1800, time.time() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "update-check")
                 app.logger.debug("update-check tick failed", exc_info=True)
             # Deliberately OUTSIDE that try. These two only ride this thread for its cadence and
             # have nothing to do with the panel-update check — but sharing its `try` meant any

@@ -89,6 +89,7 @@ del _w, _dd_del, _dd_rebind
 # away with it only because neither pulls in anything eventlet needs to green — a latent trap for
 # whichever of them grows a dependency first. tests/unit asserts this ordering now.
 from panel.core import terminal
+from panel.core import runtime_stats
 from panel.core.clock import utcnow
 
 import secrets
@@ -552,8 +553,11 @@ def _player_count_watch(app):
     live per-server counts (and a total) without a query on the request path."""
     while True:
         try:
+            _t0 = time.time()
             _refresh_player_counts(app)
+            runtime_stats.beat("player-counts", _PLAYER_POLL_SECONDS, time.time() - _t0)
         except Exception:
+            runtime_stats.bump("loopfail", "player-counts")
             _log.debug("player-count poller pass failed", exc_info=True)
         time.sleep(_PLAYER_POLL_SECONDS)
 
@@ -574,8 +578,11 @@ def _metrics_history_watch(app):
     """Background loop: sample metrics into history every _METRIC_SAMPLE_SECONDS, then prune old rows."""
     while True:
         try:
+            _t0 = time.time()
             _record_metric_samples(app)
+            runtime_stats.beat("metrics-history", _METRIC_SAMPLE_SECONDS, time.time() - _t0)
         except Exception:
+            runtime_stats.bump("loopfail", "metrics-history")
             _log.debug("metrics-history sampler pass failed", exc_info=True)
         try:
             _prune_metric_samples(app)
@@ -647,8 +654,11 @@ def _node_tools_cron_watch(app):
     """Once at startup and daily after: _node_tools_cron_pass."""
     while True:
         try:
+            _t0 = time.time()
             _node_tools_cron_pass(app)
+            runtime_stats.beat("node-tools", 86400, time.time() - _t0)
         except Exception:
+            runtime_stats.bump("loopfail", "node-tools")
             _log.debug("node-tools cron watch pass failed", exc_info=True)
         time.sleep(86400)   # daily
 
@@ -694,9 +704,12 @@ def _monitor_watch(app):
     while True:
         time.sleep(_MONITOR_SECONDS)
         try:
+            _t0 = time.time()
             with app.app_context():
                 _monitor_pass()
+            runtime_stats.beat("monitor", _MONITOR_SECONDS, time.time() - _t0)
         except Exception:
+            runtime_stats.bump("loopfail", "monitor")
             _log.debug("monitor pass failed", exc_info=True)
 
 
@@ -957,7 +970,7 @@ def _run_autoblock_now(app, remote_id):
                     _autoblock_reconcile(remote)
             except Exception:
                 _log.debug("immediate autoblock reconcile failed for %s", remote_id, exc_info=True)
-    threading.Thread(target=_go, daemon=True).start()
+    threading.Thread(target=_go, name="autoblock-now", daemon=True).start()
 
 
 def _autoblock_watch(app):
@@ -966,10 +979,12 @@ def _autoblock_watch(app):
         time.sleep(3600)
         host_ids = _autoblock_hosts()
         if not host_ids:
+            runtime_stats.beat("autoblock", 3600)
             continue
         with app.test_request_context():
             for rid, born in _autoblock_births(host_ids).items():
                 _autoblock_tick_host(rid, born)
+        runtime_stats.beat("autoblock", 3600)
 
 
 def _autoblock_births(host_ids):
@@ -2645,6 +2660,28 @@ def _os_updates_for(remote):
 
 
 
+def _make_supervisor(app):
+    """The supervisor register_routes hands every ticker: supervise(name, target).
+
+    Runs `target` in a thread and, if it ever exits, logs it and starts it again five seconds
+    later. Every thread is NAMED with `name` (a fixed code identifier, never a host or server
+    name) and every respawn is counted, because the debug report reads both: threading.enumerate()
+    for which workers are alive, runtime_stats' "respawn" group for how often each was restarted.
+    Module level so a check can drive one runner without building the whole app.
+    """
+    def _supervise(name, target):
+        def _runner():
+            while True:
+                t = threading.Thread(target=target, name=name, daemon=True)
+                t.start()
+                t.join()   # only returns if the worker exited unexpectedly
+                runtime_stats.bump("respawn", name)
+                app.logger.error("%s thread exited — respawning in 5s", name)
+                time.sleep(5)
+        threading.Thread(target=_runner, name="supervise-" + name, daemon=True).start()
+    return _supervise
+
+
 def register_routes(app):
     # Lazy, like every other panel.routes import here: those modules do
     # `from app import ...` at their top, so they can only be imported once
@@ -2770,15 +2807,7 @@ def register_routes(app):
     # Start the console poller under a tiny supervisor: it has an inner try/except so it
     # shouldn't die, but if it ever exits we log and respawn it — console streaming
     # self-heals instead of silently staying dead until the next full restart.
-    def _supervise(name, target):
-        def _runner():
-            while True:
-                t = threading.Thread(target=target, daemon=True)
-                t.start()
-                t.join()   # only returns if the worker exited unexpectedly
-                app.logger.error("%s thread exited — respawning in 5s", name)
-                time.sleep(5)
-        threading.Thread(target=_runner, daemon=True).start()
+    _supervise = _make_supervisor(app)
 
     from panel.routes import server_files as _r_server_files
     socketio = _r_server_files.register(app, _supervise)
@@ -2796,10 +2825,13 @@ def register_routes(app):
         time.sleep(120)
         while True:
             try:
+                _t0 = time.time()
                 bk.daily_backup_tick()
                 _run_due_game_backups(app)   # per-server schedules (each records its own last-run)
                 _run_pending_backups(app)    # 'wait until empty' full-backup queue
+                runtime_stats.beat("backup-ticker", 3600, time.time() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "backup-ticker")
                 app.logger.debug("backup tick failed", exc_info=True)
             time.sleep(3600)
     _supervise("backup-ticker", backup_ticker)
@@ -2810,8 +2842,11 @@ def register_routes(app):
         time.sleep(45)
         while True:
             try:
+                _t0 = time.time()
                 _run_due_restarts(app)   # apply queued 'restart/stop when empty' once a server empties
+                runtime_stats.beat("due-actions", 90, time.time() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "due-actions")
                 app.logger.debug("due-actions tick failed", exc_info=True)
             time.sleep(90)
     _supervise("due-actions", due_actions_ticker)
@@ -2836,6 +2871,7 @@ def register_routes(app):
         time.sleep(20)   # let boot settle; the per-server check is an SSH round trip
         while True:
             try:
+                _t0 = time.time()
                 with app.app_context():
                     for gs in GameServer.query.filter(
                             GameServer.status.in_(("installing", "configuring", "failed"))).all():
@@ -2843,7 +2879,9 @@ def register_routes(app):
                         # (and its id taken) since the query: skipped without reading it.
                         if still_held(gs):
                             _reconcile_stranded_install(app, gs)
+                runtime_stats.beat("install-reconcile", 600, time.time() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "install-reconcile")
                 app.logger.debug("install-reconcile tick failed", exc_info=True)
             time.sleep(600)
     _supervise("install-reconcile", install_reconcile_ticker)
@@ -2857,6 +2895,7 @@ def register_routes(app):
         time.sleep(60)
         while True:
             try:
+                _t0 = time.time()
                 with app.app_context():
                     by_remote = {}   # remote_id -> (remote, {short_name, …})
                     for gs in GameServer.query.filter_by(installed=True).all():
@@ -2868,7 +2907,9 @@ def register_routes(app):
                             set_game_priority_bulk(remote, sorted(users))
                         except Exception:
                             app.logger.debug("priority keeper: renice failed", exc_info=True)
+                runtime_stats.beat("priority-keeper", 120, time.time() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "priority-keeper")
                 app.logger.debug("priority keeper tick failed", exc_info=True)
             time.sleep(120)
 
@@ -3063,7 +3104,7 @@ if __name__ == "__main__":
                 _apply_whitelist_to_remotes(app)
             except Exception:
                 _log.debug("remote fail2ban whitelist sync failed", exc_info=True)
-    threading.Thread(target=_f2b_autostart, daemon=True).start()
+    threading.Thread(target=_f2b_autostart, name="f2b-autostart", daemon=True).start()
 
     # Record fail2ban bans/unbans of the panel-login jail in the audit log, so the activity is
     # visible even though the jail runs automatically with no management UI. Seeds from the current
@@ -3072,7 +3113,7 @@ if __name__ == "__main__":
         seen = None
         while True:
             try:
-                _taken = time.monotonic()
+                _taken = _t0 = time.monotonic()
                 reading = so.panel_fail2ban_banned_ips()
                 seen, new_bans, unbans = _f2b_ban_events(seen, reading)
                 _f2b_record_events(app, new_bans, unbans)
@@ -3084,37 +3125,45 @@ if __name__ == "__main__":
                 _banlist.set_whitelist(load_config().get("security_whitelist") or [])
                 _taken = time.monotonic()
                 _banlist.set_ufw(so.ufw_blocked_ips(), _taken)
+                runtime_stats.beat("ban-watch", 90, time.monotonic() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "ban-watch")
                 _log.debug("fail2ban ban-watch tick failed", exc_info=True)
             time.sleep(90)
     if os.name == "posix":
-        threading.Thread(target=_f2b_ban_watch, daemon=True).start()
+        threading.Thread(target=_f2b_ban_watch, name="ban-watch", daemon=True).start()
 
     # Fire any "reboot when empty" requests once a host has no players left.
-    threading.Thread(target=lambda: _reboot_when_empty_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _reboot_when_empty_watch(app), name="reboot-when-empty",
+                     daemon=True).start()
 
     # Keep each auto-block host's rolling top-20 (7-day) UFW block list in sync.
-    threading.Thread(target=lambda: _autoblock_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _autoblock_watch(app), name="autoblock", daemon=True).start()
 
     # Keep live per-server player counts fresh for the dashboard / Game Servers page.
-    threading.Thread(target=lambda: _player_count_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _player_count_watch(app), name="player-counts",
+                     daemon=True).start()
 
     # Record CPU/RAM/player samples into history (for the trend charts on the server page).
-    threading.Thread(target=lambda: _metrics_history_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _metrics_history_watch(app), name="metrics-history",
+                     daemon=True).start()
 
     # Keep gamedig, the player-query tool, installed from its pinned lockfile on every host: the
     # weekly repair cron everywhere, and the lockfile's tree itself on remotes. See the pass above.
-    threading.Thread(target=lambda: _node_tools_cron_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _node_tools_cron_watch(app), name="node-tools",
+                     daemon=True).start()
 
     # Proactive monitor: server-down / host-unreachable / disk-low admin notifications.
-    threading.Thread(target=lambda: _monitor_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _monitor_watch(app), name="monitor", daemon=True).start()
 
     # Telegram command bot (/update, /status, …) — opt-in, locked to the configured chat.
-    threading.Thread(target=lambda: _telegram_command_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _telegram_command_watch(app), name="telegram-bot",
+                     daemon=True).start()
 
     # Discord command bot (!update, !status, …) — opt-in, locked to the configured channel. Holds a
     # persistent Gateway WebSocket; a no-op until a bot token + channel are configured with commands on.
-    threading.Thread(target=lambda: _discord_command_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _discord_command_watch(app), name="discord-bot",
+                     daemon=True).start()
 
     # If a Telegram/Discord-triggered self-update just restarted us, tell the chat/channel it's back
     # (after a short settle so "back online" is true). No-op when there's no pending update.
@@ -3125,7 +3174,7 @@ if __name__ == "__main__":
                 fn()
             except Exception:
                 _log.debug("bot pending-update report failed", exc_info=True)
-    threading.Thread(target=_bot_update_report, daemon=True).start()
+    threading.Thread(target=_bot_update_report, name="bot-update-report", daemon=True).start()
 
     # Not explicitly configured: bind where the panel is actually reachable — 127.0.0.1 if
     # Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the first-run setup wizard is
