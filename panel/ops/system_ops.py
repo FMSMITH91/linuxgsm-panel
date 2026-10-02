@@ -210,22 +210,35 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
 
     That last branch is why this is not yet a privilege boundary: see run_privileged() in
     ssh_manager for the same caveat. It exists so a host that has the new code but has not had
-    install.sh re-run as root keeps working."""
+    install.sh re-run as root keeps working.
+
+    Every finished call is counted for the debug report (ssh_manager._core.note_privileged, which
+    cannot raise), by the path it took and how it ended."""
+    path, res = _run_verb_once(verb, args, timeout, merge_stderr)
+    if path:
+        from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+        _smc.note_privileged(verb, path, res)
+    return res
+
+
+def _run_verb_once(verb, args, timeout, merge_stderr):
+    """_run_verb's body: (the path taken -- "helper" / "root" / "shell", or "" for a refused
+    argument --, (stdout, stderr, rc))."""
     # NEVER RAISES, which its callers are written on (see os_run_update, server_reboot):
     # the argv builders validate the arguments and raise VerbError on a refusal, and that used to
     # escape from here into callers with no handler for it — a 500, with no audit row.
     try:
         if _helper_present():
-            argv = _priv.helper_argv(verb, args)
+            path, argv = "helper", _priv.helper_argv(verb, args)
         elif hasattr(os, "geteuid") and os.geteuid() == 0:
-            argv = _priv.tool_argv(verb, args)
+            path, argv = "root", _priv.tool_argv(verb, args)
         else:
-            return _run_verb_shell(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                                   timeout=timeout, sudo=True,
-                                   whole=verb in _WHOLE_OUTPUT_VERBS)
+            return "shell", _run_verb_shell(
+                _priv.remote_command(verb, args, merge_stderr=merge_stderr),
+                timeout=timeout, sudo=True, whole=verb in _WHOLE_OUTPUT_VERBS)
     except _priv.VerbError:
         _log.warning("privileged verb %s refused its arguments", verb)
-        return "", "invalid argument", -1
+        return "", ("", "invalid argument", -1)
     try:
         # Semgrep's dangerous-subprocess-use rules flag any subprocess call whose first argument is
         # not a literal string. That is the shape here and it is the point of the change: `argv`
@@ -251,13 +264,13 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
         out, err, rc = _collect_verb_output(p, argv, timeout, _in,
                                             whole=verb in _WHOLE_OUTPUT_VERBS)
     except subprocess.TimeoutExpired:
-        return "", "Command timed out", -1
+        return path, ("", "Command timed out", -1)
     except FileNotFoundError:
-        return "", "Command not found", -1
+        return path, ("", "Command not found", -1)
     except Exception:
         _log.debug("privileged verb failed", exc_info=True)
-        return "", "command execution error", -1
-    return _verb_result(out, err, rc, merge_stderr)
+        return path, ("", "command execution error", -1)
+    return path, _verb_result(out, err, rc, merge_stderr)
 
 
 def _collect_verb_output(p, cmd, timeout, stdin_text=None, whole=False):
@@ -412,7 +425,13 @@ def ufw_status():
     """Get UFW status and rules."""
     out, err, rc = _run_verb("ufw-status", ["verbose"], timeout=15)
     if rc != 0:
-        return {"enabled": False, "status_text": "not_installed" if "not found" in err or "not installed" in err else "inactive", "rules": []}
+        # _run_verb merges stderr into stdout, so the "not installed" answer is looked for in both.
+        # Any OTHER failure is not a reading: `enabled` stays False, which is what every caller
+        # branches on, and `unreadable` says the False was not measured (R42).
+        said = "%s\n%s" % (out or "", err or "")
+        if "not found" in said or "not installed" in said:
+            return {"enabled": False, "status_text": "not_installed", "rules": []}
+        return {"enabled": False, "status_text": "inactive", "rules": [], "unreadable": True}
 
     enabled = ufw_status_active(out)
     status_text = "active" if enabled else "inactive"
@@ -1052,6 +1071,33 @@ def _repo_slug():
     return m.group(1) if m else None
 
 
+# install.sh's REPO_URL: check_origin_trusted compares origin's URL with it, and with it minus
+# ".git", as EXACT strings (a unit check holds this to install.sh's line).
+_TRUSTED_ORIGIN = "https://github.com/FMSMITH91/linuxgsm-panel.git"
+
+
+def origin_category():
+    """How install.sh judges this checkout's origin, as a category -- never the URL, which can
+    carry user:token@ or a fork owner's name.
+
+    'canonical-https'      exactly what install.sh trusts: root's pieces are refreshed from it.
+    'canonical-other-form' the canonical repository in a form install.sh does not accept (ssh, a
+                           port, another case): it is UNTRUSTED there and root's pieces go stale,
+                           while _repo_slug still reads it, so the CI gate works.
+    'fork'                 any other repository.
+    'unreadable'           the read failed; install.sh would treat it as untrusted."""
+    url, _, rc = _git(["remote", "get-url", "origin"], timeout=5)
+    url = (url or "").strip()
+    if rc != 0 or not url:
+        return "unreadable"
+    if url in (_TRUSTED_ORIGIN, _TRUSTED_ORIGIN[:-len(".git")]):
+        return "canonical-https"
+    m = re.search(r"github\.com(?::\d+)?[/:]([^/]+/[^/]+?)(?:\.git)?/?\Z", url)
+    if m and m.group(1).lower() == "fmsmith91/linuxgsm-panel":
+        return "canonical-other-form"
+    return "fork"
+
+
 # Conclusions that mean a completed check did NOT pass.
 _CI_BAD = {"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"}
 # Checks that don't gate the update-offer: `deploy` is the deployment action itself (gating on
@@ -1149,12 +1195,120 @@ def _remote_ci_state(sha):
 
     Registration timing: the push-triggered checks all register within seconds of the push, long
     before CI (minutes) completes. The one that does not is "Open code-scanning alerts", posted
-    after CodeQL finishes — which is why presence is REQUIRED rather than inferred."""
+    after CodeQL finishes — which is why presence is REQUIRED rather than inferred.
+
+    What held the commit (failing, pending and missing check names) and GitHub's rate-limit
+    headers are recorded for the debug report (_ci_record, R31) after the answer is decided; the
+    recording cannot raise and never changes it."""
+    seen = {}
+    state = _remote_ci_state_read(sha, seen)
+    _ci_record(sha, state, seen)
+    return state
+
+
+# A check name the report may print: GitHub's public check names are this shape; anything else
+# (a fork can name a job anything) is printed as a placeholder.
+_CI_NAME_RE = re.compile(r"^[\w .,:/()+·-]{1,80}\Z")
+_CI_NAMES_MAX = 8
+
+
+def _ci_name(name):
+    return name if isinstance(name, str) and _CI_NAME_RE.match(name) else "(unnamed check)"
+
+
+def _ci_note_rate(resp, seen):
+    """Keep GitHub's X-RateLimit-* answer (and the HTTP status) from a response already received.
+    Only those headers: nothing else of the request or the response is kept."""
+    try:
+        hdr = getattr(resp, "headers", None)
+        get = hdr.get if hdr is not None else (lambda _k: None)
+
+        def _int(name):
+            v = get(name)
+            return int(v) if v is not None and str(v).strip().isdigit() else None
+        seen["rate"] = {"code": getattr(resp, "code", None) or getattr(resp, "status", None),
+                        "remaining": _int("X-RateLimit-Remaining"),
+                        "limit": _int("X-RateLimit-Limit"), "reset": _int("X-RateLimit-Reset")}
+    except Exception:  # noqa: BLE001 - recording must never touch the gate  # nosec B110
+        pass
+
+
+def _ci_failed(run):
+    return run.get("status") == "completed" and (run.get("conclusion") or "") in _CI_BAD
+
+
+def _ci_running(run):
+    return run.get("status") != "completed"
+
+
+def _ci_held_by(runs):
+    """(failing names, pending names, required names absent) of one commit's check runs."""
+    return ([_ci_name(r.get("name")) for r in runs if _ci_failed(r)][:_CI_NAMES_MAX],
+            [_ci_name(r.get("name")) for r in runs if _ci_running(r)][:_CI_NAMES_MAX],
+            _ci_required_absent(runs))
+
+
+def _ci_record(sha, state, seen):
+    """Record one commit's CI answer in runtime_stats' "ci_walk" group (R31). CANNOT RAISE.
+
+    Its own store, never _update_lock: this runs INSIDE `with _update_lock` (panel_update_status
+    holds it across the whole walk), and that lock is not re-entrant."""
+    try:
+        from panel.core import runtime_stats as _rs
+        if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha or ""):
+            return
+        failing, pending, absent = _ci_held_by(seen.get("runs") or [])
+        _rs.put("ci_walk", sha[:7].lower(), {"state": state, "failing": failing,
+                                             "pending": pending, "absent": absent,
+                                             "checks": len(seen.get("runs") or [])})
+        if seen.get("rate"):
+            _rs.put("ci_walk", "ratelimit", seen["rate"])
+    except Exception:  # noqa: BLE001 - instrumentation must never touch the gate  # nosec B110
+        pass
+
+
+def _ci_note_walk(started, commits, offered):
+    """Record which commits one walk looked at and which it offered (R31). CANNOT RAISE."""
+    try:
+        from panel.core import runtime_stats as _rs
+        _rs.put("ci_walk", "walk", {
+            "started": started, "commits": [c[:7].lower() for c in commits[:25]
+                                            if re.fullmatch(r"[0-9a-fA-F]{7,40}", c or "")],
+            "offered": (offered or "")[:7].lower() or None})
+    except Exception:  # noqa: BLE001  # nosec B110
+        pass
+
+
+def _remote_ci_state_read(sha, seen):
+    """_remote_ci_state's answer. `seen` receives the check runs read and the rate-limit answer."""
     _ci_unknown_why["reason"] = ""
     slug = _repo_slug()
     if not slug:
         _ci_unknown_why["reason"] = _CI_WHY_NO_SLUG
         return "unknown"
+    runs = _ci_fetch_runs(slug, sha, seen)
+    if isinstance(runs, str):
+        return runs          # GitHub did not hand over the checks: 'pending' or 'unknown'
+    runs = [r for r in runs if r.get("name") not in _CI_IGNORE]
+    seen["runs"] = runs
+    return _ci_judge(sha, runs)
+
+
+def _ci_fetch_page(slug, sha, page, seen):
+    url = ("https://api.github.com/repos/%s/commits/%s/check-runs?per_page=100&page=%d"
+           % (slug, sha, page))
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "linuxgsm-panel-update-check",
+    })
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- a fixed https://api.github.com URL
+    with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - fixed https host
+        _ci_note_rate(resp, seen)
+        return json.loads(resp.read().decode("utf-8")).get("check_runs", [])
+
+
+def _ci_fetch_runs(slug, sha, seen):
+    """Every check run on `sha`, or the state to answer when GitHub did not give them."""
     # PAGED. One page of 100 was "enough for now", and the failure mode if it ever stopped being
     # enough is the wrong one: a check that did not fit on page 1 is simply not seen, so a commit
     # whose only failure sits on page 2 reads as 'passing' and the panel offers the update. This
@@ -1163,15 +1317,7 @@ def _remote_ci_state(sha):
     runs = []
     try:
         for page in range(1, 6):
-            url = ("https://api.github.com/repos/%s/commits/%s/check-runs?per_page=100&page=%d"
-                   % (slug, sha, page))
-            req = urllib.request.Request(url, headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "linuxgsm-panel-update-check",
-            })
-            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- a fixed https://api.github.com URL
-            with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - fixed https host
-                batch = json.loads(resp.read().decode("utf-8")).get("check_runs", [])
+            batch = _ci_fetch_page(slug, sha, page, seen)
             runs.extend(batch)
             if len(batch) < 100:
                 break        # short page = last page
@@ -1182,6 +1328,7 @@ def _remote_ci_state(sha):
         # that lasts the rest of the hour is not an outage; it means "not verified yet".
         # 404 (and 401) is a private repository asked anonymously: 'unknown', with that reason.
         _log.debug("CI-gate: GitHub answered HTTP %s for %s", e.code, sha, exc_info=True)
+        _ci_note_rate(e, seen)
         if e.code in (403, 429):
             return "pending"
         _ci_unknown_why["reason"] = (_CI_WHY_NOT_FOUND if e.code in (401, 404)
@@ -1193,20 +1340,28 @@ def _remote_ci_state(sha):
         _log.debug("CI-gate: couldn't read check-runs for %s", sha, exc_info=True)
         _ci_unknown_why["reason"] = _CI_WHY_UNREACHABLE
         return "unknown"     # a partial read must not be judged
-    runs = [r for r in runs if r.get("name") not in _CI_IGNORE]
+    return runs
+
+
+def _ci_required_absent(runs):
+    """The _CI_REQUIRED entries no run that judged anything matches. A SKIPPED run does not count
+    as present: main's tip carries skipped workflow_run runs filed there for other events (a fork
+    PR's), and "skipped" judged nothing."""
+    judged = [r.get("name") or "" for r in runs if r.get("conclusion") != "skipped"]
+    return [req for req in _CI_REQUIRED if not any(_ci_name_matches(req, n) for n in judged)]
+
+
+def _ci_judge(sha, runs):
+    """'passing' | 'pending' | 'failing' for the check runs GitHub returned for `sha`."""
     if not runs:
         return "pending"  # push landed but no checks have registered yet
     if any(r.get("status") != "completed" for r in runs):
         return "pending"  # at least one check still queued/running
     if any((r.get("conclusion") or "") in _CI_BAD for r in runs):
         return "failing"  # every check finished, but one didn't pass
-    # Every check that EXISTS passed; now the ones that must exist. A SKIPPED run does not count
-    # as present: main's tip carries skipped workflow_run runs filed there for other events (a
-    # fork PR's), and "skipped" judged nothing.
-    if _ci_suite_expected(sha, runs):
-        judged = [r.get("name") or "" for r in runs if r.get("conclusion") != "skipped"]
-        if not all(any(_ci_name_matches(req, n) for n in judged) for req in _CI_REQUIRED):
-            return "pending"  # a check it must carry has not appeared yet
+    # Every check that EXISTS passed; now the ones that must exist.
+    if _ci_suite_expected(sha, runs) and _ci_required_absent(runs):
+        return "pending"  # a check it must carry has not appeared yet
     return "passing"
 
 
@@ -1468,6 +1623,7 @@ def _compute_update_status():
     revs, _, _ = _git(["rev-list", "--first-parent", "-n", "25", "HEAD.." + ref])
     commits = [c for c in (revs or "").split() if c]
     _ci_unknown_why["reason"] = ""
+    walk_started = time.time()
     tip_state = _remote_ci_state(commits[0]) if commits else "unknown"
     unknown_why = _ci_unknown_why["reason"] if tip_state == "unknown" else ""
     # Only a commit that CONTAINS this checkout is an update to it, while the checkout is on the
@@ -1508,6 +1664,7 @@ def _compute_update_status():
         if st == "unknown":
             unreadable = True
             break   # the checks cannot be read: nothing below can be verified either
+    _ci_note_walk(walk_started, commits, target_sha)
 
     if not target_sha:
         # Nothing in range has cleared CI. Do NOT offer an update here, because the installer will
@@ -2326,6 +2483,17 @@ def _compute_panel_integrity():
                 "message": "The panel isn't a git checkout, so file integrity "
                            "can't be verified or repaired here."}
     sha, _, _ = _git(["rev-parse", "--short", "HEAD"])
+    # NOT while an update runs. `git diff` is not read-only: on stat-dirty files whose content is
+    # unchanged -- exactly the state install.sh's reset or a snapshot restore leaves -- it takes
+    # .git/index.lock to refresh the index (with --no-optional-locks too, tested on git 2.56), and
+    # install.sh's own `git reset --hard` then fails on that lock. A Diagnostics click or a debug
+    # report during an update is the likeliest time for this read, so it stands down and says so,
+    # as _update_running_status does. Unverified, never "clean".
+    if _update_in_progress():
+        return {"git": True, "clean": True, "verified": False, "modified": [], "count": 0,
+                "current_sha": sha.strip(),
+                "message": "An update is being installed right now; file integrity is checked "
+                           "once it has finished."}
     # --name-status vs HEAD catches both staged and unstaged tampering; data/ is
     # gitignored so user data never shows up.
     out, _, rc = _git(["diff", "--name-status", "HEAD"])
@@ -2667,15 +2835,29 @@ def _write_root_file(path, content):
                 % (shlex.quote(b64), tee, shlex.quote(path)), timeout=15, sudo=False)
 
 
+# fail2ban-client's answer for a jail that is not configured: a READING ("no such jail"), unlike a
+# stopped server or a refused read, which say nothing about the jail.
+_F2B_NO_JAIL_RE = re.compile(r"does not exist|no such jail|unknown jail", re.IGNORECASE)
+
+
 def panel_fail2ban_status():
     """Whether the panel-login fail2ban jail is active on this host, and how many IPs it's banning.
-    Best-effort; {'installed': bool, 'enabled': bool, 'banned': int}."""
+    Best-effort; {'installed': bool, 'enabled': bool, 'banned': int}, plus 'unreadable': True when
+    the jail's state could not be READ (fail2ban stopped, the socket refused, a timeout).
+
+    `enabled` keeps its meaning for every caller that branches on it -- ensure_panel_fail2ban's
+    self-heal and configure's reload poll rewrite and reload the jail on False, which is still the
+    right thing to try when the read failed. `unreadable` is what lets a display tell "the jail is
+    off" from "the jail could not be read" (R42)."""
     have, _, _ = _run("command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
     if "yes" not in (have or ""):
         return {"installed": False, "enabled": False, "banned": 0}
-    out, _, rc = _run_verb("f2b-status-jail", ["linuxgsm-panel"], timeout=10, merge_stderr=False)
+    out, err, rc = _run_verb("f2b-status-jail", ["linuxgsm-panel"], timeout=10, merge_stderr=False)
     if rc != 0 or not out:
-        return {"installed": True, "enabled": False, "banned": 0}
+        res = {"installed": True, "enabled": False, "banned": 0}
+        if not _F2B_NO_JAIL_RE.search("%s\n%s" % (out or "", err or "")):
+            res["unreadable"] = True
+        return res
     m = re.search(r"Currently banned:\s*(\d+)", out)
     return {"installed": True, "enabled": True, "banned": int(m.group(1)) if m else 0}
 
@@ -2710,12 +2892,17 @@ _JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
 
 
 def _fail2ban_jails():
-    """Names of all configured fail2ban jails on this host ([] if fail2ban isn't up)."""
+    """Names of all configured fail2ban jails on this host; None when they could not be READ.
+
+    None, not []: a stopped fail2ban, a refused or timed-out read all came back [] and the Security
+    card said "No fail2ban jails found." -- the answer a healthy host with nothing configured gives.
+    `fail2ban-client status` always prints "Jail list:" when it really ran, which is the positive
+    test hosts.remote_fail2ban_overview already makes on a remote (R42)."""
     out, _, rc = _run_verb("f2b-status", [], timeout=10, merge_stderr=False)
-    if rc != 0 or not out:
-        return []
-    m = re.search(r"Jail list:\s*(.*)", out)
-    return [j.strip() for j in (m.group(1).split(",") if m else []) if _JAIL_RE.match(j.strip())]
+    m = re.search(r"Jail list:\s*(.*)", out or "")
+    if rc != 0 or not m:
+        return None
+    return [j.strip() for j in m.group(1).split(",") if _JAIL_RE.match(j.strip())]
 
 
 def fail2ban_jail_detail(jail):
@@ -2742,7 +2929,10 @@ def fail2ban_overview():
     have, _, _ = _run("command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
     if "yes" not in (have or ""):
         return {"installed": False, "jails": []}
-    details = [d for d in (fail2ban_jail_detail(j) for j in _fail2ban_jails()) if d]
+    jails = _fail2ban_jails()
+    if jails is None:
+        return {"installed": True, "jails": [], "unreadable": True}
+    details = [d for d in (fail2ban_jail_detail(j) for j in jails) if d]
     return {"installed": True, "jails": details}
 
 
@@ -3156,7 +3346,10 @@ def fail2ban_unban(jail, ip):
     # not the request), so the value interpolated into the command is sourced from trusted data and
     # is never the raw request string. A guard/allowlist alone did not clear the taint for CodeQL —
     # this rebind (mirroring how the ip guard reparses through ipaddress) does.
-    jail = next((j for j in _fail2ban_jails() if j == jail), None)
+    jails = _fail2ban_jails()
+    if jails is None:
+        return False, "Couldn't read fail2ban's jails, so nothing was unbanned."
+    jail = next((j for j in jails if j == jail), None)
     if jail is None:
         return False, "Unknown jail."
     ip = canonical_ip(ip)   # canonical form; rejects anything that isn't a real IP
@@ -3210,7 +3403,7 @@ def security_log_tail(which, lines=200, jail=None):
         if not out:
             out, _, _ = _run_verb("journal", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
         rows = (out or "").splitlines()
-        if jail and jail in _fail2ban_jails():   # allowlist; used only for in-Python filtering, never a command
+        if jail and jail in (_fail2ban_jails() or []):   # allowlist; used only for in-Python filtering, never a command
             tag = "[%s]" % jail
             rows = [ln for ln in rows if tag in ln]
         return "\n".join(rows[-lines:])
@@ -3358,183 +3551,689 @@ def ensure_panel_host_whitelist(ignore_ips):
     return True, "fail2ban whitelist applied to every jail"
 
 
-def panel_diagnostics():
-    """A fast, local self-check of the panel's own health: file integrity, data
-    dir, database, encryption keys, config, disk space, TLS cert and service
-    unit. No SSH/network. Returns {checks:[{name,level,detail}], summary, counts}."""
-    import shutil
-    from panel.core import config as _cfg
-    from datetime import datetime, timezone
-    checks = []
+# The checks below each answer (level, detail), or None when they have nothing to say on this host.
+# A DETAIL IS PRINTED IN THE PUBLIC DEBUG REPORT (the GitHub issue body), so it carries fixed text,
+# counts, repo-relative paths, octal modes and exception CLASS names only: never an absolute path,
+# an account name, a host, or str(exc).
+_DIAG_LIST_MAX = 20          # repo-relative paths named in one detail
+_ERR_CLASS_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,63}\Z")
 
-    def add(name, level, detail):
-        checks.append({"name": name, "level": level, "detail": detail})
 
-    # 1. file integrity (git)
+def _cls_token(name):
+    """`name` when it is shaped like an exception class name, else 'error'."""
+    return name if isinstance(name, str) and _ERR_CLASS_RE.match(name) else "error"
+
+
+def _diag_hidden_paths():
+    """(skip-worktree paths, assume-unchanged paths) from `git ls-files -v`; None if git failed.
+
+    These are the tracked paths `git diff` cannot see (install.sh names --skip-worktree as a way to
+    make `reset --hard` leave one alone). ls-files only READS the index: no lock is taken."""
+    out, _, rc = _git(["ls-files", "-v"], timeout=10)
+    if rc != 0:
+        return None
+    skip, assume = [], []
+    for line in (out or "").splitlines():
+        tag, _, path = line.partition(" ")
+        if tag in ("S", "s"):
+            skip.append(path)
+        elif tag[:1].islower():
+            assume.append(path)
+    return skip, assume
+
+
+def _diag_hidden_note():
+    """(a sentence for the File integrity detail, whether it is a problem)."""
+    hidden = _diag_hidden_paths()
+    if hidden is None:
+        return " Could not check for paths hidden from git (git ls-files failed).", True
+    skip, assume = hidden
+    if not skip and not assume:
+        return "", False
+    return (" %d tracked path(s) are hidden from git (skip-worktree %d, assume-unchanged %d): %s."
+            % (len(skip) + len(assume), len(skip), len(assume),
+               ", ".join((skip + assume)[:_DIAG_LIST_MAX]))), True
+
+
+def _diag_file_integrity():
     integ = panel_integrity()
     if not integ["git"]:
-        add("File integrity", "warn", integ["message"])
-    elif not integ.get("verified", True):
-        add("File integrity", "warn", integ.get("message", "Couldn't verify file integrity."))
-    elif integ["clean"]:
-        add("File integrity", "ok",
-            "All panel files match the installed version (%s)." % (integ["current_sha"] or "?"))
-    else:
-        add("File integrity", "fail",
-            "%d panel file(s) differ from the installed version." % integ["count"])
+        return "warn", integ["message"]
+    if not integ.get("verified", True):
+        return "warn", integ.get("message", "Couldn't verify file integrity.")
+    note, hidden = _diag_hidden_note()
+    if integ["clean"]:
+        return ("warn" if hidden else "ok",
+                "All panel files match the installed version (%s).%s"
+                % (integ["current_sha"] or "?", note))
+    listed = ["%s (%s)" % (m.get("path"), m.get("status"))
+              for m in (integ.get("modified") or [])][:_DIAG_LIST_MAX]
+    return "fail", ("%d panel file(s) differ from the installed version%s.%s"
+                    % (integ["count"], (": " + ", ".join(listed)) if listed else "", note))
 
-    # 2. data directory writable
-    data_dir = str(_cfg.DATA_DIR)
+
+def _owner_role(uid):
+    """The owner of a file as a ROLE, never a name: root, the panel account, or another account."""
+    if uid == 0:
+        return "root"
+    if hasattr(os, "geteuid") and uid == os.geteuid():
+        return "the panel account"
+    return "another account"
+
+
+def _diag_data_dir(data_dir):
     if os.path.isdir(data_dir) and os.access(data_dir, os.W_OK):
-        add("Data directory", "ok", "Writable.")
-    else:
-        add("Data directory", "fail", "Not writable: %s" % data_dir)
-
-    # 3. database present
+        return "ok", "Writable."
     try:
-        sz = os.path.getsize(str(_cfg.DB_PATH))
-        if sz > 0:
-            human = "%.1f MB" % (sz / 1048576) if sz >= 1048576 else "%d KB" % max(1, sz // 1024)
-            add("Database", "ok", "Present (%s)." % human)
-        else:
-            add("Database", "fail", "Database file is empty.")
+        st = os.stat(data_dir)
+    except FileNotFoundError:
+        return "fail", "data/ under the panel checkout does not exist."
     except OSError:
-        add("Database", "fail", "Database file is missing.")
+        return "fail", "data/ under the panel checkout is not writable (owner unreadable)."
+    return "fail", ("data/ under the panel checkout is not writable (owner: %s, mode %04o; the "
+                    "panel runs as %s)." % (_owner_role(st.st_uid), st.st_mode & 0o7777,
+                                            "root" if _owner_role(os.geteuid()) == "root"
+                                            else "its service account"))
 
-    # 3b. database integrity (corruption from a bad drive / power loss)
+
+def _diag_database(dbp):
     try:
-        import sqlite3
-        dbp = str(_cfg.DB_PATH)
-        if os.path.exists(dbp) and os.path.getsize(dbp) > 0:
-            con = sqlite3.connect(dbp, timeout=5)
-            try:
-                row = con.execute("PRAGMA quick_check").fetchone()
-            finally:
-                con.close()
-            if row and row[0] == "ok":
-                bak = " (a rolling backup is kept for recovery)" if os.path.exists(dbp + ".backup") else ""
-                add("Database integrity", "ok", "No corruption detected%s." % bak)
-            else:
-                add("Database integrity", "fail",
-                    "Corruption detected — the panel restores from backup automatically on restart.")
-    except Exception:
-        add("Database integrity", "warn", "Couldn't run the integrity check.")
+        sz = os.path.getsize(dbp)
+    except OSError:
+        return "fail", "Database file is missing."
+    if sz > 0:
+        human = "%.1f MB" % (sz / 1048576) if sz >= 1048576 else "%d KB" % max(1, sz // 1024)
+        return "ok", "Present (%s)." % human
+    return "fail", "Database file is empty."
 
-    # 4. encryption keys. The session secret is always needed (Flask signs cookies
-    # with it), so its absence is a real fault. The credential key is created ONLY
-    # when the first password-based credential is saved, so a missing cred_key is
-    # normal (e.g. all remotes use SSH-key / Tailscale / local auth) — not a fault.
+
+# What a restart does with a damaged database, by the state of its rolling backup: it restores a
+# backup that passes quick_check, starts EMPTY when there is none or it fails (models.
+# _set_corrupt_db_aside), and repairs nothing when the backup cannot be checked (the check raises
+# out of the self-heal, which logs it and starts on the damaged file).
+_DB_DAMAGED_TEXT = {
+    "ok": "Corruption detected. A healthy rolling backup exists, so a restart restores it (the "
+          "damaged copy is kept beside it).",
+    "not_checked": "Corruption detected, and the rolling backup could not be checked, so a "
+                   "restart will not repair it. Run the repair tool.",
+    None: "Corruption detected and NO healthy backup. A restart moves the database aside and "
+          "starts EMPTY; run the repair tool first.",
+}
+
+
+def _db_has_content(dbp):
+    try:
+        return os.path.exists(dbp) and os.path.getsize(dbp) > 0
+    except OSError:
+        return False
+
+
+def _db_check_verdict(db_check, dbp):
+    """(level, detail) for an _src_db.integrity() result."""
+    state = db_check.get("state")
+    if state == "ok":
+        bak = " (a rolling backup is kept for recovery)" if os.path.exists(dbp + ".backup") else ""
+        return "ok", "No corruption detected%s." % bak
+    if state == "damaged":
+        backup = db_check.get("backup")
+        return "fail", _DB_DAMAGED_TEXT.get(backup if backup in ("ok", "not_checked") else None)
+    return "warn", "Couldn't run the integrity check (%s)." % _cls_token(
+        db_check.get("detail_class") or "NoAnswer")
+
+
+def _diag_db_integrity(db_check, dbp):
+    """R12/R57: ONE read-only quick_check, off the hub (debug_report._src_db), or the result the
+    caller already has. Locked or busy is 'not checked', never damage."""
+    if not _db_has_content(dbp):
+        return None
+    if db_check is None:
+        from panel.ops.debug_report import _src_db
+        db_check = _src_db.integrity()
+    return _db_check_verdict(db_check or {}, dbp)
+
+
+def _diag_encryption_keys():
+    # The session secret is always needed (Flask signs cookies with it), so its absence is a real
+    # fault. The credential key is created ONLY when the first password-based credential is
+    # saved, so a missing cred_key is normal (e.g. all remotes use SSH-key / Tailscale / local
+    # auth) — not a fault. Whether the stored values DECRYPT is the Host credentials check.
+    from panel.core import config as _cfg
     if not _cfg.SECRET_FILE.exists():
-        add("Encryption keys", "fail", "Session secret key is missing.")
-    elif not _cfg.CRED_KEY_FILE.exists():
-        add("Encryption keys", "ok",
-            "Session key present; the credential key is created when the first "
-            "saved password/credential needs it.")
-    else:
-        add("Encryption keys", "ok", "Session + credential keys present.")
+        return "fail", "Session secret key is missing."
+    if not _cfg.CRED_KEY_FILE.exists():
+        return "ok", ("Session key present; the credential key is created when the first "
+                      "saved password/credential needs it.")
+    return "ok", "Session + credential keys present."
 
-    # 4b. the INSTALLED privileged helper matches this version's verb table.
-    #
-    # The helper lives outside the checkout and is placed only by install.sh as root, so the panel
-    # cannot refresh it. Nothing surfaced a mismatch: _helper_present() checks the file exists and
-    # is executable, and an unknown verb comes back as rc 2 with `unknown verb` on stderr and no
-    # fallback — so a stale helper made the feature behind each new verb fail silently. Compare the
-    # two tables here so the Diagnostics card says which verbs are missing and what to run.
-    if _helper_present():
-        try:
-            # Same suppression, and the same reasoning, as the subprocess.run in _run_verb above —
-            # which is the only other place the panel executes the helper. This argv is narrower
-            # still: BOTH elements are module constants (privileged.HELPER_PATH and the literal
-            # "--list-verbs"), nothing here is derived from a request, and shell=False means no
-            # element is ever interpreted. The scanners flag any call whose first argument is not a
-            # literal string; making it one would mean composing a command, which is the thing the
-            # verb table exists to remove. Reviewed and suppressed rather than silently left red.
-            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-            _hv = subprocess.run([_priv.HELPER_PATH, "--list-verbs"], shell=False,  # nosec B603
-                                 capture_output=True, text=True, timeout=10)
-            _installed = {ln.split("\t")[0] for ln in (_hv.stdout or "").splitlines() if ln.strip()}
-            _missing = sorted(set(_priv.verbs()) - _installed)
-            if _hv.returncode != 0 or not _installed:
-                add("Privileged helper", "warn",
-                    "Installed, but its verb table could not be read.")
-            elif _missing:
-                add("Privileged helper", "fail",
-                    "Out of date — %d verb(s) this version needs are missing (%s%s). "
-                    "Re-run install.sh as root on this host to refresh it."
-                    % (len(_missing), ", ".join(_missing[:4]),
-                       ", …" if len(_missing) > 4 else ""))
-            else:
-                add("Privileged helper", "ok",
-                    "Installed and current (%d verbs)." % len(_installed))
-        except Exception:
-            add("Privileged helper", "warn", "Installed, but could not be queried.")
-    else:
-        add("Privileged helper", "warn",
-            "Not installed — privileged actions fall back to the pre-helper path and the "
-            "sudoers grant cannot be narrowed. Re-run install.sh as root to place it.")
 
-    # 5. config loads
+def _cred_state(raw, key_present):
+    """'empty' | 'plain' | 'ok' | 'bad' for one RAW stored value. Decrypts only when the key file
+    exists: decrypt_secret goes through _cred_fernet, which CREATES a missing cred_key — on the
+    very host this check is for, that would mint a new key over the lost one's ciphertext."""
+    from panel.core import config as _cfg
+    if not raw:
+        return "empty"
+    if not _cfg.is_encrypted(raw):
+        return "plain"
+    if not key_present:
+        return "bad"
+    return "ok" if _cfg.decrypt_secret(raw) else "bad"
+
+
+def _read_host_fields():
+    """([(host id, {column: raw value})], [raw session values]) read RAW (type_coerce to Text, as
+    models.encrypt_at_rest_columns does), so nothing is decrypted on the way out."""
+    from sqlalchemy import Text as _SAText, select, type_coerce
+    from panel.db.models import ENCRYPTED_AT_REST_COLUMNS, RemoteServer, UserSession, db
+    cols = tuple(ENCRYPTED_AT_REST_COLUMNS["remote_server"]) + ("auth_credential",)
+    tbl = RemoteServer.__table__
+    rows = db.session.execute(select(tbl.c.id, *[type_coerce(tbl.c[c], _SAText).label(c)
+                                                  for c in cols])).fetchall()
+    st = UserSession.__table__
+    srows = db.session.execute(select(*[type_coerce(st.c[c], _SAText).label(c)
+                                        for c in ENCRYPTED_AT_REST_COLUMNS["user_session"]]))
+    return ([(r.id, {c: getattr(r, c) for c in cols}) for r in rows],
+            [v for r in srows.fetchall() for v in r])
+
+
+def _cred_tally(hosts, session_vals, key_present):
+    """{'ok', 'bad', 'plain', 'session_bad'} counts and [(host id, [undecryptable columns])]."""
+    tally = {"ok": 0, "bad": 0, "plain": 0, "session_bad": 0}
+    bad_hosts = []
+    for hid, vals in hosts:
+        bad_cols = []
+        for col, raw in vals.items():
+            st = _cred_state(raw, key_present)
+            if st == "plain" and col == "auth_credential":
+                continue            # a plain Text column: plaintext is not "still unencrypted"
+            if st in tally:
+                tally[st] += 1
+            if st == "bad":
+                bad_cols.append(col)
+        if bad_cols:
+            bad_hosts.append((hid, bad_cols))
+    for raw in session_vals:
+        if _cred_state(raw, key_present) == "bad":
+            tally["session_bad"] += 1
+    return tally, bad_hosts
+
+
+def _diag_host_credentials():
+    """R10: whether the stored host fields DECRYPT with this cred_key (field names, host ids and
+    counts only, never a value). A read error is a warning, never 'every field decrypts'."""
+    from panel.core import config as _cfg
+    try:
+        hosts, session_vals = _read_host_fields()
+        key = _cfg.CRED_KEY_FILE.exists()
+        tally, bad_hosts = _cred_tally(hosts, session_vals, key)
+    except Exception as exc:  # noqa: BLE001 - reported by class
+        return "warn", "Could not read the hosts table (%s)." % type(exc).__name__
+    if bad_hosts:
+        named = "; ".join("host %d: %s" % (hid, ", ".join(cols)) for hid, cols in bad_hosts[:10])
+        why = ("data/cred_key is MISSING, so" if not key else "with this data/cred_key")
+        return "fail", ("%d of %d hosts have fields that cannot be decrypted %s (%s). Commands to "
+                        "them will fail; restore the matching data/cred_key."
+                        % (len(bad_hosts), len(hosts), why, named))
+    if tally["session_bad"]:
+        return "warn", ("%d stored sign-in session value(s) cannot be decrypted with this "
+                        "data/cred_key." % tally["session_bad"])
+    return "ok", ("Every stored host field decrypts (%d encrypted value(s); 0 undecryptable, %d "
+                  "still plaintext)." % (tally["ok"], tally["plain"]))
+
+
+# R9: `sudo -n <helper> --list-verbs` -- what every real privileged call is shaped like. The check
+# ran the helper WITHOUT sudo, so a sudoers rule that made sudo refuse it (a general rule sorting
+# after the grant, see _sudoers_after_grant) left this green while every privileged action waited
+# for a password. Cached like _check_sudo: a refused `sudo -n` is logged by sudo every time, and
+# the Diagnostics card and the debug report both ask.
+_HELPER_PROBE = {"at": 0.0, "res": None}
+_HELPER_PROBE_TTL = 300
+# A refusal as a CLASS: the matched line can name the account ("alice is not in the sudoers file").
+_SUDO_REFUSAL_CLASSES = (("password", "a password is required"),
+                         ("authentication", "a password is required"),
+                         ("terminal", "a terminal is required"), ("tty", "a terminal is required"),
+                         ("sudoers", "the account is not in the sudoers file"),
+                         ("incorrect", "too many password attempts"),
+                         ("afraid", "the account may not run it"),
+                         ("root", "it must be run as root"),
+                         ("permissionerror", "the helper was refused a permission"))
+
+
+def _sudo_refusal_class(text):
+    """A fixed phrase for the sudo refusal in `text`, or None when it holds none."""
+    from panel.ops.ssh_manager import firewall as _fw   # lazy: ssh_manager imports this module
+    m = _fw._SUDO_REFUSED_RE.search(text or "")
+    if not m:
+        return None
+    low = m.group(0).lower()
+    return next((cls for key, cls in _SUDO_REFUSAL_CLASSES if key in low), "refused by sudo")
+
+
+def _helper_probe_argv():
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return [_priv.HELPER_PATH, "--list-verbs"]
+    return ["sudo", "-n", _priv.HELPER_PATH, "--list-verbs"]
+
+
+def _helper_probe_run():
+    """{"outcome": ok | refused | timeout | unreadable | error, "verbs": set, "refusal": phrase}."""
+    try:
+        # Both elements past sudo's are module constants (privileged.HELPER_PATH and the literal
+        # "--list-verbs"); shell=False, so nothing is interpreted. See _run_verb for why the
+        # scanners' "not a literal string" finding is suppressed rather than "fixed".
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+        r = subprocess.run(_helper_probe_argv(), shell=False,  # nosec B603
+                           capture_output=True, text=True, timeout=10,
+                           stdin=subprocess.DEVNULL, start_new_session=True)
+    except subprocess.TimeoutExpired:
+        return {"outcome": "timeout", "verbs": set(), "refusal": None}
+    except Exception as exc:  # noqa: BLE001 - reported by class
+        return {"outcome": "error", "verbs": set(), "refusal": None, "error": type(exc).__name__}
+    verbs = {ln.split("\t")[0] for ln in (r.stdout or "").splitlines() if ln.strip()}
+    if r.returncode == 0 and verbs:
+        return {"outcome": "ok", "verbs": verbs, "refusal": None}
+    refusal = _sudo_refusal_class(r.stderr) if r.returncode != 0 else None
+    return {"outcome": "refused" if refusal else "unreadable", "verbs": verbs, "refusal": refusal}
+
+
+def helper_probe(force=False):
+    """The cached result of `sudo -n <helper> --list-verbs` (see _HELPER_PROBE); None when the
+    probe is not run here -- the helper is absent (the caller checks that)."""
+    now = time.time()
+    if not force and _HELPER_PROBE["res"] is not None and \
+            (now - _HELPER_PROBE["at"]) < _HELPER_PROBE_TTL:
+        return _HELPER_PROBE["res"]
+    res = _helper_probe_run()
+    _HELPER_PROBE.update(at=now, res=res)
+    return res
+
+
+# /etc/sudoers.d names the report may print as they are. Any other name can be an account's
+# ("alice", "bob-nopasswd"), so it is only counted.
+_SUDOERS_D = "/etc/sudoers.d"
+_PANEL_GRANT = "linuxgsm-panel"
+_SUDOERS_KNOWN = frozenset({"README", "90-cloud-init-users", "linuxgsm-panel",
+                            "00-linuxgsm-panel-terminal"})
+
+
+def _sudoers_after_grant():
+    """A sentence on which /etc/sudoers.d files sort AFTER the panel's grant: sudo reads them in
+    lexical order and the LAST match wins, so a general rule there makes the helper prompt."""
+    try:
+        names = sorted(n for n in os.listdir(_SUDOERS_D) if _sudo_reads(n))
+    except OSError:
+        return "/etc/sudoers.d is not readable by the panel account."
+    if _PANEL_GRANT not in names:
+        return "There is no /etc/sudoers.d/linuxgsm-panel grant (a per-user install has none)."
+    return _sudoers_after_sentence([n for n in names if n > _PANEL_GRANT])
+
+
+def _sudoers_after_sentence(after):
+    """The sentence for the /etc/sudoers.d names `after` the grant: known names, others counted."""
+    if not after:
+        return "No /etc/sudoers.d file sorts after the panel's grant."
+    known = [n for n in after if n in _SUDOERS_KNOWN]
+    others = ["%d other file(s)" % (len(after) - len(known))] if len(after) > len(known) else []
+    return ("Files in /etc/sudoers.d sorting after the panel's grant (the last match wins): %s."
+            % ", ".join(known + others))
+
+
+def _sudo_reads(name):
+    """Whether sudo reads /etc/sudoers.d/<name>: it skips names with a '.' or ending in '~'."""
+    return "." not in name and not name.endswith("~")
+
+
+def _helper_blob_note():
+    piece = root_piece_state().get("panel-helper", {})
+    return {"same": " The installed file is HEAD's tools/panel-helper.",
+            "differs": " The installed file DIFFERS from HEAD's tools/panel-helper.",
+            "unreadable": " The installed file could not be read to compare with HEAD's.",
+            }.get(piece.get("state"), "")
+
+
+def _diag_helper_refused(probe):
+    remedy = ("root withholds its pieces from this origin or branch by design (see Origin under "
+              "Install & privilege)" if (origin_category() != "canonical-https"
+                                         or _tracked_branch() != _DEFAULT_BRANCH)
+              else "remove or reorder the rule that matches after it, or re-run install.sh as root")
+    return "fail", ("Installed, but sudo REFUSES it (%s). %s Every privileged action will wait "
+                    "for a password; %s." % (probe.get("refusal"), _sudoers_after_grant(), remedy))
+
+
+def _diag_helper_verbs(probe):
+    installed = probe.get("verbs") or set()
+    missing = sorted(set(_priv.verbs()) - installed)
+    if missing:
+        return "fail", ("Out of date — %d verb(s) this version needs are missing (%s%s). "
+                        "Re-run install.sh as root on this host to refresh it."
+                        % (len(missing), ", ".join(missing[:4]), ", …" if len(missing) > 4 else ""))
+    return "ok", "Installed and current (%d verbs).%s" % (len(installed), _helper_blob_note())
+
+
+def _diag_privileged_helper():
+    """R9: the installed helper, through sudo -n as every real call is, and its verb table."""
+    if not _helper_present():
+        from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+        if _smc.helper_on_disk():
+            return "warn", ("Installed, but this process started before it was placed and is not "
+                            "using it. Restart the panel.")
+        return "warn", ("Not installed — privileged actions fall back to the pre-helper path and "
+                        "the sudoers grant cannot be narrowed. Re-run install.sh as root to place "
+                        "it.")
+    probe = helper_probe()
+    outcome = probe.get("outcome")
+    if outcome == "refused":
+        return _diag_helper_refused(probe)
+    if outcome == "timeout":
+        return "warn", ("Installed, but `sudo -n` did not answer within 10 s: a sudo stall "
+                        "(hostname lookup, SSSD), not a refusal.")
+    if outcome == "error":
+        return "warn", "Installed, but could not be queried."
+    if outcome != "ok":
+        return "warn", "Installed, but its verb table could not be read."
+    return _diag_helper_verbs(probe)
+
+
+def _diag_configuration():
     # load_config() never raises: an unreadable file comes back as defaults, MARKED. The except
     # alone reported "loads cleanly" for any corrupt file, because it could never fire.
+    from panel.core import config as _cfg
     try:
-        _unreadable = _cfg.is_unreadable(_cfg.load_config())
-    except Exception:
-        _unreadable = True
-    if _unreadable:
-        add("Configuration", "fail", "config.json could not be read or parsed.")
-    else:
-        add("Configuration", "ok", "config.json loads cleanly.")
+        unreadable = _cfg.is_unreadable(_cfg.load_config())
+    except Exception:  # noqa: BLE001
+        unreadable = True
+    if unreadable:
+        return "fail", "config.json could not be read or parsed."
+    return "ok", "config.json loads cleanly."
 
-    # 6. disk space
+
+def _diag_disk_space():
+    import shutil
     try:
         du = shutil.disk_usage(PANEL_DIR)
-        free_gb, used_pct = du.free / (1024 ** 3), du.used / du.total * 100
-        detail = "%.1f GB free (%.0f%% used)." % (free_gb, used_pct)
-        add("Disk space", "warn" if (free_gb < 1 or used_pct > 92) else "ok", detail)
     except OSError:
-        add("Disk space", "warn", "Couldn't read disk usage.")
+        return "warn", "Couldn't read disk usage."
+    free_gb, used_pct = du.free / (1024 ** 3), du.used / du.total * 100
+    return ("warn" if (free_gb < 1 or used_pct > 92) else "ok",
+            "%.1f GB free (%.0f%% used)." % (free_gb, used_pct))
 
-    # 7. TLS certificate (only when the panel terminates TLS itself)
-    cert_path = os.path.join(str(_cfg.DATA_DIR), "ssl", "cert.pem")
-    if os.path.exists(cert_path):
-        try:
-            from cryptography import x509
-            with open(cert_path, "rb") as f:
-                cert = x509.load_pem_x509_certificate(f.read())
-            na = getattr(cert, "not_valid_after_utc", None)
-            if na is None:
-                na = cert.not_valid_after.replace(tzinfo=timezone.utc)
-            days = (na - datetime.now(timezone.utc)).days
-            if days < 0:
-                add("TLS certificate", "fail", "Expired %d day(s) ago." % -days)
-            elif days < 14:
-                add("TLS certificate", "warn", "Expires in %d day(s)." % days)
-            else:
-                add("TLS certificate", "ok", "Valid for %d more day(s)." % days)
-        except Exception:
-            add("TLS certificate", "warn", "Present but couldn't be parsed.")
 
-    # 8. systemd service unit
-    user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
-    system_unit = "/etc/systemd/system/linuxgsm-panel.service"
-    if os.path.exists(user_unit) or os.path.exists(system_unit):
-        add("Service", "ok", "systemd unit installed (auto-starts on boot).")
-    else:
-        add("Service", "warn", "No systemd unit found — the panel may not auto-start on boot.")
+def _boot_tls():
+    """(tls, error class) from the boot record app.py keeps in current_app.config (R20), or
+    (None, None) without one -- never recomputed from the stored config, whose bind can differ
+    from the one this process booted with."""
+    try:
+        from flask import current_app
+        cfg = current_app.config
+        if "BOOT_TLS" not in cfg:
+            return None, None
+        return cfg.get("BOOT_TLS"), cfg.get("BOOT_TLS_ERROR")
+    except Exception:  # noqa: BLE001 - no app context: no boot record
+        return None, None
 
-    # 9. automatic security updates (hardening — a warn, not a fault: the panel runs
-    # fine either way, but for an unattended box you want the OS patching itself).
+
+def _cert_days(cert_path):
+    """Whole days until the PEM certificate at `cert_path` expires (negative once it has)."""
+    from datetime import datetime, timezone
+    from cryptography import x509
+    with open(cert_path, "rb") as f:
+        cert = x509.load_pem_x509_certificate(f.read())
+    na = getattr(cert, "not_valid_after_utc", None)
+    if na is None:
+        na = cert.not_valid_after.replace(tzinfo=timezone.utc)
+    return (na - datetime.now(timezone.utc)).days
+
+
+def _cert_verdict(days, tls):
+    """(level, detail) for a cert `days` from expiry. A cert whose use is unknown is never 'fail'."""
+    prefix = ("In use (the panel terminates TLS). " if tls
+              else "In use: unknown (no boot record; this process was not started by app.py). ")
+    if days < 0:
+        return ("fail" if tls else "warn"), prefix + "Expired %d day(s) ago." % -days
+    if days < 14:
+        return "warn", prefix + "Expires in %d day(s)." % days
+    return "ok", prefix + "Valid for %d more day(s)." % days
+
+
+def _diag_tls(data_dir):
+    """R11: decided by the boot record, not by the file existing. A leftover cert on a panel
+    whose TLS is terminated elsewhere is never a warning; a TLS start that failed at boot is."""
+    tls, err = _boot_tls()
+    if tls is False and err:
+        return "fail", ("The panel should serve HTTPS, but TLS FAILED to start at boot (%s) and "
+                        "it is serving plain HTTP." % _cls_token(err))
+    cert_path = os.path.join(data_dir, "ssl", "cert.pem")
+    if not os.path.exists(cert_path):
+        return None
+    if tls is False:
+        return "ok", ("Not in use (TLS is terminated by Tailscale Serve or a proxy, or the panel "
+                      "serves plain HTTP); a leftover cert.pem is present.")
+    try:
+        days = _cert_days(cert_path)
+    except Exception:  # noqa: BLE001
+        return "warn", "Present but couldn't be parsed."
+    return _cert_verdict(days, tls)
+
+
+_UNIT_TOKEN_RE = re.compile(r"^[a-z-]{1,24}\Z")
+_USER_UNIT = "~/.config/systemd/user/linuxgsm-panel.service"
+_SYSTEM_UNIT = "/etc/systemd/system/linuxgsm-panel.service"
+
+
+def _unit_token(value):
+    return value if isinstance(value, str) and _UNIT_TOKEN_RE.match(value) else "other"
+
+
+def _linger_on():
+    """Whether systemd keeps this account's user manager running without a login; None if the
+    account cannot be named. The name is used for the path test only and never printed."""
+    try:
+        import pwd
+        name = pwd.getpwuid(os.geteuid()).pw_name
+        return os.path.exists(os.path.join("/var/lib/systemd/linger", name))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _same_dir(a, b):
+    try:
+        return os.path.realpath(a) == os.path.realpath(b)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _service_problems(scope, props):
+    """The problems a unit's `systemctl show` properties reveal, as fixed sentences."""
+    out = []
+    if props.get("UnitFileState") not in ("enabled", "enabled-runtime"):
+        out.append("the unit is %s, so it does not start at boot"
+                   % _unit_token(props.get("UnitFileState")))
+    if scope == "user" and props.get("UnitFileState") == "enabled" and _linger_on() is False:
+        out.append("linger is OFF, so the panel stops at logout and does not start at boot")
+    if str(props.get("MainPID") or "") != str(os.getpid()):
+        out.append("the unit's MainPID is not this process")
+    wd = props.get("WorkingDirectory")
+    if wd and not _same_dir(wd, PANEL_DIR):
+        out.append("the unit's WorkingDirectory is not this checkout")
+    return out
+
+
+def _is_this_process(props):
+    return str(props.get("MainPID") or "") == str(os.getpid())
+
+
+def _service_summary(scope, props):
+    """One line of fixed tokens: scope, enablement, state, whether MainPID is us, linger."""
+    linger = ({True: "on", False: "OFF"}.get(_linger_on(), "unknown") if scope == "user"
+              else "n/a")
+    return "%s unit · %s · %s (%s) · MainPID is this process: %s · linger %s." % (
+        scope, _unit_token(props.get("UnitFileState")), _unit_token(props.get("ActiveState")),
+        _unit_token(props.get("SubState")), "yes" if _is_this_process(props) else "no", linger)
+
+
+def _both_units_note():
+    both = os.path.exists(os.path.expanduser(_USER_UNIT)) and os.path.exists(_SYSTEM_UNIT)
+    return " BOTH a system unit and a per-user unit exist (two installs?)." if both else ""
+
+
+def _unit_or_read(unit):
+    """`unit` as given, or the shared `systemctl show` read now; {} for nothing at all."""
+    if unit is None:
+        from panel.ops.debug_report import _src_systemd
+        unit = _src_systemd.unit_show()
+    return unit or {}
+
+
+def _diag_service(unit):
+    """R8: the ONE `systemctl show` the report shares (debug_report._src_systemd), not a file
+    existing. Paths are printed as yes/no, never the home directory or the account."""
+    both_note = _both_units_note()
+    unit = _unit_or_read(unit)
+    props = unit.get("props") or {}
+    if unit.get("error") or not props:
+        return "warn", "systemd state unreadable (%s).%s" % (
+            _unit_token(unit.get("error") or "no-answer"), both_note)
+    scope = "user" if unit.get("scope") == "user" else "system"
+    problems = _service_problems(scope, props)
+    detail = _service_summary(scope, props)
+    if problems:
+        detail += " " + "; ".join(problems) + "."
+    return ("warn" if problems or both_note else "ok"), detail + both_note
+
+
+def _diag_auto_updates():
+    # Hardening — a warn, not a fault: the panel runs fine either way, but for an unattended box
+    # you want the OS patching itself.
     try:
         au = unattended_upgrades_status()
-        add("Automatic security updates", "ok" if au["enabled"] else "warn", au["detail"])
-    except Exception:
-        add("Automatic security updates", "warn", "Couldn't determine the update status.")
+        return ("ok" if au["enabled"] else "warn"), au["detail"]
+    except Exception:  # noqa: BLE001
+        return "warn", "Couldn't determine the update status."
 
+
+def _diag_guarded(fn):
+    """fn()'s (level, detail), with a check that raised reported as a warning by class."""
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001 - one check's failure must not take the others
+        return "warn", "Could not be checked (%s)." % type(exc).__name__
+
+
+def panel_diagnostics(db_check=None, unit=None):
+    """A fast, local self-check of the panel's own health: file integrity, data dir, database,
+    encryption keys and host credentials, the privileged helper, config, disk space, TLS cert and
+    service unit. No SSH/network. Returns {checks:[{name,level,detail}], summary, counts}.
+
+    `db_check` is debug_report._src_db.integrity()'s result and `unit` _src_systemd.unit_show()'s,
+    when the caller (the debug report) already has them: one integrity check and one
+    `systemctl show` per report. Without them this reads both itself, the integrity check off the
+    hub. Every detail is safe for the public report: no absolute path, account or host."""
+    from panel.core import config as _cfg
+    data_dir, dbp = str(_cfg.DATA_DIR), str(_cfg.DB_PATH)
+    plan = (("File integrity", _diag_file_integrity),
+            ("Data directory", lambda: _diag_data_dir(data_dir)),
+            ("Database", lambda: _diag_database(dbp)),
+            ("Database integrity", lambda: _diag_db_integrity(db_check, dbp)),
+            ("Encryption keys", _diag_encryption_keys),
+            ("Host credentials", _diag_host_credentials),
+            ("Privileged helper", _diag_privileged_helper),
+            ("Configuration", _diag_configuration),
+            ("Disk space", _diag_disk_space),
+            ("TLS certificate", lambda: _diag_tls(data_dir)),
+            ("Service", lambda: _diag_service(unit)),
+            ("Automatic security updates", _diag_auto_updates))
+    checks = []
+    for name, fn in plan:
+        res = _diag_guarded(fn)
+        if res is not None:
+            checks.append({"name": name, "level": res[0], "detail": res[1]})
     levels = [c["level"] for c in checks]
     summary = "fail" if "fail" in levels else ("warn" if "warn" in levels else "ok")
     return {"checks": checks, "summary": summary,
             "ok": levels.count("ok"), "warn": levels.count("warn"),
             "fail": levels.count("fail")}
+
+
+# ─── Root-owned pieces vs the commit they belong to (R9, R27) ──────────
+# install.sh installs these three ROOT-OWNED, outside the checkout, and only install.sh run as
+# root refreshes them. Compared by git blob id, computed here in Python (the files are read, never
+# executed), against one `git ls-tree HEAD`.
+_ROOT_PIECES = (("panel-helper", "tools/panel-helper"), ("install.sh", "install.sh"),
+                ("db_maintenance.py", "db_maintenance.py"))
+_ROOT_PIECE_MAX = 16 * 1024 * 1024
+_root_pieces_cache = {"at": 0.0, "res": None}
+_ROOT_PIECES_TTL = 60
+
+
+def _root_dir():
+    return os.path.dirname(_priv.HELPER_PATH)
+
+
+def _git_blob_id(path):
+    """git's blob id for the file at `path` (sha1 over 'blob <size>\\0' + content).
+
+    sha1 because that is git's object id, compared with git's own; not a security decision."""
+    import hashlib
+    with open(path, "rb") as fh:
+        data = fh.read(_ROOT_PIECE_MAX + 1)
+    if len(data) > _ROOT_PIECE_MAX:
+        raise OSError("too large to compare")
+    # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
+    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()  # nosec B324
+
+
+def _installed_blob(path):
+    """('ok', blob) | ('missing', None) | ('unreadable', None) for one root-owned file."""
+    try:
+        return "ok", _git_blob_id(path)
+    except FileNotFoundError:
+        return "missing", None
+    except OSError:
+        return "unreadable", None
+
+
+def _head_blobs():
+    """{repo path: blob id} at HEAD for the three pieces, from ONE `git ls-tree`; None if it failed."""
+    out, _, rc = _git(["ls-tree", "HEAD", "--"] + [rel for _n, rel in _ROOT_PIECES], timeout=5)
+    if rc != 0:
+        return None
+    blobs = {}
+    for line in (out or "").splitlines():
+        meta, _, rel = line.partition("\t")
+        parts = meta.split()
+        if len(parts) == 3 and parts[1] == "blob":
+            blobs[rel] = parts[2]
+    return blobs
+
+
+def _piece_state(installed, head_blob):
+    kind, blob = installed
+    if kind != "ok":
+        return kind
+    if head_blob is None:
+        return "unknown"
+    return "same" if blob == head_blob else "differs"
+
+
+def root_piece_state(force=False):
+    """{name: {"state": same|differs|missing|unreadable|unknown, "blob", "head_blob", "rel"}}.
+
+    'unreadable' is a file the panel account may not read: never reported as 'differs'. Cached
+    for _ROOT_PIECES_TTL so the Diagnostics check and the report's Install section share one
+    read."""
+    now = time.time()
+    if not force and _root_pieces_cache["res"] is not None and \
+            (now - _root_pieces_cache["at"]) < _ROOT_PIECES_TTL:
+        return _root_pieces_cache["res"]
+    head = _head_blobs()
+    res = {}
+    for name, rel in _ROOT_PIECES:
+        installed = _installed_blob(os.path.join(_root_dir(), name))
+        head_blob = (head or {}).get(rel)
+        res[name] = {"state": _piece_state(installed, head_blob), "blob": installed[1],
+                     "head_blob": head_blob, "rel": rel}
+    _root_pieces_cache.update(at=now, res=res)
+    return res
 
 
 # ─── Debug report (safe to share on a GitHub issue) ────────────
