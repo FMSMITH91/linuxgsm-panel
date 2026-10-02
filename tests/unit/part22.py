@@ -23,6 +23,7 @@ import queue as _q22
 import shutil as _sh22
 import sqlite3 as _sql22
 import subprocess as _sp22  # nosec B404 - only its exception classes and constants are used here
+import sys
 import tempfile as _tf22
 import threading as _thr22
 import time as _time22
@@ -516,10 +517,16 @@ with _patched(_inst22, ETC_GROUP=_grp22):
 check("R16: the fixed group name is install.sh's GAME_GROUP (lgsmpanel-games)",
       _priv22.GAME_GROUP == "lgsmpanel-games"
       and 'GAME_GROUP="%s"' % _priv22.GAME_GROUP in _install22)
-check("R16: the interpreter line never prints an absolute path (an account name can be in one)",
-      not any(d in _inst22._interpreter() for d in ("/home/", "/tmp/", "/usr/", "/opt/", "/srv/",
-                                                     "/root/", _so22.PANEL_DIR)),
-      _inst22._interpreter())
+_interp22 = []
+for _exe22 in ("/srv/someacct/py/bin/python3", os.path.join(_so22.PANEL_DIR, "venv", "bin", "python3"),
+               "/usr/bin/python3"):
+    with _patched(sys, executable=_exe22):
+        _interp22.append(_inst22._interpreter())
+check("R16: the interpreter is '<panel>/venv/bin/...', 'system python' or 'other path', never an "
+      "absolute path (an account name can be in one)",
+      [i.split(",")[0] for i in _interp22] == ["other path", "<panel>/venv/bin/python3", "system python"]
+      and not any(d in i for i in _interp22 for d in ("/home/", "/tmp/", "/usr/", "/opt/", "/srv/",
+                                                      "/root/", _so22.PANEL_DIR)), repr(_interp22))
 
 _vfake22 = _FakeSp22(stdout="Sudo version 1.9.15p5\nSudoers policy plugin\nLocal IP address and "
                             "netmask pairs:\n\t203.0.113.9/255.255.255.0\n")
