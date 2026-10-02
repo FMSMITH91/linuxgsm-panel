@@ -579,7 +579,7 @@ def _sudo_line22(path):
 _sl22rs, _sl22cl = _sudo_line22(_sudo_rs22), _sudo_line22(_sudo_cl22)
 check("R26: nsswitch's sudoers sources are printed when sudo-rs answers, and only then",
       "sudo-rs" in _sl22rs and "nsswitch sudoers: files sss other (sudo-rs ignores the sss rules)"
-      in _sl22rs and "classic sudo" in _sl22cl and "nsswitch" not in _sl22cl, (_sl22rs, _sl22cl))
+      in _sl22rs and "classic sudo" in _sl22cl and "nsswitch" not in _sl22cl, repr((_sl22rs, _sl22cl)))
 
 
 # ══ network: UFW (R40) ══════════════════════════════════════════════════════════════════════════
