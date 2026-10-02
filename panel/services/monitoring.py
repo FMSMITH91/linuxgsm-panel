@@ -22,6 +22,7 @@ import time
 from panel.services import notifications
 from panel.ops import system_ops as so
 from panel.security.auth import log_action
+from panel.core import runtime_stats
 from panel.core.clock import utcnow
 from panel.core.config import load_config
 from panel.core.validation import ip_address_or_none, ip_network_or_none, unzoned_ip_or_network
@@ -30,7 +31,7 @@ from panel.db.models import (GameServer, HostSample, MetricSample, RemoteServer,
 from panel.core.panel_state import (
     _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state,
     _player_counts, _reboot_when_empty, _rwe_lock, _server_full_alerted, _server_peak_notified,
-    forget_rows, keyed_state_with_locks,
+    forget_rows, keyed_state_with_locks, register_remote_state,
 )
 from panel.ops.ssh_manager import (
     _remote_listening_ports, game_map, host_live_metrics, lgsm_get_values, metrics_for_game,
@@ -113,12 +114,121 @@ def _host_reachable(remote):
 
     run_command runs it locally for the panel host. Used to avoid rebooting a host we can't
     currently confirm is idle.
+
+    Still a bare bool to every caller. WHY it failed is recorded beside it (_note_probe), for the
+    debug report: a host key that changed and a box that is powered off were the same
+    "unreachable" here, and so was every other cause.
     """
     try:
-        out, _, _ = run_command(remote, "echo ok", timeout=10)
-        return "ok" in (out or "")
-    except Exception:
+        out, err, rc = run_command(remote, "echo ok", timeout=10)
+        ok = "ok" in (out or "")
+    except Exception as exc:
+        _note_probe(remote, False, _probe_exc_token(exc), None)
         return False
+    _note_probe(remote, ok, None if ok else _probe_reply_token(remote, err, rc), rc)
+    return ok
+
+
+# ── The last probe of each host, for the debug report (R48) ───────────────────────────────────
+# remote id -> {ok, token, rc, at, ok_at, fail_since, streak}. A FIXED-VOCABULARY token and the
+# rc only, never the message or stderr: _connect_client's messages carry the host's address, and
+# the report is meant for a public issue. Registered, so a deleted host's id is forgotten with its
+# other state rather than handed to whatever host takes the id next. Written from the monitor's
+# pool threads as one whole-dict assignment: a lost write under a race costs one stale reading.
+_probe_record = register_remote_state({})
+
+# stderr markers of the non-raising transports (tailscale's ssh CLI, local); first match wins.
+_PROBE_ERR_TOKENS = (
+    ("host key verification failed", "host_key_changed"),
+    ("remote host identification has changed", "host_key_changed"),
+    ("permission denied", "auth_failed"),
+    ("could not resolve hostname", "dns"),
+    ("name or service not known", "dns"),
+    ("temporary failure in name resolution", "dns"),
+    ("connection refused", "refused"),
+    ("no route to host", "no_route"),
+    ("timed out", "timeout"),
+    ("invalid ssh login or host", "ssh_destination_refused"),
+)
+# The messages _connect_client and its helpers raise ConnectionError with, by their fixed wording.
+_PROBE_EXC_TOKENS = (
+    ("authentication failed", "auth_failed"),
+    ("timed out", "timeout"),
+    ("cannot resolve hostname", "dns"),
+    ("no usable ssh password", "credential_unreadable"),
+    ("connection refused", "refused"),
+    ("errno 111", "refused"),
+    ("no route to host", "no_route"),
+)
+# sudo refusing for want of a password, classic sudo's and sudo-rs's wording alike.
+_SUDO_PROMPT_RE = re.compile(
+    r"(?mi)^\s*sudo:\s*(?:a password is required|a terminal is required|no tty present"
+    r"|sorry, you must have a tty|interactive authentication is required)")
+
+
+def _first_marker(text, table):
+    """The token of the first marker of `table` found in `text` (case-insensitively), or None."""
+    low = (text or "").lower()
+    for marker, token in table:
+        if marker in low:
+            return token
+    return None
+
+
+def _probe_exc_token(exc):
+    """A fixed token for a probe that RAISED: 'other:<Class>' for anything unrecognised."""
+    try:
+        name = type(exc).__name__
+        if name == "HostKeyMismatch":
+            return ("host_key_unreadable" if "cannot be decrypted" in str(exc)
+                    else "host_key_changed")
+        if isinstance(exc, TimeoutError):
+            return "timeout"
+        return _first_marker(str(exc), _PROBE_EXC_TOKENS) or "other:" + name
+    except Exception:  # noqa: BLE001 - a classifier must never be what fails the probe
+        return "other:unclassified"
+
+
+def _probe_transport(remote):
+    """'local', 'ssh_cli' (tailscale) or 'ssh' (paramiko): run_command's own predicates."""
+    if getattr(remote, "is_local", False) or getattr(remote, "auth_method", None) == "local":
+        return "local"
+    return "ssh_cli" if getattr(remote, "auth_method", None) == "tailscale" else "ssh"
+
+
+def _probe_reply_token(remote, err, rc):
+    """A fixed token for a probe that ANSWERED without 'ok' (how the non-raising transports fail)."""
+    try:
+        if _SUDO_PROMPT_RE.search(err or ""):
+            return "sudo_password_required"
+        token = _first_marker(err, _PROBE_ERR_TOKENS)
+        if token:
+            return token
+        if rc == 0:
+            return "empty_output_rc0"
+        rc_txt = str(rc) if isinstance(rc, int) else "?"
+        return "%s_rc%s" % (_probe_transport(remote), rc_txt)
+    except Exception:  # noqa: BLE001
+        return "other:unclassified"
+
+
+def _note_probe(remote, ok, token, rc):
+    """Record one probe of `remote` in _probe_record. Never raises."""
+    try:
+        rid = getattr(remote, "id", None)
+        if not isinstance(rid, int):
+            return
+        now = time.time()
+        prev = _probe_record.get(rid)
+        prev = prev if isinstance(prev, dict) else {}
+        _probe_record[rid] = {
+            "ok": bool(ok), "token": token, "at": now,
+            "rc": rc if isinstance(rc, int) else None,
+            "ok_at": now if ok else prev.get("ok_at"),
+            "fail_since": None if ok else (prev.get("fail_since") or now),
+            "streak": 0 if ok else int(prev.get("streak") or 0) + 1}
+    except Exception:  # noqa: BLE001 - instrumentation must never raise into the monitor
+        return
 
 
 _PLAYER_POLL_SECONDS = 45
@@ -979,6 +1089,7 @@ def _reboot_when_empty_watch(app):
         time.sleep(60)
         with _rwe_lock:
             pending = list(_reboot_when_empty.keys())
+        runtime_stats.beat("reboot-when-empty", 60)   # the debug report's "is it alive" (R22)
         if not pending:
             continue
         with app.test_request_context():   # DB + log_action context for the background thread
