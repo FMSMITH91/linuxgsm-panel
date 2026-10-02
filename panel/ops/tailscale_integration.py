@@ -49,8 +49,8 @@ class TailscaleInfo:
     funnel_enabled: bool = False
     peers: list = field(default_factory=list)  # List of peer dicts
     # The parsed `tailscale status --json` and `tailscale debug prefs` this reading came from, or
-    # None when they were not read. Kept for the debug report (debug_report/_src_tailscale.py), which
-    # prints counts and booleans from them and never a value: no second CLI call for those fields.
+    # None when they were not read. Kept for the debug report (debug_report/_src_tailscale.py),
+    # which prints counts and booleans from them and never a value: no second CLI call for them.
     status_json: Optional[dict] = None
     prefs_json: Optional[dict] = None
 
@@ -155,7 +155,7 @@ def _read_route_all():
 
 
 def _route_all_of(prefs):
-    """RouteAll from a prefs dict, or None when there is none or it is not a bool."""
+    """The RouteAll pref of a prefs dict, or None when there is none or it is not a bool."""
     v = prefs.get("RouteAll") if isinstance(prefs, dict) else None
     return v if isinstance(v, bool) else None
 

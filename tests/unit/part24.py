@@ -21,7 +21,7 @@ import json as _json24
 import os
 import re as _re24
 import sqlite3 as _sql24
-import subprocess as _sp24
+import subprocess as _sp24  # nosec B404 - for TimeoutExpired only; nothing is run
 import tempfile as _tf24
 import time as _time24
 
@@ -29,7 +29,6 @@ from flask import Flask as _Flask24
 
 from unit.part01 import check, eq
 import app as _app24
-from panel.core import config as _cfg24
 from panel.ops import system_ops as _so24
 from panel.ops import tailscale_integration as _ts24
 from panel.ops.debug_report import _src_db as _db24
@@ -110,7 +109,8 @@ def _me24():
 
 
 _STATUS24 = {
-    "BackendState": "Running", "TailscaleIPs": ["100.77.0.31"], "MagicDNSSuffix": "tail7731ab.ts.net",
+    "BackendState": "Running", "TailscaleIPs": ["100.77.0.31"],
+    "MagicDNSSuffix": "tail7731ab.ts.net",
     "CurrentTailnet": {"Name": "canarytailnet7731"}, "Health": ["canary health text 7731"],
     "Self": {"HostName": "canarynode", "DNSName": "canarynode.tail7731ab.ts.net.",
              "KeyExpiry": "2099-01-01T00:00:00Z"},
@@ -141,6 +141,40 @@ def _fake_ts(calls):
     return _run_ts
 
 
+def _ts_network(state, v):
+    head = _nw24._ts_head(v) if state == "ok" else ""
+    wanted = ("panel account is the operator: yes", "health warnings 1")
+    check("contract tailscale -> Network: the status/prefs JSON is kept, so key expiry, health and "
+          "the operator are read, not 'not recorded'",
+          v["extras_recorded"] is True and "not recorded" not in head
+          and all(w in head for w in wanted), repr((state, head)))
+
+
+def _ts_hosts(hosts_view):
+    peers = (hosts_view or {}).get("peers") or []
+    texts = [_h24.peer_text(_h24.match_peer(n, peers))
+             for n in ("canarypeer7731", "canaryrelay7731")]
+    kept = repr(peers)
+    check("contract tailscale -> Hosts: a peer's direct/relayed path is read from the peer dict "
+          "('direct' from CurAddr), never 'path unknown', and CurAddr itself is not kept",
+          texts[0].startswith("online yes · direct") and "DERP-relayed" in texts[1]
+          and "CurAddr" not in kept and "198.51.100.77" not in kept, repr(texts))
+
+
+_TS_NAMES24 = ("canarynode", "canarypeer7731", "canaryrelay7731", "canarytailnet7731",
+               "canarylogin7731", "Canaryperson7731", "tail7731ab")
+
+
+def _ts_privacy(ctx, st):
+    ctx._memo["privacy"] = (True, st)
+    probe = ("node canarynode, peers canarypeer7731 and canaryrelay7731 in canarytailnet7731, user "
+             "canarylogin7731@example.com (Canaryperson7731), suffix tail7731ab.ts.net")
+    out = _pv24.scrub(ctx, probe).lower()
+    check("contract tailscale -> privacy: every name in the real reading (node, peers, tailnet, "
+          "logins, display names, MagicDNS suffix) is pseudonymised",
+          not [c for c in _TS_NAMES24 if c.lower() in out], out)
+
+
 def _tailscale_pair():
     calls, reads = [], []
     real_read = _st24.read
@@ -154,26 +188,9 @@ def _tailscale_pair():
     _pv24._tailscale_names(ctx, st, 5.0)       # what the privacy pass reads
     eq("contract tailscale: Hosts, Network and the privacy pass share ONE reading (one read(), one "
        "`tailscale status`)", (len(reads), calls.count("status --json")), (1, 1))
-    check("contract tailscale -> Network: the status/prefs JSON is kept, so key expiry, health and "
-          "the operator are read, not 'not recorded'",
-          state == "ok" and v["extras_recorded"] is True and "not recorded" not in _nw24._ts_head(v)
-          and "panel account is the operator: yes" in _nw24._ts_head(v)
-          and "health warnings 1" in _nw24._ts_head(v), repr((state, _nw24._ts_head(v))))
-    peers = (hosts_view or {}).get("peers") or []
-    texts = [_h24.peer_text(_h24.match_peer(n, peers)) for n in ("canarypeer7731", "canaryrelay7731")]
-    check("contract tailscale -> Hosts: a peer's direct/relayed path is read from the peer dict "
-          "('direct' from CurAddr), never 'path unknown', and CurAddr itself is not kept",
-          texts[0].startswith("online yes · direct") and "DERP-relayed" in texts[1]
-          and not any("CurAddr" in p or "198.51.100.77" in repr(p) for p in peers), repr(texts))
-    ctx._memo["privacy"] = (True, st)
-    probe = ("node canarynode, peers canarypeer7731 and canaryrelay7731 in canarytailnet7731, user "
-             "canarylogin7731@example.com (Canaryperson7731), suffix tail7731ab.ts.net")
-    out = _pv24.scrub(ctx, probe)
-    leaked = [c for c in ("canarynode", "canarypeer7731", "canaryrelay7731", "canarytailnet7731",
-                          "canarylogin7731", "Canaryperson7731", "tail7731ab") if c.lower() in
-              out.lower()]
-    check("contract tailscale -> privacy: every name in the real reading (node, peers, tailnet, "
-          "logins, display names, MagicDNS suffix) is pseudonymised", not leaked, out)
+    _ts_network(state, v or {"extras_recorded": None})
+    _ts_hosts(hosts_view)
+    _ts_privacy(ctx, st)
 
 
 # ══ 3. SQLite -> Sign-ins (R43), the Database section (R57/R58), Diagnostics (R12) ══════════════
@@ -187,7 +204,7 @@ def _schema24(name):
     return path
 
 
-def _db_pair():
+def _db_signins():
     path = _schema24("counts.db")
     now = _time24.strftime("%Y-%m-%d %H:%M:%S", _time24.gmtime())
     with _sql24.connect(path) as cx:
@@ -200,30 +217,35 @@ def _db_pair():
     _p24(_db24, "_db_path", lambda: path)
     res, facts = _Result24(), {}
     _nw24._signin_lines(res, _db24.run_ro(_nw24.signin_queries(), timeout=10), facts)
+    text = _text24(res)
     check("contract _src_db.run_ro -> Sign-ins: the real rows are counted, sources classified",
-          "ok 1/1 · failed 3/3" in _text24(res) and "3 distinct (public 1 · tailnet 1 · private 1"
-          in _text24(res) and facts.get("audit_fail_24h") == 3 and not res.findings, _text24(res))
+          "ok 1/1 · failed 3/3" in text and "3 distinct (public 1 · tailnet 1 · private 1" in text
+          and facts.get("audit_fail_24h") == 3 and not res.findings, text)
+    return path
+
+
+def _integrity_pair(path):
+    """(Database section lines, Diagnostics' verdict) from ONE real integrity check of `path`."""
+    _p24(_db24, "_db_path", lambda: path)
     _db24._cache.update(key=None, res=None)
-    ctx = _Ctx24()
-    hres = _Result24()
-    _data24._health_lines(ctx, hres)
-    verdict = _so24._diag_db_integrity(_diag24.shared_integrity(ctx), path)
+    ctx, res = _Ctx24(), _Result24()
+    _data24._health_lines(ctx, res)
+    return res.lines, _so24._diag_db_integrity(_diag24.shared_integrity(ctx), path)
+
+
+def _db_pair():
+    lines, verdict = _integrity_pair(_db_signins())
     check("contract _src_db.integrity -> Database section and Diagnostics: a healthy file reads ok "
-          "in both, from one check", hres.lines[:1] and hres.lines[0].startswith("- **health**: ok")
-          and verdict == ("ok", "No corruption detected."), repr((hres.lines, verdict)))
+          "in both, from one check", lines[:1] and lines[0].startswith("- **health**: ok")
+          and verdict == ("ok", "No corruption detected."), repr((lines, verdict)))
     bad = os.path.join(_TMP24, "bad.db")
     with open(bad, "wb") as fh:
         fh.write(b"SQLite format 3\x00" + b"\x13" * 4096)
-    _p24(_db24, "_db_path", lambda: bad)
-    _db24._cache.update(key=None, res=None)
-    ctx = _Ctx24()
-    dres = _Result24()
-    _data24._health_lines(ctx, dres)
-    dverdict = _so24._diag_db_integrity(_diag24.shared_integrity(ctx), bad)
+    lines, verdict = _integrity_pair(bad)
     check("contract _src_db.integrity -> Database section and Diagnostics: a damaged file with no "
           "backup is DAMAGED in one and 'starts EMPTY' in the other",
-          "DAMAGED" in _text24(dres) and dverdict[0] == "fail" and "starts EMPTY" in dverdict[1],
-          repr((dres.lines, dverdict)))
+          "DAMAGED" in "\n".join(lines) and verdict[0] == "fail" and "starts EMPTY" in verdict[1],
+          repr((lines, verdict)))
     _p24(_db24, "_db_path", lambda: os.path.join(_TMP24, "missing.db"))
     mres = _Result24()
     _nw24._signin_lines(mres, _db24.run_ro(_nw24.signin_queries()), {})
@@ -233,16 +255,13 @@ def _db_pair():
 
 
 # ══ 4. app.py's boot record -> Config, Diagnostics' TLS, Panel process, the header ══════════════
-class _CertFail24(PermissionError):
-    """A cert that could not be written; its message carries a path the report must not print."""
-
-
 def _boot(fail):
     fake = _Flask24("p24boot")
 
     def _cert(cert, key, domain):
         if fail:
-            raise _CertFail24("cannot write /home/canarypanelacct/secret/cert.pem")
+            # its message carries a path, which the report must never print
+            raise PermissionError("cannot write /home/canarypanelacct/secret/cert.pem")
     _p24(_app24, "_effective_https", lambda cfg: True)
     _p24(_app24, "_ensure_self_signed_cert", _cert)
     _app24._boot_ssl_args(fake, {}, "0.0.0.0", 5000)    # nosec B104 - a bind string, not a socket
@@ -256,11 +275,12 @@ def _boot_pair():
     fake, diag_tls, boot = _boot(fail=True)
     ctx = _Ctx24(app=fake)
     texts = (_cs24._tls_text(ctx), _proc24._serving_line(fake.config))
-    check("contract BOOT_TLS/BOOT_TLS_ERROR -> Config, Diagnostics, Panel process: a TLS start that "
-          "failed is named by its CLASS in all three, and no path", boot == (False, "_CertFail24")
-          and texts[0] == "no (configured, but it failed to start: _CertFail24)"
-          and "FAILED to start (_CertFail24)" in texts[1] and diag_tls[0] == "fail"
-          and "_CertFail24" in diag_tls[1]
+    check("contract BOOT_TLS/BOOT_TLS_ERROR -> Config, Diagnostics, Panel process: a TLS start "
+          "that failed is named by its CLASS in all three, and no path",
+          boot == (False, "PermissionError")
+          and texts[0] == "no (configured, but it failed to start: PermissionError)"
+          and "FAILED to start (PermissionError)" in texts[1] and diag_tls[0] == "fail"
+          and "PermissionError" in diag_tls[1]
           and "canarypanelacct" not in repr((texts, diag_tls)), repr((boot, texts, diag_tls)))
     fake, _diag_ok, boot = _boot(fail=False)
     ctx = _Ctx24(app=fake)
@@ -303,7 +323,7 @@ _RS_NAMES = {"runtime_stats", "rs", "_rs"}
 
 
 def _is_rs(node):
-    """Whether `node` names the runtime_stats module: an alias, or mod("panel.core.runtime_stats")."""
+    """Whether `node` is the runtime_stats module: an alias, or mod("panel.core.runtime_stats")."""
     if isinstance(node, _ast24.Name):
         return node.id in _RS_NAMES
     return (isinstance(node, _ast24.Call) and isinstance(node.func, _ast24.Name)
@@ -312,25 +332,31 @@ def _is_rs(node):
             and node.args[0].value == "panel.core.runtime_stats")
 
 
+def _rs_group(node):
+    """("read"|"written", group) for one runtime_stats call node, or None."""
+    if not (isinstance(node, _ast24.Call) and isinstance(node.func, _ast24.Attribute)
+            and _is_rs(node.func.value)):
+        return None
+    verb = node.func.attr
+    if verb == "beat":
+        return "written", "heartbeat"
+    first = node.args[0] if node.args else None
+    if verb in ("bump", "put", "snapshot") and isinstance(first, _ast24.Constant):
+        return ("read" if verb == "snapshot" else "written"), first.value
+    return None
+
+
 def _rs_calls():
     """{"read": {group}, "written": {group}} over panel/ and app.py, by the AST."""
     out = {"read": set(), "written": set()}
-    for path in _glob24.glob(os.path.join(_REPO24, "panel", "**", "*.py"), recursive=True) + \
-            [os.path.join(_REPO24, "app.py")]:
+    paths = _glob24.glob(os.path.join(_REPO24, "panel", "**", "*.py"), recursive=True)
+    for path in paths + [os.path.join(_REPO24, "app.py")]:
         if path.endswith(os.path.join("core", "runtime_stats.py")):
             continue
         with open(path, encoding="utf-8") as fh:
             tree = _ast24.parse(fh.read())
-        for node in _ast24.walk(tree):
-            if not (isinstance(node, _ast24.Call) and isinstance(node.func, _ast24.Attribute)
-                    and _is_rs(node.func.value)):
-                continue
-            verb = node.func.attr
-            if verb == "beat":
-                out["written"].add("heartbeat")
-            elif verb in ("bump", "put", "snapshot") and node.args \
-                    and isinstance(node.args[0], _ast24.Constant):
-                out["read" if verb == "snapshot" else "written"].add(node.args[0].value)
+        for got in filter(None, map(_rs_group, _ast24.walk(tree))):
+            out[got[0]].add(got[1])
     return out
 
 
@@ -339,9 +365,9 @@ def _contract_gates():
     check("contract app.config: every PANEL_COMMIT/BOOT_* key a report module reads is assigned by "
           "app.py", keys_read and keys_read <= keys_written, repr(sorted(keys_read - keys_written)))
     rs = _rs_calls()
+    gaps = (sorted(rs["read"] - rs["written"]), sorted(rs["written"] - rs["read"]))
     eq("contract runtime_stats: every group a section snapshots is written by some loop or hook, "
-       "and every group written is read by a section", (sorted(rs["read"] - rs["written"]),
-                                                         sorted(rs["written"] - rs["read"])), ([], []))
+       "and every group written is read by a section", gaps, ([], []))
     from panel.ops.debug_report import _base
     undocumented = sorted(g for g in rs["written"] if not _re24.search(
         r"\n    %s +" % _re24.escape(g), _base.__doc__))
