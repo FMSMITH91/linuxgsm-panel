@@ -1016,7 +1016,7 @@ _bad_out, _bad_err, _bad_rc = _sm_core._run_local(r"printf 'caf\351: cannot star
 check("transport (local): invalid UTF-8 in stdout still returns the text",
       _bad_rc == 0 and _bad_out.startswith("caf") and "cannot start" in _bad_out)
 check("transport (local): the undecodable byte becomes U+FFFD, not a lost result",
-      "�" in _bad_out and _bad_out != "")
+      "\ufffd" in _bad_out and _bad_out != "")
 _bad2_out, _bad2_err, _bad2_rc = _sm_core._run_local(r"printf 'x\200y\n' >&2; printf 'ok\n'",
                                                timeout=10, sudo=False)
 check("transport (local): invalid UTF-8 on stderr does not blank stdout",

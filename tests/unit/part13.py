@@ -2677,7 +2677,7 @@ try:
           and _cli_pop10[1][1].get("stdin") == "DEVNULL"
           and not any("s3cret" in a for a in _cli_pop10[0][0]), repr(_cli_pop10))
     check("core ssh cli: output is decoded leniently and stripped; truncation is logged",
-          _cli_ok10 == ("line\nout �", "warn", 0)
+          _cli_ok10 == ("line\nout \ufffd", "warn", 0)
           and any("truncated" in m for m in _cap_s10.msgs), repr((_cli_ok10, _cap_s10.msgs)))
     check("core ssh cli: a timeout and a missing ssh binary are rc -1 answers, not exceptions",
           _cli_to10 == ("", "SSH command timed out", -1)

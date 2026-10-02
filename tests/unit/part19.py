@@ -919,11 +919,12 @@ check("required checks: ...including SonarCloud's zero-new-issues job, Dependenc
 
 
 # ── SonarCloud reads only UTF-8 ─────────────────────────────────────────────────────────────────
-# Its analysis warned "There are problems with file encoding" until every file it indexes was UTF-8
-# by ITS test: ByteCharsetDetector.detect calls isUTF8(buf, rejectNulls=true), so a NUL byte fails a
-# file that is valid UTF-8. Excluding static/vendor/ was not enough (#382), nor were images (#383):
-# the culprit was a fuzz-corpus file with a NUL, under sonar.tests. Every file, sources and tests,
-# that no exclusion covers must decode, and hold no NUL.
+# Its analysis warned "There are problems with file encoding" for two literal U+FFFD characters in
+# tests (part01, part13): the scanner reports every U+FFFD as "Invalid character encountered", in a
+# file that is valid UTF-8. Found only by running the scanner locally, after three guesses (vendor
+# files, images, a NUL in the fuzz corpus) were each merged and left it standing. Every file it reads,
+# sources and tests, that no exclusion covers must decode, and hold no U+FFFD (write "\ufffd") and
+# no NUL (its charset detection refuses a file with one).
 import fnmatch as _sq_fnm  # noqa: E402
 
 with open(os.path.join(_rn_root, ".sonarcloud.properties"), encoding="utf-8") as _sq_fh:
@@ -959,7 +960,9 @@ for _sq_f in _sq_walk:
         continue
     if b"\0" in _sq_b:
         _sq_bad.append(_sq_f + " (NUL)")
-check("sonarcloud: every file it indexes, sources and tests, is UTF-8 by its rule: valid, and no NUL",
+    if "\ufffd".encode("utf-8") in _sq_b:
+        _sq_bad.append(_sq_f + " (U+FFFD)")
+check("sonarcloud: every file it reads, sources and tests, is UTF-8 with no U+FFFD and no NUL",
       len(_sq_walk) >= 300 and not _sq_bad and _sq_excluded("docs/screenshots/01-dashboard.png")
       and _sq_excluded("a.png") and not _sq_excluded("panel/x.py")
       and _sq_excluded("tests/fuzz/corpus/console/esc_control", _sq_texcl),
