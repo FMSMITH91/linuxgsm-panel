@@ -28,7 +28,6 @@ from types import SimpleNamespace as NS
 from flask import Flask as _Flask21
 
 from unit.part01 import check, eq
-from unit.part12 import P9_ADMIN, _p9_client, _p9_json
 from panel.core import config as _cfg21
 from panel.core import runtime_stats as _rs21
 from panel.db import models as _m21
@@ -613,6 +612,8 @@ def _c_ufw():
 
 
 def _c_route():
+    # part12 has already run by now (it is earlier in _PARTS): importing it runs nothing again.
+    from unit.part12 import P9_ADMIN, _p9_client, _p9_json
     _p21(_so21, "_run", lambda cmd, timeout=30, sudo=False, text=True: ("yes", "", 0))
     _p21(_so21, "_run_verb", _verb_by({"f2b-status": ("", "Failed to access socket path", 255)}))
     d = _p9_json(_p9_client(P9_ADMIN).get("/api/panel/security/bans"))
