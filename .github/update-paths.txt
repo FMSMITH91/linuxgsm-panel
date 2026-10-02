@@ -1,0 +1,74 @@
+# Which repository files a host RUNS, and which it does not. "Update available" is offered only
+# when a file named `runtime` here changes (the owner's rule); a change to `noise` alone is not an
+# update. Read by panel/ops/system_ops.py (_update_rules) FROM THE COMMIT BEING OFFERED, so naming a
+# new tool's config file here is itself a noise change: no panel is offered it. These lists used to
+# live in system_ops.py, and adding .sonarcloud.properties to them (#382) changed a file the panel
+# runs, which offered every panel that one line as an update.
+#
+# A line is `runtime <path>` or `noise <path>`. A path ending in / is a directory, one with * ? or
+# [ is a glob over the whole path (case-insensitive), any other is one file. The most specific entry
+# decides: a file over a glob over a directory, and a longer directory over a shorter one. A tie
+# goes to runtime. A path named by nothing here also counts as runtime, so a host is never left
+# behind on a file nobody classified; tests/unit (part03) fails the build for any repository file
+# left unnamed, holds every module the panel imports and every file the installers read to
+# `runtime`, and every single-file entry to a file that exists.
+
+# ── what a host runs ─────────────────────────────────────────────────────────────────────────────
+runtime panel/
+runtime static/
+runtime templates/
+runtime translations/
+# The panel's entry points, the installers and recovery tools (install.sh re-stages recover.sh,
+# db_maintenance.py and itself root-owned on every update), the two lockfiles pip installs from,
+# and VERSION (the version a checkout without .git reports).
+runtime app.py
+runtime manage.py
+runtime db_maintenance.py
+runtime VERSION
+runtime install.sh
+runtime uninstall.sh
+runtime recover.sh
+runtime reset-password.sh
+runtime requirements.txt
+runtime requirements-bootstrap.txt
+# Inside tools/, which is otherwise noise.
+#
+# tools/panel-helper is the root-owned end of the sudo boundary. It lives outside the panel's
+# checkout once installed, and only install.sh, run as root, can refresh it; the update badge is
+# what tells the operator to do that. Classified as noise, a commit that changed ONLY the helper
+# raised no badge and appeared in no changelog, so the panel moved on while the installed helper
+# did not: it then answers an unknown verb with rc 2 and no fallback, and the feature behind that
+# verb fails silently.
+runtime tools/panel-helper
+# tools/gamedig: install.sh installs these three root-owned on every host and runs the script, and
+# every game account runs the tree it installs. A commit changing only them (every Dependabot bump
+# of the lockfile) is an update. privileged.GAMEDIG_FILES names them; a unit test holds the two
+# together.
+runtime tools/gamedig/package.json
+runtime tools/gamedig/package-lock.json
+runtime tools/gamedig/install-gamedig.sh
+
+# ── what it does not ─────────────────────────────────────────────────────────────────────────────
+noise .github/
+noise docs/
+noise tests/
+noise tools/
+noise .vscode/
+noise .clusterfuzzlite/
+noise *.md
+noise LICENSE
+noise license.*
+noise .gitignore
+noise .gitattributes
+noise .dockerignore
+# requirements.in is what requirements.txt is compiled FROM: neither the panel nor install.sh reads
+# it. A dependency reaches a host through requirements.txt, which tests/unit holds to lock every
+# name in the .in. requirements-bootstrap.in is the same for pip's own lockfile,
+# requirements-bootstrap.txt, which install.sh does read, and which therefore counts.
+noise requirements.in
+noise requirements-bootstrap.in
+# Analysis and lint configuration, read by the scanners alone.
+noise .codacy.yaml
+noise .prospector.yaml
+noise .sonarcloud.properties
+noise static/js/.eslintrc.json
