@@ -19,14 +19,6 @@ name: Fuzz
 on:
   pull_request:
     branches: [ main ]
-    paths:
-      - 'panel/ops/ssh_manager/**'
-      - 'panel/ops/system_ops.py'
-      - 'panel/core/terminal.py'
-      - 'tests/fuzz/**'
-      - '.github/workflows/fuzz.yml'
-      - 'requirements.txt'
-      - '.github/ci-requirements/atheris.txt'   # a Dependabot bump of the fuzzer must run it
   schedule:
     - cron: "0 4 * * *"   # nightly 04:00 UTC — a longer soak
   workflow_dispatch:      # allow manual runs from the Actions tab
@@ -45,27 +37,74 @@ jobs:
     name: fuzz (${{ matrix.target }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: read   # the scope step lists the pull request's files
     strategy:
       fail-fast: false   # fuzz every target even if one finds a crash, so all findings surface
       matrix:
         target: [ game_status, firewall, config, fail2ban, console, cron ]
     steps:
+      # The workflow runs on EVERY pull request, so this job can be a required check: a required
+      # check whose workflow did not run holds the pull request forever. A pull request that
+      # changes none of `scope` passes here without fuzzing; the list is what this workflow's
+      # `paths:` filter was. Anything but a pull request (the nightly soak, a manual run) always
+      # fuzzes, and so does a pull request whose file list cannot be read.
+      - name: Does this pull request change what this job fuzzes?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run=true
+          if [ "$EVENT" = "pull_request" ]; then
+            scope=(
+              # A directory since the ssh_manager split: four of the six harnesses
+              # target parsers inside it.
+              'panel/ops/ssh_manager/**'
+              'panel/ops/system_ops.py'
+              'panel/core/terminal.py'
+              'tests/fuzz/**'
+              '.github/workflows/fuzz.yml'
+              'requirements.txt'
+              # A Dependabot bump of the fuzzer must run it.
+              '.github/ci-requirements/atheris.txt'
+            )
+            if files="$(gh api "repos/${REPO}/pulls/${PR}/files" --paginate \
+                        --jq '.[] | .filename, (.previous_filename // empty)')"; then
+              run=false
+              while IFS= read -r f; do
+                for g in "${scope[@]}"; do
+                  # shellcheck disable=SC2053 # $g is a glob on purpose
+                  if [[ "$f" == $g ]]; then run=true; fi
+                done
+              done <<< "$files"
+            fi
+          fi
+          echo "run=${run}" >> "$GITHUB_OUTPUT"
+          echo "this pull request changes what this job fuzzes: ${run}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.scope.outputs.run == 'true'
         with:
           # The fuzz targets run here, and none needs the job token.
           persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.scope.outputs.run == 'true'
         with:
           python-version: "3.12"   # Atheris ships manylinux wheels for 3.12 (the runner's Python)
 
       - name: Install dependencies + Atheris
+        if: steps.scope.outputs.run == 'true'
         run: |
           python -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
           python -m pip install --quiet --require-hashes --only-binary :all: \
             -r .github/ci-requirements/atheris.txt
 
       - name: Fuzz
+        if: steps.scope.outputs.run == 'true'
         env:
           EVENT: ${{ github.event_name }}
           TARGET: ${{ matrix.target }}
@@ -80,7 +119,7 @@ jobs:
             ".fuzz-corpus/$TARGET" "tests/fuzz/corpus/$TARGET"
 
       - name: Upload crash reproducer
-        if: failure()
+        if: failure() && steps.scope.outputs.run == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: fuzz-crash-${{ matrix.target }}

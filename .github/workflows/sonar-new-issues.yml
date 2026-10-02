@@ -1,0 +1,38 @@
+name: SonarCloud new issues
+
+# Zero new SonarCloud issues on a pull request, code smells included. SonarCloud's own check is its
+# quality gate, "Sonar way", which the free plan cannot replace (a stricter gate can be created but
+# not attached): it passes a pull request with new code smells while the new code still rates A, and
+# they then sat on main as open issues. This waits for SonarCloud's analysis of the head commit and
+# fails on anything new, naming it. See .github/scripts/sonar_new_issues.py.
+#
+# Pull requests only, in a workflow of its own (the update gate reads every check on main), and a
+# required check (.github/required-checks.txt), so no path filter.
+
+on:
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sonar-new-issues:
+    name: SonarCloud new issues
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Self-test
+        run: python3 .github/scripts/sonar_new_issues.py --self-test
+      - name: Wait for SonarCloud's analysis of this commit, then count what it found
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/sonar_new_issues.py --pr "$PR" --sha "$SHA" --timeout 900

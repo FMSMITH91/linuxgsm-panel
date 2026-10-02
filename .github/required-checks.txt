@@ -11,9 +11,11 @@
 #   gh api repos/FMSMITH91/linuxgsm-panel/rulesets/18871997 > rs.json, edit the
 #   required_status_checks rule's "required_status_checks" list, then PUT it back.
 #
-# Not here, on purpose: Aikido's checks (its pull-request suite often never starts, which would hold
-# every merge), the path-filtered workflows (Actionlint, Fuzz, ClusterFuzzLite, Dependency Review:
-# they run only when their files change), and Codacy's coverage checks.
+# Fuzz and ClusterFuzzLite run on every pull request too, and pass at once when it changes nothing
+# they fuzz (each job's first step reads the pull request's file list). Not here, on purpose: Aikido's
+# checks (its pull-request suite often never starts, which would hold every merge), GitHub's own
+# code-scanning checks (CodeQL, Bandit, Semgrep OSS, ClusterFuzzLite/CIFuzz: the "Open code-scanning
+# alerts (PR)" job gates on what they find), and Codacy's coverage checks.
 #
 # <app slug> | <check name>
 github-actions | checks (ubuntu-22.04 · py3.10)
@@ -34,5 +36,15 @@ github-actions | Deep SAST (Semgrep)
 github-actions | Secret scanning (Gitleaks)
 github-actions | lighthouse
 github-actions | complexity (Codacy limits)
+github-actions | SonarCloud new issues
+github-actions | actionlint
+github-actions | Dependency Review
+github-actions | fuzz (game_status)
+github-actions | fuzz (firewall)
+github-actions | fuzz (config)
+github-actions | fuzz (fail2ban)
+github-actions | fuzz (console)
+github-actions | fuzz (cron)
+github-actions | fuzz the diff (address)
 codacy-production | Codacy Static Code Analysis
 sonarqubecloud | SonarCloud Code Analysis

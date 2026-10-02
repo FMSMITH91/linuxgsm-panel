@@ -3165,7 +3165,10 @@ try:
           and _bs_ci_boot.start() < _bs_ci_req.start()
           and re.search(r"^\s*- run: pip-audit --no-deps -r requirements-bootstrap\.txt\s*$",
                         _rq_sec, re.M) is not None
-          and "      - 'requirements-bootstrap.txt'\n" in _bs_dr[:_bs_dr.index("\npermissions:")],
+          # Dependency Review runs on EVERY pull request now (a required check), so a change to it
+          # is reviewed without being named in a path filter.
+          and re.search(r"^  pull_request:\n    branches: \[ main \]\n(?!    paths)", _bs_dr, re.M)
+          is not None,
           "ci=%r audit=%r" % (_bs_ci_boot and _bs_ci_boot.group(0), "requirements-bootstrap"
                               in _rq_sec))
 
@@ -5932,9 +5935,10 @@ check("dependabot: tools/gamedig's lockfile has an npm entry with a cooldown, ga
       and re.search(r'- dependency-name: "gamedig"\n\s+update-types: \["version-update:semver-major"\]',
                     _ci_npm[0]) is not None,
       repr(_ci_npm))
-check("dependency review: runs on a change to gamedig's package.json or lockfile",
-      "      - 'tools/gamedig/package-lock.json'\n" in _ci_dr_on
-      and "      - 'tools/gamedig/package.json'\n" in _ci_dr_on, _ci_dr_on[-400:])
+check("dependency review: runs on a change to gamedig's package.json or lockfile (it runs on every "
+      "pull request, unfiltered)",
+      re.search(r"^  pull_request:\n    branches: \[ main \]\n(?!    paths)", _ci_dr_on, re.M) is not None
+      and "\n    paths" not in _ci_dr_on, _ci_dr_on[-400:])
 # ...and a workflow that runs only on listed paths must list the pinned files it installs, or a
 # Dependabot bump of that file is never tested (fuzz.yml filters by path).
 _ci_unwatched = []
