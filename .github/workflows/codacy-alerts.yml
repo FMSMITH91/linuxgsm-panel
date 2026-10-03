@@ -1,8 +1,7 @@
 name: Codacy alerts
 
 # Fail when main carries a Critical- or High-level Codacy issue (API levels Error and High) that
-# has not been reviewed, or when an accepted one stopped being reported only because Codacy
-# stopped reading its file.
+# has not been reviewed, or when Codacy stopped reporting an accepted one in a file it still reads.
 #
 # WHY THIS EXISTS
 #   Codacy's PR check only gates issues a PR ADDS. An Error already sitting on main is reported in
@@ -29,11 +28,17 @@ name: Codacy alerts
 #   Codacy Cloud does not analyse a file over 150 KB at all
 #   (https://docs.codacy.com/faq/troubleshooting/why-is-my-file-over-150-kb-missing/). When
 #   system_ops.py crossed 150 KB its three accepted entries stopped matching, and this gate went on
-#   reporting green while listing them for removal. So an accepted entry that matches nothing FAILS
-#   the run while its file (read from this checkout) is over 150 KB or its line is still in it;
-#   only an entry whose line is really gone is listed for removal. That stays red until Codacy
-#   analyses the file again (client-side analysis of the files over 150 KB), which is the point:
-#   until then, nothing reads system_ops.py's Codacy findings.
+#   reporting green while listing them for removal. Now, for an accepted entry that matches nothing
+#   (its file read from this checkout):
+#   - the file is over 150 KB: a ::warning:: and a summary section naming each entry Codacy cannot
+#     confirm, keeping it. Not a failure: this check lands on main's head, where the panel's update
+#     gate and deploy.yml read it, and it would be red every day until Codacy analyses the file
+#     again (client-side analysis of the files over 150 KB, the owner's switch), which nothing in
+#     this repository can bring about. The pull-request side runs Prospector over such files
+#     (complexity_gate.py).
+#   - the line is still in a file Codacy analyses: FAILS. Codacy can see it, and stopped reporting
+#     it.
+#   - the line, or the file, is gone: listed for removal.
 
 on:
   schedule:
@@ -62,7 +67,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Fail if main has unreviewed Critical- or High-level issues, or Codacy stopped reading an accepted one
+      - name: Fail if main has unreviewed Critical- or High-level issues, or Codacy went silent on an accepted one it reads
         env:
           # A repository API token is optional. The endpoint answers anonymously for a PUBLIC repo,
           # which this is; the token is read if present so the gate keeps working should the repo
