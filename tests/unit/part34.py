@@ -21,6 +21,9 @@ calls with no loss of function, and each check below fails on the code before it
 * F. the ban-watcher reads UFW only when ufw's rule files changed (fail2ban every tick), keeps a
      tick's ban decision when a later step of that tick raises, and the debug report says "rule
      files unchanged" only after a check that really skipped;
+* G. one console tick is one round trip — and the console still streams prompt, in order, complete
+     and unduplicated, its pushes stitching byte-exact with the 30 s /api/console window, an idle
+     tick reading nothing and counting as a good one;
 * H. a running server gamedig cannot read no longer costs a LinuxGSM `details` per pass, and a
      config read that found nothing, or LinuxGSM's static query settings, is not re-read every pass;
 * I. the debug report reads the panel's own output by indexed journal fields (sudo noise out
@@ -29,10 +32,10 @@ calls with no loss of function, and each check below fails on the code before it
 
 HOW IT RUNS. Every host command is stubbed on the module that defines it, saved and restored in a
 finally, behind a tripwire under every real transport. Where the SHELL a change builds is the thing
-under test, the stub runs it for real, with bash, against a fake `gamedig` on PATH piped through
-the real jq (the batched player query). The monitor and sampler run against this part's own
-in-memory database; the priority keeper is driven through the loop register_routes handed part12's
-supervisor, and the ban-watcher through its own 90 s loop.
+under test, the stub runs it for real, with bash, against a real file (the console) or a fake
+`gamedig` on PATH piped through the real jq (the batched player query). The monitor and sampler run
+against this part's own in-memory database; the priority keeper is driven through the loop
+register_routes handed part12's supervisor, and the ban-watcher through its own 90 s loop.
 """
 import ast as _ast34
 import json as _json34
@@ -1026,6 +1029,245 @@ def _section_banwatch_loop34():
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
+# G: the console — one round trip a tick, and the two feeds still stitch byte-exact
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+class _Sio34:
+    """The console's socket room: the lines it was pushed, in order."""
+
+    def __init__(self):
+        self.lines = []
+
+    def emit(self, event, payload, room=None, **_k):
+        if event == "console_output":
+            self.lines.extend(r["line"] for r in payload.get("rows") or [])
+
+
+class _ConsoleRig34:
+    """read_as_game_user on a REAL file: every command the console builds runs in bash.
+
+    `lines` is what the file holds, line by line; `rounds` the host commands each tick made.
+    """
+
+    def __init__(self, path):
+        self.path, self.calls, self.fail, self.rounds, self.outs = path, [], 0, [], []
+        self.tamper = _as_is34      # rewrites the host's next reply, then is reset
+        self.sio, self.sid = _Sio34(), -3401
+        self.gs = NS(console_log=path, remote=NS(timezone=""), short_name="mcsrv34",
+                     lgsm_name="mcserver")
+        self.lines = []
+
+    def __call__(self, server, user, sh, timeout=30, selfname=None):
+        self.calls.append(sh)
+        if self.fail:
+            self.fail -= 1
+            return "", "SSH command timed out", -1
+        out, err, rc = _bash34(_as_account34(user, sh, selfname))
+        tamper, self.tamper = self.tamper, _as_is34
+        out = tamper(out)
+        self.outs.append(out)
+        return out, err, rc
+
+    def _write(self, lines, mode):
+        with open(self.path, mode, encoding="utf-8", newline="") as fh:
+            fh.write("".join(ln + "\n" for ln in lines))
+
+    def add(self, lines):
+        self.lines.extend(lines)
+        self._write(lines, "a")
+
+    def replace(self, lines):
+        """Write the file afresh: the SAME inode (truncated), or a new one after rotate()."""
+        self.lines = list(lines)
+        self._write(lines, "w")
+
+    def rotate(self, lines):
+        """The start LinuxGSM does: mv the log to a dated name, then a NEW file (a new inode)."""
+        os.replace(self.path, self.path + ".old")
+        self.replace(lines)
+
+    def tick(self):
+        n = len(self.calls)
+        _sf34._console_tick(_app34, self.sio, self.gs, self.sid)
+        self.rounds.append(len(self.calls) - n)
+
+    def window(self):
+        """What the page's 30 s /api/console poll returns: the log's last 200 lines, as rows."""
+        return [r["line"] for r in _sf34._read_console_window(self.gs.remote, self.gs, 200, "")[1]]
+
+
+def _js_fn34(src, name):
+    i = src.index("function %s(" % name)
+    depth = 0
+    for k in range(src.index("{", i), len(src)):
+        depth += {"{": 1, "}": -1}.get(src[k], 0)
+        if depth == 0:
+            return src[i:k + 1]
+    return ""
+
+
+def _stitch_py34(have, incoming):
+    """server_detail.js's _newConsoleLines, line for line, for a host with no node."""
+    def same(a, b):
+        return a == b or a.strip() == b.strip()
+    if not incoming or not have:
+        return list(incoming)
+    for k in range(len(incoming) - 1, -1, -1):
+        n = min(len(have), k + 1)
+        if same(incoming[k], have[-1]) and all(same(have[len(have) - n + i], incoming[k + 1 - n + i])
+                                               for i in range(n)):
+            return incoming[k + 1:]
+    return list(incoming)
+
+
+def _stitch34(have, incoming):
+    """What the browser appends: server_detail.js's own _newConsoleLines, run by node when present."""
+    node = _shutil34.which("node")
+    if not node:
+        return _stitch_py34(have, incoming)
+    with open(os.path.join(_root, "static", "js", "server_detail.js"), encoding="utf-8") as fh:
+        js = fh.read()
+    prog = "\n".join(_js_fn34(js, n) for n in ("_sameLine", "_eqRange", "_newConsoleLines"))
+    prog += ("\nconst d=JSON.parse(require('fs').readFileSync(0,'utf8'));"
+             "process.stdout.write(JSON.stringify(_newConsoleLines(d[0], d[1])));")
+    r = _sp34.run([node, "-e", prog], input=_json34.dumps([have, incoming]),  # nosec B603 - node on fixtures
+                  capture_output=True, text=True, timeout=30, check=False)
+    return _json34.loads(r.stdout or "null")
+
+
+def _section_console34():
+    path = os.path.join(_TMP34, "console", "mcserver-console.log")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    rig = _ConsoleRig34(path)
+    _set34(_core34, "read_as_game_user", rig)
+    _set34(_sf34, "_host_timezone_cached", lambda *a, **k: "")
+    _ps34._console_offsets.pop(rig.sid, None)
+    _sf34._console_partial.pop(rig.sid, None)
+    _sf34._console_feed.pop(rig.sid, None)
+    rig.replace(["[03:30:%02d] old line %d" % (i, i) for i in range(40)])
+    rig.tick()
+    rig.add(["list", "[03:30:35] There are 0 of a max of 20 players online: "])
+    rig.tick()
+    pushed_first = list(rig.sio.lines)
+    rig.tick()
+    idle_reply, idle_feed = (rig.outs[-1:] or [""])[0], dict(_sf34._console_feed.get(rig.sid) or {})
+    check("G console: an idle tick (the log unchanged) is a GOOD tick that moves no bytes: the host "
+          "chose the same offset and read nothing, and the feed records no failure",
+          all((idle_reply.split()[2:4] == [str(_ps34._console_offsets[rig.sid]["pos"]), "0"],
+               "\n" not in idle_reply, idle_feed.get("streak") == 0, "last_fail" not in idle_feed)),
+          repr((idle_reply[:60], idle_feed)))
+    check("G console: first sight reads nothing; new output is pushed whole, a trailing space and "
+          "all; an idle tick pushes nothing",
+          all((pushed_first == rig.lines[-2:], rig.sio.lines == pushed_first)), repr(pushed_first))
+    check("G console: every tick after first sight is ONE command on the host (stat and read "
+          "together) — growing or idle", rig.rounds == [1, 1, 1], repr(rig.rounds))
+    _section_console_rotation34(rig)
+    _section_console_burst34(rig)
+    _section_console_guards34(rig)
+    _section_stitch34(rig)
+
+
+def _section_console_rotation34(rig):
+    boot = ["Unpacking io/netty/netty-codec-4.2.7.jar %03d to libraries/io/netty" % i
+            for i in range(60)] + ["Starting net.minecraft.server.Main"]
+    rig.sio.lines = []
+    rig.rotate(boot)
+    rig.tick()
+    check("G console: a log rotated by LinuxGSM's start (a new inode, already longer than the old "
+          "offset) is read from its FIRST byte, every line, in order — in one round trip",
+          all((rig.sio.lines == boot, rig.rounds[-1] == 1)),
+          "pushed %d of %d" % (len(rig.sio.lines), len(boot)))
+    rig.sio.lines = []
+    rig.rotate(["[03:40:00] Starting minecraft server version 26.3"])
+    rig.tick()
+    os.remove(rig.path)
+    before = dict(_ps34._console_offsets[rig.sid])
+    rig.tick()
+    check("G console: a smaller rotated log is read from byte 0; a log briefly MISSING (between "
+          "LinuxGSM's mv and touch) changes nothing",
+          all((rig.sio.lines == rig.lines, _ps34._console_offsets[rig.sid] == before)),
+          repr(rig.sio.lines))
+    rig.replace(rig.lines)                      # LinuxGSM's touch: a new file
+    rig.tick()
+    rig.replace(["[05:00:00] after the truncate"])  # same inode, shorter
+    rig.tick()
+    check("G console: a log truncated in place (same inode, shorter) is read from byte 0",
+          rig.sio.lines[-1:] == rig.lines, repr(rig.sio.lines[-3:]))
+
+
+def _section_console_burst34(rig):
+    rig.sio.lines = []
+    burst = ["MODULE: ct_%05d.lua loaded" % i for i in range(3000)]
+    rig.add(burst)
+    for _ in range(8):
+        rig.tick()
+    check("G console: a burst bigger than one read drains over several ticks, complete, in order, "
+          "no line cut at a read boundary", rig.sio.lines == burst,
+          "pushed %d of %d" % (len(rig.sio.lines), len(burst)))
+    rig.sio.lines = []
+    rig.add(["[05:01:00] Done (4.2s)! For help, type \"help\""])
+    rig.fail = 1
+    rig.tick()
+    mid = list(rig.sio.lines)
+    rig.tick()
+    check("G console: a read that never ran (a non-raising transport timed out) advances nothing "
+          "and the next tick delivers it", all((mid == [], rig.sio.lines == rig.lines[-1:])),
+          repr((mid, rig.sio.lines)))
+
+
+def _unframe34(out):
+    """A reply that ran and printed its stat line, but lost the byte range's closing frame."""
+    return out[:-1] if out.endswith("E") else out + "x"
+
+
+def _shift_start34(out):
+    """A reply whose host read from one byte later than the offset it was handed."""
+    head, nl, rest = out.partition("\n")
+    f = head.split()
+    return " ".join(f[:2] + [str(int(f[2]) + 1)] + f[3:]) + nl + rest if len(f) == 4 else out
+
+
+def _section_console_guards34(rig):
+    for name, tamper in (("lost its closing frame", _unframe34),
+                         ("read from another start than the offset", _shift_start34)):
+        rig.sio.lines = []
+        line = "[05:02:00] after a reply that %s" % name
+        rig.add([line])
+        before = dict(_ps34._console_offsets[rig.sid])
+        rig.tamper = tamper
+        rig.tick()
+        held = (list(rig.sio.lines), dict(_ps34._console_offsets[rig.sid]))
+        rig.tick()
+        check("G console: a reply that %s is not used — nothing pushed, the offset unmoved — and "
+              "the next tick delivers the line once" % name,
+              all((held == ([], before), rig.sio.lines == [line])), repr((held, before, rig.sio.lines)))
+
+
+def _section_stitch34(rig):
+    # The page's copy: everything before these five lines, then what the socket pushed.
+    rig.sio.lines = []
+    rig.add(["[06:00:%02d] chat line %d " % (i, i) for i in range(5)])
+    rig.tick()
+    have = list(rig.lines[:-5]) + list(rig.sio.lines)
+    window = rig.window()
+    check("G stitch: the 30 s poll's window is the file's own last lines, byte for byte",
+          window == rig.lines[-len(window):], repr(window[-3:]))
+    joined = _stitch34(have, window)
+    check("G stitch: what the socket pushed equals those same lines byte for byte (trailing spaces "
+          "kept), so the poll finds the overlap and appends nothing twice",
+          all((rig.sio.lines == rig.lines[-5:], joined == [])), repr((rig.sio.lines[-2:], joined[:3])))
+    rig.add(["[06:01:00] written between two ticks"])
+    joined = _stitch34(have, rig.window())
+    check("G stitch: a line the poll sees before the socket does is appended once, by the poll",
+          joined == ["[06:01:00] written between two ticks"], repr(joined))
+    cmd = _sf34._console_poll_cmd(rig.gs.console_log, 1, 2)
+    calls = _calls34(_fn34("panel/routes/server_files.py", "_console_poll_read"))
+    check("G console: the round trip still frames the bytes (B…E), and the script's name in the "
+          "path goes through read_as_game_user's selfname check",
+          all(("printf B" in cmd, "printf E" in cmd,
+               "selfname=gs.lgsm_name" in calls.get("_sm.read_as_game_user", []))), cmd[:80])
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
 # I: the debug report
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _PFX34 = "Oct 03 05:%02d:01 livebox7731 sudo[%d]: "
@@ -1257,6 +1499,7 @@ def _run_sections34():
     with _app34.app_context():
         _section_restart_flags34()
     _section_banwatch34()
+    _section_console34()
     _section_report_classifier34()
     _section_report_reads34()
     _section_report_once34()

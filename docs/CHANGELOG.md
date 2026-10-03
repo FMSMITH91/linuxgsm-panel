@@ -179,14 +179,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
     read. So on a host without daily restart, a restart banner from a crontab the panel does not
     manage (an imported server, an edit in the terminal) can now appear up to 10 minutes late
     instead of within a minute.
+  - The live console reads the log's size and its new lines in one command instead of two.
 
   The saving is a model, not yet a measurement of a running panel: one pass of each background
   loop, with every host command stubbed and counted, multiplied by each loop's period on the live
   host. For three servers the model gives about 9 privileged calls a minute before (the live host's
   report measured about the same) and about 2 after.
 
-  The live console is unchanged: an open console costs one call per two seconds, and two while
-  output flows.
+  An open console still costs one call per two seconds; the console was left as it was apart from
+  merging its two reads.
 - **The debug report says what is wrong, covers far more of the panel, and is safer to post.** It
   now opens with **At a glance**: every problem any section found, failures first, and the sections
   that could not be read. Below that is one verdict line per area. Diagnostics are sorted worst

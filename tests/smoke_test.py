@@ -11770,7 +11770,7 @@ try:
           "recovered" % (len(_fp_seen), 3000))
     check("console poller: ...and the poller refuses the advance on that answer",
           "if out is None:" in _bs_src
-          and "out = _console_whole_lines(server_id, out) if rc == 0 else None" in _bs_src,
+          and "out = _console_whole_lines(server_id, framed) if rc == 0 else None" in _bs_src,
           "the offset still moves on a read whose result was never proven to have arrived")
 
     # ── The REAL tick, against a fake log that rotates the way LinuxGSM rotates it ───────────
@@ -11798,16 +11798,26 @@ try:
         def read(self, _server, _user, sh, timeout=30, selfname=None):
             if sh.startswith("stat -c '%i %s'"):
                 return ("%d %d" % (self.ino, len(self.data)) if self.exists else "MISSING"), "", 0
-            m = _ct_re.match(r"printf B; \{ tail -c \+(\d+) \S+ 2>/dev/null \| head -c (\d+); \}; "
-                             r"printf E$", sh)
+            # The tick's one command after first sight (server_files._console_poll_cmd): the stat,
+            # the start the host picks from the inode and offset it is handed, the framed bytes.
+            m = _ct_re.match(r"L=\S+; S=\$\(stat -c '%i %s' \"\$L\" 2>/dev/null\) \|\| "
+                             r"\{ echo MISSING; exit 0; \}; set -- \$S; "
+                             r"if \[ \"\$1\" = (\d+) \] && \[ \"\$2\" -ge (\d+) \]; then P=\2; "
+                             r"else P=0; fi; D=\$\(\(\$2 - P\)\); if \[ \"\$D\" -gt (\d+) \]; "
+                             r"then D=\3; fi; ", sh)
             if not m:
                 return "", "unexpected command %r" % sh, 1
+            if not self.exists:
+                return "MISSING", "", 0
             if self.fail_chunk:
                 self.fail_chunk = False
                 return "", "SSH command timed out", -1      # tailscale/local: no raise, no frame
-            a = int(m.group(1)) - 1
+            size = len(self.data)
+            a = int(m.group(2)) if (int(m.group(1)) == self.ino and size >= int(m.group(2))) else 0
+            n = min(size - a, int(m.group(3)))
             # .strip(): what every transport does to the output before the caller sees it
-            return ("B" + self.data[a:a + int(m.group(2))] + "E").strip(), "", 0
+            return ("%d %d %d %d" % (self.ino, size, a, n)
+                    + ("\nB" + self.data[a:a + n] + "E" if n else "")).strip(), "", 0
 
     class _CtSio:
         def __init__(self):
