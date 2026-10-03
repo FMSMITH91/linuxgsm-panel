@@ -4118,19 +4118,24 @@ def _unit_or_read(unit):
     return unit or {}
 
 
+def _service_unread_text(unit):
+    """Why there are no unit properties to judge: no unit file is MEASURED, the rest unread."""
+    if unit.get("why") == "no-unit-file":
+        # Measured, not unread: neither unit file exists (two path tests; systemctl never ran).
+        return "No systemd unit found — the panel does not start at boot."
+    # _src_systemd's `error` is always "unreadable"; its `why` names the failure.
+    return "systemd state unreadable (%s)." % _unit_token(unit.get("why") or unit.get("error")
+                                                         or "no-answer")
+
+
 def _diag_service(unit):
     """R8: the ONE `systemctl show` the report shares (debug_report._src_systemd), not a file
     existing. Paths are printed as yes/no, never the home directory or the account."""
     both_note = _both_units_note()
     unit = _unit_or_read(unit)
     props = unit.get("props") or {}
-    if unit.get("why") == "no-unit-file":
-        # Measured, not unread: neither unit file exists (two path tests; systemctl never ran).
-        return "warn", "No systemd unit found — the panel does not start at boot." + both_note
     if unit.get("error") or not props:
-        # _src_systemd's `error` is always "unreadable"; its `why` names the failure.
-        return "warn", "systemd state unreadable (%s).%s" % (
-            _unit_token(unit.get("why") or unit.get("error") or "no-answer"), both_note)
+        return "warn", _service_unread_text(unit) + both_note
     scope = "user" if unit.get("scope") == "user" else "system"
     problems = _service_problems(scope, props)
     detail = _service_summary(scope, props)

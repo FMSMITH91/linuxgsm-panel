@@ -58,7 +58,8 @@ def evict(group, keep, keep_keys=()):
     """Drop the oldest put() entries of `group` until at most `keep` remain, `keep_keys` aside.
 
     For a group whose keys keep arriving (a commit per key): without it, the group fills to
-    _MAX_KEYS and every NEW key is dropped from then on, the opposite of what a reader wants."""
+    _MAX_KEYS and every NEW key is dropped from then on, the opposite of what a reader wants.
+    """
     try:
         g = _group(group)
         timed = sorted((v[0], k) for k, v in list(g.items())
@@ -66,7 +67,7 @@ def evict(group, keep, keep_keys=()):
         for _t, k in timed[:max(0, len(timed) - keep)]:
             g.pop(k, None)
     except Exception:  # noqa: BLE001 - instrumentation must never raise into a loop
-        pass
+        return
 
 
 def beat(name, cadence_s=None, took_s=None):

@@ -324,9 +324,10 @@ def _names_config(_ctx, st):
 
 
 def _names_origins(st, cfg):
-    """The host names an operator configured for the panel to be reached by (a reverse proxy's
-    domain in socketio_cors_origins, a bind_host given as a name): engineio logs a refused origin
-    verbatim at ERROR, and the panel logs its bind at start.
+    """Map the host names an operator configured for the panel to be reached by.
+
+    A reverse proxy's domain in socketio_cors_origins, a bind_host given as a name: engineio logs
+    a refused origin verbatim at ERROR, and the panel logs its bind at start.
     """
     from urllib.parse import urlsplit
     origins = cfg.get("socketio_cors_origins")
@@ -676,8 +677,9 @@ def scrub_lines(ctx, lines):
 
 
 def scrub_text(ctx, text):
-    """One piece of free text scrubbed before a section cuts it, or '(withheld)' when the pass
-    failed (the assembler then withholds every body anyway).
+    """One piece of free text scrubbed before a section cuts it.
+
+    '(withheld)' when the pass failed: the assembler then withholds every body anyway.
     """
     out = scrub(ctx, text)
     return "(withheld)" if prepare(ctx).pattern_error else out

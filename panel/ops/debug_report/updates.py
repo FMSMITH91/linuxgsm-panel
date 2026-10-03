@@ -68,8 +68,10 @@ def _sha7(val):
 
 
 def _scrubbed(ctx, text):
-    """`text` through the report's privacy pass BEFORE it is cut: a name cut in half is a
-    fragment the final pass cannot match. Without a ctx (a direct caller), unchanged.
+    """`text` through the report's privacy pass BEFORE it is cut.
+
+    A name cut in half is a fragment the final pass cannot match. Without a ctx (a direct
+    caller), unchanged.
     """
     if ctx is None:
         return text
@@ -379,7 +381,8 @@ def installer_said(lines, category="unreadable", ctx=None):
 def _tail_lines(res, upd, category, ctx=None):
     """The installer's warnings, then the log's last lines, each reduced by clean_line.
 
-    `res` first: _guard calls fn(res, *args)."""
+    `res` first: _guard calls fn(res, *args).
+    """
     said = installer_said(upd.get("lines") or [], category, ctx)
     res.add("- **Installer said**:" + ("" if said else " (no warnings)"))
     res.lines += ["  " + ln for ln in said]

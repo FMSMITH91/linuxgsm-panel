@@ -21,12 +21,11 @@ import time as _time25
 from flask import Flask as _Flask25
 
 from unit.part01 import SO, check, config, eq
-from unit.part20 import _canary_journal, _cfg20, _env, _patch, _patched
+from unit.part20 import _cfg20, _env, _patch, _patched
 import panel.ops.debug_report as DR
 from panel.core import runtime_stats as _rs25
 from panel.db.models import RemoteServer, db
 from panel.ops.debug_report import _src_tailscale as STS
-from panel.ops.debug_report import assemble as AS
 from panel.ops.debug_report import config_section as CS
 from panel.ops.debug_report import diagnostics as DG
 from panel.ops.debug_report import errors as ER

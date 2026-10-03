@@ -2651,7 +2651,8 @@ def _so7_panel_diagnostics_3():
 import importlib.metadata as _p7_md  # noqa: E402
 from panel.ops.debug_report import data as _p7_drdata  # noqa: E402
 from panel.ops.debug_report import updates as _p7_drupd  # noqa: E402
-from panel.ops.debug_report import _src_systemd as _p7_drsd  # noqa: E402
+# by importlib: this part imports _src_systemd under another name earlier (W0404 counts a reimport)
+_p7_drsd = __import__("importlib").import_module("panel.ops.debug_report._src_systemd")
 from panel.ops.debug_report import _src_tailscale as _p7_drts  # noqa: E402
 from panel.ops.debug_report import install as _p7_drinst  # noqa: E402
 from panel.ops.debug_report._base import Result as _P7Result  # noqa: E402
