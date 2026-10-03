@@ -322,19 +322,27 @@ const f = J.q('#file-list .fb-rename input'), e = J.q('#file-list .fb-rename-err
 return {open: !!f, value: f ? f.value : null, err: e && e.style.display !== 'none' ? e.textContent : '',
         rows: Array.from(document.querySelectorAll('#file-list [data-path]')).map(r => r.dataset.path)};
 """
-# The open field at a phone's width: no sideways scroll, a field wide enough to type in, and every
-# part of the row (the error line too) inside the row.
+# The open field at a phone's width. Nothing here is a size picked to pass: the row's own name and
+# icons are not displayed, the field's box spans the row's content box (so the field has all the
+# width its two buttons leave), every part of it — the error line too — is inside the row, and the
+# page does not scroll sideways. The first version failed the second: the icons stayed, and the
+# field was 24px wide on a 307px row.
 RENAME_FIT = r"""
-const row = J.q('#file-list .fb-renaming'), f = J.q('#file-list .fb-rename input');
-if (!row || !f) return {err: 'no field open'};
-const R = row.getBoundingClientRect(), parts = Array.from(row.querySelectorAll('.fb-rename input, .fb-rename button, .fb-rename-err'));
-const out = parts.filter(p => p.offsetParent !== null).map(p => p.getBoundingClientRect())
-  .filter(r => r.left < R.left - 0.5 || r.right > R.right + 0.5);
-const w = el => el ? Math.round(el.getBoundingClientRect().width) : null;
-return {vw: window.innerWidth, scroll: document.documentElement.scrollWidth, field: f.getBoundingClientRect().width,
-        outside: out.length, row: w(row), box: w(row.querySelector('.fb-rename')),
-        buttons: Array.from(row.querySelectorAll('.fb-rename button')).map(b => [w(b), Math.round(b.getBoundingClientRect().height)])};
+const row = J.q('#file-list .fb-renaming'), box = J.q('#file-list .fb-rename');
+if (!row || !box) return {err: 'no field open'};
+const cs = getComputedStyle(row), R = row.getBoundingClientRect();
+const inner = R.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+  - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
+const parts = Array.from(box.querySelectorAll('input, button, .fb-rename-err')).filter(p => p.offsetParent !== null);
+const w = el => Math.round(el.getBoundingClientRect().width);
+return {vw: window.innerWidth, row: w(row), box: w(box), field: w(box.querySelector('input')),
+        own_parts_hidden: Array.from(row.children).every(c => c === box || getComputedStyle(c).display === 'none'),
+        box_spans_row: Math.abs(box.getBoundingClientRect().width - inner) <= 1,
+        inside_row: parts.every(p => { const r = p.getBoundingClientRect(); return r.left >= R.left - 0.5 && r.right <= R.right + 0.5; }),
+        no_sideways_scroll: document.documentElement.scrollWidth <= window.innerWidth,
+        error_shown: parts.some(p => p.classList.contains('fb-rename-err'))};
 """
+_FITS = ("own_parts_hidden", "box_spans_row", "inside_row", "no_sideways_scroll", "error_shown")
 
 
 def _press(d, key, code, vk):
@@ -351,30 +359,35 @@ def _expect(cond, what, got):
         raise RuntimeError("rename: %s (got %r)" % (what, got))
 
 
-def files_rename(d):
-    """Rename in the file browser with real keys: open, Escape, a taken name, then Enter.
-
-    Then at 375px wide: the field fits the row, and a refusal's reason wraps inside it. A step that
-    does not do what it should raises, and the walk reports this flow as broken.
-    """
-    d.goto("/server/1/files")
-    got = d.run(RENAME_OPEN % ("notes.txt", "notes.txt")) or {}
-    _expect(got.get("sel") == [0, 5] and got.get("focused"), "the stem is selected, focused", got)
-    _press(d, "Escape", "Escape", 27)
+def _rename_state(d):
+    """Whether the field is open, the error under it, and the rows the list shows."""
     got = d.run(RENAME_STATE) or {}
-    _expect(got.get("open") is False and "notes.txt" in got.get("rows", []), "Escape closes", got)
+    return got.get("open"), got.get("err") or "", got.get("rows") or [], got
+
+
+def _rename_keys(d):
+    """Open, Escape, a taken name (shown under the field), then a new stem and Enter."""
+    got = d.run(RENAME_OPEN % ("notes.txt", "notes.txt")) or {}
+    _expect((got.get("sel"), got.get("focused")) == ([0, 5], True), "the stem is selected, focused", got)
+    _press(d, "Escape", "Escape", 27)
+    is_open, _err, rows, got = _rename_state(d)
+    _expect((is_open, "notes.txt" in rows) == (False, True), "Escape closes", got)
     d.run(RENAME_OPEN % ("notes.txt", "notes.txt"))
     d.run("J.q('#file-list .fb-rename input').select(); return 1;")
     d.keys("server.cfg\n")
-    got = d.run(RENAME_STATE) or {}
-    _expect(got.get("open") and "already exists" in got.get("err", ""), "a taken name is shown", got)
+    is_open, err, rows, got = _rename_state(d)
+    _expect((is_open, "already exists" in err) == (True, True), "a taken name is shown", got)
     _press(d, "Escape", "Escape", 27)
     d.run(RENAME_OPEN % ("notes.txt", "notes.txt"))
     d.keys("renamed\n")                     # typed over the selected stem: renamed.txt
     d.wait(1.0)
-    got = d.run(RENAME_STATE) or {}
-    _expect(not got.get("open") and "renamed.txt" in got.get("rows", [])
-            and "notes.txt" not in got.get("rows", []), "Enter renames, the list refreshes", got)
+    is_open, _err, rows, got = _rename_state(d)
+    _expect((is_open, "renamed.txt" in rows, "notes.txt" in rows) == (False, True, False),
+            "Enter renames, and the list refreshes", got)
+
+
+def _rename_phone(d):
+    """At 375px wide: open the field, send a name the panel refuses, and measure the row."""
     d.cdp.call("Emulation.setDeviceMetricsOverride",
                {"width": 375, "height": 812, "deviceScaleFactor": 2, "mobile": True})
     try:
@@ -383,12 +396,22 @@ def files_rename(d):
         d.run("J.q('#file-list .fb-rename input').select(); return 1;")
         d.keys("a/b\n")
         fit = d.run(RENAME_FIT) or {}
-        _expect(fit.get("vw") == 375 and fit.get("scroll", 999) <= 375 and fit.get("outside") == 0
-                and fit.get("field", 0) >= 120, "at 375px the field and its error fit the row", fit)
+        _expect(fit.get("vw") == 375 and all(fit.get(k) for k in _FITS),
+                "at 375px the field and its error fit the row", fit)
         _press(d, "Escape", "Escape", 27)
     finally:
         d.cdp.call("Emulation.clearDeviceMetricsOverride")
         d.goto("/server/1/files")
+
+
+def files_rename(d):
+    """Rename in the file browser with real keys, then measure the open field at 375px wide.
+
+    A step that does not do what it should raises, and the walk reports this flow as broken.
+    """
+    d.goto("/server/1/files")
+    _rename_keys(d)
+    _rename_phone(d)
 
 
 def files_drop(d):

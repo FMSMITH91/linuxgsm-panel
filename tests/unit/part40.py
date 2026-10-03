@@ -89,6 +89,34 @@ def _read40(rel):
         return None
 
 
+def _ino40(rel):
+    """The inode at `rel`, or None when there is nothing there (a check fails, never crashes)."""
+    try:
+        return os.lstat(os.path.join(_HOME40, rel)).st_ino
+    except OSError:
+        return None
+
+
+def _link40(rel):
+    """Where the symlink at `rel` points, or None when it is not one."""
+    try:
+        return os.readlink(os.path.join(_HOME40, rel))
+    except OSError:
+        return None
+
+
+def _ls40(rel):
+    """The sorted names in the folder at `rel`, or None when it is not there."""
+    try:
+        return sorted(os.listdir(os.path.join(_HOME40, rel)))
+    except OSError:
+        return None
+
+
+def _there40(rel):
+    return os.path.lexists(os.path.join(_HOME40, rel))
+
+
 def _clear40(where):
     for name in os.listdir(where):
         p = os.path.join(where, name)
@@ -201,25 +229,24 @@ def _hostile_names40(a_client, sid):
     bad = []
     for name, why in _HOSTILE40:
         code, body = _post40(a_client, sid, "cfg/a.cfg", name)
-        if code != 400 or why not in (body.get("message") or ""):
+        if (code, why in (body.get("message") or "")) != (400, True):
             bad.append("%r -> %d %r" % (name[:12], code, body))
     check("rename route: a new name with a slash, NUL, newline, '.', '..', empty, too long "
           "(chars or UTF-8 bytes) or not valid text is refused (400), each with its own reason",
           not bad, "; ".join(bad[:4]))
     check("rename route: ...before the host is asked anything — no account probe, no command",
-          not _PROBES40 and not _SHELLS40, repr((_PROBES40[:2], _SHELLS40[:1])))
+          (_PROBES40, _SHELLS40) == ([], []), repr((_PROBES40[:2], _SHELLS40[:1])))
     check("rename route: ...and the home is exactly as it was",
-          _read40("cfg/a.cfg") == "A" and sorted(os.listdir(os.path.join(_HOME40, "cfg")))
-          == ["a.cfg", "b.cfg", "c d.cfg", "dangle", "todir"],
-          repr(sorted(os.listdir(os.path.join(_HOME40, "cfg")))))
+          (_read40("cfg/a.cfg"), _ls40("cfg")) == ("A", ["a.cfg", "b.cfg", "c d.cfg", "dangle", "todir"]),
+          repr(_ls40("cfg")))
     t1 = _post40(a_client, sid, "cfg/a.cfg", 5)
     t2 = _post40(a_client, sid, ["cfg/a.cfg"], "b.cfg")
     check("rename route: a path or new name that is not text is a 400, not a crash",
-          t1[0] == 400 and t2[0] == 400 and not _SHELLS40, repr((t1, t2)))
+          (t1[0], t2[0], _SHELLS40) == (400, 400, []), repr((t1, t2)))
     edge = "y" * 251 + ".cfg"
     code, body = _post40(a_client, sid, "cfg/b.cfg", edge)
     check("rename route: a name of exactly 255 bytes is still allowed (control for 'too long')",
-          code == 200 and body.get("success") is True and _read40("cfg/" + edge) == "B",
+          (code, body.get("success"), _read40("cfg/" + edge)) == (200, True, "B"),
           repr((code, body)))
 
 
@@ -229,7 +256,7 @@ def _escapes40(a_client, sid):
     bad = []
     for path in ("../x", "cfg/../../etc", "../../etc/passwd", "", "/", ".", "cfg/.."):
         code, body = _post40(a_client, sid, path, "y")
-        if code != 400 or body.get("message") != _files40.RENAME_REFUSED:
+        if (code, body.get("message")) != (400, _files40.RENAME_REFUSED):
             bad.append("%r -> %d %r" % (path, code, body))
     check("rename route: a path escaping the home through '..', or naming the home itself, is "
           "refused (400)", not bad, "; ".join(bad[:4]))
@@ -246,15 +273,14 @@ def _protected40(a_client, sid):
              ("cfg/a.cfg", "a.cfg", "already its name")]
     got = [(p, n, _post40(a_client, sid, p, n)) for p, n, _w in cases]
     bad = ["%s -> %s: %r" % (p, n, r) for (p, n, r), (_p, _n, want) in zip(got, cases)
-           if r[0] != 400 or want not in (r[1].get("message") or "")]
+           if (r[0], want in (r[1].get("message") or "")) != (400, True)]
     check("rename route: renaming lgsm/ (or anything in it) away, onto a reserved top-level name "
           "(serverfiles, .ssh), or to the name it already has is refused (400)",
           not bad, "; ".join(bad[:3]))
     check("rename route: ...and none of them sent a command", not _SHELLS40, repr(_SHELLS40[:1]))
     check("rename route: ...and the tree is untouched (no serverfiles, no .ssh, lgsm intact)",
-          not os.path.lexists(os.path.join(_HOME40, "serverfiles"))
-          and not os.path.lexists(os.path.join(_HOME40, ".ssh"))
-          and _read40("lgsm/config-lgsm/csgoserver/common.cfg") == "L", "")
+          (_there40("serverfiles"), _there40(".ssh"), _read40("lgsm/config-lgsm/csgoserver/common.cfg"))
+          == (False, False, "L"), "")
 
 
 def _permission40(v_client, sid):
@@ -265,8 +291,8 @@ def _permission40(v_client, sid):
     check("rename route: a user without the file-manager permission is refused (403)",
           code == 403, "got %d" % code)
     check("rename route: ...nothing is asked, sent or audited, and the file keeps its name",
-          not _PROBES40 and not _SHELLS40 and len(_audits40()) == n_audit
-          and _read40("cfg/a.cfg") == "A", repr((_PROBES40, _SHELLS40[:1])))
+          (_PROBES40, _SHELLS40, len(_audits40()), _read40("cfg/a.cfg")) == ([], [], n_audit, "A"),
+          repr((_PROBES40, _SHELLS40[:1])))
 
 
 # ── the host side, end to end in a real bash ────────────────────────────────────────────────────
@@ -274,27 +300,27 @@ def _plain40(a_client, sid):
     """A file and a folder are renamed in place — content, inode and everything else kept."""
     _reset40()
     before = _snapshot40()
-    ino = os.stat(os.path.join(_HOME40, "uploads/new.txt")).st_ino
+    ino = _ino40("uploads/new.txt")
     code, body = _post40(a_client, sid, "uploads/new.txt", "renamed.txt")
     after = _snapshot40()
     want = dict(before)
     want["uploads/renamed.txt"] = want.pop("uploads/new.txt")
     check("rename route: a just-uploaded file is renamed (200, 'Renamed')",
-          code == 200 and body == {"success": True, "message": "Renamed"}, repr((code, body)))
+          (code, body) == (200, {"success": True, "message": "Renamed"}), repr((code, body)))
     check("rename route: ...exactly: same inode, same content, and nothing else in the home moved",
-          after == want and os.stat(os.path.join(_HOME40, "uploads/renamed.txt")).st_ino == ino,
+          (after, _ino40("uploads/renamed.txt")) == (want, ino),
           repr(sorted(set(after.items()) ^ set(want.items()))[:4]))
     row = (_audits40() or [NS(target=None, detail="", success=None, gsid=None)])[-1]
     check("rename route: ...audited like delete-path: the server, the old and new names, success",
-          row.success is True and row.target == "p40-" + _USER40 and row.gsid == sid
-          and row.detail == "uploads/new.txt -> renamed.txt", repr(row))
+          (row.success, row.target, row.gsid, row.detail)
+          == (True, "p40-" + _USER40, sid, "uploads/new.txt -> renamed.txt"), repr(row))
     code, body = _post40(a_client, sid, "maps", "maps-old")
     check("rename route: a folder is renamed with everything in it",
-          code == 200 and body.get("success") is True and _read40("maps-old/sub/m.bsp") == "M"
-          and not os.path.lexists(os.path.join(_HOME40, "maps")), repr((code, body)))
+          (code, body.get("success"), _read40("maps-old/sub/m.bsp"), _there40("maps"))
+          == (200, True, "M", False), repr((code, body)))
     code, body = _post40(a_client, sid, "cfg/c d.cfg", "e f.cfg")
     check("rename route: names with spaces go through the shell quoting intact",
-          code == 200 and _read40("cfg/e f.cfg") == "CD", repr((code, body)))
+          (code, _read40("cfg/e f.cfg")) == (200, "CD"), repr((code, body)))
 
 
 def _existing40(a_client, sid):
@@ -302,19 +328,19 @@ def _existing40(a_client, sid):
     _reset40()
     code, body = _post40(a_client, sid, "cfg/a.cfg", "b.cfg")
     check("rename route: renaming onto an existing name is refused as a conflict (409)",
-          code == 409 and body == {"success": False, "conflict": True, "message": _TAKEN_MSG40},
+          (code, body) == (409, {"success": False, "conflict": True, "message": _TAKEN_MSG40}),
           repr((code, body)))
-    check("rename route: ...and neither file changed", _read40("cfg/a.cfg") == "A"
-          and _read40("cfg/b.cfg") == "B", repr((_read40("cfg/a.cfg"), _read40("cfg/b.cfg"))))
+    check("rename route: ...and neither file changed",
+          (_read40("cfg/a.cfg"), _read40("cfg/b.cfg")) == ("A", "B"),
+          repr((_read40("cfg/a.cfg"), _read40("cfg/b.cfg"))))
     row = (_audits40() or [NS(detail="", success=None)])[-1]
     check("rename route: ...and the refused rename is audited as a failure",
-          row.success is False and row.detail == "cfg/a.cfg -> b.cfg (name taken)", repr(row))
+          (row.success, row.detail) == (False, "cfg/a.cfg -> b.cfg (name taken)"), repr(row))
     for new, what in (("todir", "a symlink to a folder"), ("dangle", "a dangling symlink")):
         code, body = _post40(a_client, sid, "cfg/a.cfg", new)
         check("rename route: a new name held by %s is taken too (409) — nothing moves into it"
-              % what, code == 409 and _read40("cfg/a.cfg") == "A"
-              and sorted(os.listdir(os.path.join(_HOME40, "maps"))) == ["sub"]
-              and os.path.islink(os.path.join(_HOME40, "cfg", new)), repr((code, body)))
+              % what, (code, _read40("cfg/a.cfg"), _ls40("maps"), _link40("cfg/" + new) is not None)
+              == (409, "A", ["sub"], True), repr((code, body)))
 
 
 def _symlinks40(a_client, sid):
@@ -322,21 +348,21 @@ def _symlinks40(a_client, sid):
     _reset40()
     code, body = _post40(a_client, sid, "lnk/b.cfg", "z.cfg")
     check("rename route: a file reached through a symlinked folder (inside the home) is refused, "
-          "not followed", code == 200 and body.get("success") is False
-          and "symbolic link" in (body.get("message") or "") and _read40("cfg/b.cfg") == "B"
-          and not os.path.lexists(os.path.join(_HOME40, "cfg", "z.cfg")), repr((code, body)))
+          "not followed", (code, body.get("success"), "symbolic link" in (body.get("message") or ""),
+                           _read40("cfg/b.cfg"), _there40("cfg/z.cfg")) == (200, False, True, "B", False),
+          repr((code, body)))
     code, body = _post40(a_client, sid, "lg/config-lgsm", "zz")
     check("rename route: lgsm/ reached through a symlinked folder is refused",
-          body.get("success") is False
-          and os.path.isdir(os.path.join(_HOME40, "lgsm", "config-lgsm")), repr((code, body)))
+          (body.get("success"), _read40("lgsm/config-lgsm/csgoserver/common.cfg")) == (False, "L"),
+          repr((code, body)))
     code, body = _post40(a_client, sid, "esc/x.txt", "y.txt")
     check("rename route: a file outside the home, reached through a symlink, is refused",
-          body.get("success") is False and body.get("message") == _files40.RENAME_REFUSED
-          and os.listdir(_OUTSIDE40) == ["x.txt"], repr((code, body)))
+          (body.get("success"), body.get("message"), os.listdir(_OUTSIDE40))
+          == (False, _files40.RENAME_REFUSED, ["x.txt"]), repr((code, body)))
     code, body = _post40(a_client, sid, "lnk", "lnk2")
     check("rename route: a symlink itself is renamed as a link (control) — its target untouched",
-          body.get("success") is True and os.readlink(os.path.join(_HOME40, "lnk2")) == "cfg"
-          and _read40("cfg/a.cfg") == "A", repr((code, body)))
+          (body.get("success"), _link40("lnk2"), _read40("cfg/a.cfg")) == (True, "cfg", "A"),
+          repr((code, body)))
 
 
 def _gone40(a_client, sid):
@@ -431,7 +457,7 @@ def _refused_account40(a_client, rid):
 
 
 def _failing_transports40():
-    """paramiko raises; the Tailscale and local transports return rc -1. All record the call."""
+    """Fail every transport: paramiko raises, Tailscale and local return rc -1; each records it."""
     sent = []
 
     def _paramiko(server):
