@@ -57,6 +57,23 @@ _CANARY = ("zz_complexity_gate_canary.py", "import os\n", ("pyflakes", "F401"))
 # D203/D211 pair it does not report (see .prospector.yaml).
 CODACY_DROPS = {("pydocstyle", "D203")}
 _ON_MAIN = " (Codacy reports this on main, not on the pull request)"
+# Codacy's own default ignores, quoted from docs.codacy.com/repositories-configure/ignoring-files/
+# ("Default ignored files"; .codacy.yaml's empty exclude_paths leaves them in force). Codacy never
+# analyses a path matching one, so judging it here failed #393 on code nobody can change: the
+# minified socket.io-client bundle in static/vendor/ (two functions over CCN 10).
+CODACY_DEFAULT_IGNORES = tuple(re.compile(p) for p in (
+    r".*[\.-]min\.css", r".*[\.-]min\.js", r".*node_modules/.*", r".*bower_components/.*",
+    r".*vendor/.*", r".*third[_-]?[Pp]arty/.*", r".*samples?/.*", r".*releases?/.*", r".*builds?/.*",
+    r".*dist/.*", r".*external/.*", r".*libs/.*", r".*d3\.js", r".*angular(-resource|)?\.js",
+    r".*select2(-resource|)?\.js", r".*-ace\.js", r".*typeahead\.js", r".*jquery-ui\.js",
+    r".*reveal\.js", r".*three\.js", r".*chart\.js", r".*jquery\.js", r".*underscore\.js",
+    r".*lodash\.js", r".*bootstrap\.js", r".*bootstrap\.css", r".*font-awesome\.css",
+    r".*\.[Dd]esigner\.cs"))
+
+
+def codacy_ignores(path):
+    """Is `path` one Codacy skips by default (vendored, minified, a bundled library)?"""
+    return any(p.fullmatch(path) for p in CODACY_DEFAULT_IGNORES)
 
 
 def _git(*args, cwd=None):
@@ -303,7 +320,7 @@ def _default_base():
 
 def changed_files(base, cwd=None):
     out = _git("diff", "--name-only", "--diff-filter=AMR", base, "HEAD", cwd=cwd).stdout.split()
-    return [p for p in out if p.endswith((".py", ".js")) or p in PYTHON_NAMED]
+    return [p for p in out if (p.endswith((".py", ".js")) or p in PYTHON_NAMED) and not codacy_ignores(p)]
 
 
 def _committed(rev, path, cwd=None):
@@ -404,6 +421,18 @@ def _prospector_cases():
     }
 
 
+def _ignore_cases():
+    """Return the default-ignore cases: Codacy skips vendored and minified files, so the gate does."""
+    js = "function f(a){" + "".join("if(a==%d){a++}" % i for i in range(14)) + "return a}\n"
+    plain = "function f(a){return a}\n"
+    return {
+        "a vendored or minified file is not judged (Codacy skips it)":
+            ({"static/vendor/v.min.js": plain, "web/x.min.js": plain},
+             {"static/vendor/v.min.js": js, "web/x.min.js": js}, False),
+        "the same function in a plain .js file is judged": ({"web/app.js": plain}, {"web/app.js": js}, True),
+    }
+
+
 def _case_ok(problems, expect):
     """Return whether the problems found are the verdict a self-test case expects."""
     if isinstance(expect, str):
@@ -413,7 +442,7 @@ def _case_ok(problems, expect):
 
 def self_test():
     """Build a repository, change it the ways that slipped past Codacy, and check each verdict."""
-    cases = dict(_size_cases(), **_prospector_cases())
+    cases = dict(_size_cases(), **_prospector_cases(), **_ignore_cases())
     bad = []
     env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
                GIT_COMMITTER_EMAIL="t@t")
