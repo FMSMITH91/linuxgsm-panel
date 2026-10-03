@@ -25,7 +25,8 @@ What the re-check found still open, each driven through the code that calls it:
   list: the hourly restart-when-empty line, a queued restart, the reboot confirm and the dashboard.
   Every reader now counts _core.GAMEDIG_HUMANS_JQ (numplayers less bots, or the list, whichever is
   larger), driven here through each reader's REAL jq filter against a stand-in gamedig, and the
-  daily upgrade pass heals the hourly lines already on hosts.
+  daily upgrade pass heals the hourly lines already on hosts. The longest such line still fits
+  cron's 1000-byte command buffer.
 * The maintenance probe's pgrep pattern was built from an unchecked stored name, and the
   _rewrite_crontab and run_as_game_user own guards were held by no check (each was redundant to a
   later refusal, so deleting it failed nothing).
@@ -795,6 +796,29 @@ def _restart_line36(game_type="mcb"):
     return cap.get("add") or ["", ""]
 
 
+def _restart_line_length36():
+    """The longest hourly line the panel can write still fits cron's command buffer.
+
+    Debian and Ubuntu's cron reads a crontab command into a fixed MAX_COMMAND (1000) buffer and
+    cuts the rest off without a word (entry.c: "we limit it to MAX_COMMAND. XXX - should use
+    realloc()"); a cut line is a shell syntax error, and the restart never happens. Counting
+    numplayers made the line about a hundred characters longer.
+    """
+    cap = {}
+    _p9_patch(_p9_core, "_rewrite_crontab",
+              lambda s, u, grep, add, extra_pre="": (cap.update(add=list(add)), (True, "ok"))[1])
+    _p9_patch(_p9_core, "_gamedig_host", lambda server: "255.255.255.255")
+    longest = max(_p9_core.GAMEDIG_TYPE, key=lambda g: len(_p9_core.GAMEDIG_TYPE[g]))
+    _p9_core.set_daily_restart(None, "u" * 64, "s" * 64, game_type=longest, port=65535,
+                               enabled=True)
+    lines = cap.get("add") or []
+    cmd = lines[1].split(None, 5)[5] if len(lines) == 2 else ""
+    check("V8 restart line: the longest one the panel can write (64-character account and script "
+          "names, the longest mapped gamedig id, 255.255.255.255:65535) fits Debian cron's "
+          "1000-byte command buffer, which cuts a longer line off silently",
+          0 < len(cmd) < 1000 and "numplayers" in cmd, "%d characters: %r" % (len(cmd), cmd[:120]))
+
+
 def _drive_line36(line, reply):
     """Did crontab `line`'s command restart the server, with gamedig answering `reply`?
 
@@ -922,6 +946,7 @@ try:
     _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
     _p9_patch(_p9.socketio, "emit", lambda *a, **k: None)
     _gamedig_counts36()
+    _restart_line_length36()
 finally:
     _p9_restore_all()
     _p9.socketio.emit = _saved36_emit
