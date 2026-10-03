@@ -1180,7 +1180,7 @@ try:
     _stderr_h22 = [h for h in _pl22h if getattr(h, _err22._MARK, None) == "stderr"][0]
     _native22 = type(_evp22.original("threading").RLock())
     check("R23: the stderr handler's lock is a NATIVE RLock (a tpool thread can wait on it)",
-          type(_stderr_h22.lock) is _native22, repr(type(_stderr_h22.lock)))
+          isinstance(_stderr_h22.lock, _native22), repr(type(_stderr_h22.lock)))
     _buf22 = _io22.StringIO()
     with _patched(_stderr_h22, stream=_buf22):
         _log22.getLogger("panel.p22").warning("p22 host %s unreachable", "secret-host-9")

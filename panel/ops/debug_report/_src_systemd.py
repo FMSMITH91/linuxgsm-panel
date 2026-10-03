@@ -109,4 +109,4 @@ MEMO_KEY = "systemd.unit_show"
 
 def shared(ctx):
     """unit_show(), once per report."""
-    return ctx.memo(MEMO_KEY, lambda: unit_show())  # pylint: disable=unnecessary-lambda
+    return ctx.memo(MEMO_KEY, unit_show)    # the module's unit_show, looked up at this call

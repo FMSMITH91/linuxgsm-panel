@@ -700,6 +700,8 @@ def _d_fresh_helper():
     helper = os.path.join(_T21, "panel-helper")
     with open(helper, "w") as fh:
         fh.write("#!/bin/sh\n")
+    # An executable stand-in at a scratch path: the fixture the helper's stat must find.
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
     os.chmod(helper, 0o755)                       # nosec B103 - a fixture the stat must find
     _p21(_priv21, "HELPER_PATH", helper)
     _core21._HELPER_STATE["present"] = False

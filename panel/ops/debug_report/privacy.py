@@ -755,11 +755,10 @@ def footer(ctx):
     lines = ["### Privacy",
              "- **Pseudonymised**: %s. Loopback and unspecified addresses (0.0.0.0, ::) kept."
              % ("; ".join(parts) if parts else "nothing matched a known name or pattern"),
-             "- Paths: the checkout prints as <panel>, the data directory as <data>, the "
-             "virtualenv as <venv>, the root-owned helper's directory as <panel-lib>, home "
-             "directories as /home/[user]. Tokens are the same in "
-             "every section; [host-N], [server-N], [user-N], [tag-N] and [group-N] carry the "
-             "row's database id."]
+             ("- Paths: the checkout prints as <panel>, the data directory as <data>, the "
+              "virtualenv as <venv>, the root-owned helper's directory as <panel-lib>, home "
+              "directories as /home/[user]. Tokens are the same in every section; [host-N], "
+              "[server-N], [user-N], [tag-N] and [group-N] carry the row's database id.")]
     if st.pattern_error:
         lines.append("- **Pattern redaction FAILED** (%s): every section body was withheld."
                      % st.pattern_error)

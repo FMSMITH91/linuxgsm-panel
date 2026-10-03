@@ -137,7 +137,7 @@ def shared_read(ctx, wait=None):
 
     `wait`: how long to wait for a read another section is making (default: the deadline).
     """
-    return ctx.memo(MEMO_KEY, lambda: read(), wait=wait)  # pylint: disable=unnecessary-lambda
+    return ctx.memo(MEMO_KEY, read, wait=wait)    # the module's read, looked up at this call
 
 
 def shared_info(ctx):

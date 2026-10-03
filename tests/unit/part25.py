@@ -655,7 +655,7 @@ def _p25_paths_sanitised():
     check("hardening: a cgroup path with '..' is refused before it is joined onto /sys/fs/cgroup, "
           "and a drop-in path that is relative or climbs with '..' is never read; a user unit's "
           "drop-in under ~/.local/share is",
-          all([type(raised) is ValueError, "not read: not an absolute .conf path" in relative,
+          all([isinstance(raised, ValueError), "not read: not an absolute .conf path" in relative,
                "not read: not an absolute .conf path" in climbs,
                PR._dropin_path_ok("/etc/systemd/system/linuxgsm-panel.service.d/priority.conf"),
                PR._dropin_path_ok("/home/a/.local/share/systemd/user/x.service.d/o.conf")]),

@@ -717,8 +717,12 @@ def _mux23():
     _patch23(_core23, "_SSH_CM_DIR", path)
     absent = _h23.mux_state()
     os.mkdir(path, 0o700)
+    # A control dir the group can read: the fixture the "not private" branch must catch.
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
     os.chmod(path, 0o740)
     shared = _h23.mux_state()
+    # Back to owner-only, the private case.
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
     os.chmod(path, 0o700)
     private = _h23.mux_state()
     _restore_one23(_core23, "_SSH_CM_DIR")
