@@ -764,11 +764,16 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
       }
       showPanelBacklog(panelLines);
       updateTsNotice();
-      var offEl = document.getElementById('console-ts-off');
-      if (offEl) offEl.hidden = !data.log_timestamps;
+      _showTsOffNote(data);
       if (stick) stickConsole();
     })
     .catch(() => {});
+}
+
+// The note beside the console that LinuxGSM is stamping this log (and how to turn that off).
+function _showTsOffNote(data) {
+  var offEl = document.getElementById('console-ts-off');
+  if (offEl) offEl.hidden = !data.log_timestamps;
 }
 
 // "Load older" — ask for a much bigger tail of the log and show that.

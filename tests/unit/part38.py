@@ -1113,7 +1113,9 @@ async function schedule(cfg, seed, code) {
       acting = !acting;
     } else if (r < 0.66 && acting) w.panelPush('ACT out ' + i);
     else if (r < 0.70) { other = !other; w.other(other); }
-    else if (r < 0.73 && hidden && w.page.ctx._consolePaused && w.page.socket.connected) { await w.disconnect(); await w.step(w.between(0, 5000)); await w.reconnect(); }
+    else if (r < 0.73 && hidden && w.page.ctx._consolePaused && w.page.socket.connected) {
+      await w.disconnect(); await w.step(w.between(0, 5000)); await w.reconnect();
+    }
     else if (r < 0.77 && hidden && w.page.ctx._consolePaused && w.page.socket.connected) { w.expire(); expires++; }
     mark();
     await w.step(w.between(0, 40000));
@@ -1409,8 +1411,11 @@ def _server_backlog_key38(gs_id, admin, sio):
 
 
 class _ActRig38:
-    """shell_as_game_user for an action's output drain, on a REAL file: the command built as for the
-    host, unwrapped and run by bash, with only the output file's path pointed at this part's copy."""
+    """shell_as_game_user for an action's output drain, run on a REAL file.
+
+    The command is built as for the host and unwrapped and run by bash, with only the output file's
+    path pointed at this part's copy.
+    """
 
     def __init__(self, real):
         self.real, self.calls = real, []
@@ -1424,42 +1429,45 @@ class _ActRig38:
         return _bash34(_as_account34(user, sh, selfname).replace(self.real, self.path))
 
     def write(self, n, tag):
-        """n lines of exactly 64 bytes, so a 64 KB chunk ends on a line's end."""
+        """Append n lines of exactly 64 bytes, so a 64 KB chunk ends on a line's end."""
         new = ["%s %06d %s" % (tag, i, "x" * 52) for i in range(n)]
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write("".join(x + "\n" for x in new))
         return new
 
 
-def _server_unwatched_action38(loop, gs_id, admin, sio):
-    """An action that runs start to end while nobody watches its console: the end reads it all."""
+def _unwatched_update38(loop, gs_id, admin, sio, n, label):
+    """An update writing n lines that runs start to end while its only tab is away."""
     real = _sh38._action_log_path("mcsrv38", "update")
-    http = _p9_client(admin)
-    for n, label in ((3000, "192 KB"), (16384, "1 MB")):
-        act = _ActRig38(real)
-        _set38(_core38, "shell_as_game_user", act)
-        _sh38._console_backlog.pop(gs_id, None)
-        sio.emit("join_console", {"server_id": gs_id})
+    act = _ActRig38(real)
+    _set38(_core38, "shell_as_game_user", act)
+    _sh38._console_backlog.pop(gs_id, None)
+    sio.emit("join_console", {"server_id": gs_id})
+    _pass38(loop)
+    sio.emit("leave_console", {"server_id": gs_id})      # the only tab, hidden past the grace
+    _pass38(loop)
+    _sh38._begin_action_tail(_p9, gs_id, "update", real, "mcsrv38")
+    out = act.write(n, "UPD")
+    for _ in range(3):
         _pass38(loop)
-        sio.emit("leave_console", {"server_id": gs_id})      # the only tab, hidden past the grace
-        _pass38(loop)
-        _sh38._begin_action_tail(_p9, gs_id, "update", real, "mcsrv38")
-        out = act.write(n, "UPD")
-        for _ in range(3):
-            _pass38(loop)
-        drained = len(act.calls)
-        _sh38._end_action_tail(_p9, gs_id, NS(host="192.0.2.38", name="p38-host"), "update", 0)
-        sio.emit("join_console", {"server_id": gs_id})        # back in view: the page reads the backlog
-        rows = [r.get("line") for r in (http.get("/api/console/%d" % gs_id).get_json() or {}).get("panel_lines") or []]
-        tail = [r for r in rows if r.startswith("UPD ")]
-        check("B server: an update writing %s of output while its only tab is away: nothing is drained while "
-              "nobody watches, and its end reads on to the end — the backlog the returning page shows ends "
-              "with the update's last lines, in order, then how it ended" % label,
-              drained == 0 and rows[-1:] == ["[panel] update finished successfully."]
-              and len(tail) >= 100 and tail == out[-len(tail):] and gs_id not in _sh38._action_output,
-              repr((drained, len(act.calls), len(tail), rows[-2:], out[-1])))
-        sio.emit("leave_console", {"server_id": gs_id})
-    # A pass while an action's own worker is reading the rest: the poller leaves that entry alone.
+    drained = len(act.calls)
+    _sh38._end_action_tail(_p9, gs_id, NS(host="192.0.2.38", name="p38-host"), "update", 0)
+    sio.emit("join_console", {"server_id": gs_id})        # back in view: the page reads the backlog
+    body = _p9_client(admin).get("/api/console/%d" % gs_id).get_json() or {}
+    rows = [r.get("line") for r in body.get("panel_lines") or []]
+    tail = [r for r in rows if r.startswith("UPD ")]
+    check("B server: an update writing %s of output while its only tab is away: nothing is drained while "
+          "nobody watches, and its end reads on to the end — the backlog the returning page shows ends "
+          "with the update's last lines, in order, then how it ended" % label,
+          (drained, rows[-1:], len(tail) >= 100, tail == out[-len(tail):], gs_id in _sh38._action_output)
+          == (0, ["[panel] update finished successfully."], True, True, False),
+          repr((drained, len(act.calls), len(tail), rows[-2:], out[-1])))
+    sio.emit("leave_console", {"server_id": gs_id})
+
+
+def _server_ended_entry38(loop, gs_id, sio):
+    """A pass while an action's own worker is reading the rest: the poller leaves that entry alone."""
+    real = _sh38._action_log_path("mcsrv38", "update")
     act = _ActRig38(real)
     _set38(_core38, "shell_as_game_user", act)
     _sh38._action_output[gs_id] = {"action": "update", "path": real, "user": "mcsrv38", "pos": 0,
@@ -1489,7 +1497,9 @@ def _section_server38(rig, gs_id, admin):
         _server_two_tabs38(loop, rig, gs_id, a, b)
         _server_never_joined38(loop, rig, admin)
         _server_backlog_key38(gs_id, admin, a)
-        _server_unwatched_action38(loop, gs_id, admin, a)
+        _unwatched_update38(loop, gs_id, admin, a, 3000, "192 KB")
+        _unwatched_update38(loop, gs_id, admin, a, 16384, "1 MB")
+        _server_ended_entry38(loop, gs_id, a)
     finally:
         for s in (a, b):
             s.disconnect()
