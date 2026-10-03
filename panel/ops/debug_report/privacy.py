@@ -8,6 +8,10 @@ prepare(ctx)              builds the in-memory name map once per report (request
 scrub(ctx, text) -> text  applied by the assembler to the whole report and the summary.
 scrub_lines(ctx, lines)   the same for a list of log lines, or None when the pass failed and the
                           lines must be withheld.
+scrub_early(ctx, text)    installer output: paths, URL userinfo and _redact BEFORE the pass, so a
+                          path run is never eaten as one long token.
+map_tailscale(ctx, info)  map the names of the report's one Tailscale reading now (for a section
+                          that prints Tailscale's own free text).
 footer(ctx) -> [lines]    what was pseudonymised and what was kept, stated truthfully.
 findings(ctx)             At-a-glance findings when the pass ran incompletely.
 
@@ -16,7 +20,9 @@ traceback frame keeps its module and loses the account), then the syslog host fi
 names (longest first, case-insensitive, never inside a longer word), then the generic patterns that
 need no names (*.ts.net, login URLs, URL userinfo, IP addresses by class, long ids, SteamIDs,
 '@github' logins, SQLAlchemy bound parameters), and last system_ops._redact. The map is never
-logged or printed: only the tokens and counts are.
+logged or printed: only the tokens and counts are. The footer counts every replacement, as the
+number of distinct values: what was pseudonymised (a token that stands for a value) apart from what
+was redacted (a fixed marker that stands for nothing).
 """
 import ipaddress
 import os
@@ -452,6 +458,9 @@ def _paths(text, st):
     if sys.prefix != sys.base_prefix:      # a virtualenv's own root (bin/python and the like)
         text = _replace_dir(text, sys.prefix, "<venv>")
     text = _replace_dir(text, _so.PANEL_DIR, "<panel>")
+    # gamedig's tree, before the directory it sits in: 'gamedig/current/node_modules' is itself
+    # exactly 28 characters, one "long token" even after <panel-lib>.
+    text = _replace_dir(text, _gamedig_dir(), "<gamedig>")
     # The root-owned pieces' directory (the helper and root's copies of the installer): fixed by
     # install.sh, so naming it identifies nothing, and left alone its 42-character helper path is
     # one "long token" to _redact -- every sudo line read 'COMMAND=/[redacted] <verb>'.
@@ -467,6 +476,12 @@ def _priv_lib_dir():
     """The directory install.sh places the root-owned helper in (privileged.HELPER_PATH's)."""
     from panel.security import privileged as _priv
     return os.path.dirname(_priv.HELPER_PATH)
+
+
+def _gamedig_dir():
+    """Where install.sh installs gamedig (privileged.GAMEDIG_DIR, held equal to install.sh's)."""
+    from panel.security import privileged as _priv
+    return _priv.GAMEDIG_DIR
 
 
 def _replace_dir(text, path, token):
@@ -639,11 +654,22 @@ def _ip_in_name(st):
     return _sub
 
 
+def _count_generic(rx, repl, kind, text, st):
+    """Record each match of a generic rule that the rule changes.
+
+    Not one it leaves as it is: the summary and the report are each scrubbed, and installer lines
+    are scrubbed twice (scrub_early), so an earlier pass's own 'https://[redacted]@' or
+    '[parameters: withheld]' is seen again and is not a second value.
+    """
+    if rx.search(text):
+        for m in rx.finditer(text):
+            if m.expand(repl) != m.group(0):
+                st.hit(kind, m.group(0).lower())
+
+
 def _generic(text, st):
     for rx, repl, kind in _GENERIC:
-        if kind != "sql-params" and rx.search(text):
-            for m in rx.finditer(text):
-                st.hit(kind, m.group(0).lower())
+        _count_generic(rx, repl, kind, text, st)
         text = rx.sub(repl, text)
     sub = _ip_sub(st)
     for rx in (_IP_DOTTED_NAME_RE, _IP_DASHED_NAME_RE):
@@ -672,10 +698,15 @@ def scrub(ctx, text):
     except Exception as exc:  # noqa: BLE001 - the generic rules below still run
         st.source_errors.append(("name matching", type(exc).__name__))
     try:
-        return _so._redact(_generic(text, st))
+        return _redact(_generic(text, st), st)
     except Exception as exc:  # noqa: BLE001 - withhold rather than print pattern-free text
         st.pattern_error = type(exc).__name__
         return _withhold(text)
+
+
+def _redact(text, st):
+    """system_ops._redact, each value it replaces recorded for the footer ("redact:<rule>")."""
+    return _so._redact(text, lambda kind, value: st.hit("redact:" + kind, value))
 
 
 def scrub_lines(ctx, lines):
@@ -695,6 +726,27 @@ def scrub_text(ctx, text):
     return "(withheld)" if prepare(ctx).pattern_error else out
 
 
+def scrub_early(ctx, text):
+    """Installer output: paths normalised, URL userinfo and _redact applied, then scrub_text.
+
+    _redact's long-token rule eats any 28-character run of path characters, so a path it sees
+    before _paths prints as '/[redacted]' ('home/ubuntu/linuxgsm-panel/data' is 31). And it must
+    still run before the known names: a name inside a long token splits it into fragments under 28
+    characters, and those would print. URL userinfo goes before _redact, or its email rule reads
+    'user:tok@github.com' as 'user:[email]'.
+    """
+    st = prepare(ctx)
+    try:
+        text = _paths(text, st)
+        rx, repl, kind = _GENERIC[1]
+        _count_generic(rx, repl, kind, text, st)
+        text = _redact(rx.sub(repl, text), st)
+    except Exception as exc:  # noqa: BLE001 - the assembler then withholds every body
+        st.pattern_error = type(exc).__name__
+        return "(withheld)"
+    return scrub_text(ctx, text)
+
+
 def _withhold(text):
     """Headings kept, every other line replaced by one 'withheld' line per section."""
     out = []
@@ -710,6 +762,25 @@ def finish(ctx, wait):
         _tailscale_names(ctx, prepare(ctx), wait)
     except Exception as exc:  # noqa: BLE001 - reported in the footer
         prepare(ctx).source_errors.append(("tailscale names", type(exc).__name__))
+
+
+def map_tailscale(ctx, info):
+    """Map the names of `info`, the report's one Tailscale reading, now rather than at finish().
+
+    For a section that prints Tailscale's own free text (its health messages): the names enter
+    the map only at finish(), after the sections, so text scrubbed before then keeps a node or
+    login name, and a cut through it leaves a fragment the final pass cannot match. finish() is
+    then a no-op; it would have mapped this same reading.
+    """
+    st = prepare(ctx)
+    with st.lock:
+        if st.ts_done:
+            return
+        st.ts_done = True
+    try:
+        _names_tailscale(info, st)
+    except Exception as exc:  # noqa: BLE001 - reported in the footer
+        st.source_errors.append(("tailscale names", type(exc).__name__))
 
 
 # ── what the reader is told ─────────────────────────────────────────────────────────────────────
@@ -731,16 +802,26 @@ _FOOTER_KINDS = (("host", "host"), ("server", "game server"), ("user", "panel us
                  ("ts-name", "*.ts.net name"), ("login", "@github login"),
                  ("site-title", "site title"), ("site-domain", "site domain"),
                  ("ntfy-topic", "ntfy topic"), ("ntfy-host", "ntfy server"),
-                 ("id", "long id"), ("steamid", "SteamID"), ("url", "URL credential or login link"),
-                 ("secret", "configured secret"), ("home", "home-directory path"))
+                 ("id", "long id"), ("steamid", "SteamID"), ("home", "home-directory path"))
+# Replaced by a fixed marker, not a token: nothing in the report stands for the value.
+_REDACTED_KINDS = (("redact:email", "email-shaped string"),
+                   ("redact:token", "long token"), ("redact:secret", "key=value secret"),
+                   ("secret", "configured secret"), ("url", "URL credential or login link"),
+                   ("sql-params", "SQL parameter list"))
 
 
-def _counts(st):
+def _listed(st, kinds):
+    """'2 hosts', '1 SteamID', ... for each kind in `kinds` that replaced anything."""
     parts = []
-    for kind, label in _FOOTER_KINDS:
+    for kind, label in kinds:
         n = len(st.stats.get(kind, ()))
         if n:
             parts.append("%d %s%s" % (n, label, "" if n == 1 else "s"))
+    return parts
+
+
+def _counts(st):
+    parts = _listed(st, _FOOTER_KINDS)
     ips = {k[3:]: len(v) for k, v in st.stats.items() if k.startswith("ip:")}
     if ips:
         parts.append("%d IPs (%s)" % (sum(ips.values()), ", ".join(
@@ -752,13 +833,18 @@ def footer(ctx):
     """The Privacy section: what the pass replaced and kept, and what it could not cover."""
     st = prepare(ctx)
     parts = _counts(st)
+    redacted = _listed(st, _REDACTED_KINDS)
     lines = ["### Privacy",
              "- **Pseudonymised**: %s. Loopback and unspecified addresses (0.0.0.0, ::) kept."
              % ("; ".join(parts) if parts else "nothing matched a known name or pattern"),
+             "- **Redacted** (a fixed marker such as [email], [redacted] or [parameters: withheld] "
+             "in place of the value; a long token is any run of 28+ key, hash or path "
+             "characters): %s." % ("; ".join(redacted) if redacted else "nothing"),
              ("- Paths: the checkout prints as <panel>, the data directory as <data>, the "
-              "virtualenv as <venv>, the root-owned helper's directory as <panel-lib>, home "
-              "directories as /home/[user]. Tokens are the same in every section; [host-N], "
-              "[server-N], [user-N], [tag-N] and [group-N] carry the row's database id.")]
+              "virtualenv as <venv>, the root-owned helper's directory as <panel-lib> and "
+              "gamedig's as <gamedig>, home directories as /home/[user]. Counts are of distinct "
+              "values. Tokens are the same in every section; [host-N], [server-N], [user-N], "
+              "[tag-N] and [group-N] carry the row's database id.")]
     if st.pattern_error:
         lines.append("- **Pattern redaction FAILED** (%s): every section body was withheld."
                      % st.pattern_error)

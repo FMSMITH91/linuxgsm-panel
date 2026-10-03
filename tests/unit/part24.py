@@ -320,6 +320,7 @@ def _boot_keys_written():
 
 # ══ 5. runtime_stats: what is read is written, and what is written is read ═════════════════════
 _RS_NAMES = {"runtime_stats", "rs", "_rs"}
+_RS_OWN_GROUP = {"beat": "heartbeat", "first_pass": "first_pass"}
 
 
 def _is_rs(node):
@@ -338,8 +339,8 @@ def _rs_group(node):
             and _is_rs(node.func.value)):
         return None
     verb = node.func.attr
-    if verb == "beat":
-        return "written", "heartbeat"
+    if verb in _RS_OWN_GROUP:              # a writer with its own fixed group
+        return "written", _RS_OWN_GROUP[verb]
     first = node.args[0] if node.args else None
     if verb in ("bump", "put", "snapshot") and isinstance(first, _ast24.Constant):
         return ("read" if verb == "snapshot" else "written"), first.value

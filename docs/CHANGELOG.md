@@ -404,6 +404,46 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The debug report no longer calls a systemd unit an email address.** A unit started from a
+  template is written `name@instance.service` (`user@1000.service`, `getty@tty1.service`), and the
+  report's email rule printed it as `[email]`, in cgroup paths and journal lines alike; so did an npm
+  `package@1.2.3`. Neither is replaced now. Addresses still are, an address written after a unit
+  name included.
+- **The debug report's installer lines keep their paths and the commit they name.** Installer
+  output was redacted before its paths were shortened, so on the usual install the data directory,
+  the helper and gamedig all printed as `/[redacted]`, the verified commit an update moved to as
+  `verified commit [redacted]`, and every address as a bare `[ip]`. They now print as `<data>/…`,
+  `<panel-lib>/…` and `<gamedig>/…`, the commit as its first 12 characters, and an address by its
+  class, as everywhere else in the report. The "Installer said" list no longer repeats a line the
+  log tail below it already shows; its warnings are always listed.
+- **The debug report's Privacy footer counts everything it replaced.** It counted only the names
+  and addresses it pseudonymised, so a report with `[email]` and `[redacted]` in it said "nothing
+  matched". A new "Redacted" line counts email-shaped strings, long tokens, key=value secrets, URL
+  credentials and SQL parameter lists, each counted once however often it appears.
+- **The debug report prints Tailscale's health messages, not only how many there are.** Each one
+  is on its own line, with node and login names, addresses, a self-hosted server's domain and a
+  certificate issuer replaced, as the rest of the report replaces them. A self-hosted control
+  server's host name is added to the names the report replaces everywhere.
+- **The debug report says "node key expiry disabled" for a node whose key does not expire.**
+  Tailscale leaves the expiry out for a tagged node or one with expiry turned off, and the report
+  read that as "not recorded". A node that is not in the network map yet (it needs login) says the
+  expiry is unknown instead, rather than claiming either.
+- **The debug report's update lines say what was actually checked.** With nothing newer to install,
+  the CI gate line read `ci_state=passing · target ?` although no CI was asked; it now says it was
+  not consulted. An unverified newest commit is named as one, not as the "target". While newer
+  commits are still being verified, the commit on offer is labelled "offered" rather than printed
+  as origin's tip. And "Last 'update available' notification" says "none" when there is none,
+  which is the usual state once an update is installed; it printed `?`.
+- **The debug report no longer says a background job never ran when it is not due yet.** Several
+  jobs wait before their first run (the monitor 60 s, the update check 30 s, auto-block an hour),
+  and a report taken just after a restart said each had "never completed a pass". It now says when
+  the first run is due, and for one that was due and has not finished, when it was due. "Not yet
+  probed" hosts say that the monitor has not made its first pass yet, and when it will.
+- **With `trust_proxy` off, forwarded headers from a local account other than root are logged and
+  counted.** They were already refused, but nothing recorded it, so the debug report's "Forwarding
+  headers ignored, last hour" always said "none". The log line no longer suggests editing
+  `trusted_proxies`, which does nothing without `trust_proxy`. The report's "forwarded headers
+  believed" line also names why: Tailscale Serve on loopback, or a proxy you declared.
 - **Adding a tool's settings file to the repository is no longer offered as a panel update.** The
   update check decides which files the panel runs from a list, and that list lived in the panel's
   own code. Naming SonarCloud's new settings file in it, as a file the panel does not run, was then

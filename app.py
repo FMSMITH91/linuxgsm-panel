@@ -705,6 +705,7 @@ def _mark_expected_offline(server_id):
 def _monitor_watch(app):
     """Background monitor loop that feeds the admin notifications (server down, host unreachable,
     disk low)."""
+    runtime_stats.first_pass("monitor", _MONITOR_SECONDS)
     while True:
         time.sleep(_MONITOR_SECONDS)
         try:
@@ -979,6 +980,7 @@ def _run_autoblock_now(app, remote_id):
 
 def _autoblock_watch(app):
     """Reconcile every auto-block host hourly, so the block list rolls with the 7-day window."""
+    runtime_stats.first_pass("autoblock", 3600)
     while True:
         time.sleep(3600)
         host_ids = _autoblock_hosts()
@@ -2856,6 +2858,7 @@ def register_routes(app):
         # Wait before the FIRST tick so a restart (e.g. a panel self-update) doesn't immediately
         # fire this batch — which can start a due backup, archiving a server on top of the cold-start
         # and pinning the CPU. Hourly cadence is unchanged; the first run is just shifted ~2 min.
+        runtime_stats.first_pass("backup-ticker", 120)
         time.sleep(120)
         while True:
             try:
@@ -2873,6 +2876,7 @@ def register_routes(app):
     # would leave the server up for up to an hour after it emptied. Run the deferred-action sweep on
     # a short cadence instead; it only does anything for servers that actually have a queued action.
     def due_actions_ticker():
+        runtime_stats.first_pass("due-actions", 45)
         time.sleep(45)
         while True:
             try:
@@ -2902,6 +2906,7 @@ def register_routes(app):
     # of it; it also holds the row's host check against the install-status poll asking the same
     # question at the same time.
     def install_reconcile_ticker():
+        runtime_stats.first_pass("install-reconcile", 20)
         time.sleep(20)   # let boot settle; the per-server check is an SSH round trip
         while True:
             try:
@@ -2926,6 +2931,7 @@ def register_routes(app):
     # slow cadence so every game, however it (re)started, settles at the intended priority. One
     # batched `renice` per host; users with no running processes are a no-op.
     def priority_keeper():
+        runtime_stats.first_pass("priority-keeper", 60)
         time.sleep(60)
         while True:
             try:

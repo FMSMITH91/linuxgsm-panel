@@ -10,7 +10,11 @@ threshold is invented here -- plus how long the pass took, failures and respawns
 
 Three states are kept apart, because they mean different things: "never completed a pass since
 start", "not instrumented" (a loop with no heartbeat), and the extra reads that say whether there
-was anything to do at all (no samples because no server is installed).
+was anything to do at all (no samples because no server is installed). A loop that sleeps before
+its first pass records when that pass is due (runtime_stats.first_pass), so "first pass not due
+yet" is told apart from a first pass that was due and never completed -- by the loop's own record,
+never by a second copy of its delay here, and never by its cadence, which says nothing about when
+the FIRST pass runs.
 """
 import threading
 import time
@@ -48,13 +52,53 @@ def _thread_word(name, threads, visible):
     return "thread alive" if threads[name] else "thread NOT alive"
 
 
-def _pass_words(name, cadence, hb, uptime, now):
-    """'last pass 38 s ago / every 60 s · took 4.1 s · passes 12', or why there is none."""
+def first_due(name):
+    """(when, delay) of a loop's first pass from its own record, or None when it made none."""
+    rec = mod("panel.core.runtime_stats").snapshot("first_pass").get(name)
+    if isinstance(rec, tuple) and len(rec) == 2 and isinstance(rec[1], (int, float)):
+        return rec[0] + rec[1], rec[1]
+    return None
+
+
+def first_pass_words(name, now):
+    """Where a loop with no completed pass stands, for another section's line.
+
+    'first pass due in 45 s, 60 s after the loop starts', or 'first pass was due 4 m ago, ... and
+    has not completed', from the loop's own record; 'its loop has not recorded starting'.
+    """
+    due = first_due(name)
+    if due is None:
+        return "its loop has not recorded starting"
+    at, delay = due
+    if now < at:
+        return "first pass due in %s, %s after the loop starts" % (ago(at - now), ago(delay))
+    return "first pass was due %s ago, %s after the loop started, and has not completed" % (
+        ago(now - at), ago(delay))
+
+
+def _no_pass_words(cadence, uptime, now, first):
+    """Why a loop has no heartbeat: not instrumented, not due yet, or never completed."""
+    if cadence is None:
+        return "not instrumented"
+    if first is None:
+        return "never completed a pass since start (%s)%s" % (
+            ago(uptime), " / every %s" % ago(cadence) if cadence else "")
+    at, delay = first
+    if now < at:
+        return "first pass not due yet (due in %s: the loop waits %s before it)" % (
+            ago(at - now), ago(delay))
+    return ("never completed a pass since start (%s; the first was due %s after the loop "
+            "started, %s ago)" % (ago(uptime), ago(delay), ago(now - at)))
+
+
+def _pass_words(name, cadence, hb, uptime, now, first=None):
+    """'last pass 38 s ago / every 60 s · took 4.1 s · passes 12', or why there is none.
+
+    `first`: first_due(name), the loop's own record of when its first pass is due, or None.
+    """
     every = " / every %s" % ago(cadence) if cadence else ""
     if not isinstance(hb, dict):
-        if cadence is None:
-            return ["not instrumented"]
-        return ["never completed a pass since start (%s)%s" % (ago(uptime), every)]
+        return [_no_pass_words(cadence, uptime, now, first)]
     words = ["last pass %s ago%s" % (ago(now - hb.get("at", now)),
                                      " / every %s" % ago(hb["cadence"]) if hb.get("cadence")
                                      else every)]
@@ -67,7 +111,8 @@ def _pass_words(name, cadence, hb, uptime, now):
 
 def _worker_line(name, cadence, stats, threads, visible):
     now = time.time()
-    words = _pass_words(name, cadence, stats["hb"].get(name), now - stats["started"], now)
+    words = _pass_words(name, cadence, stats["hb"].get(name), now - stats["started"], now,
+                        first_due(name))
     fails = stats["fail"].get(name, 0)
     if fails:
         words.append("failed passes %d" % fails)

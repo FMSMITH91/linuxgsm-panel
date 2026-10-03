@@ -20,6 +20,7 @@ CROSS-MODULE CONTRACTS (who writes, who reads):
   app.config["BOOT_SERVE"]      "ok" | "failed:<fixed reason class>" | "not attempted" (R20)
   runtime_stats groups ("heartbeat" via beat(); the rest via bump()/put()):
     heartbeat   loop name -> {at, cadence, took, passes}           monitor loops etc. (R22)
+    first_pass  loop name -> put(delay s), as its thread starts    loops that sleep first (R22)
     respawn     thread name -> count                               the supervisor (R22)
     loopfail    loop name -> count of passes that raised           every beating loop (R22)
     errors      "LEVEL|logger|template" -> count                   logging handler (R24)
