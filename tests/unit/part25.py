@@ -586,18 +586,21 @@ def _p25_vps():
     digest = rep.split("### Errors in the journal", 1)[-1].split("### Recent log", 1)[0]
     body = log.split("```", 1)[-1].replace(
         "a password is required ; PWD=/home/[user] ; USER=root ; COMMAND=", "")
+    # Counted ONCE, in the digest; the recent log says they are left out and where they are counted
+    # (the line was printed twice, and the copy in the recent log said nothing the digest did not).
     check("VPS fix: the panel's own sudo calls are counted by helper verb and left out of the recent "
           "log; a REFUSED sudo and the panel's own lines stay in it",
-          all(["Privileged calls (left out below)" in log, "restart-flags ×150" in log,
+          all(["Privileged calls**: left out below; counted under Errors in the journal" in log,
+               "restart-flags ×150" not in log,
                "pam_unix(sudo:session)" not in log, "COMMAND=" not in body,
                "a password is required" in log, "canary panel line 7731" in log]), log[:1500])
     check("VPS fix: ...the digest's 'most repeated lines' are not the panel's own sudo calls, and a "
           "sudo COMMAND's argument (an account, for su) is never printed as a verb",
           all(["pam_unix(sudo:session)" not in digest, "restart-flags ×150" in digest,
-               "other command ×1" in digest, "canarygameacct7731" not in rep]), digest[:1200])
+               "su as root ×1" in digest, "canarygameacct7731" not in rep]), digest[:1200])
     check("VPS fix: ...sudo-rs's spacing ('user :  PWD=... plain ', two blanks and a trailing one) "
           "is counted too, as the verb it ran",
-          all(["ufw-status ×1" in log, "ufw-status ×1" in digest]), log[:600])
+          all(["ufw-status ×1" in digest, "ufw-status ×1" not in log]), digest[:600])
 
 def _p25_vps_helper_path():
     out = PV._paths("COMMAND=/usr/local/lib/linuxgsm-panel/panel-helper restart-flags", PV._State())

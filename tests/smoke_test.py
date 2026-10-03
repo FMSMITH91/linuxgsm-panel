@@ -617,11 +617,16 @@ try:
         save_config(_gb_cfg0)
     _gb_app_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app.py"),
                        encoding="utf-8").read()
+    # The loop runs _ban_watch_tick; the tick feeds the set from the fail2ban reading it takes, and
+    # UFW's through banlist.watch_ufw (which reads it when ufw's rule files changed; unit part34).
     _gb_watch = _gb_app_src[_gb_app_src.index("def _f2b_ban_watch"):]
     _gb_watch = _gb_watch[:_gb_watch.index("time.sleep(90)")]
+    _gb_tick = _gb_app_src[_gb_app_src.index("def _ban_watch_tick"):]
+    _gb_tick = _gb_tick[:_gb_tick.index("\ndef ")]
     check("funnel gate: the 90 s ban-watcher feeds the set from the reading it already takes",
-          "_banlist.set_f2b(reading, _taken)" in _gb_watch
-          and "_banlist.set_ufw(so.ufw_blocked_ips(), _taken)" in _gb_watch)
+          "_ban_watch_tick(app, state)" in _gb_watch
+          and "_banlist.set_f2b(reading, _taken)" in _gb_tick
+          and "_banlist.watch_ufw(so.ufw_blocked_ips)" in _gb_tick)
 
     # ── a socket opened BEFORE its client was banned is dropped when the ban lands ─────────────
     # A ban refuses new connections — the gate above, or the firewall — and nothing re-asked about
@@ -7862,6 +7867,9 @@ try:
                 _monmod._host_restart_flags = lambda r: {_mon_user}
                 _ps._cron_restart_pending.clear()
                 _reset_mon()
+                # Every host due for its (gated) read: when each was last read is the gate's
+                # business, tested in unit part34; this is about what a read records.
+                _monmod._restart_flags_read_at.clear()
                 _monmod._monitor_pass()
                 check("monitor: a server whose box has the restart flag is recorded",
                       _ps._cron_restart_pending.get(_mon_id) is True,

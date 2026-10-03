@@ -151,6 +151,42 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **The panel makes far fewer privileged calls, so the host's journal stops being mostly its sudo
+  lines.** Every `sudo` writes three journal lines (and three to auth.log). On a host with three game
+  servers the panel made about 580 such calls an hour, and they were 99% of its unit's journal. Each
+  of these now skips work it did not need. On some hosts the restart banner can now appear later
+  than before; that is named below. (A server the panel cannot query can also read "unknown" for a
+  minute where it read 0; see the `details` entry under Fixed.)
+  - The metrics history no longer looks up each running server's map every minute. It stores no
+    map, so the answer was thrown away.
+  - The player poll reads the map in the same gamedig reply as the player count. The dashboard
+    uses that answer instead of running gamedig again, and two pages asking at once share one
+    lookup.
+  - The player poll runs one gamedig command per host instead of one per server. It runs as one of
+    that host's game accounts, never as the panel's own account or the SSH login, and on the
+    panel's host never as an account in an administrator group or one that is root by another door
+    (docker, lxd, incus-admin, libvirt, disk). A server that command could not read is asked on its
+    own, as before.
+  - The server page's player list is read only while the Console tab is showing, and two viewers
+    polling within ten seconds share one read. Refresh, and the re-read after a kick, always ask.
+  - The priority keeper checks nice values without privilege. It renices only the game accounts
+    that drifted, instead of every account on every host every two minutes.
+  - The ban watcher reads the UFW rules only when ufw's rule files have changed, and at least every
+    15 minutes. Blocks the panel makes itself are still read at once. fail2ban is read every 90 s as
+    before.
+  - The restart-banner flags are read every minute only for a host where daily restart is on or a
+    banner is showing. Other hosts are read every 10 minutes, and a host with no servers is never
+    read. So on a host without daily restart, a restart banner from a crontab the panel does not
+    manage (an imported server, an edit in the terminal) can now appear up to 10 minutes late
+    instead of within a minute.
+
+  The saving is a model, not yet a measurement of a running panel: one pass of each background
+  loop, with every host command stubbed and counted, multiplied by each loop's period on the live
+  host. For three servers the model gives about 9 privileged calls a minute before (the live host's
+  report measured about the same) and about 2 after.
+
+  The live console is unchanged: an open console costs one call per two seconds, and two while
+  output flows.
 - **The debug report says what is wrong, covers far more of the panel, and is safer to post.** It
   now opens with **At a glance**: every problem any section found, failures first, and the sections
   that could not be read. Below that is one verdict line per area. Diagnostics are sorted worst
@@ -404,6 +440,26 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The debug report's journal sections cover the panel's own output, not its sudo calls.** The
+  report read the newest 5,000 journal lines and only then dropped the sudo lines. On a live host
+  4,964 of the 5,000 were sudo lines, so the window covered under three hours and the recent log
+  had 36 lines. The report now asks journald for the panel's own lines by field, so the 5,000 lines
+  reach back as far as the panel's output does. Refused sudo calls and the panel's warnings are
+  still included. The sudo calls are counted from a separate read and printed once, under *Errors
+  in the journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `LinuxGSM
+  config`, `true as root`, and so on) instead of "other command". Account names, paths and scripts
+  an operator ran are never printed. A system install needs an updated helper for this; an older
+  helper gets the previous read.
+- **Call of Duty servers show the capacity the game reports.** gamedig gives cod's `maxplayers` as
+  text ("16"). The panel threw it away and showed the LinuxGSM config's number instead.
+- **A running game the panel cannot query no longer runs LinuxGSM `details` every 45 seconds.**
+  This covers a game outside the gamedig list (Factorio) and one gamedig cannot reach. The `details`
+  run (several `du` passes over the server's files) and the config reads came every pass. For a
+  server the monitor sees listening, the player count is now "unknown" without asking. For up to a
+  minute after such a server stops (until the monitor's next pass), it can show "unknown" where
+  `details` would have said 0, and a reboot-when-empty or notify-when-empty waits for that pass.
+  LinuxGSM's query settings, and a config that names no capacity, are re-read every 10 minutes
+  instead of every pass.
 - **Adding a tool's settings file to the repository is no longer offered as a panel update.** The
   update check decides which files the panel runs from a list, and that list lived in the panel's
   own code. Naming SonarCloud's new settings file in it, as a file the panel does not run, was then

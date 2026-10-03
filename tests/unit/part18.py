@@ -482,7 +482,7 @@ def _reach18(remote):
     return True
 
 
-def _slots18(gs):
+def _slots18(gs, primary=None):
     if gs.id == _pl118 and gs.short_name == "plone":
         _take_server18(_pl118, name="p18-pl-taker", short_name="pltakerserver",
                        status="online")
@@ -490,7 +490,7 @@ def _slots18(gs):
     return gs.id, (0, 10, "x")
 
 
-def _hostmetrics18(work):
+def _hostmetrics18(work, **_k):
     remote, games = work
     out = []
     for sid, _short, _port, _gt, _qt in games:
@@ -1173,6 +1173,7 @@ try:
 
     _p9_patch(_mon18, "concurrent", _SYNC18)
     _p9_patch(_mon18, "_query_server_slots", _slots18)
+    _p9_patch(_mon18, "sm_player_slots_batch", lambda *a, **k: None)   # per server, as above
     _p9_state._player_counts.pop(_pl118, None)
     _p9_state._player_counts.pop(_pl218, None)
     _mon18._refresh_player_counts(_p9)
@@ -1262,6 +1263,8 @@ try:
     _renice18 = []
 
     _p9_patch(_p9_app, "set_game_priority_bulk", _bulk18)
+    # The unprivileged nice read cannot answer here: every account is reniced, as before.
+    _p9_patch(_p9_app, "game_users_off_priority", lambda *a, **k: None)
     _k18_ran = _keeper18 is not None and _one_pass18(_keeper18, 120)
     check("priority keeper: a host replaced mid-pass is never reniced as its successor",
           _k18_ran and not any(h == "192.0.2.160" for h, _u in _renice18),

@@ -2748,6 +2748,11 @@ def _p7_report(journal_user="", journal_sys=_dr_log, journal_unit="", helper=Tru
         _p7_dr_unstub()
 
 
+# What the report asks the helper for: the panel unit's own output (filtered at read time), then its
+# sudo lines apart, which the digest counts.
+_P7_HELPER_JOURNAL = [("journal", ["panel-own", "5000"]), ("journal", ["panel-sudo", "5000"])]
+
+
 def _p7_journal_verbs():
     """The `journal` helper calls the last report made (other sections ask the helper too)."""
     return [c for c in _dr_calls["verb"] if c[0] == "journal"]
@@ -2779,7 +2784,7 @@ def _so7_generate_debug_report():
     check("so/debug report: the system journal is used when the user journal is empty, redacted",
           all(("hunter2" not in _rep_text, "password=[redacted]" in _rep_log, "line 0599" in _rep_log,
                "system journal via the privileged helper" in _rep_text,
-               _p7_journal_verbs() == [("journal", ["panel", "5000"])])), _rep_log[-200:])
+               _p7_journal_verbs() == _P7_HELPER_JOURNAL)), _rep_log[-200:])
     check("so/debug report: the recent log is the newest 400 lines, in order, and no older one",
           all((_rep_log.startswith("line 0200 "), "line 0199" not in _rep_log,
                _rep_log.find("line 0300") < _rep_log.find("line 0400"))), _rep_log[:80])
@@ -2814,7 +2819,7 @@ def _so7_generate_debug_report_3():
     check("so/debug report: a user journal answering only '-- No entries --' falls through to the "
           "helper's journal",
           all(("line 0599" in _r68_log, "-- No entries --" not in _r68_log,
-               _p7_journal_verbs() == [("journal", ["panel", "5000"])],
+               _p7_journal_verbs() == _P7_HELPER_JOURNAL,
                any("-q" in a and "--user" in a for a in _dr_calls["run"]))), _r68_log[:200])
     _so7_generate_debug_report_4()
 

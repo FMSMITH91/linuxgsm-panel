@@ -16,7 +16,11 @@
     if (tab === 'history' && window.loadHistory) window.loadHistory();   // lazy-load the trend charts
   }
   nav.addEventListener('click', function(e){
-    var b = e.target.closest('[data-mtab-btn]'); if(b) show(b.getAttribute('data-mtab-btn'));
+    var b = e.target.closest('[data-mtab-btn]'); if(!b) return;
+    var was = window._sdTab, tab = b.getAttribute('data-mtab-btn');
+    show(tab);
+    // The players poll skips the other tabs, so the list may be minutes old: re-read it now.
+    if (tab === 'console' && was !== 'console' && window.playersTabShown) window.playersTabShown();
   });
   var h = (location.hash || '').replace('#','');
   // DEFERRED to after this file has finished executing. show() guards on
@@ -258,7 +262,14 @@ document.addEventListener('keydown', function(e){
 
 loadPlayers();
 
-if(window.pollWhenVisible) pollWhenVisible(loadPlayers, 15000);
+// Only while the Console tab is showing. The Players card lives on that tab and renderPlayers
+// draws nothing anywhere else, but the poll ran regardless: a page left on History or Details paid
+// a gamedig query as the game account (three journal lines on the host) every 15 s for a card
+// nobody could see. Coming back to the Console tab re-reads at once (playersTabShown, below).
+function pollPlayers(){ if(window._sdTab==='console') loadPlayers(); }
+window.playersTabShown = function(){ loadPlayers(); };
+
+if(window.pollWhenVisible) pollWhenVisible(pollPlayers, 15000);
 
 // consoleEl can be NULL, and every path that touches it has to say so. The Console panel is
 // hideable, a hidden panel is not rendered on later loads, and a viewer with neither view_console
