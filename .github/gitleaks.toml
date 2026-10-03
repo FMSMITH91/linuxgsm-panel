@@ -29,7 +29,7 @@ regexes = [
   '''tskey-auth-\.{2,}''',          # Tailscale auth-key input placeholder (e.g. "tskey-auth-...")
   '''C1a[.…]''',                    # Ubuntu Pro token input placeholder (e.g. "C1a…")
   '''~/\.ssh/id_rsa''',             # default SSH key *path* shown in the add-remote form
-  '''maxBytes=\d+''',              # false positive: the auth.log RotatingFileHandler size — the
+  '''maxBytes=\d+''',               # false positive: the auth.log RotatingFileHandler size — the
                                     # generic-api-key rule keys off "AUTH" in AUTH_LOG_PATH; not a secret
   # An eighteen-digit run IS a Discord snowflake by shape, so discord-client-id is right to flag
   # one — this is the obviously-sequential placeholder in a unit-test fixture. The working tree

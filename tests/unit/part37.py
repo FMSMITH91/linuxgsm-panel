@@ -13,8 +13,11 @@ What it holds, one section each:
   client must carry socket.io-parser's two advisory fixes.
 * V3: gitleaks' keyword-free Telegram rule, emulated here on planted tokens built at run time (a
   literal would itself be the thing the scanners flag), and part05's fixture-shape pattern.
+* V11: every entry in gitleaks' global allowlist says why it is there (the two that did not were
+  dead, and are gone).
 * V5: the CHANGELOG may not describe a PyJWT split that the CI lockfiles no longer have.
-* F7: a test module imports `app` one way, and a cleanup that cannot delete a file says so.
+* F7: a test module imports `app` one way; a cleanup that cannot delete a file says so; and a suite
+  that sys.exit()s in its finally records a BaseException as a crash instead of exiting green.
 
 HOW IT RUNS. Everything is read as TEXT or parsed with ast: the workflows and YAML with no YAML
 parser (CI installs none), TOML with no TOML parser (3.10 has no tomllib). Nothing touches the
@@ -559,6 +562,25 @@ def _v3_fixture_shape():
           not _re37.search(pat, 'A = "12345:TESTONLYnotarealtoken00"; B = "67890:TESTONLYfixturevalue0"'))
 
 
+def _v11_allowlist_reasons():
+    """Every entry in gitleaks' global allowlist says why it is there."""
+    text = _read29(".github", "gitleaks.toml")
+    m = _re37.search(r"^\[\[allowlists\]\]\n.*?^regexes = \[\n(.*?)^\]", text, _re37.M | _re37.S)
+    lines = m.group(1).splitlines() if m else []
+    entries, bare = 0, []
+    for i, ln in enumerate(lines):
+        if not _re37.match(r"^\s*'''", ln):
+            continue
+        entries += 1
+        inline = "#" in ln.split("'''")[-1]
+        above = i > 0 and lines[i - 1].lstrip().startswith("#")
+        if not (inline or above):
+            bare.append(ln.strip())
+    check("gitleaks: every global allowlist entry says why it exists (an inline comment, or a "
+          "comment block directly above it); two that did not were dead",
+          entries >= 8 and not bare, "%d entries; no reason: %r" % (entries, bare))
+
+
 # ── V5: the CHANGELOG describes Semgrep's PyJWT as CI installs it ───────────────────────────────
 def _v5_changelog():
     """No [Unreleased] entry describes the PyJWT split #391 removed."""
@@ -671,6 +693,7 @@ _v2_socketio(_PJ37, _LOCK37)
 _v3_rule()
 _v3_allowlist()
 _v3_fixture_shape()
+_v11_allowlist_reasons()
 _v5_changelog()
 _f7_imports()
 _f7_cleanups()
