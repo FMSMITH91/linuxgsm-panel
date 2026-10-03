@@ -56,6 +56,11 @@ _TRIP36_START = len(_P9_TRIPPED)
 _BAD36 = ["gm$(id)", "gm`id`", 'gm";id;"', "gm';id;'", "x; id > /dev/null; #", "a b", "-u root",
           "../x", "", "root", "#0", "gm2\n", None, "a" * 65]
 _mine36 = {"hosts": [], "servers": []}
+# The names the fixes added, read with a stand-in when a tree does not have them yet, so an unfixed
+# tree fails these checks by name instead of crashing the part on an AttributeError.
+_INVALID36 = getattr(_sh36, "INVALID_ACCOUNT_NAME", "<no INVALID_ACCOUNT_NAME>")
+_FW_FAILED36 = getattr(_ms36, "FIREWALL_STEP_FAILED", "<no FIREWALL_STEP_FAILED>")
+_UNCHECKED36 = getattr(_p9_core, "LGSM_ARGS_UNCHECKED", "<no LGSM_ARGS_UNCHECKED>")
 
 
 class _Records36(_logging36.Handler):
@@ -179,7 +184,7 @@ def _privileged_refusals36():
               "; ".join(misses[:3]))
     check("V1 privileged_accounts: a name that is not a plain account word is refused AS that — "
           "not as root, and not as a host that could not be asked",
-          _sh36.privileged_accounts(remote, ["gm$(id)"]) == {"gm$(id)": _sh36.INVALID_ACCOUNT_NAME},
+          _sh36.privileged_accounts(remote, ["gm$(id)"]) == {"gm$(id)": _INVALID36},
           repr(_sh36.privileged_accounts(remote, ["gm$(id)"])))
 
 
@@ -337,7 +342,7 @@ def _f1_step6_raises36(rid):
     check("F1 install: ...and the install says the firewall step failed, as a warning, instead "
           "of a clean 'installed and started'",
           warn is True and msg.startswith("p36fw1 installed and started")
-          and _ms36.FIREWALL_STEP_FAILED in msg, repr(_fin36))
+          and _FW_FAILED36 in msg, repr(_fin36))
 
 
 def _f1_listen_raises36(rid):
@@ -475,7 +480,7 @@ def _f3_direct36():
         _p9_patch(_priv36, "check_args", lambda verb, args: (_ for _ in ()).throw(
             _priv36.VerbError("not an identifier")))
         verb = _p9_core.run_as_game_user(srv, "gm2", "details", selfname="gmodserver")
-    fixed = ("", _p9_core.LGSM_ARGS_UNCHECKED, 1)
+    fixed = ("", _UNCHECKED36, 1)
     check("F3 run_as_game_user: an argument check that raises something other than VerbError "
           "answers fixed text, on the shell path and the helper path — never the exception's",
           shell == fixed and helper == fixed, repr((shell, helper)))
@@ -503,7 +508,7 @@ def _f3_route36():
     msg = _p9_json(resp).get("message") or ""
     check("F3 /api/server/<id>/action: a sync action whose argument check raised answers the "
           "panel's own sentence, not the exception's text",
-          _SECRET36 not in msg and _p9_core.LGSM_ARGS_UNCHECKED in msg,
+          _SECRET36 not in msg and _UNCHECKED36 in msg,
           repr((resp.status_code, msg[:200])))
 
 
