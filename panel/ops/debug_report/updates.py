@@ -77,20 +77,12 @@ def _sha7(val):
     return val[:7] if _SHA_RE.match(val) else "?"
 
 
-def _scrubbed(ctx, text):
-    """`text` through the report's privacy pass BEFORE it is cut.
-
-    A name cut in half is a fragment the final pass cannot match. Without a ctx (a direct
-    caller), unchanged.
-    """
-    if ctx is None:
-        return text
-    from panel.ops.debug_report import privacy
-    return privacy.scrub_text(ctx, text)
-
-
 def clean_line(line, category="unreadable", ctx=None):
-    """One line of installer or git output, safe to print: see the module docstring."""
+    """One line of installer or git output, safe to print: see the module docstring.
+
+    With the report's ctx it goes through the privacy pass BEFORE it is cut: a name cut in half is
+    a fragment the final pass cannot match.
+    """
     so = _so()
     text = str(line or "")
     if text.startswith(_ORIGIN_WARN):
