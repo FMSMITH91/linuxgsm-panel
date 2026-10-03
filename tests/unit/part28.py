@@ -345,7 +345,9 @@ check("complexity job: Prospector pinned at Codacy's version with hashes, pylint
 # ══ SonarCloud: main's open issues are judged, with a positive control (SQ1) ═════════════════════
 _sq28 = _load28(".github/scripts/sonar_new_issues.py", "sonar_gate_p28")
 _SHA28 = "a" * 40
-_sq28_known = {"key": "AaDejKLMfWz637hiAQny", "component": "P:.clusterfuzzlite/Dockerfile",
+# The known issue's key comes from the script's own KNOWN_OPEN (pinned to its literal below):
+# written here as a '"key": "<20 characters>"' pair, Gitleaks' generic-api-key rule reads a secret.
+_sq28_known = {"key": next(iter(_sq28.KNOWN_OPEN)), "component": "P:.clusterfuzzlite/Dockerfile",
                "line": 10, "severity": "MINOR", "rule": "docker:S6471", "message": "root"}
 _sq28_new = {"key": "NEW1", "component": "P:panel/x.py", "line": 3, "severity": "MAJOR",
              "rule": "python:S1481", "message": "Remove the unused local variable"}
