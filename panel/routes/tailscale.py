@@ -2,6 +2,8 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
+from urllib.parse import urlsplit
+
 from flask import (current_app, jsonify, render_template, request)
 from flask_login import (current_user, login_required)
 from panel.core.config import (load_config, save_config)
@@ -11,8 +13,8 @@ from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required
     superadmin_required)
 from panel.core.http import (_json_body, _json_str)
 from panel.db.models import LOCAL_HOST_LABEL
-from app import (_bind_is_loopback, _effective_https, _leftover_note, _remove_serve_leftovers,
-    _resolved_bind, _serve_scheme_now)
+from panel.ops.serve_upkeep import (_leftover_note, _remove_serve_leftovers)
+from app import (_bind_is_loopback, _effective_https, _resolved_bind, _serve_scheme_now)
 
 
 def _sees_panel_host_tailnet(user):
@@ -72,13 +74,71 @@ def _serve_audit(detail, ok):
                detail=detail, success=ok)
 
 
-def _serve_enable(port, mount, funnel):
+def _page_after_change(page, panel_url, page_mount):
+    """Where the open Tailscale page goes after a Serve change, or None to refresh it in place.
+
+    `page` is the page's own address (the browser sends location.href), `panel_url` the panel's
+    Serve address now (_panel_address), `page_mount` the mount the page's links were built for
+    (the request's script root: PrefixMiddleware took it from tailscale_mount before the change).
+
+    Enable at a new mount and Remove both take down panel routes on :443, and one of them can be
+    the route the page was loaded through. The page then refreshed in place by fetching its own
+    address, got Serve's 404, and the admin was left on a dead page with no word of the panel's
+    new address. A page that came through that listener (same scheme, host and port as
+    `panel_url`), and is not under the panel's route or was built for another mount, goes there.
+    A page reached any other way (the tailnet IP, another listener, a proxy) lost nothing, and
+    stays. The address is the host's own route URL, never anything the browser sent.
+    """
+    here, there = _split_url(page), _split_url(panel_url)
+    if here is None or there is None or there.scheme not in ("http", "https"):
+        return None
+    if (here.scheme, here.netloc.lower()) != (there.scheme, there.netloc.lower()):
+        return None
+    if _page_is_under(here.path or "/", page_mount, there.path.rstrip("/")):
+        return None
+    return panel_url.rstrip("/") + "/tailscale"
+
+
+def _split_url(url):
+    """urlsplit(url), or None when there is none or it is not one ("http://[x" raises)."""
+    if not url:
+        return None
+    try:
+        return urlsplit(url)
+    except ValueError:
+        return None
+
+
+def _page_is_under(path, page_mount, base):
+    """True for a page at `path`, built for `page_mount`, that the route at mount `base` serves."""
+    if (page_mount or "").rstrip("/") != base:
+        return False
+    return not base or path == base or path.startswith(base + "/")
+
+
+def _panel_address(port, cfg):
+    """The panel's own Serve address now: its route at tailscale_mount, on the scheme served."""
+    if not cfg.get("tailscale_setup_done"):
+        return None
+    route = ts.panel_route(ts.get_tailscale_info(force_refresh=True).serve_config, port,
+                           cfg.get("tailscale_mount"), _serve_scheme_now(cfg, current_app.config))
+    return ts.route_url(route) if route is not None else None
+
+
+def _changed(message, port, page):
+    """A Serve change's success answer: the message, and `go` when the page has to move."""
+    go = _page_after_change(page, _panel_address(port, load_config()), request.script_root)
+    return jsonify(dict({"success": True, "message": message}, **({"go": go} if go else {})))
+
+
+def _serve_enable(port, mount, funnel, page):
     """Publish the panel at `mount`, then take down its own routes at any other mount on :443.
 
     Moving the mount here left the old route behind, on the scheme it was written with: a second
     address for the panel that nothing re-points, and a 502 from the next flip of the panel's
     scheme. The scheme written is the one this process serves now (_serve_scheme_now): the stored
-    answer is the NEXT start's, and differs while a bind change waits for a restart.
+    answer is the NEXT start's, and differs while a bind change waits for a restart. The old route
+    can be the one the page in use came through, so the answer says where to go (_changed).
     """
     cfg = load_config()
     success, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=funnel,
@@ -92,7 +152,7 @@ def _serve_enable(port, mount, funnel):
     save_config(cfg)
     log_action(current_user, "tailscale_serve_enable", target=LOCAL_HOST_LABEL, detail=msg)
     left = _remove_serve_leftovers(port, mount, "Enable on the Tailscale page", _serve_audit)
-    return jsonify({"success": True, "message": msg + _leftover_note(left)})
+    return _changed(msg + _leftover_note(left), port, page)
 
 
 def _serve_disable(port, mount):
@@ -129,13 +189,18 @@ def _serve_remove_route(port, data):
     if refusal is not None:
         return refusal
     mount, url = route["mount"], route["url"]
+    # Reading Serve needs no privilege; changing it needs the operator (or root). A host where the
+    # panel never published Serve itself — a system-service install with a hand-made route, the
+    # README's case — lists the route here and then refused its `off` with "Access denied". Enable
+    # and Disable make the panel the operator first; so does this.
+    ts.ensure_operator()
     state, err = ts.remove_panel_route(route, port)
     if state == "gone":
         return jsonify({"success": True, "message": "That route was already gone."})
     if state == "removed":
         _serve_audit("removed the Tailscale Serve route to the panel at %s (%s)"
                      % (mount, ts.listener_flag(url)), True)
-        return jsonify({"success": True, "message": "Removed the route at %s." % mount})
+        return _changed("Removed the route at %s." % mount, port, _json_str(data, "page"))
     _serve_audit("could not remove the Tailscale Serve route to the panel at %s: %s"
                  % (mount, err or state), False)
     return jsonify({"success": False, "message": (
@@ -299,7 +364,7 @@ def _register_tailscale_serve(app):
                             "message": "That isn't a usable mount point. Use \"/\" or a short "
                                        "path like \"/lgsm\"."}), 400
         if action == "enable":
-            return _serve_enable(port, mount, data.get("funnel", False))
+            return _serve_enable(port, mount, data.get("funnel", False), _json_str(data, "page"))
         return _serve_disable(port, mount)
 
     @app.route("/api/tailscale/check-peer", methods=["POST"])

@@ -25,7 +25,9 @@ from panel.ops.debug_report import _src_db, _src_net, _src_tailscale
 from panel.ops.debug_report._base import Result, ago, unread_line
 
 AREA = "Network & access"
-_MOUNT_RE = re.compile(r"/[A-Za-z0-9_-]{0,32}\Z")
+# A mount printed as itself: "/", or one plain segment, with the trailing "/" Serve keeps apart
+# ("/lgsm/" is a different route from "/lgsm"). Anything else prints as "custom".
+_MOUNT_RE = re.compile(r"/(?:[A-Za-z0-9_-]{1,32}/?)?\Z")
 _STATES = frozenset(("Running", "NeedsLogin", "Stopped", "NoState", "Starting", "NeedsMachineAuth",
                      "InUseOtherUser"))
 PANEL_JAIL = "linuxgsm-panel"
@@ -301,13 +303,20 @@ def _route_findings(res, cfg, routes, want, readable, conf=None):
         return
     from panel.ops import tailscale_integration as ts
     managed = [r for r in routes if ts.is_managed_route(r, cfg)]
+    dead = not managed and _all_wrong(routes, want)
     if _wrong(managed, want):
         res.find("fail", AREA, "the configured Tailscale Serve route reaches the panel with the "
                                "wrong scheme (Serve answers 502); a panel restart re-points it"
                  if (conf or {}).get("BOOT_SERVE") == "ok" else
                  "the configured Tailscale Serve route reaches the panel with the wrong scheme "
                  "(Serve answers 502), and the boot re-point did not fix it")
-    _unmanaged_findings(res, cfg, routes, managed, want)
+    elif dead:
+        # No managed route, and every route there is answers 502: Tailscale has no way in to the
+        # panel at all. That stays a fail, as it was before the managed/unmanaged split; the warn
+        # level below is for a 502 BESIDE a route that works.
+        res.find("fail", AREA, "every Tailscale Serve route to the panel has the wrong scheme "
+                               "(Serve answers 502 on each), so none of them reaches it")
+    _unmanaged_findings(res, cfg, routes, managed, want, dead)
 
 
 def _wrong(routes, want):
@@ -315,11 +324,17 @@ def _wrong(routes, want):
     return bool(want) and any(_scheme(r) != want for r in routes)
 
 
-def _unmanaged_findings(res, cfg, routes, managed, want):
+def _all_wrong(routes, want):
+    """True when there are `routes` and not one is on the scheme the process serves."""
+    return bool(want) and bool(routes) and all(_scheme(r) != want for r in routes)
+
+
+def _unmanaged_findings(res, cfg, routes, managed, want, dead=False):
     """_route_findings' warns for the routes the panel does not manage, said once each way.
 
     When none is at the configured mount, that is the finding (links and assets break) and the
-    "does not manage" warn would only say it again, unless one of them also answers 502.
+    "does not manage" warn would only say it again, unless one of them also answers 502. When
+    every route answers 502 (`dead`), the fail already says so, and the warn is not repeated.
     """
     others = [r for r in routes if r not in managed]
     no_home = bool(cfg.get("tailscale_setup_done")) and bool(routes) and not managed
@@ -327,6 +342,8 @@ def _unmanaged_findings(res, cfg, routes, managed, want):
         res.find("warn", AREA, "no Tailscale Serve route is at the panel's configured "
                                "tailscale_mount on :443 (links and assets break); the routes that "
                                "reach it are at other addresses")
+    if dead:
+        return
     if _wrong(others, want):
         res.find("warn", AREA, "a Tailscale Serve route the panel does not manage reaches it with "
                                "the wrong scheme (Serve answers 502 there); the report names it "

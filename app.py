@@ -133,8 +133,8 @@ from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SE
 from panel.core.panel_state import (_expected_offline, _install_jobs, _install_lock,
     _last_sample_prune, _monitor_state, _os_update_seen, _player_counts)
 from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupState, User, db,
-    init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, LOCAL_HOST_LABEL, MetricSample, HostSample,
-    RowReplaced, claim_row, row_birth, still_held)
+    init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, RowReplaced, claim_row,
+    row_birth, still_held)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, list_game_backups, game_engine as
     sm_game_engine, set_game_priority_bulk, lgsm_get_values, remote_set_fail2ban_ignoreip,
@@ -150,6 +150,8 @@ from panel.ops import system_ops as so
 # (R17) and Serve's boot outcome as a fixed reason (R20). Through the modules, at call time.
 from panel.ops.debug_report import errors as _dr_errors
 from panel.ops.debug_report import process as _dr_process
+from panel.ops.serve_upkeep import (_boot_audit, _panel_tailscale_url,
+    _remove_serve_leftovers, _tailscale_banner)
 from panel.ops import backup as bk
 from panel.services import lgsm_data
 
@@ -1980,24 +1982,6 @@ def _asset_url(app, filename):
     return "%s?v=%s" % (url, ver) if ver else url
 
 
-def _panel_tailscale_url(conf, stored):
-    """The panel's own Tailscale Serve address, for the setup-complete page, or None.
-
-    `conf` is the app's config, `stored` config.json. It was https://<MagicDNS name>, the root,
-    whenever the node had a name: with no Serve route at all, and right after the wizard's finish
-    had published the panel at /lgsm because another app held "/". Now the panel's route at
-    tailscale_mount, on the scheme this process serves.
-    """
-    try:
-        route = ts.panel_route(ts.get_tailscale_info().serve_config,
-                               conf.get("BOOT_PORT") or stored.get("port", 5000),
-                               stored.get("tailscale_mount"), _serve_scheme_now(stored, conf))
-    except Exception:
-        _log.debug("inject_globals: ignored non-fatal error", exc_info=True)
-        return None
-    return ts.route_url(route) if route is not None else None
-
-
 def register_context_processors(app):
     app.jinja_env.globals["asset_url"] = lambda filename: _asset_url(app, filename)
     # RemoteServer.is_online defaults to False, so between a fresh install (or a panel restart)
@@ -2011,7 +1995,7 @@ def register_context_processors(app):
     @app.context_processor
     def inject_globals():
         cfg = load_config()
-        tailscale_url = _panel_tailscale_url(app.config, cfg)
+        tailscale_url = _panel_tailscale_url(app.config, cfg, _serve_scheme_now)
         # Non-local remotes for the SYSTEM nav (one management link per remote VPS).
         nav_remotes = []
         try:
@@ -3180,60 +3164,6 @@ def _boot_serve(app, cfg, port):
             port, mount, "at boot", lambda detail, ok: _boot_audit(app, detail, ok))
 
 
-def _boot_audit(flask_app, detail, ok):
-    """One audit row from boot, outside any request (as _f2b_record_events writes its rows)."""
-    try:
-        with flask_app.test_request_context():
-            log_action(None, "tailscale_serve_leftover_removed", target=LOCAL_HOST_LABEL,
-                       detail=detail, success=ok)
-    except Exception:
-        _log.debug("boot audit row not written", exc_info=True)
-
-
-def _remove_serve_leftovers(panel_port, mount, where, audit):
-    """Remove the panel's own :443 Serve routes at mounts other than `mount`; return the outcome.
-
-    The outcome is what app.config["BOOT_SERVE_LEFTOVERS"] holds: "none", "unread" (Serve could not
-    be read, so nothing was removed), "removed:<mount>,<mount>" or "failed:<fixed reason class>".
-    `audit(detail, ok)` writes one row per route removed, and one for a removal that failed — the
-    only privileged way to run `off` is the operator setting (the helper's Serve verb publishes,
-    it never removes), so a host where that did not take fails here, and that has to be on record.
-    """
-    try:
-        state, removed, err = ts.remove_stale_panel_routes(panel_port, mount)
-    except Exception as e:
-        _log.debug("leftover Serve route cleanup failed", exc_info=True)
-        return "failed:" + type(e).__name__
-    for m in removed:
-        audit("%s: removed the panel's old Tailscale Serve route at %s on :443 (the panel is "
-              "published at %s)" % (where, m, mount), True)
-    if state == "failed":
-        audit("%s: could not remove a Tailscale Serve route to the panel at a mount other than %s: "
-              "%s" % (where, mount, err), False)
-        return "failed:" + _dr_process.serve_reason(err)
-    if state == "removed":
-        return "removed:" + ",".join(removed)
-    return state
-
-
-def _leftover_note(outcome):
-    """What the answer to a Serve write adds about the panel's routes at other mounts.
-
-    `outcome` is _remove_serve_leftovers' answer. Nothing for "none".
-    """
-    if outcome.startswith("removed:"):
-        return (" — and the panel's old route at %s was removed."
-                % outcome[len("removed:"):].replace(",", ", "))
-    if outcome.startswith("failed:"):
-        return (" — but a route to the panel at another mount could not be removed (%s). Remove it "
-                "with: sudo tailscale serve --https=443 --set-path=<that mount> off"
-                % outcome[len("failed:"):])
-    if outcome == "unread":
-        return (" — but this host's Serve configuration could not be read afterwards, so a route "
-                "to the panel at another mount may still be there.")
-    return ""
-
-
 def _ts_backend_scheme(cfg):
     """Loopback scheme Tailscale Serve must use to reach us — has to match how the panel
     is actually listening right now, or Serve 502s. When we're terminating self-signed
@@ -3256,33 +3186,6 @@ def _serve_scheme_now(stored, conf=None):
     if tls is None:
         return _ts_backend_scheme(stored)
     return "https+insecure" if tls else "http"
-
-
-def _tailscale_banner(stored, panel_port, conf, info):
-    """The startup banner's Tailscale lines: only addresses that reach THIS panel.
-
-    It printed https://<MagicDNS name> whether or not Serve published the panel there. That is the
-    root, "/", and a panel at /lgsm is not there: on a host whose "/" held another app the banner
-    named the other app, and on one with a leftover "/" route it named a 502. The Serve line is now
-    the panel's own route at tailscale_mount, and only while it is on the scheme this process
-    serves; the Funnel line follows that route's own listener, not "any app is funnelled". The
-    tailnet-IP fallback said http:// for a panel serving TLS, and showed for a panel bound to
-    loopback, where nothing on the tailnet can reach the port.
-    """
-    lines = []
-    route = ts.panel_route(info.serve_config, panel_port, stored.get("tailscale_mount"),
-                           _serve_scheme_now(stored, conf))
-    bind = str(conf.get("BOOT_BIND") or "")
-    if route is not None:
-        lines.append("\n  🌐 Tailscale: %s" % ts.route_url(route))
-        if route["funnel"]:
-            lines.append("  🌍 Funnel (public): %s" % ts.route_url(route))
-    elif info.tailscale_ips and (bind in ("0.0.0.0", "::", "") or bind in info.tailscale_ips):  # nosec B104 - compared, never bound
-        scheme = "https" if conf.get("BOOT_TLS") else "http"
-        addr = info.tailscale_ips[0]
-        lines.append("\n  🌐 Tailscale IP: %s://%s:%s" % (
-            scheme, "[%s]" % addr if ":" in addr else addr, panel_port))
-    return lines
 
 
 if __name__ == "__main__":
@@ -3412,7 +3315,8 @@ if __name__ == "__main__":
     # The Tailscale address, AFTER the re-point: printed before it, the banner read Serve as it
     # was, not as boot left it.
     try:
-        for _line in _tailscale_banner(cfg, port, app.config, ts.get_tailscale_info()):
+        for _line in _tailscale_banner(cfg, port, app.config, ts.get_tailscale_info(),
+                                       _serve_scheme_now):
             print(_line)
     except Exception:
         _log.debug("ignored non-fatal error", exc_info=True)

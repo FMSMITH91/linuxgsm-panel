@@ -548,7 +548,9 @@ def _serving_line(conf):
     return "HTTP since boot"
 
 
-_MOUNT_RE = re.compile(r"/[A-Za-z0-9_-]{0,32}\Z")
+# A mount printed as itself: "/", or one plain segment, with the trailing "/" Serve keeps apart
+# ("/lgsm/" is a different route from "/lgsm"). Anything else prints as "custom".
+_MOUNT_RE = re.compile(r"/(?:[A-Za-z0-9_-]{1,32}/?)?\Z")
 
 
 def _leftover_lines(res, left):

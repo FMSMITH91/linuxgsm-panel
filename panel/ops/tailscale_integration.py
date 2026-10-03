@@ -694,17 +694,37 @@ def route_scheme(route):
     return target.split("://", 1)[0] if "://" in target else "http"
 
 
+def managed_mount(mount):
+    """The mount the panel writes for `mount` (tailscale_mount), spelled as Serve stores it, or None.
+
+    _ts_mount's spelling, the one setup_tailscale_serve hands to --set-path: "/lgsm", never
+    "/lgsm/". Serve keeps the two apart (cleanURLPath accepts both) and looks "/lgsm/" up FIRST for
+    every /lgsm/* request (ipnlocal getServeHandler tries pth+"/" before pth at each level). So a
+    "/lgsm/" beside the "/lgsm" the boot writes is a second route, and the one that answers: on the
+    wrong scheme it 502s the whole panel while the route the boot re-pointed reads as fine. They
+    were compared normalised, so that twin counted as managed — never removed, never listed with a
+    Remove, and reported as one "a panel restart re-points". None when the panel cannot write the
+    mount at all (setup_tailscale_serve refuses it too), so no route is managed then.
+    """
+    try:
+        return _priv._ts_mount(mount or "/")
+    except _priv.VerbError:
+        return None
+
+
 def is_managed_route(route, cfg):
     """True for THE route the panel manages: the one at tailscale_mount on the :443 listener.
 
     The panel writes only that one (privileged.ts_serve_argv hard-codes --https=443), and the boot
     re-point keeps only that one on the scheme the panel serves. Every other route to the panel's
     port was made some other way, and nothing re-points it, so it answers 502 after the next flip
-    of the panel's own scheme. With Serve not set up, no route is managed.
+    of the panel's own scheme. With Serve not set up, no route is managed. The mount is compared
+    exactly as the panel writes it (managed_mount): a trailing-slash twin is another route.
     """
-    return (bool(cfg.get("tailscale_setup_done"))
+    want = managed_mount(cfg.get("tailscale_mount"))
+    return (bool(cfg.get("tailscale_setup_done")) and want is not None
             and _serve_port_flag(route.get("url")) == "--https=443"
-            and norm_mount(route.get("mount")) == norm_mount(cfg.get("tailscale_mount")))
+            and route.get("mount") == want)
 
 
 def panel_route(serve_config, port, mount, scheme=None):
@@ -742,15 +762,19 @@ def free_panel_mount(serve_config, port, mount):
 
 
 def stale_panel_routes(serve_config, port, mount):
-    """The panel's own routes on :443 at a mount other than `mount` (normalised).
+    """The panel's own routes on :443 at a mount other than `mount`, as the panel writes it.
 
     Only :443, the one listener the panel writes: a route to the panel on any other listener was
     made by hand, on purpose, and is left alone. Only routes to loopback on the panel's `port`
-    (panel_serve_routes): another app's route is never one of these.
+    (panel_serve_routes): another app's route is never one of these. "Other" is exact
+    (managed_mount): a "/lgsm/" beside the "/lgsm" just written is stale, and the one Serve would
+    answer /lgsm/* with. Nothing when `mount` is not one the panel can write.
     """
-    want = norm_mount(mount)
+    want = managed_mount(mount)
+    if want is None:
+        return []
     return [r for r in panel_serve_routes(serve_config, port)
-            if _serve_port_flag(r["url"]) == "--https=443" and norm_mount(r["mount"]) != want]
+            if _serve_port_flag(r["url"]) == "--https=443" and r["mount"] != want]
 
 
 def _fresh_panel_route(route, port):

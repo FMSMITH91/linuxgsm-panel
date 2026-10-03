@@ -22,12 +22,22 @@ the fix:
     EVERY update of a panel serving its own TLS, firewalled or behind Serve;
   * README's `tailscale serve --bg --https 443 http://127.0.0.1:5000` 502s on the default panel.
 
+And, from the review of that fix: a "/lgsm/" twin of the configured "/lgsm" read as the managed
+route (Serve answers /lgsm/* from the twin first), so nothing removed it; Remove never made the
+panel the Tailscale operator, so on a host where it was not one the route listed and its `off` was
+refused; Enable or Remove that took down the route the page came through left the page refreshing
+into Serve's 404; the report called "no route reaches the panel at all" a warn; and the uninstall's
+re-read before each `off`, and when the report may say "a panel restart also removes it", had no
+check that failed without them.
+
 HOW IT RUNS. A stateful fake `tailscale` (tests/unit/fake_tailscale.py; its overwrite and `off`
 semantics are the real CLI's) is put FIRST on PATH for the whole part, so the panel's code reaches
 it through tailscale_integration._run_ts, and the scripts through `timeout tailscale`, exactly as
 they would the real binary — nothing here reaches this machine's own tailscale. ensure_operator,
 allow_tailscale_ufw and system_ops._run_verb (the root fallback) are replaced for the part; the
-last records what reached it, and a check reads that. Routes run through part12's Flask app as its
+last records what reached it, and a check reads that. The stand-in ensure_operator ends as the real
+one does, with this account the operator (the fake's `set --operator=`), so a host seeded as one
+where it is not yet the operator refuses every change until something calls it. Routes run through part12's Flask app as its
 signed-in superadmin, on part12's throwaway config.json. The shell parts run as `bash -c` over the
 functions and regions lifted out of the scripts, in a scratch directory. All is put back at the end.
 """
@@ -43,6 +53,8 @@ from unit.part01 import check
 from unit.part12 import P9_ADMIN, _P9_CFG_PATH, _p9, _p9_audit, _p9_client, _p9_json
 import app as _app32
 from panel.core import config as _cfg32
+from panel.core.middleware import PrefixMiddleware as _Prefix32
+from panel.ops import serve_upkeep as _su32
 from panel.ops import tailscale_integration as ts
 from panel.ops.debug_report import network as _nw32
 from panel.ops.debug_report import process as _pr32
@@ -87,10 +99,14 @@ def _restore32():
         setattr(owner, name, value)
 
 
-def _seed(web, funnel=(), http=()):
-    """Serve as the fake CLI will report it, an empty call log, and no cached reading."""
+def _seed(web, funnel=(), http=(), **extra):
+    """Serve as the fake CLI will report it, an empty call log, and no cached reading.
+
+    `extra` goes into the fake's state as it is: operator_required=True is a host where this
+    account is not yet the Tailscale operator (it reads Serve, and may not change it).
+    """
     with open(_STATE32, "w", encoding="utf-8") as fh:
-        json.dump({"web": web, "funnel": list(funnel), "http": list(http)}, fh)
+        json.dump(dict({"web": web, "funnel": list(funnel), "http": list(http)}, **extra), fh)
     open(_LOG32, "w", encoding="utf-8").close()
     ts._cache["info"] = None
 
@@ -197,6 +213,20 @@ def _code(text):
     return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
 
 
+def _code_js(text):
+    """A script's text with comment-only `//` lines dropped."""
+    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("//"))
+
+
+def _js_fn(text, name):
+    """One top-level JS function's text, from `function name(` to the next top-level function."""
+    i = text.find("function %s(" % name)
+    if i < 0:
+        return ""
+    j = text.find("\nfunction ", i + 1)
+    return text[i:j if j > 0 else len(text)]
+
+
 def _not_refused(values):
     """The values off_mount ACCEPTS of `values` (it should refuse every one)."""
     out = []
@@ -264,6 +294,26 @@ def _p32_boot_scope():
     b = _boot(_LIVE, {"BOOT_TLS": True}, tailscale_setup_done=False)
     check("boot: with Serve not set up nothing is written or removed (the panel does not manage it)",
           (b, _calls()) == (("not attempted", "not attempted"), []), repr((b, _calls())))
+
+
+def _p32_boot_twin():
+    # Serve keeps "/lgsm/" apart from "/lgsm" and answers every /lgsm/* request from "/lgsm/" FIRST
+    # (ipnlocal getServeHandler tries pth+"/" before pth). Compared normalised, the twin counted as
+    # the managed route: never removed, while it 502'd the panel and the boot said "ok".
+    b = _boot({"443": {"/lgsm": _PS, "/lgsm/": _P}}, {"BOOT_TLS": True})
+    check("boot: a '/lgsm/' twin of the configured /lgsm is not the managed route — it is removed, "
+          "under its exact path", (_table(), b, _offs())
+          == ({"443": {"/lgsm": _PS}}, ("ok", "removed:/lgsm/"),
+              [["serve", "--https=443", "--set-path=/lgsm/", "off"]]), repr((b, _table(), _offs())))
+    check("managed route: the exact spelling the panel writes, nothing else (control: '/' and an "
+          "unwritable stored mount)",
+          (ts.is_managed_route({"url": _HOST32, "mount": "/lgsm"}, _LIVE_CFG),
+           ts.is_managed_route({"url": _HOST32, "mount": "/lgsm/"}, _LIVE_CFG),
+           ts.is_managed_route({"url": _HOST32, "mount": "/"},
+                               dict(_LIVE_CFG, tailscale_mount="")),
+           ts.is_managed_route({"url": _HOST32, "mount": "/lgsm/"},
+                               dict(_LIVE_CFG, tailscale_mount="/lgsm/")))
+          == (True, False, True, False), "")
 
 
 def _p32_boot_failures():
@@ -460,6 +510,65 @@ def _p32_remove_route():
           == (400, {"443": {"/": _P}}, True), repr(_p9_json(r)))
 
 
+def _p32_remove_operator():
+    _seed({"443": {"/lgsm": _PS}}, operator_required=True)
+    denied = ts._run_ts(["serve", "--https=443", "--set-path=/lgsm", "off"], timeout=10)[2]
+    readable = not ts.get_tailscale_info(force_refresh=True).serve_unreadable
+    check("p32 harness: a host where this account is not the operator READS Serve and may not change "
+          "it (Tailscale's own split, which the fake models)", (denied, readable, _table())
+          == (1, True, {"443": {"/lgsm": _PS}}), repr((denied, readable)))
+    _seed(_LIVE, operator_required=True)
+    _save_cfg(**_LIVE_CFG)
+    r = _serve_api(action="remove-route", mount="/", url=_HOST32)
+    check("Remove makes the panel the Tailscale operator first, as Enable and Disable do: a host "
+          "that lists the route (reading needs no privilege) can also remove it",
+          (r.status_code, _table(), ["set", "--operator=p32"] in _calls())
+          == (200, {"443": {"/lgsm": _PS}}, True), repr((_p9_json(r), _calls())))
+
+
+def _p32_page_follows():
+    # part12's app is not create_app's, so nothing sets the script root a page's links are built
+    # for. These requests go through the real PrefixMiddleware, wrapped as create_app wraps it.
+    real = _p9.wsgi_app
+    _p9.wsgi_app = _Prefix32(real)
+    try:
+        _page_follows_checks()
+    finally:
+        _p9.wsgi_app = real
+
+
+def _page_follows_checks():
+    _set_conf(BOOT_TLS=True)
+    gone = []
+    for page in (_HOST32 + "/tailscale", "https://100.64.0.9:5000/tailscale"):
+        _seed({"443": {"/": _PS}})
+        _save_cfg(tailscale_setup_done=False, tailscale_mount="", bind_host=_ALL_IFACES)
+        r = _serve_api(action="enable", mount="/lgsm", page=page)
+        gone.append((r.status_code, _p9_json(r).get("go", "absent"), _table()))
+    check("Enable at a new mount, from a page that came through the route it took down, answers the "
+          "panel's new address to go to; a page reached another way (the tailnet IP) stays",
+          gone == [(200, _HOST32 + "/lgsm/tailscale", {"443": {"/lgsm": _PS}}),
+                   (200, "absent", {"443": {"/lgsm": _PS}})], repr(gone))
+    gone = []
+    for page in (_HOST32 + "/tailscale", _HOST32 + "/lgsm/tailscale", "http://[x"):
+        _seed(_LIVE)
+        _save_cfg(**_LIVE_CFG)
+        r = _serve_api(action="remove-route", mount="/", url=_HOST32, page=page)
+        gone.append((r.status_code, _p9_json(r).get("go", "absent")))
+    check("Remove of the route the page came through answers the panel's own address; from the "
+          "panel's own route, or with a page address that is not one, it refreshes in place",
+          gone == [(200, _HOST32 + "/lgsm/tailscale"), (200, "absent"), (200, "absent")], repr(gone))
+    js = _code_js(_script_text(os.path.join("static", "js", "tailscale.js")))
+    bodies = [_js_fn(js, n) for n in ("enableServe", "removeServeRoute", "_tsAfterServeChange")]
+    check("tailscale.js: Enable and Remove send the page's address and follow `go`; the in-place "
+          "refresh is only the fallback",
+          all(["page: location.href" in bodies[0], "_tsAfterServeChange(data.go)" in bodies[0],
+               "refreshSection" not in bodies[0], "page: location.href" in bodies[1],
+               "_tsAfterServeChange(data.go)" in bodies[1], "refreshSection" not in bodies[1],
+               "window.location.assign(go)" in bodies[2], "refreshSection" in bodies[2]]),
+          repr(bodies))
+
+
 def _p32_disable():
     _seed({"443": {"/": _P, "/lgsm": _PS}, "8443": {"/x": _OTHER}}, funnel=["443"])
     _save_cfg(tailscale_use_funnel=True, **_LIVE_CFG)
@@ -476,7 +585,8 @@ _UP32 = {"BOOT_TLS": True, "BOOT_BIND": _ALL_IFACES}
 
 def _banner(conf):
     cfg = dict(_cfg32.DEFAULT_CONFIG, port=5000, **_LIVE_CFG)
-    return _app32._tailscale_banner(cfg, 5000, conf, ts.get_tailscale_info(force_refresh=True))
+    return _su32._tailscale_banner(cfg, 5000, conf, ts.get_tailscale_info(force_refresh=True),
+                                   _app32._serve_scheme_now)
 
 
 def _p32_banner():
@@ -592,6 +702,53 @@ def _p32_report_shapes():
           ("cannot be shown" in text, "/a/b" in text) == (True, False), text)
 
 
+def _p32_report_dead():
+    found, _t = _report({"443": {"/": _P}})
+    check("report: no managed route and EVERY route to the panel on the wrong scheme is a fail — "
+          "Tailscale has no way in at all (the split had made it a warn)",
+          _has(found, "fail", "every Tailscale Serve route", "wrong scheme"), repr(found))
+    found, _t = _report({"443": {"/": _P}}, tailscale_setup_done=False, tailscale_mount="")
+    check("report: ...with Serve not set up, too", _has(found, "fail", "every Tailscale Serve route"),
+          repr(found))
+    found, _t = _report({"443": {"/": _P, "/x": _PS}}, tailscale_setup_done=False, tailscale_mount="")
+    check("report: ...but a 502 beside a route that works stays a warn (control)",
+          (any(lv == "fail" for lv, _x in found), _has(found, "warn", "does not manage",
+                                                      "wrong scheme")) == (False, True), repr(found))
+
+
+def _p32_report_twin():
+    found, text = _report({"443": {"/lgsm": _PS, "/lgsm/": _P}})
+    check("report: a '/lgsm/' twin is a route the panel does not manage, named with its exact path "
+          "(it read as the configured route, so nothing named it)",
+          (_has(found, "warn", "does not manage", "wrong scheme"),
+           "`sudo tailscale serve --https=443 --set-path=/lgsm/ off`" in text) == (True, True), text)
+    _seed({"443": {"/lgsm": _PS, "/lgsm/": _P}})
+    _save_cfg(**_LIVE_CFG)
+    html = _A32.get("/tailscale").get_data(as_text=True)
+    removes = re.findall(r'data-action="removeServeRoute"\s+data-args=\'\["@self"\]\'\s+'
+                         r'data-mount="([^"]*)"', html)
+    check("tailscale page: ...and it has its own Remove", removes == ["/lgsm/"], repr(removes))
+    shown = (_pr32._leftovers_text("removed:/lgsm/"), _nw32._mount("/lgsm/"), _nw32._mount("//"),
+             _pr32._leftovers_text("removed://"))
+    check("report: the boot's line and the route's command print '/lgsm/' as itself (it is a safe "
+          "shape); '//' is still 'custom'",
+          shown == ("removed /lgsm/ (on :443)", "/lgsm/", "custom", "removed custom (on :443)"),
+          repr(shown))
+
+
+def _p32_report_restart_claim():
+    shapes = (({"443": {"/lgsm": _PS}, "8443": {"/": _PS}}, None, {}),
+              ({"443": {"/": _PS, "/x": _PS}}, None,
+               {"tailscale_setup_done": False, "tailscale_mount": ""}),
+              (_LIVE, {"BOOT_SERVE_LEFTOVERS": "failed:permission"}, {}),
+              (_LIVE, {"BOOT_SERVE": "failed:permission"}, {}))
+    said = [("a panel restart also removes it" in _report(web, conf, **over)[1])
+            for web, conf, over in shapes]
+    check("report: 'a panel restart also removes it' is not said for a route on another listener, "
+          "with Serve not set up, or after a boot whose removal or re-point failed (it is false "
+          "there)", said == [False, False, False, False], repr(said))
+
+
 def _p32_report_boot():
     res, res2 = _Result32(), _Result32()
     app = type("A", (), {"config": {"BOOT_TLS": True, "BOOT_SERVE": "ok",
@@ -656,6 +813,11 @@ def _p32_uninstall_refusals():
     check("uninstall: Funnel left on a listener that still serves another app is named",
           ("Funnel is still ON for the https=443 listener" in r.stdout, _table())
           == (True, {"443": {"/": _OTHER}}), repr(r.stdout))
+    took = json.dumps({"web": {"443": {"/lgsm": _OTHER}}})
+    r = _uninst({"443": {"/lgsm": _P}}, env={"FAKE_TS_TAKEOVER": took})
+    check("uninstall: Serve is read again right before each `off`: a mount another app took after "
+          "the first read is left alone", (_offs(), _table(), r.returncode)
+          == ([], {"443": {"/lgsm": _OTHER}}, 0), repr((r.stdout, _calls())))
     r = _uninst(_LIVE, port="")
     check("uninstall: without the panel's port nothing is read or removed, and it says so",
           (_calls(), _table(), "Leaving this node's Tailscale Serve config alone" in r.stdout)
@@ -753,13 +915,24 @@ def _p32_docs():
           bad == [], repr(bad))
 
 
+def _fake_operator():
+    """ensure_operator as the real one ends on a host: this account becomes the Tailscale operator.
+
+    The real one runs the helper's tailscale-set-operator verb, as root; here the fake CLI's own
+    `set --operator=` records it, so a host seeded operator_required lets this account change
+    Serve from then on, and not before.
+    """
+    ts._run_ts(["set", "--operator=p32"], timeout=10)
+    return True, "p32"
+
+
 def _p32_harness():
     os.makedirs(_BIN32)
     _exe("tailscale", 'exec "%s" "%s" "$@"\n' % (sys.executable, _FAKE32))
     os.environ["PATH"] = _BIN32 + os.pathsep + os.environ.get("PATH", "")
     os.environ["FAKE_TS_STATE"] = _STATE32
     os.environ["FAKE_TS_LOG"] = _LOG32
-    _patch32(ts, "ensure_operator", lambda: (True, "p32"))
+    _patch32(ts, "ensure_operator", _fake_operator)
     _patch32(ts, "allow_tailscale_ufw", lambda: (True, ""))
     _patch32(ts._so, "_run_verb",
              lambda verb, args, **kw: (_VERBS32.append((verb, list(args))),
@@ -790,10 +963,12 @@ def _p32_cleanup():
 try:
     _p32_harness()
     _A32 = _p9_client(P9_ADMIN)
-    for _step32 in (_p32_boot_live, _p32_boot_scope, _p32_boot_failures, _p32_reread,
-                    _p32_free_mount, _p32_wizard_walk, _p32_wizard_adopt, _p32_wizard_unread,
-                    _p32_enable, _p32_page, _p32_remove_route, _p32_disable, _p32_banner,
+    for _step32 in (_p32_boot_live, _p32_boot_scope, _p32_boot_twin, _p32_boot_failures,
+                    _p32_reread, _p32_free_mount, _p32_wizard_walk, _p32_wizard_adopt,
+                    _p32_wizard_unread, _p32_enable, _p32_page, _p32_remove_route,
+                    _p32_remove_operator, _p32_page_follows, _p32_disable, _p32_banner,
                     _p32_banner_funnel, _p32_links, _p32_report_live, _p32_report_shapes,
+                    _p32_report_dead, _p32_report_twin, _p32_report_restart_claim,
                     _p32_report_boot, _p32_uninstall, _p32_uninstall_refusals, _p32_install_hint,
                     _p32_install_readers, _p32_install_ufw, _p32_docs):
         _step32()

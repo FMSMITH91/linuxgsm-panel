@@ -13,6 +13,16 @@ are HTTPS); a port in `funnel` has Funnel on. Every call is appended to $FAKE_TS
 argv line. $FAKE_TS_SERVE_UNREADABLE=1 makes `serve status` fail the way a non-operator account sees
 it; $FAKE_TS_OFF_FAIL=1 makes every `off` fail the same way, and $FAKE_TS_WRITE_FAIL=1 every write.
 
+`"operator_required": true` in STATE models a host where this account is NOT the Tailscale operator:
+`serve status` still answers (reading Serve needs no privilege), but every write and every `off` is
+refused with "Access denied" until `set --operator=<user>` has run, which records "operator". That
+is Tailscale's own split (1.102.4: ipnserver actor.Permissions answers read=true for any local
+socket client and write only for root or the operator; localapi serves GET serve-config on read,
+POST on write), so a page that can LIST a route cannot necessarily remove it.
+
+$FAKE_TS_TAKEOVER, a STATE as JSON, replaces the state right after the first `serve status` read
+answers: another app taking a mount between a caller's read and its `off`.
+
 THE SEMANTICS THE TESTS DEPEND ON were checked against the real CLI (Tailscale 1.102.4) on the test
 VPS by the investigation that found these bugs, and against serve_v2.go of that version:
   * `serve --bg --https=443 [--set-path=M] <backend>` REPLACES whatever is at M, silently (rc 0).
@@ -113,8 +123,13 @@ def _parse_serve(rest):
     return port or "443", path, pos
 
 
+def _denied(st):
+    """True when this call may not change Serve: OFF/WRITE_FAIL aside, a non-operator account."""
+    return bool(st.get("operator_required")) and not st.get("operator")
+
+
 def _off(st, port, path):
-    if os.environ.get("FAKE_TS_OFF_FAIL"):
+    if os.environ.get("FAKE_TS_OFF_FAIL") or _denied(st):
         _out(rc=1, err="Access denied: serve config denied\n")
     handlers = st["web"].get(port) or {}
     if path is None:
@@ -136,13 +151,33 @@ def _serve(verb, rest):
         _off(st, port, path)
     if len(pos) != 1 or "://" not in pos[0]:
         _out(rc=1, err="invalid argument format\n")
-    if os.environ.get("FAKE_TS_WRITE_FAIL"):
+    if os.environ.get("FAKE_TS_WRITE_FAIL") or _denied(st):
         _out(rc=1, err="Access denied: serve config denied\n")
     st["web"].setdefault(port, {})[path or "/"] = pos[0]
     if verb == "funnel" and port not in st["funnel"]:
         st["funnel"].append(port)
     _save(st)
     _out("Available within your tailnet:\n\n%s%s\n" % (_url(st, port), path or "/"))
+
+
+def _set(rest):
+    """`set --operator=<user>`: from now on this account may change Serve."""
+    st = _load()
+    for a in rest:
+        if a.startswith("--operator="):
+            st["operator"] = a.split("=", 1)[1]
+    _save(st)
+    _out()
+
+
+def _takeover(st):
+    """Once: the state becomes $FAKE_TS_TAKEOVER after the read that has just been answered."""
+    raw = os.environ.get("FAKE_TS_TAKEOVER")
+    if raw and not st.get("taken_over"):
+        new = json.loads(raw)
+        new["taken_over"] = True
+        with open(os.environ["FAKE_TS_STATE"], "w", encoding="utf-8") as fh:
+            json.dump(new, fh, indent=1, sort_keys=True)
 
 
 def main(args):
@@ -158,12 +193,14 @@ def main(args):
     if args == ["debug", "prefs"]:
         _out(json.dumps({"RouteAll": False, "OperatorUser": "", "RunSSH": False}))
     if args[:1] == ["set"]:
-        _out()
+        _set(args[1:])
     if args[:2] == ["serve", "status"]:
         if os.environ.get("FAKE_TS_SERVE_UNREADABLE"):
             _out(rc=1, err="Access denied: serve config denied\n")
         st = _load()
-        _out(_status_json(st) if "--json" in args else _status_text(st))
+        text = _status_json(st) if "--json" in args else _status_text(st)
+        _takeover(st)
+        _out(text)
     if args[:1] in (["serve"], ["funnel"]):
         _serve(args[0], args[1:])
     _out(rc=1, err="fake tailscale: unhandled %r\n" % (args,))

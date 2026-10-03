@@ -412,8 +412,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   own routes at other mounts on :443, one at a time with `tailscale serve --https=443
   --set-path=<mount> off`, reading Serve again right before each. Another app's route, and a route
   to the panel on another listener, are left alone, and nothing is removed when Serve cannot be
-  read. Enable at a new mount does the same, and every Serve write uses the scheme the running
-  panel serves rather than the one its next start will.
+  read. A route at the same mount with a trailing slash ("/lgsm/" beside "/lgsm") counts as another
+  route, because Serve answers every /lgsm/ page from it. Enable at a new mount does the same, and
+  every Serve write uses the scheme the running panel serves rather than the one its next start
+  will.
 - **The setup wizard no longer publishes the panel twice.** Its finish read the "/" route its own
   Serve step had just written (or one from a hand-run `tailscale serve`) as another app's, and
   published a second route at /lgsm. It now adopts a route that already reaches the panel, and does
@@ -421,8 +423,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
   route, and the wizard says "serving" only when the panel itself is.
 - **The Tailscale page can remove a leftover route on its own.** Each route to the panel that it
   does not manage is listed with a Remove button, which leaves the panel's address and settings
-  alone. Disable removes every route to the panel, where it removed one and cleared the mount, so
-  the page in use at /lgsm lost its prefix and a second route stayed published.
+  alone. Like Enable and Disable, it first makes the panel's account the Tailscale operator, so it
+  also works on a host where the route was made by hand. When Enable or Remove takes down the
+  route the page was opened through, the page goes to the panel's own address instead of
+  reloading into a dead one. Disable removes every route to the panel, where it removed one and
+  cleared the mount, so the page in use at /lgsm lost its prefix and a second route stayed
+  published.
 - **The startup log, the setup-complete page and Recommended Access name the panel's own
   address.** They gave https://<machine name>, the root, which on a panel at /lgsm is another app
   or a leftover route. They now give the route at the configured mount, and only while it works.
@@ -430,7 +436,8 @@ CI-verified commit regardless of this file — this changelog is for humans.
   the panel with the wrong scheme" with no word on which one, and nothing at all when its scheme
   happened to match. Each route the panel does not manage is now listed with its listener and the
   exact `sudo tailscale serve --https=<port> --set-path=<mount> off` that removes it, and the boot's
-  own removal is reported beside the re-point.
+  own removal is reported beside the re-point. When no route reaches the panel on the scheme it
+  serves, that is still a failure, not a warning.
 - **Uninstalling removes the panel's Tailscale Serve route.** It ran `tailscale serve --bg --remove`,
   which no Tailscale accepts, so the route stayed behind after every uninstall (and a reinstall then
   published the panel at /lgsm beside it). It now removes every route to the panel's port, and only

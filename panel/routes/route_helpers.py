@@ -16,9 +16,10 @@ import threading
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
     _port_or, bind_host_error, can_bind_address, password_problem)
 from panel.routes.remotes import (_add_remote_field_error, _add_remote_target_error)
-from app import (_bind_is_loopback, _current_lang, _leftover_note, _log, _remove_serve_leftovers,
-    _serve_scheme_now, _setup_open, _setup_owner_ok, _setup_ts_ok, _superadmin_exists, claim_setup,
-    is_setup_complete, issue_setup_owner_token)
+from panel.ops.serve_upkeep import (_leftover_note, _remove_serve_leftovers)
+from app import (_bind_is_loopback, _current_lang, _log, _serve_scheme_now, _setup_open,
+    _setup_owner_ok, _setup_ts_ok, _superadmin_exists, claim_setup, is_setup_complete,
+    issue_setup_owner_token)
 
 # The wizard's steps in the order it walks them. A POST naming a step AHEAD of the stored one is
 # refused (see _setup_post); an earlier one is a harmless Back-button resubmit.
