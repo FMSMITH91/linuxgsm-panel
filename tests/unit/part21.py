@@ -1047,6 +1047,80 @@ def _f_run_outcome():
           repr((got["died"], got["live"])))
 
 
+# The test VPS's data/self-update.log of 2026-09-19 (the proof of #393), colour codes and all, the
+# account and the database traceback shortened. Launched by a panel-helper from before #363, which
+# wrote no "=== installer exit N ===" line; install.sh's own last line says it completed.
+_HELPER_LOG21 = (
+    "=== panel self-update ===\n"
+    "\x1b[0;36m[1/6] Snapshotting current version + database → /home/panel/linuxgsm-panel/data/"
+    ".backups/20260919-190410\x1b[0m\n"
+    "\x1b[0;32m✓\x1b[0m Snapshot saved\n"
+    "\x1b[1;33m[!]\x1b[0m Database maintenance reported a non-fatal issue (rc=1) — continuing.\n"
+    "\x1b[0;36m[3/6] Fetching the new version…\x1b[0m\n"
+    "  Updating to verified commit 18bafd3a14ad5225de94b79b9435a8881f2dab3f\n"
+    "\x1b[0;32m✓\x1b[0m Code updated (0.10.0-alpha → 0.10.0-alpha)\n"
+    "\x1b[0;36m[5/6] Starting the service…\x1b[0m\n"
+    "\x1b[0;36m[6/6] Verifying the panel came back up…\x1b[0m\n"
+    "\x1b[0;32m✓\x1b[0m Health check passed (HTTP 302) — now running version 0.10.0-alpha\n"
+    "\n"
+    "\x1b[0;32m✓\x1b[0m Update complete: 0.10.0-alpha → 0.10.0-alpha\n")
+
+
+def _f_run_outcome_no_exit_line():
+    """A log a helper from before the exit line wrote: install.sh's own last line decides."""
+    log = os.path.join(_T21, "self-update-old-helper.log")
+    with open(log, "w", encoding="utf-8") as fh:
+        fh.write(_HELPER_LOG21)
+    old = _t21.time() - 13 * 86400
+    os.utime(log, (old, old))
+    _p21(_so21, "_update_log_path", lambda: log)
+    res = _upd21.Result()
+    _, word = _upd21._last_run_lines(res, "canonical-https")
+    text = "\n".join(res.lines)
+    check("last run: a completed run whose launcher wrote no exit line (the test VPS's log of "
+          "2026-09-19) is 'succeeded' by install.sh's own last line, not 'DIED mid-run' and no "
+          "[fail]", all(("**Outcome**: succeeded — Update complete: 0.10.0-alpha → 0.10.0-alpha · "
+                         "no exit line" in text, "DIED" not in text, word == "succeeded",
+                         not res.findings)), repr((word, res.findings, res.lines)))
+    stale = _t21.time() - 3600
+    got = [_upd21.run_outcome({"exit_code": None, "lines": lines}, stale)
+           for lines in (["✓ Already up to date (version 2026.10.1) — no snapshot taken"],
+                         ["[!] Not updated: held at 1234567890, because the pin is unverified."],
+                         ["✓ Update complete: a → b", "[ERROR] Something failed after it"],
+                         ["[3/6] Fetching the new version…"])]
+    check("last run: ...the no-op endings read the same way, and a log whose last word is an "
+          "[ERROR], or a step, still DIED",
+          [g[0] for g in got] == ["ok", "ok", "fail", "fail"]
+          and got[0][1].startswith("nothing to install — Already up to date")
+          and got[1][1].startswith("NOT UPDATED — Not updated: held")
+          and all(g[1].startswith("DIED") for g in got[2:]), repr(got))
+
+
+# The system_ops wrapper's log (a per-user install): its dated header, and install.sh's HTTPS hint
+# after "Update complete". That wrapper has written the exit line since 2026-07-04, so a log of its
+# with none was stopped after install.sh's ending, not launched by an old helper.
+_WRAPPER_LOG21 = ["=== panel self-update Fri Oct  3 12:00:00 UTC 2026 ===",
+                  "[5/6] Starting the service…", "[6/6] Verifying the panel came back up…",
+                  "✓ Update complete: a → b",
+                  "This panel now serves HTTPS on port 5000 (it served plain HTTP before this "
+                  "update).",
+                  "Set up Tailscale Serve or a domain for a trusted cert."]
+
+
+def _f_run_outcome_wrapper_no_exit_line():
+    """The outcome for a log with no exit line says only what the log shows."""
+    level, text = _upd21.run_outcome({"exit_code": None, "lines": _WRAPPER_LOG21},
+                                     _t21.time() - 3600)
+    check("last run: a log with no exit line whose launcher is the wrapper (dated header) still "
+          "reads succeeded by install.sh's ending line, with a line after it, and the outcome "
+          "names no cause it never checked: not 'a helper from before the exit line wrote none', "
+          "not 'install.sh's own last line'",
+          level == "ok" and text.startswith("succeeded — Update complete: a → b · no exit line")
+          and "a run stopped after install.sh's ending leaves none" in text
+          and "existed wrote none" not in text and "own last line" not in text,
+          repr((level, text)))
+
+
 def _f_last_run_lines():
     log = os.path.join(_T21, "self-update.log")
     with open(log, "w") as fh:
@@ -1270,7 +1344,8 @@ def _run21():
                _e_root_pieces, _e_head_blobs_parse, _e_older_commit_and_conf, _e_origin, _e_tools,
                _f_cache, _f_ci_record, _f_ci_rate_limited, _f_ci_no_deadlock, _f_walk_recorded,
                _f_branch_and_checkout,
-               _f_run_outcome, _f_last_run_lines, _f_history, _f_installer_said,
+               _f_run_outcome, _f_run_outcome_no_exit_line, _f_run_outcome_wrapper_no_exit_line,
+               _f_last_run_lines, _f_history, _f_installer_said,
                _g_database, _g_database_unread, _g_backups, _g_snapshots):
         try:
             fn()

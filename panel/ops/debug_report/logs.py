@@ -56,7 +56,15 @@ _ROOT_PROGRAMS = frozenset((
 _SHELLS = frozenset(("bash", "sh", "dash"))
 # What the panel runs AS a game account, by a fixed fingerprint of the command: (label, tokens that
 # must all appear). First match wins. Only these labels are ever printed, never the command.
+# The console's tmux bodies come first. Each opens with the panel's own socket lookup
+# (ssh_manager._core._tmux_live_socket_sh), and a console send ends with what was typed, which can
+# hold any later entry's tokens ("say gamedig jq -r"), so the fixed text has to decide. The send
+# was counted as "other": the VPS proof of #393 found 42 of them so.
+_TMUX_SOCK = "tmux-$(id -u)"
 _GAME_READS = (
+    ("console send", (_TMUX_SOCK, " send-keys ")),
+    ("console snapshot", (_TMUX_SOCK, " capture-pane ")),
+    ("console session check", (_TMUX_SOCK, "echo __LIVE__")),
     ("gamedig map", ("gamedig", "jq -r")),
     ("gamedig player list", ("gamedig", "[.players[]")),
     ("gamedig players", ("gamedig", "players|length")),
@@ -198,6 +206,27 @@ def _traceback_lines(ctx, tbs):
 
 
 GAME_ACCOUNT = "as a game account"
+# The panel's own account (the service account, or the login account of a per-user install): the
+# installer runs its snapshot and config steps as it ('sudo -u <panel> env -C / tar …', 'python3 -I
+# - …/config.json'), and those were counted as game-account work.
+PANEL_ACCOUNT = "as the panel's own account"
+
+
+def _panel_accounts():
+    """The names of the panel's own account: this process's, and the installer's service account.
+
+    Asked once per count, of the own uid only (getpwuid), as the privacy pass does. The service
+    account is named too, for a report generated as root, where this process's account is root.
+    """
+    import pwd
+    from panel.ops.debug_report.install import SERVICE_ACCOUNT
+    names = {SERVICE_ACCOUNT}
+    try:
+        names.add(pwd.getpwuid(os.geteuid()).pw_name)
+    except (KeyError, OSError):
+        pass                       # no passwd entry: the service account's name still counts
+    names.discard("root")
+    return frozenset(names)
 
 
 def _game_read(rest):
@@ -208,12 +237,14 @@ def _game_read(rest):
     return "other"
 
 
-def _priv_verb(command, rest, user="root"):
+def _priv_verb(command, rest, user="root", own=frozenset()):
     """The label a sudo line is counted under: (label, sub-label or None). Fixed words only.
 
     The helper's own lines are its verb ('other verb' for one the table does not know). Anything
-    run as another account (USER= not root) is the panel's game-account work — gamedig, the console
-    reads, LinuxGSM configs, and every argv-form read — counted together under GAME_ACCOUNT with a
+    run as the panel's own account (`own`, from _panel_accounts) is PANEL_ACCOUNT, by program,
+    unless it is a shell body with a game fingerprint (_own_account_label). Anything run as another
+    account (USER= not root) is the panel's game-account work — gamedig, the console reads and
+    sends, LinuxGSM configs, and every argv-form read — counted together under GAME_ACCOUNT with a
     fixed fingerprint of what it was (_GAME_READS). Anything else is root: a program the panel
     itself runs is named, '<program> as root'; a shell is 'shell as root'; anything else 'other
     program as root'. Never an argument, never a path, never the account: for su the argument is
@@ -225,16 +256,41 @@ def _priv_verb(command, rest, user="root"):
         words = rest.split()
         return (words[0] if words and words[0] in set(_priv.verbs()) else "other verb"), None
     prog = os.path.basename(command)
-    if (user or "").strip() != "root":
+    user = (user or "").strip()
+    if user in own:
+        return _own_account_label(prog, rest)
+    if user != "root":
         return GAME_ACCOUNT, _game_label(prog, rest)
     return _root_label(prog), None
+
+
+def _own_account_label(prog, rest):
+    """(label, sub-label) for a call run as the panel's own account.
+
+    A shell body with a game fingerprint is game work whichever account ran it: a game server may
+    run under the panel's login account (game_idents_ok refuses only root), and its gamedig and
+    console calls are then sudo'd to that account. Everything else is PANEL_ACCOUNT, by program:
+    an argv-form call (cat, rm) carries no fingerprint, so its account decides, and its sub-label
+    is the program under either label.
+    """
+    read = _game_read(rest) if prog in _SHELLS else "other"
+    if read != "other":
+        return GAME_ACCOUNT, read
+    return PANEL_ACCOUNT, _program_label(prog)
+
+
+def _program_label(prog):
+    """A program's name when the panel itself runs it, 'shell' for a shell, else 'other'."""
+    if prog in _SHELLS:
+        return "shell"
+    return prog if prog in _ROOT_PROGRAMS else "other"
 
 
 def _game_label(prog, rest):
     """What a command run as a game account was: a shell body's fingerprint, else its program."""
     if prog in _SHELLS:
         return _game_read(rest)
-    return prog if prog in _ROOT_PROGRAMS else "other"
+    return _program_label(prog)
 
 
 def _root_label(prog):
@@ -250,6 +306,7 @@ def _split_priv(lines):
     A label counted for game-account work is a dict {sub-label: calls}; every other is an int.
     """
     kept, verbs, sessions = [], {}, 0
+    own = _panel_accounts()
     for ln in lines:
         body = _body(ln)
         if _SUDO_REFUSED_RE.search(body):
@@ -263,7 +320,7 @@ def _split_priv(lines):
             if m is None:
                 kept.append(ln)
                 continue
-            _count_priv(verbs, *_priv_verb(m.group(2), m.group(3), m.group(1)))
+            _count_priv(verbs, *_priv_verb(m.group(2), m.group(3), m.group(1), own))
     return kept, verbs, sessions
 
 

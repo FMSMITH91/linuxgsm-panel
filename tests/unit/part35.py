@@ -45,7 +45,9 @@ from unit.part20 import _patch, _patched
 from unit.part25 import _ctx_with
 from panel.core import runtime_stats as _rs35
 from panel.ops import tailscale_integration as _ts35
+import panel.ops.debug_report as _DR35
 from panel.ops.debug_report import _src_tailscale as STS
+from panel.ops.debug_report import assemble as AS
 from panel.ops.debug_report import config_section as CS
 from panel.ops.debug_report import hosts as HS
 from panel.ops.debug_report import network as NW
@@ -310,6 +312,136 @@ def _p35_health_domains():
           "(/etc/resolv.conf, https://tailscale.com/s/dns-fight)",
           "  - health: Linux DNS config not ideal. /etc/resolv.conf overwritten. See "
           "https://tailscale.com/s/dns-fight" in final, final)
+
+
+def _p35_health_footer():
+    """The VPS proof of #393: the footer said 'Redacted: nothing' above both health markers."""
+    ctx, _st = _ctx_with()
+    health = ["Linux DNS config not ideal. /etc/resolv.conf overwritten. See "
+              "https://tailscale.com/s/dns-fight",
+              "TLS handshake with panel7731.corp7731.example:443 failed: likely intercepted "
+              "connection; certificate is self-signed by Corp7731 Inspection CA",
+              "dial tcp: lookup derp1.relay7731.example: no such host"]
+    v = _tinfo35({"BackendState": "Running", "Health": health,
+                  "Self": {"HostName": "zephyrbox7731", "InNetworkMap": True}}, {})
+    res = Result()
+    with _patched():
+        _patch(NW, "_load_cfg", lambda: ({"port": 5000}, True))
+        NW._tailscale_lines(ctx, res, {}, ("ok", ("ok", v)))
+    final = PV.scrub(ctx, "\n".join(res.lines))
+    foot = next((ln for ln in PV.footer(ctx) if ln.startswith("- **Redacted**")), "")
+    check("privacy footer: the Tailscale health text's own [domain] and [issuer withheld] are "
+          "counted under Redacted, each distinct value once; it said 'nothing' above them",
+          "self-signed by [issuer withheld]" in final and final.count("[domain]") == 2
+          and foot.endswith("characters): 2 Tailscale health-message domains; 1 Tailscale "
+                            "health-message certificate issuer."), repr((foot, final)))
+
+
+# tailscaled's Tailscale SSH line from the test VPS's journal (the proof of #393), the account
+# changed from root to one the report does not know, and a second connection to a known host.
+_SSH_LINE35 = ("Sep 26 19:28:03 h tailscaled[1010]: handling conn: 100.69.18.95:32914->"
+               "quokka7731@100.84.48.111:22; ->root@100.84.48.111:22; "
+               "->quokka7731@zephyrhost7731:22")
+
+
+def _p35_account_at_address():
+    """'name@<IPv4>' printed the name: the IP rule made it 'name@[ip:tailnet]' before _redact."""
+    ctx, _st = _ctx_with(("zephyrhost7731", "host", 1))
+    out = PV.scrub(ctx, _SSH_LINE35)
+    later = PV.scrub(ctx, "a later section naming quokka7731 on its own")
+    pseud = next((ln for ln in PV.footer(ctx) if ln.startswith("- **Pseudonymised**")), "")
+    check("privacy: an account before an address (name@<IPv4>, already [ip:tailnet] when the email "
+          "rule runs) or before a known host is pseudonymised as an OS account, the same token "
+          "everywhere; root is kept, as everywhere in the report",
+          "quokka7731" not in out + later
+          and out.endswith("->[account-1]@[ip:tailnet]:22; ->root@[ip:tailnet]:22; "
+                           "->[account-1]@[host-1]:22")
+          and later == "a later section naming [account-1] on its own"
+          and "1 OS or SSH account" in pseud, repr((out, later, pseud)))
+
+
+# The name in plain text BEFORE its 'name@<IPv4>': the name pass had run when the account rule
+# mapped it, so the plain one printed beside its own token and linked the two.
+_SSH_TWO35 = ("Sep 26 19:28:01 h sshd[901]: Accepted publickey for quokka7731 from 100.69.18.95\n"
+              "Sep 26 19:28:03 h tailscaled[1010]: handling conn: ->quokka7731@100.84.48.111:22")
+_SECS35 = (("header", "Header", "header", "worker", "header"),
+           ("brief", "Brief", "m", "worker", "summary"),
+           ("logs", "Logs", "m", "worker", "full"))
+
+
+def _p35_account_at_order():
+    """Every mention of an account the pass maps from 'name@<address>' is its token, in order."""
+    ctx, _st = _ctx_with()
+    out = PV.scrub(ctx, _SSH_TWO35)
+    check("privacy: an account mapped from 'name@<IPv4>' is its token in the SAME text's earlier "
+          "plain mention too, not left beside its token",
+          "quokka7731" not in out
+          and "Accepted publickey for [account-1] from [ip:tailnet]\n" in out
+          and out.endswith("handling conn: ->[account-1]@[ip:tailnet]:22"), out)
+    ctx, _st = _ctx_with()
+    out = PV.scrub(ctx, "mail quokka7731@corp7731.example; key abcdefghijkl-quokka7731-opqrstuvwx"
+                        "yz0123 ->quokka7731@100.84.48.111:22")
+    check("privacy: ...and those mentions are replaced AFTER the email and long-token rules, so an "
+          "address or a long token holding the name is still redacted whole, not split around a "
+          "token into a printed domain or printed fragments",
+          out == "mail [email]; key [redacted] ->[account-1]@[ip:tailnet]:22", out)
+    ctx, st = _ctx_with()
+    st.ts_done = True                        # finish() reads no Tailscale status here
+    results = {"header": ("ok", 0.01, Result(lines=["- **Generated**: now"])),
+               "brief": ("ok", 0.01, Result(lines=["- quokka7731 signed in over Tailscale SSH"])),
+               "logs": ("ok", 0.01,
+                        Result(lines=["- handling conn: ->quokka7731@100.84.48.111:22"]))}
+    with _patched():
+        _patch(_DR35, "SECTIONS", _SECS35)
+        _patch(AS, "_filename", lambda _ctx: "r.md")
+        _patch(SO, "_github_issues_url", lambda: "https://example.invalid/issues/new")
+        rep = AS.assemble(ctx, results)
+    check("privacy: ...and in the summary, when only the full report holds 'name@<address>': the "
+          "summary was scrubbed first, before the report's pass had mapped the account",
+          "quokka7731" not in rep["summary"] + rep["report"] + rep["issue_body"]
+          and "- [account-1] signed in over Tailscale SSH" in rep["summary"],
+          repr((rep["summary"][-300:], rep["report"][-300:])))
+
+
+def _p35_token_email():
+    """A known name in an address: the name pass made it a token before _redact's email rule."""
+    ctx, _st = _ctx_with(("quokka7731", "account", None), ("wombat7731", "user", 4),
+                         ("zephyrhost7731", "host", 1))
+    out = PV.scrub(ctx, "mail quokka7731@corp7731.example, wombat7731@mail.corp7731.example.; unit "
+                        "quokka7731@1000.service; pkg quokka7731@5.3.3")
+    foot = next((ln for ln in PV.footer(ctx) if ln.startswith("- **Redacted**")), "")
+    check("privacy: an address whose local part is a known name (an OS account, a panel user) is "
+          "[email], not '[account-1]@<its domain>' with the domain printed; a unit instance and a "
+          "package@version after a known name are kept, as for any name; the footer counts both",
+          out == "mail [email], [email]; unit [account-1]@1000.service; pkg [account-1]@5.3.3"
+          and foot.endswith("characters): 2 email-shaped strings."), repr((out, foot)))
+    alone = PV.scrub(ctx, "mail root@zephyrhost7731.other7731.example")
+    out = PV.scrub(ctx, "quokka7731@zephyrhost7731.other7731.example; ssh ->quokka7731@zephyrhost"
+                        "7731:22; https://bob:tok7731@zephyrhost7731.other7731.example/x")
+    check("privacy: ...and so is one whose domain's first label is a known host's name ('root@"
+          "[host-1].other.example' printed root and the domain), while a host with no domain after "
+          "it is not an address, and URL userinfo's own [redacted] stands for no name",
+          (alone, out) == ("mail [email]", "[email]; ssh ->[account-1]@[host-1]:22; https://"
+                                           "[redacted]@[host-1].other7731.example/x"),
+          repr((alone, out)))
+
+
+def _p35_account_shape():
+    """Only an account-shaped word before '@<address>' is taken for an account."""
+    ctx, _st = _ctx_with()
+    first = PV.scrub(ctx, "peer 2026@10.0.0.1 ok")
+    later = PV.scrub(ctx, "Report generated 2026-10-03 13:00 UTC")
+    ctx2, _st2 = _ctx_with(("alice", "account", None))
+    glued = PV.scrub(ctx2, "alice.smith@100.84.48.111 alice_smith@100.84.48.112")
+    after = PV.scrub(ctx2, "see .smith, _smith and smith")
+    check("privacy: a word that cannot be an account name (a year before '@<address>') is not "
+          "mapped as one, so every date in the report keeps its year; nor is a fragment glued to a "
+          "token ('[account-1].smith@', '[account-1]_smith@')",
+          (first, later, glued, after)
+          == ("peer 2026@[ip:private] ok", "Report generated 2026-10-03 13:00 UTC",
+              "[account-1].smith@[ip:tailnet] [account-1]_smith@[ip:tailnet]",
+              "see .smith, _smith and smith"),
+          repr((first, later, glued, after)))
 
 
 def _p35_control_host():
@@ -652,7 +784,10 @@ def _p35_trust_proxy():
 
 for _fn35 in (_p35_units, _p35_installer_paths, _p35_installer_musts, _p35_installer_ids,
               _p35_userinfo_ctx, _p35_installer_said, _p35_footer_counts, _p35_footer_installer,
-              _p35_health, _p35_health_domains, _p35_control_host, _p35_key_expiry,
+              _p35_health, _p35_health_domains, _p35_health_footer, _p35_account_at_address,
+              _p35_account_at_order, _p35_token_email, _p35_account_shape,
+              _p35_control_host,
+              _p35_key_expiry,
               _p35_ci_gate, _p35_announced, _p35_workers, _p35_loops_record, _p35_loops_gate,
               _p35_trust_proxy):
     try:

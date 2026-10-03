@@ -461,7 +461,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
   Autostart switch read On even when neither of the install's two attempts to write the monitor
   cron line worked, because both attempts' results were ignored. Such a server does not come back
   after a crash or a reboot. The switch now follows what was written and what the crontab reads back
-  as, and a failed write is logged.
+  as, and a failed write is logged. A write that fails changes nothing: a new server starts Off
+  until a write or the crontab says otherwise, and a retried install keeps what its earlier attempt
+  recorded, because a failed write leaves that attempt's monitor line in place. When nothing can
+  confirm the switch, the panel logs a warning. An install that failed before this version was
+  created with the switch On before anything wrote the line; the upgrade sets such a server (one
+  whose install never finished) Off, once, and its retry's first cron write or read corrects it.
 - **The panel is published over Tailscale Serve at one address, and a leftover route to it no
   longer answers 502.** The boot re-point wrote only the configured mount (`tailscale_mount`), so a
   second route to the panel — at "/" beside /lgsm, say — kept the scheme it was written with and
@@ -471,7 +476,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   --set-path=<mount> off`, reading Serve again right before each. Another app's route, and a route
   to the panel on another listener, are left alone, and nothing is removed when Serve cannot be
   read. A route at the same mount with a trailing slash ("/lgsm/" beside "/lgsm") counts as another
-  route, because Serve answers every /lgsm/ page from it. Enable at a new mount does the same, and
+  route, because Serve answers every /lgsm/ page from it. Only a config set with `tailscale serve
+  set-raw` can hold both, because every other Serve write replaces the other spelling. So the
+  panel's own write at start clears such a route, and the Tailscale page and the debug report name
+  it until then. Enable at a new mount does the same, and
   every Serve write uses the scheme the running panel serves rather than the one its next start
   will.
 - **The setup wizard no longer publishes the panel twice.** Its finish read the "/" route its own
@@ -524,10 +532,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
   as before; when that read has nothing either, the report says its lines are the oldest of the
   window, cut off. Refused sudo calls and the panel's warnings are still included. The sudo calls
   of the last hour are counted from a separate read and printed once, under *Errors in the
-  journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `LinuxGSM config`,
-  `true as root`, and so on) instead of "other command". Account names, paths and scripts an
-  operator ran are never printed. A system install needs an updated helper for this; an older
-  helper gets the previous read.
+  journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `console send`,
+  `LinuxGSM config`, `true as root`, and so on) instead of "other command". Account names, paths,
+  what was typed into a console and scripts an operator ran are never printed. The installer's
+  calls as the panel's own account (the service account, or the login account a per-user panel
+  runs as) are counted under their own label, not as a game account's; a game server run under
+  that same account still has its gamedig and console calls counted as game work. A system
+  install needs an updated helper for this; an older helper gets the previous read.
 - **A privileged command the panel gives up on no longer keeps running as root.** When a call
   through the helper timed out, the panel stopped it with SIGKILL. That reached `sudo` alone, and
   sudo cannot pass a SIGKILL on, so the helper and the program it ran carried on as root with
@@ -567,7 +578,24 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **The debug report's Privacy footer counts everything it replaced.** It counted only the names
   and addresses it pseudonymised, so a report with `[email]` and `[redacted]` in it said "nothing
   matched". A new "Redacted" line counts email-shaped strings, long tokens, key=value secrets, URL
-  credentials and SQL parameter lists, each counted once however often it appears.
+  credentials and SQL parameter lists, each counted once however often it appears, and the domains
+  and certificate issuers that Tailscale's health messages print as [domain] and [issuer withheld].
+- **The debug report pseudonymises an account written before an address.** In `name@<IPv4>` the
+  address rule ran first, so the email rule no longer saw an address and the account printed
+  (`alice@[ip:tailnet]`); `name@<a known host>` was the same. The account is now an [account-N]
+  token, the same one wherever else the name appears, a mention earlier in the same text or in the
+  summary included. Names the report keeps everywhere, such as root, are kept here too, and so is a
+  word no account can be named (one starting with a digit, such as a year). An email address whose
+  local part is a name the report knows (an OS account, a panel user), or whose domain starts with
+  a known host's name, is now `[email]`; the name was replaced first, so the address was no longer
+  recognised, and its domain (or the name before the @) printed.
+- **The debug report no longer says a self-update that completed DIED.** It read a log with no
+  "installer exit" line as a run killed mid-update, and raised a [fail] at the top of the report.
+  The panel's helper wrote no such line until its version of 2026-09-26, so every self-update an
+  older helper ran ended without one, finished or not. When the log holds install.sh's own ending
+  ("Update complete", "Already up to date", "Not updated") with no error after it, the report now
+  gives that outcome, says the exit line is missing, and names what can leave it out (an older
+  helper, or a run stopped after install.sh's ending) without claiming which one did.
 - **The debug report prints Tailscale's health messages, not only how many there are.** Each one
   is on its own line, with node and login names, addresses, a self-hosted server's domain and a
   certificate issuer replaced, as the rest of the report replaces them; file paths and Tailscale's
@@ -602,7 +630,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   automatic backup from the audit log ("Last automatic backup: 2d ago", or that it failed — and when
   the newest failed, the newest that worked first, so one failing host does not hide the rest). The
   debug report prints the schedule per server (by id and game: interval, whose setting it is, the
-  clock's age, "due since", "clock not started"), what the unattended backups recorded in 30 days,
+  clock's age, "due since", "clock not started"; a clock the install or the schedule's first look
+  at a server only started says "no backup yet" and when the first is due, where it said "last 0 s
+  ago"), what the unattended backups recorded in 30 days,
   and the button's run under its own name. A default interval of 0 reads "default: off", because a
   server's own setting can still back it up. Unused code that would have backed every server up
   twice (`full_backup_due`) is gone.

@@ -1264,6 +1264,9 @@ def game_schedule_from(cfg, sid, defaults=None):
         "keep": (_clamp(entry["keep"], MIN_FULL_KEEP, MAX_FULL_KEEP, d["keep"])
                  if has_keep else d["keep"]),
         "last": _clamp(entry.get("last", 0), 0, 2 ** 63, 0),
+        # The `last` that start_game_clock wrote, while no backup has moved the clock since: the
+        # clock was started (at install, or on the sweep's first sight), no backup was taken.
+        "clock_started": _clamp(entry.get("clock_started", 0), 0, 2 ** 63, 0),
         "overridden": has_iv or has_keep,
         "interval_set": has_iv,   # True → this server overrides the interval (else inherits default)
         "keep_set": has_keep,     # True → this server overrides keep
@@ -1356,7 +1359,22 @@ def record_game_backup(sid):
         if not isinstance(entry, dict):
             entry = {}
         entry["last"] = int(time.time())
+        entry.pop("clock_started", None)    # a backup moved it: no longer only started
         sched[str(sid)] = entry
+    update_config(_mut)
+
+
+def start_game_clock(sid):
+    """Start a server's schedule clock with no backup taken: its first is one interval from now.
+
+    `last` is what game_backup_due measures from, so it is set as a backup sets it; the same value
+    in `clock_started` says no backup did. The install and the scheduled sweep's first sight of a
+    server start it this way, and the debug report printed such a clock as "last 0 s ago", a backup
+    that never ran. Raises like update_config.
+    """
+    def _mut(cfg):
+        now = int(time.time())
+        _schedule_entry(cfg, sid).update({"last": now, "clock_started": now})
     update_config(_mut)
 
 

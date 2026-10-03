@@ -208,7 +208,7 @@ def _p20_canaries():
 
 
 def _p20_withheld():
-    def _boom(text, st):
+    def _boom(*_a, **_k):                    # scrub passes _generic a third argument (found)
         raise RuntimeError("pattern pass")
     with _patched():
         _env(journal=_canary_journal())

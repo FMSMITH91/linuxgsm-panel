@@ -479,16 +479,19 @@ def _backups_blocked_by_config(app, sweep):
     return True
 
 
-def _record_game_clock(app, sid, gname):
+def _record_game_clock(app, sid, gname, started=False):
     """Move a server's backup schedule clock. False, logged, when config.json refused the write.
 
     record_game_backup writes config.json, and update_config refuses while the file is there but
     unparseable. That can happen between the archive being written and this call, and it is not
     the backup failing: letting it reach the sweep's `except` audited and alerted a backup that
     worked as "backup error (ConfigUnreadable)", and skipped recording what really happened.
+
+    `started`: the clock is only being started, no backup was taken (bk.start_game_clock), so the
+    report can say no backup has run yet rather than "last 0 s ago".
     """
     try:
-        bk.record_game_backup(sid)
+        (bk.start_game_clock if started else bk.record_game_backup)(sid)
         return True
     except ConfigUnreadable:
         app.logger.warning("config.json could not be read; the backup clock of %s was not saved",
@@ -574,7 +577,7 @@ def _back_up_if_due(app, target):
         # Never backed up on a schedule yet (fresh install / pre-existing server):
         # start its clock now instead of backing up immediately, so the first
         # scheduled backup is one interval out — not the moment it's installed.
-        _record_game_clock(app, sid, gname)
+        _record_game_clock(app, sid, gname, started=True)
         return
     if not bk.game_backup_due(sid):
         return

@@ -456,6 +456,13 @@ def _manual_line(res):
         res.find("warn", "Backups", "the last manual full backup had failures")
 
 
+# A schedule clock's (age, overdue, upcoming) words: one a backup moved, and one the install or the
+# sweep's first sight only STARTED (bk.start_game_clock). That one took no backup, and "last 0 s
+# ago" read as one that had just run.
+_CLOCK_WORDS = {False: ("last %s ago", "due since", "next in"),
+                True: ("no backup yet (clock started %s ago)", "first due since", "first due in")}
+
+
 def _sched_row(sid, gtype, sched, now):
     """One server's automatic schedule as (sort key, line, due_at or None)."""
     from panel.ops.debug_report.hosts import game_tok
@@ -468,10 +475,11 @@ def _sched_row(sid, gtype, sched, now):
     if not last:
         return (1, 0), " · ".join(words + ["clock not started"]), None
     due_at = last + every * _DAY
-    words.append("last %s ago" % ago(now - last))
+    since, due, upcoming = _CLOCK_WORDS[sched.get("clock_started") == last]
+    words.append(since % ago(now - last))
     if now >= due_at:
-        return (0, due_at), " · ".join(words + ["due since %s" % ago(now - due_at)]), due_at
-    return (2, last), " · ".join(words + ["next in %s" % ago(due_at - now)]), None
+        return (0, due_at), " · ".join(words + ["%s %s" % (due, ago(now - due_at))]), due_at
+    return (2, last), " · ".join(words + ["%s %s" % (upcoming, ago(due_at - now))]), None
 
 
 def _ticker_passed(due_at, now):
