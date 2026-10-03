@@ -101,6 +101,23 @@ def ago(seconds):
     return "%d d" % (s // 86400)
 
 
+def cut_words(text, limit):
+    """`text` cut to at most `limit` characters at a word boundary, with '…' when cut.
+
+    Free text is cut BEFORE the report's final privacy pass, which matches whole names and
+    addresses: cut through the middle of one and the pass sees only a fragment it cannot match, so
+    the fragment prints. Cutting at whitespace keeps every word either whole or gone; the caller
+    scrubs first where it can (a name of several words can still be cut between two of them). One
+    word longer than half the limit is cut through, rather than dropping the whole text.
+    """
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    cut = text[:max(0, limit - 1)]
+    space = max(cut.rfind(" "), cut.rfind("\t"))
+    return (cut[:space].rstrip() if space >= len(cut) // 2 else cut) + "…"
+
+
 class Ctx(object):
     """Per-report shared state: the deadline, the Flask app (or None), and a memo so a source two
     sections need (one `systemctl show`, one journal read, one tailscale status, one sqlite job) is
@@ -112,6 +129,7 @@ class Ctx(object):
         self.deadline = self.started + deadline_s
         self.request_info = request_info or {}
         self._memo = {}
+        self._running = {}          # key -> Event, while the first caller computes it
         self._memo_lock = threading.Lock()
 
     def remaining(self):
@@ -121,20 +139,44 @@ class Ctx(object):
     def memo(self, key, fn):
         """fn() once per report under `key`; later callers get the same value, or the same raise.
 
-        Two sections asking at once both may compute it (the lock guards the dict, not the call:
-        holding a lock across a subprocess would serialise every section behind the slowest)."""
+        Single-flight: a caller arriving while another computes the key waits for that answer (at
+        most until the report's deadline) instead of starting a second read -- two worker sections
+        start together, and a duplicate `systemctl show` or quick_check costs most exactly when the
+        source is slow. The lock guards the dicts, never the call: holding it across a subprocess
+        would serialise every section behind the slowest. A waiter past the deadline raises
+        TimeoutError (its section is then reported as unread); fn must not ask for its own key.
+        """
         with self._memo_lock:
             if key in self._memo:
-                ok, val = self._memo[key]
-                if ok:
-                    return val
-                raise val
+                return self._unwrap(key)
+            running = self._running.get(key)
+            if running is None:
+                mine = self._running[key] = threading.Event()
+        if running is not None:
+            running.wait(self.remaining())
+            with self._memo_lock:
+                if key in self._memo:
+                    return self._unwrap(key)
+            raise TimeoutError("memo %s still being read at the deadline" % (key,))
+        entry = (False, RuntimeError("memo %s abandoned" % (key,)))   # a BaseException: no answer
         try:
             val = fn()
+            entry = (True, val)
+            return val
         except Exception as exc:  # noqa: BLE001 - re-raised to every caller of this key
-            with self._memo_lock:
-                self._memo.setdefault(key, (False, exc))
+            entry = (False, exc)
             raise
+        finally:
+            self._settle(key, mine, entry)
+
+    def _unwrap(self, key):
+        ok, val = self._memo[key]
+        if ok:
+            return val
+        raise val
+
+    def _settle(self, key, event, entry):
         with self._memo_lock:
-            self._memo.setdefault(key, (True, val))
-            return self._memo[key][1] if self._memo[key][0] else val
+            self._memo.setdefault(key, entry)
+            self._running.pop(key, None)
+        event.set()

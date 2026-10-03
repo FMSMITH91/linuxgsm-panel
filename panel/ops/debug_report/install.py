@@ -113,10 +113,14 @@ def _interpreter():
     """'<panel>/venv/bin/python3, Python 3.12.3 · pyvenv.cfg 3.12, same · sys.prefix is the venv: yes'."""
     import platform
     venv = os.path.realpath(os.path.join(so.PANEL_DIR, "venv"))
-    exe = os.path.realpath(sys.executable or "")
-    if exe.startswith(venv + os.sep):
+    # The path the interpreter was STARTED as, not its realpath: install.sh's venv
+    # (`python3 -m venv`) makes venv/bin/python3 a symlink to /usr/bin/python3, so the resolved
+    # path is always the system one. The venv dir itself may be reached through a symlink.
+    exe = os.path.abspath(sys.executable or "")
+    venvs = {venv, os.path.abspath(os.path.join(so.PANEL_DIR, "venv"))}
+    if any(exe.startswith(v + os.sep) for v in venvs):
         where = "<panel>/venv/bin/" + os.path.basename(sys.executable or "python")
-    elif exe.startswith(("/usr/bin/", "/usr/local/bin/")):
+    elif os.path.realpath(exe).startswith(("/usr/bin/", "/usr/local/bin/")):
         where = "system python"
     else:
         where = "other path"

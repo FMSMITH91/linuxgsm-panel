@@ -74,8 +74,15 @@ def _heading(title, status, seconds, detail, deadline):
 
 # ── R1: At a glance and Verdicts ───────────────────────────────────────────────────────────────
 def _glance_items(sections, results, extra):
+    """Every non-ok finding, fail first.
+
+    The header's own findings arrive in `extra` (assemble passes them, or a minimal header's), so
+    the header section is not walked a second time.
+    """
     items = [(f["level"], f["area"], f["text"]) for f in extra if f["level"] != "ok"]
-    for key, title, _module, _mode, _part in sections:
+    for key, title, _module, _mode, part in sections:
+        if part == "header":
+            continue
         status, _sec, res = results[key]
         if status != "ok":
             items.append(("unread", title, "could not be read" if status == "error"
@@ -86,20 +93,38 @@ def _glance_items(sections, results, extra):
     return items
 
 
-def glance(sections, results, extra=()):
-    """At a glance: every non-ok finding, fail first, each unread section; 8 lines at most."""
+def problem_count(items):
+    """How many of `items` are problems (fail or warn), whoever is shown."""
+    return sum(1 for it in items if it[0] in ("fail", "warn"))
+
+
+def glance(sections, results, extra=(), limit=GLANCE_MAX_ITEMS):
+    """At a glance: every non-ok finding, fail first, each unread section; 8 lines at most.
+
+    The rest are counted on the last line, which points at the All findings block of the full
+    report (all_findings), where every one of them is listed.
+    """
     items = _glance_items(sections, results, list(extra))
-    problems = sum(1 for it in items if it[0] in ("fail", "warn"))
+    problems = problem_count(items)
     unread = sum(1 for it in items if it[0] == "unread")
     head = "### At a glance: %d problem%s, %d unreadable" % (problems, "" if problems == 1 else "s",
                                                              unread)
     if not items:
         return [head, "- no problems found by any section"]
-    shown = items if len(items) <= GLANCE_MAX_ITEMS else items[:GLANCE_MAX_ITEMS - 1]
+    shown = items if len(items) <= limit else items[:limit - 1]
     lines = [head] + ["- [%s] %s: %s" % it for it in shown]
     if len(shown) < len(items):
-        lines.append("- … and %d more in the full report" % (len(items) - len(shown)))
+        lines.append("- … and %d more, every one listed under All findings in the full report"
+                     % (len(items) - len(shown)))
     return lines
+
+
+def all_findings(sections, results, extra=()):
+    """The full report's complete list, when At a glance had to leave some out; else []."""
+    items = _glance_items(sections, results, list(extra))
+    if len(items) <= GLANCE_MAX_ITEMS:
+        return []
+    return ["### All findings (%d)" % len(items)] + ["- [%s] %s: %s" % it for it in items] + [""]
 
 
 def _verdicts(sections, results):
@@ -189,16 +214,26 @@ def _parts(ctx, sections, results):
 
 
 def _glance_or_fallback(sections, results, extra):
+    """(At a glance lines, All findings lines, problem count); the fallback when it raises."""
     try:
-        return glance(sections, results, extra)
+        return (glance(sections, results, extra), all_findings(sections, results, extra),
+                problem_count(_glance_items(sections, results, list(extra))))
     except Exception as exc:  # noqa: BLE001 - R1: fall back, and say so
-        return ["### At a glance",
-                "- [unread] At a glance: could not be assembled (%s)" % type(exc).__name__]
+        return (["### At a glance",
+                 "- [unread] At a glance: could not be assembled (%s)" % type(exc).__name__], [], 0)
 
 
 def _filename(ctx):
+    """The download's name; never raises.
+
+    The header's git read may have raised (its section is then reported unread), and the memo
+    hands that same exception to every later caller.
+    """
     from panel.ops.debug_report import header
-    sha = header._running_commit(ctx) or ctx.memo("head_sha", header._head_sha) or "unknown"
+    try:
+        sha = header._running_commit(ctx) or ctx.memo("head_sha", header._head_sha) or "unknown"
+    except Exception:  # noqa: BLE001 - a name without the commit, never a failed report
+        sha = "unknown"
     sha = re.sub(r"[^0-9a-f+]", "", sha)[:41] or "unknown"
     return "linuxgsm-panel-debug-%s-%s.md" % (sha, time.strftime("%Y%m%d-%H%M%S"))
 
@@ -212,7 +247,8 @@ def assemble(ctx, results):
     head.append("- **Report built in**: %.2f s · slowest: %s"
                 % (time.monotonic() - ctx.started, _slowest(SECTIONS, results) or "n/a"))
     privacy.finish(ctx, wait=min(5.0, ctx.remaining() + 2.0))
-    glance_lines = _glance_or_fallback(SECTIONS, results, head_findings + privacy.findings(ctx))
+    glance_lines, every, problems = _glance_or_fallback(SECTIONS, results,
+                                                        head_findings + privacy.findings(ctx))
     verdicts = _verdicts(SECTIONS, results)
     top = ["## LinuxGSM Panel debug report", ""] + head + [""] + glance_lines + [""]
     must_keep = len(top)
@@ -220,7 +256,7 @@ def assemble(ctx, results):
         top += ["### Verdicts"] + verdicts + [""]
     summary_secs, full_secs = _parts(ctx, SECTIONS, results)
     summary = "\n".join(top + summary_secs)
-    report = summary + "\n" + "\n".join(full_secs)
+    report = "\n".join(top + every + summary_secs) + "\n" + "\n".join(full_secs)
     summary = _clean(privacy.scrub(ctx, summary))
     report = _cap(_clean(privacy.scrub(ctx, report)))
     if privacy.prepare(ctx).pattern_error:
@@ -228,7 +264,6 @@ def assemble(ctx, results):
     report += "\n" + "\n".join(privacy.footer(ctx)) + (
         "\n\n<!-- Generated by the panel. Review before sharing. -->\n")
     issues_url = so._github_issues_url()
-    problems = sum(1 for ln in glance_lines if ln.startswith(("- [fail]", "- [warn]")))
     return {"report": report, "summary": summary,
             "issue_body": _clean(issue_body(summary, issues_url, must_keep, problems)),
             "issues_url": issues_url, "filename": _filename(ctx)}

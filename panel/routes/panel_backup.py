@@ -770,8 +770,12 @@ def _register_panel_diagnostics(app):
         panel/ops/debug_report). Best-effort, so the page asks the operator to review it before
         sharing. One report is built at a time: a second request waits for the first's result.
         """
+        from panel.ops.debug_report import ReportBusy
         try:
             return jsonify(so.generate_debug_report())
+        except ReportBusy:
+            return jsonify({"error": "A debug report is still being built. Try again in a "
+                                     "minute."}), 429
         except Exception:
             return jsonify({"error": _log_and_generic("debug report failed")}), 500
 

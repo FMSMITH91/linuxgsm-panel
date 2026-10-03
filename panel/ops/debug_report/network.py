@@ -80,7 +80,10 @@ def _sudo_cached_ok():
     Never probes: a failed probe counts toward pam_faillock.
     """
     probe = getattr(so, "_SUDO_PROBE", None) or {}
-    return probe.get("ok") is True
+    # Within the probe's own TTL only, as _check_sudo reads it: an "ok" from days ago says nothing
+    # about a grant revoked since, and a refused `sudo -n` may count toward pam_faillock.
+    age = time.time() - (probe.get("at") or 0)
+    return probe.get("ok") is True and 0 <= age < getattr(so, "_SUDO_PROBE_TTL", 300)
 
 
 def may_read_privileged():
@@ -120,6 +123,18 @@ def priv_read(verb, args, timeout):
     if _sudo_cached_ok():
         return sudo_n_verb(verb, args, timeout)
     return None
+
+
+def running_port(ctx, cfg):
+    """The port this process serves on: the boot record's BOOT_PORT, else config.json's.
+
+    A port changed in config.json takes effect at the next restart; until then Serve and the
+    firewall must reach the port the panel is actually bound to.
+    """
+    boot = (getattr(ctx.app, "config", None) or {}).get("BOOT_PORT") if ctx is not None else None
+    if isinstance(boot, int) and not isinstance(boot, bool) and 0 < boot < 65536:
+        return boot
+    return int(cfg.get("port", 5000) or 5000)
 
 
 def _load_cfg():
@@ -179,7 +194,7 @@ def _plural(n, word):
 
 def _route_text(r, port, want):
     """'/lgsm → http to loopback:5000 ✓': the mount if plain, the scheme, never the URL."""
-    scheme = r["target"].split("://", 1)[0] if "://" in r["target"] else "http"
+    scheme = _scheme(r)
     mark = ""
     if want:
         mark = " ✓" if scheme == want else " ✗ expected %s" % want
@@ -230,6 +245,31 @@ def _ts_findings(res, v, cfg, routes):
         res.find("fail", AREA, "the Tailscale node key has expired")
 
 
+def _route_findings(res, cfg, routes, want, readable):
+    """Findings for a panel route Serve cannot use.
+
+    The wrong backend scheme (Serve answers 502), or, once set up, a mount other than the
+    configured one (every URL the panel builds is under that one).
+    """
+    if want and any(_scheme(r) != want for r in routes):
+        res.find("fail", AREA, "a Tailscale Serve route reaches the panel with the wrong scheme "
+                               "(Serve answers 502)")
+    if readable and routes and cfg.get("tailscale_setup_done"):
+        if _norm_mount(cfg.get("tailscale_mount")) not in {_norm_mount(r["mount"]) for r in routes}:
+            res.find("warn", AREA, "the Serve route's mount is not the panel's configured "
+                                   "tailscale_mount (links and assets break)")
+
+
+def _norm_mount(mount):
+    """'/lgsm/' and '/lgsm' are one mount; empty is '/' (middleware.py reads it the same way)."""
+    return str(mount or "/").rstrip("/") or "/"
+
+
+def _scheme(route):
+    target = route.get("target") or ""
+    return target.split("://", 1)[0] if "://" in target else "http"
+
+
 def _onoff(flag):
     return "on" if flag else "off"
 
@@ -266,13 +306,14 @@ def _tailscale_lines(ctx, res, facts, got):
     v = got[1][1]
     cfg, readable = _load_cfg()
     cfg = cfg if readable else {}
-    port = int(cfg.get("port", 5000) or 5000)
+    port = running_port(ctx, cfg)
     want = _expected_scheme(getattr(ctx.app, "config", None) or {}, cfg) if readable else None
     res.add("- **Tailscale**: " + _ts_head(v))
     text, routes = _serve_text(v, port, want)
     res.add("- **Serve**: " + text)
     res.add("- **Funnel**: " + _funnel_line(cfg, readable, v, routes))
     _ts_findings(res, v, cfg, routes)
+    _route_findings(res, cfg, routes, want, readable)
     state = v.get("backend_state")
     facts["ts"] = "%s, Funnel %s" % (state if state in _STATES else "other",
                                      _onoff(v.get("funnel_enabled")))
@@ -364,7 +405,8 @@ _UFW_STATES = {
 }
 
 
-def _ufw_lines(res, facts, got, cfg):
+def _ufw_lines(res, facts, got, cfg, port):
+    """R40's lines; `port` is the one the panel serves on (running_port)."""
     status, u = got
     if status != "ok":
         res.add("- **UFW**: %s" % ("timed out (not shown)" if status == "timeout"
@@ -382,7 +424,7 @@ def _ufw_lines(res, facts, got, cfg):
     facts["ufw"] = "active" if u["active"] else "inactive"
     res.add("- **UFW**: %s · %d rules · default incoming: %s" % (
         facts["ufw"], len(u["rules"]), _tok(u["default_in"])))
-    res.add("- **Ways in**: " + _ways_in(u, int(cfg.get("port", 5000) or 5000), cfg))
+    res.add("- **Ways in**: " + _ways_in(u, port, cfg))
     res.add("- **Deny-all-ports rules**: " + _deny_text(u))
 
 
@@ -470,9 +512,13 @@ def _watch_text(c, watch_path):
     """Whether a jail's runtime reads the panel's auth.log: never the path itself."""
     if c["journal"]:
         return "ACTIVE BUT NOT WATCHING auth.log (journal backend), so it can never ban"
+    return "watching the panel's auth.log %s" % ("✓" if _watching(c, watch_path) else "✗ NO")
+
+
+def _watching(c, watch_path):
+    """Whether a jail's runtime File list includes `watch_path` (both resolved)."""
     want = os.path.realpath(watch_path)
-    watching = any(os.path.realpath(p) == want for p in c["file_list"] or [])
-    return "watching the panel's auth.log %s" % ("✓" if watching else "✗ NO")
+    return any(os.path.realpath(p) == want for p in c["file_list"] or [])
 
 
 def _jail_status_text(entry, watch_path=None):
@@ -525,11 +571,21 @@ def _f2b_runtime_lines(res, facts, rt):
     else:
         text, c = _jail_status_text(rt.get("panel"), auth_log_path())
         res.add("- **%s jail (runtime)**: %s" % (PANEL_JAIL, text))
-        if c is not None and c["journal"]:
-            res.find("fail", AREA, "the panel's fail2ban jail is active but watches no file, "
-                                   "so it can never ban")
+        _panel_jail_findings(res, c)
     if "sshd" in names:
         res.add("- **sshd jail**: %s" % _jail_status_text(rt.get("sshd"))[0])
+
+
+def _panel_jail_findings(res, c):
+    """The panel jail's runtime read as findings: unread, watching no file, or another file."""
+    if c is None:
+        res.find("unread", AREA, "the panel's fail2ban jail could not be read")
+    elif c["journal"]:
+        res.find("fail", AREA, "the panel's fail2ban jail is active but watches no file, "
+                               "so it can never ban")
+    elif not _watching(c, auth_log_path()):
+        res.find("fail", AREA, "the panel's fail2ban jail watches another file, not this "
+                               "install's auth.log, so it can never ban")
 
 
 def _f2b_lines(res, facts, got, cfg, readable):
@@ -561,7 +617,8 @@ def section_network(ctx):
                         ("ufw", ufw_read), ("f2b", f2b_runtime)))
     cfg, readable = _load_cfg()
     parts = (("Tailscale", lambda: _tailscale_lines(ctx, res, facts, got["tailscale"])),
-             ("UFW", lambda: _ufw_lines(res, facts, got["ufw"], cfg)),
+             ("UFW", lambda: _ufw_lines(res, facts, got["ufw"], cfg,
+                                        running_port(ctx, cfg if readable else {}))),
              ("fail2ban", lambda: _f2b_lines(res, facts, got["f2b"], cfg, readable)))
     for title, part in parts:
         try:

@@ -17,7 +17,8 @@ Sections run in one of two modes:
              worker makes carries its own timeout, so it does end.
 
 One report is built at a time: a second request while one is building waits for it and gets the
-same result.
+same result; one still waiting at WAIT_S gets ReportBusy, never a second build. A request section
+not started by the deadline is reported as timed out.
 """
 import importlib
 import threading
@@ -64,7 +65,7 @@ SECTIONS = (
 )
 
 _inflight_lock = threading.Lock()
-_inflight = {"done": None, "result": None}
+_inflight = {"build": None}     # {"done": Event, "result": dict|None} while one builds
 
 
 def _section_fn(module, key):
@@ -119,7 +120,10 @@ def _run_sections(ctx):
             waits.append((key, done))
     for key, _title, module, mode, _part in SECTIONS:
         if mode == "request":
-            results[key] = _run_one(ctx, key, module)
+            # A request section runs in this greenlet and cannot be abandoned once started, so one
+            # not started by the deadline is not started at all: it is reported as timed out.
+            results[key] = (_run_one(ctx, key, module) if ctx.remaining() > 0
+                            else ("timeout", 0.0, None))
     for key, done in waits:
         done.wait(ctx.remaining())
     out = {}
@@ -138,28 +142,41 @@ def _build(app=None, request_info=None):
     return assemble.assemble(ctx, _run_sections(ctx))
 
 
+class ReportBusy(RuntimeError):
+    """A report has been building for longer than a caller waits; it is not built a second time."""
+
+
+# How long a second caller waits for the report being built before it is told to try again. Past
+# it, the caller NEVER builds a report of its own: N clicks on a slow panel would run N builds side
+# by side, each with its own subprocess fan-out, exactly when the panel is struggling.
+WAIT_S = DEADLINE_S + 15
+
+
 def generate(app=None, request_info=None):
     """The report dict: {report, summary, issue_body, issues_url, filename}. One build at a time;
-    a caller arriving while one builds waits for it and gets its result."""
-    with _inflight_lock:
-        running = _inflight["done"]
-        if running is None:
-            mine = threading.Event()
-            _inflight["done"], _inflight["result"] = mine, None
-    if running is not None:
-        running.wait(DEADLINE_S + 15)
-        res = _inflight.get("result")
-        if res is not None:
-            return res
-        return _build(app, request_info)
+    a caller arriving while one builds waits for it (at most WAIT_S) and gets its result. Raises
+    ReportBusy when that build is still running at WAIT_S; a build that raised hands the next
+    waiter the turn to build, one at a time."""
+    give_up = time.monotonic() + WAIT_S
+    while True:
+        with _inflight_lock:
+            build = _inflight["build"]
+            if build is None:
+                build = _inflight["build"] = {"done": threading.Event(), "result": None}
+                break
+        if not build["done"].wait(max(0.0, give_up - time.monotonic())):
+            raise ReportBusy("a debug report is still being built")
+        if build["result"] is not None:
+            return build["result"]
+        if time.monotonic() >= give_up:
+            raise ReportBusy("a debug report is still being built")
     try:
-        res = _build(app, request_info)
-        _inflight["result"] = res
-        return res
+        build["result"] = _build(app, request_info)
+        return build["result"]
     finally:
         with _inflight_lock:
-            _inflight["done"] = None
-        mine.set()
+            _inflight["build"] = None
+        build["done"].set()
 
 
-__all__ = ["generate", "SECTIONS", "LEVELS"]
+__all__ = ["generate", "ReportBusy", "SECTIONS", "LEVELS"]

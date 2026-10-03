@@ -675,6 +675,31 @@ def ts_info(ctx):
     return src.shared_info(ctx)
 
 
+# Kept back from the report's deadline when waiting for the Tailscale read: what is left prints
+# every host's own lines, so a hung tailscaled costs the Tailscale words and nothing else.
+_TS_RESERVE_S = 1.5
+
+
+def _ts_unanswered(res, status, why):
+    """{host id: why} for every tailscale host, when the Tailscale read did not answer."""
+    timed_out = status == "timeout"
+    res.add("- **Tailscale (this node)**: %s" % ("timed out (not shown)" if timed_out
+                                                else "could not be read (%s)" % why))
+    res.find("unread", AREA, "Tailscale status could not be read")
+    return {rid: "tailscale status %s" % ("timed out" if timed_out else "not readable")
+            for rid in _ts_hosts()}
+
+
+def _ts_info_bounded(ctx):
+    """ts_info(ctx) in a thread, waited on until the deadline less _TS_RESERVE_S.
+
+    ("ok", info) | ("error", class name) | ("timeout", None). A late read is left to finish.
+    """
+    network = mod("panel.ops.debug_report.network")
+    return network.bounded(ctx, (("tailscale", lambda: ts_info(ctx)),),
+                           reserve=_TS_RESERVE_S)["tailscale"]
+
+
 def _peer_names(peer):
     names = set()
     for key in ("dns_name", "DNSName", "hostname", "HostName"):
@@ -767,11 +792,18 @@ def peers_by_host(ctx, res):
     if not key_present():
         res.add("- **Tailscale peers**: not matched (credential key missing)")
         return {}
-    info = ts_info(ctx)
+    status, info = _ts_info_bounded(ctx)
+    if status != "ok":
+        return _ts_unanswered(res, status, info)
     res.add(_node_line(info))
     peers = _tsf(info, "peers") if info is not None else None
     if not isinstance(peers, (list, tuple)):
         return {rid: "tailscale status not readable" for rid in _ts_hosts()}
+    return _matched_peers(res, peers)
+
+
+def _matched_peers(res, peers):
+    """{host id: peer text}, each tailscale host matched against the node's peers."""
     out = {}
     for rid, host in _ts_hosts().items():
         p = match_peer(host, peers)

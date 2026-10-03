@@ -32,6 +32,8 @@ def lag_tick(state, lag):
         lag = max(0.0, float(lag))
         state["ticks"] += 1
         runtime_stats.put("hub", "ticks", state["ticks"])
+        # a heartbeat too, so Background workers shows the watch's passes like any other loop
+        runtime_stats.beat("hub-lag-watch", _LAG_TICK)
         if lag > state["max"]:
             state["max"] = lag
             runtime_stats.put("hub", "lag_max", round(lag, 3))
@@ -180,6 +182,12 @@ def _service_lines(ctx, res, facts):
     """R15: one `systemctl show`, shared with R8 and R21 through the memo."""
     unit = _src_systemd.shared(ctx)
     facts["unit"] = unit
+    if unit.get("why") == "no-unit-file":
+        # A measurement (neither unit file exists), not a failed read.
+        res.add("- **Service**: no systemd unit file, so not started by systemd (the panel does "
+                "not start at boot)")
+        res.find("warn", AREA, "no systemd unit: the panel does not start at boot")
+        return
     if unit.get("error"):
         rc = unit.get("rc")
         res.add("- **Service**: systemd state could not be read (%s%s)"
@@ -417,6 +425,8 @@ def _lag_text(res, now=None):
     now = time.time() if now is None else now
     hub = runtime_stats.snapshot("hub")
     if "ticks" not in hub:
+        if _HUB_LAG["started"]:
+            return "not measured yet (the lag watch started, and has not ticked yet)"
         return "not measured (the lag watch runs only in a process app.py started under eventlet)"
     at, worst = hub.get("lag_max") or (None, 0.0)
     last_5 = recent_lag(now)
@@ -715,7 +725,9 @@ _PARTS = (("Service", _service_lines), ("Process resources", _resource_lines),
 def _verdict(facts):
     bits = []
     unit = facts.get("unit") or {}
-    if unit.get("error"):
+    if unit.get("why") == "no-unit-file":
+        bits.append("no systemd unit (started by hand)")
+    elif unit.get("error"):
         bits.append("systemd state unread")
     else:
         bits.append("the unit's MainPID" if facts.get("mainpid_is_me") else "NOT the unit's MainPID")

@@ -1248,6 +1248,9 @@ def _ci_held_by(runs):
             _ci_required_absent(runs))
 
 
+_CI_WALK_KEEP = 100      # per-commit answers kept for the report (a walk asks about 25 at most)
+
+
 def _ci_record(sha, state, seen):
     """Record one commit's CI answer in runtime_stats' "ci_walk" group (R31). CANNOT RAISE.
 
@@ -1258,6 +1261,9 @@ def _ci_record(sha, state, seen):
         if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha or ""):
             return
         failing, pending, absent = _ci_held_by(seen.get("runs") or [])
+        # Each commit is a new key: past the group's cap the NEWEST would be dropped, so a
+        # long-lived panel lost the answer for the commit holding its update. Oldest go first.
+        _rs.evict("ci_walk", _CI_WALK_KEEP, keep_keys=("walk", "ratelimit"))
         _rs.put("ci_walk", sha[:7].lower(), {"state": state, "failing": failing,
                                              "pending": pending, "absent": absent,
                                              "checks": len(seen.get("runs") or [])})
@@ -2473,6 +2479,9 @@ def panel_integrity(force=False):
     return data
 
 
+_INTEGRITY_GIT_TIMEOUT = 10
+
+
 def _compute_panel_integrity():
     """Which of the panel's own git-tracked files have been modified or deleted
     since install. Returns {git, clean, current_sha, modified:[{path,status}],
@@ -2482,7 +2491,9 @@ def _compute_panel_integrity():
                 "current_sha": "",
                 "message": "The panel isn't a git checkout, so file integrity "
                            "can't be verified or repaired here."}
-    sha, _, _ = _git(["rev-parse", "--short", "HEAD"])
+    # Explicit timeouts, never _git's 45 s default: the debug report and the Diagnostics card run
+    # this on a request, and a git left running past the report's deadline can hold index.lock.
+    sha, _, _ = _git(["rev-parse", "--short", "HEAD"], timeout=_INTEGRITY_GIT_TIMEOUT)
     # NOT while an update runs. `git diff` is not read-only: on stat-dirty files whose content is
     # unchanged -- exactly the state install.sh's reset or a snapshot restore leaves -- it takes
     # .git/index.lock to refresh the index (with --no-optional-locks too, tested on git 2.56), and
@@ -2496,7 +2507,7 @@ def _compute_panel_integrity():
                            "once it has finished."}
     # --name-status vs HEAD catches both staged and unstaged tampering; data/ is
     # gitignored so user data never shows up.
-    out, _, rc = _git(["diff", "--name-status", "HEAD"])
+    out, _, rc = _git(["diff", "--name-status", "HEAD"], timeout=_INTEGRITY_GIT_TIMEOUT)
     if rc != 0:
         # git itself failed (not installed, unreadable repo, …). Fail SAFE: never
         # claim the files are verified-clean when we couldn't actually run the check.
@@ -4113,6 +4124,9 @@ def _diag_service(unit):
     both_note = _both_units_note()
     unit = _unit_or_read(unit)
     props = unit.get("props") or {}
+    if unit.get("why") == "no-unit-file":
+        # Measured, not unread: neither unit file exists (two path tests; systemctl never ran).
+        return "warn", "No systemd unit found — the panel does not start at boot." + both_note
     if unit.get("error") or not props:
         # _src_systemd's `error` is always "unreadable"; its `why` names the failure.
         return "warn", "systemd state unreadable (%s).%s" % (
