@@ -219,8 +219,10 @@ def cleanup():
         if p not in _PREEXISTING and p.exists():
             try:
                 p.unlink()
-            except OSError:
-                pass
+            except OSError as e:
+                # Said, not swallowed: a panel.db left behind makes the NEXT run of every
+                # DB-owning suite print SKIP and exit 0, with nothing to say why.
+                print("cleanup: could not remove %s (%s)" % (p, e), file=sys.stderr)
     if _CONFIG_SNAPSHOT is not None:
         try:
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
@@ -477,7 +479,7 @@ try:
         # re-applies Serve — so getting back in took host SSH. change-port refuses to create that
         # state; Disable created it with one click. Both a stored 127.0.0.1 and an unset bind that
         # boot resolved to 127.0.0.1 are that state.
-        import app as _tsd_app
+        _tsd_app = sys.modules["app"]   # loaded by `from app import` above
         _tsd_rb = dict(_tsd_app._RESOLVED_BIND)
         try:
             for _tsd_label, _tsd_bind, _tsd_resolved in (
@@ -717,7 +719,7 @@ try:
     # Every commit of a day shares the date, so the footer only answers "what is deployed" with the
     # commit next to it. Rendered with known values: this suite's copy of the panel may have no
     # .git, and then its own version reads "unknown" with no commit at all.
-    import app as _fv_app
+    _fv_app = sys.modules["app"]   # loaded by `from app import` above
     _fv_saved = (_fv_app.PANEL_VERSION, _fv_app.PANEL_COMMIT)
     try:
         _fv_app.PANEL_VERSION, _fv_app.PANEL_COMMIT = "2026.9.26", "a1b2c3d"
@@ -2242,7 +2244,7 @@ try:
               _hp_go.status_code == 403 and _hp_sy.status_code == 403 and _hp_fw == [],
               "open=%d sync=%d calls=%r" % (_hp_go.status_code, _hp_sy.status_code, _hp_fw))
         # Known version and commit (see the footer's check) for the Updates card's header.
-        import app as _hp_app
+        _hp_app = sys.modules["app"]   # loaded by `from app import` above
         _hp_vsaved = (_hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT)
         try:
             _hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT = "2026.9.26", "a1b2c3d"
@@ -10387,7 +10389,7 @@ try:
     # the panel login" message per live ban, then a "Login attack in progress" alert once three
     # arrived together. _f2b_ban_events decides; this is what it emits, driven directly rather
     # than through the daemon thread.
-    import app as _fre
+    _fre = sys.modules["app"]   # loaded by `from app import` above
     from panel.db.models import AuditLog as _fre_AL
     _fre_notes = []
     _fre_saved = _fre.notifications.notify
@@ -15697,7 +15699,7 @@ try:
     # and still answers the panel's own. Only meaningful when the app came up without a domain,
     # which is how this suite builds it; the first check says so if that ever changes.
     _so_eio = app.socketio.server.eio
-    import app as _so_app
+    _so_app = sys.modules["app"]   # loaded by `from app import` above
     check("socket origin: the running engine.io server was built with the per-request origin check",
           _so_eio.cors_allowed_origins is _so_app._socket_origin_allowed,
           "cors_allowed_origins is %r" % (_so_eio.cors_allowed_origins,))

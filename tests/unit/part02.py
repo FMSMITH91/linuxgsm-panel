@@ -3281,7 +3281,7 @@ check("stats endpoint: ...and an install in progress is never overwritten",
 # PACKAGE, and the restore left a real attribute behind that shadows __getattr__ for the rest of
 # the run: every later stub on _core.server_live_metrics was invisible to app, and a part10 check
 # went on to run the real read — an actual `ssh` to its fixture host — while still passing.
-import app as _app_mod
+_app_mod = _sys2.modules["app"]   # app is loaded (from app import above); not `import app as`
 _lrs_orig = _sm_core.server_live_metrics
 try:
     _lrs = {"m": {}}

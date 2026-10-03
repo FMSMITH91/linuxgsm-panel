@@ -1187,11 +1187,40 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
-- **CI's Semgrep job runs on PyJWT 2.15.** Every PyJWT 2.13 release has published advisories (the
-  worst critical, GHSA-ffc3-869f-jxw9), and semgrep 1.178.0 pins `~=2.13.0`, so no lockfile that
-  honours semgrep's own pin was safe and Dependabot could not open a fix. PyJWT is now pinned apart
-  from semgrep's lockfile and both are installed hash-checked with `--no-deps`. This touches CI only:
-  the panel does not use PyJWT.
+- **The browser's Socket.IO client is 4.8.4, past two HIGH advisories in the parser it bundles.**
+  The panel vendored socket.io-client 4.7.5, whose bundle carries socket.io-parser 4.2.4: affected
+  by GHSA-677m-j7p3-52f9 (fixed in 4.2.6) and GHSA-2m8v-j782-fhvr (fixed in 4.2.7), both of which
+  name the client too. Every page loads it. The decoder runs in the operator's browser on packets
+  from the panel's own server, so the realistic worst case was a browser tab driven out of memory by
+  a malicious or intercepted server. The new file is byte-identical to the one in the npm tarball,
+  whose integrity and registry signature were checked; its bundle carries both parser fixes, and it
+  speaks the same protocols (Engine.IO 4, Socket.IO 5) as the panel's python-socketio 5.17.
+- **Scanners can see the vendored browser libraries now.** No scanner read `static/vendor/`: there
+  was no manifest for the dependency graph, and neither Dependabot alerts nor osv-scanner can look
+  inside a minified bundle, which is how the client above sat on a vulnerable parser with every check
+  green. `static/vendor/package.json` and `package-lock.json` now record each library and what its
+  bundle carries, the dependency audit reads the lockfile on every pull request, push and week, and
+  a unit gate ties every file to the manifest by sha256 and by the version its own banner states.
+- **gitleaks catches a Telegram bot token wherever it is written.** Its built-in rule needs a
+  `telegr…` name right before the value, so it missed the panel's own `config.json` shape, a bare
+  `token = "…"`, a function argument, the Bot API URL and prose; main's full-history scan carried a
+  real-shaped value and reported nothing. A keyword-free rule now finds all of them. Its one
+  allowlisted value is the historical synthetic fixture, matched exactly. The fixture-shape check in
+  the unit suite also caught too little: a token ending in `-` and the Bot API URL form passed it.
+- **CodeQL sees Socket.IO input and the panel's own-host shell.** CodeQL models python-socketio but
+  not Flask-SocketIO, so what a browser emits to the console and terminal sockets was not untrusted
+  input to any query; and the shell every own-host command runs in (`bash -c` through the unpatched
+  `subprocess`) was not a command-injection sink, because CodeQL takes only the first element of an
+  argument list as the command. A model pack in `.github/codeql/extensions` adds both, and makes
+  `shlex.quote` a barrier there. The `py/partial-ssrf` exclusion's justification, which said one
+  function was the panel's only outbound request, now lists all six outbound-HTTP call sites, and a
+  unit check fails on a seventh until it is reviewed.
+- **CI's Semgrep job runs on a PyJWT with no known advisory.** Every PyJWT 2.13 release has
+  published advisories (the worst critical, GHSA-ffc3-869f-jxw9), and semgrep 1.178.0 pinned
+  `~=2.13.0`, so no lockfile that honoured semgrep's own pin was safe and Dependabot could not open a
+  fix. semgrep 1.179.0 accepts PyJWT 2.15, so Semgrep's one hash lockfile now carries PyJWT 2.15.1
+  and installs with pip's dependency check on; the interim second lockfile for PyJWT alone is gone.
+  This touches CI only: the panel does not use PyJWT.
 - **Group forms reject ids that cannot be real ids.** Anyone who could manage groups could make the
   add and edit pages fail with a server error by submitting an extremely long number as an id; such
   values, and non-ASCII digits that were being read as ids, are now ignored.

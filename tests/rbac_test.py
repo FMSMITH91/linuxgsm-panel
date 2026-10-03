@@ -3715,8 +3715,10 @@ finally:
         for _f in _managed_files() - _files_before:
             try:
                 os.remove(_f)
-            except OSError:
-                pass
+            except OSError as _e:
+                # Said, not swallowed: the leftover panel.db the comment above describes is exactly
+                # what a failed remove leaves, and the next smoke run would SKIP with no reason.
+                print("cleanup: could not remove %s (%s)" % (_f, _e), file=sys.stderr)
     else:
         # Live/configured install: remove ONLY our throwaway users/groups, never real data.
         #

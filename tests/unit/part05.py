@@ -791,8 +791,12 @@ check("tailnet: the panel can name the OS user it runs as", bool(TS._current_os_
 # it trains whoever reads that dashboard to wave the next one through. The panel's own patterns
 # are far looser than the real formats, so a fixture can stay valid AND be obviously fake.
 import re as _re_fx
+# The Telegram shape is bounded by "no digit before, no token character after", not by \b: a
+# trailing \b needs a WORD character at the end, so a token ending in '-' (1 in 64 of them) passed,
+# and a leading \b cannot sit between 'bot' and the id, so the Bot API URL form
+# (api.telegram.org/bot<id>:<secret>/...) passed too. part37 holds both probes to this pattern.
 _fixture_shapes = [
-    ("Telegram bot token", r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b"),
+    ("Telegram bot token", r"(?<![0-9])\d{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])"),
     ("Discord webhook", r"https://discord\.com/api/webhooks/\d{17,19}/[A-Za-z0-9_-]{60,}"),
     ("GitHub token", r"\bgh[pousr]_[A-Za-z0-9]{36}\b"),
 ]
@@ -6274,7 +6278,7 @@ finally:
 import ast as _cu_ast                                                               # noqa: E402
 import tempfile as _cu_tmp                                                          # noqa: E402
 import flask as _cu_flask                                                           # noqa: E402
-import app as _cu_app                                                               # noqa: E402
+_cu_app = sys.modules["app"]   # loaded by the from-imports above; never `import app as` beside them
 from panel.core import config as _cu_cfg                                            # noqa: E402
 from panel.ops import system_ops as _cu_so                                          # noqa: E402
 _cu_saved = (_cu_cfg.CONFIG_FILE, _cu_so.ensure_panel_fail2ban, _cu_app.RemoteServer,
@@ -6747,7 +6751,7 @@ for _g, _h, _want, _why in (
 # ...and the list itself must carry the flag, or the picker has nothing to show. Driven from a
 # FIXED serverlist rather than the machine's cached copy: reading the live one made this depend on
 # whatever an earlier suite had already cached.
-import app as _app_mod                                                             # noqa: E402
+_app_mod = sys.modules["app"]   # loaded by the from-imports above; never `import app as` beside them
 from panel.services import lgsm_data as _ld                                        # noqa: E402
 _o_sl, _o_cache = _ld.serverlist, dict(_app_mod._GAME_LIST_CACHE)
 try:

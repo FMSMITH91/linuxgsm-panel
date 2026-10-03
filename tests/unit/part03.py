@@ -73,7 +73,7 @@ check("resolve_free_port: propagates the None rather than inventing a port",
 # running — so five STOPPED Source servers on 27015-27019 left 27020 looking free and the sixth
 # install was handed the first server's SourceTV port. That install succeeded; the cost landed
 # later, on whoever started the older server and got "Port 27020 was unavailable" from srcds.
-import app as _app_mod                                                             # noqa: E402
+_app_mod = sys.modules["app"]   # loaded by the from-imports above; never `import app as` beside them
 _o_rlp, _o_gsq = _app_mod._remote_listening_ports, _app_mod.GameServer
 _o_lgv, _o_eng = _app_mod.lgsm_get_values, _app_mod.sm_game_engine
 try:

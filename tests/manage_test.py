@@ -122,8 +122,10 @@ def cleanup():
         if p not in _PREEXISTING and p.exists():
             try:
                 p.unlink()
-            except OSError:
-                pass
+            except OSError as e:
+                # Said, not swallowed: a panel.db left behind makes the NEXT run of every
+                # DB-owning suite print SKIP and exit 0, with nothing to say why.
+                print("cleanup: could not remove %s (%s)" % (p, e), file=sys.stderr)
     if _CONFIG_SNAPSHOT is not None:
         try:
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
@@ -401,7 +403,11 @@ try:
 
     _check_tty_safe()
 
-except Exception:
+except BaseException:
+    # BaseException, not Exception: the finally below ends in sys.exit(), which REPLACES an
+    # exception still in flight. An eventlet Timeout (a BaseException) raised mid-suite
+    # therefore ended the run early with "N / N checks passed" and exit 0. Recorded here,
+    # it is a failure with its traceback, like any other crash.
     # Without this the suite just reports fewer checks than it has and looks green-ish. A crash
     # part-way through is a FAILURE, and the traceback is the whole point of running it.
     import traceback

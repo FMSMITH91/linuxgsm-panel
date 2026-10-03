@@ -1,0 +1,35 @@
+# The panel's own-host shell is a command-injection sink.
+#
+# Every command run_command sends to the panel's own host ends at
+#   panel/ops/ssh_manager/_core.py  _exec_local_shell:  _real_subprocess.Popen(["/bin/bash", "-c", shell_cmd])
+# and py/command-line-injection could not see it. CodeQL's subprocess model takes only the FIRST
+# element of an argument list as the command (Stdlib.qll, SubprocessPopenCall.getCommand, whose own
+# TODO reads 'Handle using args=["sh", "-c", <user-input>]'), and that element here is the literal
+# "/bin/bash". _real_subprocess is eventlet.patcher.original("subprocess"), the unpatched module.
+#
+# The sink: every element of the argument list given to that module's Popen. Models-as-data cannot
+# say "the element after -c", so "/bin/bash" and "-c" are sinks too; they are literals and can never
+# carry taint. The other call through that module, _exec_local_argv, is handed an argv built by
+# helper_argv/tool_argv (a list concatenation or a table call), never a list literal, so the
+# ListElement step does not reach its elements; an argv runs no shell.
+#
+# The barrier: shlex.quote's result. CodeQL's own stdlib model makes shlex.quote a TAINT STEP
+# (Stdlib.model.yml summaryModel), so without this every value the panel quotes correctly before it
+# reaches that shell (ssh_manager._quote is shlex.quote) would be reported as an injection. Every
+# shell the panel quotes for is bash, where a quoted value is one literal word.
+#
+# This file is separate from flask_socketio.model.yml so that it can be removed on its own. A finding
+# it raises is either a real flow into the local shell or a value the code validates in a way CodeQL
+# does not recognise (a regex check, or a routed <int:...> parameter, which is an int and still a
+# source); read the flow before deciding.
+extensions:
+  - addsTo:
+      pack: codeql/python-all
+      extensible: sinkModel
+    data:
+      - ["eventlet", "Member[patcher].Member[original].ReturnValue.Member[Popen].Argument[0,args:].ListElement", "command-injection"]
+  - addsTo:
+      pack: codeql/python-all
+      extensible: barrierModel
+    data:
+      - ["shlex", "Member[quote].ReturnValue", "command-injection"]
