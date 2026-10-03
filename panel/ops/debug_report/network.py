@@ -206,19 +206,23 @@ def _ts_head(v):
                "not recorded" if health is None else len(health)))
 
 
-def _health_domain(m):
-    """[domain] for a match, unless it is Tailscale's own or a path's component.
+def _health_domain(counted):
+    """re.sub's callback: [domain] for a match, unless it is Tailscale's own or a path's component.
 
     After a single '/' a dotted name is a file ('/etc/resolv.conf', which a real health message
-    names); after '//' it is a URL's host, which is replaced.
+    names); after '//' it is a URL's host, which is replaced. Each one replaced is passed to
+    `counted`, for the Privacy footer.
     """
-    before = m.string[max(0, m.start() - 2):m.start()]
-    if before.endswith("/") and before != "//":
-        return m.group(0)
-    host = m.group(0).lower()
-    if any(host == d or host.endswith("." + d) for d in _HEALTH_OWN_DOMAINS):
-        return m.group(0)
-    return "[domain]"
+    def _sub(m):
+        before = m.string[max(0, m.start() - 2):m.start()]
+        if before.endswith("/") and before != "//":
+            return m.group(0)
+        host = m.group(0).lower()
+        if any(host == d or host.endswith("." + d) for d in _HEALTH_OWN_DOMAINS):
+            return m.group(0)
+        counted(host)
+        return "[domain]"
+    return _sub
 
 
 def health_text(ctx, message):
@@ -228,11 +232,19 @@ def health_text(ctx, message):
     the list), a self-signed certificate's issuer dropped, the report's privacy pass (the
     Tailscale names are mapped before this is called), then every domain left outside Tailscale's
     own as [domain] -- after the pass, whose email rule must see 'name@domain' whole -- and only
-    then the cut, so the final pass still sees every name whole.
+    then the cut, so the final pass still sees every name whole. The issuer and each domain are
+    counted for the Privacy footer, which otherwise said "Redacted: nothing" above both markers.
     """
     from panel.ops.debug_report import privacy
-    text = _SELF_SIGNED_RE.sub(r"\1 [issuer withheld]", " ".join(str(message).split()))
-    text = _HEALTH_DOMAIN_RE.sub(_health_domain, privacy.scrub_text(ctx, text))
+    text = " ".join(str(message).split())
+    issuer = _SELF_SIGNED_RE.search(text)
+    who = issuer.group(0)[len(issuer.group(1)):].strip() if issuer else ""
+    if who:
+        privacy.count_redacted(ctx, "tailscale-issuer", who)
+    text = _SELF_SIGNED_RE.sub(r"\1 [issuer withheld]", text)
+    text = _HEALTH_DOMAIN_RE.sub(
+        _health_domain(lambda host: privacy.count_redacted(ctx, "tailscale-domain", host)),
+        privacy.scrub_text(ctx, text))
     return cut_words(text, HEALTH_MAX)
 
 

@@ -534,6 +534,43 @@ def _f2_retry36(rid):
           repr(_autostart36(sid)))
 
 
+def _retried36(rid, name, port, **host):
+    """(Autostart after an earlier attempt that wrote the line, after a retry run with `host`)."""
+    sid = _install36(rid, name, port, listen=[{port}])
+    before = _autostart36(sid)
+    _configure36(rid, sid, name, port, listen=[{port}], **host)
+    return before, _autostart36(sid)
+
+
+def _f2_retry_paths36(rid):
+    """The same corner on the paths a check above does not take: the write raising (paramiko), and
+    the command list not read at all, so step 5 never writes (the host unreachable on a retry)."""
+    down = ConnectionError("SSH connection failed")
+    got = _retried36(rid, "p36asra", 27620, cron5=[down], cron7=[down], cron_list=[down])
+    check("F2 install (paramiko): a RETRY whose cron writes and read-back all RAISE keeps the "
+          "Autostart On the earlier attempt recorded — a write that raised learned nothing",
+          got == (True, True), "column before, after: %r" % (got,))
+    got = _retried36(rid, "p36asrb", 27630, cmds=[[]], cron7=[(False, "crontab: could not write")],
+                     cron_list=[None])
+    check("F2 install (tailscale/local): a RETRY whose command list cannot be read (so step 5 "
+          "writes nothing), whose step-7 write fails and whose read-back fails keeps On",
+          got == (True, True), "column before, after: %r" % (got,))
+    got = _retried36(rid, "p36asrc", 27640, cmds=[down], cron7=[down], cron_list=[down])
+    check("F2 install (paramiko): ...and one whose command-list read RAISES keeps On too",
+          got == (True, True), "column before, after: %r" % (got,))
+
+
+def _f2_no_false_warning36(rid):
+    """Step 5's write landed: the column is what it got, whatever step 7's write and read do."""
+    with _capture36(_p9_app._log) as rec:
+        sid = _install36(rid, "p36asw", 27650, cron7=[(False, "crontab: could not write")],
+                         cron_list=[None], listen=[{27650}])
+    said = [r.getMessage()[:100] for r in rec.records if "unconfirmed" in r.getMessage()]
+    check("F2 install: when step 5's write landed, a failed step-7 write and read-back log no "
+          "'unconfirmed' warning — step 5's write is what the column says",
+          _autostart36(sid) is True and not said, repr((_autostart36(sid), said)))
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # F3 — no exception text from the argument check reaches an action's message
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -960,7 +997,7 @@ try:
     _H36 = _host36("p36-install-host", "192.0.2.68")
     for _fn36 in (_f1_step6_raises36, _f1_listen_raises36, _f1_listen_unreadable36,
                   _f1_sibling_after_step6, _f1_foreign_listener36, _f1_happy36, _f1_warning36,
-                  _f2_checks36, _f2_retry36):
+                  _f2_checks36, _f2_retry36, _f2_retry_paths36, _f2_no_false_warning36):
         _fn36(_H36)
     _p9_restore_all()
 

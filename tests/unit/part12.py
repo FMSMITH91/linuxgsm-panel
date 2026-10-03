@@ -2470,6 +2470,12 @@ try:
     check("install: a typed name in capitals is folded to lowercase, not refused",
           _p9_json(_r).get("success") is True and _ms_up is not None and _ms_up[1] == "p9upper",
           repr((_r.status_code, _p9_json(_r), _ms_up)))
+    _ms_clock = (_p9_bk._game_schedules(_p9_cfg.load_config()).get(str(_ms_up[0])) or {}
+                 if _ms_up is not None else {})
+    check("install: the new server's backup clock is STARTED, not recorded as a backup taken (the "
+          "debug report says none has run yet, and when the first is due)",
+          bool(_ms_clock.get("last")) and _ms_clock.get("clock_started") == _ms_clock.get("last"),
+          repr(_ms_clock))
     if _ms_up is not None:
         _p9_delete_server(_ms_up[0])
 

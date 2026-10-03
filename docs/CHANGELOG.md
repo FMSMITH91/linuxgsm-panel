@@ -464,7 +464,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   as, and a failed write is logged. A write that fails changes nothing: a new server starts Off
   until a write or the crontab says otherwise, and a retried install keeps what its earlier attempt
   recorded, because a failed write leaves that attempt's monitor line in place. When nothing can
-  confirm the switch, the panel logs a warning.
+  confirm the switch, the panel logs a warning. An install that failed before this version was
+  created with the switch On before anything wrote the line; the upgrade sets such a server (one
+  whose install never finished) Off, once, and its retry's first cron write or read corrects it.
 - **The panel is published over Tailscale Serve at one address, and a leftover route to it no
   longer answers 502.** The boot re-point wrote only the configured mount (`tailscale_mount`), so a
   second route to the panel — at "/" beside /lgsm, say — kept the scheme it was written with and
@@ -523,8 +525,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   still included. The sudo calls are counted from a separate read and printed once, under *Errors
   in the journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `console
   send`, `LinuxGSM config`, `true as root`, and so on) instead of "other command". Account names,
-  paths, what was typed into a console and scripts an operator ran are never printed. A system
-  install needs an updated helper for this; an older helper gets the previous read.
+  paths, what was typed into a console and scripts an operator ran are never printed. The
+  installer's calls as the panel's own account are counted under their own label, not as a game
+  account's. A system install needs an updated helper for this; an older helper gets the previous
+  read.
 - **Call of Duty servers show the capacity the game reports.** gamedig gives cod's `maxplayers` as
   text ("16"). The panel threw it away and showed the LinuxGSM config's number instead.
 - **A running game the panel cannot query no longer runs LinuxGSM `details` every 45 seconds.**
@@ -550,7 +554,19 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **The debug report's Privacy footer counts everything it replaced.** It counted only the names
   and addresses it pseudonymised, so a report with `[email]` and `[redacted]` in it said "nothing
   matched". A new "Redacted" line counts email-shaped strings, long tokens, key=value secrets, URL
-  credentials and SQL parameter lists, each counted once however often it appears.
+  credentials and SQL parameter lists, each counted once however often it appears, and the domains
+  and certificate issuers that Tailscale's health messages print as [domain] and [issuer withheld].
+- **The debug report pseudonymises an account written before an address.** In `name@<IPv4>` the
+  address rule ran first, so the email rule no longer saw an address and the account printed
+  (`alice@[ip:tailnet]`); `name@<a known host>` was the same. The account is now an [account-N]
+  token, the same one wherever else the name appears. Names the report keeps everywhere, such as
+  root, are kept here too.
+- **The debug report no longer says a self-update that completed DIED.** It read a log with no
+  "installer exit" line as a run killed mid-update, and raised a [fail] at the top of the report.
+  The panel's helper wrote no such line until its version of 2026-09-26, so every self-update an
+  older helper ran ended without one, finished or not. When the log's last line is install.sh's own
+  ending ("Update complete", "Already up to date", "Not updated"), the report now gives that outcome
+  and says the exit line is missing.
 - **The debug report prints Tailscale's health messages, not only how many there are.** Each one
   is on its own line, with node and login names, addresses, a self-hosted server's domain and a
   certificate issuer replaced, as the rest of the report replaces them; file paths and Tailscale's
@@ -585,7 +601,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   automatic backup from the audit log ("Last automatic backup: 2d ago", or that it failed — and when
   the newest failed, the newest that worked first, so one failing host does not hide the rest). The
   debug report prints the schedule per server (by id and game: interval, whose setting it is, the
-  clock's age, "due since", "clock not started"), what the unattended backups recorded in 30 days,
+  clock's age, "due since", "clock not started"; a clock the install or the schedule's first look
+  at a server only started says "no backup yet" and when the first is due, where it said "last 0 s
+  ago"), what the unattended backups recorded in 30 days,
   and the button's run under its own name. A default interval of 0 reads "default: off", because a
   server's own setting can still back it up. Unused code that would have backed every server up
   twice (`full_backup_due`) is gone.

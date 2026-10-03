@@ -89,6 +89,12 @@ _IP_DOTTED_NAME_RE = re.compile(r"(?<=[A-Za-z]\.)()(\d{1,3}(?:\.\d{1,3}){3})(?=\
 _IP_DASHED_NAME_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9]{0,15}-)(\d{1,3}(?:-\d{1,3}){3})"
                                 r"(?=\.[A-Za-z]|[^\w-]|\Z)")
 _LONG_ID_RE = re.compile(r"(?<!\d)\d{15,}(?!\d)")
+# An account written before an address or a host name the pass has already replaced: 'name@<IPv4>'
+# is 'name@[ip:tailnet]' by the time _redact's email rule runs, and 'name@<known host>' is
+# 'name@[host-1]', so neither is email-shaped any more and the account printed (tailscaled's
+# '…->alice@100.84.48.111:22'). The account is pseudonymised like any other: an [account-N] token.
+_ACCOUNT_AT_RE = re.compile(r"(?<![\w.+-])([\w.+-]{1,64})@(?=\[\[?(?:ip:[a-z-]{1,16}|host-\d{1,9}|"
+                            r"panel-host|ts-name|tailnet-name-\d{1,9})\])")
 _WITHHELD = "_(withheld: pseudonymisation unavailable)_"
 
 
@@ -675,6 +681,25 @@ def _count_generic(rx, repl, kind, text, st):
                 st.hit(kind, m.group(0).lower())
 
 
+def _account_at(st):
+    """re.sub's callback for _ACCOUNT_AT_RE: the account as its token, mapped as an OS account.
+
+    A name the report keeps everywhere (root, ubuntu, a word under _MIN_NAME characters) is kept
+    here too. Any other is added to the map, so it is the same token wherever else it appears.
+    """
+    def _sub(m):
+        key = _name_key(m.group(1))
+        if not _usable_name(key):
+            return m.group(0)
+        st.add(m.group(1), "account")
+        token = st.snapshot()[0].get(key)
+        if token is None:
+            return m.group(0)
+        st.hit("account", key)
+        return token + "@"
+    return _sub
+
+
 def _generic(text, st):
     for rx, repl, kind in _GENERIC:
         _count_generic(rx, repl, kind, text, st)
@@ -685,6 +710,8 @@ def _generic(text, st):
     text = _IPV4_RE.sub(sub, text)
     if ":" in text:
         text = _IPV6_RE.sub(lambda m: sub(m) if m.group(0).count(":") >= 2 else m.group(0), text)
+    if "@" in text:
+        text = _ACCOUNT_AT_RE.sub(_account_at(st), text)
 
     def _long(m):
         st.hit("id", m.group(0))
@@ -815,7 +842,19 @@ _FOOTER_KINDS = (("host", "host"), ("server", "game server"), ("user", "panel us
 _REDACTED_KINDS = (("redact:email", "email-shaped string"),
                    ("redact:token", "long token"), ("redact:secret", "key=value secret"),
                    ("secret", "configured secret"), ("url", "URL credential or login link"),
-                   ("sql-params", "SQL parameter list"))
+                   ("sql-params", "SQL parameter list"),
+                   ("tailscale-domain", "Tailscale health-message domain"),
+                   ("tailscale-issuer", "Tailscale health-message certificate issuer"))
+
+
+def count_redacted(ctx, kind, value):
+    """Count `value`, which a section replaced by a fixed marker of its own, for the footer.
+
+    `kind` is one of _REDACTED_KINDS. For text a section reduces itself before or after the pass
+    (the Tailscale health messages' [domain] and [issuer withheld]): the pass never saw the value,
+    so without this the footer said "Redacted: nothing" above the markers.
+    """
+    prepare(ctx).hit(kind, value)
 
 
 def _listed(st, kinds):
@@ -845,8 +884,8 @@ def footer(ctx):
     lines = ["### Privacy",
              "- **Pseudonymised**: %s. Loopback and unspecified addresses (0.0.0.0, ::) kept."
              % ("; ".join(parts) if parts else "nothing matched a known name or pattern"),
-             "- **Redacted** (a fixed marker such as [email], [redacted] or [parameters: withheld] "
-             "in place of the value; a long token is any run of 28+ key, hash or path "
+             "- **Redacted** (a fixed marker such as [email], [redacted], [domain] or [parameters: "
+             "withheld] in place of the value; a long token is any run of 28+ key, hash or path "
              "characters): %s." % ("; ".join(redacted) if redacted else "nothing"),
              ("- Paths: the checkout prints as <panel>, the data directory as <data>, the "
               "virtualenv as <venv>, the root-owned helper's directory as <panel-lib> and "

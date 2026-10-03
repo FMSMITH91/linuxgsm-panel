@@ -421,8 +421,9 @@ def _register_install(app):
         # out). Without this, last=0 makes game_backup_due() true the moment installed flips True.
         # Through _record_game_clock: record_game_backup REFUSES (ConfigUnreadable) while config.json
         # is there but unparseable, and a raise here, one line after the row was committed, answered
-        # the install with a 500 and left the server "installing" with no job behind it.
-        _record_game_clock(app, gs.id, gs.name)
+        # the install with a 500 and left the server "installing" with no job behind it. Started,
+        # not a backup: the debug report says none has run yet.
+        _record_game_clock(app, gs.id, gs.name, started=True)
 
         # GMod is the one game that needs mounted content to render maps/props — offer the picked
         # games (validated against the known set). This adds a content step to the install job.
@@ -1288,10 +1289,10 @@ def _fail_game_files(job, why, last_out):
 
 def _configure_and_start(job, remote, gs):
     """Steps 5 to the end of the install job, once the game files have landed."""
-    _configure_server(job, remote, gs)
+    cron_written = _configure_server(job, remote, gs)
     port_conflict, port_unchecked = _open_game_ports(job, remote, gs)
     _seed_scpsl_port_config(remote, job.short_name, gs)
-    _enable_autostart(job, remote, gs)
+    _enable_autostart(job, remote, gs, cron_written)
     start_step = _install_gmod_content(job, remote)
     started = _start_and_verify(job, remote, gs, start_step)
     # None, not an empty set, when step 6 never reached its decision: an empty set read as "step 6
@@ -1326,13 +1327,16 @@ def _noting_firewall_failure(job):
 
 
 def _configure_server(job, remote, gs):
-    """Step 5 of the install job: port, command list and cron, EULAs, persistent bans."""
+    """Step 5 of the install job: port, command list and cron, EULAs, persistent bans.
+
+    -> what the maintenance cron write reported (_cache_commands_and_cron), for step 7.
+    """
     short_name, lgsm_name, _p = job.short_name, job.lgsm_name, job.p
     # 5. Configure: cache command list + maintenance cron + Minecraft EULA.
     _p(5, "Configuring server")
 
     _write_install_ports(job, remote)
-    _cache_commands_and_cron(remote, short_name, gs)
+    cron_written = _cache_commands_and_cron(remote, short_name, gs)
     _accept_game_eulas(remote, short_name, gs)
     # Source/GoldSrc: make the server reload its ban list on every start, so a banid
     # ban actually survives a restart (without this the engine drops it on reboot and
@@ -1342,6 +1346,7 @@ def _configure_server(job, remote, gs):
             ensure_persistent_bans(remote, short_name, lgsm_name)
         except Exception:
             _log.debug("_run: ignored non-fatal error", exc_info=True)
+    return cron_written
 
 
 def _write_install_ports(job, remote):
@@ -1385,6 +1390,9 @@ def _cache_commands_and_cron(remote, short_name, gs):
     attempt wrote one — is still there. Recording that as Off was the VPS proof's mismatch: with
     step 7's write and its read-back failing too, nothing corrected it, and the Details page said
     Off while `monitor` kept restarting the server.
+
+    -> the write's answer (_install_maintenance_cron): True or False when it landed, None when it
+    failed or never ran. Step 7 reads it: a column this write just recorded is not unconfirmed.
     """
     wrote_monitor = None
     try:
@@ -1396,6 +1404,7 @@ def _cache_commands_and_cron(remote, short_name, gs):
         _log.debug("_run: ignored non-fatal error", exc_info=True)
     if wrote_monitor is not None:
         _record_autostart(gs, wrote_monitor)
+    return wrote_monitor
 
 
 def _install_maintenance_cron(remote, short_name, gs, cmds):
@@ -1722,7 +1731,7 @@ def _seed_scpsl_port_config(remote, short_name, gs):
             _log.debug("_run: ignored non-fatal error", exc_info=True)
 
 
-def _enable_autostart(job, remote, gs):
+def _enable_autostart(job, remote, gs, cron_written=None):
     """Step 7 of the install job: switch the LinuxGSM monitor cron on, and record what it got.
 
     Best-effort, but no longer blind: set_autostart's (ok, why) was thrown away, so a write that
@@ -1730,8 +1739,10 @@ def _enable_autostart(job, remote, gs):
     it. A write that worked turns the column on; one that failed leaves step 5's answer (the line
     step 5 wrote is still there: a failed rewrite installs nothing). Then the crontab is READ back
     and the column made to match it, which settles both steps; a read that fails changes nothing
-    (_sync_toggles_from_cron refuses None). When this write AND that read both fail, the column is
-    what the panel last knew and nothing here confirmed it, so that is logged at warning.
+    (_sync_toggles_from_cron refuses None). When this write AND that read both fail, and step 5's
+    write did not land either (`cron_written`, its answer: None), the column is what the panel last
+    knew and nothing in this run confirmed it, so that is logged at warning. When step 5's write
+    landed, the column is what that write got, and saying "unconfirmed" would be false.
     """
     short_name, _p = job.short_name, job.p
     # 7. Enable autostart by default (the LinuxGSM monitor cron; install_game_cron
@@ -1744,7 +1755,7 @@ def _enable_autostart(job, remote, gs):
     except Exception:
         jobs = None
         _log.debug("install %s: the crontab could not be read back", short_name, exc_info=True)
-    if jobs is None and not wrote:
+    if jobs is None and not wrote and cron_written is None:
         _log.warning("install %s: the monitor line could not be written or the crontab read back, "
                      "so Autostart is left %s, as last known, unconfirmed", short_name,
                      "On" if gs.autostart else "Off")

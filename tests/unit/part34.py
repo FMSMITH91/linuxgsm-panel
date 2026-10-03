@@ -1377,6 +1377,32 @@ def _section_report_console_labels34():
               t in line for t in ("7731", "mcserver", "say", "list", "x.cfg")), line)
 
 
+# The installer's own steps as the panel's service account, as sudo-rs logged them on the test VPS
+# (the 14:33 deploy, in the proof of #393): counted 'as a game account [env ×7, python3 ×2]'.
+_SERVICE34 = [
+    "root :  PWD=/root ; USER=lgsmpanel ; COMMAND=/usr/bin/env -C / tar -C /home/lgsmpanel/"
+    "linuxgsm-panel --ignore-failed-read --exclude=./venv -czf - . ",
+    "root :  PWD=/root ; USER=lgsmpanel ; COMMAND=/usr/bin/env -C / mkdir -p -- /home/lgsmpanel/"
+    "linuxgsm-panel/data/.backups/20261003-143328 ",
+    "root :  PWD=/root ; USER=lgsmpanel ; COMMAND=/usr/bin/python3 -I - /home/lgsmpanel/"
+    "linuxgsm-panel/data/config.json ",
+    "  ubuntu : PWD=/home/ubuntu ; USER=mcsrv7731 ; COMMAND=/usr/bin/rm -f /home/mcsrv7731/x7731",
+]
+
+
+def _section_report_panel_account34():
+    lines = [_PFX34 % (i, 2200 + i) + b for i, b in enumerate(_SERVICE34)]
+    _kept, verbs, _s = _lg34._split_priv(lines)
+    check("I labels: the installer's calls as the panel's own service account are counted apart, "
+          "by program — not 'as a game account' — and a game account's call beside them still is",
+          verbs.get(_lg34.PANEL_ACCOUNT) == {"env": 2, "python3": 1}
+          and verbs.get(_lg34.GAME_ACCOUNT) == {"rm": 1}, repr(verbs))
+    line = _lg34._priv_line(verbs, 0, "x") or ""
+    check("I labels: ...and the printed line names neither account, path nor argument",
+          "as the panel's own account ×3 [env ×2, python3 ×1]" in line and not any(
+              t in line for t in ("lgsmpanel", "7731", "/home", "config.json", "tar")), line)
+
+
 _OWN34 = "Oct 03 08:00:00 h python3[1]: WARNING panel own line\n"
 _SUDO34 = "Oct 03 08:00:01 h sudo[2]:   u : PWD=/x ; USER=root ; COMMAND=/usr/bin/true\n"
 
@@ -1557,6 +1583,7 @@ def _run_sections34():
     _section_console34()
     _section_report_classifier34()
     _section_report_console_labels34()
+    _section_report_panel_account34()
     _section_report_reads34()
     _section_report_once34()
     check("ws4: nothing in this part reached a real SSH or local transport", _TRIP34 == [],

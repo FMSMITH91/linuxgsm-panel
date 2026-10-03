@@ -681,6 +681,48 @@ def _e_gates():
           and any("scheduled game backups are skipped" in f["text"] for f in finds), text)
 
 
+def _e_line(sid):
+    """Server `sid`'s line of the report's automatic schedule, '' when it has none."""
+    head = "  - gs %d · " % sid
+    return next((ln for ln in _e_report()[0].split("\n") if ln.startswith(head)), "")
+
+
+def _e_first_sight(rid):
+    """The VPS proof's 'gs 3 · cod · last 0 s ago · next in 6 d': a clock started, no backup."""
+    sid = _new33("p33-first", "firstserver", rid, game="cod")
+    _only33(sid)
+    _b_sweep()                               # the real sweep's first sight of it
+    line = _e_line(sid)
+    check("report: a clock the scheduled sweep only STARTED says no backup has run yet, and when "
+          "the first is due — not 'last 0 s ago', which read as a backup just taken",
+          all(("firstserver" not in _RUNS33, "· every 7 d · no backup yet (clock started " in line,
+               " s ago) · first due in 6 d" in line, "last" not in line)),
+          repr((line, _RUNS33[-3:])))
+    old = int(_t33.time() - 8 * _DAY33)
+    _entry33(sid, last=old, clock_started=old)
+    line = _e_line(sid)
+    check("report: ...and once that first backup is due, 'first due since', still no 'last'",
+          "· no backup yet (clock started 8 d ago) · first due since 24 h" in line
+          and "last" not in line, line)
+    _b_sweep()                               # now it is archived, by the same sweep
+    line = _e_line(sid)
+    check("report: ...and the backup that then runs makes it an ordinary clock: 'last 0 s ago · "
+          "next in 6 d'", _RUNS33.count("firstserver") == 1 and "· every 7 d · last " in line
+          and " s ago · next in 6 d" in line and "no backup yet" not in line,
+          repr((line, _RUNS33[-3:])))
+    second = int(_t33.time())
+    _p33(_bk33, "time", NS(time=lambda: second, sleep=_t33.sleep, monotonic=_t33.monotonic))
+    try:
+        _bk33.start_game_clock(sid)
+        _bk33.record_game_backup(sid)        # a backup in the very second the clock started
+    finally:
+        _restore_one33(_bk33, "time")
+    line = _e_line(sid)
+    check("report: ...and so does a backup taken in the same second the clock was started (its "
+          "time alone cannot tell them apart)", "· last " in line and "no backup yet" not in line,
+          line)
+
+
 def _e_events():
     form = {"telegram": {}, "discord": {}, "ntfy": {}, "thresholds": {},
             "events": {"backup_failed": False, "server_up": True, "ip_banned": False,
@@ -1078,7 +1120,8 @@ def _run33():
                      (_b_report_not_a_backup, (rid,)), (_b_queue, (rid,)), (_c_clocks, (rid,)),
                      (_c_requeue, (rid,)), (_c_clock_write_fails, (rid,)), (_d_raises, (rid,)),
                      (_d_queued_only, (rid,)), (_d_audit_fails, (rid,)), (_d_replaced, (rid,)),
-                     (_e_section, (rid,)), (_e_gates, ()), (_e_events, ()), (_f_js, ()),
+                     (_e_section, (rid,)), (_e_gates, ()), (_e_first_sight, (rid,)),
+                     (_e_events, ()), (_f_js, ()),
                      (_f_template, ()), (_f_route, ()), (_g_paramiko, (rid,)), (_g_pool_drop, ()),
                      (_g_streams, ()), (_h_claim_leak, ())):
         try:

@@ -14438,7 +14438,8 @@ try:
                     continue
                 for _bkc_c in _bkc_ast.walk(_bkc_fn):
                     if (isinstance(_bkc_c, _bkc_ast.Call) and isinstance(_bkc_c.func, _bkc_ast.Attribute)
-                            and _bkc_c.func.attr in ("record_game_backup", "record_full_backup")):
+                            and _bkc_c.func.attr in ("record_game_backup", "record_full_backup",
+                                                     "start_game_clock")):
                         _bkc_direct.append("%s:%d in %s()" % (_bkc_py.name, _bkc_c.lineno, _bkc_fn.name))
         check("backup clock: nothing but the two safe helpers calls the writers that raise on a bad "
               "config.json", not _bkc_direct,

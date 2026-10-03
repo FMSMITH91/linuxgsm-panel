@@ -1464,9 +1464,12 @@ def _old_db18(name):
         c.execute(t["group"].insert(), [{"id": i, "name": "p18g%d" % i} for i in (1, 2)])
         c.execute(t["remote_server"].insert(), [{"id": i, "name": "h%d" % i, "host": "192.0.2.%d" % i,
                                                  "username": "root"} for i in (1, 2)])
+        # Installed servers: data migration 1 leaves their Autostart alone, so every value the
+        # rebuild carries is still the one it had.
         c.execute(t["game_server"].insert(), [{"id": i, "remote_id": 1, "name": "s%d" % i,
                                                "short_name": "s%dserver" % i, "game_type": "csgo",
-                                               "port": 27000 + i} for i in (1, 2, 3)])
+                                               "port": 27000 + i, "installed": True}
+                                              for i in (1, 2, 3)])
         c.execute(t["game_server"].delete().where(t["game_server"].c.id == 3))
         c.execute(t["audit_log"].insert(), [{"id": 1, "username": "x", "action": "start_server",
                                              "target": "s1", "game_server_id": 3}])
@@ -1566,6 +1569,61 @@ def _next_after_delete18(model, **fields):
     db.session.add(second)
     db.session.commit()
     return first_id, second.id
+
+
+def _start18(path):
+    """One start's migrations on the database at `path`: None, or the error that stopped them."""
+    try:
+        with _app18(path).app_context():
+            _m18._run_light_migrations()
+        return None
+    except Exception as e:  # noqa: BLE001 - a lock or a failed migration is the finding
+        return repr(e)[:200]
+
+
+def _write18(path, sql, rows=()):
+    con = _sq18.connect(path)
+    try:
+        if rows:
+            con.executemany(sql, rows)
+        else:
+            con.execute(sql)
+        con.commit()
+    finally:
+        con.close()
+
+
+def _data_migration18():
+    """Data migration 1 replayed: an upgrade from a version whose install rows started On."""
+    path, _ = _old_db18("autostart.db")
+    # Made by the old install route (no autostart given, so the model's default On): one that
+    # failed before step 5, an installed server, and a failed one a write had already set Off.
+    _write18(path, "INSERT INTO game_server (id, remote_id, name, short_name, game_type, port, "
+                   "installed, autostart) VALUES (?, 1, ?, ?, 'csgo', ?, ?, ?)",
+             [(10, "p18-failed", "p18fserver", 27110, 0, 1),
+              (11, "p18-up", "p18userver", 27111, 1, 1),
+              (12, "p18-off", "p18oserver", 27112, 0, 0)])
+    check("data migration (premise): the old database has run none (user_version 0), and its "
+          "game_server table must be rebuilt after the migration (the write lock)",
+          _one18(path, "PRAGMA user_version") == [(0,)] and _plain18(path, "game_server"), "")
+    err = _start18(path)
+    got = dict(_one18(path, "SELECT id, autostart FROM game_server WHERE id >= 10"))
+    check("data migration: an upgrade sets Autostart Off on an install that never finished (the "
+          "old default On, over a crontab no monitor line reached) and keeps an installed "
+          "server's On", err is None and got == {10: 0, 11: 1, 12: 0}, repr((err, got)))
+    check("data migration: ...committed before the rebuild and the index build, which take the "
+          "write lock on connections of their own (nothing locked, game_server rebuilt), and "
+          "counted: user_version 1",
+          err is None and not _plain18(path, "game_server")
+          and _one18(path, "PRAGMA user_version") == [(1,)],
+          repr((err, _plain18(path, "game_server"), _one18(path, "PRAGMA user_version"))))
+    # A retry of that install, on this version, wrote the monitor line and recorded On: evidence.
+    _write18(path, "UPDATE game_server SET autostart = 1 WHERE id = 10")
+    err = _start18(path)
+    check("data migration: ...ONCE: the next start leaves an unfinished install's On alone (this "
+          "version records it only on what a write or a read reported)",
+          err is None and _one18(path, "SELECT autostart FROM game_server WHERE id = 10") == [(1,)],
+          repr((err, _one18(path, "SELECT autostart FROM game_server WHERE id = 10"))))
 
 
 try:
@@ -1722,6 +1780,7 @@ try:
                  _next_after_delete18(_m18.UserSession, user_id=1, sid="p18-next"))
     check("autoincrement: a removed global ban, invite or login session's id is not given to the "
           "next one", all(a != b for a, b in _nx18), repr(_nx18))
+    _data_migration18()
 finally:
     for _a in _apps18:
         try:

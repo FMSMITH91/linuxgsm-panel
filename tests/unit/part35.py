@@ -312,6 +312,52 @@ def _p35_health_domains():
           "https://tailscale.com/s/dns-fight" in final, final)
 
 
+def _p35_health_footer():
+    """The VPS proof of #393: the footer said 'Redacted: nothing' above both health markers."""
+    ctx, _st = _ctx_with()
+    health = ["Linux DNS config not ideal. /etc/resolv.conf overwritten. See "
+              "https://tailscale.com/s/dns-fight",
+              "TLS handshake with panel7731.corp7731.example:443 failed: likely intercepted "
+              "connection; certificate is self-signed by Corp7731 Inspection CA",
+              "dial tcp: lookup derp1.relay7731.example: no such host"]
+    v = _tinfo35({"BackendState": "Running", "Health": health,
+                  "Self": {"HostName": "zephyrbox7731", "InNetworkMap": True}}, {})
+    res = Result()
+    with _patched():
+        _patch(NW, "_load_cfg", lambda: ({"port": 5000}, True))
+        NW._tailscale_lines(ctx, res, {}, ("ok", ("ok", v)))
+    final = PV.scrub(ctx, "\n".join(res.lines))
+    foot = next((ln for ln in PV.footer(ctx) if ln.startswith("- **Redacted**")), "")
+    check("privacy footer: the Tailscale health text's own [domain] and [issuer withheld] are "
+          "counted under Redacted, each distinct value once; it said 'nothing' above them",
+          "self-signed by [issuer withheld]" in final and final.count("[domain]") == 2
+          and foot.endswith("characters): 2 Tailscale health-message domains; 1 Tailscale "
+                            "health-message certificate issuer."), repr((foot, final)))
+
+
+# tailscaled's Tailscale SSH line from the test VPS's journal (the proof of #393), the account
+# changed from root to one the report does not know, and a second connection to a known host.
+_SSH_LINE35 = ("Sep 26 19:28:03 h tailscaled[1010]: handling conn: 100.69.18.95:32914->"
+               "quokka7731@100.84.48.111:22; ->root@100.84.48.111:22; "
+               "->quokka7731@zephyrhost7731:22")
+
+
+def _p35_account_at_address():
+    """'name@<IPv4>' printed the name: the IP rule made it 'name@[ip:tailnet]' before _redact."""
+    ctx, _st = _ctx_with(("zephyrhost7731", "host", 1))
+    out = PV.scrub(ctx, _SSH_LINE35)
+    later = PV.scrub(ctx, "a later section naming quokka7731 on its own")
+    pseud = next((ln for ln in PV.footer(ctx) if ln.startswith("- **Pseudonymised**")), "")
+    check("privacy: an account before an address (name@<IPv4>, already [ip:tailnet] when the email "
+          "rule runs) or before a known host is pseudonymised as an OS account, the same token "
+          "everywhere; root is kept, as everywhere in the report",
+          "quokka7731" not in out + later
+          and out.endswith("->[account-1]@[ip:tailnet]:22; ->root@[ip:tailnet]:22; "
+                           "->[account-1]@[host-1]:22")
+          and later == "a later section naming [account-1] on its own"
+          and "1 OS or SSH account" in pseud, repr((out, later, pseud)))
+
+
 def _p35_control_host():
     own = _tinfo35({"Self": {}}, {"ControlURL": "https://controlplane.tailscale.com"})
     hosted = _tinfo35({"Self": {}}, {"ControlURL": "https://hs.zephyr7731.example:443"})
@@ -652,7 +698,9 @@ def _p35_trust_proxy():
 
 for _fn35 in (_p35_units, _p35_installer_paths, _p35_installer_musts, _p35_installer_ids,
               _p35_userinfo_ctx, _p35_installer_said, _p35_footer_counts, _p35_footer_installer,
-              _p35_health, _p35_health_domains, _p35_control_host, _p35_key_expiry,
+              _p35_health, _p35_health_domains, _p35_health_footer, _p35_account_at_address,
+              _p35_control_host,
+              _p35_key_expiry,
               _p35_ci_gate, _p35_announced, _p35_workers, _p35_loops_record, _p35_loops_gate,
               _p35_trust_proxy):
     try:

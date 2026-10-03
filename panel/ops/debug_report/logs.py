@@ -206,6 +206,27 @@ def _traceback_lines(ctx, tbs):
 
 
 GAME_ACCOUNT = "as a game account"
+# The panel's own account (the service account, or the login account of a per-user install): the
+# installer runs its snapshot and config steps as it ('sudo -u <panel> env -C / tar …', 'python3 -I
+# - …/config.json'), and those were counted as game-account work.
+PANEL_ACCOUNT = "as the panel's own account"
+
+
+def _panel_accounts():
+    """The names of the panel's own account: this process's, and the installer's service account.
+
+    Asked once per count, of the own uid only (getpwuid), as the privacy pass does. The service
+    account is named too, for a report generated as root, where this process's account is root.
+    """
+    import pwd
+    from panel.ops.debug_report.install import SERVICE_ACCOUNT
+    names = {SERVICE_ACCOUNT}
+    try:
+        names.add(pwd.getpwuid(os.geteuid()).pw_name)
+    except (KeyError, OSError):
+        pass                       # no passwd entry: the service account's name still counts
+    names.discard("root")
+    return frozenset(names)
 
 
 def _game_read(rest):
@@ -216,16 +237,17 @@ def _game_read(rest):
     return "other"
 
 
-def _priv_verb(command, rest, user="root"):
+def _priv_verb(command, rest, user="root", own=frozenset()):
     """The label a sudo line is counted under: (label, sub-label or None). Fixed words only.
 
     The helper's own lines are its verb ('other verb' for one the table does not know). Anything
-    run as another account (USER= not root) is the panel's game-account work — gamedig, the console
-    reads and sends, LinuxGSM configs, and every argv-form read — counted together under
-    GAME_ACCOUNT with a fixed fingerprint of what it was (_GAME_READS). Anything else is root: a
-    program the panel itself runs is named, '<program> as root'; a shell is 'shell as root';
-    anything else 'other program as root'. Never an argument, never a path, never the account: for
-    su the argument is an account, and USER= is one.
+    run as the panel's own account (`own`, from _panel_accounts) is PANEL_ACCOUNT, by program.
+    Anything run as another account (USER= not root) is the panel's game-account work — gamedig,
+    the console reads and sends, LinuxGSM configs, and every argv-form read — counted together
+    under GAME_ACCOUNT with a fixed fingerprint of what it was (_GAME_READS). Anything else is
+    root: a program the panel itself runs is named, '<program> as root'; a shell is 'shell as
+    root'; anything else 'other program as root'. Never an argument, never a path, never the
+    account: for su the argument is an account, and USER= is one.
     """
     from panel.security import privileged as _priv
     rest = rest or ""
@@ -233,16 +255,26 @@ def _priv_verb(command, rest, user="root"):
         words = rest.split()
         return (words[0] if words and words[0] in set(_priv.verbs()) else "other verb"), None
     prog = os.path.basename(command)
-    if (user or "").strip() != "root":
+    user = (user or "").strip()
+    if user in own:
+        return PANEL_ACCOUNT, _program_label(prog)
+    if user != "root":
         return GAME_ACCOUNT, _game_label(prog, rest)
     return _root_label(prog), None
+
+
+def _program_label(prog):
+    """A program's name when the panel itself runs it, 'shell' for a shell, else 'other'."""
+    if prog in _SHELLS:
+        return "shell"
+    return prog if prog in _ROOT_PROGRAMS else "other"
 
 
 def _game_label(prog, rest):
     """What a command run as a game account was: a shell body's fingerprint, else its program."""
     if prog in _SHELLS:
         return _game_read(rest)
-    return prog if prog in _ROOT_PROGRAMS else "other"
+    return _program_label(prog)
 
 
 def _root_label(prog):
@@ -258,6 +290,7 @@ def _split_priv(lines):
     A label counted for game-account work is a dict {sub-label: calls}; every other is an int.
     """
     kept, verbs, sessions = [], {}, 0
+    own = _panel_accounts()
     for ln in lines:
         body = _body(ln)
         if _SUDO_REFUSED_RE.search(body):
@@ -271,7 +304,7 @@ def _split_priv(lines):
             if m is None:
                 kept.append(ln)
                 continue
-            _count_priv(verbs, *_priv_verb(m.group(2), m.group(3), m.group(1)))
+            _count_priv(verbs, *_priv_verb(m.group(2), m.group(3), m.group(1), own))
     return kept, verbs, sessions
 
 
