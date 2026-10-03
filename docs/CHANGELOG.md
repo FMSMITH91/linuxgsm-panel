@@ -526,9 +526,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   in the journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `console
   send`, `LinuxGSM config`, `true as root`, and so on) instead of "other command". Account names,
   paths, what was typed into a console and scripts an operator ran are never printed. The
-  installer's calls as the panel's own account are counted under their own label, not as a game
-  account's. A system install needs an updated helper for this; an older helper gets the previous
-  read.
+  installer's calls as the panel's own account (the service account, or the login account a
+  per-user panel runs as) are counted under their own label, not as a game account's; a game server
+  run under that same account still has its gamedig and console calls counted as game work. A
+  system install needs an updated helper for this; an older helper gets the previous read.
 - **Call of Duty servers show the capacity the game reports.** gamedig gives cod's `maxplayers` as
   text ("16"). The panel threw it away and showed the LinuxGSM config's number instead.
 - **A running game the panel cannot query no longer runs LinuxGSM `details` every 45 seconds.**
@@ -559,14 +560,19 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **The debug report pseudonymises an account written before an address.** In `name@<IPv4>` the
   address rule ran first, so the email rule no longer saw an address and the account printed
   (`alice@[ip:tailnet]`); `name@<a known host>` was the same. The account is now an [account-N]
-  token, the same one wherever else the name appears. Names the report keeps everywhere, such as
-  root, are kept here too.
+  token, the same one wherever else the name appears, a mention earlier in the same text or in the
+  summary included. Names the report keeps everywhere, such as root, are kept here too, and so is a
+  word no account can be named (one starting with a digit, such as a year). An email address whose
+  local part is a name the report knows (an OS account, a panel user), or whose domain starts with
+  a known host's name, is now `[email]`; the name was replaced first, so the address was no longer
+  recognised, and its domain (or the name before the @) printed.
 - **The debug report no longer says a self-update that completed DIED.** It read a log with no
   "installer exit" line as a run killed mid-update, and raised a [fail] at the top of the report.
   The panel's helper wrote no such line until its version of 2026-09-26, so every self-update an
-  older helper ran ended without one, finished or not. When the log's last line is install.sh's own
-  ending ("Update complete", "Already up to date", "Not updated"), the report now gives that outcome
-  and says the exit line is missing.
+  older helper ran ended without one, finished or not. When the log holds install.sh's own ending
+  ("Update complete", "Already up to date", "Not updated") with no error after it, the report now
+  gives that outcome, says the exit line is missing, and names what can leave it out (an older
+  helper, or a run stopped after install.sh's ending) without claiming which one did.
 - **The debug report prints Tailscale's health messages, not only how many there are.** Each one
   is on its own line, with node and login names, addresses, a self-hosted server's domain and a
   certificate issuer replaced, as the rest of the report replaces them; file paths and Tailscale's

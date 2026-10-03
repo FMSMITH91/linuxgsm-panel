@@ -93,8 +93,17 @@ _LONG_ID_RE = re.compile(r"(?<!\d)\d{15,}(?!\d)")
 # is 'name@[ip:tailnet]' by the time _redact's email rule runs, and 'name@<known host>' is
 # 'name@[host-1]', so neither is email-shaped any more and the account printed (tailscaled's
 # '…->alice@100.84.48.111:22'). The account is pseudonymised like any other: an [account-N] token.
-_ACCOUNT_AT_RE = re.compile(r"(?<![\w.+-])([\w.+-]{1,64})@(?=\[\[?(?:ip:[a-z-]{1,16}|host-\d{1,9}|"
-                            r"panel-host|ts-name|tailnet-name-\d{1,9})\])")
+# Shaped as an account name (a letter or '_' first, as useradd requires), and never a fragment
+# glued to a token ('[account-1].smith@'): a year or a fragment taken for one is replaced in every
+# later mention ('2026@10.0.0.1' made every date read '[account-1]-10-03').
+_ACCOUNT_AT_RE = re.compile(r"(?<![\w.+\]-])([A-Za-z_][\w.+-]{0,63})@(?=\[\[?(?:ip:[a-z-]{1,16}|"
+                            r"host-\d{1,9}|panel-host|ts-name|tailnet-name-\d{1,9})\])")
+# An address the name pass made unreadable to _redact's email rule: its local part, or its domain's
+# first label, is a token ('[account-1]@corp.example', 'root@[host-1].corp.example'). Groups: the
+# local part, the domain, the domain's first label.
+_PSEUDONYM_RX = r"\[[a-z][a-z0-9-]{0,40}\]"
+_TOKEN_EMAIL_RE = re.compile(r"(%s|(?<![\w.+-])[\w.+-]{1,64})@((%s|[\w-]{1,63})\.[\w.-]{1,253})"
+                             % (_PSEUDONYM_RX, _PSEUDONYM_RX))
 _WITHHELD = "_(withheld: pseudonymisation unavailable)_"
 
 
@@ -544,15 +553,17 @@ def _name_rx(key):
     return r"\s+".join(map(re.escape, key.split(" ")))
 
 
-def _known_names(text, st):
+def _known_names(text, st, only=None):
     """Every known name in `text` replaced by its token. Headings are fixed text and skipped.
 
     Matched over each run of non-heading lines, so a name split across a line break is still
     one match; the token keeps the line breaks it replaced, so the line count never changes.
+    `only`, a set of tokens, limits it to the names those tokens stand for.
     """
     names, kinds = st.snapshot()
     low = _fold(text)
-    present = [n for n in names if n.split(" ", 1)[0] in low]
+    present = [n for n in names if (only is None or names[n] in only)
+               and n.split(" ", 1)[0] in low]
     if not present:
         return text
     present.sort(key=len, reverse=True)
@@ -681,11 +692,12 @@ def _count_generic(rx, repl, kind, text, st):
                 st.hit(kind, m.group(0).lower())
 
 
-def _account_at(st):
+def _account_at(st, found):
     """re.sub's callback for _ACCOUNT_AT_RE: the account as its token, mapped as an OS account.
 
     A name the report keeps everywhere (root, ubuntu, a word under _MIN_NAME characters) is kept
-    here too. Any other is added to the map, so it is the same token wherever else it appears.
+    here too. Any other is added to the map, so it is the same token wherever else it appears, and
+    its token is put in `found` for scrub to replace this text's other mentions of it.
     """
     def _sub(m):
         key = _name_key(m.group(1))
@@ -696,11 +708,12 @@ def _account_at(st):
         if token is None:
             return m.group(0)
         st.hit("account", key)
+        found.add(token)
         return token + "@"
     return _sub
 
 
-def _generic(text, st):
+def _generic(text, st, found=None):
     for rx, repl, kind in _GENERIC:
         _count_generic(rx, repl, kind, text, st)
         text = rx.sub(repl, text)
@@ -711,7 +724,7 @@ def _generic(text, st):
     if ":" in text:
         text = _IPV6_RE.sub(lambda m: sub(m) if m.group(0).count(":") >= 2 else m.group(0), text)
     if "@" in text:
-        text = _ACCOUNT_AT_RE.sub(_account_at(st), text)
+        text = _ACCOUNT_AT_RE.sub(_account_at(st, set() if found is None else found), text)
 
     def _long(m):
         st.hit("id", m.group(0))
@@ -728,20 +741,56 @@ def scrub(ctx, text):
     except Exception as exc:  # noqa: BLE001 - nothing pattern-only is printed after this
         st.pattern_error = type(exc).__name__
         return _withhold(text)
+    text = _names_pass(text, st)
+    found = set()
     try:
-        text = _known_names(text, st)
-    except Exception as exc:  # noqa: BLE001 - the generic rules below still run
-        st.source_errors.append(("name matching", type(exc).__name__))
-    try:
-        return _redact(_generic(text, st), st)
+        text = _redact(_generic(text, st, found), st)
     except Exception as exc:  # noqa: BLE001 - withhold rather than print pattern-free text
         st.pattern_error = type(exc).__name__
         return _withhold(text)
+    if found:
+        # An account _generic mapped from 'name@<address>' after the name pass above: its other
+        # mentions in this text, before or after, are its token too, not the name. After _redact,
+        # so an address or a long token holding the name is still redacted whole.
+        text = _names_pass(text, st, only=found)
+    return text
+
+
+def _names_pass(text, st, only=None):
+    """_known_names; when it fails, the failure is recorded and the generic rules still run."""
+    try:
+        return _known_names(text, st, only)
+    except Exception as exc:  # noqa: BLE001 - the generic rules still run
+        st.source_errors.append(("name matching", type(exc).__name__))
+        return text
 
 
 def _redact(text, st):
     """system_ops._redact, each value it replaces recorded for the footer ("redact:<rule>")."""
-    return _so._redact(text, lambda kind, value: st.hit("redact:" + kind, value))
+    return _so._redact(_token_emails(text, st), lambda kind, value: st.hit("redact:" + kind, value))
+
+
+def _token_emails(text, st):
+    """`text` with each address the name pass made a token in replaced by [email].
+
+    The names run before _redact, so with alice known 'alice@corp.example' reached the email rule
+    as '[account-1]@corp.example', which has no local part it reads, and the domain printed; a
+    known host's name as the domain's first label did the same ('root@[host-1].corp.example').
+    Only a name's token counts: a fixed marker stands for no name ('https://[redacted]@host' is
+    URL userinfo), and an address with no token is _redact's own. As for any address, a systemd
+    unit or a package@version after the '@' is kept.
+    """
+    if "]@" not in text and "@[" not in text:
+        return text
+    tokens = set(st.snapshot()[0].values())
+
+    def _sub(m):
+        named = [t for t in (m.group(1), m.group(3)) if t.startswith("[")]
+        if not named or any(t not in tokens for t in named) or _so._not_an_address(m.group(2)):
+            return m.group(0)
+        st.hit("redact:email", m.group(0).lower())
+        return "[email]"
+    return _TOKEN_EMAIL_RE.sub(_sub, text)
 
 
 def scrub_lines(ctx, lines):

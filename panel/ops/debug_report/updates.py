@@ -45,12 +45,18 @@ _KEEP_PREFIXES = _WARN_PREFIXES + ("✓ sudo grant:", "Keeping ", "Updating to v
 # '(this) checkout (<sha>)' (the sideways-hold warning, and the no-safe-target error's second line).
 _INSTALLER_SHA_RE = re.compile(r"((?:verified|pinned) commit |^\s*Keeping |stays at |pinned to, |"
                                r"checkout \()([0-9a-f]{40})(?![0-9a-f])")
-# install.sh's last line on each of its exit-0 paths, as panel_update_log reads them (ANSI gone):
-# the update's own, then update_noop_line's two. Each is printed only on its way to `exit 0`.
+# The line install.sh prints on its way to `exit 0` on each exit-0 path, as panel_update_log reads
+# them (ANSI gone): the update's own, then update_noop_line's two. Not always its last line: the
+# update's can be followed by _post_update_scheme_hint's HTTPS hint.
 _INSTALLER_OK_ENDS = (("✓ Update complete", "done"), ("✓ Already up to date", "current"),
                       ("[!] Not updated:", "held"))
-_NO_EXIT_LINE = (" · no exit line (a panel-helper from before the exit line existed wrote none), "
-                 "so this is install.sh's own last line")
+# Only what the log shows. Why the exit line is missing is not in it: a panel-helper from before
+# #363 never wrote one, and a run stopped after install.sh's ending (the system_ops wrapper's, or a
+# current helper's) leaves none either. The header cannot tell them apart: the old and the new
+# helper write the same one, and a long log's tail may not hold it.
+_NO_EXIT_LINE = (" · no exit line, so this outcome is install.sh's own ending line (a "
+                 "panel-helper from before 2026-09-26 never wrote an exit line; a run stopped "
+                 "after install.sh's ending leaves none either)")
 _REFLOG_ACTIONS = ("reset", "pull", "checkout", "commit", "merge", "rebase", "clone",
                    "cherry-pick", "fetch", "branch")
 # panel_self_update's and panel_switch_branch's messages, as fixed categories chosen IN SQL, so no
@@ -372,9 +378,10 @@ def _ok_outcome(upd, lines, category, ctx=None):
 
 
 def _installer_end(lines):
-    """install.sh's own last word on an exit-0 path, when the log holds one: (outcome, reason).
+    """install.sh's own ending line on an exit-0 path, when the log holds one: (outcome, reason).
 
-    None when it does not, or when an [ERROR] came after it. Read only for a log with no exit line.
+    None when it does not, or when an [ERROR] came after it. Lines after it that are not an [ERROR]
+    (the HTTPS hint) are passed over. Read only for a log with no exit line.
     """
     for ln in reversed(lines):
         if ln.startswith("[ERROR]"):
@@ -389,7 +396,7 @@ def run_outcome(upd, mtime, category="unreadable", now=None, ctx=None):
     """(level, outcome text) for a self-update log: the EXIT STATUS first, text markers second.
 
     A log with no exit line that stopped being written _UPDATE_STALE_LOG ago is a run that DIED,
-    unless install.sh's own last line says how it ended. The exit line is the LAUNCHER's, written
+    unless install.sh's own ending line says how it ended. The exit line is the LAUNCHER's, written
     after install.sh returns, and the panel-helper wrote none before #363: every self-update it ran
     ended without one, finished or not, and the report called a run whose log ends "✓ Update
     complete" DIED, a [fail] at the top of the report.

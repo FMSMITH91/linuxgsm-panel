@@ -1403,7 +1403,43 @@ def _section_report_panel_account34():
               t in line for t in ("lgsmpanel", "7731", "/home", "config.json", "tar")), line)
 
 
-_OWN34 = "Oct 03 08:00:00 h python3[1]: WARNING panel own line\n"
+# A per-user install: install.sh run as root sets TREE_SUDO to 'sudo -u <login account> env -C /',
+# so its steps run as the account the panel itself runs as, which is not the service account. And a
+# game server may run under that same account (game_idents_ok refuses only root): its gamedig and
+# console bodies are then sudo'd to it as well.
+_PERUSER34 = "panelop7731"
+_GAMEDIG34 = ("COMMAND=/usr/bin/bash -c 'gamedig --type garrysmod 192.0.2.5:27015 2>/dev/null | jq "
+              "-r '.map // \"\"' 2>/dev/null'")
+
+
+def _section_report_process_account34():
+    as_me = "root :  PWD=/root ; USER=%s ; " % _PERUSER34
+    tree = [as_me + "COMMAND=/usr/bin/env -C / tar -C /home/%s/linuxgsm-panel --ignore-failed-read "
+            "-czf - . " % _PERUSER34,
+            as_me + "COMMAND=/usr/bin/env -C / mkdir -p -- /home/%s/linuxgsm-panel/data/.backups/x"
+            % _PERUSER34,
+            as_me + "COMMAND=/usr/bin/python3 -I - /home/%s/linuxgsm-panel/data/config.json "
+            % _PERUSER34]
+    game = ["%s : PWD=/home/%s ; USER=%s ; %s" % (_PERUSER34, _PERUSER34, _PERUSER34, _GAMEDIG34),
+            _VPS_SEND34.replace("USER=mcsrv7731", "USER=%s" % _PERUSER34)]
+    with _patched():
+        # this process's account, whatever the suite runs as (root in a container included)
+        _patch(_pwd34, "getpwuid", lambda _uid: NS(pw_name=_PERUSER34))
+        _kept, verbs, _s = _lg34._split_priv([_PFX34 % (i, 2300 + i) + b
+                                              for i, b in enumerate(tree)])
+        _kept, mixed, _s = _lg34._split_priv([_PFX34 % (i, 2310 + i) + b
+                                              for i, b in enumerate(tree + game)])
+    check("I labels: a per-user install's steps, run as the account the panel process runs as "
+          "(TREE_SUDO's 'sudo -u <it> env -C /', the config read), are the panel's own account's, "
+          "not a game account's",
+          verbs == {_lg34.PANEL_ACCOUNT: {"env": 2, "python3": 1}}, repr(verbs))
+    check("I labels: ...and a game server running under that same account is still game work: its "
+          "gamedig and console bodies read 'as a game account', by what they were",
+          mixed.get(_lg34.GAME_ACCOUNT) == {"gamedig map": 1, "console send": 1}
+          and mixed.get(_lg34.PANEL_ACCOUNT) == {"env": 2, "python3": 1}, repr(mixed))
+
+
+_OWN34 ="Oct 03 08:00:00 h python3[1]: WARNING panel own line\n"
 _SUDO34 = "Oct 03 08:00:01 h sudo[2]:   u : PWD=/x ; USER=root ; COMMAND=/usr/bin/true\n"
 
 
@@ -1584,6 +1620,7 @@ def _run_sections34():
     _section_report_classifier34()
     _section_report_console_labels34()
     _section_report_panel_account34()
+    _section_report_process_account34()
     _section_report_reads34()
     _section_report_once34()
     check("ws4: nothing in this part reached a real SSH or local transport", _TRIP34 == [],

@@ -241,13 +241,14 @@ def _priv_verb(command, rest, user="root", own=frozenset()):
     """The label a sudo line is counted under: (label, sub-label or None). Fixed words only.
 
     The helper's own lines are its verb ('other verb' for one the table does not know). Anything
-    run as the panel's own account (`own`, from _panel_accounts) is PANEL_ACCOUNT, by program.
-    Anything run as another account (USER= not root) is the panel's game-account work — gamedig,
-    the console reads and sends, LinuxGSM configs, and every argv-form read — counted together
-    under GAME_ACCOUNT with a fixed fingerprint of what it was (_GAME_READS). Anything else is
-    root: a program the panel itself runs is named, '<program> as root'; a shell is 'shell as
-    root'; anything else 'other program as root'. Never an argument, never a path, never the
-    account: for su the argument is an account, and USER= is one.
+    run as the panel's own account (`own`, from _panel_accounts) is PANEL_ACCOUNT, by program,
+    unless it is a shell body with a game fingerprint (_own_account_label). Anything run as another
+    account (USER= not root) is the panel's game-account work — gamedig, the console reads and
+    sends, LinuxGSM configs, and every argv-form read — counted together under GAME_ACCOUNT with a
+    fixed fingerprint of what it was (_GAME_READS). Anything else is root: a program the panel
+    itself runs is named, '<program> as root'; a shell is 'shell as root'; anything else 'other
+    program as root'. Never an argument, never a path, never the account: for su the argument is
+    an account, and USER= is one.
     """
     from panel.security import privileged as _priv
     rest = rest or ""
@@ -257,10 +258,25 @@ def _priv_verb(command, rest, user="root", own=frozenset()):
     prog = os.path.basename(command)
     user = (user or "").strip()
     if user in own:
-        return PANEL_ACCOUNT, _program_label(prog)
+        return _own_account_label(prog, rest)
     if user != "root":
         return GAME_ACCOUNT, _game_label(prog, rest)
     return _root_label(prog), None
+
+
+def _own_account_label(prog, rest):
+    """(label, sub-label) for a call run as the panel's own account.
+
+    A shell body with a game fingerprint is game work whichever account ran it: a game server may
+    run under the panel's login account (game_idents_ok refuses only root), and its gamedig and
+    console calls are then sudo'd to that account. Everything else is PANEL_ACCOUNT, by program:
+    an argv-form call (cat, rm) carries no fingerprint, so its account decides, and its sub-label
+    is the program under either label.
+    """
+    read = _game_read(rest) if prog in _SHELLS else "other"
+    if read != "other":
+        return GAME_ACCOUNT, read
+    return PANEL_ACCOUNT, _program_label(prog)
 
 
 def _program_label(prog):
