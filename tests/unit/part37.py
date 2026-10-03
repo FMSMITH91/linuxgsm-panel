@@ -511,8 +511,11 @@ def _wrapper_refs37(tree):
 
 
 def _f6_reach():
-    """Outside _core.py, the second-shell wrappers are only handed constants, and nothing imports
-    ssh_manager relatively (an API graph does not follow a relative import)."""
+    """Nothing reaches a second-shell wrapper past the entry-point rows.
+
+    Outside _core.py the wrappers are only handed constants, and nothing imports relatively (an API
+    graph does not follow a relative import).
+    """
     bad, relative = [], []
     for f in _shipped_py37():
         rel = _rel37(f)
@@ -653,8 +656,10 @@ _BANNER_LINE37 = _re37.compile(r"^\s*\*?\s*(@?[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+
 
 
 def _embedded37(text, own, locked):
-    """{npm name: version} for each package a bundle names in a banner other than its own package:
-    a name the lockfile knows, or any scoped (@x/y) name, which can only be an npm package."""
+    """{npm name: version} for each package a bundle names in a banner other than its own.
+
+    A name counts when the lockfile knows it, or when it is scoped (@x/y), which only an npm package is.
+    """
     out = {}
     for m in _re37.finditer(r"/\*[!*](.*?)\*/", text, _re37.S):
         for name, ver in _BANNER_LINE37.findall(m.group(1)):
@@ -711,13 +716,13 @@ def _v2_asset_urls():
 def _v2_update_paths():
     """The two scanner manifests are noise to the update card; the files they describe are runtime."""
     rules = _so37._parse_update_paths(_read29(".github", "update-paths.txt")) or {}
-    manifests = ("static/vendor/package.json", "static/vendor/package-lock.json")
-    runtime = ["static/vendor/" + r for r in sorted(_vendor_files37())]
-    got = {p: _so37._is_runtime_path(p, rules) for p in manifests + tuple(runtime)}
+    want = {"static/vendor/package.json": False, "static/vendor/package-lock.json": False}
+    want.update({"static/vendor/" + r: True for r in _vendor_files37()})
+    got = {p: _so37._is_runtime_path(p, rules) for p in want}
     check("vendor: .github/update-paths.txt makes static/vendor's two scanner manifests noise (a "
           "lockfile-only bump offers no panel an update) and keeps every vendored file runtime",
-          bool(rules) and len(runtime) >= 9 and not any(got[p] for p in manifests)
-          and all(got[p] for p in runtime), repr({p: v for p, v in got.items() if v != (p in runtime)}))
+          bool(rules) and len(want) >= 11 and got == want,
+          "runtime?: %r" % {p: v for p, v in got.items() if v != want[p]})
 
 
 # ── V3: gitleaks' Telegram rule, and part05's fixture shape ──────────────────────────────────────
@@ -851,8 +856,10 @@ def _v3_fixture_shape():
 
 
 def _gl_branches37():
-    """The Gitleaks step's (pull-request branch, other branch) as commands: comments dropped, each
-    continued line joined to its command, whitespace collapsed."""
+    """The Gitleaks step's (pull-request branch, other branch), as commands.
+
+    Comment lines are dropped, each continued line is joined to its command, whitespace collapsed.
+    """
     body = _wf_run_block(_read29(".github", "workflows", "security.yml"), "Gitleaks")
     code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
     lines = [" ".join(ln.split()) for ln in _re37.sub(r"\\\n\s*", " ", code).splitlines() if ln.strip()]
@@ -863,25 +870,54 @@ def _gl_branches37():
     return lines[start + 1:els], lines[els + 1:lines.index("fi", els)]
 
 
+def _first_capture37(pattern, commands):
+    """The first group of the first command `pattern` matches in full, or None."""
+    for c in commands:
+        m = _re37.fullmatch(pattern, c)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _gl_pr_facts37(pr):
+    """Where the pull-request branch puts the base's config and ignore file, and the order it runs.
+
+    (the base config's copy, the base ignore file's dir, where the tree's own is removed, where the
+    first scan is); None or -1 for what is not there.
+    """
+    cfg = _first_capture37(r'git show "\$\{BASE_SHA\}:\.github/gitleaks\.toml" > "([^"]+)"', pr)
+    ign = _first_capture37(r'git show "\$\{BASE_SHA\}:\.gitleaksignore" > "([^"]+)/\.gitleaksignore".*', pr)
+    rm = [i for i, c in enumerate(pr) if c == "rm -rf -- ./.gitleaksignore"]
+    first = [i for i, c in enumerate(pr) if c in _gl_scans37(pr)]
+    return cfg, ign, (rm or [None])[0], (first or [-1])[0]
+
+
+def _gl_scans37(commands):
+    return [c for c in commands if "gitleaks git " in c]
+
+
+def _gl_pr_bad37(pr, other):
+    """What lets a pull request bring its own allowlist: [] when nothing does."""
+    scans, pr_scans = _gl_scans37(pr + other), _gl_scans37(pr)
+    cfg, ign, rm_at, first = _gl_pr_facts37(pr)
+    tests = [
+        (cfg, "no copy of the base's config"),
+        (ign, "no copy of the base's .gitleaksignore"),
+        (-1 < (-1 if rm_at is None else rm_at) < first, "the tree's own .gitleaksignore is not removed first"),
+        (any('--config "%s"' % cfg in c for c in pr_scans), "no scan uses the base's config"),
+        (all('--gitleaks-ignore-path "%s"' % ign in c for c in pr_scans), "a scan reads another ignore file"),
+        (all("--ignore-gitleaks-allow" in c for c in scans), "a scan honours gitleaks:allow"),
+        (len(scans) == 3, "%d scans, not 3" % len(scans)),
+    ]
+    return [msg for ok, msg in tests if not ok]
+
+
 def _v3_pr_allowlists():
     """A pull request is scanned by the base's allowlists, never by ones it brings itself."""
-    pr, other = _gl_branches37()
-    scans = [c for c in pr + other if "gitleaks git " in c]
-    pr_scans = [c for c in pr if "gitleaks git " in c]
-    cfg = next((m.group(1) for c in pr for m in [_re37.fullmatch(
-        r'git show "\$\{BASE_SHA\}:\.github/gitleaks\.toml" > "([^"]+)"', c)] if m), None)
-    ign = next((m.group(1) for c in pr for m in [_re37.match(
-        r'git show "\$\{BASE_SHA\}:\.gitleaksignore" > "([^"]+)/\.gitleaksignore"', c)] if m), None)
-    rm_at = next((i for i, c in enumerate(pr) if c == "rm -rf -- ./.gitleaksignore"), None)
-    first = next((i for i, c in enumerate(pr) if "gitleaks git " in c), -1)
+    bad = _gl_pr_bad37(*_gl_branches37())
     check("gitleaks: a pull request is scanned with the BASE commit's config and .gitleaksignore, its "
           "own .gitleaksignore deleted first and every `gitleaks:allow` ignored, so it cannot allowlist "
-          "its own finding in the same diff",
-          cfg is not None and ign is not None and rm_at is not None and rm_at < first
-          and any('--config "%s"' % cfg in c for c in pr_scans)
-          and all('--gitleaks-ignore-path "%s"' % ign in c for c in pr_scans)
-          and len(scans) == 3 and all("--ignore-gitleaks-allow" in c for c in scans),
-          "base config %r, base ignore dir %r, rm at %r (first scan %r): %r" % (cfg, ign, rm_at, first, scans))
+          "its own finding in the same diff", not bad, "; ".join(bad))
 
 
 def _v11_allowlist_reasons():
