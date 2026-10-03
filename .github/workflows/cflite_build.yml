@@ -1,0 +1,46 @@
+name: ClusterFuzzLite continuous builds
+
+# The vendor's continuous build: on every push to main, build the fuzz targets and keep the build
+# as an Actions artifact (cifuzz-build-address-<commit>). When cflite_pr.yml's fuzzing finds a
+# crash, it runs the same input against the stored build of the pull request's base commit, or of
+# one of the two commits before it; a crash that reproduces there is not new, and is not reported
+# against the pull request. Without a stored build every crash is reported, the safe direction,
+# so this only cuts noise. Copied from
+# https://google.github.io/clusterfuzzlite/running-clusterfuzzlite/github-actions/#continuous-builds
+# (the vendor workflow), with the action pinned by SHA as every `uses:` here is.
+#
+# Unfiltered on purpose: the novelty check looks builds up by commit, so a build skipped for a
+# commit is a build the next pull request cannot use.
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: fuzz build (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only this repository's main: cflite_pr.yml refuses any cifuzz-* artifact made anywhere else.
+    if: github.repository == 'FMSMITH91/linuxgsm-panel'
+    # Uploading an artifact needs no token permission (the runner's own artifact token does it),
+    # and nothing here reads one, so the job token stays at contents: read.
+    permissions:
+      contents: read
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [ address ]
+    steps:
+      - name: Build fuzzers (${{ matrix.sanitizer }})
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: python
+          sanitizer: ${{ matrix.sanitizer }}
+          upload-build: true

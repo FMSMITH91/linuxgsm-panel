@@ -1,8 +1,10 @@
 name: ClusterFuzzLite prune and coverage
 
-# Corpus pruning and a coverage report for the fuzz targets. Both need the corpus that
-# cflite_batch.yml accumulates, so both self-disable without CFL_STORAGE_REPO — see that file for
-# what to create. Inert until then; live the moment the secret exists.
+# Corpus pruning and a coverage report for the fuzz targets, over the corpus cflite_batch.yml keeps
+# as Actions artifacts (see that file: no storage repository, no secret). Prune replaces each
+# cifuzz-corpus-<target> with a smaller one that reaches the same code; coverage uploads
+# cifuzz-coverage-latest, which cflite_pr.yml's build step reads to fuzz only the targets a pull
+# request's diff touches.
 on:
   schedule:
     - cron: '43 4 * * 0'     # weekly, after a few nightly batch runs have fed the corpus
@@ -11,69 +13,83 @@ on:
 permissions:
   contents: read
 
-env:
-  CFL_STORAGE_REPO: ${{ secrets.CFL_STORAGE_REPO }}
-
 jobs:
   prune:
     name: prune the corpus
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: github.repository == 'FMSMITH91/linuxgsm-panel'
+    # Never in a fork, and only on main: cflite_pr.yml reads back what this uploads, and refuses any
+    # cifuzz-* artifact that was not made on main.
+    if: github.repository == 'FMSMITH91/linuxgsm-panel' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read   # the corpus is an Actions artifact (the vendor's read-all)
     steps:
-      # A job whose steps are all skipped concludes SUCCESS, not "skipped" — and with no required
-      # status checks on this repo, three green ticks per cycle for zero work is indistinguishable
-      # from three green ticks for a clean fuzz. CFL_STORAGE_REPO is unset, so every step below is
-      # skipped and has been since 2026-08-09. `secrets` and `env` are not available in a
-      # job-level `if:`, so the honest fix at this level is to SAY SO in the summary, ungated.
-      - name: Say whether this job is actually doing anything
+      # See cflite_pr.yml: the prune step unpacks the stored corpus unchecked, so every stored
+      # cifuzz-* artifact must be main's first.
+      - name: Every stored fuzz artifact was made on main here
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -z "${CFL_STORAGE_REPO}" ]; then
-            echo "DISABLED: CFL_STORAGE_REPO is not set, so every fuzzing step below is skipped." \
-              >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::ClusterFuzzLite is disabled (CFL_STORAGE_REPO unset) — this green tick means no fuzzing ran."
-          else
-            echo "Corpus storage: ${CFL_STORAGE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          rows="$(gh api "repos/${REPO}/actions/artifacts?per_page=100" --paginate --jq '
+            .artifacts[] | select((.expired | not) and (.name | startswith("cifuzz-")))
+            | [.name, .id, .workflow_run.id, .workflow_run.head_branch,
+               .workflow_run.head_repository_id, .workflow_run.repository_id] | @tsv')"
+          foreign="$(awk -F'\t' 'NF && ($4 != "main" || $5 == "" || $5 != $6)' <<< "${rows}")"
+          echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true)"
+          if [ -n "${foreign}" ]; then
+            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
+            printf '%s\n' "${foreign}"
+            exit 1
           fi
 
       - name: Build fuzzers
         id: build
-        if: env.CFL_STORAGE_REPO != ''
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: python
 
       - name: Prune
         # Drops inputs that no longer reach anything new, so the corpus stays fast to replay.
-        if: env.CFL_STORAGE_REPO != '' && steps.build.outcome == 'success'
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: python
           github-token: ${{ secrets.GITHUB_TOKEN }}
           fuzz-seconds: 600
           mode: prune
-          storage-repo: ${{ secrets.CFL_STORAGE_REPO }}
-          storage-repo-branch: main
-          storage-repo-branch-coverage: gh-pages
 
   coverage:
     name: fuzzing coverage report
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: github.repository == 'FMSMITH91/linuxgsm-panel'
+    if: github.repository == 'FMSMITH91/linuxgsm-panel' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read   # the corpus it replays is an Actions artifact
     steps:
-      # Same as the prune job above: all-skipped steps conclude SUCCESS, so say what happened.
-      - name: Say whether this job is actually doing anything
+      # Same as the prune job above.
+      - name: Every stored fuzz artifact was made on main here
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -z "${CFL_STORAGE_REPO}" ]; then
-            echo "DISABLED: CFL_STORAGE_REPO is not set, so the coverage run below is skipped." \
-              >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::ClusterFuzzLite is disabled (CFL_STORAGE_REPO unset) — this green tick means no coverage report was produced."
+          set -euo pipefail
+          rows="$(gh api "repos/${REPO}/actions/artifacts?per_page=100" --paginate --jq '
+            .artifacts[] | select((.expired | not) and (.name | startswith("cifuzz-")))
+            | [.name, .id, .workflow_run.id, .workflow_run.head_branch,
+               .workflow_run.head_repository_id, .workflow_run.repository_id] | @tsv')"
+          foreign="$(awk -F'\t' 'NF && ($4 != "main" || $5 == "" || $5 != $6)' <<< "${rows}")"
+          echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true)"
+          if [ -n "${foreign}" ]; then
+            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
+            printf '%s\n' "${foreign}"
+            exit 1
           fi
 
       - name: Build fuzzers (coverage)
         id: build
-        if: env.CFL_STORAGE_REPO != ''
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: python
@@ -82,7 +98,7 @@ jobs:
       - name: Report
         # Which lines the fuzzers actually reach — a different question from tests/ coverage, and
         # the honest way to tell whether a target is exercising the parser or bouncing off a guard.
-        if: env.CFL_STORAGE_REPO != '' && steps.build.outcome == 'success'
+        # The report is the cifuzz-coverage-latest artifact on this run.
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: python
@@ -90,6 +106,3 @@ jobs:
           fuzz-seconds: 600
           mode: coverage
           sanitizer: coverage
-          storage-repo: ${{ secrets.CFL_STORAGE_REPO }}
-          storage-repo-branch: main
-          storage-repo-branch-coverage: gh-pages

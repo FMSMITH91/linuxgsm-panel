@@ -24,9 +24,9 @@ import atheris
 # Running `python tests/fuzz/fuzz_x.py` puts tests/fuzz (not the project root) on sys.path.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-# Pre-load ssh_manager's heavy dependencies UNINSTRUMENTED so instrument_imports() covers only the
-# parsers (faster, and the coverage signal stays on target).
-for _dep in ("paramiko", "eventlet.tpool", "panel.core.config"):
+# Pre-load ssh_manager's heavy dependencies UNINSTRUMENTED (see fuzz_game_status).
+for _dep in ("paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
+             "sqlalchemy.dialects.sqlite", "panel.core.config"):
     importlib.import_module(_dep)
 
 with atheris.instrument_imports():

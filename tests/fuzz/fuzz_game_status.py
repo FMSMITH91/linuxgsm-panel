@@ -21,9 +21,19 @@ import atheris
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Pre-load ssh_manager's heavy dependencies UNINSTRUMENTED so instrument_imports() below instruments
-# only the parser module (not paramiko / eventlet) — faster, and coverage stays on target. importlib
-# (rather than a static `import`) loads them purely for effect without an unused-import.
-for _dep in ("paramiko", "eventlet.tpool", "panel.core.config"):
+# only the panel's own modules, not paramiko, eventlet, Flask or SQLAlchemy. importlib (rather than
+# a static `import`) loads them purely for effect without an unused-import.
+#
+# Start-up is the budget that matters. ClusterFuzzLite's PR run gives each target a slice of
+# fuzz-seconds and kills the process 10s after it: time spent instrumenting at import is time
+# outside libFuzzer's clock. With only paramiko and eventlet pre-loaded, Atheris instrumented
+# 280 modules here (131 of them SQLAlchemy, plus Flask, Werkzeug and Jinja2, which
+# panel.db.models and panel.security pull in) and took ~27s on a runner before the first input,
+# so every PR run killed this target and its three siblings as 'process timed out'. With the
+# list below only the panel's own modules are instrumented. The same list is in fuzz_config,
+# fuzz_cron and fuzz_firewall; part29 holds all four to it.
+for _dep in ("paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
+             "sqlalchemy.dialects.sqlite", "panel.core.config"):
     importlib.import_module(_dep)
 
 with atheris.instrument_imports():
