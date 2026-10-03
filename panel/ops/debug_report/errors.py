@@ -29,7 +29,7 @@ import sys
 import time
 
 from panel.core import runtime_stats
-from panel.ops.debug_report._base import Result, ago
+from panel.ops.debug_report._base import Result, ago, cut_words
 
 AREA = "Errors since start"
 FORMAT = "%(levelname)s %(name)s: %(message)s"
@@ -71,7 +71,7 @@ class StderrHandler(logging.StreamHandler):
 def error_key(record):
     """'LEVEL|logger|template': record.msg when it is text, else only its type's name."""
     msg = record.msg if isinstance(record.msg, str) else type(record.msg).__name__
-    return "%s|%s|%s" % (record.levelname, record.name, msg[:TEMPLATE_MAX])
+    return "%s|%s|%s" % (record.levelname, record.name, cut_words(msg, TEMPLATE_MAX))
 
 
 def _exc_class(record):
@@ -153,12 +153,14 @@ def capturing():
 # ── the section ──────────────────────────────────────────────────────────────────────────────────
 def _cell(text):
     """A template as a table cell: one line, no pipes, at most SHOWN_MAX characters."""
-    t = " ".join(str(text).split()).replace("|", "/")
-    return t if len(t) <= SHOWN_MAX else t[:SHOWN_MAX - 1] + "…"
+    return cut_words(" ".join(str(text).split()).replace("|", "/"), SHOWN_MAX)
 
 
-def _row(key, count, last):
+def _row(key, count, last, ctx=None):
     level, name, template = (key.split("|", 2) + ["", ""])[:3]
+    if ctx is not None:                 # scrubbed BEFORE the cell is cut (see cut_words)
+        from panel.ops.debug_report import privacy
+        template = privacy.scrub_text(ctx, template)
     at, exc = last if isinstance(last, tuple) else (None, None)
     return "| %s | %s | %s | %s | %d | %s |" % (
         _cell(level), _cell(name), _cell(template), _cell(exc or "–"), count,
@@ -181,20 +183,20 @@ def section_errors_since_start(ctx):
     if not rows:
         res.add("- none since start (%s)" % up)
         return res
-    _table(res, rows, last, dropped, up)
+    _table(res, rows, last, dropped, up, ctx)
     if any(k.startswith(("ERROR|", "CRITICAL|")) for k, _v in rows):
         res.find("warn", AREA, "errors were logged since the process started")
     return res
 
 
-def _table(res, rows, last, dropped, up):
+def _table(res, rows, last, dropped, up, ctx=None):
     res.add("Process up %s; %d distinct messages, %d records." % (
         up, len(rows), sum(v for _k, v in rows)))
     res.add("")
     res.add("| level | logger | message template | exception | count | last (UTC) |")
     res.add("|---|---|---|---|---|---|")
     for key, count in rows[:ROWS_MAX]:
-        res.add(_row(key, count, last.get(key)))
+        res.add(_row(key, count, last.get(key), ctx))
     if len(rows) > ROWS_MAX or dropped:
         res.add("")
         res.add("- %d more not shown; %d further keys not stored (the counter keeps %d)" % (

@@ -223,19 +223,17 @@ def _tls_text(ctx):
 
 
 def _proxy_users_existing(value):
-    import pwd
+    """(entries naming an account that exists here, entries), from /etc/passwd.
+
+    Never pwd.getpwnam: on names mostly absent locally it falls through to LDAP/SSSD, a native call
+    that blocks the eventlet hub, and this section runs in the request greenlet.
+    """
+    from panel.ops.debug_report import privacy
     entries = list(_DEFAULT_PROXY_USERS if value is None else
                    ([value] if isinstance(value, (str, int)) else value))
-    found = 0
-    for entry in entries:
-        if isinstance(entry, int) or str(entry).strip().isdecimal():
-            found += 1
-            continue
-        try:
-            pwd.getpwnam(str(entry).strip())
-            found += 1
-        except KeyError:
-            continue
+    local = {parts[0] for parts in privacy._etc_rows(privacy.ETC_PASSWD) if parts}
+    found = sum(1 for entry in entries if isinstance(entry, int) or str(entry).strip().isdecimal()
+                or str(entry).strip() in local)
     return found, len(entries)
 
 

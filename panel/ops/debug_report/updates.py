@@ -18,7 +18,7 @@ import os
 import re
 import time
 
-from panel.ops.debug_report._base import Result, ago
+from panel.ops.debug_report._base import Result, ago, cut_words
 
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}\Z")
 _CI_STATES = ("passing", "pending", "failing", "unknown", "unverified")
@@ -27,7 +27,7 @@ _LINE_MAX = 160
 _REASON_MAX = 120
 _TAIL_LINES = 25
 _HISTORY_MAX = 10
-_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]{1,15}://)[^/\s@]+@")
+_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]{1,15}://)[^/\s]+@")
 _IPV4_RE = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 _ORIGIN_WARN = "[!] This checkout's git origin is"
 # The lines of an installer run worth keeping whatever their place in the log (R35).
@@ -67,7 +67,17 @@ def _sha7(val):
     return val[:7] if _SHA_RE.match(val) else "?"
 
 
-def clean_line(line, category="unreadable"):
+def _scrubbed(ctx, text):
+    """`text` through the report's privacy pass BEFORE it is cut: a name cut in half is a
+    fragment the final pass cannot match. Without a ctx (a direct caller), unchanged.
+    """
+    if ctx is None:
+        return text
+    from panel.ops.debug_report import privacy
+    return privacy.scrub_text(ctx, text)
+
+
+def clean_line(line, category="unreadable", ctx=None):
     """One line of installer or git output, safe to print: see the module docstring."""
     so = _so()
     text = str(line or "")
@@ -76,7 +86,7 @@ def clean_line(line, category="unreadable"):
                 % category)
     text = _USERINFO_RE.sub(r"\1[userinfo]@", text)
     text = so._redact(text)
-    return _IPV4_RE.sub("[ip]", text)[:_LINE_MAX]
+    return cut_words(_scrubbed(ctx, _IPV4_RE.sub("[ip]", text)), _LINE_MAX)
 
 
 # ── R30: the cached status ────────────────────────────────────────────────────────────────────────
@@ -275,7 +285,7 @@ def _checkout_lines(res):
 
 
 # ── R33: the last run ─────────────────────────────────────────────────────────────────────────────
-def _failed_outcome(upd, text, category):
+def _failed_outcome(upd, text, category, ctx=None):
     code = upd.get("exit_code")
     if code == 124:
         return "FAILED — the installer was stopped after 30 minutes (exit 124)" + (
@@ -288,23 +298,26 @@ def _failed_outcome(upd, text, category):
         return ("FAILED — update failed its health check and was rolled back to the previous "
                 "version (exit %s)" % code)
     return "FAILED — the installer stopped (exit %s): %s" % (
-        code, clean_line(upd.get("reason") or "see the log below", category)[:_REASON_MAX])
+        code, cut_words(clean_line(upd.get("reason") or "see the log below", category, ctx),
+                        _REASON_MAX))
 
 
-def _ok_outcome(upd, lines, category):
+def _ok_outcome(upd, lines, category, ctx=None):
     outcome = upd.get("outcome")
     if outcome == "held":
-        return "NOT UPDATED — " + clean_line(upd.get("reason"), category)[:_REASON_MAX]
+        return "NOT UPDATED — " + cut_words(clean_line(upd.get("reason"), category, ctx),
+                                            _REASON_MAX)
     if outcome == "current":
-        return "nothing to install — " + clean_line(upd.get("reason"), category)[:_REASON_MAX]
+        return "nothing to install — " + cut_words(clean_line(upd.get("reason"), category, ctx),
+                                                   _REASON_MAX)
     if any("Rolling back" in ln for ln in lines):
         return "ROLLED BACK? exit 0, but the log says the update was rolled back"
     done = next((ln for ln in reversed(lines) if ln.startswith("✓ Update complete")), "")
-    return "succeeded" + (" — " + clean_line(done[2:], category)[:_REASON_MAX] if done else
+    return "succeeded" + (" — " + cut_words(clean_line(done[2:], category, ctx), _REASON_MAX) if done else
                           " (exit 0: the run went through the restart)")
 
 
-def run_outcome(upd, mtime, category="unreadable", now=None):
+def run_outcome(upd, mtime, category="unreadable", now=None, ctx=None):
     """(level, outcome text) for a self-update log: the EXIT STATUS first, text markers second.
 
     A log with no exit line that stopped being written _UPDATE_STALE_LOG ago is a run that DIED.
@@ -317,8 +330,8 @@ def run_outcome(upd, mtime, category="unreadable", now=None):
                             "mid-update); check the snapshot in data/.backups" % _utc(mtime))
         return "ok", "running (no exit line yet)"
     if upd.get("exit_code") != 0:
-        return "fail", _failed_outcome(upd, "\n".join(lines), category)
-    return "ok", _ok_outcome(upd, lines, category)
+        return "fail", _failed_outcome(upd, "\n".join(lines), category, ctx)
+    return "ok", _ok_outcome(upd, lines, category, ctx)
 
 
 def _log_mtime():
@@ -329,7 +342,7 @@ def _log_mtime():
         return None
 
 
-def _last_run_lines(res, category):
+def _last_run_lines(res, category, ctx=None):
     so = _so()
     upd = so.panel_update_log()
     if not upd.get("exists"):
@@ -337,7 +350,7 @@ def _last_run_lines(res, category):
                 "write one; see Update history)")
         return None, "none"
     mtime = _log_mtime()
-    level, text = run_outcome(upd, mtime, category)
+    level, text = run_outcome(upd, mtime, category, ctx=ctx)
     res.add("- **Last run**: %s (log mtime; %s ago) · exit %s" % (
         _utc(mtime), ago(time.time() - mtime) if mtime else "?",
         "none" if upd.get("exit_code") is None else upd.get("exit_code")))
@@ -349,25 +362,30 @@ def _last_run_lines(res, category):
 
 
 # ── R35: installer warnings, from the tail already read ──────────────────────────────────────────
-def installer_said(lines, category="unreadable"):
+def installer_said(lines, category="unreadable", ctx=None):
     """The warning, error and grant lines of a run (with an [ERROR]'s continuation lines)."""
     out, in_error = [], False
     for ln in lines:
         s = ln.strip()
         if in_error and ln[:1].isspace() and s:
-            out.append("  " + clean_line(s, category))
+            out.append("  " + clean_line(s, category, ctx))
             continue
         in_error = s.startswith("[ERROR]")
         if s.startswith(_KEEP_PREFIXES):
-            out.append(clean_line(s, category))
+            out.append(clean_line(s, category, ctx))
     return out[-20:]
 
 
-def _tail_lines(upd, res, category):
-    said = installer_said(upd.get("lines") or [], category)
+def _tail_lines(res, upd, category, ctx=None):
+    """The installer's warnings, then the log's last lines, each reduced by clean_line.
+
+    `res` first: _guard calls fn(res, *args)."""
+    said = installer_said(upd.get("lines") or [], category, ctx)
     res.add("- **Installer said**:" + ("" if said else " (no warnings)"))
     res.lines += ["  " + ln for ln in said]
-    tail = [clean_line(ln, category) for ln in (upd.get("lines") or [])[-_TAIL_LINES:]]
+    # a log line of three backticks would close the fence early
+    tail = [clean_line(ln, category, ctx).replace("`" * 3, "'" * 3) for ln in
+            (upd.get("lines") or [])[-_TAIL_LINES:]]
     res.add("```")
     res.lines += tail or ["(empty)"]
     res.add("```")
@@ -488,9 +506,9 @@ def section_updates(ctx):
     data = _guard(res, _cache_lines)
     _guard(res, _ci_lines)
     _guard(res, _checkout_lines)
-    run = _guard(res, _last_run_lines, category) or (None, "unknown")
+    run = _guard(res, _last_run_lines, category, ctx) or (None, "unknown")
     if run[0] is not None:
-        _guard(res, _tail_lines, run[0], category)
+        _guard(res, _tail_lines, run[0], category, ctx)
     _guard(res, _history_lines)
     res.verdict = _verdict(data, run[1])
     return res

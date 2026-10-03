@@ -38,24 +38,45 @@ _STOP_WORDS = frozenset((
     "status", "online", "offline", "running", "started", "stopped", "update", "updates",
     "backup", "backups", "tailscale", "console", "database", "config", "network", "service",
     "unknown", "system", "journal", "helper", "privileged", "operator", "everyone",
+    # generic first labels of a host's FQDN, which is mapped by its first label too: these name no
+    # one, and "home" would turn every /home/[user] path into a token
+    "www", "mail", "vps", "srv", "node", "box", "web", "app", "api", "home", "data", "dev",
+    "prod", "cloud", "gateway", "router", "remote",
 ))
+ETC_PASSWD = "/etc/passwd"  # nosec B105 - a file path, not a password
+ETC_GROUP = "/etc/group"
 _TAILNET_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
 
-_SYSLOG_HOST_RE = re.compile(r"^([A-Z][a-z]{2}[ \t]+\d{1,2}[ \t]+[\d:]{5,8}[ \t]+)(\S{1,255})([ \t])",
-                             re.M)
+# A journal line's host field, by position: after the timestamp (journalctl's short or short-iso
+# form) and before the "ident[pid]:" tag. The tag is required, so a log line that merely starts
+# with a date and a word is not taken for one.
+_SYSLOG_HOST_RE = re.compile(
+    r"^((?:[A-Z][a-z]{2}[ \t]+\d{1,2}[ \t]+[\d:]{5,8}|\d{4}-\d\d-\d\dT[\d:.]{5,15}"
+    r"(?:[+-]\d\d:?\d\d|Z)?)[ \t]+)(\S{1,255})([ \t]+[\w./@-]{1,64}(?:\[\d{1,10}\])?:)", re.M)
 _HOME_RE = re.compile(r"(/(?:home|srv|opt|var/home|Users))/(?!\[user\])[^/\s\"':;,)\]]{1,64}")
 _VENV_RE = re.compile(r"(?:/[^\s/\"':]{1,255}){0,32}/(?:site|dist)-packages(?=/)")
 _GENERIC = (
     (re.compile(r"\[parameters: [^\n]*"), "[parameters: withheld]", "sql-params"),
-    (re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]{0,15}://)[^/\s@]{1,256}@"), r"\1[redacted]@", "url"),
+    # up to the LAST '@' before the path: userinfo can itself hold an unencoded '@'
+    (re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]{0,15}://)[^/\s]{1,256}@"), r"\1[redacted]@", "url"),
     (re.compile(r"(?:https?://)?login\.tailscale\.com[^\s)\"'>\]]*"), "[tailscale-url]", "url"),
     (re.compile(r"(?<![\w.-])[\w-]{1,63}(?:\.[\w-]{1,63}){0,8}\.ts\.net\b"), "[ts-name]", "ts-name"),
     (re.compile(r"(?<![\w.-])[\w.-]{1,64}@github\b"), "[login]", "login"),
     (re.compile(r"STEAM_[0-5]:[01]:\d{1,12}|\[U:1:\d{1,12}\]"), "[steamid]", "steamid"),
 )
 _IPV4_RE = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d])")
-_IPV6_RE = re.compile(r"(?<![\w:.%])[0-9A-Fa-f:]{2,39}(?:(?<=:)\d{1,3}(?:\.\d{1,3}){3})?"
+# Not preceded by a hex digit, ':' or '.', so a match starts at the first character an address can
+# start at, even when a word is glued to it ('src2a01:...'); up to 45 characters, so a full-form
+# address with a ':port' after it is one candidate. _ip_sub validates every candidate, and trims a
+# trailing ':' or ':port' and a glued prefix before it gives up.
+_IPV6_RE = re.compile(r"(?<![0-9A-Fa-f:.%])[0-9A-Fa-f:]{2,45}(?:(?<=:)\d{1,3}(?:\.\d{1,3}){3})?"
                       r"(?:%[\w.-]{1,32})?")
+# An address carried inside a provider's reverse-DNS name, dotted (static.77.13.2.81.clients...,
+# often reversed) or dashed (ec2-81-2-13-77..., ip-51-38-12-34...): four octets between hostname
+# labels. Each octet is checked to be 0-255 before it is replaced.
+_IP_DOTTED_NAME_RE = re.compile(r"(?<=[A-Za-z]\.)()(\d{1,3}(?:\.\d{1,3}){3})(?=\.[A-Za-z])")
+_IP_DASHED_NAME_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9]{0,15}-)(\d{1,3}(?:-\d{1,3}){3})"
+                                r"(?=\.[A-Za-z]|[^\w-]|\Z)")
 _LONG_ID_RE = re.compile(r"(?<!\d)\d{15,}(?!\d)")
 _WITHHELD = "_(withheld: pseudonymisation unavailable)_"
 
@@ -76,21 +97,48 @@ class _State(object):
         self.lock = threading.Lock()
 
     def add(self, name, kind, ident=None):
-        """Map `name` to a typed token; ident is a DB id when the name belongs to a row."""
+        """Map `name` to a typed token; ident is a DB id when the name belongs to a row.
+
+        Keyed by _name_key (folded case, single spaces). A name whose full case folding differs
+        ('Straße' -> 'strasse') is mapped under that spelling too, to the same token.
+        """
         if not isinstance(name, str):
             return
-        key = name.strip().lower()
-        if not _usable_name(key) or key in self.names:
-            return
-        if ident is None:
-            ident = self.counters.get(kind, 0) + 1
-            self.counters[kind] = ident
-        self.names[key] = "[%s-%s]" % (kind, ident) if ident != "" else "[%s]" % kind
-        self.kinds[key] = kind
+        key = _name_key(name)
+        with self.lock:
+            if not _usable_name(key) or key in self.names:
+                return
+            if ident is None:
+                ident = self.counters.get(kind, 0) + 1
+                self.counters[kind] = ident
+            token = "[%s-%s]" % (kind, ident) if ident != "" else "[%s]" % kind
+            for variant in (key, _name_key(name.casefold())):
+                if variant not in self.names and _usable_name(variant):
+                    self.names[variant], self.kinds[variant] = token, kind
+
+    def snapshot(self):
+        """A copy of the map, safe to iterate while another thread adds a name."""
+        with self.lock:
+            return dict(self.names), dict(self.kinds)
 
     def hit(self, kind, value):
         """Record that `value` of `kind` was replaced."""
         self.stats.setdefault(kind, set()).add(value)
+
+
+def _fold(text):
+    """`text` lower-cased one character for one.
+
+    A match found in it is then at the same offset in `text` ('İ'.lower() is two characters; its
+    first is the simple lower case 'i').
+    """
+    low = text.lower()
+    return low if len(low) == len(text) else "".join(ch.lower()[:1] or ch for ch in text)
+
+
+def _name_key(name):
+    """A name as the map keys it: folded, its whitespace runs single spaces."""
+    return " ".join(_fold(name).split())
 
 
 def _usable_name(key):
@@ -177,8 +225,25 @@ def _read_host_names(st):
                                 RemoteServer.linuxgsm_user):
         for value in row[1:4]:
             st.add(value, "host", row[0])
+            st.add(_first_label(value), "host", row[0])
         for value in row[4:]:
             st.add(value, "account")
+
+
+def _first_label(value):
+    """A host name's first label ('zephyr' of 'zephyr.example.org'); '' for an address.
+
+    Also '' for a name with no dot. Logs often print a host by its short name.
+    """
+    value = str(value or "").strip()
+    if "." not in value:
+        return ""
+    try:
+        ipaddress.ip_address(value)
+        return ""
+    except ValueError:
+        label = value.split(".", 1)[0]
+        return "" if label.isdigit() else label
 
 
 def _read_server_names(st):
@@ -195,7 +260,7 @@ def _read_server_names(st):
 def _names_os(_ctx, st):
     import socket
     host = socket.gethostname() or ""
-    for value in (host, host.split(".")[0]):
+    for value in (host, _first_label(host)):
         st.add(value, "panel-host", "")
     for value in _etc_hosts_names(host):
         st.add(value, "panel-host", "")
@@ -219,16 +284,31 @@ def _etc_hosts_names(host):
 
 
 def _os_accounts():
-    """The panel's own account, every login account (uid 1000+), and the game-account group."""
-    import grp
+    """The panel's own account, every login account (uid 1000+), and the game-account group.
+
+    Parsed from /etc/passwd and /etc/group, never pwd.getpwall()/grp.getgrnam(): those are NSS
+    calls that can fall through to LDAP/SSSD, native calls that block the eventlet hub, and this
+    runs in the request greenlet. Only getpwuid(own uid) is asked of NSS.
+    """
     import pwd
     names = [pwd.getpwuid(os.getuid()).pw_name]
-    names += [p.pw_name for p in pwd.getpwall() if 1000 <= p.pw_uid < 65534]
-    try:
-        names += list(grp.getgrnam("lgsmpanel-games").gr_mem)
-    except KeyError:
-        pass                                # no game-account group on this host
+    for parts in _etc_rows(ETC_PASSWD):
+        if len(parts) > 2 and parts[2].isdigit() and 1000 <= int(parts[2]) < 65534:
+            names.append(parts[0])
+    for parts in _etc_rows(ETC_GROUP):
+        if len(parts) > 3 and parts[0] == "lgsmpanel-games":
+            names += [m for m in parts[3].split(",") if m]
     return names
+
+
+def _etc_rows(path):
+    """The ':'-split rows of a local account file; [] when it cannot be read."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return [line.rstrip("\n").split(":") for line in fh.read(4 * 1024 * 1024).splitlines()
+                    if line and not line.startswith("#")]
+    except OSError:
+        return []
 
 
 def _names_config(_ctx, st):
@@ -239,7 +319,28 @@ def _names_config(_ctx, st):
     if (cfg.get("site_title") or "") != cfgmod.DEFAULT_CONFIG.get("site_title"):
         st.add(cfg.get("site_title"), "site-title", "")
     st.add(cfg.get("site_domain"), "site-domain", "")
+    _names_origins(st, cfg)
     _names_notifications(st, cfg.get("notifications") or {})
+
+
+def _names_origins(st, cfg):
+    """The host names an operator configured for the panel to be reached by (a reverse proxy's
+    domain in socketio_cors_origins, a bind_host given as a name): engineio logs a refused origin
+    verbatim at ERROR, and the panel logs its bind at start.
+    """
+    from urllib.parse import urlsplit
+    origins = cfg.get("socketio_cors_origins")
+    origins = [origins] if isinstance(origins, str) else list(origins or [])
+    names = []
+    for origin in origins:
+        try:
+            names.append(urlsplit(str(origin)).hostname or "")
+        except ValueError:
+            continue                        # not a URL: the generic rules still apply
+    names.append(str(cfg.get("bind_host") or ""))
+    for name in names:
+        st.add(name, "site-domain", "")
+        st.add(_first_label(name), "site-domain", "")
 
 
 def _ids(value):
@@ -254,6 +355,8 @@ def _names_bot(st, conf, key):
         return
     for value in [conf.get(key)] + _ids(conf.get("command_users")):
         st.add(str(value or ""), "id")
+        # a group's chat id is negative; logs and API errors often print it without the sign
+        st.add(str(value or "").strip().lstrip("-"), "id")
     for secret in ("token", "bot_token", "webhook"):
         st.add(str(conf.get(secret) or ""), "secret", "")
 
@@ -296,6 +399,8 @@ def _names_tailscale(info, st, key="", depth=0):
         value = info.strip().rstrip(".")
         st.add(value, "tailnet-name")
         st.add(value.split(".")[0], "tailnet-name")
+        if "@" in value:                    # a login's handle prints on its own too
+            st.add(value.split("@", 1)[0], "tailnet-name")
 
 
 def _tailscale_names(ctx, st, wait):
@@ -312,8 +417,14 @@ def _tailscale_names(ctx, st, wait):
     box, done = {}, threading.Event()
 
     def _read():
+        # shared_read, not shared_info: info() answers None both for "not installed" and for a
+        # status that could not be read, and only the second leaves names unmapped.
         try:
-            box["info"] = _src_tailscale.shared_info(ctx)
+            state, val = _src_tailscale.shared_read(ctx)
+            if state == "error":
+                box["error"] = str(val)
+            elif state == "ok":
+                box["info"] = val
         except Exception as exc:  # noqa: BLE001 - reported as a source error below
             box["error"] = type(exc).__name__
         finally:
@@ -355,30 +466,75 @@ def _replace_dir(text, path, token):
 
 
 def _syslog_hosts(text, st):
+    """The journal's host field rewritten by position.
+
+    The name is also MAPPED, so the same name later in the message ('unable to resolve host <old
+    name>') is caught by the known-name pass: an old hostname is in no other source.
+    """
     def _host(m):
         if m.group(2).startswith("["):
             return m.group(0)
         st.hit("panel-host", m.group(2).lower())
+        st.add(m.group(2), "panel-host", "")
         return m.group(1) + "[panel-host]" + m.group(3)
     return _SYSLOG_HOST_RE.sub(_host, text)
 
 
+def _is_heading(line):
+    """Whether `line` is one of the assembler's own headings (fixed text).
+
+    Those are never pseudonymised, and are kept when bodies are withheld. Any other line starting
+    with '#' is content, a log line.
+    """
+    if not line.startswith(("## ", "### ")):
+        return False
+    from panel.ops.debug_report import SECTIONS
+    rest = line.split(" ", 1)[1]
+    titles = [sec[1] for sec in SECTIONS] + list(_OWN_HEADINGS)
+    return any(rest == t or rest.startswith((t + " _(", t + ": ", t + " (")) for t in titles)
+
+
+_OWN_HEADINGS = ("LinuxGSM Panel debug report", "At a glance", "Verdicts", "All findings",
+                 "Privacy")
+
+
+def _name_rx(key):
+    """The pattern for one map key: its words with any run of whitespace between them."""
+    return r"\s+".join(map(re.escape, key.split(" ")))
+
+
 def _known_names(text, st):
-    """Every known name in `text` replaced by its token. Headings are fixed text and skipped."""
-    low = text.lower()
-    present = [n for n in st.names if n in low]
+    """Every known name in `text` replaced by its token. Headings are fixed text and skipped.
+
+    Matched over each run of non-heading lines, so a name split across a line break is still
+    one match; the token keeps the line breaks it replaced, so the line count never changes.
+    """
+    names, kinds = st.snapshot()
+    low = _fold(text)
+    present = [n for n in names if n.split(" ", 1)[0] in low]
     if not present:
         return text
     present.sort(key=len, reverse=True)
-    rx = re.compile(r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])" % "|".join(map(re.escape, present)),
+    rx = re.compile(r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])" % "|".join(map(_name_rx, present)),
                     re.I)
 
     def _sub(m):
-        key = m.group(0).lower()
-        st.hit(st.kinds.get(key, "name"), key)
-        return st.names.get(key, "[name]")
+        key = _name_key(m.group(0))
+        st.hit(kinds.get(key, "name"), key)
+        return names.get(key, "[name]") + "\n" * m.group(0).count("\n")
 
-    return "\n".join(ln if ln.startswith("#") else rx.sub(_sub, ln) for ln in text.split("\n"))
+    out, run = [], []
+    for line in text.split("\n"):
+        if _is_heading(line):
+            if run:
+                out.append(rx.sub(_sub, "\n".join(run)))
+                run = []
+            out.append(line)
+        else:
+            run.append(line)
+    if run:
+        out.append(rx.sub(_sub, "\n".join(run)))
+    return "\n".join(out)
 
 
 def _ip_class(ip):
@@ -396,18 +552,78 @@ def _ip_class(ip):
     return "public"
 
 
+def _v4(raw):
+    """An IPv4 address written with zero-padded octets ('081.002.013.077'), or None."""
+    parts = raw.split(".")
+    if len(parts) != 4 or not all(p.isdigit() and int(p) <= 255 for p in parts):
+        return None
+    return ipaddress.ip_address(".".join(str(int(p)) for p in parts))
+
+
+def _ip_candidates(raw):
+    """(prefix, address, suffix) readings of a candidate, most literal first."""
+    yield "", raw, ""
+    yield "", raw.split("%", 1)[0], ""               # its zone (an interface name) dropped
+    if ":" not in raw:
+        return
+    stripped = raw.rstrip(":")
+    if stripped != raw:                              # 'addr: message'
+        yield "", stripped, raw[len(stripped):]
+    port = re.match(r"(.+):(\d{1,5})\Z", stripped)
+    if port:                                         # a full-form address and its ':port'
+        yield "", port.group(1), raw[len(port.group(1)):]
+    if stripped.count(":") >= 3:                     # a word glued in front of it ('src2a01:...')
+        for cut in range(1, 5):
+            yield raw[:cut], stripped[cut:], raw[len(stripped):]
+
+
+def _ip_parse(raw):
+    """(prefix, ipaddress object, suffix) for the first reading that is an address, or None."""
+    for prefix, addr, suffix in _ip_candidates(raw):
+        try:
+            return prefix, ipaddress.ip_address(addr), suffix
+        except ValueError:
+            ip = _v4(addr) if "." in addr and ":" not in addr else None
+            if ip is not None:
+                return prefix, ip, suffix
+    return None
+
+
+def _v6_skip(m):
+    """Whether an IPv6 candidate is not one to read.
+
+    A word glued to fewer than three colons ('Type::bad'), or the '::ffff:' left in front of an
+    IPv4 address already replaced.
+    """
+    text, start, end = m.string, m.start(), m.end()
+    glued = start > 0 and (text[start - 1].isalnum() or text[start - 1] == "_")
+    return (glued and m.group(0).count(":") < 3) or text[end:end + 1] == "["
+
+
 def _ip_sub(st):
     def _sub(m):
         raw = m.group(0)
-        try:
-            ip = ipaddress.ip_address(raw.split("%", 1)[0])
-        except ValueError:
+        if ":" in raw and _v6_skip(m):
             return raw
+        got = _ip_parse(raw)
+        if got is None:
+            return raw
+        prefix, ip, suffix = got
         cls = _ip_class(ip)
         if cls is None:
             return raw
         st.hit("ip:" + cls, str(ip))
-        return "[ip:%s]" % cls
+        return "%s[ip:%s]%s" % (prefix, cls, suffix)
+    return _sub
+
+
+def _ip_in_name(st):
+    def _sub(m):
+        octets = re.split(r"[.-]", m.group(2))
+        if not all(int(o) <= 255 for o in octets):
+            return m.group(0)
+        st.hit("ip:in-hostname", ".".join(octets))
+        return m.group(1) + "[ip:in-hostname]"
     return _sub
 
 
@@ -418,6 +634,8 @@ def _generic(text, st):
                 st.hit(kind, m.group(0).lower())
         text = rx.sub(repl, text)
     sub = _ip_sub(st)
+    for rx in (_IP_DOTTED_NAME_RE, _IP_DASHED_NAME_RE):
+        text = rx.sub(_ip_in_name(st), text)
     text = _IPV4_RE.sub(sub, text)
     if ":" in text:
         text = _IPV6_RE.sub(lambda m: sub(m) if m.group(0).count(":") >= 2 else m.group(0), text)
@@ -457,11 +675,19 @@ def scrub_lines(ctx, lines):
     return out
 
 
+def scrub_text(ctx, text):
+    """One piece of free text scrubbed before a section cuts it, or '(withheld)' when the pass
+    failed (the assembler then withholds every body anyway).
+    """
+    out = scrub(ctx, text)
+    return "(withheld)" if prepare(ctx).pattern_error else out
+
+
 def _withhold(text):
     """Headings kept, every other line replaced by one 'withheld' line per section."""
     out = []
     for line in text.split("\n"):
-        if line.startswith("#"):
+        if _is_heading(line):
             out.extend([line, _WITHHELD])
     return "\n".join(out) + "\n"
 
@@ -529,6 +755,7 @@ def footer(ctx):
                      "pattern redaction covers them. Review host and server names before posting."
                      % (source, why))
     lines.append("- Not covered: names under %d characters, common words, and names deleted "
-                 "since (their addresses are still caught by the IP rule). This is a best-effort "
-                 "pass: review the report before posting it." % _MIN_NAME)
+                 "since (an IP address is still caught by the IP rule; a host NAME deleted since "
+                 "is not). This is a best-effort pass: review the report before posting it."
+                 % _MIN_NAME)
     return lines

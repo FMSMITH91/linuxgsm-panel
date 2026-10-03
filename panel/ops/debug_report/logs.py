@@ -12,7 +12,7 @@ import threading
 import time
 
 from panel.ops.debug_report import _src_journal, privacy
-from panel.ops.debug_report._base import Result
+from panel.ops.debug_report._base import Result, cut_words
 
 DIGEST_LINES = 5000
 TAIL_LINES = 400
@@ -76,8 +76,9 @@ def _quote(ctx, text):
     out = privacy.scrub_lines(ctx, [text])
     if out is None:
         return "(withheld)"
-    q = out[0].replace("`", "'").strip()
-    return q if len(q) <= _QUOTE_MAX else q[:_QUOTE_MAX - 1] + "…"
+    # Cut at a word: the Tailscale names are added to the map only after every section (finish),
+    # so the assembler's final pass must see whole words to match them.
+    return cut_words(out[0].replace("`", "'").strip(), _QUOTE_MAX)
 
 
 # ── Errors in the journal (R71) ─────────────────────────────────────────────────────────────────
