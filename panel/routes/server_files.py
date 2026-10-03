@@ -27,6 +27,7 @@ from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can
     server_access_required,
     superadmin_required)
 from panel.services import (lgsm_data)
+from itertools import groupby
 import re
 import threading
 import time
@@ -1451,8 +1452,15 @@ def _audit_name(text):
     """
     if not isinstance(text, str):
         return text
-    return "/".join(re.sub(r"^ +| +$| {2,}", lambda m: "\\x20" * len(m.group()), part)
-                    for part in text.split("/"))
+    return "/".join(_audit_part(part) for part in text.split("/"))
+
+
+def _audit_part(part):
+    """One part of a path for _audit_name: its edge spaces, and each run of spaces, escaped."""
+    runs = ["".join(run) for _space, run in groupby(part, key=" ".__eq__)]
+    last = len(runs) - 1
+    return "".join("\\x20" * len(run) if run[0] == " " and (i in (0, last) or len(run) > 1) else run
+                   for i, run in enumerate(runs))
 
 
 def _audit_safe(text, limit=None):
