@@ -331,7 +331,7 @@ function _pathBody(lead, path, tail){
 }
 function deletePath(path, isDir){
   confirmDialog({title:'Delete '+(isDir?'directory':'file'), icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
-    bodyNode:_pathBody('Delete '+(isDir?'directory (and everything in it)':'file')+'?', path),
+    bodyNode:_pathBody(isDir?'Delete this directory and everything in it?':'Delete this file?', path),
     onConfirm:function(){
       fetch(MOUNT+'/api/server/'+serverId+'/delete-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
         .then(r=>r.json()).then(d=>{
