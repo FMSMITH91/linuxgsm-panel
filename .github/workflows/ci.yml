@@ -30,7 +30,11 @@ jobs:
   checks:
     name: checks (${{ matrix.os }} · py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # 30, not 20: before the root step below the slowest leg (22.04) took 971-1003 s in the last 15
+    # green runs, and the root step runs the unit suite once more (169-186 s of the job log), which
+    # left about a minute under 20. A timed-out leg is a failed required check, and on main a
+    # failure the panel's update gate and deploy.yml read. The root step prints its own duration.
+    timeout-minutes: 30
     strategy:
       fail-fast: false   # report EVERY LTS result even if one fails, so a version-specific break is obvious
       matrix:
@@ -119,9 +123,11 @@ jobs:
           root_log="${RUNNER_TEMP}/unit-root.txt"
           # SC2016: ${!SUDO_@} is the root shell's to expand. SC2024: the log is written by this
           # shell, as the runner, on purpose; only the suite runs as root.
+          started="${SECONDS}"
           # shellcheck disable=SC2016,SC2024
           sudo -E env PATH="$PATH" bash -c 'unset "${!SUDO_@}"; exec python tests/unit_test.py' \
             > "${root_log}" 2>&1 || true
+          echo "the unit suite as root took $((SECONDS - started))s"
           python - "${RUNNER_TEMP}/unit-user.txt" "${root_log}" <<'EOF'
           import re
           import sys
