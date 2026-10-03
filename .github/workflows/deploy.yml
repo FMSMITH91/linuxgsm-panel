@@ -37,6 +37,7 @@ on:
   workflow_run:
     workflows: [ "CI" ]
     types: [ completed ]
+  # zizmor: ignore[dangerous-triggers] deploys only a push to main, after proving head_sha is on main (verify step)
 
 # Least-privilege GITHUB_TOKEN: deploy reads the repo and SSHes to the host; no write needed.
 permissions:
@@ -48,6 +49,8 @@ concurrency:
 
 jobs:
   deploy:
+    # The name the panel's update gate and the verify step below ignore (_CI_IGNORE): keep it.
+    name: deploy
     # Only after CI SUCCEEDED on a PUSH to main, and only when explicitly enabled.
     #
     # `event == 'push'` is the load-bearing clause. CI also runs on pull_request, and for a PR
@@ -87,12 +90,23 @@ jobs:
     # (header, step 1) exchanges for a one-off auth key. Granted to this job only.
     permissions:
       contents: read
-      id-token: write
+      id-token: write  # the signed OIDC token the Tailscale step trades for an auth key (above)
       checks: read     # the verify step waits for the commit's security checks, not only CI
     runs-on: ubuntu-latest
     # 20 of these minutes may be the verify step waiting for the checks CI does not include.
     timeout-minutes: 50
     steps:
+      # No Harden-Runner here, unlike every other job. Its audit mode is not passive. It points the
+      # job's DNS (systemd-resolved's, and docker's) at its own proxy. It drops any host on
+      # StepSecurity's global blocklist, which it fetches when the job starts along with feature
+      # flags that can turn on process killing, so either can change without a commit here. It
+      # fails the job if its agent will not start. Its post step prints each address the job reached
+      # and each root command line into the job's public log, and sends the same records to
+      # StepSecurity. This job holds the tailnet identity that reaches the live panel as an account
+      # that can become root. A deploy must not depend on a third party's runtime policy, and its log
+      # must not list the deploy host's address and every command run as root. part42 names this
+      # exception.
+
       # The installer root runs on a system install comes from the commit CI just verified, carried
       # to the host inside the SSH session — not from the host's own checkout (the system-install
       # branch below says why that one cannot be trusted).

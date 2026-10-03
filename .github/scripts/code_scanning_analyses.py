@@ -2,13 +2,14 @@
 """Wait until code scanning holds one commit's analysis in every category the alert gates read.
 
 Both alert gates (codeql.yml's pr-alerts and codeql-alerts.yml) read a ref's OPEN ALERTS, and a ref's
-alert set is the newest analysis in each category. Five categories feed it, from two workflows that
-nothing orders: CodeQL's three languages (codeql.yml) and Bandit and Semgrep (security-code.yml). So
-"the ref has an analysis" says nothing about THIS commit: the previous push's Semgrep result stays on
-the ref until this push's lands, and a gate that read the alerts in between judged the old one and
-passed (PR #385: the gate read refs/pull/385/merge 13 s before that commit's Semgrep analysis
-landed). This waits until every category's newest analysis is the commit's own, and fails naming the
-categories that never arrived. "No analysis" is never read as "no alerts".
+alert set is the newest analysis in each category. Six categories feed it, from three workflows that
+nothing orders: CodeQL's three languages (codeql.yml), Bandit and Semgrep (security-code.yml) and
+zizmor (zizmor.yml). So "the ref has an analysis" says nothing about THIS commit: the previous
+push's Semgrep result stays on the ref until this push's lands, and a gate that read the alerts in
+between judged the old one and passed (PR #385: the gate read refs/pull/385/merge 13 s before that
+commit's Semgrep analysis landed). This waits until every category's newest analysis is the
+commit's own, and fails naming the categories that never arrived. "No analysis" is never read as
+"no alerts".
 
 The list endpoint has no commit filter (GitHub's REST description documents only tool_name,
 tool_guid, ref, pr, sarif_id, sort, direction and paging), so each row's commit_sha is compared here.
@@ -16,9 +17,9 @@ ONE page of the newest 100 is read: it always holds a just-analysed commit's row
 --paginate --jq` would apply a filter to each page separately.
 
 A scheduled run (codeql-alerts.yml judges those too) analyses the branch's head again with the one
-workflow that was scheduled. Its own categories must be the commit's; the other workflow's may be an
+workflow that was scheduled. Its own categories must be the commit's; the other workflows' may be an
 earlier commit's, as long as that analysis is older than this commit's own (the push that would have
-re-run it changed nothing either workflow scans: they share one paths-ignore list).
+re-run them changed nothing any of the workflows scans: they share one paths-ignore list).
 
 Usage:
     code_scanning_analyses.py --ref REF --sha SHA [--event EVENT] [--workflow PATH]
@@ -37,8 +38,9 @@ import sys
 import time
 
 # Every category the alert gates wait for, and the workflow that uploads it. tests/unit (part26)
-# holds this to codeql.yml's language matrix and security-code.yml's upload-sarif categories, both
-# ways. ClusterFuzzLite's category is NOT here: it uploads only when a pull request touches fuzzed
+# holds this to codeql.yml's language matrix and the upload-sarif categories of security-code.yml
+# and zizmor.yml, both ways, and to the workflows codeql-alerts.yml is triggered by and waits for.
+# ClusterFuzzLite's category is NOT here: it uploads only when a pull request touches fuzzed
 # code, about ten minutes later, and the required "fuzz the diff" job already fails on a crash.
 CATEGORIES = {
     "/language:python": "codeql.yml",
@@ -46,6 +48,7 @@ CATEGORIES = {
     "/language:actions": "codeql.yml",
     "bandit": "security-code.yml",
     "semgrep": "security-code.yml",
+    "zizmor": "zizmor.yml",
 }
 
 MISSING, MOVED = 1, 3

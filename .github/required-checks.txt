@@ -12,12 +12,18 @@
 #   required_status_checks rule's "required_status_checks" list, then PUT it back.
 #
 # Fuzz and ClusterFuzzLite run on every pull request too, and pass at once when it changes nothing
-# they fuzz (each job's first step reads the pull request's file list). Not here, on purpose: Aikido's
+# they fuzz (each job's scope step, the first after Harden-Runner, reads the pull request's file
+# list). Not here, on purpose: Aikido's
 # checks (its pull-request suite often never starts, which would hold every merge), GitHub's own
-# code-scanning checks (CodeQL, Bandit, Semgrep OSS: the "Open code-scanning alerts (PR)" job waits
-# for each one's analysis of the pull request's merge commit and gates on what they find;
+# code-scanning checks (CodeQL, Bandit, Semgrep OSS, zizmor: the "Open code-scanning alerts (PR)" job
+# waits for each one's analysis of the pull request's merge commit and gates on what they find;
 # ClusterFuzzLite/CIFuzz is not waited for, as it uploads only when fuzzed code changes, and a crash
 # it finds fails the required "fuzz the diff" job instead), and Codacy's coverage checks.
+#
+# Not here YET, the owner's call: zizmor.yml's two jobs, "Workflow security (zizmor)" and "Upload
+# zizmor results". They run on every pull request, so either can be added (here and in the ruleset).
+# Until then zizmor still gates a merge: "Open code-scanning alerts (PR)" fails when its analysis of
+# the merge commit is missing, or when it found anything.
 #
 # <app slug> | <check name>
 github-actions | checks (ubuntu-22.04 · py3.10)

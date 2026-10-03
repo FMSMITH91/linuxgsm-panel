@@ -1,17 +1,18 @@
 """Part 26 of the unit suite: the code-scanning alert gates judge THIS commit's analyses.
 
 Both alert gates read a ref's open alerts, and a ref's alert set is the newest analysis in each of
-five categories uploaded by two workflows nothing orders: CodeQL's three languages (codeql.yml) and
-Bandit and Semgrep (security-code.yml). The PR gate (codeql.yml's pr-alerts) polled for ANY
-analysis of refs/pull/<n>/merge, which after a PR's first push is always the previous push's: on
-#385 it read the alerts 13 s before that commit's Semgrep analysis landed, and passed. The main gate
+six categories uploaded by three workflows nothing orders: CodeQL's three languages (codeql.yml),
+Bandit and Semgrep (security-code.yml) and zizmor (zizmor.yml). The PR gate (codeql.yml's
+pr-alerts) polled for ANY analysis of refs/pull/<n>/merge, which after a PR's first push is always
+the previous push's: on #385 it read the alerts 13 s before that commit's Semgrep analysis landed,
+and passed. The main gate
 (codeql-alerts.yml) asked for "an analysis of this commit" with a `sha=` parameter the analyses list
 does not have, so that guard could never fire, and it skipped scheduled runs, so the weekly scan's
 new alerts were never judged on main.
 
 Now both run .github/scripts/code_scanning_analyses.py first, which holds the one category list and
 waits until each category's newest analysis is the judged commit's own. Here: the list is pinned to
-the two workflows that upload; the decision is driven case by case; and each gate's own step is
+the three workflows that upload; the decision is driven case by case; and each gate's own step is
 taken out of its workflow and run with `gh` stubbed, so the callers are tested, not just the helper.
 
 Workflows are read as text: PyYAML is not installed where CI runs this suite.
@@ -37,6 +38,7 @@ _spec26.loader.exec_module(CSA)
 _cq26 = _wf14("codeql.yml")
 _cqa26 = _wf14("codeql-alerts.yml")
 _sec26 = _wf14("security-code.yml")
+_zz26 = _wf14("zizmor.yml")
 
 
 def _job26(text, job):
@@ -65,14 +67,17 @@ _langs26 = re.findall(r"^\s+- language: (\S+)\s*$", _an26, re.M)
 _from_wf26 = {("/language:" + lang, "codeql.yml") for lang in _langs26}
 _sec_cats26 = _upload_categories26(_wf14_code("security-code.yml"))
 _from_wf26 |= {(c, "security-code.yml") for c in _sec_cats26}
-check("code-scanning gates: the category list is exactly what codeql.yml's language matrix and "
-      "security-code.yml's upload-sarif steps upload, each named with its workflow",
+_zz_cats26 = _upload_categories26(_wf14_code("zizmor.yml"))
+_from_wf26 |= {(c, "zizmor.yml") for c in _zz_cats26}
+check("code-scanning gates: the category list is exactly what codeql.yml's language matrix and the "
+      "upload-sarif steps of security-code.yml and zizmor.yml upload, each named with its workflow",
       set(CSA.CATEGORIES.items()) == _from_wf26 and len(CSA.CATEGORIES) == len(_from_wf26),
       repr((sorted(CSA.CATEGORIES.items()), sorted(_from_wf26))))
 check("code-scanning gates: ...read from the workflows themselves (positive control: three "
-      "languages, CodeQL's category formula, and both SARIF uploads found)",
+      "languages, CodeQL's category formula, and all three SARIF uploads found)",
       len(_langs26) == 3 and 'category: "/language:${{ matrix.language }}"' in _an26
-      and sorted(_sec_cats26) == ["bandit", "semgrep"], repr((_langs26, _sec_cats26)))
+      and sorted(_sec_cats26) == ["bandit", "semgrep"] and _zz_cats26 == ["zizmor"],
+      repr((_langs26, _sec_cats26, _zz_cats26)))
 check("code-scanning gates: ...and the reader finds a category it was not told about (a third "
       "upload in a sample workflow)",
       _upload_categories26(
@@ -103,8 +108,9 @@ _late26 = _rows26(*(_set26(_S26, "2026-10-03T10:00:00Z", [c for c in CSA.CATEGOR
                     + _set26(_P26, "2026-10-03T09:00:00Z")))
 _moved26 = _rows26(*([("/language:python", _N26, "2026-10-03T11:00:00Z")]
                      + _set26(_S26, "2026-10-03T10:00:00Z")))
-# A scheduled CodeQL run over a docs-only head: CodeQL's categories are its own, Bandit's and
-# Semgrep's are the predecessor's (security-code.yml did not run for a docs-only push either).
+# A scheduled CodeQL run over a docs-only head: CodeQL's categories are its own, Bandit's, Semgrep's
+# and zizmor's are the predecessor's (security-code.yml and zizmor.yml did not run for a docs-only
+# push either).
 _sched_spec26 = (_set26(_S26, "2026-10-05T05:30:00Z", sorted(_CQ26))
                  + _set26(_P26, "2026-10-03T09:00:00Z"))
 _sched26 = _rows26(*_sched_spec26)
@@ -118,7 +124,8 @@ _cases26 = {
     "a later commit's Python is newer": (CSA.assess(_moved26, _S26, _ALL26),
                                          ([], ["/language:python"])),
     "scheduled CodeQL, docs-only head": (CSA.assess(_sched26, _S26, _CQ26), ([], [])),
-    "...but the same rows on a push": (CSA.assess(_sched26, _S26, _ALL26), (["bandit", "semgrep"], [])),
+    "...but the same rows on a push": (CSA.assess(_sched26, _S26, _ALL26),
+                                       (["bandit", "semgrep", "zizmor"], [])),
     "scheduled, a later commit's Bandit": (CSA.assess(_sched_later26, _S26, _CQ26), ([], ["bandit"])),
     "scheduled, own rows not landed yet": (
         CSA.assess(_rows26(*_set26(_P26, "2026-10-03T09:00:00Z")), _S26, _CQ26),
@@ -133,13 +140,15 @@ _own26 = {
     "push": CSA.own_categories("push", ".github/workflows/codeql.yml"),
     "schedule codeql": CSA.own_categories("schedule", ".github/workflows/codeql.yml"),
     "schedule security-code": CSA.own_categories("schedule", ".github/workflows/security-code.yml"),
+    "schedule zizmor": CSA.own_categories("schedule", ".github/workflows/zizmor.yml"),
     "schedule unknown": CSA.own_categories("schedule", ".github/workflows/other.yml"),
     "manual": CSA.own_categories("", ""),
 }
 check("code-scanning gates: every category must be the commit's own, except on a scheduled run, "
       "which re-analyses with its one workflow",
       _own26 == {"pull_request": _ALL26, "push": _ALL26, "schedule codeql": _CQ26,
-                 "schedule security-code": {"bandit", "semgrep"}, "schedule unknown": _ALL26,
+                 "schedule security-code": {"bandit", "semgrep"}, "schedule zizmor": {"zizmor"},
+                 "schedule unknown": _ALL26,
                  "manual": _ALL26}, repr(_own26))
 
 
@@ -180,8 +189,8 @@ _sparse26 = "sparse-checkout: .github/scripts/code_scanning_analyses.py"
 check("code-scanning gates: pr-alerts checks out the script, then waits for this merge commit "
       "(github.sha) in every category, and only then judges the alerts",
       [s[0] or s[1].split("@")[0] for s in _pr_steps26]
-      == ["actions/checkout", "Wait for this merge commit's analysis in every category",
-          "Judge refs/pull/<n>/merge"]
+      == ["Harden Runner", "actions/checkout",
+          "Wait for this merge commit's analysis in every category", "Judge refs/pull/<n>/merge"]
       and _sparse26 in _pr26 and "code_scanning_analyses.py" in _pr_wait26
       and "--event pull_request" in _pr_wait26 and "SHA: ${{ github.sha }}" in _pr26
       and "code_scanning_analyses.py" not in _pr_judge26, repr(_pr_steps26))
@@ -193,7 +202,7 @@ check("code-scanning gates: ...the main gate checks it out and runs it before re
       and '--event "${WR_EVENT}" --workflow "${WR_PATH}"' in _m_judge26
       and "WR_EVENT: ${{ github.event.workflow_run.event }}" in _m_job26
       and "WR_PATH: ${{ github.event.workflow_run.path }}" in _m_job26, repr(_m_steps26))
-check("code-scanning gates: pr-alerts waits about ten minutes for the other workflow, and its job "
+check("code-scanning gates: pr-alerts waits about ten minutes for the other workflows, and its job "
       "timeout leaves room after the wait (it was 10 minutes, the wait's own length)",
       _pr_poll26[0] * _pr_poll26[1] >= 600
       and _pr_poll26[0] * _pr_poll26[1] + 120 <= _timeout26(_pr26) * 60 and _pr_poll26[2],
@@ -312,14 +321,17 @@ try:
           all(c in _mj["clean"][4] for c in CSA.CATEGORIES) and "None. :white_check_mark:"
           in _mj["clean"][4], _mj["clean"][4][-600:])
 
-    # ── scheduled runs reach the gate, and wait for the other workflow's scheduled run ──
-    _wait26 = _step26(_cqa26, "Wait for the other uploader")
+    # ── scheduled runs reach the gate, and wait for the other workflows' scheduled runs ──
+    _wait26 = _step26(_cqa26, "Wait for the other uploaders")
     _ws = _run26(_wait26, [], GITHUB_EVENT_NAME="workflow_run", WR_SHA=_S26, WR_NAME="CodeQL",
                  WR_EVENT="schedule")
-    check("code-scanning gates (main): a scheduled run looks for both workflows' scheduled AND push "
-          "runs of the same commit (a push run still uploading is not judged early)",
-          _ws[:2] == (0, {"judge": "true"}) and _ws[2].count("event=schedule") == 2
-          and _ws[2].count("event=push") == 2 and "event=pull_request" not in _ws[2], repr(_ws[:3]))
+    _ws_wf = sorted({re.sub(r".*actions/workflows/([^/]+)/runs.*", r"\1", ln)
+                     for ln in _ws[2].splitlines() if "actions/workflows/" in ln})
+    check("code-scanning gates (main): a scheduled run looks for every uploading workflow's scheduled "
+          "AND push runs of the same commit (a push run still uploading is not judged early)",
+          _ws[:2] == (0, {"judge": "true"}) and _ws[2].count("event=schedule") == 3
+          and _ws[2].count("event=push") == 3 and "event=pull_request" not in _ws[2]
+          and _ws_wf == ["codeql.yml", "security-code.yml", "zizmor.yml"], repr((_ws[:3], _ws_wf)))
 finally:
     _shutil26.rmtree(_sb26, ignore_errors=True)
 
@@ -332,7 +344,8 @@ check("code-scanning gates (main): the gate's `if:` admits a scheduled run of ma
       and "github.event.workflow_run.conclusion == 'success'" in _if26
       and "github.event.workflow_run.head_branch == 'main'" in _if26
       and re.search(r"^  schedule:\n    - cron: ", _cq26, re.M) is not None
-      and re.search(r"^  schedule:\n    - cron: ", _sec26, re.M) is not None, _if26)
+      and re.search(r"^  schedule:\n    - cron: ", _sec26, re.M) is not None
+      and re.search(r"^  schedule:\n    - cron: ", _zz26, re.M) is not None, _if26)
 
 # ── 4. required-checks.txt says what pr-alerts gates, and no more ────────────────────────────
 with open(os.path.join(_root, ".github", "required-checks.txt"), encoding="utf-8") as _fh:

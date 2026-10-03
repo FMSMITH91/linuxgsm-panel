@@ -1,0 +1,162 @@
+name: Security scan (workflows)
+
+# zizmor (https://docs.zizmor.sh): static security analysis of the GitHub Actions setup itself,
+# every workflow here and .github/dependabot.yml. It finds template injection, over-scoped
+# permissions, credentials left in .git/config, cache poisoning, dangerous triggers, and, online,
+# impostor commits and action versions with a known advisory.
+#
+# HOW IT GATES. As Bandit and Semgrep do (security-code.yml): the findings are SARIF, uploaded to
+# code scanning under the category `zizmor`, and an open one fails "Open code-scanning alerts (PR)"
+# on a pull request and "Open code-scanning alerts" on main. Both gates wait for this commit's
+# zizmor analysis (.github/scripts/code_scanning_analyses.py), so a run that uploaded nothing fails
+# them too. With --format=sarif zizmor exits 0 on findings and non-zero only when it could not run;
+# a run that could not, or that audited fewer workflow files than there are, fails here.
+#
+# PERSONA: pedantic. The regular persona reports what is exploitable now; pedantic adds the code
+# smells that make the next mistake likelier (a permission with no comment saying why, a workflow
+# with no concurrency setting, a job with no name, a pinned action whose version comment is
+# missing). Each of those was fixed here, so holding them at zero costs a pull request nothing until
+# it adds one. The auditor persona adds findings zizmor itself expects to be mostly false positives,
+# which would turn the gate into a stream of ignore comments. An accepted design is marked where it
+# is, `# zizmor: ignore[<rule>] <reason>`, and is visible in review; nothing is configured away.
+#
+# TWO JOBS, so the scanner never holds a token that can write. Online audits need a token, and
+# this job's can write code-scanning alert state, which both alert gates read as the truth. The scan
+# runs with a read-only token and hands its SARIF on as an artifact; the upload job, holding
+# security-events: write, runs only GitHub's own actions (security-code.yml's Bandit job hands its
+# token to upload-sarif alone for the same reason).
+#
+# TRIGGERS, the same as security-code.yml's and for the same reasons. Every pull request,
+# unfiltered: the PR alert gate waits for this category on every one. A push to main with the
+# paths-ignore list ci.yml, codeql.yml and security-code.yml share (a docs-only push runs none of
+# the uploaders; code_scanning_analyses.py relies on that). And weekly, because the online audits
+# change their answer without a commit: an action version pinned here can gain an advisory.
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: "37 5 * * 1"   # weekly, Monday 05:37 UTC, between CodeQL's and security-code.yml's
+
+# The event is part of the group, as in codeql.yml and security-code.yml: on main the Monday
+# scheduled run shares the ref with a push run, and must not cancel it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    name: Workflow security (zizmor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # zizmor reads the files; it is handed the read-only job token for its online audits,
+          # through GH_TOKEN below, never through .git/config.
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # Exact version and hashes, wheels only (the wheel carries zizmor's compiled binary); see
+      # .github/ci-requirements/zizmor.in.
+      - run: >-
+          python -m pip install --quiet --require-hashes --only-binary :all:
+          -r .github/ci-requirements/zizmor.txt
+
+      #   --strict-collection: a file zizmor cannot parse fails the run. Without it the file is
+      #     skipped with a warning, and the SARIF says nothing about it.
+      #   --no-config: no zizmor.yml can switch a rule off or ignore a file. The only way to accept
+      #     a finding is an inline `# zizmor: ignore[<rule>] <reason>` beside it (tests/unit holds
+      #     the list of them).
+      #   The count: zizmor logs each input it audited. Every workflow file must be among them, or
+      #     the run fails: a scan that read nothing writes an empty SARIF, which reads as clean.
+      - name: zizmor (SARIF)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          zizmor --version
+          if ! zizmor --persona=pedantic --strict-collection --no-config --color=never --format=sarif . \
+               > zizmor.sarif 2> zizmor.log; then
+            cat zizmor.log
+            echo "::error::zizmor did not complete, so nothing was audited."
+            exit 1
+          fi
+          cat zizmor.log
+          shopt -s nullglob
+          workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
+          audited="$(grep -cE 'completed \./\.github/workflows/[^/]+\.ya?ml$' zizmor.log || true)"
+          findings="$(jq '[.runs[].results[]] | length' zizmor.sarif)"
+          echo "zizmor audited ${audited} of ${#workflows[@]} workflow files; ${findings} finding(s)."
+          {
+            echo '### zizmor (pedantic)'
+            echo ''
+            echo "Audited ${audited} of ${#workflows[@]} workflow files; ${findings} finding(s)."
+            jq -r '.runs[].results[] | "- `\(.ruleId)` \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"' zizmor.sarif
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${#workflows[@]}" -eq 0 ] || [ "${audited}" != "${#workflows[@]}" ] \
+             || [ "$(jq '.runs | length' zizmor.sarif)" != "1" ]; then
+            echo "::error::zizmor audited ${audited} of the ${#workflows[@]} workflow files: the rest were NOT checked."
+            exit 1
+          fi
+
+      - name: Hand the SARIF to the upload job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: zizmor-sarif
+          path: zizmor.sarif
+          retention-days: 5
+          if-no-files-found: error
+
+  upload:
+    name: Upload zizmor results
+    needs: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write   # upload-sarif writes the findings into code scanning
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      # upload-sarif reads the commit and, on a pull request, its base from the checkout. Nothing
+      # here runs the checked-out code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Take the SARIF the scan made
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: zizmor-sarif
+          path: ${{ runner.temp }}/zizmor
+
+      - name: Upload zizmor results to code scanning
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        with:
+          sarif_file: ${{ runner.temp }}/zizmor/zizmor.sarif
+          category: zizmor

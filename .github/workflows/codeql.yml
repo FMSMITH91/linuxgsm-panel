@@ -47,8 +47,8 @@ jobs:
     # activate automatically once the repo is made public.
     if: ${{ github.event.repository.private == false }}
     permissions:
-      security-events: write
-      actions: read
+      security-events: write   # init and analyze upload the results to code scanning
+      actions: read            # the upload's look-up of this run, as GitHub's CodeQL template grants
       contents: read
     # FULL analysis on pull requests, not diff-informed. By default the action analyses a PR only
     # on the lines it changes ("Computing PR diff ranges..."), so an alert a PR causes on a line
@@ -71,6 +71,11 @@ jobs:
           - language: actions
             name: actions
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # init and analyze take the token as an input; nothing uses it through git.
@@ -102,9 +107,10 @@ jobs:
   # ordinary PR check. The main gate in codeql-alerts.yml stays as the backstop.
   #
   # It reads the alerts only once code scanning holds THIS merge commit's analysis in every category
-  # that feeds them: CodeQL's three languages, and Bandit and Semgrep, which upload from
-  # security-code.yml. `needs: analyze` orders this job after CodeQL alone; nothing orders it after
-  # the other workflow. It used to poll for ANY analysis of the ref, which after a PR's first push is
+  # that feeds them: CodeQL's three languages, Bandit and Semgrep, which upload from
+  # security-code.yml, and zizmor, which uploads from zizmor.yml. `needs: analyze` orders this job
+  # after CodeQL alone; nothing orders it after the other workflows. It used to poll for ANY
+  # analysis of the ref, which after a PR's first push is
   # always there (the previous push's), so on #385 it read the alerts 13 s before that commit's
   # Semgrep analysis landed and passed on the old one. The categories, and the wait, are
   # .github/scripts/code_scanning_analyses.py, shared with the main gate (codeql-alerts.yml).
@@ -113,12 +119,17 @@ jobs:
     if: github.event_name == 'pull_request'
     needs: analyze
     runs-on: ubuntu-latest
-    # The wait below allows ten minutes for the other workflow's uploads; the rest is margin.
+    # The wait below allows ten minutes for the other workflows' uploads; the rest is margin.
     timeout-minutes: 15
     permissions:
       contents: read
-      security-events: read
+      security-events: read   # the merge ref's code-scanning analyses and open alerts
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false   # nothing here pushes; gh takes the token from GH_TOKEN

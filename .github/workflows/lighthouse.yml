@@ -38,9 +38,16 @@ concurrency:
 
 jobs:
   lighthouse:
+    # A required check by this name (.github/required-checks.txt): keep it.
+    name: lighthouse
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The panel and Lighthouse run here; neither needs the job token.
@@ -68,7 +75,7 @@ jobs:
       - name: Run Lighthouse CI
         # URL + puppeteer login live in .github/lighthouserc.json so we audit the real
         # (authenticated) dashboard, not just the login page.
-        uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # v12.6.2
+        uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # 12.6.2
         with:
           configPath: .github/lighthouserc.json
           uploadArtifacts: true

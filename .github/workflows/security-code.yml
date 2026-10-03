@@ -53,6 +53,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The audits read the lockfiles; no step here needs the job token.
@@ -170,6 +174,10 @@ jobs:
       contents: read
       security-events: write   # upload SARIF to the Security tab (code scanning)
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The job token can write code-scanning alert state, which the open-alerts gates read
@@ -232,6 +240,10 @@ jobs:
       contents: read
       security-events: write   # upload SARIF to the Security tab (code scanning), as Bandit does
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Semgrep scans the working tree. The job token can write code-scanning alert state;

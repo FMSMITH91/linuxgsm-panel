@@ -258,7 +258,7 @@ python app.py
 bash tools/run-tests.sh    # compile, flake8, unit + smoke tests, shellcheck
 ```
 
-CI runs the same suite on every push and PR, plus CodeQL, Bandit, Semgrep, a dependency audit, and coverage-guided fuzzing (`tests/fuzz/`).
+CI runs the same suite on every push and PR, plus CodeQL, Bandit, Semgrep, zizmor (on the workflows themselves), a dependency audit, and coverage-guided fuzzing (`tests/fuzz/`). Every CI job except the deploy job starts with StepSecurity's Harden-Runner in audit mode: it records the job's outbound connections and the processes it runs as root (in the job's public log, and with StepSecurity), routes the job's DNS through its own proxy, and blocks hosts on StepSecurity's global blocklist.
 
 The panel's own JavaScript (`static/js/`) is measured separately, in a real browser: `tools/js_coverage/run.py` boots a seeded panel in a throwaway copy of the tree, with every host command answered by a fake host, walks its pages and controls in headless Chrome, and writes V8's coverage as LCOV (`python tools/js_coverage/run.py --summary js-coverage.txt` with Chrome or Chromium installed; it never touches `data/`). CI sends that to Codacy beside the Python report.
 

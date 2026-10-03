@@ -14,6 +14,7 @@ name: ClusterFuzzLite continuous builds
 on:
   push:
     branches: [ main ]
+  # zizmor: ignore[concurrency-limits] a group would cancel a pending build on main (see the job's note)
 
 permissions:
   contents: read
@@ -29,7 +30,7 @@ jobs:
     # actions: read is for the last step, which lists this run's artifacts.
     permissions:
       contents: read
-      actions: read
+      actions: read   # the last step lists this run's artifacts
     # No concurrency group, unlike the vendor's template: one cancels a running build when the
     # next merge lands (a group also cancels a PENDING run, even with cancel-in-progress off), and
     # this check lands on that main commit, where the panel's update gate (_CI_BAD) and deploy.yml
@@ -39,6 +40,10 @@ jobs:
       matrix:
         sanitizer: [ address ]
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - name: Build fuzzers (${{ matrix.sanitizer }})
         id: build
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1

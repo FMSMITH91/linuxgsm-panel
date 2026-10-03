@@ -83,9 +83,9 @@ check("cflite: the continuous build on main has no concurrency group (a cancelle
 
 # ── E5: a scheduled CodeQL or security-code run never cancels the push run of the same ref ───────
 _conc30 = {f: (_block30(_wf29(f), "concurrency", 0) or {}).get("group", "")
-           for f in ("codeql.yml", "security-code.yml")}
-check("CodeQL and security-code: the concurrency group includes the event, so the Monday schedule "
-      "does not cancel an in-progress push run on main",
+           for f in ("codeql.yml", "security-code.yml", "zizmor.yml")}
+check("CodeQL, security-code and zizmor: the concurrency group includes the event, so the Monday "
+      "schedule does not cancel an in-progress push run on main",
       all("${{ github.event_name }}" in g and "${{ github.ref }}" in g for g in _conc30.values()),
       repr(_conc30))
 
