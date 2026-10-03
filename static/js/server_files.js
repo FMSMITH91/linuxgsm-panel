@@ -183,7 +183,7 @@ function mkRow(opts){
     var dlTitle=(opts.type==='dir'?'Download folder as .tar.gz':'Download');
     // The label carries the name, so it is no catalog key the page's translator could match:
     // its first half is translated here, the name never is.
-    dl.title=dlTitle; dl.setAttribute('aria-label', _tr(dlTitle)+': '+opts.name);
+    dl.title=dlTitle; dl.setAttribute('aria-label', _rowLabel(dlTitle, opts.name));
     dl.innerHTML='<i class="bi bi-download"></i>';
     right.appendChild(dl);
   }
@@ -193,11 +193,11 @@ function mkRow(opts){
     // same rule protects a path from both, because renaming lgsm/ away breaks the server exactly as
     // deleting it does. One control at every width — the row has no separate phone layout.
     var rn=document.createElement('button'); rn.type='button'; rn.className='btn btn-sm btn-link p-0 text-secondary';
-    rn.title='Rename'; rn.setAttribute('aria-label', _tr('Rename')+': '+opts.name);
+    rn.title='Rename'; rn.setAttribute('aria-label', _rowLabel('Rename', opts.name));
     rn.dataset.action='rename';
     rn.appendChild(_icon('bi-pencil'));
     right.appendChild(rn);
-    var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0'; b.title='Delete'; b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b);
+    var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0'; b.title='Delete'; b.setAttribute('aria-label', _rowLabel('Delete', opts.name)); b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b);
   }
   row.appendChild(left); row.appendChild(right);
   return row;
@@ -325,9 +325,17 @@ function _pathBody(lead, path, tail){
   var q=document.createElement('div'); q.textContent=lead; box.appendChild(q);
   var p=document.createElement('code'); p.className='fb-dialog-path'; p.setAttribute('data-no-i18n','');
   p.style.whiteSpace='pre-wrap'; p.style.wordBreak='break-all';
-  p.textContent='“'+path+'”'; box.appendChild(p);
+  // Each quote is held to the character beside it. A line may break after a space, and a space at
+  // a line's end is not drawn, so on a phone "server.cfg " could wrap as “…server.cfg, then ” alone
+  // on the next line, with the space gone.
+  var m=/^(\s*\S?)([\s\S]*?)(\S?\s*)$/.exec(path);
+  p.appendChild(_span('“'+m[1], 'nowrap')); p.appendChild(_span(m[2], ''));
+  p.appendChild(_span(m[3]+'”', 'nowrap')); box.appendChild(p);
   if(tail){ var t=document.createElement('div'); t.className='mt-2'; t.textContent=tail; box.appendChild(t); }
   return box;
+}
+function _span(text, ws){
+  var s=document.createElement('span'); s.textContent=text; if(ws) s.style.whiteSpace=ws; return s;
 }
 function deletePath(path, isDir){
   confirmDialog({title:'Delete '+(isDir?'directory':'file'), icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
@@ -352,6 +360,9 @@ function deletePath(path, isDir){
 var _renaming = null;   // {row, path, name, input, ok, err, busy}: the one row being renamed
 // window.t (i18n.js) where the page has it, the English otherwise.
 function _tr(s){ return window.t ? window.t(s) : s; }
+// A row control's accessible name: the verb, then the row's name in quotes. An accessible name is
+// trimmed, so "Rename: server.cfg " was announced exactly as the real server.cfg's Rename.
+function _rowLabel(verb, name){ return _tr(verb)+': “'+name+'”'; }
 function _icon(cls){ var i=document.createElement('i'); i.className='bi '+cls; return i; }
 // Where the stem ends: before the extension, which is kept. A folder, a dotfile (.bashrc) and a
 // name with no dot have none to keep; an archive's double extension (.tar.gz) is kept whole. A

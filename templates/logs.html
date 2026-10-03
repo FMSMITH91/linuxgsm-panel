@@ -92,7 +92,7 @@
                a global ban lists the servers it missed at the end) — so the part kept on purpose was the part
                no page ever showed. data-no-i18n: this is logged output, not panel copy. #}
             {% set detail = entry.detail or "" %}
-            <td class="small text-secondary audit-detail" data-no-i18n style="white-space:pre-wrap;">{% if detail|length > 100 %}<details><summary>{{ detail[:100] }}…</summary><span style="white-space:pre-wrap;word-break:break-word;">{{ detail[100:] }}</span></details>{% else %}{{ detail }}{% endif %}</td>
+            <td class="small text-secondary audit-detail" data-no-i18n>{% if detail|length > 100 %}<details><summary>{{ detail[:100] }}…</summary><span style="white-space:pre-wrap;word-break:break-word;">{{ detail[100:] }}</span></details>{% else %}{{ detail }}{% endif %}</td>
             <td class="small text-secondary">{% if show_all_ips or entry.user_id == current_user.id %}{{ entry.ip_address }}{% endif %}</td>
             <td>
               {% if entry.success %}

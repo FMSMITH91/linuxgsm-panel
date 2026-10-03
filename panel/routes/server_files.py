@@ -1433,20 +1433,26 @@ def _register_file_removal(app):
             return refused
         try:
             ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
-            log_action(current_user, "delete_file", target=gs.name, detail=_audit_name(rel),
-                       success=ok, server=gs)
+            log_action(current_user, "delete_file", target=gs.name,
+                       detail=_audit_safe(_audit_name(rel)), success=ok, server=gs)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
 
 
 def _audit_name(text):
-    """A path or name for an audit row, in quotes when a space starts or ends it.
+    """A path or name for an audit row, with each space a reader could not see written as an escape.
 
-    The audit page shows a row's text as HTML does, which drops a space at either end, so a delete
-    of "server.cfg " beside a real "server.cfg" read like a delete of the real one.
+    The audit page shows a row as HTML does. A space at the end of a line is not drawn and a run of
+    them shows as one, so a delete of "server.cfg " beside a real "server.cfg" read like a delete
+    of the real one. Quotes did not fix it on a phone, where the closing one wrapped to a line of
+    its own. So a space at either end of any part of the path, and every space in a run, is written
+    as x20 after a backslash, the way _audit_safe writes every other character that does not show.
     """
-    return '"%s"' % text if isinstance(text, str) and text != text.strip() else text
+    if not isinstance(text, str):
+        return text
+    return "/".join(re.sub(r"^ +| +$| {2,}", lambda m: "\\x20" * len(m.group()), part)
+                    for part in text.split("/"))
 
 
 def _audit_safe(text, limit=None):

@@ -4952,7 +4952,9 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
   c.confirmDialog = realCD;
   out.path_dialogs = asked.map(o => {
     const code = o.bodyNode ? o.bodyNode.children.find(e => e.tagName === 'CODE') : null;
-    return code ? [code.textContent, code.style.whiteSpace, 'data-no-i18n' in code.attrs, o.bodyText === undefined]
+    const ends = code ? [code.children[0], code.children[code.children.length - 1]] : [];
+    return code ? [code.textContent, code.style.whiteSpace, 'data-no-i18n' in code.attrs, o.bodyText === undefined,
+                   ends.filter(Boolean).map(e => [e.textContent, e.style.whiteSpace || ''])]
                 : null;
   });
   // A refusal shows under the field, which stays open and editable — and no toast.
@@ -5013,12 +5015,13 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
   const r2 = l2.querySelectorAll('[data-path]').filter(r => r.dataset.path === 'a.txt ')[0];
   const pen2 = r2 && r2.querySelector('[data-action="rename"]');
   const dl2 = r2 && r2.querySelector('[data-action="download"]');
+  const del2 = r2 && r2.querySelector('[data-action="delete"]');
   const posts2 = () => c2.fetched.filter(f => f.url.indexOf('/rename-path') >= 0);
   if (pen2) pen2.click();
   const f2 = l2.querySelector('.fb-rename input');
   out.i18n = {field: f2 && f2.getAttribute('aria-label'), value: f2 && f2.value,
               pencil: pen2 && pen2.getAttribute('aria-label'),
-              dl: dl2 && dl2.getAttribute('aria-label')};
+              dl: dl2 && dl2.getAttribute('aria-label'), del: del2 && del2.getAttribute('aria-label')};
   // Enter on the name as it is: nothing is sent, although trim() would make it look changed.
   if (f2) fire(f2, 'keydown', {key: 'Enter'});
   await flush();
@@ -5064,10 +5067,14 @@ if _node:
           "name with no dot has no extension to keep, and a name with a space at either end is "
           "selected whole (the panel refuses to keep that space)",
           repr((_rn.get("folder_sel"), _rn.get("stems"))))
-    check(_rn.get("path_dialogs") == [["\u201cdup2/server.cfg \u201d", "pre-wrap", True, True],
-                                      ["\u201cmaps  old \u201d", "pre-wrap", True, True]],
+    check(_rn.get("path_dialogs")
+          == [["\u201cdup2/server.cfg \u201d", "pre-wrap", True, True,
+               [["\u201cd", "nowrap"], ["g \u201d", "nowrap"]]],
+              ["\u201cmaps  old \u201d", "pre-wrap", True, True,
+               [["\u201cm", "nowrap"], ["d \u201d", "nowrap"]]]],
           "js (node): the delete and folder-download dialogs show the path quoted with its spaces "
-          "kept, so 'server.cfg ' reads apart from 'server.cfg'",
+          "kept, each quote held to the character beside it — so on a phone the closing quote "
+          "cannot wrap away from 'server.cfg ' and leave its space unseen",
           repr(_rn.get("path_dialogs")))
     check(_rn.get("refused") == {"body": {"path": "notes.txt", "new_name": "maps"},
                                  "err": "TAKEN-MESSAGE", "err_shown": True, "open": True,
@@ -5094,10 +5101,13 @@ if _node:
           "js (node): the file open in the editor follows its new name — and its folder's — so "
           "Save cannot write the old path back", repr((_rnd.get("cur"), _rn.get("folder_follow"))))
     check(_rn.get("i18n") == {"field": "Nuevo nombre", "value": "a.txt ",
-                              "pencil": "Renombrar: a.txt ", "dl": "Descargar: a.txt "},
+                              "pencil": "Renombrar: \u201ca.txt \u201d",
+                              "dl": "Descargar: \u201ca.txt \u201d",
+                              "del": "Delete: \u201ca.txt \u201d"},
           "js (node, es, real i18n.js): the rename field's accessible name is translated and its "
-          "value (the filename) is not; the row's Rename and Download labels translate the verb, "
-          "never the name", repr(_rn.get("i18n")))
+          "value (the filename) is not; the row's Rename, Download and Delete labels translate the "
+          "verb, never the name, and quote the name — an accessible name is trimmed, so 'a.txt ' "
+          "unquoted was announced as 'a.txt'", repr(_rn.get("i18n")))
     check(_rn.get("space_unchanged") == {"sent": 0, "open": False},
           "js (node): Enter on a name that ends in a space, left as it was, sends nothing and "
           "closes — the name is not trimmed into a rename", repr(_rn.get("space_unchanged")))

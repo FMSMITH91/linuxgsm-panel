@@ -38,7 +38,6 @@ reached a real host.
 """
 import json
 import os
-import re as _re40
 import shutil as _shutil40
 import subprocess as _sp40  # nosec B404 - runs bash on the rename command this part builds
 import tempfile as _tf40
@@ -436,43 +435,51 @@ def _existing40(a_client, sid):
               == (409, "A", ["sub"], True), repr((code, body)))
 
 
-def _audit_quotes40(a_client, sid):
-    """A name with a space at either end is quoted in its audit row, and /logs keeps the spaces.
+def _audit_spaces40(a_client, sid):
+    """Each space an audit row's reader could not see is written as an escape.
 
-    The audit page drops a space at a line's end and collapses a run of them, so a delete of
-    `server.cfg ` beside a real `server.cfg` read like a delete of the real config.
+    The audit page drops a space at a line's end and shows a run of them as one, so a delete of
+    `server.cfg ` beside a real `server.cfg` read like a delete of the real config. Quotes did not
+    fix it on a phone: the closing one wrapped to a line of its own.
     """
     _reset40()
-    _write40("cfg/sp.cfg ", "S")
-    code, body = _post40(a_client, sid, "cfg/sp.cfg ", "sp2.cfg")
-    row = (_audits40() or [NS(detail="", success=None)])[-1]
-    check("rename route: a name ending in a space is quoted in its audit row",
-          (code, _read40("cfg/sp2.cfg"), row.success, row.detail)
-          == (200, "S", True, '"cfg/sp.cfg " -> sp2.cfg'), repr((code, body, row)))
+    for rel in ("cfg/sp.cfg ", "cfg/ lead.cfg", "cfg/a  b.cfg"):
+        _write40(rel, "S")
+    cases = [("cfg/sp.cfg ", "sp2.cfg", "cfg/sp.cfg\\x20 -> sp2.cfg"),
+             ("cfg/ lead.cfg", "lead2.cfg", "cfg/\\x20lead.cfg -> lead2.cfg"),
+             ("cfg/a  b.cfg", "ab.cfg", "cfg/a\\x20\\x20b.cfg -> ab.cfg"),
+             ("cfg/c d.cfg", "e f.cfg", "cfg/c d.cfg -> e f.cfg")]
+    got = []
+    for rel, new, _want in cases:
+        code, _body = _post40(a_client, sid, rel, new)
+        row = (_audits40() or [NS(detail="", success=None)])[-1]
+        got.append((code, row.success, row.detail))
+    check("rename route: a space at either end of a name, or in a run, is written as an escape in "
+          "the audit row — a single space between words is left as it is (control)",
+          got == [(200, True, want) for _r, _n, want in cases], repr(got))
     code, body = _post40(a_client, sid, "cfg/a.cfg", " x.cfg")
     row = (_audits40() or [NS(detail="", success=None)])[-1]
-    check("rename route: ...and a refused new name with a space at its start is quoted too",
-          (code, row.success, row.detail.startswith('refused: cfg/a.cfg -> " x.cfg": '))
+    check("rename route: ...and a refused new name's leading space is escaped too",
+          (code, row.success, row.detail.startswith("refused: cfg/a.cfg -> \\x20x.cfg: "))
           == (400, False, True), repr((code, row)))
     _write40("cfg/del.cfg ", "D")
     _write40("cfg/del.cfg", "R")
     try:
         r = a_client.post("/api/server/%d/delete-path" % sid, json={"path": "cfg/del.cfg "})
         code = r.status_code
+        page = a_client.get("/logs").get_data(as_text=True)
     except Exception as exc:  # noqa: BLE001 - a crash fails the check that made it, not the part
-        code = repr(exc)[:200]
+        code, page = repr(exc)[:200], ""
     with _p9.app_context():
         last = AuditLog.query.filter_by(action="delete_file").order_by(AuditLog.id.desc()).first()
         got = (last.detail, last.success) if last is not None else None
-    check("delete route: a path ending in a space is quoted in its audit row, so it reads apart "
-          "from the real file beside it — which is still there",
+    check("delete route: a path ending in a space is audited with the space escaped, so it reads "
+          "apart from the real file beside it — which is still there",
           (code, got, _there40("cfg/del.cfg "), _read40("cfg/del.cfg"))
-          == (200, ('"cfg/del.cfg "', True), False, "R"), repr((code, got)))
-    with open(os.path.join(_ROOT40, "templates", "logs.html"), encoding="utf-8") as fh:
-        cell = _re40.search(r'<td class="[^"]*audit-detail[^"]*"[^>]*>', fh.read())
-    check("/logs: the audit detail cell keeps a row's spaces (white-space: pre-wrap)",
-          cell is not None and "white-space:pre-wrap" in cell.group(0).replace(" ", ""),
-          cell.group(0) if cell else "no audit-detail cell")
+          == (200, ("cfg/del.cfg\\x20", True), False, "R"), repr((code, got)))
+    check("/logs: ...and the audit page shows it that way",
+          "cfg/del.cfg\\x20" in page and "cfg/sp.cfg\\x20 -&gt; sp2.cfg" in page,
+          "the escaped rows are not on /logs (%d bytes)" % len(page))
 
 
 def _symlinks40(a_client, sid):
@@ -656,6 +663,7 @@ def _real_transports40():
     """Route every host command through the REAL transport for its host, over the stand-ins."""
     with open(os.path.join(_BIN40, "ssh"), "w", encoding="utf-8") as fh:
         fh.write(_SSH40)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
     os.chmod(os.path.join(_BIN40, "ssh"), 0o700)  # nosec B103 - this part's own stand-in, in its own temp dir
     os.environ["PATH"] = _BIN40 + os.pathsep + _PATH40
     os.environ["P40_HOME"], os.environ["P40_VIA"] = _HOME40, os.path.join(_BIN40, "via")
@@ -994,7 +1002,7 @@ try:
     _permission40(_V40, _S40)
     _plain40(_A40, _S40)
     _existing40(_A40, _S40)
-    _audit_quotes40(_A40, _S40)
+    _audit_spaces40(_A40, _S40)
     _symlinks40(_A40, _S40)
     _gone40(_A40, _S40)
     _console40(_A40, _S40)
