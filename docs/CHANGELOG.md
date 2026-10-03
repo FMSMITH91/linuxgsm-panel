@@ -461,7 +461,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   Autostart switch read On even when neither of the install's two attempts to write the monitor
   cron line worked, because both attempts' results were ignored. Such a server does not come back
   after a crash or a reboot. The switch now follows what was written and what the crontab reads back
-  as, and a failed write is logged.
+  as, and a failed write is logged. A write that fails changes nothing: a new server starts Off
+  until a write or the crontab says otherwise, and a retried install keeps what its earlier attempt
+  recorded, because a failed write leaves that attempt's monitor line in place. When nothing can
+  confirm the switch, the panel logs a warning.
 - **The panel is published over Tailscale Serve at one address, and a leftover route to it no
   longer answers 502.** The boot re-point wrote only the configured mount (`tailscale_mount`), so a
   second route to the panel — at "/" beside /lgsm, say — kept the scheme it was written with and
@@ -471,7 +474,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   --set-path=<mount> off`, reading Serve again right before each. Another app's route, and a route
   to the panel on another listener, are left alone, and nothing is removed when Serve cannot be
   read. A route at the same mount with a trailing slash ("/lgsm/" beside "/lgsm") counts as another
-  route, because Serve answers every /lgsm/ page from it. Enable at a new mount does the same, and
+  route, because Serve answers every /lgsm/ page from it. Only a config set with `tailscale serve
+  set-raw` can hold both, because every other Serve write replaces the other spelling. So the
+  panel's own write at start clears such a route, and the Tailscale page and the debug report name
+  it until then. Enable at a new mount does the same, and
   every Serve write uses the scheme the running panel serves rather than the one its next start
   will.
 - **The setup wizard no longer publishes the panel twice.** Its finish read the "/" route its own
@@ -515,10 +521,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   had 36 lines. The report now asks journald for the panel's own lines by field, so the 5,000 lines
   reach back as far as the panel's output does. Refused sudo calls and the panel's warnings are
   still included. The sudo calls are counted from a separate read and printed once, under *Errors
-  in the journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `LinuxGSM
-  config`, `true as root`, and so on) instead of "other command". Account names, paths and scripts
-  an operator ran are never printed. A system install needs an updated helper for this; an older
-  helper gets the previous read.
+  in the journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `console
+  send`, `LinuxGSM config`, `true as root`, and so on) instead of "other command". Account names,
+  paths, what was typed into a console and scripts an operator ran are never printed. A system
+  install needs an updated helper for this; an older helper gets the previous read.
 - **Call of Duty servers show the capacity the game reports.** gamedig gives cod's `maxplayers` as
   text ("16"). The panel threw it away and showed the LinuxGSM config's number instead.
 - **A running game the panel cannot query no longer runs LinuxGSM `details` every 45 seconds.**

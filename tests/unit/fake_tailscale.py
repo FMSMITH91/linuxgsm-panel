@@ -26,6 +26,14 @@ answers: another app taking a mount between a caller's read and its `off`.
 THE SEMANTICS THE TESTS DEPEND ON were checked against the real CLI (Tailscale 1.102.4) on the test
 VPS by the investigation that found these bugs, and against serve_v2.go of that version:
   * `serve --bg --https=443 [--set-path=M] <backend>` REPLACES whatever is at M, silently (rc 0).
+    It also drops the mount that differs from M only by one trailing "/": ipn/serve.go
+    SetWebHandler deletes every other handler whose mount, less one trailing "/", equals M's ("/foo/
+    overwrites /foo ... the opposite example is also handled"). Measured on the VPS, a write at
+    "/lgsm/" turned ['/', '/lgsm'] into ['/', '/lgsm/'], and the boot's write at "/lgsm" turned it
+    back. So no write leaves "/x" and "/x/" side by side.
+  * `serve set-raw` (an undocumented debug command, serve_v2.go runServeCombined) replaces the whole
+    config with the ipn.ServeConfig JSON on stdin, as given and with no dedupe. It is the one CLI
+    path that can leave "/x" beside "/x/". Like every write, it needs the operator.
   * `serve --https=N --set-path=M off` removes ONLY M; a missing M is rc 1 "handler does not exist".
   * `off` WITHOUT --set-path removes EVERY mount on that listener (no TTY, so no prompt).
   * Removing a listener's last mount clears it, and its Funnel flag with it.
@@ -144,20 +152,85 @@ def _off(st, port, path):
     _out()
 
 
+def _trim_slash(mount):
+    """Go's strings.TrimSuffix(mount, "/"): ONE trailing "/" off, so "//" becomes "/"."""
+    return mount[:-1] if mount.endswith("/") else mount
+
+
+def _set_web_handler(handlers, mount, backend):
+    """Write `backend` at `mount` as ipn.ServeConfig.SetWebHandler (1.102.4) does.
+
+    Every OTHER mount that is the same less one trailing "/" goes: "/foo/" overwrites "/foo", and
+    the other way round.
+    """
+    handlers[mount] = backend
+    for other in [m for m in handlers if m != mount]:
+        if _trim_slash(other) == _trim_slash(mount):
+            del handlers[other]
+
+
+def _write_refused(st):
+    if os.environ.get("FAKE_TS_WRITE_FAIL") or _denied(st):
+        _out(rc=1, err="Access denied: serve config denied\n")
+
+
 def _serve(verb, rest):
+    if rest == ["set-raw"]:
+        _set_raw()
     st = _load()
     port, path, pos = _parse_serve(rest)
     if pos == ["off"]:
         _off(st, port, path)
     if len(pos) != 1 or "://" not in pos[0]:
         _out(rc=1, err="invalid argument format\n")
-    if os.environ.get("FAKE_TS_WRITE_FAIL") or _denied(st):
-        _out(rc=1, err="Access denied: serve config denied\n")
-    st["web"].setdefault(port, {})[path or "/"] = pos[0]
+    _write_refused(st)
+    _set_web_handler(st["web"].setdefault(port, {}), path or "/", pos[0])
     if verb == "funnel" and port not in st["funnel"]:
         st["funnel"].append(port)
     _save(st)
     _out("Available within your tailnet:\n\n%s%s\n" % (_url(st, port), path or "/"))
+
+
+def _raw_config():
+    """The ipn.ServeConfig JSON on stdin, or exit 1 as the CLI does for one it cannot parse."""
+    try:
+        sc = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        sc = None
+    if not isinstance(sc, dict):
+        _out(rc=1, err="invalid JSON\n")
+    return sc
+
+
+def _raw_port(hostport):
+    return hostport.rsplit(":", 1)[1]
+
+
+def _raw_web(sc):
+    """{listener: {mount: backend}} of a ServeConfig's Web block, every handler kept as given."""
+    web = {}
+    for hostport, cfg in (sc.get("Web") or {}).items():
+        handlers = (cfg or {}).get("Handlers") or {}
+        web[_raw_port(hostport)] = {m: (h or {}).get("Proxy", "") for m, h in handlers.items()}
+    return web
+
+
+def _raw_http(sc):
+    """The listeners a ServeConfig's TCP block marks HTTP (not HTTPS)."""
+    tcp = sc.get("TCP") or {}
+    return [p for p, h in tcp.items() if (h or {}).get("HTTP") and not h.get("HTTPS")]
+
+
+def _set_raw():
+    """`serve set-raw`: the whole config becomes the ipn.ServeConfig JSON on stdin, as given."""
+    st = _load()
+    _write_refused(st)
+    sc = _raw_config()
+    st["web"] = _raw_web(sc)
+    st["http"] = _raw_http(sc)
+    st["funnel"] = [_raw_port(hp) for hp, on in (sc.get("AllowFunnel") or {}).items() if on]
+    _save(st)
+    _out()
 
 
 def _set(rest):

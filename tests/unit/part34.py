@@ -28,7 +28,8 @@ calls with no loss of function, and each check below fails on the code before it
      config read that found nothing, or LinuxGSM's static query settings, is not re-read every pass;
 * I. the debug report reads the panel's own output by indexed journal fields (sudo noise out
      BEFORE the line limit), counts the sudo calls from a read of their own, prints them once, and
-     names the game-account reads by fixed labels.
+     names the game-account reads by fixed labels — the console's send included, which the VPS
+     proof found counted as "other".
 
 HOW IT RUNS. Every host command is stubbed on the module that defines it, saved and restored in a
 finally, behind a tripwire under every real transport. Where the SHELL a change builds is the thing
@@ -66,6 +67,7 @@ from panel.ops.ssh_manager import _core as _core34
 from panel.ops.ssh_manager import cron as _cron34
 from panel.ops.ssh_manager import files as _files34
 from panel.ops.ssh_manager import game as _game34
+from panel.ops.ssh_manager import gmod as _gmod34
 from panel.routes import api as _api34
 from panel.routes import server_files as _sf34
 from panel.security import banlist as _bl34
@@ -1324,6 +1326,57 @@ def _section_report_classifier34():
                "as a game account ×1200 [gamedig players ×900, console poll ×300]" in shown)), shown)
 
 
+# The console send as sudo-rs logged it on the test VPS (the proof of #393), accounts renamed. The
+# classifier had no fingerprint for it, so all 42 of that run's sends were counted as "other".
+_VPS_SEND34 = ("lgsmpanel : PWD=/tmp/paneltest-console-sudo/branch ; USER=mcsrv7731 ; "
+               "COMMAND=/usr/bin/bash -c 'D=/tmp/tmux-$(id -u); SOCK=\"\"; for s in $(ls -1 \"$D\" "
+               "2>/dev/null | grep \"^mcserver-\"); do tmux -L \"$s\" has-session -t mcserver "
+               "2>/dev/null && { SOCK=\"$s\"; break; }; done; [ -z \"$SOCK\" ] && { echo NO_SESSION; "
+               "exit 3; }; tmux -L \"$SOCK\" send-keys -t mcserver list Enter'")
+
+
+def _console_bodies34():
+    """{kind: the shell each console builder runs as the game account}, from the builders."""
+    srv = NS(id=-3407, host="192.0.2.34", username="local", is_local=True, auth_method="local",
+             sudo_enabled=True)
+    got = {}
+
+    def _rec(server, user, sh, timeout=30, selfname=None):
+        got[len(got)] = (user, sh)
+        return "", "", 0
+    with _patched():
+        _patch(_core34, "shell_as_game_user", _rec)
+        # What an operator typed, holding other entries' tokens: the fixed text must decide.
+        _core34.send_console_command(srv, "mcsrv7731", "say gamedig jq -r cat x.cfg", selfname="mcserver")
+        _game34.capture_console(srv, "mcsrv7731", selfname="mcserver", lines=180)
+        _gmod34._mount_needs_restart(srv, "gmodsrv7731")
+    return [got.get(i, ("x", "")) for i in range(3)]
+
+
+def _section_report_console_labels34():
+    send, snap, live = _console_bodies34()
+    lines = [_PFX34 % (i, 2100 + i) + ("  ubuntu : PWD=/home/ubuntu ; USER=%s ; COMMAND=/usr/bin/bash "
+                                        "-c %s" % body) for i, body in enumerate((send, snap, live))]
+    _kept, verbs, _s = _lg34._split_priv([_PFX34 % (9, 2109) + _VPS_SEND34])
+    check("I labels: the console's send command (typed in the console, or kick, ban, say) is "
+          "'console send' as a game account, not 'other' — the line sudo-rs logged on the VPS",
+          verbs.get(_lg34.GAME_ACCOUNT) == {"console send": 1}, repr(verbs))
+    _kept, verbs, _s = _lg34._split_priv(lines[:1])
+    check("I labels: ...and a send whose typed command holds another entry's tokens ('gamedig … "
+          "jq -r', 'cat ….cfg') is still 'console send': the console's own text decides, first",
+          verbs.get(_lg34.GAME_ACCOUNT) == {"console send": 1}, repr((verbs, send[1][-60:])))
+    _kept, verbs, _s = _lg34._split_priv(lines[1:])
+    check("I labels: the console snapshot (capture-pane) and GMod's live-session check are named "
+          "too, never 'other'",
+          verbs.get(_lg34.GAME_ACCOUNT) == {"console snapshot": 1, "console session check": 1},
+          repr((verbs, snap[1][-60:], live[1][-40:])))
+    line = _lg34._priv_line(_lg34._split_priv(lines + [_PFX34 % (9, 2109) + _VPS_SEND34])[1], 0,
+                            "x") or ""
+    check("I labels: ...and the printed line names none of what was typed, the account or the "
+          "script", "console send ×2" in line and not any(
+              t in line for t in ("7731", "mcserver", "say", "list", "x.cfg")), line)
+
+
 _OWN34 = "Oct 03 08:00:00 h python3[1]: WARNING panel own line\n"
 _SUDO34 = "Oct 03 08:00:01 h sudo[2]:   u : PWD=/x ; USER=root ; COMMAND=/usr/bin/true\n"
 
@@ -1503,6 +1556,7 @@ def _run_sections34():
     _section_banwatch34()
     _section_console34()
     _section_report_classifier34()
+    _section_report_console_labels34()
     _section_report_reads34()
     _section_report_once34()
     check("ws4: nothing in this part reached a real SSH or local transport", _TRIP34 == [],

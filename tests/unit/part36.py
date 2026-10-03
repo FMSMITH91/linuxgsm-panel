@@ -15,7 +15,10 @@ What the re-check found still open, each driven through the code that calls it:
   step 6 never decided, says the firewall step failed (and who can open the ports, since the
   Firewall page takes Manage Remotes), logs it at warning and records it on the audit entry.
 * F2 (alerts #97/#102): the install recorded Autostart On whatever the crontab got. Both cron
-  writes' answers are kept now, and the column is read back from the crontab.
+  writes' answers are kept now, and the column is read back from the crontab. The VPS proof of
+  that fix found its corner: a retry whose writes and read-back all failed recorded Off over the
+  monitor line an earlier attempt wrote. A failed write now changes nothing (a new row starts Off,
+  as an import's does), and the unconfirmed state is logged at warning.
 * F3 (alert #10): run_as_game_user returned str() of ANY exception from its argument check into
   the action's message. A non-VerbError now gives fixed text and is logged.
 * V8: seven GAMEDIG_TYPE values were not game ids in gamedig 5.3.3 (old ids it resolves only with
@@ -339,10 +342,16 @@ def _stub_install36():
 
 def _install36(rid, name, port, **host):
     """Steps 5 to the end of a csgo install of `name` on `port`, as the job runs them. -> row id."""
-    _h36_reset(**host)
     with _p9.app_context():
         sid = _ms36._create_install_row(rid, name, name, "csgo", port).id
     _mine36["servers"].append(sid)
+    _configure36(rid, sid, name, port, **host)
+    return sid
+
+
+def _configure36(rid, sid, name, port, **host):
+    """Steps 5 to the end on row `sid` as it stands: a retry runs the job again on the same row."""
+    _h36_reset(**host)
     job = NS(app=_p9, gs_id=sid, remote_id=rid, short_name=name, game_type="csgo",
              lgsm_name="csgoserver", final_port=port, content_games=[], run=None,
              p=lambda *a, **k: None, fail=lambda *a, **k: _fin36.append(("FAILED", a)),
@@ -494,6 +503,35 @@ def _f2_checks36(rid):
         got = _autostart36(sid)
         check("F2 install: Autostart is %s when %s" % ("On" if want else "Off", label),
               got is want, "column %r, finish %r" % (got, _fin36))
+
+
+def _f2_retry36(rid):
+    """The VPS proof's corner: a monitor line already there, and every cron call of this run fails.
+
+    The crontab already holds the line, and this run's two cron writes AND its read-back fail. A
+    retry is how an install meets that crontab (a first install goes only into an account it
+    creates): the earlier attempt wrote the line, and a failed rewrite installs nothing, so the line
+    is still there.
+    """
+    fail = (False, "crontab: could not write")
+    sid = _install36(rid, "p36asr", 27600, listen=[{27600}])   # the earlier attempt: line written
+    before = _autostart36(sid)
+    with _capture36(_p9_app._log) as rec:
+        _configure36(rid, sid, "p36asr", 27600, cron5=[fail], cron7=[fail], cron_list=[None],
+                     listen=[{27600}])
+    got = _autostart36(sid)
+    check("F2 install: a RETRY whose cron writes and read-back all fail keeps the Autostart On the "
+          "earlier attempt recorded — its monitor line is still there; step 5 recorded Off over it",
+          (before, got) == (True, True), "column before %r, after %r" % (before, got))
+    hits = [r for r in rec.records if "Autostart is left On, as last known" in r.getMessage()]
+    check("F2 install: ...and that unconfirmed Autostart is logged at WARNING",
+          len(hits) == 1 and hits[0].levelno == _logging36.WARNING,
+          repr([(r.levelname, r.getMessage()[:90]) for r in rec.records]))
+    sid = _install36(rid, "p36asn", 27610, cmds=[[]], cron7=[fail], cron_list=[None],
+                     listen=[{27610}])
+    check("F2 install: a new server that no write or read reached starts and stays Off (as an "
+          "import's row does), not the model's default On", _autostart36(sid) is False,
+          repr(_autostart36(sid)))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -922,7 +960,7 @@ try:
     _H36 = _host36("p36-install-host", "192.0.2.68")
     for _fn36 in (_f1_step6_raises36, _f1_listen_raises36, _f1_listen_unreadable36,
                   _f1_sibling_after_step6, _f1_foreign_listener36, _f1_happy36, _f1_warning36,
-                  _f2_checks36):
+                  _f2_checks36, _f2_retry36):
         _fn36(_H36)
     _p9_restore_all()
 

@@ -56,7 +56,15 @@ _ROOT_PROGRAMS = frozenset((
 _SHELLS = frozenset(("bash", "sh", "dash"))
 # What the panel runs AS a game account, by a fixed fingerprint of the command: (label, tokens that
 # must all appear). First match wins. Only these labels are ever printed, never the command.
+# The console's tmux bodies come first. Each opens with the panel's own socket lookup
+# (ssh_manager._core._tmux_live_socket_sh), and a console send ends with what was typed, which can
+# hold any later entry's tokens ("say gamedig jq -r"), so the fixed text has to decide. The send
+# was counted as "other": the VPS proof of #393 found 42 of them so.
+_TMUX_SOCK = "tmux-$(id -u)"
 _GAME_READS = (
+    ("console send", (_TMUX_SOCK, " send-keys ")),
+    ("console snapshot", (_TMUX_SOCK, " capture-pane ")),
+    ("console session check", (_TMUX_SOCK, "echo __LIVE__")),
     ("gamedig map", ("gamedig", "jq -r")),
     ("gamedig player list", ("gamedig", "[.players[]")),
     ("gamedig players", ("gamedig", "players|length")),
@@ -213,11 +221,11 @@ def _priv_verb(command, rest, user="root"):
 
     The helper's own lines are its verb ('other verb' for one the table does not know). Anything
     run as another account (USER= not root) is the panel's game-account work — gamedig, the console
-    reads, LinuxGSM configs, and every argv-form read — counted together under GAME_ACCOUNT with a
-    fixed fingerprint of what it was (_GAME_READS). Anything else is root: a program the panel
-    itself runs is named, '<program> as root'; a shell is 'shell as root'; anything else 'other
-    program as root'. Never an argument, never a path, never the account: for su the argument is
-    an account, and USER= is one.
+    reads and sends, LinuxGSM configs, and every argv-form read — counted together under
+    GAME_ACCOUNT with a fixed fingerprint of what it was (_GAME_READS). Anything else is root: a
+    program the panel itself runs is named, '<program> as root'; a shell is 'shell as root';
+    anything else 'other program as root'. Never an argument, never a path, never the account: for
+    su the argument is an account, and USER= is one.
     """
     from panel.security import privileged as _priv
     rest = rest or ""

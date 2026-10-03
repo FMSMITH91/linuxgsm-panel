@@ -30,6 +30,12 @@ into Serve's 404; the report called "no route reaches the panel at all" a warn; 
 re-read before each `off`, and when the report may say "a panel restart also removes it", had no
 check that failed without them.
 
+The VPS proof of that fix found the fake stored both "/lgsm" and "/lgsm/" where the real CLI cannot:
+every Serve write drops the mount that differs from the one written by a trailing "/" (Tailscale's
+SetWebHandler), so the boot check tested a state no write leaves. The fake now writes as the CLI
+does, and the twin checks seed a twin the one way it can exist, `tailscale serve set-raw`: the boot's
+own write replaces it, and the report and the Tailscale page, which only read Serve, name it.
+
 HOW IT RUNS. A stateful fake `tailscale` (tests/unit/fake_tailscale.py; its overwrite and `off`
 semantics are the real CLI's) is put FIRST on PATH for the whole part, so the panel's code reaches
 it through tailscale_integration._run_ts, and the scripts through `timeout tailscale`, exactly as
@@ -109,6 +115,35 @@ def _seed(web, funnel=(), http=(), **extra):
         json.dump(dict({"web": web, "funnel": list(funnel), "http": list(http)}, **extra), fh)
     open(_LOG32, "w", encoding="utf-8").close()
     ts._cache["info"] = None
+
+
+def _ts_cli(args, stdin=""):
+    """Run the fake `tailscale` directly, as a script would, with `stdin`; -> its exit code."""
+    r = subprocess.run([os.path.join(_BIN32, "tailscale")] + list(args),  # nosec B603 - the fake this part wrote
+                       input=stdin, capture_output=True, text=True, timeout=60, check=False)
+    return r.returncode
+
+
+def _raw_config(web):
+    """`web` ({listener: {mount: backend}}) as the ipn.ServeConfig JSON `serve set-raw` reads."""
+    host = _HOST32.split("://", 1)[1]
+    return {"TCP": {p: {"HTTPS": True} for p in web},
+            "Web": {"%s:%s" % (host, p): {"Handlers": {m: {"Proxy": b} for m, b in h.items()}}
+                    for p, h in web.items()}}
+
+
+def _seed_raw(web):
+    """Serve as only `tailscale serve set-raw` can leave it; -> set-raw's exit code.
+
+    Every other write drops the mount that differs from the one written by a trailing "/"
+    (Tailscale's SetWebHandler, and the fake's), so a "/lgsm/" twin beside "/lgsm" exists only in a
+    config set raw — by hand, or by a tool that posts the whole config. Then an empty call log.
+    """
+    _seed({})
+    rc = _ts_cli(["serve", "set-raw"], json.dumps(_raw_config(web)))
+    open(_LOG32, "w", encoding="utf-8").close()
+    ts._cache["info"] = None
+    return rc
 
 
 def _table():
@@ -296,15 +331,44 @@ def _p32_boot_scope():
           (b, _calls()) == (("not attempted", "not attempted"), []), repr((b, _calls())))
 
 
+def _p32_fake_writes():
+    """The fake writes as the real CLI does: no write but `set-raw` leaves "/x" beside "/x/"."""
+    _seed({"443": {"/": _OTHER, "/lgsm": _PS}})
+    got = []
+    for path in ("/lgsm/", "/lgsm"):
+        rc = _ts_cli(["serve", "--bg", "--https=443", "--set-path=" + path, _P])
+        got.append((rc, sorted(_table().get("443", {}))))
+    check("fake tailscale: a write at '/lgsm/' replaces '/lgsm' and one at '/lgsm' replaces "
+          "'/lgsm/', as the real CLI did on the test VPS (1.102.4: ['/', '/lgsm'] -> ['/', "
+          "'/lgsm/'] -> ['/', '/lgsm']); another app's '/' is left alone",
+          got == [(0, ["/", "/lgsm/"]), (0, ["/", "/lgsm"])], repr(got))
+    rc = _seed_raw({"443": {"/lgsm": _PS, "/lgsm/": _P}})
+    check("fake tailscale: ...and `serve set-raw` stores a config as given, the one write that can "
+          "leave both spellings", (rc, _table()) == (0, {"443": {"/lgsm": _PS, "/lgsm/": _P}}),
+          repr((rc, _table())))
+
+
 def _p32_boot_twin():
     # Serve keeps "/lgsm/" apart from "/lgsm" and answers every /lgsm/* request from "/lgsm/" FIRST
-    # (ipnlocal getServeHandler tries pth+"/" before pth). Compared normalised, the twin counted as
-    # the managed route: never removed, while it 502'd the panel and the boot said "ok".
-    b = _boot({"443": {"/lgsm": _PS, "/lgsm/": _P}}, {"BOOT_TLS": True})
-    check("boot: a '/lgsm/' twin of the configured /lgsm is not the managed route — it is removed, "
-          "under its exact path", (_table(), b, _offs())
-          == ({"443": {"/lgsm": _PS}}, ("ok", "removed:/lgsm/"),
-              [["serve", "--https=443", "--set-path=/lgsm/", "off"]]), repr((b, _table(), _offs())))
+    # (ipnlocal getServeHandler tries pth+"/" before pth). But no Serve WRITE leaves the two side by
+    # side: SetWebHandler drops the other spelling (the VPS proof of #393 measured it). Only a config
+    # set with `serve set-raw` holds a twin, and the boot's own write of /lgsm then replaces it.
+    rc = _seed_raw({"443": {"/lgsm": _PS, "/lgsm/": _P}})
+    cfg = _save_cfg(**_LIVE_CFG)
+    _set_conf(BOOT_TLS=True)
+    _app32._boot_serve(_p9, cfg, 5000)
+    b = (_p9.config.get("BOOT_SERVE"), _p9.config.get("BOOT_SERVE_LEFTOVERS"))
+    check("boot: a '/lgsm/' twin of the configured /lgsm (only `serve set-raw` leaves one) is "
+          "replaced by the boot's own write of /lgsm, as Tailscale replaces it: the panel answers "
+          "at /lgsm on the scheme it serves, nothing is left to remove, and no `off` runs",
+          (rc, _table(), b, _offs()) == (0, {"443": {"/lgsm": _PS}}, ("ok", "none"), []),
+          repr((rc, b, _table(), _calls())))
+    _seed_raw({"443": {"/lgsm": _PS, "/lgsm/": _P}})
+    stale = [r["mount"] for r in ts.stale_panel_routes(
+        ts.get_tailscale_info(force_refresh=True).serve_config, 5000, "/lgsm")]
+    check("stale routes: in a config set raw with a '/lgsm/' twin, the twin is stale and /lgsm is "
+          "not — exact, as the panel writes it (the removal after a write meets a twin only if "
+          "set-raw ran in between)", stale == ["/lgsm/"], repr(stale))
     check("managed route: the exact spelling the panel writes, nothing else (control: '/' and an "
           "unwritable stored mount)",
           (ts.is_managed_route({"url": _HOST32, "mount": "/lgsm"}, _LIVE_CFG),
@@ -641,8 +705,8 @@ def _p32_links():
 
 
 # ═══ 5. the debug report ═════════════════════════════════════════════════════════════════════════
-def _report(web, conf=None, **cfg_over):
-    _seed(web)
+def _report(web, conf=None, seed=None, **cfg_over):
+    (seed or _seed)(web)
     services = ts.get_tailscale_info(force_refresh=True).serve_config.get("services") or []
     cfg = dict(_cfg32.DEFAULT_CONFIG, port=5000, **dict(_LIVE_CFG, **cfg_over))
     view = {"version": "1.102.4", "backend_state": "Running", "magic_dns": True, "key_expiry": None,
@@ -717,12 +781,14 @@ def _p32_report_dead():
 
 
 def _p32_report_twin():
-    found, text = _report({"443": {"/lgsm": _PS, "/lgsm/": _P}})
-    check("report: a '/lgsm/' twin is a route the panel does not manage, named with its exact path "
-          "(it read as the configured route, so nothing named it)",
+    # Seeded the one way a twin can exist (`serve set-raw`; every other write drops it). The report
+    # and the page only READ Serve, so they meet it as it was set.
+    found, text = _report({"443": {"/lgsm": _PS, "/lgsm/": _P}}, seed=_seed_raw)
+    check("report: a '/lgsm/' twin set with `serve set-raw` is a route the panel does not manage, "
+          "named with its exact path (it read as the configured route, so nothing named it)",
           (_has(found, "warn", "does not manage", "wrong scheme"),
            "`sudo tailscale serve --https=443 --set-path=/lgsm/ off`" in text) == (True, True), text)
-    _seed({"443": {"/lgsm": _PS, "/lgsm/": _P}})
+    _seed_raw({"443": {"/lgsm": _PS, "/lgsm/": _P}})
     _save_cfg(**_LIVE_CFG)
     html = _A32.get("/tailscale").get_data(as_text=True)
     removes = re.findall(r'data-action="removeServeRoute"\s+data-args=\'\["@self"\]\'\s+'
@@ -963,7 +1029,8 @@ def _p32_cleanup():
 try:
     _p32_harness()
     _A32 = _p9_client(P9_ADMIN)
-    for _step32 in (_p32_boot_live, _p32_boot_scope, _p32_boot_twin, _p32_boot_failures,
+    for _step32 in (_p32_fake_writes, _p32_boot_live, _p32_boot_scope, _p32_boot_twin,
+                    _p32_boot_failures,
                     _p32_reread, _p32_free_mount, _p32_wizard_walk, _p32_wizard_adopt,
                     _p32_wizard_unread, _p32_enable, _p32_page, _p32_remove_route,
                     _p32_remove_operator, _p32_page_follows, _p32_disable, _p32_banner,
