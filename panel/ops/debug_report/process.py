@@ -636,14 +636,15 @@ IOSchedulingClass=best-effort
 IOSchedulingPriority=6
 """
 _DROPIN_NAME_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}\.conf\Z")
-_DROPIN_DIRS = ("/etc/systemd/", "/run/systemd/", "/usr/lib/systemd/", "/lib/systemd/")
 
 
 def _dropin_path_ok(path):
-    """Whether `path` is a .conf under a systemd (or the user's) unit directory, with no '..'."""
-    dirs = _DROPIN_DIRS + (os.path.expanduser("~/.config/systemd/"),)
-    return (path.startswith(dirs) and path.endswith(".conf")
-            and ".." not in path.split("/"))
+    """Whether `path` is an absolute .conf path with no '..' segment.
+
+    Not a list of systemd's directories: user units' drop-ins also live under ~/.local/share and
+    /run/user/<uid>, and a list that missed one would hide a real drop-in.
+    """
+    return path.startswith("/") and path.endswith(".conf") and ".." not in path.split("/")
 
 
 def render_unit(scope, user, panel_dir):
@@ -699,10 +700,9 @@ def _unit_line(scope):
 def _dropin_text(path):
     name = os.path.basename(path)
     shown = name if _DROPIN_NAME_RE.match(name) else "a drop-in"
-    # systemd's DropInPaths: read only a .conf under a systemd unit directory, never a path that
-    # leaves one through '..'.
+    # systemd's DropInPaths: read only an absolute .conf path, never one that climbs with '..'.
     if not _dropin_path_ok(path):
-        return "%s (not read: not under a systemd unit directory)" % shown
+        return "%s (not read: not an absolute .conf path)" % shown
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()

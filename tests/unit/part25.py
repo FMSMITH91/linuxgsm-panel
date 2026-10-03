@@ -650,14 +650,16 @@ def _p25_paths_sanitised():
         PR._cgroup_others("/system.slice/../../../etc/linuxgsm-panel.service")
     except Exception as exc:  # noqa: BLE001 - which exception it is, is the check
         raised = exc
-    outside = PR._dropin_text("/srv/evil7731/override.conf")
-    climbs = PR._dropin_text("/etc/systemd/system/../../../tmp/x.conf")
+    relative = PR._dropin_text("evil7731/override.conf")
+    climbs = PR._dropin_text("/etc/systemd/system/../../../srv/x.conf")
     check("hardening: a cgroup path with '..' is refused before it is joined onto /sys/fs/cgroup, "
-          "and a drop-in outside a systemd unit directory, or climbing out of one, is never read",
-          all([type(raised) is ValueError, "not read: not under a systemd unit directory" in outside,
-               "not read: not under a systemd unit directory" in climbs,
-               PR._dropin_path_ok("/etc/systemd/system/linuxgsm-panel.service.d/priority.conf")]),
-          repr((raised, outside, climbs)))
+          "and a drop-in path that is relative or climbs with '..' is never read; a user unit's "
+          "drop-in under ~/.local/share is",
+          all([type(raised) is ValueError, "not read: not an absolute .conf path" in relative,
+               "not read: not an absolute .conf path" in climbs,
+               PR._dropin_path_ok("/etc/systemd/system/linuxgsm-panel.service.d/priority.conf"),
+               PR._dropin_path_ok("/home/a/.local/share/systemd/user/x.service.d/o.conf")]),
+          repr((raised, relative, climbs)))
 
 
 try:
