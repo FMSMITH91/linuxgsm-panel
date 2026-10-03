@@ -568,16 +568,27 @@ def _loop_first_pass35(fn_node):
     return True, None
 
 
+def _calls35(node, names):
+    """Does node call any of `names` (as a bare name or an attribute)?"""
+    return any(isinstance(n, _ast35.Call) and (getattr(n.func, "attr", None) in names
+                                               or getattr(n.func, "id", None) in names)
+               for n in _ast35.walk(node))
+
+
+def _beating_helpers35():
+    """Functions that beat for a loop that calls them: backup_ticker's beat is in _backup_ticker_pass."""
+    tree = _ast35.parse((_REPO35 / "panel/routes/_shared.py").read_text(encoding="utf-8"))
+    return {n.name for n in _ast35.walk(tree)
+            if isinstance(n, _ast35.FunctionDef) and _calls35(n, {"beat"})}
+
+
 def _p35_loops_gate():
     bad, recorded = [], 0
+    beating = {"beat"} | _beating_helpers35()
     for rel in _LOOP_FILES35:
         tree = _ast35.parse((_REPO35 / rel).read_text(encoding="utf-8"))
         for node in _ast35.walk(tree):
-            if not isinstance(node, _ast35.FunctionDef):
-                continue
-            beats = [n for n in _ast35.walk(node) if isinstance(n, _ast35.Call)
-                     and getattr(n.func, "attr", None) == "beat"]
-            if not beats:
+            if not isinstance(node, _ast35.FunctionDef) or not _calls35(node, beating):
                 continue
             got, problem = _loop_first_pass35(node)
             recorded += got
