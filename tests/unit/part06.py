@@ -4771,6 +4771,11 @@ _cd_spec = _cd_ilu.spec_from_file_location(
     "codacy_gate", os.path.join(_root, ".github", "scripts", "codacy_open_errors.py"))
 _cd = _cd_ilu.module_from_spec(_cd_spec)
 _cd_spec.loader.exec_module(_cd)
+# The HTTP handling is this block's subject, so its accepted list is empty. With the real list a
+# well-formed empty answer fails on its own: system_ops.py is over 150 KB, so Codacy reports none
+# of its accepted entries (part28 holds that).
+_cd.ACCEPTED_FILE = _cd.pathlib.Path(_tf.mkdtemp(prefix="codacy-gate-p6-")) / "accepted.json"
+_cd.ACCEPTED_FILE.write_text('{"accepted": []}', encoding="utf-8")
 
 
 class _CdResp:

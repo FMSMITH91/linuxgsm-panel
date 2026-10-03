@@ -1,6 +1,8 @@
 name: Codacy alerts
 
-# Fail when main carries an Error-level Codacy issue that has not been reviewed.
+# Fail when main carries a Critical- or High-level Codacy issue (API levels Error and High) that
+# has not been reviewed, or when an accepted one stopped being reported only because Codacy
+# stopped reading its file.
 #
 # WHY THIS EXISTS
 #   Codacy's PR check only gates issues a PR ADDS. An Error already sitting on main is reported in
@@ -19,9 +21,19 @@ name: Codacy alerts
 #   workflow_dispatch is there for when you want the answer now.
 #
 # THE ACCEPTED LIST
-#   .github/codacy-accepted-errors.json names the Error-level issues that are reviewed and
-#   deliberate, keyed on (filePath, patternId) — never line number, which moves with every edit
-#   above it. Anything not on that list fails the run.
+#   .github/codacy-accepted-errors.json names the Critical- and High-level issues that are reviewed
+#   and deliberate, keyed on (filePath, patternId, lineText) — never line number, which moves with
+#   every edit above it. Anything not on that list fails the run.
+#
+# AN ACCEPTED ENTRY CODACY STOPS REPORTING
+#   Codacy Cloud does not analyse a file over 150 KB at all
+#   (https://docs.codacy.com/faq/troubleshooting/why-is-my-file-over-150-kb-missing/). When
+#   system_ops.py crossed 150 KB its three accepted entries stopped matching, and this gate went on
+#   reporting green while listing them for removal. So an accepted entry that matches nothing FAILS
+#   the run while its file (read from this checkout) is over 150 KB or its line is still in it;
+#   only an entry whose line is really gone is listed for removal. That stays red until Codacy
+#   analyses the file again (client-side analysis of the files over 150 KB), which is the point:
+#   until then, nothing reads system_ops.py's Codacy findings.
 
 on:
   schedule:
@@ -50,7 +62,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Fail if main has unreviewed Error-level issues
+      - name: Fail if main has unreviewed Critical- or High-level issues, or Codacy stopped reading an accepted one
         env:
           # A repository API token is optional. The endpoint answers anonymously for a PUBLIC repo,
           # which this is; the token is read if present so the gate keeps working should the repo
