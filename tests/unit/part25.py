@@ -560,12 +560,69 @@ def _p25_leads():
           stale is False and fresh is True, repr((stale, fresh)))
 
 
+# ── found on the test VPS (a system install with the helper) ───────────────────────────────────
+# Every helper call writes three journal lines (sudo's COMMAND line, pam_unix's session opened and
+# closed), about three calls a minute: the 400-line tail and every "most repeated" line were those.
+_VPS25_LOG = "\n".join(
+    ["Oct 03 02:%02d:41 vps sudo[%d]: lgsmpanel : PWD=/home/lgsmpanel/linuxgsm-panel ; USER=root ; "
+     "COMMAND=/usr/local/lib/linuxgsm-panel/panel-helper restart-flags" % (i % 60, 1000 + i)
+     for i in range(150)]
+    + ["Oct 03 02:%02d:41 vps sudo[%d]: pam_unix(sudo:session): session opened for user root(uid=0) by "
+       "(uid=999)" % (i % 60, 1000 + i) for i in range(150)]
+    + ["Oct 03 02:59:49 vps sudo[2999]: lgsmpanel :  PWD=/home/x ; USER=root ; "
+       "COMMAND=/usr/local/lib/linuxgsm-panel/panel-helper ufw-status plain ",
+       "Oct 03 02:59:50 vps sudo[3000]: lgsmpanel : PWD=/home/x ; USER=root ; COMMAND=/usr/bin/su "
+       "canarygameacct7731",
+       "Oct 03 02:59:51 vps sudo[3001]: lgsmpanel : a password is required ; PWD=/home/x ; USER=root ; "
+       "COMMAND=/usr/bin/true",
+       "Oct 03 02:59:52 vps python3[1234]: WARNING panel.monitor: canary panel line 7731"])
+
+
+def _p25_vps():
+    with _patched():
+        _env(journal=_VPS25_LOG)
+        rep = _gen25()["report"]
+    log = rep.split("### Recent log", 1)[-1]
+    digest = rep.split("### Errors in the journal", 1)[-1].split("### Recent log", 1)[0]
+    check("VPS fix: the panel's own sudo calls are counted by helper verb and left out of the recent "
+          "log; a REFUSED sudo and the panel's own lines stay in it",
+          "Privileged calls (left out below)" in log and "restart-flags ×150" in log
+          and "pam_unix(sudo:session)" not in log and "COMMAND=" not in log.split("```", 1)[-1]
+          .replace("a password is required ; PWD=/home/[user] ; USER=root ; COMMAND=", "")
+          and "a password is required" in log and "canary panel line 7731" in log, log[:1500])
+    check("VPS fix: ...the digest's 'most repeated lines' are not the panel's own sudo calls, and a "
+          "sudo COMMAND's argument (an account, for su) is never printed as a verb",
+          "pam_unix(sudo:session)" not in digest and "restart-flags ×150" in digest
+          and "other command ×1" in digest and "canarygameacct7731" not in rep, digest[:1200])
+    check("VPS fix: ...sudo-rs's spacing ('user :  PWD=... plain ', two blanks and a trailing one) "
+          "is counted too, as the verb it ran",
+          "ufw-status ×1" in log and "ufw-status ×1" in digest, log[:600])
+    out = PV._paths("COMMAND=/usr/local/lib/linuxgsm-panel/panel-helper restart-flags", PV._State())
+    check("VPS fix: the helper's path prints as <panel-lib>/panel-helper, not one long token that "
+          "_redact turns into '/[redacted]'",
+          out == "COMMAND=<panel-lib>/panel-helper restart-flags"
+          and SO._redact(out) == out, repr(out))
+    with _patched():
+        _patch(sys, "prefix", "/opt/othervenv7731")
+        _patch(sys, "base_prefix", "/usr")
+        _patch(sys, "executable", "/opt/othervenv7731/bin/python3")
+        other = INS._interpreter()
+        _patch(sys, "prefix", "/usr")
+        _patch(sys, "executable", "/usr/bin/python3")
+        system = INS._interpreter()
+    check("VPS fix: a virtualenv that is not this checkout's is named as one, not 'system python' "
+          "(its python resolves to the system binary); a real system python still is",
+          other.startswith("a virtualenv outside this checkout")
+          and system.startswith("system python"), repr((other, system)))
+
+
 try:
     _seed25()
     for _fn25 in (_p25_update_tail, _p25_tailscale_error, _p25_addresses, _p25_git_raises, _p25_cuts,
                   _p25_names, _p25_host_first_label, _p25_single_flight_busy, _p25_request_deadline,
                   _p25_memo, _p25_hub_lag, _p25_hosts_ts_hung, _p25_glance, _p25_interpreter, _p25_nss,
-                  _p25_serve, _p25_f2b, _p25_git_timeouts, _p25_ci_walk, _p25_no_unit, _p25_leads):
+                  _p25_serve, _p25_f2b, _p25_git_timeouts, _p25_ci_walk, _p25_no_unit, _p25_leads,
+                  _p25_vps):
         _fn25()
 except Exception as _e25:  # noqa: BLE001 - a harness failure must fail by name, not end the suite
     import traceback as _tb25

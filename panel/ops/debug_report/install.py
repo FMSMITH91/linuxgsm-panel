@@ -120,6 +120,10 @@ def _interpreter():
     venvs = {venv, os.path.abspath(os.path.join(so.PANEL_DIR, "venv"))}
     if any(exe.startswith(v + os.sep) for v in venvs):
         where = "<panel>/venv/bin/" + os.path.basename(sys.executable or "python")
+    elif sys.prefix != sys.base_prefix:
+        # Checked before the realpath: a virtualenv's python is a symlink to the system one, so
+        # resolving it named every OTHER virtualenv "system python".
+        where = "a virtualenv outside this checkout"
     elif os.path.realpath(exe).startswith(("/usr/bin/", "/usr/local/bin/")):
         where = "system python"
     else:

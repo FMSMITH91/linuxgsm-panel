@@ -451,11 +451,21 @@ def _paths(text, st):
     if sys.prefix != sys.base_prefix:      # a virtualenv's own root (bin/python and the like)
         text = _replace_dir(text, sys.prefix, "<venv>")
     text = _replace_dir(text, so.PANEL_DIR, "<panel>")
+    # The root-owned pieces' directory (the helper and root's copies of the installer): fixed by
+    # install.sh, so naming it identifies nothing, and left alone its 42-character helper path is
+    # one "long token" to _redact -- every sudo line read 'COMMAND=/[redacted] <verb>'.
+    text = _replace_dir(text, _priv_lib_dir(), "<panel-lib>")
 
     def _home(m):
         st.hit("home", m.group(0))
         return m.group(1) + "/[user]"
     return _HOME_RE.sub(_home, text)
+
+
+def _priv_lib_dir():
+    """The directory install.sh places the root-owned helper in (privileged.HELPER_PATH's)."""
+    from panel.security import privileged as _priv
+    return os.path.dirname(_priv.HELPER_PATH)
 
 
 def _replace_dir(text, path, token):
@@ -746,7 +756,8 @@ def footer(ctx):
              "- **Pseudonymised**: %s. Loopback and unspecified addresses (0.0.0.0, ::) kept."
              % ("; ".join(parts) if parts else "nothing matched a known name or pattern"),
              "- Paths: the checkout prints as <panel>, the data directory as <data>, the "
-             "virtualenv as <venv>, home directories as /home/[user]. Tokens are the same in "
+             "virtualenv as <venv>, the root-owned helper's directory as <panel-lib>, home "
+             "directories as /home/[user]. Tokens are the same in "
              "every section; [host-N], [server-N], [user-N], [tag-N] and [group-N] carry the "
              "row's database id."]
     if st.pattern_error:

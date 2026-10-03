@@ -7,6 +7,7 @@ Privacy: the recent log's lines go through privacy.scrub_lines BEFORE anything i
 budgeted; the digest normalises first (syslog prefix stripped, digits folded) and scrubs only the
 lines it prints. When the privacy pass fails, the text is withheld, never printed pattern-free.
 """
+import os
 import re
 import threading
 import time
@@ -27,6 +28,20 @@ _LEVEL_RE = re.compile(r"^(CRITICAL|ERROR|WARNING) ")
 _START_MARK = "LinuxGSM Panel starting on"
 _PRIORITY_RE = re.compile(r"Traceback|Error|ERROR|WARNING|CRITICAL|Exception|[Ff]ailed|"
                           r"Main process exited|oom-kill|Out of memory|" + _START_MARK)
+# The panel's own privileged calls. On a system install every helper call writes three journal
+# lines -- sudo's COMMAND line and pam_unix's session opened/closed -- about three calls a minute,
+# so the 400-line tail was nothing else: on the test VPS, 1,666 calls in a 5,000-line read, and
+# every "most repeated" line was one of them. They are counted by helper verb and left out of the
+# log and the digest's repeats. A REFUSED sudo is the opposite of noise and stays in both.
+_PAM_SESSION_RE = re.compile(r"^pam_unix\((?:sudo|sudo-i|runuser|runuser-l|su|su-l):session\): "
+                             r"session (?:opened|closed) for user ")
+# Spacing differs by implementation: sudo-rs writes 'user :  PWD=...' (two blanks after the
+# colon, and a trailing blank); sudo.ws ' user : PWD=...'. sudo-rs logs no line for a refusal.
+_SUDO_CMD_RE = re.compile(r" :[ \t]{1,4}(?:TTY=[^;\n]{1,64};[ \t]{1,4})?PWD=[^;\n]{0,512};[ \t]{1,4}"
+                          r"USER=[^;\n]{1,64};[ \t]{1,4}COMMAND=(\S{1,512})(?: (\S{1,64}))?")
+_SUDO_REFUSED_RE = re.compile(r"a password is required|NOT in sudoers|not allowed to (?:run|execute)"
+                              r"|incorrect password|authentication failure|command not allowed",
+                              re.IGNORECASE)
 _SOURCE_LABEL = {"user-journal": "user journal (journalctl --user)",
                  "user-unit": "system journal, this account's user unit",
                  "helper": "system journal via the privileged helper",
@@ -153,15 +168,58 @@ def _traceback_lines(ctx, tbs):
     return out
 
 
+def _priv_verb(command, arg):
+    """The helper verb a sudo COMMAND ran ('other verb' for one the table does not know), or
+    'other command' for anything but the helper: never an argument, which can be an account."""
+    from panel.security import privileged as _priv
+    if not command.endswith("/" + os.path.basename(_priv.HELPER_PATH)):
+        return "other command"
+    return arg if arg in set(_priv.verbs()) else "other verb"
+
+
+def _split_priv(lines):
+    """(lines without the panel's own successful sudo/runuser/su lines, {verb: calls}, sessions)."""
+    kept, verbs, sessions = [], {}, 0
+    for ln in lines:
+        body = _body(ln)
+        if _SUDO_REFUSED_RE.search(body):
+            kept.append(ln)
+        elif _PAM_SESSION_RE.match(body):
+            sessions += 1
+        else:
+            m = _SUDO_CMD_RE.search(body)
+            if m is None:
+                kept.append(ln)
+                continue
+            verb = _priv_verb(m.group(1), m.group(2))
+            verbs[verb] = verbs.get(verb, 0) + 1
+    return kept, verbs, sessions
+
+
+def _priv_line(verbs, sessions, span_of):
+    """'- **Privileged calls (left out below)**: N sudo calls ... (verb ×n, ...) · M session lines'."""
+    if not verbs and not sessions:
+        return None
+    top = sorted(verbs.items(), key=lambda kv: (-kv[1], kv[0]))
+    shown = ", ".join("%s ×%d" % kv for kv in top[:6]) + (", …" if len(top) > 6 else "")
+    return ("- **Privileged calls (left out below)**: %d successful sudo call%s in %s%s · %d pam "
+            "session line%s" % (sum(verbs.values()), "" if sum(verbs.values()) == 1 else "s",
+                                span_of, " (%s)" % shown if shown else "", sessions,
+                                "" if sessions == 1 else "s"))
+
+
 def section_journal_digest(ctx):
     """Tracebacks, log levels and the most repeated lines over the whole journal read."""
     j = _journal(ctx)
     res = Result()
-    lines = j["lines"]
-    if not lines:
+    if not j["lines"]:
         return res.add("_(digest unavailable: %s)_" % (j["why"] or "no journal read"))
+    lines, verbs, sessions = _split_priv(j["lines"])
     bodies = [_body(ln) for ln in lines]
-    res.add("- **Window**: the last %d lines, %s" % (len(lines), _span(lines)))
+    res.add("- **Window**: the last %d lines, %s" % (len(j["lines"]), _span(j["lines"])))
+    priv = _priv_line(verbs, sessions, "this window")
+    if priv:
+        res.add(priv)
     tbs = _tracebacks(bodies, [_stamp(ln) for ln in lines])
     res.lines.extend(_traceback_lines(ctx, tbs))
     res.add(_levels_line(bodies))
@@ -286,11 +344,15 @@ def section_recent_log(ctx):
         return (res.add("- **Source**: none (%s)" % (j["why"] or "no journal read"))
                 .add("```").add("(no journal available)").add("```")
                 .find("unread", "Recent log", "no journal readable"))
-    tail = j["lines"][-TAIL_LINES:]
+    kept, verbs, sessions = _split_priv(j["lines"])
+    tail = kept[-TAIL_LINES:]
     scrubbed = privacy.scrub_lines(ctx, tail)
     res.add("- **Source**: %s · %d lines · %s · report generated %s UTC" % (
         _SOURCE_LABEL.get(j["source"], "journal"), len(tail), _span(tail),
         time.strftime("%H:%M:%S", time.gmtime())))
+    priv = _priv_line(verbs, sessions, "the %d-line journal read" % len(j["lines"]))
+    if priv:
+        res.add(priv)
     if scrubbed is None:
         return res.add("_(withheld: pseudonymisation unavailable)_").find(
             "warn", "Recent log", "withheld: pseudonymisation unavailable")
