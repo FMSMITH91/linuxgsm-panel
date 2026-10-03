@@ -967,3 +967,14 @@ check("sonarcloud: every file it reads, sources and tests, is UTF-8 with no U+FF
       and _sq_excluded("a.png") and not _sq_excluded("panel/x.py")
       and _sq_excluded("tests/fuzz/corpus/console/esc_control", _sq_texcl),
       repr(_sq_bad[:6]))
+
+# ── CodeQL analyses a pull request in FULL, as main does ───────────────────────────────────────
+# By default the action is diff-informed on a PR: it reports alerts only on the lines the PR
+# changes. #387 removed the last use of a module global on a line it left alone; its PR gate read
+# 0 alerts and main went red on py/unused-global-variable. The analyze job must switch the
+# feature off (codeql-action src/feature-flags.ts: CODEQL_ACTION_DIFF_INFORMED_QUERIES).
+with open(os.path.join(_rn_root, ".github", "workflows", "codeql.yml"), encoding="utf-8") as _cq_fh:
+    _cq_src = _cq_fh.read()
+_cq_job = _cq_src.split("\n  analyze:\n", 1)[-1].split("\n  pr-alerts", 1)[0].split("\n    steps:\n", 1)[0]
+check("codeql: the analyze job turns diff-informed analysis OFF, so a PR is judged on every alert",
+      '\n    env:\n      CODEQL_ACTION_DIFF_INFORMED_QUERIES: "false"\n' in _cq_job, _cq_job[-600:])

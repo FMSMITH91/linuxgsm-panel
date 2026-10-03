@@ -47,6 +47,13 @@ jobs:
       security-events: write
       actions: read
       contents: read
+    # FULL analysis on pull requests, not diff-informed. By default the action analyses a PR only
+    # on the lines it changes ("Computing PR diff ranges..."), so an alert a PR causes on a line
+    # it did NOT touch reaches main unseen: #387 removed the last use of a global it left alone,
+    # its PR gate read 0 alerts, and main went red on py/unused-global-variable. The PR alert gate
+    # below must judge what main will judge. Feature flag: codeql-action src/feature-flags.ts.
+    env:
+      CODEQL_ACTION_DIFF_INFORMED_QUERIES: "false"
     strategy:
       fail-fast: false   # one language's analysis failing must not block the others
       matrix:

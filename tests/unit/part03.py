@@ -1694,7 +1694,8 @@ check("redact: leaves ordinary text intact", "server is offline" in _rd("server 
 _secret_keys = {"secret_key", "cred_key", "secret", "credentials", "auth_credential",
                 "host_key", "totp_secret", "backup_codes", "password"}
 check("debug whitelist excludes every secret key",
-      not (set(_so._DEBUG_CONFIG_KEYS) & _secret_keys))
+      not (set(__import__("panel.ops.debug_report.config_section", fromlist=["x"])
+               .DEBUG_CONFIG_KEYS) & _secret_keys))
 # R73: a traceback frame keeps its module once the privacy pass has normalised its path; a long token
 # on the same line is still redacted, and a path that was NOT normalised gets no exemption.
 _rd_frame = _rd('  File "<panel>/panel/ops/debug_report/config_section.py", line 3, in f '
