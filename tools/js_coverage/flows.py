@@ -309,6 +309,86 @@ return 1;
 """
 
 
+RENAME_OPEN = r"""
+const btn = await J.waitFor('#file-list [data-path="%s"] [data-action="rename"]', 5000);
+if (!btn) return {err: 'no Rename control on %s'};
+btn.click(); await J.sleep(200);
+const f = J.q('#file-list .fb-rename input');
+if (!f) return {err: 'Rename opened no field'};
+return {value: f.value, sel: [f.selectionStart, f.selectionEnd], focused: document.activeElement === f};
+"""
+RENAME_STATE = r"""
+const f = J.q('#file-list .fb-rename input'), e = J.q('#file-list .fb-rename-err');
+return {open: !!f, value: f ? f.value : null, err: e && e.style.display !== 'none' ? e.textContent : '',
+        rows: Array.from(document.querySelectorAll('#file-list [data-path]')).map(r => r.dataset.path)};
+"""
+# The open field at a phone's width: no sideways scroll, a field wide enough to type in, and every
+# part of the row (the error line too) inside the row.
+RENAME_FIT = r"""
+const row = J.q('#file-list .fb-renaming'), f = J.q('#file-list .fb-rename input');
+if (!row || !f) return {err: 'no field open'};
+const R = row.getBoundingClientRect(), parts = Array.from(row.querySelectorAll('.fb-rename input, .fb-rename button, .fb-rename-err'));
+const out = parts.filter(p => p.offsetParent !== null).map(p => p.getBoundingClientRect())
+  .filter(r => r.left < R.left - 0.5 || r.right > R.right + 0.5);
+return {vw: window.innerWidth, scroll: document.documentElement.scrollWidth, field: f.getBoundingClientRect().width,
+        outside: out.length, buttons: Array.from(row.querySelectorAll('.fb-rename button')).map(b => Math.round(b.getBoundingClientRect().height))};
+"""
+
+
+def _press(d, key, code, vk):
+    """One real key press (keydown and keyup) into whatever has focus."""
+    down = {"type": "keyDown", "key": key, "code": code, "windowsVirtualKeyCode": vk}
+    d.cdp.call("Input.dispatchKeyEvent", down)
+    d.cdp.call("Input.dispatchKeyEvent", dict(down, type="keyUp"))
+    d.settle(quiet=0.3, limit=4.0)
+
+
+def _expect(cond, what, got):
+    """Raise, naming what the rename did not do, so the walk reports this flow as broken."""
+    if not cond:
+        raise RuntimeError("rename: %s (got %r)" % (what, got))
+
+
+def files_rename(d):
+    """Rename in the file browser with real keys: open, Escape, a taken name, then Enter.
+
+    Then at 375px wide: the field fits the row, and a refusal's reason wraps inside it. A step that
+    does not do what it should raises, and the walk reports this flow as broken.
+    """
+    d.goto("/server/1/files")
+    got = d.run(RENAME_OPEN % ("notes.txt", "notes.txt")) or {}
+    _expect(got.get("sel") == [0, 5] and got.get("focused"), "the stem is selected, focused", got)
+    _press(d, "Escape", "Escape", 27)
+    got = d.run(RENAME_STATE) or {}
+    _expect(got.get("open") is False and "notes.txt" in got.get("rows", []), "Escape closes", got)
+    d.run(RENAME_OPEN % ("notes.txt", "notes.txt"))
+    d.run("J.q('#file-list .fb-rename input').select(); return 1;")
+    d.keys("server.cfg\n")
+    got = d.run(RENAME_STATE) or {}
+    _expect(got.get("open") and "already exists" in got.get("err", ""), "a taken name is shown", got)
+    _press(d, "Escape", "Escape", 27)
+    d.run(RENAME_OPEN % ("notes.txt", "notes.txt"))
+    d.keys("renamed\n")                     # typed over the selected stem: renamed.txt
+    d.wait(1.0)
+    got = d.run(RENAME_STATE) or {}
+    _expect(not got.get("open") and "renamed.txt" in got.get("rows", [])
+            and "notes.txt" not in got.get("rows", []), "Enter renames, the list refreshes", got)
+    d.cdp.call("Emulation.setDeviceMetricsOverride",
+               {"width": 375, "height": 812, "deviceScaleFactor": 2, "mobile": True})
+    try:
+        d.goto("/server/1/files")
+        d.run(RENAME_OPEN % ("server.cfg", "server.cfg"))
+        d.run("J.q('#file-list .fb-rename input').select(); return 1;")
+        d.keys("a/b\n")
+        fit = d.run(RENAME_FIT) or {}
+        _expect(fit.get("vw") == 375 and fit.get("scroll", 999) <= 375 and fit.get("outside") == 0
+                and fit.get("field", 0) >= 120, "at 375px the field and its error fit the row", fit)
+        _press(d, "Escape", "Escape", 27)
+    finally:
+        d.cdp.call("Emulation.clearDeviceMetricsOverride")
+        d.goto("/server/1/files")
+
+
 def files_drop(d):
     """Drop files and a folder, from disk, onto the file browser; the upload asks and is let go."""
     src = os.path.join(d.tree, "jscov-drop")
@@ -727,7 +807,7 @@ FLOWS = {
                   ("actions", js(SERVER_ACTIONS))],
     "/server/4": [("console", js(CONSOLE)), ("players", js(PLAYERS))],
     "/server/1/files": [("files", js(FILES)), ("drop", files_drop), ("cron", js(CRON)),
-                        ("config", js(GAME_CONFIG))],
+                        ("config", js(GAME_CONFIG)), ("rename", files_rename)],
     "/server-management": [("tabs", js(HOST_TABS)), ("security", js(HOST_SECURITY)),
                            ("controls", js(HOST_CONTROLS)), ("maintenance", js(HOST_MAINTENANCE)),
                            ("backups", js(BACKUPS))],

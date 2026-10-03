@@ -442,12 +442,14 @@ def _failing_transports40():
         sent.append("tailscale")
         return "", "ssh: connect to host box.ts.net port 22: %s timed out" % _LEAK40, -1
 
-    def _local(shell_cmd, timeout=30, stdin_text=None):
+    def _local(cmd, timeout=30, sudo=False, stdin_text=None):
         sent.append("local")
         return "", "Command timed out (%s)" % _LEAK40, -1
     _p9_patch(_p9_core, "get_connection", _paramiko)
     _p9_patch(_p9_core, "_run_via_ssh_cli", _ts)
-    _p9_patch(_p9_core, "_exec_local_shell", _local)
+    # _run_local, not the _exec_local_shell under it: tools/nosudo_runner replaces _run_local
+    # itself (it refuses the `sudo -u`), so a stub below it is never reached in a local run.
+    _p9_patch(_p9_core, "_run_local", _local)
     return sent
 
 

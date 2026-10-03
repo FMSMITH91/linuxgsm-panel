@@ -13,6 +13,7 @@ cs2server, vps-two runs vhserver. Numbers are plausible, not measured.
 import base64
 import json
 import re
+import shlex
 import threading
 import time
 
@@ -383,8 +384,47 @@ def _discover(command):
             "FOUND|arkserver|arkserver|7777|0|1|0|0\n")
 
 
+# The write gate's account probe (routes/_shared.privileged_accounts): every account here is a plain
+# game account. Unanswered, the probe reads as "couldn't check", and every file-browser write —
+# save, upload, delete, rename — is refused before it reaches the host, so none of their success
+# paths ever ran in the walk.
+def _account_probe(command):
+    names = re.findall(r"id -u ([a-z0-9_][a-z0-9._-]*) 2>/dev/null", command)
+    return "".join("ACCT %s 1001 %s\n" % (n, n) for n in dict.fromkeys(names)) \
+        + "LGSM_ACCT_PROBE_DONE\n"
+
+
+# The file browser's rename (ssh_manager.files.rename_path): the folder, the name and the new name,
+# out of the shell-quoted script; a name already in the folder is taken, otherwise the entry in the
+# tree is renamed, so the listing that follows shows it under its new name.
+_RN_PARTS = (re.compile(r"cd -P -- (.*?) 2>/dev/null && pwd -P"),
+             re.compile(r't="\$d"/(.*?); case "\$t"'),
+             re.compile(r'n="\$d"/(.*?); if \['))
+
+
+def _rename(command):
+    try:
+        inner = shlex.split(command)[-1]
+        folder, src, new = (shlex.split(rx.search(inner).group(1))[0] for rx in _RN_PARTS)
+    except (AttributeError, ValueError, IndexError):
+        return None
+    rel = folder.split("/", 3)[3] if folder.count("/") >= 3 else ""
+    with _lock:
+        entries = _TREE.setdefault(rel, [("f", 10, "readme.txt")])
+        names = [e[2] for e in entries]
+        if new in names:
+            return "__RENAME_TAKEN__"
+        if src not in names:
+            return "__RENAME_GONE__"
+        i = names.index(src)
+        entries[i] = (entries[i][0], entries[i][1], new)
+    return "__RENAME_DONE__"
+
+
 # (pattern, answer): answer is text, or a callable taking the command. First match wins.
 _TABLE = [
+    (r"mv -n -T -- ", _rename),
+    (r"LGSM_ACCT_PROBE_DONE", _account_probe),
     (r"tail -c \+\d+|printf B; tail -\d+", _console),
     (r"stat -c '?%i %s'?", lambda c: "4242 %d" % len(_log_text().encode())),
     (r"-maxdepth 1 -mindepth 1 -printf", _browse),

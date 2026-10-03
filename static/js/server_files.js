@@ -344,11 +344,6 @@ function _renameStemEnd(name, isDir){
   var dot=arc ? arc.index : name.lastIndexOf('.');
   return dot>0 ? dot : name.length;
 }
-function _renameButton(cls, action, label){
-  var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm '+cls;
-  b.dataset.action=action; b.textContent=label;
-  return b;
-}
 function startRename(row){
   if(!row) return;
   if(_renaming) cancelRename();
@@ -360,8 +355,10 @@ function startRename(row){
   input.setAttribute('autocapitalize','off'); input.setAttribute('aria-label','New name');
   input.setAttribute('data-no-i18n','');   // its value is a filename, never a translation of one
   input.dataset.action='renameKey'; input.dataset.on='keydown'; input.dataset.args='["@event"]';
-  var ok=_renameButton('btn-primary', 'submitRename', 'Rename');
-  var no=_renameButton('btn-outline-secondary', 'cancelRename', 'Cancel');
+  var ok=document.createElement('button'); ok.type='button'; ok.className='btn btn-sm btn-primary';
+  ok.dataset.action='submitRename'; ok.textContent='Rename';
+  var no=document.createElement('button'); no.type='button'; no.className='btn btn-sm btn-outline-secondary';
+  no.dataset.action='cancelRename'; no.textContent='Cancel';
   var err=document.createElement('div'); err.className='small text-danger mt-1 fb-rename-err';
   err.setAttribute('role','alert'); err.style.display='none';
   line.appendChild(input); line.appendChild(ok); line.appendChild(no);
@@ -776,9 +773,10 @@ function doUpload(ev){
 // from. Every other top-level dereference in this file was already guarded; these two were not.
 var _fileList = document.getElementById('file-list');
 if (_fileList) _fileList.addEventListener('click', function(ev){
-  // A click in the rename field is editing, not opening the row. Its Rename and Cancel buttons
-  // carry their own data-action, so the event is left to bubble to the page's dispatcher.
-  if(ev.target.closest('.fb-rename')) return;
+  // A click anywhere on a row being renamed is editing, not opening it — the field, or the row's
+  // padding around it. Its Rename and Cancel buttons carry their own data-action, so the event is
+  // left to bubble on to the page's dispatcher.
+  if(ev.target.closest('.fb-renaming')) return;
   var rn = ev.target.closest('[data-action="rename"]');
   if(rn){ ev.stopPropagation(); startRename(rn.closest('[data-path]')); return; }
   var del = ev.target.closest('[data-action="delete"]');

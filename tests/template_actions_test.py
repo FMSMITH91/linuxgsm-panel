@@ -4728,6 +4728,330 @@ else:
           and _rrs2.count("/api/panel/update-status") == 1,
           "js (no node): the update watcher reads the status only after boot_id flips", _wpr2_iv[:300])
 
+# ── the file browser's Rename, driven: open, edit, submit, error ─────────────────────────────────
+# The row's Rename control opens a field in the row with the name's stem selected; Enter or the
+# Rename button sends it, Escape or Cancel puts the row back, a refusal stays under the field, and
+# on success the list refreshes and the editor follows the file. DRIVEN in Node, with panel.js's
+# REAL dispatcher and server_files.js loaded whole into a small DOM (the field's keys and buttons
+# reach their handlers through data-action / data-on exactly as in the page), fetch scripted. The
+# real browser walk is tools/js_coverage (flows.py, files_rename), which also measures it at 375px.
+_RENAME_HARNESS = r"""
+const vm = require('vm'), fs = require('fs');
+// A small DOM: enough of Element for the file browser and the page's real dispatcher (panel.js).
+const kebab = s => s.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
+const TOKEN = /(#[\w-]+)|(\.[\w-]+)|\[([\w-]+)(?:(\*?=)["']?([^"'\]]*)["']?)?\]/g;
+function matchOne(el, sel){
+  if (!el || !el.attrs) return false;
+  const tag = /^[a-zA-Z]+/.exec(sel);
+  if (tag && el.tagName !== tag[0].toUpperCase()) return false;
+  let m, n = 0; TOKEN.lastIndex = 0;
+  while ((m = TOKEN.exec(sel))) {
+    n += m[0].length;
+    if (m[1] && el.attrs.id !== m[1].slice(1)) return false;
+    if (m[2] && (' ' + (el.attrs['class'] || '') + ' ').indexOf(' ' + m[2].slice(1) + ' ') < 0) return false;
+    if (m[3]) {
+      const v = el.attrs[m[3]];
+      if (v === undefined) return false;
+      if (m[4] === '=' && v !== m[5]) return false;
+      if (m[4] === '*=' && v.indexOf(m[5]) < 0) return false;
+    }
+  }
+  return n + (tag ? tag[0].length : 0) === sel.length;
+}
+function matches(el, sel){
+  return sel.split(',').some(s => {
+    const parts = s.trim().split(/\s+/);
+    if (!matchOne(el, parts[parts.length - 1])) return false;
+    let i = parts.length - 2;
+    for (let a = el.parentNode; a && i >= 0; a = a.parentNode) if (matchOne(a, parts[i])) i--;
+    return i < 0;
+  });
+}
+class El {
+  constructor(tag, doc){
+    this.tagName = String(tag).toUpperCase(); this.ownerDocument = doc || this; this.children = [];
+    this.parentNode = null; this.style = {}; this.attrs = {}; this._text = ''; this._html = '';
+    this.value = ''; this.disabled = false; this.listeners = {}; this.selectionStart = null;
+    this.selectionEnd = null; this.type = ''; this.href = '';
+    const self = this;
+    this.dataset = new Proxy({}, {
+      set(t, k, v){ self.attrs['data-' + kebab(String(k))] = String(v); return true; },
+      get(t, k){ return self.attrs['data-' + kebab(String(k))]; },
+      has(t, k){ return ('data-' + kebab(String(k))) in self.attrs; }});
+    const cls = () => (self.attrs['class'] || '').split(/\s+/).filter(Boolean);
+    this.classList = {
+      add(...c){ self.attrs['class'] = Array.from(new Set(cls().concat(c))).join(' '); },
+      remove(...c){ self.attrs['class'] = cls().filter(x => c.indexOf(x) < 0).join(' '); },
+      contains(c){ return cls().indexOf(c) >= 0; },
+      toggle(c, on){ (on === undefined ? !this.contains(c) : on) ? this.add(c) : this.remove(c); }};
+  }
+  get className(){ return this.attrs['class'] || ''; }
+  set className(v){ this.attrs['class'] = String(v); }
+  get id(){ return this.attrs.id || ''; }
+  set id(v){ this.attrs.id = String(v); }
+  get title(){ return this.attrs.title || ''; }
+  set title(v){ this.attrs.title = String(v); }
+  get firstElementChild(){ return this.children[0] || null; }
+  get textContent(){ return this._text + this.children.map(c => c.textContent).join(''); }
+  set textContent(v){ this._clear(); this._text = String(v); }
+  get innerHTML(){ return this._html; }
+  set innerHTML(v){ this._clear(); this._html = String(v); }
+  _clear(){ this.children.forEach(c => { c.parentNode = null; }); this.children = []; this._text = ''; this._html = ''; }
+  appendChild(c){ if (c.parentNode) c.remove(); c.parentNode = this; this.children.push(c); return c; }
+  insertAdjacentHTML(){}
+  remove(){ if (this.parentNode) { const a = this.parentNode.children; a.splice(a.indexOf(this), 1); this.parentNode = null; } }
+  setAttribute(k, v){ this.attrs[k] = String(v); }
+  getAttribute(k){ return k in this.attrs ? this.attrs[k] : null; }
+  hasAttribute(k){ return k in this.attrs; }
+  removeAttribute(k){ delete this.attrs[k]; }
+  matches(sel){ return matches(this, sel); }
+  closest(sel){ for (let e = this; e && e.attrs; e = e.parentNode) if (e.matches(sel)) return e; return null; }
+  querySelectorAll(sel){ const out = []; const walk = e => e.children.forEach(c => { if (c.matches(sel)) out.push(c); walk(c); }); walk(this); return out; }
+  querySelector(sel){ return this.querySelectorAll(sel)[0] || null; }
+  addEventListener(t, fn){ (this.listeners[t] = this.listeners[t] || []).push(fn); }
+  removeEventListener(){}
+  focus(){ this.ownerDocument.activeElement = this; }
+  blur(){}
+  click(){ return fire(this, 'click'); }
+  setSelectionRange(a, b){ this.selectionStart = a; this.selectionEnd = b; }
+  getBoundingClientRect(){ return {top: 0, left: 0, width: 0, height: 0, right: 0, bottom: 0}; }
+}
+// An event that bubbles from `target` to the document, as the browser's does.
+function fire(target, type, init){
+  const ev = Object.assign({type, target, bubbles: true, cancelable: true, defaultPrevented: false,
+    _stop: false, preventDefault(){ this.defaultPrevented = true; }, stopPropagation(){ this._stop = true; }}, init || {});
+  for (let n = target; n; n = n.parentNode) {
+    (n.listeners[type] || []).slice().forEach(fn => fn.call(n, ev));
+    if (ev._stop) break;
+  }
+  return ev;
+}
+function page(){
+  const doc = new El('#document');
+  doc.attrs = {};
+  doc.body = doc.appendChild(new El('body', doc));
+  doc.createElement = tag => new El(tag, doc);
+  doc.createTextNode = s => { const t = new El('#text', doc); t._text = String(s); return t; };
+  doc.getElementById = id => doc.querySelector('#' + id);
+  doc.activeElement = null; doc.hidden = false; doc.visibilityState = 'visible';
+  const card = doc.body.appendChild(new El('div', doc)); card.id = 'file-browser';
+  for (const id of ['breadcrumb', 'upload-dest', 'file-list', 'upload-status', 'editor-path',
+                    'editor-download', 'file-save-msg', 'editor-wrap', 'editor-empty', 'editor',
+                    'editor-gutter']) {
+    const e = card.appendChild(new El(id === 'editor' ? 'textarea' : 'div', doc)); e.id = id;
+  }
+  return doc;
+}
+const flush = async () => { for (let i = 0; i < 30; i++) await new Promise(r => setImmediate(r)); };
+function load(root, respond){
+  const doc = page(), fetched = [], toasts = [];
+  const ctx = {console, Promise, JSON, Date, Math, String, Number, Array, Object, RegExp, Error, Set,
+    Map, Proxy, Headers, encodeURIComponent, decodeURIComponent, parseInt, parseFloat, isNaN, Symbol,
+    MOUNT: '', serverId: 7, SERVER_NAME: 'srv', document: doc, fetched, toasts, CSRF: 't',
+    SIGNED_IN: true, CSS: {escape: s => String(s)},
+    escapeHtml: s => String(s == null ? '' : s).replace(/[&<>"']/g, ch => '&#' + ch.charCodeAt(0) + ';'),
+    navigator: {clipboard: {writeText: () => Promise.resolve()}},
+    location: {href: 'http://x/server/7/files', pathname: '/server/7/files', search: '', hash: ''},
+    setTimeout: () => 0, clearTimeout(){}, setInterval: () => 0, clearInterval(){},
+    matchMedia: () => ({matches: false, addEventListener(){}}), addEventListener(){},
+    removeEventListener(){},
+    fetch(url, opts){
+      fetched.push({url: String(url), method: (opts && opts.method) || 'GET', body: opts && opts.body});
+      const r = respond(String(url));
+      if (r instanceof Error) return Promise.reject(r);
+      return Promise.resolve({ok: true, status: 200, headers: {get: () => null},
+                              json: () => Promise.resolve(r)});
+    }};
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  for (const f of ['panel.js', 'server_files.js'])
+    vm.runInContext(fs.readFileSync(root + '/static/js/' + f, 'utf8'), ctx, {filename: f});
+  ctx.toast = (m, k) => toasts.push([m, k]);
+  return ctx;
+}
+const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5, protected: prot});
+(async () => {
+  process.on('unhandledRejection', () => {});
+  const root = process.argv[2], out = {};
+  const S = {listing: [ENTRY('maps', true, false), ENTRY('lgsm', true, true),
+                       ENTRY('notes.txt', false, false)], reply: {success: true, message: 'Renamed'}};
+  const c = load(root, url => url.indexOf('/browse?') >= 0 ? {path: '', entries: S.listing}
+    : url.indexOf('/rename-path') >= 0 ? S.reply : url.indexOf('/file?') >= 0 ? {content: 'x'} : {});
+  await flush();
+  const doc = c.document, list = doc.getElementById('file-list');
+  const row = p => list.querySelector('[data-path="' + p + '"]');
+  const btn = p => row(p) && row(p).querySelector('[data-action="rename"]');
+  const box = () => list.querySelector('.fb-rename');
+  const field = () => list.querySelector('.fb-rename input');
+  const err = () => list.querySelector('.fb-rename-err');
+  const key = (el, k) => fire(el, 'keydown', {key: k});
+  const posts = () => c.fetched.filter(f => f.url.indexOf('/rename-path') >= 0);
+  const count = part => c.fetched.filter(f => f.url.indexOf(part) >= 0).length;
+  const lastBody = () => { const p = posts(); return p.length ? JSON.parse(p[p.length - 1].body) : null; };
+  out.rename_on = list.querySelectorAll('[data-action="rename"]').map(b => b.closest('[data-path]').dataset.path);
+  // Open: the stem is selected, the field has focus, and the row's own parts are hidden.
+  if (btn('notes.txt')) btn('notes.txt').click();
+  const f1 = field();
+  out.open = {value: f1 && f1.value, sel: f1 && [f1.selectionStart, f1.selectionEnd],
+              focused: !!f1 && doc.activeElement === f1, files_opened: count('/file?'),
+              hidden: !!f1 && row('notes.txt').children.filter(ch => ch !== box())
+                .every(ch => ch.style.display === 'none')};
+  if (f1) f1.click();
+  if (f1) row('notes.txt').click();
+  out.click_in_field_opens = count('/file?');
+  // Escape puts the row back and sends nothing.
+  if (f1) key(f1, 'Escape');
+  out.escape = {open: !!box(), sent: posts().length, focus_back: doc.activeElement === btn('notes.txt'),
+                shown: row('notes.txt').children.every(ch => ch.style.display === '')};
+  if (box()) key(field(), 'Escape');
+  if (btn('maps')) btn('maps').click();
+  out.folder_sel = field() ? [field().selectionStart, field().selectionEnd, field().value] : null;
+  if (field()) key(field(), 'Escape');
+  out.stems = ['pack.tar.gz', '.bashrc', 'Makefile', 'a.b.cfg'].map(n => c._renameStemEnd(n, false));
+  // A refusal shows under the field, which stays open and editable — and no toast.
+  if (btn('notes.txt')) btn('notes.txt').click();
+  S.reply = {success: false, conflict: true, message: 'TAKEN-MESSAGE'};
+  if (field()) { field().value = 'maps'; key(field(), 'Enter'); }
+  await flush();
+  out.refused = {body: lastBody(), err: err() && err().textContent,
+                 err_shown: !!err() && err().style.display === '', open: !!box(),
+                 editable: !!field() && !field().disabled, toasts: c.toasts.length};
+  // An empty name is refused here; an unchanged one just closes; neither is sent.
+  const n0 = posts().length;
+  if (field()) { field().value = '   '; key(field(), 'Enter'); }
+  await flush();
+  out.empty = {sent: posts().length - n0, err: err() && err().textContent};
+  if (field()) { field().value = 'notes.txt'; key(field(), 'Enter'); }
+  await flush();
+  out.unchanged = {sent: posts().length - n0, open: !!box()};
+  // The panel cannot be reached.
+  if (btn('notes.txt')) btn('notes.txt').click();
+  S.reply = new Error('offline');
+  if (field()) field().value = 'x.txt';
+  const sb = list.querySelector('[data-action="submitRename"]');
+  if (sb) sb.click();
+  await flush();
+  out.offline = {err: err() && err().textContent, open: !!box()};
+  if (field()) key(field(), 'Escape');
+  // Success, with the file open in the editor: the list refreshes, and the editor follows.
+  row('notes.txt').click(); await flush();
+  out.editing = c.curFile;
+  S.reply = {success: true, message: 'Renamed'};
+  S.listing = [ENTRY('maps', true, false), ENTRY('lgsm', true, true), ENTRY('renamed.txt', false, false)];
+  if (btn('notes.txt')) btn('notes.txt').click();
+  if (field()) field().value = 'renamed.txt';
+  const b0 = count('/browse?');
+  const sb2 = list.querySelector('[data-action="submitRename"]');
+  if (sb2) sb2.click();
+  await flush();
+  out.renamed = {body: lastBody(), browsed: count('/browse?') - b0, open: !!box(),
+                 rows: list.querySelectorAll('[data-path]').map(r => r.dataset.path),
+                 cur: c.curFile, header: doc.getElementById('editor-path').textContent,
+                 toast: c.toasts[c.toasts.length - 1] || null};
+  // A renamed folder takes the open file inside it along.
+  c.curFile = 'maps/server.cfg';
+  if (btn('maps')) btn('maps').click();
+  if (field()) { field().value = 'maps2'; key(field(), 'Enter'); }
+  await flush();
+  out.folder_follow = c.curFile;
+  console.log(JSON.stringify(out));
+})().catch(e => console.log(JSON.stringify({error: String(e && e.stack || e)})));"""
+_sfr_src = (STATIC_JS / "server_files.js").read_text(encoding="utf-8")
+_sfr_list = _js_code_only(_sfr_src[_sfr_src.index("var _fileList = document.getElementById('file-list');"):])
+if _node:
+    with _tf_ta.NamedTemporaryFile("w", suffix=".js", delete=False) as _rh:
+        _rh.write(_RENAME_HARNESS)
+    try:
+        _rr = _sp_ta.run([_node, _rh.name, str(ROOT)], capture_output=True, text=True, timeout=60)
+    finally:
+        _os_ta.unlink(_rh.name)
+    try:
+        _rn = json.loads((_rr.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _rn = {"error": (_rr.stdout + _rr.stderr)[-600:]}
+    check("error" not in _rn, "js (node): the rename harness ran", repr(_rn)[:600])
+    check(_rn.get("rename_on") == ["maps", "notes.txt"],
+          "js (node): every deletable row has a Rename control, and a protected one has none",
+          repr(_rn.get("rename_on")))
+    check(_rn.get("open") == {"value": "notes.txt", "sel": [0, 5], "focused": True,
+                              "files_opened": 0, "hidden": True},
+          "js (node): Rename opens a field in the row holding the name, focused, with the stem "
+          "('notes' of notes.txt) selected and the extension kept", repr(_rn.get("open")))
+    check(_rn.get("click_in_field_opens") == 0,
+          "js (node): a click in the field, or on the row around it, edits — it does not open "
+          "the file", repr(_rn.get("click_in_field_opens")))
+    check(_rn.get("escape") == {"open": False, "sent": 0, "focus_back": True, "shown": True},
+          "js (node): Escape puts the row back, sends nothing, and returns focus to Rename",
+          repr(_rn.get("escape")))
+    check(_rn.get("folder_sel") == [0, 4, "maps"] and _rn.get("stems") == [4, 7, 8, 3],
+          "js (node): a folder's whole name is selected; .tar.gz is kept whole, and a dotfile or "
+          "a name with no dot has no extension to keep",
+          repr((_rn.get("folder_sel"), _rn.get("stems"))))
+    check(_rn.get("refused") == {"body": {"path": "notes.txt", "new_name": "maps"},
+                                 "err": "TAKEN-MESSAGE", "err_shown": True, "open": True,
+                                 "editable": True, "toasts": 0},
+          "js (node): Enter sends {path, new_name}; the panel's refusal is shown under the field, "
+          "which stays open and editable (no toast)", repr(_rn.get("refused")))
+    check(_rn.get("empty") == {"sent": 0, "err": "Enter a new name."}
+          and _rn.get("unchanged") == {"sent": 0, "open": False},
+          "js (node): an empty name is refused in the page, an unchanged one just closes; "
+          "neither is sent", repr((_rn.get("empty"), _rn.get("unchanged"))))
+    check(_rn.get("offline") == {"err": "Could not reach the panel. Reload the file browser to "
+                                        "see whether it was renamed.", "open": True},
+          "js (node): a panel that cannot be reached is said under the field, not swallowed",
+          repr(_rn.get("offline")))
+    _rnd = _rn.get("renamed") or {}
+    check(_rnd.get("body") == {"path": "notes.txt", "new_name": "renamed.txt"}
+          and _rnd.get("browsed") == 1 and _rnd.get("open") is False
+          and _rnd.get("rows") == ["maps", "lgsm", "renamed.txt"]
+          and _rnd.get("toast") == ["Renamed", "success"],
+          "js (node): the Rename button sends it, and on success the list refreshes and the field "
+          "closes", repr(_rnd))
+    check(_rnd.get("cur") == "renamed.txt" and _rnd.get("header") == "renamed.txt"
+          and _rn.get("folder_follow") == "maps2/server.cfg",
+          "js (node): the file open in the editor follows its new name — and its folder's — so "
+          "Save cannot write the old path back", repr((_rnd.get("cur"), _rn.get("folder_follow"))))
+else:
+    _sfr_start = _js_code_only(_js_function_body(_sfr_src, "startRename"))
+    _sfr_key = _js_code_only(_js_function_body(_sfr_src, "renameKey"))
+    check("setSelectionRange(0, _renameStemEnd(" in _sfr_start
+          and "input.dataset.on='keydown'" in _sfr_start,
+          "js (no node): Rename selects the stem, and the field's keys go through the dispatcher",
+          _sfr_start[:300])
+    check("'Enter'" in _sfr_key and "submitRename()" in _sfr_key and "'Escape'" in _sfr_key
+          and "cancelRename()" in _sfr_key,
+          "js (no node): Enter submits and Escape cancels", _sfr_key[:300])
+    check("closest('.fb-renaming')) return;" in _sfr_list,
+          "js (no node): a click on a row being renamed does not open it", _sfr_list[:300])
+
+# ── a data-action a SCRIPT assigns must resolve too ───────────────────────────────────────────
+# Check 1 reads data-action out of markup; a script that builds a control and sets
+# `el.dataset.action = 'x'` is invisible to it, and a name that resolves to nothing is a control
+# that silently does nothing. Every literal a script assigns must name a global the dispatcher can
+# call, or one a page's own listener picks up by `[data-action="x"]`.
+_JS_ASSIGNED = re.compile(r"""dataset\.action\s*=\s*['"]([A-Za-z_$][\w$]*)['"]"""
+                          r"""|setAttribute\(\s*['"]data-action['"]\s*,\s*['"]([A-Za-z_$][\w$]*)['"]""")
+_js_assigned = sorted({(_m.group(1) or _m.group(2), _p.name) for _p in STATIC_JS.glob("*.js")
+                       for _m in _JS_ASSIGNED.finditer(_js_code_only(_p.read_text(encoding="utf-8")))})
+check(len(_js_assigned) >= 8 and ("submitRename", "server_files.js") in _js_assigned,
+      "sweep: the script-assigned data-action scan found its subjects",
+      "found %r — the check below proves nothing" % (_js_assigned,))
+check(not [a for a in _js_assigned if a[0] not in handled],
+      "every data-action a script assigns is defined, or picked up by a delegated listener",
+      "unhandled: %r" % [a for a in _js_assigned if a[0] not in handled])
+# The row's Rename is DELEGATED (#file-list's listener needs the row) and must stay so: a global
+# of the same name would ALSO run from the page dispatcher on the same click, with no row. The
+# field's own controls are the reverse — globals the dispatcher calls — and the listener must leave
+# their clicks alone (closest('.fb-renaming') returns before any row handling).
+check("rename" in delegated and "rename" not in defined
+      and {"submitRename", "cancelRename", "renameKey"} <= defined
+      and "startRename(rn.closest('[data-path]'))" in _sfr_list
+      and _sfr_list.index("closest('.fb-renaming')) return;")
+      < _sfr_list.index("closest('[data-action=\"delete\"]')"),
+      "file browser: Rename is delegated on #file-list (not a global), its field's controls go "
+      "through the dispatcher, and a click on the row being renamed is left to them",
+      _sfr_list[:400])
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]
