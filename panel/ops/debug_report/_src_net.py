@@ -15,6 +15,8 @@ import ipaddress
 import os
 import struct
 
+from panel.ops import system_ops as _so
+
 # Module constants so a test can point them at fixtures; nothing else changes them.
 PROC_NET_TCP = {4: "/proc/net/tcp", 6: "/proc/net/tcp6"}
 PROC_SELF_FD = "/proc/self/fd"
@@ -24,7 +26,8 @@ MAX_ROWS = 50000
 # How many of this process's fds are looked at for socket inodes (RLIMIT_NOFILE is the real cap).
 MAX_FDS = 65536
 _LISTEN = "0A"
-_TAILNET = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+# Tailscale's fixed ranges, from their one definition (system_ops._TAILNET_RANGES).
+_TAILNET = tuple(ipaddress.ip_network(n) for n in _so._TAILNET_RANGES)
 
 
 def _socket_inodes():

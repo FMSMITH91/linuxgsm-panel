@@ -25,6 +25,7 @@ from collections import Counter
 
 from sqlalchemy import func
 
+from panel.ops import system_ops as _so
 from panel.ops.debug_report._base import Result, ago, unread_line
 
 AREA = "Hosts"
@@ -37,8 +38,8 @@ _TRANSPORTS = ("local", "tailscale", "key", "password")
 _T_LABEL = dict(zip(_TRANSPORTS, ("panel host", "tailscale", "key", "password")))
 _T_WORD = dict(zip(_TRANSPORTS, ("local (panel host)", None, "key (paramiko, pooled)",
                                  "password (paramiko, pooled)")))
-_TAILNET_V4 = ipaddress.ip_network("100.64.0.0/10")
-_TAILNET_V6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
+# Tailscale's fixed ranges, from their one definition (system_ops._TAILNET_RANGES).
+_TAILNET_V4, _TAILNET_V6 = (ipaddress.ip_network(n) for n in _so._TAILNET_RANGES)
 _DOWN_SHOWN = 3        # down hosts named in the public block; the rest are counted
 _CONFLICTS_SHOWN = 3   # port conflicts named in the public block; the rest are counted
 

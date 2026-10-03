@@ -24,6 +24,7 @@ import re
 import sys
 import threading
 
+from panel.ops import system_ops as _so
 from panel.ops.debug_report._base import finding
 
 _MIN_NAME = 3
@@ -45,7 +46,8 @@ _STOP_WORDS = frozenset((
 ))
 ETC_PASSWD = "/etc/passwd"  # nosec B105 - a file path, not a password
 ETC_GROUP = "/etc/group"
-_TAILNET_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+# Tailscale's fixed ranges, from their one definition (system_ops._TAILNET_RANGES).
+_TAILNET_NETS = tuple(ipaddress.ip_network(n) for n in _so._TAILNET_RANGES)
 
 # A journal line's host field, by position: after the timestamp (journalctl's short or short-iso
 # form) and before the "ident[pid]:" tag. The tag is required, so a log line that merely starts
@@ -444,13 +446,12 @@ def _tailscale_names(ctx, st, wait):
 def _paths(text, st):
     """The data dir, the virtualenv, the checkout and home directories as fixed placeholders."""
     from panel.core import config as cfgmod
-    from panel.ops import system_ops as so
     text = _replace_dir(text, str(cfgmod.DATA_DIR), "<data>")
     if "-packages/" in text:
         text = _VENV_RE.sub("<venv>", text)
     if sys.prefix != sys.base_prefix:      # a virtualenv's own root (bin/python and the like)
         text = _replace_dir(text, sys.prefix, "<venv>")
-    text = _replace_dir(text, so.PANEL_DIR, "<panel>")
+    text = _replace_dir(text, _so.PANEL_DIR, "<panel>")
     # The root-owned pieces' directory (the helper and root's copies of the installer): fixed by
     # install.sh, so naming it identifies nothing, and left alone its 42-character helper path is
     # one "long token" to _redact -- every sudo line read 'COMMAND=/[redacted] <verb>'.
@@ -659,7 +660,6 @@ def _generic(text, st):
 
 def scrub(ctx, text):
     """`text` pseudonymised; when the pattern pass itself fails, every body is withheld."""
-    from panel.ops import system_ops as so
     st = prepare(ctx)
     try:
         text = _paths(text, st)
@@ -672,7 +672,7 @@ def scrub(ctx, text):
     except Exception as exc:  # noqa: BLE001 - the generic rules below still run
         st.source_errors.append(("name matching", type(exc).__name__))
     try:
-        return so._redact(_generic(text, st))
+        return _so._redact(_generic(text, st))
     except Exception as exc:  # noqa: BLE001 - withhold rather than print pattern-free text
         st.pattern_error = type(exc).__name__
         return _withhold(text)
