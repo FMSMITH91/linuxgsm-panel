@@ -297,6 +297,10 @@ def _pid_info(pid, uptime, hz, me):
 
 def _cgroup_others(path):
     """The OTHER processes in this cgroup, at most MAX_PIDS; a pid that vanished is skipped."""
+    # The path comes from /proc/self/cgroup: kernel data, but it is joined onto /sys/fs/cgroup,
+    # so a '..' segment is refused rather than followed.
+    if not path.startswith("/") or ".." in path.split("/"):
+        raise ValueError("cgroup path")
     with open("/sys/fs/cgroup" + path + "/cgroup.procs", encoding="ascii") as fh:
         pids = [int(p) for p in fh.read().split()[:MAX_PIDS + 1]]
     me, hz, up = os.geteuid(), os.sysconf("SC_CLK_TCK"), _uptime()
@@ -632,6 +636,14 @@ IOSchedulingClass=best-effort
 IOSchedulingPriority=6
 """
 _DROPIN_NAME_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}\.conf\Z")
+_DROPIN_DIRS = ("/etc/systemd/", "/run/systemd/", "/usr/lib/systemd/", "/lib/systemd/")
+
+
+def _dropin_path_ok(path):
+    """Whether `path` is a .conf under a systemd (or the user's) unit directory, with no '..'."""
+    dirs = _DROPIN_DIRS + (os.path.expanduser("~/.config/systemd/"),)
+    return (path.startswith(dirs) and path.endswith(".conf")
+            and ".." not in path.split("/"))
 
 
 def render_unit(scope, user, panel_dir):
@@ -687,6 +699,10 @@ def _unit_line(scope):
 def _dropin_text(path):
     name = os.path.basename(path)
     shown = name if _DROPIN_NAME_RE.match(name) else "a drop-in"
+    # systemd's DropInPaths: read only a .conf under a systemd unit directory, never a path that
+    # leaves one through '..'.
+    if not _dropin_path_ok(path):
+        return "%s (not read: not under a systemd unit directory)" % shown
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()

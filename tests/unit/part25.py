@@ -644,13 +644,30 @@ def _p25_lost_writes():
           and any(f["level"] == "warn" for f in res.findings), repr((_rs25.lost() - lost0, res.lines[:2])))
 
 
+def _p25_paths_sanitised():
+    raised = None
+    try:
+        PR._cgroup_others("/system.slice/../../../etc/linuxgsm-panel.service")
+    except ValueError as exc:
+        raised = exc
+    outside = PR._dropin_text("/tmp/evil7731/override.conf")
+    climbs = PR._dropin_text("/etc/systemd/system/../../../tmp/x.conf")
+    check("hardening: a cgroup path with '..' is refused before it is joined onto /sys/fs/cgroup, "
+          "and a drop-in outside a systemd unit directory, or climbing out of one, is never read",
+          all([raised is not None, "not read: not under a systemd unit directory" in outside,
+               "not read: not under a systemd unit directory" in climbs,
+               PR._dropin_path_ok("/etc/systemd/system/linuxgsm-panel.service.d/priority.conf")]),
+          repr((raised, outside, climbs)))
+
+
 try:
     _seed25()
     for _fn25 in (_p25_update_tail, _p25_tailscale_error, _p25_addresses, _p25_git_raises, _p25_cuts,
                   _p25_names, _p25_host_first_label, _p25_single_flight_busy, _p25_request_deadline,
                   _p25_memo, _p25_hub_lag, _p25_hosts_ts_hung, _p25_glance, _p25_interpreter, _p25_nss,
                   _p25_serve, _p25_f2b, _p25_git_timeouts, _p25_ci_walk, _p25_no_unit, _p25_leads,
-                  _p25_vps, _p25_vps_helper_path, _p25_vps_interpreter, _p25_lost_writes):
+                  _p25_vps, _p25_vps_helper_path, _p25_vps_interpreter, _p25_lost_writes,
+                  _p25_paths_sanitised):
         _fn25()
 except Exception as _e25:  # noqa: BLE001 - a harness failure must fail by name, not end the suite
     import traceback as _tb25
