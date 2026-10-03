@@ -23,6 +23,7 @@ CROSS-MODULE CONTRACTS (who writes, who reads):
                                 | "not attempted" (R20)
   runtime_stats groups ("heartbeat" via beat(); the rest via bump()/put()):
     heartbeat   loop name -> {at, cadence, took, passes}           monitor loops etc. (R22)
+    loop_start  loop name -> put(s to its first pass), when started  loops that sleep first (R22)
     respawn     thread name -> count                               the supervisor (R22)
     loopfail    loop name -> count of passes that raised           every beating loop (R22)
     errors      "LEVEL|logger|template" -> count                   logging handler (R24)

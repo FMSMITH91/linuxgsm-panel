@@ -1389,12 +1389,15 @@ def _declared_proxy_trusted(addr, conf):
     return False
 
 
-def _note_ignored_proxy(addr, local_uid=None):
+def _note_ignored_proxy(addr, local_uid=None, declared=True):
     """Log that a forwarding header from `addr` was not believed.
 
     Once an hour per peer, and only when the request carried one (a direct client without headers
     is not news). `local_uid`: the peer IS in trusted_proxies (loopback) but this local account is
-    not a proxy account.
+    not a proxy account. `declared` False: trust_proxy is off, and the peer is a loopback account
+    other than root's (tailscaled), the only one believed then; trusted_proxies and
+    trusted_proxy_users do nothing without trust_proxy, so the advice names neither. The debug
+    report's "Forwarding headers ignored" count reads the same record.
     """
     import logging
     if not (request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP")):
@@ -1407,7 +1410,11 @@ def _note_ignored_proxy(addr, local_uid=None):
         _ignored_proxy_warned.clear()       # bounded: a scan from many addresses cannot grow it
     _ignored_proxy_warned[key] = now
     log = logging.getLogger("panel.app")
-    if local_uid is None:
+    if not declared:
+        log.warning("ignoring X-Forwarded-For from %s (a local account, uid %s): without "
+                    "trust_proxy only a root-owned loopback peer (tailscaled) is believed", addr,
+                    local_uid)
+    elif local_uid is None:
         log.warning("ignoring X-Forwarded-For from %s; add it to trusted_proxies in config.json if "
                     "it is your proxy", addr)
     else:
@@ -1507,8 +1514,15 @@ def _request_came_through_proxy(peer):
     if declared:
         return _declared_proxy_trusted(addr, conf)
     # Loopback is NOT a proxy by itself — any local account can dial it. Only a root-owned peer
-    # (tailscaled) is; see _loopback_proxy_trusted.
-    return addr in ("127.0.0.1", "::1") and _loopback_proxy_trusted()
+    # (tailscaled) is; see _loopback_proxy_trusted. Any other loopback account's headers are
+    # recorded as refused, as _declared_proxy_trusted records them under trust_proxy.
+    if addr not in ("127.0.0.1", "::1"):
+        return False
+    if _loopback_proxy_trusted():
+        return True
+    uid = _loopback_peer_uid_memo()
+    _note_ignored_proxy(addr, local_uid=uid if uid is not None else "unknown", declared=False)
+    return False
 
 
 def _forwarded_client_ip():

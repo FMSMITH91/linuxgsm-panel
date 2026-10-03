@@ -230,6 +230,20 @@ def _probe_token(rec):
     return tok(rec.get("token")) if isinstance(rec, dict) else "no probe recorded"
 
 
+def _unprobed_why(n):
+    """Why `n` hosts are not yet probed, while the monitor has completed no pass; else ''.
+
+    Only the monitor's pass records a host's state, and it sleeps before its first one. Once it
+    has completed a pass, a host not yet probed is one added since: that needs no note.
+    """
+    beats = mod("panel.core.runtime_stats").snapshot("heartbeat")
+    if not n or isinstance(beats.get("monitor"), dict):
+        return ""
+    from panel.ops.debug_report import workers
+    return " (the monitor has completed no pass yet: %s)" % workers.first_pass_words(
+        "monitor", time.time())
+
+
 def _brief_hosts(ctx, res):
     rows = host_cols(ctx)
     mon = monitor_map("remotes")
@@ -237,9 +251,10 @@ def _brief_hosts(ctx, res):
     down = [r["id"] for r, st in zip(rows, states) if st is False]
     up = states.count(True)
     probes = probe_records() if down else {}
-    res.add("- **Hosts**: %d (%s). Monitor: %d up, %d DOWN%s, %d not yet probed" % (
+    unprobed = len(rows) - up - len(down)
+    res.add("- **Hosts**: %d (%s). Monitor: %d up, %d DOWN%s, %d not yet probed%s" % (
         len(rows), _kinds(rows) or "none in the database", up, len(down),
-        _down_detail(down, probes, time.time()), len(rows) - up - len(down)))
+        _down_detail(down, probes, time.time()), unprobed, _unprobed_why(unprobed)))
     for rid in down:
         res.find("warn", AREA, "host %d is down (%s)" % (rid, _probe_token(probes.get(rid))))
 

@@ -22,7 +22,7 @@ import time
 from panel.core import runtime_stats
 from panel.ops import system_ops as so
 from panel.ops.debug_report import _src_db, _src_net, _src_tailscale
-from panel.ops.debug_report._base import Result, ago, unread_line
+from panel.ops.debug_report._base import Result, ago, cut_words, unread_line
 
 AREA = "Network & access"
 # A mount printed as itself: "/", or one plain segment, with the trailing "/" Serve keeps apart
@@ -38,6 +38,20 @@ STANDARD_JAILS = frozenset(("sshd", "recidive", "sshd-ddos", "dropbear", "selinu
 F2B_TIMEOUT = 5
 UFW_TIMEOUT = 10
 NOT_READ = "not read (no helper, and passwordless sudo not confirmed; it would need sudo)"
+# Tailscale's health messages (`tailscale status --json` "Health"), printed one per line.
+HEALTH_SHOWN = 5
+HEALTH_MAX = 160
+# A domain name in a health message: a TLS dial records the server it dialled (a self-hosted relay
+# or control server), which the name map may not know. Tailscale's own domains name no one. The
+# rule runs after the name pass, so any label before the last may already be one of its tokens
+# ('[host-1].example.net', a relay named after the panel host): the run is still one domain.
+_HEALTH_LABEL = r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?|\[[a-z][\w:-]{0,40}\])"
+_HEALTH_DOMAIN_RE = re.compile(r"(?<![\w.-])(?:%s\.){1,8}[A-Za-z][A-Za-z0-9-]{0,61}[A-Za-z](?![\w-])"
+                               % _HEALTH_LABEL)
+_HEALTH_OWN_DOMAINS = ("tailscale.com", "tailscale.io", "ts.net")
+# 'certificate is self-signed by <issuer>': the issuer of an intercepting proxy's certificate is
+# often the employer's name.
+_SELF_SIGNED_RE = re.compile(r"(?i)(self-signed by)\b.*")
 
 
 # ── running the slow reads side by side, each under the report's deadline ───────────────────────
@@ -153,6 +167,12 @@ def _yn(flag):
 def _key_text(expiry, now=None):
     if not expiry:
         return "node key expiry not recorded"
+    if expiry == _src_tailscale.KEY_DISABLED:
+        return "node key expiry disabled (tagged node or expiry turned off)"
+    if expiry == _src_tailscale.KEY_NO_NETMAP:
+        return "node key expiry unknown (not in the network map)"
+    if expiry == _src_tailscale.KEY_NO_FIELD:
+        return "node key expiry unknown (this Tailscale version does not report it)"
     if expiry.startswith("0001-"):
         return "node key expiry disabled"
     try:
@@ -184,6 +204,52 @@ def _ts_head(v):
             % (ver.group(0) if ver else "?", state, "on" if v.get("magic_dns") else "off",
                _key_text(v.get("key_expiry")), _operator_text(v.get("operator_user")),
                "not recorded" if health is None else len(health)))
+
+
+def _health_domain(m):
+    """[domain] for a match, unless it is Tailscale's own or a path's component.
+
+    After a single '/' a dotted name is a file ('/etc/resolv.conf', which a real health message
+    names); after '//' it is a URL's host, which is replaced.
+    """
+    before = m.string[max(0, m.start() - 2):m.start()]
+    if before.endswith("/") and before != "//":
+        return m.group(0)
+    host = m.group(0).lower()
+    if any(host == d or host.endswith("." + d) for d in _HEALTH_OWN_DOMAINS):
+        return m.group(0)
+    return "[domain]"
+
+
+def health_text(ctx, message):
+    """One Tailscale health message, safe to print: one line, scrubbed, then cut at a word.
+
+    Whitespace collapsed (a control-server message is arbitrary text, and a newline would break
+    the list), a self-signed certificate's issuer dropped, the report's privacy pass (the
+    Tailscale names are mapped before this is called), then every domain left outside Tailscale's
+    own as [domain] -- after the pass, whose email rule must see 'name@domain' whole -- and only
+    then the cut, so the final pass still sees every name whole.
+    """
+    from panel.ops.debug_report import privacy
+    text = _SELF_SIGNED_RE.sub(r"\1 [issuer withheld]", " ".join(str(message).split()))
+    text = _HEALTH_DOMAIN_RE.sub(_health_domain, privacy.scrub_text(ctx, text))
+    return cut_words(text, HEALTH_MAX)
+
+
+def _health_lines(ctx, res, v):
+    """Each health message on its own line under the Tailscale line (at most HEALTH_SHOWN).
+
+    No finding: Health carries no severity, and benign entries (an update available, Tailscale
+    starting) would count as problems on a healthy panel.
+    """
+    health = v.get("health") or []
+    if not health:
+        return
+    from panel.ops.debug_report import privacy
+    privacy.map_tailscale(ctx, v)
+    res.lines += ["  - health: %s" % health_text(ctx, h) for h in health[:HEALTH_SHOWN]]
+    if len(health) > HEALTH_SHOWN:
+        res.add("  - health: +%d more" % (len(health) - HEALTH_SHOWN))
 
 
 def _mount(m):
@@ -389,7 +455,10 @@ def _funnel_line(cfg, readable, v, routes):
 
 
 def _tailscale_lines(ctx, res, facts, got):
-    """R36: state, Serve and Funnel from the one cached reading; names, IPs and URLs never."""
+    """R36: state, Serve and Funnel from the one cached reading; names, IPs and URLs never.
+
+    Tailscale's health messages are its own free text, printed only through health_text.
+    """
     if _ts_unread(res, facts, got):
         return
     v = got[1][1]
@@ -399,6 +468,7 @@ def _tailscale_lines(ctx, res, facts, got):
     conf = getattr(ctx.app, "config", None) or {}
     want = _expected_scheme(conf, cfg) if readable else None
     res.add("- **Tailscale**: " + _ts_head(v))
+    _health_lines(ctx, res, v)
     text, routes = _serve_text(v, port, want)
     res.add("- **Serve**: " + text)
     res.add("- **Funnel**: " + _funnel_line(cfg, readable, v, routes))
@@ -763,6 +833,19 @@ def hsts_expected(forwarded_proto, is_secure, self_tls):
     return forwarded_proto == "https" or (bool(is_secure) and not self_tls)
 
 
+def _believed_text(believed, conf):
+    """'yes (a root-owned loopback peer: tailscaled)', 'yes (a declared proxy)' or 'no'.
+
+    Without trust_proxy the headers are still believed from a root-owned loopback peer, so the
+    line names its basis rather than reading as a contradiction of 'trust_proxy: false'.
+    """
+    if not believed:
+        return "no"
+    if conf.get("_TRUST_PROXY"):
+        return "yes (a declared proxy)"
+    return "yes (a root-owned loopback peer: tailscaled)"
+
+
 def _request_lines(res, conf):
     """R38: fixed booleans and categories only. Never a header's value or an address."""
     from flask import has_request_context, request
@@ -780,7 +863,7 @@ def _request_lines(res, conf):
                 "/" if mount == "/" else _mount(mount)))
     client = _src_net.addr_class(auth.client_ip())
     res.add("- **Client address as the panel keys it**: %s · forwarded headers believed: %s" % (
-        client, _yn(auth._request_came_through_proxy(peer))))
+        client, _believed_text(auth._request_came_through_proxy(peer), conf)))
     res.add("- **HSTS on this response**: %s" % _yn(hsts_expected(
         env.get("HTTP_X_FORWARDED_PROTO", ""), request.is_secure, _self_tls(conf))))
     if client == "loopback" and env.get("HTTP_X_FORWARDED_FOR"):

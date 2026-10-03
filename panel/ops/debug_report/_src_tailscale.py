@@ -18,8 +18,12 @@ The dict (every key always present):
     funnel_enabled                bool, what Serve says
     peers                         list of tailscale_integration's peer dicts: IDENTIFYING fields
                                   (hostname, dns_name, ips); online, os, last_seen, relay are not
-    key_expiry                    str (RFC 3339) or None when not recorded
-    health                        list of str or None when not recorded: FREE TEXT, print a count
+    key_expiry                    str (RFC 3339), or one of KEY_DISABLED / KEY_NO_NETMAP /
+                                  KEY_NO_FIELD (why there is none), or None when not recorded
+    health                        list of str or None when not recorded: FREE TEXT, Tailscale's own
+                                  messages; printed only through the privacy pass (network.py)
+    control_host                  str or None: the control server's host when it is NOT Tailscale's
+                                  own (a self-hosted one): IDENTIFYING, for R72's name list only
     operator_user                 str or None when not recorded: compare, never print
     run_ssh                       bool or None when not recorded
     magic_dns_suffix, tailnet_name  str or None when not recorded: IDENTIFYING
@@ -40,7 +44,19 @@ shared_read(ctx) / shared_info(ctx) -> read() / info() through the report's memo
 every section and the privacy pass share ONE reading per report. Sections call these, never read()
 or info() directly.
 """
+import re
+
 from panel.ops import tailscale_integration as ts
+
+# Why a status carries no Self.KeyExpiry. Tailscale leaves the field out when the node's expiry
+# is disabled (tailcfg's zero KeyExpiry: a tagged node, or expiry turned off in the admin console),
+# but it also builds Self with no netmap at all (NeedsLogin, logged out, before the first netmap),
+# and before v1.36 it never sent the field.
+KEY_DISABLED = "disabled"
+KEY_NO_NETMAP = "no-netmap"
+KEY_NO_FIELD = "no-field"
+# Tailscale's own control servers: a host that names no one, so it is not mapped.
+_DEFAULT_CONTROL = frozenset(("controlplane.tailscale.com", "login.tailscale.com"))
 
 
 def _dict(value):
@@ -55,15 +71,43 @@ def _logins(users):
     return out
 
 
-def _status_extras(status):
+def _reports_key_expiry(version):
+    """Whether this Tailscale version sends Self.KeyExpiry at all (v1.36 and later)."""
+    m = re.match(r"(\d+)\.(\d+)", str(version or ""))
+    return bool(m) and (int(m.group(1)), int(m.group(2))) >= (1, 36)
+
+
+def _key_expiry(status, version):
+    """Self.KeyExpiry, or why it is absent (KEY_*); None when there is no Self to read."""
+    me = status.get("Self")
+    if not isinstance(me, dict):
+        return None
+    if me.get("KeyExpiry"):
+        return me["KeyExpiry"]
+    if me.get("InNetworkMap") is not True:
+        return KEY_NO_NETMAP
+    return KEY_DISABLED if _reports_key_expiry(version) else KEY_NO_FIELD
+
+
+def _status_extras(status, version=""):
     """Fields from `tailscale status --json` that TailscaleInfo does not carry on its own."""
     status = _dict(status)
     health = status.get("Health")
-    return {"key_expiry": _dict(status.get("Self")).get("KeyExpiry") or None,
+    return {"key_expiry": _key_expiry(status, version),
             "health": list(health) if isinstance(health, list) else None,
             "magic_dns_suffix": status.get("MagicDNSSuffix") or None,
             "tailnet_name": _dict(status.get("CurrentTailnet")).get("Name") or None,
             "user_logins": _logins(status.get("User"))}
+
+
+def _control_host(url):
+    """The host of prefs' ControlURL when it is not Tailscale's own control server, else None."""
+    from urllib.parse import urlsplit
+    try:
+        host = (urlsplit(str(url or "")).hostname or "").lower()
+    except ValueError:
+        return None
+    return host if host and host not in _DEFAULT_CONTROL else None
 
 
 def _prefs_extras(prefs):
@@ -71,7 +115,8 @@ def _prefs_extras(prefs):
     prefs = prefs if isinstance(prefs, dict) else {}
     run_ssh = prefs.get("RunSSH")
     return {"operator_user": prefs.get("OperatorUser") if "OperatorUser" in prefs else None,
-            "run_ssh": run_ssh if isinstance(run_ssh, bool) else None}
+            "run_ssh": run_ssh if isinstance(run_ssh, bool) else None,
+            "control_host": _control_host(prefs.get("ControlURL"))}
 
 
 def as_dict(ti):
@@ -86,7 +131,7 @@ def as_dict(ti):
            "serve_services": list((ti.serve_config or {}).get("services") or []),
            "funnel_enabled": bool(ti.funnel_enabled), "peers": list(ti.peers or []),
            "extras_recorded": isinstance(status, dict)}
-    out.update(_status_extras(status))
+    out.update(_status_extras(status, out["version"]))
     if not isinstance(status, dict):
         out["key_expiry"] = out["health"] = None
     out.update(_prefs_extras(prefs))

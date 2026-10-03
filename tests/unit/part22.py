@@ -807,8 +807,9 @@ _tsv22 = dict(_tsx22, funnel_enabled=True, serve_services=[
     peers=[{"hostname": "peer-secret", "dns_name": "peer-secret.ts.net", "ips": ["100.99.1.1"]}])
 _tl22, _tf22f = _ts_lines(_tsv22, {"port": 5000, "tailscale_setup_done": True,
                                    "tailscale_use_funnel": False, "tailscale_mount": "/lgsm"})
-check("R36: state, Serve and Funnel print without any node name, tailnet, IP, URL, login or health "
-      "text", "1 route to the panel at /lgsm → http to loopback:5000" in _text(_tl22)
+check("R36: state, Serve and Funnel print without any node name, tailnet, IP, URL or login (the "
+      "health messages print scrubbed, part35)",
+      "1 route to the panel at /lgsm → http to loopback:5000" in _text(_tl22)
       and "1 other app route" in _text(_tl22) and "health warnings 2" in _text(_tl22)
       and not any(s in _text(_tl22) for s in ("secret-node", "tail9999", "100.10", "peer-secret",
                                                "me@github", "https://")), _text(_tl22))

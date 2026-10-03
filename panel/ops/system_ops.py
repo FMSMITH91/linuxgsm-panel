@@ -4283,43 +4283,76 @@ def root_piece_state(force=False):
 # An address: a run of [\w.+-] (the local part), "@", a [\w-] label, ".", then [\w.-] to its end.
 _EMAIL_LOCAL_RE = re.compile(r"[\w.+-]+")
 _EMAIL_DOMAIN_RE = re.compile(r"@[\w-]+\.[\w.-]+")
+# What follows the "@" of a match that is not an address. A systemd template instance is
+# 'name@instance.type' (user@1000.service, getty@tty1.service, wg-quick@wg0.service), and the
+# unit types are not top-level domains -- except "target", which is one, and is still kept: a unit
+# name is far likelier in a journal than an address at a .target domain. A final label of digits
+# is a version (gamedig@5.3.3, inflight@1.0.6), never a TLD; but a dotted quad is an address,
+# and 'account@203.0.113.5' stays an address.
+_UNIT_TYPES = frozenset(("service", "socket", "slice", "scope", "timer", "mount", "automount",
+                         "path", "swap", "device", "target"))
+_DOTTED_QUAD_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}\Z")
 
 
-def _redact_emails(text):
+def _not_an_address(domain):
+    """Whether the part after '@' names a systemd unit or a version, not a mail domain."""
+    domain = domain.rstrip(".")
+    last = domain.rsplit(".", 1)[-1]
+    if last.lower() in _UNIT_TYPES:
+        return True
+    return last.isdecimal() and not _DOTTED_QUAD_RE.match(domain)
+
+
+def _redact_emails(text, hit=None):
     r"""`text` with every email address replaced by [email], in one pass.
 
-    Exactly what re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "[email]", text) returns. That sub tried
+    An address is what re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "[email]", text) matched, less the
+    matches _not_an_address keeps: a systemd template unit or a package@version. That sub tried
     a match at every character of a run with no "@" after it, and read the run to its end from
     each one: a 20,000-character token — a base64 blob in the log tail — took 1.2s, and one twice
     as long four times that. A match can only begin where the search resumes or at the start of a
     run, since every character of a run reaches the same "@", so taking each run whole and
-    looking at what follows it finds the same addresses at the same places."""
+    looking at what follows it finds the same addresses at the same places. A kept match resumes
+    the search at its own "@", as a run with no domain does, so an address glued after a unit
+    name ('a@b.service@c.com') is still found. `hit(kind, value)`, when given, is told each one."""
     out, done, pos = [], 0, 0
     while True:
         run = _EMAIL_LOCAL_RE.search(text, pos)
         if run is None:
             break
         dom = _EMAIL_DOMAIN_RE.match(text, run.end())
-        if dom is None:
+        if dom is None or _not_an_address(dom.group(0)[1:]):
             pos = run.end()
             continue
         out.append(text[done:run.start()])
         out.append("[email]")
+        if hit is not None:
+            hit("email", text[run.start():dom.end()])
         done = pos = dom.end()
     out.append(text[done:])
     return "".join(out)
 
 
-def _redact(text):
+_SECRET_KV_RE = re.compile(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
+                           r"cred(?:ential)?|cookie|bearer)[\w-]*)(\s*[=:]\s*)(\S+)")
+
+
+def _redact(text, hit=None):
     """Best-effort scrub of anything secret-looking from free text (a log tail). The
     report is whitelist-built so this is defence-in-depth: emails, long token/key/hash
-    strings, and key=value secrets get masked before an admin reviews + shares it."""
-    text = _redact_emails(text)
+    strings, and key=value secrets get masked before an admin reviews + shares it.
+
+    `hit(kind, value)`, when given, is told each value replaced ("email", "secret" for a
+    key=value secret, "token" for a long token), so the report's footer can count them."""
+    text = _redact_emails(text, hit)
     # key=value / key: value where the key name contains a secret-ish word (incl.
     # prefixed forms like auth_token, access_key) — redact the value, keep the key.
-    text = re.sub(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
-                  r"cred(?:ential)?|cookie|bearer)[\w-]*)(\s*[=:]\s*)\S+", r"\1\2[redacted]", text)
-    return _redact_long_tokens(text)
+
+    def _kv(m):
+        if hit is not None and m.group(3) != "[redacted]":   # not an earlier pass's own marker
+            hit("secret", m.group(3))
+        return m.group(1) + m.group(2) + "[redacted]"
+    return _redact_long_tokens(_SECRET_KV_RE.sub(_kv, text), hit)
 
 
 _LONG_TOKEN_RE = re.compile(r"\b[A-Za-z0-9+/_-]{28,}={0,2}\b")
@@ -4333,7 +4366,7 @@ _SAFE_FRAME_PATH_RE = re.compile(r"(?:<panel>|<venv>|/usr/lib/python3[\d.]*)/[\w
 _HELD_FRAME_RE = re.compile("\x00(\\d+)\x00")
 
 
-def _redact_long_tokens(text):
+def _redact_long_tokens(text, hit=None):
     """`text` with every 28+-character token run replaced by [redacted], except a safe frame path."""
     text = text.replace("\x00", "")
     held = []
@@ -4344,7 +4377,12 @@ def _redact_long_tokens(text):
         held.append(m.group(2))
         return "%s\x00%d\x00%s" % (m.group(1), len(held) - 1, m.group(3))
 
-    text = _LONG_TOKEN_RE.sub("[redacted]", _FRAME_RE.sub(_hold, text))
+    def _token(m):
+        if hit is not None:
+            hit("token", m.group(0))
+        return "[redacted]"
+
+    text = _LONG_TOKEN_RE.sub(_token, _FRAME_RE.sub(_hold, text))
     if held:
         text = _HELD_FRAME_RE.sub(lambda m: held[int(m.group(1))], text)
     return text
