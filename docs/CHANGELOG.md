@@ -425,6 +425,53 @@ CI-verified commit regardless of this file — this changelog is for humans.
   cron line worked, because both attempts' results were ignored. Such a server does not come back
   after a crash or a reboot. The switch now follows what was written and what the crontab reads back
   as, and a failed write is logged.
+- **The panel is published over Tailscale Serve at one address, and a leftover route to it no
+  longer answers 502.** The boot re-point wrote only the configured mount (`tailscale_mount`), so a
+  second route to the panel — at "/" beside /lgsm, say — kept the scheme it was written with and
+  answered 502 from the next change of the panel's own scheme (a bind change, an update, a restore),
+  while the debug report said the re-point was "ok". At each start the panel now also removes its
+  own routes at other mounts on :443, one at a time with `tailscale serve --https=443
+  --set-path=<mount> off`, reading Serve again right before each. Another app's route, and a route
+  to the panel on another listener, are left alone, and nothing is removed when Serve cannot be
+  read. A route at the same mount with a trailing slash ("/lgsm/" beside "/lgsm") counts as another
+  route, because Serve answers every /lgsm/ page from it. Enable at a new mount does the same, and
+  every Serve write uses the scheme the running panel serves rather than the one its next start
+  will.
+- **The setup wizard no longer publishes the panel twice.** Its finish read the "/" route its own
+  Serve step had just written (or one from a hand-run `tailscale serve`) as another app's, and
+  published a second route at /lgsm. It now adopts a route that already reaches the panel, and does
+  nothing when the Serve step has run. The Serve step no longer publishes at "/" over another app's
+  route, and the wizard says "serving" only when the panel itself is.
+- **The Tailscale page can remove a leftover route on its own.** Each route to the panel that it
+  does not manage is listed with a Remove button, which leaves the panel's address and settings
+  alone. Like Enable and Disable, it first makes the panel's account the Tailscale operator, so it
+  also works on a host where the route was made by hand. When Enable or Remove takes down the
+  route the page was opened through, the page goes to the panel's own address instead of
+  reloading into a dead one. Disable removes every route to the panel, where it removed one and
+  cleared the mount, so the page in use at /lgsm lost its prefix and a second route stayed
+  published.
+- **The startup log, the setup-complete page and Recommended Access name the panel's own
+  address.** They gave https://<machine name>, the root, which on a panel at /lgsm is another app
+  or a leftover route. They now give the route at the configured mount, and only while it works.
+- **The debug report names a leftover Serve route and how to remove it.** It said "a route reaches
+  the panel with the wrong scheme" with no word on which one, and nothing at all when its scheme
+  happened to match. Each route the panel does not manage is now listed with its listener and the
+  exact `sudo tailscale serve --https=<port> --set-path=<mount> off` that removes it, and the boot's
+  own removal is reported beside the re-point. When no route reaches the panel on the scheme it
+  serves, that is still a failure, not a warning.
+- **Uninstalling removes the panel's Tailscale Serve route.** It ran `tailscale serve --bg --remove`,
+  which no Tailscale accepts, so the route stayed behind after every uninstall (and a reinstall then
+  published the panel at /lgsm beside it). It now removes every route to the panel's port, and only
+  those, and says what it could not.
+- **An update says "this panel now serves HTTPS" only when that is new.** It said so after every
+  update of a panel serving its own TLS, with a public address even when the firewall closed the
+  port and with "set up Tailscale" when Tailscale Serve was already up. It now compares with what
+  the panel served before the update, gives the Serve address when there is one, and gives the
+  public address only when the firewall does not close the port.
+- **The README no longer gives a `tailscale serve` command to copy.** Its
+  `tailscale serve --bg --https 443 http://127.0.0.1:5000` answers 502 on a panel serving its
+  default HTTPS. Use the wizard or the Tailscale page. docs/https.md no longer says Serve always
+  takes over TLS: it does only once the panel is bound to 127.0.0.1.
 - **Adding a tool's settings file to the repository is no longer offered as a panel update.** The
   update check decides which files the panel runs from a list, and that list lived in the panel's
   own code. Naming SonarCloud's new settings file in it, as a file the panel does not run, was then

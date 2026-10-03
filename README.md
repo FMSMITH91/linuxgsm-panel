@@ -84,7 +84,7 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 1. **Detects** whether it's a root/system install or a per-user one (and refuses to run without `sudo` on a root install).
 2. **Asks you to confirm** — type `yes` (or pass `--yes`); anything else aborts with nothing changed.
 3. **Stops, disables, and removes** the systemd service and its priority drop-in.
-4. **(Root install)** Removes the panel's **own** UFW port rule and resets its Tailscale Serve binding — never a game-server port.
+4. Removes the panel's **own** UFW port rule — never a game-server port — and every Tailscale Serve route that pointed at the panel's port, one at a time with `tailscale serve --https=<port> --set-path=<mount> off`. Other apps' Serve routes are left alone, and if Serve's config can't be read nothing is removed and it says so. (Both install kinds.)
 5. **Deletes the panel files and its `data/`** — accounts, config, and encryption keys.
 6. **(Root install)** Removes everything the installer put outside the panel directory: the sudoers entry, the root-owned helper directory (`/usr/local/lib/linuxgsm-panel`, which holds the panel's gamedig install too), the `/usr/local/bin/gamedig` and `/usr/bin/gamedig` links into it (only when they point there), the `linuxgsm-panel-recover` command, the weekly gamedig cron, the panel's sysctl tuning, and the dedicated `lgsmpanel` user.
 
@@ -195,10 +195,7 @@ the account. Any leftover grant is stripped at startup.)
 
 Run behind **Tailscale** (recommended — tailnet-only, no open ports; auto-detected in the wizard or managed at `/tailscale`) or a **reverse proxy**. With a proxy, set `"trust_proxy": true` and `"bind_host": "127.0.0.1"` so the panel serves HTTP to the proxy that terminates TLS. See [docs/https.md](docs/https.md).
 
-```bash
-# Tailscale Serve (private) — or `tailscale funnel` for public
-tailscale serve --bg --https 443 http://127.0.0.1:5000
-```
+For Tailscale Serve, use the setup wizard's Tailscale step or **Enable Serve** on the panel's `/tailscale` page, not a `tailscale serve` command of your own. The panel then writes the route itself, on the scheme it is actually serving (its own self-signed HTTPS by default, which needs `https+insecure://`; plain `http://` only once it is bound to `127.0.0.1` with Serve set up), records the mount in `tailscale_mount`, and re-points the route at every start. A route you add by hand is one the panel does not manage: nothing re-points it, so it answers 502 once the panel's scheme changes, and a hand-made one at `/` makes the wizard publish the panel a second time at `/lgsm`. If you already have one, the `/tailscale` page lists it with a **Remove** button, and the debug report names it with the exact `sudo tailscale serve --https=443 --set-path=<mount> off` that removes it.
 
 ```nginx
 # Reverse proxy — the WebSocket console needs the upgrade headers

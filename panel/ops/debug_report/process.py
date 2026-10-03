@@ -548,6 +548,38 @@ def _serving_line(conf):
     return "HTTP since boot"
 
 
+# A mount printed as itself: "/", or one plain segment, with the trailing "/" Serve keeps apart
+# ("/lgsm/" is a different route from "/lgsm"). Anything else prints as "custom".
+_MOUNT_RE = re.compile(r"/(?:[A-Za-z0-9_-]{1,32}/?)?\Z")
+
+
+def _leftover_lines(res, left):
+    """What the boot did about the panel's Serve routes at other mounts (BOOT_SERVE_LEFTOVERS)."""
+    if left is None:
+        return
+    res.add("- **Panel routes at other mounts, at boot**: " + _leftovers_text(left))
+    if str(left).startswith("failed"):
+        res.find("warn", AREA, "the boot could not remove a Tailscale Serve route to the panel at "
+                               "another mount (Network & access names it)")
+
+
+def _leftovers_text(left):
+    """BOOT_SERVE_LEFTOVERS as printed: what the boot did about the panel's routes at other mounts.
+
+    Mounts print only in network.py's plain shape (else "custom"), a failure only as its class.
+    """
+    left = str(left)
+    if left.startswith("removed:"):
+        mounts = [m if _MOUNT_RE.match(m) else "custom" for m in left[len("removed:"):].split(",")]
+        return "removed " + ", ".join(mounts) + " (on :443)"
+    if left.startswith("failed:"):
+        return "removal FAILED (%s); nothing else was tried" % _tok(left[len("failed:"):], "other")
+    return {"none": "none found on :443",
+            "unread": "Serve could not be read, so none were removed",
+            "not attempted": "not attempted (Serve is not set up, or its re-point failed)"
+            }.get(left, "other")
+
+
 def _scheme_line(conf, cfg):
     """'process serves http · routes point Serve at http ✓ · cookies Secure: yes'."""
     serves = "https" if conf.get("BOOT_TLS") else "http"
@@ -569,6 +601,7 @@ def _boot_lines(ctx, res, facts):
     serve = conf.get("BOOT_SERVE")
     res.add("- **Serve re-point at boot**: %s" % (
         "unknown (no boot record)" if serve is None else re.sub(r"[^A-Za-z0-9:_ .+-]", "", serve)[:60]))
+    _leftover_lines(res, conf.get("BOOT_SERVE_LEFTOVERS"))
     if conf.get("BOOT_TLS_ERROR") and not conf.get("BOOT_TLS"):
         res.find("fail", AREA, "HTTPS was configured but failed to start at boot")
     if isinstance(serve, str) and serve.startswith("failed"):

@@ -18,6 +18,9 @@ CROSS-MODULE CONTRACTS (who writes, who reads):
   app.config["BOOT_TLS"]        True/False/None: whether the panel itself serves TLS since boot (R20)
   app.config["BOOT_TLS_ERROR"]  exception CLASS name when TLS was configured but failed, else None
   app.config["BOOT_SERVE"]      "ok" | "failed:<fixed reason class>" | "not attempted" (R20)
+  app.config["BOOT_SERVE_LEFTOVERS"]  the panel's routes at other mounts, after that re-point:
+                                "none" | "removed:<mount>,..." | "unread" | "failed:<reason class>"
+                                | "not attempted" (R20)
   runtime_stats groups ("heartbeat" via beat(); the rest via bump()/put()):
     heartbeat   loop name -> {at, cadence, took, passes}           monitor loops etc. (R22)
     respawn     thread name -> count                               the supervisor (R22)

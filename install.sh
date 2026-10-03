@@ -561,6 +561,108 @@ health_check() {
     return 1
 }
 
+# The scheme the RUNNING panel answers on now: https, http, or unknown (no answer, or a server
+# error). One probe of each, each bounded by _http_code's own 3 s. An update reads it before it
+# stops the service, so the HTTPS hint afterwards can tell a real switch from a panel that already
+# served HTTPS. "unknown" is never read as "unchanged": a panel that was down still gets the hint.
+panel_scheme_now() {
+    local port code scheme
+    port="$(panel_port)"
+    for scheme in https http; do
+        code="$(_http_code "${scheme}://127.0.0.1:${port}/")"
+        case "${code:-000}" in
+            [1-4][0-9][0-9]) echo "${scheme}"; return 0 ;;
+        esac
+    done
+    echo "unknown"
+}
+
+# The panel's own Tailscale Serve address, read from the HOST (tailscale_setup_done is only a
+# config claim): the :443 route at tailscale_mount that proxies loopback on the panel's port on an
+# https backend, as https://<node name><mount>. Empty when there is none, or Serve, the name or the
+# mount cannot be read. Read-only and bounded; what it prints is held to a host-name and mount
+# shape before it reaches the terminal.
+panel_serve_url() {
+    local cfg="${PANEL_DIR}/data/config.json" mount js
+    command -v tailscale >/dev/null 2>&1 || return 0
+    [[ -f "${cfg}" ]] || return 0
+    mount="$(_owner_read "${cfg}" | python3 -I -c "import json,sys;print(json.load(sys.stdin).get('tailscale_mount') or '/')" 2>/dev/null)" || return 0
+    js="$(timeout 10 tailscale serve status --json 2>/dev/null)" || return 0
+    printf '%s' "${js}" | python3 -I -c '
+import json, re, sys
+port, mount = sys.argv[1], sys.argv[2].rstrip("/") or "/"
+sc = json.loads(sys.stdin.read() or "{}") or {}
+plain = re.compile(r"/|(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,31}){1,3}").fullmatch
+for hp, web in sorted((sc.get("Web") or {}).items()):
+    host, _, lport = hp.rpartition(":")
+    if lport != "443" or not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", host) or not plain(mount):
+        continue
+    for m, h in sorted(((web or {}).get("Handlers") or {}).items()):
+        proxy = str((h or {}).get("Proxy") or "")
+        thost, _, tport = proxy.split("://", 1)[-1].split("/", 1)[0].rpartition(":")
+        if ((m.rstrip("/") or "/") == mount and proxy.startswith("https")
+                and thost in ("127.0.0.1", "localhost", "::1", "[::1]") and tport == port):
+            print("https://" + host + ("" if mount == "/" else mount))
+            sys.exit(0)
+' "$(panel_port)" "${mount}" 2>/dev/null || true
+}
+
+# The panel port's state in UFW: open, closed, inactive, or unknown when ufw would not answer.
+# Never prompts: a non-root run asks `sudo -n`, which fails rather than asking for a password.
+ufw_port_state() {
+    local port="$1" out="" line
+    local -a sudo_n=()
+    command -v ufw >/dev/null 2>&1 || { echo inactive; return 0; }
+    [[ "$(id -u)" -eq 0 ]] || sudo_n=(sudo -n)
+    out="$(timeout 10 "${sudo_n[@]}" ufw status 2>/dev/null)" || true
+    case "${out}" in
+        *"Status: active"*) ;;
+        *"Status: inactive"*) echo inactive; return 0 ;;
+        *) echo unknown; return 0 ;;
+    esac
+    while IFS= read -r line; do
+        if [[ "${line}" =~ ^${port}(/tcp)?(\ \(v6\))?[[:space:]]+(ALLOW|LIMIT) ]]; then
+            echo open; return 0
+        fi
+    done <<< "${out}"
+    echo closed
+}
+
+# After an update, say the panel serves HTTPS now — only when that is NEWS, and only with addresses
+# that reach it. It printed on EVERY update of a panel that terminates its own TLS ("This panel now
+# serves HTTPS. Open it at https://<public ip>:5000"), with nothing recording what it served
+# before: on a host behind Tailscale Serve with the port closed in UFW it handed out a public
+# address the firewall drops, and told an operator with Serve already up to "set up Tailscale".
+# `pre` is panel_scheme_now's answer before the update ("unknown" still gets the hint), `post`
+# health_check's PANEL_SCHEME. The public address is fetched only when it will be printed.
+_post_update_scheme_hint() {
+    local pre="$1" post="$2" port ts_url ufw ip note=""
+    [[ "${post}" = "https" ]] || return 0
+    [[ "${pre}" != "https" ]] || return 0
+    port="$(panel_port)"
+    ts_url="$(panel_serve_url)"
+    ufw="$(ufw_port_state "${port}")"
+    echo ""
+    if [[ "${pre}" = "http" ]]; then
+        echo -e "  ${YELLOW}This panel now serves HTTPS on port ${port} (it served plain HTTP before this update).${NC}"
+    else
+        echo -e "  ${YELLOW}This panel serves HTTPS on port ${port} (it was not answering before this update).${NC}"
+    fi
+    echo -e "  ${YELLOW}An http:// address to that port will NOT load (ERR_EMPTY_RESPONSE) — use https://.${NC}"
+    [[ -z "${ts_url}" ]] || echo -e "  Through Tailscale Serve it is at ${CYAN}${ts_url}${NC} (a trusted certificate)."
+    if [[ "${ufw}" != "closed" ]]; then
+        ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+            || hostname -I 2>/dev/null | awk '{print $1}')"
+        [[ "${ufw}" != "unknown" ]] || note="  ${YELLOW}(firewall state unknown — check 'sudo ufw status')${NC}"
+        echo -e "  Directly: ${CYAN}https://${ip:-<your-ip>}:${port}${NC}${note}"
+        echo -e "  ${YELLOW}Its built-in cert is self-signed, so the browser shows a one-time \"not private\"${NC}"
+        echo -e "  ${YELLOW}warning there — click Advanced → Proceed.${NC}"
+    fi
+    if [[ -z "${ts_url}" ]]; then
+        echo -e "  ${YELLOW}Set up Tailscale Serve or a domain for a trusted cert.${NC}"
+    fi
+}
+
 # Run git inside PANEL_DIR as the repo's owner. When the panel self-updates on a
 # root/system-service install, this script runs as root but the checkout is owned
 # by the service user — git refuses that ("detected dubious ownership") unless we
@@ -2398,6 +2500,9 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         _tree_owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
         [[ "${_tree_owner}" != "root" ]] && TREE_SUDO="sudo -u ${_tree_owner} env -C /"
     fi
+    # The scheme the panel answers on BEFORE the update, read while it still runs ([1/6] stops it):
+    # the HTTPS hint after the update is news only if this was not https already.
+    PRE_SCHEME="$(panel_scheme_now)"
     snapshot_service_unit
     info "[1/6] Snapshotting current version + database → ${BACKUP}"
     ${TREE_SUDO:-} mkdir -p -- "${BACKUP}"
@@ -2645,19 +2750,9 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         fi
         echo ""
         ok "Update complete: ${FROM_VER} → ${TO_VER}"
-        # If the panel now answers on HTTPS, say so explicitly. Older installs were plain
-        # HTTP, and the self-signed-HTTPS default means an existing http:// bookmark would
-        # otherwise just fail with ERR_EMPTY_RESPONSE and no explanation.
-        if [[ "${PANEL_SCHEME}" = "https" ]]; then
-            _uport="$(panel_port)"
-            _uip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
-                || hostname -I 2>/dev/null | awk '{print $1}')"
-            echo ""
-            echo -e "  ${YELLOW}This panel now serves HTTPS.${NC} Open it at ${CYAN}https://${_uip:-<your-ip>}:${_uport}${NC}"
-            echo -e "  ${YELLOW}An http:// address will NOT load (ERR_EMPTY_RESPONSE) — use https://.${NC}"
-            echo -e "  ${YELLOW}The built-in cert is self-signed, so you'll see a one-time \"not private\"${NC}"
-            echo -e "  ${YELLOW}warning — click Advanced → Proceed. Set up Tailscale/a domain for a trusted cert.${NC}"
-        fi
+        # If the panel has just switched to HTTPS, say so explicitly: an existing http://
+        # bookmark would otherwise fail with ERR_EMPTY_RESPONSE and no explanation.
+        _post_update_scheme_hint "${PRE_SCHEME:-unknown}" "${PANEL_SCHEME}"
 
         # A panel-only update doesn't need a reboot — but if the OS has pending updates,
         # apply them now and reboot (same "bake it in + prove it boots" philosophy as a

@@ -2729,7 +2729,8 @@ check("tailscale: ...while '(tailnet only)' is private, even with 'funnel' in a 
 _tsi._cache["info"] = None
 
 # ── Disabling Serve runs a command the CLI has, and removes only the PANEL's mapping ─────────
-# It ran `tailscale serve --bg --remove <mount>`. No Tailscale version has --remove: the CLI exits 2
+# It ran `tailscale serve --bg --remove <mount>`. No Tailscale has both (--remove was the 1.34-1.36
+# alpha CLI's, --bg the serve CLI that replaced it), so the command fails on every version: exit 2
 # ("flag provided but not defined: -remove") before doing anything, so every Disable failed —
 # including taking a Funnelled panel back off the internet. The CLI's removal is
 # `serve --https=<port> --set-path=<mount> off`; without --set-path, `off` drops EVERY mount on

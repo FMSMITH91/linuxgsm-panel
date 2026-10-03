@@ -182,10 +182,24 @@ _restart_saved = _so_mod.restart_panel
 _ts_calls, _ssh_calls, _restarts = [], [], []
 _ts_mod.install_tailscale_local = lambda *a, **k: (_ts_calls.append("install") or (True, ""))
 _ts_mod.tailscale_up_local = lambda *a, **k: (_ts_calls.append("up") or (True, "https://x"))
-_ts_mod.setup_tailscale_serve = lambda *a, **k: (_ts_calls.append("serve") or (True, ""))
 # A host on a tailnet, so the Serve step and the complete page have a tailnet name to show.
 _TS_INFO = _ts_mod.TailscaleInfo(installed=True, running=True, dns_name="panel.example-tail.ts.net",
                                  tailscale_ips=["100.64.0.7"])
+
+
+def _ts_publish(port=5000, mount="/", funnel=False, backend_scheme="http"):
+    """What a Serve write leaves on the host: the panel's route, in the reading the stub answers.
+
+    The complete page names the panel's Tailscale address only when the host reports a route to
+    the panel at its mount, on the scheme it serves, so the recorder has to leave one behind.
+    """
+    _TS_INFO.serve_config = {"services": [{"url": "https://panel.example-tail.ts.net",
+                                           "funnel": bool(funnel), "routes": [
+        {"mount": mount or "/", "target": "%s://127.0.0.1:%s" % (backend_scheme, port)}]}]}
+
+
+_ts_mod.setup_tailscale_serve = lambda *a, **k: (_ts_calls.append("serve") or _ts_publish(**k)
+                                                 or (True, ""))
 _ts_mod.get_tailscale_info = lambda *a, **k: _TS_INFO
 _rh.ssh_test_connection = lambda *a, **k: (_ssh_calls.append(a) or (True, "ok"))
 _so_mod.restart_panel = lambda *a, **k: (_restarts.append(1) or (True, "scheduled"))
@@ -451,9 +465,14 @@ def _check_complete_page():
     check("audit: finishing setup is on record, by the setup wizard",
           [r[:2] + r[3:4] for r in _audit("setup_finished")]
           == [("setup wizard", "Panel Server", True)], repr(_audit("setup_finished")))
+    # The Serve step already published the panel, so the finish publishes nothing more. It used to
+    # publish it AGAIN — it read the step's own "/" route as another app's, and added /lgsm beside
+    # it — and this check pinned that second write ("...and so is the Serve it set up on the way
+    # out"). part32 drives both paths against a fake tailscale CLI.
     _serve_end = [r for r in _audit("setup_tailscale_serve") if r[2].startswith("at the end")]
-    check("audit: ...and so is the Serve it set up on the way out",
-          [r[3] for r in _serve_end] == [True], repr(_audit("setup_tailscale_serve")))
+    check("audit: ...and the finish publishes no second Serve route once the Serve step has",
+          _serve_end == [] and _ts_calls.count("serve") == 1,
+          repr((_audit("setup_tailscale_serve"), _ts_calls)))
 
 
 def _check_restart_now():
@@ -474,14 +493,23 @@ def _check_restart_now():
           repr(_restarts))
     check("audit: ...and writes no row", len(_audit("panel_restart")) == 1,
           repr(_audit("panel_restart")))
-    # ...and the private claim is back, because it is true now (positive control).
+    # ...and the private claim is back, because it is true now (positive control). This is the
+    # panel after its restart: on loopback it serves plain HTTP (BOOT_TLS False), and the boot
+    # re-point has moved the Serve route to http, which is what the page names.
+    app.config["BOOT_TLS"] = False
+    _cfg_now = load_config()
+    _ts_publish(port=_cfg_now.get("port", 5000), mount=_cfg_now.get("tailscale_mount") or "/",
+                backend_scheme="http")
     with app.test_request_context("/setup"):
         _cp = getattr(_rh, "_complete_page", None)
         _priv_html = _cp(load_config()) if _cp else ""
     check("complete: on a loopback bind the page does say the tailnet URL is private",
           "Private tailnet" in _priv_html and 'id="rebind-notice"' not in _priv_html,
           _priv_html[-400:])
+    check("complete: ...and names the panel's own Serve address, with its mount",
+          'href="https://panel.example-tail.ts.net"' in _priv_html, _priv_html[-400:])
     app.config.pop("_BOOT_BIND", None)
+    app.config.pop("BOOT_TLS", None)
 
 
 def _check_auto_serve_failure():
