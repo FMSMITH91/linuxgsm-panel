@@ -296,11 +296,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
   about 1,800 an hour, for each console left open in another tab, a minimised window or a locked
   phone. A quick switch away costs nothing. Coming back rejoins straight away and fills in what was
   written in the meantime from the log file, each line once and in order, along with the panel's
-  own lines that went to the console meanwhile, such as an update's result. A tab stays in while an
-  update or another long panel action it saw start is still running, so that action's last lines
-  still reach it. If the server was restarted while the tab was away, the lines it wrote just before
-  the restart are not filled in, because the restart starts a new log file and the catch-up reads
-  the current one. A dropped connection has always worked the same way.
+  own lines that went to the console meanwhile, such as an update's result. That includes a return
+  whose connection dropped while the tab was away, as it does on a phone that slept. The catch-up
+  reads back at most 2,000 lines. If more was written, or the server was restarted while the tab
+  was away (a restart starts a new log file, and the catch-up reads the current one), the console
+  says that some output is not shown, at the point where it is missing. A tab stays in while an
+  update or another long panel action it saw start is still running, so that action's output keeps
+  arriving as it is written.
 - **The debug report says what is wrong, covers far more of the panel, and is safer to post.** It
   now opens with **At a glance**: every problem any section found, failures first, and the sections
   that could not be read. Below that is one verdict line per area. Diagnostics are sorted worst
@@ -666,6 +668,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **An update's output no longer appears twice in the live console.** On a server page opened
   before any panel action had run, an update's lines showed as they came, and a later console poll
   appended the whole update again beneath them.
+- **An update that ran with no console open keeps its result.** The panel reads a long action's
+  output only while someone has its console open. An update started from the dashboard, by a bot,
+  or with the console closed got one read when it ended, of its first 64 KB, so a long one lost the
+  lines that say whether it worked. The end now reads the rest, up to what the console's history
+  keeps, so opening the console afterwards shows how it ended.
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
   and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
   `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query

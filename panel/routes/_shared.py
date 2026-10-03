@@ -1304,6 +1304,10 @@ def _drain_action_output(app, remote, server_id):
     st = _action_output.get(server_id)
     if not st:
         return False
+    if st.get("ended") and not getattr(_action_tail_local, "final", False):
+        # Its own worker is reading the rest (_drain_action_to_end). A poller tick reading the same
+        # offset alongside it would push the same bytes twice.
+        return True
     path, user, pos = st["path"], st["user"], st["pos"]
     # One round trip: the size on its own first line, then the new bytes. Splitting this into a
     # stat call and a tail call would double the SSH traffic of every tick for no gain.
@@ -1325,6 +1329,7 @@ def _drain_action_output(app, remote, server_id):
         size = int(head.strip())
     except ValueError:
         return True          # no size line — the file isn't there yet; try again next tick
+    st["size"] = size        # how far there is to go, for the end-of-action drain
     if size < pos:
         # Truncated under us — a second run of the same action re-opens the file with `>`. Start
         # over from byte 0 and read it on the NEXT tick rather than falling through: `body` here is
@@ -1339,6 +1344,38 @@ def _drain_action_output(app, remote, server_id):
         _console_push(app, server_id, terminal.render_colour(body))
     st["pos"] = min(size, pos + _ACTION_TAIL_CHUNK)
     return True
+
+
+# The end-of-action drain reads at most this many chunks after its first: what the backlog can keep
+# (_CONSOLE_BACKLOG_BYTES), plus one for a chunk that straddles where it starts.
+_ACTION_FINAL_CHUNKS = _CONSOLE_BACKLOG_BYTES // _ACTION_TAIL_CHUNK + 1
+
+
+def _drain_action_to_end(app, remote, server_id, entry):
+    """Read what is left of `entry`'s output, to its end, as an action finishes.
+
+    The poller drains an action's output only for a console someone is watching, so an action that
+    ran with nobody watching — every tab on it left (static/js/server_detail.js leaves a console
+    hidden for 30 s), or started by a bot or from the dashboard with no console open — had read
+    nothing when it ended, and ONE chunk from byte 0 was all it got: an update's first 64 KB, and
+    never the lines that say whether it worked. So the end reads on, chunk by chunk, until the
+    output is all sent. Further behind than the backlog keeps, it skips to the part the backlog
+    keeps: that is all a page can replay, and it ends with how the action ended.
+    """
+    _action_tail_local.final = True
+    try:
+        for _ in range(_ACTION_FINAL_CHUNKS + 1):
+            if _action_output.get(server_id) is not entry:
+                return
+            before = entry["pos"]
+            _drain_action_output(app, remote, server_id)
+            size = entry.get("size")
+            # Done, or no headway: a read that failed, or a file cut short under it.
+            if size is None or entry["pos"] >= size or entry["pos"] <= before:
+                return
+            entry["pos"] = max(entry["pos"], size - _CONSOLE_BACKLOG_BYTES)
+    finally:
+        _action_tail_local.final = False
 
 
 # Which registration THIS worker made, per (server_id, action). A thread-local (a greenlet-local
@@ -1425,7 +1462,7 @@ def _end_action_tail(app, server_id, remote, action, rc):
     if own:
         cur["ended"] = True
         try:
-            _drain_action_output(app, remote, server_id)
+            _drain_action_to_end(app, remote, server_id, cur)
         except Exception:
             _log.debug("final action-output drain for server %s failed", server_id, exc_info=True)
         finally:
