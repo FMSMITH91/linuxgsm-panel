@@ -6,9 +6,20 @@
 # it is used here despite ubuntu-26.04 being GitHub-hosted rather than self-hosted. That is the
 # remedy actionlint's own error message points at.
 #
-# Remove this file once the pinned actionlint (reviewdog/action-actionlint, currently v1.73.4)
-# ships a release that knows ubuntu-26.04 — at that point it validates the label properly again,
-# and keeping the override would silently accept genuine typos like "ubuntu-26.4".
+# Remove this once the pinned rhysd/actionlint (VERSION in .github/workflows/actionlint.yml) lists
+# ubuntu-26.04 in rule_runner_label.go: at that point it validates the label properly again, and
+# keeping the override would silently accept genuine typos like "ubuntu-26.4".
 self-hosted-runner:
   labels:
     - ubuntu-26.04
+
+# Every repository variable a workflow reads as `vars.<NAME>`. With a list here actionlint checks
+# `vars` strictly, so a misspelt name fails the lint; without one (the default, null) a typo is
+# simply null at run time. deploy.yml gates production deploys on vars.DEPLOY_ENABLED == 'true',
+# so a typo there would read as "deploy disabled" and report skipped, forever. A new variable is
+# added here when it is created (Settings > Secrets and variables > Actions > Variables).
+# https://github.com/rhysd/actionlint/blob/v1.7.12/docs/config.md
+config-variables:
+  - DEPLOY_ENABLED
+  - DEPLOY_HOST
+  - DEPLOY_USER

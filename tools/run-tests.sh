@@ -104,7 +104,13 @@ else
 fi
 
 echo "== unit tests (pure logic; no network) =="
-"$PY" tests/unit_test.py
+# UNIT_LOG=<file> keeps a copy of this run's output. ci.yml sets it: its next step runs the suite
+# again as root, and judges the checks that ran only there against this run.
+if [[ -n "${UNIT_LOG:-}" ]]; then
+    "$PY" tests/unit_test.py | tee "${UNIT_LOG}"
+else
+    "$PY" tests/unit_test.py
+fi
 
 # Through run_suite, not bare: this suite can SKIP (esprima is optional locally), and a skip here
 # silently removes the JS parse gate and four CSRF gates from the run. Bare, its exit code was the

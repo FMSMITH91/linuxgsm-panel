@@ -74,7 +74,26 @@ jobs:
           echo "${SHA256}  /tmp/${TARBALL}" | sha256sum -c -
           tar -xz -C /tmp -f "/tmp/${TARBALL}" actionlint
           /tmp/actionlint -version
-          # No pipe, so a failure in actionlint is the step's failure. shellcheck is preinstalled
-          # on the runner and actionlint picks it up for the embedded run: scripts, which is the
-          # same coverage the wrapper's image gave.
-          /tmp/actionlint -color
+          # The embedded run: scripts are linted by shellcheck, and only when actionlint FINDS it:
+          # a failed lookup is logged under -verbose alone ('Rule "shellcheck" was disabled'), and
+          # the lint goes on over YAML and expressions and exits 0 (linter.go, v1.7.12). Naming a
+          # path with -shellcheck= fails the same way. So find it here, or fail.
+          sc="$(command -v shellcheck)" || {
+            echo "::error::shellcheck is not on this runner, so actionlint would lint no run: script and pass"
+            exit 1
+          }
+          "${sc}" --version
+          # ...and prove it is used: a workflow with a known SC2086 must fail the lint.
+          ctl="$(mktemp -d)"
+          mkdir -p "${ctl}/.github/workflows"
+          # shellcheck disable=SC2016 # the unexpanded $1 IS the control's defect
+          printf '%s\n' 'on: push' 'jobs:' '  control:' '    runs-on: ubuntu-latest' '    steps:' \
+            '      - run: echo $1' > "${ctl}/.github/workflows/control.yml"
+          if out="$(/tmp/actionlint -no-color -shellcheck="${sc}" "${ctl}/.github/workflows/control.yml" 2>&1)" \
+              || ! grep -q 'SC2086' <<< "${out}"; then
+            printf '%s\n' "${out}"
+            echo "::error::actionlint did not report the control workflow's SC2086: its shellcheck pass is not running"
+            exit 1
+          fi
+          # No pipe, so a failure in actionlint is the step's failure.
+          /tmp/actionlint -color -shellcheck="${sc}"

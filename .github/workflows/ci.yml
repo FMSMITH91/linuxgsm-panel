@@ -92,7 +92,84 @@ jobs:
         # with flake8 made to raise, an injected undefined name reported as a clean run.
         # shellcheck is pre-installed on the ubuntu runners and flake8 is installed above, so this
         # only ever fires when the runner image changes under us.
-        run: PYTHON=python REQUIRE_TOOLS=1 bash tools/run-tests.sh
+        # UNIT_LOG: the unit run's output, which the next step compares its root run against.
+        run: PYTHON=python REQUIRE_TOOLS=1 UNIT_LOG="${RUNNER_TEMP}/unit-user.txt" bash tools/run-tests.sh
+
+      - name: Run the root-only unit checks, as root
+        # The checks above run as the runner's own account, so every check that needs root SKIPS
+        # there, and a skip does not fail the unit suite: visudo -cf on the sudoers grant install.sh
+        # writes, _chown_panel_tree, panel_port read as the tree's owner, the remote content grant
+        # driven through a link, and the update's snapshot and rollback as the tree's owner. They
+        # had never run in CI, and 26.04's visudo is sudo-rs, which refuses settings classic sudo
+        # accepts. GitHub's Linux runners have passwordless sudo, so this runs the suite again as
+        # root. A step, not a job: the required checks are these jobs' names.
+        #
+        # The suite as a whole does not pass as root, and that is not this step's question: about
+        # 60 checks are written for an unprivileged account (they create the "panel's" files and
+        # expect them not to be root's), and they are judged by the run above. This step judges the
+        # checks that ran ONLY here: every one must pass, every check the run above skipped for
+        # want of root must have run, and there must be some. Measured in throwaway ubuntu:22.04,
+        # 24.04 and 26.04 containers before landing: nothing outside the checkout and /tmp changed.
+        #
+        # sudo exports SUDO_UID, SUDO_USER and the rest, and the privileged helper reads SUDO_UID
+        # (who invoked it); the suite's stand-in `pwd` has no getpwuid, so with them set it died in
+        # part05 before reaching a single root check. They are unset; nothing else changes.
+        run: |
+          set -uo pipefail
+          root_log="${RUNNER_TEMP}/unit-root.txt"
+          # SC2016: ${!SUDO_@} is the root shell's to expand. SC2024: the log is written by this
+          # shell, as the runner, on purpose; only the suite runs as root.
+          # shellcheck disable=SC2016,SC2024
+          sudo -E env PATH="$PATH" bash -c 'unset "${!SUDO_@}"; exec python tests/unit_test.py' \
+            > "${root_log}" 2>&1 || true
+          python - "${RUNNER_TEMP}/unit-user.txt" "${root_log}" <<'EOF'
+          import re
+          import sys
+
+          LINE = re.compile(r"^\s*(PASS|FAIL|SKIP)  (.+?)(?:   \[(.*))?$")
+
+
+          def read(path):
+              seen, why, tally = {}, {}, None
+              with open(path, encoding="utf-8", errors="replace") as fh:
+                  for ln in fh:
+                      m = LINE.match(ln.rstrip("\n"))
+                      if m:
+                          seen.setdefault(m.group(2), set()).add(m.group(1))
+                          if m.group(1) == "SKIP":
+                              why[m.group(2)] = m.group(3) or ""
+                      if re.match(r"\d+ / \d+ checks passed$", ln.strip()):
+                          tally = ln.strip()
+              return seen, why, tally
+
+
+          def fail(why):
+              print("::error::" + why)   # stdout: where the runner reads workflow commands
+              sys.exit(1)
+
+
+          user, user_why, user_tally = read(sys.argv[1])
+          root, _, root_tally = read(sys.argv[2])
+          if user_tally is None or root_tally is None:
+              fail("a unit run left no tally (as the runner: %s; as root: %s), so nothing can be "
+                   "judged" % (user_tally, root_tally))
+          gates = sorted(n for n, w in user_why.items() if re.search(r"\broot\b", w))
+          shut = [n for n in gates if "SKIP" in root.get(n, set())]
+          only = sorted(n for n, st in root.items()
+                        if st & {"PASS", "FAIL"} and not user.get(n, set()) & {"PASS", "FAIL"})
+          bad = [n for n in only if "FAIL" in root[n]]
+          print("as the runner: %s; as root: %s" % (user_tally, root_tally))
+          print("skipped for want of root: %d; ran only as root: %d" % (len(gates), len(only)))
+          for n in only:
+              print("  %s  %s" % ("FAIL" if n in bad else "PASS", n))
+          if not gates or not only:
+              fail("no check was skipped for want of root, or none ran only as root: this step "
+                   "judged nothing")
+          if shut:
+              fail("still skipped as root: %s" % "; ".join(shut))
+          if bad:
+              fail("failed as root: %s" % "; ".join(bad))
+          EOF
 
   coverage:
     name: coverage

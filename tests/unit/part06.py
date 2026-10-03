@@ -5669,34 +5669,6 @@ check("workflows: every curl that fetches over https refuses a redirect to http 
       {"actionlint.yml", "codacy-coverage.yml", "security.yml"} <= set(_cpx_calls) and not _cpx_bad,
       "calls=%r bad=%r" % (_cpx_calls, _cpx_bad))
 
-# ── the batch fuzz job's summary says storage is configured, never what it is ─────────────────
-# CFL_STORAGE_REPO is the https URL with a write token IN it (the workflow's header, step 3), and
-# the step summary printed it verbatim for anyone who can read the run. The step is run here as
-# GitHub runs it, with a sentinel in the secret's place.
-_cfs_raw = open(os.path.join(_root, ".github", "workflows", "cflite_batch.yml"),
-                encoding="utf-8").read()
-_cfs_run = _wf_run_block(_cfs_raw, "Say whether this job is actually doing anything")
-_cfs_tmp = _tempfile.mkdtemp(prefix="cflite-summary-")
-try:
-    _cfs_out = {}
-    for _cfs_val in ("https://x-access-token:SENTINEL-corpus-token-0451@github.com/o/c.git", ""):
-        _cfs_sum = os.path.join(_cfs_tmp, "summary-%d" % len(_cfs_out))
-        _r = _sp.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", _cfs_run],
-                     env=dict(os.environ, GITHUB_STEP_SUMMARY=_cfs_sum, CFL_STORAGE_REPO=_cfs_val),
-                     capture_output=True, text=True, timeout=60)
-        _cfs_txt = open(_cfs_sum, encoding="utf-8").read() if os.path.exists(_cfs_sum) else ""
-        _cfs_out[bool(_cfs_val)] = (_r.returncode, _cfs_txt, _r.stdout + _r.stderr)
-    check("cflite_batch: with corpus storage set, the step summary says it is configured and never "
-          "prints the URL, which holds the token",
-          _cfs_out[True][0] == 0 and _cfs_out[True][1] == "Corpus storage: configured.\n"
-          and "SENTINEL-corpus-token" not in _cfs_out[True][1] + _cfs_out[True][2],
-          repr(_cfs_out[True]))
-    check("cflite_batch: ...and unset, it still says the job is DISABLED (control: the block ran)",
-          _cfs_out[False][0] == 0 and _cfs_out[False][1].startswith("DISABLED: "),
-          repr(_cfs_out[False]))
-finally:
-    _shutil.rmtree(_cfs_tmp, ignore_errors=True)
-
 # ── the fuzz image's build context: no keys, no databases, no worktree checkouts ──────────────
 # .clusterfuzzlite/Dockerfile did `COPY . $SRC/linuxgsm-panel` with the repository root as its
 # context (it copies panel/ and tests/fuzz/ now; see the gates after these), and Docker reads

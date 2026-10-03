@@ -249,6 +249,20 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           audience: ${{ secrets.TS_AUDIENCE }}
           tags: tag:ci
+          # The client this job runs, pinned here like every other binary a workflow fetches.
+          # Without sha256sum the action fetches tailscale_<v>_amd64.tgz.sha256 from
+          # pkgs.tailscale.com, the server the tarball comes from (src/main.ts at this SHA), so a
+          # compromise there swaps both. This digest was cross-checked through Tailscale's own
+          # signature chain: the tarball's .sig verifies under pkgs.tailscale.com/distsign.pub,
+          # which verifies under the root keys in tailscale/tailscale clientupdate/distsign/roots.
+          # use-cache 'false': a cache hit installs the cached binaries with NO checksum check, and
+          # the key names only the version, so with the cache on the pin would check nothing (the
+          # 2026-09-26 deploy logged "Found Tailscale 1.94.2 in cache", an entry saved 2026-08-30).
+          # BUMP BY HAND, all three together, when the action moves: version is the action's own
+          # default at its SHA, and part29 holds the pair to that SHA.
+          version: '1.94.2'
+          sha256sum: 'c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32'
+          use-cache: 'false'
 
       - name: Deploy via safe self-update (snapshot + health-check + rollback)
         env:
