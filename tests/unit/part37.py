@@ -6,7 +6,8 @@ What it holds, one section each:
   outbound-HTTP call site, and this part lists them too: a new one fails until it is reviewed.
 * F6: the CodeQL model pack in .github/codeql/extensions makes Flask-SocketIO handler parameters
   remote sources, and the command text entering run_command, shell_as_game_user, read_as_game_user
-  and game_user_cmd (plus the own-host shell) command-injection sinks, with shlex.quote a barrier.
+  and game_user_cmd command-injection sinks, with shlex.quote a barrier. The own-host shell has no
+  row: the canary probe (#394) proved the eventlet Popen row inert, so it was removed.
   Whether CodeQL honours it is proved by the probe PR's canary; this part holds the pack's shape and
   the code shapes its rows assume, so a refactor cannot leave a model quietly matching nothing. A
   barrier cannot be scoped, so every place a whole script is quoted for a second shell (where the
@@ -208,8 +209,6 @@ _SIO_ROWS37 = [
     ["flask_socketio.SocketIO", "Member[on_event].Argument[1,handler:].Parameter[0..9]", "remote"],
     ["flask_socketio.SocketIO", "Member[event].Argument[0].Parameter[0..9]", "remote"],
 ]
-_SINK_ROW37 = ["eventlet", "Member[patcher].Member[original].ReturnValue.Member[Popen]"
-               ".Argument[0,args:].ListElement", "command-injection"]
 _BARRIER_ROW37 = ["shlex", "Member[quote].ReturnValue", "command-injection"]
 
 
@@ -243,11 +242,18 @@ def _f6_pack():
     check("codeql model pack: Flask-SocketIO handler parameters are remote sources "
           "(the on() decorator, on_event, the bare event decorator)",
           all(r in rows.get("sourceModel", []) for r in _SIO_ROWS37), repr(rows.get("sourceModel")))
-    check("codeql model pack: the own-host shell is a command-injection sink, with shlex.quote a "
-          "barrier (CodeQL's stdlib model passes taint through it)",
-          _SINK_ROW37 in rows.get("sinkModel", []) and _BARRIER_ROW37 in rows.get("barrierModel", []),
-          repr((rows.get("sinkModel"), rows.get("barrierModel"))))
+    _f6_barrier(rows)
     return rows
+
+
+def _f6_barrier(rows):
+    """shlex.quote is the barrier, and the row the canary probe proved inert stays out."""
+    inert = [r for r in rows.get("sinkModel", []) if r[0] == "eventlet"]
+    check("codeql model pack: shlex.quote is a command-injection barrier (CodeQL's stdlib model passes "
+          "taint through it), and no sink row sits on eventlet's original Popen, which the canary "
+          "probe (#394) proved matches nothing",
+          _BARRIER_ROW37 in rows.get("barrierModel", []) and not inert,
+          repr((rows.get("sinkModel"), rows.get("barrierModel"))))
 
 
 def _sio_forms37():
@@ -280,49 +286,6 @@ def _f6_shapes(rows):
           "(the instance the source rows start from)",
           _re37.search(r"^from flask_socketio import \(?[^)]*\bSocketIO\b", sf, _re37.M) is not None
           and _re37.search(r"^\s+socketio = SocketIO\(app\b", sf, _re37.M) is not None)
-    core = _ast37.parse(open(os.path.join(_root, "panel", "ops", "ssh_manager", "_core.py"),
-                             encoding="utf-8").read())
-    check("codeql model pack: _core's local shell is eventlet's original subprocess, Popen'd with a "
-          "[\"/bin/bash\", \"-c\", cmd] list literal (what the sink row matches)", _shell_shape37(core))
-
-
-def _names_imported37(tree, module, name):
-    """The local names `from <module> import <name> [as x]` binds in tree."""
-    out = set()
-    for n in _ast37.walk(tree):
-        if isinstance(n, _ast37.ImportFrom) and n.module == module:
-            out |= {a.asname or a.name for a in n.names if a.name == name}
-    return out
-
-
-def _assigned_from37(tree, target):
-    """The callees of every `<target> = <callee>(...)` assignment in tree."""
-    out = set()
-    for n in _ast37.walk(tree):
-        if not (isinstance(n, _ast37.Assign) and isinstance(n.value, _ast37.Call)):
-            continue
-        if target in {getattr(t, "id", "") for t in n.targets}:
-            out.add(_callee37(n.value.func))
-    return out
-
-
-def _popen_list_heads37(fn):
-    """The first two elements of each list literal fn hands to _real_subprocess.Popen."""
-    heads = []
-    for c in _ast37.walk(fn):
-        if not (isinstance(c, _ast37.Call) and _callee37(c.func) == "_real_subprocess.Popen"):
-            continue
-        if c.args and isinstance(c.args[0], _ast37.List):
-            heads.append([getattr(e, "value", None) for e in c.args[0].elts[:2]])
-    return heads
-
-
-def _shell_shape37(tree):
-    """Is _real_subprocess = original("subprocess"), and _exec_local_shell's Popen a bash -c list?"""
-    original = _names_imported37(tree, "eventlet.patcher", "original")
-    bound = bool(original & _assigned_from37(tree, "_real_subprocess"))
-    fn = [n for n in tree.body if isinstance(n, _ast37.FunctionDef) and n.name == "_exec_local_shell"]
-    return bound and bool(fn) and _popen_list_heads37(fn[0]) == [["/bin/bash", "-c"]]
 
 
 # ── F6: the command-text entry points, and every script quoted for a second shell ───────────────
@@ -509,6 +472,41 @@ def _wrapper_refs37(tree):
             ok += isinstance(arg, _ast37.Constant) and isinstance(arg.value, str)
     return refs, ok
 
+
+# The own-host shell has no sink row (#394 proved the only form tried inert), so what reaches it
+# without passing an entry row is held here instead: exactly these functions call _run_local or
+# _exec_local_shell. run_command is the entry row's own body; the three privileged builders pass
+# text privileged.py builds from validated arguments. A new caller fails until it is reviewed.
+_LOCAL_SHELL_CALLERS37 = {("_run_local", "_exec_local_shell"), ("run_command", "_run_local"),
+                          ("_run_privileged", "_run_local"), ("write_content_cron", "_run_local"),
+                          ("write_root_file", "_run_local")}
+
+
+def _local_shell_callers37():
+    """{(innermost enclosing function, callee)} for every call of _run_local/_exec_local_shell."""
+    found = set()
+
+    def visit(node, owner):
+        for child in _ast37.iter_child_nodes(node):
+            inner = child.name if isinstance(child, (_ast37.FunctionDef, _ast37.AsyncFunctionDef)) else owner
+            if isinstance(child, _ast37.Call):
+                name = _callee37(child.func).split(".")[-1]
+                if name in ("_run_local", "_exec_local_shell"):
+                    found.add((owner, name))
+            visit(child, inner)
+
+    for f in _glob37.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True) + [
+            os.path.join(_root, "app.py")]:
+        visit(_ast37.parse(open(f, encoding="utf-8").read()), "<module>")
+    return found
+
+
+def _f6_local_shell():
+    """No sink row covers the own-host shell, so its callers are a reviewed list."""
+    got = _local_shell_callers37()
+    check("codeql model pack: exactly the reviewed functions call _run_local/_exec_local_shell "
+          "(the own-host shell has no sink row; a new caller is reviewed here)",
+          got == _LOCAL_SHELL_CALLERS37, repr(sorted(got ^ _LOCAL_SHELL_CALLERS37)))
 
 def _f6_reach():
     """Nothing reaches a second-shell wrapper past the entry-point rows.
@@ -1086,6 +1084,7 @@ _ROWS37 = _f6_pack()
 _f6_shapes(_ROWS37)
 _f6_entry_points(_ROWS37)
 _f6_double_shell()
+_f6_local_shell()
 _f6_reach()
 _PJ37, _LOCK37 = _vendor_json37("package.json"), _vendor_json37("package-lock.json")
 _v2_files(_PJ37)

@@ -1,4 +1,4 @@
-# The panel's command-text entry points, and its own-host shell, are command-injection sinks.
+# The panel's command-text entry points are command-injection sinks.
 #
 # WHY THE ENTRY POINTS. Every command the panel runs on a host is shell TEXT handed to one of four
 # functions in panel/ops/ssh_manager/_core.py:
@@ -33,18 +33,20 @@
 # dotted type to INSTANCES of it, not to the module. What no row can reach is a call from inside
 # _core.py to its own function (a local call is not an API-graph use): send_console_command and
 # run_as_game_user's shell path call shell_as_game_user that way. Both quote every value they
-# interpolate, and the shell sink below still sees what reaches the panel's own shell unwrapped.
+# interpolate.
 #
-# THE OWN-HOST SHELL. Every own-host command ends at
+# THE OWN-HOST SHELL HAS NO ROW. Every own-host command ends at
 #   panel/ops/ssh_manager/_core.py  _exec_local_shell:  _real_subprocess.Popen(["/bin/bash", "-c", shell_cmd])
 # which py/command-line-injection cannot see on its own: CodeQL's subprocess model takes only the
 # FIRST element of an argument list as the command (Stdlib.qll, SubprocessPopenCall.getCommand,
 # whose TODO reads 'Handle using args=["sh", "-c", <user-input>]'), and that element is "/bin/bash".
-# _real_subprocess is eventlet.patcher.original("subprocess"), the unpatched module. MaD cannot say
-# "the element after -c", so "/bin/bash" and "-c" are sinks too; they are literals and never carry
-# taint. ListElement reaches list-literal elements only, so _exec_local_argv's helper-built argv,
-# which runs no shell, is not a sink. This row is a backstop for flows that reach the shell without
-# passing an entry point; a flow through run_command that reaches it unwrapped is reported at both.
+# A row on eventlet.patcher.original("subprocess")'s Popen with Argument[0].ListElement was tried and
+# PROVED INERT: the canary probe (#394, 2026-10-03) raised every entry-row alert and nothing at
+# _core.py:711, on the four flows that reach it unwrapped. A row that matches nothing reads as
+# coverage, so it is not here. What reaches that shell without passing an entry row is _core's own
+# three calls of _run_local with a privileged-verb builder's text (remote_write_command,
+# remote_content_cron_command, remote_command), whose arguments privileged.py validates and its
+# unit gates hold; a new direct caller of _run_local or _exec_local_shell fails part37.
 #
 # THE BARRIER: shlex.quote's result. CodeQL's stdlib model makes shlex.quote a TAINT STEP
 # (Stdlib.model.yml summaryModel), so without this every value the panel quotes correctly before it
@@ -72,7 +74,6 @@ extensions:
       - ["panel", "Member[ops].Member[ssh_manager].Member[_core].Member[shell_as_game_user].Argument[2,sh:]", "command-injection"]
       - ["panel", "Member[ops].Member[ssh_manager].Member[_core].Member[read_as_game_user].Argument[2,sh:]", "command-injection"]
       - ["panel", "Member[ops].Member[ssh_manager].Member[_core].Member[game_user_cmd].Argument[1,inner:]", "command-injection"]
-      - ["eventlet", "Member[patcher].Member[original].ReturnValue.Member[Popen].Argument[0,args:].ListElement", "command-injection"]
   - addsTo:
       pack: codeql/python-all
       extensible: barrierModel
