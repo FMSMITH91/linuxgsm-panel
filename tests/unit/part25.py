@@ -650,7 +650,7 @@ def _p25_paths_sanitised():
         PR._cgroup_others("/system.slice/../../../etc/linuxgsm-panel.service")
     except Exception as exc:  # noqa: BLE001 - which exception it is, is the check
         raised = exc
-    outside = PR._dropin_text("/tmp/evil7731/override.conf")
+    outside = PR._dropin_text("/srv/evil7731/override.conf")
     climbs = PR._dropin_text("/etc/systemd/system/../../../tmp/x.conf")
     check("hardening: a cgroup path with '..' is refused before it is joined onto /sys/fs/cgroup, "
           "and a drop-in outside a systemd unit directory, or climbing out of one, is never read",
