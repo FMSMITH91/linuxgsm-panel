@@ -900,8 +900,6 @@ try:
                   '  *actions/workflows/codeql.yml/*) echo "${OPEN_CODEQL:-0}" ;;\n'
                   '  *actions/workflows/security-code.yml/*) echo "${OPEN_SEC:-0}" ;;\n'
                   '  *code-scanning/alerts*) echo "${ALERTS:-[]}" ;;\n'
-                  '  *code-scanning/analyses*sha=*) echo "${TOTAL:-1}" ;;\n'
-                  '  *code-scanning/analyses*) echo "${NEWEST:-}" ;;\n'
                   '  *check-runs*) : ;;\n'
                   'esac\n')
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
@@ -922,9 +920,9 @@ try:
 
     _S14 = "d" * 40
     _wait_busy = _cqa14("Wait for the other uploader", GITHUB_EVENT_NAME="workflow_run",
-                        WR_SHA=_S14, WR_NAME="CodeQL", OPEN_SEC="1")
+                        WR_SHA=_S14, WR_NAME="CodeQL", WR_EVENT="push", OPEN_SEC="1")
     _wait_done = _cqa14("Wait for the other uploader", GITHUB_EVENT_NAME="workflow_run",
-                        WR_SHA=_S14, WR_NAME="CodeQL")
+                        WR_SHA=_S14, WR_NAME="CodeQL", WR_EVENT="push")
     _wait_man = _cqa14("Wait for the other uploader", GITHUB_EVENT_NAME="workflow_dispatch",
                        WR_SHA="", WR_NAME="")
     check("codeql-alerts: the first uploader to finish posts nothing while the other still runs; "
@@ -932,19 +930,8 @@ try:
           _wait_busy[:2] == (0, {"judge": "false"}) and _wait_done[:2] == (0, {"judge": "true"})
           and "head_sha=%s" % _S14 in _wait_done[2] and _wait_man[:2] == (0, {"judge": "true"}),
           repr((_wait_busy, _wait_done, _wait_man)))
-    _jenv = dict(REF="refs/heads/main", LABEL="`main`", SHA=_S14)
-    _j_clean = _cqa14("Fail if that ref has open code-scanning alerts", NEWEST=_S14, **_jenv)
-    _j_dirty = _cqa14("Fail if that ref has open code-scanning alerts", NEWEST=_S14,
-                      ALERTS='[{"rule":"x","sev":"high","path":"a.py","line":1}]', **_jenv)
-    _j_none = _cqa14("Fail if that ref has open code-scanning alerts", TOTAL="0", NEWEST=_S14,
-                     **_jenv)
-    _j_moved = _cqa14("Fail if that ref has open code-scanning alerts", NEWEST="e" * 40, **_jenv)
-    check("codeql-alerts: clean is 'success', open alerts or no analysis OF THIS COMMIT fail",
-          _j_clean[:2] == (0, {"verdict": "success"}) and _j_dirty[0] == 1
-          and _j_none[0] == 1 and "sha=%s" % _S14 in _j_none[2],
-          repr((_j_clean[:2], _j_dirty[:2], _j_none[:2])))
-    check("codeql-alerts: ...and when main's alerts are already a LATER commit's, this one is not "
-          "judged on them", _j_moved[:2] == (0, {"verdict": "skipped"}), repr(_j_moved[:2]))
+    # The judge step (clean, open alerts, no analysis of this commit, moved on) is run in part26,
+    # against the per-category analyses it now waits for (.github/scripts/code_scanning_analyses.py).
     _posts = {}
     for _oc, _vd in (("success", "success"), ("success", "skipped"), ("failure", "")):
         _r = _cqa14("Post the verdict on the judged commit", SHA=_S14, OUTCOME=_oc, VERDICT=_vd,
