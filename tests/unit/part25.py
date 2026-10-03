@@ -584,24 +584,30 @@ def _p25_vps():
         rep = _gen25()["report"]
     log = rep.split("### Recent log", 1)[-1]
     digest = rep.split("### Errors in the journal", 1)[-1].split("### Recent log", 1)[0]
+    body = log.split("```", 1)[-1].replace(
+        "a password is required ; PWD=/home/[user] ; USER=root ; COMMAND=", "")
     check("VPS fix: the panel's own sudo calls are counted by helper verb and left out of the recent "
           "log; a REFUSED sudo and the panel's own lines stay in it",
-          "Privileged calls (left out below)" in log and "restart-flags ×150" in log
-          and "pam_unix(sudo:session)" not in log and "COMMAND=" not in log.split("```", 1)[-1]
-          .replace("a password is required ; PWD=/home/[user] ; USER=root ; COMMAND=", "")
-          and "a password is required" in log and "canary panel line 7731" in log, log[:1500])
+          all(["Privileged calls (left out below)" in log, "restart-flags ×150" in log,
+               "pam_unix(sudo:session)" not in log, "COMMAND=" not in body,
+               "a password is required" in log, "canary panel line 7731" in log]), log[:1500])
     check("VPS fix: ...the digest's 'most repeated lines' are not the panel's own sudo calls, and a "
           "sudo COMMAND's argument (an account, for su) is never printed as a verb",
-          "pam_unix(sudo:session)" not in digest and "restart-flags ×150" in digest
-          and "other command ×1" in digest and "canarygameacct7731" not in rep, digest[:1200])
+          all(["pam_unix(sudo:session)" not in digest, "restart-flags ×150" in digest,
+               "other command ×1" in digest, "canarygameacct7731" not in rep]), digest[:1200])
     check("VPS fix: ...sudo-rs's spacing ('user :  PWD=... plain ', two blanks and a trailing one) "
           "is counted too, as the verb it ran",
-          "ufw-status ×1" in log and "ufw-status ×1" in digest, log[:600])
+          all(["ufw-status ×1" in log, "ufw-status ×1" in digest]), log[:600])
+
+def _p25_vps_helper_path():
     out = PV._paths("COMMAND=/usr/local/lib/linuxgsm-panel/panel-helper restart-flags", PV._State())
     check("VPS fix: the helper's path prints as <panel-lib>/panel-helper, not one long token that "
           "_redact turns into '/[redacted]'",
           out == "COMMAND=<panel-lib>/panel-helper restart-flags"
           and SO._redact(out) == out, repr(out))
+
+
+def _p25_vps_interpreter():
     with _patched():
         _patch(sys, "prefix", "/opt/othervenv7731")
         _patch(sys, "base_prefix", "/usr")
@@ -616,13 +622,35 @@ def _p25_vps():
           and system.startswith("system python"), repr((other, system)))
 
 
+def _p25_lost_writes():
+    lost0 = _rs25.lost()
+    saved = _rs25._GROUPS
+
+    class _Boom(dict):
+        def get(self, *_a, **_k):
+            raise RuntimeError("boom")
+    try:
+        _rs25._GROUPS = _Boom()
+        _rs25.bump("loopfail", "x")
+        _rs25.put("probe", "host:1", 1)
+        _rs25.beat("monitor", 60, 0.1)
+    finally:
+        _rs25._GROUPS = saved
+    res = ER.section_errors_since_start(Ctx())
+    check("instrumentation: a counter write that raises is swallowed AND counted, and the errors "
+          "section says how many were lost",
+          _rs25.lost() - lost0 == 3
+          and any("Counter writes lost to an exception" in ln for ln in res.lines)
+          and any(f["level"] == "warn" for f in res.findings), repr((_rs25.lost() - lost0, res.lines[:2])))
+
+
 try:
     _seed25()
     for _fn25 in (_p25_update_tail, _p25_tailscale_error, _p25_addresses, _p25_git_raises, _p25_cuts,
                   _p25_names, _p25_host_first_label, _p25_single_flight_busy, _p25_request_deadline,
                   _p25_memo, _p25_hub_lag, _p25_hosts_ts_hung, _p25_glance, _p25_interpreter, _p25_nss,
                   _p25_serve, _p25_f2b, _p25_git_timeouts, _p25_ci_walk, _p25_no_unit, _p25_leads,
-                  _p25_vps):
+                  _p25_vps, _p25_vps_helper_path, _p25_vps_interpreter, _p25_lost_writes):
         _fn25()
 except Exception as _e25:  # noqa: BLE001 - a harness failure must fail by name, not end the suite
     import traceback as _tb25

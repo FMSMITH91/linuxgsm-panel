@@ -1,5 +1,7 @@
-"""The panel's debug report: what an operator pastes to a maintainer (or an AI) when something breaks,
-and what the "Open a GitHub issue" button pre-fills. It must stay safe to post publicly.
+"""The panel's debug report, safe to post publicly.
+
+It is what an operator pastes to a maintainer (or an AI) when something breaks, and what the "Open
+a GitHub issue" button pre-fills.
 
 generate() runs every section in SECTIONS, each under the contract in _base.py, and assembles:
   report      the full markdown (download / paste)
@@ -108,8 +110,10 @@ def _run_worker(ctx, key, module, slot, done, gate):
 
 
 def _run_sections(ctx):
-    """{key: (status, seconds, Result|class name)} for every section; a worker unfinished at the
-    deadline is ("timeout", seconds_waited, None)."""
+    """{key: (status, seconds, Result|class name)} for every section.
+
+    A worker unfinished at the deadline is ("timeout", seconds_waited, None).
+    """
     results, waits = {}, []
     gate = threading.BoundedSemaphore(MAX_WORKERS)
     for key, _title, module, mode, _part in SECTIONS:
@@ -153,10 +157,12 @@ WAIT_S = DEADLINE_S + 15
 
 
 def generate(app=None, request_info=None):
-    """The report dict: {report, summary, issue_body, issues_url, filename}. One build at a time;
-    a caller arriving while one builds waits for it (at most WAIT_S) and gets its result. Raises
-    ReportBusy when that build is still running at WAIT_S; a build that raised hands the next
-    waiter the turn to build, one at a time."""
+    """The report dict: {report, summary, issue_body, issues_url, filename}.
+
+    One build at a time: a caller arriving while one builds waits for it (at most WAIT_S) and gets
+    its result. Raises ReportBusy when that build is still running at WAIT_S; a build that raised
+    hands the next waiter the turn to build, one at a time.
+    """
     give_up = time.monotonic() + WAIT_S
     while True:
         with _inflight_lock:

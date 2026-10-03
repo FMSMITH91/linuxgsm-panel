@@ -171,6 +171,12 @@ def section_errors_since_start(ctx):
     """R24: what the counter saw since this process started, most frequent first."""
     res = Result()
     up = ago(time.time() - runtime_stats.started())
+    lost = runtime_stats.lost()
+    if lost:
+        # The counters swallow their own errors so a loop never dies of them; say how many.
+        res.add("- **Counter writes lost to an exception**: %d (the numbers in this report "
+                "undercount by up to that)" % lost)
+        res.find("warn", AREA, "%d instrumentation write(s) failed" % lost)
     if not capturing():
         res.add("- (no error capture: this process was not started through app.create_app, or "
                 "predates the counter)")

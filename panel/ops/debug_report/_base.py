@@ -65,6 +65,7 @@ class Result(object):
     """
 
     def __init__(self, lines=None, findings=None, verdict=None, summary_lines=None):
+        """A Result holding copies of the given lists (all empty by default)."""
         self.lines = list(lines or [])
         self.findings = list(findings or [])
         self.verdict = verdict
@@ -82,8 +83,11 @@ class Result(object):
 
 
 def unread_line(what, exc):
-    """'- **what**: could not be read (ExceptionClass)' -- the class only, never its message:
-    sqlite, SQLAlchemy and OSError messages carry paths and bound parameters."""
+    """'- **what**: could not be read (ExceptionClass)', naming the class only.
+
+    Never the exception's message: sqlite, SQLAlchemy and OSError messages carry paths and bound
+    parameters.
+    """
     return "- **%s**: could not be read (%s)" % (what, type(exc).__name__)
 
 
@@ -119,11 +123,14 @@ def cut_words(text, limit):
 
 
 class Ctx(object):
-    """Per-report shared state: the deadline, the Flask app (or None), and a memo so a source two
-    sections need (one `systemctl show`, one journal read, one tailscale status, one sqlite job) is
-    read once per report."""
+    """Per-report shared state: the deadline, the Flask app (or None), and a memo.
+
+    The memo is how a source two sections need (one `systemctl show`, one journal read, one
+    tailscale status, one sqlite job) is read once per report.
+    """
 
     def __init__(self, app=None, deadline_s=20.0, request_info=None):
+        """A context whose deadline is `deadline_s` seconds from now."""
         self.app = app
         self.started = time.monotonic()
         self.deadline = self.started + deadline_s

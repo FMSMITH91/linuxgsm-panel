@@ -16,6 +16,7 @@ import time
 _MAX_KEYS = 200
 _GROUPS = {}            # group -> {key: value}
 _STARTED = time.time()  # when this module was first imported: about when the process started
+_LOST = [0]             # writes an exception swallowed; the report says so rather than nothing
 
 
 def _group(group):
@@ -40,18 +41,20 @@ def bump(group, key, n=1):
         if _room(g, key):
             g[key] = g.get(key, 0) + n
     except Exception:  # noqa: BLE001 - instrumentation must never raise into a loop
-        pass
+        _LOST[0] += 1
 
 
 def put(group, key, value):
-    """Record `value` (a number, bool, fixed token, or a small tuple/dict of those) as the latest
-    for `key`, with the wall-clock time it was recorded."""
+    """Record `value` as the latest for `key`, with the wall-clock time it was recorded.
+
+    `value` is a number, bool, fixed token, or a small tuple/dict of those.
+    """
     try:
         g = _group(group)
         if _room(g, key):
             g[key] = (time.time(), value)
     except Exception:  # noqa: BLE001
-        pass
+        _LOST[0] += 1
 
 
 def evict(group, keep, keep_keys=()):
@@ -79,7 +82,7 @@ def beat(name, cadence_s=None, took_s=None):
             g[name] = {"at": time.time(), "cadence": cadence_s, "took": took_s,
                        "passes": prev.get("passes", 0) + 1}
     except Exception:  # noqa: BLE001
-        pass
+        _LOST[0] += 1
 
 
 def snapshot(group):
@@ -98,3 +101,8 @@ def groups():
 def started():
     """Wall-clock time this module was imported (about when the process started)."""
     return _STARTED
+
+
+def lost():
+    """How many writes an exception swallowed since the process started (they are never raised)."""
+    return _LOST[0]

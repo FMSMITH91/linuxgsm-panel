@@ -169,8 +169,11 @@ def _traceback_lines(ctx, tbs):
 
 
 def _priv_verb(command, arg):
-    """The helper verb a sudo COMMAND ran ('other verb' for one the table does not know), or
-    'other command' for anything but the helper: never an argument, which can be an account."""
+    """The helper verb a sudo COMMAND ran, 'other verb', or 'other command'.
+
+    'other verb' is one the table does not know; 'other command' is anything but the helper. Never
+    an argument of another command, which for su is an account.
+    """
     from panel.security import privileged as _priv
     if not command.endswith("/" + os.path.basename(_priv.HELPER_PATH)):
         return "other command"
