@@ -4957,7 +4957,8 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
   console.log(JSON.stringify(out));
 })().catch(e => console.log(JSON.stringify({error: String(e && e.stack || e)})));"""
 _sfr_src = (STATIC_JS / "server_files.js").read_text(encoding="utf-8")
-_sfr_list = _js_code_only(_sfr_src[_sfr_src.index("var _fileList = document.getElementById('file-list');"):])
+_sfr_at = _sfr_src.find("var _fileList = document.getElementById('file-list');")
+_sfr_list = _js_code_only(_sfr_src[_sfr_at:]) if _sfr_at >= 0 else ""   # "" fails the checks below
 if _node:
     with _tf_ta.NamedTemporaryFile("w", suffix=".js", delete=False) as _rh:
         _rh.write(_RENAME_HARNESS)
@@ -5046,8 +5047,9 @@ check(not [a for a in _js_assigned if a[0] not in handled],
 check("rename" in delegated and "rename" not in defined
       and {"submitRename", "cancelRename", "renameKey"} <= defined
       and "startRename(rn.closest('[data-path]'))" in _sfr_list
-      and _sfr_list.index("closest('.fb-renaming')) return;")
-      < _sfr_list.index("closest('[data-action=\"delete\"]')"),
+      # find, not index: a missing guard must FAIL this check, not crash the suite (-1 < x).
+      and 0 <= _sfr_list.find("closest('.fb-renaming')) return;")
+      < _sfr_list.find("closest('[data-action=\"delete\"]')"),
       "file browser: Rename is delegated on #file-list (not a global), its field's controls go "
       "through the dispatcher, and a click on the row being renamed is left to them",
       _sfr_list[:400])
