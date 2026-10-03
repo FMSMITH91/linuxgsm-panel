@@ -379,10 +379,13 @@ def _gone40(a_client, sid):
 # ── the built command: renames exactly, never clobbers ─────────────────────────────────────────
 _SRV40 = NS(id=94001, host="192.0.2.140", is_local=False, auth_method="key")
 # Each stands in for `mv` and does one thing the real host could do between the check and the move.
-_RACE_FILE40 = 'mv(){ printf RACER > "${@: -1}"; command mv "$@"; }; '
-_RACE_LINK40 = 'mv(){ ln -s ../maps "${@: -1}"; command mv "$@"; }; '
-_NO_N40 = 'mv(){ command mv -T -- "${@: -2:1}" "${@: -1}"; }; '      # an mv that ignores -n
-_MV_FAILS40 = 'mv(){ return 1; }; '
+# `gnumv` is defined to the same stand-in: the command prefers GNU's mv under that name (a uutils
+# host), and a machine running this suite that has one must not slip past the stand-in.
+_GNUMV40 = 'gnumv(){ mv "$@"; }; '
+_RACE_FILE40 = 'mv(){ printf RACER > "${@: -1}"; command mv "$@"; }; ' + _GNUMV40
+_RACE_LINK40 = 'mv(){ ln -s ../maps "${@: -1}"; command mv "$@"; }; ' + _GNUMV40
+_NO_N40 = 'mv(){ command mv -T -- "${@: -2:1}" "${@: -1}"; }; ' + _GNUMV40   # ignores -n
+_MV_FAILS40 = 'mv(){ return 1; }; ' + _GNUMV40
 
 
 def _race40():
@@ -391,24 +394,29 @@ def _race40():
     got = _files40.rename_path(_SRV40, _USER40, "cfg/a.cfg", "new.cfg")
     check("rename command (real bash): a file appearing at the new name during the move is "
           "reported as taken and is NOT replaced",
-          got == (False, _files40.RENAME_EXISTS) and _read40("cfg/new.cfg") == "RACER"
-          and _read40("cfg/a.cfg") == "A", repr((got, _read40("cfg/new.cfg"))))
+          (got, _read40("cfg/new.cfg"), _read40("cfg/a.cfg"))
+          == ((False, _files40.RENAME_EXISTS), "RACER", "A"), repr((got, _read40("cfg/new.cfg"))))
     _reset40(_RACE_LINK40)
     got = _files40.rename_path(_SRV40, _USER40, "cfg/a.cfg", "lnk2maps")
     check("rename command (real bash): a symlink to a folder appearing at the new name is never "
-          "moved INTO (mv -T)", got == (False, _files40.RENAME_EXISTS)
-          and _read40("cfg/a.cfg") == "A"
-          and sorted(os.listdir(os.path.join(_HOME40, "maps"))) == ["sub"],
-          repr((got, os.listdir(os.path.join(_HOME40, "maps")))))
+          "moved INTO (mv -T)", (got, _read40("cfg/a.cfg"), _ls40("maps"))
+          == ((False, _files40.RENAME_EXISTS), "A", ["sub"]), repr((got, _ls40("maps"))))
     _reset40(_NO_N40)
     got = _files40.rename_path(_SRV40, _USER40, "cfg/a.cfg", "b.cfg")
     check("rename command (real bash): even an mv that ignores -n replaces nothing — the name is "
-          "checked before the move", got == (False, _files40.RENAME_EXISTS)
-          and _read40("cfg/b.cfg") == "B" and _read40("cfg/a.cfg") == "A", repr(got))
+          "checked before the move", (got, _read40("cfg/b.cfg"), _read40("cfg/a.cfg"))
+          == ((False, _files40.RENAME_EXISTS), "B", "A"), repr(got))
     _reset40(_MV_FAILS40)
     got = _files40.rename_path(_SRV40, _USER40, "cfg/a.cfg", "z.cfg")
     check("rename command (real bash): an mv the host refuses says so, in fixed text",
-          got[0] is False and "host refused the rename" in got[1] and _read40("cfg/a.cfg") == "A",
+          (got[0], "host refused the rename" in got[1], _read40("cfg/a.cfg")) == (False, True, "A"),
+          repr(got))
+    marker = os.path.join(_OUTSIDE40, "gnumv-ran")
+    _reset40('gnumv(){ : > %s; command mv "$@"; }; ' % marker)
+    got = _files40.rename_path(_SRV40, _USER40, "cfg/a.cfg", "g.cfg")
+    check("rename command (real bash): where GNU's mv is installed as gnumv (a uutils host), the "
+          "move goes through it — its -n -T is the kernel's atomic no-replace",
+          (got, os.path.exists(marker), _read40("cfg/g.cfg")) == ((True, "Renamed"), True, "A"),
           repr(got))
 
 
@@ -416,7 +424,7 @@ def _exact40():
     """The built command moves exactly the one name it was given, in the same folder."""
     _reset40()
     before = _snapshot40()
-    ino = os.stat(os.path.join(_HOME40, "cfg/a.cfg")).st_ino
+    ino = _ino40("cfg/a.cfg")
     got = _files40.rename_path(_SRV40, _USER40, "cfg/a.cfg", "a renamed.cfg")
     after = _snapshot40()
     want = dict(before)

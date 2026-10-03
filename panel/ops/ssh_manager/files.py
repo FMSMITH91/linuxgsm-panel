@@ -1167,10 +1167,13 @@ def _rename_inner(ap, new_name):
     * The new name is joined to "$d", the same real folder, so the two ends cannot part.
     * `mv -T` takes the destination as a name, never as a folder to move INTO — a symlink to a
       folder sitting at the new name would otherwise swallow the source — and `-n` never replaces.
+      GNU mv (coreutils 8.29 and later) does `-n -T` as one renameat2(RENAME_NOREPLACE), so a name
+      appearing during the move is refused by the kernel. uutils' mv, the default from Ubuntu
+      25.10, checks and then renames; where GNU's is installed beside it, as `gnumv`, that is used.
     * Whether it moved is read from the filesystem, by the source's device:inode turning up at the
       new name, never from mv's exit status: coreutils 9.2 changed what `mv -n` returns when it
-      skips, and uutils (Ubuntu 25.10 and later) is another implementation again. A name that
-      appeared between the check and the move is reported as taken, never clobbered.
+      skips, and uutils is another implementation again. A name that appeared between the check
+      and the move is reported as taken, never clobbered.
     """
     q = _core._quote
     taken = '[ -e "$n" ] || [ -L "$n" ]'
@@ -1178,7 +1181,8 @@ def _rename_inner(ap, new_name):
             f'si=$(stat -c %d:%i -- "$t" 2>/dev/null) || {{ echo {_RENAME_GONE}; exit 7; }}; '
             f'n="$d"/{q(new_name)}; '
             f'if {taken}; then echo {_RENAME_TAKEN}; exit 6; fi; '
-            'mv -n -T -- "$t" "$n"; '
+            'm=mv; command -v gnumv >/dev/null 2>&1 && m=gnumv; '
+            '"$m" -n -T -- "$t" "$n"; '
             f'if [ "$(stat -c %d:%i -- "$n" 2>/dev/null)" = "$si" ]; then echo {_RENAME_DONE}; exit 0; fi; '
             f'if {taken}; then echo {_RENAME_TAKEN}; exit 6; fi; '
             f'echo {_RENAME_MVFAIL}; exit 1')

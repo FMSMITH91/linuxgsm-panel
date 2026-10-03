@@ -423,7 +423,7 @@ def _rename(command):
 
 # (pattern, answer): answer is text, or a callable taking the command. First match wins.
 _TABLE = [
-    (r"mv -n -T -- ", _rename),
+    (r'-n -T -- "\$t" "\$n"', _rename),
     (r"LGSM_ACCT_PROBE_DONE", _account_probe),
     (r"tail -c \+\d+|printf B; tail -\d+", _console),
     (r"stat -c '?%i %s'?", lambda c: "4242 %d" % len(_log_text().encode())),
