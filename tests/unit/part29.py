@@ -9,7 +9,8 @@ HOW IT RUNS. The workflows are read as TEXT, as part06 and part19 read them: the
 installs no YAML parser. Where a workflow step's script can be run, it is: cut out of the file and
 run by bash or python on fixtures in a temporary directory, with stand-ins for `gh`, `actionlint`
 and `shellcheck` on PATH. One check imports panel.ops.ssh_manager in a child process, the way
-the fuzz harnesses do. Nothing here touches the network or the checkout's data/.
+the fuzz harnesses do. Nothing here touches the network or the checkout's data/. Each section is
+a function, called in order at the bottom.
 """
 import ast as _ast29
 import glob as _glob29
@@ -27,6 +28,10 @@ from unit.part06 import _wf_run_block
 
 _ROOT29 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _WF29 = os.path.join(_ROOT29, ".github", "workflows")
+_GUARD29 = "Every stored fuzz artifact was made on main here"
+_CI_ROOT29 = "Run the root-only unit checks, as root"
+# The workflow's own path for the actionlint binary, which the driven step is pointed away from.
+_AL_PATH29 = "/tmp/actionlint"  # nosec B108 - a string in the workflow, replaced, never opened
 
 
 def _read29(*parts):
@@ -47,6 +52,11 @@ def _job29(text, job):
     return text[m.start():m.end() + nxt.start()] if nxt else text[m.start():]
 
 
+def _jobs29(text):
+    """The names of a workflow's jobs."""
+    return _re29.findall(r"^  ([a-z][a-z-]*):\n", text[text.find("\njobs:\n"):], _re29.M)
+
+
 def _steps29(job_text):
     """The job's steps, each as its text from its `- ` line, in order."""
     body = job_text[job_text.find("\n    steps:\n"):]
@@ -59,21 +69,8 @@ def _name29(step):
 
 
 def _runbody29(step):
-    """The `run: |` block of one step's text, dedented, and nothing after it."""
-    lines = step.splitlines()
-    at = next((i for i, ln in enumerate(lines) if ln.strip() == "run: |"), None)
-    if at is None:
-        return ""
-    ind = len(lines[at]) - len(lines[at].lstrip())
-    body = []
-    for ln in lines[at + 1:]:
-        if ln.strip() and len(ln) - len(ln.lstrip()) <= ind:
-            break
-        body.append(ln)
-    while body and not body[-1].strip():
-        body.pop()
-    cut = min((len(ln) - len(ln.lstrip()) for ln in body if ln.strip()), default=0)
-    return "\n".join(ln[cut:] for ln in body) + "\n"
+    """The `run: |` block of one step's text, dedented, trailing blank lines dropped."""
+    return _wf_run_block(step, _name29(step)).rstrip() + "\n" if "run: |" in step else ""
 
 
 def _code29(text):
@@ -86,400 +83,493 @@ def _run29(argv, **kw):
     return _sp29.run(argv, capture_output=True, text=True, check=False, **kw)  # nosec B603 - fixed argvs
 
 
-_TMP29 = _tf29.mkdtemp(prefix="lgsm-unit-p29-")
-try:
-    # ── ClusterFuzzLite, PR side: the vendor's 600s, split across the targets ─────────────────────
-    # 180s over six targets was 30s each, shorter than the ssh_manager targets' start-up, and each
-    # was killed as "process timed out" before libFuzzer finished (CF1).
-    _pr29 = _wf29("cflite_pr.yml")
-    _pr_job29 = _job29(_pr29, "code-change")
-    _pr_steps29 = _steps29(_pr_job29)
-    _pr_run29 = [s for s in _pr_steps29 if "clusterfuzzlite/actions/run_fuzzers@" in s]
-    check("cflite_pr: the PR run fuzzes for the vendor's 600s in code-change mode",
-          len(_pr_run29) == 1
-          and _re29.search(r"^ +fuzz-seconds: 600$", _pr_run29[0], _re29.M) is not None
-          and _re29.search(r"^ +mode: code-change$", _pr_run29[0], _re29.M) is not None,
-          _pr_run29[0][-600:] if _pr_run29 else "no run_fuzzers step")
+def _write_exe29(path, text):
+    with open(path, "w") as fh:
+        fh.write(text)
+    os.chmod(path, 0o755)  # nosec B103 - a stand-in program this part runs; it must be executable
 
-    # ── the four ssh_manager harnesses pre-load the heavy dependencies, uninstrumented ────────────
-    # With only paramiko and eventlet pre-loaded, Atheris instrumented 280 modules per target, ~27s
-    # on a runner before the first input. The list is the same in all four, and must hold what
-    # ssh_manager pulls in.
-    _hz29 = {}
-    for _p in sorted(_glob29.glob(os.path.join(_ROOT29, "tests", "fuzz", "fuzz_*.py"))):
-        _tree = _ast29.parse(open(_p, encoding="utf-8").read())
-        for _n in _ast29.walk(_tree):
-            if (isinstance(_n, _ast29.For) and isinstance(_n.target, _ast29.Name)
-                    and _n.target.id == "_dep" and isinstance(_n.iter, _ast29.Tuple)):
-                _hz29[os.path.basename(_p)] = tuple(_c.value for _c in _n.iter.elts
-                                                    if isinstance(_c, _ast29.Constant))
-    _hz_want29 = {"fuzz_config.py", "fuzz_cron.py", "fuzz_firewall.py", "fuzz_game_status.py"}
-    _hz_lists29 = set(_hz29.values())
-    _hz_list29 = next(iter(_hz_lists29)) if len(_hz_lists29) == 1 else ()
+
+# ── ClusterFuzzLite, PR side: the vendor's 600s, split across the targets ─────────────────────────
+# 180s over six targets was 30s each, shorter than the ssh_manager targets' start-up, and each was
+# killed as "process timed out" before libFuzzer finished (CF1).
+def _cf1_seconds():
+    runs = [s for s in _steps29(_job29(_wf29("cflite_pr.yml"), "code-change"))
+            if "clusterfuzzlite/actions/run_fuzzers@" in s]
+    check("cflite_pr: the PR run fuzzes for the vendor's 600s in code-change mode",
+          len(runs) == 1
+          and _re29.search(r"^ +fuzz-seconds: 600$", runs[0], _re29.M) is not None
+          and _re29.search(r"^ +mode: code-change$", runs[0], _re29.M) is not None,
+          runs[0][-600:] if runs else "no run_fuzzers step")
+
+
+# ── the four ssh_manager harnesses pre-load the heavy dependencies, uninstrumented ────────────────
+# With only paramiko and eventlet pre-loaded, Atheris instrumented 280 modules per target, ~27s on
+# a runner before the first input. The list is the same in all four, and must hold what
+# ssh_manager pulls in.
+def _harness_lists():
+    found = {}
+    for p in sorted(_glob29.glob(os.path.join(_ROOT29, "tests", "fuzz", "fuzz_*.py"))):
+        for n in _ast29.walk(_ast29.parse(open(p, encoding="utf-8").read())):
+            if (isinstance(n, _ast29.For) and isinstance(n.target, _ast29.Name)
+                    and n.target.id == "_dep" and isinstance(n.iter, _ast29.Tuple)):
+                found[os.path.basename(p)] = tuple(c.value for c in n.iter.elts
+                                                   if isinstance(c, _ast29.Constant))
+    return found
+
+
+def _cf1_preload():
+    found = _harness_lists()
+    lists = set(found.values())
+    one = next(iter(lists)) if len(lists) == 1 else ()
     check("fuzz harnesses: the four ssh_manager harnesses pre-load one list, SQLAlchemy and Flask in it",
-          set(_hz29) == _hz_want29 and len(_hz_lists29) == 1
+          set(found) == {"fuzz_config.py", "fuzz_cron.py", "fuzz_firewall.py", "fuzz_game_status.py"}
+          and len(lists) == 1
           and {"paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
-               "sqlalchemy.dialects.sqlite"} <= set(_hz_list29)
-          and _hz_list29[-1] == "panel.core.config", repr(_hz29))
-    # ...and the list is enough: importing ssh_manager after it loads nothing outside panel/ and the
-    # standard library, so Atheris instruments the panel's own modules and nothing else. A child
-    # process, because this one imported ssh_manager long ago. It also records any file it opens
-    # under the checkout's data/, which must be none.
-    _hz_code29 = (
-        "import importlib, json, os, sys\n"
-        "data = os.path.join(%r, 'data') + os.sep\n"
-        "opened = []\n"
-        "def _hook(ev, args):\n"
-        "    if ev == 'open' and args and isinstance(args[0], (str, bytes, os.PathLike)):\n"
-        "        p = os.path.abspath(os.fsdecode(args[0]))\n"
-        "        if p.startswith(data):\n"
-        "            opened.append(p)\n"
-        "sys.addaudithook(_hook)\n"
-        "for d in %r:\n"
-        "    importlib.import_module(d)\n"
-        "before = set(sys.modules)\n"
-        "from panel.ops import ssh_manager\n"
-        "new = sorted(set(sys.modules) - before)\n"
-        "print(json.dumps({'new': new, 'opened': opened}))\n" % (_ROOT29, _hz_list29))
-    _r = _run29([_sys29.executable, "-W", "ignore", "-c", _hz_code29], cwd=_TMP29,
-                env=dict(os.environ, PYTHONPATH=_ROOT29))
+               "sqlalchemy.dialects.sqlite"} <= set(one)
+          and one[-1] == "panel.core.config", repr(found))
+    return one
+
+
+# ...and the list is enough: importing ssh_manager after it loads nothing outside panel/ and the
+# standard library, so Atheris instruments the panel's own modules and nothing else. A child
+# process, because this one imported ssh_manager long ago. It also records any file it opens under
+# the checkout's data/, which must be none.
+_IMPORT_PROBE29 = """import importlib, json, os, sys
+data = os.path.join(%r, 'data') + os.sep
+opened = []
+def _hook(ev, args):
+    if ev == 'open' and args and isinstance(args[0], (str, bytes, os.PathLike)):
+        p = os.path.abspath(os.fsdecode(args[0]))
+        if p.startswith(data):
+            opened.append(p)
+sys.addaudithook(_hook)
+for d in %r:
+    importlib.import_module(d)
+before = set(sys.modules)
+from panel.ops import ssh_manager
+print(json.dumps({'new': sorted(set(sys.modules) - before), 'opened': opened}))
+"""
+
+
+def _foreign_module29(name):
+    """Neither the panel's nor the standard library's.
+
+    eventlet's patcher keeps the unpatched stdlib modules under __original_module_<name>.
+    """
+    top = name.split(".")[0]
+    return top != "panel" and top not in _sys29.stdlib_module_names \
+        and not name.startswith("__original_module_")
+
+
+def _cf1_imports(preload, tmp):
+    r = _run29([_sys29.executable, "-W", "ignore", "-c", _IMPORT_PROBE29 % (_ROOT29, preload)],
+               cwd=tmp, env=dict(os.environ, PYTHONPATH=_ROOT29))
     try:
-        _hz_out29 = _json29.loads(_r.stdout.strip().splitlines()[-1])
+        out = _json29.loads(r.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
-        _hz_out29 = {"new": [], "opened": [], "error": _r.stdout[-400:] + _r.stderr[-800:]}
-    _hz_panel29 = [m for m in _hz_out29["new"] if m == "panel" or m.startswith("panel.")]
-    # eventlet's patcher keeps the unpatched stdlib modules under __original_module_<name>.
-    _hz_other29 = [m for m in _hz_out29["new"]
-                   if m not in _hz_panel29 and m.split(".")[0] not in _sys29.stdlib_module_names
-                   and not m.startswith("__original_module_")]
+        out = {"new": [], "opened": [], "error": r.stdout[-400:] + r.stderr[-800:]}
+    panel = [m for m in out["new"] if m.split(".")[0] == "panel"]
+    other = [m for m in out["new"] if _foreign_module29(m)]
     check("fuzz harnesses: after the pre-load, importing ssh_manager loads only panel modules and "
           "the standard library (what Atheris instruments)",
-          len(_hz_panel29) >= 10 and "panel.ops.ssh_manager.cron" in _hz_panel29
-          and not _hz_other29 and not _hz_out29["opened"],
-          repr({"outside panel and stdlib": _hz_other29, "panel": len(_hz_panel29),
-                "opened under data/": _hz_out29["opened"], "error": _hz_out29.get("error")}))
+          all([len(panel) >= 10, "panel.ops.ssh_manager.cron" in panel, not other, not out["opened"]]),
+          repr({"outside panel and stdlib": other, "panel": len(panel),
+                "opened under data/": out["opened"], "error": out.get("error")}))
 
-    # ── ClusterFuzzLite keeps everything as Actions artifacts, and nothing waits on a secret ──────
-    # Every batch, prune and coverage step waited on a CFL_STORAGE_REPO secret that was never set:
-    # those jobs reported success for two months having fuzzed nothing (CF2). The storage repo is
-    # optional; the artifacts route needs no secret, and is the one taken, end to end.
-    _cfl29 = {os.path.basename(p): open(p, encoding="utf-8").read()
-              for p in sorted(_glob29.glob(os.path.join(_WF29, "cflite_*.yml")))}
-    _cfl_bad29 = ["%s: %s" % (n, w) for n, t in _cfl29.items()
-                  for w in ("CFL_STORAGE_REPO", "storage-repo") if w in _code29(t)]
-    _cfl_bad29 += ["%s: a step-level if: reads env or secrets" % n for n, t in _cfl29.items()
-                   if _re29.search(r"^ {8}if: .*\b(env|secrets)\.", t, _re29.M)]
+
+# ── ClusterFuzzLite keeps everything as Actions artifacts, and nothing waits on a secret ──────────
+# Every batch, prune and coverage step waited on a CFL_STORAGE_REPO secret that was never set: those
+# jobs reported success for two months having fuzzed nothing (CF2). The storage repo is optional;
+# the artifacts route needs no secret, and is the one taken, end to end.
+def _cflite_files():
+    return {os.path.basename(p): open(p, encoding="utf-8").read()
+            for p in sorted(_glob29.glob(os.path.join(_WF29, "cflite_*.yml")))}
+
+
+def _cf2_no_secret(cfl):
+    bad = ["%s: %s" % (n, w) for n, t in cfl.items()
+           for w in ("CFL_STORAGE_REPO", "storage-repo") if w in _code29(t)]
+    bad += ["%s: a step-level if: reads env or secrets" % n for n, t in cfl.items()
+            if _re29.search(r"^ {8}if: .*\b(env|secrets)\.", t, _re29.M)]
     check("cflite: no workflow names a storage repository or gates a step on a secret",
-          set(_cfl29) >= {"cflite_pr.yml", "cflite_batch.yml", "cflite_cron.yml", "cflite_build.yml"}
-          and not _cfl_bad29, repr(_cfl_bad29))
-    # The jobs that make the artifacts run on this repository's main only: the provenance check
-    # below refuses any cifuzz-* artifact made anywhere else, so a producer elsewhere would stop
-    # every reader. And each job that reads them may (actions: read, the vendor's read-all).
-    _cfl_prod29 = {"cflite_batch.yml": ("batch",), "cflite_cron.yml": ("prune", "coverage"),
-                   "cflite_build.yml": ("build",)}
-    _cfl_pbad29 = []
-    for _n, _jobs in _cfl_prod29.items():
-        _t = _cfl29.get(_n, "")
-        _on = _t[_t.find("\non:\n"):_t.find("\npermissions:")]
-        if "pull_request" in _on:
-            _cfl_pbad29.append("%s: runs for pull requests" % _n)
-        for _j in _jobs:
-            _jt = _job29(_t, _j)
-            _if = _re29.search(r"^    if: (.*)$", _jt, _re29.M)
-            if (not _if or "github.repository == 'FMSMITH91/linuxgsm-panel'" not in _if.group(1)
-                    or ("github.ref == 'refs/heads/main'" not in _if.group(1)
-                        and _on.strip() != "on:\n  push:\n    branches: [ main ]")):
-                _cfl_pbad29.append("%s/%s: job if: %r" % (_n, _j, _if and _if.group(1)))
-            if _n != "cflite_build.yml" and not _re29.search(r"^      actions: read\b", _jt, _re29.M):
-                _cfl_pbad29.append("%s/%s: no actions: read" % (_n, _j))
-    if not _re29.search(r"^      actions: read\b", _pr_job29, _re29.M):
-        _cfl_pbad29.append("cflite_pr.yml: no actions: read")
-    _bld29 = _steps29(_job29(_cfl29.get("cflite_build.yml", ""), "build"))
-    if not (len(_bld29) == 1 and "clusterfuzzlite/actions/build_fuzzers@" in _bld29[0]
-            and _re29.search(r"^ +upload-build: true$", _bld29[0], _re29.M)):
-        _cfl_pbad29.append("cflite_build.yml: not one build_fuzzers step with upload-build: true")
-    check("cflite: batch, prune, coverage and the continuous build run only on this repository's "
-          "main; every reader may read artifacts; the build uploads itself",
-          not _cfl_pbad29, repr(_cfl_pbad29))
+          set(cfl) >= {"cflite_pr.yml", "cflite_batch.yml", "cflite_cron.yml", "cflite_build.yml"}
+          and not bad, repr(bad))
 
-    # ── every cifuzz-* artifact a job reads was made on main here ─────────────────────────────────
-    # The action takes the newest artifact of a name from ANY run in the repository and unpacks it
-    # unchecked; a fork's pull request can upload one. So in every job, a guard step comes before
-    # any step that can read one (run_fuzzers; build_fuzzers given a token), and the copies are one.
-    _GUARD29 = "Every stored fuzz artifact was made on main here"
-    _g_bodies29, _g_bad29, _g_jobs29 = set(), [], 0
-    for _n, _t in _cfl29.items():
-        for _jm in _re29.finditer(r"^  ([a-z][a-z-]*):\n", _t[_t.find("\njobs:\n"):], _re29.M):
-            _steps = _steps29(_job29(_t, _jm.group(1)))
-            _readers = [i for i, s in enumerate(_steps)
-                        if "clusterfuzzlite/actions/run_fuzzers@" in s
-                        or ("clusterfuzzlite/actions/build_fuzzers@" in s and "github-token:" in s)]
-            if not _readers:
+
+def _producer_bad(name, text, job):
+    """What is wrong with one artifact-making job: it must run only on this repository's main."""
+    on = text[text.find("\non:\n"):text.find("\npermissions:")]
+    jt = _job29(text, job)
+    m = _re29.search(r"^    if: (.*)$", jt, _re29.M)
+    cond = m.group(1) if m else ""
+    bad = ["%s: runs for pull requests" % name] if "pull_request" in on else []
+    main_only = ("github.ref == 'refs/heads/main'" in cond
+                 or on.strip() == "on:\n  push:\n    branches: [ main ]")
+    if "github.repository == 'FMSMITH91/linuxgsm-panel'" not in cond or not main_only:
+        bad.append("%s/%s: job if: %r" % (name, job, cond))
+    if name != "cflite_build.yml" and not _re29.search(r"^      actions: read\b", jt, _re29.M):
+        bad.append("%s/%s: no actions: read" % (name, job))
+    return bad
+
+
+# The jobs that make the artifacts run on this repository's main only: the provenance check below
+# refuses any cifuzz-* artifact made anywhere else, so a producer elsewhere would stop every
+# reader. And each job that reads them may (actions: read, the vendor's read-all).
+def _cf2_producers(cfl):
+    bad = []
+    for name, jobs in (("cflite_batch.yml", ("batch",)), ("cflite_cron.yml", ("prune", "coverage")),
+                       ("cflite_build.yml", ("build",))):
+        for job in jobs:
+            bad += _producer_bad(name, cfl.get(name, ""), job)
+    if not _re29.search(r"^      actions: read\b", _job29(cfl.get("cflite_pr.yml", ""), "code-change"),
+                        _re29.M):
+        bad.append("cflite_pr.yml: no actions: read")
+    bld = _steps29(_job29(cfl.get("cflite_build.yml", ""), "build"))
+    if not (len(bld) == 1 and "clusterfuzzlite/actions/build_fuzzers@" in bld[0]
+            and _re29.search(r"^ +upload-build: true$", bld[0], _re29.M)):
+        bad.append("cflite_build.yml: not one build_fuzzers step with upload-build: true")
+    check("cflite: batch, prune, coverage and the continuous build run only on this repository's "
+          "main; every reader may read artifacts; the build uploads itself", not bad, repr(bad))
+
+
+# ── every cifuzz-* artifact a job reads was made on main here ─────────────────────────────────────
+# The action takes the newest artifact of a name from ANY run in the repository and unpacks it
+# unchecked; a fork's pull request can upload one. So in every job, a guard step comes before any
+# step that can read one (run_fuzzers; build_fuzzers given a token), and the copies are one.
+def _reads_artifacts29(step):
+    """run_fuzzers reads the corpus (and a build); build_fuzzers given a token reads coverage."""
+    if "clusterfuzzlite/actions/run_fuzzers@" in step:
+        return True
+    return "clusterfuzzlite/actions/build_fuzzers@" in step and "github-token:" in step
+
+
+def _guards_in_job(steps):
+    """(index of the first reader or None, guard indexes, guard bodies, trouble) for one job."""
+    readers = [i for i, s in enumerate(steps) if _reads_artifacts29(s)]
+    guards = [i for i, s in enumerate(steps) if _name29(s).startswith(_GUARD29)]
+    trouble = [i for i in guards if "continue-on-error" in steps[i]]
+    return (readers[0] if readers else None), guards, {_runbody29(steps[i]) for i in guards}, trouble
+
+
+def _pr_guard_after29(cfl):
+    """The PR job's last step is the guard again, run even when fuzzing failed."""
+    pr_steps = _steps29(_job29(cfl.get("cflite_pr.yml", ""), "code-change"))
+    last = pr_steps[-1] if pr_steps else ""
+    if _name29(last).startswith(_GUARD29) \
+            and "if: always() && steps.scope.outputs.run == 'true'" in last:
+        return []
+    return ["cflite_pr.yml: the guard does not run again, always, after fuzzing"]
+
+
+def _cf2_guard_placement(cfl):
+    bodies, bad, jobs = set(), [], 0
+    for name, text in cfl.items():
+        for job in _jobs29(text):
+            first, guards, found, trouble = _guards_in_job(_steps29(_job29(text, job)))
+            if first is None:
                 continue
-            _g_jobs29 += 1
-            _guards = [i for i, s in enumerate(_steps) if _name29(s).startswith(_GUARD29)]
-            if not _guards or _guards[0] > _readers[0]:
-                _g_bad29.append("%s/%s: no guard before step %d" % (_n, _jm.group(1), _readers[0]))
-            for _gi in _guards:
-                _g_bodies29.add(_runbody29(_steps[_gi]))
-                if "continue-on-error" in _steps[_gi]:
-                    _g_bad29.append("%s/%s: the guard may fail without failing the job" % (_n, _jm.group(1)))
-    _pr_last29 = _pr_steps29[-1] if _pr_steps29 else ""
-    if not (_name29(_pr_last29).startswith(_GUARD29)
-            and "if: always() && steps.scope.outputs.run == 'true'" in _pr_last29):
-        _g_bad29.append("cflite_pr.yml: the guard does not run again, always, after fuzzing")
+            jobs += 1
+            bodies |= found
+            if not guards or guards[0] > first:
+                bad.append("%s/%s: no guard before step %d" % (name, job, first))
+            if trouble:
+                bad.append("%s/%s: the guard may fail without failing the job" % (name, job))
+    bad += _pr_guard_after29(cfl)
     check("cflite: every job that reads a stored fuzz artifact checks first where all of them came "
           "from (and the PR job again after fuzzing), with one copy of the check",
-          _g_jobs29 >= 4 and len(_g_bodies29) == 1 and not _g_bad29,
-          repr((_g_jobs29, len(_g_bodies29), _g_bad29)))
+          all([jobs >= 4, len(bodies) == 1, not bad]), repr((jobs, len(bodies), bad)))
 
-    # ...and the check works: run, as the step runs it, against a stand-in `gh` that applies the
-    # step's own --jq filter (with jq) to pages of artifacts.
+
+# ...and the check works: run, as the step runs it, against a stand-in `gh` that applies the step's
+# own --jq filter (with jq) to pages of artifacts.
+_FAKE_GH29 = """#!/bin/bash
+[ "$1" = api ] || exit 9
+[ "$2" = "repos/o/r/actions/artifacts?per_page=100" ] || { echo "path $2" >&2; exit 7; }
+f=""; p=0; a=("$@")
+for ((i = 0; i < ${#a[@]}; i++)); do
+  case "${a[i]}" in --jq) f="${a[i+1]}" ;; --paginate) p=1 ;; esac
+done
+[ -z "${GH_FAKE_FAIL:-}" ] || { echo "HTTP 502" >&2; exit 1; }
+[ "$p" = 1 ] || { echo "not paginated" >&2; exit 8; }
+exec jq -r "$f" "$GH_FAKE_PAGES"
+"""
+
+
+def _art29(name, aid, branch="main", head=5, expired=False, run=True):
+    return {"name": name, "id": aid, "expired": expired,
+            "workflow_run": ({"id": aid * 10, "head_branch": branch, "head_repository_id": head,
+                              "repository_id": 5} if run else None)}
+
+
+def _guard_run29(script, tmp, extra, fail=False):
+    pages = os.path.join(tmp, "pages.json")
+    first = [_art29("cifuzz-corpus-fuzz_cron", 1), _art29("coverage", 2, "topic", 9),
+             _art29("cifuzz-build-address-abc", 3, "evil", 9, expired=True)]
+    with open(pages, "w") as fh:
+        fh.write(_json29.dumps({"total_count": 9, "artifacts": first}) + "\n"
+                 + _json29.dumps({"total_count": 9, "artifacts": [_art29("cifuzz-coverage-latest", 4)]
+                                  + extra}) + "\n")
+    env = dict(os.environ, PATH=os.path.join(tmp, "gbin") + os.pathsep + os.environ.get("PATH", ""),
+               REPO="o/r", GH_FAKE_PAGES=pages)
+    env["GH_TOKEN"] = "stand-in"  # nosec B105 - the stand-in gh reads no token
+    if fail:
+        env["GH_FAKE_FAIL"] = "1"
+    r = _run29(["bash", "--noprofile", "--norc", "-e", "-c", script], env=env)
+    return r.returncode, r.stdout + r.stderr
+
+
+def _cf2_guard_driven(cfl, tmp):
     if _shutil29.which("jq") is None:
         _skip29("cflite: the artifact check, driven", "no jq on this machine")
-    else:
-        _g_run29 = _wf_run_block(_cfl29["cflite_batch.yml"], _GUARD29)
-        _gbin29 = os.path.join(_TMP29, "gbin")
-        os.makedirs(_gbin29)
-        with open(os.path.join(_gbin29, "gh"), "w") as fh:
-            fh.write('#!/bin/bash\n'
-                     '[ "$1" = api ] || exit 9\n'
-                     '[ "$2" = "repos/o/r/actions/artifacts?per_page=100" ] || { echo "path $2" >&2; exit 7; }\n'
-                     'f=""; p=0; a=("$@")\n'
-                     'for ((i = 0; i < ${#a[@]}; i++)); do\n'
-                     '  case "${a[i]}" in --jq) f="${a[i+1]}" ;; --paginate) p=1 ;; esac\n'
-                     'done\n'
-                     '[ -z "${GH_FAKE_FAIL:-}" ] || { echo "HTTP 502" >&2; exit 1; }\n'
-                     '[ "$p" = 1 ] || { echo "not paginated" >&2; exit 8; }\n'
-                     'exec jq -r "$f" "$GH_FAKE_PAGES"\n')
-        os.chmod(os.path.join(_gbin29, "gh"), 0o755)
+        return
+    os.makedirs(os.path.join(tmp, "gbin"))
+    _write_exe29(os.path.join(tmp, "gbin", "gh"), _FAKE_GH29)
+    script = _wf_run_block(cfl["cflite_batch.yml"], _GUARD29)
+    g = {"main": _guard_run29(script, tmp, []),
+         "fork": _guard_run29(script, tmp, [_art29("cifuzz-corpus-fuzz_x", 7, "main", 9)]),
+         "branch": _guard_run29(script, tmp, [_art29("cifuzz-coverage-latest", 8, "topic")]),
+         "no run": _guard_run29(script, tmp, [_art29("cifuzz-build-address-def", 6, run=False)]),
+         "api": _guard_run29(script, tmp, [], fail=True)}
+    check("cflite: the artifact check passes main's own (expired and non-cifuzz ones from "
+          "elsewhere ignored), and says how many it read (control)",
+          g["main"][0] == 0 and "stored cifuzz-* artifacts: 2" in g["main"][1], repr(g["main"]))
+    check("cflite: ...and fails on one from a fork, even on a branch the fork calls main",
+          g["fork"][0] != 0 and "cifuzz-corpus-fuzz_x\t7\t70\tmain\t9\t5" in g["fork"][1]
+          and "::error::" in g["fork"][1], repr(g["fork"]))
+    check("cflite: ...and on one from another branch here, or with no run recorded",
+          g["branch"][0] != 0 and "cifuzz-coverage-latest\t8" in g["branch"][1]
+          and g["no run"][0] != 0 and "cifuzz-build-address-def\t6" in g["no run"][1],
+          repr((g["branch"], g["no run"])))
+    check("cflite: ...and when the artifacts cannot be listed", g["api"][0] != 0, repr(g["api"]))
 
-        def _art29(name, aid, branch="main", head=5, repo=5, expired=False, run=True):
-            return {"name": name, "id": aid, "expired": expired,
-                    "workflow_run": ({"id": aid * 10, "head_branch": branch,
-                                      "head_repository_id": head, "repository_id": repo}
-                                     if run else None)}
 
-        _g_main29 = [_art29("cifuzz-corpus-fuzz_cron", 1), _art29("coverage", 2, "topic", 9),
-                     _art29("cifuzz-build-address-abc", 3, "evil", 9, expired=True)]
-        _g_page2_29 = [_art29("cifuzz-coverage-latest", 4)]
+# ── the root-only unit checks run, as root, in every checks leg (CI1) ─────────────────────────────
+# They skipped in every CI leg, and a skip does not fail the unit suite. The step runs the suite
+# again as root after run-tests.sh has kept the runner's run in UNIT_LOG, and judges the checks
+# that ran only as root.
+def _ci1_root_step_bad(steps):
+    names = [_name29(s) for s in steps]
+    rt = next((i for i, n in enumerate(names) if n.startswith("Run all checks")), None)
+    if any([_CI_ROOT29 not in names, rt is None]) or names.index(_CI_ROOT29) < rt:
+        return ["no root step after the run-tests step: %r" % names]
+    bad, rs = [], steps[names.index(_CI_ROOT29)]
+    if 'UNIT_LOG="${RUNNER_TEMP}/unit-user.txt" bash tools/run-tests.sh' not in steps[rt]:
+        bad.append("run-tests.sh is not given UNIT_LOG")
+    wants = ("sudo -E env PATH=\"$PATH\" bash -c 'unset \"${!SUDO_@}\"; exec python tests/unit_test.py'",
+             '"${RUNNER_TEMP}/unit-user.txt" "${root_log}"')
+    if not all(w in rs for w in wants):
+        bad.append("the root step does not run the suite as root, SUDO_* unset, and compare it "
+                   "with UNIT_LOG")
+    if _re29.search(r"^ {8}(if|continue-on-error):", rs, _re29.M):
+        bad.append("the root step can be skipped or fail without failing the job")
+    return bad
 
-        def _guard29(extra, fail=False):
-            pages = os.path.join(_TMP29, "pages.json")
-            with open(pages, "w") as fh:
-                fh.write(_json29.dumps({"total_count": 9, "artifacts": _g_main29}) + "\n"
-                         + _json29.dumps({"total_count": 9, "artifacts": _g_page2_29 + extra}) + "\n")
-            env = dict(os.environ, PATH=_gbin29 + os.pathsep + os.environ.get("PATH", ""),
-                       REPO="o/r", GH_TOKEN="t", GH_FAKE_PAGES=pages)
-            if fail:
-                env["GH_FAKE_FAIL"] = "1"
-            r = _run29(["bash", "--noprofile", "--norc", "-e", "-c", _g_run29], env=env)
-            return r.returncode, r.stdout + r.stderr
 
-        _g = {"main": _guard29([]),
-              "fork": _guard29([_art29("cifuzz-corpus-fuzz_x", 7, "main", 9)]),
-              "branch": _guard29([_art29("cifuzz-coverage-latest", 8, "topic")]),
-              "no run": _guard29([_art29("cifuzz-build-address-def", 6, run=False)]),
-              "api": _guard29([], fail=True)}
-        check("cflite: the artifact check passes main's own (expired and non-cifuzz ones from "
-              "elsewhere ignored), and says how many it read (control)",
-              _g["main"][0] == 0 and "stored cifuzz-* artifacts: 2" in _g["main"][1], repr(_g["main"]))
-        check("cflite: ...and fails on one from a fork, even on a branch the fork calls main",
-              _g["fork"][0] != 0 and "cifuzz-corpus-fuzz_x\t7\t70\tmain\t9\t5" in _g["fork"][1]
-              and "::error::" in _g["fork"][1], repr(_g["fork"]))
-        check("cflite: ...and on one from another branch here, or with no run recorded",
-              _g["branch"][0] != 0 and "cifuzz-coverage-latest\t8" in _g["branch"][1]
-              and _g["no run"][0] != 0 and "cifuzz-build-address-def\t6" in _g["no run"][1],
-              repr((_g["branch"], _g["no run"])))
-        check("cflite: ...and when the artifacts cannot be listed",
-              _g["api"][0] != 0, repr(_g["api"]))
-
-    # ── the root-only unit checks run, as root, in every checks leg (CI1) ─────────────────────────
-    # They skipped in every CI leg, and a skip does not fail the unit suite. The step runs the
-    # suite again as root after run-tests.sh has kept the runner's run in UNIT_LOG, and judges the
-    # checks that ran only as root.
-    _ci29 = _wf29("ci.yml")
-    _ci_steps29 = _steps29(_job29(_ci29, "checks"))
-    _ci_names29 = [_name29(s) for s in _ci_steps29]
-    _ci_root_name29 = "Run the root-only unit checks, as root"
-    _ci_bad29 = []
-    _ci_rt_at29 = next((i for i, n in enumerate(_ci_names29) if n.startswith("Run all checks")), None)
-    if (_ci_root_name29 not in _ci_names29 or _ci_rt_at29 is None
-            or _ci_names29.index(_ci_root_name29) < _ci_rt_at29):
-        _ci_bad29.append("no root step after the run-tests step: %r" % _ci_names29)
-    else:
-        _ci_rs = _ci_steps29[_ci_names29.index(_ci_root_name29)]
-        _ci_rt = _ci_steps29[_ci_rt_at29]
-        if 'UNIT_LOG="${RUNNER_TEMP}/unit-user.txt" bash tools/run-tests.sh' not in _ci_rt:
-            _ci_bad29.append("run-tests.sh is not given UNIT_LOG")
-        if ("sudo -E env PATH=\"$PATH\" bash -c 'unset \"${!SUDO_@}\"; exec python tests/unit_test.py'"
-                not in _ci_rs or '"${RUNNER_TEMP}/unit-user.txt" "${root_log}"' not in _ci_rs):
-            _ci_bad29.append("the root step does not run the suite as root, SUDO_* unset, and "
-                             "compare it with UNIT_LOG")
-        if _re29.search(r"^ {8}(if|continue-on-error):", _ci_rs, _re29.M):
-            _ci_bad29.append("the root step can be skipped or fail without failing the job")
-    _rt29 = _read29("tools", "run-tests.sh")
-    if ('"$PY" tests/unit_test.py | tee "${UNIT_LOG}"' not in _rt29
-            or "set -euo pipefail" not in _rt29.splitlines()[:12]):
-        _ci_bad29.append("run-tests.sh does not tee the unit run to UNIT_LOG under pipefail")
+def _ci1_wiring():
+    bad = _ci1_root_step_bad(_steps29(_job29(_wf29("ci.yml"), "checks")))
+    rt = _read29("tools", "run-tests.sh")
+    if ('"$PY" tests/unit_test.py | tee "${UNIT_LOG}"' not in rt
+            or "set -euo pipefail" not in rt.splitlines()[:12]):
+        bad.append("run-tests.sh does not tee the unit run to UNIT_LOG under pipefail")
     check("ci: every checks leg runs the unit suite again as root, against the runner's own run",
-          not _ci_bad29, repr(_ci_bad29))
+          not bad, repr(bad))
 
-    # ...and its verdict: the step's own python, cut out of the workflow, on made-up runs.
-    _ci_src29 = _wf_run_block(_ci29, _ci_root_name29) if _ci_root_name29 in _ci_names29 else ""
-    _ci_py29 = _ci_src29[_ci_src29.find("<<'EOF'\n") + 8:_ci_src29.rfind("\nEOF")] if _ci_src29 else ""
-    _U29 = ("PASS  a\nPASS  b\nSKIP  root gate   [skipped: needs root and a daemon account]\n"
-            "SKIP  zsh thing   [skipped: no zsh on this machine]\n\n2 / 2 checks passed\n\n"
-            "2 CHECK(S) DID NOT RUN:\n  SKIP  root gate   [skipped: needs root and a daemon account]\n")
-    _R_OK29 = ("PASS  a\nFAIL  b   [a detail\nthat spans lines]\nPASS  r1\nPASS  r2\n"
-               "SKIP  zsh thing   [skipped: no zsh on this machine]\n\n3 / 4 checks passed\n")
 
-    def _verdict29(user, root):
-        u, r = os.path.join(_TMP29, "u.txt"), os.path.join(_TMP29, "r.txt")
-        with open(u, "w") as fh:
-            fh.write(user)
-        with open(r, "w") as fh:
-            fh.write(root)
-        p = _run29([_sys29.executable, "-", u, r], input=_ci_py29)
-        return p.returncode, p.stdout + p.stderr
+# ...and its verdict: the step's own python, cut out of the workflow, on made-up runs.
+_U29 = ("PASS  a\nPASS  b\nSKIP  root gate   [skipped: needs root and a daemon account]\n"
+        "SKIP  zsh thing   [skipped: no zsh on this machine]\n\n2 / 2 checks passed\n\n"
+        "2 CHECK(S) DID NOT RUN:\n  SKIP  root gate   [skipped: needs root and a daemon account]\n")
+_R_OK29 = ("PASS  a\nFAIL  b   [a detail\nthat spans lines]\nPASS  r1\nPASS  r2\n"
+           "SKIP  zsh thing   [skipped: no zsh on this machine]\n\n3 / 4 checks passed\n")
 
-    _v = {"ok": _verdict29(_U29, _R_OK29),
-          "fail": _verdict29(_U29, _R_OK29.replace("PASS  r2\n", "FAIL  r2   [boom]\n")),
-          "shut": _verdict29(_U29, _R_OK29 + "SKIP  root gate   [skipped: needs root and x]\n"),
-          "tally": _verdict29(_U29, _R_OK29.replace("3 / 4 checks passed", "Traceback")),
-          "none": _verdict29(_U29, _U29),
-          "nogate": _verdict29(_U29.replace("needs root and", "needs"), _R_OK29)}
+
+def _verdict29(code, tmp, user, root):
+    u, r = os.path.join(tmp, "u.txt"), os.path.join(tmp, "r.txt")
+    with open(u, "w") as fh:
+        fh.write(user)
+    with open(r, "w") as fh:
+        fh.write(root)
+    p = _run29([_sys29.executable, "-", u, r], input=code)
+    return p.returncode, p.stdout + p.stderr
+
+
+def _ci1_verdict(tmp):
+    ci = _wf29("ci.yml")
+    src = _wf_run_block(ci, _CI_ROOT29) if _CI_ROOT29 in ci else "<<'EOF'\n\nEOF"
+    code = src[src.find("<<'EOF'\n") + 8:src.rfind("\nEOF")]
+    v = {"ok": _verdict29(code, tmp, _U29, _R_OK29),
+         "fail": _verdict29(code, tmp, _U29, _R_OK29.replace("PASS  r2\n", "FAIL  r2   [boom]\n")),
+         "shut": _verdict29(code, tmp, _U29, _R_OK29 + "SKIP  root gate   [skipped: needs root and x]\n"),
+         "tally": _verdict29(code, tmp, _U29, _R_OK29.replace("3 / 4 checks passed", "Traceback")),
+         "none": _verdict29(code, tmp, _U29, _U29),
+         "nogate": _verdict29(code, tmp, _U29.replace("needs root and", "needs"), _R_OK29)}
     check("ci root step: passes when every check that ran only as root passed, a check failing as "
           "root that also ran as the runner aside (control)",
-          bool(_ci_py29) and _v["ok"][0] == 0 and "ran only as root: 2" in _v["ok"][1], repr(_v["ok"]))
+          all([code, v["ok"][0] == 0, "ran only as root: 2" in v["ok"][1]]), repr(v["ok"]))
     check("ci root step: ...fails on a root-only check that failed, naming it",
-          _v["fail"][0] != 0 and "::error::failed as root: r2" in _v["fail"][1], repr(_v["fail"]))
+          all([v["fail"][0], "::error::failed as root: r2" in v["fail"][1]]), repr(v["fail"]))
     check("ci root step: ...and when a check skipped for want of root still skipped as root",
-          _v["shut"][0] != 0 and "still skipped as root: root gate" in _v["shut"][1], repr(_v["shut"]))
+          all([v["shut"][0], "still skipped as root: root gate" in v["shut"][1]]), repr(v["shut"]))
     check("ci root step: ...and when a run left no tally, or nothing ran only as root, or nothing "
           "was skipped for want of root (it judged nothing)",
-          _v["tally"][0] != 0 and "left no tally" in _v["tally"][1]
-          and _v["none"][0] != 0 and "judged nothing" in _v["none"][1]
-          and _v["nogate"][0] != 0 and "judged nothing" in _v["nogate"][1],
-          repr((_v["tally"], _v["none"], _v["nogate"])))
+          all([v["tally"][0], "left no tally" in v["tally"][1],
+               v["none"][0], "judged nothing" in v["none"][1],
+               v["nogate"][0], "judged nothing" in v["nogate"][1]]),
+          repr((v["tally"], v["none"], v["nogate"])))
 
-    # ── actionlint finds shellcheck, or fails, and proves it uses it (SC5) ────────────────────────
-    # actionlint skips the run: scripts in silence when it cannot find shellcheck, and exits 0.
-    # The step's script after the download, run with stand-ins for actionlint and shellcheck.
-    _al29 = _wf_run_block(_wf29("actionlint.yml"), "actionlint")
-    _al_tail29 = _al29[_al29.find("/tmp/actionlint -version\n") + len("/tmp/actionlint -version\n"):]
-    _abin29 = os.path.join(_TMP29, "abin")
-    os.makedirs(_abin29)
-    _fake_al29 = os.path.join(_TMP29, "fake-actionlint")
-    with open(_fake_al29, "w") as fh:
-        fh.write('#!/bin/bash\n'
-                 'sc=""; files=()\n'
-                 'for a in "$@"; do case "$a" in -shellcheck=*) sc="${a#-shellcheck=}" ;; -*) ;; '
-                 '*) files+=("$a") ;; esac; done\n'
-                 '[ "${FAKE_BLIND:-}" = 1 ] && exit 0\n'
-                 'if [ "${#files[@]}" -gt 0 ]; then\n'
-                 '  [ -x "$sc" ] && grep -q \'echo \\$1\' "${files[@]}" '
-                 '&& { echo "control.yml:6:9: shellcheck reported issue in this script: SC2086:info"; exit 1; }\n'
-                 '  exit 0\n'
-                 'fi\n'
-                 'echo "LINTED WITH ${sc}"\n')
-    os.chmod(_fake_al29, 0o755)
-    for _tool in ("mktemp", "mkdir", "grep", "cat", "rm"):
-        _tp = _shutil29.which(_tool)
-        if _tp:
-            os.symlink(_tp, os.path.join(_abin29, _tool))
-    _sc29 = os.path.join(_TMP29, "scbin")
-    os.makedirs(_sc29)
-    with open(os.path.join(_sc29, "shellcheck"), "w") as fh:
-        fh.write("#!/bin/bash\necho 'ShellCheck - stand-in'\n")
-    os.chmod(os.path.join(_sc29, "shellcheck"), 0o755)
 
-    def _al_run29(with_sc, blind=False):
-        path = _abin29 + (os.pathsep + _sc29 if with_sc else "")
-        env = {"PATH": path, "HOME": _TMP29, "TMPDIR": _TMP29}
-        if blind:
-            env["FAKE_BLIND"] = "1"
-        r = _run29(["/bin/bash", "--noprofile", "--norc", "-euo", "pipefail", "-c",
-                    _al_tail29.replace("/tmp/actionlint", _fake_al29)], env=env)
-        return r.returncode, r.stdout + r.stderr
+# ── actionlint finds shellcheck, or fails, and proves it uses it (SC5) ────────────────────────────
+# actionlint skips the run: scripts in silence when it cannot find shellcheck, and exits 0. The
+# step's script after the download, run with stand-ins for actionlint and shellcheck.
+_FAKE_AL29 = """#!/bin/bash
+sc=""; files=()
+for a in "$@"; do case "$a" in -shellcheck=*) sc="${a#-shellcheck=}" ;; -*) ;; *) files+=("$a") ;; esac; done
+[ "${FAKE_BLIND:-}" = 1 ] && exit 0
+if [ "${#files[@]}" -gt 0 ]; then
+  [ -x "$sc" ] && grep -q 'echo \\$1' "${files[@]}" \\
+    && { echo "control.yml:6:9: shellcheck reported issue in this script: SC2086:info"; exit 1; }
+  exit 0
+fi
+echo "LINTED WITH ${sc}"
+"""
 
-    _a = {"ok": _al_run29(True), "nosc": _al_run29(False), "blind": _al_run29(True, blind=True)}
+
+def _al_setup29(tmp):
+    abin, scbin = os.path.join(tmp, "abin"), os.path.join(tmp, "scbin")
+    os.makedirs(abin)
+    os.makedirs(scbin)
+    _write_exe29(os.path.join(tmp, "fake-actionlint"), _FAKE_AL29)
+    _write_exe29(os.path.join(scbin, "shellcheck"), "#!/bin/bash\necho 'ShellCheck - stand-in'\n")
+    for tool in ("mktemp", "mkdir", "grep", "cat", "rm"):
+        if _shutil29.which(tool):
+            os.symlink(_shutil29.which(tool), os.path.join(abin, tool))
+    return abin, scbin
+
+
+def _al_run29(tail, tmp, path, blind=False):
+    env = {"PATH": path, "HOME": tmp, "TMPDIR": tmp}
+    if blind:
+        env["FAKE_BLIND"] = "1"
+    r = _run29(["/bin/bash", "--noprofile", "--norc", "-euo", "pipefail", "-c",
+                tail.replace(_AL_PATH29, os.path.join(tmp, "fake-actionlint"))], env=env)
+    return r.returncode, r.stdout + r.stderr
+
+
+def _sc5_shellcheck(tmp):
+    step = _wf_run_block(_wf29("actionlint.yml"), "actionlint")
+    cut = _AL_PATH29 + " -version\n"
+    tail = step[step.find(cut) + len(cut):]
+    abin, scbin = _al_setup29(tmp)
+    a = {"ok": _al_run29(tail, tmp, abin + os.pathsep + scbin),
+         "nosc": _al_run29(tail, tmp, abin),
+         "blind": _al_run29(tail, tmp, abin + os.pathsep + scbin, blind=True)}
     check("actionlint: with shellcheck there, the control is caught and the lint runs with it named "
           "(control)",
-          _a["ok"][0] == 0 and "LINTED WITH %s" % os.path.join(_sc29, "shellcheck") in _a["ok"][1],
-          repr(_a["ok"]))
+          a["ok"][0] == 0 and "LINTED WITH %s" % os.path.join(scbin, "shellcheck") in a["ok"][1],
+          repr(a["ok"]))
     check("actionlint: ...without shellcheck the step fails, not lints YAML alone",
-          _a["nosc"][0] != 0 and "shellcheck is not on this runner" in _a["nosc"][1]
-          and "LINTED" not in _a["nosc"][1], repr(_a["nosc"]))
+          a["nosc"][0] != 0 and "shellcheck is not on this runner" in a["nosc"][1]
+          and "LINTED" not in a["nosc"][1], repr(a["nosc"]))
     check("actionlint: ...and an actionlint that does not run shellcheck fails the control",
-          _a["blind"][0] != 0 and "did not report the control" in _a["blind"][1]
-          and "LINTED" not in _a["blind"][1], repr(_a["blind"]))
+          a["blind"][0] != 0 and "did not report the control" in a["blind"][1]
+          and "LINTED" not in a["blind"][1], repr(a["blind"]))
 
-    # ── actionlint checks vars.* strictly, against the variables the workflows read (SC9) ─────────
-    _alc29 = _read29(".github", "actionlint.yaml")
-    _alc_m29 = _re29.search(r"^config-variables:\n((?:  - \S+\n)+)", _alc29, _re29.M)
-    _alc_vars29 = sorted(_re29.findall(r"  - (\S+)", _alc_m29.group(1))) if _alc_m29 else []
-    _used29 = sorted({v for p in _glob29.glob(os.path.join(_WF29, "*.yml"))
-                      for v in _re29.findall(r"\bvars\.([A-Za-z_][A-Za-z0-9_]*)",
-                                             open(p, encoding="utf-8").read())})
+
+# ── actionlint checks vars.* strictly, against the variables the workflows read (SC9) ─────────────
+def _sc9_vars():
+    conf = _read29(".github", "actionlint.yaml")
+    m = _re29.search(r"^config-variables:\n((?:  - \S+\n)+)", conf, _re29.M)
+    listed = sorted(_re29.findall(r"  - (\S+)", m.group(1))) if m else []
+    used = sorted({v for p in _glob29.glob(os.path.join(_WF29, "*.yml"))
+                   for v in _re29.findall(r"\bvars\.([A-Za-z_][A-Za-z0-9_]*)",
+                                          open(p, encoding="utf-8").read())})
     check("actionlint: config-variables lists exactly the vars.* the workflows read, so a typo fails",
-          "DEPLOY_ENABLED" in _used29 and _alc_vars29 == _used29, repr((_alc_vars29, _used29)))
+          "DEPLOY_ENABLED" in used and listed == used, repr((listed, used)))
     check("actionlint: the runner-label override's removal note names the actionlint pinned now",
-          "rhysd/actionlint (VERSION in .github/workflows/actionlint.yml)" in _alc29
-          and "reviewdog" not in _alc29, _alc29[:900])
+          "rhysd/actionlint (VERSION in .github/workflows/actionlint.yml)" in conf
+          and "reviewdog" not in conf, conf[:900])
 
-    # ── the deploy job's Tailscale client is pinned by version and digest, uncached (SC6) ─────────
-    # Without sha256sum the action trusts a checksum fetched from the server the tarball comes
-    # from; with the cache on, a hit installs binaries with no check at all. Each pair here was
-    # cross-checked by hand: version = the action's default at that SHA (its action.yml); digest =
-    # pkgs.tailscale.com's tarball, verified through Tailscale's distsign chain. A new action SHA
-    # fails here until that is redone and the row added.
-    _TS_PINS29 = {"d1b6cd204f8dceda5b3eaad7f1f767be390056cd":
-                  ("1.94.2", "c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32")}
-    _dep29 = _wf29("deploy.yml")
-    _ts29 = _dep29[_dep29.find("- name: Join the tailnet"):]
-    _ts29 = _ts29[:_ts29.find("\n      - name: ", 1)]
-    _ts_sha29 = _re29.search(r"uses: tailscale/github-action@([0-9a-f]{40})\b", _ts29)
-    _ts_v29 = _re29.search(r"^ +version: '([^']+)'$", _ts29, _re29.M)
-    _ts_d29 = _re29.search(r"^ +sha256sum: '([0-9a-f]{64})'$", _ts29, _re29.M)
-    _ts_c29 = _re29.search(r"^ +use-cache: '(\w+)'$", _ts29, _re29.M)
+
+# ── the deploy job's Tailscale client is pinned by version and digest, uncached (SC6) ─────────────
+# Without sha256sum the action trusts a checksum fetched from the server the tarball comes from;
+# with the cache on, a hit installs binaries with no check at all. Each pair here was cross-checked
+# by hand: version = the action's default at that SHA (its action.yml); digest = pkgs.tailscale.com's
+# tarball, verified through Tailscale's distsign chain. A new action SHA fails here until that is
+# redone and the row added.
+_TS_PINS29 = {"d1b6cd204f8dceda5b3eaad7f1f767be390056cd":
+              ("1.94.2", "c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32")}
+
+
+def _sc6_tailscale():
+    dep = _wf29("deploy.yml")
+    ts = dep[dep.find("- name: Join the tailnet"):]
+    ts = ts[:ts.find("\n      - name: ", 1)]
+    sha = _re29.search(r"uses: tailscale/github-action@([0-9a-f]{40})\b", ts)
+    ver = _re29.search(r"^ +version: '([^']+)'$", ts, _re29.M)
+    dig = _re29.search(r"^ +sha256sum: '([0-9a-f]{64})'$", ts, _re29.M)
+    cache = _re29.search(r"^ +use-cache: '(\w+)'$", ts, _re29.M)
     check("deploy: the Tailscale client is pinned to a version and its sha256 for the action's SHA, "
           "and never taken from the cache",
-          _ts_sha29 is not None and _ts_sha29.group(1) in _TS_PINS29
-          and _ts_v29 is not None and _ts_d29 is not None
-          and (_ts_v29.group(1), _ts_d29.group(1)) == _TS_PINS29[_ts_sha29.group(1)]
-          and _ts_c29 is not None and _ts_c29.group(1) == "false", _ts29)
+          sha is not None and sha.group(1) in _TS_PINS29 and ver is not None and dig is not None
+          and (ver.group(1), dig.group(1)) == _TS_PINS29[sha.group(1)]
+          and cache is not None and cache.group(1) == "false", ts)
 
-    # ── every action is pinned to a full commit SHA (SC8) ─────────────────────────────────────────
-    # The convention, never enforced: CodeQL's unpinned-tag query trusts actions/* and github/*, and
-    # the repository does not require SHA pins. A local action (./) and a docker:// image are not
-    # commits; every other `uses:` must end in @<40 hex>. Comment lines are not read.
-    _uses29, _unpinned29 = [], []
-    _act_files29 = (sorted(_glob29.glob(os.path.join(_WF29, "*.y*ml")))
-                    + sorted(_glob29.glob(os.path.join(_ROOT29, ".github", "actions", "**", "action.y*ml"),
-                                          recursive=True)))
-    for _p in _act_files29:
-        for _ln_no, _ln in enumerate(open(_p, encoding="utf-8").read().splitlines(), 1):
-            if _ln.lstrip().startswith("#"):
-                continue
-            for _m in _re29.finditer(r"(?:^|[\s{,])uses:\s*(['\"]?)([^\s'\",}#]+)\1", _ln):
-                _ref = _m.group(2)
-                _uses29.append(_ref)
-                if _ref.startswith(("./", "docker://")):
-                    continue
-                if not _re29.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", _ref):
-                    _unpinned29.append("%s:%d %s" % (os.path.relpath(_p, _ROOT29), _ln_no, _ref))
+
+# ── every action is pinned to a full commit SHA (SC8) ─────────────────────────────────────────────
+# The convention, never enforced: CodeQL's unpinned-tag query trusts actions/* and github/*, and the
+# repository does not require SHA pins. A local action (./) and a docker:// image are not commits;
+# every other `uses:` must end in @<40 hex>. Comment lines are not read.
+def _all_uses29():
+    files = (sorted(_glob29.glob(os.path.join(_WF29, "*.y*ml")))
+             + sorted(_glob29.glob(os.path.join(_ROOT29, ".github", "actions", "**", "action.y*ml"),
+                                   recursive=True)))
+    uses = []
+    for p in files:
+        for no, ln in enumerate(_code29(open(p, encoding="utf-8").read()).splitlines(), 1):
+            uses += [(os.path.relpath(p, _ROOT29), m.group(2)) for m in
+                     _re29.finditer(r"(?:^|[\s{,])uses:\s*(['\"]?)([^\s'\",}#]+)\1", ln)]
+    return uses
+
+
+def _pinned29(ref):
+    """A local action and a docker:// image are not commits; anything else ends in @<40 hex>."""
+    if ref.startswith(("./", "docker://")):
+        return True
+    return _re29.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", ref) is not None
+
+
+_TAGGED29 = ("clusterfuzzlite-build-fuzzers:v1", "clusterfuzzlite-run-fuzzers:v1", "scorecard-action")
+
+
+def _sc8_pins():
+    uses = _all_uses29()
+    unpinned = ["%s %s" % u for u in uses if not _pinned29(u[1])]
     check("workflows: every action is pinned to a full-length commit SHA",
-          len(_uses29) >= 40 and any(u.startswith("actions/checkout@") for u in _uses29)
-          and not _unpinned29, repr((len(_uses29), _unpinned29)))
+          all([len(uses) >= 40, any(u.startswith("actions/checkout@") for _, u in uses), not unpinned]),
+          repr((len(uses), unpinned)))
     # The ClusterFuzzLite actions run images they name by tag (the Dockerfile's header says so, of
     # "that SHA"): one SHA across every workflow, so the one note covers them all.
-    _cfl_shas29 = {_re29.sub(r".*@", "", u) for u in _uses29 if u.startswith("google/clusterfuzzlite/")}
-    _df29 = _read29(".clusterfuzzlite", "Dockerfile")
+    shas = {_re29.sub(r".*@", "", u) for _, u in uses if u.startswith("google/clusterfuzzlite/")}
+    df = _read29(".clusterfuzzlite", "Dockerfile")
     check("cflite: every ClusterFuzzLite action is at one SHA, and the Dockerfile says its images "
           "are pulled by tag",
-          len(_cfl_shas29) == 1 and "clusterfuzzlite-build-fuzzers:v1" in _df29
-          and "clusterfuzzlite-run-fuzzers:v1" in _df29 and "scorecard-action" in _df29,
-          repr(_cfl_shas29))
+          all([len(shas) == 1] + [w in df for w in _TAGGED29]), repr(shas))
+
+
+_TMP29 = _tf29.mkdtemp(prefix="lgsm-unit-p29-")
+try:
+    _cf1_seconds()
+    _cf1_imports(_cf1_preload(), _TMP29)
+    _CFL29 = _cflite_files()
+    _cf2_no_secret(_CFL29)
+    _cf2_producers(_CFL29)
+    _cf2_guard_placement(_CFL29)
+    _cf2_guard_driven(_CFL29, _TMP29)
+    _ci1_wiring()
+    _ci1_verdict(_TMP29)
+    _sc5_shellcheck(_TMP29)
+    _sc9_vars()
+    _sc6_tailscale()
+    _sc8_pins()
 finally:
     _shutil29.rmtree(_TMP29, ignore_errors=True)
