@@ -650,11 +650,15 @@ async function checkBackground(cfg) {
         w.emits('leave_console') === 1, JSON.stringify(w.page.emitted.map(e => e[0])));
 }
 
+// The grace timer must fire BETWEEN two ticks of the 30 s console poll: a tick that runs while the
+// tab is in view clears a pending timer itself, and would hide what this check is for.
 async function checkLateTimer(cfg) {
   const w = await manualWorld(cfg);
-  await w.hide(true);
+  await w.advance(5000);
+  await w.hide(true);                       // the timer is due at 35 s; the poll ticks at 30 s and 60 s
+  await w.advance(26000);                   // 31 s: the 30 s tick has passed, the tab still hidden
   await w.page.setHidden(false, true);      // visible again, but the page was frozen: no event
-  await w.advance(GRACE);
+  await w.advance(4000);                    // 35 s: the frozen page's timer fires late
   check('a grace timer a frozen page fires after it is visible again leaves nothing',
         w.emits('leave_console') === 0 && w.room.has('page'), JSON.stringify(w.page.emitted.map(e => e[0])));
 }
