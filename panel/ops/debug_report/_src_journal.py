@@ -24,14 +24,26 @@ read(max_lines=5000, timeout=10) -> dict
     (_TRANSPORT stdout/journal), the unit's syslog lines at warning or worse (a REFUSED sudo stays,
     and so does anything else that complains), and the messages systemd and coredump write about
     the unit — the terms systemd's add_matches_for_unit / add_matches_for_user_unit use, with the
-    service's own term narrowed. -n then counts only those lines, so the window reaches back as far
-    as the panel's own output does. NOT `--grep`: on systemd 254+ `-n` with `--grep` walks the
-    whole journal backwards and returns newest-first (24-39 s on the test VPS, past the 10 s cap),
-    and on 249 it filters the same last N lines without widening anything.
+    service's own term narrowed. NOT `--grep`: on systemd 254+ `-n` with `--grep` walks the whole
+    journal backwards and returns newest-first (24-39 s on the test VPS, past the 10 s cap), and
+    on 249 it filters the same last N lines without widening anything.
 
-    "sudo" is a second, separate read of the unit's sudo lines (SYSLOG_IDENTIFIER=sudo), which the
-    digest counts by helper verb; None when the main read was not filtered (its own lines then
-    carry them, as before) or when it could not be read ("sudo_why").
+    WHY A WINDOW, NOT `-n`. These matches are an AND of two dense terms (the unit's entries, most
+    of them sudo lines; every service's stdout) whose intersection is sparse, and sd-journal steps
+    through that one of the unit's entries at a time. `-n N` walks back from the end until N match,
+    so when the whole retained journal holds fewer than N it walks ALL of it: on the test VPS
+    (1.9 GB, 1683 matches) it was still running at 315 s, the 10 s budget went on it, and the
+    report showed no journal at all. So each filtered read is `--since=<window> --lines=+N`: it
+    seeks to the window's start and walks forward (bounded by the window, whatever the journal's
+    size), keeping the OLDEST N lines of it (privileged.JOURNAL_SINCE has the windows and the
+    versions). A read that comes back with all N has more than that in its window, so its newest
+    lines are missing: the plain read is used instead, which reads the newest N. And a filtered
+    read gets at most _FILTERED_SHARE of the time left, so the plain read after it always has the
+    rest — the filtered read spending the whole budget is how the VPS report ended up with none.
+
+    "sudo" is a second, separate read of the unit's sudo lines (SYSLOG_IDENTIFIER=sudo) over the
+    last hour, which the digest counts by helper verb; None when the main read was not filtered
+    (its own lines then carry them, as before) or when it could not be read ("sudo_why").
 
     journalctl prints '-- No entries --' to stdout with rc 0 when nothing matches, and an older
     helper's verb has no -q: output that is only such marker lines (or journalctl's "No journal
@@ -43,6 +55,8 @@ read(max_lines=5000, timeout=10) -> dict
 import re
 import time
 
+from panel.security import privileged as _priv
+
 _UNIT = "linuxgsm-panel"
 _SERVICE = _UNIT + ".service"
 _MARKER_RE = re.compile(r"^(?:-- (?:No entries|Boot |Reboot|Logs begin|Journal begins|Journal ends)"
@@ -50,6 +64,9 @@ _MARKER_RE = re.compile(r"^(?:-- (?:No entries|Boot |Reboot|Logs begin|Journal b
 # Syslog lines kept from the unit: emerg..warning. sudo logs a successful command at notice (5) and
 # pam its sessions at info (6); a refusal is alert (1), pam's auth failures err/crit.
 _LOUD = ["PRIORITY=%d" % p for p in range(5)]
+# The share of the time left that a FILTERED read may spend, so the plain read after it always has
+# the rest (see WHY A WINDOW).
+_FILTERED_SHARE = 0.5
 
 
 def user_unit_matches(uid):
@@ -65,6 +82,12 @@ def user_unit_matches(uid):
 def user_unit_sudo_matches(uid):
     """The sudo lines of this account's user unit: the calls the digest counts."""
     return ["_SYSTEMD_USER_UNIT=" + _SERVICE, "_UID=%d" % uid, "SYSLOG_IDENTIFIER=sudo"]
+
+
+def window_words(name):
+    """'the last 24 hours' for a privileged.JOURNAL_SINCE window ('-24h')."""
+    hours = int(_priv.JOURNAL_SINCE[name].strip("-h"))
+    return "the last hour" if hours == 1 else "the last %d hours" % hours
 
 
 def content_lines(out):
@@ -93,15 +116,25 @@ def _privileged_allowed(so):
     return hasattr(so.os, "geteuid") and so.os.geteuid() == 0
 
 
-def _first_lines(reads):
-    """Run the (filtered, read) pairs in order until one has content: (lines, filtered, state)."""
-    state = "not read"
+def _first_lines(reads, n):
+    """Run the (filtered, read) pairs in order until one has content: (lines, filtered, state).
+
+    A filtered read that came back FULL -- `n` lines, the oldest n of its window, so its newest
+    lines are past them -- gives way to the plain read after it, which reads the newest n. The
+    full read is the answer only when that one has nothing.
+    """
+    state, full = "not read", None
     for filtered, run in reads:
         out, err, rc = run()
         lines = content_lines(out)
+        if filtered and len(lines) >= n:
+            full = full or lines
+            continue
         if lines:
             return lines, filtered, None
         state = _state(out, err, rc)
+    if full:
+        return full, True, None
     return [], False, state
 
 
@@ -129,33 +162,43 @@ def read(max_lines=5000, timeout=10):
     def left():
         return max(0.5, end - time.monotonic())
 
-    def jctl(pre, matches=()):
+    def share():
+        return max(0.5, left() * _FILTERED_SHARE)
+
+    def jctl(pre, matches=(), window=None):
         # The options BEFORE the matches: journalctl reads a stray option after them as a match
-        # when POSIXLY_CORRECT is set. The unit reads keep the argv they always had.
-        return lambda: so._debug_run(["journalctl"] + list(pre) + ["-q", "-n", n, "--no-pager"]
-                                     + list(matches), timeout=left())
+        # when POSIXLY_CORRECT is set. The unit reads keep the argv they always had. A filtered
+        # read (`window`, a privileged.JOURNAL_SINCE name) is bounded by its window and its share.
+        limit = (["--since=" + _priv.JOURNAL_SINCE[window], "--lines=+" + n] if window
+                 else ["-n", n])
+        return lambda: so._debug_run(["journalctl"] + list(pre) + ["-q"] + limit + ["--no-pager"]
+                                     + list(matches),
+                                     timeout=share() if window == "panel-own" else left())
 
     lines, filtered, state = _first_lines(
-        [(True, jctl(["--user"], user_unit_matches(uid))), (False, jctl(["--user", "-u", _UNIT]))])
+        [(True, jctl(["--user"], user_unit_matches(uid), "panel-own")),
+         (False, jctl(["--user", "-u", _UNIT]))], int(n))
     if lines:
         return _found("user-journal", lines, filtered,
-                      jctl(["--user"], user_unit_sudo_matches(uid)))
+                      jctl(["--user"], user_unit_sudo_matches(uid), "panel-sudo"))
     tried = ["user journal: " + state]
     if _privileged_allowed(so):
         source = "helper" if so._helper_present() else "root"
 
-        def verb(src):
-            return lambda: so._run_verb("journal", [src, n], timeout=left(), merge_stderr=False)
-        lines, filtered, state = _first_lines([(True, verb("panel-own")), (False, verb("panel"))])
+        def verb(src, budget=left):
+            return lambda: so._run_verb("journal", [src, n], timeout=budget(), merge_stderr=False)
+        lines, filtered, state = _first_lines(
+            [(True, verb("panel-own", share)), (False, verb("panel"))], int(n))
         if lines:
             return _found(source, lines, filtered, verb("panel-sudo"))
         tried.append("system journal via %s: %s" % (source, state))
     else:
         lines, filtered, state = _first_lines(
-            [(True, jctl([], user_unit_matches(uid))),
-             (False, jctl(["_SYSTEMD_USER_UNIT=%s" % _SERVICE, "_UID=%d" % uid]))])
+            [(True, jctl([], user_unit_matches(uid), "panel-own")),
+             (False, jctl(["_SYSTEMD_USER_UNIT=%s" % _SERVICE, "_UID=%d" % uid]))], int(n))
         if lines:
-            return _found("user-unit", lines, filtered, jctl([], user_unit_sudo_matches(uid)))
+            return _found("user-unit", lines, filtered,
+                          jctl([], user_unit_sudo_matches(uid), "panel-sudo"))
         tried.append("system journal for this account's unit: " + state)
         tried.append("no journal readable without sudo")
     return {"source": None, "lines": [], "why": "; ".join(tried), "filtered": False,

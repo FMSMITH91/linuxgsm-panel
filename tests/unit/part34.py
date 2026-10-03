@@ -1347,11 +1347,12 @@ def _section_report_reads34():
                                             "", 0))
     first = calls[0] if calls else []
     check("I journal: the report's read asks journald for the panel's OWN output by indexed fields — "
-          "its user unit's stdout, its warnings, systemd's lines about it — so -n 5000 counts only "
-          "those (not --grep, which on systemd 254+ walks the whole journal backwards)",
+          "its user unit's stdout, its warnings, systemd's lines about it — so the line limit counts "
+          "only those (not --grep, which on systemd 254+ walks the whole journal backwards; the "
+          "window that bounds it is part39's)",
           all(([t for t in ("--user", "_SYSTEMD_USER_UNIT=linuxgsm-panel.service", "_UID=%d" % uid,
                             "_TRANSPORT=stdout", "PRIORITY=4", "+", "USER_UNIT=linuxgsm-panel.service",
-                            "-n", "5000") if t not in first] == [],
+                            "--lines=+5000") if t not in first] == [],
                not set(first) & {"-u", "-g", "--grep", "PRIORITY=5"})), repr(first))
     second = calls[1] if len(calls) > 1 else []
     check("I journal: ...and the sudo lines are read APART, for the digest's count",

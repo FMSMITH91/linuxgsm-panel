@@ -104,13 +104,17 @@ JOURNAL_MATCHES = {
                   "+", "_PID=1", "UNIT=" + _PANEL_SVC, "+", "_UID=0", "OBJECT_SYSTEMD_UNIT=" + _PANEL_SVC),
     "panel-sudo": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "SYSLOG_IDENTIFIER=sudo"),
 }
+# How far back a field-match source reads, FORWARD from there, with `--lines=+N` (the oldest N of
+# the window): the only form that is bounded whatever the journal's size — see tools/panel-helper.
+JOURNAL_SINCE = {"panel-own": "-24h", "panel-sudo": "-1h"}
 JOURNAL_SOURCES = tuple(sorted(set(JOURNAL_UNITS) | set(JOURNAL_MATCHES)))
 
 
 def journal_argv(source, lines):
     """The journalctl argv for one journal SOURCE name and a line count (already validated)."""
     if source in JOURNAL_MATCHES:
-        return ["journalctl", "--no-pager", "-q", "-n", lines] + list(JOURNAL_MATCHES[source])
+        return (["journalctl", "--no-pager", "-q", "--since=" + JOURNAL_SINCE[source],
+                 "--lines=+" + lines] + list(JOURNAL_MATCHES[source]))
     return (["journalctl"] + [x for u in JOURNAL_UNITS[source] for x in ("-u", u)]
             + ["--no-pager", "-n", lines])
 

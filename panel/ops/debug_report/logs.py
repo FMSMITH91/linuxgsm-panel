@@ -306,8 +306,9 @@ def _priv_summary(j):
     """The privileged-call line for this report, from the separate sudo read when there was one."""
     if j.get("sudo"):
         _kept, verbs, sessions = _split_priv(j["sudo"])
-        return _priv_line(verbs, sessions, "the newest %d sudo lines of the panel's unit, %s"
-                          % (len(j["sudo"]), _span(j["sudo"])), title="Privileged calls")
+        return _priv_line(verbs, sessions, "the %d sudo lines of the panel's unit from %s, %s"
+                          % (len(j["sudo"]), _src_journal.window_words("panel-sudo"),
+                             _span(j["sudo"])), title="Privileged calls")
     if j.get("filtered"):
         return "- **Privileged calls**: not counted (%s)" % (j.get("sudo_why") or "no sudo lines read")
     _kept, verbs, sessions = _split_priv(j["lines"])
@@ -322,9 +323,12 @@ def section_journal_digest(ctx):
         return res.add("_(digest unavailable: %s)_" % (j["why"] or "no journal read"))
     lines, _verbs, _sessions = _split_priv(j["lines"])
     bodies = [_body(ln) for ln in lines]
-    res.add("- **Window**: the last %d lines%s, %s" % (
-        len(j["lines"]), " of the panel's own output (its sudo lines read apart)"
-        if j.get("filtered") else "", _span(j["lines"])))
+    if j.get("filtered"):
+        res.add("- **Window**: %d lines of the panel's own output from %s (its sudo lines read "
+                "apart), %s" % (len(j["lines"]), _src_journal.window_words("panel-own"),
+                                _span(j["lines"])))
+    else:
+        res.add("- **Window**: the last %d lines, %s" % (len(j["lines"]), _span(j["lines"])))
     priv = _priv_summary(j)
     if priv:
         res.add(priv)

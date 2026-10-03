@@ -140,11 +140,17 @@ try:
     # select.poll and makes select.select wait in the CALLING thread's hub, which a tpool thread
     # does not run. See _readiness().
     _real_select = _ev_original("select")
+    # ...and the unpatched time, for a native thread's sleep (_pause_for).
+    _real_time = _ev_original("time")
 except Exception:
     _tpool = None
     _real_subprocess = subprocess
     _real_threading = threading
     _real_select = select
+    _real_time = time
+# The unpatched Popen CLASS, held apart from the module handle above (which a test harness may
+# stand a shim over): _pause_for tells a native thread's process by it.
+_REAL_POPEN = _real_subprocess.Popen
 
 
 # In-memory SSH connection cache, keyed by _conn_key() below.
@@ -320,22 +326,79 @@ def _ufw_mutating(verb):
     return verb.startswith("ufw-") and verb != "ufw-status"
 
 
+# How long a stopped command's process group gets after SIGTERM before SIGKILL. SIGTERM FIRST
+# because of sudo: the panel can signal sudo (its real uid is the panel's) but not what sudo runs
+# as root, and sudo cannot relay a SIGKILL. A SIGKILL'd sudo left the root helper and its
+# journalctl running at 100% of a core for 5.5 minutes on the test VPS, parented to init. Classic
+# sudo and sudo-rs both relay SIGTERM to their command (exec_nopty.c / exec/no_pty.rs), and the
+# helper ends its children and exits (tools/panel-helper, READ_VERBS) -- well inside this.
+_TERM_GRACE = 2.0
+_GROUP_POLL = 0.05
+
+
+def _group_signalable(pgid):
+    """Whether process group `pgid` still has a member this process may signal (sudo, a shell)."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except OSError:      # ESRCH: nobody left; EPERM: only processes of another user (root) left
+        return False
+
+
+def _pause_for(p):
+    """The sleep that suits the thread `p` is collected in.
+
+    Real beside the unpatched Popen (tpool's native threads, which have no hub to yield to), green
+    beside eventlet's patched one (a request greenlet: a real sleep there would stop the whole
+    hub). Without eventlet both are time.sleep.
+    """
+    return _real_time.sleep if type(p) is _REAL_POPEN else time.sleep
+
+
 def _signal_process_tree(p):
-    """SIGKILL a Popen and its entire process group, so no grandchildren are left orphaned.
+    """Stop a Popen and its entire process group, so no grandchildren are left orphaned.
+
+    SIGTERM to the group; then, once `p` has exited and the group has nothing left this process
+    may signal -- or _TERM_GRACE has passed -- SIGKILL to the group, for anything of ours that
+    ignored the SIGTERM. Waiting for the group, not just `p`, matters when `p` is a shell: it
+    exits at once while the sudo under it is still relaying, and a SIGKILL then would orphan the
+    root command all over again.
 
     Signals only: it never touches p's pipes, because the capped readers own them (see
-    _collect_capped). Never raises.
+    _collect_capped); it reaps `p` when `p` exits. Never raises.
     """
     try:
-        if hasattr(os, "killpg") and hasattr(os, "getpgid"):
-            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-        else:
-            p.kill()   # Windows / no process groups
+        pgid = os.getpgid(p.pid) if hasattr(os, "killpg") and hasattr(os, "getpgid") else None
     except Exception:
-        try:
-            p.kill()
-        except Exception:  # nosec B110 - killing an already-dead process is the expected race
-            pass           # here, and there is nothing left to do about it either way.
+        pgid = None          # already reaped: there is no group left to signal
+    if pgid is None:
+        _kill_quietly(p)     # Windows / no process groups / gone
+        return
+    _killpg_quietly(pgid, signal.SIGTERM)
+    deadline = time.monotonic() + _TERM_GRACE
+    try:
+        p.wait(timeout=_TERM_GRACE)
+    except Exception:
+        _log.debug("a command outlived its SIGTERM grace", exc_info=True)
+    pause = _pause_for(p)
+    while _group_signalable(pgid) and time.monotonic() < deadline:
+        pause(_GROUP_POLL)
+    if _group_signalable(pgid):
+        _killpg_quietly(pgid, signal.SIGKILL)
+
+
+def _killpg_quietly(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except OSError:
+        pass                 # the group is gone, or only another user's processes are left in it
+
+
+def _kill_quietly(p):
+    try:
+        p.kill()
+    except Exception:  # nosec B110 - killing an already-dead process is the expected race
+        pass           # here, and there is nothing left to do about it either way.
 
 
 def _kill_process_tree(p):
@@ -636,11 +699,13 @@ def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
     are kept, and the rest is read and DISCARDED rather than left unread, so a command still
     writing is not blocked into outliving its timeout.
 
-    BOUNDED: it answers within `timeout` plus _KILL_GRACE, however the command's descendants
-    behave. `kill` only signals; the readers get _KILL_GRACE to reach EOF, are told to stop, and
-    each pipe is closed once its reader has returned (one reader per descriptor: never
-    communicate(), which is a second). Then p is reaped. What the kill cannot reach (the root
-    helper under sudo, from the panel's account) exits in its own time, and is not waited for.
+    BOUNDED: it answers within `timeout` plus _KILL_GRACE -- plus, when `kill` is
+    _signal_process_tree, up to its _TERM_GRACE -- however the command's descendants behave.
+    `kill` only signals (and may wait for `p`); the readers get _KILL_GRACE to reach EOF, are told
+    to stop, and each pipe is closed once its reader has returned (one reader per descriptor:
+    never communicate(), which is a second). Then p is reaped. What the kill cannot reach (the
+    root helper under sudo, from the panel's account) is told by sudo's relayed SIGTERM and ends
+    itself (tools/panel-helper, READ_VERBS); it is not waited for.
 
     `threads` is the caller's to choose, as a threading MODULE: the unpatched one inside tpool,
     where a green thread has no hub to run on; the patched (green) one in a request greenlet,
