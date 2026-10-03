@@ -473,7 +473,7 @@ def _tg_rule37():
     blocks = _toml_blocks37(_read29(".github", "gitleaks.toml"))
     at = [i for i, (h, b) in enumerate(blocks) if h == "[[rules]]" and 'id = "%s"' % _TG_RULE_ID37 in b]
     if not at:
-        return {}
+        return {"regex": None, "group": 0, "keywords": False, "target": "secret", "allow": []}
     body = blocks[at[0]][1]
     allows = []
     for h, b in blocks[at[0] + 1:]:
@@ -491,9 +491,9 @@ def _tg_rule37():
 
 
 def _tg_found37(rule, text):
-    """The secrets the rule reports in `text`, after its allowlist, as gitleaks would."""
+    """The secrets the rule reports in `text`, after its allowlist, as gitleaks would ([] with no rule)."""
     out = []
-    for m in _re37.finditer(rule["regex"], text):
+    for m in _re37.finditer(rule.get("regex") or r"(?!)", text):
         secret = m.group(rule["group"])
         if not any(_re37.search(a, secret if rule["target"] == "secret" else m.group(0))
                    for a in rule["allow"]):
@@ -504,10 +504,9 @@ def _tg_found37(rule, text):
 def _v3_rule():
     """The keyword-free rule finds a fresh token everywhere, and nothing it should not."""
     rule = _tg_rule37()
+    has = bool(rule.get("regex"))
     check("gitleaks: a keyword-free Telegram rule is configured, reporting capture group 1",
-          bool(rule.get("regex")) and rule["group"] == 1 and not rule["keywords"], repr(rule))
-    if not rule.get("regex"):
-        return
+          has and rule["group"] == 1 and not rule["keywords"], repr(rule))
     missed = []
     for label, fmt in sorted(_TG_PLACES37.items()):
         for tok in (_tg_token37(), _tg_token37(last="-"), _tg_token37(last="_")):
@@ -516,7 +515,7 @@ def _v3_rule():
                 missed.append("%s%s: %r" % (label, " (ends %s)" % tok[-1], got))
     check("gitleaks: the Telegram rule finds a fresh token in every placement, as exactly that "
           "token (config.json, an assignment, an argument, the Bot API URL, prose, env, YAML)",
-          not missed, "; ".join(missed))
+          has and not missed, "; ".join(missed[:4]) or "no rule")
     near = {"gitleaks' own documented false positive": "clm12345:AgencyIdentificationCodeContentType",
             "a 34-character tail": _tg_token37()[:-1],
             "the TESTONLY fixtures": 'T = "12345:TESTONLYnotarealtoken00"; U = "67890:TESTONLYfixturevalue0"',
@@ -524,7 +523,7 @@ def _v3_rule():
     hits = {k: _tg_found37(rule, v) for k, v in near.items()}
     check("gitleaks: ...and finds nothing in gitleaks' own XSD false positive, a 34-character tail, "
           "the panel's TESTONLY fixtures, or a `:A` that is not `:AA`",
-          not any(hits.values()), repr({k: v for k, v in hits.items() if v}))
+          has and not any(hits.values()), repr({k: v for k, v in hits.items() if v}) if has else "no rule")
 
 
 def _v3_allowlist():
@@ -532,18 +531,15 @@ def _v3_allowlist():
     rule = _tg_rule37()
     hist = "123456789:" + "AAtoken" * 5      # the #72 fixture (74d11e8d), built, not written out
     same_id = "123456789:AA" + _tg_token37()[-33:]
-    if not rule.get("regex"):
-        check("gitleaks: the Telegram rule's allowlist clears only the #72 synthetic value", False,
-              "no rule")
-        return
+    matched = bool(rule.get("regex")) and _re37.search(rule["regex"], "t=" + hist + "\n") is not None
+    anchored = bool(rule.get("allow")) and all(a.startswith("^") and a.endswith("$") for a in rule["allow"])
     check("gitleaks: the Telegram rule's allowlist clears the #72 synthetic value (the rule does "
           "match it), anchored, on the secret",
-          _re37.search(rule["regex"], "t=" + hist + "\n") is not None and _tg_found37(rule, hist) == []
-          and rule["target"] == "secret" and rule["allow"]
-          and all(a.startswith("^") and a.endswith("$") for a in rule["allow"]), repr(rule["allow"]))
+          matched and _tg_found37(rule, hist) == [] and rule["target"] == "secret" and anchored,
+          repr(rule.get("allow")))
     check("gitleaks: ...and nothing else: the same bot id with another secret, and the value with "
           "its last character changed, still fire", _tg_found37(rule, same_id) == [same_id]
-          and _tg_found37(rule, hist[:-1] + "x") == [hist[:-1] + "x"], repr(rule["allow"]))
+          and _tg_found37(rule, hist[:-1] + "x") == [hist[:-1] + "x"], repr(rule.get("allow")))
     check("gitleaks: the config does not carry the #72 value as a literal (that is the token-shaped "
           "text GitHub's secret scanning alerted on)", hist not in _read29(".github", "gitleaks.toml"))
 
