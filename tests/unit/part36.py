@@ -109,12 +109,12 @@ def _server36(rid, short, port, game_type="csgo"):
 def _set_short_name36(sid, name):
     """Store `name` as the row's short_name the way a pre-validator database or a hand edit did.
 
-    Raw SQL: the model's @validates hook refuses it on assignment, which is the point — it never
-    looks again on a load.
+    A Core UPDATE, past the ORM: the model's @validates hook refuses it on assignment, which is
+    the point — it never looks again on a load.
     """
+    table = GameServer.__table__
     with _p9.app_context():
-        db.session.execute(_sa36.text("UPDATE %s SET short_name = :n WHERE id = :i"
-                                      % GameServer.__tablename__), {"n": name, "i": sid})
+        db.session.execute(_sa36.update(table).where(table.c.id == sid).values(short_name=name))
         db.session.commit()
 
 
@@ -221,7 +221,7 @@ def _uninstall_bad_row36():
 
 
 def _discover_selection36():
-    """discover's import asks the host only about names the import itself would accept."""
+    """The import from discover asks the host only about names the import itself accepts."""
     remote = NS(id=93603, host="192.0.2.63", username="admin", is_local=False, auth_method="key",
                 sudo_enabled=True)
     calls = []
@@ -281,7 +281,7 @@ def _run_as36(remote, user, action, **k):
 
 def _stub_install36():
     """Every host call steps 5 to the end make, answered from the script."""
-    _p9_patch(_ms36, "detect_game_ports", lambda r, s, l: _h36_next("detect"))
+    _p9_patch(_ms36, "detect_game_ports", lambda r, s, _lg: _h36_next("detect"))
     _p9_patch(_ms36, "_remote_listening_ports",
               lambda r: _h36_next("listen" if _h36["started"] else "listen_pre"))
     _p9_patch(_ms36, "remote_ufw_allow_game_ports",
@@ -291,16 +291,16 @@ def _stub_install36():
     _p9_patch(_ms36, "lgsm_write_config", lambda *a, **k: (True, ""))
     _p9_patch(_ms36, "_resolve_source_aux_ports", lambda *a, **k: {})
     _p9_patch(_ms36, "ensure_persistent_bans", lambda *a, **k: None)
-    _p9_patch(_ms36, "install_game_cron", lambda r, s, l, supported: _h36_next("cron5"))
-    _p9_patch(_ms36, "set_autostart", lambda r, s, on, l=None: _h36_next("cron7"))
+    _p9_patch(_ms36, "install_game_cron", lambda r, s, _lg, supported: _h36_next("cron5"))
+    _p9_patch(_ms36, "set_autostart", lambda r, s, on, _lg=None: _h36_next("cron7"))
     _p9_patch(_ms36, "time", NS(time=__import__("time").time, sleep=lambda s: None,
                                 monotonic=__import__("time").monotonic))
-    _p9_patch(_p9_sm, "list_server_commands", lambda r, s, l: _h36_next("cmds"))
+    _p9_patch(_p9_sm, "list_server_commands", lambda r, s, _lg: _h36_next("cmds"))
     _p9_patch(_p9_sm, "protected_host_ports", lambda r: {22})
     _p9_patch(_p9_sm, "remote_ufw_tagged_ports", lambda r, n: set())
     _p9_patch(_p9_sm, "_invalidate_port_scan", lambda rid: None)
     _p9_patch(_p9_sm, "run_as_game_user", _run_as36)
-    _p9_patch(_p9_sm, "list_cron_jobs", lambda r, s, l: _h36_next("cron_list"))
+    _p9_patch(_p9_sm, "list_cron_jobs", lambda r, s, _lg: _h36_next("cron_list"))
 
 
 def _install36(rid, name, port, **host):
