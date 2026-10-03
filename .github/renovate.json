@@ -2,8 +2,9 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
     "Renovate keeps ONLY the sha256-pinned release downloads in the workflows current (gitleaks,",
-    "actionlint, the Codacy coverage reporter), which Dependabot cannot see. Everything else stays",
-    "with Dependabot (.github/dependabot.yml), so the two never propose the same update.",
+    "actionlint, osv-scanner, the Codacy coverage reporter), which Dependabot cannot see.",
+    "Everything else stays with Dependabot (.github/dependabot.yml), so the two never propose the",
+    "same update.",
     "Each pin is marked in its step's env with a `# renovate: datasource=... depName=owner/repo`",
     "line directly above the VERSION (the release tag) and SHA256 lines. The",
     "github-release-attachments datasource finds the asset the current sha256 belongs to and",

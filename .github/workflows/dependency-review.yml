@@ -1,9 +1,10 @@
 name: Dependency Review
 
-# On every pull request, flag a NEWLY-INTRODUCED dependency that has a known vulnerability
-# (high or above), using the repo's dependency graph. This complements the other two dependency
-# layers rather than duplicating them: Dependabot UPDATES existing deps, pip-audit scans the WHOLE
-# current set on every push — this is the review-time gate on what a PR is about to ADD.
+# On every pull request, flag a NEWLY-INTRODUCED dependency that has a known vulnerability, at any
+# severity, using the repo's dependency graph. This complements the other dependency layers rather
+# than duplicating them: Dependabot UPDATES existing deps, and the dependency audit
+# (security-code.yml: pip-audit and osv-scanner) scans the WHOLE current set of every lockfile on
+# every push, pull request and week. This is the review-time gate on what a PR is about to ADD.
 #
 # It only runs on pull_request (the action diffs the PR base against its head), so a push straight
 # to main won't trigger it; it stays dormant until a PR is opened. Skipped on a private repo
@@ -39,5 +40,15 @@ jobs:
       - name: Dependency Review
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
-          # Fail the PR check when it would pull in a dependency with a high/critical advisory.
-          fail-on-severity: high
+          # Fail the PR check when it would pull in a dependency with an advisory of ANY severity:
+          # `low` is the action's own default (README at this SHA), and what pip-audit and
+          # osv-scanner hold every lockfile to. It was `high`, so a moderate advisory a pull request
+          # added (to gamedig's tree, or a CI tool's lockfile, which pip-audit never read) passed.
+          fail-on-severity: low
+          # Reviewed advisories with no fix, comma-separated. Each must also be an expiring,
+          # reasoned [[IgnoredVulns]] entry in the osv-scanner.toml beside its lockfile, which is
+          # where the triage is written; a unit check (part27) holds the two lists together, so an
+          # exemption cannot be added here alone. When that entry's date passes, the dependency
+          # audit fails, and the advisory is looked at again: both entries renewed or removed.
+          #   GHSA-ch52-4w7c-c8xp: http-cache-semantics, gamedig's tree (tools/gamedig/osv-scanner.toml).
+          allow-ghsas: GHSA-ch52-4w7c-c8xp

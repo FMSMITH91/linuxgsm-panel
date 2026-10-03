@@ -9,7 +9,13 @@ title = "linuxgsm-panel gitleaks"
 [extend]
 useDefault = true
 
-[allowlist]
+# `[[allowlists]]`, an array of tables: gitleaks v8.25.0 replaced the single `[allowlist]` table with
+# it (README, v8.30.1). The old table still loads through a deprecated compatibility shim, and a
+# release that dropped the shim and ignored the table would start firing on every placeholder below.
+# The keys are the same. Measured with the pinned 8.30.1 over the full history (986 commits): no
+# findings under either spelling, and with the entries removed one at a time, each spelling reports
+# exactly the same findings back, so the array table is read as the old one was.
+[[allowlists]]
 description = "Non-secret UI placeholders and example values"
 # Match against the detected secret text.
 regexTarget = "match"
