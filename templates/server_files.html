@@ -17,7 +17,16 @@
   /* Download now sits immediately left of Delete, and a bare icon is ~14px wide — on a phone that
      is a mis-tap away from the trash. Padding grows the hit area to ~30x28 without changing the
      icon or the row height (the row is already taller than the icon, so this fits inside it). */
-  #file-list .fb-dl, #file-list [data-action="delete"] { padding: .15rem .35rem !important; line-height: 1; }
+  #file-list .fb-dl, #file-list [data-action="rename"], #file-list [data-action="delete"] { padding: .15rem .35rem !important; line-height: 1; }
+  /* A row being renamed: its own name and icons go, the field takes the row's whole width, and the
+     row stops looking like a link. !important because the icons' wrapper is .d-flex, whose
+     display is itself !important. min-width:0 lets the field shrink on a phone instead of pushing
+     the buttons out. */
+  #file-list .fb-renaming { cursor: default !important; }
+  #file-list .fb-renaming > :not(.fb-rename) { display: none !important; }
+  #file-list .fb-rename { flex: 1 1 auto; min-width: 0; }
+  #file-list .fb-rename .form-control { min-width: 0; flex: 1 1 auto; }
+  #file-list .fb-rename .btn { flex: 0 0 auto; }
   #drop-overlay {
     position: absolute; inset: 0; z-index: 5; pointer-events: none;
     display: none; align-items: center; justify-content: center; text-align: center;
@@ -197,7 +206,9 @@
           <i class="bi bi-info-circle"></i>
           Tip: drag files or folders anywhere onto this card to upload (subfolders included), or use the buttons above.
           <i class="bi bi-shield-lock"></i>
-          This marks files protected from deletion.
+          This marks files protected from deletion and renaming.
+          <i class="bi bi-pencil"></i>
+          This renames a file or folder.
           <i class="bi bi-download"></i>
           This downloads a file, or a folder as .tar.gz.
         </div>

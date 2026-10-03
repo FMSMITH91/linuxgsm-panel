@@ -1454,6 +1454,24 @@ def _check_vps_prep_allows_a_remote_host():
               _it.status_code == 400, "got %d" % _it.status_code)
 
 
+def _check_rename_idor():
+    """Rename, probed like the action and tags above, as the MANAGE_SERVERS holder `_ci`.
+
+    A name with a slash is refused (400) before the host is asked anything, so the probe renames
+    nothing on either branch: a refused server is a 403, a server that got past access a 400.
+    """
+    if not other_id:
+        return
+    _irn = _ci.post("/api/server/%d/rename-path" % other_id,
+                    json={"path": "server.cfg", "new_name": "a/b"})
+    check("IDOR: renaming a file on a non-granted server BLOCKED (for a MANAGE_SERVERS holder)",
+          _irn.status_code == 403, "got %d" % _irn.status_code)
+    _irn = _ci.post("/api/server/%d/rename-path" % accessible_id,
+                    json={"path": "server.cfg", "new_name": "a/b"})
+    check("IDOR: ...while the same rename on the granted server gets past access (control)",
+          _irn.status_code == 400, "got %d" % _irn.status_code)
+
+
 def _check_limited_user_server_actions():
     """The limited user's server actions and file/cron/tag writes are refused; tag reads scoped."""
     global _dl
@@ -1463,6 +1481,11 @@ def _check_limited_user_server_actions():
           c.post("/api/command/%d" % accessible_id, json={"command": "status"}).status_code == 403)
     check("read file without MANAGE_SERVERS -> 403",
           c.get("/api/server/%d/file?path=.bashrc" % accessible_id).status_code == 403)
+    # A VALID rename, so the 403 can only be the permission: with the file-manager check gone it
+    # would go on to the account gate and the host, and answer something else.
+    check("rename file without MANAGE_SERVERS -> 403",
+          c.post("/api/server/%d/rename-path" % accessible_id,
+                 json={"path": "server.cfg", "new_name": "renamed.cfg"}).status_code == 403)
     # The download is the one file-browser route that hands bytes OUT, and it is a plain link
     # rather than an /api/ route — so its refusal is a redirect, not a 403 body.
     #
@@ -3666,6 +3689,7 @@ try:
     _check_tailscale_migrate_refuses_panel_host()
     _check_host_routes_refuse_delegated_panel_host()
     _check_vps_prep_allows_a_remote_host()
+    _check_rename_idor()
     _check_limited_user_server_actions()
     _check_legacy_super_admin_grant()
     _check_denials_and_limited_pages()
@@ -4235,8 +4259,9 @@ _AX_ACTION_FROM_CALLER = {
                                 # "queued_backup_waiting"
     "audit_bot_action",         # the chat bots pass "moderate_say" (server=) / "panel_self_update"
     "_write_refused",           # server_files' write routes pass edit_config / edit_file /
-                                # delete_file / upload_file / cron_add / cron_update / cron_delete /
-                                # cron_run_now — each the action that route audits on success
+                                # delete_file / rename_file / upload_file / cron_add / cron_update /
+                                # cron_delete / cron_run_now — each the action that route audits on
+                                # success
 }
 _ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
 _ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)

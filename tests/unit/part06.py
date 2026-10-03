@@ -4679,8 +4679,11 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # password is held on until it sets its own). This total exists to catch a view VANISHING during a
 # move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the record of what
 # the new route actually is.
-check("register_routes: every one of the 224 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 224,
+# 225, was 224: /api/server/<id>/rename-path is a genuinely new view — renaming a file or folder in
+# the file browser, behind the same gates as delete-path (the file-manager permission, then the
+# game account's write refusal).
+check("register_routes: every one of the 225 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 225,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

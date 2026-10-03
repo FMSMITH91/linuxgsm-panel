@@ -14,6 +14,26 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Added
 
+- **Rename a file or folder in the file browser.** Every row that can be deleted now has a Rename
+  (pencil) control, at every width. It turns the row's name into a field holding the current name,
+  with the part before the extension selected, so typing replaces `notes` and keeps `.txt`. Enter or
+  Rename sends it, Escape or Cancel puts the row back, and when the panel refuses, the reason shows
+  under the field so you can fix the name where you typed it. It covers renaming something you just
+  uploaded, and a file open in the editor follows its new name. A rename stays in its own folder,
+  and the same rules guard it as Delete. The new name must be a single name: no `/`, not `.` or
+  `..`, at most 255 bytes, and no character that would make it read as another name (control
+  characters, line or paragraph separators, text-direction controls, or a space at either end:
+  `server.cfg ` looks exactly like `server.cfg`). The name is sent as typed and never trimmed; a
+  name the panel refuses comes back with the reason. Protected LinuxGSM paths cannot be renamed, and
+  no other name can be renamed onto them. Nor can the live console's log or the `log` and
+  `log/console` folders it is in, also when the logs are reached through a symbolic link, because
+  the console would stop until the server restarts. A path reached through a symbolic link to a
+  folder is refused, not followed. An existing name is never replaced, including one that appears
+  while the rename runs; there is no "replace" option. A game account that can become root is
+  refused, as it is for every other file write. Every rename request from someone allowed to manage
+  files is in the audit log (`rename_file`): renamed, refused (with the reason, including a name
+  refused for its form) or unconfirmed. If the host doesn't confirm the rename, the panel says
+  exactly that and asks you to reload, rather than guessing whether it happened.
 - **A terminal in the browser, for the panel's own host and for every remote.** xterm.js over the
   socket the console already uses. It needs a new "use terminal" permission (`use_terminal`) and
   access to the host; on the panel's own host it is superadmin-only whatever the grants say, because
@@ -441,6 +461,18 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The file browser lists every file under its real name, including one whose name ends in a
+  space or holds a line break.** The host's listing ended each entry with a newline, and every
+  connection type (local, Tailscale, SSH) trims the whitespace at the end of a command's output. So
+  when the entry listed last was a name ending in a space, the space went with the newline:
+  `server.cfg ` was listed as `server.cfg`. Rename on that row said the file was no longer there,
+  and Delete answered "Deleted" and left it in place. Worse, beside a real `server.cfg` both rows
+  pointed at the real file, so Rename, Delete or Edit on the spaced row acted on the real config.
+  Separately, the listing was split on every kind of line break Python knows, so a name holding
+  U+2028, U+2029 or U+0085 (an upload can create one) showed cut short, under a name no file has.
+  In each case, uploading a file of that name was not flagged as replacing it. Both listings now end
+  each entry with a NUL, which no filename can hold and the trim leaves alone, and are split on that
+  alone. Found by the real-browser check of file rename on the test VPS.
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
   and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
   `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query

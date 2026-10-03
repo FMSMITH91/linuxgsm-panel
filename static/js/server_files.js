@@ -170,7 +170,9 @@ function mkRow(opts){
   row.style.cursor='pointer';
   row.dataset.path=opts.path; row.dataset.type=opts.type;
   var left=document.createElement('span'); left.style.flex='1'; left.style.minWidth='0'; left.style.overflow='hidden'; left.style.textOverflow='ellipsis'; left.style.whiteSpace='nowrap';
-  left.innerHTML=opts.icon+' <span style="font-size:.85rem;" data-no-i18n>'+esc(opts.name)+'</span>';  // nosemgrep
+  // white-space:pre: the name as it is, so "a  b.txt" does not read as "a b.txt" nor " lead.txt" as
+  // "lead.txt" beside it. The row is one line anyway (nowrap, with an ellipsis).
+  left.innerHTML=opts.icon+' <span style="font-size:.85rem;white-space:pre;" data-no-i18n>'+esc(opts.name)+'</span>';  // nosemgrep
   var right=document.createElement('span'); right.className='d-flex align-items-center gap-2 flex-shrink-0';
   if(opts.size!=null){ var s=document.createElement('span'); s.className='text-secondary'; s.style.fontSize='.68rem'; s.textContent=fmtSize(opts.size); right.appendChild(s); }
   // A real <a href>, not a button: the browser downloads it natively, "Save link as" and
@@ -181,12 +183,24 @@ function mkRow(opts){
     dl.href=MOUNT+'/server/'+serverId+'/download?path='+encodeURIComponent(opts.path);
     dl.dataset.action='download';
     var dlTitle=(opts.type==='dir'?'Download folder as .tar.gz':'Download');
-    dl.title=dlTitle; dl.setAttribute('aria-label', dlTitle+': '+opts.name);
+    // The label carries the name, so it is no catalog key the page's translator could match:
+    // its first half is translated here, the name never is.
+    dl.title=dlTitle; dl.setAttribute('aria-label', _rowLabel(dlTitle, opts.name));
     dl.innerHTML='<i class="bi bi-download"></i>';
     right.appendChild(dl);
   }
   if(opts.protected){ var lk=document.createElement('span'); lk.className='text-secondary'; lk.title='Protected — required by LinuxGSM/the game'; lk.innerHTML='<i class="bi bi-shield-lock"></i>'; right.appendChild(lk); }
-  else if(opts.deletable){ var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0'; b.title='Delete'; b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b); }
+  else if(opts.deletable){
+    // Rename sits between Download and Delete, on every row the panel would let you delete: the
+    // same rule protects a path from both, because renaming lgsm/ away breaks the server exactly as
+    // deleting it does. One control at every width — the row has no separate phone layout.
+    var rn=document.createElement('button'); rn.type='button'; rn.className='btn btn-sm btn-link p-0 text-secondary';
+    rn.title='Rename'; rn.setAttribute('aria-label', _rowLabel('Rename', opts.name));
+    rn.dataset.action='rename';
+    rn.appendChild(_icon('bi-pencil'));
+    right.appendChild(rn);
+    var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0'; b.title='Delete'; b.setAttribute('aria-label', _rowLabel('Delete', opts.name)); b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b);
+  }
   row.appendChild(left); row.appendChild(right);
   return row;
 }
@@ -200,6 +214,7 @@ function browse(path){
   var want = path||'', seq = ++_browseSeq;
   fetch(MOUNT+'/api/server/'+serverId+'/browse?path='+encodeURIComponent(want)).then(r=>r.json()).then(d=>{
     if(seq !== _browseSeq) return;   // a later browse() owns the list now
+    _renaming = null;                // the row being renamed is about to be rebuilt
     var l=document.getElementById('file-list'); l.innerHTML='';
     if(d.error){ l.innerHTML='<div class="text-danger small p-2">'+esc(d.error)+'</div>'; return; }  // nosemgrep
     curDir = want;
@@ -293,9 +308,9 @@ function saveFile(){
 // first while a single file downloads on one click.
 function confirmFolderDownload(path, href){
   confirmDialog({title:'Download folder', icon:'file-earmark-zip', confirmLabel:'Download .tar.gz',
-    bodyText:'Download this folder as a .tar.gz archive?\n'+path+'\n\n'
-      +'The archive is built while it downloads, so the total size is not known in advance — a big '
-      +'folder like serverfiles can run to many gigabytes.',
+    bodyNode:_pathBody('Download this folder as a .tar.gz archive?', path,
+      'The archive is built while it downloads, so the total size is not known in advance — a big '
+      +'folder like serverfiles can run to many gigabytes.'),
     onConfirm:function(){
       // A temporary anchor rather than location=href: navigating away from the page would tear
       // down the file browser if the server answers with anything but the file.
@@ -304,9 +319,51 @@ function confirmFolderDownload(path, href){
       setTimeout(function(){ a.remove(); }, 0);
     }});
 }
+// A dialog body naming a path: the question, then the path quoted on its own line with its spaces
+// kept. The dialog's text body collapses runs of spaces and drops one at a line's end, so
+// "server.cfg " beside a real "server.cfg" read the same in the dialog that deletes one of them.
+function _pathBody(lead, path, tail){
+  var box=document.createElement('div');
+  var q=document.createElement('div'); q.textContent=lead; box.appendChild(q);
+  var p=document.createElement('code'); p.className='fb-dialog-path'; p.setAttribute('data-no-i18n','');
+  p.style.whiteSpace='pre-wrap'; p.style.wordBreak='break-all';
+  // A line may break after a space, and a space at a line's end is not drawn. So on a phone
+  // "server.cfg " could wrap as “…server.cfg with ” alone on the next line, and ".../ lead.txt" as
+  // ".../" then "lead.txt": each read like its lookalike. Every run of spaces is held to the
+  // characters on both sides of it, and each quote to the character beside it.
+  _pathPieces('“'+path+'”').forEach(function(piece){ p.appendChild(_span(piece[0], piece[1] ? 'nowrap' : '')); });
+  box.appendChild(p);
+  if(tail){ var t=document.createElement('div'); t.className='mt-2'; t.textContent=tail; box.appendChild(t); }
+  return box;
+}
+// `q` (a quoted path) as [[text, held]]: a held piece must not break. The pieces held are the
+// first two and last two characters (each quote with its neighbour) and every run of spaces with
+// one character on each side. Pieces that only touch stay apart, so a line can still break
+// between two characters that are not spaces. Scanned, not matched: a regex that does this
+// backtracks.
+function _pathPieces(q){
+  var n=q.length, held=[[0, Math.min(2, n)], [Math.max(n-2, 0), n]], i=1, out=[], at=0, k=0;
+  while(i<n-1){
+    if(!/\s/.test(q.charAt(i))){ i++; continue; }
+    var j=i; while(j<n-1 && /\s/.test(q.charAt(j))) j++;
+    held.push([i-1, j+1]); i=j;
+  }
+  held.sort(function(a, b){ return a[0]-b[0]; });
+  while(k<held.length){
+    var s=held[k][0], e=held[k][1];
+    while(k+1<held.length && held[k+1][0]<e){ e=Math.max(e, held[k+1][1]); k++; }
+    if(s>at) out.push([q.slice(at, s), false]);
+    out.push([q.slice(s, e), true]); at=e; k++;
+  }
+  if(at<n) out.push([q.slice(at), false]);
+  return out;
+}
+function _span(text, ws){
+  var s=document.createElement('span'); s.textContent=text; if(ws) s.style.whiteSpace=ws; return s;
+}
 function deletePath(path, isDir){
   confirmDialog({title:'Delete '+(isDir?'directory':'file'), icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
-    bodyText:'Delete '+(isDir?'directory (and everything in it)':'file')+':\n'+path+' ?',
+    bodyNode:_pathBody(isDir?'Delete this directory and everything in it?':'Delete this file?', path),
     onConfirm:function(){
       fetch(MOUNT+'/api/server/'+serverId+'/delete-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
         .then(r=>r.json()).then(d=>{
@@ -315,6 +372,117 @@ function deletePath(path, isDir){
           browse(curDir);
         }).catch(()=>{ if(window.toast) toast('Delete failed','danger'); });
     }});
+}
+// ── Rename, in place in the row ───────────────────────────────────────────────────────────────
+// The row's name becomes a field holding the current name with the part before the extension
+// selected, so typing replaces "notes" and keeps ".txt", as a desktop file manager does. Enter or
+// the Rename button sends it, Escape or Cancel puts the row back. The panel decides what is
+// allowed (a taken name, a slash, a protected path are refused there), and its reason stays under
+// the field instead of in a toast, so the name can be fixed where it was typed. The field and its
+// buttons go through the data-action dispatcher like every other control; built from DOM nodes,
+// never markup, because the name is user-authored.
+var _renaming = null;   // {row, path, name, input, ok, err, busy}: the one row being renamed
+// window.t (i18n.js) where the page has it, the English otherwise.
+function _tr(s){ return window.t ? window.t(s) : s; }
+// A row control's accessible name: the verb, then the row's name in quotes. An accessible name is
+// trimmed, so "Rename: server.cfg " was announced exactly as the real server.cfg's Rename.
+function _rowLabel(verb, name){ return _tr(verb)+': “'+name+'”'; }
+function _icon(cls){ var i=document.createElement('i'); i.className='bi '+cls; return i; }
+// Where the stem ends: before the extension, which is kept. A folder, a dotfile (.bashrc) and a
+// name with no dot have none to keep; an archive's double extension (.tar.gz) is kept whole. A
+// name with a space at either end is selected whole: the panel refuses to keep that space, so
+// keeping "cfg " would make the first try fail.
+function _renameStemEnd(name, isDir){
+  if(isDir || /^\s|\s$/.test(name)) return name.length;
+  var arc=/\.tar\.(?:gz|bz2|xz|zst)$/i.exec(name);
+  var dot=arc ? arc.index : name.lastIndexOf('.');
+  return dot>0 ? dot : name.length;
+}
+function startRename(row){
+  if(!row) return;
+  if(_renaming) cancelRename();
+  var path=row.dataset.path, name=path.split('/').pop(), isDir=row.dataset.type==='dir';
+  var box=document.createElement('div'); box.className='fb-rename';
+  var line=document.createElement('div'); line.className='d-flex align-items-center gap-1';
+  var input=document.createElement('input'); input.type='text'; input.className='form-control form-control-sm';
+  input.value=name; input.spellcheck=false; input.autocomplete='off';
+  // No data-no-i18n: the page's translator never touches a field's value, and the guard also
+  // kept it from translating the field's aria-label, so "New name" stayed English.
+  input.setAttribute('autocapitalize','off'); input.setAttribute('aria-label','New name');
+  input.dataset.action='renameKey'; input.dataset.on='keydown'; input.dataset.args='["@event"]';
+  var ok=document.createElement('button'); ok.type='button'; ok.className='btn btn-sm btn-primary';
+  ok.dataset.action='submitRename'; ok.textContent='Rename';
+  var no=document.createElement('button'); no.type='button'; no.className='btn btn-sm btn-outline-secondary';
+  no.dataset.action='cancelRename'; no.textContent='Cancel';
+  var err=document.createElement('div'); err.className='small text-danger mt-1 fb-rename-err';
+  err.setAttribute('role','alert'); err.style.display='none';
+  line.appendChild(input); line.appendChild(ok); line.appendChild(no);
+  box.appendChild(line); box.appendChild(err);
+  // The class hides the row's own name and icons (server_files.html): an inline display:none
+  // loses to Bootstrap's `.d-flex { display: flex !important }` on the icons, which then kept
+  // 128px of a 307px row on a phone and left the field 24px wide.
+  row.classList.add('fb-renaming'); row.appendChild(box);
+  _renaming={row:row, path:path, name:name, input:input, ok:ok, err:err, busy:false};
+  input.focus();
+  input.setSelectionRange(0, _renameStemEnd(name, isDir));
+}
+function cancelRename(){
+  var r=_renaming;
+  if(!r) return;
+  _renaming=null;
+  var box=r.row.querySelector('.fb-rename');
+  if(box) box.remove();
+  r.row.classList.remove('fb-renaming');
+  var btn=r.row.querySelector('[data-action="rename"]');
+  if(btn) btn.focus();
+}
+// Enter sends, Escape puts the row back. Reached through the dispatcher's keydown (data-on).
+function renameKey(ev){
+  if(!ev) return;
+  if(ev.key==='Enter'){ ev.preventDefault(); submitRename(); }
+  else if(ev.key==='Escape'){ ev.preventDefault(); cancelRename(); }
+}
+function _renameFailed(r, msg){
+  r.busy=false; r.input.disabled=false; r.ok.disabled=false;
+  r.err.textContent=msg; r.err.style.display='';
+  r.input.focus();
+}
+// The open file follows its new name, and so does one inside a renamed folder: Save would
+// otherwise write the OLD path back into existence beside the renamed one.
+function _followRename(from, to){
+  if(!curFile || (curFile!==from && curFile.indexOf(from+'/')!==0)) return;
+  curFile=to+curFile.slice(from.length);
+  var ep=document.getElementById('editor-path');
+  if(ep) ep.textContent=curFile;
+  var edl=document.getElementById('editor-download');
+  if(edl) edl.href=MOUNT+'/server/'+serverId+'/download?path='+encodeURIComponent(curFile);
+}
+function _renamed(r, want){
+  var parent=r.path.split('/').slice(0,-1).join('/');
+  _followRename(r.path, parent ? parent+'/'+want : want);
+  if(_renaming===r) _renaming=null;
+  if(window.toast) toast('Renamed','success');
+  browse(curDir);
+}
+function submitRename(){
+  var r=_renaming;
+  if(!r || r.busy) return;
+  // Sent as typed: trimming here renamed ' notes' to 'notes' on an Enter that changed nothing, and
+  // a new name with a space at either end is the panel's to refuse, with its reason under the field.
+  // trim() only tells an empty name.
+  var want=r.input.value;
+  if(want===r.name){ cancelRename(); return; }
+  if(!want.trim()){ _renameFailed(r, 'Enter a new name.'); return; }
+  r.busy=true; r.input.disabled=true; r.ok.disabled=true; r.err.style.display='none';
+  fetch(MOUNT+'/api/server/'+serverId+'/rename-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:r.path,new_name:want})})
+    .then(function(res){ return res.json(); })
+    .then(function(d){
+      if(d.success) _renamed(r, want);
+      else if(_renaming===r) _renameFailed(r, d.message||d.error||'Rename failed');
+    })
+    .catch(function(){
+      if(_renaming===r) _renameFailed(r, 'Could not reach the panel. Reload the file browser to see whether it was renamed.');
+    });
 }
 // The year is dropped for dates in the current year: at 375px the label and value have to share
 // one line, and "Sep 5, 7:10 PM" fits where "Sep 5, 2026, 07:10 PM" wraps. An older file still
@@ -664,6 +832,12 @@ function doUpload(ev){
 // from. Every other top-level dereference in this file was already guarded; these two were not.
 var _fileList = document.getElementById('file-list');
 if (_fileList) _fileList.addEventListener('click', function(ev){
+  // A click anywhere on a row being renamed is editing, not opening it — the field, or the row's
+  // padding around it. Its Rename and Cancel buttons carry their own data-action, so the event is
+  // left to bubble on to the page's dispatcher.
+  if(ev.target.closest('.fb-renaming')) return;
+  var rn = ev.target.closest('[data-action="rename"]');
+  if(rn){ ev.stopPropagation(); startRename(rn.closest('[data-path]')); return; }
   var del = ev.target.closest('[data-action="delete"]');
   if(del){ ev.stopPropagation(); var r=del.closest('[data-path]'); deletePath(r.dataset.path, r.dataset.type==='dir'); return; }
   var dl = ev.target.closest('[data-action="download"]');

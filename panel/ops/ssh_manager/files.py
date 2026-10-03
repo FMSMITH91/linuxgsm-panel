@@ -9,6 +9,7 @@ import subprocess  # nosec B404 - every call site below passes an argv LIST, nev
 from panel.core import terminal
 from panel.security import privileged as _priv
 import posixpath as _pp
+import unicodedata as _ud
 from panel.ops.ssh_manager import (_core, cron)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
 # visible to every caller — see the package docstring.
@@ -754,6 +755,8 @@ def _protected_top_names(selfname):
 
 
 _PROTECTED_MARK = "__PROTECTED__"
+# What _protected_resolved prints on stderr when the parent directory is not there to resolve.
+_NO_SUCH_DIR = "No such directory"
 
 
 def _protected_resolved(user, ap, selfname, inner):
@@ -776,7 +779,7 @@ def _protected_resolved(user, ap, selfname, inner):
     hq = _core._quote(home)
     names = "|".join(_core._quote(n) for n in sorted(_protected_top_names(selfname)))
     return (f"d=$(cd -P -- {_core._quote(_pp.dirname(ap))} 2>/dev/null && pwd -P) "
-            "|| { echo 'No such directory' >&2; exit 1; }; "
+            f"|| {{ echo '{_NO_SUCH_DIR}' >&2; exit 1; }}; "
             f't="$d"/{_core._quote(_pp.basename(ap))}; '
             f'case "$t" in {hq}/*) r=${{t#{hq}/}} ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; '
             f'case "$r" in lgsm|lgsm/*|{names}) echo {_PROTECTED_MARK}; exit 8 ;; esac; '
@@ -792,7 +795,7 @@ def browse_dir(server, user, relpath="", selfname=None):
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return None
-    inner = f"find {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%f\\n' 2>/dev/null"
+    inner = f"find {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%f\\0' 2>/dev/null"
     out, _, rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):
         return None
@@ -807,10 +810,26 @@ def browse_dir(server, user, relpath="", selfname=None):
     return {"path": base, "entries": _browse_entries(out, base, selfname)}
 
 
+def _listing_records(out):
+    """The records of a `find -printf` listing whose format ends in NUL, split on that NUL.
+
+    NUL, because no filename can hold one, and because every transport strips its whole stdout
+    (_core._finish, the Tailscale ssh path and the paramiko path all return `out.strip()`).
+    Records ended with a newline lost whatever whitespace ended the name `find` printed LAST,
+    along with the newline: `server.cfg ` was listed as `server.cfg`, so its row named a different
+    path — Rename said "no longer there", Delete said "Deleted" and left it, and beside a real
+    `server.cfg` both rows carried the same path and acted on the real file. strip() leaves a NUL
+    alone, so the last record keeps its name whole. A newline, U+2028, U+0085 or any other line
+    break a name holds is part of the name now, not the end of a record (str.splitlines() breaking
+    on those cut a name short the same way).
+    """
+    return (out or "").split("\0")
+
+
 def _browse_entries(out, base, selfname):
     """The tab-separated `find -printf` listing (type, size, name) as entries, dirs first."""
     entries = []
-    for line in (out or "").splitlines():
+    for line in _listing_records(out):
         parts = line.split("\t")
         if len(parts) >= 3:
             typ, size = parts[0], parts[1]
@@ -952,7 +971,7 @@ def stat_upload_targets(server, user, reldir, names):
     if apdir is None:
         return None
     inner = (f"find {_core._quote(apdir)} -maxdepth 1 -mindepth 1 "
-             f"-printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null")
+             f"-printf '%y\\t%s\\t%T@\\t%f\\0' 2>/dev/null")
     out, err, rc = _core.shell_as_game_user(server, user, _guarded(user, apdir, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):
         return None
@@ -970,9 +989,13 @@ def stat_upload_targets(server, user, reldir, names):
 
 
 def _upload_dir_entries(out):
-    """Map each name to {is_dir, size, mtime}, from the tab-separated `find -printf` listing."""
+    """Map each name to {is_dir, size, mtime}, from the tab-separated `find -printf` listing.
+
+    Read as _browse_entries reads it (_listing_records), or a name ending in whitespace, or holding
+    a line break, is never found here and an upload onto it is not flagged as a conflict.
+    """
     present = {}
-    for line in (out or "").splitlines():
+    for line in _listing_records(out):
         parts = line.split("\t")
         if len(parts) < 4:
             continue
@@ -1082,6 +1105,244 @@ def _files_delete_outcome(out, e, rc):
     if rc == 0 and "__OK__" in (out or ""):
         return True, "Deleted"
     return False, e or out or "Delete failed"
+
+
+# ── Renaming a file or folder, within its own folder ───────────────────────────────────────────
+# rename_path's message when the new name is already taken, before the move or by something that
+# appeared between the check and the move. A sentinel, like UPLOAD_EXISTS, so the route answers a
+# machine-readable conflict rather than the page pattern-matching prose.
+RENAME_EXISTS = "__RENAME_EXISTS__"
+# Linux's NAME_MAX: the most one path component holds on ext4, xfs and btrfs. Counted in UTF-8
+# BYTES, because that is what the filesystem counts — 128 two-byte characters are already too many.
+RENAME_NAME_MAX = 255
+# The fixed text for a rename the host never confirmed. It is said the same way whichever transport
+# failed: paramiko raises, the Tailscale and local transports return ("", "...", -1), and neither
+# says whether `mv` ran before the link went — so this does not claim that nothing changed.
+RENAME_UNCONFIRMED = ("The host didn't confirm the rename. Reload the file browser to see whether "
+                      "it happened before trying again.")
+RENAME_PROTECTED = "This file/folder is protected — renaming it would break the server."
+RENAME_REFUSED = "Refusing to rename this path."
+RENAME_CONSOLE = ("The live console reads this path — renaming it would stop the console until the "
+                  "server restarts.")
+_RENAME_CONSOLE_MARK = "__RENAME_CONSOLE__"
+RENAME_EDGE_SPACE = ("A name can't start or end with a space — it would look just like the name "
+                     "without one.")
+# Unicode's Bidi_Control characters. Each makes the text after it display in another order, so a
+# name holding one shows as something else: "\u202egnp.sh" displays as "hs.png".
+_BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e"
+                           "\u2066\u2067\u2068\u2069")
+_RENAME_LINKED = "__RENAME_LINKED__"
+_RENAME_GONE = "__RENAME_GONE__"
+_RENAME_TAKEN = "__RENAME_TAKEN__"
+_RENAME_MVFAIL = "__RENAME_MVFAIL__"
+_RENAME_DONE = "__RENAME_DONE__"
+_RENAME_GONE_MSG = "That file or folder is no longer there. Reload the file browser."
+
+
+def rename_name_problem(name):
+    """Why `name` cannot be the new name of a file or folder, or None when it can.
+
+    One path component of a Linux filename: not empty, not '.' or '..', no '/', valid UTF-8, at
+    most RENAME_NAME_MAX bytes, and nothing that makes the name read as something else: no control
+    character (Cc: NUL, newline, DEL, U+0085...), no line or paragraph separator (U+2028, U+2029),
+    no text-direction control, and no whitespace at either end. upload_file's rules ('', '.', '..',
+    the '/' basename() removes and the NUL it strips) are the subset of these an upload could meet;
+    a rename is TYPED, so it gets a reason for each instead of having its name quietly changed into
+    one that passes.
+    """
+    if not isinstance(name, str) or not name:
+        return "Enter a new name."
+    if name in (".", ".."):
+        return "'.' and '..' are not names a file or folder can have."
+    if "/" in name:
+        return "A name can't contain a slash (/) — renaming never moves anything to another folder."
+    return _rename_char_problem(name) or _rename_edge_problem(name)
+
+
+def _rename_edge_problem(name):
+    """Refuse whitespace at either end of a new name (whatever str.strip() would remove).
+
+    `server.cfg ` shows exactly as `server.cfg` does: a trailing space typed by mistake (a phone
+    keyboard's autocomplete adds one) made a second "server.cfg" row, and the one the user meant to
+    delete or edit was easy to confuse with the real config. The name is not trimmed into one that
+    passes: it is refused with the reason, as every other rule here is.
+    """
+    if name != name.strip():
+        return RENAME_EDGE_SPACE
+    return None
+
+
+def _rename_char_problem(name):
+    """rename_name_problem's character and length rules, for a name that is one component."""
+    kinds = {_ud.category(c) for c in name}
+    if "Cc" in kinds:
+        return "A name can't contain control characters."
+    if kinds & {"Zl", "Zp"}:
+        return "A name can't contain a line or paragraph separator."
+    if not _BIDI_CONTROLS.isdisjoint(name):
+        return ("A name can't contain text-direction characters — they make a name display as "
+                "something it isn't.")
+    try:
+        size = len(name.encode("utf-8"))
+    except UnicodeEncodeError:          # a lone surrogate: JSON can carry one, no filename can
+        return "That name isn't valid text."
+    if size > RENAME_NAME_MAX:
+        return "That name is too long (255 bytes at most)."
+    return None
+
+
+def rename_refusal(user, relpath, new_name, selfname=None):
+    """Why renaming `relpath` to `new_name` is refused before the host is asked, else None.
+
+    The home itself, anything outside it, a path that is not valid text, a protected path (by
+    delete_path's rules: renaming `lgsm` or `serverfiles` away breaks the server exactly as deleting
+    it does), the live console's log or a folder above it (_console_paths), a bad new name, the name
+    it already has, and a new name that is itself protected where it would land.
+    """
+    ap = _safe_abspath(user, relpath) if isinstance(relpath, str) else None
+    if ap is None or ap == f"/home/{user}" or not relpath.strip("/") or not _is_text(relpath):
+        return RENAME_REFUSED
+    return (rename_name_problem(new_name)
+            or _rename_ends_refusal(user, relpath, ap, new_name, selfname))
+
+
+def _rename_ends_refusal(user, relpath, ap, new_name, selfname):
+    """rename_refusal's rules about the two ends — what is renamed, and the name it would take."""
+    home = f"/home/{user}"
+    if _is_protected_path(relpath, selfname):
+        return RENAME_PROTECTED
+    if _pp.relpath(ap, home) in _console_paths(selfname):
+        return RENAME_CONSOLE
+    if new_name == _pp.basename(ap):
+        return "That is already its name."
+    if _is_protected_path(_pp.relpath(_pp.join(_pp.dirname(ap), new_name), home), selfname):
+        return "That name is reserved for LinuxGSM or the game's account — choose another."
+    return None
+
+
+def _is_text(s):
+    """True when `s` can be written as UTF-8, as a filename on the host and an audit row are."""
+    try:
+        s.encode("utf-8")
+    except UnicodeEncodeError:          # a lone surrogate: JSON can carry one, no filename can
+        return False
+    return True
+
+
+def _console_paths(selfname):
+    """The paths, relative to the home, that the live console reads: its log and the two folders.
+
+    GameServer.console_log is log/console/<lgsm_name>-console.log, a fixed path. tmux pipe-pane
+    keeps appending to the file it opened, so renaming the log or a folder above it while the
+    server runs leaves the console reading a path nothing writes to, until the next restart.
+    Delete has the same reach; this is rename's own refusal, and leaves delete's rules unchanged.
+    """
+    paths = {"log", "log/console"}
+    if selfname:
+        paths.add(f"log/console/{selfname}-console.log")
+    return paths
+
+
+def _console_guard(user, selfname):
+    """Host-side: refuse when "$t" is the console's path, or a folder above it, once RESOLVED.
+
+    rename_refusal's check reads the path's text, and a home can move its logs through a symlink
+    (`log -> disk/logs`): renaming disk/logs breaks the console as surely as renaming log, and
+    only the host can see that. realpath -m resolves each console path, and "$t" (the real parent
+    plus the name, pinned by the linked-parent refusal before this) is refused when it is one of
+    them or above one.
+    """
+    q = _core._quote
+    paths = " ".join(q(f"/home/{user}/{p}") for p in sorted(_console_paths(selfname)))
+    return (f'for c in {paths}; do c=$(realpath -m "$c" 2>/dev/null || printf %s "$c"); '
+            f'case "$c" in "$t"|"$t"/*) echo {_RENAME_CONSOLE_MARK}; exit 11 ;; esac; done; ')
+
+
+def _rename_inner(ap, new_name, user, selfname=None):
+    """The host-side rename, run after _protected_resolved has set "$d" (real parent) and "$t".
+
+    * "$d" is the source's folder resolved with `cd -P`. Anything but the folder the browser named
+      means a symlink on the way, and the rename is refused rather than followed: delete_path's
+      check only asks where the link LEADS, and a rename has two ends to keep in one place.
+    * The live console's log, or a folder it is in, reached by its resolved path (_console_guard).
+    * The new name is joined to "$d", the same real folder, so the two ends cannot part.
+    * `mv -T` takes the destination as a name, never as a folder to move INTO — a symlink to a
+      folder sitting at the new name would otherwise swallow the source — and `-n` never replaces.
+      GNU mv (coreutils 8.29 and later) does `-n -T` as one renameat2(RENAME_NOREPLACE), so a name
+      appearing during the move is refused by the kernel. uutils' mv, the default from Ubuntu
+      25.10, checks and then renames; where GNU's is installed beside it, as `gnumv`, that is used.
+    * Whether it moved is read from the filesystem, by the source's device:inode turning up at the
+      new name, never from mv's exit status: coreutils 9.2 changed what `mv -n` returns when it
+      skips, and uutils is another implementation again. A name that appeared between the check
+      and the move is reported as taken, never clobbered.
+    """
+    q = _core._quote
+    taken = '[ -e "$n" ] || [ -L "$n" ]'
+    return (f'[ "$d" = {q(_pp.dirname(ap))} ] || {{ echo {_RENAME_LINKED}; exit 10; }}; '
+            + _console_guard(user, selfname) +
+            f'si=$(stat -c %d:%i -- "$t" 2>/dev/null) || {{ echo {_RENAME_GONE}; exit 7; }}; '
+            f'n="$d"/{q(new_name)}; '
+            f'if {taken}; then echo {_RENAME_TAKEN}; exit 6; fi; '
+            'm=mv; command -v gnumv >/dev/null 2>&1 && m=gnumv; '
+            '"$m" -n -T -- "$t" "$n"; '
+            f'if [ "$(stat -c %d:%i -- "$n" 2>/dev/null)" = "$si" ]; then echo {_RENAME_DONE}; exit 0; fi; '
+            f'if {taken}; then echo {_RENAME_TAKEN}; exit 6; fi; '
+            f'echo {_RENAME_MVFAIL}; exit 1')
+
+
+def rename_path(server, user, relpath, new_name, selfname=None):
+    """Rename a file or folder in the game user's home to `new_name`, in the same folder.
+
+    -> (ok, message); message is RENAME_EXISTS when the new name is taken. Never overwrites.
+
+    Guarded as delete_path is — _safe_abspath, then _guarded and _protected_resolved on the host,
+    in the same command as the move — plus _rename_inner's own refusals: a source reached through
+    a symlinked folder, and a destination that exists (even as a dangling symlink).
+    """
+    refusal = rename_refusal(user, relpath, new_name, selfname)
+    if refusal:
+        return False, refusal
+    ap = _safe_abspath(user, relpath)
+    inner = _rename_inner(ap, new_name, user, selfname)
+    out, e, rc = _core.shell_as_game_user(
+        server, user, _guarded(user, ap, _protected_resolved(user, ap, selfname, inner)),
+        timeout=30)
+    return _rename_outcome(out, e, rc)
+
+
+# Sentinel -> (ok, message), first match wins. _OUTSIDE_HOME and _PROTECTED_MARK are delete_path's
+# own, printed by the guards rename_path shares with it.
+_RENAME_OUTCOMES = (
+    (_OUTSIDE_HOME, RENAME_REFUSED),
+    (_PROTECTED_MARK, RENAME_PROTECTED),
+    (_RENAME_CONSOLE_MARK, RENAME_CONSOLE),
+    (_RENAME_LINKED, "Refusing to rename through a symbolic link: open the folder it points to "
+                     "and rename it there."),
+    (_RENAME_GONE, _RENAME_GONE_MSG),
+    (_RENAME_TAKEN, RENAME_EXISTS),
+    (_RENAME_MVFAIL, "The host refused the rename — the file may belong to another account or "
+                     "be in use. Nothing was renamed."),
+)
+
+
+def _rename_outcome(out, e, rc):
+    """rename_path's (ok, message) from what its guarded host-side command printed.
+
+    Fixed text only: the host's stderr is logged, never returned, and an answer with no sentinel
+    in it — a timeout or a dropped link on the transports that return rather than raise — is
+    RENAME_UNCONFIRMED.
+    """
+    out = out or ""
+    if rc == 0 and _RENAME_DONE in out:
+        return True, "Renamed"
+    for mark, message in _RENAME_OUTCOMES:
+        if mark in out:
+            return False, message
+    if _NO_SUCH_DIR in (e or ""):
+        return False, _RENAME_GONE_MSG
+    _core._log.warning("rename_path: the host did not confirm the rename (rc=%s): %s",
+                       rc, (e or "")[:200])
+    return False, RENAME_UNCONFIRMED
 
 
 # ── Downloads: the read side of the file browser ───────────────────────────────────────────────

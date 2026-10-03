@@ -1582,6 +1582,17 @@
       "POST"
     ]
   },
+  "/api/server/<int:server_id>/rename-path": {
+    "endpoint": "api_server_rename_path",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_rename_path"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "/api/server/<int:server_id>/restart-when-empty": {
     "endpoint": "api_server_restart_when_empty",
     "guards": [

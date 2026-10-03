@@ -9,8 +9,8 @@ from panel.core import (terminal)
 from panel.core import runtime_stats
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth,
     taken_by_another)
-from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, UPLOAD_EXISTS,
-    add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
+from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAME_EXISTS,
+    RENAME_UNCONFIRMED, UPLOAD_EXISTS, add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
     gmod_current_mounts, gmod_mount_setup, install_gmod_content, lgsm_game_config,
     lgsm_get_values, lgsm_read_config, lgsm_write_config, mods_action, mods_available,
     mods_installed, path_disk_free, read_file, run_cron_job_now, send_console_command,
@@ -27,6 +27,7 @@ from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can
     server_access_required,
     superadmin_required)
 from panel.services import (lgsm_data)
+from itertools import groupby
 import re
 import threading
 import time
@@ -1194,6 +1195,7 @@ def register(app, supervise):
     _register_mods(app)
     _register_file_editor(app)
     _register_file_removal(app)
+    _register_file_rename(app)
     _register_download(app)
     _register_lgsm_data(app)
     _register_cron_jobs(app)
@@ -1432,11 +1434,122 @@ def _register_file_removal(app):
             return refused
         try:
             ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
-            log_action(current_user, "delete_file", target=gs.name, detail=rel, success=ok,
-                       server=gs)
+            log_action(current_user, "delete_file", target=gs.name,
+                       detail=_audit_safe(_audit_name(rel)), success=ok, server=gs)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
+
+
+def _audit_name(text):
+    """A path or name for an audit row, with each space a reader could not see written as an escape.
+
+    The audit page shows a row as HTML does. A space at the end of a line is not drawn and a run of
+    them shows as one, so a delete of "server.cfg " beside a real "server.cfg" read like a delete
+    of the real one. Quotes did not fix it on a phone, where the closing one wrapped to a line of
+    its own. So a space at either end of any part of the path, and every space in a run, is written
+    as x20 after a backslash, the way _audit_safe writes every other character that does not show.
+    """
+    if not isinstance(text, str):
+        return text
+    return "/".join(_audit_part(part) for part in text.split("/"))
+
+
+def _audit_part(part):
+    """One part of a path for _audit_name, with its hidden spaces and its backslashes escaped.
+
+    A backslash is doubled, so a file really named with the four characters of the escape cannot
+    read like a name ending in a space.
+    """
+    runs = ["".join(run) for _space, run in groupby(part.replace("\\", "\\\\"), key=" ".__eq__)]
+    last = len(runs) - 1
+    return "".join("\\x20" * len(run) if run[0] == " " and (i in (0, last) or len(run) > 1) else run
+                   for i, run in enumerate(runs))
+
+
+def _audit_safe(text, limit=None):
+    """`text` as an audit row can store and show it: what is not printable is written escaped.
+
+    A rename's names come from the request. A lone surrogate cannot be stored as UTF-8 at all (the
+    row's commit raised), and a control, separator or text-direction character would hide or
+    reorder what the audit page shows — which is what a refused name usually is. `limit` cuts the
+    text before it is escaped as well as after, so a huge request body is never walked whole.
+    """
+    text = str(text) if limit is None else str(text)[:limit]
+    out = "".join(c if c.isprintable() else ascii(c)[1:-1] for c in text)
+    return out if limit is None else out[:limit]
+
+
+def _rename_refused(gs, rel, new_name, why):
+    """A rename refused before the host is asked to move anything: audited, then a 400.
+
+    delete-path audits its refusals (a protected path, one out of the home), and so does this —
+    every one, including a new name refused for its form, so an attempt to rename the LinuxGSM tree
+    or the console's log away leaves a trace whatever stopped it.
+    """
+    log_action(current_user, "rename_file", target=gs.name,
+               detail=_audit_safe("refused: %s -> %s: %s"
+                                  % (_audit_name(rel), _audit_name(new_name), why), 250),
+               success=False, server=gs)
+    return jsonify({"success": False, "message": why}), 400
+
+
+def _rename_answer(gs, rel, new_name):
+    """Rename on the host and audit it: the rename route's answer once every refusal has passed.
+
+    A host that raises (paramiko) gets the same fixed text as one that returns a failure
+    (Tailscale, local): neither says whether `mv` ran before the link went, and the exception's own
+    text is for the log. Every outcome is audited, a refused or unconfirmed one as a failure.
+    """
+    try:
+        ok, msg = _sm.rename_path(gs.remote, gs.short_name, rel, new_name, gs.lgsm_name)
+    except ConnectionError:
+        _log.warning("rename-path: the host did not answer", exc_info=True)
+        ok, msg = False, RENAME_UNCONFIRMED
+    detail = _audit_safe("%s -> %s" % (_audit_name(rel), _audit_name(new_name)))
+    if msg == RENAME_EXISTS:
+        log_action(current_user, "rename_file", target=gs.name, detail=detail + " (name taken)",
+                   success=False, server=gs)
+        return jsonify({"success": False, "conflict": True,
+                        "message": "Something with that name already exists in this folder. "
+                                   "Nothing was renamed — choose another name."}), 409
+    log_action(current_user, "rename_file", target=gs.name,
+               detail=detail + ("" if ok or msg != RENAME_UNCONFIRMED else " (unconfirmed)"),
+               success=ok, server=gs)
+    return jsonify({"success": ok, "message": msg})
+
+
+def _register_file_rename(app):
+    """Renaming a file or folder from the file browser, within the folder it is in."""
+    @app.route("/api/server/<int:server_id>/rename-path", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_rename_path(server_id):
+        """Rename one file or folder; never overwrites, never moves it to another folder.
+
+        The same gates as delete-path, in the same order: the file-manager permission, then the
+        game account (a root-capable one is refused — see _write_refused), then the path. The new
+        name is checked before any of that asks the host anything. Everything past the permission
+        is audited as rename_file, refusals included.
+        """
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        body = _json_body()
+        rel, new_name = body.get("path"), body.get("new_name")
+        problem = "Invalid path" if not isinstance(rel, str) else _sm.rename_name_problem(new_name)
+        if problem:
+            return _rename_refused(gs, rel, new_name, problem)
+        refused = _write_refused(gs, "rename_file", rel)
+        if refused is not None:
+            return refused
+        why = _sm.rename_refusal(gs.short_name, rel, new_name, gs.lgsm_name)
+        if why:
+            return _rename_refused(gs, rel, new_name, why)
+        try:
+            return _rename_answer(gs, rel, new_name)
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("rename_path failed")}), 500
 
 
 def _register_download(app):

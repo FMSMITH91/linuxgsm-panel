@@ -309,6 +309,114 @@ return 1;
 """
 
 
+RENAME_OPEN = r"""
+const btn = await J.waitFor('#file-list [data-path="%s"] [data-action="rename"]', 5000);
+if (!btn) return {err: 'no Rename control on %s'};
+btn.click(); await J.sleep(200);
+const f = J.q('#file-list .fb-rename input');
+if (!f) return {err: 'Rename opened no field'};
+return {value: f.value, sel: [f.selectionStart, f.selectionEnd], focused: document.activeElement === f};
+"""
+RENAME_STATE = r"""
+const f = J.q('#file-list .fb-rename input'), e = J.q('#file-list .fb-rename-err');
+return {open: !!f, value: f ? f.value : null, err: e && e.style.display !== 'none' ? e.textContent : '',
+        rows: Array.from(document.querySelectorAll('#file-list [data-path]')).map(r => r.dataset.path),
+        editing: (J.q('#editor-path') || {}).textContent || ''};
+"""
+# The open field at a phone's width. Nothing here is a size picked to pass: the row's own name and
+# icons are not displayed, the field's box spans the row's content box (so the field has all the
+# width its two buttons leave), every part of it — the error line too — is inside the row, and the
+# page does not scroll sideways. The first version failed the second: the icons stayed, and the
+# field was 24px wide on a 307px row.
+RENAME_FIT = r"""
+const row = J.q('#file-list .fb-renaming'), box = J.q('#file-list .fb-rename');
+if (!row || !box) return {err: 'no field open'};
+const cs = getComputedStyle(row), R = row.getBoundingClientRect();
+const inner = R.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+  - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
+const parts = Array.from(box.querySelectorAll('input, button, .fb-rename-err')).filter(p => p.offsetParent !== null);
+const w = el => Math.round(el.getBoundingClientRect().width);
+return {vw: window.innerWidth, row: w(row), box: w(box), field: w(box.querySelector('input')),
+        own_parts_hidden: Array.from(row.children).every(c => c === box || getComputedStyle(c).display === 'none'),
+        box_spans_row: Math.abs(box.getBoundingClientRect().width - inner) <= 1,
+        inside_row: parts.every(p => { const r = p.getBoundingClientRect(); return r.left >= R.left - 0.5 && r.right <= R.right + 0.5; }),
+        no_sideways_scroll: document.documentElement.scrollWidth <= window.innerWidth,
+        error_shown: parts.some(p => p.classList.contains('fb-rename-err'))};
+"""
+_FITS = ("own_parts_hidden", "box_spans_row", "inside_row", "no_sideways_scroll", "error_shown")
+
+
+def _press(d, key, code, vk):
+    """One real key press (keydown and keyup) into whatever has focus."""
+    down = {"type": "keyDown", "key": key, "code": code, "windowsVirtualKeyCode": vk}
+    d.cdp.call("Input.dispatchKeyEvent", down)
+    d.cdp.call("Input.dispatchKeyEvent", dict(down, type="keyUp"))
+    d.settle(quiet=0.3, limit=4.0)
+
+
+def _expect(cond, what, got):
+    """Raise, naming what the rename did not do, so the walk reports this flow as broken."""
+    if not cond:
+        raise RuntimeError("rename: %s (got %r)" % (what, got))
+
+
+def _rename_state(d):
+    """Whether the field is open, the error under it, and the rows the list shows."""
+    got = d.run(RENAME_STATE) or {}
+    return got.get("open"), got.get("err") or "", got.get("rows") or [], got
+
+
+def _rename_keys(d):
+    """Open, Escape, a taken name (shown under the field), then a new stem and Enter."""
+    got = d.run(RENAME_OPEN % ("notes.txt", "notes.txt")) or {}
+    _expect((got.get("sel"), got.get("focused")) == ([0, 5], True), "the stem is selected, focused", got)
+    _press(d, "Escape", "Escape", 27)
+    is_open, _err, rows, got = _rename_state(d)
+    _expect((is_open, "notes.txt" in rows) == (False, True), "Escape closes", got)
+    d.run(RENAME_OPEN % ("notes.txt", "notes.txt"))
+    d.run("J.q('#file-list .fb-rename input').select(); return 1;")
+    d.keys("server.cfg\n")
+    is_open, err, rows, got = _rename_state(d)
+    _expect((is_open, "already exists" in err) == (True, True), "a taken name is shown", got)
+    _press(d, "Escape", "Escape", 27)
+    d.run("J.click('#file-list [data-path=\"notes.txt\"]'); await J.sleep(800); return 1;")
+    d.run(RENAME_OPEN % ("notes.txt", "notes.txt"))
+    d.keys("renamed\n")                     # typed over the selected stem: renamed.txt
+    d.wait(1.0)
+    is_open, _err, rows, got = _rename_state(d)
+    _expect((is_open, "renamed.txt" in rows, "notes.txt" in rows, got.get("editing"))
+            == (False, True, False, "renamed.txt"),
+            "Enter renames, the list refreshes, and the open file follows", got)
+
+
+def _rename_phone(d):
+    """At 375px wide: open the field, send a name the panel refuses, and measure the row."""
+    d.cdp.call("Emulation.setDeviceMetricsOverride",
+               {"width": 375, "height": 812, "deviceScaleFactor": 2, "mobile": True})
+    try:
+        d.goto("/server/1/files")
+        d.run(RENAME_OPEN % ("server.cfg", "server.cfg"))
+        d.run("J.q('#file-list .fb-rename input').select(); return 1;")
+        d.keys("a/b\n")
+        fit = d.run(RENAME_FIT) or {}
+        _expect(fit.get("vw") == 375 and all(fit.get(k) for k in _FITS),
+                "at 375px the field and its error fit the row", fit)
+        _press(d, "Escape", "Escape", 27)
+    finally:
+        d.cdp.call("Emulation.clearDeviceMetricsOverride")
+        d.goto("/server/1/files")
+
+
+def files_rename(d):
+    """Rename in the file browser with real keys, then measure the open field at 375px wide.
+
+    A step that does not do what it should raises, and the walk reports this flow as broken.
+    """
+    d.goto("/server/1/files")
+    _rename_keys(d)
+    _rename_phone(d)
+
+
 def files_drop(d):
     """Drop files and a folder, from disk, onto the file browser; the upload asks and is let go."""
     src = os.path.join(d.tree, "jscov-drop")
@@ -727,7 +835,7 @@ FLOWS = {
                   ("actions", js(SERVER_ACTIONS))],
     "/server/4": [("console", js(CONSOLE)), ("players", js(PLAYERS))],
     "/server/1/files": [("files", js(FILES)), ("drop", files_drop), ("cron", js(CRON)),
-                        ("config", js(GAME_CONFIG))],
+                        ("config", js(GAME_CONFIG)), ("rename", files_rename)],
     "/server-management": [("tabs", js(HOST_TABS)), ("security", js(HOST_SECURITY)),
                            ("controls", js(HOST_CONTROLS)), ("maintenance", js(HOST_MAINTENANCE)),
                            ("backups", js(BACKUPS))],
