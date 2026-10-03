@@ -12,19 +12,26 @@ What this part holds, and how each runs:
 * the helper's lgsm-command and cron-run-now give the child a transient scope of its own, and the
   priority it should start at, BEFORE it drops to the game account (drop with initgroups kept).
   Run for real in a subprocess that forks, with busctl/ionice/the drop recorded to a shared log,
-  so the ORDER across the two processes is what is asserted;
-* adopt-game-processes and terminal-scope move only what is in the panel's own cgroup: driven
-  in-process on a fresh copy of the helper with /proc and cgroupfs readers stubbed;
+  so the ORDER across the two processes is what is asserted. The move is made to land late, as
+  the real one does, so the helper's WAIT for it is asserted too (and its limit, and a host with
+  no unified cgroup path, where nothing is scoped);
+* adopt-game-processes and terminal-scope move only what is in the panel's own cgroup, never the
+  panel itself, and a group systemd refused for one exited pid is retried: driven in-process on a
+  fresh copy of the helper with /proc and cgroupfs readers stubbed;
 * the four jobs start as the main process of their own transient service and run in its
-  foreground (`--job`, refused anywhere else); the reboot is a transient timer; no systemd keeps
-  the old double fork. In-process, with subprocess.run and os.fork replaced by recorders;
+  foreground (`--job`, refused anywhere else); the reboot is a transient timer, with the old
+  grandchild when the timer cannot be made; no systemd (or no unified cgroup path) keeps the old
+  double fork. In-process, with subprocess.run and os.fork replaced by recorders;
 * the panel side: the LinuxGSM backup and "Run now" go through those verbs, a per-user install
   without the helper uses `systemd-run --user --scope`, the terminal's shell gets a scope, the
-  adoption runs at panel start, a per-user restore no longer uses the helper's system-unit swap,
-  and the debug report names game processes in the panel's cgroup with the memory split;
+  adoption runs at panel start, a per-user restore no longer uses the helper's system-unit swap
+  (and its own launch is checked), and the debug report names game processes in the panel's
+  cgroup with the memory split;
 * found beside them: an uninstall removes the account's crontab before the account (userdel -r
   leaves it behind, orphaned) — the verb, its refusal of the panel's own account, and an AST gate
-  that every account-deleting function in manage_servers.py calls it first.
+  that every account-deleting function in manage_servers.py calls it first;
+* a system uninstall stops the web terminal's scopes before it deletes the panel user: the
+  function lifted out of uninstall.sh and run under bash with a stand-in systemctl.
 Nothing here runs systemd-run, busctl, sudo or a real game; every privileged call is recorded.
 """
 import ast as _ast31
@@ -39,6 +46,7 @@ import subprocess as _sp31  # nosec B404 - runs this suite's own probe scripts, 
 import sys as _sys31
 import tempfile as _tf31
 import threading as _thr31
+import time as _time31
 import types as _types31
 
 from unit.part01 import check, eq
@@ -117,31 +125,52 @@ def _no_fork31():
 
 # ══ 1. lgsm-command and cron-run-now: scope + priority BEFORE the drop, for real ═══════════════════
 # The probe forks for real. The helper's busctl/ionice calls, setpriority and _drop_to are
-# recorders writing one JSON line each to a log both processes append to; busctl's recorder
-# sleeps before it writes, as the real move lands a moment after the call — so a child released
-# early would log its drop FIRST, and the order below would say so.
+# recorders writing one JSON line each to a log both processes append to. The move is made to
+# land LATE, as the real one does (StartTransientUnit returns once the job is queued; measured,
+# the first read after it still showed the old cgroup): the probe's _cgroup_of answers the panel's
+# cgroup for _LAND31 seconds after busctl returns, then the new scope, and logs "landed" the first
+# time it does. So a child released before the move landed would log its drop BEFORE "landed",
+# and a wait that gave up early, or never, would log nothing between. times.log has every event
+# and every poll with its monotonic time, for the checks on HOW LONG it waited.
+_LAND31, _WAIT31 = 0.25, 1.0
 _PROBE31 = r'''
 import importlib.util as u, importlib.machinery as m, json, os, sys, time, types
-helper, work, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+helper, work, mode, landing = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+land_after, wait = float(sys.argv[5]), float(sys.argv[6])
 s = u.spec_from_loader("ph31p", m.SourceFileLoader("ph31p", helper))
 mod = u.module_from_spec(s); s.loader.exec_module(mod)
-LOG = os.path.join(work, "events.log")
-def ev(*parts):
-    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+LOG, TLOG = os.path.join(work, "events.log"), os.path.join(work, "times.log")
+def put(path, parts):
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     os.write(fd, (json.dumps(parts) + "\n").encode()); os.close(fd)
+def ev(*parts):
+    put(LOG, parts); put(TLOG, [parts[0], time.monotonic()])
 home = os.path.join(work, "home")
 pw = types.SimpleNamespace(pw_name="gm31", pw_dir=home, pw_uid=os.getuid(), pw_gid=os.getgid())
 mod.pwd = types.SimpleNamespace(getpwnam=lambda n: pw, getpwuid=lambda u: pw)
-mod.SYSTEMD_BOOTED_DIR, mod.SCOPE_WAIT_SECONDS = work, 0.05
+mod.SYSTEMD_BOOTED_DIR, mod.SCOPE_WAIT_SECONDS = work, wait
 mod.resolve = lambda name: "/usr/bin/" + name
+PANEL, ME, moves, seen = "/system.slice/linuxgsm-panel.service", os.getpid(), {}, []
 def run(argv, **kw):
     if argv[0].endswith("busctl"):
-        time.sleep(0.4)
         ev("scope", os.getpid(), argv[7], argv[10:14])
+        if landing == "land":
+            moves[argv[7]] = time.monotonic() + land_after
     elif argv[0].endswith("ionice"):
         ev("ionice", os.getpid(), argv[1:])
     return types.SimpleNamespace(returncode=0)
+def cgroup_of(pid):
+    if pid == ME:
+        return PANEL
+    for unit, at in moves.items():
+        if time.monotonic() >= at:
+            if not seen:
+                seen.append(pid); ev("landed", pid)
+            return "/system.slice/" + unit
+    put(TLOG, ["poll", time.monotonic()])
+    return PANEL
 mod.subprocess.run = run
+mod._cgroup_of = cgroup_of
 os.setpriority = lambda which, who, prio: ev("nice", who, prio)
 mod._drop_to = lambda p, own_groups=False: (ev("drop", os.getpid(), own_groups), True)[1]
 if mode.startswith("lgsm-"):
@@ -153,8 +182,8 @@ ev("rc", rc)
 '''
 
 
-def _probe31(mode, runner=True):
-    """Run the probe in a fresh work dir; (events, stdout, stderr)."""
+def _probe31(mode, runner=True, landing="land"):
+    """Run the probe in a fresh work dir; (events, stdout, stderr, times)."""
     work = _tf31.mkdtemp(prefix="p31-", dir=_TMP31)
     home = os.path.join(work, "home")
     os.makedirs(os.path.join(home, ".lgsm-cron"))
@@ -170,13 +199,17 @@ def _probe31(mode, runner=True):
     script = os.path.join(work, "probe.py")
     with open(script, "w", encoding="utf-8") as fh:
         fh.write(_PROBE31)
-    r = _sp31.run([_sys31.executable, script, _helper_path, work, mode],  # nosec B603 - own probe
-                  capture_output=True, text=True, timeout=60, check=False)
-    events = []
-    if os.path.exists(log):
-        with open(log, encoding="utf-8") as fh:
-            events = [_json31.loads(ln) for ln in fh if ln.strip()]
-    return events, r.stdout, r.stderr
+    r = _sp31.run([_sys31.executable, script, _helper_path, work, mode, landing,  # nosec B603 - own probe
+                   str(_LAND31), str(_WAIT31)], capture_output=True, text=True, timeout=60, check=False)
+    return (_jsonl31(log), r.stdout, r.stderr, _jsonl31(os.path.join(work, "times.log")))
+
+
+def _jsonl31(path):
+    """The JSON lines of `path`, or [] when it was never written."""
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as fh:
+        return [_json31.loads(ln) for ln in fh if ln.strip()]
 
 
 def _kinds31(events):
@@ -191,62 +224,158 @@ def _start_order31(events):
     return child, (scopes[0] if scopes else None), _kinds31(events)
 
 
+def _when31(times, kind):
+    """The monotonic time of the first `kind` in times.log, or None."""
+    return next((t for k, t in times if k == kind), None)
+
+
+_PLACED31 = ["scope", "landed", "nice", "ionice", "drop"]
+
+
 def _check_lgsm_start31():
-    events, _out, err = _probe31("lgsm-start")
+    events, _out, err, _t = _probe31("lgsm-start")
     child, scope, kinds = _start_order31(events)
-    check("helper lgsm-command start: the child is moved into a scope of its own, then reniced and "
-          "given no I/O class, and only THEN drops to the account and runs the script",
-          kinds == ["scope", "nice", "ionice", "drop", "script", "rc"]
-          or kinds == ["scope", "nice", "ionice", "drop", "rc", "script"],
+    check("helper lgsm-command start: the child is moved into a scope of its own, the helper WAITS "
+          "until the move has landed, then renices it and gives it no I/O class, and only THEN does "
+          "it drop to the account and run the script",
+          kinds in (_PLACED31 + ["script", "rc"], _PLACED31 + ["rc", "script"]),
           repr((kinds, err[-300:])))
     check("helper lgsm-command start: the scope is new and named for the account and the CHILD's pid, "
           "holds exactly that pid, and the child starts at the game nice with initgroups kept",
           scope is not None and scope[2].startswith("lgsm-gm31-%s-" % child)
           and scope[2].endswith(".scope") and scope[3] == ["PIDs", "au", "1", str(child)]
           and ["nice", child, -1] in events and ["ionice", scope[1], ["-c", "0", "-p", str(child)]]
-          in events and ["drop", child, True] in events and ["rc", 0] in events,
-          repr((scope, child, events)))
+          in events and ["drop", child, True] in events and ["rc", 0] in events
+          and ["landed", child] in events, repr((scope, child, events)))
+
+
+def _check_scope_wait31():
+    """The wait in _start_scope, as the fork sees it: it polls until the move lands, and no longer."""
+    _events, _out, err, times = _probe31("lgsm-start")
+    t_scope, t_landed, t_nice = (_when31(times, k) for k in ("scope", "landed", "nice"))
+    polls = [t for k, t in times if k == "poll"]
+    check("helper lgsm-command start: the wait polls the child's cgroup until the move lands (%.2fs "
+          "late here) and goes on AT the landing — not after the whole %.1fs limit"
+          % (_LAND31, _WAIT31),
+          None not in (t_scope, t_landed, t_nice) and len(polls) >= 2
+          and t_landed - t_scope >= _LAND31 - 0.02 and t_nice - t_landed < 0.5,
+          repr((t_scope, t_landed, t_nice, len(polls), err[-200:])))
+
+
+def _check_scope_never31():
+    """The same fork, with a move that never lands: the limit, and the server still starts."""
+    events, _out, err, times = _probe31("lgsm-start", landing="never")
+    kinds = _kinds31(events)
+    t_scope, t_nice = _when31(times, "scope"), _when31(times, "nice")
+    check("helper lgsm-command start: a move that never lands is waited for SCOPE_WAIT_SECONDS and "
+          "no longer; the server still starts, where it was, as before scopes existed",
+          kinds[:4] == ["scope", "nice", "ionice", "drop"] and "landed" not in kinds
+          and ["rc", 0] in events and "script" in kinds and None not in (t_scope, t_nice)
+          and _WAIT31 - 0.05 <= t_nice - t_scope < _WAIT31 + 1.5,
+          repr((kinds, t_scope, t_nice, err[-200:])))
 
 
 def _check_lgsm_other31():
-    events, _out, err = _probe31("lgsm-update")
+    events, _out, err, _t = _probe31("lgsm-update")
     check("helper lgsm-command update: a maintenance action that restarts the server is scoped too, "
           "at LinuxGSM cron's nice 0 (an update's download is not lifted above every other game)",
-          _kinds31(events)[:4] == ["scope", "nice", "ionice", "drop"]
+          _kinds31(events)[:5] == _PLACED31
           and any(e[0] == "nice" and e[2] == 0 for e in events), repr((events, err[-200:])))
-    events, _out, err = _probe31("lgsm-details")
+    events, _out, err, _t = _probe31("lgsm-details")
     check("helper lgsm-command details: an action that cannot leave a server running is not scoped "
           "and keeps its priority", _kinds31(events) in (["drop", "script", "rc"], ["drop", "rc", "script"])
           , repr((events, err[-200:])))
 
 
 def _check_cron_now31():
-    events, out, err = _probe31("cron")
+    events, out, err, _t = _probe31("cron")
     child, scope, kinds = _start_order31(events)
     check("helper cron-run-now: the task's own runner runs as the account with the job id and its "
-          "base64 command, after its scope and cron's priority, and the verb says it started",
-          kinds[:4] == ["scope", "nice", "ionice", "drop"] and ["runner", "abcdef012345", "ZWNobyBoaQ=="]
+          "base64 command, after its scope has landed and cron's priority, and the verb says it started",
+          kinds[:5] == _PLACED31 and ["runner", "abcdef012345", "ZWNobyBoaQ=="]
           in events and ["rc", 0] in events and "CRON_RUN_STARTED" in out
           and scope is not None and scope[2].startswith("lgsm-cron-gm31-%s-" % child)
           and ["nice", child, 0] in events, repr((events, out, err[-300:])))
-    events, out, err = _probe31("cron", runner=False)
+    events, out, err, _t = _probe31("cron", runner=False)
     check("helper cron-run-now: no runnable ~/.lgsm-cron/run is a failure the caller is told about, "
           "never a 'started' for a task that cannot run",
           ["rc", 1] in events and "CRON_RUN_STARTED" not in out and "could not be started" in err,
           repr((events, out, err[-200:])))
 
 
+# _start_scope itself, in-process: busctl answers 0, and _cgroup_of is a script of answers.
+_SC_UNIT31 = "lgsm-gm31-4242-0a0b0c0d.scope"
+_SC_PANEL31 = "/system.slice/linuxgsm-panel.service"
+
+
+def _scope_helper31(answers, own=_SC_PANEL31):
+    """A helper copy whose busctl is recorded and whose _cgroup_of reads `answers`.
+
+    `answers` maps a pid to a list of what its successive reads return (its last answer repeats);
+    this process's own cgroup is `own`. Returns (module, busctl calls, reads per pid).
+    """
+    mod = _fresh_helper31()
+    calls, reads = [], {}
+    mod.subprocess = _Proxy31(_sp31, run=lambda argv, **kw: (
+        calls.append(list(argv)), _sp31.CompletedProcess(argv, 0, "", ""))[1])
+
+    def _cg(pid):
+        if pid == os.getpid():
+            return own
+        reads[pid] = reads.get(pid, 0) + 1
+        seq = answers[pid]
+        return seq[min(reads[pid], len(seq)) - 1]
+    mod._cgroup_of = _cg
+    mod.SCOPE_WAIT_SECONDS = 0.3
+    return mod, calls, reads
+
+
+def _check_start_scope31():
+    there = "/system.slice/" + _SC_UNIT31
+    mod, calls, reads = _scope_helper31({4242: [_SC_PANEL31, _SC_PANEL31, there]})
+    got = mod._start_scope(_SC_UNIT31, [4242], "d")
+    check("helper _start_scope: True once the pid is seen INSIDE the new scope, read until then "
+          "(here: still in the panel's cgroup twice, there on the third read) and not after",
+          got is True and reads == {4242: 3} and len(calls) == 1, repr((got, reads, calls)))
+    mod, calls, reads = _scope_helper31({4242: [_SC_PANEL31]})
+    t0 = _time31.monotonic()
+    got = mod._start_scope(_SC_UNIT31, [4242], "d")
+    took = _time31.monotonic() - t0
+    check("helper _start_scope: a move that never lands is False after SCOPE_WAIT_SECONDS of "
+          "polling, never True", got is False and 0.28 <= took < 2.0 and reads[4242] > 2,
+          repr((got, took, reads)))
+    mod, calls, reads = _scope_helper31({4242: [None], 4243: [_SC_PANEL31, there]})
+    got = mod._start_scope(_SC_UNIT31, [4242, 4243], "d")
+    check("helper _start_scope: a group whose FIRST pid has exited still counts as moved once another "
+          "of its pids is inside the scope", got is True, repr((got, reads)))
+    mod, calls, reads = _scope_helper31({4242: [None], 4243: [None]})
+    t0 = _time31.monotonic()
+    got = mod._start_scope(_SC_UNIT31, [4242, 4243], "d")
+    check("helper _start_scope: a group that has entirely exited is False at once, not after the wait",
+          got is False and _time31.monotonic() - t0 < 0.25, repr((got, reads)))
+    for own in ("/", None):
+        mod, calls, reads = _scope_helper31({4242: [there]}, own=own)
+        got = mod._start_scope(_SC_UNIT31, [4242], "d")
+        check("helper _start_scope: with no unified cgroup path to watch the move by (own cgroup %r, "
+              "a legacy-hierarchy boot) no scope is asked for: the placement from before, no 3s wait"
+              % own, got is False and calls == [] and reads == {}, repr((got, calls, reads)))
+
+
 # ══ 2. adopt-game-processes and terminal-scope: only the panel's own cgroup ═══════════════════════
 _PANEL_CG31 = "/user.slice/user-1000.slice/user@1000.service/app.slice/linuxgsm-panel.service"
 _ME31 = os.getpid()
 # pid: (comm, ppid, sid, uid). 999 is the panel's account (SUDO_UID), 1004/1005 game accounts,
-# 1006 an account the panel may not act as.
+# 1006 an account the panel may not act as. 100 is the panel itself: its unit's main process, a
+# session leader as systemd starts every one, and the parent of the sudo (200) that ran this
+# helper. 800 is the web terminal's shell (a child of the panel, leading its own session) and 801
+# what it started; 700 is a panel child in the panel's own session.
 _FACTS31 = {
     100: ("python3", 1, 100, 999), 200: ("sudo", 100, 200, 0), _ME31: ("panel-helper", 200, 200, 0),
     300: ("tmux: server", 1, 300, 1004), 301: ("cod_lnxded", 300, 301, 1004), 302: ("cat", 300, 300, 1004),
     400: ("tmux: server", 1, 400, 999), 401: ("sleep", 400, 401, 999),
     500: ("bash", 1, 500, 1005), 501: ("steamcmd", 500, 500, 1005),
     600: ("bash", 1, 600, 1006), 700: ("bash", 100, 100, 999),
+    800: ("bash", 100, 800, 999), 801: ("tmux: client", 800, 800, 999),
 }
 _NAMES31 = {999: "lgsmpanel", 1004: "codserver", 1005: "mcserver", 1006: "postgres"}
 
@@ -289,20 +418,55 @@ def _check_adopt31():
     mod._start_scope = lambda unit, pids, desc: False
     check("helper adopt-game-processes: a scope systemd would not make is a failure exit, not a pass",
           mod.do_adopt_game_processes([], "") == 1)
+    _check_adopt_retry31()
+
+
+def _check_adopt_retry31():
+    """One pid of a group exits between the cgroup.procs read and the call: systemd refuses it all."""
+    mod, made = _adopt_helper31()
+    tried, gone = [], {501}
+    listing = sorted(_FACTS31)
+
+    def _scope(unit, pids, _desc):
+        tried.append(list(pids))
+        if gone & set(pids):
+            return False              # StartTransientUnit: "No such process" for the whole group
+        made.append((unit, list(pids)))
+        return True
+    reads = []
+
+    def _pids(cg):
+        """cgroup.procs: the first read still lists 501, every later one does not."""
+        reads.append(cg)
+        return listing if len(reads) == 1 else [p for p in listing if p not in gone]
+    mod._start_scope = _scope
+    mod._cgroup_pids = _pids
+    sink = _Sink31()
+    with _ctx31.redirect_stdout(sink):          # the verb print()s its tally
+        rc = mod.do_adopt_game_processes([], "")
+    out = sink.text
+    check("helper adopt-game-processes: a group systemd refused because one of its pids had exited "
+          "is tried once more with the rest, and the exited pid is no failure",
+          rc == 0 and "ADOPTED 6 0" in out and [500, 501] in tried and [500] in tried
+          and sorted(p for _u, p in made) == [[300, 301, 302], [400, 401], [500]]
+          and [u for u, p in made if p == [500]][0].startswith("lgsm-adopted-mcserver-500-"),
+          repr((rc, out, tried, made)))
 
 
 def _check_terminal_scope31():
     mod, made = _adopt_helper31()
     nices = []
     mod._reset_priority = lambda pid, nice: nices.append((pid, nice))
-    rc = mod.do_terminal_scope(["100"], "")
+    rc = mod.do_terminal_scope(["800"], "")
     check("helper terminal-scope: the shell and the rest of ITS session move into one new scope, "
           "at an SSH login's priority",
-          rc == 0 and [p for _u, p in made] == [[100, 700]] and made[0][0].startswith(
-              "linuxgsm-panel-terminal-lgsmpanel-100-") and nices == [(100, 0), (700, 0)],
+          rc == 0 and [p for _u, p in made] == [[800, 801]] and made[0][0].startswith(
+              "linuxgsm-panel-terminal-lgsmpanel-800-") and nices == [(800, 0), (801, 0)],
           repr((rc, made, nices)))
     for pid, why, said in (("300", "another account's process", "not a process of the panel's own"),
-                           ("700", "a process that does not lead its own session", "lead its own")):
+                           ("700", "a process that does not lead its own session", "lead its own"),
+                           ("100", "the panel's own process (a session leader of its account, in its "
+                            "cgroup, and the parent of the sudo that ran the helper)", "the panel itself")):
         mod, made = _adopt_helper31()
         rc = mod.do_terminal_scope([pid], "")
         check("helper terminal-scope: refuses %s, and says which" % why,
@@ -322,6 +486,8 @@ def _job_helper31(rc=0):
         calls.append(list(argv)), _sp31.CompletedProcess(argv, rc, "", "Unit x already exists"))[1])
     mod.os = _Proxy31(os, fork=_no_fork31, environ={"SUDO_UID": "999", "SUDO_USER": "lgsmpanel",
                                                      "PATH": "/x"})
+    # Run from the panel's unit, as the panel runs it: a unified cgroup path, whatever runs the suite.
+    mod._cgroup_of = lambda pid: "/system.slice/linuxgsm-panel.service"
     db = os.path.join(_TMP31, "panel.db")
     open(db, "w", encoding="utf-8").close()
     data = os.path.join(_TMP31, "data")
@@ -409,23 +575,54 @@ def _check_os_update_job31():
           and (mod.OS_UPDATE_DONE + "7") in text, repr((rc, text[-200:])))
 
 
+def _forking31(mod):
+    """Let `mod` fork: the parent's side only (4242), recorded; returns the record."""
+    forked = []
+    mod.os = _Proxy31(os, fork=lambda: forked.append(1) or 4242, waitpid=lambda p, f: (p, 0))
+    return forked
+
+
 def _check_no_systemd31():
     mod, calls = _job_helper31()
     mod.SYSTEMD_BOOTED_DIR = os.path.join(_TMP31, "no-such-dir")
-    forked = []
-    mod.os = _Proxy31(os, fork=lambda: forked.append(1) or 4242, waitpid=lambda p, f: (p, 0))
+    forked = _forking31(mod)
     rc, out = _run_verb31(mod, "do_panel_db_repair", [])
     check("helper panel-db-repair without systemd as PID 1: the detached child, as before",
           rc == 0 and forked == [1] and calls == [] and "REPAIR_STARTED" in out, repr((rc, forked, calls)))
+    for own in ("/", None):
+        mod, calls = _job_helper31()
+        mod._cgroup_of = lambda pid, own=own: own
+        forked = _forking31(mod)
+        rc, out = _run_verb31(mod, "do_panel_db_repair", [])
+        check("helper panel-db-repair with systemd but no unified cgroup path (own cgroup %r: a "
+              "legacy-hierarchy boot): the detached child, as before — a job launched there could "
+              "never find its own unit, and would only refuse" % own,
+              rc == 0 and forked == [1] and calls == [] and "REPAIR_STARTED" in out,
+              repr((rc, forked, calls)))
+    mod, _calls = _job_helper31()
+    seen = {}
+    for cg in ("/system.slice/linuxgsm-panel.service", "/", "", None):
+        mod._cgroup_of = lambda pid, cg=cg: cg
+        seen[cg] = mod._cgroup_v2_placed()
+    eq("helper _cgroup_v2_placed: a real unified path is placed; `0::/`, an empty line and an "
+       "unreadable /proc are not", seen, {"/system.slice/linuxgsm-panel.service": True, "/": False,
+                                          "": False, None: False})
+
+
+_REBOOT_TIMER31 = ["/usr/bin/systemd-run", "--on-active=2", "--collect", "--quiet", "--", "/usr/bin/reboot"]
 
 
 def _check_reboot31():
     mod, calls = _job_helper31()
     rc, _out = _run_verb31(mod, "do_reboot_delayed", [])
     check("helper reboot-delayed: a transient timer owned by the system manager, not a sleeping "
-          "grandchild in the panel's cgroup", rc == 0
-          and calls == [["/usr/bin/systemd-run", "--on-active=2", "--collect", "--quiet", "--",
-                         "/usr/bin/reboot"]], repr((rc, calls)))
+          "grandchild in the panel's cgroup", rc == 0 and calls == [_REBOOT_TIMER31], repr((rc, calls)))
+    mod, calls = _job_helper31(rc=1)
+    forked = _forking31(mod)
+    rc, _out = _run_verb31(mod, "do_reboot_delayed", [])
+    check("helper reboot-delayed: a timer systemd-run could not create falls back to the detached "
+          "grandchild, so the reboot still happens (never a 0 for a reboot nothing will do)",
+          rc == 0 and calls == [_REBOOT_TIMER31] and forked == [1], repr((rc, calls, forked)))
 
 
 # ══ 4. one table, two copies: the gates between the helper and the panel ══════════════════════════
@@ -507,6 +704,22 @@ def _check_run_now31():
         res = _smcron31.run_cron_job_now(_REMOTE31, "gm", raw, "gmodserver")
     check("Run now on a remote: unchanged, the detached shell form over SSH",
           res[0] is True and rec["argv"] == [] and any("setsid bash" in c for c in rec["cmd"]), repr(rec))
+
+
+def _check_run_now_refused31():
+    """A hand-edited crontab line whose recorder id is longer than the verb takes."""
+    rec, _exec, _run = _recorders31()
+    long_id = "ab" * 35
+    b64 = _b6431.b64encode(b"/home/gm/gmodserver monitor").decode()
+    raw = "*/5 * * * * /home/gm/.lgsm-cron/run %s %s" % (long_id, b64)
+    with _swap31(_smc31, helper_present=lambda recheck=False: True, _exec_local_argv=_exec,
+                 run_command=_run):
+        res = _smcron31.run_cron_job_now(_LOCAL31, "gm", raw, "gmodserver")
+    check("Run now on the panel's host: an argument the verb refuses (here a 70-character job id, "
+          "which the crontab parser accepts) is reported with the validator's own reason, not as a "
+          "command that is too long, and nothing runs",
+          res[0] is False and "not a job id" in res[1] and "too long" not in res[1]
+          and rec["argv"] == [], repr((res, rec)))
 
 
 _PREFIX31 = "systemd-run --user --scope --collect --quiet -- "
@@ -601,17 +814,40 @@ def _check_terminal31():
 
 def _check_restore31():
     calls = []
-    for per_user, want in ((True, "legacy"), (False, "verb")):
+    for system, want in ((False, "legacy"), (True, "verb")):
         calls[:] = []
-        with _swap31(_bk31, _helper_present=lambda: True, _per_user_install=lambda pu=per_user: pu,
+        with _swap31(_bk31, _helper_present=lambda: True, _is_system_service=lambda sy=system: sy,
                      _run_verb=lambda verb, args=(), **k: (calls.append("verb"), ("", "", 0))[1],
                      _legacy_restore_dispatch=lambda *a, **k: (calls.append("legacy"), (True, "ok"))[1]):
             _bk31._dispatch_restore(os.path.join(_TMP31, "stage"), "x.tar.gz", "", False)
         check("restore with the helper on a %s install: %s" % (
-            "per-user" if per_user else "system",
+            "system" if system else "per-user (or unit-less)",
+            "the helper's panel-restore" if system else
             "the account's own --user restore (the helper's swap targets a SYSTEM unit that is not "
-            "there, and copied under the running panel)" if per_user else "the helper's panel-restore"),
-            calls == [want], repr(calls))
+            "there, and copied under the running panel)"), calls == [want], repr(calls))
+    check("restore: chooses the helper by system_ops._is_system_service, the one test the repair and "
+          "the self-update use, so a host with neither unit file is not a system install to any of "
+          "them", _bk31._is_system_service is _so31._is_system_service)
+    _check_restore_launch31()
+
+
+def _check_restore_launch31():
+    """The restore without the helper's verb: a launcher systemd-run refuses is a failure."""
+    data = _tf31.mkdtemp(prefix="rs31-", dir=_TMP31)
+    stage = os.path.join(data, ".restore-stage")
+    os.makedirs(stage)
+    with open(os.path.join(stage, "cred_key"), "w", encoding="utf-8") as fh:
+        fh.write("k")
+    spawned = []
+    sp = _Proxy31(_sp31, run=lambda argv, **k: _sp31.CompletedProcess(argv, 1, "", "Failed to connect to bus"),
+                  Popen=lambda argv, **k: spawned.append(list(argv)))
+    with _swap31(_bk31, DATA_DIR=data, subprocess=sp,
+                 _service_restart_launcher=lambda script: ["systemd-run", "--user", "--collect", script]):
+        res = _bk31._legacy_restore_dispatch(stage, "x.tar.gz", "", False)
+    check("restore through the user manager: a systemd-run that fails (no user bus, sudo refused) is "
+          "'could not start', never 'Restoring…', and the staged keys and database are wiped",
+          res == (False, "Could not start the restore.") and not os.path.exists(stage) and spawned == [],
+          repr((res, os.path.exists(stage), spawned)))
 
 
 def _check_system_ops31():
@@ -810,12 +1046,73 @@ def _check_crontab31():
           == ["crontab", "-u", "codserver", "-r"], repr(refused))
 
 
-for _fn31 in (_check_lgsm_start31, _check_lgsm_other31, _check_cron_now31, _check_adopt31,
+# ══ 8. an uninstall stops the web terminal's scopes before it deletes the panel user ═════════════
+def _uninstall_src31():
+    with open(os.path.join(_root, "uninstall.sh"), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _code_lines31(text):
+    """`text` without its comment lines: what the shell runs."""
+    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+
+
+_FAKE_SYSTEMCTL31 = r"""#!/bin/sh
+echo "$*" >> "$LOG31"
+case "$1" in
+list-units)
+  echo "linuxgsm-panel-terminal-lgsmpanel-812-0a0b0c0d.scope loaded active running linuxgsm-panel web terminal shell"
+  echo "● linuxgsm-panel-terminal-lgsmpanel-955-1a1b1c1d.scope loaded failed failed linuxgsm-panel web terminal shell"
+  echo "linuxgsm-panel-terminal-lgsmpanel-990-2a2b2c2d.scope loaded active running linuxgsm-panel web terminal shell"
+  echo "lgsm-mcserver-2137851-2add1ddd.scope loaded active running LinuxGSM mcserver" ;;
+esac
+"""
+
+
+def _check_uninstall_scopes31():
+    src = _uninstall_src31()
+    code = _code_lines31(src)
+    fn = src[src.index("\nstop_terminal_scopes() {") + 1:]
+    fn = fn[:fn.index("\n}\n") + 3]
+    work = _tf31.mkdtemp(prefix="un31-", dir=_TMP31)
+    with open(os.path.join(work, "systemctl"), "w", encoding="utf-8") as fh:
+        fh.write(_FAKE_SYSTEMCTL31)
+    os.chmod(os.path.join(work, "systemctl"), 0o700)  # nosemgrep - owner-only test stand-in
+    log = os.path.join(work, "calls.log")
+    r = _sp31.run(["bash", "-c", "set -euo pipefail\nwarn() { echo \"WARN $*\"; }\n" + fn  # nosec B603 B607
+                   + 'stop_terminal_scopes "/system.slice/linuxgsm-panel-terminal-lgsmpanel-990-2a2b2c2d.scope"\n'
+                   + 'echo "[rc=$?]"'], capture_output=True, text=True, timeout=30, check=False,
+                  env=dict(os.environ, PATH=work + ":" + os.environ.get("PATH", ""), LOG31=log))
+    calls = []
+    if os.path.exists(log):
+        with open(log, encoding="utf-8") as fh:
+            calls = fh.read().splitlines()
+    stops = [c for c in calls if c.startswith("stop ")]
+    check("uninstall.sh stop_terminal_scopes: every linuxgsm-panel-terminal scope is stopped (a failed "
+          "one's bullet included); a game server's scope is not, nor the one the uninstall runs in, "
+          "which is named instead",
+          stops == ["stop linuxgsm-panel-terminal-lgsmpanel-812-0a0b0c0d.scope",
+                    "stop linuxgsm-panel-terminal-lgsmpanel-955-1a1b1c1d.scope"]
+          and "WARN Left linuxgsm-panel-terminal-lgsmpanel-990-2a2b2c2d.scope running" in r.stdout
+          and "[rc=0]" in r.stdout, repr((calls, r.stdout, r.stderr[-300:])))
+    call = 'stop_terminal_scopes "$('
+    deluser = 'userdel -r "${PANEL_USER}"'
+    check("uninstall.sh: a system uninstall stops the terminal scopes after the panel's unit and "
+          "BEFORE it deletes the panel user (userdel refuses an account with a live process)",
+          code.count(call) == 1 and code.index("svc disable --now linuxgsm-panel.service")
+          < code.index(call) < code.index(deluser)
+          and 'if [[ "${MODE}" = "system" ]]; then\n    ' + call in code,
+          repr((code.count(call), code.count(deluser))))
+
+
+for _fn31 in (_check_lgsm_start31, _check_scope_wait31, _check_scope_never31, _check_start_scope31, _check_lgsm_other31,
+              _check_cron_now31, _check_adopt31,
               _check_terminal_scope31, _check_jobs31, _check_job_entry31, _check_os_update_job31,
               _check_no_systemd31, _check_reboot31, _check_constants31, _check_backup31,
-              _check_run_now31, _check_user_scope31, _check_user_scope_probe31, _check_terminal31,
+              _check_run_now31, _check_run_now_refused31, _check_user_scope31,
+              _check_user_scope_probe31, _check_terminal31,
               _check_restore31, _check_system_ops31, _check_app31, _check_report31, _check_journal31,
-              _check_crontab31, _check_keeper31):
+              _check_crontab31, _check_keeper31, _check_uninstall_scopes31):
     try:
         _fn31()
     except Exception as _e31:  # noqa: BLE001 - a crashed block is a FAILED check, by name

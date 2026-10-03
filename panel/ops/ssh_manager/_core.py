@@ -2190,13 +2190,15 @@ SCOPED_LGSM_ACTIONS = frozenset(("start", "restart", "monitor", "update", "force
 
 
 def user_scope_argv():
-    """The argv prefix that starts a command in a new scope of this account's user manager, or []
-    where that cannot be done: not a per-user install, or a probe found no user manager to ask.
+    """Return the argv prefix that starts a command in a new scope of this account's user manager.
+
+    [] where that cannot be done: not a per-user install, or a probe found no user manager to ask.
 
     Asked by RUNNING it once (`systemd-run --user --scope -- true`): the unit file's presence says
     which install this is, not whether XDG_RUNTIME_DIR reaches a manager from here. A failed probe
     is asked again after ten minutes rather than believed for the life of the process; a
-    successful one is kept. [] is today's behaviour, never a failed start."""
+    successful one is kept. [] is today's behaviour, never a failed start.
+    """
     now = time.monotonic()
     if _USER_SCOPE["ok"] is None or (not _USER_SCOPE["ok"]
                                      and now - _USER_SCOPE["at"] > _USER_SCOPE_RETRY):

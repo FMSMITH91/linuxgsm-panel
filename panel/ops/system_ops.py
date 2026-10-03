@@ -2297,8 +2297,9 @@ def panel_repair_database():
 
 
 def adopt_game_processes():
-    """Move game-server processes ALREADY in the panel's cgroup into scopes of their own. Once, at
-    panel start (app.py).
+    """Move game-server processes ALREADY in the panel's cgroup into scopes of their own.
+
+    Once, at panel start (app.py).
 
     The helper now gives every server the panel starts a scope of its own, but servers started
     before that are still inside the unit: on a per-user install they survived every restart only
@@ -2307,7 +2308,8 @@ def adopt_game_processes():
     before the move stays with the panel until it is freed.
 
     The helper's (out, err, rc), or None where there is no helper to ask — that host keeps its
-    placement, and the debug report names any game process left in the panel's cgroup."""
+    placement, and the debug report names any game process left in the panel's cgroup.
+    """
     if not _helper_present():
         return None
     out, err, rc = _run_verb("adopt-game-processes", [], timeout=60, merge_stderr=False)
@@ -2320,9 +2322,11 @@ def adopt_game_processes():
 
 
 def terminal_scope(pid):
-    """Ask the helper to give the local web terminal's shell (`pid`) a scope of its own, so what an
-    operator starts there is not ended by the next panel restart. None without a helper (the shell
-    stays where it is, as before); else the helper's (out, err, rc)."""
+    """Ask the helper to give the local web terminal's shell (`pid`) a scope of its own.
+
+    So what an operator starts there is not ended by the next panel restart. None without a helper
+    (the shell stays where it is, as before); else the helper's (out, err, rc).
+    """
     if not _helper_present():
         return None
     out, err, rc = _run_verb("terminal-scope", [str(pid)], timeout=20, merge_stderr=False)

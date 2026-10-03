@@ -613,7 +613,8 @@ from panel.ops import backup as _bk7  # noqa: E402
 _bk7_names = ("BACKUP_DIR", "DATA_DIR", "DB_PATH", "CONFIG_FILE", "SECRET_FILE", "CRED_KEY_FILE",
               "load_config", "update_config", "get_passphrase", "_helper_present", "_run_verb",
               "subprocess", "create_backup", "prune_backups", "_derive_key", "_encrypt_archive",
-              "_safe_path", "_service_restart_launcher", "os", "tempfile", "decrypt_secret", "time")
+              "_safe_path", "_service_restart_launcher", "os", "tempfile", "decrypt_secret", "time",
+              "_is_system_service")
 _bk7_saved = {k: getattr(_bk7, k) for k in _bk7_names}
 _b7 = _p7_pl.Path(_p7_tf.mkdtemp(prefix="p7-bk-"))
 _b7_cfg = {}
@@ -1008,13 +1009,14 @@ def _bk7_restore_backup_refusal_happens():
 
     # The helper answers non-zero: nothing restarts, and the staged keys do not linger.
     _rv_verbs = []
-    _bk7._helper_present = lambda: True
+    _bk7._helper_present = _bk7._is_system_service = lambda: True
     _bk7._run_verb = lambda verb, args=(), **k: (_rv_verbs.append((verb, list(args), k.get("timeout"))),
                                                  ("", "helper: refused", 1))[1]
     try:
         _hv_res = _p7_call(_bk7.restore_backup, _plain_name, skip_safety_backup=True)
     finally:
         _bk7._helper_present, _bk7._run_verb = _bk7_saved["_helper_present"], _bk7_saved["_run_verb"]
+        _bk7._is_system_service = _bk7_saved["_is_system_service"]
     check("backup/restore: a helper that refuses the restore is a failure, and the stage is wiped",
           _hv_res == (False, "Could not start the restore.") and _rv_verbs == [("panel-restore", [], 20)]
           and not os.path.exists(_stage),
@@ -1032,10 +1034,11 @@ def _bk7_restore_backup_refusal_happens_2():
           _hx_res == (False, "Could not start the restore.") and not os.path.exists(_stage), repr(_hx_res))
 
     # The pre-helper fallback: a script that copies exactly the staged members, quoted, then a
-    # detached launch of it. Popen is recorded, never run.
+    # detached launch of it. The launcher's run is recorded, never run.
     _popen = []
     _bk7._helper_present = lambda: False
-    _bk7.subprocess = _Over(_p7_sp, Popen=lambda argv, **k: _popen.append(list(argv)))
+    _bk7.subprocess = _Over(_p7_sp, run=lambda argv, **k: (
+        _popen.append(list(argv)), _p7_sp.CompletedProcess(argv, 0, "", ""))[1])
     _bk7._service_restart_launcher = lambda script: ["LAUNCH", script]
     try:
         # A REAL database: restore re-reads the archive's panel.db before anything is staged

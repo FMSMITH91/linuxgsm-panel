@@ -166,6 +166,32 @@ svc daemon-reload >/dev/null 2>&1 || true
 if [[ "${MODE}" = "system" ]]; then systemctl reset-failed linuxgsm-panel.service >/dev/null 2>&1 || true; fi
 ok "Service stopped and removed"
 
+# ── ...and the panel host's web-terminal shells, which run in scopes of their own ──
+# The helper's terminal-scope verb moves each local terminal shell, and its session, out of the
+# panel's unit into linuxgsm-panel-terminal-<account>-<pid>-<id>.scope, so a server, tmux, screen
+# or nohup job an operator starts there outlives a panel restart. It therefore outlives the unit
+# stop above as well, and it runs as the panel user: `userdel` below then refuses the account
+# ("currently used by process") and the uninstall ends with the panel user still on the host and
+# that scope still running. So they are stopped here, by name; the game servers' own scopes
+# (lgsm-*) are left alone, like the servers. The one this script runs in, if it was started from
+# such a shell, is skipped: stopping it would end the uninstall half done.
+stop_terminal_scopes() {   # <this script's own cgroup path>
+    local own="$1" line scope
+    while IFS= read -r line; do
+        [[ "${line}" =~ (linuxgsm-panel-terminal-[A-Za-z0-9_.@-]+\.scope) ]] || continue
+        scope="${BASH_REMATCH[1]}"
+        if [[ -n "${own}" && "${own}" == */"${scope}" ]]; then
+            warn "Left ${scope} running: this uninstall runs inside it. Close that terminal afterwards."
+            continue
+        fi
+        systemctl stop "${scope}" >/dev/null 2>&1 || warn "Could not stop ${scope}"
+    done < <(systemctl list-units --type=scope --all --plain --no-legend \
+                 'linuxgsm-panel-terminal-*.scope' 2>/dev/null || true)
+}
+if [[ "${MODE}" = "system" ]]; then
+    stop_terminal_scopes "$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null || true)"
+fi
+
 # ── The sudo grants go FIRST, the moment nothing needs them ──
 # They used to be removed near the END, after the panel's files, the firewall rule, Tailscale and
 # the host-wide pieces. Every one of those steps can stop this script (`set -e`, a file `rm -rf`

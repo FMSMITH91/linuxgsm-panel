@@ -758,13 +758,31 @@ CI-verified commit regardless of this file — this changelog is for humans.
   services of their own (as does the OS update, which a panel restart could kill mid-upgrade); a
   second one while the first is running is refused. Measured with the real helper on the test host:
   before, the stand-in panel was left inactive; after, it came back on its own.
+  **Updating a root install TO this version: do it from a shell, once** — `sudo bash install.sh` in
+  the panel's checkout (`/home/lgsmpanel/linuxgsm-panel`), or the one-line install command. The
+  panel's Update button runs the updater the host already has, which is the previous version's and
+  has this bug: it stops the panel at step 1 of 6, ends itself with it, and leaves the panel down
+  until `sudo systemctl start linuxgsm-panel`. Every update after this one works from the button.
+  A per-user install is not affected and updates from the button as usual.
+- **An OS update can now restart the panel (root installs on Ubuntu 24.04 and 26.04).** With apt
+  running in a service of its own, Ubuntu's needrestart (which on 24.04 and 26.04 restarts affected
+  services by default) restarts `linuxgsm-panel.service` like any other service when the update
+  replaces a library the panel has loaded. Before, apt ran inside the panel's unit, and needrestart deferred
+  that one restart because it would have killed apt itself. The consoles reconnect once the panel
+  is back, the OS-update window retries until it answers and goes on following the log, and the
+  game servers, no longer inside the panel's unit, keep running through it.
 - **Restoring a backup on a per-user install with the helper no longer swaps the files under the
   running panel.** The helper's restore stops and starts the SYSTEM unit, which a per-user install
   does not have, so the panel kept running while its database and its WAL were replaced beneath
-  it. A per-user install now restores through its own user manager.
+  it. A per-user install now restores through its own user manager, chosen by the same system-unit
+  test the database repair and the self-update use. That launch is now checked as well: a
+  `systemd-run` that fails is reported as "Could not start the restore." and the staged database
+  and keys are deleted, where it used to answer "Restoring…" for a restore that never ran.
 - **The local web terminal's jobs outlive a panel restart.** A server, tmux or nohup job started in
   the panel host's terminal ran inside the panel's unit and died at the next restart or self-update.
-  The terminal's shell now runs in a scope of its own.
+  The terminal's shell now runs in a scope of its own. Uninstalling a root install stops those
+  scopes before it removes the panel user, which `userdel` would otherwise refuse while a job left
+  in the terminal is still running.
 - **The debug report names game servers inside the panel's cgroup.** It listed them as "other",
   printed their memory as the panel's, and raised nothing. It now counts game-server processes (tmux
   servers, what they started, and leftovers older than the panel) with a warning that says what a

@@ -1451,8 +1451,10 @@ def _start_hub_lag_watch():
 
 
 def _adopt_game_processes():
-    """Once per panel start: game servers an earlier run started, still inside this unit's cgroup,
-    moved into scopes of their own (system_ops.adopt_game_processes). Never raises."""
+    """Move game servers an earlier run started out of this unit's cgroup, once per panel start.
+
+    They go into scopes of their own (system_ops.adopt_game_processes). Never raises.
+    """
     try:
         so.adopt_game_processes()
     except Exception:

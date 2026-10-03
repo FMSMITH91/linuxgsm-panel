@@ -150,12 +150,14 @@ which widens what the helper will run:
   AS that account, the reach the panel's `sudo -u` grant already gives it. `adopt-game-processes`
   and `terminal-scope` move processes OUT of the panel's own cgroup and nowhere else: only one
   whose cgroup is `…/linuxgsm-panel.service`, and for the terminal only a process of the account
-  that invoked sudo, leading its own session.
+  that invoked sudo, leading its own session, and never the helper's own ancestors (the panel's
+  main process is a session leader of that account in that cgroup, so it is refused by name).
 * The four jobs that stop the panel's unit (`panel-db-repair`, `panel-restore`,
   `panel-self-update`) or must outlive it (`os-update-run`) start as the main process of a
   transient service of their own (`systemd-run --unit=<fixed name> -- <the helper> --job <name>`)
   and run in its foreground. `--job` is not a verb: it refuses to run anywhere but inside that
-  unit, and re-validates its arguments. Without systemd as PID 1 the old detached child is kept.
+  unit, and re-validates its arguments. Without systemd as PID 1, or without a unified (v2)
+  cgroup path to find that unit by, the old detached child is kept.
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
 said the panel had "113" privileged call sites and tracked them down to 42. That counted only

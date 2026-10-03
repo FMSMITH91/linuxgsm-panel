@@ -817,9 +817,12 @@ def _run_now_in_scope(server, user, core, jid):
     try:
         out, err, rc = _core.run_privileged(server, "cron-run-now", [user, jid, b64], timeout=30,
                                             merge_stderr=False)
-    except _priv.VerbError:
-        # A command too long for the verb's bound (16 KB of base64). Nothing was started.
-        return False, "That job's command is too long to run from here."
+    except _priv.VerbError as exc:
+        # The verb's own bounds refused an argument, and nothing was started: a command over 16 KB
+        # of base64, or a job id longer than the verb's 64 hex characters (the crontab parser
+        # accepts any length, so a hand-edited line can carry one). The reason is the validator's
+        # own, which never echoes the value it refused.
+        return False, "This task can't be run from here: %s." % exc
     return _run_now_result(out, err, rc)
 
 
