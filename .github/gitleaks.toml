@@ -66,6 +66,12 @@ regexes = [
   # a secret's; the value is a test function's name. Matched as that exact assignment, so any other
   # value assigned to the name (and every real key anywhere) still turns the gate red.
   '''_persist_host_key = _pl_traced_persist10''',
+  # SonarCloud's ISSUE key for the declined docker:S6471 finding (an opaque issue id, readable by
+  # anyone at sonarcloud.io/api/issues/search), in part28's fixture as a '"key": "<id>"' pair, which
+  # generic-api-key reads as a credential. The tree now takes it from sonar_new_issues.KNOWN_OPEN;
+  # this entry exists only because commit d5074031 in the PR range carries the literal. Matched with
+  # its field name and exact value, so any other value, or this one under another name, still fires.
+  '''key": "AaDejKLMfWz637hiAQny"''',
 ]
 # No `paths` exemptions. There was one — '''README\.md''' — and gitleaks' path patterns are
 # unanchored searches, so it took every README in the repo (the root one, static/js/,
