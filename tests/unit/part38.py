@@ -7,8 +7,9 @@ room once its tab has stayed hidden for 30 s, and on the way back rejoins and ca
 itself. Every check below is judged on the console's own job — output prompt, in order, complete and
 unduplicated — and what holds it up is, one section each:
 
-* A. THE PAGE. server_detail.js run WHOLE in node (a small DOM, a virtual clock, a fake socket, a
-     fetch the check answers, panel.js's own pollWhenVisible) against a model of the server's half
+* A. THE PAGE. server_detail.js run WHOLE in node (a small DOM, a virtual clock, a fake socket that
+     buffers as socket.io-client 4.8.4 does, a fetch the check answers, panel.js's own
+     pollWhenVisible) against a model of the server's half
      of the console with the semantics B pins: a pass forgets a console nobody watches; a first look
      records where the log ends and reads nothing; each later pass pushes what was written since, to
      whoever is in the room right then; the window is the log's last lines at the moment it is read.
@@ -17,7 +18,8 @@ unduplicated — and what holds it up is, one section each:
 * B. THE SERVER. Through flask-socketio's test client and the real console poller loop, reading a
      real file with bash: a room left empty is not read at all and its offset is forgotten; a rejoin
      is a first look, with no replay; a second tab keeps the reads going; a socket that never joined
-     is never read; and the panel backlog carries each push's time, the key the page dedupes by.
+     is never read; the panel backlog carries each push's time, the key the page dedupes by; and an
+     update that runs while nobody watches is read to its end when it ends.
 * C. BOTH. Payloads the real server produced — the poller's pushes, /api/console's windows — fed to
      the real page in the order the server produced them, for the two orderings a plain rejoin gets
      wrong.
@@ -1221,7 +1223,7 @@ def _section_page38():
         return
     results = out.get("results") or []
     check("A page: the harness ran server_detail.js whole and reported every check",
-          len(results) >= 37 and not out.get("error"), repr(out)[:1500])
+          len(results) >= 61 and not out.get("error"), repr(out)[:1500])
     for r in results:
         check("A page: " + r["name"], r["ok"], r.get("detail", ""))
 
