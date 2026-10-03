@@ -670,6 +670,19 @@ async function checkFocusFallback(cfg) {
         JSON.stringify({emits: w.page.emitted.map(e => e[0]), pending: w.pending().map(f => f.url)}));
 }
 
+async function checkSilentReturn(cfg) {
+  const w = await manualWorld(cfg);
+  await w.hide(true); await w.advance(GRACE);
+  await w.hide(false, true);                  // in view, but neither visibilitychange nor focus came
+  await w.advance(GRACE - 1);
+  const before = w.emits('join_console');
+  await w.advance(1);
+  check('a return no event announced is noticed by the 30 s console poll, which rejoins and catches up',
+        w.emits('leave_console') === 1 && before === 1 && w.emits('join_console') === 2
+        && w.pending(/lines=2000/).length === 1,
+        JSON.stringify({emits: w.page.emitted.map(e => [e[0], e[2]]), pending: w.pending().map(f => f.url)}));
+}
+
 async function checkNoConsole(cfg) {
   const w = makeWorld({manual: true, src: cfg.src, panel: cfg.panel, code: cfg.code, console: false});
   w.write(3); await w.start();
@@ -815,7 +828,7 @@ async function replay(cfg) {
   for (const fn of [checkLoad, checkGrace, checkAltTab, checkReturn, checkOrderReadFirst, checkAhead,
                     checkDropWhileCatchingUp, checkInsideWindow, checkGiveUp, checkHiddenAgain, checkOrderPushFirst,
                     checkQuiet, checkOtherTab, checkReconnectWhilePaused, checkDropBeforeGrace, checkAction,
-                    checkFinishedAway, checkBackground, checkLateTimer, checkFocusFallback, checkNoConsole,
+                    checkFinishedAway, checkBackground, checkLateTimer, checkFocusFallback, checkSilentReturn, checkNoConsole,
                     checkNoView, checkIndicator, checkBacklogOnce, checkRotation, checkSchedules]) {
     try { await fn(cfg); } catch (e) { check(fn.name + ' ran to its end', false, e && e.stack || e); }
   }
@@ -848,7 +861,7 @@ def _section_page38():
         return
     results = out.get("results") or []
     check("A page: the harness ran server_detail.js whole and reported every check",
-          len(results) >= 36 and not out.get("error"), repr(out)[:1500])
+          len(results) >= 37 and not out.get("error"), repr(out)[:1500])
     for r in results:
         check("A page: " + r["name"], r["ok"], r.get("detail", ""))
 

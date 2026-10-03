@@ -1693,7 +1693,10 @@ pollStats();
 
 document.addEventListener('visibilitychange', function(){ if (!document.hidden) pollStats(); });
 
-pollWhenVisible(function(){ refreshConsole(); }, 30000);
+// The same 30 s poll notices a tab that is in view but whose console is still set aside — a return
+// that no visibilitychange or focus announced — and rejoins it (_onConsoleVisibility); in view and
+// not set aside, that call does nothing.
+pollWhenVisible(function(){ _onConsoleVisibility(); refreshConsole(); }, 30000);
 
 // Which build of the game is installed. Fetched once, after the page has drawn — the endpoint
 // reads the Steam manifest over SSH and queries the running game, which is far too slow to sit on
