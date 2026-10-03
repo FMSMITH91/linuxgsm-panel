@@ -414,27 +414,175 @@ def _kinds_text(arch):
 
 _FULL_COUNTS_RE = re.compile(r"^(\d+) server\(s\) backed up(?:, (\d+) failed)?"
                              r"(?:, (\d+) skipped \(players online\))?")
+# The installed servers the scheduled sweep backs up (installed, with a host), and what the
+# unattended runs recorded. Static SQL; ids and game types only, never a name.
+_SCHED_SERVERS_SQL = ("SELECT id, game_type FROM game_server WHERE installed = 1 AND remote_id IS "
+                      "NOT NULL AND remote_id != 0 ORDER BY id")
+_SCHED_AUDIT_SQL = ("SELECT action, COUNT(*), SUM(CASE WHEN success THEN 1 ELSE 0 END), "
+                    "MAX(timestamp) FROM audit_log WHERE action IN ('scheduled_backup', "
+                    "'queued_backup', 'scheduled_backup_overdue', 'queued_backup_waiting') "
+                    "AND timestamp >= ? GROUP BY action")
+# The backups themselves, and the two reports of a backup players kept waiting
+# (_shared._report_overdue_skip / _report_long_queue), which are not backups and have their own
+# actions so they are not counted as failed ones.
+_SCHED_BACKUP_ACTIONS = (("scheduled_backup", "scheduled"), ("queued_backup", "queued"))
+_SCHED_REPORT_ACTIONS = (("scheduled_backup_overdue", "reported overdue"),
+                         ("queued_backup_waiting", "reported still queued"))
+_SCHED_AUDIT_DAYS = 30
 
 
-def _full_line(res):
-    """Full backups from COUNTS parsed off the summary's fixed prefix.
+def _manual_line(res):
+    """The MANUAL "Back up game servers now" run, from COUNTS parsed off its summary's prefix.
 
-    The summary itself names game servers and carries their error text, so it is never printed.
+    full_backup_last/summary are that button's alone (record_full_backup has no other caller); the
+    automatic schedule keeps a clock per server, read by _schedule_lines. This line used to sit
+    under the schedule's settings and read "never run" on every install where nobody had pressed
+    the button, however many scheduled backups had run. The summary names game servers and
+    carries their error text, so it is never printed.
     """
     from panel.ops import backup as bk
     s = bk.get_full_settings()
-    head = "- **Full (game-server) backups**: every %s d, keep %s" % (s["interval_days"], s["keep"])
+    head = "- **Manual 'Back up game servers now'**:"
     if not s.get("last"):
-        res.add(head + " · never run")
+        res.add(head + " never run")
         return
     m = _FULL_COUNTS_RE.match(str(s.get("summary") or ""))
     counts = ("%s backed up, %s failed, %s skipped" % (m.group(1), m.group(2) or 0, m.group(3) or 0)
               if m else "outcome not recorded in counts")
     queued = " · some queued for when empty" if "will back up once empty" in str(s.get("summary")) \
         else ""
-    res.add(head + " · last run %s ago: %s%s" % (ago(time.time() - s["last"]), counts, queued))
+    res.add(head + " last run %s ago: %s%s" % (ago(time.time() - s["last"]), counts, queued))
     if m and int(m.group(2) or 0):
-        res.find("warn", "Backups", "the last full backup had failures")
+        res.find("warn", "Backups", "the last manual full backup had failures")
+
+
+def _sched_row(sid, gtype, sched, now):
+    """One server's automatic schedule as (sort key, line, due_at or None)."""
+    from panel.ops.debug_report.hosts import game_tok
+    every, last = sched["interval_days"], sched["last"]
+    words = ["gs %d" % sid, game_tok(gtype)]
+    own = " (its own setting)" if sched.get("interval_set") else ""
+    if every <= 0:
+        return (3, 0), " · ".join(words + ["off%s" % own]), None
+    words.append("every %d d%s" % (every, own))
+    if not last:
+        return (1, 0), " · ".join(words + ["clock not started"]), None
+    due_at = last + every * _DAY
+    words.append("last %s ago" % ago(now - last))
+    if now >= due_at:
+        return (0, due_at), " · ".join(words + ["due since %s" % ago(now - due_at)]), due_at
+    return (2, last), " · ".join(words + ["next in %s" % ago(due_at - now)]), None
+
+
+def _ticker_passed(due_at, now):
+    """Whether the backup-ticker STARTED a completed pass after `due_at`, more than a cadence ago.
+
+    Gating the warning on the ticker's own heartbeat keeps out what is not a missed backup: a
+    report taken just after a restart (the first pass is 2 min in), a server that fell due while
+    the panel was down, a pass still archiving other servers one after another.
+    """
+    from panel.core import runtime_stats as rs
+    from panel.ops.debug_report.workers import WORKERS
+    hb = rs.snapshot("heartbeat").get("backup-ticker")
+    if not isinstance(hb, dict) or now - due_at <= dict(WORKERS)["backup-ticker"]:
+        return False
+    return hb.get("at", 0) - (hb.get("took") or 0) > due_at
+
+
+def _schedule_rows(cfg, servers, now):
+    from panel.ops import backup as bk
+    defaults = bk.full_settings_from(cfg)
+    rows = [_sched_row(int(sid), gtype, bk.game_schedule_from(cfg, sid, defaults), now)
+            for sid, gtype in servers]
+    return sorted(rows, key=lambda r: r[0])
+
+
+def _schedule_head(cfg):
+    from panel.ops import backup as bk
+    d = bk.full_settings_from(cfg)
+    default = ("default every %d d, keep %d" % (d["interval_days"], d["keep"])
+               if d["interval_days"] > 0 else "default: off, keep %d" % d["keep"])
+    return "- **Game-server backups, automatic** (%s; each server can override it)" % default
+
+
+def _schedule_lines(res, servers):
+    """The automatic per-server schedule: each installed server's interval and clock (R62).
+
+    One config read for every server: get_game_schedule reads config.json twice per call, a
+    deepcopy of the whole file each time. An unreadable config.json is said as such, because the
+    sweeps are skipped while it is (_shared._backups_blocked_by_config) and its defaults would
+    print every clock as "not started".
+    """
+    from panel.ops import backup as bk
+    cfg = bk.load_config()   # the backup module's own reader: the one the schedule is read with
+    if bk.is_unreadable(cfg):
+        res.add("- **Game-server backups, automatic**: config.json could not be read, so the "
+                "scheduled and queued sweeps are skipped until it can")
+        res.find("warn", "Backups", "config.json is unreadable: scheduled game backups are skipped")
+        return
+    head = _schedule_head(cfg)
+    if isinstance(servers, str):
+        res.add(head + ": installed servers could not be read (%s)" % servers.split(":", 1)[-1])
+        res.find("unread", "Backups", "the installed game servers could not be read")
+        return
+    if not servers:
+        res.add(head + ": no installed game servers")
+        return
+    _schedule_body(res, head, _schedule_rows(cfg, servers, time.time()))
+
+
+def _schedule_body(res, head, rows):
+    """The schedule's count line, the first _LIST_MAX servers (most overdue first), the finding."""
+    now = time.time()
+    counts = [sum(1 for r in rows if r[0][0] == k) for k in range(4)]
+    res.add(head + ": %d installed · %d due · %d clock not started · %d on schedule · %d off" % (
+        len(rows), counts[0], counts[1], counts[2], counts[3]))
+    for _key, line, _due in rows[:_LIST_MAX]:
+        res.add("  - " + line)
+    if len(rows) > _LIST_MAX:
+        res.add("  - … and %d more" % (len(rows) - _LIST_MAX))
+    missed = sum(1 for r in rows if r[2] is not None and _ticker_passed(r[2], now))
+    if missed:
+        res.find("warn", "Backups", "%d game server(s) due for a scheduled backup that the "
+                 "backup-ticker has passed since without taking (players online, or failing)"
+                 % missed)
+
+
+def _audit_counts(rows):
+    known = {a for a, _l in _SCHED_BACKUP_ACTIONS + _SCHED_REPORT_ACTIONS}
+    by = {}
+    for action, n, ok, newest in rows:
+        if action in known:
+            by[action] = (int(n or 0), int(ok or 0), newest)
+    return by
+
+
+def _scheduled_audit_line(res, rows):
+    """What the unattended runs recorded in the last 30 days: the clocks alone cannot say.
+
+    A clock also moves when it is first started and when a backup fails, so only these audit rows
+    (one per unattended backup, success or not) show that backups actually happened.
+    """
+    head = "- **Unattended game-server backups, last %d d**" % _SCHED_AUDIT_DAYS
+    if isinstance(rows, str):
+        res.add(head + ": could not be read (%s)" % rows.split(":", 1)[-1])
+        return
+    by = _audit_counts(rows or [])
+    parts = []
+    for action, label in _SCHED_BACKUP_ACTIONS:
+        if action not in by:
+            parts.append("%s: none" % label)
+            continue
+        n, ok, newest = by[action]
+        parts.append("%s: %d ok, %d failed, newest %s" % (label, ok, n - ok, _when(newest)))
+    parts += ["%s: %d, newest %s" % (label, by[action][0], _when(by[action][2]))
+              for action, label in _SCHED_REPORT_ACTIONS if action in by]
+    res.add(head + ": " + " · ".join(parts))
+
+
+def _schedule_queries():
+    return {"sched_servers": (_SCHED_SERVERS_SQL, ()),
+            "sched_audit": (_SCHED_AUDIT_SQL, (_sql_time(_SCHED_AUDIT_DAYS * _DAY),))}
 
 
 def _snapshot_dirs(root):
@@ -477,13 +625,22 @@ def _snapshots_line(res):
 
 
 def section_backups(ctx):
-    """Panel backups (settings, passphrase readable, archives) and update snapshots."""
+    """Panel backups (settings, passphrase readable, archives), game-server backups, snapshots.
+
+    Game-server backups are three lines because there are three things: the automatic schedule
+    (a clock per server), what the unattended runs recorded, and the manual full run.
+    """
+    from panel.ops.debug_report import _src_db
     res = Result()
-    for part in (_settings_line, _archives_line, _full_line, _snapshots_line):
+    got = _src_db.run_ro(_schedule_queries(), timeout=max(1.0, min(10.0, ctx.remaining() - 1.0)))
+    for label, part, args in (
+            ("settings", _settings_line, ()), ("archives", _archives_line, ()),
+            ("game-server schedule", _schedule_lines, (got.get("sched_servers"),)),
+            ("unattended game-server backups", _scheduled_audit_line, (got.get("sched_audit"),)),
+            ("manual full backup", _manual_line, ()), ("snapshots", _snapshots_line, ())):
         try:
-            part(res)
+            part(res, *args)
         except Exception as exc:  # noqa: BLE001 - its own line says so
-            res.add("- **%s**: could not be read (%s)" % (part.__name__.strip("_").replace(
-                "_line", ""), type(exc).__name__))
+            res.add("- **%s**: could not be read (%s)" % (label, type(exc).__name__))
             res.find("unread", "Backups", "a part could not be read")
     return res

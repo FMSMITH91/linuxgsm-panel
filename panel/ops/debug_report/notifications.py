@@ -23,6 +23,8 @@ from panel.ops.debug_report._base import Result, ago
 AREA = "Notifications"
 CHANNELS = ("telegram", "discord", "ntfy")
 OUTCOMES = ("sent", "rejected", "unreachable", "not-configured", "failed", "error")
+# An event key as EVENTS spells them; anything else is not printed.
+_EVENT_KEY_RE = re.compile(r"^[a-z0-9_]{1,64}\Z")
 
 
 def _onoff(flag):
@@ -71,10 +73,21 @@ def _settings_lines(res, form, default_server):
     res.add("- " + _ntfy_line(form.get("ntfy") or {}, default_server))
     events = form.get("events") or {}
     th = form.get("thresholds") or {}
-    res.add("- Events on: %d of %d · thresholds disk %s%% · load %s%% · mem %s%% · for %s min" % (
-        sum(1 for v in events.values() if v), len(events), *(
+    res.add("- Events on: %d of %d%s · thresholds disk %s%% · load %s%% · mem %s%% · for %s min" % (
+        sum(1 for v in events.values() if v), len(events), _off_events(events), *(
             int(th[k]) if isinstance(th.get(k), int) else "?"
             for k in ("disk_pct", "load_pct", "mem_pct", "load_mins"))))
+
+
+def _off_events(events):
+    """' (off: ip_banned, server_up)': the events turned off, BY KEY, or '' when none is.
+
+    A count alone ("15 of 19") could not say whether backup_failed was one of the 15: the default
+    set has four off, and any other four gives the same number. The keys are the panel's own
+    fixed identifiers (settings_for_form builds this map from EVENTS), never a value from config.
+    """
+    off = sorted(str(k) for k, v in events.items() if not v and _EVENT_KEY_RE.match(str(k)))
+    return " (off: %s)" % ", ".join(off) if off else ""
 
 
 def _last(stats, key, now):

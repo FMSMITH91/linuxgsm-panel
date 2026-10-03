@@ -4228,7 +4228,9 @@ def _ax_names(expr, var):
 
 # Calls whose action is a parameter, with where the real names come from.
 _AX_ACTION_FROM_CALLER = {
-    "_record_backup_outcome",   # its callers pass "scheduled_backup" / "queued_backup"
+    "_audit_backup_outcome",    # _record_backup_outcome's callers pass "scheduled_backup" /
+                                # "queued_backup", and _report_once's "scheduled_backup_overdue" /
+                                # "queued_backup_waiting"
     "audit_bot_action",         # the chat bots pass "moderate_say" (server=) / "panel_self_update"
     "_write_refused",           # server_files' write routes pass edit_config / edit_file /
                                 # delete_file / upload_file / cron_add / cron_update / cron_delete /

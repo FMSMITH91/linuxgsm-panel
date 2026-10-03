@@ -428,9 +428,12 @@ def _calls23(path, attr):
     return out
 
 
+# panel/routes/_shared.py: the backup-ticker's pass (_backup_ticker_pass) beats there, so that a
+# pass whose daily backup raised can still run the game sweeps and be counted as failed.
 _LOOP_FILES23 = ("app.py", "panel/services/monitoring.py", "panel/routes/server_files.py",
                  "panel/routes/os_updates.py", "panel/routes/host_terminal.py",
-                 "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py")
+                 "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py",
+                 "panel/routes/_shared.py")
 
 
 def _names_gates23():

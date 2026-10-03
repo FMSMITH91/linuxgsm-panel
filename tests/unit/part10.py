@@ -1257,14 +1257,19 @@ try:
         return r
     _pb7._marked_backup = _p7_marked
     _pb7._button_backup_running = lambda sid: sid == 1
-    _pb7.bk = _Over(_pb7_saved["bk"], game_prune_keep=lambda sid: (30, False) if sid == 5 else (sid + 10, True))
+    _pb7.bk = _Over(_pb7_saved["bk"], game_prune_keep=lambda sid: (30, False) if sid == 5 else (sid + 10, True),
+                    record_queued=lambda sid: _pb7_clock.append(("queued", sid)))
     _fb = _pb7_c.post("/api/panel/backup/full", json={"mode": "wait"})
     _fb_j = _fb.get_json() or {}
     check("panel_backup/full 'wait': the answer says busy servers back up once they empty",
           _fb.status_code == 200 and _fb_j.get("message", "").startswith("Backing up empty servers now"),
           "%s %r" % (_fb.status_code, _fb_j))
+    # ("queued", 2): bravo was queued now, so its wait starts now. ("game", 5): echo was archived,
+    # so its own schedule clock moves (it stayed put, and the ticker archived it again). Nothing
+    # for the skipped, failed or raising servers: they stay due.
     eq("panel_backup/full: the recorded summary names every outcome, in order",
-       _pb7_clock, ["1 server(s) backed up, 3 failed, 1 skipped (players online) — charlie: disk full; "
+       _pb7_clock, [("queued", 2), ("game", 5),
+                    "1 server(s) backed up, 3 failed, 1 skipped (players online) — charlie: disk full; "
                     "delta: backup error (RuntimeError); kilo: backup error (ValueError) — will back up "
                     "once empty: bravo — already "
                     "being backed up from the server page: alpha — config.json could not be read, so "

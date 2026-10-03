@@ -1248,7 +1248,9 @@ def _stream_paramiko(server, shell, rel, chunk, ok=(0,)):
     client = _core.get_connection(server)
     # An idle timeout, the channel closed however the stream ends, and the exit status checked at
     # EOF — see _core.stream_channel for what each of those cost when missing.
-    _in, out, _err = client.exec_command(shell, timeout=_core.STREAM_IDLE_TIMEOUT)
+    # exec_bounded: the wait for the exec reply has a bound too, which exec_command lacks.
+    _in, out, _err = _core.exec_bounded(client, shell, _core.STREAM_IDLE_TIMEOUT,
+                                        _core.STREAM_IDLE_TIMEOUT)
     try:
         _in.write(rel)
         _in.flush()

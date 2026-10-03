@@ -6,14 +6,15 @@ from flask import (Response, abort, jsonify, request, send_file)
 from flask_login import (current_user, login_required)
 from panel.core.panel_state import (_full_backup_lock, _game_backup_status)
 from sqlalchemy.orm import (joinedload)
-from panel.db.models import (_NO_BIRTH, GameServer, LOCAL_HOST_LABEL, RemoteServer, claim_row,
-    db, row_birth, still_held, taken_by_another)
+from panel.db.models import (_NO_BIRTH, AuditLog, GameServer, LOCAL_HOST_LABEL, RemoteServer,
+    claim_row, db, row_birth, still_held, taken_by_another)
 from panel.ops import (backup as bk, system_ops as so)
 from panel.ops.ssh_manager import (backup_disk_info, delete_game_backup, list_game_backups,
     run_game_backup, stream_game_backup)
 from panel.security.auth import (get_game, log_action, superadmin_required)
 from panel.services import (notifications)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _cached_player_count)
+import calendar
 import concurrent.futures
 import os
 import threading
@@ -65,12 +66,15 @@ class _FullBackupTally:
         return summary
 
 
-def _full_backup_server(gs, force, defer, tally):
+def _full_backup_server(app, gs, modes, tally):
     """Back up one server as part of a full run, recording the outcome in `tally`.
 
     Nothing is recorded for a server deleted while it was archived: its status entry and its
     backup_pending flag would be the next server's with that id (models.still_held).
     """
+    force, defer = modes
+    # Read before the archive: recording the outcome can commit, which expires the row.
+    ident, was_pending = (gs.id, gs.name), bool(gs.backup_pending)
     # game_prune_keep, not get_game_schedule: with config.json unreadable the
     # latter answers the default keep, and the prune deleted past the server's
     # own retention.
@@ -85,6 +89,36 @@ def _full_backup_server(gs, force, defer, tally):
         query_type=gs.query_type, runner=run_game_backup)
     if still_held(gs):
         _record_full_backup_outcome(gs, (ok, reason, was_skipped), defer, tally)
+        _schedule_after_full(app, ident, (ok, was_skipped), (defer, was_pending))
+
+
+def _schedule_after_full(app, ident, result, queue):
+    """A full run's schedule bookkeeping for one server: its clock, and when it was queued.
+
+    The CLOCK: "Back up game servers now" moved only full_backup_last, never the server's own
+    schedule clock, so every server it had just archived still looked due to the hourly ticker,
+    which archived it again at its old due time — another stop and restart, another multi-GB
+    archive, and the prune to `keep` evicting an older restore point early. The per-server "Back
+    up now" and the queued sweep both move it for exactly this reason; this third path did not.
+    Only an archive that worked moves it, as there: a skipped or failed server stays due.
+
+    The QUEUE time: a server this run queues ('wait until empty') that was not already waiting
+    starts a new wait, which _shared._report_long_queue measures.
+
+    A write that fails is logged, never raised: it would reach _full_backup_next's except and
+    tally a backup that worked as failed too, with a "Backup failed" alert about it.
+    """
+    sid, gname = ident
+    ok, was_skipped = result
+    defer, was_pending = queue
+    try:
+        if ok and not was_skipped:
+            _record_game_clock(app, sid, gname)
+        elif was_skipped and defer and not was_pending:
+            bk.record_queued(sid)
+    except Exception:
+        app.logger.warning("could not save the backup schedule of %s after the full backup",
+                           gname, exc_info=True)
 
 
 def _record_full_backup_outcome(gs, result, defer, tally):
@@ -119,7 +153,6 @@ def _full_backup_next(app, gs, modes, tally):
     without reading its object, which would reload from the row that took its id
     (models.RowReplaced).
     """
-    force, defer = modes
     if not still_held(gs):
         return
     gname = gs.name
@@ -130,7 +163,7 @@ def _full_backup_next(app, gs, modes, tally):
         tally.in_flight.append(gname)
         return
     try:
-        _full_backup_server(gs, force, defer, tally)
+        _full_backup_server(app, gs, modes, tally)
     except Exception as e:
         tally.failed(gs if still_held(gs) else None,
                      "%s: backup error (%s)" % (gname, type(e).__name__))
@@ -252,6 +285,30 @@ def _game_backup_row(gs, gb, hdisk):
             "host": host_label,
             "est_backup": _est_one,  # largest existing backup = worst-case next size
             "disk": {"free": hdisk["free"], "total": hdisk["total"]}}, done_bytes
+
+
+def _last_scheduled_backup():
+    """The newest automatic (scheduled) game-server backup: {"at", "ok", "ok_at"}, or None.
+
+    From the audit row _record_backup_outcome writes for every scheduled backup, success or not,
+    and NOT from the servers' clocks: a clock also moves when it is first started (no backup at
+    all), on a per-server or queued backup, and on a failure — so the newest clock says when a
+    clock last moved, not when the schedule last backed anything up. The overdue report is not
+    one of these rows: it has its own action (_shared._report_overdue_skip).
+
+    `ok_at` is the newest one that WORKED (None if none did), read only when the newest failed:
+    the rows are every server's, and one host failing hourly made the newest row a failure that
+    hid the other servers' backups the night before. One or two indexed queries (action),
+    whatever the number of servers.
+    """
+    q = (db.session.query(AuditLog.timestamp, AuditLog.success)
+         .filter(AuditLog.action == "scheduled_backup").order_by(AuditLog.id.desc()))
+    row = q.first()
+    if row is None or row[0] is None:
+        return None
+    good = row if row[1] else q.filter(AuditLog.success.is_(True)).first()
+    return {"at": calendar.timegm(row[0].timetuple()), "ok": bool(row[1]),
+            "ok_at": calendar.timegm(good[0].timetuple()) if good and good[0] else None}
 
 
 def _back_up_one_now(app, server_id, gname, opts, born):
@@ -665,6 +722,7 @@ def _register_backup_overview(app):
                             # source, rather than the same two numbers written out in three places.
                             "limits": bk.keep_limits(),
                             "full": bk.get_full_settings(), "full_running": _full_backup_lock.locked(),
+                            "scheduled": _last_scheduled_backup(),
                             "games": games, "multi_host": len(disk_by_remote) > 1,
                             "disk": {"free": first["free"], "total": first["total"],
                                      "backup_bytes": backup_bytes, "est_cycle": est_cycle}})

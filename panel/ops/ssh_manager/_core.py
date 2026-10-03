@@ -1067,6 +1067,30 @@ def _open_client(server):
     return client
 
 
+def _drop_pooled_client(client):
+    """Take `client` out of the pool and close it, when the pool holds it. Returns whether it did.
+
+    For a client whose remote left an exec request unanswered for exec_bounded's whole bound. Its
+    transport still reads as active — the 30 s keepalive asks for no reply — so
+    _live_pooled_client went on handing it out, and every later command on the host waited the
+    bound again: about five commands per server in a backup sweep, 300 s each, under the lock
+    every backup on every host shares. Dropped, the next command reconnects, or fails fast on a
+    host that is down. The other commands on it are as stuck: an sshd that does not answer one
+    request on a connection is not serving that connection. The pool's own clients only: an
+    entry already replaced is not this client and is left alone, and a client a caller owns
+    (pooled=False) is the caller's to close.
+    """
+    with _conn_lock:
+        keys = [k for k, c in _connections.items() if c is client]
+        for key in keys:
+            del _connections[key]
+        for rid in [r for r, k in _remote_conn_keys.items() if k in keys]:
+            del _remote_conn_keys[rid]
+    if keys:
+        _close_quietly(client)
+    return bool(keys)
+
+
 def _close_quietly(client):
     """Close an SSH client; a close that fails (its transport already torn down) is only logged."""
     try:
@@ -1698,6 +1722,61 @@ def stream_channel(out, chunk, what, ok=(0,)):
         raise StreamFailed("%s failed (exit %s)" % (what, rc))
 
 
+def exec_bounded(client, command, timeout, limit):
+    """client.exec_command(command, timeout=timeout), with the wait for the exec reply bounded.
+
+    Returns (stdin, stdout, stderr) as exec_command does. Raises paramiko.SSHException when the
+    remote has not answered the exec request after `limit` seconds.
+
+    paramiko's exec_command applies `timeout` to opening the session and to the channel's reads,
+    and to nothing else: Channel.exec_command then waits for the server's reply to the exec
+    request with `self.event.wait()`, which has NO timeout (paramiko 5.0.0, channel.py). So a
+    direct-SSH remote that opens the channel and never answers the exec — a wedged sshd, or a
+    hostile one — held its caller for ever; the drain's silence bound below never started. The
+    caller that showed it holds the GLOBAL backup lock across a sweep: one such host stopped every
+    scheduled and queued backup on every host until the panel restarted, with no audit row and no
+    alert. Closing the channel wakes that wait (Channel._set_closed sets the event, and
+    exec_command raises "Channel closed"), so a watchdog closes it once `limit` passes unanswered.
+
+    `limit` for run_command is _DRAIN_IDLE_FLOOR, the silence bound the drain applies too, and
+    NOT the caller's timeout when that is longer: the replies to the channel open and to the exec
+    request come before the command runs, so a backup's 3600 s is no reason to wait an hour for
+    either. The open keeps the caller's timeout when it is SHORTER, as exec_command gave it. Nothing
+    that answers today is cut off: a reply slower than five minutes is a remote not answering.
+
+    A client that is not a paramiko SSHClient (the suites' stand-ins) answers through its own
+    exec_command.
+
+    When the bound passes, the client is also dropped from the pool (_drop_pooled_client): its
+    transport still reads as active, so every later command on that host was handed the same
+    wedged client and waited the whole bound again.
+    """
+    if not isinstance(client, paramiko.SSHClient):
+        return client.exec_command(command, timeout=timeout)  # nosec B601  # nosemgrep
+    chan = client.get_transport().open_session(timeout=min(timeout or limit, limit))
+    answered = threading.Event()
+
+    def _watchdog():
+        if answered.wait(limit):
+            return
+        _log.warning("the remote did not answer an exec request in %ds; closing the channel "
+                     "and dropping the pooled connection", int(limit))
+        try:
+            chan.close()
+        except Exception:
+            _log.debug("could not close an unanswered exec channel", exc_info=True)
+        _drop_pooled_client(client)
+
+    threading.Thread(target=_watchdog, name="ssh-exec-watchdog", daemon=True).start()
+    try:
+        chan.settimeout(timeout)
+        # nosec B601 - `command` is the caller's, assembled from _quote()d parts (see the callers).
+        chan.exec_command(command)  # nosec B601  # nosemgrep
+    finally:
+        answered.set()
+    return chan.makefile_stdin("wb", -1), chan.makefile("r", -1), chan.makefile_stderr("r", -1)
+
+
 def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES, idle_limit=None):
     """Read stdout+stderr to EOF, then the exit status. Returns (out, err, rc, truncated).
 
@@ -1807,11 +1886,13 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
     # and pass sudo=False, so the demotion was its only surviving effect, on a form the Add Remote
     # page invited the operator to fill in.
     full_cmd = f"sudo bash -c {_quote(command)}" if use_sudo else command
+    # How long the remote may stay silent while the command runs (_drain_exec).
+    silence = max(timeout or 0, _DRAIN_IDLE_FLOOR)
 
     try:
-        # nosec B601 - full_cmd is assembled HERE from _quote()d components; there is no
-        # interpolation of caller text into it that has not been through _quote first.
-        stdin, stdout, _stderr = client.exec_command(full_cmd, timeout=timeout)  # nosec B601  # nosemgrep
+        # full_cmd is assembled HERE from _quote()d components; there is no interpolation of
+        # caller text into it that has not been through _quote first.
+        stdin, stdout, _stderr = exec_bounded(client, full_cmd, timeout, _DRAIN_IDLE_FLOOR)
         # EOF on the remote's fd 0, immediately. `stdin` was bound and thrown away: nothing was
         # ever written to it and it was never closed, so the remote process's stdin was an open SSH
         # channel that receives nothing and never ends. Any command that READS stdin — a LinuxGSM
@@ -1831,7 +1912,7 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
         except Exception:
             _log.debug("could not shut down the exec channel's stdin", exc_info=True)
         out_b, err_b, exit_code, truncated = _drain_exec(
-            stdout.channel, idle_limit=max(timeout or 0, _DRAIN_IDLE_FLOOR))
+            stdout.channel, idle_limit=silence)
         out = out_b.decode("utf-8", errors="replace")
         err = err_b.decode("utf-8", errors="replace")
         if truncated:

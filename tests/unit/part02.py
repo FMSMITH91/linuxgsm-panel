@@ -1373,11 +1373,16 @@ _bk.update_config = lambda m: _fake_update(_fake_cfg, m)
 try:
     _fs = _bk.set_full_settings(interval_days=7, keep=2)
     check("full backup: settings save round-trip", _fs["interval_days"] == 7 and _fs["keep"] == 2)
-    check("full backup: due when never run", _bk.full_backup_due() is True)
+    # full_backup_due() is gone: nothing called it once scheduling moved to per-server clocks,
+    # and full_backup_last is the manual "Back up game servers now" run's alone (part33).
+    check("full backup: a manual run's time is unset before it has run", _fs["last"] == 0)
     _bk.record_full_backup("2 server(s) backed up")
-    check("full backup: not due right after a run", _bk.full_backup_due() is False)
-    _bk.set_full_settings(interval_days=0)
-    check("full backup: interval 0 = off (never due)", _bk.full_backup_due() is False)
+    _fs2 = _bk.get_full_settings()
+    check("full backup: recording a manual run saves its time and its summary",
+          abs(_fs2["last"] - _bk.time.time()) < 5 and _fs2["summary"] == "2 server(s) backed up",
+          repr(_fs2))
+    check("full backup: the schedule module no longer offers full_backup_due",
+          not hasattr(_bk, "full_backup_due"))
 finally:
     _bk.load_config, _bk.update_config = _orig_bkload, _orig_bkupdate
 

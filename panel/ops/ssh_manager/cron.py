@@ -1040,8 +1040,9 @@ def stream_game_backup(server, user, name, chunk=262144):
 
     # paramiko remote
     client = _core.get_connection(server)
-    _in, out, _err = client.exec_command(_core.game_user_exec_cmd(user, ["cat", path]),
-                                         timeout=_core.STREAM_IDLE_TIMEOUT)
+    # exec_bounded: the wait for the exec reply has a bound too (see there).
+    _in, out, _err = _core.exec_bounded(client, _core.game_user_exec_cmd(user, ["cat", path]),
+                                        _core.STREAM_IDLE_TIMEOUT, _core.STREAM_IDLE_TIMEOUT)
     yield from _core.stream_channel(out, chunk, "backup download")
 
 
