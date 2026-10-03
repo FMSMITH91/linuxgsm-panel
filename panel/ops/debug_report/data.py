@@ -633,13 +633,17 @@ def section_backups(ctx):
     from panel.ops.debug_report import _src_db
     res = Result()
     got = _src_db.run_ro(_schedule_queries(), timeout=max(1.0, min(10.0, ctx.remaining() - 1.0)))
-    for label, part, args in (
-            ("settings", _settings_line, ()), ("archives", _archives_line, ()),
-            ("game-server schedule", _schedule_lines, (got.get("sched_servers"),)),
-            ("unattended game-server backups", _scheduled_audit_line, (got.get("sched_audit"),)),
-            ("manual full backup", _manual_line, ()), ("snapshots", _snapshots_line, ())):
+    # One explicit call per part: a shared `part(res, *args)` read to CodeQL as any part maybe
+    # getting the schedule's extra argument (py/call/wrong-arguments on the four one-argument parts).
+    for label, part in (
+            ("settings", lambda: _settings_line(res)), ("archives", lambda: _archives_line(res)),
+            ("game-server schedule", lambda: _schedule_lines(res, got.get("sched_servers"))),
+            ("unattended game-server backups",
+             lambda: _scheduled_audit_line(res, got.get("sched_audit"))),
+            ("manual full backup", lambda: _manual_line(res)),
+            ("snapshots", lambda: _snapshots_line(res))):
         try:
-            part(res, *args)
+            part()
         except Exception as exc:  # noqa: BLE001 - its own line says so
             res.add("- **%s**: could not be read (%s)" % (label, type(exc).__name__))
             res.find("unread", "Backups", "a part could not be read")
