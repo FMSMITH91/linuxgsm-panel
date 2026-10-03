@@ -11,7 +11,7 @@ threshold is invented here -- plus how long the pass took, failures and respawns
 Three states are kept apart, because they mean different things: "never completed a pass since
 start", "not instrumented" (a loop with no heartbeat), and the extra reads that say whether there
 was anything to do at all (no samples because no server is installed). A loop that sleeps before
-its first pass records when that pass is due (runtime_stats.first_pass), so "first pass not due
+its first pass records when that pass is due (runtime_stats.loop_started), so "first pass not due
 yet" is told apart from a first pass that was due and never completed -- by the loop's own record,
 never by a second copy of its delay here, and never by its cadence, which says nothing about when
 the FIRST pass runs.
@@ -54,7 +54,7 @@ def _thread_word(name, threads, visible):
 
 def first_due(name):
     """(when, delay) of a loop's first pass from its own record, or None when it made none."""
-    rec = mod("panel.core.runtime_stats").snapshot("first_pass").get(name)
+    rec = mod("panel.core.runtime_stats").snapshot("loop_start").get(name)
     if isinstance(rec, tuple) and len(rec) == 2 and isinstance(rec[1], (int, float)):
         return rec[0] + rec[1], rec[1]
     return None

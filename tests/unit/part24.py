@@ -320,7 +320,7 @@ def _boot_keys_written():
 
 # ══ 5. runtime_stats: what is read is written, and what is written is read ═════════════════════
 _RS_NAMES = {"runtime_stats", "rs", "_rs"}
-_RS_OWN_GROUP = {"beat": "heartbeat", "first_pass": "first_pass"}
+_RS_OWN_GROUP = {"beat": "heartbeat", "loop_started": "loop_start"}
 
 
 def _is_rs(node):

@@ -1085,7 +1085,7 @@ def _reboot_when_empty_watch(app):
     on a guess), so a host that can't be queried just waits. Runs forever on a 60s tick; the
     registry is in-memory.
     """
-    runtime_stats.first_pass("reboot-when-empty", 60)
+    runtime_stats.loop_started("reboot-when-empty", 60)
     while True:
         time.sleep(60)
         with _rwe_lock:

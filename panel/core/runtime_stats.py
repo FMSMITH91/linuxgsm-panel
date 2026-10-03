@@ -85,14 +85,14 @@ def beat(name, cadence_s=None, took_s=None):
         _LOST[0] += 1
 
 
-def first_pass(name, delay_s):
+def loop_started(name, delay_s):
     """A loop's thread has started, and will run its first pass `delay_s` seconds from now.
 
     Called by each loop that sleeps before its first pass, as it starts: without it the report
     cannot tell a first pass not due yet from one that never came. A supervised loop that is
     respawned sleeps its delay again, and records it again.
     """
-    put("first_pass", name, delay_s)
+    put("loop_start", name, delay_s)
 
 
 def snapshot(group):

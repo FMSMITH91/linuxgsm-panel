@@ -114,6 +114,10 @@ def _p35_installer_paths():
     check("installer lines: ...and a slash-split secret right after <data>/ is still redacted "
           "(no hold on the path after a normalised token)",
           "AKIA" not in secret and "wJalr" not in secret and "[redacted]" in secret, secret)
+
+
+def _p35_installer_musts():
+    ctx, _st = _ctx_with(("zephyrhost7731", "host", 1))
     musts = {"b64": "key qZ3vT8rW1yX5uA9sD2fG7hJ4kL6mN0pQ end",
              "hex": "sha 0123456789abcdef0123456789abcdef01234567 elsewhere",
              "split": "x abcdefghijklmn-zephyrhost7731-opqrstuvwxyz0123456 y"}
@@ -216,7 +220,10 @@ def _p35_health():
         NW._tailscale_lines(ctx, res, {}, ("ok", ("ok", v)))
     PV.map_tailscale(ctx, v)                 # what the assembler's finish() maps, then its pass
     final = PV.scrub(ctx, "\n".join(res.lines))
-    shown = [ln for ln in res.lines if ln.startswith("  - health: ")]
+    _health_checks35(final, [ln for ln in res.lines if ln.startswith("  - health: ")], res)
+
+
+def _health_checks35(final, shown, res):
     low = final.lower()
     check("tailscale health: each message prints on its own line under the count, plain text "
           "verbatim, with '+N more' past five",
@@ -353,7 +360,7 @@ class _Stop35(Exception):
 
 
 def _groups35(fn):
-    saved = {g: _rs35._GROUPS.get(g) for g in ("heartbeat", "first_pass")}
+    saved = {g: _rs35._GROUPS.get(g) for g in ("heartbeat", "loop_start")}
     try:
         return fn()
     finally:
@@ -367,7 +374,7 @@ def _groups35(fn):
 def _workers35():
     now = _time35.time()
     _rs35._GROUPS["heartbeat"] = {}
-    _rs35._GROUPS["first_pass"] = {"monitor": (now, 60), "update-check": (now - 300, 30)}
+    _rs35._GROUPS["loop_start"] = {"monitor": (now, 60), "update-check": (now - 300, 30)}
     with _patched():
         _patch(WK, "threads_by_name", lambda: {})
         res = WK.section_workers(Ctx())
@@ -387,7 +394,7 @@ def _workers35():
 def _hosts35():
     now = _time35.time()
     _rs35._GROUPS["heartbeat"] = {}
-    _rs35._GROUPS["first_pass"] = {"monitor": (now, 60)}
+    _rs35._GROUPS["loop_start"] = {"monitor": (now, 60)}
     ctx = Ctx()
     ctx._memo["b4.host_cols"] = (True, [{"id": 1, "transport": "local"}])
     with _patched():
@@ -404,7 +411,7 @@ def _hosts35():
 
 
 def _update_cold35():
-    _rs35._GROUPS["first_pass"] = {"update-check": (_time35.time(), 30)}
+    _rs35._GROUPS["loop_start"] = {"update-check": (_time35.time(), 30)}
     with _patched():
         _patch(SO, "_update_cache", {"ts": 0.0, "data": None})
         res = Result()
@@ -423,14 +430,14 @@ def _p35_workers():
 def _drive35(owner, fn):
     def _sleep(_s):
         raise _Stop35()
-    _rs35._GROUPS["first_pass"] = {}
+    _rs35._GROUPS["loop_start"] = {}
     with _patched():
         _patch(owner, "time", _NS35(time=_time35.time, monotonic=_time35.monotonic, sleep=_sleep))
         try:
             fn()
         except _Stop35:
             pass
-    return dict(_rs35._GROUPS.get("first_pass") or {})
+    return dict(_rs35._GROUPS.get("loop_start") or {})
 
 
 def _p35_loops_record():
@@ -472,8 +479,8 @@ def _loop_first_pass35(fn_node):
     body = [s for s in fn_node.body if not (isinstance(s, _ast35.Expr)
                                             and isinstance(s.value, _ast35.Constant))]
     if _first_sleep35(body) is not None:
-        return False, "sleeps before its first pass with no first_pass record"
-    if _call_name35(body[0] if body else None) != "first_pass":
+        return False, "sleeps before its first pass with no loop_started record"
+    if _call_name35(body[0] if body else None) != "loop_started":
         return False, None
     delay = body[0].value.args[1]
     sleep = _first_sleep35(body[1:])
@@ -553,7 +560,7 @@ def _p35_trust_proxy():
                                    "tailscaled)" in ln for ln in res.lines), repr(res.lines))
 
 
-for _fn35 in (_p35_units, _p35_installer_paths, _p35_installer_said, _p35_footer_counts,
+for _fn35 in (_p35_units, _p35_installer_paths, _p35_installer_musts, _p35_installer_said, _p35_footer_counts,
               _p35_footer_installer, _p35_health, _p35_control_host, _p35_key_expiry,
               _p35_ci_gate, _p35_announced, _p35_workers, _p35_loops_record, _p35_loops_gate,
               _p35_trust_proxy):
