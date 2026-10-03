@@ -452,7 +452,7 @@ def _c_clocks(rid):
 
 
 def _c_requeue(rid):
-    """'Back up game servers now' (wait until empty) pressed again while a server already waits."""
+    """A second "wait until empty" full run while a server is already queued keeps its wait."""
     sid = _new33("p33-frq", "frqserver", rid, backup_pending=True)
     _only33(sid)
     since = int(_t33.time() - 8 * _DAY33)
