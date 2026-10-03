@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
-"""Fail when main carries an Error-level Codacy issue that is not on the accepted list.
+"""Fail when main carries a Critical- or High-level Codacy issue that is not on the accepted list.
+
+Codacy's API names its levels Info, Warning, High and Error, which its UI shows as Minor, Medium,
+High and Critical (the SeverityLevel enum in https://api.codacy.com/api/api-docs/swagger.yaml).
+This reads Error AND High: High sits between the two, and a pattern Codacy files at High would
+otherwise stay on main ungated.
+
+It also fails when an accepted entry matches nothing while its line is still in the file, or while
+the file is over 150 KB. Codacy Cloud does not analyse a file over 150 KB at all
+(https://docs.codacy.com/faq/troubleshooting/why-is-my-file-over-150-kb-missing/), so "no issue
+reported" there is Codacy not reading the file, not the file being clean. system_ops.py crossed
+150 KB on 2026-09-24, its three accepted findings stopped matching, and this gate reported green
+every day while telling the reader to delete the record of the documented hole. An entry is
+reported for removal only when its line is really gone from the file, decided from the checkout
+the workflow runs in.
 
 Run by .github/workflows/codacy-alerts.yml; see the long note at the top of that file for why the
 gate exists and why it is scheduled rather than triggered by a push. Runnable by hand too:
@@ -24,6 +38,11 @@ API = ("https://app.codacy.com/api/v3/analysis/organizations/%s/repositories/%s"
        "/issues/search?limit=100" % (ORG, REPO))
 ROOT = pathlib.Path(__file__).resolve().parent.parent      # .github/
 ACCEPTED_FILE = ROOT / "codacy-accepted-errors.json"
+CHECKOUT = ROOT.parent                                      # the checkout the workflow runs in
+# The API's names for the levels read: Error is the UI's Critical; High is High.
+LEVELS = ("Error", "High")
+# Codacy Cloud skips a file over 150 KB; 150,000 bytes is the lower of the two readings of "150 KB".
+CODACY_MAX_BYTES = 150000
 # 4xx statuses that mean "not NOW", not "not this request": a rate limit and a request timeout. This
 # runs daily from shared GitHub runner IPs against the anonymous API and can page up to 20 POSTs,
 # so a 429 is weather, not a verdict — failing on it sent the operator to check an endpoint and a
@@ -51,7 +70,7 @@ def _read_page(page):
 
 
 def fetch_errors():
-    """Every Error-level issue Codacy currently reports for the default branch.
+    """Every Error- and High-level issue Codacy currently reports for the default branch.
 
     Pages through the cursor rather than trusting one response to hold them all — a gate that
     silently reads only the first page reports "clean" the moment the list grows past it.
@@ -72,7 +91,7 @@ def fetch_errors():
     for _ in range(20):                       # bounded: 20 pages x 100 is far more than plausible
         url = API + ("&cursor=%s" % cursor if cursor else "")
         req = urllib.request.Request(
-            url, data=json.dumps({"levels": ["Error"]}).encode(), headers=headers, method="POST")
+            url, data=json.dumps({"levels": list(LEVELS)}).encode(), headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=30) as resp:   # nosec B310 - constant https host
             data, cursor = _read_page(json.loads(resp.read().decode("utf-8", "replace")))
         if data is not None:
@@ -176,15 +195,70 @@ def _unreviewed_table(unreviewed):
     return lines + ["", _fix_hint]
 
 
-def _stale_lines(allow, seen):
-    """The summary's lines for accepted entries that no longer match any issue (none if all do)."""
-    # An accepted entry that no longer matches anything is dead weight, and a stale allow-list is
-    # how a real finding gets waved through later. Say so, without failing the run.
-    stale = [k for k in allow if k not in seen]
-    if not stale:
+def _checkout_file(path):
+    """Return the checkout's file at the repo-relative `path`, or None (missing, or outside it)."""
+    f = (CHECKOUT / (path or "")).resolve()
+    root = CHECKOUT.resolve()
+    return f if f != root and root in f.parents and f.is_file() else None
+
+
+def _still_there(key):
+    """Why Codacy must still be reporting accepted entry `key`, or None when its line is gone.
+
+    Read from the checkout: the file is over 150 KB (Codacy Cloud does not analyse it, so no issue
+    in it can match), or the accepted line, whitespace collapsed, is still one of its lines.
+    """
+    path, _pattern, text = key
+    f = _checkout_file(path)
+    if f is None:
+        return None
+    size = f.stat().st_size
+    if size > CODACY_MAX_BYTES:
+        return "the file is %d bytes, over the 150 KB Codacy Cloud analyses" % size
+    lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+    if any(" ".join(ln.split()) == text for ln in lines):
+        return "the accepted line is still in the file (is it over 150 KB?)"
+    return None
+
+
+def _split_stale(allow, seen):
+    """Split the accepted entries no issue matched into (Codacy blind to them, really gone).
+
+    The first are [(key, why)]: an entry whose file Codacy cannot be analysing, or whose line is
+    still there, is not stale; Codacy has stopped reporting it, and that fails the run. Only the
+    second, whose line is gone from the file, are dead weight to remove.
+    """
+    blind, gone = [], []
+    for key in allow:
+        if key in seen:
+            continue
+        why = _still_there(key)
+        if why:
+            blind.append((key, why))
+        else:
+            gone.append(key)
+    return blind, gone
+
+
+def _blind_lines(blind):
+    """The summary's lines for accepted entries Codacy reports nothing for although they stand."""
+    if not blind:
         return []
-    return (["", "**Accepted entries that no longer match any issue** (remove them):", ""]
-            + ["- `%s` / `%s`\n  (was: `%s`)" % (f, p.split(".")[-1], t) for f, p, t in stale])
+    return (["", "**Codacy reports nothing for these accepted entries, but they are still there** "
+             "(Codacy is not analysing the file; keep the entries):", ""]
+            + ["- `%s` / `%s`: %s\n  (line: `%s`)" % (f, p.split(".")[-1], why, t)
+               for (f, p, t), why in blind])
+
+
+def _stale_lines(allow, seen):
+    """The summary's lines for accepted entries whose line is gone from the file (none if none)."""
+    # An accepted entry whose line no longer exists is dead weight, and a stale allow-list is how a
+    # real finding gets waved through later. Say so, without failing the run.
+    gone = _split_stale(allow, seen)[1]
+    if not gone:
+        return []
+    return (["", "**Accepted entries whose line is gone from the file** (remove them):", ""]
+            + ["- `%s` / `%s`\n  (was: `%s`)" % (f, p.split(".")[-1], t) for f, p, t in gone])
 
 
 def _publish(out):
@@ -205,22 +279,28 @@ def main():
         return rc
 
     unreviewed, seen = _split_unreviewed(issues, allow)
+    blind = _split_stale(allow, seen)[0]
 
     summary = [
-        "### Error-level Codacy issues on `main`", "",
+        "### Critical- and High-level Codacy issues on `main` (API levels: %s)" % ", ".join(LEVELS),
+        "",
         "%d reported · %d accepted · **%d unreviewed**"
         % (len(issues), len(issues) - len(unreviewed), len(unreviewed)), "",
     ]
     summary += _unreviewed_table(unreviewed)
+    summary += _blind_lines(blind)
     summary += _stale_lines(allow, seen)
 
     _publish("\n".join(summary))
 
+    for (path, pattern, _text), why in blind:
+        print("::error::Codacy reports nothing for %s (accepted `%s`), but %s: Codacy is not "
+              "analysing the file. Keep the entry; see the job summary."
+              % (path, pattern.split(".")[-1], why), file=sys.stderr)
     if unreviewed:
-        print("::error::main has %d unreviewed Error-level Codacy issue(s) — see the job summary."
-              % len(unreviewed), file=sys.stderr)
-        return 1
-    return 0
+        print("::error::main has %d unreviewed Critical- or High-level Codacy issue(s) — see the "
+              "job summary." % len(unreviewed), file=sys.stderr)
+    return 1 if unreviewed or blind else 0
 
 
 if __name__ == "__main__":

@@ -1,0 +1,60 @@
+name: SonarCloud open issues (main)
+
+# Every open SonarCloud issue on main is a known one, or this fails. See
+# .github/scripts/sonar_new_issues.py (--branch).
+#
+# WHY THIS EXISTS
+#   sonar-new-issues.yml holds a pull request to zero NEW issues, but SonarCloud's pull-request
+#   analysis reports issues on new code only: "the first analysis of the target branch after the
+#   merge can report new issues on old code that the pull request analysis did not report"
+#   (https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/pull-request-analysis/).
+#   On main such an issue is backdated to its line's last commit and counted as overall code, which
+#   "Sonar way" does not judge. So a change that makes an UNCHANGED line wrong lands on main with
+#   both Sonar checks green: always for a code smell, and for a bug or vulnerability on a line last
+#   changed before the new-code period. The same is true of a rule SonarCloud rolls out
+#   (javascript:S9383 put 10 issues on main with no pull request involved). CodeQL's diff-informed
+#   pull-request run was the same gap (#387, #388).
+#
+# HOW
+#   On a push to main: wait until SonarCloud lists an analysis of this commit (about 4-5 minutes
+#   after the merge; up to 15), then read main's open issues and fail on any whose key is not in
+#   KNOWN_OPEN, naming each. A KNOWN_OPEN issue that is missing fails too: the positive control that
+#   the read returned main's issues at all (and the prompt to drop it once fixed or Accepted).
+#   Daily, and on demand: judge whatever commit SonarCloud analysed last, which catches a rule
+#   rollout that comes with no commit. The schedule never waits on a commit SonarCloud may not
+#   analyse again.
+#
+# ON MAIN, NOT PULL REQUESTS
+#   A push and a schedule trigger only, in a workflow of its own: sonar-new-issues.yml's job is a
+#   required pull-request check, and a unit check forbids it a push trigger. Its check run lands on
+#   the main commit, so the panel's update gate reads it: a red result holds every panel's update
+#   until it is fixed, as "Open code-scanning alerts" does. No concurrency group, on purpose: a
+#   group cancels a pending run when a third arrives, even with cancel-in-progress off, and the
+#   update gate and deploy.yml read a cancelled check as a failure. Each run only reads.
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: "55 6 * * *"   # daily, beside codacy-alerts.yml's
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sonar-main-issues:
+    name: SonarCloud open issues (main)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Self-test
+        run: python3 .github/scripts/sonar_new_issues.py --self-test
+      - name: Wait for SonarCloud's analysis of this commit, then read main's open issues
+        env:
+          # A push judges its own commit; the schedule and a manual run judge the last one analysed.
+          SHA: ${{ github.event_name == 'push' && github.sha || '' }}
+        run: python3 .github/scripts/sonar_new_issues.py --branch main ${SHA:+--sha "$SHA"} --timeout 900
