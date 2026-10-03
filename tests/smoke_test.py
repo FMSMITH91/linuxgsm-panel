@@ -14467,11 +14467,20 @@ try:
             return True, "", False
 
         _bkc_rec_real, _bkc_full_real = _bkops.record_game_backup, _bkops.record_full_backup
+        _bkc_start_real = _bkops.start_game_clock
         _bkc_sched_real = _bkops.get_game_schedule
 
         def _bkc_rec(sid):
             try:
                 return _bkc_rec_real(sid)
+            except _BkcCU:
+                _bkc_refused.append(sid)
+                raise
+
+        def _bkc_start(sid):
+            """start_game_clock, recording a refused write: a first sight STARTS the clock."""
+            try:
+                return _bkc_start_real(sid)
             except _BkcCU:
                 _bkc_refused.append(sid)
                 raise
@@ -14513,6 +14522,7 @@ try:
             _bksh.notifications.notify = lambda k, t, b="": _bkc_notes.append((k, t))
             _bkops.game_backup_due = lambda sid: sid == gs_id    # only OUR server is due
             _bkops.record_game_backup, _bkops.record_full_backup = _bkc_rec, _bkc_full
+            _bkops.start_game_clock = _bkc_start
             _bkc_rec_real(gs_id)                                 # a clock: not "never run before"
             _bkops.set_game_schedule(gs_id, 1, 2)                # ...and the schedule is ON
             _bksh.run_game_backup = _bkmod.run_game_backup = _bkc_break_config
@@ -14618,6 +14628,7 @@ try:
             (_bksh.notifications.notify, _bkops.game_backup_due, _bksh.run_game_backup,
              _bkmod.run_game_backup, _bkmod.threading) = _bkc_saved
             _bkops.record_game_backup, _bkops.record_full_backup = _bkc_rec_real, _bkc_full_real
+            _bkops.start_game_clock = _bkc_start_real
             _bkops.get_game_schedule = _bkc_sched_real
             _bkops.set_game_schedule(gs_id, None, None)
             with app.app_context():
