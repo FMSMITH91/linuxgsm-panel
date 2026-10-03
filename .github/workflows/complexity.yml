@@ -48,6 +48,26 @@ jobs:
       - run: >-
           python -m pip install --quiet --require-hashes --only-binary :all: --no-deps
           -r .github/ci-requirements/complexity.txt
+      # --no-deps also turns off pip's check that the lockfile is the whole closure, so a bump that
+      # adds a dependency complexity.txt lacks would install and pass. pip check puts it back. The
+      # only missing requirement it may report is a package the lockfile's own header leaves out
+      # with --unsafe-package (pylint-celery); anything else fails the job, named.
+      - name: The installed tools are the whole closure, apart from what the lockfile leaves out
+        run: |
+          set -euo pipefail
+          lock=.github/ci-requirements/complexity.txt
+          mapfile -t unsafe < <(grep -oE -- '--unsafe-package=[A-Za-z0-9._-]+' "${lock}" | cut -d= -f2 | sort -u)
+          out="$(python -m pip check 2>&1)" || true
+          bad="$(printf '%s\n' "${out}" | grep -vxF -e 'No broken requirements found.' -e '' || true)"
+          for u in "${unsafe[@]}"; do
+            bad="$(printf '%s\n' "${bad}" | grep -vF -e " requires ${u}, which is not installed." || true)"
+          done
+          printf '%s\n' "${out}"
+          if [ -n "${bad}" ]; then
+            echo "::error::pip check found requirements complexity.txt does not satisfy (left out by name: ${unsafe[*]:-none}):"
+            printf '%s\n' "${bad}"
+            exit 1
+          fi
       # The gate proves it still tells a grown function from an old one, and still reads a file over
       # 150 KB through Prospector with the repository's profile, before its verdict counts.
       - name: Self-test

@@ -359,8 +359,46 @@ check("semgrep: ...and its lockfile is the whole closure: PyJWT pinned in it, no
       _re27.search(r"^pyjwt==\d", _sg_txt27, _re27.M) is not None
       and "--unsafe-package" not in _sg_txt27 and "were not pinned" not in _sg_txt27
       and not os.path.exists(os.path.join(_root, ".github", "ci-requirements", "semgrep-pyjwt.txt")))
-check("workflows: no pip install anywhere uses --no-deps", _ci_installs
-      and not [_w for _w, _t in _ci_installs if "--no-deps" in _t])
+# --no-deps turns off pip's check that a lockfile is the whole closure; that is how the semgrep
+# workaround hid a vulnerable PyJWT. One install keeps it: complexity.yml, whose lockfile leaves
+# out pylint-celery (sdist only) by name. Its next step runs pip check and tolerates only what the
+# lockfile's header leaves out with --unsafe-package.
+_PC_STEP27 = "The installed tools are the whole closure, apart from what the lockfile leaves out"
+_CX27 = _read27(".github", "workflows", "complexity.yml")
+_nodeps27 = sorted({_w for _w, _t in _ci_installs if "--no-deps" in _t})
+check("workflows: --no-deps only in complexity.yml, and pip check follows it there",
+      _ci_installs and _nodeps27 in ([], ["complexity.yml"])
+      and (not _nodeps27 or ("- name: " + _PC_STEP27) in _CX27
+           and _CX27.index("--no-deps\n") < _CX27.index("- name: " + _PC_STEP27)
+           < _CX27.index("complexity_gate.py --self-test")),
+      repr(_nodeps27))
+
+
+def _pipcheck27(report):
+    """complexity.yml's pip-check step, run with `python -m pip check` answering `report`."""
+    if ("- name: " + _PC_STEP27) not in _CX27:
+        return 99, "no such step"
+    with _tf27.TemporaryDirectory() as _d:
+        _bin = os.path.join(_d, "bin")
+        os.mkdir(_bin)
+        _stub27(_bin, "python", "import sys\nsys.stdout.write(%r)\nsys.exit(%d)\n"
+                % (report, 0 if report.startswith("No broken") else 1))
+        _env = dict(os.environ, PATH=_bin + os.pathsep + os.environ.get("PATH", ""))
+        return _run_step27(_wf_run_block(_CX27, _PC_STEP27), _env)
+
+
+_PC_CELERY27 = "prospector 1.19.1 requires pylint-celery, which is not installed.\n"
+_pc_ok27 = _pipcheck27(_PC_CELERY27)
+_pc_clean27 = _pipcheck27("No broken requirements found.\n")
+_pc_missing27 = _pipcheck27("pylint 4.1.2 requires astroid, which is not installed.\n" + _PC_CELERY27)
+_pc_version27 = _pipcheck27("pylint 4.1.2 has requirement astroid<=4.4,>=4.3.3, but you have astroid 3.0.0.\n")
+check("complexity job: pip check passes the lockfile's own --unsafe-package omission, and a clean report",
+      _pc_ok27[0] == 0 and _pc_clean27[0] == 0, repr((_pc_ok27, _pc_clean27)))
+check("complexity job: ...and fails on any other missing or mismatched requirement, naming it",
+      _pc_missing27[0] != 0 and "::error::" in _pc_missing27[1]
+      and "requires astroid" in _pc_missing27[1].split("::error::", 1)[1]
+      and _pc_version27[0] != 0 and "has requirement astroid" in _pc_version27[1].split("::error::", 1)[1],
+      repr((_pc_missing27, _pc_version27)))
 
 
 # ── gitleaks: the `git` command, and the `[[allowlists]]` table ─────────────────────────────────
