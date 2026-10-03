@@ -74,18 +74,20 @@ def _callee37(node):
     return ""
 
 
-def _openers37(tree):
-    """Names a module binds to urlopen/build_opener under another name, and its opener objects."""
-    aliases, openers = {}, set()
-    for node in _ast37.walk(tree):
-        if isinstance(node, _ast37.ImportFrom) and node.module == "urllib.request":
-            for a in node.names:
-                if a.name in ("urlopen", "build_opener"):
-                    aliases[a.asname or a.name] = a.name
-        if isinstance(node, _ast37.Assign) and isinstance(node.value, _ast37.Call):
-            if _callee37(node.value.func).split(".")[-1] == "build_opener":
-                openers |= {t.id for t in node.targets if isinstance(t, _ast37.Name)}
-    return aliases, openers
+def _urlopen_aliases37(tree):
+    """{local name: urlopen or build_opener} for `from urllib.request import ... as ...`."""
+    froms = [n for n in _ast37.walk(tree)
+             if isinstance(n, _ast37.ImportFrom) and n.module == "urllib.request"]
+    return {a.asname or a.name: a.name for n in froms for a in n.names
+            if a.name in ("urlopen", "build_opener")}
+
+
+def _opener_names37(tree):
+    """Names bound to the result of a build_opener(...) call: objects whose .open() is a request."""
+    calls = [n for n in _ast37.walk(tree)
+             if isinstance(n, _ast37.Assign) and isinstance(n.value, _ast37.Call)]
+    return {t.id for n in calls if _callee37(n.value.func).split(".")[-1] == "build_opener"
+            for t in n.targets if isinstance(t, _ast37.Name)}
 
 
 def _http_kind37(call, aliases, openers):
@@ -105,24 +107,32 @@ def _http_kind37(call, aliases, openers):
     return None
 
 
+def _node_kinds37(node, aliases, openers):
+    """The outbound-HTTP kinds one AST node is: a request call, or a client library's import."""
+    if isinstance(node, _ast37.Call):
+        kind = _http_kind37(node, aliases, openers)
+        return [kind] if kind else []
+    if isinstance(node, _ast37.Import):
+        mods = [a.name for a in node.names]
+    elif isinstance(node, _ast37.ImportFrom):
+        mods = [node.module or ""]
+    else:
+        return []
+    return ["import " + m for m in mods if m.split(".")[0] in _HTTP_LIBS37]
+
+
 def _http_sites37(source, rel):
     """(rel, enclosing function, kind) for every outbound-HTTP call or client import in source."""
     tree = _ast37.parse(source)
-    aliases, openers = _openers37(tree)
+    aliases, openers = _urlopen_aliases37(tree), _opener_names37(tree)
     sites = set()
-
-    def walk(node, func):
+    todo = [(tree, "<module>")]
+    while todo:
+        node, func = todo.pop()
         for child in _ast37.iter_child_nodes(node):
-            inner = child.name if isinstance(child, (_ast37.FunctionDef, _ast37.AsyncFunctionDef)) else func
-            if isinstance(child, _ast37.Call):
-                kind = _http_kind37(child, aliases, openers)
-                if kind:
-                    sites.add((rel, func, kind))
-            if isinstance(child, (_ast37.Import, _ast37.ImportFrom)):
-                mods = [a.name for a in child.names] if isinstance(child, _ast37.Import) else [child.module or ""]
-                sites.update((rel, func, "import " + m) for m in mods if m.split(".")[0] in _HTTP_LIBS37)
-            walk(child, inner)
-    walk(tree, "<module>")
+            sites.update((rel, func, k) for k in _node_kinds37(child, aliases, openers))
+            is_def = isinstance(child, (_ast37.FunctionDef, _ast37.AsyncFunctionDef))
+            todo.append((child, child.name if is_def else func))
     return sites
 
 
@@ -263,20 +273,43 @@ def _f6_shapes(rows):
           "[\"/bin/bash\", \"-c\", cmd] list literal (what the sink row matches)", _shell_shape37(core))
 
 
+def _names_imported37(tree, module, name):
+    """The local names `from <module> import <name> [as x]` binds in tree."""
+    out = set()
+    for n in _ast37.walk(tree):
+        if isinstance(n, _ast37.ImportFrom) and n.module == module:
+            out |= {a.asname or a.name for a in n.names if a.name == name}
+    return out
+
+
+def _assigned_from37(tree, target):
+    """The callees of every `<target> = <callee>(...)` assignment in tree."""
+    out = set()
+    for n in _ast37.walk(tree):
+        if not (isinstance(n, _ast37.Assign) and isinstance(n.value, _ast37.Call)):
+            continue
+        if target in {getattr(t, "id", "") for t in n.targets}:
+            out.add(_callee37(n.value.func))
+    return out
+
+
+def _popen_list_heads37(fn):
+    """The first two elements of each list literal fn hands to _real_subprocess.Popen."""
+    heads = []
+    for c in _ast37.walk(fn):
+        if not (isinstance(c, _ast37.Call) and _callee37(c.func) == "_real_subprocess.Popen"):
+            continue
+        if c.args and isinstance(c.args[0], _ast37.List):
+            heads.append([getattr(e, "value", None) for e in c.args[0].elts[:2]])
+    return heads
+
+
 def _shell_shape37(tree):
     """Is _real_subprocess = original("subprocess"), and _exec_local_shell's Popen a bash -c list?"""
-    alias = [a.asname or a.name for n in _ast37.walk(tree) if isinstance(n, _ast37.ImportFrom)
-             and n.module == "eventlet.patcher" for a in n.names if a.name == "original"]
-    bound = any(isinstance(n, _ast37.Assign) and isinstance(n.value, _ast37.Call)
-                and _callee37(n.value.func) in alias
-                and any(getattr(t, "id", "") == "_real_subprocess" for t in n.targets)
-                for n in _ast37.walk(tree))
+    original = _names_imported37(tree, "eventlet.patcher", "original")
+    bound = bool(original & _assigned_from37(tree, "_real_subprocess"))
     fn = [n for n in tree.body if isinstance(n, _ast37.FunctionDef) and n.name == "_exec_local_shell"]
-    pops = [c for c in _ast37.walk(fn[0]) if isinstance(c, _ast37.Call)
-            and _callee37(c.func) == "_real_subprocess.Popen"] if fn else []
-    lits = [c.args[0] for c in pops if c.args and isinstance(c.args[0], _ast37.List)]
-    return bool(alias) and bound and len(lits) == 1 and [
-        getattr(e, "value", None) for e in lits[0].elts[:2]] == ["/bin/bash", "-c"]
+    return bound and bool(fn) and _popen_list_heads37(fn[0]) == [["/bin/bash", "-c"]]
 
 
 # ── V2: static/vendor/, its two manifests, and the files ────────────────────────────────────────
@@ -365,13 +398,19 @@ def _v2_versions(pj, lock):
         bad += _version_bad37(rel, ent, deps, pkgs)
     check("vendor: each file's banner states exactly the version its package is pinned at, and the "
           "lockfile scanners read resolves that version", bool(vend) and not bad, "; ".join(bad))
+    root = (pkgs.get("") or {}).get("dependencies")
     check("vendor: the lockfile was written for this package.json (its root lists the same pins)",
-          (pkgs.get("") or {}).get("dependencies") == deps and lock.get("lockfileVersion") == 3,
-          repr((pkgs.get("") or {}).get("dependencies")))
+          root == deps and lock.get("lockfileVersion") == 3, repr(root))
+    _v2_versions_md(deps, vend)
+
+
+def _v2_versions_md(deps, vend):
+    """VERSIONS.md's table agrees with package.json, row by row."""
     rows = _re37.findall(r"^\|\s*([^|]+?)\s*\|\s*([0-9][0-9.]*)\s*\|\s*`([^`]+)`\s*\|",
                          _read29("static", "vendor", "VERSIONS.md"), _re37.M)
-    off = ["%s: VERSIONS.md %s, package.json %s" % (f, v, deps.get((vend.get(f) or {}).get("package")))
-           for _n, v, f in rows if v != deps.get((vend.get(f) or {}).get("package"))]
+    pinned = {f: deps.get(ent.get("package")) for f, ent in vend.items()}
+    off = ["%s: VERSIONS.md %s, package.json %s" % (f, v, pinned.get(f))
+           for _n, v, f in rows if v != pinned.get(f)]
     check("vendor: VERSIONS.md, the manifest for people, records the same version for every library",
           len(rows) >= 7 and not off, "; ".join(off))
 
@@ -507,7 +546,7 @@ def _v3_allowlist():
 
 
 def _v3_fixture_shape():
-    """part05's Telegram fixture shape catches what its \\b-bounded version let through."""
+    """part05's Telegram fixture shape catches what its word-boundary version let through."""
     pat = dict(_fixture_shapes).get("Telegram bot token", "^$")
     probes = {"a token ending in '-'": _tg_token37(last="-"),
               "the Bot API URL form": "https://api.telegram.org/bot%s/getMe" % _tg_token37(),
@@ -539,16 +578,23 @@ def _test_files37():
     return sorted(_glob37.glob(os.path.join(_root, "tests", "**", "*.py"), recursive=True))
 
 
+def _app_imports37(tree):
+    """(lines of `import app`, lines of `from app import`) in one module."""
+    plain, frm = [], []
+    for n in _ast37.walk(tree):
+        if isinstance(n, _ast37.Import) and "app" in {a.name for a in n.names}:
+            plain.append(n.lineno)
+        elif isinstance(n, _ast37.ImportFrom) and n.module == "app" and not n.level:
+            frm.append(n.lineno)
+    return plain, frm
+
+
 def _f7_imports():
     """No test module imports app with both `import app` and `from app import`."""
     both = []
     files = _test_files37()
     for f in files:
-        tree = _ast37.parse(open(f, encoding="utf-8").read())
-        plain = [n.lineno for n in _ast37.walk(tree) if isinstance(n, _ast37.Import)
-                 and any(a.name == "app" for a in n.names)]
-        frm = [n.lineno for n in _ast37.walk(tree) if isinstance(n, _ast37.ImportFrom)
-               and n.module == "app" and not n.level]
+        plain, frm = _app_imports37(_ast37.parse(open(f, encoding="utf-8").read()))
         if plain and frm:
             both.append("%s: import at %s, from-import at %s" % (_rel37(f), plain[:3], frm[:3]))
     check("tests: no test module imports app both ways (`import app as X` beside `from app import`; "
@@ -556,20 +602,25 @@ def _f7_imports():
           len(files) >= 40 and not both, "; ".join(both))
 
 
+def _is_removal_try37(node):
+    """Is node `try: <x>.unlink()` or `try: os.remove(...)`, alone in its body?"""
+    if not (isinstance(node, _ast37.Try) and len(node.body) == 1):
+        return False
+    call = getattr(node.body[0], "value", None)
+    return isinstance(call, _ast37.Call) and _callee37(call.func).endswith((".unlink", ".remove"))
+
+
+def _silent_oserror37(handler):
+    """Does this handler catch OSError (or a tuple naming it) and do nothing but `pass`?"""
+    if handler.type is None or "OSError" not in _ast37.unparse(handler.type):
+        return False
+    return all(isinstance(b, _ast37.Pass) for b in handler.body)
+
+
 def _swallowed_removals37(tree):
     """Lines of `try: <x>.unlink() / os.remove(...)` whose OSError handler is only `pass`."""
-    out = []
-    for n in _ast37.walk(tree):
-        if not (isinstance(n, _ast37.Try) and len(n.body) == 1):
-            continue
-        call = getattr(n.body[0], "value", None)
-        if not (isinstance(call, _ast37.Call) and _callee37(call.func).endswith((".unlink", ".remove"))):
-            continue
-        for h in n.handlers:
-            if h.type is not None and "OSError" in _ast37.unparse(h.type) and all(
-                    isinstance(b, _ast37.Pass) for b in h.body):
-                out.append(n.lineno)
-    return out
+    return [n.lineno for n in _ast37.walk(tree) if _is_removal_try37(n)
+            and any(_silent_oserror37(h) for h in n.handlers)]
 
 
 def _f7_cleanups():
@@ -584,23 +635,29 @@ def _f7_cleanups():
           not bad and _swallowed_removals37(_ast37.parse(probe)) == [1], "; ".join(bad))
 
 
+def _exits_in_finally37(node):
+    """Is node a module-level try whose finally calls sys.exit()?"""
+    if not (isinstance(node, _ast37.Try) and node.finalbody):
+        return False
+    fin = _ast37.Module(body=node.finalbody, type_ignores=[])
+    return any(_callee37(c.func) == "sys.exit" for c in _ast37.walk(fin) if isinstance(c, _ast37.Call))
+
+
+def _catches_base37(node):
+    """Does the try have a handler for BaseException (or a bare except)?"""
+    return any(h.type is None or _ast37.unparse(h.type) == "BaseException" for h in node.handlers)
+
+
 def _f7_crash_handlers():
     """A suite whose module-level finally calls sys.exit() records a BaseException as a crash."""
-    bad, seen = [], 0
+    tries = []
     for f in sorted(_glob37.glob(os.path.join(_root, "tests", "*.py"))):
-        for n in _ast37.parse(open(f, encoding="utf-8").read()).body:
-            if not (isinstance(n, _ast37.Try) and n.finalbody):
-                continue
-            fin = _ast37.Module(body=n.finalbody, type_ignores=[])
-            if not any(isinstance(c, _ast37.Call) and _callee37(c.func) == "sys.exit"
-                       for c in _ast37.walk(fin)):
-                continue
-            seen += 1
-            if not any(h.type is None or _ast37.unparse(h.type) == "BaseException" for h in n.handlers):
-                bad.append("%s:%d" % (_rel37(f), n.lineno))
+        body = _ast37.parse(open(f, encoding="utf-8").read()).body
+        tries += [(f, n) for n in body if _exits_in_finally37(n)]
+    bad = ["%s:%d" % (_rel37(f), n.lineno) for f, n in tries if not _catches_base37(n)]
     check("tests: a suite whose finally calls sys.exit() records a BaseException as a crash (the "
           "exit replaces it, so an eventlet Timeout ended setup_wizard_test early, green)",
-          seen >= 3 and not bad, "%d such suites; Exception-only at %s" % (seen, bad))
+          len(tries) >= 3 and not bad, "%d such suites; Exception-only at %s" % (len(tries), bad))
 
 
 _f5_tripwire()
