@@ -410,7 +410,8 @@ CI-verified commit regardless of this file — this changelog is for humans.
   every week read "Never run" right beside the Automatic backups switch, and one whose button was
   pressed yesterday read "Last: 1d ago" there however overdue the schedule was. The button's own
   line now sits under the button and says whose it is, and the schedule's row shows the newest
-  automatic backup from the audit log ("Last automatic backup: 2d ago", or that it failed). The
+  automatic backup from the audit log ("Last automatic backup: 2d ago", or that it failed — and when
+  the newest failed, the newest that worked first, so one failing host does not hide the rest). The
   debug report prints the schedule per server (by id and game: interval, whose setting it is, the
   clock's age, "due since", "clock not started"), what the unattended backups recorded in 30 days,
   and the button's run under its own name. A default interval of 0 reads "default: off", because a
@@ -426,12 +427,17 @@ CI-verified commit regardless of this file — this changelog is for humans.
   overdue (twice its interval since its last backup) that is audited and alerted, once — it is
   remembered in config.json, so the panel's daily restart does not repeat it — and again only after
   the server has been backed up. A "wait until empty" backup on a server whose own schedule is off
-  is reported the same way after a week of waiting. No player is ever disconnected for it.
+  is reported the same way after a week of waiting; pressing the button again does not restart that
+  week. The report says how old the server's backup clock is and that players were on at that
+  attempt, not that they were on at every attempt: the clock is also that old after a schedule was
+  off, or a host's backups failed, for days. It is filed as its own audit action, so it does not
+  read as a failed backup. No player is ever disconnected for it.
 - **A backup host that is down sends one alert, not one an hour.** A scheduled or queued backup
   that raised (a direct-SSH host that is down, or a key it now refuses) is retried hourly, and every
   retry alerted again — twice an hour for a server both due and queued. The first failure of a
   streak alerts; the retries are still on the audit log. The next failure after a backup that
-  reached the host alerts again.
+  reached the host alerts again. An audit-log write that fails (a locked database) no longer takes
+  the alert with it, nor stops the rest of the sweep.
 - **A failing daily panel backup no longer stops the game-server backups.** The hourly backup pass
   ran the panel's own daily backup and both game-server sweeps under one error handler, so a daily
   backup that raised skipped the game backups for that hour, every hour, and logged nothing at the
@@ -442,7 +448,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   caller for ever — and a backup sweep holds the one lock every backup on every host shares, so
   all scheduled and queued backups stopped, silently, until the panel restarted. That wait (and the
   channel open, for long commands) is now bounded at five minutes, for commands and for the backup
-  and file downloads. Hosts on the panel's own machine and over Tailscale were never affected.
+  and file downloads, and the connection that did not answer is dropped, so the next command on
+  that host reconnects instead of waiting five minutes again. Hosts on the panel's own machine and
+  over Tailscale were never affected.
 - **A daily panel backup that cannot make its temp folder no longer leaves an empty "backup".** The
   archive's name was claimed before the temp folder was made, and a failure there left a 0-byte
   file that counted as the day's daily backup — so none was taken for 23 hours, and the Backups page

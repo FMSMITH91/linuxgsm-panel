@@ -47,6 +47,7 @@
   "Schedule": "Programación",
   "Scheduled Tasks": "Tareas programadas",
   "Set a new passphrase to replace the current one": "Escribe una contraseña nueva para sustituir la actual",
+  "The newest attempt failed:": "El intento más reciente falló:",
   "The passphrase this backup was written with": "La contraseña con la que se creó esta copia",
   "This backup is encrypted, and this panel's configured passphrase does not open it — it was written by another panel, or before the passphrase was changed.": "Esta copia está cifrada y la contraseña configurada en este panel no la abre: la creó otro panel, o se creó antes de cambiar la contraseña.",
   "Turn off": "Desactivar",

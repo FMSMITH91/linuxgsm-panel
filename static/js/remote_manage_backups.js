@@ -142,14 +142,19 @@ function bkRenderDisk(){
 }
 // A status line as a fixed label (translated by the catalog walker, so it is its own node) and a
 // value that is per-request text (an age, a summary naming servers), kept out of the walker.
-function bkStatusText(el, label, value){
+function bkStatusText(el, label, value){ bkStatusParts(el, [[label, value]]); }
+// The same for several label/value pairs in one line, ' · ' between them.
+function bkStatusParts(el, parts){
   el.textContent='';
-  var a=document.createElement('span'); a.textContent=label; el.appendChild(a);
-  if(value){
-    el.appendChild(document.createTextNode(' '));
-    var b=document.createElement('span'); b.setAttribute('data-no-i18n',''); b.textContent=value;
-    el.appendChild(b);
-  }
+  parts.forEach(function(p, i){
+    if(i) el.appendChild(document.createTextNode(' · '));
+    var a=document.createElement('span'); a.textContent=p[0]; el.appendChild(a);
+    if(p[1]){
+      el.appendChild(document.createTextNode(' '));
+      var b=document.createElement('span'); b.setAttribute('data-no-i18n',''); b.textContent=p[1];
+      el.appendChild(b);
+    }
+  });
 }
 // "Back up game servers now" and the line under it. full.last/summary are that BUTTON's: it is
 // their only writer. The line sat in the Automatic-backups row and read "Never run" beside a
@@ -166,13 +171,18 @@ function bkRenderFullStatus(d, f){
 }
 // The automatic schedule's line, beside its controls: the newest scheduled backup on the audit
 // log (d.scheduled), which the route reads rather than the servers' clocks — a clock also moves
-// when it is first started, on a manual backup and on a failure.
+// when it is first started, on a manual backup and on a failure. The rows are every server's, so
+// when the newest failed, the newest that worked (ok_at) is said first: one host failing every
+// hour read as "Last automatic backup failed" over the others' backups of the night before.
 function bkRenderAutoStatus(d){
   var as=document.getElementById('fb-auto-status');
   if(!as) return;
   var s=d.scheduled;
   if(!s || !s.at) bkStatusText(as, 'No automatic backup has run yet.', '');
-  else bkStatusText(as, s.ok ? 'Last automatic backup:' : 'Last automatic backup failed:', bkAgo(s.at));
+  else if(s.ok) bkStatusText(as, 'Last automatic backup:', bkAgo(s.at));
+  else if(s.ok_at) bkStatusParts(as, [['Last automatic backup:', bkAgo(s.ok_at)],
+                                     ['The newest attempt failed:', bkAgo(s.at)]]);
+  else bkStatusText(as, 'Last automatic backup failed:', bkAgo(s.at));
 }
 // One game server's finished backups as table rows ('' when it has none).
 function bkGameRows(g){

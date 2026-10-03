@@ -288,19 +288,27 @@ def _game_backup_row(gs, gb, hdisk):
 
 
 def _last_scheduled_backup():
-    """The newest automatic (scheduled) game-server backup: {"at": epoch, "ok": bool}, or None.
+    """The newest automatic (scheduled) game-server backup: {"at", "ok", "ok_at"}, or None.
 
     From the audit row _record_backup_outcome writes for every scheduled backup, success or not,
     and NOT from the servers' clocks: a clock also moves when it is first started (no backup at
     all), on a per-server or queued backup, and on a failure — so the newest clock says when a
-    clock last moved, not when the schedule last backed anything up. One indexed query (action),
+    clock last moved, not when the schedule last backed anything up. The overdue report is not
+    one of these rows: it has its own action (_shared._report_overdue_skip).
+
+    `ok_at` is the newest one that WORKED (None if none did), read only when the newest failed:
+    the rows are every server's, and one host failing hourly made the newest row a failure that
+    hid the other servers' backups the night before. One or two indexed queries (action),
     whatever the number of servers.
     """
-    row = (db.session.query(AuditLog.timestamp, AuditLog.success)
-           .filter(AuditLog.action == "scheduled_backup").order_by(AuditLog.id.desc()).first())
+    q = (db.session.query(AuditLog.timestamp, AuditLog.success)
+         .filter(AuditLog.action == "scheduled_backup").order_by(AuditLog.id.desc()))
+    row = q.first()
     if row is None or row[0] is None:
         return None
-    return {"at": calendar.timegm(row[0].timetuple()), "ok": bool(row[1])}
+    good = row if row[1] else q.filter(AuditLog.success.is_(True)).first()
+    return {"at": calendar.timegm(row[0].timetuple()), "ok": bool(row[1]),
+            "ok_at": calendar.timegm(good[0].timetuple()) if good and good[0] else None}
 
 
 def _back_up_one_now(app, server_id, gname, opts, born):

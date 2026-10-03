@@ -5,24 +5,32 @@ What it tests, one section each:
      own name and does not beat;
   B. a server that players keep from its scheduled backup is reported ONCE per clock value, and
      that survives a restart; the 'wait until empty' queue likewise when the server's own schedule
-     is off;
+     is off; each report says only what is known (the clock's age, THIS attempt) and is filed
+     under its own audit action, never as a scheduled backup;
   C. "Back up game servers now" moves each archived server's clock, so the ticker does not archive
-     it again, and records when it queued one; a clock write that fails is not a failed backup;
-  D. a backup that RAISES alerts once per streak, across BOTH sweeps, and audits every attempt;
-  E. the debug report: the automatic schedule per server, what the unattended runs recorded, the
-     manual run labelled as the manual run's, and the notification events that are off, by key;
-  F. the Backups page: the payload's newest scheduled backup, the manual status under its button
-     and the automatic one in the schedule's row (the JS run under node);
+     it again, and records when it queued one (not again for one already waiting); a clock write
+     that fails is not a failed backup;
+  D. a backup that RAISES alerts once per streak, across BOTH sweeps, and audits every attempt; an
+     audit write that fails neither swallows an alert nor stops the sweep;
+  E. the debug report: the automatic schedule per server, what the unattended runs recorded (the
+     reports counted apart), the manual run labelled as the manual run's, and the notification
+     events that are off, by key;
+  F. the Backups page: the payload's newest scheduled backup (and the newest that worked, when it
+     failed), the manual status under its button and the automatic one in the schedule's row (the
+     JS run under node);
   G. paramiko: an exec request the remote never answers is bounded (commands and both download
-     streams), and a sweep holding the global backup lock against such a host lets it go;
+     streams), a sweep holding the global backup lock against such a host lets it go, and the
+     wedged client is dropped from the pool so the next command reconnects;
   H. the panel's own backup: a temp dir that cannot be made leaves no empty archive behind.
 
 HOW IT RUNS. Its own Flask app and SQLite file in a temp dir (db.init_app + create_all), never the
 checkout's data/. config.json is the runner's throwaway one, snapshotted at the start and put back
 in the finally. The sweeps, _record_backup_outcome, log_action and the config writers are the real
-ones; run_game_backup (on both route modules) and notify are recorded stand-ins. G runs a paramiko
-server on 127.0.0.1 inside this process and points _core.get_connection at a client of it. Every
-attribute replaced is put back in the finally, and the in-memory maps this part fills are emptied.
+ones (D's refused audit write wraps the real log_action); run_game_backup (on both route modules)
+and notify are recorded stand-ins. G runs a paramiko server on 127.0.0.1 inside this process and
+points _core.get_connection (or, for the pool check, _core._open_client behind the real pool) at a
+client of it. Every attribute replaced is put back in the finally, and the in-memory maps this part
+fills are emptied.
 """
 import datetime as _dt33
 import json as _json33
@@ -256,10 +264,10 @@ def _b_overdue(rid):
     _entry33(sid, last=int(now - 15 * _DAY33))
     _SCRIPT33["busyserver"] = _BUSY33
     _b_sweep()
-    rows, notes = _audits33("scheduled_backup", "p33-busy"), _notes33("p33-busy")
+    rows, notes = _audits33("scheduled_backup_overdue", "p33-busy"), _notes33("p33-busy")
     check("players online: a server kept from its backup for twice its interval is audited and "
           "alerted", all((len(rows) == 1, rows and rows[0].success is False,
-                          rows and "not backed up for 15 days" in rows[0].detail, len(notes) == 1,
+                          rows and "clock last moved 15 days ago" in rows[0].detail, len(notes) == 1,
                           notes and notes[0][1] == "Scheduled backup overdue")),
           repr((rows, notes)))
     check("players online: ...and its clock is left alone (it stays due; nobody is disconnected)",
@@ -269,7 +277,7 @@ def _b_overdue(rid):
     _restart33()
     _b_sweep()
     check("players online: the report is sent ONCE per clock value — not again on later ticks, "
-          "nor after a restart", (len(_audits33("scheduled_backup", "p33-busy")),
+          "nor after a restart", (len(_audits33("scheduled_backup_overdue", "p33-busy")),
                                   len(_notes33("p33-busy"))) == (1, 1),
           repr(_notes33("p33-busy")))
     _entry33(sid, last=int(now - 16 * _DAY33))
@@ -286,7 +294,7 @@ def _b_not_yet(rid):
     _SCRIPT33["busy8server"] = _BUSY33
     _b_sweep()
     check("players online: a server overdue by less than a whole interval is not reported yet",
-          not _notes33("p33-busy8") and not _audits33("scheduled_backup", "p33-busy8")
+          not _notes33("p33-busy8") and not _audits33("scheduled_backup_overdue", "p33-busy8")
           and _RUNS33.count("busy8server") == 1, repr(_notes33("p33-busy8")))
 
 
@@ -306,6 +314,45 @@ def _b_refused_write(rid):
               len(_notes33("p33-busyro")) == 1,
               any("could not save" in m for m in _LOGS33.msgs))),
           repr((_notes33("p33-busyro"), _LOGS33.msgs[-3:])))
+
+
+def _b_reenabled(rid):
+    """A schedule turned back on over an old clock: the clock is old, but not because of players."""
+    sid = _new33("p33-reon", "reonserver", rid)
+    _only33(sid)
+    _bk33.set_game_schedule(sid, 0, _bk33.UNCHANGED)        # off: the sweep never touches the clock
+    _entry33(sid, last=int(_t33.time() - 20 * _DAY33))
+    _SCRIPT33["reonserver"] = _BUSY33
+    _b_sweep()
+    _bk33.set_game_schedule(sid, None, _bk33.UNCHANGED)     # back on, at the default 7 d
+    _b_sweep()
+    rows, notes = _audits33("scheduled_backup_overdue", "p33-reon"), _notes33("p33-reon")
+    want = ("its backup clock last moved 20 days ago (every 7 d); skipped at this attempt: "
+            + _BUSY33[1])
+    check("players online: a schedule turned back on over a 20-day-old clock and skipped ONCE is "
+          "reported as what is known (the clock's age, THIS attempt), not as players on at every "
+          "attempt", all((_RUNS33.count("reonserver") == 1, [r.detail for r in rows] == [want],
+                          [n[2] for n in notes] == [
+                              "p33-reon is overdue for its scheduled backup: " + want])),
+          repr((_RUNS33.count("reonserver"), rows, notes)))
+
+
+def _b_report_not_a_backup(rid):
+    """The overdue report is not a backup attempt, so the Backups page must not read it as one."""
+    with _APP33.app_context():
+        db.session.add(AuditLog(username="system", action="scheduled_backup", success=True,
+                                target="p33-ok-elsewhere"))
+        db.session.commit()
+    sid = _new33("p33-busypg", "busypgserver", rid)
+    _only33(sid)
+    _entry33(sid, last=int(_t33.time() - 15 * _DAY33))
+    _SCRIPT33["busypgserver"] = _BUSY33
+    _b_sweep()
+    with _APP33.app_context():
+        got = _pb33._last_scheduled_backup()
+    check("players online: the overdue report has its own audit action, so the Backups page's newest "
+          "automatic backup is still the one that worked, not a 'failed' one",
+          len(_notes33("p33-busypg")) == 1 and (got or {}).get("ok") is True, repr(got))
 
 
 def _raise33(exc):
@@ -333,12 +380,18 @@ def _b_queue(rid):
           abs(since - _t33.time()) < 60 and not _notes33("p33-queue"), repr((since, _NOTES33[-2:])))
     _entry33(sid, queued_at=int(_t33.time() - 8 * _DAY33))
     _sh33._run_pending_backups(_APP33)
-    rows, notes = _audits33("queued_backup", "p33-queue"), _notes33("p33-queue")
+    rows, notes = _audits33("queued_backup_waiting", "p33-queue"), _notes33("p33-queue")
     check("queued backup: still waiting a whole default interval later, with its schedule off, it "
           "is audited and alerted", all((
               len(rows) == 1, rows and rows[0].success is False,
               rows and "queued 8 days ago and still waiting" in rows[0].detail,
               [n[1] for n in notes] == ["Queued backup still waiting"])), repr((rows, notes)))
+    want = "queued 8 days ago and still waiting; skipped at this attempt: " + _BUSY33[1]
+    check("queued backup: the report says what is known — when it was queued, and that players were "
+          "on at THIS attempt — not that they were on at every attempt",
+          [r.detail for r in rows] == [want]
+          and [n[2] for n in notes] == ["The queued backup of p33-queue is still waiting: " + want],
+          repr((rows, notes)))
     _restart33()
     _sh33._run_pending_backups(_APP33)
     check("queued backup: ...once: not again after a restart, and it stays queued",
@@ -396,6 +449,20 @@ def _c_clocks(rid):
     check("full backup now: an hour later the ticker does NOT archive the server it just backed up "
           "again (it still archives the ones that stayed due)",
           sorted(_RUNS33) == ["fbusyserver", "ffailserver"], repr(_RUNS33))
+
+
+def _c_requeue(rid):
+    """'Back up game servers now' (wait until empty) pressed again while a server already waits."""
+    sid = _new33("p33-frq", "frqserver", rid, backup_pending=True)
+    _only33(sid)
+    since = int(_t33.time() - 8 * _DAY33)
+    _entry33(sid, queued_at=since)
+    _SCRIPT33["frqserver"] = _BUSY33
+    ran = _c_full_run(defer=True)
+    check("full backup now: pressed again while a server is already queued, its wait is NOT restarted "
+          "(the long-queue report measures from the first press)",
+          ran and _bk33.queued_since(sid) == since and _row33(sid).backup_pending is True,
+          repr((ran, _bk33.queued_since(sid), since)))
 
 
 def _c_clock_write_fails(rid):
@@ -458,6 +525,65 @@ def _d_queued_only(rid):
           len(_notes33("p33-qraise")) == 1, repr(_notes33("p33-qraise")))
 
 
+def _poison_log33(times):
+    """A log_action whose first `times` calls fail the way a refused commit does.
+
+    The flush raises (NOT NULL), and the session then refuses every query until it is rolled back
+    (PendingRollbackError) — what SQLite "database is locked" leaves behind as well.
+    """
+    real, left = _sh33.log_action, [times]
+
+    def _log(*a, **k):
+        if left[0] > 0:
+            left[0] -= 1
+            db.session.add(AuditLog(username="system", action=None))
+            db.session.commit()
+        return real(*a, **k)
+    return _log
+
+
+def _sweep_with_poison33(times, sweep):
+    """Run `sweep` with the poisoned log_action in place; the exception it raised, or None."""
+    _p33(_sh33, "log_action", _poison_log33(times))
+    try:
+        sweep(_APP33)
+        return None
+    except Exception as e:  # noqa: BLE001 - returned to the check
+        return e
+    finally:
+        _restore_one33(_sh33, "log_action")
+
+
+def _d_audit_fails(rid):
+    sid = _new33("p33-busylk", "busylkserver", rid)
+    _only33(sid)
+    _entry33(sid, last=int(_t33.time() - 15 * _DAY33))
+    _SCRIPT33["busylkserver"] = _BUSY33
+    err = _sweep_with_poison33(99, _sh33._run_due_game_backups)
+    check("audit write refused: the overdue alert still goes out (its mark is saved before it, so a "
+          "skipped alert was never sent)", err is None and [n[1] for n in _notes33("p33-busylk")] == [
+              "Scheduled backup overdue"], repr((err, _notes33("p33-busylk"))))
+    sid = _new33("p33-raiselk", "raiselkserver", rid)
+    _only33(sid)
+    _entry33(sid, last=int(_t33.time() - 8 * _DAY33))
+    _SCRIPT33["raiselkserver"] = OSError("ssh dropped")
+    err = _sweep_with_poison33(99, _sh33._run_due_game_backups)
+    check("audit write refused: a host's first raise still alerts (the streak is marked before it, so "
+          "a skipped alert muted the whole outage)", err is None and [
+              n[1] for n in _notes33("p33-raiselk")] == ["Scheduled backup failed"],
+          repr((err, _notes33("p33-raiselk"))))
+    sids = [_new33("p33-lk" + x, "lk%sserver" % x, rid) for x in ("a", "b")]
+    _only33(*sids)
+    for sid in sids:
+        _entry33(sid, last=int(_t33.time() - 8 * _DAY33))
+    err = _sweep_with_poison33(1, _sh33._run_due_game_backups)
+    rows = _audits33("scheduled_backup", "p33-lkb")
+    check("audit write refused: the sweep goes on — the next server is still backed up and on the "
+          "audit log (the failed write is rolled back, not left to fail every later query)",
+          err is None and "lkbserver" in _RUNS33 and [r.success for r in rows] == [True],
+          repr((err, _RUNS33[-3:], rows)))
+
+
 def _d_replaced(rid):
     sid = _new33("p33-gone", "goneserver", rid)
     with _APP33.app_context():
@@ -481,15 +607,18 @@ def _e_seed(rid):
     _bk33.set_game_schedule(sids[2], 0, _bk33.UNCHANGED)
     _entry33(sids[3], last=None)
     with _APP33.app_context():
-        AuditLog.query.filter(AuditLog.action.in_(("scheduled_backup", "queued_backup"))).delete(
-            synchronize_session=False)
+        AuditLog.query.filter(AuditLog.action.in_((
+            "scheduled_backup", "queued_backup", "scheduled_backup_overdue",
+            "queued_backup_waiting"))).delete(synchronize_session=False)
         old = _dt33.datetime.fromtimestamp(now - 40 * _DAY33, _dt33.timezone.utc).replace(tzinfo=None)
         db.session.add_all([AuditLog(username="system", action="scheduled_backup", success=True,
                                      target="p33-rep-a"),
                             AuditLog(username="system", action="scheduled_backup", success=False,
                                      target="p33-rep-b"),
                             AuditLog(username="system", action="scheduled_backup", success=True,
-                                     target="p33-rep-a", timestamp=old)])
+                                     target="p33-rep-a", timestamp=old),
+                            AuditLog(username="system", action="scheduled_backup_overdue",
+                                     success=False, target="p33-rep-b")])
         db.session.commit()
     _cfg33.update_config(lambda c: c.pop("full_backup_last", None))
     return sids
@@ -518,6 +647,9 @@ def _e_section(rid):
               "gs %d · rust · every 7 d · clock not started" % sids[3] in text)), text)
     check("report: what the unattended runs recorded in 30 days, from the audit log (the old row "
           "is outside it)", "scheduled: 1 ok, 1 failed, newest " in text and "queued: none" in text,
+          text)
+    check("report: an overdue report is counted as a report, not as a failed scheduled backup",
+          "scheduled: 1 ok, 1 failed, newest " in text and "reported overdue: 1, newest " in text,
           text)
     check("report: no game-server name is printed", "p33-rep" not in text, text)
     check("report: a server due since before the backup-ticker's last pass began is a warning",
@@ -590,6 +722,8 @@ function run(d){
   const value = n => (els[n].children.find(c => c.attrs && 'data-no-i18n' in c.attrs) || {}).textContent;
   return {manual: els['fb-status'].textContent, auto: els['fb-auto-status'].textContent,
           manual_value: value('fb-status'), auto_value: value('fb-auto-status'),
+          auto_values: els['fb-auto-status'].children
+            .filter(c => c.attrs && 'data-no-i18n' in c.attrs).map(c => c.textContent),
           disabled: els['fb-now'].disabled};
 }
 if (out.loaded) {
@@ -598,6 +732,7 @@ if (out.loaded) {
   out.none = run({full: {last: 0}, scheduled: null});
   out.failed = run({full: {last: 0}, scheduled: {at: 9, ok: false}});
   out.running = run({full: {last: 1000}, full_running: true, scheduled: null});
+  out.partial = run({full: {last: 0}, scheduled: {at: 9, ok: false, ok_at: 4}});
 }
 console.log(JSON.stringify(out));
 """
@@ -621,7 +756,8 @@ def _f_js_source():
                encoding="utf-8").read()
     check("backups page (no node): the manual status names its button and the schedule has its "
           "own line", all(("'“Back up game servers now” has never been run.'" in src,
-                           "function bkRenderAutoStatus(d)" in src, "'Never run'" not in src)), "")
+                           "function bkRenderAutoStatus(d)" in src, "'Never run'" not in src,
+                           "'The newest attempt failed:'" in src)), "")
 
 
 def _f_js():
@@ -645,6 +781,12 @@ def _f_js():
     check("backups page: the per-request part of each line (an age, a summary naming servers) is "
           "kept out of the translator", (rs.get("manual_value"), rs.get("auto_value")) == (
               "AGO(1000) — 4 server(s) backed up", "AGO(5)"), repr(rs))
+    pt = out.get("partial") or {}
+    check("backups page: when the newest automatic backup failed and an older one worked, the one "
+          "that worked is said first, then the failed attempt (one failing host no longer hides "
+          "the rest)", (pt.get("auto"), pt.get("auto_values")) == (
+              "Last automatic backup: AGO(4) · The newest attempt failed: AGO(9)",
+              ["AGO(4)", "AGO(9)"]), repr(pt))
 
 
 def _f_template():
@@ -659,11 +801,18 @@ def _f_template():
 
 
 def _f_route():
+    t_ok, t_fail = int(_t33.time()) - 2 * _DAY33, int(_t33.time()) - 3600
+
+    def _naive(ts):
+        return _dt33.datetime.fromtimestamp(ts, _dt33.timezone.utc).replace(tzinfo=None)
     with _APP33.app_context():
-        newest = AuditLog.query.filter_by(action="scheduled_backup").order_by(
-            AuditLog.id.desc()).first()
-        want = {"at": int(newest.timestamp.replace(tzinfo=_dt33.timezone.utc).timestamp()),
-                "ok": bool(newest.success)}
+        db.session.add_all([
+            AuditLog(username="system", action="scheduled_backup", success=True,
+                     target="p33-route-ok", timestamp=_naive(t_ok)),
+            AuditLog(username="system", action="scheduled_backup", success=False,
+                     target="p33-route-fail", timestamp=_naive(t_fail))])
+        db.session.commit()
+    want = {"at": t_fail, "ok": False}
     _p33(_auth33, "current_user", NS(is_authenticated=True, is_superadmin=True))
     _p33(_pb33, "list_game_backups", lambda remote, short: [])
     _p33(_pb33, "backup_disk_info", lambda remote, short: {"free": 1, "total": 2})
@@ -671,8 +820,11 @@ def _f_route():
     if "api_panel_backups" not in _APP33.view_functions:
         _pb33._register_backup_overview(_APP33)
     got = _APP33.test_client().get("/api/panel/backups").get_json() or {}
+    sched = got.get("scheduled") or {}
     eq("backups page: the payload carries the newest scheduled backup from the audit log",
-       got.get("scheduled"), want)
+       {k: sched.get(k) for k in want}, want)
+    eq("backups page: ...and, when that one failed, the newest that worked (ok_at)",
+       sched.get("ok_at"), t_ok)
 
 
 # ══ G. paramiko: an exec request the remote never answers ═════════════════════════════════════
@@ -869,6 +1021,37 @@ def _g_paramiko(rid):
                           len(_notes33("p33-wedged")) == 1)), repr((rows, _notes33("p33-wedged"))))
 
 
+def _g_pool_drop():
+    """A host that left an exec unanswered: the NEXT command must not get the same wedged client."""
+    wedged, held_w = _g_serve(True)
+    good, held_g = _g_serve(False)
+    key = _core33._conn_key(_G_REMOTE33.username, _G_REMOTE33.host, _G_REMOTE33.port)
+    prev = _core33._connections.get(key)
+    _core33._connections[key] = wedged
+    _p33(_core33, "_open_client", lambda server: good)     # the reconnect, to the answering server
+    first = second = (False, None, 0.0, None)
+    try:
+        first = _g_call(lambda: _core33.run_command(_G_REMOTE33, "echo ok", timeout=30), 20)
+        second = _g_call(lambda: _core33.run_command(_G_REMOTE33, "echo ok", timeout=30), 20)
+    finally:
+        with _core33._conn_lock:
+            _core33._connections.pop(key, None)
+            if prev is not None:
+                _core33._connections[key] = prev
+            _core33._remote_conn_keys.pop(_G_REMOTE33.id, None)
+        _restore_one33(_core33, "_open_client")
+        wedged_alive = bool(wedged.get_transport() and wedged.get_transport().is_active())
+        for client, held in ((wedged, held_w), (good, held_g)):
+            _g_teardown(client, held)
+        for got in (first, second):
+            if got[3] is not None:
+                _join33(got[3], 10)
+    check("paramiko exec: a host that left an exec unanswered has its pooled connection closed and "
+          "dropped, so the next command opens a new one instead of waiting the whole bound again",
+          all((isinstance(first[1], ConnectionError), second[0], second[1] == ("ok", "", 0),
+               not wedged_alive)), repr((first[:3], second[:3], wedged_alive)))
+
+
 # ══ H. the panel's own daily backup ══════════════════════════════════════════════════════════
 def _h_claim_leak():
     bdir = os.path.join(_T33, "claim-backups")
@@ -891,10 +1074,12 @@ def _h_claim_leak():
 def _run33():
     rid = _setup33()
     for fn, args in ((_a_ticker, ()), (_b_overdue, (rid,)), (_b_not_yet, (rid,)),
-                     (_b_refused_write, (rid,)), (_b_queue, (rid,)), (_c_clocks, (rid,)),
-                     (_c_clock_write_fails, (rid,)), (_d_raises, (rid,)), (_d_queued_only, (rid,)),
-                     (_d_replaced, (rid,)), (_e_section, (rid,)), (_e_gates, ()), (_e_events, ()),
-                     (_f_js, ()), (_f_template, ()), (_f_route, ()), (_g_paramiko, (rid,)),
+                     (_b_refused_write, (rid,)), (_b_reenabled, (rid,)),
+                     (_b_report_not_a_backup, (rid,)), (_b_queue, (rid,)), (_c_clocks, (rid,)),
+                     (_c_requeue, (rid,)), (_c_clock_write_fails, (rid,)), (_d_raises, (rid,)),
+                     (_d_queued_only, (rid,)), (_d_audit_fails, (rid,)), (_d_replaced, (rid,)),
+                     (_e_section, (rid,)), (_e_gates, ()), (_e_events, ()), (_f_js, ()),
+                     (_f_template, ()), (_f_route, ()), (_g_paramiko, (rid,)), (_g_pool_drop, ()),
                      (_g_streams, ()), (_h_claim_leak, ())):
         try:
             fn(*args)

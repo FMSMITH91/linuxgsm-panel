@@ -420,7 +420,14 @@ _SCHED_SERVERS_SQL = ("SELECT id, game_type FROM game_server WHERE installed = 1
                       "NOT NULL AND remote_id != 0 ORDER BY id")
 _SCHED_AUDIT_SQL = ("SELECT action, COUNT(*), SUM(CASE WHEN success THEN 1 ELSE 0 END), "
                     "MAX(timestamp) FROM audit_log WHERE action IN ('scheduled_backup', "
-                    "'queued_backup') AND timestamp >= ? GROUP BY action")
+                    "'queued_backup', 'scheduled_backup_overdue', 'queued_backup_waiting') "
+                    "AND timestamp >= ? GROUP BY action")
+# The backups themselves, and the two reports of a backup players kept waiting
+# (_shared._report_overdue_skip / _report_long_queue), which are not backups and have their own
+# actions so they are not counted as failed ones.
+_SCHED_BACKUP_ACTIONS = (("scheduled_backup", "scheduled"), ("queued_backup", "queued"))
+_SCHED_REPORT_ACTIONS = (("scheduled_backup_overdue", "reported overdue"),
+                         ("queued_backup_waiting", "reported still queued"))
 _SCHED_AUDIT_DAYS = 30
 
 
@@ -542,9 +549,10 @@ def _schedule_body(res, head, rows):
 
 
 def _audit_counts(rows):
+    known = {a for a, _l in _SCHED_BACKUP_ACTIONS + _SCHED_REPORT_ACTIONS}
     by = {}
     for action, n, ok, newest in rows:
-        if action in ("scheduled_backup", "queued_backup"):
+        if action in known:
             by[action] = (int(n or 0), int(ok or 0), newest)
     return by
 
@@ -561,12 +569,14 @@ def _scheduled_audit_line(res, rows):
         return
     by = _audit_counts(rows or [])
     parts = []
-    for action, label in (("scheduled_backup", "scheduled"), ("queued_backup", "queued")):
+    for action, label in _SCHED_BACKUP_ACTIONS:
         if action not in by:
             parts.append("%s: none" % label)
             continue
         n, ok, newest = by[action]
         parts.append("%s: %d ok, %d failed, newest %s" % (label, ok, n - ok, _when(newest)))
+    parts += ["%s: %d, newest %s" % (label, by[action][0], _when(by[action][2]))
+              for action, label in _SCHED_REPORT_ACTIONS if action in by]
     res.add(head + ": " + " · ".join(parts))
 
 

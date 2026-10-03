@@ -258,21 +258,56 @@ def _record_backup_outcome(app, sid, gname, ok, reason, action, title, born=_NO_
 
     `title` None audits the failure without alerting: a repeat the operator was already told about
     (see _record_raised_backup).
+
+    The audit row and the alert are written apart (_audit_backup_outcome, _alert_backup): they
+    shared one try, so an audit write that failed (SQLite "database is locked") skipped the alert
+    too, and the callers that mark an alert as sent before sending it (_report_once, the raise
+    streak) then never sent it at all.
     """
+    _bk_gs = _audit_backup_outcome(app, (sid, gname, born), ok, reason, action)
+    if ok or title is None:
+        return
+    _alert_backup(app, _bk_gs, title,
+                  "The backup of %s failed: %s" % (gname, reason or "no reason given"))
+
+
+def _audit_backup_outcome(app, ident, ok, reason, action):
+    """The audit row for one unattended backup of ident=(sid, gname, born). Returns its server row.
+
+    That is claim_row's answer: None for a server deleted (or its id taken) meanwhile, and None
+    when even that read failed. Never raises: this is the reporting, and the sweeps run the
+    remaining servers after it. A write that failed is rolled back, because the session refuses
+    every later query until it is (PendingRollbackError), and the sweep's next server would have
+    failed on its first read of the database.
+    """
+    sid, gname, born = ident
+    _bk_gs = None
     try:
         _bk_gs = claim_row(GameServer, sid, born)
         log_action(None, action, target=gname, detail=(reason or "")[:500], success=bool(ok),
                    server=_bk_gs)
-        if ok or title is None:
-            return
-        if _bk_gs is not None and notifications.alerts_muted(_bk_gs):
-            return
-        notifications.notify("backup_failed", title,
-                             "The backup of %s failed: %s" % (gname, reason or "no reason given"))
     except Exception:
-        # Never the thing that breaks the sweep: this is the reporting, and the callers below run
-        # the remaining servers after it.
         app.logger.warning("could not record %s of %s", action, gname, exc_info=True)
+        try:
+            db.session.rollback()
+        except Exception:
+            app.logger.debug("rolling back after a failed audit write failed", exc_info=True)
+    return _bk_gs
+
+
+def _alert_backup(app, gs, title, body):
+    """One backup_failed alert, unless the server's tags mute it. Never raises.
+
+    `gs` None (a server gone, or one that could not be read) is not muted: alerts_muted fails open
+    for the same reason. notify() is documented never to raise; a channel that does anyway is
+    logged here, so it is never what breaks the sweep.
+    """
+    try:
+        if gs is not None and notifications.alerts_muted(gs):
+            return
+        notifications.notify("backup_failed", title, body)
+    except Exception:
+        app.logger.warning("could not send the '%s' alert", title, exc_info=True)
 
 
 # Servers whose last unattended backup attempt RAISED (a direct-SSH host that is down, a key it
@@ -307,14 +342,20 @@ def _record_raised_backup(app, ident, exc, action, title):
 
 
 def _report_once(app, ident, marker, report):
-    """Send one escalation `report`=(reason, action, title) unless `marker` was already reported.
+    """Send one escalation `report`=(reason, action, title, body) unless `marker` was reported.
 
     marker=(value, read_saved, save, fallback): read_saved(sid) is the persisted mark, save(sid,
     value) persists it, `fallback` is the in-memory map used when that write is refused. Persisted
     FIRST, so a report is never sent twice for one value: an in-memory-only mark sent the same
-    alert again after every restart, and the panel restarts daily on a self-update.
+    alert again after every restart, and the panel restarts daily on a self-update. Marking first
+    loses nothing, because nothing after it can stop the alert: the audit row is written apart
+    from it (_audit_backup_outcome) and _alert_backup never raises.
+
+    `action` is the report's OWN audit action, never the backup's: the Backups page reads the
+    newest "scheduled_backup" row as the newest automatic backup, and a report filed under it read
+    there as "Last automatic backup failed" about a backup that had not been attempted.
     """
-    sid, gname, born = ident
+    sid, gname, _born = ident
     value, read_saved, save, fallback = marker
     if value in (read_saved(sid), fallback.get(sid)):
         return False
@@ -324,8 +365,8 @@ def _report_once(app, ident, marker, report):
     except Exception:
         app.logger.warning("could not save that '%s' was reported for %s", report[2], gname,
                            exc_info=True)
-    reason, action, title = report
-    _record_backup_outcome(app, sid, gname, False, reason, action, title, born)
+    reason, action, title, body = report
+    _alert_backup(app, _audit_backup_outcome(app, ident, False, reason, action), title, body)
     return True
 
 
@@ -339,16 +380,21 @@ def _report_overdue_skip(app, ident, sched, reason):
     moved — one full interval overdue — that is audited and alerted, once per clock value: the
     moment a backup runs (or fails, which records the clock), it re-arms by itself. It never
     forces the backup; no player is disconnected by this.
+
+    The text says what is KNOWN: how old the clock is, and that players were on at THIS attempt.
+    Not that they were on at every attempt, which it once said: the clock is as old for a schedule
+    that was off (the sweep does not touch it then), for a host whose backups raised for days (a
+    raise does not move it), and for days the panel was down — none of them players' doing.
     """
     last, every = sched["last"], sched["interval_days"] * 86400
     if not last or every <= 0 or time.time() - last < 2 * every:
         return False
-    days = int((time.time() - last) // 86400)
+    text = ("its backup clock last moved %d days ago (every %d d); skipped at this attempt: %s"
+            % ((time.time() - last) // 86400, sched["interval_days"], reason or "players online"))
     return _report_once(app, ident, (last, bk.overdue_alerted, bk.mark_overdue_alerted,
                                      _overdue_reported),
-                        ("not backed up for %d days: players were online at every attempt (%s)"
-                         % (days, reason or "skipped"), "scheduled_backup",
-                         "Scheduled backup overdue"))
+                        (text, "scheduled_backup_overdue", "Scheduled backup overdue",
+                         "%s is overdue for its scheduled backup: %s" % (ident[1], text)))
 
 
 def _report_long_queue(app, gs, sched, reason):
@@ -364,22 +410,28 @@ def _report_long_queue(app, gs, sched, reason):
     since = bk.queued_since(gs.id)
     if not since:
         # Queued before the queue time was recorded (an upgrade): start its clock now.
-        _keep_queue_time(app, gs.id, gs.name)
+        _start_queue_time(app, gs.id, gs.name)
         return False
     if time.time() - since < bk.DEFAULT_FULL_INTERVAL * 86400:
         return False
-    days = int((time.time() - since) // 86400)
+    # What is known: when it was queued, that it still is, and why THIS attempt skipped it (an
+    # attempt that raised, or hours the panel was down, also kept it waiting).
+    text = ("queued %d days ago and still waiting; skipped at this attempt: %s"
+            % ((time.time() - since) // 86400, reason or "players online"))
     return _report_once(app, (gs.id, gs.name, row_birth(gs)),
                         (since, bk.queued_alerted, bk.mark_queued_alerted, _queue_wait_reported),
-                        ("queued %d days ago and still waiting: players were online at every "
-                         "attempt (%s)" % (days, reason or "skipped"), "queued_backup",
-                         "Queued backup still waiting"))
+                        (text, "queued_backup_waiting", "Queued backup still waiting",
+                         "The queued backup of %s is still waiting: %s" % (gs.name, text)))
 
 
-def _keep_queue_time(app, sid, gname, restart=False):
-    """Record when `sid` was queued (restart=True: now; else only when none is recorded). Logged."""
+def _start_queue_time(app, sid, gname):
+    """bk.record_queued(sid) for a queued server with no queue time, a refused write logged.
+
+    Called only when none is recorded, under the backup lock the full run (the other writer) also
+    holds, so there is nothing to keep: the time is simply now.
+    """
     try:
-        bk.record_queued(sid, keep_first=not restart)
+        bk.record_queued(sid)
     except Exception:
         app.logger.warning("could not save when %s was queued for backup", gname, exc_info=True)
 

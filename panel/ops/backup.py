@@ -1405,18 +1405,15 @@ def queued_alerted(sid):
     return _marker(sid, "queued_alerted")
 
 
-def record_queued(sid, keep_first=False):
-    """Note that `sid` was queued for a 'wait until empty' backup now.
+def record_queued(sid):
+    """Note that `sid` was queued for a 'wait until empty' backup now. Raises like update_config.
 
-    The full run calls this when it queues a server that was NOT already waiting, so a new queue
-    always starts a new wait (and re-arms its report). keep_first=True records only when no time
-    is there: a server queued before the time was kept starts its wait at first sight.
+    One rule, whoever calls: the time is now. The full run calls this only when it queues a server
+    that was NOT already waiting, so a new queue starts a new wait (and re-arms its report) while
+    pressing the button again does not restart one; the queued sweep calls it only for a server
+    queued before the time was kept, which starts its wait at first sight.
     """
-    def _mut(cfg):
-        entry = _schedule_entry(cfg, sid)
-        if not (keep_first and entry.get("queued_at")):
-            entry["queued_at"] = int(time.time())
-    update_config(_mut)
+    update_config(lambda cfg: _schedule_entry(cfg, sid).update({"queued_at": int(time.time())}))
 
 
 def mark_queued_alerted(sid, queued_at):

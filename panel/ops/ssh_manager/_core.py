@@ -1067,6 +1067,30 @@ def _open_client(server):
     return client
 
 
+def _drop_pooled_client(client):
+    """Take `client` out of the pool and close it, when the pool holds it. Returns whether it did.
+
+    For a client whose remote left an exec request unanswered for exec_bounded's whole bound. Its
+    transport still reads as active — the 30 s keepalive asks for no reply — so
+    _live_pooled_client went on handing it out, and every later command on the host waited the
+    bound again: about five commands per server in a backup sweep, 300 s each, under the lock
+    every backup on every host shares. Dropped, the next command reconnects, or fails fast on a
+    host that is down. The other commands on it are as stuck: an sshd that does not answer one
+    request on a connection is not serving that connection. The pool's own clients only: an
+    entry already replaced is not this client and is left alone, and a client a caller owns
+    (pooled=False) is the caller's to close.
+    """
+    with _conn_lock:
+        keys = [k for k, c in _connections.items() if c is client]
+        for key in keys:
+            del _connections[key]
+        for rid in [r for r, k in _remote_conn_keys.items() if k in keys]:
+            del _remote_conn_keys[rid]
+    if keys:
+        _close_quietly(client)
+    return bool(keys)
+
+
 def _close_quietly(client):
     """Close an SSH client; a close that fails (its transport already torn down) is only logged."""
     try:
@@ -1722,6 +1746,10 @@ def exec_bounded(client, command, timeout, limit):
 
     A client that is not a paramiko SSHClient (the suites' stand-ins) answers through its own
     exec_command.
+
+    When the bound passes, the client is also dropped from the pool (_drop_pooled_client): its
+    transport still reads as active, so every later command on that host was handed the same
+    wedged client and waited the whole bound again.
     """
     if not isinstance(client, paramiko.SSHClient):
         return client.exec_command(command, timeout=timeout)  # nosec B601  # nosemgrep
@@ -1731,12 +1759,13 @@ def exec_bounded(client, command, timeout, limit):
     def _watchdog():
         if answered.wait(limit):
             return
-        _log.warning("the remote did not answer an exec request in %ds; closing the channel",
-                     int(limit))
+        _log.warning("the remote did not answer an exec request in %ds; closing the channel "
+                     "and dropping the pooled connection", int(limit))
         try:
             chan.close()
         except Exception:
             _log.debug("could not close an unanswered exec channel", exc_info=True)
+        _drop_pooled_client(client)
 
     threading.Thread(target=_watchdog, name="ssh-exec-watchdog", daemon=True).start()
     try:
