@@ -363,7 +363,9 @@ function startRename(row){
   err.setAttribute('role','alert'); err.style.display='none';
   line.appendChild(input); line.appendChild(ok); line.appendChild(no);
   box.appendChild(line); box.appendChild(err);
-  Array.prototype.forEach.call(row.children, function(c){ c.style.display='none'; });
+  // The class hides the row's own name and icons (server_files.html): an inline display:none
+  // loses to Bootstrap's `.d-flex { display: flex !important }` on the icons, which then kept
+  // 128px of a 307px row on a phone and left the field 24px wide.
   row.classList.add('fb-renaming'); row.appendChild(box);
   _renaming={row:row, path:path, name:name, input:input, ok:ok, err:err, busy:false};
   input.focus();
@@ -375,7 +377,6 @@ function cancelRename(){
   _renaming=null;
   var box=r.row.querySelector('.fb-rename');
   if(box) box.remove();
-  Array.prototype.forEach.call(r.row.children, function(c){ c.style.display=''; });
   r.row.classList.remove('fb-renaming');
   var btn=r.row.querySelector('[data-action="rename"]');
   if(btn) btn.focus();

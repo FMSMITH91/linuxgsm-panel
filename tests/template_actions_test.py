@@ -4894,15 +4894,15 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
   const f1 = field();
   out.open = {value: f1 && f1.value, sel: f1 && [f1.selectionStart, f1.selectionEnd],
               focused: !!f1 && doc.activeElement === f1, files_opened: count('/file?'),
-              hidden: !!f1 && row('notes.txt').children.filter(ch => ch !== box())
-                .every(ch => ch.style.display === 'none')};
+              hidden: !!f1 && row('notes.txt').classList.contains('fb-renaming')};
   if (f1) f1.click();
   if (f1) row('notes.txt').click();
   out.click_in_field_opens = count('/file?');
   // Escape puts the row back and sends nothing.
   if (f1) key(f1, 'Escape');
   out.escape = {open: !!box(), sent: posts().length, focus_back: doc.activeElement === btn('notes.txt'),
-                shown: row('notes.txt').children.every(ch => ch.style.display === '')};
+                shown: !row('notes.txt').classList.contains('fb-renaming')
+                  && row('notes.txt').children.length === 2};
   if (box()) key(field(), 'Escape');
   if (btn('maps')) btn('maps').click();
   out.folder_sel = field() ? [field().selectionStart, field().selectionEnd, field().value] : null;
@@ -5051,6 +5051,18 @@ check("rename" in delegated and "rename" not in defined
       "file browser: Rename is delegated on #file-list (not a global), its field's controls go "
       "through the dispatcher, and a click on the row being renamed is left to them",
       _sfr_list[:400])
+# The row's own name and icons are hidden by CLASS while it is renamed. The first version set an
+# inline display:none on each, and the icons' wrapper is .d-flex, whose display:flex is !important,
+# so it stayed: 128px of a 307px row at 375px wide, and a 24px field. Found by the js_coverage
+# flow's phone-width measurement; this keeps the rule that fixed it, and keeps the inline one out.
+_sfr_tpl = (TEMPLATES / "server_files.html").read_text(encoding="utf-8")
+check(re.search(r"#file-list \.fb-renaming > :not\(\.fb-rename\)\s*\{\s*display:\s*none !important;",
+                _sfr_tpl) is not None
+      and "row.children" not in _js_code_only(_js_function_body(_sfr_src, "startRename")),
+      "file browser: a row being renamed hides its own name and icons with a class rule that beats "
+      "the icons' .d-flex (!important), not an inline style",
+      "server_files.html has no `#file-list .fb-renaming > :not(.fb-rename)` display:none "
+      "!important rule, or startRename styles the row's children itself")
 
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)

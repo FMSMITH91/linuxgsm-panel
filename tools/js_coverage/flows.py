@@ -330,8 +330,10 @@ if (!row || !f) return {err: 'no field open'};
 const R = row.getBoundingClientRect(), parts = Array.from(row.querySelectorAll('.fb-rename input, .fb-rename button, .fb-rename-err'));
 const out = parts.filter(p => p.offsetParent !== null).map(p => p.getBoundingClientRect())
   .filter(r => r.left < R.left - 0.5 || r.right > R.right + 0.5);
+const w = el => el ? Math.round(el.getBoundingClientRect().width) : null;
 return {vw: window.innerWidth, scroll: document.documentElement.scrollWidth, field: f.getBoundingClientRect().width,
-        outside: out.length, buttons: Array.from(row.querySelectorAll('.fb-rename button')).map(b => Math.round(b.getBoundingClientRect().height))};
+        outside: out.length, row: w(row), box: w(row.querySelector('.fb-rename')),
+        buttons: Array.from(row.querySelectorAll('.fb-rename button')).map(b => [w(b), Math.round(b.getBoundingClientRect().height)])};
 """
 
 

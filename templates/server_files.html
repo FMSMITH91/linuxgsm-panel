@@ -18,9 +18,12 @@
      is a mis-tap away from the trash. Padding grows the hit area to ~30x28 without changing the
      icon or the row height (the row is already taller than the icon, so this fits inside it). */
   #file-list .fb-dl, #file-list [data-action="rename"], #file-list [data-action="delete"] { padding: .15rem .35rem !important; line-height: 1; }
-  /* A row being renamed: the field takes the row's whole width, and the row stops looking like a
-     link. min-width:0 lets the field shrink on a phone instead of pushing the buttons out. */
+  /* A row being renamed: its own name and icons go, the field takes the row's whole width, and the
+     row stops looking like a link. !important because the icons' wrapper is .d-flex, whose
+     display is itself !important. min-width:0 lets the field shrink on a phone instead of pushing
+     the buttons out. */
   #file-list .fb-renaming { cursor: default !important; }
+  #file-list .fb-renaming > :not(.fb-rename) { display: none !important; }
   #file-list .fb-rename { flex: 1 1 auto; min-width: 0; }
   #file-list .fb-rename .form-control { min-width: 0; flex: 1 1 auto; }
   #file-list .fb-rename .btn { flex: 0 0 auto; }
