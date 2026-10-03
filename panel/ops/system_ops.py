@@ -4280,24 +4280,6 @@ def root_piece_state(force=False):
 
 
 # ─── Debug report (safe to share on a GitHub issue) ────────────
-# Config keys that are settings/behaviour, never secrets. Everything else in
-# config.json (secret_key, cred_key, credentials, host keys, TOTP, …) is excluded
-# by construction — this is a whitelist, not a "strip the secrets" blacklist.
-# Several of these are not printed as they are: panel/ops/debug_report/config_section.py prints
-# bind_host, site_domain, site_title and tailscale_mount as classes, and the list-valued keys
-# (trusted_proxies, trusted_proxy_users, security_whitelist, autoblock_hosts,
-# socketio_cors_origins) as counts, because their values name hosts, addresses and accounts.
-_DEBUG_CONFIG_KEYS = (
-    "port", "bind_host", "use_https", "trust_proxy", "cookie_secure",
-    "tailscale_setup_done", "tailscale_auto_setup", "tailscale_mount", "tailscale_use_funnel",
-    "setup_complete", "remember_days", "session_lifetime_hours",
-    "session_protection", "audit_log_retention_days", "audit_ip_retention_days",
-    "ssh_timeout", "site_title", "site_domain",
-    "trusted_proxies", "trusted_proxy_users", "security_whitelist", "autoblock_hosts",
-    "socketio_cors_origins",
-)
-
-
 # An address: a run of [\w.+-] (the local part), "@", a [\w-] label, ".", then [\w.-] to its end.
 _EMAIL_LOCAL_RE = re.compile(r"[\w.+-]+")
 _EMAIL_DOMAIN_RE = re.compile(r"@[\w-]+\.[\w.-]+")

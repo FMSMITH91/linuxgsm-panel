@@ -2,7 +2,7 @@
 
 Owner: builder B1. A request-mode section: the running values come from the Flask app's config.
 
-- Only system_ops._DEBUG_CONFIG_KEYS are shown, and never as typed where the value names something:
+- Only DEBUG_CONFIG_KEYS (below) are shown, and never as typed where the value names something:
   bind_host as loopback / all interfaces / auto / [ip:class] / hostname; site_domain as set
   (a .ts.net name) / set / unset; site_title as custom / default; tailscale_mount as / or a short
   plain path, else custom; list-valued keys as counts.
@@ -17,8 +17,24 @@ from datetime import timedelta
 
 from panel.ops.debug_report._base import Result
 
+# Config keys that are settings/behaviour, never secrets. Everything else in
+# config.json (secret_key, cred_key, credentials, host keys, TOTP, …) is excluded
+# by construction — this is a whitelist, not a "strip the secrets" blacklist.
+# Several of these are not printed as they are: this module prints
+# bind_host, site_domain, site_title and tailscale_mount as classes, and the list-valued keys
+# (trusted_proxies, trusted_proxy_users, security_whitelist, autoblock_hosts,
+# socketio_cors_origins) as counts, because their values name hosts, addresses and accounts.
+DEBUG_CONFIG_KEYS = (
+    "port", "bind_host", "use_https", "trust_proxy", "cookie_secure",
+    "tailscale_setup_done", "tailscale_auto_setup", "tailscale_mount", "tailscale_use_funnel",
+    "setup_complete", "remember_days", "session_lifetime_hours",
+    "session_protection", "audit_log_retention_days", "audit_ip_retention_days",
+    "ssh_timeout", "site_title", "site_domain",
+    "trusted_proxies", "trusted_proxy_users", "security_whitelist", "autoblock_hosts",
+    "socketio_cors_origins",
+)
 _PLAIN_MOUNT_RE = re.compile(r"/[A-Za-z0-9_-]{0,32}\Z")
-# Whitelisted keys the file-vs-running lines print; every other key of system_ops._DEBUG_CONFIG_KEYS
+# Whitelisted keys the file-vs-running lines print; every other key of DEBUG_CONFIG_KEYS
 # prints in _other_lines, through its classifier when it has one, else as a scalar or its type.
 _RUNNING_KEYS = frozenset(("port", "bind_host", "trust_proxy", "trusted_proxies", "trusted_proxy_users",
                            "socketio_cors_origins", "cookie_secure", "session_lifetime_hours",
@@ -321,8 +337,7 @@ _CLASSIFY = {"ssh_timeout": _ssh_timeout, "site_title": _site_title, "tailscale_
 
 def _other_lines(cfg, res):
     """Every other whitelisted key: classified, counted, or a scalar; never free text."""
-    from panel.ops import system_ops as so
-    for key in so._DEBUG_CONFIG_KEYS:
+    for key in DEBUG_CONFIG_KEYS:
         if key in _RUNNING_KEYS:
             continue
         if key in _CLASSIFY:

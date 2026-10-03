@@ -303,8 +303,11 @@ check("f2b: _valid_ip still answers a bool", _sm_hosts._valid_ip("10.0.0.1") is 
 # hardcoded 15 and 12), and an autoblock threshold that defaulted to 20 when read and 100 when
 # saved — so saving Settings once made the panel five times more permissive than documented.
 from panel.core import config as _cfgmod
+# route_helpers reads tailscale_auto_setup; it was missing here, and the key "had a reader" only
+# because system_ops' debug-report whitelist named it, until the whitelist moved out of it.
 _CFG_READERS = "".join(_modsrc(m) for m in
-                       ("app", "ssh_manager", "system_ops", "panel/services/notifications.py", "backup"))
+                       ("app", "ssh_manager", "system_ops", "panel/services/notifications.py", "backup",
+                        "panel/routes/route_helpers.py"))
 check("config: every DEFAULT_CONFIG key has a reader",
       all(k in _CFG_READERS for k in _cfgmod.DEFAULT_CONFIG),
       str([k for k in _cfgmod.DEFAULT_CONFIG if k not in _CFG_READERS]))
