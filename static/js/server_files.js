@@ -328,11 +328,21 @@ function _pathBody(lead, path, tail){
   // Each quote is held to the character beside it. A line may break after a space, and a space at
   // a line's end is not drawn, so on a phone "server.cfg " could wrap as “…server.cfg, then ” alone
   // on the next line, with the space gone.
-  var m=/^(\s*\S?)([\s\S]*?)(\S?\s*)$/.exec(path);
-  p.appendChild(_span('“'+m[1], 'nowrap')); p.appendChild(_span(m[2], ''));
-  p.appendChild(_span(m[3]+'”', 'nowrap')); box.appendChild(p);
+  var m=_pathEnds(path);
+  p.appendChild(_span('“'+m[0], 'nowrap')); p.appendChild(_span(m[1], ''));
+  p.appendChild(_span(m[2]+'”', 'nowrap')); box.appendChild(p);
   if(tail){ var t=document.createElement('div'); t.className='mt-2'; t.textContent=tail; box.appendChild(t); }
   return box;
+}
+// [head, middle, tail] of a path: head is any leading spaces with the first character after them,
+// tail the last character before any trailing spaces with those spaces. Scanned from each end, not
+// matched: a regex that splits it this way backtracks.
+function _pathEnds(path){
+  var i=0, j=path.length;
+  while(i<j && /\s/.test(path.charAt(i))) i++;
+  while(j>i && /\s/.test(path.charAt(j-1))) j--;
+  var a=Math.min(i+1, j), b=Math.max(j-1, a);
+  return [path.slice(0, a), path.slice(a, b), path.slice(b)];
 }
 function _span(text, ws){
   var s=document.createElement('span'); s.textContent=text; if(ws) s.style.whiteSpace=ws; return s;
