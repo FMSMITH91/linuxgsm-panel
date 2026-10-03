@@ -443,19 +443,21 @@ def _audit_spaces40(a_client, sid):
     fix it on a phone: the closing one wrapped to a line of its own.
     """
     _reset40()
-    for rel in ("cfg/sp.cfg ", "cfg/ lead.cfg", "cfg/a  b.cfg"):
+    for rel in ("cfg/sp.cfg ", "cfg/ lead.cfg", "cfg/a  b.cfg", "cfg/x\\x20"):
         _write40(rel, "S")
     cases = [("cfg/sp.cfg ", "sp2.cfg", "cfg/sp.cfg\\x20 -> sp2.cfg"),
              ("cfg/ lead.cfg", "lead2.cfg", "cfg/\\x20lead.cfg -> lead2.cfg"),
              ("cfg/a  b.cfg", "ab.cfg", "cfg/a\\x20\\x20b.cfg -> ab.cfg"),
-             ("cfg/c d.cfg", "e f.cfg", "cfg/c d.cfg -> e f.cfg")]
+             ("cfg/c d.cfg", "e f.cfg", "cfg/c d.cfg -> e f.cfg"),
+             ("cfg/x\\x20", "x2.cfg", "cfg/x\\\\x20 -> x2.cfg")]
     got = []
     for rel, new, _want in cases:
         code, _body = _post40(a_client, sid, rel, new)
         row = (_audits40() or [NS(detail="", success=None)])[-1]
         got.append((code, row.success, row.detail))
     check("rename route: a space at either end of a name, or in a run, is written as an escape in "
-          "the audit row — a single space between words is left as it is (control)",
+          "the audit row, and a backslash doubled so a name really holding the escape's characters "
+          "reads apart — a single space between words is left as it is (control)",
           got == [(200, True, want) for _r, _n, want in cases], repr(got))
     code, body = _post40(a_client, sid, "cfg/a.cfg", " x.cfg")
     row = (_audits40() or [NS(detail="", success=None)])[-1]

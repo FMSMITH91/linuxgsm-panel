@@ -897,7 +897,7 @@ check("tag.server_count" in _rtl_fn and "(tag.server_ids || []).length + ' serve
 _sf_src = (ROOT / "static" / "js" / "server_files.js").read_text(encoding="utf-8")
 _sf_missing = []
 for _label, _needle in (
-        ("the row's name span", "font-size:.85rem;\" data-no-i18n>'+esc(opts.name)"),
+        ("the row's name span", "white-space:pre;\" data-no-i18n>'+esc(opts.name)"),
         ("each breadcrumb segment", "'+esc(acc)+'\" data-no-i18n>'+esc(p)+'"),
         ("the upload destination", "dest.setAttribute('data-no-i18n','')"),
         ("the editor header", "_ep.setAttribute('data-no-i18n','')")):
@@ -4924,6 +4924,7 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
   const count = part => c.fetched.filter(f => f.url.indexOf(part) >= 0).length;
   const lastBody = () => { const p = posts(); return p.length ? JSON.parse(p[p.length - 1].body) : null; };
   out.rename_on = list.querySelectorAll('[data-action="rename"]').map(b => b.closest('[data-path]').dataset.path);
+  out.name_pre = row('notes.txt') ? row('notes.txt').children[0].innerHTML : null;
   // Open: the stem is selected, the field has focus, and the row's own parts are hidden.
   if (btn('notes.txt')) btn('notes.txt').click();
   const f1 = field();
@@ -4949,12 +4950,12 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
   c.confirmDialog = o => asked.push(o);
   c.deletePath('dup2/server.cfg ', false);
   c.confirmFolderDownload('maps  old ', '/dl');
+  c.deletePath('h/c/ lead.txt', false);
   c.confirmDialog = realCD;
   out.path_dialogs = asked.map(o => {
     const code = o.bodyNode ? o.bodyNode.children.find(e => e.tagName === 'CODE') : null;
-    const ends = code ? [code.children[0], code.children[code.children.length - 1]] : [];
-    return code ? [code.textContent, code.style.whiteSpace, 'data-no-i18n' in code.attrs, o.bodyText === undefined,
-                   ends.filter(Boolean).map(e => [e.textContent, e.style.whiteSpace || ''])]
+    const held = code ? code.children.filter(e => e.style.whiteSpace === 'nowrap').map(e => e.textContent) : [];
+    return code ? [code.textContent, code.style.whiteSpace, 'data-no-i18n' in code.attrs, o.bodyText === undefined, held]
                 : null;
   });
   // A refusal shows under the field, which stays open and editable — and no toast.
@@ -5068,13 +5069,13 @@ if _node:
           "selected whole (the panel refuses to keep that space)",
           repr((_rn.get("folder_sel"), _rn.get("stems"))))
     check(_rn.get("path_dialogs")
-          == [["\u201cdup2/server.cfg \u201d", "pre-wrap", True, True,
-               [["\u201cd", "nowrap"], ["g \u201d", "nowrap"]]],
-              ["\u201cmaps  old \u201d", "pre-wrap", True, True,
-               [["\u201cm", "nowrap"], ["d \u201d", "nowrap"]]]],
+          == [["\u201cdup2/server.cfg \u201d", "pre-wrap", True, True, ["\u201cd", "g \u201d"]],
+              ["\u201cmaps  old \u201d", "pre-wrap", True, True, ["\u201cm", "s  o", "d \u201d"]],
+              ["\u201ch/c/ lead.txt\u201d", "pre-wrap", True, True, ["\u201ch", "/ l", "t\u201d"]]],
           "js (node): the delete and folder-download dialogs show the path quoted with its spaces "
-          "kept, each quote held to the character beside it — so on a phone the closing quote "
-          "cannot wrap away from 'server.cfg ' and leave its space unseen",
+          "kept, each quote held to the character beside it and every run of spaces to the "
+          "characters on both sides — so on a phone no space can fall at a line's end, unseen "
+          "('server.cfg ', '.../ lead.txt')",
           repr(_rn.get("path_dialogs")))
     check(_rn.get("refused") == {"body": {"path": "notes.txt", "new_name": "maps"},
                                  "err": "TAKEN-MESSAGE", "err_shown": True, "open": True,
@@ -5100,6 +5101,9 @@ if _node:
           and _rn.get("folder_follow") == "maps2/server.cfg",
           "js (node): the file open in the editor follows its new name — and its folder's — so "
           "Save cannot write the old path back", repr((_rnd.get("cur"), _rn.get("folder_follow"))))
+    check("white-space:pre;" in (_rn.get("name_pre") or "") and "notes.txt</span>" in (_rn.get("name_pre") or ""),
+          "js (node): a row's name keeps its spaces (white-space: pre) — 'a  b.txt' does not read as "
+          "'a b.txt', nor ' lead.txt' as 'lead.txt'", repr(_rn.get("name_pre")))
     check(_rn.get("i18n") == {"field": "Nuevo nombre", "value": "a.txt ",
                               "pencil": "Renombrar: \u201ca.txt \u201d",
                               "dl": "Descargar: \u201ca.txt \u201d",

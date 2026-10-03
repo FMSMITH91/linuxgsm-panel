@@ -170,7 +170,9 @@ function mkRow(opts){
   row.style.cursor='pointer';
   row.dataset.path=opts.path; row.dataset.type=opts.type;
   var left=document.createElement('span'); left.style.flex='1'; left.style.minWidth='0'; left.style.overflow='hidden'; left.style.textOverflow='ellipsis'; left.style.whiteSpace='nowrap';
-  left.innerHTML=opts.icon+' <span style="font-size:.85rem;" data-no-i18n>'+esc(opts.name)+'</span>';  // nosemgrep
+  // white-space:pre: the name as it is, so "a  b.txt" does not read as "a b.txt" nor " lead.txt" as
+  // "lead.txt" beside it. The row is one line anyway (nowrap, with an ellipsis).
+  left.innerHTML=opts.icon+' <span style="font-size:.85rem;white-space:pre;" data-no-i18n>'+esc(opts.name)+'</span>';  // nosemgrep
   var right=document.createElement('span'); right.className='d-flex align-items-center gap-2 flex-shrink-0';
   if(opts.size!=null){ var s=document.createElement('span'); s.className='text-secondary'; s.style.fontSize='.68rem'; s.textContent=fmtSize(opts.size); right.appendChild(s); }
   // A real <a href>, not a button: the browser downloads it natively, "Save link as" and
@@ -325,24 +327,36 @@ function _pathBody(lead, path, tail){
   var q=document.createElement('div'); q.textContent=lead; box.appendChild(q);
   var p=document.createElement('code'); p.className='fb-dialog-path'; p.setAttribute('data-no-i18n','');
   p.style.whiteSpace='pre-wrap'; p.style.wordBreak='break-all';
-  // Each quote is held to the character beside it. A line may break after a space, and a space at
-  // a line's end is not drawn, so on a phone "server.cfg " could wrap as “…server.cfg, then ” alone
-  // on the next line, with the space gone.
-  var m=_pathEnds(path);
-  p.appendChild(_span('“'+m[0], 'nowrap')); p.appendChild(_span(m[1], ''));
-  p.appendChild(_span(m[2]+'”', 'nowrap')); box.appendChild(p);
+  // A line may break after a space, and a space at a line's end is not drawn. So on a phone
+  // "server.cfg " could wrap as “…server.cfg with ” alone on the next line, and ".../ lead.txt" as
+  // ".../" then "lead.txt": each read like its lookalike. Every run of spaces is held to the
+  // characters on both sides of it, and each quote to the character beside it.
+  _pathPieces('“'+path+'”').forEach(function(piece){ p.appendChild(_span(piece[0], piece[1] ? 'nowrap' : '')); });
+  box.appendChild(p);
   if(tail){ var t=document.createElement('div'); t.className='mt-2'; t.textContent=tail; box.appendChild(t); }
   return box;
 }
-// [head, middle, tail] of a path: head is any leading spaces with the first character after them,
-// tail the last character before any trailing spaces with those spaces. Scanned from each end, not
-// matched: a regex that splits it this way backtracks.
-function _pathEnds(path){
-  var i=0, j=path.length;
-  while(i<j && /\s/.test(path.charAt(i))) i++;
-  while(j>i && /\s/.test(path.charAt(j-1))) j--;
-  var a=Math.min(i+1, j), b=Math.max(j-1, a);
-  return [path.slice(0, a), path.slice(a, b), path.slice(b)];
+// `q` (a quoted path) as [[text, held]]: a held piece must not break. The pieces held are the
+// first two and last two characters (each quote with its neighbour) and every run of spaces with
+// one character on each side. Pieces that only touch stay apart, so a line can still break
+// between two characters that are not spaces. Scanned, not matched: a regex that does this
+// backtracks.
+function _pathPieces(q){
+  var n=q.length, held=[[0, Math.min(2, n)], [Math.max(n-2, 0), n]], i=1, out=[], at=0, k=0;
+  while(i<n-1){
+    if(!/\s/.test(q.charAt(i))){ i++; continue; }
+    var j=i; while(j<n-1 && /\s/.test(q.charAt(j))) j++;
+    held.push([i-1, j+1]); i=j;
+  }
+  held.sort(function(a, b){ return a[0]-b[0]; });
+  while(k<held.length){
+    var s=held[k][0], e=held[k][1];
+    while(k+1<held.length && held[k+1][0]<e){ e=Math.max(e, held[k+1][1]); k++; }
+    if(s>at) out.push([q.slice(at, s), false]);
+    out.push([q.slice(s, e), true]); at=e; k++;
+  }
+  if(at<n) out.push([q.slice(at), false]);
+  return out;
 }
 function _span(text, ws){
   var s=document.createElement('span'); s.textContent=text; if(ws) s.style.whiteSpace=ws; return s;

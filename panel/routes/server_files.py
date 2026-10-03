@@ -1456,8 +1456,12 @@ def _audit_name(text):
 
 
 def _audit_part(part):
-    """One part of a path for _audit_name: its edge spaces, and each run of spaces, escaped."""
-    runs = ["".join(run) for _space, run in groupby(part, key=" ".__eq__)]
+    """One part of a path for _audit_name, with its hidden spaces and its backslashes escaped.
+
+    A backslash is doubled, so a file really named with the four characters of the escape cannot
+    read like a name ending in a space.
+    """
+    runs = ["".join(run) for _space, run in groupby(part.replace("\\", "\\\\"), key=" ".__eq__)]
     last = len(runs) - 1
     return "".join("\\x20" * len(run) if run[0] == " " and (i in (0, last) or len(run) > 1) else run
                    for i, run in enumerate(runs))
