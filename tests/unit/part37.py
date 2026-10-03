@@ -501,18 +501,24 @@ def _tg_found37(rule, text):
     return out
 
 
+def _tg_missed37(rule):
+    """Each planted token the rule does not report as exactly itself, by placement."""
+    missed = []
+    for label, fmt in sorted(_TG_PLACES37.items()):
+        for tok in (_tg_token37(), _tg_token37(last="-"), _tg_token37(last="_")):
+            got = _tg_found37(rule, "a line before\n" + fmt % tok + "\nand one after")
+            if got != [tok]:
+                missed.append("%s (ends %s): %r" % (label, tok[-1], got))
+    return missed
+
+
 def _v3_rule():
     """The keyword-free rule finds a fresh token everywhere, and nothing it should not."""
     rule = _tg_rule37()
     has = bool(rule.get("regex"))
     check("gitleaks: a keyword-free Telegram rule is configured, reporting capture group 1",
           has and rule["group"] == 1 and not rule["keywords"], repr(rule))
-    missed = []
-    for label, fmt in sorted(_TG_PLACES37.items()):
-        for tok in (_tg_token37(), _tg_token37(last="-"), _tg_token37(last="_")):
-            got = _tg_found37(rule, "a line before\n" + fmt % tok + "\nand one after")
-            if got != [tok]:
-                missed.append("%s%s: %r" % (label, " (ends %s)" % tok[-1], got))
+    missed = _tg_missed37(rule)
     check("gitleaks: the Telegram rule finds a fresh token in every placement, as exactly that "
           "token (config.json, an assignment, an argument, the Bot API URL, prose, env, YAML)",
           has and not missed, "; ".join(missed[:4]) or "no rule")
@@ -520,10 +526,10 @@ def _v3_rule():
             "a 34-character tail": _tg_token37()[:-1],
             "the TESTONLY fixtures": 'T = "12345:TESTONLYnotarealtoken00"; U = "67890:TESTONLYfixturevalue0"',
             "gitleaks' own `:A` shape, not `:AA`": _tg_token37().replace(":AA", ":AB", 1)}
-    hits = {k: _tg_found37(rule, v) for k, v in near.items()}
+    hits = {k: v for k, v in ((k, _tg_found37(rule, t)) for k, t in near.items()) if v}
     check("gitleaks: ...and finds nothing in gitleaks' own XSD false positive, a 34-character tail, "
           "the panel's TESTONLY fixtures, or a `:A` that is not `:AA`",
-          has and not any(hits.values()), repr({k: v for k, v in hits.items() if v}) if has else "no rule")
+          has and not hits, repr(hits) if has else "no rule")
 
 
 def _v3_allowlist():
