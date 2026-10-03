@@ -314,25 +314,26 @@ socket.on('connect', function() {
   _socketEverConnected = true;
 });
 
+// A catch-up that was under way when the socket dropped is abandoned: what it held back is still in
+// the log, and the reconnect's own catch-up (the connect handler) reads it from there. Its own
+// listener, registered first: socket.io-client runs every listener an event has, in order (unlike
+// flask-socketio's server-side handlers, where a second registration replaces the first).
+socket.on('disconnect', function() { _endResync(); });
+
 socket.on('disconnect', function() {
-  // A catch-up that was under way is abandoned: what it held back is still in the log, and the
-  // reconnect's own catch-up (above) reads it from there.
-  _endResync();
   if (!wsStatus) return;
   wsStatus.textContent = '(disconnected)';
   wsStatus.className = 'text-danger small ms-2';
 });
 
 socket.on('console_output', function(data) {
-  if (data.server_id !== serverId || !data.data) return;
-  // Noted even with no console on the page: whether a long action is still running decides
-  // whether a hidden tab may leave the room (_pauseConsole). False only for a push this page
-  // already showed, from the panel's backlog, on its way back into view.
-  if (data.panel && !_notePanelPush(data)) return;
-  if (consoleEl) _showConsoleOutput(data);
-});
-
-function _showConsoleOutput(data) {
+  if (data.server_id !== serverId || !data.data || !consoleEl) return;
+  // A panel push this page already showed — from the backlog, while catching up on its way back
+  // into view — is not shown again; every other one is noted (_notePanelPush).
+  if (!_notePanelPush(data)) return;
+  // Back from a hidden spell and still catching up: lines wait until they can be placed against
+  // the log's window (_resyncTake).
+  if (_resyncTake(data)) return;
   var stick = consoleAtBottom();   // capture BEFORE appending
   // Only the POLLER's pushes are lines of the console log, and it always sends `rows`. Everything
   // else on this event — the panel's own "[panel] update started" markers and an action's output
@@ -341,13 +342,6 @@ function _showConsoleOutput(data) {
   // windows, and a line the file does not contain can never match, so the first poll after an
   // update found no overlap and appended the whole window again beneath the update's output.
   var fromLog = Array.isArray(data.rows) && !data.panel;
-  if (_resync && (fromLog || data.panel)) {
-    // Back from a hidden spell and still catching up: lines wait until they can be placed against
-    // the log's window (see _resyncTake).
-    _resyncTake(data, fromLog);
-    if (stick) stickConsole();
-    return;
-  }
   if (fromLog && data.rows.length) {
     // Per-line rows: a LinuxGSM-stamped line carries the time the GAME wrote it, which beats the
     // moment the poller happened to read it. data.ts is the fallback for lines with no stamp —
@@ -358,10 +352,9 @@ function _showConsoleOutput(data) {
     updateTsNotice();
   } else {
     appendConsole(data.data, data.ts, fromLog);
-    if (data.panel) _panelShownAt(data.ts);
   }
   if (stick) stickConsole();
-}
+});
 
 // Live output pushed over the websocket. This is the path that actually runs on a busy server, and
 // it used to carry its OWN 500-line cap and its own rendering — so however much history the poll
@@ -641,15 +634,19 @@ function _notePanelMarker(text, t) {
   else _actionStarts.push(Number(t) || Date.now() / 1000);
 }
 
-// A panel push: note any action marker in it. False when this page already showed it — from the
-// backlog, while catching up on the way back into view (_resyncPanelLines).
+// A push about to be shown: for a panel push, note any action marker in it. False when this page
+// already showed it — from the backlog, while catching up on the way back into view
+// (_resyncPanelLines). A page with no console on it does not track markers: it has no action
+// output to lose by leaving, and on its return it re-reads the game version anyway.
 function _notePanelPush(data) {
+  if (!data.panel) return true;
   var key = String(data.ts);
   if (_shownOnReturn[key]) { delete _shownOnReturn[key]; return false; }
   var t = Number(data.ts);
-  // The first panel push since the tab came back: it and every later one arrive on the socket, in
-  // order, so the backlog is caught up only to before it.
-  if (_resync && _resync.panelUntil === Infinity && t) _resync.panelUntil = t;
+  // Not catching up, the push is shown now. Catching up, the first panel push since the tab came
+  // back marks where the backlog stops: it and every later one arrive on the socket, in order.
+  if (!_resync) _panelShownAt(t);
+  else if (_resync.panelUntil === Infinity && t) _resync.panelUntil = t;
   _notePanelMarker(data.data, t);
   return true;
 }
@@ -967,14 +964,21 @@ function _resyncWindow(r, data, anchor) {
   if (stick) stickConsole();
 }
 
-// A push while catching up. Panel lines wait only for the first read (so the backlog's older lines
-// go above them); the poller's lines wait for the second.
-function _resyncTake(data, fromLog) {
-  var r = _resync;
-  if (!fromLog) {
-    if (r.firstDone) _showPanelPush(data); else r.heldPanel.push(data);
-    return;
-  }
+// A push while catching up after a return: true when the catch-up took it. Panel lines wait only
+// for the first read (so the backlog's older lines go above them); the poller's lines wait for the
+// second (_resyncTakeLog). Anything else — an access notice — is shown as it always was.
+function _resyncTake(data) {
+  var r = _resync, fromLog = Array.isArray(data.rows) && !data.panel;
+  if (!r || !(fromLog || data.panel)) return false;
+  var stick = consoleAtBottom();
+  if (fromLog) _resyncTakeLog(r, data);
+  else if (r.firstDone) _showPanelPush(data);
+  else r.heldPanel.push(data);
+  if (stick) stickConsole();
+  return true;
+}
+
+function _resyncTakeLog(r, data) {
   var rows = Array.isArray(data.rows) && data.rows.length ? data.rows
     : String(data.data).split('\n').map(function (l) { return {line: l}; });
   rows = _resyncRows(rows).map(function (x) { return {t: x.t || data.ts, line: x.line}; });
