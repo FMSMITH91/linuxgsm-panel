@@ -287,8 +287,20 @@ CI-verified commit regardless of this file — this changelog is for humans.
   host. For three servers the model gives about 9 privileged calls a minute before (the live host's
   report measured about the same) and about 2 after.
 
-  An open console still costs one call per two seconds; the console was left as it was apart from
-  merging its two reads.
+  A console you are looking at still costs one call per two seconds; apart from merging its two
+  reads, the console was left as it was. A console tab left in the background no longer costs
+  anything (next entry).
+- **A console tab left in the background stops costing the host a privileged read every two
+  seconds.** Once a server page's tab has been hidden for 30 seconds it leaves the live console, and
+  the panel stops reading that log when nobody else is watching it: one sudo call every two seconds,
+  about 1,800 an hour, for each console left open in another tab, a minimised window or a locked
+  phone. A quick switch away costs nothing. Coming back rejoins straight away and fills in what was
+  written in the meantime from the log file, each line once and in order, along with the panel's
+  own lines that went to the console meanwhile, such as an update's result. A tab stays in while an
+  update or another long panel action it saw start is still running, so that action's last lines
+  still reach it. If the server was restarted while the tab was away, the lines it wrote just before
+  the restart are not filled in, because the restart starts a new log file and the catch-up reads
+  the current one. A dropped connection has always worked the same way.
 - **The debug report says what is wrong, covers far more of the panel, and is safer to post.** It
   now opens with **At a glance**: every problem any section found, failures first, and the sections
   that could not be read. Below that is one verdict line per area. Diagnostics are sorted worst
@@ -651,6 +663,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   now pages when the Restart's three minutes are up, where it paged about two minutes after it ran.
   A server the panel first sees down after it starts (an update, a reboot of its own host) was
   never announced as down, so its return isn't announced either; it used to page "back online".
+- **An update's output no longer appears twice in the live console.** On a server page opened
+  before any panel action had run, an update's lines showed as they came, and a later console poll
+  appended the whole update again beneath them.
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
   and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
   `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query

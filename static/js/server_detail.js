@@ -287,11 +287,17 @@ var socket = (window.ensureSocket && window.ensureSocket())
   || io({ path: MOUNT + '/socket.io', transports: ['websocket', 'polling'] });
 
 var _socketEverConnected = false;
+// True while this tab has LEFT its console's room because it stayed hidden (see _pauseConsole).
+var _consolePaused = false;
 socket.on('connect', function() {
   if (wsStatus) {
     wsStatus.textContent = '(connected)';
     wsStatus.className = 'text-success small ms-2';
   }
+  // A socket that comes back while the console is set aside for a hidden tab does not rejoin:
+  // that read every two seconds is what leaving was for. Coming back into view rejoins, and
+  // catches up from the log, in _resumeConsole.
+  if (_consolePaused) { _socketEverConnected = true; return; }
   // Only a viewer who may read the console joins it: the server refuses everyone else anyway.
   // Joined with the panel hidden too: the update-finished marker that re-reads the game version
   // (the second console_output handler, near the end) arrives on this room, and the line
@@ -309,13 +315,24 @@ socket.on('connect', function() {
 });
 
 socket.on('disconnect', function() {
+  // A catch-up that was under way is abandoned: what it held back is still in the log, and the
+  // reconnect's own catch-up (above) reads it from there.
+  _endResync();
   if (!wsStatus) return;
   wsStatus.textContent = '(disconnected)';
   wsStatus.className = 'text-danger small ms-2';
 });
 
 socket.on('console_output', function(data) {
-  if (data.server_id !== serverId || !data.data || !consoleEl) return;
+  if (data.server_id !== serverId || !data.data) return;
+  // Noted even with no console on the page: whether a long action is still running decides
+  // whether a hidden tab may leave the room (_pauseConsole). False only for a push this page
+  // already showed, from the panel's backlog, on its way back into view.
+  if (data.panel && !_notePanelPush(data)) return;
+  if (consoleEl) _showConsoleOutput(data);
+});
+
+function _showConsoleOutput(data) {
   var stick = consoleAtBottom();   // capture BEFORE appending
   // Only the POLLER's pushes are lines of the console log, and it always sends `rows`. Everything
   // else on this event — the panel's own "[panel] update started" markers and an action's output
@@ -324,6 +341,13 @@ socket.on('console_output', function(data) {
   // windows, and a line the file does not contain can never match, so the first poll after an
   // update found no overlap and appended the whole window again beneath the update's output.
   var fromLog = Array.isArray(data.rows) && !data.panel;
+  if (_resync && (fromLog || data.panel)) {
+    // Back from a hidden spell and still catching up: lines wait until they can be placed against
+    // the log's window (see _resyncTake).
+    _resyncTake(data, fromLog);
+    if (stick) stickConsole();
+    return;
+  }
   if (fromLog && data.rows.length) {
     // Per-line rows: a LinuxGSM-stamped line carries the time the GAME wrote it, which beats the
     // moment the poller happened to read it. data.ts is the fallback for lines with no stamp —
@@ -334,9 +358,10 @@ socket.on('console_output', function(data) {
     updateTsNotice();
   } else {
     appendConsole(data.data, data.ts, fromLog);
+    if (data.panel) _panelShownAt(data.ts);
   }
   if (stick) stickConsole();
-});
+}
 
 // Live output pushed over the websocket. This is the path that actually runs on a busy server, and
 // it used to carry its OWN 500-line cap and its own rendering — so however much history the poll
@@ -575,10 +600,58 @@ function _trimConsole() {
 // to read when the server it was updating is down.
 var _panelBacklogShown = false;
 
+// The newest panel line SHOWN on this page, by the panel's own clock (epoch seconds): a push, the
+// backlog, or a Load older rebuild put it there. A backlog row at or before it is already shown.
+var _lastPanelT = 0;
+
+function _panelShownAt(t) {
+  if (Number(t) > _lastPanelT) _lastPanelT = Number(t);
+}
+
+function _newerPanelRows(rows) {
+  return _lastPanelT ? rows.filter(function (r) { return Number(r.t) > _lastPanelT; }) : rows;
+}
+
 function showPanelBacklog(panelLines) {
-  if (_panelBacklogShown || !panelLines.length) return;
+  // Not while catching up on the way back into view: that reads the backlog itself, and both
+  // showing it put the lines missed while the tab was away on the page twice (_resyncPanelLines).
+  if (_resync || _panelBacklogShown || !panelLines.length) return;
   _panelBacklogShown = true;
-  _renderPanelLines(panelLines);
+  // Only what is NEWER than the panel lines already on the page. A page opened while the backlog
+  // was empty shows an update's lines as they are pushed, and the next poll's backlog holds those
+  // very lines; rendered whole, the update's entire output appeared a second time beneath itself.
+  var fresh = _newerPanelRows(panelLines);
+  fresh.forEach(function (row) { _notePanelMarker(row.line, row.t); });
+  _renderPanelLines(fresh);
+}
+
+// Long panel actions (update, validate, backup…) this page has seen start and not yet seen end,
+// as their start times. Read by _pauseConsole; the markers are _begin_action_tail's and
+// _announce_action_end's (panel/routes/_shared.py), the same ones the version re-read watches for.
+var _actionStarts = [];
+
+function _isActionEnd(text) {
+  return text.indexOf('[panel] ') >= 0 && text.indexOf(' started') < 0;
+}
+
+function _notePanelMarker(text, t) {
+  text = String(text);
+  if (text.indexOf('[panel] ') < 0) return;
+  if (_isActionEnd(text)) _actionStarts.shift();
+  else _actionStarts.push(Number(t) || Date.now() / 1000);
+}
+
+// A panel push: note any action marker in it. False when this page already showed it — from the
+// backlog, while catching up on the way back into view (_resyncPanelLines).
+function _notePanelPush(data) {
+  var key = String(data.ts);
+  if (_shownOnReturn[key]) { delete _shownOnReturn[key]; return false; }
+  var t = Number(data.ts);
+  // The first panel push since the tab came back: it and every later one arrive on the socket, in
+  // order, so the backlog is caught up only to before it.
+  if (_resync && _resync.panelUntil === Infinity && t) _resync.panelUntil = t;
+  _notePanelMarker(data.data, t);
+  return true;
 }
 
 function _renderPanelLines(panelLines) {
@@ -595,6 +668,7 @@ function _renderPanelLines(panelLines) {
     // the panel wrote them, so it knows exactly when. That is why an update's output still reads
     // with its timestamps after a reload, where the game log's own window cannot.
     if (row && row.t) { div.dataset.ts = row.t; stampLine(div, row.t); }
+    if (row) _panelShownAt(row.t);
     renderAnsi(div, (row && row.line) || '');
     frag.appendChild(div);
   });
@@ -721,6 +795,257 @@ function loadMoreConsole(btn) {
     .catch(function(){ if (window.toast) toast('Could not load more console output', 'danger'); })
     .finally(function(){ if (btn) { btn.disabled = false; btn.innerHTML = orig; } })  // nosemgrep
     .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
+}
+
+// ── A tab that stays hidden leaves the console ─────────────────────────────────────────────────
+// Every console someone has joined costs one privileged read of its log on the host every two
+// seconds — the poller in panel/routes/server_files.py, about 1,800 sudo calls an hour per
+// console — and a tab left open in the background paid that all day for output nobody looked at.
+// So a tab that STAYS hidden for _CONSOLE_HIDE_GRACE_MS leaves its console's room: the server stops
+// reading a log nobody watches (and forgets where it was), and coming back into view rejoins and
+// catches up from the log file itself (_resumeConsole).
+//
+// The grace is so that alt-tabbing, a glance at another window or a phone notification costs
+// nothing: until it runs out nothing is sent, and the console is exactly what it was.
+//
+// It does not leave while a long panel action this page saw start is still running. The poller
+// drains an action's output only for a watched console, and an action that ends with nobody
+// watching gets one final read of it — so leaving during a long update would cost its last lines,
+// the ones that say whether it worked. A start older than _ACTION_RUNNING_MAX_S whose end this
+// page never saw (that marker came while its socket was down) stops holding the tab in.
+var _CONSOLE_HIDE_GRACE_MS = 30000;
+var _ACTION_RUNNING_MAX_S = 6 * 3600;
+var _hideTimer = null;
+
+function _actionRunning() {
+  var now = Date.now() / 1000;
+  return _actionStarts.some(function (t) { return now - t < _ACTION_RUNNING_MAX_S; });
+}
+
+function _onConsoleVisibility() {
+  if (document.hidden) {
+    if (!_hideTimer && !_consolePaused) _hideTimer = setTimeout(_pauseConsole, _CONSOLE_HIDE_GRACE_MS);
+    return;
+  }
+  if (_hideTimer) { clearTimeout(_hideTimer); _hideTimer = null; }
+  if (_consolePaused) _resumeConsole();
+}
+
+function _pauseConsole() {
+  _hideTimer = null;
+  // A timer that a frozen page fires late, once it is visible again, does nothing.
+  if (!document.hidden || _consolePaused || window._CAN_VIEW_CONSOLE === false) return;
+  if (_actionRunning()) { _hideTimer = setTimeout(_pauseConsole, _CONSOLE_HIDE_GRACE_MS); return; }
+  _consolePaused = true;
+  _endResync();
+  // With the socket down the server has already let this console go; the flag alone keeps a
+  // reconnect from rejoining while the tab is still hidden.
+  if (socket.connected) socket.emit('leave_console', { server_id: serverId });
+}
+
+function _resumeConsole() {
+  _consolePaused = false;
+  // Not connected: the connect handler rejoins and catches up once the socket is back, as it does
+  // after any reconnect.
+  if (!socket.connected) return;
+  socket.emit('join_console', { server_id: serverId });
+  // No console on the page: it is in the room only for the update-finished marker that re-reads
+  // the game version, and one that came while the tab was away was missed — so read it now.
+  if (!consoleEl) { loadGameVersion(); return; }
+  // Never primed (no window has come back yet): nothing on screen is the log to stitch to, and the
+  // first poll that returns lines replaces it anyway. Catch up the way a reconnect does.
+  if (!_consolePrimed) { refreshConsole(false, null, true); return; }
+  _startResync();
+}
+
+document.addEventListener('visibilitychange', _onConsoleVisibility);
+// For a return that does not announce itself as a visibility change: a page restored from the
+// back/forward cache, a phone browser woken from the lock screen. Visible and not paused, a no-op.
+window.addEventListener('pageshow', _onConsoleVisibility);
+window.addEventListener('focus', _onConsoleVisibility);
+if (document.hidden) _onConsoleVisibility();   // opened in a background tab
+
+// ── Catching up on the way back in ─────────────────────────────────────────────────────────────
+// Two feeds meet here. The poller's pushes start wherever the poller stands when the tab rejoins:
+// for a console nobody else watched, at its FIRST look, which records where the log ends and reads
+// nothing. The /api/console window ends wherever the file ended when it was read. Appended as they
+// came, the lines written between those two points showed TWICE when the window was read after the
+// poller's look, and NEVER when it was read before it — and the window, asked for the moment the tab
+// rejoins, usually answers inside the poller's two-second sleep.
+//
+// So the catch-up is two reads, and the poller's lines are HELD, not shown, until the second:
+//  1. at once, a window: whatever it has past the page's last line is appended (_newConsoleLines,
+//     the stitching every catch-up uses), so what happened while the tab was away shows straight
+//     away;
+//  2. once the poller has pushed anything since the rejoin — proof it has looked at the log — or
+//     has stayed quiet for _RESYNC_QUIET_MS (three of its passes), a second window. Every line held
+//     when it was asked for was read BEFORE it, so those lines sit inside it, and where they sit says
+//     where the poller's stream stands: the window's lines are shown, the held lines it already
+//     had are not, and lines it had that the stream has not reached yet are dropped from the
+//     stream as they arrive (_resyncPlace, _resyncAfter).
+// The panel's own lines are caught up from the backlog both reads carry (_resyncPanelLines).
+//
+// A catch-up that has not finished in _RESYNC_MAX_MS — each window read gives the host 15 s
+// (_read_console_window), and there are two — is given up rather than left holding the console:
+// what it held is shown, matched against the page as any catch-up is.
+var _RESYNC_QUIET_MS = 6000;
+var _RESYNC_MAX_MS = 45000;
+var _resync = null;
+// Backlog rows shown while catching up, by their time: the same push may still arrive on the
+// socket, and is then not shown again (_notePanelPush).
+var _shownOnReturn = {};
+
+function _startResync() {
+  _endResync();
+  _shownOnReturn = {};
+  var r = _resync = {held: [], heldPanel: [], firstDone: false, anchor: false, firstLen: 0,
+                     after: null, pending: [], quiet: null, panelUntil: Infinity};
+  r.giveUp = setTimeout(function () { if (_resync === r) _resyncGiveUp(r); }, _RESYNC_MAX_MS);
+  _resyncFetch(r, false);
+}
+
+// Stop catching up. Held log lines are dropped (they are in the log, and whatever catches up next
+// reads them from there); held panel lines are shown, since nothing would bring them back.
+function _endResync() {
+  var r = _resync;
+  _resync = null;
+  if (!r) return;
+  clearTimeout(r.quiet);
+  clearTimeout(r.giveUp);
+  _releasePanel(r);
+}
+
+function _resyncGiveUp(r) {
+  var stick = consoleAtBottom(), held = r.held;
+  _endResync();
+  _appendConsoleRows(_newConsoleRows(_consoleLines, held), null);
+  updateTsNotice();
+  if (stick) stickConsole();
+}
+
+function _releasePanel(r) {
+  var held = r.heldPanel;
+  r.heldPanel = [];
+  held.forEach(_showPanelPush);
+}
+
+function _showPanelPush(d) {
+  appendConsole(d.data, d.ts, false);
+  _panelShownAt(d.ts);
+}
+
+function _resyncFetch(r, anchor) {
+  if (anchor) { r.anchor = true; r.firstLen = r.held.length; }
+  // The first read reaches back as far as the console's window can: the more of the hidden spell
+  // it covers, the less of it is skipped. The second only has to cover a few seconds.
+  fetch(MOUNT + '/api/console/' + serverId + (anchor ? '' : '?lines=2000'))
+    .then(function (resp) { return resp.json(); })
+    .then(function (data) { if (_resync === r) _resyncWindow(r, data || {}, anchor); },
+          function () { if (_resync === r) _resyncWindow(r, {}, anchor); })
+    .catch(function () { if (_resync === r) _endResync(); });
+}
+
+function _resyncRows(list) {
+  return (list || []).filter(function (x) { return x && typeof x.line === 'string' && x.line.trim(); });
+}
+
+function _resyncWindow(r, data, anchor) {
+  var stick = consoleAtBottom();
+  var rows = _resyncRows(data.lines);
+  _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now);
+  _resyncPanelLines(r, data.panel_lines);
+  if (anchor) {
+    _resyncPlaceHeld(r, rows);
+  } else {
+    r.firstDone = true;
+    _releasePanel(r);
+    if (r.held.length) _resyncFetch(r, true);
+    else r.quiet = setTimeout(function () { if (_resync === r && !r.anchor) _resyncFetch(r, true); },
+                              _RESYNC_QUIET_MS);
+  }
+  updateTsNotice();
+  if (stick) stickConsole();
+}
+
+// A push while catching up. Panel lines wait only for the first read (so the backlog's older lines
+// go above them); the poller's lines wait for the second.
+function _resyncTake(data, fromLog) {
+  var r = _resync;
+  if (!fromLog) {
+    if (r.firstDone) _showPanelPush(data); else r.heldPanel.push(data);
+    return;
+  }
+  var rows = Array.isArray(data.rows) && data.rows.length ? data.rows
+    : String(data.data).split('\n').map(function (l) { return {line: l}; });
+  rows = _resyncRows(rows).map(function (x) { return {t: x.t || data.ts, line: x.line}; });
+  if (!rows.length) return;
+  if (r.after) { _resyncAfter(r, rows); return; }
+  r.held = r.held.concat(rows);
+  if (r.firstDone && !r.anchor) {
+    if (r.quiet) { clearTimeout(r.quiet); r.quiet = null; }
+    _resyncFetch(r, true);
+  }
+  updateTsNotice();
+}
+
+// Where the stream held since the rejoin stands in the second window: how many held lines the
+// window already had (`skip`), and the window's lines the stream has not reached yet (`pending`).
+// The first `firstLen` held lines were read before the window was, so they are inside it; the
+// LATEST place they fit is taken, as _newConsoleLines takes the latest occurrence of a line. With
+// no lines read before it, or no place found, the held lines are judged against the page as any
+// catch-up is, and `pending` is null when there is nothing held to judge yet.
+function _resyncPlace(win, held, firstLen) {
+  for (var j = win.length - firstLen; firstLen > 0 && j >= 0; j--) {
+    var n = Math.min(held.length, win.length - j);
+    if (_eqRange(win, j, held, 0, n)) return {skip: n, pending: win.slice(j + n)};
+  }
+  if (!held.length) return {skip: 0, pending: null};
+  return {skip: held.length - _newConsoleLines(_consoleLines, held).length, pending: []};
+}
+
+function _resyncPlaceHeld(r, winRows) {
+  var at = _resyncPlace(winRows.map(function (x) { return x.line; }),
+                        r.held.map(function (x) { return x.line; }), r.firstLen);
+  _appendConsoleRows(r.held.slice(at.skip), null);
+  r.held = [];
+  if (at.pending === null) r.after = 'next';
+  else if (at.pending.length) { r.after = 'pending'; r.pending = at.pending; }
+  else _endResync();
+}
+
+// A push after the second window. `next`: nothing was held, so this first one is matched against
+// the page, as a catch-up's window is. `pending`: what the window already showed is dropped from
+// its front; a line that differs means the placement was wrong, and the push is matched instead.
+function _resyncAfter(r, rows) {
+  var i = 0;
+  while (r.after === 'pending' && i < rows.length && r.pending.length
+         && _sameLine(rows[i].line, r.pending[0])) { r.pending.shift(); i++; }
+  if (r.after === 'next' || (r.pending.length && i < rows.length)) {
+    _endResync();
+    _appendConsoleRows(_newConsoleRows(_consoleLines, rows), null);
+  } else {
+    if (!r.pending.length) _endResync();
+    _appendConsoleRows(rows.slice(i), null);
+  }
+  updateTsNotice();
+}
+
+// The panel's own lines (an action's markers and output) that went to the room while this tab was
+// out of it, from the backlog the window carries: newer than the newest panel line it shows, and
+// older than the first panel push it has received since it came back — that one, and every one
+// after it, comes on the socket in order. Noted like pushes, so an update that finished while the
+// tab was away still re-reads the game version and stops holding the tab in.
+function _resyncPanelLines(r, list) {
+  var shown = _shownOnReturn;
+  var rows = _resyncRows(list).filter(function (x) {
+    var t = Number(x.t);
+    return t > _lastPanelT && t < r.panelUntil && !shown[String(x.t)];
+  });
+  if (!rows.length) return;
+  rows.forEach(function (x) { shown[String(x.t)] = true; _notePanelMarker(x.line, x.t); });
+  _panelBacklogShown = true;
+  _renderPanelLines(rows);
+  if (rows.some(function (x) { return _isActionEnd(x.line); })) setTimeout(loadGameVersion, 500);
 }
 
 // Ctrl/Cmd+A inside the console selects the CONSOLE, not the whole page.
@@ -1399,7 +1724,7 @@ loadGameVersion();
 // still changed the files on disk, and showing the pre-update build would be a lie.
 socket.on('console_output', function(data) {
   if (data.server_id !== serverId || typeof data.data !== 'string') return;
-  if (data.data.indexOf('[panel] ') >= 0 && data.data.indexOf(' started') < 0) {
+  if (_isActionEnd(data.data)) {
     setTimeout(loadGameVersion, 500);
   }
 });
