@@ -91,11 +91,12 @@ for _attr, _fns in _WATCHED.items():
 # part19 comes right after part18, whose app, client and row helpers it imports. part20 (the debug
 # report) builds its own app and imports only part01. part21 to part23 are the debug report's other
 # sections; part21 imports part12 for one route check. part24 runs the cross-builder contracts as
-# real producer-consumer pairs. part29 reads the CI workflows, and imports only part01 and part06.
+# real producer-consumer pairs. part29 reads the CI workflows, and imports only part01 and part06;
+# part30 reads them too (the review's fuzz and CodeQL-trigger fixes), importing part01 and part05.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
-          "part28", "part29", "part15")
+          "part28", "part29", "part30", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

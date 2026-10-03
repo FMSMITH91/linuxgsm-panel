@@ -316,10 +316,10 @@ try:
     _wait26 = _step26(_cqa26, "Wait for the other uploader")
     _ws = _run26(_wait26, [], GITHUB_EVENT_NAME="workflow_run", WR_SHA=_S26, WR_NAME="CodeQL",
                  WR_EVENT="schedule")
-    check("code-scanning gates (main): a scheduled run looks for the other workflow's SCHEDULED run "
-          "of the same commit",
+    check("code-scanning gates (main): a scheduled run looks for both workflows' scheduled AND push "
+          "runs of the same commit (a push run still uploading is not judged early)",
           _ws[:2] == (0, {"judge": "true"}) and _ws[2].count("event=schedule") == 2
-          and "event=push" not in _ws[2], repr(_ws[:3]))
+          and _ws[2].count("event=push") == 2 and "event=pull_request" not in _ws[2], repr(_ws[:3]))
 finally:
     _shutil26.rmtree(_sb26, ignore_errors=True)
 

@@ -1,0 +1,82 @@
+name: ClusterFuzzLite artifact cleanup
+
+# Deletes every cifuzz-* artifact that provably did not come from a run of this repository's main,
+# without ever downloading or reading one.
+#
+# WHY THIS EXISTS
+#   ClusterFuzzLite reads back the newest artifact of each cifuzz-* name from ANY run in this
+#   repository (see cflite_pr.yml), and a fork's pull request runs its own copy of a workflow and
+#   can upload one. So every job that reads them first checks that each came from main here, and
+#   fails if one did not: "fuzz the diff (address)", a required check, then fails on every pull
+#   request that touches fuzzed code, and the nightly batch, prune and coverage jobs stop, until
+#   the artifact is gone. Nothing removed it but a person, and it would otherwise sit there for the
+#   whole 90-day retention. This removes it within six hours, or at once when run by hand.
+#
+# WHAT IT DELETES, AND WHAT IT DOES NOT
+#   Only an artifact whose run names its branch, its head repository and this repository, and
+#   whose branch is not main or whose head repository is not this one. An artifact with any of
+#   those missing is listed and kept: the guards refuse it too, so it stays visible there, and if
+#   GitHub ever stopped returning one of the fields, this must not read every artifact, main's
+#   corpus included, as foreign and delete it. Each deletion is a ::warning:: naming the artifact,
+#   its run and the repository it came from, so the record of an upload survives the upload.
+#
+# ON MAIN, ON A SCHEDULE
+#   Scheduled and manual runs only, never a pull request, so its token may write: actions: write
+#   (delete an artifact) and nothing else, no checkout, nothing run from the tree. It NEVER fails:
+#   its check lands on main's head, where the panel's update gate and deploy.yml read a failure as
+#   main being broken, and a GitHub API hiccup every six hours is not that. Everything it finds or
+#   cannot do is a ::warning::; the fuzz jobs' own guards still refuse a foreign artifact.
+on:
+  schedule:
+    - cron: '29 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: delete fuzz artifacts not made on main here
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.repository == 'FMSMITH91/linuxgsm-panel' && github.ref == 'refs/heads/main'
+    permissions:
+      actions: write   # list and delete artifacts; nothing is downloaded or checked out
+    steps:
+      - name: Delete every cifuzz-* artifact that provably came from elsewhere
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          if ! rows="$(gh api --paginate --jq '
+            .artifacts[] | select((.expired | not) and (.name | startswith("cifuzz-")))
+            | [.name, .id, .workflow_run.id, .workflow_run.head_branch,
+               .workflow_run.head_repository_id, .workflow_run.repository_id] | @tsv' \
+            -- "repos/${REPO}/actions/artifacts?per_page=100")"; then
+            echo "::warning::could not list the repository's artifacts; nothing deleted this time."
+            exit 0
+          fi
+          foreign="$(awk -F'\t' 'NF && $4 != "" && $5 != "" && $6 != "" && ($4 != "main" || $5 != $6)' <<< "${rows}")"
+          unknown="$(awk -F'\t' 'NF && ($4 == "" || $5 == "" || $6 == "")' <<< "${rows}")"
+          echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true); from elsewhere: $(grep -c . <<< "${foreign}" || true); provenance unknown, kept: $(grep -c . <<< "${unknown}" || true)"
+          if [ -n "${unknown}" ]; then
+            echo "::warning::Kept, as their run does not say where they came from (the fuzz jobs still refuse them; delete by hand once looked at). (name, id, run, branch, head repository id, repository id):"
+            printf '%s\n' "${unknown}"
+          fi
+          while IFS=$'\t' read -r name id run branch head repo; do
+            [ -n "${name}" ] || continue
+            if ! [[ "${id}" =~ ^[0-9]+$ ]]; then
+              echo "::warning::artifact ${name} has no numeric id (${id}); nothing deleted for it."
+              continue
+            fi
+            echo "::warning::deleting ${name} (artifact ${id}, run ${run}, branch ${branch}, head repository ${head}; this repository is ${repo})"
+            if ! gh api -X DELETE --silent -- "repos/${REPO}/actions/artifacts/${id}"; then
+              # Gone already (another run, or a person) is the outcome wanted.
+              if gh api --silent -- "repos/${REPO}/actions/artifacts/${id}"; then
+                echo "::warning::could not delete artifact ${id} (${name}); the fuzz jobs still refuse it."
+                continue
+              fi
+              echo "artifact ${id} was already gone"
+            fi
+          done <<< "${foreign}"

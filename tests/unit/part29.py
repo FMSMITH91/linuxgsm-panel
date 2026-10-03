@@ -225,10 +225,12 @@ def _cf2_producers(cfl):
     if not _re29.search(r"^      actions: read\b", _job29(cfl.get("cflite_pr.yml", ""), "code-change"),
                         _re29.M):
         bad.append("cflite_pr.yml: no actions: read")
-    bld = _steps29(_job29(cfl.get("cflite_build.yml", ""), "build"))
+    bld = [s for s in _steps29(_job29(cfl.get("cflite_build.yml", ""), "build"))
+           if "clusterfuzzlite/actions/" in s]
     if not (len(bld) == 1 and "clusterfuzzlite/actions/build_fuzzers@" in bld[0]
             and _re29.search(r"^ +upload-build: true$", bld[0], _re29.M)):
-        bad.append("cflite_build.yml: not one build_fuzzers step with upload-build: true")
+        bad.append("cflite_build.yml: not one ClusterFuzzLite step, a build_fuzzers with "
+                   "upload-build: true")
     check("cflite: batch, prune, coverage and the continuous build run only on this repository's "
           "main; every reader may read artifacts; the build uploads itself", not bad, repr(bad))
 

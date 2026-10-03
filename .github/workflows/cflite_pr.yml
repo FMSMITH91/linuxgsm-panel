@@ -90,6 +90,17 @@ jobs:
       # cifuzz-* artifact must come from a run of this repository's main: cflite_batch.yml,
       # cflite_cron.yml and cflite_build.yml, which run nowhere else. The same block guards each of
       # them, and part29 holds the copies equal.
+      #
+      # A check before a read is not the read: an artifact uploaded after it passes is read
+      # unchecked. So it runs three times here. Before the build, which reads the coverage report
+      # at its end, minutes later. Again directly before the fuzzing step, which reads the corpus
+      # within seconds of starting, so that window is seconds rather than the whole build. And
+      # after fuzzing, turning the job red on anything that arrived meanwhile, including the build
+      # of the base commit a crash makes the fuzzing step download and run, which no check here can
+      # reach in time. What would close the race is the repository setting that has every outside
+      # contributor's workflow approved before it runs (Settings > Actions > General > fork pull
+      # request workflows: all outside contributors). As of 2026-10-03 it is set to first-time
+      # contributors only, an owner decision; cflite_cleanup.yml deletes what a fork uploaded.
       - name: Every stored fuzz artifact was made on main here
         if: steps.scope.outputs.run == 'true'
         env:
@@ -104,7 +115,7 @@ jobs:
           foreign="$(awk -F'\t' 'NF && ($4 != "main" || $5 == "" || $5 != $6)' <<< "${rows}")"
           echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true)"
           if [ -n "${foreign}" ]; then
-            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
+            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: run the ClusterFuzzLite artifact cleanup workflow (cflite_cleanup.yml, also every 6 hours), or gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
             printf '%s\n' "${foreign}"
             exit 1
           fi
@@ -120,6 +131,25 @@ jobs:
           # bad-build-check is left ON (the default). These targets are PyInstaller bundles, so the
           # failure to worry about is a fuzzer that builds fine and then dies on its first import —
           # which is exactly what that check catches.
+
+      - name: Every stored fuzz artifact was made on main here, again just before fuzzing
+        if: steps.scope.outputs.run == 'true'
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rows="$(gh api "repos/${REPO}/actions/artifacts?per_page=100" --paginate --jq '
+            .artifacts[] | select((.expired | not) and (.name | startswith("cifuzz-")))
+            | [.name, .id, .workflow_run.id, .workflow_run.head_branch,
+               .workflow_run.head_repository_id, .workflow_run.repository_id] | @tsv')"
+          foreign="$(awk -F'\t' 'NF && ($4 != "main" || $5 == "" || $5 != $6)' <<< "${rows}")"
+          echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true)"
+          if [ -n "${foreign}" ]; then
+            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: run the ClusterFuzzLite artifact cleanup workflow (cflite_cleanup.yml, also every 6 hours), or gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
+            printf '%s\n' "${foreign}"
+            exit 1
+          fi
 
       - name: Fuzz the changed code (${{ matrix.sanitizer }})
         id: run
@@ -147,8 +177,8 @@ jobs:
           sarif_file: cifuzz-sarif/results.sarif
           checkout_path: cifuzz-sarif
 
-      # The check above ran before the build; an artifact uploaded while this job built and fuzzed
-      # was read without it. Looking again afterwards cannot undo that read, but it turns this
+      # The checks above ran before the build and before fuzzing; an artifact uploaded after them
+      # was read without one. Looking again afterwards cannot undo that read, but it turns this
       # check red rather than leaving it green over it.
       - name: Every stored fuzz artifact was made on main here, after fuzzing too
         if: always() && steps.scope.outputs.run == 'true'
@@ -164,7 +194,7 @@ jobs:
           foreign="$(awk -F'\t' 'NF && ($4 != "main" || $5 == "" || $5 != $6)' <<< "${rows}")"
           echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true)"
           if [ -n "${foreign}" ]; then
-            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
+            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: run the ClusterFuzzLite artifact cleanup workflow (cflite_cleanup.yml, also every 6 hours), or gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
             printf '%s\n' "${foreign}"
             exit 1
           fi

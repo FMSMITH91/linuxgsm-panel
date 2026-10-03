@@ -40,7 +40,7 @@ jobs:
           foreign="$(awk -F'\t' 'NF && ($4 != "main" || $5 == "" || $5 != $6)' <<< "${rows}")"
           echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true)"
           if [ -n "${foreign}" ]; then
-            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
+            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: run the ClusterFuzzLite artifact cleanup workflow (cflite_cleanup.yml, also every 6 hours), or gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
             printf '%s\n' "${foreign}"
             exit 1
           fi
@@ -59,6 +59,33 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           fuzz-seconds: 600
           mode: prune
+
+      # ClusterFuzzLite catches every upload failure, logs it and goes on (oss-fuzz
+      # infra/cifuzz/clusterfuzz_deployment.py upload_build/upload_corpus; the filestore ignores
+      # upload.js's exit code), so the step above passes having stored nothing. Its artifacts use
+      # @actions/artifact 2, whose uploads the REST API lists at once, mid-run (actions/toolkit
+      # packages/artifact/README.md). So this lists THIS run's artifacts and fails, naming each,
+      # on any it should have made. part30 holds the copies equal and the names to the targets.
+      - name: This run stored the fuzz artifacts it made
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECT: >-
+            cifuzz-corpus-fuzz_config cifuzz-corpus-fuzz_console cifuzz-corpus-fuzz_cron
+            cifuzz-corpus-fuzz_fail2ban cifuzz-corpus-fuzz_firewall cifuzz-corpus-fuzz_game_status
+        run: |
+          set -euo pipefail
+          read -ra want <<< "${EXPECT}"
+          stored="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+                      --paginate --jq '.artifacts[] | select(.expired | not) | .name')"
+          missing=()
+          for name in "${want[@]}"; do
+            grep -qxF -- "${name}" <<< "${stored}" || missing+=("${name}")
+          done
+          echo "this run stored $(grep -c . <<< "${stored}" || true) artifact(s); expected ${#want[@]}, missing ${#missing[@]}"
+          if [ "${#want[@]}" -eq 0 ] || [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::This run stored no artifact named: ${missing[*]:-(nothing was expected)}. ClusterFuzzLite logs a failed upload and goes on, so the step above passed without keeping it."
+            exit 1
+          fi
 
   coverage:
     name: fuzzing coverage report
@@ -83,7 +110,7 @@ jobs:
           foreign="$(awk -F'\t' 'NF && ($4 != "main" || $5 == "" || $5 != $6)' <<< "${rows}")"
           echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true)"
           if [ -n "${foreign}" ]; then
-            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
+            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: run the ClusterFuzzLite artifact cleanup workflow (cflite_cleanup.yml, also every 6 hours), or gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
             printf '%s\n' "${foreign}"
             exit 1
           fi
@@ -106,3 +133,28 @@ jobs:
           fuzz-seconds: 600
           mode: coverage
           sanitizer: coverage
+
+      # ClusterFuzzLite catches every upload failure, logs it and goes on (oss-fuzz
+      # infra/cifuzz/clusterfuzz_deployment.py upload_build/upload_corpus; the filestore ignores
+      # upload.js's exit code), so the step above passes having stored nothing. Its artifacts use
+      # @actions/artifact 2, whose uploads the REST API lists at once, mid-run (actions/toolkit
+      # packages/artifact/README.md). So this lists THIS run's artifacts and fails, naming each,
+      # on any it should have made. part30 holds the copies equal and the names to the targets.
+      - name: This run stored the fuzz artifacts it made
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECT: cifuzz-coverage-latest
+        run: |
+          set -euo pipefail
+          read -ra want <<< "${EXPECT}"
+          stored="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+                      --paginate --jq '.artifacts[] | select(.expired | not) | .name')"
+          missing=()
+          for name in "${want[@]}"; do
+            grep -qxF -- "${name}" <<< "${stored}" || missing+=("${name}")
+          done
+          echo "this run stored $(grep -c . <<< "${stored}" || true) artifact(s); expected ${#want[@]}, missing ${#missing[@]}"
+          if [ "${#want[@]}" -eq 0 ] || [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::This run stored no artifact named: ${missing[*]:-(nothing was expected)}. ClusterFuzzLite logs a failed upload and goes on, so the step above passed without keeping it."
+            exit 1
+          fi

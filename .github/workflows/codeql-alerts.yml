@@ -141,8 +141,12 @@ jobs:
       # avoid, one uploader along. So a run that finds the OTHER workflow's run for the same commit
       # still going posts nothing; that one's completion triggers the run that judges. A commit one
       # of them never ran for (none found) does not wait. A manual run judges at once.
-      # The other workflow's runs are looked up under the triggering run's own event: a push's with
-      # the push, a scheduled run's with the other scheduled run.
+      # The other workflow's runs are looked up for this commit under BOTH events that reach the
+      # gate, push and schedule, whichever event triggered this one. Looking only under its own
+      # event, a scheduled run for a commit just pushed missed the other workflow's push run still
+      # uploading, and judged its predecessor's analyses as this commit's (review finding E5). A
+      # pull_request run never counts: its commit is a merge commit, and its completion judges
+      # nothing here, so waiting on one could leave a commit unjudged.
       - name: Wait for the other uploader
         id: settled
         if: steps.ref.outputs.skip != 'true'
@@ -158,13 +162,15 @@ jobs:
             exit 0
           fi
           for wf in codeql.yml security-code.yml; do
-            open="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?head_sha=${WR_SHA}&event=${WR_EVENT}&per_page=20" \
-                      --jq '[.workflow_runs[] | select(.status != "completed")] | length')"
-            if [ "${open}" != "0" ]; then
-              echo "judge=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::${wf} is still running for ${WR_SHA} (this run was for ${WR_NAME}); its completion judges this commit."
-              exit 0
-            fi
+            for ev in push schedule; do
+              open="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?head_sha=${WR_SHA}&event=${ev}&per_page=20" \
+                        --jq '[.workflow_runs[] | select(.status != "completed")] | length')"
+              if [ "${open}" != "0" ]; then
+                echo "judge=false" >> "$GITHUB_OUTPUT"
+                echo "::notice::${wf}'s ${ev} run is still running for ${WR_SHA} (this run was ${WR_NAME}'s ${WR_EVENT} run); its completion judges this commit."
+                exit 0
+              fi
+            done
           done
           echo "judge=true" >> "$GITHUB_OUTPUT"
 

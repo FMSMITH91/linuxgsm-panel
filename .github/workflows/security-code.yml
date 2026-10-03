@@ -28,8 +28,11 @@ on:
 
 # Cancel an in-progress run when a newer commit is pushed to the same ref, so rapid
 # pushes don't queue up and waste runner minutes.
+# The event is part of the group: on main, the Monday scheduled run shares the ref with a push
+# run, and without it the schedule CANCELLED an in-progress push run, leaving "cancelled" required
+# checks on that commit, which the panel's update gate and deploy.yml read as a failure.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

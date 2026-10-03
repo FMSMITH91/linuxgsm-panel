@@ -25,13 +25,15 @@ jobs:
     timeout-minutes: 30
     # Only this repository's main: cflite_pr.yml refuses any cifuzz-* artifact made anywhere else.
     if: github.repository == 'FMSMITH91/linuxgsm-panel'
-    # Uploading an artifact needs no token permission (the runner's own artifact token does it),
-    # and nothing here reads one, so the job token stays at contents: read.
+    # Uploading an artifact needs no token permission (the runner's own artifact token does it);
+    # actions: read is for the last step, which lists this run's artifacts.
     permissions:
       contents: read
-    concurrency:
-      group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
-      cancel-in-progress: true
+      actions: read
+    # No concurrency group, unlike the vendor's template: one cancels a running build when the
+    # next merge lands (a group also cancels a PENDING run, even with cancel-in-progress off), and
+    # this check lands on that main commit, where the panel's update gate (_CI_BAD) and deploy.yml
+    # read "cancelled" as a failure. A cancelled build is also one the novelty check cannot use.
     strategy:
       fail-fast: false
       matrix:
@@ -44,3 +46,28 @@ jobs:
           language: python
           sanitizer: ${{ matrix.sanitizer }}
           upload-build: true
+
+      # ClusterFuzzLite catches every upload failure, logs it and goes on (oss-fuzz
+      # infra/cifuzz/clusterfuzz_deployment.py upload_build/upload_corpus; the filestore ignores
+      # upload.js's exit code), so the step above passes having stored nothing. Its artifacts use
+      # @actions/artifact 2, whose uploads the REST API lists at once, mid-run (actions/toolkit
+      # packages/artifact/README.md). So this lists THIS run's artifacts and fails, naming each,
+      # on any it should have made. part30 holds the copies equal and the names to the targets.
+      - name: This run stored the fuzz artifacts it made
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECT: cifuzz-build-${{ matrix.sanitizer }}-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          read -ra want <<< "${EXPECT}"
+          stored="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+                      --paginate --jq '.artifacts[] | select(.expired | not) | .name')"
+          missing=()
+          for name in "${want[@]}"; do
+            grep -qxF -- "${name}" <<< "${stored}" || missing+=("${name}")
+          done
+          echo "this run stored $(grep -c . <<< "${stored}" || true) artifact(s); expected ${#want[@]}, missing ${#missing[@]}"
+          if [ "${#want[@]}" -eq 0 ] || [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::This run stored no artifact named: ${missing[*]:-(nothing was expected)}. ClusterFuzzLite logs a failed upload and goes on, so the step above passed without keeping it."
+            exit 1
+          fi
