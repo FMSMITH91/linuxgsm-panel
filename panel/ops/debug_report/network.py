@@ -993,15 +993,32 @@ def _age(taken):
     return "read %s ago" % ago(time.monotonic() - taken)
 
 
+def _ufw_checked(banlist):
+    """' (rule files unchanged, checked X ago)' when the ban-watcher's last UFW check SKIPPED a read.
+
+    Without it, "read 14m ago" under the gate looks like a watcher that stopped. Only a skip earns
+    it: a read that answered None (ufw inactive or unreadable) or a check whose stat failed also
+    leaves the last read behind the last check, and giving either this reason would explain a UFW
+    set that was never read with something that did not happen.
+    """
+    state = banlist.ufw_gate_state() if hasattr(banlist, "ufw_gate_state") else {}
+    if state.get("last_skipped") is not True:
+        return ""
+    checked = state.get("checked_at")
+    if not isinstance(checked, float) or checked == float("-inf"):
+        return ""
+    return " (rule files unchanged, checked %s ago)" % ago(time.monotonic() - checked)
+
+
 def _bangate_line(res):
     from panel.security import banlist
     taken = dict(getattr(banlist, "_taken", {}) or {})
     gate = runtime_stats.snapshot("bangate")
     last = gate.get("last")
-    res.add("- **Ban gate (Funnel / remote proxy)**: fail2ban set %d networks, %s · UFW set %d, %s"
+    res.add("- **Ban gate (Funnel / remote proxy)**: fail2ban set %d networks, %s · UFW set %d, %s%s"
             " · whitelist %d · refusals since boot %d%s" % (
                 len(getattr(banlist, "_f2b", ()) or ()), _age(taken.get("f2b")),
-                len(getattr(banlist, "_ufw", ()) or ()), _age(taken.get("ufw")),
+                len(getattr(banlist, "_ufw", ()) or ()), _age(taken.get("ufw")), _ufw_checked(banlist),
                 len(getattr(banlist, "_allow", ()) or ()), int(gate.get("refused", 0) or 0),
                 (" (last %s ago)" % ago(time.time() - last[0])) if isinstance(last, tuple) else ""))
     if taken.get("f2b") in (None, float("-inf")):

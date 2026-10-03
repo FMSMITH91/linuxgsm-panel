@@ -469,39 +469,35 @@ def _console_tick(app, socketio, gs, server_id):
       READ — never to the file's size, which discarded everything past the cap.
 
     A read that did not run leaves the offset alone so the next tick re-reads the same range.
+
+    ONE round trip per tick once the console has been seen (_console_poll_cmd): the stat and the
+    byte-range read used to be two `sudo -u <account>` calls whenever the log had grown, so a busy
+    console cost two privileged calls (six journal lines) every two seconds. The host now applies
+    the same three cases to the inode and offset it is handed and says which start it used; the
+    bookkeeping here is unchanged, and a reply whose start disagrees with it is not used at all.
     """
     log_path = gs.console_log
     remote = gs.remote
-    stat = _console_log_stat(remote, gs, log_path)
-    if stat is None:
-        _feed_tick(server_id, "stat-unparseable")
+    if _console_offsets.get(server_id) is None:
+        _console_first_sight(remote, gs, log_path, server_id)
         return
-    ino, size = stat
-    start = _console_read_start(server_id, ino, size)
-    if start is None:
-        _feed_tick(server_id)
+    state = _console_offsets[server_id]
+    reply, rc = _console_poll_read(remote, gs, log_path, state["ino"], state["pos"])
+    if reply is None:
+        _feed_tick(server_id, "read-failed" if rc != 0 else "stat-unparseable")
         return
-    state, pos = start
-    if size <= pos:
-        _feed_tick(server_id)
+    ino, size, started, diff, framed = reply
+    state, pos = _console_read_start(server_id, ino, size)
+    verdict = _console_reply_verdict(size, pos, started, diff)
+    if verdict is not None:
+        _feed_tick(server_id, verdict or None)
         return
-    diff = min(size - pos, _CONSOLE_READ_CAP)
-    # tail -c +N | head -c diff: two reads, not one-per-byte. 'B' and 'E' are SENTINELS, not
-    # decoration: run_command `.strip()`s what it returns, and strip() takes BOTH ends — the
-    # trailing one would eat the chunk's own final newline and make a COMPLETE last line look
-    # partial, the leading one eats the newline a chunk starts with and glues two real log lines
-    # into one. See _console_whole_lines.
-    out, _, rc = _sm.read_as_game_user(
-        remote, gs.short_name,
-        f"printf B; {{ tail -c +{pos + 1} {log_path} 2>/dev/null | head -c {diff}; }}; printf E",
-        timeout=5, selfname=gs.lgsm_name,
-    )
     # The frame is the POSITIVE TOKEN that this read ran at all. tailscale and local do not
-    # raise: a 64KB read that exceeds the 5s timeout returns ("", "SSH command timed out", -1)
-    # while the 20-byte stat in the same tick succeeded, so advancing here would jump `diff` bytes
-    # over output the host never sent. Re-read the same range next tick instead — the guard
-    # _drain_action_output makes in routes/_shared.py for the same reason.
-    out = _console_whole_lines(server_id, out) if rc == 0 else None
+    # raise: a 64KB read that exceeds the 5s timeout returns ("", "SSH command timed out", -1),
+    # so advancing here would jump `diff` bytes over output the host never sent. Re-read the same
+    # range next tick instead — the guard _drain_action_output makes in routes/_shared.py for the
+    # same reason.
+    out = _console_whole_lines(server_id, framed) if rc == 0 else None
     if out is None:
         _feed_tick(server_id, "read-unframed" if rc == 0 else "read-failed")
         return
@@ -510,6 +506,75 @@ def _console_tick(app, socketio, gs, server_id):
     # to what the file holds), and this line is reached only past the frame check above.
     state["pos"] = pos + diff
     _feed_tick(server_id)
+
+
+def _console_first_sight(remote, gs, log_path, server_id):
+    """First sight: record where the log ends now and read nothing (one stat round trip)."""
+    stat = _console_log_stat(remote, gs, log_path)
+    if stat is None:
+        _feed_tick(server_id, "stat-unparseable")
+        return
+    _console_read_start(server_id, *stat)
+    _feed_tick(server_id)
+
+
+def _console_reply_verdict(size, pos, started, diff):
+    """What a parsed reply means before its bytes are used: None to use them, else the tick's end.
+
+    "" is a good tick with nothing to read (the log has not grown). "read-unframed" is a reply
+    whose start or length is not the one the bookkeeping chose. That cannot happen while the host
+    and _console_read_start apply the same rules; if it ever does, those bytes are not these, and
+    nothing may advance on them.
+    """
+    if size <= pos and started == pos and diff == 0:
+        return ""
+    if started != pos or diff != min(size - pos, _CONSOLE_READ_CAP):
+        return "read-unframed"
+    return None
+
+
+def _console_poll_cmd(log_path, ino, pos):
+    """The tick's one command: the log's stat, the start it chose, and the new bytes, framed.
+
+    Prints `<inode> <size> <start> <count>` and, when count > 0, `B<bytes>E` on the next line —
+    or MISSING when there is no file (between LinuxGSM's `mv` and its `touch`). The start is the
+    one _console_read_start picks: `pos` while the inode is the same and the file has not shrunk,
+    otherwise 0 (rotated or truncated: the new log is read from its first byte). The count is
+    capped at _CONSOLE_READ_CAP.
+
+    'B' and 'E' are SENTINELS, not decoration: run_command `.strip()`s what it returns, and
+    strip() takes BOTH ends — the trailing one would eat the chunk's own final newline and make a
+    COMPLETE last line look partial, the leading one eats the newline a chunk starts with and
+    glues two real log lines into one. See _console_whole_lines. tail -c +N | head -c count: two
+    reads, not one-per-byte. `ino` and `pos` are the ints this module stored; nothing else varies.
+    """
+    ino, pos = int(ino), int(pos)
+    return (f"L={log_path}; S=$(stat -c '%i %s' \"$L\" 2>/dev/null) || {{ echo MISSING; exit 0; }}; "
+            f"set -- $S; "
+            f"if [ \"$1\" = {ino} ] && [ \"$2\" -ge {pos} ]; then P={pos}; else P=0; fi; "
+            f"D=$(($2 - P)); if [ \"$D\" -gt {_CONSOLE_READ_CAP} ]; then D={_CONSOLE_READ_CAP}; fi; "
+            f"echo \"$1 $2 $P $D\"; "
+            f"if [ \"$D\" -gt 0 ]; then printf B; {{ tail -c +$((P + 1)) \"$L\" 2>/dev/null "
+            f"| head -c \"$D\"; }}; printf E; fi")
+
+
+def _console_poll_read(remote, gs, log_path, ino, pos):
+    """Run _console_poll_cmd: ((inode, size, start, count, framed bytes), rc), or (None, rc).
+
+    None is a reply that is not one — MISSING, an empty answer from a read that did not run on a
+    non-raising transport, anything unparseable — which is never a measurement.
+    """
+    # selfname=: the path names the LinuxGSM script (console_log is built from lgsm_name, which is
+    # the loaded game_type), so the builder has to check it — see _core.read_as_game_user.
+    out, _, rc = _sm.read_as_game_user(remote, gs.short_name,
+                                       _console_poll_cmd(log_path, ino, pos),
+                                       timeout=5, selfname=gs.lgsm_name)
+    head, _nl, framed = (out or "").partition("\n")
+    parts = head.split()
+    if len(parts) != 4 or not all(p.isdecimal() for p in parts):
+        return None, rc
+    ino_now, size, started, diff = (int(p) for p in parts)
+    return (ino_now, size, started, diff, framed), rc
 
 
 def _console_log_stat(remote, gs, log_path):

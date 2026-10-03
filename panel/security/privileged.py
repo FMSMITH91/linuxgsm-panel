@@ -90,7 +90,31 @@ JOURNAL_UNITS = {
     "fail2ban": ("fail2ban",),
     "panel": ("linuxgsm-panel",),
 }
-JOURNAL_SOURCES = tuple(sorted(JOURNAL_UNITS))
+# Sources read by FIELD MATCH rather than by unit, for the debug report: the panel unit's own
+# output without the three lines every sudo call writes there (panel-own), and those sudo lines
+# alone (panel-sudo), so the report's window is the panel's lines and not its privileged calls.
+# The terms are systemd's add_matches_for_unit for linuxgsm-panel.service, with the service's own
+# term narrowed to its stdout/journal output and its syslog lines at warning or worse.
+_PANEL_SVC = "linuxgsm-panel.service"
+JOURNAL_MATCHES = {
+    "panel-own": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=stdout", "_TRANSPORT=journal", "+",
+                  "_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=syslog", "PRIORITY=0", "PRIORITY=1",
+                  "PRIORITY=2", "PRIORITY=3", "PRIORITY=4", "+",
+                  "MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1", "_UID=0", "COREDUMP_UNIT=" + _PANEL_SVC,
+                  "+", "_PID=1", "UNIT=" + _PANEL_SVC, "+", "_UID=0", "OBJECT_SYSTEMD_UNIT=" + _PANEL_SVC),
+    "panel-sudo": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "SYSLOG_IDENTIFIER=sudo"),
+}
+JOURNAL_SOURCES = tuple(sorted(set(JOURNAL_UNITS) | set(JOURNAL_MATCHES)))
+
+
+def journal_argv(source, lines):
+    """The journalctl argv for one journal SOURCE name and a line count (already validated)."""
+    if source in JOURNAL_MATCHES:
+        return ["journalctl", "--no-pager", "-q", "-n", lines] + list(JOURNAL_MATCHES[source])
+    return (["journalctl"] + [x for u in JOURNAL_UNITS[source] for x in ("-u", u)]
+            + ["--no-pager", "-n", lines])
+
+
 # cron's execution log is matched by COMM, not by unit — see tools/panel-helper.
 CRON_JOURNAL_SINCE = "-14 days"
 LOG_FILES = {
@@ -976,9 +1000,7 @@ _ARGV = {
     # Neither journalctl nor tail is ever handed a caller's target: the SOURCE is a name from a
     # fixed set and this table maps it to units or to a path, so no path crosses the boundary.
     "journal": ([_choice(*JOURNAL_SOURCES), _linecount],
-                lambda a: ["journalctl"]
-                + [x for u in JOURNAL_UNITS[a[0]] for x in ("-u", u)]
-                + ["--no-pager", "-n", a[1]], None),
+                lambda a: journal_argv(a[0], a[1]), None),
     "journal-cron": ([], lambda a: ["journalctl", "_COMM=cron", "--since", CRON_JOURNAL_SINCE,
                                     "-o", "short-unix", "--no-pager"], None),
     "log-tail": ([_choice(*LOG_FILES), _linecount],

@@ -618,11 +618,16 @@ try:
         save_config(_gb_cfg0)
     _gb_app_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app.py"),
                        encoding="utf-8").read()
+    # The loop runs _ban_watch_tick; the tick feeds the set from the fail2ban reading it takes, and
+    # UFW's through banlist.watch_ufw (which reads it when ufw's rule files changed; unit part34).
     _gb_watch = _gb_app_src[_gb_app_src.index("def _f2b_ban_watch"):]
     _gb_watch = _gb_watch[:_gb_watch.index("time.sleep(90)")]
+    _gb_tick = _gb_app_src[_gb_app_src.index("def _ban_watch_tick"):]
+    _gb_tick = _gb_tick[:_gb_tick.index("\ndef ")]
     check("funnel gate: the 90 s ban-watcher feeds the set from the reading it already takes",
-          "_banlist.set_f2b(reading, _taken)" in _gb_watch
-          and "_banlist.set_ufw(so.ufw_blocked_ips(), _taken)" in _gb_watch)
+          "_ban_watch_tick(app, state)" in _gb_watch
+          and "_banlist.set_f2b(reading, _taken)" in _gb_tick
+          and "_banlist.watch_ufw(so.ufw_blocked_ips)" in _gb_tick)
 
     # ── a socket opened BEFORE its client was banned is dropped when the ban lands ─────────────
     # A ban refuses new connections — the gate above, or the firewall — and nothing re-asked about
@@ -7863,6 +7868,9 @@ try:
                 _monmod._host_restart_flags = lambda r: {_mon_user}
                 _ps._cron_restart_pending.clear()
                 _reset_mon()
+                # Every host due for its (gated) read: when each was last read is the gate's
+                # business, tested in unit part34; this is about what a read records.
+                _monmod._restart_flags_read_at.clear()
                 _monmod._monitor_pass()
                 check("monitor: a server whose box has the restart flag is recorded",
                       _ps._cron_restart_pending.get(_mon_id) is True,
@@ -11763,7 +11771,7 @@ try:
           "recovered" % (len(_fp_seen), 3000))
     check("console poller: ...and the poller refuses the advance on that answer",
           "if out is None:" in _bs_src
-          and "out = _console_whole_lines(server_id, out) if rc == 0 else None" in _bs_src,
+          and "out = _console_whole_lines(server_id, framed) if rc == 0 else None" in _bs_src,
           "the offset still moves on a read whose result was never proven to have arrived")
 
     # ── The REAL tick, against a fake log that rotates the way LinuxGSM rotates it ───────────
@@ -11791,16 +11799,26 @@ try:
         def read(self, _server, _user, sh, timeout=30, selfname=None):
             if sh.startswith("stat -c '%i %s'"):
                 return ("%d %d" % (self.ino, len(self.data)) if self.exists else "MISSING"), "", 0
-            m = _ct_re.match(r"printf B; \{ tail -c \+(\d+) \S+ 2>/dev/null \| head -c (\d+); \}; "
-                             r"printf E$", sh)
+            # The tick's one command after first sight (server_files._console_poll_cmd): the stat,
+            # the start the host picks from the inode and offset it is handed, the framed bytes.
+            m = _ct_re.match(r"L=\S+; S=\$\(stat -c '%i %s' \"\$L\" 2>/dev/null\) \|\| "
+                             r"\{ echo MISSING; exit 0; \}; set -- \$S; "
+                             r"if \[ \"\$1\" = (\d+) \] && \[ \"\$2\" -ge (\d+) \]; then P=\2; "
+                             r"else P=0; fi; D=\$\(\(\$2 - P\)\); if \[ \"\$D\" -gt (\d+) \]; "
+                             r"then D=\3; fi; ", sh)
             if not m:
                 return "", "unexpected command %r" % sh, 1
+            if not self.exists:
+                return "MISSING", "", 0
             if self.fail_chunk:
                 self.fail_chunk = False
                 return "", "SSH command timed out", -1      # tailscale/local: no raise, no frame
-            a = int(m.group(1)) - 1
+            size = len(self.data)
+            a = int(m.group(2)) if (int(m.group(1)) == self.ino and size >= int(m.group(2))) else 0
+            n = min(size - a, int(m.group(3)))
             # .strip(): what every transport does to the output before the caller sees it
-            return ("B" + self.data[a:a + int(m.group(2))] + "E").strip(), "", 0
+            return ("%d %d %d %d" % (self.ino, size, a, n)
+                    + ("\nB" + self.data[a:a + n] + "E" if n else "")).strip(), "", 0
 
     class _CtSio:
         def __init__(self):

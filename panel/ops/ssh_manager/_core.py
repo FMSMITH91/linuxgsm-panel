@@ -2279,6 +2279,99 @@ def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
             set_game_priority(server, user, nice)
 
 
+# A process younger than this is not judged. The panel's own reads run AS the game account at the
+# panel's nice (sudo keeps the caller's nice): gamedig for 1-3 s, the console's stat and tail, a
+# config `cat`. So does LinuxGSM's monitor cron, every few minutes. Any of them seen mid-run would
+# read as "a game process is off its priority" on almost every pass. A game that really restarted
+# at nice 0 is caught one keeper pass later.
+_PRIORITY_SETTLE_SECONDS = 30
+_PS_END = "@@lgsm-ps-end"
+
+
+def game_users_off_priority(server, users, nice=GAME_PRIORITY_NICE):
+    """The accounts in `users` that have a settled process whose nice is not `nice`.
+
+    The priority keeper renices every game account on every host every two minutes, as root — a
+    privileged call each time, three journal lines — though after the first pass the processes
+    are already there. Reading nice values needs no privilege, so the keeper reads first and
+    renices only the accounts that drifted. `[]` is "nothing to do".
+
+    None when it could not tell — the read failed or was cut short, or it could not see other
+    users' processes at all (/proc mounted hidepid: no root-owned process in the list). The caller
+    then renices every account, as it always did: an empty read is never "all at priority".
+
+    Unprivileged on both kinds of host: `ps` as the panel's account here, as the SSH login on a
+    remote. `ruid` because renice -u matches the REAL uid; uids come from getent, which still
+    answers for the accounts that exist when one of them does not (exit 2). Its exit status rides
+    along (`@@ <rc>`): a getent that is missing or whose lookup failed names no account at all, and
+    without its status that silence parsed as "no game process here" — nothing reniced, forever.
+    """
+    users = sorted({u for u in users if game_idents_ok(u)})
+    if not users:
+        return []
+    cmd = ('getent passwd %s; echo "@@ $?"; ps -e -o ruid=,etimes=,ni= && echo %s'
+           % (" ".join(_quote(u) for u in users), _PS_END))
+    try:
+        out, _, rc = run_command(server, cmd, timeout=15, sudo=False)
+    except Exception:
+        return None
+    if rc != 0:
+        return None
+    return _off_priority_from(out, users, int(nice))
+
+
+# getent's exit statuses that are an answer: 0 (every account found), 2 (some keys not found — the
+# others are still listed). 1 (database unknown), 3, and 127 (no getent) are not.
+_GETENT_ANSWERED = ("0", "2")
+
+
+def _getent_cut(lines):
+    """The index of the `@@ <rc>` line, when getent answered and ps ran to its end; else None."""
+    if not lines or lines[-1] != _PS_END:
+        return None
+    for i, ln in enumerate(lines):
+        f = ln.split()
+        if f[:1] == ["@@"]:
+            return i if len(f) == 2 and f[1] in _GETENT_ANSWERED else None
+    return None
+
+
+def _uids_named(lines, users):
+    """{uid: {account names}} from `getent passwd` lines, for the accounts in `users` only."""
+    names_by_uid = {}
+    for ln in lines:
+        parts = ln.split(":")
+        if len(parts) > 2 and parts[0] in users and parts[2].isdecimal():
+            names_by_uid.setdefault(int(parts[2]), set()).add(parts[0])
+    return names_by_uid
+
+
+def _ps_rows(lines):
+    """(real uid, age in seconds, nice as text) for each well-formed `ps -o ruid=,etimes=,ni=` line."""
+    for ln in lines:
+        f = ln.split()
+        if len(f) == 3 and f[0].isdecimal() and f[1].isdecimal():
+            yield int(f[0]), int(f[1]), f[2]
+
+
+def _off_priority_from(out, users, nice):
+    """game_users_off_priority's parse of its read; None when that read is unreadable.
+
+    The read is `getent …; echo "@@ <getent's rc>"; ps … && echo END`.
+    """
+    lines = [ln.strip() for ln in (out or "").splitlines()]
+    cut = _getent_cut(lines)
+    if cut is None:
+        return None
+    names_by_uid = _uids_named(lines[:cut], users)
+    seen_root, off = False, set()
+    for uid, age, ni in _ps_rows(lines[cut + 1:-1]):
+        seen_root = seen_root or uid == 0
+        if uid in names_by_uid and age >= _PRIORITY_SETTLE_SECONDS and ni != str(nice):
+            off |= names_by_uid[uid]
+    return sorted(off) if seen_root else None
+
+
 def _tmux_live_socket_sh(selfname):
     """Shell that sets $SOCK to the tmux socket holding a LIVE `<selfname>` session.
 

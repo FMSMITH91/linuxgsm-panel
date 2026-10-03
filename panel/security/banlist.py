@@ -16,6 +16,7 @@ set_f2b / set_ufw / set_whitelist and swapped in, and a failed read (None) keeps
 — an unreadable firewall is not "nothing is banned".
 """
 import ipaddress
+import os
 import logging
 import threading
 import time
@@ -136,6 +137,79 @@ def set_ufw(ips, taken=None):
     _changed()
 
 
+# ── the ban-watcher's UFW read, skipped while ufw's rule files are unchanged ──────────────────────
+# `ufw status` lists the rules it reads from these files, and ufw rewrites one of them (in place:
+# same inode, new mtime) for every rule it adds or deletes. The panel's account can stat them
+# without privilege (/etc/ufw is 0755), so the 90 s watcher reads UFW, a privileged call, only when
+# one changed. ufw.conf is in the key because enabling or disabling ufw rewrites it.
+#
+# What keeps this from going stale:
+#   * the files are stat'ed BEFORE the read, so a change made while it ran is seen next tick;
+#   * the key advances only on a real reading: ufw_blocked_ips answers None for an inactive or
+#     unreadable firewall, and rules added while ufw was off and then enabled would otherwise stay
+#     invisible — so a None keeps the read happening every tick, as before;
+#   * a stat that fails (other than a file that does not exist) reads, never skips;
+#   * every UFW_FORCED_READ seconds it reads regardless.
+# The panel's own blocks do not wait for any of this: they call refresh_soon(), which reads at once.
+UFW_RULE_FILES = ("/etc/ufw/user.rules", "/etc/ufw/user6.rules", "/etc/ufw/ufw.conf")
+UFW_FORCED_READ = 900
+# last_skipped: whether the LAST check skipped its read. Only then may the debug report say "rule
+# files unchanged" — a None reading or a failed stat also leaves read_at behind checked_at, and
+# neither skipped anything.
+_ufw_gate = {"key": None, "read_at": float("-inf"), "checked_at": float("-inf"), "skipped": 0,
+             "last_skipped": False}
+
+
+def ufw_rules_key():
+    """(inode, size, mtime_ns) per rule file — ("missing",) for one that is absent — or None.
+
+    None is "could not look", and the watcher reads on it.
+    """
+    key = []
+    for path in UFW_RULE_FILES:
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            key.append(("missing",))
+            continue
+        except OSError:
+            return None
+        key.append((st.st_ino, st.st_size, st.st_mtime_ns))
+    return tuple(key)
+
+
+def watch_ufw(read):
+    """The ban-watcher's UFW step: read() into set_ufw unless the rule files are unchanged.
+
+    `read` is system_ops.ufw_blocked_ips. Returns whether it read.
+    """
+    key = ufw_rules_key()                 # before the read: a change made during it is caught next tick
+    now = time.monotonic()
+    _ufw_gate["checked_at"] = now
+    if (key is not None and key == _ufw_gate["key"]
+            and now - _ufw_gate["read_at"] < UFW_FORCED_READ):
+        _ufw_gate["skipped"] += 1
+        _ufw_gate["last_skipped"] = True
+        return False
+    _ufw_gate["last_skipped"] = False
+    taken = time.monotonic()
+    reading = read()
+    set_ufw(reading, taken)
+    if reading is not None and key is not None:
+        _ufw_gate["key"], _ufw_gate["read_at"] = key, now
+    else:
+        _ufw_gate["key"] = None           # nothing measured: read again next tick
+    return True
+
+
+def ufw_gate_state():
+    """A copy of the UFW gate's state for the debug report.
+
+    When it last checked, when it last read, and whether that last check skipped its read.
+    """
+    return dict(_ufw_gate)
+
+
 def set_whitelist(entries):
     """The security whitelist: addresses and networks this gate never refuses.
 
@@ -207,7 +281,8 @@ def _never_refused(addr):
 
 
 # ── refreshing ──────────────────────────────────────────────────────────────────────────────────
-# The ban-watcher feeds set_f2b / set_ufw every 90 seconds. Between ticks, a ban the panel caused (a
+# The ban-watcher feeds set_f2b every 90 seconds, and set_ufw through watch_ufw (when ufw's rule
+# files changed, and every UFW_FORCED_READ seconds). Between ticks, a ban the panel caused (a
 # failed login that reached the jail's limit, an admin's Block IP) is picked up by refresh_soon():
 # one background read, and one more if another request arrived while it was pending — a request
 # is never dropped, because the ban it is for may land just after the read that was already due.

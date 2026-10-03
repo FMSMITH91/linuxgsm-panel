@@ -137,7 +137,8 @@ from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupSta
     row_birth, still_held)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, list_game_backups, game_engine as
-    sm_game_engine, set_game_priority_bulk, lgsm_get_values, remote_set_fail2ban_ignoreip,
+    sm_game_engine, set_game_priority_bulk, game_users_off_priority, lgsm_get_values,
+    remote_set_fail2ban_ignoreip,
     ensure_node_tools_cron, ensure_persistent_bans)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
@@ -595,6 +596,21 @@ def _metrics_history_watch(app):
         except Exception:
             _log.debug("metrics-history prune failed", exc_info=True)
         time.sleep(_METRIC_SAMPLE_SECONDS)
+
+
+def _keep_game_priority(remote, users):
+    """One priority-keeper step for one host: renice the game accounts that drifted off -1.
+
+    Reads the nice values first, unprivileged (game_users_off_priority), and spends the root
+    renice only on accounts with a settled process off priority. When the read cannot answer it
+    is None, and every account is reniced, which is what the keeper always did.
+    """
+    users = sorted(users)
+    due = game_users_off_priority(remote, users)
+    if due is None:
+        due = users
+    if due:
+        set_game_priority_bulk(remote, due)
 
 
 def _still_in_db(row):
@@ -2919,7 +2935,8 @@ def register_routes(app):
     # its own start/restart, but the LinuxGSM monitor cron restarts a crashed server AS the game
     # user — which can't set a negative nice — so it falls back to nice 0. Re-apply the boost on a
     # slow cadence so every game, however it (re)started, settles at the intended priority. One
-    # batched `renice` per host; users with no running processes are a no-op.
+    # unprivileged `ps` read per host, then one batched `renice` for the accounts that drifted
+    # (all of them when the read cannot answer); see _keep_game_priority.
     def priority_keeper():
         time.sleep(60)
         while True:
@@ -2933,7 +2950,7 @@ def register_routes(app):
                         by_remote.setdefault(gs.remote_id, (gs.remote, set()))[1].add(gs.short_name)
                     for remote, users in by_remote.values():
                         try:
-                            set_game_priority_bulk(remote, sorted(users))
+                            _keep_game_priority(remote, users)
                         except Exception:
                             app.logger.debug("priority keeper: renice failed", exc_info=True)
                 runtime_stats.beat("priority-keeper", 120, time.time() - _t0)
@@ -3102,6 +3119,50 @@ def _f2b_record_events(app, new_bans, unbans):
                              "%d IPs were just banned from the panel login at once." % len(new_bans))
 
 
+def _ban_watch_tick(app, state):
+    """One ban-watcher tick: the panel jail's bans recorded and fed to the ban gate, with UFW's.
+
+    `state` is the loop's own {"seen": ...} (see _f2b_ban_events). The decision is stored in it
+    the moment it is made, BEFORE anything that can raise: the audit rows, the whitelist from a
+    hand-edited config.json, the UFW read. A tick that failed after deciding must not leave the
+    loop holding the old `seen`, or every ban in it is announced again on every later tick — an
+    audit row and an "IP banned" notification each 90 s for the whole hour of the ban — and, before
+    the first good tick, no new ban is ever announced at all. Module level so a test drives the
+    tick itself; the loop that calls it only sleeps and counts failures.
+    """
+    _taken = _t0 = time.monotonic()
+    reading = so.panel_fail2ban_banned_ips()
+    state["seen"], new_bans, unbans = _f2b_ban_events(state.get("seen"), reading)
+    _f2b_record_events(app, new_bans, unbans)
+    # The same reading feeds the panel's own ban gate, for traffic the firewall rule never sees
+    # (Tailscale Funnel, which can also be switched on outside the panel, so this does not ask),
+    # with the UFW denies and the whitelist. Each reading carries when it was TAKEN, so a slower
+    # read cannot overwrite a newer refresh. fail2ban is read every tick, always: its bans come
+    # and go on their own clock.
+    _banlist.set_f2b(reading, _taken)
+    _banlist.set_whitelist(load_config().get("security_whitelist") or [])
+    # UFW only when its rule files changed (or every banlist.UFW_FORCED_READ seconds): the rules
+    # live in those files, and re-reading them unchanged was a privileged call every 90 s.
+    _banlist.watch_ufw(so.ufw_blocked_ips)
+    runtime_stats.beat("ban-watch", 90, time.monotonic() - _t0)
+
+
+def _f2b_ban_watch(app):
+    """The ban-watcher: _ban_watch_tick every 90 s, forever, a failed tick counted and survived.
+
+    It owns the tick's state, so a tick that raised after deciding keeps that decision (see
+    _ban_watch_tick). Module level so a test drives this loop itself, with a sleep that stops it.
+    """
+    state = {"seen": None}
+    while True:
+        try:
+            _ban_watch_tick(app, state)
+        except Exception:
+            runtime_stats.bump("loopfail", "ban-watch")
+            _log.debug("fail2ban ban-watch tick failed", exc_info=True)
+        time.sleep(90)
+
+
 def _boot_ssl_args(app, cfg, host, port):
     """The self-signed TLS arguments for socketio.run, recording what really started (R20).
 
@@ -3217,29 +3278,8 @@ if __name__ == "__main__":
     # Record fail2ban bans/unbans of the panel-login jail in the audit log, so the activity is
     # visible even though the jail runs automatically with no management UI. Seeds from the current
     # bans on start (so existing bans aren't re-logged) and polls for changes.
-    def _f2b_ban_watch():
-        seen = None
-        while True:
-            try:
-                _taken = _t0 = time.monotonic()
-                reading = so.panel_fail2ban_banned_ips()
-                seen, new_bans, unbans = _f2b_ban_events(seen, reading)
-                _f2b_record_events(app, new_bans, unbans)
-                # The same reading feeds the panel's own ban gate, for traffic the firewall rule
-                # never sees (Tailscale Funnel, which can also be switched on outside the panel, so
-                # this does not ask), with the UFW denies and the whitelist. Each reading carries
-                # when it was TAKEN, so a slower read cannot overwrite a newer refresh.
-                _banlist.set_f2b(reading, _taken)
-                _banlist.set_whitelist(load_config().get("security_whitelist") or [])
-                _taken = time.monotonic()
-                _banlist.set_ufw(so.ufw_blocked_ips(), _taken)
-                runtime_stats.beat("ban-watch", 90, time.monotonic() - _t0)
-            except Exception:
-                runtime_stats.bump("loopfail", "ban-watch")
-                _log.debug("fail2ban ban-watch tick failed", exc_info=True)
-            time.sleep(90)
     if os.name == "posix":
-        threading.Thread(target=_f2b_ban_watch, name="ban-watch", daemon=True).start()
+        threading.Thread(target=_f2b_ban_watch, args=(app,), name="ban-watch", daemon=True).start()
 
     # Fire any "reboot when empty" requests once a host has no players left.
     threading.Thread(target=lambda: _reboot_when_empty_watch(app), name="reboot-when-empty",

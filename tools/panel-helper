@@ -191,7 +191,31 @@ JOURNAL_UNITS = {
     "fail2ban": ("fail2ban",),
     "panel": ("linuxgsm-panel",),
 }
-JOURNAL_SOURCES = tuple(sorted(JOURNAL_UNITS))
+# Sources read by FIELD MATCH rather than by unit, for the debug report: the panel unit's own
+# output without the three lines every sudo call writes there (panel-own), and those sudo lines
+# alone (panel-sudo). Fixed terms, like the units above: nothing in them comes from the caller.
+# The terms are systemd's add_matches_for_unit for linuxgsm-panel.service, with the service's own
+# term narrowed to its stdout/journal output and its syslog lines at warning or worse.
+_PANEL_SVC = "linuxgsm-panel.service"
+JOURNAL_MATCHES = {
+    "panel-own": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=stdout", "_TRANSPORT=journal", "+",
+                  "_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=syslog", "PRIORITY=0", "PRIORITY=1",
+                  "PRIORITY=2", "PRIORITY=3", "PRIORITY=4", "+",
+                  "MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1", "_UID=0", "COREDUMP_UNIT=" + _PANEL_SVC,
+                  "+", "_PID=1", "UNIT=" + _PANEL_SVC, "+", "_UID=0", "OBJECT_SYSTEMD_UNIT=" + _PANEL_SVC),
+    "panel-sudo": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "SYSLOG_IDENTIFIER=sudo"),
+}
+JOURNAL_SOURCES = tuple(sorted(set(JOURNAL_UNITS) | set(JOURNAL_MATCHES)))
+
+
+def journal_argv(source, lines):
+    """The journalctl argv for one journal SOURCE name and a line count (already validated)."""
+    if source in JOURNAL_MATCHES:
+        return ["journalctl", "--no-pager", "-q", "-n", lines] + list(JOURNAL_MATCHES[source])
+    return (["journalctl"] + [x for u in JOURNAL_UNITS[source] for x in ("-u", u)]
+            + ["--no-pager", "-n", lines])
+
+
 # cron's own execution log is matched by COMM, not by unit, so it needs its own verb rather than a
 # JOURNAL_UNITS entry. The window is fixed here; the caller passes nothing.
 CRON_JOURNAL_SINCE = "-14 days"
@@ -1989,8 +2013,7 @@ VERBS = {
     # no way to ask the helper to read /etc/shadow, and no path crosses the boundary at all.
     "journal": (
         [v_choice(*JOURNAL_SOURCES), v_linecount],
-        lambda a: ["journalctl"] + [x for u in JOURNAL_UNITS[a[0]] for x in ("-u", u)]
-        + ["--no-pager", "-n", a[1]],
+        lambda a: journal_argv(a[0], a[1]),
         None),
     # cron logs the command it ran, matched by _COMM rather than by unit. Fixed matcher, fixed
     # window, no argument — the caller filters the result.
