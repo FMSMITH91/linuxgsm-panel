@@ -169,4 +169,31 @@ function disableServe(btn) {
     }});
 }
 
+// One route to the panel that the panel does not manage (a leftover at another mount). Only that
+// route comes down: the panel's own address and its settings stay as they are, unlike Disable.
+function removeServeRoute(btn) {
+  var mount = btn.dataset.mount, url = btn.dataset.url;
+  confirmDialog({title:'Remove this Serve route', icon:'exclamation-triangle', confirmClass:'btn-danger', confirmLabel:'Remove',
+    bodyText:'Remove this Tailscale Serve route? It reaches the panel at an address the panel does not manage. The panel\'s own address and settings are not changed.',
+    onConfirm:function(){
+      fetch(MOUNT + '/api/tailscale/serve', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'remove-route', mount: mount, url: url}),
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          if (window.toast) toast(data.message, 'success');
+          setTimeout(function(){ window.refreshSection('#ts-page','wireTsButtons'); }, 800);
+        } else if (window.toast) {
+          toast(data.message, 'danger');
+        }
+      })
+      .catch(function() {
+        if (window.toast) toast('Error removing the Serve route', 'danger');
+      });
+    }});
+}
+
 // (peer-host Enter handler now lives in wireTsButtons so it survives an in-place refresh)

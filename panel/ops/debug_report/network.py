@@ -192,13 +192,52 @@ def _plural(n, word):
     return "%d %s%s" % (n, word, "" if n == 1 else "s")
 
 
+def _listener(route):
+    """':443' for the listener a route is on (from its URL, which is never printed), or ':?'."""
+    from panel.ops import tailscale_integration as ts
+    flag = ts.listener_flag(route.get("url"))
+    return ":" + flag.split("=", 1)[1] if flag else ":?"
+
+
 def _route_text(r, port, want):
-    """'/lgsm → http to loopback:5000 ✓': the mount if plain, the scheme, never the URL."""
+    """One route as '/lgsm → http to loopback:5000, listener :443 ✓'.
+
+    The mount if plain, the scheme and the listener's port, never the URL. The listener decides
+    which route `off` removes, and two routes at one mount on two listeners read the same without it.
+    """
     scheme = _scheme(r)
     mark = ""
     if want:
         mark = " ✓" if scheme == want else " ✗ expected %s" % want
-    return "%s → %s to loopback:%d%s" % (_mount(r["mount"]), _tok(scheme), port, mark)
+    return "%s → %s to loopback:%d, listener %s%s" % (_mount(r["mount"]), _tok(scheme), port,
+                                                     _listener(r), mark)
+
+
+def _remedy_text(route, conf, cfg):
+    """How to remove one route the panel does not manage: the exact command, when it can be shown.
+
+    `sudo tailscale serve` works whoever the Tailscale operator is, on a system-service install and
+    under sudo-rs. The path is always named: without --set-path, `off` takes down EVERY route on
+    that listener, the panel's own one included. The panel's Disable button is never the remedy:
+    it removes the panel's own route too and clears tailscale_mount.
+    """
+    from panel.ops import tailscale_integration as ts
+    flag, mount = ts.listener_flag(route.get("url")), _mount(route.get("mount"))
+    if flag is None or mount == "custom":
+        return ("%s, listener %s → the command cannot be shown (the report does not print this "
+                "mount or listener): find it with `tailscale serve status`, then `sudo tailscale "
+                "serve --https=<port> --set-path=<mount> off`" % (mount, _listener(route)))
+    text = ("%s, listener %s → remove it with `sudo tailscale serve %s --set-path=%s off` (that "
+            "route only), or Remove beside it on the Tailscale page" % (mount, _listener(route),
+                                                                       flag, mount))
+    return text + ("; a panel restart also removes it" if _restart_removes(flag, conf, cfg) else "")
+
+
+def _restart_removes(flag, conf, cfg):
+    """Would the next boot remove this route? Only on :443, with Serve set up, after a boot that did."""
+    return (bool(cfg.get("tailscale_setup_done")) and flag == "--https=443"
+            and conf.get("BOOT_SERVE") == "ok"
+            and not str(conf.get("BOOT_SERVE_LEFTOVERS") or "").startswith("failed"))
 
 
 def _serve_text(v, port, want):
@@ -245,24 +284,57 @@ def _ts_findings(res, v, cfg, routes):
         res.find("fail", AREA, "the Tailscale node key has expired")
 
 
-def _route_findings(res, cfg, routes, want, readable):
-    """Findings for a panel route Serve cannot use.
+def _route_findings(res, cfg, routes, want, readable, conf=None):
+    """Findings for the panel's Serve routes, the one it manages apart from the rest.
 
-    The wrong backend scheme (Serve answers 502), or, once set up, a mount other than the
-    configured one (every URL the panel builds is under that one).
+    The panel manages ONE route (tailscale_integration.is_managed_route: tailscale_mount on :443,
+    once Serve is set up). A wrong scheme there is a fail: it is the panel's address, and Serve
+    answers 502. Every other route to the panel is one nothing re-points: a leftover of an earlier
+    mount, a README `tailscale serve` line, a route on another listener, or any route at all once
+    Serve is not set up. It was reported only as "a route with the wrong scheme", with no word on
+    which one or what to do, and not at all while its scheme happened to match — so the leftover
+    that would 502 at the next scheme flip went unreported. Each now has a warn, and the body names
+    it with the command that removes it (_remedy_text). With the config unreadable nothing can be
+    classified, so nothing is said.
     """
-    if want and any(_scheme(r) != want for r in routes):
-        res.find("fail", AREA, "a Tailscale Serve route reaches the panel with the wrong scheme "
-                               "(Serve answers 502)")
-    if readable and routes and cfg.get("tailscale_setup_done"):
-        if _norm_mount(cfg.get("tailscale_mount")) not in {_norm_mount(r["mount"]) for r in routes}:
-            res.find("warn", AREA, "the Serve route's mount is not the panel's configured "
-                                   "tailscale_mount (links and assets break)")
+    if not readable:
+        return
+    from panel.ops import tailscale_integration as ts
+    managed = [r for r in routes if ts.is_managed_route(r, cfg)]
+    if _wrong(managed, want):
+        res.find("fail", AREA, "the configured Tailscale Serve route reaches the panel with the "
+                               "wrong scheme (Serve answers 502); a panel restart re-points it"
+                 if (conf or {}).get("BOOT_SERVE") == "ok" else
+                 "the configured Tailscale Serve route reaches the panel with the wrong scheme "
+                 "(Serve answers 502), and the boot re-point did not fix it")
+    _unmanaged_findings(res, cfg, routes, managed, want)
 
 
-def _norm_mount(mount):
-    """'/lgsm/' and '/lgsm' are one mount; empty is '/' (middleware.py reads it the same way)."""
-    return str(mount or "/").rstrip("/") or "/"
+def _wrong(routes, want):
+    """True when one of `routes` is not on the scheme the process serves (`want`, when known)."""
+    return bool(want) and any(_scheme(r) != want for r in routes)
+
+
+def _unmanaged_findings(res, cfg, routes, managed, want):
+    """_route_findings' warns for the routes the panel does not manage, said once each way.
+
+    When none is at the configured mount, that is the finding (links and assets break) and the
+    "does not manage" warn would only say it again, unless one of them also answers 502.
+    """
+    others = [r for r in routes if r not in managed]
+    no_home = bool(cfg.get("tailscale_setup_done")) and bool(routes) and not managed
+    if no_home:
+        res.find("warn", AREA, "no Tailscale Serve route is at the panel's configured "
+                               "tailscale_mount on :443 (links and assets break); the routes that "
+                               "reach it are at other addresses")
+    if _wrong(others, want):
+        res.find("warn", AREA, "a Tailscale Serve route the panel does not manage reaches it with "
+                               "the wrong scheme (Serve answers 502 there); the report names it "
+                               "and the command that removes it")
+    elif others and not no_home:
+        res.find("warn", AREA, "a Tailscale Serve route the panel does not manage reaches it "
+                               "(nothing re-points it when the panel's scheme changes); the report "
+                               "names it and the command that removes it")
 
 
 def _scheme(route):
@@ -307,13 +379,19 @@ def _tailscale_lines(ctx, res, facts, got):
     cfg, readable = _load_cfg()
     cfg = cfg if readable else {}
     port = running_port(ctx, cfg)
-    want = _expected_scheme(getattr(ctx.app, "config", None) or {}, cfg) if readable else None
+    conf = getattr(ctx.app, "config", None) or {}
+    want = _expected_scheme(conf, cfg) if readable else None
     res.add("- **Tailscale**: " + _ts_head(v))
     text, routes = _serve_text(v, port, want)
     res.add("- **Serve**: " + text)
     res.add("- **Funnel**: " + _funnel_line(cfg, readable, v, routes))
+    if readable:
+        from panel.ops import tailscale_integration as ts
+        for r in routes:
+            if not ts.is_managed_route(r, cfg):
+                res.add("- **Serve route the panel does not manage**: " + _remedy_text(r, conf, cfg))
     _ts_findings(res, v, cfg, routes)
-    _route_findings(res, cfg, routes, want, readable)
+    _route_findings(res, cfg, routes, want, readable, conf)
     state = v.get("backend_state")
     facts["ts"] = "%s, Funnel %s" % (state if state in _STATES else "other",
                                      _onoff(v.get("funnel_enabled")))

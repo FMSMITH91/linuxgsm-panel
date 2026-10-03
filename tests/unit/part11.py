@@ -443,7 +443,7 @@ try:
     _ts_info["v"] = _tsi.TailscaleInfo(serve_unreadable=True)
     check("tailscale disable: an UNREAD Serve config removes nothing and says so",
           _tsi.disable_tailscale_serve("/", 5000)[0] is False and _ts_off_calls == [])
-    _ts_info["v"] = _tsi.TailscaleInfo(serve_config=_ts_ours)
+    _ts_info["v"] = _tsi.TailscaleInfo(installed=True, serve_config=_ts_ours)
     _ts_other = _tsi.disable_tailscale_serve("/", 5000)
     check("tailscale disable: another app's mapping at the mount is never touched — the panel is "
           "at /lgsm, and the answer says so",
@@ -453,7 +453,7 @@ try:
     eq("tailscale disable: nothing proxies the panel -> done, nothing to remove",
        _tsi.disable_tailscale_serve("/", 5000),
        (True, "Tailscale Serve wasn't publishing the panel, so there was nothing to remove."))
-    _ts_info["v"] = _tsi.TailscaleInfo(serve_config=_ts_ours)
+    _ts_info["v"] = _tsi.TailscaleInfo(installed=True, serve_config=_ts_ours)
     _tsi._cache["info"] = "stale"
     _ts_rm = _tsi.disable_tailscale_serve("/lgsm", 5000)
     check("tailscale disable: the panel's own mapping is removed with the listener's off-grammar",

@@ -4003,17 +4003,37 @@ try:
                      '  esac; return 0; }\n'
                      'ufw() { echo "UFW $*" >> "${TRACE}"; _fakeufw "$@"; }\n'
                      'sudo() { echo "SUDO $*" >> "${TRACE}";'
-                     ' if [ "$1" = ufw ]; then shift; _fakeufw "$@"; fi; }\n'
-                     'tailscale() { echo "TS $*" >> "${TRACE}"; }\n')
+                     ' if [ "$1" = ufw ]; then shift; _fakeufw "$@"; fi; }\n')
+        # tailscale is a PROGRAM on PATH, not a shell function: the teardown runs it under
+        # `timeout`, which execs from PATH, so a function shim would be bypassed and the host's
+        # REAL tailscale run instead. It is tests/unit/fake_tailscale.py (the stateful CLI part32
+        # describes), seeded per run, and it writes "TS <args>" to the trace like the old shim.
+        _fw_bin = os.path.join(_fw_tmp, "bin")
+        os.makedirs(_fw_bin)
+        _fw_ts_state = os.path.join(_fw_tmp, "ts-state.json")
+        with open(os.path.join(_fw_bin, "tailscale"), "w", encoding="utf-8") as _fh:
+            _fh.write('#!/bin/sh\necho "TS $*" >> "${TRACE}"\nexec %s %s "$@"\n'
+                      % (_su_shlex.quote(sys.executable),
+                         _su_shlex.quote(os.path.join(_root, "tests", "unit", "fake_tailscale.py"))))
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
+        os.chmod(os.path.join(_fw_bin, "tailscale"), 0o700)
 
-        def _fw_run(env, rules=("ufw allow 5000/tcp",)):
+        def _fw_run(env, rules=("ufw allow 5000/tcp",), serve=None):
             open(_trace, "w").close()
             with open(_ufw_state, "w", encoding="utf-8") as _fh:
                 _fh.write("".join(r + "\n" for r in rules))
-            _out = _su_run(_fw_region, "TRACE=%s\nUFW_STATE=%s\n"
-                           % (_su_shlex.quote(_trace), _su_shlex.quote(_ufw_state)) + env,
+            with open(_fw_ts_state, "w", encoding="utf-8") as _fh:
+                json.dump({"web": serve or {}}, _fh)
+            _out = _su_run(_fw_region, "export TRACE=%s FAKE_TS_STATE=%s PATH=%s:\"$PATH\"\n"
+                           "UFW_STATE=%s\n"
+                           % (_su_shlex.quote(_trace), _su_shlex.quote(_fw_ts_state),
+                              _su_shlex.quote(_fw_bin), _su_shlex.quote(_ufw_state)) + env,
                            extra=_fw_shims)
             return _out, open(_trace, encoding="utf-8").read()
+
+        def _fw_serve_left():
+            with open(_fw_ts_state, encoding="utf-8") as _fh:
+                return json.load(_fh).get("web", {})
 
         _r, _tr = _fw_run('MODE=user\nFAKE_UID=1000\nPANEL_PORT=5000\n'
                           'TS_DONE=0\nTS_CONF_UNREAD=0\nTS_MOUNT=/\n')
@@ -4115,12 +4135,17 @@ try:
         # `tailscale serve reset` is "clear the entire serve/funnel config": it took every OTHER
         # mapping on the node with it — a /grafana mount, a funnel for a stats page — unlisted,
         # unlogged and unrecoverable, since serve config is not versioned. It then printed "it was
-        # pointing at the panel", which nothing here had established.
-        _r, _tr = _fw_run('MODE=system\nFAKE_UID=0\nPANEL_PORT=\n'
-                          'TS_DONE=1\nTS_CONF_UNREAD=0\nTS_MOUNT=/lgsm-panel\n')
+        # pointing at the panel", which nothing here had established. It then ran
+        # `serve --bg --remove <mount>`, which no Tailscale accepts (exit 2): the fake CLI refuses
+        # it the same way, so only the CLI's real removal grammar can pass these.
+        _r, _tr = _fw_run('MODE=system\nFAKE_UID=0\nPANEL_PORT=5000\n'
+                          'TS_DONE=1\nTS_CONF_UNREAD=0\nTS_MOUNT=/lgsm-panel\n', rules=(),
+                          serve={"443": {"/lgsm-panel": "http://127.0.0.1:5000",
+                                         "/grafana": "http://127.0.0.1:3000"}})
         check("uninstall.sh: the Tailscale teardown removes only the panel's own mount",
-              "TS serve --bg --remove /lgsm-panel" in _tr and "reset" not in _tr,
-              "this wipes every Serve/Funnel mapping on the host: %r" % _tr)
+              "TS serve --https=443 --set-path=/lgsm-panel off" in _tr and "reset" not in _tr
+              and _fw_serve_left() == {"443": {"/grafana": "http://127.0.0.1:3000"}},
+              "this wipes every Serve/Funnel mapping on the host: %r %r" % (_tr, _fw_serve_left()))
         check("uninstall.sh: ...and names the mount it removed",
               "at /lgsm-panel" in _r.stdout, repr(_r.stdout[-160:]))
         # ...and a panel that never set Serve up is still left alone (positive control).
@@ -4136,21 +4161,22 @@ try:
         # setup_tailscale_serve() succeeds (routes/tailscale.py, route_helpers.py), with no
         # install-mode split anywhere in that path. So a per-user panel left its Serve mapping
         # published on the tailnet, pointing at a backend that no longer exists.
-        _r, _tr = _fw_run('MODE=user\nFAKE_UID=1000\nPANEL_PORT=\n'
-                          'TS_DONE=1\nTS_CONF_UNREAD=0\nTS_MOUNT=/lgsm-panel\n')
+        _r, _tr = _fw_run('MODE=user\nFAKE_UID=1000\nPANEL_PORT=5000\n'
+                          'TS_DONE=1\nTS_CONF_UNREAD=0\nTS_MOUNT=/lgsm-panel\n', rules=(),
+                          serve={"443": {"/lgsm-panel": "http://127.0.0.1:5000"}})
         check("uninstall.sh: a PER-USER panel's Tailscale Serve mapping is removed too",
-              "TS serve --bg --remove /lgsm-panel" in _tr,
+              "TS serve --https=443 --set-path=/lgsm-panel off" in _tr and _fw_serve_left() == {},
               "the mapping stays on the tailnet pointing at a dead backend: %r" % _tr)
 
-        # ── a mount that could not be read is never guessed at ───────────────────────────────
-        # The config read used to substitute "/" for a value it could not validate — and "/" is a
+        # ── a config that could not be read is never guessed at ──────────────────────────────
+        # The config read used to substitute "/" for a mount it could not validate — and "/" is a
         # real mount, the one most likely to belong to something ELSE on this node, so an
-        # unreadable or malformed config.json ended in `tailscale serve --bg --remove /`. The
-        # panel's own teardown refuses instead (disable_tailscale_serve() catches VerbError and
-        # returns "That isn't a usable mount point." without calling the CLI). Empty is how that
-        # reaches here, and nothing may be removed on it.
+        # unreadable or malformed config.json ended in a removal at `/`. The teardown now picks
+        # routes by the panel's PORT, and an unreadable config.json blanks that too: nothing may
+        # be removed on it, and the operator is told where to look.
         _r, _tr = _fw_run('MODE=system\nFAKE_UID=0\nPANEL_PORT=\n'
-                          'TS_DONE=1\nTS_CONF_UNREAD=1\nTS_MOUNT=\n')
+                          'TS_DONE=1\nTS_CONF_UNREAD=1\nTS_MOUNT=\n',
+                          serve={"443": {"/": "http://127.0.0.1:5000"}})
         check("uninstall.sh: an unreadable mount removes NOTHING, least of all the root mount",
               "TS " not in _tr,
               "removed a mount this script had to guess at: %r" % _tr)
@@ -4158,13 +4184,15 @@ try:
               "tailscale serve status" in _r.stdout
               and "Leaving this node's Tailscale Serve config alone" in _r.stdout,
               repr(_r.stdout[-320:]))
-        # ...but a "/" the config genuinely RECORDS is still the panel's own mount, and still
-        # comes off: config.py defaults tailscale_mount to "/", so refusing it wholesale would
-        # strand the mapping of every panel that took the default (positive control).
-        _r, _tr = _fw_run('MODE=system\nFAKE_UID=0\nPANEL_PORT=\n'
-                          'TS_DONE=1\nTS_CONF_UNREAD=0\nTS_MOUNT=/\n')
+        # ...but a "/" route to the panel's port is the panel's own, and still comes off:
+        # config.py defaults tailscale_mount to "/", so refusing it wholesale would strand the
+        # mapping of every panel that took the default (positive control).
+        _r, _tr = _fw_run('MODE=system\nFAKE_UID=0\nPANEL_PORT=5000\n'
+                          'TS_DONE=1\nTS_CONF_UNREAD=0\nTS_MOUNT=/\n', rules=(),
+                          serve={"443": {"/": "http://127.0.0.1:5000"}})
         check("uninstall.sh: ...while a recorded \"/\" is the panel's own mount and is removed",
-              "TS serve --bg --remove /\n" in _tr, repr(_tr))
+              "TS serve --https=443 --set-path=/ off\n" in _tr and _fw_serve_left() == {},
+              repr(_tr))
     finally:
         _shutil.rmtree(_fw_tmp, ignore_errors=True)
 

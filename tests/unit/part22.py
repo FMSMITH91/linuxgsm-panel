@@ -1326,7 +1326,10 @@ def _boot_serve(cfg, answer):
         if isinstance(answer, Exception):
             raise answer
         return answer
-    with _patched(_ts22, setup_tailscale_serve=setup), \
+    # The boot then removes the panel's routes at other mounts; that reads the HOST's Serve config,
+    # so it is stubbed with the rest (part32 drives it against a fake CLI).
+    with _patched(_ts22, setup_tailscale_serve=setup,
+                  remove_stale_panel_routes=lambda port, mount: ("none", [], "")), \
             _patched(_app22, _ts_backend_scheme=lambda c: "http"):
         _app22._boot_serve(fake, cfg, 5000)
     return fake.config.get("BOOT_SERVE"), len(calls)

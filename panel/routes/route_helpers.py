@@ -16,9 +16,9 @@ import threading
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
     _port_or, bind_host_error, can_bind_address, password_problem)
 from panel.routes.remotes import (_add_remote_field_error, _add_remote_target_error)
-from app import (_bind_is_loopback, _current_lang, _log, _setup_open, _setup_owner_ok,
-    _setup_ts_ok, _superadmin_exists, _ts_backend_scheme, claim_setup, is_setup_complete,
-    issue_setup_owner_token)
+from app import (_bind_is_loopback, _current_lang, _leftover_note, _log, _remove_serve_leftovers,
+    _serve_scheme_now, _setup_open, _setup_owner_ok, _setup_ts_ok, _superadmin_exists, claim_setup,
+    is_setup_complete, issue_setup_owner_token)
 
 # The wizard's steps in the order it walks them. A POST naming a step AHEAD of the stored one is
 # refused (see _setup_post); an earlier one is a harmless Back-button resubmit.
@@ -188,12 +188,15 @@ def _register_setup_tailscale(app):
         if not _setup_ts_ok():
             return jsonify({"error": "forbidden"}), 403
         info = ts.get_tailscale_info(force_refresh=True)
-        serve_url = next((s.get("url") for s in (info.serve_config or {}).get("services", [])), None)
+        # "Serving" means the PANEL is published, at its own mount, on the scheme this process
+        # serves. It was the first Serve service of any app, so a node where another app held "/"
+        # read as done: the step hid its button and named the other app's address as the panel's.
+        serve_url = _wizard_serve_url(info, load_config())
         return jsonify({
             "installed": info.installed, "running": info.running,
             "dns_name": info.dns_name, "ips": info.tailscale_ips,
             "serve_url": serve_url,
-            "https_url": (f"https://{info.dns_name}" if info.dns_name else None),
+            "https_url": serve_url,
         })
 
     @app.route("/api/setup/tailscale/install", methods=["POST"])
@@ -225,13 +228,21 @@ def _register_setup_tailscale(app):
             return jsonify({"error": "forbidden"}), 403
         cfg = load_config()
         port = cfg.get("port", 5000)
-        mount = cfg.get("tailscale_mount", "/") or "/"
+        # Not the stored mount as it stands: on a node where another app holds "/", publishing
+        # there REPLACES that app's route (the CLI overwrites a mount without asking). The same
+        # rule as the finish and the Tailscale page's Enable form.
+        mount, why = _wizard_serve_mount(cfg, port)
+        if mount is None:
+            _setup_log("setup_tailscale_serve", target=_SETUP_TARGET,
+                       detail="port %s: %s" % (port, why), success=False)
+            return jsonify({"success": False, "message": why})
         ok, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=False,
-                                           backend_scheme=_ts_backend_scheme(cfg))
+                                           backend_scheme=_serve_scheme_now(cfg, current_app.config))
         _setup_log("setup_tailscale_serve", target=_SETUP_TARGET,
                    detail="port %s, mount %s" % (port, mount), success=ok)
         if not ok:
             return jsonify({"success": False, "message": msg})
+        left = _remove_serve_leftovers(port, mount, "setup wizard", _wizard_audit)
         info = ts.get_tailscale_info(force_refresh=True)
         cfg["tailscale_setup_done"] = True
         cfg["tailscale_mount"] = mount
@@ -239,8 +250,8 @@ def _register_setup_tailscale(app):
         if info.dns_name and not cfg.get("site_domain"):
             cfg["site_domain"] = info.dns_name
         save_config(cfg)
-        return jsonify({"success": True, "message": msg,
-                        "url": (f"https://{info.dns_name}" if info.dns_name else None)})
+        return jsonify({"success": True, "message": msg + _leftover_note(left),
+                        "url": _wizard_serve_url(info, cfg)})
 
 
 def _setup_gate():
@@ -591,28 +602,70 @@ def _complete_page(cfg, restarting=False, restart_ok=None):
                            restart_ok=restart_ok, **_complete_facts(cfg))
 
 
+def _wizard_audit(detail, ok):
+    """One wizard audit row about a leftover Serve route (the shape _remove_serve_leftovers takes)."""
+    _setup_log("tailscale_serve_leftover_removed", target=_SETUP_TARGET, detail=detail, success=ok)
+
+
+def _wizard_serve_url(info, cfg):
+    """The panel's own Serve address (ts.route_url), or None when no route at its mount works now."""
+    route = ts.panel_route(info.serve_config, cfg.get("port", 5000), cfg.get("tailscale_mount"),
+                           _serve_scheme_now(cfg, current_app.config))
+    return ts.route_url(route) if route is not None else None
+
+
+def _wizard_serve_mount(cfg, port):
+    """(mount, None) for the wizard to publish the panel at, or (None, why) to publish nothing.
+
+    ts.free_panel_mount on a FRESH read: the stored mount unless another app holds it on :443,
+    then /lgsm. A Serve config that cannot be read is not an empty one: it cannot say whether "/"
+    is another app's, and the CLI replaces a mount without asking. Until the panel's account is the
+    Tailscale operator, an unreadable config is what `serve status` answers, so the operator is set
+    (as setup_tailscale_serve would) and the config read once more before giving up.
+    """
+    info = ts.get_tailscale_info(force_refresh=True)
+    if info.serve_unreadable:
+        ts.ensure_operator()
+        info = ts.get_tailscale_info(force_refresh=True)
+    if info.serve_unreadable:
+        return None, ("Couldn't read this host's Tailscale Serve configuration, so the panel can't "
+                      "tell whether another app is published where it would go. Nothing was "
+                      "changed; set Serve up on the Tailscale page once it can be read.")
+    mount = ts.free_panel_mount(info.serve_config, port, cfg.get("tailscale_mount") or "/")
+    if mount is None:
+        return None, ("Other apps hold both / and /lgsm on this host's Tailscale Serve, so the "
+                      "panel was not published. Choose a mount on the Tailscale page.")
+    return mount, None
+
+
 def _auto_tailscale_serve(cfg):
-    """Point Tailscale Serve at the panel when this host is on a tailnet; the caller treats a failure as non-fatal."""
+    """Point Tailscale Serve at the panel when this host is on a tailnet; the caller treats a failure as non-fatal.
+
+    Nothing when the wizard's own Serve step has already published it: that route is on the scheme
+    this process serves, and the boot re-point moves it to the next one after the restart. Running
+    anyway is how a setup ended with the panel at "/" AND /lgsm: the "/" the step had just written
+    was read as another app's ("root taken" never asked whose), so the finish published a second
+    route at /lgsm, on the scheme the NEXT start would serve, in front of this one — a 502 until
+    the restart, and the "/" route a 502 from the restart on.
+    """
+    if cfg.get("tailscale_setup_done"):
+        return
     ts_info = ts.get_tailscale_info()
     if ts_info.running and ts_info.dns_name:
-        mount = "/lgsm"
-        serve_info = ts_info.serve_config
-        root_taken = False
-        if serve_info and serve_info.get("services"):
-            for svc in serve_info["services"]:
-                for route in svc.get("routes", []):
-                    if route.get("mount") == "/":
-                        root_taken = True
-                        break
-        if not root_taken:
-            mount = cfg.get("tailscale_mount", "/")
+        port = cfg.get("port", 5000)
+        mount, why = _wizard_serve_mount(cfg, port)
+        if mount is None:
+            _record_auto_serve(cfg, cfg.get("tailscale_mount") or "/", False, why)
+            return
         ok, msg = ts.setup_tailscale_serve(
-            port=cfg.get("port", 5000),
+            port=port,
             mount=mount,
             funnel=cfg.get("tailscale_use_funnel", False),
-            backend_scheme=_ts_backend_scheme(cfg),
+            backend_scheme=_serve_scheme_now(cfg, current_app.config),
         )
         _record_auto_serve(cfg, mount, ok, msg)
+        if ok:
+            _remove_serve_leftovers(port, mount, "at the end of setup", _wizard_audit)
 
 
 def _record_auto_serve(cfg, mount, ok, msg):

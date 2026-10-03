@@ -438,7 +438,8 @@ try:
     # ── /tailscale's Disable takes down the PANEL's Serve mapping, not the first one listed ──
     # The button sent services[0].routes[0].mount, and Tailscale lists "/" first — on a node where
     # another app holds "/" and the panel sits at /lgsm, that was the other app. And the removal
-    # ran `tailscale serve --bg --remove`, a flag no Tailscale version has, so it never worked.
+    # ran `tailscale serve --bg --remove`, which no Tailscale accepts (--remove was the 1.34-1.36
+    # alpha CLI's, which had no --bg), so it never worked.
     import panel.ops.tailscale_integration as _tsd
     from panel.core.config import load_config as _tsd_load, save_config as _tsd_save
     _tsd_saved = (_tsd.get_tailscale_info, _tsd._run_ts, _tsd.ensure_operator)
