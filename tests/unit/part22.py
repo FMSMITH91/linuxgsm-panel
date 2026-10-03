@@ -352,7 +352,8 @@ _r22, _f22 = _svc({"scope": "system", "props": _props22, "error": None, "rc": 0,
 check("R15: the service line says whose MainPID, the restarts, memory n/a on an old systemd, and "
       "whether WorkingDirectory is this checkout, never the directory itself",
       "MainPID is this process: yes" in _text(_r22) and "Automatic restarts (systemd's NRestarts)**: 2"
-      in _text(_r22) and "182 MB now, peak n/a" in _text(_r22) and "is this checkout**: yes"
+      in _text(_r22) and "182 MB now" in _text(_r22)
+      and "peak n/a over the cgroup's life" in _text(_r22) and "is this checkout**: yes"
       in _text(_r22) and _so22.PANEL_DIR not in _text(_r22) and "/etc/systemd" not in _text(_r22),
       _text(_r22))
 check("R15: automatic restarts are a finding", any("restarted the panel automatically" in f["text"]
@@ -396,9 +397,9 @@ check("R18: a process's comm outside the allowlist is 'other' (a LinuxGSM script
       and abs(_pi22["age"] - 90.0) < 0.01 and abs(_pi22["cpu_pct"] - 6.67) < 0.1, repr(_pi22))
 _gp22 = _proc22._group_procs([
     {"comm": "ssh", "owner": "panel", "state": "S", "age": 4.0, "cpu_pct": 0.0},
-    {"comm": "other", "owner": "other", "state": "R", "age": 11520.0, "cpu_pct": 98.0}])
+    {"comm": "other", "owner": "another account", "state": "R", "age": 11520.0, "cpu_pct": 98.0}])
 eq("R18: the cgroup's other processes are grouped by allowlisted comm and owner role",
-   _gp22, "other ×1 (up 3 h 12 m, other, R, 98% CPU), ssh ×1 (up 4 s)")
+   _gp22, "other ×1 (up 3 h 12 m, another account, R, 98% CPU), ssh ×1 (up 4 s)")
 
 
 # ══ process: listening, boot record, unit drift (R19, R20, R21) ═════════════════════════════════

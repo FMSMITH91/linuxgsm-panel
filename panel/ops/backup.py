@@ -1059,10 +1059,24 @@ def _stage_archive(src):
     return stage
 
 
+def _per_user_install():
+    """True when the panel is a systemd --user service (a per-user install)."""
+    return os.path.exists(os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service"))
+
+
 def _dispatch_restore(stage, name, safety, typed):
-    """Start the detached swap of the staged files; return _restore_validated's (ok, message)."""
+    """Start the detached swap of the staged files; return _restore_validated's (ok, message).
+
+    The helper's panel-restore only on a SYSTEM install. It stops and starts the system unit
+    linuxgsm-panel.service as root; on a per-user install that unit does not exist, so the stop
+    did nothing and the files were swapped under the RUNNING panel — its open database replaced and
+    its WAL deleted beneath it. A per-user install restores as itself, through its own user manager
+    (_legacy_restore_dispatch's `systemctl --user`), which is no escalation: it is the panel's own
+    account acting on its own files. panel_repair_database and the self-update already choose the
+    helper by the same test.
+    """
     try:
-        if _helper_present():
+        if _helper_present() and not _per_user_install():
             out, err, rc = _run_verb("panel-restore", [], timeout=20)
             if rc == 0:
                 return True, _restore_started_msg(name, safety, typed)
@@ -1070,7 +1084,7 @@ def _dispatch_restore(stage, name, safety, typed):
             shutil.rmtree(stage, ignore_errors=True)
             return False, "Could not start the restore."
         # Pre-helper fallback, unchanged in shape: a host that has not re-run install.sh as root
-        # still needs to be able to restore.
+        # still needs to be able to restore, and a per-user install restores this way (above).
         return _legacy_restore_dispatch(stage, name, safety, typed)
     except Exception:
         _log.exception("restore dispatch failed")

@@ -105,6 +105,11 @@ TOOLS = {
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
     "tail": ("/usr/bin/tail", "/bin/tail"),
     "systemd-run": ("/usr/bin/systemd-run", "/bin/systemd-run"),
+    # Both for one purpose: a game server's own scope (see _start_scope and _reset_priority).
+    # busctl makes ONE call, StartTransientUnit, with a fixed argv; ionice sets one pid's I/O
+    # class to "none". Neither runs anything it is handed.
+    "busctl": ("/usr/bin/busctl", "/bin/busctl"),
+    "ionice": ("/usr/bin/ionice", "/bin/ionice"),
     # NOT "bash". resolve("bash") must keep raising — a general shell in TOOLS would
     # let any future verb build ["bash", "-c", ...] and undo the whole boundary. This
     # entry exists solely to run INSTALLER_PATH, a fixed root-owned file.
@@ -1872,6 +1877,28 @@ def v_answers(s):
     return s
 
 
+def v_pid(s):
+    """A process id: digits, 2..4194304 (the kernel's pid_max ceiling). 1 is init, never ours."""
+    if not re.fullmatch(r"[1-9][0-9]{0,6}", s) or not 2 <= int(s) <= 4194304:
+        raise ValueError("not a process id")
+    return s
+
+
+def v_cron_job_id(s):
+    """A scheduled task's id: the hex the panel's cron recorder names its status and log files by."""
+    if not re.fullmatch(r"[0-9a-f]{6,64}", s):
+        raise ValueError("not a job id")
+    return s
+
+
+def v_cron_b64(s):
+    """A scheduled task's command as the crontab line carries it: base64, bounded. Never decoded
+    here — the account's own runner decodes it, as that account, exactly as cron's run does."""
+    if len(s) > 16384 or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", s):
+        raise ValueError("not a base64 command")
+    return s
+
+
 # ── The verb table ────────────────────────────────────────────────────────────────────────────
 # verb -> (validators, build(args) -> argv, stdin or None)
 #
@@ -2027,6 +2054,10 @@ VERBS = {
 
     # ── cron and user accounts ──
     "crontab-list": ([v_game_account], lambda a: ["crontab", "-u", a[0], "-l"], None),
+    # An uninstalled server's crontab, removed before its account: `userdel -r` leaves
+    # /var/spool/cron/crontabs/<name> behind, owned by a uid useradd hands to the next account.
+    # A destroy verb, so it refuses the panel's own account, as userdel does.
+    "crontab-remove": ([v_destroyable_user], lambda a: ["crontab", "-u", a[0], "-r"], None),
     "user-create": ([v_managed_user],
                     lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
     "user-lock-password": ([v_game_account], lambda a: ["passwd", "-l", a[0]], None),
@@ -2079,6 +2110,12 @@ VERBS = {
     # One LinuxGSM action, run as the game user -- see do_lgsm_command for why this verb exists.
     "lgsm-command": ([v_game_account, v_ident, v_choice(*LGSM_ACTIONS), v_answers,
                       v_choice("yes", "no")], lambda a: [], None),
+    # A scheduled task's "Run now", as its account, in a scope of its own -- see do_cron_run_now.
+    "cron-run-now": ([v_game_account, v_cron_job_id, v_cron_b64], lambda a: [], None),
+    # Game-server processes already in the panel's cgroup, moved into scopes of their own; the
+    # panel's local web terminal shell, likewise. See do_adopt_game_processes / do_terminal_scope.
+    "adopt-game-processes": ([], lambda a: [], None),
+    "terminal-scope": ([v_pid], lambda a: [], None),
     # Put a game account in the group the sudoers grant names -- see do_gameuser_group.
     "gameuser-group": ([v_managed_user], lambda a: [], None),
     # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
@@ -2333,7 +2370,13 @@ def do_reboot_delayed(args, content):
     Was `( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled` — a subshell, a background job and
     a redirect, all needing a shell. The double fork does the same thing: the grandchild is
     re-parented to init, survives this process exiting, waits, and execs reboot. No shell, and the
-    only thing it can exec is the reboot binary this table resolves."""
+    only thing it can exec is the reboot binary this table resolves.
+
+    With systemd as PID 1 the delay is a transient timer instead (_reboot_timer): the sleeping
+    grandchild sat in the panel's cgroup, where a panel stop in those two seconds ended it and the
+    reboot never happened. The grandchild stays as the path for a host without systemd."""
+    if _job_launcher_available() and _reboot_timer() == 0:
+        return 0
     pid = os.fork()
     if pid == 0:                       # child
         os.setsid()                    # detach from the session, so our exit cannot kill it
@@ -2362,6 +2405,19 @@ def do_reboot_delayed(args, content):
 
 
 REBOOT_DELAY_SECONDS = 2
+
+
+def _reboot_timer():
+    """A transient timer, owned by the system manager, that reboots REBOOT_DELAY_SECONDS from now.
+    systemd-run's exit status: anything but 0 means no timer, and the caller forks instead."""
+    try:
+        argv = [resolve("systemd-run"), "--on-active=%d" % REBOOT_DELAY_SECONDS, "--collect",
+                "--quiet", "--", resolve("reboot")]
+        return subprocess.run(argv, env=_clean_env(), stdin=subprocess.DEVNULL,  # nosec B603 - fixed argv
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+                              check=False).returncode
+    except (OSError, subprocess.SubprocessError):
+        return 1
 
 
 def _sshd_includes_dropin_dir():
@@ -2557,10 +2613,83 @@ def do_create_swapfile(args, content):
     return 0
 
 
-def _os_update_detached():
-    """The OS update itself, in the grandchild. NEVER RETURNS — every path ends in os._exit, which
-    is why it is a separate function: its caller can then have exactly one return, and a reader is
-    not left working out which branch falls off the end."""
+# ── The detached jobs: each in the foreground of a transient service of its own ────────────────
+# panel-db-repair, os-update-run, panel-restore and panel-self-update used to "detach" with
+# setsid and a double fork. That leaves the SESSION, not the cgroup, so each job stayed in
+# linuxgsm-panel.service's cgroup — and three of them stop that unit. On a system install
+# `systemctl stop linuxgsm-panel.service` from inside it signals the whole cgroup, the job
+# included: the repair and the restore died at their first step and left the panel DOWN (an
+# explicit stop is not a crash, so Restart=always never brought it back), and the self-update died
+# at the installer's [1/6]. os-update-run's apt was killed by any panel restart, mid-dpkg.
+#
+# So on a host booted with systemd each job is started as the MAIN process of a transient service
+# (`systemd-run --unit=<fixed name>`), and does its work in the FOREGROUND there: re-launching the
+# old double fork under systemd-run would let the unit's main process exit at once, and systemd
+# would then kill the grandchild with it. A fixed name per job means a second one while the first
+# runs is refused by systemd ("already loaded") instead of running twice. The job is
+# `panel-helper --job <name>`, which refuses to run anywhere but inside that unit.
+#
+# Without systemd as PID 1 (a container) there is no unit to stop and nothing to escape from, and
+# the double fork below is kept for that case.
+JOB_UNITS = {
+    "panel-db-repair": "linuxgsm-panel-db-repair.service",
+    "os-update-run": "linuxgsm-panel-os-update.service",
+    "panel-restore": "linuxgsm-panel-restore.service",
+    "panel-self-update": "linuxgsm-panel-self-update.service",
+}
+
+
+def _job_launcher_available():
+    """True when a job can be started as a transient service: systemd is PID 1, systemd-run here."""
+    if not _systemd_booted():
+        return False
+    try:
+        resolve("systemd-run")
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _job_setenv():
+    """--setenv for the SUDO_* identity sudo gave us: systemd-run starts the job with a clean
+    environment, and install.sh's _panel_started_run reads SUDO_UID. Values are sudo's own."""
+    out = []
+    for key in _KEPT_IDENTITY:
+        val = os.environ.get(key, "")
+        if val and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", val):
+            out.append("--setenv=%s=%s" % (key, val))
+    return out
+
+
+def _launch_job(job, args):
+    """Start `job` as the main process of its own transient service, and return systemd-run's
+    verdict: 0 once the service has started, 1 (with systemd's words) when it could not — one of
+    the same name still running included."""
+    unit = JOB_UNITS[job]
+    argv = ([resolve("systemd-run"), "--unit=" + unit, "--collect", "--quiet",
+             "--description=linuxgsm-panel " + job] + _job_setenv()
+            + ["--", os.path.realpath(__file__), "--job", job] + list(args))
+    try:
+        r = subprocess.run(argv, env=_clean_env(), stdin=subprocess.DEVNULL,  # nosec B603 - fixed argv
+                           capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        sys.stderr.write("could not start %s (%s)\n" % (unit, type(exc).__name__))
+        return 1
+    if r.returncode != 0:
+        sys.stderr.write("could not start %s: %s\n" % (unit, (r.stderr or "").strip()[-300:]))
+        return 1
+    return 0
+
+
+def _in_own_unit(unit):
+    """True when this process runs inside the transient service `unit`."""
+    cg = _cgroup_of(os.getpid())
+    return bool(cg) and cg.endswith("/" + unit)
+
+
+def _detach():
+    """setsid, fork again, stdio onto /dev/null. Returns in the grandchild only; the middle process
+    exits at once. The no-systemd path of the jobs above."""
     os.setsid()                       # detach from the session so the caller's exit cannot kill us
     if os.fork() != 0:
         os._exit(0)                   # middle process: hand the work to the grandchild and go
@@ -2570,6 +2699,21 @@ def _os_update_detached():
             os.dup2(devnull, fd)
         if devnull > 2:
             os.close(devnull)         # dup2 kept the copies; this one would leak
+    except OSError:
+        # Best-effort: the job matters more than where its (unread) output goes.
+        pass
+
+
+def _os_update_detached():
+    """The OS update in a detached grandchild. NEVER RETURNS — it ends in os._exit."""
+    _detach()
+    os._exit(_os_update_run())
+
+
+def _os_update_run():
+    """The OS update itself: apt update, full-upgrade, autoremove, then the sentinel the UI waits
+    for. 0, or 1 once a FAILURE sentinel has been written for a run that died before its own."""
+    try:
         env = _clean_env(DEBIAN_FRONTEND="noninteractive")
         apt = resolve("apt-get")
         with open(OS_UPDATE_LOG, "w", encoding="utf-8") as log:
@@ -2589,11 +2733,11 @@ def _os_update_detached():
             log.write("%s%d\n" % (OS_UPDATE_DONE, rc))
     except Exception:
         # Fall through to the failure sentinel below. Caught rather than allowed to propagate
-        # because this is a forked child: an unhandled traceback here would unwind into whatever
-        # the parent was doing.
+        # because this may be a forked child: an unhandled traceback here would unwind into
+        # whatever the parent was doing.
         pass
     else:
-        os._exit(0)
+        return 0
     # Only here when the run above died before writing its own sentinel. The sentinel is how the
     # UI knows the job ended at all — without one the popup waits forever — so -1 says "it ended,
     # badly" rather than leaving the reader to guess.
@@ -2604,7 +2748,7 @@ def _os_update_detached():
         # The log is unwritable (a full or read-only /run). Nothing further to try, and the caller
         # has long since returned — the exit status below is all that is left to say.
         pass
-    os._exit(1)
+    return 1
 
 
 def _db_repair_account(db_path):
@@ -2705,7 +2849,13 @@ def _db_repair_reclaim(db_path, account):
 
 
 def _db_repair_detached(db_path):
-    """The offline repair itself, in the grandchild. NEVER RETURNS — every path ends in os._exit.
+    """The offline repair in a detached grandchild. NEVER RETURNS — it ends in os._exit."""
+    _detach()
+    os._exit(_db_repair_run(db_path))
+
+
+def _db_repair_run(db_path):
+    """The offline repair itself: 0 once it ran, 1 when it could not start (and stopped nothing).
 
     stop -> repair -> start, as three argv calls with no shell between them. The panel used to
     compose this as a `bash -c` string and hand it to `sudo systemd-run`; the string was built from
@@ -2713,30 +2863,14 @@ def _db_repair_detached(db_path):
     Here the interpreter is the system one and the script is the root-owned copy beside this file,
     and it runs as the database's owner, not as root (_db_repair_account says why).
     """
-    os.setsid()
-    if os.fork() != 0:
-        os._exit(0)
-    try:
-        devnull = os.open(os.devnull, os.O_RDWR)
-        for fd in (0, 1, 2):
-            os.dup2(devnull, fd)
-        if devnull > 2:
-            os.close(devnull)
-    except OSError:
-        # Detaching stdio is best-effort. If /dev/null cannot be opened the repair should still run;
-        # the worst case is that output goes nowhere useful, which is where it was headed anyway.
-        pass
+    python = next((p for p in SYSTEM_PYTHON if os.path.isfile(p) and os.access(p, os.X_OK)), None)
+    # No account, no repair — and no stop either, so the panel is left as it was. Running it as
+    # root instead is exactly what leaves the database unopenable.
+    account = _db_repair_account(db_path)
+    if python is None or account is None:
+        return 1
     try:
         systemctl = resolve("systemctl")
-        python = next((p for p in SYSTEM_PYTHON if os.path.isfile(p) and os.access(p, os.X_OK)),
-                      None)
-        if python is None:
-            os._exit(1)
-        # No account, no repair — and no stop either, so the panel is left as it was. Running it as
-        # root instead is exactly what leaves the database unopenable.
-        account = _db_repair_account(db_path)
-        if account is None:
-            os._exit(1)
         # The panel is holding the database open; it has to go down before the file can be rebuilt.
         subprocess.run([systemctl, "stop", PANEL_UNIT],  # nosec B603 - fixed argv
                        check=False, timeout=120)
@@ -2746,9 +2880,9 @@ def _db_repair_detached(db_path):
         subprocess.run([python, DBM_PATH, "repair", db_path],  # nosec B603 - root-owned script
                        check=False, timeout=900, **_db_repair_as(account))
     except Exception:
-        # Swallowed so the finally below ALWAYS runs. This is a detached grandchild with no stderr
-        # anyone reads, and the only thing that matters after a failed repair is that the panel is
-        # started again — which the finally does. A raise here would skip it and leave it down.
+        # Swallowed so the finally below ALWAYS runs. This job has no stderr anyone reads, and the
+        # only thing that matters after a failed repair is that the panel is started again —
+        # which the finally does. A raise here would skip it and leave it down.
         pass
     finally:
         # Start it again WHATEVER happened above. A panel left down by a failed repair is worse
@@ -2757,10 +2891,10 @@ def _db_repair_detached(db_path):
             subprocess.run([resolve("systemctl"), "start", PANEL_UNIT],  # nosec B603 - fixed argv
                            check=False, timeout=120)
         except Exception:
-            # Last resort in a finally, in a detached grandchild: there is nobody to report to and
-            # nothing further to try. Falling through to os._exit is the only remaining behaviour.
+            # Last resort in a finally: there is nobody to report to and nothing further to try.
+            # Returning is the only remaining behaviour.
             pass
-    os._exit(0)
+    return 0
 
 
 def _copy_one_regular(src, dst, src_dir_fd=None, dst_dir_fd=None):
@@ -2892,25 +3026,21 @@ def restore_copy_members(stage, data_dir):
 
 
 def _restore_detached(data_dir):
-    """The restore swap itself, in the grandchild. NEVER RETURNS — every path ends in os._exit.
+    """The restore swap in a detached grandchild. NEVER RETURNS — it ends in os._exit."""
+    _detach()
+    _restore_run(data_dir)
+    os._exit(0)
+
+
+def _restore_run(data_dir):
+    """The restore swap itself. Returns 0 whatever happened: the panel is started again and the
+    staging directory removed on every path.
 
     stop -> copy the staged files over the live ones -> drop the WAL/SHM sidecars -> start -> wipe
     the staging directory. The panel used to write this as a bash script into its own data dir and
     hand the path to `sudo systemd-run`; root then executed a file the panel user had just written.
     Here the sequence is fixed in root-owned code and the only thing that varies is which of the
     four known members happen to be present."""
-    os.setsid()
-    if os.fork() != 0:
-        os._exit(0)
-    try:
-        devnull = os.open(os.devnull, os.O_RDWR)
-        for fd in (0, 1, 2):
-            os.dup2(devnull, fd)
-        if devnull > 2:
-            os.close(devnull)
-    except OSError:
-        # Best-effort detach; the restore matters more than where its (unread) output goes.
-        pass
     stage = os.path.join(data_dir, RESTORE_STAGE)
     try:
         systemctl = resolve("systemctl")
@@ -2933,33 +3063,52 @@ def _restore_detached(data_dir):
             subprocess.run([resolve("systemctl"), "start", PANEL_UNIT],  # nosec B603 - fixed argv
                            check=False, timeout=120)
         except Exception:
-            # Detached grandchild in a finally: nobody to tell, nothing left to try.
+            # In a finally, with nobody to tell: nothing left to try.
             pass
         # The staging dir holds a plaintext database AND both encryption keys — the pair that
         # decrypts every stored SSH credential. Remove it whatever happened above.
         shutil.rmtree(stage, ignore_errors=True)
-    os._exit(0)
+    return 0
 
 
-def do_panel_restore(args, content):
-    """Swap a staged backup into place, detached, and report that it started.
-
-    Zero arguments. Both the staging directory and the destinations come from panel.conf's
-    data_dir, so a caller chooses neither the source nor the target of a root-run copy."""
+def _restore_target():
+    """panel.conf's data_dir when something is staged in it to restore; None (and why, on stderr)
+    otherwise."""
     data_dir = panel_conf().get("data_dir", "")
     if not data_dir or not os.path.isabs(data_dir) or not os.path.isdir(data_dir):
         sys.stderr.write("panel.conf has no usable data_dir\n")
-        return 1
-    stage = os.path.join(data_dir, RESTORE_STAGE)
-    if not os.path.isdir(stage):
+        return None
+    if not os.path.isdir(os.path.join(data_dir, RESTORE_STAGE)):
         sys.stderr.write("nothing staged to restore\n")
-        return 1
+        return None
+    return data_dir
+
+
+def _fork_detached(detached, *args):
+    """Run `detached(*args)` — one of the NEVER-RETURNING _*_detached functions — in a child, and
+    reap the middle process it leaves. 0: the job is on its way."""
     pid = os.fork()
     if pid == 0:
-        _restore_detached(data_dir)   # never returns
+        detached(*args)               # never returns
     os.waitpid(pid, 0)
-    sys.stdout.write("RESTORE_STARTED")
     return 0
+
+
+def do_panel_restore(args, content):
+    """Swap a staged backup into place, in a job of its own, and report that it started.
+
+    Zero arguments. Both the staging directory and the destinations come from panel.conf's
+    data_dir, so a caller chooses neither the source nor the target of a root-run copy."""
+    data_dir = _restore_target()
+    if data_dir is None:
+        return 1
+    if _job_launcher_available():
+        rc = _launch_job("panel-restore", [])
+    else:
+        rc = _fork_detached(_restore_detached, data_dir)
+    if rc == 0:
+        sys.stdout.write("RESTORE_STARTED")
+    return rc
 
 
 SELF_UPDATE_LOG = "self-update.log"
@@ -3027,7 +3176,14 @@ def _self_update_env(ref, branch):
 
 
 def _self_update_detached(panel_dir, data_dir, ref, branch):
-    """The self-update, in the grandchild. NEVER RETURNS — every path ends in os._exit.
+    """The self-update in a detached grandchild. NEVER RETURNS — it ends in os._exit."""
+    _detach()
+    _self_update_run(panel_dir, data_dir, ref, branch)
+    os._exit(0)
+
+
+def _self_update_run(panel_dir, data_dir, ref, branch):
+    """The self-update itself: the installer, with its output and its exit line in the log.
 
     Runs the ROOT-OWNED installer, not the one in the panel's checkout. The panel used to write a
     wrapper script into its own data dir that exported three variables and then ran
@@ -3039,18 +3195,6 @@ def _self_update_detached(panel_dir, data_dir, ref, branch):
     is fixed and small; the code the installer pulls goes on to run as the PANEL user, and its
     trustworthiness rests on the signed, CI-verified commit — which is checked before we get here.
     """
-    os.setsid()
-    if os.fork() != 0:
-        os._exit(0)
-    try:
-        devnull = os.open(os.devnull, os.O_RDWR)
-        for fd in (0, 1, 2):
-            os.dup2(devnull, fd)
-        if devnull > 2:
-            os.close(devnull)
-    except OSError:
-        # Best-effort detach; the installer writes its own log either way.
-        pass
     env = _self_update_env(ref, branch)
     try:
         with _open_log_in_dir(data_dir, SELF_UPDATE_LOG) as log:
@@ -3058,10 +3202,10 @@ def _self_update_detached(panel_dir, data_dir, ref, branch):
             log.flush()
             log.write("=== installer exit %s ===\n" % _run_installer_to(log, panel_dir, env))
     except Exception:
-        # Nobody reads this process's stderr; the installer's own log is the record. Falling
-        # through to os._exit is all that is left.
+        # Nobody reads this process's stderr; the installer's own log is the record. Returning is
+        # all that is left.
         pass
-    os._exit(0)
+    return 0
 
 
 def _run_installer_to(log, panel_dir, env):
@@ -3096,23 +3240,37 @@ def _run_installer_to(log, panel_dir, env):
     return str(rc if rc >= 0 else 128 - rc)
 
 
-def do_panel_self_update(args, content):
-    """Start the panel self-update detached, and report that it launched."""
-    ref, branch = args[0], args[1]
+def _self_update_target():
+    """(panel_dir, data_dir) from panel.conf when both exist and the root-owned installer is in
+    place; None (and why, on stderr) otherwise."""
     conf = panel_conf()
     panel_dir, data_dir = conf.get("panel_dir", ""), conf.get("data_dir", "")
     if not panel_dir or not os.path.isdir(panel_dir) or not data_dir or not os.path.isdir(data_dir):
         sys.stderr.write("panel.conf has no usable panel_dir/data_dir\n")
-        return 1
+        return None
     if not os.path.isfile(INSTALLER_PATH):
         sys.stderr.write("installer is not installed root-owned; re-run install.sh as root\n")
+        return None
+    return panel_dir, data_dir
+
+
+def do_panel_self_update(args, content):
+    """Start the panel self-update in a job of its own, and report that it launched.
+
+    In the panel's cgroup the installer's own `systemctl stop linuxgsm-panel.service` ([1/6], before
+    its signal traps are armed) ended the installer with the panel, on a system install, and left
+    the panel down. So it runs as its own transient service — see _launch_job."""
+    ref, branch = args[0], args[1]
+    target = _self_update_target()
+    if target is None:
         return 1
-    pid = os.fork()
-    if pid == 0:
-        _self_update_detached(panel_dir, data_dir, ref, branch)
-    os.waitpid(pid, 0)
-    sys.stdout.write("UPDATE_STARTED")
-    return 0
+    if _job_launcher_available():
+        rc = _launch_job("panel-self-update", [ref, branch])
+    else:
+        rc = _fork_detached(_self_update_detached, target[0], target[1], ref, branch)
+    if rc == 0:
+        sys.stdout.write("UPDATE_STARTED")
+    return rc
 
 
 def do_lgsm_discover(args, content):
@@ -3413,6 +3571,392 @@ def _emit_dir_tar(path, buf):
                     continue
 
 
+# ── A game server's own scope ─────────────────────────────────────────────────────────────────
+# Every LinuxGSM action the panel starts on its own host forks from the panel. Nothing on the way
+# leaves its cgroup: sudo opens no session (Ubuntu's /etc/pam.d/sudo includes
+# common-session-noninteractive, which has no pam_systemd), and neither the fork below, setsid nor
+# tmux daemonising moves a process. So LinuxGSM's tmux server, the game and the console's `cat`
+# all lived in linuxgsm-panel.service's cgroup, and that unit is KillMode=control-group: every
+# panel stop, restart, crash and self-update signalled them. On a system install that killed every
+# game the panel had started, silently (the journal names none of them); on a per-user install it
+# killed those running as the panel's own account and failed with EPERM for the rest. Their memory
+# and tasks were charged to the panel, and they ran at the panel's own priority.conf (Nice=10,
+# CPUWeight=30, I/O best-effort/6), the low priority meant for the panel alone.
+#
+# So before the child drops to the game account, root moves it into a transient SCOPE of its own
+# under the system manager — beside cron.service in system.slice, where LinuxGSM's own monitor
+# cron puts a server it restarts — and sets the priority it should start at. A scope, not a unit
+# per server: nothing is written to /etc, and every panel control keeps working as it did. A fresh
+# name every time, because a restart's new tmux must not collide with the old scope, which still
+# holds the old server until it has stopped (an empty scope is collected).
+#
+# NOT `systemd-run --scope --uid=`: up to systemd v261 that keeps root's supplementary groups, so
+# the game ran with group 0 and without lgsmpanel-games. The drop stays _drop_to's, initgroups and
+# all.
+#
+# Anything that goes wrong here — no systemd as PID 1 (a container), no D-Bus, a refusal — leaves
+# the child where it was, which is the behaviour from before this existed. The debug report names
+# game processes it finds in the panel's cgroup, so that case is visible rather than silent.
+SYSTEMD_BOOTED_DIR = "/run/systemd/system"     # sd_booted()'s own test
+SCOPE_SLICE = "system.slice"
+SCOPE_WAIT_SECONDS = 3.0
+# The nice a game starts at. panel/ops/ssh_manager/_core.py's GAME_PRIORITY_NICE is the panel's
+# copy, the value its priority keeper renices games to; a unit check holds the two equal.
+GAME_NICE = -1
+# LinuxGSM's maintenance actions stop the server and START it again inside them. They run at the
+# nice LinuxGSM's own cron gives the same actions, 0 — so an update's download is not lifted above
+# every other game — and the keeper takes the restarted game to GAME_NICE, as after a cron restart.
+MAINT_NICE = 0
+SCOPED_START_ACTIONS = frozenset(("start", "restart", "monitor"))
+SCOPED_MAINT_ACTIONS = frozenset(("update", "force-update", "validate", "backup", "mods-update"))
+TMUX_SERVER_COMM = "tmux: server"
+
+
+def _systemd_booted():
+    """True when systemd is PID 1 here (sd_booted). Without it there is no manager to ask."""
+    return os.path.isdir(SYSTEMD_BOOTED_DIR)
+
+
+def _scope_unit(prefix, label, pid):
+    """A new scope name, <prefix>-<label>-<pid>-<random>.scope. `label` is a validated account."""
+    return "%s-%s-%d-%s.scope" % (prefix, label, pid, os.urandom(4).hex())
+
+
+def _cgroup_of(pid):
+    """The cgroup v2 path of `pid`, or None when it cannot be read."""
+    try:
+        with open("/proc/%d/cgroup" % pid, encoding="ascii", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("0::"):
+                    return line[3:].strip()
+    except OSError:
+        return None
+    return None
+
+
+def _scope_argv(unit, pids, description):
+    """busctl's StartTransientUnit call for a scope holding `pids`: every element fixed here, a
+    pid this helper read or forked, or a name built from a validated account."""
+    return ([resolve("busctl"), "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+             "org.freedesktop.systemd1.Manager", "StartTransientUnit", "ssa(sv)a(sa(sv))",
+             unit, "fail", "4", "PIDs", "au", str(len(pids))] + [str(p) for p in pids]
+            + ["Slice", "s", SCOPE_SLICE, "Description", "s", description,
+               "CollectMode", "s", "inactive-or-failed", "0"])
+
+
+def _start_scope(unit, pids, description):
+    """Move `pids` into a new transient scope `unit` under the system manager.
+
+    True once the first of them is inside it; False when there is no systemd, the call failed, or
+    the move did not land in time — and then nothing has changed."""
+    if not pids or not _systemd_booted():
+        return False
+    try:
+        r = subprocess.run(_scope_argv(unit, pids, description),  # nosec B603 - fixed argv
+                           env=_clean_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if r.returncode != 0:
+        return False
+    # StartTransientUnit returns once the job is QUEUED, and the move happens when it runs
+    # (measured: the first read after the call still showed the old cgroup). Waiting for it is
+    # what makes "moved before the drop" true.
+    deadline = time.monotonic() + SCOPE_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        cg = _cgroup_of(pids[0])
+        if cg is None or cg.endswith("/" + unit):
+            return cg is not None
+        time.sleep(0.01)
+    return False
+
+
+def _reset_priority(pid, nice):
+    """Give `pid` nice `nice` and the I/O class "none".
+
+    A scope cannot carry Nice= or an I/O class (systemd refuses both on a scope), and everything
+    the panel's unit starts inherits its Nice=10 and best-effort/6, inside a scope as anywhere."""
+    try:
+        os.setpriority(os.PRIO_PROCESS, pid, nice)
+    except OSError:
+        # The pid is gone, or this is not root: it keeps what it inherited, as before.
+        pass
+    try:
+        subprocess.run([resolve("ionice"), "-c", "0", "-p", str(pid)],  # nosec B603 - fixed argv
+                       env=_clean_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        # No ionice here, or it hung: the I/O class stays the inherited one, as it always was.
+        pass
+
+
+def _fork_placed(child_main, prefix, label, description, nice):
+    """Fork; while the child waits, give it its own scope and `nice`; then let it run child_main.
+
+    The child blocks on a pipe until the parent closes its end, so nothing it does as the game
+    account happens inside the panel's cgroup. Returns the child's pid. The child ends with
+    child_main()'s return value and can never fall back into the caller's code: the finally runs
+    for any exception, without catching BaseException to do it."""
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        rc = 1
+        try:
+            os.close(w)
+            os.read(r, 1)            # EOF once the parent has placed it, or given up trying
+            os.close(r)
+            rc = child_main()
+        finally:
+            os._exit(rc)
+    os.close(r)
+    try:
+        _start_scope(_scope_unit(prefix, label, pid), [pid], description)
+        _reset_priority(pid, nice)
+    finally:
+        os.close(w)
+    return pid
+
+
+def _action_nice(action):
+    """The nice a LinuxGSM action that can start the server begins at; None for any other action,
+    which runs where it always did (a `details` or a `stop` leaves nothing running)."""
+    if action in SCOPED_START_ACTIONS:
+        return GAME_NICE
+    if action in SCOPED_MAINT_ACTIONS:
+        return MAINT_NICE
+    return None
+
+
+def _game_env(pw, home):
+    """The environment a game account's LinuxGSM script or cron job starts with. Built, never
+    inherited: the panel's own environment carries its secrets, and LinuxGSM reads a good deal."""
+    return {
+        "HOME": home, "USER": pw.pw_name, "LOGNAME": pw.pw_name, "PWD": home,
+        "SHELL": "/bin/bash",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        # Without this LinuxGSM emits `tput: unknown terminal "unknown"` on almost every line.
+        "TERM": "xterm",
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+    }
+
+
+# ── Moving what is already in the panel's cgroup out of it ────────────────────────────────────
+def _panel_cgroup():
+    """This process's cgroup when it is the panel's unit, else None.
+
+    sudo opens no session, so the helper runs in the cgroup of whoever called it — the panel. The
+    verbs below move processes OUT of that cgroup and nowhere else, so anything else answers None
+    and they do nothing."""
+    cg = _cgroup_of(os.getpid())
+    if not cg or not cg.startswith("/") or ".." in cg.split("/"):
+        return None
+    return cg if cg.endswith("/" + PANEL_UNIT) else None
+
+
+def _cgroup_pids(cg):
+    """The pids in cgroup `cg` (a path _panel_cgroup accepted)."""
+    with open("/sys/fs/cgroup" + cg + "/cgroup.procs", encoding="ascii") as fh:
+        return [int(p) for p in fh.read().split()]
+
+
+def _proc_facts(pid):
+    """(comm, ppid, session id, real uid) of `pid`, or None when /proc cannot say."""
+    try:
+        with open("/proc/%d/stat" % pid, encoding="utf-8", errors="replace") as fh:
+            raw = fh.read()
+        comm = raw[raw.index("(") + 1:raw.rindex(")")]
+        rest = raw[raw.rindex(")") + 2:].split()
+        with open("/proc/%d/status" % pid, encoding="ascii", errors="replace") as fh:
+            uids = [line.split()[1] for line in fh if line.startswith("Uid:")]
+        return (comm, int(rest[1]), int(rest[3]), int(uids[0])) if uids else None
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _tmux_root(pid, facts):
+    """The non-root 'tmux: server' that `pid` is (or descends from) within `facts`, else None."""
+    seen = set()
+    while pid in facts and pid not in seen:
+        seen.add(pid)
+        comm, ppid, _sid, uid = facts[pid]
+        if comm == TMUX_SERVER_COMM and uid != 0:
+            return pid
+        pid = ppid
+    return None
+
+
+def _is_game_uid(uid, caller):
+    """True for an account the panel acts as (v_game_account), other than root and the caller."""
+    if uid in (0, caller):
+        return False
+    name = _pw_name(uid)
+    if not name:
+        return False
+    try:
+        v_game_account(name)
+    except ValueError:
+        return False
+    return True
+
+
+def _adoption_groups(pids, caller):
+    """({group key: [pids]}, {pid: facts}) for what to move out of the panel's cgroup.
+
+    Every tmux server and its descendants, whoever owns them: the panel never runs tmux new-session
+    itself, so a tmux server there is a game server (on a same-account install, the panel's own
+    uid). And every other process of a game account, one group per account: an update or backup
+    that outlived a restart. Never root's: that is sudo and this helper."""
+    facts = {}
+    for pid in pids:
+        if pid != os.getpid():
+            got = _proc_facts(pid)
+            if got is not None:
+                facts[pid] = got
+    groups = {}
+    for pid in sorted(facts):
+        uid = facts[pid][3]
+        if uid == 0:
+            continue
+        root = _tmux_root(pid, facts)
+        if root is not None:
+            groups.setdefault(("tmux", root), []).append(pid)
+        elif _is_game_uid(uid, caller):
+            groups.setdefault(("account", uid), []).append(pid)
+    return groups, facts
+
+
+def do_adopt_game_processes(args, content):
+    """Move game-server processes that are ALREADY in the panel's cgroup into scopes of their own.
+
+    The scope in do_lgsm_command keeps every server the panel starts from now on out of the panel's
+    cgroup. This is for the ones started before it: a per-user install's servers survived every
+    panel restart (the user manager cannot signal another account, and says so in the journal) and
+    are still inside the unit, charged to it and signalled at every stop. The panel calls this once
+    at start. Zero arguments: the cgroup is this process's own, and only when it is the panel's.
+
+    Memory charged before a move stays with the panel's cgroup until it is freed — cgroup v2 does
+    not move a charge. Prints `ADOPTED <moved> <failed>`; exit 1 if any group could not be moved."""
+    cg = _panel_cgroup()
+    if cg is None:
+        print("ADOPTED 0 0")
+        return 0
+    caller = _int_or_none(os.environ.get("SUDO_UID"))
+    groups, facts = _adoption_groups(_cgroup_pids(cg), caller)
+    moved = failed = 0
+    for _key, pids in sorted(groups.items()):
+        owner = _pw_name(facts[pids[0]][3]) or "unknown"
+        unit = _scope_unit("lgsm-adopted", owner, pids[0])
+        if _start_scope(unit, pids, "LinuxGSM processes moved out of linuxgsm-panel.service"):
+            moved += len(pids)
+        else:
+            failed += len(pids)
+    print("ADOPTED %d %d" % (moved, failed))
+    return 1 if failed else 0
+
+
+def do_terminal_scope(args, content):
+    """Give the panel's local web terminal shell — `pid`, and its session — a scope of its own.
+
+    The terminal is the panel account's own login shell, a child of the panel, so it lived in the
+    panel's cgroup: a server an operator starts there (`./gmodserver start`, or `sudo -u mcserver
+    ./mcserver start`), and any tmux, screen or nohup job, outlived the browser tab but died at the
+    next panel restart or self-update. The shell is moved, with whatever its session has already
+    forked, and given an SSH login's priority (nice 0, no I/O class) instead of the panel's.
+
+    Bounded to what the caller already owns: `pid` must run as the account that invoked sudo, sit
+    in the panel's own cgroup, and lead its own session (the panel starts it with
+    start_new_session). Nothing here starts, signals or reads anything else."""
+    pid = int(args[0])
+    caller = _int_or_none(os.environ.get("SUDO_UID"))
+    cg = _panel_cgroup()
+    facts = _proc_facts(pid)
+    if cg is None or not caller or facts is None or facts[3] != caller or _cgroup_of(pid) != cg:
+        sys.stderr.write("refusing: not a process of the panel's own account in its cgroup\n")
+        return 1
+    members = []
+    for p in _cgroup_pids(cg):
+        got = _proc_facts(p)
+        if got is not None and got[2] == pid and got[3] == caller:
+            members.append(p)
+    if pid not in members:
+        sys.stderr.write("refusing: that process does not lead its own session\n")
+        return 1
+    unit = _scope_unit("linuxgsm-panel-terminal", _pw_name(caller) or "panel", pid)
+    if not _start_scope(unit, members, "linuxgsm-panel web terminal shell"):
+        sys.stderr.write("could not create the terminal's scope\n")
+        return 1
+    for p in members:
+        _reset_priority(p, MAINT_NICE)
+    print(unit)
+    return 0
+
+
+# ── Scheduled tasks' "Run now" ────────────────────────────────────────────────────────────────
+CRON_RUNNER = ".lgsm-cron/run"
+
+
+def _cron_job_exec(pw, home, job_id, b64):
+    """The dropped half of cron-run-now: become the account and exec ITS OWN runner. Returns only
+    when that could not be done."""
+    if not _drop_to(pw, own_groups=True):
+        return 1
+    runner = os.path.realpath(os.path.join(home, CRON_RUNNER))
+    if not runner.startswith(home + "/") or not (os.path.isfile(runner)
+                                                 and os.access(runner, os.X_OK)):
+        return 1                          # missing, or a symlink out of the home directory
+    devnull = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(devnull, fd)
+    os.chdir(home)
+    # nosec B606 - no shell here: the runner is the account's own script, run AS that account
+    # after the drop above, with arguments that passed v_cron_job_id and v_cron_b64.
+    os.execve(runner, [runner, job_id, b64], _game_env(pw, home))  # nosec B606
+    return 1
+
+
+def do_cron_run_now(args, content):
+    """Run one scheduled task NOW, detached, as its game account, in a scope of its own.
+
+    "Run now" ran `sudo -u <account> … | setsid bash &` from the panel. setsid leaves the session,
+    not the cgroup, so a task that starts the server — `monitor`, `restart`, `update` — left it in
+    the panel's cgroup, where the next panel restart ended it. This runs the same thing the
+    crontab line runs, the account's own ~/.lgsm-cron/run with the job's id and its base64
+    command, as that account, in its own scope at cron's priority (nice 0, no I/O class).
+
+    Nothing here interprets the command: the runner decodes and runs it, AS THE ACCOUNT, after the
+    drop — the same reach the panel's `sudo -u <account>` grant already gives it, and no more.
+    Waits only until the runner has started (a close-on-exec pipe says so); prints
+    CRON_RUN_STARTED. The run records its own result in ~/.lgsm-cron/<id>.status."""
+    user, job_id, b64 = args[0], args[1], args[2]
+    pw = pwd.getpwnam(user)
+    home = os.path.realpath(pw.pw_dir)
+    st_r, st_w = os.pipe()               # close-on-exec: the exec closes the child's end
+
+    def _child():
+        os.close(st_r)
+        os.setsid()
+        try:
+            _cron_job_exec(pw, home, job_id, b64)
+        finally:
+            os.write(st_w, b"x")         # reached only when the runner was NOT exec'd
+        return 1
+
+    pid = _fork_placed(_child, "lgsm-cron", user, "Scheduled task for %s, run now from "
+                       "linuxgsm-panel" % user, MAINT_NICE)
+    os.close(st_w)
+    try:
+        failed = os.read(st_r, 1)
+    finally:
+        os.close(st_r)
+    if failed:
+        os.waitpid(pid, 0)
+        sys.stderr.write("the task could not be started as %s (no runnable ~/%s)\n"
+                         % (user, CRON_RUNNER))
+        return 1
+    sys.stdout.write("CRON_RUN_STARTED")
+    return 0
+
+
 def _lgsm_log_path(home, action):
     """Where a long action's output is tee'd, DERIVED rather than passed in.
 
@@ -3440,16 +3984,7 @@ def _lgsm_child(pw, home, selfname, action, stdin_text, tee):
         if not (os.path.isfile(script) and os.access(script, os.X_OK)):
             sys.stderr.write("no executable %s in %s\n" % (selfname, home))
             return 1
-        # Built here, not inherited: the panel's own environment carries its secrets, and LinuxGSM
-        # reads a good deal of what it finds.
-        env = {
-            "HOME": home, "USER": pw.pw_name, "LOGNAME": pw.pw_name, "PWD": home,
-            "SHELL": "/bin/bash",
-            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            # Without this LinuxGSM emits `tput: unknown terminal "unknown"` on almost every line.
-            "TERM": "xterm",
-            "LANG": os.environ.get("LANG", "C.UTF-8"),
-        }
+        env = _game_env(pw, home)
         out_fd = os.dup(1)
         log_fd = None
         if tee:
@@ -3709,9 +4244,17 @@ def do_lgsm_command(args, content):
     home = os.path.realpath(pw.pw_dir)
     stdin_text = "" if answers == "-" else "".join(a + "\n" for a in answers.split(","))
 
-    pid = os.fork()
-    if pid == 0:
-        os._exit(_lgsm_child(pw, home, selfname, action, stdin_text, tee == "yes"))
+    nice = _action_nice(action)
+    if nice is None:
+        pid = os.fork()
+        if pid == 0:
+            os._exit(_lgsm_child(pw, home, selfname, action, stdin_text, tee == "yes"))
+    else:
+        # An action that can leave the server running gets a scope of its own BEFORE the child
+        # drops to the account — see "A game server's own scope" above for why.
+        pid = _fork_placed(lambda: _lgsm_child(pw, home, selfname, action, stdin_text, tee == "yes"),
+                           "lgsm", user, "LinuxGSM %s (%s), started by linuxgsm-panel"
+                           % (selfname, user), nice)
     _pid, status = os.waitpid(pid, 0)
     return os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1
 
@@ -3792,32 +4335,45 @@ def do_tailscale_install(args, content):
             pass
 
 
-def do_panel_db_repair(args, content):
-    """Repair the panel database offline, detached, and report that it started.
-
-    Zero arguments. The database path comes from panel.conf, which install.sh wrote as root — not
-    from the caller, because "run the repair on THIS file" with a caller-chosen path is a way to
-    make root clobber any file on the box."""
+def _db_repair_target():
+    """panel.conf's db_path when it is a real file the root-owned repair may run on; None (and why,
+    on stderr) otherwise."""
     db_path = panel_conf().get("db_path", "")
     if not db_path or not os.path.isabs(db_path) or not os.path.exists(db_path):
         sys.stderr.write("panel.conf has no usable db_path\n")
-        return 1
+        return None
     # os.path.exists() above follows symlinks, and db_path names a file inside the panel's own
     # data/ directory — which the panel user owns. A symlink there aimed the root-side repair at
     # any file on the box; db_maintenance refuses it too, and this is the copy on the far side of
     # the privilege boundary, so it does not rely on that one.
     if os.path.islink(db_path):
         sys.stderr.write("refusing: the database path is a symlink\n")
-        return 1
+        return None
     if not os.path.isfile(DBM_PATH):
         sys.stderr.write("db_maintenance is not installed root-owned; re-run install.sh as root\n")
+        return None
+    return db_path
+
+
+def do_panel_db_repair(args, content):
+    """Repair the panel database offline, in a job of its own, and report that it started.
+
+    Zero arguments. The database path comes from panel.conf, which install.sh wrote as root — not
+    from the caller, because "run the repair on THIS file" with a caller-chosen path is a way to
+    make root clobber any file on the box.
+
+    The job stops the panel, so it must not be IN the panel's cgroup: there, on a system install,
+    the stop ended the job too and left the panel down with nothing repaired. See _launch_job."""
+    db_path = _db_repair_target()
+    if db_path is None:
         return 1
-    pid = os.fork()
-    if pid == 0:
-        _db_repair_detached(db_path)   # never returns
-    os.waitpid(pid, 0)
-    sys.stdout.write("REPAIR_STARTED")
-    return 0
+    if _job_launcher_available():
+        rc = _launch_job("panel-db-repair", [])
+    else:
+        rc = _fork_detached(_db_repair_detached, db_path)
+    if rc == 0:
+        sys.stdout.write("REPAIR_STARTED")
+    return rc
 
 
 def do_os_update_run(args, content):
@@ -3828,14 +4384,64 @@ def do_os_update_run(args, content):
     flags, autoremove, and a sentinel carrying the exit code. It took no caller input at all — the
     only variables in it were two constants — which is what makes it a zero-argument verb.
 
-    One return, and it is the parent's: the child branch calls _os_update_detached(), which never
-    comes back."""
-    pid = os.fork()
-    if pid == 0:
-        _os_update_detached()         # never returns
-    os.waitpid(pid, 0)                # reap the middle process immediately
-    sys.stdout.write(OS_UPDATE_STARTED)
-    return 0
+    In the panel's cgroup any panel stop — a restart, a self-update, a crash and Restart=always —
+    killed apt mid-dpkg on a system install, so it runs as its own transient service (see
+    _launch_job). Without systemd, the detached child below, whose function never returns."""
+    if _job_launcher_available():
+        rc = _launch_job("os-update-run", [])
+    else:
+        rc = _fork_detached(_os_update_detached)
+    if rc == 0:
+        sys.stdout.write(OS_UPDATE_STARTED)
+    return rc
+
+
+def _job_db_repair(args):
+    db_path = _db_repair_target()
+    return 1 if db_path is None else _db_repair_run(db_path)
+
+
+def _job_restore(args):
+    data_dir = _restore_target()
+    return 1 if data_dir is None else _restore_run(data_dir)
+
+
+def _job_self_update(args):
+    ref, branch = v_git_ref(args[0]), v_branch_name(args[1])
+    target = _self_update_target()
+    return 1 if target is None else _self_update_run(target[0], target[1], ref, branch)
+
+
+# {job: (its body, how many arguments it takes)}. The arguments are re-validated here: this entry
+# is reachable as `sudo panel-helper --job ...` too, where it refuses (run_job), but it is checked
+# as if it were not.
+_JOBS = {
+    "panel-db-repair": (_job_db_repair, 0),
+    "os-update-run": (lambda args: _os_update_run(), 0),
+    "panel-restore": (_job_restore, 0),
+    "panel-self-update": (_job_self_update, 2),
+}
+
+
+def run_job(job, args):
+    """`panel-helper --job <job> [args]`: one detached job's work, in the FOREGROUND of the
+    transient service _launch_job started for it.
+
+    Refused anywhere else. Run from the panel's own cgroup it would be the old bug exactly — the
+    job stopping the unit it runs in — so it insists on being inside JOB_UNITS[job]."""
+    spec, unit = _JOBS.get(job), JOB_UNITS.get(job)
+    if spec is None or unit is None or not _in_own_unit(unit):
+        print("panel-helper: --job runs only inside its own transient unit", file=sys.stderr)
+        return 2
+    body, nargs = spec
+    if len(args) != nargs:
+        print("panel-helper: --job %s takes %d argument(s)" % (job, nargs), file=sys.stderr)
+        return 2
+    try:
+        return body(args)
+    except ValueError as exc:
+        print("panel-helper: --job %s: %s" % (job, exc), file=sys.stderr)
+        return 2
 
 def do_tailscale_up_login(args, content):
     """Start `tailscale up` detached and print its login URL once it appears.
@@ -4456,6 +5062,9 @@ ACTIONS = {
     "game-dir-tar": do_game_dir_tar,
     "lgsm-discover": do_lgsm_discover,
     "lgsm-command": do_lgsm_command,
+    "cron-run-now": do_cron_run_now,
+    "adopt-game-processes": do_adopt_game_processes,
+    "terminal-scope": do_terminal_scope,
     "restart-flags": do_restart_flags,
     "steamcmd-install": do_steamcmd_install,
     "steam-dumps-sweep": do_steam_dumps_sweep,
@@ -4755,6 +5364,8 @@ def main(argv):
         for verb in sorted(VERBS):
             print("%s\t%d" % (verb, len(VERBS[verb][0])))
         return 0
+    if len(argv) >= 3 and argv[1] == "--job":
+        return run_job(argv[2], argv[3:])
     if len(argv) < 2:
         print("panel-helper: a verb is required", file=sys.stderr)
         return 2

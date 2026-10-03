@@ -2149,19 +2149,63 @@ def game_user_exec_cmd(user, argv, selfname=None):
     return " ".join([f"sudo -u {_quote(user)}"] + [_quote(str(a)) for a in argv])
 
 
-def shell_as_game_user(server, user, sh, timeout=30, selfname=None):
+def shell_as_game_user(server, user, sh, timeout=30, selfname=None, scope=False):
     """Run shell `sh` AS the game account; (out, err, rc).
 
     An unsafe account or script name sends nothing and answers GAME_ACCOUNT_REFUSED. `sh` is
     panel-built text; pass `selfname` whenever it names the LinuxGSM script (see game_user_cmd).
+
+    `scope` is for a command that can leave a game server running. On the panel's own host it is
+    started in a transient scope of the user manager when it can be (user_scope_argv), so the
+    server is not left in the panel's cgroup. Remote hosts are unaffected: there the command runs
+    in the SSH login's own session scope, nothing of the panel's.
     """
     try:
         cmd = game_user_cmd(user, sh, selfname=selfname)
     except UnsafeGameAccount:
         _log.warning("refusing to run as an unsafe account/script name")
         return GAME_ACCOUNT_REFUSED
+    if scope and is_local_server(server):
+        cmd = " ".join(user_scope_argv() + [cmd])
     # The command self-escalates via `sudo -u`, so it must not be wrapped in root sudo too.
     return run_command(server, cmd, timeout=timeout, sudo=False)
+
+
+# ── Keeping a game server out of the panel's cgroup without the helper ─────────────────────────
+# With the helper, lgsm-command and cron-run-now give a game server a scope of its own under the
+# SYSTEM manager (tools/panel-helper, "A game server's own scope"). A per-user install WITHOUT the
+# helper has no root to ask, but it has its own user manager, which will put a command — sudo, and
+# the game account's processes under it, which it accepts though they are another uid's — in a
+# scope beside the panel's unit instead of inside it. Then a `systemctl --user stop` of the panel
+# leaves the server alone. A system install without the helper keeps today's placement: its
+# grant names only the helper, so there is nothing to ask.
+USER_SCOPE_ARGV = ("systemd-run", "--user", "--scope", "--collect", "--quiet", "--")
+_USER_UNIT = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
+_USER_SCOPE = {"ok": None, "at": 0.0}
+_USER_SCOPE_RETRY = 600.0
+# The LinuxGSM actions that can leave the server running: tools/panel-helper's
+# SCOPED_START_ACTIONS | SCOPED_MAINT_ACTIONS, which a unit check holds this equal to.
+SCOPED_LGSM_ACTIONS = frozenset(("start", "restart", "monitor", "update", "force-update",
+                                 "validate", "backup", "mods-update"))
+
+
+def user_scope_argv():
+    """The argv prefix that starts a command in a new scope of this account's user manager, or []
+    where that cannot be done: not a per-user install, or a probe found no user manager to ask.
+
+    Asked by RUNNING it once (`systemd-run --user --scope -- true`): the unit file's presence says
+    which install this is, not whether XDG_RUNTIME_DIR reaches a manager from here. A failed probe
+    is asked again after ten minutes rather than believed for the life of the process; a
+    successful one is kept. [] is today's behaviour, never a failed start."""
+    now = time.monotonic()
+    if _USER_SCOPE["ok"] is None or (not _USER_SCOPE["ok"]
+                                     and now - _USER_SCOPE["at"] > _USER_SCOPE_RETRY):
+        ok = False
+        if os.path.exists(_USER_UNIT):
+            _out, _err, rc = _exec_local_argv(list(USER_SCOPE_ARGV) + ["true"], timeout=15)
+            ok = rc == 0
+        _USER_SCOPE.update(ok=ok, at=now)
+    return list(USER_SCOPE_ARGV) if _USER_SCOPE["ok"] else []
 
 
 def create_game_user(server, user, timeout=30):
@@ -2301,7 +2345,8 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
     # `export`, not a `TERM=xterm cmd` prefix: with `answers` the command is a PIPELINE, and a
     # prefix would set TERM for printf and leave LinuxGSM emitting `tput: unknown terminal`.
     inner = f"cd /home/{_quote(user)} && export TERM=xterm && {body}"
-    return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
+    return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname,
+                              scope=action in SCOPED_LGSM_ACTIONS)
 
 
 def _lgsm_command_via_helper(verb_args, timeout):
@@ -2370,7 +2415,30 @@ def _lgsm_shell_body(user, selfname, action, answers, tee_log):
     return body
 
 
-GAME_PRIORITY_NICE = -1   # slight CPU priority edge for game processes (root-only to set negative)
+# Slight CPU priority edge for game processes (root-only to set negative). tools/panel-helper's
+# GAME_NICE is its copy — the nice a server the helper starts begins at — and the root-owned helper
+# cannot import this one, so a unit check holds the two equal.
+GAME_PRIORITY_NICE = -1
+
+
+def _renice_targets(server, users):
+    """`users` without the panel's OWN account, on the panel's own host.
+
+    `renice -u` changes every process the account owns. Where LinuxGSM runs as the panel's own
+    account (a layout the helper accepts), that is the panel too: the keeper reniced the panel to
+    GAME_PRIORITY_NICE every two minutes, undoing priority.conf's Nice=10 for it. A server the
+    helper starts already begins at that nice (tools/panel-helper's GAME_NICE), so what this gives
+    up, for that one account, is only the keeper's backstop after a cron restart.
+    """
+    users = [u for u in users if u]
+    if not is_local_server(server):
+        return users
+    try:
+        import pwd
+        me = pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError):
+        return users
+    return [u for u in users if u != me]
 
 
 def set_game_priority(server, user, nice=GAME_PRIORITY_NICE):
@@ -2381,6 +2449,8 @@ def set_game_priority(server, user, nice=GAME_PRIORITY_NICE):
     the freshly spawned game process gets the boost; the periodic keeper (set_game_priority_bulk)
     then holds it there even for servers the LinuxGSM monitor cron restarts as the game user.
     """
+    if not _renice_targets(server, [user]):
+        return
     try:
         run_privileged(server, "renice-users", [str(int(nice)), user], timeout=15,
                        merge_stderr=False)
@@ -2402,7 +2472,7 @@ def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
     with no running processes is a harmless no-op. `users` are validated instance names (no
     injection risk). Best-effort.
     """
-    users = [u for u in users if u]
+    users = _renice_targets(server, users)
     if not users:
         return
     try:

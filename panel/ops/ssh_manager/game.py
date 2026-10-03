@@ -950,13 +950,19 @@ def _run_linuxgsm_backup(server, user, selfname):
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
     # which every backup refuses with "Lockfile found: Backup is currently running". See
     # _stale_backup_lock_sweep for when a lock counts as orphaned.
-    precheck = _stale_backup_lock_sweep(user)
+    _core.shell_as_game_user(server, user, _stale_backup_lock_sweep(user) + "true", timeout=60)
     # When the instance is running, LinuxGSM's `backup` warns + counts down, then STOPS the
     # server, archives it, and RESTARTS it (verified on a live box: ~1.5 min outage for a 6.5G
     # GMod install). It doesn't strictly need a y/N answer, but we feed a few harmless "y"s as a
     # safety net for any version that does prompt. The stream is bounded, so it can't hang.
-    inner = precheck + f"cd /home/{user} && printf 'y\\ny\\ny\\n' | ./{selfname} backup"
-    out, err, rc = _core.shell_as_game_user(server, user, inner, timeout=3600, selfname=selfname)
+    #
+    # Through run_as_game_user, the one path every other LinuxGSM action takes. This was its own
+    # `sudo -u <account> … ./<script> backup`, and the server LinuxGSM restarts at the end of a
+    # backup was started from the panel's cgroup with it: on a system install the next panel
+    # restart ended it. On the panel's own host the helper's lgsm-command gives the action a scope
+    # of its own before it drops to the account; on a remote it is the same shell form as before.
+    out, err, rc = _core.run_as_game_user(server, user, "backup", timeout=3600, selfname=selfname,
+                                          answers=["y", "y", "y"])
     ok = rc == 0
     # LinuxGSM can exit 0 while REFUSING to back up because a (possibly stale) lock exists —
     # "Lockfile found: Backup is currently running". No archive is created, so this is NOT a

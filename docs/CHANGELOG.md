@@ -732,6 +732,50 @@ CI-verified commit regardless of this file — this changelog is for humans.
   listed one that cannot be restored.
 - **The debug report names the notification events that are off.** It printed only a count ("15
   of 19"), so whether "A backup fails" was one of them could not be told. It now lists them by key.
+- **Restarting or updating the panel no longer kills the game servers it started.** Every server
+  the panel started on its own host — Start, Restart, an update, validate or backup that restarts
+  it, a scheduled task's "Run now" — ran inside the panel's own systemd unit, and every panel stop,
+  restart, crash or self-update sent it the same signals. On a root install that killed them, with
+  nothing in the journal naming them, until LinuxGSM's monitor cron brought them back up to five
+  minutes later (or never, with autostart off). On a per-user install it killed servers running as
+  the panel's own account and filled the journal with "Failed to kill control group" for the rest.
+  The privileged helper now starts each of them in a transient scope of its own, beside
+  `cron.service` in `system.slice`, before it drops to the game account. Servers an earlier version
+  started are moved out once when the panel starts. A per-user install without the helper uses its
+  own user manager (`systemd-run --user --scope`); a host without systemd is unchanged. Measured on
+  the test host: Minecraft started from the panel survived `systemctl restart linuxgsm-panel` (before:
+  killed), and the panel unit stayed at 21 tasks (before: 61, with 585 MB of the game charged to it).
+- **Panel-started game servers run at the game priority, not the panel's.** They inherited the
+  panel's low-priority tuning (nice 10, I/O best-effort 6, and its CPU weight of 30 against cron's
+  100); the priority keeper could undo only the nice, and only up to two minutes later. A Start or
+  Restart now begins at nice -1 with no I/O class, and LinuxGSM's maintenance actions at nice 0 —
+  what LinuxGSM's own cron gives the same actions — in a scope of their own. Where LinuxGSM runs as
+  the panel's own account, the priority keeper no longer renices the panel itself to -1.
+- **Repairing the database, restoring a backup and updating the panel no longer leave a root
+  install's panel stopped.** Each ran inside the panel's unit and stopped that unit as its first step,
+  which ended the job too: nothing was repaired or restored, the self-update died at step 1 of 6, and
+  the panel stayed down until someone ran `systemctl start` over SSH. They now run as transient
+  services of their own (as does the OS update, which a panel restart could kill mid-upgrade); a
+  second one while the first is running is refused. Measured with the real helper on the test host:
+  before, the stand-in panel was left inactive; after, it came back on its own.
+- **Restoring a backup on a per-user install with the helper no longer swaps the files under the
+  running panel.** The helper's restore stops and starts the SYSTEM unit, which a per-user install
+  does not have, so the panel kept running while its database and its WAL were replaced beneath
+  it. A per-user install now restores through its own user manager.
+- **The local web terminal's jobs outlive a panel restart.** A server, tmux or nohup job started in
+  the panel host's terminal ran inside the panel's unit and died at the next restart or self-update.
+  The terminal's shell now runs in a scope of its own.
+- **The debug report names game servers inside the panel's cgroup.** It listed them as "other",
+  printed their memory as the panel's, and raised nothing. It now counts game-server processes (tmux
+  servers, what they started, and leftovers older than the panel) with a warning that says what a
+  panel stop does to them on this kind of install, splits the unit's memory into anon and file cache
+  (the live report's "20976 MB" was mostly page cache), says the peak covers the cgroup's whole life,
+  counts processes it could not read instead of dropping them, and explains systemd's "Failed to
+  kill control group … remains running after unit stopped" lines in the journal digest.
+- **Uninstalling a server removes its account's crontab.** `userdel -r` removes the home but not
+  `/var/spool/cron/crontabs/<name>`, so every uninstalled server left its monitor and update lines
+  behind; cron logged them as "ORPHAN (no passwd entry)", and the file stayed owned by a uid the
+  next new account was given. The crontab is now removed just before the account.
 - **Adding a tool's settings file to the repository is no longer offered as a panel update.** The
   update check decides which files the panel runs from a list, and that list lived in the panel's
   own code. Naming SonarCloud's new settings file in it, as a file the panel does not run, was then

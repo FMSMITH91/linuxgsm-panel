@@ -289,6 +289,7 @@ def _existing_account_verdict(remote, key, fresh):
                        "deletes the account) and install again." % short_name), True
     # A half-finished account an earlier attempt of THIS process made: rebuild it clean. Two
     # verbs, and the home path is built by the helper from the validated name.
+    _remove_account_crontab(remote, short_name)
     _, d_err, d_rc = _sm.run_privileged(remote, "user-delete", [short_name], timeout=15,
                                         merge_stderr=False)
     if d_rc != 0:
@@ -2177,6 +2178,7 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
             _sm.run_privileged(remote, "steam-dumps-sweep", [short_name], timeout=20)
         except Exception:
             _log.debug("uninstall: steam dumps sweep failed", exc_info=True)
+        _remove_account_crontab(remote, short_name)
         out, err, rc = _sm.run_privileged(remote, "user-delete-force", [short_name], timeout=30)
         _gone = rc in (0, 6, 12)
         log_action(current_user, "uninstall_server", target=gs.name, success=_gone, server=gs)
@@ -2250,6 +2252,21 @@ def _index_reply(message, success, category, code=None, warn=False):
         return (body, code) if code else body
     flash(message, category)
     return redirect(url_for("index"))
+
+
+def _remove_account_crontab(remote, short_name):
+    """Remove a game account's crontab, just before the account itself is removed.
+
+    `userdel -r` removes the home and the mail spool, not /var/spool/cron/crontabs/<name>. On the
+    test host every uninstalled server's monitor and update lines stayed there, cron logged
+    "ORPHAN (no passwd entry)" for them, and the file stayed owned by a uid the next useradd handed
+    to a different account. Best-effort, like the dump sweep: no crontab at all is the common case
+    (crontab exits 1 for it), and nothing here may stop the account removal that follows.
+    """
+    try:
+        _sm.run_privileged(remote, "crontab-remove", [short_name], timeout=15, merge_stderr=False)
+    except Exception:
+        _log.debug("uninstall: crontab removal failed", exc_info=True)
 
 
 def _stop_game_processes(remote, short_name, selfname):

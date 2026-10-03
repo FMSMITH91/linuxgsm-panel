@@ -79,6 +79,15 @@ _GAME_READS = (
 _SUDO_REFUSED_RE = re.compile(r"a password is required|NOT in sudoers|not allowed to (?:run|execute)"
                               r"|incorrect password|authentication failure|command not allowed",
                               re.IGNORECASE)
+# What systemd logs when it stops the panel's unit and processes inside it do not stop with it:
+# another account's processes a user manager may not signal (EPERM), then left behind and found
+# again at the next start. On the live host that was every self-update trying to kill game servers
+# the panel had started — printed only among the "most repeated lines", with At a glance saying
+# one problem. It catches only the case where they SURVIVED: on a system install, or as the
+# panel's own account, the kill succeeds and the journal says nothing at all. The Panel process
+# section's cgroup listing is the measurement; this is the history.
+_CGROUP_KILL_RE = re.compile(r"Failed to kill control group|remains running after unit stopped|"
+                             r"Found left-over process")
 _SOURCE_LABEL = {"user-journal": "user journal (journalctl --user)",
                  "user-unit": "system journal, this account's user unit",
                  "helper": "system journal via the privileged helper",
@@ -402,10 +411,24 @@ def section_journal_digest(ctx):
     res.lines.extend(_traceback_lines(ctx, tbs))
     res.add(_levels_line(bodies))
     res.lines.extend(_repeated_lines(ctx, bodies))
+    _cgroup_kill_lines(res, bodies)
     if tbs:
         res.find("warn", "Journal", "%d traceback(s) in the journal window"
                  % sum(v[0] for v in tbs.values()))
     return res
+
+
+def _cgroup_kill_lines(res, bodies):
+    """The digest's line, and a warning, for systemd's 'could not stop it with the unit' lines."""
+    n = sum(1 for b in bodies if _CGROUP_KILL_RE.search(b))
+    if not n:
+        return
+    res.add("- **Processes systemd could not stop with the panel**: %d line%s ('Failed to kill "
+            "control group', 'remains running after unit stopped', 'left-over process'): another "
+            "account's processes — game servers started from the panel — were inside its unit "
+            "when it stopped. Panel process lists what is in it now." % (n, "" if n == 1 else "s"))
+    res.find("warn", "Journal", "systemd could not stop processes inside the panel's unit with it "
+             "(%d journal line%s): game servers started from the panel" % (n, "" if n == 1 else "s"))
 
 
 # ── Recent log (R68, R69, R70, R73) ─────────────────────────────────────────────────────────────

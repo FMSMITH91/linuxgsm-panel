@@ -1212,10 +1212,14 @@ ensure_fail2ban() {
     return 0
 }
 
-# Run the panel (and its bursts: updates, backups, page-load probes) at LOW CPU/IO priority so it
-# yields to the game servers under contention — important on a 1-core VPS. Game servers autostart
-# via their own cron (nice 0), so they keep priority; the panel just waits its turn. Written as a
-# systemd DROP-IN, so it stays the panel's own tuning whatever the main unit says.
+# Run the panel (and its own bursts: page-load probes, file and backup reads) at LOW CPU/IO
+# priority so it yields to the game servers under contention — important on a 1-core VPS. Every
+# child inherits Nice/IO priority, and every process the unit starts sits under its CPUWeight, so
+# this holds for game servers only because none of them runs here: LinuxGSM's own cron starts them
+# in cron.service, and the panel's helper starts each in a transient scope of its own (beside
+# cron.service in system.slice) at the game priority — a scope cannot carry Nice=, so the helper
+# sets it. Written as a systemd DROP-IN, so it stays the panel's own tuning whatever the main unit
+# says.
 ensure_service_tuning() {
     local dir
     if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
