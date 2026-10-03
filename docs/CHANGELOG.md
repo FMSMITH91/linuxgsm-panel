@@ -179,7 +179,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   - **panel backups, notifications, dependencies** (from what is installed), and **Config**,
     showing the file and what the process runs with;
   - **a digest of journal errors** before the recent log, which keeps the newest and most important
-    lines instead of cutting at 8000 characters.
+    lines instead of cutting at 8000 characters. On a system install the panel's own privileged
+    calls (about three a minute, three journal lines each) used to fill the whole log. They are now
+    counted by helper verb ("restart-flags ×714, …") and left out, so the log shows the panel. A
+    refused `sudo` still shows.
 
   The header's commit is now the code this process is running, not the checkout. When the two
   differ, the header says RESTART PENDING. "Open a GitHub issue" puts the "describe the problem"
