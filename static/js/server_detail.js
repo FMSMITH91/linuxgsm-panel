@@ -615,6 +615,15 @@ function _panelShownAt(t) {
   if (Number(t) > _lastPanelT) _lastPanelT = Number(t);
 }
 
+// The first window's wipe took any panel line pushed before it off the page, so none is shown now:
+// the backlog that follows must be rendered whole again, those lines with it. Left at the pushed
+// line's time, it rendered nothing older — an update opened mid-way lost its start. Only while that
+// backlog is still to be shown: a re-prime after Clear does not show it again, and the lines the
+// viewer cleared must not come back with a later return either.
+function _panelLinesWiped() {
+  if (!_panelBacklogShown) _lastPanelT = 0;
+}
+
 function _newerPanelRows(rows) {
   return _lastPanelT ? rows.filter(function (r) { return Number(r.t) > _lastPanelT; }) : rows;
 }
@@ -732,10 +741,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         _consolePrimed = true;
         _consoleLines = [];
         consoleEl.innerHTML = '';
-        // The wipe took any panel line pushed before this answer off the page, so none is shown
-        // now: the backlog below must be rendered whole again, those lines with it. Left at the
-        // pushed line's time, it rendered nothing older — an update opened mid-way lost its start.
-        _lastPanelT = 0;
+        _panelLinesWiped();
         // The priming window is history, so it gets NO arrival time — but a row that carries
         // LinuxGSM's own stamp keeps it, which is the whole point: that one is a real time for a
         // line written long before the panel looked.
@@ -875,6 +881,7 @@ function _pauseConsole() {
   if (_actionRunning()) { _hideTimer = setTimeout(_pauseConsole, _CONSOLE_HIDE_GRACE_MS); return; }
   _consolePaused = true;
   _returnOwed = true;
+  _awayRead = false;
   _endResync();
   // With the socket down the server has already let this console go; the flag alone keeps a
   // reconnect from rejoining while the tab is still hidden.
@@ -930,11 +937,14 @@ if (document.hidden) _onConsoleVisibility();   // opened in a background tab
 //     had are not, and lines it had that the stream has not reached yet are dropped from the
 //     stream as they arrive (_resyncPlace, _resyncAfter).
 // The panel's own lines are caught up from the backlog both reads carry (_resyncPanelLines).
+// A read the host did not answer is asked again, never taken for an empty log (_resyncUnread).
 //
 // A catch-up that has not finished in _RESYNC_MAX_MS — each window read gives the host 15 s
 // (_read_console_window), and there are two — is given up rather than left holding the console:
-// what it held is shown, matched against the page as any catch-up is. Once the second window has
-// placed the held lines nothing is held, and the catch-up ends with the next push instead.
+// what it held is shown, and if the time away was never read, a notice says so. That limit also
+// bounds the `next` hedge (_resyncAfter), which is right only for the poller's first pass after the
+// second window. Only once the second window has placed the held lines AND the stream owes it
+// lines it already showed (`pending`) does the catch-up wait for the stream with no limit.
 var _RESYNC_QUIET_MS = 6000;
 var _RESYNC_MAX_MS = 45000;
 var _resync = null;
@@ -945,8 +955,9 @@ var _shownOnReturn = {};
 function _startResync() {
   _endResync();
   _shownOnReturn = {};
+  // `added`: how many lines the return's reads appended (_resyncAppended).
   var r = _resync = {held: [], heldPanel: [], firstDone: false, anchor: false, firstLen: 0,
-                     after: null, pending: [], quiet: null, panelUntil: Infinity};
+                     after: null, pending: [], quiet: null, panelUntil: Infinity, added: 0};
   r.giveUp = setTimeout(function () { if (_resync === r) _resyncGiveUp(r); }, _RESYNC_MAX_MS);
   _resyncFetch(r, false);
 }
@@ -972,12 +983,25 @@ function _resyncDone() {
 
 function _resyncGiveUp(r) {
   var stick = consoleAtBottom(), held = r.held;
-  // With the socket up the page goes on with the stream as it is; down, the return is still owed.
-  if (socket.connected) _resyncDone();
-  else _endResync();
-  _appendConsoleRows(_newConsoleRows(_consoleLines, held), null);
+  // Down, the return is still owed: the reconnect reads the time away. Up, the page goes on with the
+  // stream as it is — and if no read of the time away ever came back, it says that output is missing.
+  if (!socket.connected) _endResync();
+  else {
+    _resyncDone();
+    if (!r.firstDone && _consoleLines.length) _showReturnGap();
+  }
+  // Held lines can repeat only what the return's reads appended (_resyncAppended), never the page.
+  _appendConsoleRows(_newConsoleRows(_resyncAppended(r), held), null);
   updateTsNotice();
   if (stick) stickConsole();
+}
+
+// The lines the return's reads appended to the page. The poller looks at the log only after the
+// rejoin, so a line it pushes since can repeat one of these, and never a line the page showed before
+// the tab went away: matched against the whole page, a push that began with a line the game repeats
+// (a heartbeat, an idle notice) lost that line.
+function _resyncAppended(r) {
+  return r.added ? _consoleLines.slice(-r.added) : [];
 }
 
 function _releasePanel(r) {
@@ -998,7 +1022,7 @@ function _resyncFetch(r, anchor) {
   fetch(MOUNT + '/api/console/' + serverId + (anchor ? '' : '?lines=2000'))
     .then(function (resp) { return resp.json(); })
     .then(function (data) { if (_resync === r) _resyncWindow(r, data || {}, anchor); },
-          function () { if (_resync === r) _resyncWindow(r, {}, anchor); })
+          function () { if (_resync === r) _resyncWindow(r, {}, anchor); })   // no `lines`: not read
     .catch(function () { if (_resync === r) _endResync(); });
 }
 
@@ -1008,23 +1032,43 @@ function _resyncRows(list) {
 
 function _resyncWindow(r, data, anchor) {
   var stick = consoleAtBottom();
-  var rows = _resyncRows(data.lines);
-  _appendReturnRows(rows, data.now);
-  _resyncPanelLines(r, data.panel_lines);
-  if (anchor) {
-    _resyncPlaceHeld(r, rows);
+  if (data.readable === false || data.error || !Array.isArray(data.lines)) {
+    // The panel's own lines come from the panel, not the host, so they are good all the same.
+    _resyncPanelLines(r, data.panel_lines);
+    _resyncUnread(r, anchor);
   } else {
-    r.firstDone = true;
-    _releasePanel(r);
-    // Read with the socket down (the 30 s console poll's catch-up), there is no stream to place it
-    // against: the time away is on the page, and the reconnect catches up again from there.
-    if (!socket.connected) _endResync();
-    else if (r.held.length) _resyncFetch(r, true);
-    else r.quiet = setTimeout(function () { if (_resync === r && !r.anchor) _resyncFetch(r, true); },
-                              _RESYNC_QUIET_MS);
+    var rows = _resyncRows(data.lines);
+    r.added += _appendReturnRows(rows, data.now);
+    _resyncPanelLines(r, data.panel_lines);
+    if (anchor) _resyncPlaceHeld(r, rows);
+    else _resyncFirstDone(r);
   }
   updateTsNotice();
   if (stick) stickConsole();
+}
+
+function _resyncFirstDone(r) {
+  r.firstDone = true;
+  _releasePanel(r);
+  // Read with the socket down (the 30 s console poll's catch-up), there is no stream to place it
+  // against: the time away is on the page, and the reconnect catches up again from there.
+  if (!socket.connected) _endResync();
+  else if (r.held.length) _resyncFetch(r, true);
+  else r.quiet = setTimeout(function () { if (_resync === r && !r.anchor) _resyncFetch(r, true); },
+                            _RESYNC_QUIET_MS);
+}
+
+// A read the host did not answer (`readable: false`, an error, no answer at all) is not an empty
+// log. Taken for one, it placed the held lines and ended the return as if nothing had been written
+// while the tab was away: the whole hidden spell went unshown, with no notice and nothing to retry.
+// So nothing is appended or placed from it, and the return stays owed: with the socket down the
+// reconnect or the next 30 s poll reads it again; up, the same read is asked again in
+// _RESYNC_QUIET_MS (the second read on the next push too), until the give-up.
+function _resyncUnread(r, anchor) {
+  if (!socket.connected) { _endResync(); return; }
+  r.anchor = false;
+  r.quiet = setTimeout(function () { if (_resync === r && !r.anchor) _resyncFetch(r, anchor); },
+                       _RESYNC_QUIET_MS);
 }
 
 // The return's reads, stitched to the page. The first reaches back 2000 lines, and matched as
@@ -1032,51 +1076,121 @@ function _resyncWindow(r, data, anchor) {
 // the page shows: a reconnect's catch-up appends its window after the lines nothing brought it (more
 // than its 250 lines were written while the socket was down, or some were written between that
 // window and the poller's first look), and across a hole nothing matched, so the whole 2000-line
-// read was appended again — up to 572 lines twice in the model. So the match reads only the page's
-// last _RESYNC_MATCH_LINES lines, the reach of the window every other catch-up stitches with; and
-// failing that, takes the latest place where at least _RESYNC_MIN_RUN of the page's last lines agree
-// with the window, allowing one run of up to _RESYNC_MAX_HOLE lines the window has and the page
-// does not (_agreeBack).
+// read was appended again — up to 572 lines twice in the model. The page can also hold a line the log
+// does not have: one shown twice (a page load's own window and the poller's first push can carry
+// the same line) or a piece of one (a read that landed mid-line). So, in order:
+//  1. base's rule, on the page's last _RESYNC_MATCH_LINES lines (the reach of the window every other
+//     catch-up stitches with): those lines, unbroken, end at the place;
+//  2. the LATEST place where the page's last _RESYNC_MIN_RUN lines stand unbroken (_latestRun);
+//  3. the place where they agree across ONE break — up to _RESYNC_MAX_EXTRA lines only the page has
+//     and up to _RESYNC_MAX_HOLE lines only the window has, at one point — that skips the FEWEST
+//     lines, the earliest of equally few (_cheapestBroken).
+// Not simply the latest, nor the earliest: a break can stand in for lines the page does have. Taking
+// the latest copy of a line the game repeats (an idle notice) made the lines written before it a
+// "hole" the page lacked: none of them shown, and no notice. Taking the earliest copy instead made the
+// page's own newest lines "lines only the page has", and showed them twice. Either way the break has
+// to skip every line between the true place and the copy as well as whatever the true place skips,
+// so the true place is the cheapest. A second break in the page's last lines, or a read that does
+// not reach them, gets the notice and the whole read (as a restart does, where the new log may well
+// repeat the page's last line).
 var _RESYNC_MATCH_LINES = 250;
 var _RESYNC_MIN_RUN = 20;
 var _RESYNC_MAX_HOLE = 250;
+var _RESYNC_MAX_EXTRA = 20;
 
 // Where the page's last line sits in `lines`, or -1 when it is not there.
 function _returnOverlap(lines) {
   var have = _consoleLines.slice(-_RESYNC_MATCH_LINES);
   var fresh = _newConsoleLines(have, lines);
   if (fresh.length < lines.length || !have.length) return lines.length - fresh.length - 1;
-  var need = Math.min(_RESYNC_MIN_RUN, have.length);
-  for (var k = lines.length - 1; k >= 0; k--) {
-    if (_sameLine(lines[k], have[have.length - 1]) && _agreeBack(have, lines, k, need)) return k;
+  // Compared trimmed, as _sameLine compares, but trimmed once: the break search compares a lot.
+  var h = _trimmedLines(have), w = _trimmedLines(lines), need = Math.min(_RESYNC_MIN_RUN, h.length);
+  var k = _latestRun(h, w, need);
+  return k >= 0 ? k : _cheapestBroken(h, w, need);
+}
+
+function _trimmedLines(list) {
+  return list.map(function (s) { return String(s).trim(); });
+}
+
+function _latestRun(h, w, need) {
+  for (var k = w.length - 1; k >= 0; k--) {
+    if (_runBack(h, h.length - 1, w, k, need) >= need) return k;
   }
   return -1;
 }
 
-// Whether `need` of the page's last lines agree with the window's lines up to lines[k], counting
-// back, across at most one hole: a run of lines the window has between two of the page's.
-function _agreeBack(have, lines, k, need) {
-  var m = _runBack(have, have.length - 1, lines, k, need), p = have.length - 1 - m, q = k - m;
-  for (var g = 1; m < need && p >= 0 && g <= _RESYNC_MAX_HOLE && q - g >= 0; g++) {
-    if (m + _runBack(have, p, lines, q - g, need - m) >= need) return true;
+// The place where the page's last lines agree with the window across the CHEAPEST break. The page's
+// last line is matched if it can be: only when no place fits it are its last `e0` lines taken for
+// ones only the page has (a piece of a line at its very end), which is then the break.
+function _cheapestBroken(h, w, need) {
+  for (var e0 = 0; e0 <= _RESYNC_MAX_EXTRA && e0 <= h.length - need; e0++) {
+    var k = _cheapestAt(h, h.length - 1 - e0, w, need, !e0);
+    if (k >= 0) return k;
   }
-  return m >= need;
+  return -1;
 }
 
-// How many lines (at most `cap`) are the same, counting back from have[i] and lines[j] together.
-function _runBack(have, i, lines, j, cap) {
+// Of the places where h[i] stands in the window, the one whose break skips the fewest lines, the
+// page's and the window's together; the earliest of equally few.
+function _cheapestAt(h, i, w, need, canBreak) {
+  var best = -1, cost = Infinity;
+  for (var k = 0; k < w.length && cost > 0; k++) {
+    var c = w[k] === h[i] ? _breakCost(h, i, w, k, need, canBreak, cost) : Infinity;
+    if (c < cost) { cost = c; best = k; }
+  }
+  return best;
+}
+
+// How many lines one break must skip, the page's and the window's together, for `need` lines to agree
+// counting back from h[i] and w[j]: 0 with no break, Infinity when none (or none allowed, or none
+// cheaper than `limit`) does it.
+function _breakCost(h, i, w, j, need, canBreak, limit) {
+  var m = _runBack(h, i, w, j, need);
+  if (m >= need) return 0;
+  if (!canBreak || m > i || m > j) return Infinity;
+  var top = Math.min(limit - 1, _RESYNC_MAX_EXTRA + _RESYNC_MAX_HOLE);
+  for (var c = 1; c <= top; c++) {
+    if (_breakFits(h, i - m, w, j - m, c, need - m)) return c;
+  }
+  return Infinity;
+}
+
+// Whether a break of `c` lines — e of the page's and c - e of the window's, at the first pair that
+// differs (h[p], w[q]) — leaves `rest` lines agreeing behind it.
+function _breakFits(h, p, w, q, c, rest) {
+  var lo = Math.max(0, c - _RESYNC_MAX_HOLE, c - q), hi = Math.min(c, _RESYNC_MAX_EXTRA, p);
+  for (var e = lo; e <= hi; e++) {
+    if (_runBack(h, p - e, w, q - c + e, rest) >= rest) return true;
+  }
+  return false;
+}
+
+// How many lines (at most `cap`) are the same, counting back from h[i] and w[j] together.
+function _runBack(h, i, w, j, cap) {
   var m = 0;
-  while (m < cap && m <= i && m <= j && _sameLine(have[i - m], lines[j - m])) m++;
+  while (m < cap && m <= i && m <= j && h[i - m] === w[j - m]) m++;
   return m;
 }
 
+// True from the first read of the time away that this return appended (reset by _pauseConsole).
+// Lines a later read finds past the page's end were written since that read, so its time is honest
+// for them, as a poll delta's is; the first read's new lines were written at any point while the tab
+// was away, and stamping them with the time it came back put a confident wrong time on them — the
+// gutter stays blank for them, as it does for any history (_appendConsoleRows).
+var _awayRead = false;
+
+// Appends what `rows` (a return's read) has past the page's end; returns how many lines that is.
 function _appendReturnRows(rows, now) {
   var k = _returnOverlap(rows.map(function (x) { return x.line; }));
   // The read does not reach back to what the page shows: more was written while the tab was away
   // than one read brings back, or the server restarted and began a new log. Say so where the lines
   // are missing, rather than run the two spans together as if nothing were between them.
   if (k < 0 && rows.length && _consoleLines.length) _showReturnGap();
-  _appendConsoleRows(rows.slice(k + 1), now);
+  var fresh = rows.slice(k + 1);
+  _appendConsoleRows(fresh, _awayRead ? now : null);
+  _awayRead = true;
+  return fresh.length;
 }
 
 function _showReturnGap() {
@@ -1134,23 +1248,31 @@ function _resyncPlaceHeld(r, winRows) {
                         r.held.map(function (x) { return x.line; }), r.firstLen);
   _appendConsoleRows(r.held.slice(at.skip), null);
   r.held = [];
-  if (at.pending === null) r.after = 'next';
-  else if (at.pending.length) { r.after = 'pending'; r.pending = at.pending; }
-  else { _resyncDone(); return; }
-  // Placed: nothing is held any more, so the give-up has nothing to release — and giving up now
-  // would hand the next push, which may start with lines the window already showed, to the page
-  // unmatched. A poller pass slower than the give-up (a serial loop on a slow host) showed them twice.
+  if (at.pending === null) { r.after = 'next'; return; }
+  if (!at.pending.length) { _resyncDone(); return; }
+  r.after = 'pending';
+  r.pending = at.pending;
+  // The stream owes lines the window already showed, and drops them as they come, however late:
+  // given up, the next push — which starts with them — went to the page unmatched, and a poller pass
+  // slower than the give-up (a serial loop on a slow host) showed them twice. `next` keeps the
+  // give-up: its hedge is right only for the poller's first pass after the window.
   clearTimeout(r.giveUp);
 }
 
-// A push after the second window. `next`: nothing was held, so this first one is matched against
-// the page, as a catch-up's window is. `pending`: what the window already showed is dropped from
-// its front; a line that differs means the placement was wrong, and the push is matched instead.
+// A push after the second window. `next`: nothing was held, so the poller may not have pushed lines
+// the window already showed; this first push is matched against what the return's reads appended
+// (_resyncAppended), and only until the give-up. `pending`: what the window already showed is
+// dropped from its front; a line that differs means the placement was wrong, and the push is matched
+// against the page instead.
 function _resyncAfter(r, rows) {
   var i = 0;
   while (r.after === 'pending' && i < rows.length && r.pending.length
          && _sameLine(rows[i].line, r.pending[0])) { r.pending.shift(); i++; }
-  if (r.after === 'next' || (r.pending.length && i < rows.length)) {
+  if (r.after === 'next') {
+    var have = _resyncAppended(r);
+    _resyncDone();
+    _appendConsoleRows(_newConsoleRows(have, rows), null);
+  } else if (r.pending.length && i < rows.length) {
     _resyncDone();
     _appendConsoleRows(_newConsoleRows(_consoleLines, rows), null);
   } else {

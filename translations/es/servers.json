@@ -193,7 +193,7 @@
   "Show the controls for rearranging this tab": "Mostrar los controles para reorganizar esta pestaña",
   "Show the time the panel saw each line, in your own timezone": "Muestra la hora en que el panel vio cada línea, en tu zona horaria",
   "Show this panel again": "Volver a mostrar este panel",
-  "Some output from while this tab was in the background is not shown. The server keeps it in its console log files.": "Parte de la salida de mientras esta pestaña estaba en segundo plano no se muestra. El servidor la guarda en sus archivos de registro de consola.",
+  "Some output from while this tab was in the background is not shown. The server keeps it in its console log files.": "No se muestra parte de la salida generada mientras esta pestaña estaba en segundo plano. El servidor la conserva en sus archivos de registro de la consola.",
   "Stamping is off. Restart the server to restore the live console.": "El marcado está desactivado. Reinicia el servidor para restaurar la consola en vivo.",
   "Start by adding a remote server, then install a game server from the Game Servers page.": "Empieza añadiendo un servidor remoto y luego instala un servidor de juego desde la página Servidores de juego.",
   "SteamID": "SteamID",

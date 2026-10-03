@@ -1304,8 +1304,8 @@ def _drain_action_output(app, remote, server_id):
     st = _action_output.get(server_id)
     if not st:
         return False
-    if st.get("ended") and not getattr(_action_tail_local, "final", False):
-        # Its own worker is reading the rest (_drain_action_to_end). A poller tick reading the same
+    if st.get("ended"):
+        # Its own worker reads the rest (_drain_action_to_end). A poller tick reading the same
         # offset alongside it would push the same bytes twice.
         return True
     path, user, pos = st["path"], st["user"], st["pos"]
@@ -1324,12 +1324,18 @@ def _drain_action_output(app, remote, server_id):
         _log.debug("action-output tail for server %s failed; retrying next tick", server_id,
                    exc_info=True)
         return True
+    if st.get("ended") or _action_output.get(server_id) is not st:
+        # It ended, or another action took its place, while this read was out. The check above
+        # only stops a tick that STARTS after the end: one already waiting on its read pushed it
+        # after the worker's own final read had pushed the same bytes — after "[panel] … finished"
+        # — and wrote back an offset the worker had moved past. Its worker (or this action's own
+        # tail, once it is tailed again) reads from st["pos"], which this read leaves alone.
+        return True
     head, _, body = (out or "").partition("\n")
     try:
         size = int(head.strip())
     except ValueError:
         return True          # no size line — the file isn't there yet; try again next tick
-    st["size"] = size        # how far there is to go, for the end-of-action drain
     if size < pos:
         # Truncated under us — a second run of the same action re-opens the file with `>`. Start
         # over from byte 0 and read it on the NEXT tick rather than falling through: `body` here is
@@ -1346,36 +1352,51 @@ def _drain_action_output(app, remote, server_id):
     return True
 
 
-# The end-of-action drain reads at most this many chunks after its first: what the backlog can keep
-# (_CONSOLE_BACKLOG_BYTES), plus one for a chunk that straddles where it starts.
-_ACTION_FINAL_CHUNKS = _CONSOLE_BACKLOG_BYTES // _ACTION_TAIL_CHUNK + 1
+def _final_drain_cmd(path, pos):
+    """The end-of-action read: what is left of `path` past byte `pos`, as much as the backlog keeps.
+
+    Prints the size on its own first line, as _drain_action_output's command does, then the output's
+    last lines: as many as the backlog keeps beside the end marker that follows them (one row and
+    1 KB are left for it), counted in raw bytes, which is never less than what the backlog counts. A
+    cut that lands inside a line drops that line: the byte before the cut is read too, and
+    everything up to the first newline from there is skipped, so what is kept starts on a line of
+    its own.
+    """
+    pos, keep, rows = int(pos), _CONSOLE_BACKLOG_BYTES - 1024, _CONSOLE_BACKLOG_MAX - 1
+    return (f"s=$(stat -c%s {path} 2>/dev/null || echo 0); printf '%s\\n' \"$s\"; "
+            f"if [ \"$s\" -gt {pos + keep} ]; then "
+            f"tail -c +$((s - {keep})) {path} 2>/dev/null | head -c {keep + 1} | tail -n +2; "
+            f"elif [ \"$s\" -gt {pos} ]; then "
+            f"tail -c +{pos + 1} {path} 2>/dev/null | head -c $((s - {pos})); "
+            f"fi | tail -n {rows}")
 
 
 def _drain_action_to_end(app, remote, server_id, entry):
-    """Read what is left of `entry`'s output, to its end, as an action finishes.
+    """Send what is left of `entry`'s output as its action finishes: ONE read, to the output's end.
 
     The poller drains an action's output only for a console someone is watching, so an action that
     ran with nobody watching — every tab on it left (static/js/server_detail.js leaves a console
     hidden for 30 s), or started by a bot or from the dashboard with no console open — had read
-    nothing when it ended, and ONE chunk from byte 0 was all it got: an update's first 64 KB, and
-    never the lines that say whether it worked. So the end reads on, chunk by chunk, until the
-    output is all sent. Further behind than the backlog keeps, it skips to the part the backlog
-    keeps: that is all a page can replay, and it ends with how the action ended.
+    nothing when it ended, and one 64 KB chunk from byte 0 was all it got: an update's start, and
+    never the lines that say whether it worked. A watched action is usually a few lines behind; an
+    unwatched one can be megabytes. Either way the read is of the output's last whole lines, as many
+    as the backlog keeps beside the end marker (_final_drain_cmd): that is all a page coming back can
+    replay, and it ends with how the action ended. Read in 64 KB chunks from the stale offset
+    instead, it pushed the action's first 64 KB (then trimmed from the backlog) and every later
+    chunk began and ended inside a line, each piece shown as a line of its own; and each extra read
+    held back "[panel] … finished" a little longer.
     """
-    _action_tail_local.final = True
     try:
-        for _ in range(_ACTION_FINAL_CHUNKS + 1):
-            if _action_output.get(server_id) is not entry:
-                return
-            before = entry["pos"]
-            _drain_action_output(app, remote, server_id)
-            size = entry.get("size")
-            # Done, or no headway: a read that failed, or a file cut short under it.
-            if size is None or entry["pos"] >= size or entry["pos"] <= before:
-                return
-            entry["pos"] = max(entry["pos"], size - _CONSOLE_BACKLOG_BYTES)
-    finally:
-        _action_tail_local.final = False
+        # Through the module, as _drain_action_output calls it (see the note there).
+        out, _, _ = _sm.shell_as_game_user(remote, entry["user"],
+                                           _final_drain_cmd(entry["path"], entry["pos"]), timeout=15)
+    except Exception:
+        _log.debug("final action-output read for server %s failed", server_id, exc_info=True)
+        return
+    head, _, body = (out or "").partition("\n")
+    # The size line first is the sign the read ran: a failed or timed-out transport answers "".
+    if head.strip().isdigit() and body.strip():
+        _console_push(app, server_id, terminal.render_colour(body))
 
 
 # Which registration THIS worker made, per (server_id, action). A thread-local (a greenlet-local
@@ -1466,7 +1487,11 @@ def _end_action_tail(app, server_id, remote, action, rc):
         except Exception:
             _log.debug("final action-output drain for server %s failed", server_id, exc_info=True)
         finally:
-            _reinstate_displaced(server_id, cur)
+            # Only while `cur` is still the registered one. An action begun during that read has
+            # taken its place, and reinstating over it left that action streaming nothing — and,
+            # not registered at its own end, with no final read either: all its output was lost.
+            if _action_output.get(server_id) is cur:
+                _reinstate_displaced(server_id, cur)
     _announce_action_end(app, server_id, action, rc)
 
 

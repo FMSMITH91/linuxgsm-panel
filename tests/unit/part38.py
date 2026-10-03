@@ -18,8 +18,9 @@ unduplicated — and what holds it up is, one section each:
 * B. THE SERVER. Through flask-socketio's test client and the real console poller loop, reading a
      real file with bash: a room left empty is not read at all and its offset is forgotten; a rejoin
      is a first look, with no replay; a second tab keeps the reads going; a socket that never joined
-     is never read; the panel backlog carries each push's time, the key the page dedupes by; and an
-     update that runs while nobody watches is read to its end when it ends.
+     is never read; the panel backlog carries each push's time, the key the page dedupes by; an
+     update that runs while nobody watches is read to its end, in one read, when it ends; and a tick
+     or an action that overlaps that end neither repeats its output nor loses its own.
 * C. BOTH. Payloads the real server produced — the poller's pushes, /api/console's windows — fed to
      the real page in the order the server produced them, for the two orderings a plain rejoin gets
      wrong.
@@ -236,6 +237,8 @@ function makePage(o) {
     // Every line on the page, the "not everything is shown" notice included unless `gaps` is false.
     lines: gaps => consoleEl.children.filter(c => c instanceof El && (gaps !== false || !isGap(c))).map(lineText),
     gaps: () => consoleEl.children.filter(c => c instanceof El).map((c, i) => isGap(c) ? i : -1).filter(i => i >= 0),
+    // Every line with the time in its gutter (data-ts), or null where it has none.
+    stamped: () => consoleEl.children.filter(c => c instanceof El && !isGap(c)).map(c => [lineText(c), c.dataset.ts || null]),
   };
 }
 
@@ -954,10 +957,11 @@ async function checkReplayedJoin(cfg) {
 }
 
 // The second window read AHEAD of the stream (it shows lines the next push will start with), and the
-// poller's next pass slower than the 45 s give-up — and the same with nothing held (`next`).
+// poller's next pass slower than the 45 s give-up — and the same with nothing held (`next`), whose
+// hedge lasts only until the give-up (checkNextBounded), so its slow pass comes within it.
 async function checkSlowPassAfterPlacement(cfg) {
   for (const held of [true, false]) {
-    for (const slow of [1000, 50000]) {
+    for (const slow of held ? [1000, 50000] : [1000, 30000]) {
       const w = await awayAndBack(cfg);
       await w.answer(w.pending()[0]);
       w.pass();
@@ -1088,6 +1092,290 @@ async function checkRepeatsPlacement(cfg) {
         w.exact() && !w.page.ctx._resync, JSON.stringify({got: w.pageLog().slice(-5), want: w.log().slice(-5)}));
 }
 
+// ── review round 3 ───────────────────────────────────────────────────────────────────────────────
+// Away and back, answering every read and letting the poller pass, as a page that comes back does.
+async function backAndSettle(w, rounds) {
+  await w.hide(false); await w.settlePolls();
+  for (let i = 0; i < (rounds || 3); i++) { for (const f of w.pending()) await w.answer(f); w.pass(); await w.advance(7000); }
+  w.write(1); await w.pass();
+}
+const PIECE = 'L00020 ine';     // the end of a line, as a read that landed inside it shows it
+const pushPiece = w => w.page.push({server_id: 7, data: PIECE, rows: [{t: null, line: PIECE}], ts: 1700000001});
+const minus = (log, gone) => log.filter(l => gone.indexOf(l) < 0);
+
+// A break in the page's last 250 lines, so base's rule finds nothing — a line lost 33 back (base's
+// own reconnect race), or a piece of a line 30 back — and the page's last line one the game repeats.
+// While away the game writes on and repeats it. The copy written last is not the page's place: taken
+// for it, everything written before it was a "hole" the page lacked, none of it shown, with no notice.
+async function checkRepeatAfterBreak(cfg) {
+  const X = 'L99999 No players online, skipping autosave';
+  for (const [label, shape, away] of [['a line lost 33 back', 'lost', 10], ['a piece of a line 30 back', 'piece', 10],
+                                      ['a piece of a line 30 back', 'piece', 200]]) {
+    const w = await manualWorld(cfg);
+    w.pass();
+    if (shape === 'lost') {
+      w.write(2); await w.pass();
+      await w.disconnect(); w.pass(); w.write(5); await w.reconnect();
+      const rd = w.read(w.pending()[0]);       // the reconnect's window, read…
+      w.write(3); w.pass();                    // …before these and the poller's first look: lost
+      await w.reply(rd);
+    } else await pushPiece(w);
+    w.write(29); w.log().push(X); await w.pass();
+    const lost = w.log().filter(l => w.pageLog().indexOf(l) < 0);
+    await w.hide(true); await w.advance(GRACE);
+    w.pass(); w.write(away); w.log().push(X);
+    await backAndSettle(w);
+    const got = w.pageLog().filter(l => l !== PIECE);
+    check('a page with ' + label + ', its last line one the game repeats, away while ' + away + ' lines and that '
+          + 'line again are written: back in view every one of them shows, once, and no notice',
+          JSON.stringify(got) === JSON.stringify(minus(w.log(), lost)) && w.page.gaps().length === 0
+          && (shape === 'piece' ? lost.length === 0 : lost.length === 3),
+          JSON.stringify({lost: lost.length, shown: got.length, want: w.log().length - lost.length, gaps: w.page.gaps(),
+                          tail: got.slice(-4)}));
+  }
+}
+
+// Base's race lost lines just before the page's last line — one line came after them, then the console
+// went quiet — and the game repeats that line while away. The break is right at the page's end, and
+// the page's own place, the EARLIEST that fits across it, is taken: every line written while away
+// shows, and nothing says output is missing.
+async function checkBreakBeforeLast(cfg) {
+  const X = 'L99999 Server empty for 60 seconds, pausing';
+  const w = await manualWorld(cfg);
+  w.pass(); w.write(30); await w.pass();
+  await w.disconnect(); w.pass(); w.write(2); await w.reconnect();
+  const rd = w.read(w.pending()[0]);
+  w.write(3); w.pass();                        // lost: after the reconnect's window, before the first look
+  await w.reply(rd);
+  w.log().push(X); await w.pass();             // one line, then quiet
+  const lost = w.log().filter(l => w.pageLog().indexOf(l) < 0);
+  await w.hide(true); await w.advance(GRACE);
+  w.pass(); w.write(10); w.log().push(X);
+  await backAndSettle(w);
+  const got = w.pageLog();
+  check('lines lost to a reconnect just before the page\'s last line, a line the game repeats while the tab is '
+        + 'away: back in view everything written since shows, once, and no notice',
+        lost.length === 3 && JSON.stringify(got) === JSON.stringify(minus(w.log(), lost)) && w.page.gaps().length === 0,
+        JSON.stringify({lost: lost.length, shown: got.length, want: w.log().length - lost.length, gaps: w.page.gaps(),
+                        tail: got.slice(-4)}));
+}
+
+// The page holds lines the log does not, near its end: a piece of a line 5 back, or — the page load's
+// own race (its window read after the poller's first look, the same lines then pushed) — the last
+// lines twice. A return must not take them for "the log moved on": it showed a notice that output was
+// missing and appended its whole read again, every line of the console twice.
+async function checkPageOnlyLines(cfg) {
+  let w = await manualWorld(cfg);
+  w.pass(); await pushPiece(w);
+  w.write(5); await w.pass();
+  await w.hide(true); await w.advance(GRACE);
+  w.pass(); w.write(3);
+  await backAndSettle(w);
+  let got = w.pageLog().filter(l => l !== PIECE);
+  check('a piece of a line 5 lines before the tab went away: back in view each line shows once, nothing is '
+        + 'missing, and no notice', JSON.stringify(got) === JSON.stringify(w.log()) && w.page.gaps().length === 0,
+        JSON.stringify({shown: got.length, want: w.log().length, gaps: w.page.gaps()}));
+  for (const n of [1, 6]) {
+    w = makeWorld({manual: true, src: cfg.src, panel: cfg.panel, code: cfg.code});
+    w.write(38);
+    await w.reconnect();                       // the page's first connect: it joins
+    w.pass(); w.write(n);                      // the poller's first look, then n lines…
+    await w.answer(w.pending()[0]);            // …which the load's window, read after both, shows
+    await w.pass();                            // …and the first push shows again
+    const twice = w.pageLog().length - w.log().length;
+    await w.hide(true); await w.advance(GRACE);
+    w.pass(); w.write(40);
+    await backAndSettle(w);
+    got = w.pageLog();
+    check('the page load showing its last ' + n + ' line(s) twice (its own race), then away while 40 lines are '
+          + 'written: back in view those 40 show once, nothing else twice, and no notice',
+          twice === n && got.length === w.log().length + n
+          && JSON.stringify([...new Set(got)]) === JSON.stringify(w.log()) && w.page.gaps().length === 0,
+          JSON.stringify({twice, shown: got.length, want: w.log().length + n, gaps: w.page.gaps()}));
+  }
+}
+
+// A break in the page's last 250 lines and its last 25 lines a block it ALSO showed earlier: the page's
+// place is the block's latest copy that stands unbroken, as base's rule takes the latest. The earlier
+// copy would show everything after it again.
+async function checkUnbrokenLatest(cfg) {
+  const block = Array.from({length: 25}, (_, i) => 'status row ' + String(i + 1).padStart(2, '0'));
+  const w = await manualWorld(cfg);
+  w.pass(); w.say(...block); w.write(5); await w.pass();
+  await w.disconnect(); w.pass(); w.write(2); await w.reconnect();
+  const rd = w.read(w.pending()[0]);
+  w.write(3); w.pass();
+  await w.reply(rd);
+  w.write(5); w.say(...block); await w.pass();
+  const lost = w.log().filter(l => w.pageLog().indexOf(l) < 0);
+  await w.hide(true); await w.advance(GRACE);
+  w.pass(); w.write(5);
+  await backAndSettle(w);
+  const got = w.pageLog();
+  check('a page with a break in its last 250 lines whose last 25 lines are a block it showed before too: back in '
+        + 'view it is placed at the block\'s latest unbroken copy, so nothing shows twice',
+        lost.length === 3 && JSON.stringify(got) === JSON.stringify(minus(w.log(), lost)) && w.page.gaps().length === 0,
+        JSON.stringify({lost: lost.length, shown: got.length, want: w.log().length - lost.length, gaps: w.page.gaps()}));
+}
+
+// A quiet return (`next`: nothing held when the second read answered). The first push after it may
+// start with lines that read already showed, so it is matched — but only against what the return's
+// reads appended, and only until the give-up. Matched against the whole page with no limit, a push
+// that began with a line the game repeats (a heartbeat) lost it, however late it came.
+async function checkNextBounded(cfg) {
+  const H = 'heartbeat: no players, skipping save';
+  for (const [label, awayLines, later] of [['nothing written while away; the push 20 s later', 0, 20000],
+                                           ['nothing written while away; the push 10 min later', 0, 600000],
+                                           ['the time away ending on it; the push 10 min later', 4, 600000]]) {
+    const w = await manualWorld(cfg);
+    w.pass();
+    if (!awayLines) w.say(H);
+    await w.pass();
+    await w.hide(true); await w.advance(GRACE);
+    w.pass();
+    if (awayLines) { w.write(awayLines); w.say(H); }
+    await w.hide(false); await w.settlePolls();
+    await w.answer(w.pending()[0]);            // the first read
+    w.pass();                                  // the first look: nothing new, nothing pushed
+    await w.advance(6000);
+    const second = w.pending();
+    for (const f of second) await w.answer(f); // the quiet second read
+    await w.advance(later);
+    for (const f of w.pending()) await w.answer(f);
+    w.say(H); await w.pass();                  // the game says it again
+    w.write(1); await w.pass();
+    check('a quiet return whose page ends on a line the game repeats (' + label + '): the push that repeats it '
+          + 'shows it', second.length === 1 && w.exact() && !w.page.ctx._resync && !w.page.ctx._returnOwed,
+          JSON.stringify({second: second.length, got: w.pageLog().slice(-4), want: w.log().slice(-4),
+                          resync: !!w.page.ctx._resync}));
+  }
+}
+
+// A return read the host did not answer (`readable: false`, no lines) is not an empty log. Taken for
+// one, the return was over: the time away never showed, nothing retried, and no notice said so.
+async function checkUnreadable(cfg) {
+  const unread = rd => { rd.b = Object.assign({}, rd.b, {lines: [], readable: false}); return rd; };
+  const refused = rd => { rd.b = {error: 'Permission denied', lines: []}; return rd; };
+  const failFirst = {
+    unread: async w => w.reply(unread(w.read(w.pending()[0]))),
+    refused: async w => w.reply(refused(w.read(w.pending()[0]))),
+    failed: async w => { const f = w.pending()[0]; f.done = true; f.reject(new Error('network')); await w.page.flush(); },
+  };
+  for (const [label, away, never, how] of [['its first read unanswered, 40 lines away', 40, false, 'unread'],
+                                           ['its first read unanswered, 400 lines away (more than a 250-line window)', 400, false, 'unread'],
+                                           ['its first read refused (an error and no lines), 400 lines away', 400, false, 'refused'],
+                                           ['its first read failing outright (no answer to parse), 400 lines away', 400, false, 'failed'],
+                                           ['no read answered at all, 40 lines away', 40, true, 'unread']]) {
+    const w = await manualWorld(cfg);
+    w.pass(); w.write(2); await w.pass();
+    await w.hide(true); await w.advance(GRACE);
+    w.pass(); w.write(away);
+    await w.hide(false); await w.settlePolls();
+    await failFirst[how](w);
+    w.pass();
+    for (let i = 0; i < 9; i++) {
+      await w.advance(6000);
+      for (const f of w.pending()) await w.reply(never ? unread(w.read(f)) : w.read(f));
+      w.write(1); await w.pass();
+    }
+    const got = w.pageLog(), gaps = w.page.gaps(), lines = w.page.lines();
+    const missing = w.log().filter(l => got.indexOf(l) < 0);
+    const ok = never
+      ? JSON.stringify(missing) === JSON.stringify(w.log().slice(22, 22 + away)) && gaps.length === 1
+        && lines[gaps[0] - 1] === w.log()[21] && lines[gaps[0] + 1] === w.log()[22 + away]
+      : w.exact() && gaps.length === 0;
+    check('a return ' + label + ': ' + (never ? 'given up after 45 s with a notice where the time away is missing, '
+          + 'and everything since shown once' : 'the read is asked again and the time away shows, once, in order'),
+          ok && !w.page.ctx._resync && !w.page.ctx._returnOwed && new Set(got).size === got.length,
+          JSON.stringify({missing: missing.length, gaps, shown: got.length, want: w.log().length,
+                          resync: !!w.page.ctx._resync, owed: w.page.ctx._returnOwed}));
+  }
+  // With the socket down there is no stream to wait on: an unanswered read is left to the 30 s console
+  // poll (and the reconnect), as any read made with the socket down is — not asked again every 6 s.
+  const w = await awayLong(cfg, 40);
+  w.expire();
+  await w.hide(false);
+  const first = w.pending(/lines=2000/);         // the return's, and the 30 s poll's that came with it
+  for (const f of first) await w.reply(unread(w.read(f)));
+  const reads = () => w.page.fetches.filter(f => /\/api\/console\//.test(f.url)).length, asked = reads();
+  await w.advance(GRACE - 1000);
+  const early = reads() - asked;
+  await w.advance(1000);
+  for (const f of w.pending()) await w.answer(f);
+  check('a return read unanswered while the socket is down is not asked again every 6 s: the next 30 s console '
+        + 'poll reads the time away, which then shows, once', first.length >= 1 && early === 0 && w.exact()
+        && w.page.ctx._returnOwed && !w.page.socket.connected,
+        JSON.stringify({first: first.length, early, exact: w.exact(), owed: w.page.ctx._returnOwed}));
+}
+
+// A catch-up given up before any read of the time away came back, holding a push that begins with the
+// line the page ended on — the game repeats it. The push is all new (the poller looked only after the
+// rejoin): matched against the page, that line was dropped.
+async function checkGiveUpRepeat(cfg) {
+  const w = await manualWorld(cfg);
+  w.pass(); w.say('heartbeat: no players, skipping save'); await w.pass();
+  await w.hide(true); await w.advance(GRACE);
+  w.pass();
+  await w.hide(false); await w.settlePolls();     // the first read: it never answers
+  w.pass();
+  w.say('heartbeat: no players, skipping save'); w.write(1); await w.pass();   // held
+  await w.advance(46000);
+  w.write(1); await w.pass();
+  check('a catch-up given up whose held push begins with the line the page ended on (the game repeats it): the '
+        + 'push shows whole', w.exact() && !w.page.ctx._resync,
+        JSON.stringify({got: w.pageLog().slice(-4), want: w.log().slice(-4)}));
+}
+
+// Clear, then the 30 s poll primes the console again from the window: the panel lines the viewer
+// cleared stay cleared — and do not come back with a later return either.
+async function checkClearThenReturn(cfg) {
+  const w = makeWorld({manual: true, src: cfg.src, panel: cfg.panel, code: cfg.code});
+  w.write(20);
+  w.panelPush('[panel] update started — its output follows.');
+  w.panelPush('ACT one\nACT two');
+  w.panelPush('[panel] update finished successfully.');
+  await w.start();
+  w.pass();
+  const shown = w.pagePanel().length;
+  w.page.ctx.clearConsole();
+  w.write(2); await w.pass();
+  await w.advance(30000);
+  for (const f of w.pending()) await w.answer(f);    // the 30 s poll primes the cleared console
+  const cleared = w.pagePanel().length;
+  await w.hide(true); await w.advance(GRACE);
+  w.pass(); w.write(3);
+  await backAndSettle(w);
+  check('panel lines the viewer cleared stay cleared after the console is primed again and the tab goes away '
+        + 'and comes back', shown === 4 && cleared === 0 && w.pagePanel().length === 0 && w.exact(),
+        JSON.stringify({shown, cleared, after: w.pagePanel()}));
+}
+
+// When each line came. The first read of the time away shows lines written at some point the panel did
+// not see, so they get no time, as the window a page opens with gets none; a push the panel watched
+// arrive has its time, and so do the lines a later read finds past the first read's end.
+async function checkAwayStamps(cfg) {
+  const w = await awayAndBack(cfg);              // 5 lines written while away
+  await w.answer(w.pending()[0]);
+  w.pass(); w.write(2); await w.pass();          // held; the second read asked
+  w.write(1);
+  await w.answer(w.pending()[0]);                // shows the two held and one more
+  w.write(1); await w.pass();
+  const stamps = () => { const st = w.page.stamped(); return l => (st.find(([x]) => x === l) || [])[1]; };
+  let at = stamps();
+  const away = w.log().slice(22, 27), after = w.log().slice(27);
+  check('lines the first read of the time away shows have no time beside them; pushed lines, and what a later '
+        + 'read finds past the first one\'s end, do', w.exact() && away.every(l => at(l) === null)
+        && after.length === 4 && after.every(l => at(l)),
+        JSON.stringify({away: away.map(l => [l, at(l)]), after: after.map(l => [l, at(l)])}));
+  await w.hide(true); await w.advance(GRACE);    // and away again
+  w.pass(); w.write(3);
+  await backAndSettle(w);
+  at = stamps();
+  const again = w.log().slice(31, 34);
+  check('...and so do the first read\'s lines on the next return too', w.exact() && again.every(l => at(l) === null),
+        JSON.stringify(again.map(l => [l, at(l)])));
+}
+
 // ── random schedules ─────────────────────────────────────────────────────────────────────────────
 async function schedule(cfg, seed, code) {
   const w = makeWorld({src: cfg.src, panel: cfg.panel, code, seed});
@@ -1191,7 +1479,10 @@ async function replay(cfg) {
                     checkFinishedAway, checkBackground, checkLateTimer, checkFocusFallback, checkSilentReturn, checkNoConsole,
                     checkNoView, checkIndicator, checkBacklogOnce, checkRotation, checkPrimeAfterPush,
                     checkUnlockExpired, checkGiveUpWhileDown, checkInStepAfterReturn, checkDropBeforeFirstRead, checkReplayedJoin, checkSlowPassAfterPlacement,
-                    checkLongAway, checkHoleThenAway, checkHoleThenRepeats, checkRepeatsPlacement, checkSchedules]) {
+                    checkLongAway, checkHoleThenAway, checkHoleThenRepeats, checkRepeatsPlacement,
+                    checkRepeatAfterBreak, checkBreakBeforeLast, checkPageOnlyLines, checkUnbrokenLatest,
+                    checkNextBounded, checkUnreadable, checkGiveUpRepeat, checkClearThenReturn, checkAwayStamps,
+                    checkSchedules]) {
     try { await fn(cfg); } catch (e) { check(fn.name + ' ran to its end', false, e && e.stack || e); }
   }
   process.stdout.write(JSON.stringify({results}));
@@ -1223,7 +1514,7 @@ def _section_page38():
         return
     results = out.get("results") or []
     check("A page: the harness ran server_detail.js whole and reported every check",
-          len(results) >= 61 and not out.get("error"), repr(out)[:1500])
+          len(results) >= 82 and not out.get("error"), repr(out)[:1500])
     for r in results:
         check("A page: " + r["name"], r["ok"], r.get("detail", ""))
 
@@ -1413,33 +1704,42 @@ def _server_backlog_key38(gs_id, admin, sio):
 
 
 class _ActRig38:
-    """shell_as_game_user for an action's output drain, run on a REAL file.
+    """shell_as_game_user for an action's output drain, run on REAL files.
 
-    The command is built as for the host and unwrapped and run by bash, with only the output file's
-    path pointed at this part's copy.
+    The command is built as for the host and unwrapped and run by bash, with only the output files'
+    paths pointed at this part's copies. `hook`, when set, runs once inside the next call, after its
+    read and before it returns: what another greenlet does while this one waits on the host.
     """
 
-    def __init__(self, real):
-        self.real, self.calls = real, []
-        self.path = os.path.join(_TMP38, "action", os.path.basename(real))
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        with open(self.path, "w", encoding="utf-8"):
-            pass
+    def __init__(self, *reals):
+        self.calls, self.hook, self.paths = [], None, {}
+        for real in reals:
+            self.paths[real] = os.path.join(_TMP38, "action", os.path.basename(real))
+            os.makedirs(os.path.dirname(self.paths[real]), exist_ok=True)
+            with open(self.paths[real], "w", encoding="utf-8"):
+                pass
 
     def __call__(self, server, user, sh, timeout=30, selfname=None):
         self.calls.append(sh)
-        return _bash34(_as_account34(user, sh, selfname).replace(self.real, self.path))
+        cmd = _as_account34(user, sh, selfname)
+        for real, path in self.paths.items():
+            cmd = cmd.replace(real, path)
+        out = _bash34(cmd)
+        hook, self.hook = self.hook, None
+        if hook:
+            hook()
+        return out
 
-    def write(self, n, tag):
-        """Append n lines of exactly 64 bytes, so a 64 KB chunk ends on a line's end."""
-        new = ["%s %06d %s" % (tag, i, "x" * 52) for i in range(n)]
-        with open(self.path, "a", encoding="utf-8") as fh:
+    def write(self, n, tag, real=None, width=64):
+        """Append n lines of exactly `width` bytes to `real`'s copy (the first one's by default)."""
+        new = ["%s %06d %s" % (tag, i, "x" * (width - 12)) for i in range(n)]
+        with open(self.paths[real or next(iter(self.paths))], "a", encoding="utf-8") as fh:
             fh.write("".join(x + "\n" for x in new))
         return new
 
 
-def _unwatched_update38(loop, gs_id, admin, sio, n, label):
-    """An update writing n lines that runs start to end while its only tab is away."""
+def _unwatched_update38(loop, gs_id, admin, sio, n, label, width=64):
+    """An update writing n lines of `width` bytes that runs start to end while its only tab is away."""
     real = _sh38._action_log_path("mcsrv38", "update")
     act = _ActRig38(real)
     _set38(_core38, "shell_as_game_user", act)
@@ -1449,21 +1749,34 @@ def _unwatched_update38(loop, gs_id, admin, sio, n, label):
     sio.emit("leave_console", {"server_id": gs_id})      # the only tab, hidden past the grace
     _pass38(loop)
     _sh38._begin_action_tail(_p9, gs_id, "update", real, "mcsrv38")
-    out = act.write(n, "UPD")
+    out = act.write(n, "UPD", width=width)
     for _ in range(3):
         _pass38(loop)
     drained = len(act.calls)
-    _sh38._end_action_tail(_p9, gs_id, NS(host="192.0.2.38", name="p38-host"), "update", 0)
+    pushed = []
+    push = _sh38._console_push
+
+    def _seen(app, server_id, text, ts=None):
+        pushed.extend(ln for ln in str(text).split("\n") if ln.strip())
+        push(app, server_id, text, ts)
+    _sh38._console_push = _seen
+    try:
+        _sh38._end_action_tail(_p9, gs_id, NS(host="192.0.2.38", name="p38-host"), "update", 0)
+    finally:
+        _sh38._console_push = push
     sio.emit("join_console", {"server_id": gs_id})        # back in view: the page reads the backlog
     body = _p9_client(admin).get("/api/console/%d" % gs_id).get_json() or {}
     rows = [r.get("line") for r in body.get("panel_lines") or []]
     tail = [r for r in rows if r.startswith("UPD ")]
+    told = pushed[:-1]
     check("B server: an update writing %s of output while its only tab is away: nothing is drained while "
-          "nobody watches, and its end reads on to the end — the backlog the returning page shows ends "
-          "with the update's last lines, in order, then how it ended" % label,
-          (drained, rows[-1:], len(tail) >= 100, tail == out[-len(tail):], gs_id in _sh38._action_output)
-          == (0, ["[panel] update finished successfully."], True, True, False),
-          repr((drained, len(act.calls), len(tail), rows[-2:], out[-1])))
+          "nobody watches, and its end makes ONE read, of the update's last whole lines — no more than the "
+          "backlog keeps beside the end marker, every one kept — so the returning page shows them, in "
+          "order, then how it ended" % label,
+          (drained, len(act.calls) - drained, rows[-1:], tail == told, told == out[-len(told):], len(told) >= 100,
+           gs_id in _sh38._action_output)
+          == (0, 1, ["[panel] update finished successfully."], True, True, True, False),
+          repr((drained, len(act.calls) - drained, len(tail), len(told), told[:1], rows[-2:], out[-1][:20])))
     sio.emit("leave_console", {"server_id": gs_id})
 
 
@@ -1486,6 +1799,52 @@ def _server_ended_entry38(loop, gs_id, sio):
     _sh38._console_backlog.pop(gs_id, None)
 
 
+def _inflight_end38(gs_id):
+    """A poller tick whose read is still out when the action ends: that read is dropped, not pushed."""
+    remote = NS(host="192.0.2.38", name="p38-host")
+    real = _sh38._action_log_path("mcsrv38", "update")
+    act = _ActRig38(real)
+    _set38(_core38, "shell_as_game_user", act)
+    _sh38._console_backlog.pop(gs_id, None)
+    _sh38._begin_action_tail(_p9, gs_id, "update", real, "mcsrv38")
+    out = act.write(10, "INF")
+
+    def _ends():
+        out.extend(act.write(2, "INF"))        # the update's last words, then it exits
+        _sh38._end_action_tail(_p9, gs_id, remote, "update", 0)
+    act.hook = _ends                           # …while the tick below is still waiting on its read
+    _sh38._drain_action_output(_p9, remote, gs_id)
+    rows = [r["line"] for r in _sh38._console_backlog.get(gs_id, [])]
+    check("B server: a poller tick whose read is still out when the action ends: the end's own read shows the "
+          "output once, and the tick's stale copy is dropped — nothing after '[panel] update finished'",
+          rows == ["[panel] update started — its output follows."] + out + ["[panel] update finished successfully."]
+          and gs_id not in _sh38._action_output, repr((len(rows), rows[-3:])))
+    _sh38._console_backlog.pop(gs_id, None)
+
+
+def _begun_during_end38(gs_id):
+    """An action begun while another's end is reading: it stays tailed, and its own end shows its output."""
+    remote = NS(host="192.0.2.38", name="p38-host")
+    ru, rv = (_sh38._action_log_path("mcsrv38", a) for a in ("update", "validate"))
+    act = _ActRig38(ru, rv)
+    _set38(_core38, "shell_as_game_user", act)
+    _sh38._console_backlog.pop(gs_id, None)
+    _sh38._begin_action_tail(_p9, gs_id, "update", ru, "mcsrv38")
+    act.write(5, "UPD", ru)
+    act.hook = lambda: _sh38._begin_action_tail(_p9, gs_id, "validate", rv, "mcsrv38")
+    _sh38._end_action_tail(_p9, gs_id, remote, "update", 0)
+    reg = (_sh38._action_output.get(gs_id) or {}).get("action")
+    val = act.write(50, "VAL", rv)
+    _sh38._end_action_tail(_p9, gs_id, remote, "validate", 0)
+    rows = [r["line"] for r in _sh38._console_backlog.get(gs_id, [])]
+    check("B server: Validate clicked while Update's end is reading: Validate stays tailed, and its end shows all "
+          "of its output, then how it ended", (reg, [r for r in rows if r.startswith("VAL ")] == val, rows[-1:],
+                                               gs_id in _sh38._action_output)
+          == ("validate", True, ["[panel] validate finished successfully."], False),
+          repr((reg, len([r for r in rows if r.startswith("VAL ")]), rows[-2:])))
+    _sh38._console_backlog.pop(gs_id, None)
+
+
 def _section_server38(rig, gs_id, admin):
     loop = _poller38()
     check("B server: register() hands the console poller to its supervisor (so a pass can be driven)",
@@ -1501,7 +1860,10 @@ def _section_server38(rig, gs_id, admin):
         _server_backlog_key38(gs_id, admin, a)
         _unwatched_update38(loop, gs_id, admin, a, 3000, "192 KB")
         _unwatched_update38(loop, gs_id, admin, a, 16384, "1 MB")
+        _unwatched_update38(loop, gs_id, admin, a, 600, "600 KB in 1 KB lines", width=1000)
         _server_ended_entry38(loop, gs_id, a)
+        _inflight_end38(gs_id)
+        _begun_during_end38(gs_id)
     finally:
         for s in (a, b):
             s.disconnect()

@@ -299,9 +299,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
   own lines that went to the console meanwhile, such as an update's result. That includes a return
   whose connection dropped while the tab was away, as it does on a phone that slept. The catch-up
   reads back at most 2,000 lines. If more was written, or the server was restarted while the tab
-  was away (a restart starts a new log file, and the catch-up reads the current one), the console
-  says that some output is not shown, at the point where it is missing. A tab stays in while an
-  update or another long panel action it saw start is still running, so that action's output keeps
+  was away (a restart starts a new log file, and the catch-up reads the current one), or the host
+  never answered the catch-up's read, the console says that some output is not shown, at the point
+  where it is missing. Lines filled in this way have no time beside them unless the log itself
+  stamps them, since the panel did not see when they were written. A tab stays in while an update
+  or another long panel action it saw start is still running, so that action's output keeps
   arriving as it is written.
 - **The debug report says what is wrong, covers far more of the panel, and is safer to post.** It
   now opens with **At a glance**: every problem any section found, failures first, and the sections
@@ -671,8 +673,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **An update that ran with no console open keeps its result.** The panel reads a long action's
   output only while someone has its console open. An update started from the dashboard, by a bot,
   or with the console closed got one read when it ended, of its first 64 KB, so a long one lost the
-  lines that say whether it worked. The end now reads the rest, up to what the console's history
-  keeps, so opening the console afterwards shows how it ended.
+  lines that say whether it worked. The end now reads the last of the output in one read, as much
+  as the console's history keeps (its last 599 lines, within 255 KB, whole lines only), so opening
+  the console afterwards shows how it ended.
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
   and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
   `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query
