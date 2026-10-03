@@ -40,9 +40,11 @@ _KEEP_PREFIXES = _WARN_PREFIXES + ("✓ sudo grant:", "Keeping ", "Updating to v
                                    "✓ Code updated (")
 # A full commit id in install.sh's own messages (_choose_update_target's 'pin'/'stay'/'hold' lines
 # and its warnings), shortened: 40 hex characters are one "long token" to _redact. Anchored to those
-# message forms, so a 40-hex value anywhere else is still redacted.
+# message forms, so a 40-hex value anywhere else is still redacted: 'verified commit <sha>',
+# 'the pinned commit <sha>', 'Keeping <sha>:', 'stays at <sha>:', 'pinned to, <sha>,' and
+# '(this) checkout (<sha>)' (the sideways-hold warning, and the no-safe-target error's second line).
 _INSTALLER_SHA_RE = re.compile(r"((?:verified|pinned) commit |^\s*Keeping |stays at |pinned to, |"
-                               r"contained by it \()([0-9a-f]{40})(?![0-9a-f])")
+                               r"checkout \()([0-9a-f]{40})(?![0-9a-f])")
 _REFLOG_ACTIONS = ("reset", "pull", "checkout", "commit", "merge", "rebase", "clone",
                    "cherry-pick", "fetch", "branch")
 # panel_self_update's and panel_switch_branch's messages, as fixed categories chosen IN SQL, so no

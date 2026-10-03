@@ -40,9 +40,12 @@ NOT_READ = "not read (no helper, and passwordless sudo not confirmed; it would n
 HEALTH_SHOWN = 5
 HEALTH_MAX = 160
 # A domain name in a health message: a TLS dial records the server it dialled (a self-hosted relay
-# or control server), which the name map may not know. Tailscale's own domains name no one.
-_HEALTH_DOMAIN_RE = re.compile(r"(?<![\w.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.){1,8}"
-                               r"[A-Za-z][A-Za-z0-9-]{0,61}[A-Za-z](?![\w-])")
+# or control server), which the name map may not know. Tailscale's own domains name no one. The
+# rule runs after the name pass, so any label before the last may already be one of its tokens
+# ('[host-1].example.net', a relay named after the panel host): the run is still one domain.
+_HEALTH_LABEL = r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?|\[[a-z][\w:-]{0,40}\])"
+_HEALTH_DOMAIN_RE = re.compile(r"(?<![\w.-])(?:%s\.){1,8}[A-Za-z][A-Za-z0-9-]{0,61}[A-Za-z](?![\w-])"
+                               % _HEALTH_LABEL)
 _HEALTH_OWN_DOMAINS = ("tailscale.com", "tailscale.io", "ts.net")
 # 'certificate is self-signed by <issuer>': the issuer of an intercepting proxy's certificate is
 # often the employer's name.
@@ -202,6 +205,14 @@ def _ts_head(v):
 
 
 def _health_domain(m):
+    """[domain] for a match, unless it is Tailscale's own or a path's component.
+
+    After a single '/' a dotted name is a file ('/etc/resolv.conf', which a real health message
+    names); after '//' it is a URL's host, which is replaced.
+    """
+    before = m.string[max(0, m.start() - 2):m.start()]
+    if before.endswith("/") and before != "//":
+        return m.group(0)
     host = m.group(0).lower()
     if any(host == d or host.endswith("." + d) for d in _HEALTH_OWN_DOMAINS):
         return m.group(0)

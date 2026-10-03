@@ -63,10 +63,13 @@ _SYSLOG_HOST_RE = re.compile(
     r"(?:[+-]\d\d:?\d\d|Z)?)[ \t]+)(\S{1,255})([ \t]+[\w./@-]{1,64}(?:\[\d{1,10}\])?:)", re.M)
 _HOME_RE = re.compile(r"(/(?:home|srv|opt|var/home|Users))/(?!\[user\])[^/\s\"':;,)\]]{1,64}")
 _VENV_RE = re.compile(r"(?:/[^\s/\"':]{1,255}){0,32}/(?:site|dist)-packages(?=/)")
+# URL userinfo, up to the LAST '@' before the path: userinfo can itself hold an unencoded '@'.
+# Named, not indexed: scrub_early runs this one rule on its own, before _redact.
+_URL_USERINFO = (re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]{0,15}://)[^/\s]{1,256}@"), r"\1[redacted]@",
+                 "url")
 _GENERIC = (
     (re.compile(r"\[parameters: [^\n]*"), "[parameters: withheld]", "sql-params"),
-    # up to the LAST '@' before the path: userinfo can itself hold an unencoded '@'
-    (re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]{0,15}://)[^/\s]{1,256}@"), r"\1[redacted]@", "url"),
+    _URL_USERINFO,
     (re.compile(r"(?:https?://)?login\.tailscale\.com[^\s)\"'>\]]*"), "[tailscale-url]", "url"),
     (re.compile(r"(?<![\w.-])[\w-]{1,63}(?:\.[\w-]{1,63}){0,8}\.ts\.net\b"), "[ts-name]", "ts-name"),
     (re.compile(r"(?<![\w.-])[\w.-]{1,64}@github\b"), "[login]", "login"),
@@ -392,6 +395,9 @@ def _names_notifications(st, notif):
 
 # Keys of tailscale data whose string values name a node, a person or the tailnet.
 _TS_KEYS = re.compile(r"(?i)name|host|dns|login|display|tailnet|suffix|user|domain|node|peer|owner")
+# Keys mapped by their whole value only. A node's first label is its name, but a self-hosted control
+# server's is usually a word ("login", "vpn", "headscale") that would be replaced report-wide.
+_TS_WHOLE_KEYS = frozenset(("control_host",))
 
 
 def _names_tailscale(info, st, key="", depth=0):
@@ -407,6 +413,8 @@ def _names_tailscale(info, st, key="", depth=0):
     elif isinstance(info, str) and _TS_KEYS.search(key):
         value = info.strip().rstrip(".")
         st.add(value, "tailnet-name")
+        if key in _TS_WHOLE_KEYS:
+            return
         st.add(value.split(".")[0], "tailnet-name")
         if "@" in value:                    # a login's handle prints on its own too
             st.add(value.split("@", 1)[0], "tailnet-name")
@@ -738,7 +746,7 @@ def scrub_early(ctx, text):
     st = prepare(ctx)
     try:
         text = _paths(text, st)
-        rx, repl, kind = _GENERIC[1]
+        rx, repl, kind = _URL_USERINFO
         _count_generic(rx, repl, kind, text, st)
         text = _redact(rx.sub(repl, text), st)
     except Exception as exc:  # noqa: BLE001 - the assembler then withholds every body

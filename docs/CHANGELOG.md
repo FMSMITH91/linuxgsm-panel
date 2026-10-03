@@ -422,8 +422,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   credentials and SQL parameter lists, each counted once however often it appears.
 - **The debug report prints Tailscale's health messages, not only how many there are.** Each one
   is on its own line, with node and login names, addresses, a self-hosted server's domain and a
-  certificate issuer replaced, as the rest of the report replaces them. A self-hosted control
-  server's host name is added to the names the report replaces everywhere.
+  certificate issuer replaced, as the rest of the report replaces them; file paths and Tailscale's
+  own help links are kept. A self-hosted control server's full host name is added to the names the
+  report replaces everywhere.
 - **The debug report says "node key expiry disabled" for a node whose key does not expire.**
   Tailscale leaves the expiry out for a tagged node or one with expiry turned off, and the report
   read that as "not recorded". A node that is not in the network map yet (it needs login) says the

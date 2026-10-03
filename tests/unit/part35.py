@@ -17,6 +17,13 @@ Each check here fails on the tree before the fix, and names the line of the live
 * with trust_proxy off, a loopback account other than root sending X-Forwarded-For was refused but
   never counted, so 'Forwarding headers ignored, last hour: none' was not a reading.
 
+And the review of those fixes: install.sh's hold messages ('pinned to, <pin>,', 'this checkout
+(<sha>)', 'stays at <sha>:') printed [redacted] for the id; installer lines with a ctx got their URL
+userinfo rule by its index in privacy._GENERIC; a health message's domain whose first label the name
+pass had replaced ('[host-1].example.net') printed its registrable domain, while a file name
+('/etc/resolv.conf') read as [domain]; and a self-hosted control server's generic first label
+('login') was replaced across the whole report.
+
 HOW IT RUNS. Every read is stubbed on the module that defines it, through part20's _patch and
 _patched (undone at the end of each block); runtime_stats groups and auth's ignored-proxy record
 are saved and restored. The privacy map is built in memory (part25's _ctx_with), so nothing is read
@@ -132,6 +139,42 @@ def _p35_installer_musts():
        "fetch https://[userinfo]@example.org/x from [ip]")
 
 
+def _installer_ids35():
+    """install.sh's hold messages (install.sh:727, 849, 850, 853), each naming a full commit id."""
+    return {
+        "sideways": ("[!] The commit this update is pinned to, %s, is on main's first-parent line, "
+                     "but it neither contains this checkout (%s) nor is contained by it" % (_PIN35, _SHA35),
+                     "pinned to, 86843af0bbbb, is on main's first-parent line, but it neither contains "
+                     "this checkout (8139d8bc4f0e)"),
+        "stays": ("[!] This checkout stays at %s: moving to the pin would drop commits it has." % _SHA35,
+                  "This checkout stays at 8139d8bc4f0e: moving to the pin"),
+        "hold": ("[!] This checkout stays at %s: the update does not fall back to main's tip, which "
+                 "nothing verified." % _SHA35, "stays at 8139d8bc4f0e: the update does not fall back"),
+        "unverified": ("[!] The commit this update is pinned to, %s, is not on main's first-parent "
+                       "line here, so it is not verified." % _PIN35, "pinned to, 86843af0bbbb, is not on"),
+        "error": ("     checkout (%s) is not on main to stay at. The update does not" % _SHA35,
+                  "checkout (8139d8bc4f0e) is not on main to stay at"),
+    }
+
+
+def _p35_installer_ids():
+    ctx, _st = _ctx_with()
+    got = {k: UP.clean_line(line, "canonical", ctx) for k, (line, _w) in _installer_ids35().items()}
+    bad = {k: got[k] for k, (_l, want) in _installer_ids35().items() if want not in got[k]}
+    check("installer lines: every full commit id install.sh's hold messages print ('pinned to, "
+          "<pin>,', 'this checkout (<sha>)', 'stays at <sha>:') is cut to 12 characters, never "
+          "[redacted]", not bad and not any("[redacted]" in v for v in got.values()), repr(bad or got))
+
+
+def _p35_userinfo_ctx():
+    ctx, _st = _ctx_with()
+    out = UP.clean_line("fetch https://bob:tok3n@github.com/x.git", "canonical", ctx)
+    check("installer lines: with the report's ctx, URL userinfo is one [redacted] before _redact's "
+          "email rule runs (never 'https://bob:[email]/'), so the user name does not print",
+          "https://[redacted]@github.com/x.git" in out and "bob" not in out and "tok3n" not in out,
+          out)
+
+
 def _tail35(lines, ctx):
     upd = {"exists": True, "exit_code": 0, "lines": lines}
     res = Result()
@@ -242,6 +285,33 @@ def _health_checks35(final, shown, res):
           not any("health" in f["text"].lower() for f in res.findings), repr(res.findings))
 
 
+def _p35_health_domains():
+    ctx, _st = _ctx_with(("zephyrhost7731", "host", 1))
+    health = ["TLS handshake with zephyrhost7731.smithfam7731.net:443 failed: x509: certificate "
+              "signed by unknown authority",
+              "dial tcp: lookup derp1.zephyrbox7731.quokkanet7731.org: no such host",
+              "Linux DNS config not ideal. /etc/resolv.conf overwritten. See "
+              "https://tailscale.com/s/dns-fight"]
+    v = _tinfo35({"BackendState": "Running", "Health": health,
+                  "Self": {"HostName": "zephyrbox7731", "InNetworkMap": True}}, {})
+    res = Result()
+    with _patched():
+        _patch(NW, "_load_cfg", lambda: ({"port": 5000}, True))
+        NW._tailscale_lines(ctx, res, {}, ("ok", ("ok", v)))
+    final = PV.scrub(ctx, "\n".join(res.lines))
+    low = final.lower()
+    check("tailscale health: a self-hosted domain whose first (or a middle) label the name pass "
+          "already replaced is still [domain] ('[host-1].<domain>': a relay named after the panel "
+          "host)",
+          "smithfam7731" not in low and "quokkanet7731" not in low
+          and "TLS handshake with [domain]:443 failed" in final
+          and "lookup [domain]: no such host" in final, final)
+    check("tailscale health: ...while a file path and Tailscale's own links print verbatim "
+          "(/etc/resolv.conf, https://tailscale.com/s/dns-fight)",
+          "  - health: Linux DNS config not ideal. /etc/resolv.conf overwritten. See "
+          "https://tailscale.com/s/dns-fight" in final, final)
+
+
 def _p35_control_host():
     own = _tinfo35({"Self": {}}, {"ControlURL": "https://controlplane.tailscale.com"})
     hosted = _tinfo35({"Self": {}}, {"ControlURL": "https://hs.zephyr7731.example:443"})
@@ -252,6 +322,13 @@ def _p35_control_host():
           "Tailscale's own is not",
           own.get("control_host") is None and hosted.get("control_host") == "hs.zephyr7731.example"
           and "zephyr7731" not in out and "controlplane.tailscale.com ok" in out, out)
+    ctx, st = _ctx_with()
+    PV._names_tailscale(_tinfo35({"Self": {}}, {"ControlURL": "https://login.zephyr7731.example"}), st)
+    out = PV.scrub(ctx, "Login throttle: 0 · last login 3 m ago; dial login.zephyr7731.example failed")
+    check("tailscale: ...as its whole name only: a generic first label (https://login.<domain>) "
+          "is not replaced across the report ('Login throttle', 'last login' survive)",
+          out.startswith("Login throttle: 0 · last login 3 m ago; dial ") and "zephyr7731" not in out,
+          out)
 
 
 def _p35_key_expiry():
@@ -562,8 +639,9 @@ def _p35_trust_proxy():
                                    "tailscaled)" in ln for ln in res.lines), repr(res.lines))
 
 
-for _fn35 in (_p35_units, _p35_installer_paths, _p35_installer_musts, _p35_installer_said, _p35_footer_counts,
-              _p35_footer_installer, _p35_health, _p35_control_host, _p35_key_expiry,
+for _fn35 in (_p35_units, _p35_installer_paths, _p35_installer_musts, _p35_installer_ids,
+              _p35_userinfo_ctx, _p35_installer_said, _p35_footer_counts, _p35_footer_installer,
+              _p35_health, _p35_health_domains, _p35_control_host, _p35_key_expiry,
               _p35_ci_gate, _p35_announced, _p35_workers, _p35_loops_record, _p35_loops_gate,
               _p35_trust_proxy):
     try:
