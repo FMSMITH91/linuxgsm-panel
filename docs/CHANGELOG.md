@@ -674,7 +674,7 @@ CI-verified commit regardless of this file — this changelog is for humans.
   output only while someone has its console open. An update started from the dashboard, by a bot,
   or with the console closed got one read when it ended, of its first 64 KB, so a long one lost the
   lines that say whether it worked. The end now reads the last of the output in one read, as much
-  as the console's history keeps (its last 599 lines, within 255 KB, whole lines only), so opening
+  as the console's history keeps (its last 599 lines, within 256 KB, whole lines only), so opening
   the console afterwards shows how it ended.
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
   and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,

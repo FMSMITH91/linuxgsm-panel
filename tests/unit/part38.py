@@ -1290,6 +1290,19 @@ async function checkUnreadable(cfg) {
           JSON.stringify({missing: missing.length, gaps, shown: got.length, want: w.log().length,
                           resync: !!w.page.ctx._resync, owed: w.page.ctx._returnOwed}));
   }
+  // No read of the log answers, and an update ran start to end while the tab was away: the panel's own
+  // lines come from the panel, not the host, so they show all the same — and the version is re-read.
+  const u = await awayLong(cfg, 40);
+  const v0 = versions(u);
+  await u.hide(false); await u.settlePolls();
+  for (let i = 0; i < 9; i++) {
+    for (const f of u.pending()) await u.reply(unread(u.read(f)));
+    u.pass(); await u.advance(6000);
+  }
+  check('a return no read of the log answers, an update having run while the tab was away: its lines still show, '
+        + 'once, in order, and the game version is re-read', !u.page.ctx._resync && versions(u) - v0 === 1
+        && JSON.stringify(u.pagePanel()) === JSON.stringify(u.backlog.map(b => b.line)),
+        JSON.stringify({panel: u.pagePanel(), versions: versions(u) - v0}));
   // With the socket down there is no stream to wait on: an unanswered read is left to the 30 s console
   // poll (and the reconnect), as any read made with the socket down is — not asked again every 6 s.
   const w = await awayLong(cfg, 40);
@@ -1514,7 +1527,7 @@ def _section_page38():
         return
     results = out.get("results") or []
     check("A page: the harness ran server_detail.js whole and reported every check",
-          len(results) >= 82 and not out.get("error"), repr(out)[:1500])
+          len(results) >= 83 and not out.get("error"), repr(out)[:1500])
     for r in results:
         check("A page: " + r["name"], r["ok"], r.get("detail", ""))
 
@@ -1819,6 +1832,18 @@ def _inflight_end38(gs_id):
           "output once, and the tick's stale copy is dropped — nothing after '[panel] update finished'",
           rows == ["[panel] update started — its output follows."] + out + ["[panel] update finished successfully."]
           and gs_id not in _sh38._action_output, repr((len(rows), rows[-3:])))
+    _sh38._console_backlog.pop(gs_id, None)
+    # The server deleted while a tick's read is out (forget_rows drops its registration): its id may be
+    # another server's by the time the read answers, so nothing of it may land in that console.
+    _sh38._begin_action_tail(_p9, gs_id, "update", real, "mcsrv38")
+    _sh38._console_backlog.pop(gs_id, None)
+    act.write(3, "DEL")
+    act.hook = lambda: _ps38.forget_rows(server_ids=[gs_id])
+    _sh38._drain_action_output(_p9, remote, gs_id)
+    check("B server: ...and a tick whose read is still out when the server is deleted pushes nothing into what "
+          "may by then be another server's console", gs_id not in _sh38._console_backlog,
+          repr(_sh38._console_backlog.get(gs_id, [])[-2:]))
+    _sh38._end_action_tail(_p9, gs_id, remote, "update", 0)      # its worker ends it: says nothing
     _sh38._console_backlog.pop(gs_id, None)
 
 

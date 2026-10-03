@@ -1356,13 +1356,13 @@ def _final_drain_cmd(path, pos):
     """The end-of-action read: what is left of `path` past byte `pos`, as much as the backlog keeps.
 
     Prints the size on its own first line, as _drain_action_output's command does, then the output's
-    last lines: as many as the backlog keeps beside the end marker that follows them (one row and
-    1 KB are left for it), counted in raw bytes, which is never less than what the backlog counts. A
-    cut that lands inside a line drops that line: the byte before the cut is read too, and
-    everything up to the first newline from there is skipped, so what is kept starts on a line of
-    its own.
+    last lines: as many as the backlog keeps beside the end marker that follows them — one row is
+    left for it, and the bytes are counted raw, newlines and all, which is more than the backlog
+    counts, so the marker always fits beside them. A cut that lands inside a line drops that line:
+    the byte before the cut is read too, and everything up to the first newline from there is
+    skipped, so what is kept starts on a line of its own.
     """
-    pos, keep, rows = int(pos), _CONSOLE_BACKLOG_BYTES - 1024, _CONSOLE_BACKLOG_MAX - 1
+    pos, keep, rows = int(pos), _CONSOLE_BACKLOG_BYTES, _CONSOLE_BACKLOG_MAX - 1
     return (f"s=$(stat -c%s {path} 2>/dev/null || echo 0); printf '%s\\n' \"$s\"; "
             f"if [ \"$s\" -gt {pos + keep} ]; then "
             f"tail -c +$((s - {keep})) {path} 2>/dev/null | head -c {keep + 1} | tail -n +2; "
