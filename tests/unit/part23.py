@@ -419,7 +419,7 @@ def _calls23(path, attr):
 
 _LOOP_FILES23 = ("app.py", "panel/services/monitoring.py", "panel/routes/server_files.py",
                  "panel/routes/os_updates.py", "panel/routes/host_terminal.py",
-                 "panel/ops/terminal_session.py")
+                 "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py")
 
 
 def _names_gates23():

@@ -89,7 +89,8 @@ _CANARIES = ("canary-host-7731", "198.51.100.77", "CanaryServer", "canaryadmin",
              "canarysshacct", "canarypanelacct", "canarynode", "tail7731ab", "canaryuser@github",
              "1234567890", "canarytopic7731", "canaryntfy7731", "canaryu:canaryp4ss", "canarytag",
              "198.51.100.79", "203.0.113.9", "canaryparam7731", "7731234", "76561197960287930",
-             "canarypeer7731", "canarytailnet7731", "CanaryTitle7731", "/home/canarypanelacct")
+             "canarypeer7731", "canarytailnet7731", "CanaryTitle7731", "/home/canarypanelacct",
+             "canaryurlacct", "pa$$w0rd!7731")
 
 
 def _canary_journal():
@@ -101,6 +102,7 @@ def _canary_journal():
         "  Tailscale: https://canarynode.tail7731ab.ts.net (peer canarypeer7731 in canarytailnet7731)",
         "login canaryuser@github ok, chat 1234567890 notified via canarytopic7731",
         "fetch https://canaryu:canaryp4ss@example.org/repo failed; tag canarytag applied",
+        "push https://canaryurlacct:pa$$w0rd!7731@git.example.org/x refused",
         "peer ::ffff:198.51.100.79 connected; Open it at https://203.0.113.9:5000",
         "ban STEAM_0:1:7731234 and 76561197960287930; ssh canarysshacct@canary-host-7731",
         "Traceback (most recent call last):",
@@ -255,10 +257,12 @@ def _p20_matching():
     st = PV._State()
     for name, ident in (("abc", 1), ("abcdef", 2), ("game", 3), ("my.box", 4)):
         st.add(name, "host", ident)
-    out = PV._known_names("abcdef abc xabc abcx ABC game my.box myXbox\n### abc", st)
+    st.add("Diagnostics", "host", 5)
+    out = PV._known_names("abcdef abc xabc abcx ABC game my.box myXbox\n### Diagnostics _(read in 0.01 s)_",
+                          st)
     eq("debug report privacy: known names match longest first, case-insensitively, never inside a longer "
        "word, never a common word, never in a heading",
-       out, "[host-2] [host-1] xabc abcx [host-1] game [host-4] myXbox\n### abc")
+       out, "[host-2] [host-1] xabc abcx [host-1] game [host-4] myXbox\n### Diagnostics _(read in 0.01 s)_")
     st2 = PV._State()
     text = PV._generic("a 100.101.102.103 b 8.8.8.8 c 127.0.0.1 d 0.0.0.0 e ::1 f fd7a:115c:a1e0::5 "
                        "g 12:00:01 h [2001:db8::1]:5000 i 10.0.0.2 j fe80::1%eth0", st2)
@@ -297,7 +301,7 @@ def _p20_glance():
        "most, with the rest counted",
        lines, ["### At a glance: 6 problems, 3 unreadable", "- [fail] A: f1", "- [fail] A: f2",
                "- [warn] A: w1", "- [warn] A: w2", "- [warn] A: w3", "- [warn] A: w4",
-               "- … and 3 more in the full report"])
+               "- … and 3 more, every one listed under All findings in the full report"])
     check("debug report: a section that returned nothing (or only '(none)') is one that could not be "
           "read; one with findings and no body prints its findings",
           results["s4"][:1] == ("error",) and results["s4"][2] == "EmptyResult"

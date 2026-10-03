@@ -631,7 +631,7 @@ check("R40: without the helper (or root) UFW is not read at all (the pre-helper 
 
 def _ufw_text(got, cfg=None):
     res, facts = _b22.Result(), {}
-    _nw22._ufw_lines(res, facts, got, cfg or {"port": 5000, "tailscale_setup_done": True})
+    _nw22._ufw_lines(res, facts, got, cfg or {"port": 5000, "tailscale_setup_done": True}, 5000)
     return res, facts
 
 
@@ -674,7 +674,8 @@ class _FakePopen22:
 def _sudo_n22(answer, fn):
     """Run fn() with no helper, not root, and a CACHED passwordless-sudo probe."""
     fake, verbs = _FakePopen22(answer), []
-    with _patched(_so22, _helper_present=lambda: False, _SUDO_PROBE={"at": 1.0, "ok": True},
+    # probed just now: an answer older than _SUDO_PROBE_TTL is not used (see _sudo_cached_ok)
+    with _patched(_so22, _helper_present=lambda: False, _SUDO_PROBE={"at": _time22.time(), "ok": True},
                   _run_verb=lambda *a, **k: verbs.append(a) or ("", "", 1),
                   _collect_verb_output=lambda p, argv, timeout, *a, **k: fake.answer), \
             _patched(_nw22, subprocess=fake), _patched(_nw22.os, geteuid=lambda: 1000):
