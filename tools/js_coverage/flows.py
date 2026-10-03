@@ -320,7 +320,8 @@ return {value: f.value, sel: [f.selectionStart, f.selectionEnd], focused: docume
 RENAME_STATE = r"""
 const f = J.q('#file-list .fb-rename input'), e = J.q('#file-list .fb-rename-err');
 return {open: !!f, value: f ? f.value : null, err: e && e.style.display !== 'none' ? e.textContent : '',
-        rows: Array.from(document.querySelectorAll('#file-list [data-path]')).map(r => r.dataset.path)};
+        rows: Array.from(document.querySelectorAll('#file-list [data-path]')).map(r => r.dataset.path),
+        editing: (J.q('#editor-path') || {}).textContent || ''};
 """
 # The open field at a phone's width. Nothing here is a size picked to pass: the row's own name and
 # icons are not displayed, the field's box spans the row's content box (so the field has all the
@@ -378,12 +379,14 @@ def _rename_keys(d):
     is_open, err, rows, got = _rename_state(d)
     _expect((is_open, "already exists" in err) == (True, True), "a taken name is shown", got)
     _press(d, "Escape", "Escape", 27)
+    d.run("J.click('#file-list [data-path=\"notes.txt\"]'); await J.sleep(800); return 1;")
     d.run(RENAME_OPEN % ("notes.txt", "notes.txt"))
     d.keys("renamed\n")                     # typed over the selected stem: renamed.txt
     d.wait(1.0)
     is_open, _err, rows, got = _rename_state(d)
-    _expect((is_open, "renamed.txt" in rows, "notes.txt" in rows) == (False, True, False),
-            "Enter renames, and the list refreshes", got)
+    _expect((is_open, "renamed.txt" in rows, "notes.txt" in rows, got.get("editing"))
+            == (False, True, False, "renamed.txt"),
+            "Enter renames, the list refreshes, and the open file follows", got)
 
 
 def _rename_phone(d):
