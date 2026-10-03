@@ -160,12 +160,14 @@ def _p35_footer_counts():
     ctx, _st = _ctx_with()
     text = ("unit user@1000.service; mail someone@example.com; token "
             "qZ3vT8rW1yX5uA9sD2fG7hJ4kL6mN0pQ; password=hunter2xyz; fetch https://bob:pw@example.org/x")
-    PV.scrub(ctx, text)
+    out = PV.scrub(ctx, text)
     PV.scrub(ctx, text)                                   # the summary and the report each scrub
+    PV.scrub(ctx, out)               # and scrubbed text is scrubbed again (installer lines, sections)
     red = _redacted_line35(ctx)
     pseud = next((ln for ln in PV.footer(ctx) if ln.startswith("- **Pseudonymised**")), "")
     check("privacy footer: _redact's replacements are counted under Redacted, as distinct values "
-          "(two passes over the same text count each once), never under Pseudonymised",
+          "(a second pass, or one over the first's own markers, counts nothing again), never under "
+          "Pseudonymised",
           all(w in red for w in ("1 email-shaped string;", "1 long token;", "1 key=value secret;",
                                  "1 URL credential or login link")) and "email" not in pseud, red)
 
@@ -248,7 +250,7 @@ def _p35_control_host():
     out = PV.scrub(ctx, "dial hs.zephyr7731.example failed; controlplane.tailscale.com ok")
     check("tailscale: a self-hosted control server's host is mapped (it names the operator); "
           "Tailscale's own is not",
-          own["control_host"] is None and hosted["control_host"] == "hs.zephyr7731.example"
+          own.get("control_host") is None and hosted.get("control_host") == "hs.zephyr7731.example"
           and "zephyr7731" not in out and "controlplane.tailscale.com ok" in out, out)
 
 
