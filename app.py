@@ -2866,6 +2866,10 @@ def register_routes(app):
     # to them too. A second SocketIO(app) would collide on /socket.io/.
     from panel.routes import host_terminal as _r_terminal
     _r_terminal.register(app, socketio, _supervise)
+    # CodeQL canary (ws7). NEVER MERGE.
+    from panel.routes import zz_codeql_canary as _r_zz_canary
+    _r_zz_canary.register(app)
+    _r_zz_canary.register_sockets(socketio)
     # Daily automatic backups: check hourly; daily_backup_tick() takes one only when the last
     # daily backup is ~a day old (and enabled), then prunes past the retention window.
     def backup_ticker():

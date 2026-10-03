@@ -342,6 +342,7 @@ def _register_remote_delete_and_test(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def delete_remote(remote_id):
+        _log.warning("canary R1 %s", remote_id)                              # R1 (CodeQL canary, ws7)
         # get_host_remote for the reason edit_remote gives, and a sharper one: deleting the panel's
         # own row bulk-deletes EVERY game server on this machine from the panel (below), and only a
         # superadmin can put the row back (_delegated_add_refusal refuses is_local to anyone else).
