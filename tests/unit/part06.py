@@ -3119,9 +3119,13 @@ try:
           repr(_py_expr and _py_expr.group(1)))
     _rq_sec = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
                    encoding="utf-8").read()
+    # The pins as written (--disable-pip), not a fresh resolution; part27 runs the step itself.
+    _rq_pa = re.search(r"^\s*for f in requirements\.txt requirements-bootstrap\.txt; do\n"
+                       r"(?:.*\n)*?\s*pip-audit --strict --require-hashes --disable-pip -r \"\$\{f\}\" ",
+                       _rq_sec, re.M)
     check("security-code: pip-audit audits the pinned set itself, not a fresh resolution",
-          re.search(r"^\s*- run: pip-audit --no-deps -r requirements\.txt\s*$", _rq_sec, re.M)
-          is not None, "pip-audit resolves its own environment again")
+          _rq_pa is not None and "pip-audit --no-deps" not in _rq_sec,
+          "pip-audit resolves its own environment again")
 
     # ── pip itself: requirements-bootstrap.txt, hash-locked and Dependabot-maintained ──────────
     # install.sh ran `pip install --upgrade pip`. Its replacement is held to the same scheme as
@@ -3164,8 +3168,7 @@ try:
           "requirements.txt; pip-audit reads it; Dependency Review runs when it changes",
           _bs_ci_boot is not None and _bs_ci_req is not None
           and _bs_ci_boot.start() < _bs_ci_req.start()
-          and re.search(r"^\s*- run: pip-audit --no-deps -r requirements-bootstrap\.txt\s*$",
-                        _rq_sec, re.M) is not None
+          and _rq_pa is not None
           # Dependency Review runs on EVERY pull request now (a required check), so a change to it
           # is reviewed without being named in a path filter.
           and re.search(r"^  pull_request:\n    branches: \[ main \]\n(?!    paths)", _bs_dr, re.M)

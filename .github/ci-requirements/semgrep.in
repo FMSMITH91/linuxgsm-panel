@@ -4,15 +4,10 @@
 # `--require-hashes`. Dependabot keeps it current by re-running pip-compile on the Python its
 # header names (3.11), so a bump never pins a set that cannot be installed together. Edit
 # THIS file, then regenerate (run in python:3.11-slim):
-#   pip-compile --generate-hashes --no-annotate --strip-extras --unsafe-package=pyjwt \
-#     --output-file=semgrep.txt semgrep.in
+#   pip-compile --generate-hashes --no-annotate --strip-extras --output-file=semgrep.txt semgrep.in
 #
-# PyJWT is left out of semgrep.txt (--unsafe-package) and pinned on its own in semgrep-pyjwt.txt.
-# semgrep 1.178.0 declares pyjwt~=2.13.0, and every 2.13 release is vulnerable (GHSA-ffc3-869f-jxw9
-# and ten more; fixed in 2.15.0), so no set that honours semgrep's pin is safe. The job installs
-# both files with --no-deps: the two together are the whole closure, hash-checked, and semgrep scan
-# runs on PyJWT 2.15 (it imports jwt at startup for its MCP server, and never verifies a token in a
-# scan). Dependabot keeps --unsafe-package (it reads it back from the header) and updates
-# semgrep-pyjwt.txt on its own. Once a semgrep release allows a safe PyJWT, drop the option and the
-# second file and install semgrep.txt alone again.
+# semgrep.txt is the whole closure, PyJWT included, and the job installs it alone with pip's
+# dependency check on. semgrep 1.178.0 pinned pyjwt~=2.13.0, every release of which is vulnerable,
+# so PyJWT was compiled out (--unsafe-package) and pinned in a second file installed with
+# --no-deps. semgrep 1.179.0 requires pyjwt>=2.15.0,<3, which is safe, so that split is gone.
 semgrep

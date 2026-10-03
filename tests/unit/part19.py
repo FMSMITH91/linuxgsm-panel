@@ -629,8 +629,9 @@ if _sg_m is not None and _shutil18b.which("jq"):
 
 
 # ── Renovate keeps the workflows' sha256-pinned downloads current, and nothing else ─────────────
-# gitleaks, actionlint and the Codacy coverage reporter are release binaries fetched by tag and
-# checked against a sha256. Dependabot cannot see them, so they were bumped by hand, or not at all.
+# gitleaks, actionlint, osv-scanner and the Codacy coverage reporter are release binaries fetched by
+# tag and checked against a sha256. Dependabot cannot see them, so they were bumped by hand, or not
+# at all.
 # .github/renovate.json runs ONE regex manager over the workflows (Dependabot keeps everything
 # else, so the two never propose the same update). Its github-release-attachments lookup fetches
 # releases/tags/<value>, so the value must be the exact tag the URL downloads: `v${VERSION}` in a
@@ -683,7 +684,7 @@ for _rn_wf in sorted(_rn_glob.glob(os.path.join(_rn_root, ".github", "workflows"
 check("renovate: every sha256-checked download in a workflow is matched, and fetched by the tag "
       "Renovate looks up",
       not _rn_bad and sorted(_rn_deps) == ["codacy/codacy-coverage-reporter", "gitleaks/gitleaks",
-                                            "rhysd/actionlint"],
+                                            "google/osv-scanner", "rhysd/actionlint"],
       repr((_rn_bad, _rn_deps)))
 _rn_ctl = ("          # renovate: datasource=github-release-attachments depName=o/r\n"
            "          VERSION: 'v1.2.3'\n          SHA256: '%s'\n"
