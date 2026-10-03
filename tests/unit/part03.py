@@ -924,7 +924,8 @@ check("daily_restart(mapped): queries gamedig for player count",
 # print nothing unless it really saw a player array.
 _dr_line = _cron["add"][1]
 check("daily_restart(mapped): jq prints nothing unless gamedig really answered",
-      'if (.players|type=="array") then (.players|length) else empty end' in _dr_line, _dr_line[:200])
+      'if (.players|type=="array") then ' in _dr_line and ' else empty end' in _dr_line,
+      _dr_line[:200])
 check("daily_restart(mapped): restarts on a counted 0, not on an empty/failed read",
       '[ "$P" = 0 ]' in _dr_line
       and '-z "$P"' not in _dr_line and '"$P" = null' not in _dr_line, _dr_line[:200])

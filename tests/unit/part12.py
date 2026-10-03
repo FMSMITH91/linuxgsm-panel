@@ -2572,10 +2572,12 @@ try:
     _jf = _ms_job(_ms_f)
     check("install flow F: a failed EULA write, command read and port detect are all non-fatal",
           "mc-eula" in _ms_log and _jf.get("status") == "done", repr((_ms_log, _jf)))
+    # (Its port detect raised, so step 6 failed: the audit entry says that too.)
     check("install flow F: a clean start whose port is not open yet is 'starting', not a failure",
           _jf.get("warn") is True
           and "installed and starting — it hasn't opened port 25600" in _jf.get("message", "")
-          and _p9_audit("install_complete").detail == "started; port 25600 not open after 90s",
+          and _p9_audit("install_complete").detail
+          == "started; port 25600 not open after 90s; firewall step failed",
           repr(_jf))
 
     # ── Flow G: SCP:SL — its EULA and per-port config are seeded; failures there are non-fatal ──

@@ -463,10 +463,12 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
         return None
     # Player fields are protocol-specific in gamedig: Source/valve exposes score + time (seconds
     # connected); Quake3/idTech3 (cod) exposes `frags` and no time. Pull score from score OR frags
-    # so cod shows a score too; time stays null where the game doesn't report it.
-    jqf = ('[.players[] | {name:(.name // ""), '
+    # so cod shows a score too; time stays null where the game doesn't report it. `c` is the
+    # reply's own head count (_core.GAMEDIG_HUMANS_JQ), so an empty list can be told from an empty
+    # server: see _gamedig_players_from_output.
+    jqf = ('{p:[.players[] | {name:(.name // ""), '
            'score:(.raw.score // .score // .raw.frags // .frags // null), '
-           'time:(.raw.time // .time // null)}]')
+           'time:(.raw.time // .time // null)}], c:%s}' % _core.GAMEDIG_HUMANS_JQ)
     cmd = f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null | jq -c {_core._quote(jqf)} 2>/dev/null"
     try:
         out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
@@ -476,8 +478,17 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
 
 
 def _gamedig_players_from_output(out):
-    """The player list from the jq-reduced gamedig output, or None when there is none to read."""
-    line = next((ln.strip() for ln in (out or "").splitlines() if ln.strip().startswith("[")), "")
+    """The player list from the jq-reduced gamedig output ({p: list, c: head count}), or None.
+
+    None when there is nothing to read — and when the list has no names while the reply's own count
+    says someone is on. A Minecraft Bedrock reply never carries a list (numplayers is all its ping
+    returns), nor does a Java server hiding its players or a Source server that does not answer
+    A2S_PLAYER, and an empty list was read as a confirmed-empty server: the Players panel and the
+    chat bot's /players said "no players connected" with people on. Unknown lets the on-demand
+    console fallback answer instead.
+    """
+    line = next((ln.strip() for ln in reversed((out or "").splitlines())
+                 if ln.strip().startswith("{")), "")
     if not line:
         return None
     try:
@@ -485,11 +496,16 @@ def _gamedig_players_from_output(out):
         data = _json.loads(line)
     except (ValueError, TypeError):
         return None
-    return _gamedig_player_rows(data)
+    if not isinstance(data, dict):
+        return None
+    rows = _gamedig_player_rows(data.get("p"))
+    if not rows and data.get("c") != 0:
+        return None      # nobody named, and the count is not a counted 0: unknown, not empty
+    return rows
 
 
 def _gamedig_player_rows(data):
-    """Player rows from the decoded gamedig list: named entries only, name capped at 64."""
+    """Player rows from the decoded gamedig list (`p`): named entries only, name capped at 64."""
     players = []
     for p in (data if isinstance(data, list) else []):
         if isinstance(p, dict):

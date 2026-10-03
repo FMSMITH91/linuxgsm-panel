@@ -443,13 +443,20 @@ def _cron_log_command(line, marker):
 #                        else, so the old query, filter and condition are still there.
 #   2a3e69b (#331)       the guarded filter (`... else empty end`) and a counted `[ "$P" = 0 ]`;
 #                        no query became `if true`.
-#   0816ced (#362)       the same with PATH=/usr/local/bin:/usr/bin:/bin: today's line.
+#   0816ced (#362)       the same with PATH=/usr/local/bin:/usr/bin:/bin. It still counted the
+#                        player LIST, which a Minecraft Bedrock reply always leaves empty and a
+#                        Java server hiding its players does too (numplayers alone carries the
+#                        count), so such a server read as a counted 0 with people on it.
+#   ws6-security         the same, counting _core.GAMEDIG_HUMANS_JQ: today's line.
 #
 # The PATH is the literal #362 wrote, not _core.CRON_TOOL_PATH: this table is history. A unit gate
 # requires that what set_daily_restart writes today is in it, so changing that line without adding
 # its shape here fails the suite instead of leaving the new line unrecognised.
 _RC_JQ_OLD = "'.players|length'"
 _RC_JQ_GUARD = "'if (.players|type==\"array\") then (.players|length) else empty end'"
+_RC_JQ_HUMANS = ("'if (.players|type==\"array\") then ([(.players|length), "
+                 "((.numplayers|numbers) - ([(.bots|arrays|length), (.raw.numbots?|numbers)] "
+                 "| max // 0))] | max) else empty end'")
 _RC_COND_OLD = 'if [ -z "$P" ] || [ "$P" = 0 ] || [ "$P" = null ]; then '
 _RC_COND_COUNTED = 'if [ "$P" = 0 ]; then '
 _RC_PATH_362 = "PATH=/usr/local/bin:/usr/bin:/bin; "
@@ -472,6 +479,7 @@ def _restart_check_res(user, selfname):
         query(_RC_PATH_362, _RC_JQ_OLD) + re.escape(_RC_COND_OLD),    # ... after #362's PATH heal
         query("", _RC_JQ_GUARD) + re.escape(_RC_COND_COUNTED),        # 2a3e69b (#331)
         query(_RC_PATH_362, _RC_JQ_GUARD) + re.escape(_RC_COND_COUNTED),   # 0816ced (#362)
+        query(_RC_PATH_362, _RC_JQ_HUMANS) + re.escape(_RC_COND_COUNTED),  # ws6-security, today
         re.escape("if true; then "),                                  # #331 onward, no query
     )
     head = re.escape("[ -f ") + flag + re.escape(" ] && { ")
@@ -1239,7 +1247,9 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     #
     # player_slots twenty lines below has carried this guard from the start, and its comment says
     # exactly this ("a FAILED query reads as '0 players'"). This function simply never got it.
-    jqf = '{c:(.players|length), ok:(.players|type=="array")}'
+    # `c` is _core.GAMEDIG_HUMANS_JQ, not the list's length: Bedrock answers numplayers with an
+    # empty list, and that list counted as a confident 0.
+    jqf = '{c:%s, ok:(.players|type=="array")}' % _core.GAMEDIG_HUMANS_JQ
     cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
            f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     d = _gamedig_reply(server, user, cmd)
@@ -1262,8 +1272,10 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
     # One query -> compact JSON {c:count, m:maxplayers, n:name, ok:<did it actually respond?>}. `ok`
     # (players is an array) distinguishes a real reply from gamedig's {"error":...} — otherwise a
     # FAILED query reads as "0 players", which both shows a bogus 0 and blocks the console fallback.
-    # JSON escaping lets a server name with any character round-trip safely.
-    jqf = '{c:(.players|length), m:.maxplayers, n:(.name // ""), ok:(.players|type=="array")}'
+    # JSON escaping lets a server name with any character round-trip safely. The count is
+    # _core.GAMEDIG_HUMANS_JQ, as in player_count.
+    jqf = ('{c:%s, m:.maxplayers, n:(.name // ""), ok:(.players|type=="array")}'
+           % _core.GAMEDIG_HUMANS_JQ)
     cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
            f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     d = _gamedig_reply(server, user, cmd)
@@ -1340,8 +1352,8 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     # with rc 0. That is the one answer this function must never invent, and its own docstring
     # promises it does not ("or the query fails. None => 'unknown', which the reboot poller treats
     # as 'don't reboot'"). player_slots has carried this guard from the start and player_count
-    # gained it later; this one never got it.
-    jqf = '{c:(.players|length), ok:(.players|type=="array")}'
+    # gained it later; this one never got it. The count is _core.GAMEDIG_HUMANS_JQ, as there.
+    jqf = '{c:%s, ok:(.players|type=="array")}' % _core.GAMEDIG_HUMANS_JQ
     cmd = ("gamedig --type %s %s:%d 2>/dev/null | jq -c %s 2>/dev/null"
            % (qtype, _core._gamedig_host(server), int(qport), _core._quote(jqf)))
     d = _gamedig_reply(server, user, cmd)

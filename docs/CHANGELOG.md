@@ -411,6 +411,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
   restart-when-empty check could never see these servers empty. They now use gamedig 5's names
   (`counterstrike16`, `counterstrike2`, `teamfortress2`, `hl2d`, `l4d2`, `cod4mw`, `mbe`). Existing
   restart-check lines are rewritten by the daily cron upgrade.
+- **A server whose query lists no player names is no longer counted as empty with people on it.**
+  The panel counted players by the length of the name list gamedig returns. A Minecraft Bedrock
+  server's reply never has that list, only the number of players. A Java server that hides its
+  players, or a Source server that does not answer the player-list query, sends an empty one. Each
+  read as 0 players whoever was on. The hourly restart-when-empty check then restarted the server,
+  a restart or stop queued for when it emptied ran at once, and the reboot warning listed nobody.
+  Every count now uses the server's own player number, less its bots, when that is larger than the
+  list. The Players panel and the chat bot's /players now say they could not read the list instead
+  of "no players connected". Existing restart-check lines are rewritten by the daily cron upgrade.
 - **Autostart shows what the server's crontab really has after an install.** A new server's
   Autostart switch read On even when neither of the install's two attempts to write the monitor
   cron line worked, because both attempts' results were ignored. Such a server does not come back
@@ -1207,8 +1216,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   hand edit or a restore is not checked when it is loaded. A name that is not a plain account name
   is now refused before anything is asked; the check passes every name as a quoted argument; and an
   import checks a name before it asks the host about it, not after. Removing such a server now
-  removes it from the panel without touching the host. Before, Remove asked the host about the
-  name, which ran it, then said "couldn't check, try again", so the server could never be removed.
+  removes it from the panel without touching the host, and the message says so without repeating
+  the name. Before, Remove asked the host about the name, which ran it, then said "couldn't check,
+  try again", so the server could never be removed.
 - **A failed firewall step during an install no longer opens SSH.** The install's last step re-reads
   the game's ports after its first start and opens any new ones, minus the ones the firewall step
   had held back (SSH, the panel's port, other servers' ports). If the firewall step itself failed,
@@ -1216,8 +1226,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   naming port 22 as its query port opened SSH. The re-read now works out SSH, the panel's port and
   other servers' ports for itself. When the firewall step failed it opens only the server's own
   port, and the install finishes with a warning that the firewall step failed instead of a clean
-  "installed and started". A port the firewall step could not check is no longer re-opened by the
-  re-read when another port was held back in the same install.
+  "installed and started". The warning says to ask someone who manages the host when you cannot
+  open its Firewall page, and the install's audit entry records the failed step. A port the firewall
+  step could not check is no longer re-opened by the re-read when another port was held back in the
+  same install.
 - **An action's message never carries an internal error's text.** A LinuxGSM action whose argument
   check failed for an unexpected reason answered with that error's own text, which could name a
   path. It now says the panel could not check the action's arguments, and the error goes to the

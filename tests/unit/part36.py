@@ -7,18 +7,25 @@ What the re-check found still open, each driven through the code that calls it:
   refuses a name that is not a plain account word before any probe is built; the probe passes
   each name as a quoted printf argument; discover's import checks the name before it asks the
   host. The uninstall of such a row then removes the ROW and touches no host — the way out the
-  load-time warning promises — instead of re-running the payload on every click.
+  load-time warning promises — instead of re-running the payload on every click, and says so
+  without repeating the stored name.
 * F1 (alert #101): when install step 6 raised, the post-start re-open opened every port `details`
   reported — "Query 22" included — because the withheld set was only ever written on step 6's
   success path. The re-open now works out its own filter, opens only the server's own port when
-  step 6 never decided, says the firewall step failed, and logs it at warning.
+  step 6 never decided, says the firewall step failed (and who can open the ports, since the
+  Firewall page takes Manage Remotes), logs it at warning and records it on the audit entry.
 * F2 (alerts #97/#102): the install recorded Autostart On whatever the crontab got. Both cron
   writes' answers are kept now, and the column is read back from the crontab.
 * F3 (alert #10): run_as_game_user returned str() of ANY exception from its argument check into
   the action's message. A non-VerbError now gives fixed text and is logged.
 * V8: seven GAMEDIG_TYPE values were not game ids in gamedig 5.3.3 (old ids it resolves only with
   --checkOldIDs, and "minecraftpe", which is none at all). Every value is held to the pinned
-  version's id list, tests/unit/gamedig_game_ids.txt.
+  version's id list, tests/unit/gamedig_game_ids.txt. Once Bedrock's id answered, its reply —
+  numplayers and an EMPTY player list — read as a confident 0 to every reader that counted the
+  list: the hourly restart-when-empty line, a queued restart, the reboot confirm and the dashboard.
+  Every reader now counts _core.GAMEDIG_HUMANS_JQ (numplayers less bots, or the list, whichever is
+  larger), driven here through each reader's REAL jq filter against a stand-in gamedig, and the
+  daily upgrade pass heals the hourly lines already on hosts.
 * The maintenance probe's pgrep pattern was built from an unchecked stored name, and the
   _rewrite_crontab and run_as_game_user own guards were held by no check (each was redundant to a
   later refusal, so deleting it failed nothing).
@@ -27,7 +34,9 @@ HOW IT RUNS. On part12's Flask app, database and client (imported; part12 has ru
 importing it runs nothing again), with part12's transport tripwire re-armed for this part's
 duration and every stub undone in its finally. The install steps are driven through
 _configure_and_start, the install job's own call, against a scripted host; the account probe runs
-in a real bash. It ends by checking nothing it drove reached a transport.
+in a real bash. The gamedig readers run their own command in bash with real jq, against a
+stand-in gamedig on PATH that answers only the type the panel should send (skipped, as SKIP, where
+there is no jq). It ends by checking nothing it drove reached a transport.
 """
 import contextlib as _contextlib36
 import json as _json36
@@ -41,10 +50,13 @@ from types import SimpleNamespace as NS
 import sqlalchemy as _sa36
 
 from unit import REPO_ROOT as _ROOT36
-from unit.part01 import check
-from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_app, _p9_client, _p9_core, _p9_json,
-                         _p9_patch, _p9_restore_all, _p9_sm, _p9_so, _p9_trip)
+from unit.part01 import check, skip
+from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_app, _p9_audit, _p9_client, _p9_core,
+                         _p9_json, _p9_patch, _p9_restore_all, _p9_sm, _p9_so, _p9_trip)
 from panel.db.models import GameServer, RemoteServer, db
+from panel.ops.ssh_manager import cron as _cron36
+from panel.ops.ssh_manager import files as _files36
+from panel.ops.ssh_manager import game as _game36
 from panel.routes import _shared as _sh36
 from panel.routes import discover as _disc36
 from panel.routes import manage_servers as _ms36
@@ -217,12 +229,27 @@ def _uninstall_bad_row36():
     resp = _p9_client(P9_ADMIN).post("/servers/%d/delete" % sid,
                                       headers={"X-Requested-With": "XMLHttpRequest"})
     body = _p9_json(resp)
+    msg = body.get("message") or ""
     check("V1 uninstall: a row whose stored short_name is a shell payload is removed from the "
           "panel — the way out the load-time warning promises — and the host is never touched "
           "(no probe, no stop, no userdel)",
           resp.status_code == 200 and body.get("success") is True and not _exists36(sid)
-          and not sent and "NOT deleted or stopped" in (body.get("message") or ""),
-          repr((resp.status_code, body, sent[:3])))
+          and not sent and "removed from the panel" in msg, repr((resp.status_code, body, sent[:3])))
+    _uninstall_words36(msg, _p9_audit("uninstall_server").detail)
+
+
+def _uninstall_words36(msg, detail):
+    """What that uninstall says, to the operator and in the audit log.
+
+    The refusal to write as such an account does not repeat the name (it is exactly the text the
+    panel refuses to handle), and neither may the uninstall's own sentence; nor may either speak of
+    an account that was kept, when nothing on the host was asked about at all.
+    """
+    said = ("gm$(id)" in msg, "NOT deleted" in msg, "nothing on" in msg and "was touched" in msg,
+            "nothing on the host was touched" in detail, "account was left" in detail)
+    check("V1 uninstall: ...and its message does not repeat the stored name or call it an account "
+          "left on the host — it says nothing on the host was touched; the audit entry agrees",
+          said == (False, False, True, True, False), repr((said, msg, detail)))
 
 
 def _discover_selection36():
@@ -343,6 +370,15 @@ def _f1_step6_raises36(rid):
           "of a clean 'installed and started'",
           warn is True and msg.startswith("p36fw1 installed and started")
           and _FW_FAILED36 in msg, repr(_fin36))
+    # The Firewall page takes Manage Remotes; an install takes only Manage Servers (or Install).
+    check("F1 install: ...and that sentence does not send a Manage Servers user only to a page "
+          "that takes Manage Remotes — it says who else can open the ports",
+          "Firewall page" in msg and "or ask someone who manages the host to" in msg, msg)
+    audit = _p9_audit("install_complete")
+    check("F1 install: ...and the install_complete audit entry records the failed firewall step "
+          "— the job's message is gone with the job, the audit log is what stays",
+          audit.target == "p36fw1" and "firewall step failed" in audit.detail,
+          repr((audit.target, audit.detail, audit.success)))
 
 
 def _f1_listen_raises36(rid):
@@ -408,6 +444,10 @@ def _f1_happy36(rid):
           "runtime-only one; the install ends clean",
           _opened36("step6") == [[27480]] and _opened36("post") == [[27480, 27481]]
           and _fin36 == [("p36fw6 installed and started", False)], repr((_ufw36, _fin36)))
+    audit = _p9_audit("install_complete")
+    check("F1 install (control): ...and its audit entry is a clean success with no firewall note",
+          audit.target == "p36fw6" and audit.success is True
+          and "firewall" not in audit.detail, repr((audit.target, audit.detail, audit.success)))
 
 
 def _f1_warning36(rid):
@@ -595,6 +635,246 @@ def _gamedig_types36():
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
+# V8 (review) — a gamedig reply is counted by its numplayers, not only by its player list
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# What gamedig 5.3.3 prints for a Minecraft Bedrock server with 7 of 10 on: its RakNet ping carries
+# the counts and no names, so `players` is EMPTY (protocols/minecraftbedrock.js sets numplayers and
+# maxplayers only). The other fields are gamedig's Results defaults.
+def _bedrock36(numplayers):
+    return {"name": "Fake BDS", "map": "Bedrock level",
+            "raw": {"edition": "MCPE", "mcVersion": "1.21.40"}, "version": "1.21.40",
+            "maxplayers": 10, "numplayers": numplayers, "players": [], "bots": [],
+            "queryPort": 19132, "connect": "192.0.2.69:19132", "ping": 2}
+
+
+_GD_FAILED36 = {"error": "Failed all 1 attempts"}
+_GD_HOST36 = "192.0.2.69"
+
+
+@_contextlib36.contextmanager
+def _fake_gamedig36(reply, gdtype="mbe"):
+    """(temp dir, shell text defining a `gamedig` function that answers `reply`).
+
+    The function prints `reply` for `--type <gdtype>`, and gamedig's own 'Invalid game' object for
+    any other type, so the type the panel sends is part of the test. A function, not a file on
+    PATH: it wins over any gamedig the machine has, and inside the restart line's
+    `$(PATH=...; gamedig ...)` too.
+    """
+    root = _tf36.mkdtemp(prefix="lgsm-unit-p36gd-")
+    try:
+        reply_path = os.path.join(root, "reply.json")
+        with open(reply_path, "w", encoding="utf-8") as fh:
+            fh.write(_json36.dumps(reply))
+        yield root, ('gamedig() { if [ "$1 $2" = "--type %s" ]; then cat "%s"; '
+                     'else echo \'{"error":"Invalid game: \'"$2"\'"}\'; fi; }\n'
+                     % (gdtype, reply_path))
+    finally:
+        _shutil36.rmtree(root, ignore_errors=True)
+
+
+def _sh_with36(fake):
+    """A shell_as_game_user stand-in that runs the reader's REAL command, real jq filter included.
+
+    In bash, with `fake` (from _fake_gamedig36) answering for gamedig.
+    """
+    root, define = fake
+
+    def _run(_server, _user, sh, **_k):
+        p = _sp36.run(["bash", "-c", define + sh],  # nosec B603 B607 - bash on the panel's own reader command
+                      env={"PATH": "/usr/bin:/bin", "HOME": root},
+                      capture_output=True, text=True, timeout=60, check=False)
+        return p.stdout, p.stderr, p.returncode
+    return _run
+
+
+def _readers36(reply, game_type="mcb", gdtype="mbe"):
+    """{reader: answer} for one gamedig reply, every reader through its real command."""
+    srv = NS(id=93608, host=_GD_HOST36, username="admin", is_local=False, auth_method="key")
+    with _fake_gamedig36(reply, gdtype) as fake:
+        _p9_patch(_p9_core, "shell_as_game_user", _sh_with36(fake))
+        _p9_patch(_p9_core, "_gamedig_host", lambda server: _GD_HOST36)
+        _p9_patch(_files36, "lgsm_get_values",
+                  lambda *a, **k: {"querymode": "2", "querytype": gdtype, "queryport": "19132",
+                                   "port": "19132"})
+        return {"count": _cron36.player_count(srv, "p36mcb", game_type, 19132),
+                "slots": _cron36.player_slots(srv, "p36mcb", game_type, 19132),
+                "lgsm": _cron36.player_count_via_lgsm_query(srv, "p36mcb", "bedrockserver"),
+                "list": _game36._gamedig_player_list(srv, "p36mcb", game_type, 19132)}
+
+
+def _count_readers36():
+    """player_count, player_slots, player_count_via_lgsm_query and the player list, on real jq."""
+    got = _readers36(_bedrock36(7))
+    check("V8 count: a Minecraft Bedrock reply (numplayers 7, an empty player list) is 7 to "
+          "player_count — never the confident 0 that restart-when-empty and a queued restart act on",
+          got["count"] == 7, repr(got))
+    check("V8 count: ...and to player_slots (count, max, name), which the dashboard shows and "
+          "which skips the LinuxGSM fallback when it answers",
+          got["slots"] == (7, 10, "Fake BDS"), repr(got))
+    check("V8 count: ...and to player_count_via_lgsm_query (LinuxGSM's own querytype), which the "
+          "reboot-when-empty poller reads", got["lgsm"] == 7, repr(got))
+    check("V8 count: ...and the player LIST is unknown (None), not the confirmed-empty server [] is "
+          "— the Players panel and the chat bot said 'no players connected' with 7 on",
+          got["list"] is None, repr(got))
+    empty = _readers36(_bedrock36(0))
+    check("V8 count (control): a Bedrock reply of 0 is still a counted 0 to every reader, and an "
+          "empty list then IS a confirmed-empty server",
+          (empty["count"], empty["slots"][0], empty["lgsm"], empty["list"]) == (0, 0, 0, []),
+          repr(empty))
+    failed = _readers36(_GD_FAILED36)
+    check("V8 count (control): a failed query is still unknown to every reader, not 0",
+          (failed["count"], failed["slots"], failed["lgsm"], failed["list"])
+          == (None, (None, None, None), None, None), repr(failed))
+    # numplayers counts bots on a Source server; gamedig reports them as raw.numbots and moves
+    # them into `bots` when it can tell them apart. A bot is not a person: a server with only
+    # bots on it is empty, as it was when the list alone was counted.
+    src = [_readers36({"numplayers": 10, "players": [{"name": "p%d" % i} for i in range(6)],
+                       "bots": [{"name": "b%d" % i} for i in range(4)],
+                       "raw": {"numbots": 4}}, "gmod", "garrysmod")["count"],
+           _readers36({"numplayers": 9, "players": [], "bots": [], "raw": {"numbots": 3}},
+                      "gmod", "garrysmod")["count"],
+           _readers36({"numplayers": 4, "players": [], "bots": [], "raw": {"numbots": 4}},
+                      "gmod", "garrysmod")["count"]]
+    check("V8 count: Source bots are not people — 10 with 4 bots is 6, 9 with 3 bots and no "
+          "A2S_PLAYER answer is 6, and 4 bots alone is an empty server",
+          src == [6, 6, 0], repr(src))
+
+
+def _queued_action36():
+    """The queued restart/stop: run only when the server is online and EMPTY."""
+    rid = _host36("p36-queued-host", "192.0.2.70")
+    sid = _server36(rid, "p36mcbq", 19132, game_type="mcb")
+    ran = []
+    _p9_patch(_sh36, "get_server_status", lambda remote, gs, **k: "online")
+    _p9_patch(_sh36, "_run_queued_action", lambda app, gs: ran.append(gs.id))
+    out = {}
+    for n in (7, 0):
+        ran.clear()
+        with _fake_gamedig36(_bedrock36(n)) as fake:
+            _p9_patch(_p9_core, "shell_as_game_user", _sh_with36(fake))
+            _p9_patch(_p9_core, "_gamedig_host", lambda server: _GD_HOST36)
+            with _p9.app_context():
+                gs = db.session.get(GameServer, sid)
+                gs.restart_pending = True
+                db.session.commit()
+                _sh36._settle_queued_action(_p9, gs)
+        out[n] = list(ran)
+    with _p9.app_context():
+        db.session.get(GameServer, sid).restart_pending = False
+        db.session.commit()
+    check("V8 count: a queued restart on a Bedrock server with 7 on waits — it ran at once while "
+          "the empty list counted as nobody; with 0 on it runs (control)",
+          out == {7: [], 0: [sid]}, repr(out))
+
+
+def _reboot_confirm36():
+    """/api/remote/<id>/players, which the reboot confirm warns from."""
+    rid = _host36("p36-reboot-host", "192.0.2.71")
+    sid = _server36(rid, "p36mcbr", 19132, game_type="mcb")
+    with _p9.app_context():
+        db.session.get(GameServer, sid).status = "online"
+        db.session.commit()
+    with _fake_gamedig36(_bedrock36(7)) as fake:
+        _p9_patch(_p9_core, "shell_as_game_user", _sh_with36(fake))
+        _p9_patch(_p9_core, "_gamedig_host", lambda server: _GD_HOST36)
+        body = _p9_json(_p9_client(P9_ADMIN).get("/api/remote/%d/players" % rid))
+    check("V8 count: the reboot confirm's player read lists the Bedrock server as busy with 7 — "
+          "it reported nobody, neither busy nor unknown",
+          body.get("total") == 7 and body.get("busy") == [{"name": "p36-p36mcbr", "players": 7}],
+          repr(body))
+
+
+def _restart_line36(game_type="mcb"):
+    """[flag line, check line] as set_daily_restart writes them for a Bedrock server today."""
+    cap = {}
+    _p9_patch(_p9_core, "_rewrite_crontab",
+              lambda s, u, grep, add, extra_pre="": (cap.update(add=list(add)), (True, "ok"))[1])
+    _p9_patch(_p9_core, "_gamedig_host", lambda server: _GD_HOST36)
+    _p9_core.set_daily_restart(None, "p36mcb", "bedrockserver", game_type=game_type, port=19132,
+                               enabled=True)
+    return cap.get("add") or ["", ""]
+
+
+def _drive_line36(line, reply):
+    """Did crontab `line`'s command restart the server, with gamedig answering `reply`?
+
+    Run as cron runs it (sh, cron's own environment). The line removes its flag in the same branch
+    that runs the restart, so a flag that is gone is a restart: no stand-in script is needed.
+    """
+    with _fake_gamedig36(reply) as (root, define):
+        home = os.path.join(root, "home")
+        os.makedirs(home)
+        flag = os.path.join(home, ".restart-pending")
+        open(flag, "w", encoding="utf-8").close()
+        cmd = line.split(None, 5)[5].replace("/home/p36mcb/", home + "/")
+        _sp36.run(["env", "-i", "HOME=" + home, "SHELL=/bin/sh", "PATH=/usr/bin:/bin",  # nosec B603 B607 - cron's own env
+                   "sh", "-c", define + cmd], capture_output=True, text=True, timeout=60,
+                  check=False)
+        return not os.path.exists(flag)
+
+
+# What main wrote for a Bedrock server (0816ced's shape, with main's "minecraftpe"), and what this
+# branch wrote before the review (the gamedig 5 id, still counting the list) — read out of
+# daily_restart_check_cmd at refs/remotes/origin/main and at 6d6a45e7.
+_RC_MAIN36 = ("10 * * * * [ -f /home/p36mcb/.restart-pending ] && { P=$(PATH=/usr/local/bin:/usr/bin:"
+              "/bin; gamedig --type %s " + _GD_HOST36 + ":19132 2>/dev/null | jq -r 'if (.players|"
+              "type==\"array\") then (.players|length) else empty end' 2>/dev/null); if [ \"$P\" = 0 ]; "
+              "then /home/p36mcb/bedrockserver restart >/dev/null 2>&1; rm -f "
+              "/home/p36mcb/.restart-pending; fi; }")
+
+
+def _upgrade36(listing):
+    """(returned, lines written) for one upgrade pass of the p36mcb crontab.
+
+    As app.py's daily pass makes it: with the server's own game type and port.
+    """
+    cap = {}
+    _p9_patch(_p9_core, "run_privileged", lambda server, verb, args=(), **k: (listing, "", 0))
+    _p9_patch(_p9_core, "_rewrite_crontab",
+              lambda s, u, grep, add, extra_pre="": (cap.update(add=list(add)), (True, "ok"))[1])
+    _p9_patch(_p9_core, "_gamedig_host", lambda server: _GD_HOST36)
+    ret = _cron36.upgrade_managed_cron_tracking(None, "p36mcb", "bedrockserver", game_type="mcb",
+                                                port=19132)
+    return ret, cap.get("add")
+
+
+def _restart_check36():
+    """The hourly restart-when-empty line: written, healed in place, and driven under sh."""
+    now = _restart_line36()[1]
+    check("V8 restart line: a Bedrock server's hourly check asks gamedig 5's id and counts "
+          "numplayers", "--type mbe " in now and "numplayers" in now, now)
+    seen = (_drive_line36(now, _bedrock36(7)), _drive_line36(now, _bedrock36(0)),
+            _drive_line36(now, _GD_FAILED36))
+    check("V8 restart line (driven): with 7 on it does NOT restart; with 0 it does; a failed query "
+          "does not (it restarted with 7 on while it counted the empty list)",
+          seen == (False, True, False), repr(seen))
+    healed = {}
+    for label, gdtype in (("main's (minecraftpe)", "minecraftpe"), ("the pre-review (mbe)", "mbe")):
+        ret, add = _upgrade36(_RC_MAIN36 % gdtype)
+        healed[label] = (ret, add == [now], _drive_line36(add[0], _bedrock36(7)) if add else None)
+    check("V8 restart line: the daily upgrade pass rewrites main's and the pre-review line to "
+          "today's, which does not restart a Bedrock server with 7 on — installed hosts are healed "
+          "with no operator action", healed == {k: (True, True, False) for k in healed},
+          repr(healed))
+    ret, add = _upgrade36("\n".join(_restart_line36()))
+    check("V8 restart line: ...and today's line is recognised as the panel's own and left alone "
+          "on the next pass", ret is False and add is None
+          and any(r.match(now.split(None, 5)[5]) for r in _cron36._restart_check_res(
+              "p36mcb", "bedrockserver")), repr((ret, add)))
+
+
+def _gamedig_counts36():
+    if not (_shutil36.which("jq") and _shutil36.which("bash")):
+        for name in ("V8 count: every reader counts numplayers", "V8 restart line (driven)"):
+            skip(name, "no jq or bash on this machine")
+        return
+    _count_readers36()
+    _queued_action36()
+    _reboot_confirm36()
+    _restart_check36()
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
 _saved36_emit = _p9.socketio.emit
 try:
     # part12's tripwire, again: nothing below may reach a host or run a command on this machine.
@@ -635,6 +915,13 @@ try:
     _p9_restore_all()
     _maintenance_probe36()
     _gamedig_types36()
+    _p9_restore_all()
+    _p9_patch(_p9_core, "get_connection",
+              _p9_trip("paramiko", exc=ConnectionError("refused by part36's tripwire")))
+    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
+    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _p9_patch(_p9.socketio, "emit", lambda *a, **k: None)
+    _gamedig_counts36()
 finally:
     _p9_restore_all()
     _p9.socketio.emit = _saved36_emit

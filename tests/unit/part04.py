@@ -527,16 +527,16 @@ try:
     _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("a banner line\nde_nuke\n", "", 0)
     check("game-map: the map is the LAST line of output, where jq prints it",
           _sm_cron.game_map(object(), "u", "css", 27015) == "de_nuke")
-    # The gamedig player reader had only stubbed callers. The JSON list is found on whatever line
-    # it lands on, unnamed entries are dropped, and a reply with no list in it is "could not query"
-    # (None) — never the confirmed-empty server an empty list is.
-    _sm_core.run_command = lambda *a, **k: ('a banner line\n[{"name":" Alice ","score":3,"time":61.5},'
-                                            '{"name":""},"x"]\n', "", 0)
+    # The gamedig player reader had only stubbed callers. The jq reply ({p: rows, c: head count})
+    # is found on whatever line it lands on, unnamed entries are dropped, and a reply with no list
+    # in it is "could not query" (None) — never the confirmed-empty server an empty list is.
+    _sm_core.run_command = lambda *a, **k: ('a banner line\n{"p":[{"name":" Alice ","score":3,'
+                                            '"time":61.5},{"name":""},"x"],"c":2}\n', "", 0)
     check("gamedig players: the list is read off its own line, unnamed entries dropped",
           _sm_game._gamedig_player_list(object(), "u", "css", 27015)
           == [{"name": "Alice", "steamid": "", "num": None, "score": 3, "time": 61.5}],
           str(_sm_game._gamedig_player_list(object(), "u", "css", 27015)))
-    _sm_core.run_command = lambda *a, **k: ("[]\n", "", 0)
+    _sm_core.run_command = lambda *a, **k: ('{"p":[],"c":0}\n', "", 0)
     check("gamedig players: an empty list is a confirmed-empty server ([]), not unknown",
           _sm_game._gamedig_player_list(object(), "u", "css", 27015) == [])
     _sm_core.run_command = lambda *a, **k: ("", "", 0)

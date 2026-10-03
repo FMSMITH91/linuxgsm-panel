@@ -36,8 +36,8 @@ from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN
 from app import (PortScanUnreadable, _extract_start_error, _log, _port_span, _prune_jobs,
     _resolve_source_aux_ports, _sync_toggles_from_cron, game_os_unsupported, load_game_list,
     resolve_free_port)
-from panel.routes._shared import (_looks_installed, _notify_servers_changed, _record_game_clock,
-    privileged_accounts)
+from panel.routes._shared import (INVALID_ACCOUNT_NAME, _looks_installed, _notify_servers_changed,
+    _record_game_clock, privileged_accounts)
 
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
 # row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
@@ -1295,9 +1295,12 @@ def _configure_and_start(job, remote, gs):
                             started)
 
 
-# Appended to whatever the install's last word is when step 6 raised (see _open_game_ports).
+# Appended to whatever the install's last word is when step 6 raised (see _open_game_ports). The
+# host's Firewall page takes Manage Remotes and an install only Manage Servers, so the sentence
+# says who else can — as edit_server's does for the same button.
 FIREWALL_STEP_FAILED = ("The firewall step failed, so this server's ports may not be open: open "
-                        "them from the host's Firewall page ('Open all ports').")
+                        "them from the host's Firewall page ('Open all ports'), or ask someone who "
+                        "manages the host to.")
 
 
 def _noting_firewall_failure(job):
@@ -1881,6 +1884,18 @@ def _runtime_ports(remote, short_name, gs, withheld):
     return detect_game_ports(remote, short_name, gs.lgsm_name).get("open_ports") or []
 
 
+def _audit_install(job, gs, success, detail=""):
+    """The install's `install_complete` audit entry, naming a failed firewall step if there was one.
+
+    The job's message says so (_noting_firewall_failure), but that message is gone with the job;
+    the audit log is what stays, and it recorded a clean success over ports never opened.
+    """
+    if getattr(job, "firewall_failed", False):
+        detail = "; ".join(d for d in (detail, "firewall step failed") if d)
+    log_action(None, "install_complete", target=gs.name, success=success, detail=detail[:300],
+               server=gs)
+
+
 def _report_install_outcome(job, gs, ports, started):
     """Finish the install job with the sentence that fits what happened, and audit it.
 
@@ -1897,9 +1912,8 @@ def _report_install_outcome(job, gs, ports, started):
                 f"{port_conflict[1]}, so the panel did not open it in the firewall. Free that "
                 f"port on the host, or change it in the game's own config (Files & Config).",
                 warn=True)
-        log_action(None, "install_complete", target=gs.name, success=False,
-                   detail=("port %s clashes with %s"
-                           % (port_conflict[0], port_conflict[1]))[:300], server=gs)
+        _audit_install(job, gs, False, "port %s clashes with %s"
+                       % (port_conflict[0], port_conflict[1]))
     elif port_conflict:
         # The files are there and LinuxGSM will keep reporting STARTED, so this is
         # not a failed install — but the server cannot serve anyone until the
@@ -1909,9 +1923,8 @@ def _report_install_outcome(job, gs, ports, started):
                 f"which {port_conflict[1]} already uses. This game ignores the "
                 f"port the panel sets, so change it in the game's own config "
                 f"(Files & Config), or free that port on the host.", warn=True)
-        log_action(None, "install_complete", target=gs.name, success=False,
-                   detail=("port %s clashes with %s"
-                           % (port_conflict[0], port_conflict[1]))[:300], server=gs)
+        _audit_install(job, gs, False, "port %s clashes with %s"
+                       % (port_conflict[0], port_conflict[1]))
     elif port_unchecked:
         # This used to be the sentence above, with "something the panel could not
         # check for" spliced in where the holder's name goes — so the operator was
@@ -1926,12 +1939,11 @@ def _report_install_outcome(job, gs, ports, started):
                 f"If the server can't be reached, check that port in the game's "
                 f"own config (Files & Config) and on the host's firewall.",
                 warn=True)
-        log_action(None, "install_complete", target=gs.name, success=True,
-                   detail=("port %s reported but the host's listening ports "
-                           "could not be read" % port_unchecked)[:300], server=gs)
+        _audit_install(job, gs, True, "port %s reported but the host's listening ports "
+                                      "could not be read" % port_unchecked)
     elif really_up:
         _finish(f"{short_name} installed and started")
-        log_action(None, "install_complete", target=gs.name, success=True, server=gs)
+        _audit_install(job, gs, True)
     else:
         _report_not_started(job, gs, s_rc, start_out)
 
@@ -1957,8 +1969,7 @@ def _report_not_started(job, gs, s_rc, start_out):
                 f"It will show as online on its own once it does.")
         _detail = "started; port %s not open after 90s" % gs.port
     _finish(note, warn=True)
-    log_action(None, "install_complete", target=gs.name, success=False,
-               detail=_detail[:300], server=gs)
+    _audit_install(job, gs, False, _detail)
 
 
 def _register_uninstall_and_edit(app):
@@ -2154,24 +2165,36 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
 
 
 def _remove_row_only(app, gs, remote, server_id, name, why):
-    """Uninstall a server whose account is root-capable: the ROW goes, the host is not touched.
+    """Uninstall a server whose account the panel won't act on: the ROW goes, the host is untouched.
 
-    The row is the mistake, and the account is somebody's login. Keeping the row would leave a
-    server nobody can remove.
+    The account is root-capable (the row is the mistake, and the account is somebody's login), or
+    its stored name is not a plain account name (privileged_accounts refuses it unasked). Keeping
+    the row would leave a server nobody can remove.
     """
-    short_name = gs.short_name
-    log_action(current_user, "uninstall_server", target=gs.name, server=gs,
-               detail="removed from the panel only — the account was left on the host: "
-                      "%s" % why)
+    detail, message = _row_only_texts(name, gs.short_name, remote, why)
+    log_action(current_user, "uninstall_server", target=gs.name, server=gs, detail=detail)
     db.session.delete(gs)
     db.session.commit()
     _forget_game_server(server_id)
     _notify_servers_changed(app)
-    return _index_reply(
-        "'%s' was removed from the panel, but the '%s' account on %s was NOT deleted or "
-        "stopped: %s. Remove its LinuxGSM files by hand if you meant to."
-        % (name, short_name, remote.display_name, why), True, "warning",
-        warn=True)
+    return _index_reply(message, True, "warning", warn=True)
+
+
+def _row_only_texts(name, short_name, remote, why):
+    """(audit detail, operator message) for _remove_row_only.
+
+    A stored account name that is not a plain account name is not repeated (it is exactly the text
+    the panel refuses to handle, as _privileged_write_msg says), nor spoken of as an account that
+    was kept: nothing on the host was even asked about.
+    """
+    if why == INVALID_ACCOUNT_NAME:
+        return ("removed from the panel only — nothing on the host was touched: %s" % why,
+                "'%s' was removed from the panel. Its stored account name was not a plain account "
+                "name, so nothing on %s was touched." % (name, remote.display_name))
+    return ("removed from the panel only — the account was left on the host: %s" % why,
+            "'%s' was removed from the panel, but the '%s' account on %s was NOT deleted or "
+            "stopped: %s. Remove its LinuxGSM files by hand if you meant to."
+            % (name, short_name, remote.display_name, why))
 
 
 def _index_reply(message, success, category, code=None, warn=False):

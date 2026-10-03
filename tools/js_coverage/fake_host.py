@@ -212,9 +212,10 @@ def _details(command):
 
 
 def _players_json(_command):
-    return json.dumps([{"name": "Steve", "score": 12, "time": 3725.4},
-                       {"name": "Alex", "score": 3, "time": 118.0},
-                       {"name": "Admin", "score": None, "time": None}])
+    # The list reader's jq prints {p: the named rows, c: the reply's own head count}.
+    return json.dumps({"p": [{"name": "Steve", "score": 12, "time": 3725.4},
+                             {"name": "Alex", "score": 3, "time": 118.0},
+                             {"name": "Admin", "score": None, "time": None}], "c": 3})
 
 
 # ── host figures ────────────────────────────────────────────────────────────────────────────────
