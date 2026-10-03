@@ -208,7 +208,6 @@
   "This game doesn't have any LinuxGSM-installable mods.": "Este juego no tiene mods instalables por LinuxGSM.",
   "This install failed — the game files never downloaded.": "Esta instalación falló: los archivos del juego nunca se descargaron.",
   "This keeps running if you leave the page — the server appears on the dashboard with the same progress under it.": "Esto sigue ejecutándose si sales de la página: el servidor aparece en el panel con el mismo progreso debajo.",
-  "This marks files protected from deletion.": "Esto marca los archivos protegidos contra borrado.",
   "Tick every server the current filters leave visible": "Marca todos los servidores que dejan visibles los filtros actuales",
   "Time": "Tiempo",
   "Time of day the daily restart runs, in your timezone": "Hora del día en que se ejecuta el reinicio diario, en tu zona horaria",
@@ -249,5 +248,7 @@
   "— everything is downloaded automatically.": "— todo se descarga automáticamente.",
   "— this install failed.": "— esta instalación falló.",
   "● Live": "● En vivo",
-  "The panel could not read this host": "El panel no pudo leer este host."
+  "The panel could not read this host": "El panel no pudo leer este host.",
+  "This marks files protected from deletion and renaming.": "Esto marca los archivos protegidos contra borrado y cambio de nombre.",
+  "This renames a file or folder.": "Esto cambia el nombre de un archivo o una carpeta."
 }

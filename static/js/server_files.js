@@ -186,7 +186,16 @@ function mkRow(opts){
     right.appendChild(dl);
   }
   if(opts.protected){ var lk=document.createElement('span'); lk.className='text-secondary'; lk.title='Protected — required by LinuxGSM/the game'; lk.innerHTML='<i class="bi bi-shield-lock"></i>'; right.appendChild(lk); }
-  else if(opts.deletable){ var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0'; b.title='Delete'; b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b); }
+  else if(opts.deletable){
+    // Rename sits between Download and Delete, on every row the panel would let you delete: the
+    // same rule protects a path from both, because renaming lgsm/ away breaks the server exactly as
+    // deleting it does. One control at every width — the row has no separate phone layout.
+    var rn=document.createElement('button'); rn.type='button'; rn.className='btn btn-sm btn-link p-0 text-secondary';
+    rn.title='Rename'; rn.setAttribute('aria-label', 'Rename'+': '+opts.name); rn.dataset.action='rename';
+    rn.appendChild(_icon('bi-pencil'));
+    right.appendChild(rn);
+    var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0'; b.title='Delete'; b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b);
+  }
   row.appendChild(left); row.appendChild(right);
   return row;
 }
@@ -200,6 +209,7 @@ function browse(path){
   var want = path||'', seq = ++_browseSeq;
   fetch(MOUNT+'/api/server/'+serverId+'/browse?path='+encodeURIComponent(want)).then(r=>r.json()).then(d=>{
     if(seq !== _browseSeq) return;   // a later browse() owns the list now
+    _renaming = null;                // the row being renamed is about to be rebuilt
     var l=document.getElementById('file-list'); l.innerHTML='';
     if(d.error){ l.innerHTML='<div class="text-danger small p-2">'+esc(d.error)+'</div>'; return; }  // nosemgrep
     curDir = want;
@@ -315,6 +325,108 @@ function deletePath(path, isDir){
           browse(curDir);
         }).catch(()=>{ if(window.toast) toast('Delete failed','danger'); });
     }});
+}
+// ── Rename, in place in the row ───────────────────────────────────────────────────────────────
+// The row's name becomes a field holding the current name with the part before the extension
+// selected, so typing replaces "notes" and keeps ".txt", as a desktop file manager does. Enter or
+// the Rename button sends it, Escape or Cancel puts the row back. The panel decides what is
+// allowed (a taken name, a slash, a protected path are refused there), and its reason stays under
+// the field instead of in a toast, so the name can be fixed where it was typed. The field and its
+// buttons go through the data-action dispatcher like every other control; built from DOM nodes,
+// never markup, because the name is user-authored.
+var _renaming = null;   // {row, path, name, input, ok, err, busy}: the one row being renamed
+function _icon(cls){ var i=document.createElement('i'); i.className='bi '+cls; return i; }
+// Where the stem ends: before the extension, which is kept. A folder, a dotfile (.bashrc) and a
+// name with no dot have none to keep; an archive's double extension (.tar.gz) is kept whole.
+function _renameStemEnd(name, isDir){
+  if(isDir) return name.length;
+  var arc=/\.tar\.(?:gz|bz2|xz|zst)$/i.exec(name);
+  var dot=arc ? arc.index : name.lastIndexOf('.');
+  return dot>0 ? dot : name.length;
+}
+function _renameButton(cls, action, label){
+  var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm '+cls;
+  b.dataset.action=action; b.textContent=label;
+  return b;
+}
+function startRename(row){
+  if(!row) return;
+  if(_renaming) cancelRename();
+  var path=row.dataset.path, name=path.split('/').pop(), isDir=row.dataset.type==='dir';
+  var box=document.createElement('div'); box.className='fb-rename';
+  var line=document.createElement('div'); line.className='d-flex align-items-center gap-1';
+  var input=document.createElement('input'); input.type='text'; input.className='form-control form-control-sm';
+  input.value=name; input.spellcheck=false; input.autocomplete='off';
+  input.setAttribute('autocapitalize','off'); input.setAttribute('aria-label','New name');
+  input.setAttribute('data-no-i18n','');   // its value is a filename, never a translation of one
+  input.dataset.action='renameKey'; input.dataset.on='keydown'; input.dataset.args='["@event"]';
+  var ok=_renameButton('btn-primary', 'submitRename', 'Rename');
+  var no=_renameButton('btn-outline-secondary', 'cancelRename', 'Cancel');
+  var err=document.createElement('div'); err.className='small text-danger mt-1 fb-rename-err';
+  err.setAttribute('role','alert'); err.style.display='none';
+  line.appendChild(input); line.appendChild(ok); line.appendChild(no);
+  box.appendChild(line); box.appendChild(err);
+  Array.prototype.forEach.call(row.children, function(c){ c.style.display='none'; });
+  row.classList.add('fb-renaming'); row.appendChild(box);
+  _renaming={row:row, path:path, name:name, input:input, ok:ok, err:err, busy:false};
+  input.focus();
+  input.setSelectionRange(0, _renameStemEnd(name, isDir));
+}
+function cancelRename(){
+  var r=_renaming;
+  if(!r) return;
+  _renaming=null;
+  var box=r.row.querySelector('.fb-rename');
+  if(box) box.remove();
+  Array.prototype.forEach.call(r.row.children, function(c){ c.style.display=''; });
+  r.row.classList.remove('fb-renaming');
+  var btn=r.row.querySelector('[data-action="rename"]');
+  if(btn) btn.focus();
+}
+// Enter sends, Escape puts the row back. Reached through the dispatcher's keydown (data-on).
+function renameKey(ev){
+  if(!ev) return;
+  if(ev.key==='Enter'){ ev.preventDefault(); submitRename(); }
+  else if(ev.key==='Escape'){ ev.preventDefault(); cancelRename(); }
+}
+function _renameFailed(r, msg){
+  r.busy=false; r.input.disabled=false; r.ok.disabled=false;
+  r.err.textContent=msg; r.err.style.display='';
+  r.input.focus();
+}
+// The open file follows its new name, and so does one inside a renamed folder: Save would
+// otherwise write the OLD path back into existence beside the renamed one.
+function _followRename(from, to){
+  if(!curFile || (curFile!==from && curFile.indexOf(from+'/')!==0)) return;
+  curFile=to+curFile.slice(from.length);
+  var ep=document.getElementById('editor-path');
+  if(ep) ep.textContent=curFile;
+  var edl=document.getElementById('editor-download');
+  if(edl) edl.href=MOUNT+'/server/'+serverId+'/download?path='+encodeURIComponent(curFile);
+}
+function _renamed(r, want){
+  var parent=r.path.split('/').slice(0,-1).join('/');
+  _followRename(r.path, parent ? parent+'/'+want : want);
+  if(_renaming===r) _renaming=null;
+  if(window.toast) toast('Renamed','success');
+  browse(curDir);
+}
+function submitRename(){
+  var r=_renaming;
+  if(!r || r.busy) return;
+  var want=r.input.value.trim();
+  if(!want){ _renameFailed(r, 'Enter a new name.'); return; }
+  if(want===r.name){ cancelRename(); return; }
+  r.busy=true; r.input.disabled=true; r.ok.disabled=true; r.err.style.display='none';
+  fetch(MOUNT+'/api/server/'+serverId+'/rename-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:r.path,new_name:want})})
+    .then(function(res){ return res.json(); })
+    .then(function(d){
+      if(d.success) _renamed(r, want);
+      else if(_renaming===r) _renameFailed(r, d.message||d.error||'Rename failed');
+    })
+    .catch(function(){
+      if(_renaming===r) _renameFailed(r, 'Could not reach the panel. Reload the file browser to see whether it was renamed.');
+    });
 }
 // The year is dropped for dates in the current year: at 375px the label and value have to share
 // one line, and "Sep 5, 7:10 PM" fits where "Sep 5, 2026, 07:10 PM" wraps. An older file still
@@ -664,6 +776,11 @@ function doUpload(ev){
 // from. Every other top-level dereference in this file was already guarded; these two were not.
 var _fileList = document.getElementById('file-list');
 if (_fileList) _fileList.addEventListener('click', function(ev){
+  // A click in the rename field is editing, not opening the row. Its Rename and Cancel buttons
+  // carry their own data-action, so the event is left to bubble to the page's dispatcher.
+  if(ev.target.closest('.fb-rename')) return;
+  var rn = ev.target.closest('[data-action="rename"]');
+  if(rn){ ev.stopPropagation(); startRename(rn.closest('[data-path]')); return; }
   var del = ev.target.closest('[data-action="delete"]');
   if(del){ ev.stopPropagation(); var r=del.closest('[data-path]'); deletePath(r.dataset.path, r.dataset.type==='dir'); return; }
   var dl = ev.target.closest('[data-action="download"]');

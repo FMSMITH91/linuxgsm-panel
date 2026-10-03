@@ -9,8 +9,8 @@ from panel.core import (terminal)
 from panel.core import runtime_stats
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth,
     taken_by_another)
-from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, UPLOAD_EXISTS,
-    add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
+from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAME_EXISTS,
+    RENAME_UNCONFIRMED, UPLOAD_EXISTS, add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
     gmod_current_mounts, gmod_mount_setup, install_gmod_content, lgsm_game_config,
     lgsm_get_values, lgsm_read_config, lgsm_write_config, mods_action, mods_available,
     mods_installed, path_disk_free, read_file, run_cron_job_now, send_console_command,
@@ -1194,6 +1194,7 @@ def register(app, supervise):
     _register_mods(app)
     _register_file_editor(app)
     _register_file_removal(app)
+    _register_file_rename(app)
     _register_download(app)
     _register_lgsm_data(app)
     _register_cron_jobs(app)
@@ -1437,6 +1438,65 @@ def _register_file_removal(app):
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
+
+
+def _rename_answer(gs, rel, new_name):
+    """Rename on the host and audit it: the rename route's answer once every refusal has passed.
+
+    A host that raises (paramiko) gets the same fixed text as one that returns a failure
+    (Tailscale, local): neither says whether `mv` ran before the link went, and the exception's own
+    text is for the log. Every outcome is audited, a refused or unconfirmed one as a failure.
+    """
+    try:
+        ok, msg = _sm.rename_path(gs.remote, gs.short_name, rel, new_name, gs.lgsm_name)
+    except ConnectionError:
+        _log.warning("rename-path: the host did not answer", exc_info=True)
+        ok, msg = False, RENAME_UNCONFIRMED
+    detail = "%s -> %s" % (rel, new_name)
+    if msg == RENAME_EXISTS:
+        log_action(current_user, "rename_file", target=gs.name, detail=detail + " (name taken)",
+                   success=False, server=gs)
+        return jsonify({"success": False, "conflict": True,
+                        "message": "Something with that name already exists in this folder. "
+                                   "Nothing was renamed — choose another name."}), 409
+    log_action(current_user, "rename_file", target=gs.name,
+               detail=detail + ("" if ok or msg != RENAME_UNCONFIRMED else " (unconfirmed)"),
+               success=ok, server=gs)
+    return jsonify({"success": ok, "message": msg})
+
+
+def _register_file_rename(app):
+    """Renaming a file or folder from the file browser, within the folder it is in."""
+    @app.route("/api/server/<int:server_id>/rename-path", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_rename_path(server_id):
+        """Rename one file or folder; never overwrites, never moves it to another folder.
+
+        The same gates as delete-path, in the same order: the file-manager permission, then the
+        game account (a root-capable one is refused — see _write_refused), then the path. The new
+        name is checked before any of that asks the host anything.
+        """
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        body = _json_body()
+        rel, new_name = body.get("path"), body.get("new_name")
+        if not isinstance(rel, str):
+            return jsonify({"success": False, "message": "Invalid path"}), 400
+        problem = _sm.rename_name_problem(new_name)
+        if problem:
+            return jsonify({"success": False, "message": problem}), 400
+        refused = _write_refused(gs, "rename_file", rel)
+        if refused is not None:
+            return refused
+        why = _sm.rename_refusal(gs.short_name, rel, new_name, gs.lgsm_name)
+        if why:
+            return jsonify({"success": False, "message": why}), 400
+        try:
+            return _rename_answer(gs, rel, new_name)
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("rename_path failed")}), 500
 
 
 def _register_download(app):

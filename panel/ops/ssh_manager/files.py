@@ -754,6 +754,8 @@ def _protected_top_names(selfname):
 
 
 _PROTECTED_MARK = "__PROTECTED__"
+# What _protected_resolved prints on stderr when the parent directory is not there to resolve.
+_NO_SUCH_DIR = "No such directory"
 
 
 def _protected_resolved(user, ap, selfname, inner):
@@ -776,7 +778,7 @@ def _protected_resolved(user, ap, selfname, inner):
     hq = _core._quote(home)
     names = "|".join(_core._quote(n) for n in sorted(_protected_top_names(selfname)))
     return (f"d=$(cd -P -- {_core._quote(_pp.dirname(ap))} 2>/dev/null && pwd -P) "
-            "|| { echo 'No such directory' >&2; exit 1; }; "
+            f"|| {{ echo '{_NO_SUCH_DIR}' >&2; exit 1; }}; "
             f't="$d"/{_core._quote(_pp.basename(ap))}; '
             f'case "$t" in {hq}/*) r=${{t#{hq}/}} ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; '
             f'case "$r" in lgsm|lgsm/*|{names}) echo {_PROTECTED_MARK}; exit 8 ;; esac; '
@@ -1082,6 +1084,158 @@ def _files_delete_outcome(out, e, rc):
     if rc == 0 and "__OK__" in (out or ""):
         return True, "Deleted"
     return False, e or out or "Delete failed"
+
+
+# ── Renaming a file or folder, within its own folder ───────────────────────────────────────────
+# rename_path's message when the new name is already taken, before the move or by something that
+# appeared between the check and the move. A sentinel, like UPLOAD_EXISTS, so the route answers a
+# machine-readable conflict rather than the page pattern-matching prose.
+RENAME_EXISTS = "__RENAME_EXISTS__"
+# Linux's NAME_MAX: the most one path component holds on ext4, xfs and btrfs. Counted in UTF-8
+# BYTES, because that is what the filesystem counts — 128 two-byte characters are already too many.
+RENAME_NAME_MAX = 255
+# The fixed text for a rename the host never confirmed. It is said the same way whichever transport
+# failed: paramiko raises, the Tailscale and local transports return ("", "...", -1), and neither
+# says whether `mv` ran before the link went — so this does not claim that nothing changed.
+RENAME_UNCONFIRMED = ("The host didn't confirm the rename. Reload the file browser to see whether "
+                      "it happened before trying again.")
+RENAME_PROTECTED = "This file/folder is protected — renaming it would break the server."
+RENAME_REFUSED = "Refusing to rename this path."
+_RENAME_LINKED = "__RENAME_LINKED__"
+_RENAME_GONE = "__RENAME_GONE__"
+_RENAME_TAKEN = "__RENAME_TAKEN__"
+_RENAME_MVFAIL = "__RENAME_MVFAIL__"
+_RENAME_DONE = "__RENAME_DONE__"
+_RENAME_GONE_MSG = "That file or folder is no longer there. Reload the file browser."
+
+
+def rename_name_problem(name):
+    """Why `name` cannot be the new name of a file or folder, or None when it can.
+
+    One path component of a Linux filename: not empty, not '.' or '..', no '/', no NUL (nor any
+    other control character — a newline would split the browser's own listing), valid UTF-8, and at
+    most RENAME_NAME_MAX bytes. upload_file's rules ('', '.', '..', the '/' basename() removes and
+    the NUL it strips) are the subset of these an upload could meet; a rename is TYPED, so it gets a
+    reason for each instead of having its name quietly changed into one that passes.
+    """
+    if not isinstance(name, str) or not name:
+        return "Enter a new name."
+    if name in (".", ".."):
+        return "'.' and '..' are not names a file or folder can have."
+    if "/" in name:
+        return "A name can't contain a slash (/) — renaming never moves anything to another folder."
+    if any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return "A name can't contain control characters."
+    try:
+        size = len(name.encode("utf-8"))
+    except UnicodeEncodeError:          # a lone surrogate: JSON can carry one, no filename can
+        return "That name isn't valid text."
+    if size > RENAME_NAME_MAX:
+        return "That name is too long (255 bytes at most)."
+    return None
+
+
+def rename_refusal(user, relpath, new_name, selfname=None):
+    """Why renaming `relpath` to `new_name` is refused before the host is asked, else None.
+
+    The home itself, anything outside it, a protected path (by delete_path's rules: renaming
+    `lgsm` or `serverfiles` away breaks the server exactly as deleting it does), a bad new name, the
+    name it already has, and a new name that is itself protected where it would land.
+    """
+    ap = _safe_abspath(user, relpath) if isinstance(relpath, str) else None
+    home = f"/home/{user}"
+    if ap is None or ap == home or not relpath.strip("/"):
+        return RENAME_REFUSED
+    problem = rename_name_problem(new_name)
+    if problem:
+        return problem
+    if _is_protected_path(relpath, selfname):
+        return RENAME_PROTECTED
+    if new_name == _pp.basename(ap):
+        return "That is already its name."
+    if _is_protected_path(_pp.relpath(_pp.join(_pp.dirname(ap), new_name), home), selfname):
+        return "That name is reserved for LinuxGSM or the game's account — choose another."
+    return None
+
+
+def _rename_inner(ap, new_name):
+    """The host-side rename, run after _protected_resolved has set "$d" (real parent) and "$t".
+
+    * "$d" is the source's folder resolved with `cd -P`. Anything but the folder the browser named
+      means a symlink on the way, and the rename is refused rather than followed: delete_path's
+      check only asks where the link LEADS, and a rename has two ends to keep in one place.
+    * The new name is joined to "$d", the same real folder, so the two ends cannot part.
+    * `mv -T` takes the destination as a name, never as a folder to move INTO — a symlink to a
+      folder sitting at the new name would otherwise swallow the source — and `-n` never replaces.
+    * Whether it moved is read from the filesystem, by the source's device:inode turning up at the
+      new name, never from mv's exit status: coreutils 9.2 changed what `mv -n` returns when it
+      skips, and uutils (Ubuntu 25.10 and later) is another implementation again. A name that
+      appeared between the check and the move is reported as taken, never clobbered.
+    """
+    q = _core._quote
+    taken = '[ -e "$n" ] || [ -L "$n" ]'
+    return (f'[ "$d" = {q(_pp.dirname(ap))} ] || {{ echo {_RENAME_LINKED}; exit 10; }}; '
+            f'si=$(stat -c %d:%i -- "$t" 2>/dev/null) || {{ echo {_RENAME_GONE}; exit 7; }}; '
+            f'n="$d"/{q(new_name)}; '
+            f'if {taken}; then echo {_RENAME_TAKEN}; exit 6; fi; '
+            'mv -n -T -- "$t" "$n"; '
+            f'if [ "$(stat -c %d:%i -- "$n" 2>/dev/null)" = "$si" ]; then echo {_RENAME_DONE}; exit 0; fi; '
+            f'if {taken}; then echo {_RENAME_TAKEN}; exit 6; fi; '
+            f'echo {_RENAME_MVFAIL}; exit 1')
+
+
+def rename_path(server, user, relpath, new_name, selfname=None):
+    """Rename a file or folder in the game user's home to `new_name`, in the same folder.
+
+    -> (ok, message); message is RENAME_EXISTS when the new name is taken. Never overwrites.
+
+    Guarded as delete_path is — _safe_abspath, then _guarded and _protected_resolved on the host,
+    in the same command as the move — plus _rename_inner's own refusals: a source reached through
+    a symlinked folder, and a destination that exists (even as a dangling symlink).
+    """
+    refusal = rename_refusal(user, relpath, new_name, selfname)
+    if refusal:
+        return False, refusal
+    ap = _safe_abspath(user, relpath)
+    inner = _rename_inner(ap, new_name)
+    out, e, rc = _core.shell_as_game_user(
+        server, user, _guarded(user, ap, _protected_resolved(user, ap, selfname, inner)),
+        timeout=30)
+    return _rename_outcome(out, e, rc)
+
+
+# Sentinel -> (ok, message), first match wins. _OUTSIDE_HOME and _PROTECTED_MARK are delete_path's
+# own, printed by the guards rename_path shares with it.
+_RENAME_OUTCOMES = (
+    (_OUTSIDE_HOME, RENAME_REFUSED),
+    (_PROTECTED_MARK, RENAME_PROTECTED),
+    (_RENAME_LINKED, "Refusing to rename through a symbolic link: open the folder it points to "
+                     "and rename it there."),
+    (_RENAME_GONE, _RENAME_GONE_MSG),
+    (_RENAME_TAKEN, RENAME_EXISTS),
+    (_RENAME_MVFAIL, "The host refused the rename — the file may belong to another account or "
+                     "be in use. Nothing was renamed."),
+)
+
+
+def _rename_outcome(out, e, rc):
+    """rename_path's (ok, message) from what its guarded host-side command printed.
+
+    Fixed text only: the host's stderr is logged, never returned, and an answer with no sentinel
+    in it — a timeout or a dropped link on the transports that return rather than raise — is
+    RENAME_UNCONFIRMED.
+    """
+    out = out or ""
+    if rc == 0 and _RENAME_DONE in out:
+        return True, "Renamed"
+    for mark, message in _RENAME_OUTCOMES:
+        if mark in out:
+            return False, message
+    if _NO_SUCH_DIR in (e or ""):
+        return False, _RENAME_GONE_MSG
+    _core._log.warning("rename_path: the host did not confirm the rename (rc=%s): %s",
+                       rc, (e or "")[:200])
+    return False, RENAME_UNCONFIRMED
 
 
 # ── Downloads: the read side of the file browser ───────────────────────────────────────────────
