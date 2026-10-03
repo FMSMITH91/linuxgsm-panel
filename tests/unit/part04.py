@@ -656,8 +656,10 @@ check("query-type: a mapped game with no override uses the map",
       _sm_cron._gamedig_type("gmod", None) == "garrysmod")
 check("query-type: the override is sanitized to a gamedig-safe charset",
       _sm_cron._gamedig_type("cod", "co d;rm -rf") == "codrm-rf")
+# gamedig 5 calls Call of Duty 4 "cod4mw"; "cod4" is only its old_id, which it resolves with
+# --checkOldIDs alone (part36 holds every map value to the pinned gamedig's ids).
 check("query-type: the Call of Duty family is mapped, so its player count (restart/backup) works",
-      _sm_cron._gamedig_type("cod", None) == "cod" and _sm_cron._gamedig_type("cod4", None) == "cod4")
+      _sm_cron._gamedig_type("cod", None) == "cod" and _sm_cron._gamedig_type("cod4", None) == "cod4mw")
 check("query-type: a game with neither engine nor map becomes queryable once an override is set",
       _sm_game.is_player_queryable("nosuchgame", None) is False
       and _sm_game.is_player_queryable("nosuchgame", "quake3") is True)

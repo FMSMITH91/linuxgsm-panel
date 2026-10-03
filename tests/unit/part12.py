@@ -2284,7 +2284,7 @@ try:
                    listen_pre=[set()], tagged=[set()],
                    start=[("Starting", "", 0)], cmds=[[]], unset=[(True, "")],
                    cu=[{"user": "gmcontent"}], mount=[(True, "Mounted.")], aux=[{}],
-                   userdel=[("", "", 0)], boom=set())
+                   userdel=[("", "", 0)], crontab=[None], boom=set())
         _ms.update(kw)
         _ms_log.clear()
 
@@ -2308,7 +2308,8 @@ try:
             # The uninstall's "is this account root on the host?" probe (privileged_accounts):
             # every scripted account is a plain game account, in its own group only. Not logged —
             # it is a read, and the step lists below are what these checks compare.
-            _users = _p9_re.findall(r'echo "NOACCT ([a-z0-9_-]+)"', cmd)
+            # The names, read back off the probe's own NOACCT line (each a printf argument).
+            _users = _p9_re.findall(r"'NOACCT %s\\n' ([a-z0-9_-]+)", cmd)
             return ("".join("ACCT %s 1001 %s\n" % (u, u) for u in _users)
                     + "LGSM_ACCT_PROBE_DONE\n", "", 0)
         if "wget" in cmd and "linuxgsm.sh" in cmd:
@@ -2382,8 +2383,11 @@ try:
     _p9_patch(_p9_ms, "lgsm_write_config", _ms_write_cfg)
     _p9_patch(_p9_ms, "_resolve_source_aux_ports",
               lambda *a: (_ms_boom("aux"), _ms_next("aux"))[1])
+    # The cron writes answer (ok, why), as the real ones do: the install records Autostart from
+    # that answer now, and from the crontab read back (`crontab`: None is a read that failed, which
+    # changes nothing — so by default the column is what the writes reported).
     _p9_patch(_p9_ms, "install_game_cron",
-              lambda r, s, l, supported: (_ms_log.append("cron"), _ms_boom("cron"))[0])
+              lambda r, s, l, supported: (_ms_log.append("cron"), _ms_boom("cron"), (True, ""))[2])
     _p9_patch(_p9_ms, "ensure_persistent_bans",
               lambda r, s, l: (_ms_log.append("bans"), _ms_boom("bans"))[0])
     _p9_patch(_p9_ms, "detect_game_ports",
@@ -2402,7 +2406,9 @@ try:
     _p9_patch(_p9_ms, "remote_ufw_allow_game_ports",
               lambda r, ports, name: _ms_log.append("ufw-allow:%s" % sorted(ports)))
     _p9_patch(_p9_ms, "set_autostart",
-              lambda r, s, on, l=None: (_ms_log.append("autostart"), _ms_boom("autostart"))[0])
+              lambda r, s, on, l=None: (_ms_log.append("autostart"), _ms_boom("autostart"),
+                                        (True, ""))[2])
+    _p9_patch(_p9_sm, "list_cron_jobs", lambda r, s, l: _ms_next("crontab"))
     _p9_patch(_p9_ms, "ensure_content_user", _ms_ensure_cu)
     _p9_patch(_p9_ms, "install_gmod_content", _ms_install_content)
     _p9_patch(_p9_ms, "gmod_mount_setup", lambda r, s, cu, games: _ms_next("mount"))

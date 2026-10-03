@@ -2145,8 +2145,7 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
     try:
         _priv.check_args("lgsm-command", verb_args)
     except Exception as exc:
-        _log.warning("refusing LinuxGSM action: %s", exc)
-        return "", str(exc), 1
+        return _lgsm_args_refused(exc)
 
     if is_local_server(server) and helper_present():
         return _lgsm_command_via_helper(verb_args, timeout)
@@ -2168,12 +2167,30 @@ def _lgsm_command_via_helper(verb_args, timeout):
         # here because this function's contract is a TUPLE and never a raise: every caller
         # unpacks (out, err, rc), and several run inside a background thread whose only
         # report to the user is that rc. A raise here reached them as silence.
-        _log.warning("refusing LinuxGSM action: %s", exc)
-        return "", str(exc), 1
+        return _lgsm_args_refused(exc)
     out, err, rc = _exec_local_argv(argv, timeout=timeout)
     # The shell form used `2>&1` and every caller reads LinuxGSM's errors out of stdout, so
     # merge here too — switching transport must not move a message from one stream to the other.
     return ("\n".join(x for x in (out, err) if x)).strip(), "", rc
+
+
+LGSM_ARGS_UNCHECKED = "the panel could not check this LinuxGSM action's arguments"
+
+
+def _lgsm_args_refused(exc):
+    """run_as_game_user's (out, err, rc) for an argument check that raised `exc`.
+
+    The rc and the stderr slot reach the operator: the sync actions put `err` into the route's
+    message (server_detail._run_sync_action). A VerbError's text is fixed by design and never
+    carries the rejected value (privileged.VerbError), so it is passed on. Anything else — a bug,
+    a KeyError, an OSError reading the helper — is not the panel's wording and may carry a path or
+    a value, so the operator gets fixed text and the log gets the exception.
+    """
+    if isinstance(exc, _priv.VerbError):
+        _log.warning("refusing LinuxGSM action: %s", exc)
+        return "", str(exc), 1
+    _log.warning("refusing LinuxGSM action: the argument check failed", exc_info=exc)
+    return "", LGSM_ARGS_UNCHECKED, 1
 
 
 def _lgsm_shell_body(user, selfname, action, answers, tee_log):
@@ -2828,9 +2845,11 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     # Validated and quoted HERE, for the reason run_as_game_user spells out above: the model's
     # @validates hook fires on ASSIGNMENT and never on a row loaded from the database, so a row
     # written before that validator existed — or restored from a tampered backup — reaches this
-    # function unchecked. It matters more here than there: `user` went in UNQUOTED, and the
-    # pipeline below runs as ROOT, so `crontab -u <user>` was a root command-injection point one
-    # bad row away. Five cron routes reach this.
+    # function unchecked. It mattered more here than there: `user` went in UNQUOTED into a
+    # pipeline that ran as ROOT, so `crontab -u <user>` was a root command-injection point one bad
+    # row away. The pipeline now runs AS the account, through shell_as_game_user (below), which
+    # refuses such a name too; this check is the function's own, refusing before the account's
+    # crontab lock is even taken. Five cron routes reach this.
     if not game_idents_ok(user):
         _log.warning("refusing to rewrite a crontab for an unsafe account name")
         return False, "invalid account name"
@@ -2950,21 +2969,31 @@ def install_game_cron(server, user, selfname=None, supported=None):
 
 # Panel game_type -> gamedig query type (best effort). Unmapped games skip the
 # player check and just restart at the daily time.
+#
+# Every value is a game id of the gamedig the panel installs (tools/gamedig/package-lock.json pins
+# 5.3.3; its lib/games.js keys). gamedig 5 renamed several games and keeps the old name only as an
+# `old_id`, which it resolves ONLY with --checkOldIDs — a flag the panel never passes. So "cs16",
+# "cs2", "tf2", "hl2dm", "left4dead2" and "cod4" answered {"error":"Invalid game: …"} to every
+# query, and "minecraftpe" was no id at all: nine game types fell back to LinuxGSM's own query for
+# player counts, and their daily restart-when-empty check could never see an empty server. A unit
+# check holds every value to the pinned version's list (tests/unit/gamedig_game_ids.txt).
 GAMEDIG_TYPE = {
-    "gmod": "garrysmod", "cs": "cs16", "css": "css", "cs2": "cs2", "tf2": "tf2",
-    "hl2dm": "hl2dm", "dods": "dods", "left4dead2": "left4dead2", "l4d2": "left4dead2",
+    "gmod": "garrysmod", "cs": "counterstrike16", "css": "css", "cs2": "counterstrike2",
+    "tf2": "teamfortress2",
+    "hl2dm": "hl2d", "dods": "dods", "left4dead2": "l4d2", "l4d2": "l4d2",
     "insurgency": "insurgency", "ins": "insurgency", "rust": "rust",
     "valheim": "valheim", "vh": "valheim",
     "sdtd": "sdtd", "7d2d": "sdtd",
     # Minecraft: Java editions (vanilla + Paper/Velocity/Waterfall, which answer Server List Ping)
-    # use "minecraft"; Bedrock uses "minecraftpe". This is what yields count AND max-players (Minecraft
-    # keeps max in server.properties, not the LinuxGSM config, so the config-fallback can't see it).
+    # use "minecraft"; Bedrock uses "mbe" (gamedig 5's "Minecraft: Bedrock Edition"). This is what
+    # yields count AND max-players (Minecraft keeps max in server.properties, not the LinuxGSM
+    # config, so the config-fallback can't see it).
     "mc": "minecraft", "pmc": "minecraft", "vmc": "minecraft", "wmc": "minecraft",
-    "mcb": "minecraftpe", "mcbe": "minecraftpe",
+    "mcb": "mbe", "mcbe": "mbe",
     "squad": "squad", "arma3": "arma3", "mumble": "mumble",
-    # Call of Duty family — gamedig CAN query these (protocol names match the LinuxGSM shortnames),
-    # so the player count (restart/backup guards + daily-restart-when-empty) works for them too.
-    "cod": "cod", "coduo": "coduo", "cod2": "cod2", "cod4": "cod4", "codwaw": "codwaw",
+    # Call of Duty family — gamedig CAN query these, so the player count (restart/backup guards +
+    # daily-restart-when-empty) works for them too. Call of Duty 4 is "cod4mw" in gamedig 5.
+    "cod": "cod", "coduo": "coduo", "cod2": "cod2", "cod4": "cod4mw", "codwaw": "codwaw",
 }
 
 

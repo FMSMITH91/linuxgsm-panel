@@ -34,7 +34,8 @@ from panel.core import terminal
 from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN_PORT,
     SAFE_LABEL_RE, _port_or)
 from app import (PortScanUnreadable, _extract_start_error, _log, _port_span, _prune_jobs,
-    _resolve_source_aux_ports, game_os_unsupported, load_game_list, resolve_free_port)
+    _resolve_source_aux_ports, _sync_toggles_from_cron, game_os_unsupported, load_game_list,
+    resolve_free_port)
 from panel.routes._shared import (_looks_installed, _notify_servers_changed, _record_game_clock,
     privileged_accounts)
 
@@ -1286,9 +1287,32 @@ def _configure_and_start(job, remote, gs):
     _enable_autostart(job, remote, gs)
     start_step = _install_gmod_content(job, remote)
     started = _start_and_verify(job, remote, gs, start_step)
+    # None, not an empty set, when step 6 never reached its decision: an empty set read as "step 6
+    # withheld nothing", and the re-read then opened every port `details` reported — SSH included.
     _reopen_runtime_ports(remote, job.short_name, gs, port_conflict, port_unchecked,
-                          getattr(job, "withheld", frozenset()))
-    _report_install_outcome(job, gs, (port_conflict, port_unchecked), started)
+                          getattr(job, "withheld", None))
+    _report_install_outcome(_noting_firewall_failure(job), gs, (port_conflict, port_unchecked),
+                            started)
+
+
+# Appended to whatever the install's last word is when step 6 raised (see _open_game_ports).
+FIREWALL_STEP_FAILED = ("The firewall step failed, so this server's ports may not be open: open "
+                        "them from the host's Firewall page ('Open all ports').")
+
+
+def _noting_firewall_failure(job):
+    """`job`, with a finish that also says the firewall step failed — when it did.
+
+    Step 6 swallows its exception (a firewall problem must not fail an install whose files are
+    there), and the install then ended "installed and started" over ports it never opened. The
+    operator is told instead, whichever sentence the outcome picked, and the job is a warning.
+    """
+    if not getattr(job, "firewall_failed", False):
+        return job
+
+    def finish(msg, warn=False):
+        job.finish("%s %s" % (msg, FIREWALL_STEP_FAILED), warn=True)
+    return SimpleNamespace(**dict(vars(job), finish=finish))
 
 
 def _configure_server(job, remote, gs):
@@ -1336,24 +1360,46 @@ def _write_install_ports(job, remote):
 
 
 def _cache_commands_and_cron(remote, short_name, gs):
-    """Cache the game's command list and install its maintenance cron, recording Autostart."""
+    """Cache the game's command list and install its maintenance cron, recording Autostart.
+
+    The Autostart column is what the crontab GOT. install_game_cron schedules `monitor` when the
+    game has it, and that line IS the Autostart switch — so the column says True only when the
+    write reported success with `monitor` in it. It used to ignore the write's answer: a crontab
+    write that failed RETURNS (False, why) on the tailscale and local transports rather than
+    raising, and a new row's column is already True (the model's default), so the Details page
+    said Autostart On over a crontab with no monitor line — a server that would not come back
+    after a crash or a reboot. Step 7 (_enable_autostart) writes the line again, and reconciles.
+    """
+    wrote_monitor = False
     try:
         cmds = _sm.list_server_commands(remote, short_name, gs.lgsm_name)
         if cmds:
             gs.set_commands(cmds); db.session.commit()
-            try:
-                supported = {c["cmd"] for c in cmds}
-                install_game_cron(remote, short_name, gs.lgsm_name, supported)
-                # install_game_cron schedules `monitor` when the game has it, and
-                # that line IS the Autostart switch — record it, or the Details
-                # page shows Off while monitor is scheduled and running.
-                if "monitor" in supported and not gs.autostart:
-                    gs.autostart = True
-                    db.session.commit()
-            except Exception:
-                _log.debug("_run: ignored non-fatal error", exc_info=True)
+            wrote_monitor = _install_maintenance_cron(remote, short_name, gs, cmds)
     except Exception:
         _log.debug("_run: ignored non-fatal error", exc_info=True)
+    _record_autostart(gs, wrote_monitor)
+
+
+def _install_maintenance_cron(remote, short_name, gs, cmds):
+    """install_game_cron for the commands `cmds` lists. -> True when it wrote the monitor line."""
+    try:
+        supported = {c["cmd"] for c in cmds}
+        ok, why = install_game_cron(remote, short_name, gs.lgsm_name, supported) or (False, "")
+    except Exception:
+        _log.warning("install %s: the maintenance cron could not be written", short_name,
+                     exc_info=True)
+        return False
+    if not ok:
+        _log.warning("install %s: the maintenance cron was not written: %s", short_name, why)
+    return bool(ok) and "monitor" in supported
+
+
+def _record_autostart(gs, on):
+    """Set the Autostart column to `on` (what the crontab got), committing only a change."""
+    if bool(gs.autostart) != bool(on):
+        gs.autostart = bool(on)
+        db.session.commit()
 
 
 def _accept_game_eulas(remote, short_name, gs):
@@ -1403,6 +1449,11 @@ def _open_game_ports(job, remote, gs):
     _p(6, "Detecting ports & opening firewall")
     port_conflict = None      # (port, who holds it) — OBSERVED, never inferred
     port_unchecked = None     # the reported port whose owner could not be read
+    # Until this step reaches its decision below, nothing is known about whose ports are whose:
+    # None tells the post-start re-read so (see _reopen_runtime_ports), where an empty set would
+    # say "nothing withheld" and open every port `details` reports.
+    job.withheld = None
+    job.firewall_failed = False
     try:
         info = detect_game_ports(remote, short_name, gs.lgsm_name)
         real_port = info.get("game_port")
@@ -1445,7 +1496,11 @@ def _open_game_ports(job, remote, gs):
         job.withheld = frozenset(withheld) | foreign
         remote_ufw_allow_game_ports(remote, to_open, short_name)
     except Exception:
-        _log.debug("_run: ignored non-fatal error", exc_info=True)
+        # Still not fatal — the files are there — but no longer silent: it was logged at debug,
+        # which production never shows, and the install reported a clean success.
+        job.firewall_failed = True
+        _log.warning("install %s: the firewall step failed; its ports may not be open",
+                     short_name, exc_info=True)
     return port_conflict, port_unchecked
 
 
@@ -1646,15 +1701,31 @@ def _seed_scpsl_port_config(remote, short_name, gs):
 
 
 def _enable_autostart(job, remote, gs):
-    """Step 7 of the install job: switch the LinuxGSM monitor cron on. Best-effort."""
+    """Step 7 of the install job: switch the LinuxGSM monitor cron on, and record what it got.
+
+    Best-effort, but no longer blind: set_autostart's (ok, why) was thrown away, so a write that
+    failed left the column at whatever it was — True on a new row — with no monitor line behind
+    it. A write that worked turns the column on; one that failed leaves step 5's answer (the line
+    step 5 wrote is still there: a failed rewrite installs nothing). Then the crontab is READ back
+    and the column made to match it, which settles both steps; a read that fails changes nothing
+    (_sync_toggles_from_cron refuses None).
+    """
     short_name, _p = job.short_name, job.p
     # 7. Enable autostart by default (the LinuxGSM monitor cron; install_game_cron
     #    above already adds it when supported — this ensures it either way).
     _p(7, "Enabling autostart (monitor)")
     try:
-        set_autostart(remote, short_name, True, gs.lgsm_name)
+        ok, why = set_autostart(remote, short_name, True, gs.lgsm_name) or (False, "")
+        if ok:
+            _record_autostart(gs, True)
+        else:
+            _log.warning("install %s: could not enable autostart: %s", short_name, why)
     except Exception:
-        _log.debug("_run: ignored non-fatal error", exc_info=True)
+        _log.warning("install %s: enabling autostart failed", short_name, exc_info=True)
+    try:
+        _sync_toggles_from_cron(gs, _sm.list_cron_jobs(remote, short_name, gs.lgsm_name))
+    except Exception:
+        _log.debug("install %s: the crontab could not be read back", short_name, exc_info=True)
 
 
 def _install_gmod_content(job, remote):
@@ -1754,20 +1825,27 @@ def _poll_for_game_port(remote, gs):
 
 
 def _reopen_runtime_ports(remote, short_name, gs, port_conflict, port_unchecked,
-                          withheld=frozenset()):
+                          withheld=None):
     """Open any port that only showed up once the server ran. Best-effort; ufw allow is idempotent.
 
     `withheld` is every port step 6 found belonging to someone else — another server's block, SSH,
     the panel, or a port something was already listening on before this server first started —
-    none of which it may open now either.
+    none of which it may open now either. None when step 6 never reached that decision (it
+    raised): then only the server's own port is opened, because the ports something else was
+    listening on before the first start cannot be told apart from ours any more.
+
+    Whatever step 6 decided, the ports no game server may open are worked out again HERE: SSH and
+    the panel (protected_host_ports, which a failed read narrows but never empties) and every
+    other server's block on the host as it is NOW. This gate used to be only as good as step 6's
+    finishing — an exception there left `withheld` empty and this opened "Query 22" — and a
+    server another install added while this one downloaded was in nobody's set.
     """
     # Now that it's actually run once, re-read the ports and open any that only
     # become visible at runtime. A no-op for the static-config majority (step 6 already
     # opened them before start); future-proofs a game whose effective ports settle on
     # first start. Best-effort — ufw allow is idempotent.
     try:
-        info2 = detect_game_ports(remote, short_name, gs.lgsm_name)
-        extra = info2.get("open_ports") or []
+        extra = _runtime_ports(remote, short_name, gs, withheld)
         if port_conflict:
             # Step 6 refused this port precisely so the panel would not open it in
             # front of someone else's process. detect_game_ports re-reads the same
@@ -1780,16 +1858,27 @@ def _reopen_runtime_ports(remote, short_name, gs, port_conflict, port_unchecked,
             # server's name, and uninstalling this one would then delete the rule
             # protecting the other, still-running server.
             extra = [p for p in extra if p != port_conflict[0]]
-        elif port_unchecked:
+        if port_unchecked:
             # Same reasoning, weaker evidence: step 6 did not adopt this port
             # because it could not read who has it, so it must not be re-opened
             # here under this server's name either. The rest of `extra` is fine.
+            # An `if`, not an `elif`: step 6 reports BOTH when the unchecked branch's ports then
+            # met a withheld one ("Query 22"), and the elif re-opened the unchecked port.
             extra = [p for p in extra if p != port_unchecked]
-        extra = _ports_not_in(extra, withheld)
+        extra = _ports_not_in(extra, withheld or ())
+        rows = GameServer.query.filter_by(remote_id=remote.id).all()
+        extra = _ports_not_in(extra, withheld_game_ports(rows, gs, _sm.protected_host_ports(remote)))
         if extra:
             remote_ufw_allow_game_ports(remote, extra, short_name)
     except Exception:
         _log.debug("_run: post-start port re-detect failed", exc_info=True)
+
+
+def _runtime_ports(remote, short_name, gs, withheld):
+    """The ports the post-start re-open starts from: `details` read again, or ours alone."""
+    if withheld is None:
+        return [gs.port] if gs.port else []
+    return detect_game_ports(remote, short_name, gs.lgsm_name).get("open_ports") or []
 
 
 def _report_install_outcome(job, gs, ports, started):

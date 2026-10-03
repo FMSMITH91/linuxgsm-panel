@@ -34,8 +34,8 @@ from panel.core.panel_state import (
     forget_rows, keyed_state_with_locks, register_remote_state,
 )
 from panel.ops.ssh_manager import (
-    _remote_listening_ports, game_map, host_live_metrics, lgsm_get_values, metrics_for_game,
-    remote_fail2ban_attempt_counts, remote_reboot,
+    _remote_listening_ports, game_idents_ok, game_map, host_live_metrics, lgsm_get_values,
+    metrics_for_game, remote_fail2ban_attempt_counts, remote_reboot,
     remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
     run_privileged,
     server_live_metrics, tailnet_exempt_ips, ufw_lock,
@@ -580,10 +580,14 @@ def _lgsm_maintenance_running(remote, gs):
         # lgsm_name is derived ("{game_type}server"), so it is falsy only when game_type is — and it
         # degrades to a bare "server", which would match ANY *server maintenance this user is running.
         selfname = (gs.lgsm_name or "").strip() if (gs.game_type or "").strip() else ""
-        if not user or not selfname:
+        # Both names go into a pgrep ERE, and nothing has checked them since they were ASSIGNED: a
+        # row loaded from an older database, a hand edit or a restore can carry `x|.*`, which makes
+        # every maintenance process on the host this server's — BUSY for ever, so its offline
+        # alerts are muted for good. game_idents_ok is the rule every command builder applies.
+        if not user or not selfname or not game_idents_ok(user, selfname):
             return False
-        # pgrep -f takes an ERE. short_name/game_type are pinned to [A-Za-z0-9._-], so "." is the one
-        # metacharacter that can reach here; make it literal so it can't match a neighbouring name.
+        # pgrep -f takes an ERE. With the names checked above, "." is the one metacharacter that
+        # can reach here; make it literal so it can't match a neighbouring name.
         pattern = "%s (%s)" % (selfname.replace(".", "[.]"), "|".join(_LGSM_MAINTENANCE_CMDS))
         out, _, _ = run_command(
             remote,
