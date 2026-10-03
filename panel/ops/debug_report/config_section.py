@@ -337,7 +337,6 @@ _CLASSIFY = {"ssh_timeout": _ssh_timeout, "site_title": _site_title, "tailscale_
 
 def _other_lines(cfg, res):
     """Every other whitelisted key: classified, counted, or a scalar; never free text."""
-    from panel.ops import system_ops as so
     for key in DEBUG_CONFIG_KEYS:
         if key in _RUNNING_KEYS:
             continue
