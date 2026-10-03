@@ -315,6 +315,13 @@ def _priv_summary(j):
     return _priv_line(verbs, sessions, "this window")
 
 
+def _cut_words(j):
+    """What a CUT read holds: the window had more than the read keeps, and these are its OLDEST."""
+    return ("the oldest %d entries of the panel's own output from %s (cut off: the window held "
+            "more, and its newest lines were not read)"
+            % (_src_journal.entry_count(j["lines"]), _src_journal.window_words("panel-own")))
+
+
 def section_journal_digest(ctx):
     """Tracebacks, log levels and the most repeated lines over the whole journal read."""
     j = _journal(ctx)
@@ -323,7 +330,9 @@ def section_journal_digest(ctx):
         return res.add("_(digest unavailable: %s)_" % (j["why"] or "no journal read"))
     lines, _verbs, _sessions = _split_priv(j["lines"])
     bodies = [_body(ln) for ln in lines]
-    if j.get("filtered"):
+    if j.get("cut"):
+        res.add("- **Window**: %s, its sudo lines read apart, %s" % (_cut_words(j), _span(j["lines"])))
+    elif j.get("filtered"):
         res.add("- **Window**: %d lines of the panel's own output from %s (its sudo lines read "
                 "apart), %s" % (len(j["lines"]), _src_journal.window_words("panel-own"),
                                 _span(j["lines"])))
@@ -462,6 +471,9 @@ def section_recent_log(ctx):
     res.add("- **Source**: %s · %d lines · %s · report generated %s UTC" % (
         _SOURCE_LABEL.get(j["source"], "journal"), len(tail), _span(tail),
         time.strftime("%H:%M:%S", time.gmtime())))
+    if j.get("cut"):
+        # The block below ends at the newest of what was read, which is not the newest there is.
+        res.add("- **Read**: %s" % _cut_words(j))
     # Counted ONCE, in Errors in the journal; this only says the lines are not in the block below.
     if verbs or sessions or j.get("filtered"):
         res.add("- **Privileged calls**: left out below; counted under Errors in the journal")

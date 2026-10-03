@@ -196,12 +196,32 @@ JOURNAL_UNITS = {
 # output without the three lines every sudo call writes there (panel-own), and those sudo lines
 # alone (panel-sudo). Fixed terms, like the units above: nothing in them comes from the caller.
 # The terms are systemd's add_matches_for_unit for linuxgsm-panel.service, with the service's own
-# term narrowed to its stdout/journal output and its syslog lines at warning or worse.
+# term narrowed to its stdout/journal output and its syslog lines at critical or worse.
+#
+# EVERY BRANCH HAS A TERM THAT IS SPARSE ON ITS OWN, or the read is not bounded by its window.
+# journalctl ORs the branches, and sd-journal finds each next line by asking every branch afresh
+# where ITS next match is (next_for_match, MATCH_OR_TERM). A branch that matches rarely is walked
+# from the current line to its next match -- or to the end of the file -- once per line printed,
+# and an AND walks one step per entry of its sparsest term. So a branch whose terms are all dense
+# is re-walked across the whole window over and over: measured on a day with 2,400 panel lines,
+# the read took 2.6 s, against 0.01 s for the same lines with these terms. The sparse terms:
+#   - the panel's own output: SYSLOG_IDENTIFIER, which systemd sets on a service's stdout to the
+#     basename of ExecStart's program (exec-invoke.c connect_logger_as), "python" for the unit
+#     install.sh writes (and every update rewrites). The unit term alone is dense -- most of its
+#     entries are the three lines each sudo call writes -- and so is _TRANSPORT=stdout (every
+#     service's). PANEL_IDENT must follow install.sh's ExecStart; a unit check holds it to it.
+#   - the unit's syslog lines: PRIORITY 0-2. A refused sudo is alert (1) and pam_unix's failed
+#     authentication crit (2), its "conversation failed" err (3) beside them. Warnings (4) are
+#     every host's ufw BLOCK lines, and errors (3) every public host's sshd scanner noise: with
+#     either, this branch alone made the read ~50-250x slower on that day.
+#   - the rest: MESSAGE_ID, UNIT=, OBJECT_SYSTEMD_UNIT= name this unit and are rare.
 _PANEL_SVC = "linuxgsm-panel.service"
+PANEL_IDENT = "python"
 JOURNAL_MATCHES = {
-    "panel-own": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=stdout", "_TRANSPORT=journal", "+",
+    "panel-own": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=stdout", "_TRANSPORT=journal",
+                  "SYSLOG_IDENTIFIER=" + PANEL_IDENT, "+",
                   "_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=syslog", "PRIORITY=0", "PRIORITY=1",
-                  "PRIORITY=2", "PRIORITY=3", "PRIORITY=4", "+",
+                  "PRIORITY=2", "+",
                   "MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1", "_UID=0", "COREDUMP_UNIT=" + _PANEL_SVC,
                   "+", "_PID=1", "UNIT=" + _PANEL_SVC, "+", "_UID=0", "OBJECT_SYSTEMD_UNIT=" + _PANEL_SVC),
     "panel-sudo": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "SYSLOG_IDENTIFIER=sudo"),
@@ -4490,12 +4510,15 @@ SECRET_STDIN = {
 #     sees within _WATCH_TICK.
 #   - READ_DEADLINE. A backstop for anything that neither signals nor dies: no read the panel makes
 #     waits longer than 45 s (lgsm-discover), so a read still running at 60 s has no reader left.
+#     A LinuxGSM read (LGSM_READ_ACTIONS) gets LGSM_READ_DEADLINE: the panel waits up to 60 s.
 #
-# ONLY reads. A verb that CHANGES the host keeps running when its caller leaves, as it always has:
+# ONLY reads. A verb that CHANGES the host keeps running when its caller leaves, as it always has --
+# through the SIGTERM, and through the loss of sudo that follows it when the panel's grace runs out:
 # apt or dpkg stopped halfway leaves packages half-configured, and a multi-step verb stopped
 # between steps (the sshd drop-in written but not validated, an account created but not enrolled)
 # is worse than one that finishes late. For those a SIGTERM is noted and the verb runs to its end,
-# its own follow-up steps included -- dying of the signal would have skipped them.
+# its own follow-up steps included -- dying of the signal would have skipped them. Which is which
+# is decided by is_read(verb, args): lgsm-command is a read for its read-only LinuxGSM actions.
 READ_VERBS = frozenset({
     "apt-any-running", "apt-upgrade-running", "content-game-present", "content-scan",
     "content-script-present", "crontab-list", "disk-free", "dpkg-lock-held", "f2b-log-lines",
@@ -4508,6 +4531,12 @@ READ_VERBS = frozenset({
 # when the caller stops reading (their next write fails) or by the two signals above.
 STREAMED_READS = frozenset({"game-backup-read", "game-dir-tar", "game-file-read"})
 READ_DEADLINE = 60
+# The LinuxGSM actions that only report (the panel's auth.READONLY_ACTIONS less `monitor`, which
+# restarts a crashed server, and `test-alert`, which sends one). `lgsm-command` with one of these
+# is a read: the panel waits up to 60 s for it (server_detail._run_sync_action), so its deadline
+# is longer than that.
+LGSM_READ_ACTIONS = frozenset({"details", "check-update", "postdetails"})
+LGSM_READ_DEADLINE = 120
 # How long a stopped read's processes get after SIGTERM before SIGKILL, and how often the watch for
 # a lost parent and the deadline runs.
 STOP_GRACE = 1.0
@@ -4527,22 +4556,50 @@ class Stopped(BaseException):
         self.rc, self.why = rc, why
 
 
-_STOP = {"pid": None, "ppid": None, "verb": None, "deadline": None, "stopping": False}
+_STOP = {"pid": None, "ppid": None, "verb": None, "read": False, "deadline": None,
+         "stopping": False}
 
 
-def _ppid_of(pid):
-    """`pid`'s parent from /proc/<pid>/stat, or None for a process that is gone or a zombie.
+def is_read(verb, args):
+    """Whether this run of `verb` only reads, and so is ended when its caller gives up on it."""
+    if verb == "lgsm-command":
+        return len(args) >= 3 and args[2] in LGSM_READ_ACTIONS
+    return verb in READ_VERBS
+
+
+def read_deadline(verb, args):
+    """The deadline of a read (is_read), in seconds; None for a streamed download or a writer."""
+    if not is_read(verb, args) or verb in STREAMED_READS:
+        return None
+    return LGSM_READ_DEADLINE if verb == "lgsm-command" else READ_DEADLINE
+
+
+def _live_stat(pid):
+    """(parent pid, start time) of `pid` from /proc/<pid>/stat; None when it is gone or a zombie.
 
     A zombie has exited: it is waiting for its parent to collect it, it cannot be stopped, and
-    leaving it out keeps a SIGKILL from being aimed at it.
+    leaving it out keeps a SIGKILL from being aimed at it. The start time (clock ticks after boot)
+    tells a process from a later one given the same pid.
     """
     try:
         with open("/proc/%d/stat" % pid, "rb") as fh:
             stat_line = fh.read()
         fields = stat_line[stat_line.rindex(b")") + 2:].split()
-        return None if fields[0] == b"Z" else int(fields[1])
+        return None if fields[0] == b"Z" else (int(fields[1]), int(fields[19]))
     except (OSError, ValueError, IndexError):
         return None
+
+
+def _ppid_of(pid):
+    """`pid`'s parent, or None for a process that is gone or a zombie (see _live_stat)."""
+    st = _live_stat(pid)
+    return st[0] if st else None
+
+
+def _start_of(pid):
+    """`pid`'s start time, or None for a process that is gone or a zombie (see _live_stat)."""
+    st = _live_stat(pid)
+    return st[1] if st else None
 
 
 def descendants(root):
@@ -4550,7 +4607,7 @@ def descendants(root):
 
     By parent links, read fresh each time, so a pid recycled by an unrelated process is never
     taken for one of ours. A descendant whose parent has already exited has been reparented away
-    and is not found; the stop below signals the whole tree at once, before any of it exits.
+    and is not found: stop_descendants keeps the pids it sent SIGTERM to for that.
     """
     kids = {}
     for name in os.listdir("/proc"):
@@ -4575,13 +4632,24 @@ def _signal_all(pids, sig):
 
 
 def stop_descendants(grace=STOP_GRACE):
-    """SIGTERM everything this process started; SIGKILL what is still there after `grace`."""
+    """SIGTERM everything this process started; SIGKILL what is still there after `grace`.
+
+    "Still there" is a fresh walk of the tree AND every process the SIGTERM went to that is still
+    running -- the same process, by its start time, never a later one given its pid. The walk
+    alone misses a process that ignored the SIGTERM while its parent died of it: it has been
+    reparented away from this process by then, and it would run on as root.
+    """
     me = os.getpid()
-    _signal_all(descendants(me), signal.SIGTERM)
+    termed = {pid: _start_of(pid) for pid in descendants(me)}
+    _signal_all(termed, signal.SIGTERM)
+
+    def left():
+        same = {pid for pid, start in termed.items() if start is not None and _start_of(pid) == start}
+        return same | set(descendants(me))
     deadline = time.monotonic() + grace
-    while descendants(me) and time.monotonic() < deadline:
+    while left() and time.monotonic() < deadline:
         time.sleep(0.05)
-    _signal_all(descendants(me), signal.SIGKILL)
+    _signal_all(left(), signal.SIGKILL)
 
 
 def _stop(rc, why):
@@ -4601,7 +4669,7 @@ def _on_stop_signal(signum, _frame):
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
         return
-    if _STOP["verb"] in READ_VERBS:
+    if _STOP["read"]:
         _stop(143, "was stopped (signal %d): its caller gave up on it" % signum)
     # Any other verb runs to its end (see READ_VERBS): the signal is not its default action.
 
@@ -4611,22 +4679,24 @@ def _on_watch_tick(_signum, _frame):
         return
     if os.getppid() != _STOP["ppid"]:
         _stop(143, "lost its caller (its parent process exited)")
-    if _STOP["deadline"] is not None and time.monotonic() > _STOP["deadline"]:
-        _stop(124, "ran past its %d s limit" % READ_DEADLINE)
+    if _STOP["deadline"] is not None and time.monotonic() > _STOP["deadline"][0]:
+        _stop(124, "ran past its %d s limit" % _STOP["deadline"][1])
 
 
-def arm_stop(verb):
-    """Install the stop rules above for one run of `verb`.
+def arm_stop(verb, args=()):
+    """Install the stop rules above for one run of `verb` with `args`.
 
     Called by run() alone, never by main(), so a test that imports this file and calls main()
-    keeps its own signal handlers.
+    keeps its own signal handlers. A verb that changes the host gets the SIGTERM handler only
+    (noted, not obeyed) and no watch: it must outlive the sudo above it (see READ_VERBS).
     """
-    _STOP.update(pid=os.getpid(), ppid=os.getppid(), verb=verb, stopping=False,
-                 deadline=(time.monotonic() + READ_DEADLINE
-                           if verb in READ_VERBS and verb not in STREAMED_READS else None))
+    limit = read_deadline(verb, args)
+    _STOP.update(pid=os.getpid(), ppid=os.getppid(), verb=verb, read=is_read(verb, args),
+                 stopping=False,
+                 deadline=(time.monotonic() + limit, limit) if limit is not None else None)
     signal.signal(signal.SIGTERM, _on_stop_signal)
     signal.signal(signal.SIGHUP, _on_stop_signal)
-    if verb in READ_VERBS:
+    if _STOP["read"]:
         signal.signal(signal.SIGALRM, _on_watch_tick)
         signal.setitimer(signal.ITIMER_REAL, _WATCH_TICK, _WATCH_TICK)
 
@@ -4634,7 +4704,7 @@ def arm_stop(verb):
 def run(argv):
     """main(argv) under the stop rules above. The rc and message of a stopped read are fixed."""
     verb = argv[1] if len(argv) >= 2 and argv[1] in VERBS else None
-    arm_stop(verb)
+    arm_stop(verb, argv[2:])
     try:
         return main(argv)
     except Stopped as e:
