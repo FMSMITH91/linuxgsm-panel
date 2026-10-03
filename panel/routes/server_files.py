@@ -1433,11 +1433,20 @@ def _register_file_removal(app):
             return refused
         try:
             ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
-            log_action(current_user, "delete_file", target=gs.name, detail=rel, success=ok,
-                       server=gs)
+            log_action(current_user, "delete_file", target=gs.name, detail=_audit_name(rel),
+                       success=ok, server=gs)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
+
+
+def _audit_name(text):
+    """A path or name for an audit row, in quotes when a space starts or ends it.
+
+    The audit page shows a row's text as HTML does, which drops a space at either end, so a delete
+    of "server.cfg " beside a real "server.cfg" read like a delete of the real one.
+    """
+    return '"%s"' % text if isinstance(text, str) and text != text.strip() else text
 
 
 def _audit_safe(text, limit=None):
@@ -1461,7 +1470,8 @@ def _rename_refused(gs, rel, new_name, why):
     or the console's log away leaves a trace whatever stopped it.
     """
     log_action(current_user, "rename_file", target=gs.name,
-               detail=_audit_safe("refused: %s -> %s: %s" % (rel, new_name, why), 250),
+               detail=_audit_safe("refused: %s -> %s: %s"
+                                  % (_audit_name(rel), _audit_name(new_name), why), 250),
                success=False, server=gs)
     return jsonify({"success": False, "message": why}), 400
 
@@ -1478,7 +1488,7 @@ def _rename_answer(gs, rel, new_name):
     except ConnectionError:
         _log.warning("rename-path: the host did not answer", exc_info=True)
         ok, msg = False, RENAME_UNCONFIRMED
-    detail = _audit_safe("%s -> %s" % (rel, new_name))
+    detail = _audit_safe("%s -> %s" % (_audit_name(rel), _audit_name(new_name)))
     if msg == RENAME_EXISTS:
         log_action(current_user, "rename_file", target=gs.name, detail=detail + " (name taken)",
                    success=False, server=gs)

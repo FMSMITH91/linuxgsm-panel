@@ -38,6 +38,7 @@ reached a real host.
 """
 import json
 import os
+import re as _re40
 import shutil as _shutil40
 import subprocess as _sp40  # nosec B404 - runs bash on the rename command this part builds
 import tempfile as _tf40
@@ -52,6 +53,7 @@ from panel.routes import _shared as _sh40
 from panel.security import auth as _auth40
 
 _TRIP40_START = len(_P9_TRIPPED)
+_ROOT40 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _USER40 = "rn40"                      # the game account; its "home" is _HOME40
 _HOME40 = os.path.realpath(_tf40.mkdtemp(prefix="lgsm-unit-p40-home-"))
 _OUTSIDE40 = os.path.realpath(_tf40.mkdtemp(prefix="lgsm-unit-p40-out-"))
@@ -301,8 +303,7 @@ def _hostile_names40(a_client, sid):
 
 def _catalog_keys40(lang):
     """Every key of translations/<lang>/*.json, merged as panel.core.i18n.catalog merges them."""
-    root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                        "translations", lang)
+    root = os.path.join(_ROOT40, "translations", lang)
     keys = set()
     for name in sorted(os.listdir(root)):
         if name.endswith(".json"):
@@ -433,6 +434,45 @@ def _existing40(a_client, sid):
         check("rename route: a new name held by %s is taken too (409) — nothing moves into it"
               % what, (code, _read40("cfg/a.cfg"), _ls40("maps"), _link40("cfg/" + new) is not None)
               == (409, "A", ["sub"], True), repr((code, body)))
+
+
+def _audit_quotes40(a_client, sid):
+    """A name with a space at either end is quoted in its audit row, and /logs keeps the spaces.
+
+    The audit page drops a space at a line's end and collapses a run of them, so a delete of
+    `server.cfg ` beside a real `server.cfg` read like a delete of the real config.
+    """
+    _reset40()
+    _write40("cfg/sp.cfg ", "S")
+    code, body = _post40(a_client, sid, "cfg/sp.cfg ", "sp2.cfg")
+    row = (_audits40() or [NS(detail="", success=None)])[-1]
+    check("rename route: a name ending in a space is quoted in its audit row",
+          (code, _read40("cfg/sp2.cfg"), row.success, row.detail)
+          == (200, "S", True, '"cfg/sp.cfg " -> sp2.cfg'), repr((code, body, row)))
+    code, body = _post40(a_client, sid, "cfg/a.cfg", " x.cfg")
+    row = (_audits40() or [NS(detail="", success=None)])[-1]
+    check("rename route: ...and a refused new name with a space at its start is quoted too",
+          (code, row.success, row.detail.startswith('refused: cfg/a.cfg -> " x.cfg": '))
+          == (400, False, True), repr((code, row)))
+    _write40("cfg/del.cfg ", "D")
+    _write40("cfg/del.cfg", "R")
+    try:
+        r = a_client.post("/api/server/%d/delete-path" % sid, json={"path": "cfg/del.cfg "})
+        code = r.status_code
+    except Exception as exc:  # noqa: BLE001 - a crash fails the check that made it, not the part
+        code = repr(exc)[:200]
+    with _p9.app_context():
+        last = AuditLog.query.filter_by(action="delete_file").order_by(AuditLog.id.desc()).first()
+        got = (last.detail, last.success) if last is not None else None
+    check("delete route: a path ending in a space is quoted in its audit row, so it reads apart "
+          "from the real file beside it — which is still there",
+          (code, got, _there40("cfg/del.cfg "), _read40("cfg/del.cfg"))
+          == (200, ('"cfg/del.cfg "', True), False, "R"), repr((code, got)))
+    with open(os.path.join(_ROOT40, "templates", "logs.html"), encoding="utf-8") as fh:
+        cell = _re40.search(r'<td class="[^"]*audit-detail[^"]*"[^>]*>', fh.read())
+    check("/logs: the audit detail cell keeps a row's spaces (white-space: pre-wrap)",
+          cell is not None and "white-space:pre-wrap" in cell.group(0).replace(" ", ""),
+          cell.group(0) if cell else "no audit-detail cell")
 
 
 def _symlinks40(a_client, sid):
@@ -954,6 +994,7 @@ try:
     _permission40(_V40, _S40)
     _plain40(_A40, _S40)
     _existing40(_A40, _S40)
+    _audit_quotes40(_A40, _S40)
     _symlinks40(_A40, _S40)
     _gone40(_A40, _S40)
     _console40(_A40, _S40)

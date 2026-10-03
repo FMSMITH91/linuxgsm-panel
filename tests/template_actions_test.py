@@ -4942,7 +4942,19 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
   if (btn('maps')) btn('maps').click();
   out.folder_sel = field() ? [field().selectionStart, field().selectionEnd, field().value] : null;
   if (field()) key(field(), 'Escape');
-  out.stems = ['pack.tar.gz', '.bashrc', 'Makefile', 'a.b.cfg'].map(n => c._renameStemEnd(n, false));
+  out.stems = ['pack.tar.gz', '.bashrc', 'Makefile', 'a.b.cfg', 'server.cfg ', ' a.txt', 'a.cfg\u00a0']
+    .map(n => c._renameStemEnd(n, false));
+  // The delete and folder-download dialogs name the path quoted, with its spaces kept.
+  const realCD = c.confirmDialog, asked = [];
+  c.confirmDialog = o => asked.push(o);
+  c.deletePath('dup2/server.cfg ', false);
+  c.confirmFolderDownload('maps  old ', '/dl');
+  c.confirmDialog = realCD;
+  out.path_dialogs = asked.map(o => {
+    const code = o.bodyNode ? o.bodyNode.children.find(e => e.tagName === 'CODE') : null;
+    return code ? [code.textContent, code.style.whiteSpace, 'data-no-i18n' in code.attrs, o.bodyText === undefined]
+                : null;
+  });
   // A refusal shows under the field, which stays open and editable — and no toast.
   if (btn('notes.txt')) btn('notes.txt').click();
   S.reply = {success: false, conflict: true, message: 'TAKEN-MESSAGE'};
@@ -5047,10 +5059,16 @@ if _node:
     check(_rn.get("escape") == {"open": False, "sent": 0, "focus_back": True, "shown": True},
           "js (node): Escape puts the row back, sends nothing, and returns focus to Rename",
           repr(_rn.get("escape")))
-    check(_rn.get("folder_sel") == [0, 4, "maps"] and _rn.get("stems") == [4, 7, 8, 3],
-          "js (node): a folder's whole name is selected; .tar.gz is kept whole, and a dotfile or "
-          "a name with no dot has no extension to keep",
+    check(_rn.get("folder_sel") == [0, 4, "maps"] and _rn.get("stems") == [4, 7, 8, 3, 11, 6, 6],
+          "js (node): a folder's whole name is selected; .tar.gz is kept whole, a dotfile or a "
+          "name with no dot has no extension to keep, and a name with a space at either end is "
+          "selected whole (the panel refuses to keep that space)",
           repr((_rn.get("folder_sel"), _rn.get("stems"))))
+    check(_rn.get("path_dialogs") == [["\u201cdup2/server.cfg \u201d", "pre-wrap", True, True],
+                                      ["\u201cmaps  old \u201d", "pre-wrap", True, True]],
+          "js (node): the delete and folder-download dialogs show the path quoted with its spaces "
+          "kept, so 'server.cfg ' reads apart from 'server.cfg'",
+          repr(_rn.get("path_dialogs")))
     check(_rn.get("refused") == {"body": {"path": "notes.txt", "new_name": "maps"},
                                  "err": "TAKEN-MESSAGE", "err_shown": True, "open": True,
                                  "editable": True, "toasts": 0},

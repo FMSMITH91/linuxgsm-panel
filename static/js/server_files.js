@@ -306,9 +306,9 @@ function saveFile(){
 // first while a single file downloads on one click.
 function confirmFolderDownload(path, href){
   confirmDialog({title:'Download folder', icon:'file-earmark-zip', confirmLabel:'Download .tar.gz',
-    bodyText:'Download this folder as a .tar.gz archive?\n'+path+'\n\n'
-      +'The archive is built while it downloads, so the total size is not known in advance — a big '
-      +'folder like serverfiles can run to many gigabytes.',
+    bodyNode:_pathBody('Download this folder as a .tar.gz archive?', path,
+      'The archive is built while it downloads, so the total size is not known in advance — a big '
+      +'folder like serverfiles can run to many gigabytes.'),
     onConfirm:function(){
       // A temporary anchor rather than location=href: navigating away from the page would tear
       // down the file browser if the server answers with anything but the file.
@@ -317,9 +317,21 @@ function confirmFolderDownload(path, href){
       setTimeout(function(){ a.remove(); }, 0);
     }});
 }
+// A dialog body naming a path: the question, then the path quoted on its own line with its spaces
+// kept. The dialog's text body collapses runs of spaces and drops one at a line's end, so
+// "server.cfg " beside a real "server.cfg" read the same in the dialog that deletes one of them.
+function _pathBody(lead, path, tail){
+  var box=document.createElement('div');
+  var q=document.createElement('div'); q.textContent=lead; box.appendChild(q);
+  var p=document.createElement('code'); p.className='fb-dialog-path'; p.setAttribute('data-no-i18n','');
+  p.style.whiteSpace='pre-wrap'; p.style.wordBreak='break-all';
+  p.textContent='“'+path+'”'; box.appendChild(p);
+  if(tail){ var t=document.createElement('div'); t.className='mt-2'; t.textContent=tail; box.appendChild(t); }
+  return box;
+}
 function deletePath(path, isDir){
   confirmDialog({title:'Delete '+(isDir?'directory':'file'), icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
-    bodyText:'Delete '+(isDir?'directory (and everything in it)':'file')+':\n'+path+' ?',
+    bodyNode:_pathBody('Delete '+(isDir?'directory (and everything in it)':'file')+'?', path),
     onConfirm:function(){
       fetch(MOUNT+'/api/server/'+serverId+'/delete-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
         .then(r=>r.json()).then(d=>{
@@ -342,9 +354,11 @@ var _renaming = null;   // {row, path, name, input, ok, err, busy}: the one row 
 function _tr(s){ return window.t ? window.t(s) : s; }
 function _icon(cls){ var i=document.createElement('i'); i.className='bi '+cls; return i; }
 // Where the stem ends: before the extension, which is kept. A folder, a dotfile (.bashrc) and a
-// name with no dot have none to keep; an archive's double extension (.tar.gz) is kept whole.
+// name with no dot have none to keep; an archive's double extension (.tar.gz) is kept whole. A
+// name with a space at either end is selected whole: the panel refuses to keep that space, so
+// keeping "cfg " would make the first try fail.
 function _renameStemEnd(name, isDir){
-  if(isDir) return name.length;
+  if(isDir || /^\s|\s$/.test(name)) return name.length;
   var arc=/\.tar\.(?:gz|bz2|xz|zst)$/i.exec(name);
   var dot=arc ? arc.index : name.lastIndexOf('.');
   return dot>0 ? dot : name.length;
