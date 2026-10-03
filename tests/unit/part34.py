@@ -182,6 +182,7 @@ _BIN34 = os.path.join(_TMP34, "bin")
 os.makedirs(_BIN34, exist_ok=True)
 with open(os.path.join(_BIN34, "gamedig"), "w", encoding="utf-8") as _fh34:
     _fh34.write(_FAKE_GAMEDIG34)
+# nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
 os.chmod(os.path.join(_BIN34, "gamedig"), 0o700)
 _HAVE_JQ34 = _shutil34.which("jq") is not None
 
@@ -676,6 +677,7 @@ def _section_renice_getent34(users):
         os.makedirs(fake, exist_ok=True)
         with open(os.path.join(fake, "getent"), "w", encoding="utf-8") as fh:
             fh.write("#!/bin/sh\nexit %d\n" % rc)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
         os.chmod(os.path.join(fake, "getent"), 0o700)
         _set34(_core34, "run_command",
                lambda server, cmd, timeout=30, sudo=None, stdin_text=None, _p=fake: _bash34(cmd, _p))
