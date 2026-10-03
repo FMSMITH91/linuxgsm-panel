@@ -525,7 +525,7 @@ def _all_uses29():
                                    recursive=True)))
     uses = []
     for p in files:
-        for no, ln in enumerate(_code29(open(p, encoding="utf-8").read()).splitlines(), 1):
+        for ln in _code29(open(p, encoding="utf-8").read()).splitlines():
             uses += [(os.path.relpath(p, _ROOT29), m.group(2)) for m in
                      _re29.finditer(r"(?:^|[\s{,])uses:\s*(['\"]?)([^\s'\",}#]+)\1", ln)]
     return uses
