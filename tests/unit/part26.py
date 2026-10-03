@@ -225,7 +225,7 @@ try:
                       env=dict(os.environ, PATH=_bin26 + os.pathsep + os.environ["PATH"],
                                GH_LOG=paths["log"], GITHUB_OUTPUT=paths["out"],
                                GITHUB_STEP_SUMMARY=paths["summary"], ANALYSES=paths["analyses"],
-                               GITHUB_REPOSITORY="o/r", GH_TOKEN="x", **env), timeout=120)
+                               GITHUB_REPOSITORY="o/r", **env), timeout=120)
         outs = dict(ln.split("=", 1) for ln in open(paths["out"]).read().splitlines() if "=" in ln)
         return p.returncode, outs, open(paths["log"]).read(), p.stdout + p.stderr, \
             open(paths["summary"]).read()
