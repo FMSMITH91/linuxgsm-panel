@@ -251,7 +251,7 @@ try:
     _q26 = [ln for ln in _pw["clean"][2].splitlines() if "code-scanning/analyses" in ln]
     check("code-scanning gates (PR): it reads ONE page of the ref's newest 100 analyses, unpaginated, "
           "with no `sha=` (the list has no commit filter)",
-          _q26 == ["api repos/o/r/code-scanning/analyses?ref=refs/pull/7/merge&per_page=100"
+          _q26 == ["api -- repos/o/r/code-scanning/analyses?ref=refs/pull/7/merge&per_page=100"
                    "&sort=created&direction=desc"], repr(_q26))
     check("code-scanning gates (PR): this merge commit in every category passes the wait",
           _pw["clean"][0] == 0, _pw["clean"][3][-800:])
