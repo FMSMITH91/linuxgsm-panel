@@ -149,6 +149,14 @@ def _timeout26(job_text):
     return int(m.group(1)) if m else 0
 
 
+def _step26(text, name):
+    """The step's `run:` body, or "" when the workflow has no such step (its checks then fail)."""
+    try:
+        return _wf14_run(text, name)
+    except (StopIteration, ValueError):
+        return ""
+
+
 def _poll26(run):
     """(tries, interval) the step passes the script, and the run with the interval cut to 0."""
     t = re.search(r"--tries (\d+)", run)
@@ -160,11 +168,11 @@ def _poll26(run):
 _pr26 = _job26(_cq26, "pr-alerts")
 _STEP26 = r"^      - (?:name: (.+)|uses: (\S+).*)$"
 _pr_steps26 = re.findall(_STEP26, _pr26, re.M)
-_pr_wait26 = _wf14_run(_cq26, "Wait for this merge commit's analysis in every category")
-_pr_judge26 = _wf14_run(_cq26, "Judge refs/pull/<n>/merge")
+_pr_wait26 = _step26(_cq26, "Wait for this merge commit's analysis in every category")
+_pr_judge26 = _step26(_cq26, "Judge refs/pull/<n>/merge")
 _pr_poll26 = _poll26(_pr_wait26)
 _judge_name26 = "Fail if that ref has open code-scanning alerts"
-_m_judge26 = _wf14_run(_cqa26, _judge_name26)
+_m_judge26 = _step26(_cqa26, _judge_name26)
 _m_poll26 = _poll26(_m_judge26)
 _m_job26 = _job26(_cqa26, "open-alerts")
 _m_steps26 = [s[0] or s[1].split("@")[0] for s in re.findall(_STEP26, _m_job26, re.M)]
@@ -181,7 +189,7 @@ check("code-scanning gates: ...the main gate checks it out and runs it before re
       "with the triggering run's event and workflow",
       _sparse26 in _m_job26 and "actions/checkout" in _m_steps26 and _judge_name26 in _m_steps26
       and _m_steps26.index("actions/checkout") == _m_steps26.index(_judge_name26) - 1
-      and _m_judge26.index("code_scanning_analyses.py") < _m_judge26.index("code-scanning/alerts")
+      and 0 <= _m_judge26.find("code_scanning_analyses.py") < _m_judge26.find("code-scanning/alerts")
       and '--event "${WR_EVENT}" --workflow "${WR_PATH}"' in _m_judge26
       and "WR_EVENT: ${{ github.event.workflow_run.event }}" in _m_job26
       and "WR_PATH: ${{ github.event.workflow_run.path }}" in _m_job26, repr(_m_steps26))
@@ -215,7 +223,12 @@ try:
         os.chmod(os.path.join(_bin26, _x), 0o700)
 
     def _run26(run, rows, **env):
-        """Run a step body in the checkout with `gh` stubbed; (rc, outputs, gh log, stdout, summary)."""
+        """Run a step body in the checkout with `gh` stubbed; (rc, outputs, gh log, stdout, summary).
+
+        A step that was not found runs as nothing, which exits 0: it is reported as rc 99 instead.
+        """
+        if not run.strip():
+            return 99, {}, "", "no such step", ""
         paths = {k: os.path.join(_sb26, k) for k in ("out", "log", "summary", "analyses")}
         for p in paths.values():
             open(p, "w").close()
@@ -300,7 +313,7 @@ try:
           in _mj["clean"][4], _mj["clean"][4][-600:])
 
     # ── scheduled runs reach the gate, and wait for the other workflow's scheduled run ──
-    _wait26 = _wf14_run(_cqa26, "Wait for the other uploader")
+    _wait26 = _step26(_cqa26, "Wait for the other uploader")
     _ws = _run26(_wait26, [], GITHUB_EVENT_NAME="workflow_run", WR_SHA=_S26, WR_NAME="CodeQL",
                  WR_EVENT="schedule")
     check("code-scanning gates (main): a scheduled run looks for the other workflow's SCHEDULED run "
