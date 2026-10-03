@@ -978,3 +978,19 @@ with open(os.path.join(_rn_root, ".github", "workflows", "codeql.yml"), encoding
 _cq_job = _cq_src.split("\n  analyze:\n", 1)[-1].split("\n  pr-alerts", 1)[0].split("\n    steps:\n", 1)[0]
 check("codeql: the analyze job turns diff-informed analysis OFF, so a PR is judged on every alert",
       '\n    env:\n      CODEQL_ACTION_DIFF_INFORMED_QUERIES: "false"\n' in _cq_job, _cq_job[-600:])
+
+
+# ── Gitleaks on main judges main's history, not every branch in the checkout ───────────────────
+# `detect` with no --log-opts runs `git log --all`; with fetch-depth 0 that includes every open PR's
+# branch, and main went red on 2026-10-03 for a literal that existed only on one.
+with open(os.path.join(_rn_root, ".github", "workflows", "security.yml"), encoding="utf-8") as _gl_fh:
+    _gl_src = _gl_fh.read()
+_gl_full = _gl_src.split('echo "Scanning the full history of ${GITHUB_SHA}"', 1)[-1].split("fi\n", 1)[0]
+# Commands only: the comments above them mention --log-opts too.
+_gl_code = "\n".join(_l for _l in _gl_src.splitlines() if not _l.lstrip().startswith("#"))
+check("gitleaks: the non-PR scan is the full history of the commit judged (--log-opts GITHUB_SHA), "
+      "and no gitleaks scan in the workflow runs without --log-opts (that walks every branch)",
+      'Scanning the full history of ${GITHUB_SHA}' in _gl_src
+      and '--log-opts "${GITHUB_SHA}"' in _gl_full and "--exit-code 1" in _gl_full
+      and _gl_code.count("gitleaks detect --source") == 2
+      and _gl_code.count('--log-opts "') == 2, _gl_full[:400])
