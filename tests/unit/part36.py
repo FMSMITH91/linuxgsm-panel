@@ -543,8 +543,11 @@ def _retried36(rid, name, port, **host):
 
 
 def _f2_retry_paths36(rid):
-    """The same corner on the paths a check above does not take: the write raising (paramiko), and
-    the command list not read at all, so step 5 never writes (the host unreachable on a retry)."""
+    """The same corner on the paths a check above does not take.
+
+    The write raising (paramiko), and the command list not read at all, so step 5 never writes
+    (the host unreachable on a retry).
+    """
     down = ConnectionError("SSH connection failed")
     got = _retried36(rid, "p36asra", 27620, cron5=[down], cron7=[down], cron_list=[down])
     check("F2 install (paramiko): a RETRY whose cron writes and read-back all RAISE keeps the "
