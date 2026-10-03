@@ -512,13 +512,36 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **The debug report's journal sections cover the panel's own output, not its sudo calls.** The
   report read the newest 5,000 journal lines and only then dropped the sudo lines. On a live host
   4,964 of the 5,000 were sudo lines, so the window covered under three hours and the recent log
-  had 36 lines. The report now asks journald for the panel's own lines by field, so the 5,000 lines
-  reach back as far as the panel's output does. Refused sudo calls and the panel's warnings are
-  still included. The sudo calls are counted from a separate read and printed once, under *Errors
-  in the journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `LinuxGSM
-  config`, `true as root`, and so on) instead of "other command". Account names, paths and scripts
-  an operator ran are never printed. A system install needs an updated helper for this; an older
+  had 36 lines. The report now asks journald for the panel's own lines by field, over the last 24
+  hours, so the lines it reads are the panel's output and not its sudo calls. The 24-hour window
+  is what keeps the read short on any journal: asked instead for the newest 5,000 such lines,
+  journalctl walked the whole of a 1.9 GB journal that held fewer, was still running after five
+  minutes, and the report showed no journal at all. Each part of the request names something rare
+  on its own (the panel's own output stream, a critical message, the unit), so a day on which the
+  panel logged thousands of errors costs little more to read than a quiet one. When the window
+  holds more than 5,000 entries (a traceback is one entry, however many lines it prints), or the
+  filtered read fails or runs out of its half of the time, the report reads the newest 5,000 lines
+  as before; when that read has nothing either, the report says its lines are the oldest of the
+  window, cut off. Refused sudo calls and the panel's warnings are still included. The sudo calls
+  of the last hour are counted from a separate read and printed once, under *Errors in the
+  journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `LinuxGSM config`,
+  `true as root`, and so on) instead of "other command". Account names, paths and scripts an
+  operator ran are never printed. A system install needs an updated helper for this; an older
   helper gets the previous read.
+- **A privileged command the panel gives up on no longer keeps running as root.** When a call
+  through the helper timed out, the panel stopped it with SIGKILL. That reached `sudo` alone, and
+  sudo cannot pass a SIGKILL on, so the helper and the program it ran carried on as root with
+  nobody waiting for the answer: on the test host a debug report's journal read kept a core busy
+  for five and a half minutes, and every further report added another. The panel now sends SIGTERM
+  first, which both classic sudo and sudo-rs pass on, and SIGKILL only after two seconds. The
+  helper ends a read, and every process it started, when that SIGTERM arrives, when the sudo above
+  it is gone, or after 60 seconds; a process that ignores the SIGTERM is killed even after the one
+  that started it has exited. A LinuxGSM `details`, `check-update` or `postdetails` counts as a
+  read (with two minutes before its own limit), so a timed-out one no longer leaves the helper
+  waiting on it as root. A call that changes the host (apt, a firewall rule, a new account, a
+  LinuxGSM start) still runs to its end when the panel stops waiting, as it always did, even
+  after the sudo above it is gone: stopping it halfway would be worse. An update installs the new
+  helper.
 - **Call of Duty servers show the capacity the game reports.** gamedig gives cod's `maxplayers` as
   text ("16"). The panel threw it away and showed the LinuxGSM config's number instead.
 - **A running game the panel cannot query no longer runs LinuxGSM `details` every 45 seconds.**

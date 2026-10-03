@@ -306,12 +306,20 @@ def _priv_summary(j):
     """The privileged-call line for this report, from the separate sudo read when there was one."""
     if j.get("sudo"):
         _kept, verbs, sessions = _split_priv(j["sudo"])
-        return _priv_line(verbs, sessions, "the newest %d sudo lines of the panel's unit, %s"
-                          % (len(j["sudo"]), _span(j["sudo"])), title="Privileged calls")
+        return _priv_line(verbs, sessions, "the %d sudo lines of the panel's unit from %s, %s"
+                          % (len(j["sudo"]), _src_journal.window_words("panel-sudo"),
+                             _span(j["sudo"])), title="Privileged calls")
     if j.get("filtered"):
         return "- **Privileged calls**: not counted (%s)" % (j.get("sudo_why") or "no sudo lines read")
     _kept, verbs, sessions = _split_priv(j["lines"])
     return _priv_line(verbs, sessions, "this window")
+
+
+def _cut_words(j):
+    """What a CUT read holds: the window had more than the read keeps, and these are its OLDEST."""
+    return ("the oldest %d entries of the panel's own output from %s (cut off: the window held "
+            "more, and its newest lines were not read)"
+            % (_src_journal.entry_count(j["lines"]), _src_journal.window_words("panel-own")))
 
 
 def section_journal_digest(ctx):
@@ -322,9 +330,14 @@ def section_journal_digest(ctx):
         return res.add("_(digest unavailable: %s)_" % (j["why"] or "no journal read"))
     lines, _verbs, _sessions = _split_priv(j["lines"])
     bodies = [_body(ln) for ln in lines]
-    res.add("- **Window**: the last %d lines%s, %s" % (
-        len(j["lines"]), " of the panel's own output (its sudo lines read apart)"
-        if j.get("filtered") else "", _span(j["lines"])))
+    if j.get("cut"):
+        res.add("- **Window**: %s, its sudo lines read apart, %s" % (_cut_words(j), _span(j["lines"])))
+    elif j.get("filtered"):
+        res.add("- **Window**: %d lines of the panel's own output from %s (its sudo lines read "
+                "apart), %s" % (len(j["lines"]), _src_journal.window_words("panel-own"),
+                                _span(j["lines"])))
+    else:
+        res.add("- **Window**: the last %d lines, %s" % (len(j["lines"]), _span(j["lines"])))
     priv = _priv_summary(j)
     if priv:
         res.add(priv)
@@ -458,6 +471,9 @@ def section_recent_log(ctx):
     res.add("- **Source**: %s · %d lines · %s · report generated %s UTC" % (
         _SOURCE_LABEL.get(j["source"], "journal"), len(tail), _span(tail),
         time.strftime("%H:%M:%S", time.gmtime())))
+    if j.get("cut"):
+        # The block below ends at the newest of what was read, which is not the newest there is.
+        res.add("- **Read**: %s" % _cut_words(j))
     # Counted ONCE, in Errors in the journal; this only says the lines are not in the block below.
     if verbs or sessions or j.get("filtered"):
         res.add("- **Privileged calls**: left out below; counted under Errors in the journal")

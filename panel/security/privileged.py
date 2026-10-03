@@ -94,23 +94,32 @@ JOURNAL_UNITS = {
 # output without the three lines every sudo call writes there (panel-own), and those sudo lines
 # alone (panel-sudo), so the report's window is the panel's lines and not its privileged calls.
 # The terms are systemd's add_matches_for_unit for linuxgsm-panel.service, with the service's own
-# term narrowed to its stdout/journal output and its syslog lines at warning or worse.
+# term narrowed to its stdout/journal output and its syslog lines at critical or worse. Every
+# branch has a term that is sparse on its own (PANEL_IDENT, PRIORITY 0-2, ...), or journalctl
+# re-walks it once per line printed -- see tools/panel-helper.
 _PANEL_SVC = "linuxgsm-panel.service"
+# What systemd names the unit's stdout lines: the basename of install.sh's ExecStart program.
+PANEL_IDENT = "python"
 JOURNAL_MATCHES = {
-    "panel-own": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=stdout", "_TRANSPORT=journal", "+",
+    "panel-own": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=stdout", "_TRANSPORT=journal",
+                  "SYSLOG_IDENTIFIER=" + PANEL_IDENT, "+",
                   "_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=syslog", "PRIORITY=0", "PRIORITY=1",
-                  "PRIORITY=2", "PRIORITY=3", "PRIORITY=4", "+",
+                  "PRIORITY=2", "+",
                   "MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1", "_UID=0", "COREDUMP_UNIT=" + _PANEL_SVC,
                   "+", "_PID=1", "UNIT=" + _PANEL_SVC, "+", "_UID=0", "OBJECT_SYSTEMD_UNIT=" + _PANEL_SVC),
     "panel-sudo": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "SYSLOG_IDENTIFIER=sudo"),
 }
+# How far back a field-match source reads, FORWARD from there, with `--lines=+N` (the oldest N of
+# the window): the only form that is bounded whatever the journal's size — see tools/panel-helper.
+JOURNAL_SINCE = {"panel-own": "-24h", "panel-sudo": "-1h"}
 JOURNAL_SOURCES = tuple(sorted(set(JOURNAL_UNITS) | set(JOURNAL_MATCHES)))
 
 
 def journal_argv(source, lines):
     """The journalctl argv for one journal SOURCE name and a line count (already validated)."""
     if source in JOURNAL_MATCHES:
-        return ["journalctl", "--no-pager", "-q", "-n", lines] + list(JOURNAL_MATCHES[source])
+        return (["journalctl", "--no-pager", "-q", "--since=" + JOURNAL_SINCE[source],
+                 "--lines=+" + lines] + list(JOURNAL_MATCHES[source]))
     return (["journalctl"] + [x for u in JOURNAL_UNITS[source] for x in ("-u", u)]
             + ["--no-pager", "-n", lines])
 
