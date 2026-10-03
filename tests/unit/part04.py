@@ -527,16 +527,16 @@ try:
     _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("a banner line\nde_nuke\n", "", 0)
     check("game-map: the map is the LAST line of output, where jq prints it",
           _sm_cron.game_map(object(), "u", "css", 27015) == "de_nuke")
-    # The gamedig player reader had only stubbed callers. The JSON list is found on whatever line
-    # it lands on, unnamed entries are dropped, and a reply with no list in it is "could not query"
-    # (None) — never the confirmed-empty server an empty list is.
-    _sm_core.run_command = lambda *a, **k: ('a banner line\n[{"name":" Alice ","score":3,"time":61.5},'
-                                            '{"name":""},"x"]\n', "", 0)
+    # The gamedig player reader had only stubbed callers. The jq reply ({p: rows, c: head count})
+    # is found on whatever line it lands on, unnamed entries are dropped, and a reply with no list
+    # in it is "could not query" (None) — never the confirmed-empty server an empty list is.
+    _sm_core.run_command = lambda *a, **k: ('a banner line\n{"p":[{"name":" Alice ","score":3,'
+                                            '"time":61.5},{"name":""},"x"],"c":2}\n', "", 0)
     check("gamedig players: the list is read off its own line, unnamed entries dropped",
           _sm_game._gamedig_player_list(object(), "u", "css", 27015)
           == [{"name": "Alice", "steamid": "", "num": None, "score": 3, "time": 61.5}],
           str(_sm_game._gamedig_player_list(object(), "u", "css", 27015)))
-    _sm_core.run_command = lambda *a, **k: ("[]\n", "", 0)
+    _sm_core.run_command = lambda *a, **k: ('{"p":[],"c":0}\n', "", 0)
     check("gamedig players: an empty list is a confirmed-empty server ([]), not unknown",
           _sm_game._gamedig_player_list(object(), "u", "css", 27015) == [])
     _sm_core.run_command = lambda *a, **k: ("", "", 0)
@@ -656,8 +656,10 @@ check("query-type: a mapped game with no override uses the map",
       _sm_cron._gamedig_type("gmod", None) == "garrysmod")
 check("query-type: the override is sanitized to a gamedig-safe charset",
       _sm_cron._gamedig_type("cod", "co d;rm -rf") == "codrm-rf")
+# gamedig 5 calls Call of Duty 4 "cod4mw"; "cod4" is only its old_id, which it resolves with
+# --checkOldIDs alone (part36 holds every map value to the pinned gamedig's ids).
 check("query-type: the Call of Duty family is mapped, so its player count (restart/backup) works",
-      _sm_cron._gamedig_type("cod", None) == "cod" and _sm_cron._gamedig_type("cod4", None) == "cod4")
+      _sm_cron._gamedig_type("cod", None) == "cod" and _sm_cron._gamedig_type("cod4", None) == "cod4mw")
 check("query-type: a game with neither engine nor map becomes queryable once an override is set",
       _sm_game.is_player_queryable("nosuchgame", None) is False
       and _sm_game.is_player_queryable("nosuchgame", "quake3") is True)

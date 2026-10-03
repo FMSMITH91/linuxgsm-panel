@@ -1421,21 +1421,31 @@ def spend_totp_step(u, step):
 # and disk each hand out root outright (a privileged container, a raw block device).
 _ROOT_EQUIVALENT_GROUPS = frozenset({"sudo", "wheel", "admin", "root", "docker", "lxd", "disk"})
 _ACCOUNT_PROBE_END = "LGSM_ACCT_PROBE_DONE"
+# privileged_accounts' reason for a name it will not put into any command (see _refused_by_name).
+INVALID_ACCOUNT_NAME = "its name is not a plain account name, so the panel puts it into no command"
 
 
 def _account_probe_cmd(users):
-    """One shell command that reports, per account, its uid and groups — and any sudoers rule."""
+    """One shell command that reports, per account, its uid and groups — and any sudoers rule.
+
+    Each name reaches the text ONLY as a shell-quoted word: the report lines are printf ARGUMENTS,
+    never part of the format. They were `echo "ACCT <name> …"`, the raw name inside double quotes,
+    where $(…) and backticks still expand and a `"` in the name ends the string — so a stored
+    short_name of `gm$(id>/tmp/x)` ran its payload as root on a sudo-enabled remote (GHSA-hh39,
+    reopened by #374). privileged_accounts refuses such a name before this is built; this is the
+    second wall, for a caller that does not.
+    """
     import shlex as _shlex
     parts = []
     for u in users:
-        q = _shlex.quote(u)
         parts.append(
-            'if uid=$(id -u %s 2>/dev/null); then echo "ACCT %s $uid $(id -Gn %s 2>/dev/null)"; '
+            "if uid=$(id -u %(q)s 2>/dev/null); then "
+            "printf 'ACCT %%s %%s %%s\\n' %(q)s \"$uid\" \"$(id -Gn %(q)s 2>/dev/null)\"; "
             # `sudo -l -U` needs root, so it is asked only when the probe IS root (a remote whose
             # login escalates); otherwise the groups above are the evidence there is.
-            'if [ "$(id -u)" = 0 ] && LC_ALL=C sudo -n -l -U %s 2>/dev/null '
-            '| grep -q "may run the following"; then echo "SUDOERS %s"; fi; '
-            'else echo "NOACCT %s"; fi' % (q, u, q, q, u, u))
+            "if [ \"$(id -u)\" = 0 ] && LC_ALL=C sudo -n -l -U %(q)s 2>/dev/null "
+            "| grep -q \"may run the following\"; then printf 'SUDOERS %%s\\n' %(q)s; fi; "
+            "else printf 'NOACCT %%s\\n' %(q)s; fi" % {"q": _shlex.quote(u)})
     parts.append("echo %s" % _ACCOUNT_PROBE_END)
     return "; ".join(parts)
 
@@ -1481,7 +1491,19 @@ def _parse_account_probe(out, users):
 
 
 def _refused_by_name(remote, users, local):
-    """{user: why} for the accounts refused without asking the host: root, its login, the panel's own."""
+    """{user: why} for the accounts refused without asking the host.
+
+    Root, any name that is not a plain account word, the host's login, and the panel's own.
+
+    A name game_idents_ok refuses is refused HERE, before any probe is built. The probe is shell
+    text run as root on a sudo-enabled remote, and its callers hand it names nothing has checked:
+    a stored short_name (the model validates on assignment, never on a load — a database from
+    before the validator, a hand edit, a restore) and the /home listing discover found. Asking the
+    host about such a name ran it; the host's answer could not even be matched back to it, so
+    privileged_accounts answered None, the uninstall said "couldn't check, try again", and every
+    retry ran the payload again. Refused by name, the row reaches _remove_row_only, which touches
+    no host: the operator's way out the load-time warning promises.
+    """
     # The login the panel signs in as, by NAME, whatever its groups say: it is the account whose
     # authorized_keys the panel's own access rests on, and on a host whose sudoers grants it by
     # name (cloud-init's 90-cloud-init-users) the group test in the probe would not see it without
@@ -1493,6 +1515,8 @@ def _refused_by_name(remote, users, local):
     for u in users:
         if u == "root":
             refused[u] = "it is root"
+        elif not _sm.game_idents_ok(u):
+            refused[u] = INVALID_ACCOUNT_NAME
         elif u == login:
             refused[u] = "it is the account the panel signs in to this host as"
         elif local:
@@ -1532,8 +1556,11 @@ def privileged_accounts(remote, users):
     own account. So the route asks the host itself. Superadmins are refused too: nothing the panel
     does through a game account is something the host's own login needs, and a superadmin who
     really means it has the host's shell.
+
+    A name that is not a plain account word (game_idents_ok) — "" and None included — is refused
+    as INVALID_ACCOUNT_NAME without asking the host: see _refused_by_name.
     """
-    users = [u for u in dict.fromkeys(users) if u]
+    users = list(dict.fromkeys(users))
     if not users:
         return {}
     local = _sm.is_local_server(remote)
@@ -1605,6 +1632,13 @@ def _store_account_verdict(key, now, why):
 
 
 def _privileged_write_msg(user, why):
+    if why == INVALID_ACCOUNT_NAME:
+        # Not "can become root": nothing was asked of the host. And the name is not repeated —
+        # it is exactly the text the panel refuses to handle.
+        return ("Refused: this server's account name is not a plain account name, so the panel "
+                "puts it into no command on the host and writes none of its files or scheduled "
+                "tasks. Remove the server from the panel (that leaves the host untouched) and "
+                "import or install it again under a valid name.")
     return ("Refused: the '%s' account on this host can become root (%s), so the panel does not "
             "write its files or scheduled tasks — that would be root on the host. This server was "
             "imported before the panel refused such accounts; remove it from the panel and run the "

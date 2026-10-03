@@ -2145,8 +2145,7 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
     try:
         _priv.check_args("lgsm-command", verb_args)
     except Exception as exc:
-        _log.warning("refusing LinuxGSM action: %s", exc)
-        return "", str(exc), 1
+        return _lgsm_args_refused(exc)
 
     if is_local_server(server) and helper_present():
         return _lgsm_command_via_helper(verb_args, timeout)
@@ -2168,12 +2167,30 @@ def _lgsm_command_via_helper(verb_args, timeout):
         # here because this function's contract is a TUPLE and never a raise: every caller
         # unpacks (out, err, rc), and several run inside a background thread whose only
         # report to the user is that rc. A raise here reached them as silence.
-        _log.warning("refusing LinuxGSM action: %s", exc)
-        return "", str(exc), 1
+        return _lgsm_args_refused(exc)
     out, err, rc = _exec_local_argv(argv, timeout=timeout)
     # The shell form used `2>&1` and every caller reads LinuxGSM's errors out of stdout, so
     # merge here too — switching transport must not move a message from one stream to the other.
     return ("\n".join(x for x in (out, err) if x)).strip(), "", rc
+
+
+LGSM_ARGS_UNCHECKED = "the panel could not check this LinuxGSM action's arguments"
+
+
+def _lgsm_args_refused(exc):
+    """run_as_game_user's (out, err, rc) for an argument check that raised `exc`.
+
+    The rc and the stderr slot reach the operator: the sync actions put `err` into the route's
+    message (server_detail._run_sync_action). A VerbError's text is fixed by design and never
+    carries the rejected value (privileged.VerbError), so it is passed on. Anything else — a bug,
+    a KeyError, an OSError reading the helper — is not the panel's wording and may carry a path or
+    a value, so the operator gets fixed text and the log gets the exception.
+    """
+    if isinstance(exc, _priv.VerbError):
+        _log.warning("refusing LinuxGSM action: %s", exc)
+        return "", str(exc), 1
+    _log.warning("refusing LinuxGSM action: the argument check failed", exc_info=exc)
+    return "", LGSM_ARGS_UNCHECKED, 1
 
 
 def _lgsm_shell_body(user, selfname, action, answers, tee_log):
@@ -2828,9 +2845,11 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     # Validated and quoted HERE, for the reason run_as_game_user spells out above: the model's
     # @validates hook fires on ASSIGNMENT and never on a row loaded from the database, so a row
     # written before that validator existed — or restored from a tampered backup — reaches this
-    # function unchecked. It matters more here than there: `user` went in UNQUOTED, and the
-    # pipeline below runs as ROOT, so `crontab -u <user>` was a root command-injection point one
-    # bad row away. Five cron routes reach this.
+    # function unchecked. It mattered more here than there: `user` went in UNQUOTED into a
+    # pipeline that ran as ROOT, so `crontab -u <user>` was a root command-injection point one bad
+    # row away. The pipeline now runs AS the account, through shell_as_game_user (below), which
+    # refuses such a name too; this check is the function's own, refusing before the account's
+    # crontab lock is even taken. Five cron routes reach this.
     if not game_idents_ok(user):
         _log.warning("refusing to rewrite a crontab for an unsafe account name")
         return False, "invalid account name"
@@ -2950,22 +2969,54 @@ def install_game_cron(server, user, selfname=None, supported=None):
 
 # Panel game_type -> gamedig query type (best effort). Unmapped games skip the
 # player check and just restart at the daily time.
+#
+# Every value is a game id of the gamedig the panel installs (tools/gamedig/package-lock.json pins
+# 5.3.3; its lib/games.js keys). gamedig 5 renamed several games and keeps the old name only as an
+# `old_id`, which it resolves ONLY with --checkOldIDs — a flag the panel never passes. So "cs16",
+# "cs2", "tf2", "hl2dm", "left4dead2" and "cod4" answered {"error":"Invalid game: …"} to every
+# query, and "minecraftpe" was no id at all: nine game types fell back to LinuxGSM's own query for
+# player counts, and their daily restart-when-empty check could never see an empty server. A unit
+# check holds every value to the pinned version's list (tests/unit/gamedig_game_ids.txt).
 GAMEDIG_TYPE = {
-    "gmod": "garrysmod", "cs": "cs16", "css": "css", "cs2": "cs2", "tf2": "tf2",
-    "hl2dm": "hl2dm", "dods": "dods", "left4dead2": "left4dead2", "l4d2": "left4dead2",
+    "gmod": "garrysmod", "cs": "counterstrike16", "css": "css", "cs2": "counterstrike2",
+    "tf2": "teamfortress2",
+    "hl2dm": "hl2d", "dods": "dods", "left4dead2": "l4d2", "l4d2": "l4d2",
     "insurgency": "insurgency", "ins": "insurgency", "rust": "rust",
     "valheim": "valheim", "vh": "valheim",
     "sdtd": "sdtd", "7d2d": "sdtd",
     # Minecraft: Java editions (vanilla + Paper/Velocity/Waterfall, which answer Server List Ping)
-    # use "minecraft"; Bedrock uses "minecraftpe". This is what yields count AND max-players (Minecraft
-    # keeps max in server.properties, not the LinuxGSM config, so the config-fallback can't see it).
+    # use "minecraft"; Bedrock uses "mbe" (gamedig 5's "Minecraft: Bedrock Edition"). This is what
+    # yields count AND max-players (Minecraft keeps max in server.properties, not the LinuxGSM
+    # config, so the config-fallback can't see it).
     "mc": "minecraft", "pmc": "minecraft", "vmc": "minecraft", "wmc": "minecraft",
-    "mcb": "minecraftpe", "mcbe": "minecraftpe",
+    "mcb": "mbe", "mcbe": "mbe",
     "squad": "squad", "arma3": "arma3", "mumble": "mumble",
-    # Call of Duty family — gamedig CAN query these (protocol names match the LinuxGSM shortnames),
-    # so the player count (restart/backup guards + daily-restart-when-empty) works for them too.
-    "cod": "cod", "coduo": "coduo", "cod2": "cod2", "cod4": "cod4", "codwaw": "codwaw",
+    # Call of Duty family — gamedig CAN query these, so the player count (restart/backup guards +
+    # daily-restart-when-empty) works for them too. Call of Duty 4 is "cod4mw" in gamedig 5.
+    "cod": "cod", "coduo": "coduo", "cod2": "cod2", "cod4": "cod4mw", "codwaw": "codwaw",
 }
+
+# How many PEOPLE a gamedig reply says are on — the one jq expression every player-count reader
+# (cron.player_count, player_slots, player_count_via_lgsm_query, game._gamedig_player_list and the
+# hourly restart check) counts with.
+#
+# Not `.players|length` alone. gamedig's own README says `players` "could be of a different length
+# compared to numplayers", and for several protocols it is EMPTY whoever is on: Minecraft
+# Bedrock's RakNet ping carries only the counts (protocols/minecraftbedrock.js sets numplayers and
+# maxplayers, never players: `--type mbe` against a responder advertising 7 of 10 printed
+# {"numplayers":7,"players":[],…}); a Java server with hide-online-players sends no sample, and the
+# sample stops at 12 anyway; a Source server that does not answer A2S_PLAYER (CS2 without a
+# plugin, CS:GO without host_players_show 2) leaves it empty too. Counted by the list alone, every
+# one of those read as a confident 0, and 0 is what restart-when-empty, a queued restart and the
+# reboot confirm all act on as "nobody is on".
+#
+# numplayers is the server's own count. For Source it includes bots, which gamedig reports as
+# raw.numbots and moves into `bots` when it can tell them apart — so it is taken less whichever of
+# those is larger. The answer is the LARGER of that and the list's length: the one wrong answer
+# that costs anything is a 0 that is not one. `numbers`/`arrays` drop a field of the wrong type
+# instead of failing the whole filter, so a reply without numplayers counts by its list, as before.
+GAMEDIG_HUMANS_JQ = ('([(.players|length), ((.numplayers|numbers) - '
+                     '([(.bots|arrays|length), (.raw.numbots?|numbers)] | max // 0))] | max)')
 
 
 # Registered: a deleted host's id is reused, and this decides where a player query is SENT — so a
@@ -3117,7 +3168,8 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port):
     # players, from an unattended hourly cron, and this is the one decision the feature exists to
     # avoid. `if … then … else empty end` makes jq print NOTHING unless it really saw a player
     # array, which is the same `ok:(.players|type=="array")` guard the three python-side readers in
-    # cron.py use; the shell then only acts on an exact 0.
+    # cron.py use; the shell then only acts on an exact 0. And what it counts is GAMEDIG_HUMANS_JQ,
+    # not the list's length: a Bedrock server answers with an empty list and numplayers 7.
     #
     # The no-query case stays unconditional, and that is not the same thing: when the panel knows
     # at cron-writing time that the game has no gamedig type or no port, there is no reading to
@@ -3126,7 +3178,7 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port):
         # An int, or ValueError — never stored text in a line /bin/sh runs (set_daily_restart and
         # cron.upgrade_managed_cron_tracking refuse such a port before they get here).
         port = cron_port(port)
-        jqf = 'if (.players|type=="array") then (.players|length) else empty end'
+        jqf = 'if (.players|type=="array") then %s else empty end' % GAMEDIG_HUMANS_JQ
         # gamedig by the PATH above, not cron's: see CRON_TOOL_PATH.
         getp = (f"{gamedig_cron_call()}--type {gdtype} {host}:{port} 2>/dev/null "
                 f"| jq -r {_quote(jqf)} 2>/dev/null); ")

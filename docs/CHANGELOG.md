@@ -404,6 +404,27 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
+  and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
+  `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query
+  answered "Invalid game". Player counts fell back to LinuxGSM's own query, and the daily
+  restart-when-empty check could never see these servers empty. They now use gamedig 5's names
+  (`counterstrike16`, `counterstrike2`, `teamfortress2`, `hl2d`, `l4d2`, `cod4mw`, `mbe`). Existing
+  restart-check lines are rewritten by the daily cron upgrade.
+- **A server whose query lists no player names is no longer counted as empty with people on it.**
+  The panel counted players by the length of the name list gamedig returns. A Minecraft Bedrock
+  server's reply never has that list, only the number of players. A Java server that hides its
+  players, or a Source server that does not answer the player-list query, sends an empty one. Each
+  read as 0 players whoever was on. The hourly restart-when-empty check then restarted the server,
+  a restart or stop queued for when it emptied ran at once, and the reboot warning listed nobody.
+  Every count now uses the server's own player number, less its bots, when that is larger than the
+  list. The Players panel and the chat bot's /players now say they could not read the list instead
+  of "no players connected". Existing restart-check lines are rewritten by the daily cron upgrade.
+- **Autostart shows what the server's crontab really has after an install.** A new server's
+  Autostart switch read On even when neither of the install's two attempts to write the monitor
+  cron line worked, because both attempts' results were ignored. Such a server does not come back
+  after a crash or a reboot. The switch now follows what was written and what the crontab reads back
+  as, and a failed write is logged.
 - **Adding a tool's settings file to the repository is no longer offered as a panel update.** The
   update check decides which files the panel runs from a list, and that list lived in the panel's
   own code. Naming SonarCloud's new settings file in it, as a file the panel does not run, was then
@@ -1187,6 +1208,35 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **A stored server name is never put into the account check's shell text (GHSA-hh39-76g3-wxcx,
+  reopened).** The check the panel runs before deleting a server's account, writing its files or
+  cron, or importing it asks the host about the account in one shell command, as root on a remote
+  with sudo enabled. Since that check arrived it carried the name raw inside a quoted `echo`, where
+  `$(…)`, backticks and a `"` still run — and a name from a database older than the name rule, a
+  hand edit or a restore is not checked when it is loaded. A name that is not a plain account name
+  is now refused before anything is asked; the check passes every name as a quoted argument; and an
+  import checks a name before it asks the host about it, not after. Removing such a server now
+  removes it from the panel without touching the host, and the message says so without repeating
+  the name. Before, Remove asked the host about the name, which ran it, then said "couldn't check,
+  try again", so the server could never be removed.
+- **A failed firewall step during an install no longer opens SSH.** The install's last step re-reads
+  the game's ports after its first start and opens any new ones, minus the ones the firewall step
+  had held back (SSH, the panel's port, other servers' ports). If the firewall step itself failed,
+  that held-back list was empty and the re-read opened everything LinuxGSM reported, so a config
+  naming port 22 as its query port opened SSH. The re-read now works out SSH, the panel's port and
+  other servers' ports for itself. When the firewall step failed it opens only the server's own
+  port, and the install finishes with a warning that the firewall step failed instead of a clean
+  "installed and started". The warning says to ask someone who manages the host when you cannot
+  open its Firewall page, and the install's audit entry records the failed step. A port the firewall
+  step could not check is no longer re-opened by the re-read when another port was held back in the
+  same install.
+- **An action's message never carries an internal error's text.** A LinuxGSM action whose argument
+  check failed for an unexpected reason answered with that error's own text, which could name a
+  path. It now says the panel could not check the action's arguments, and the error goes to the
+  log.
+- **A malformed stored server name can no longer mute that server's offline alerts.** The check
+  for a nightly LinuxGSM update in progress built a process pattern from the stored names, and a
+  name like `x|.*` matched every maintenance process on the host. Such names are not probed now.
 - **CI's Semgrep job runs on PyJWT 2.15.** Every PyJWT 2.13 release has published advisories (the
   worst critical, GHSA-ffc3-869f-jxw9), and semgrep 1.178.0 pins `~=2.13.0`, so no lockfile that
   honours semgrep's own pin was safe and Dependabot could not open a fix. PyJWT is now pinned apart
