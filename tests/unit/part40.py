@@ -461,7 +461,7 @@ def _audit_spaces40(a_client, sid):
     row = (_audits40() or [NS(detail="", success=None)])[-1]
     check("rename route: ...and a refused new name's leading space is escaped too",
           (code, row.success, row.detail.startswith("refused: cfg/a.cfg -> \\x20x.cfg: "))
-          == (400, False, True), repr((code, row)))
+          == (400, False, True), repr((code, body, row)))
     _write40("cfg/del.cfg ", "D")
     _write40("cfg/del.cfg", "R")
     try:
