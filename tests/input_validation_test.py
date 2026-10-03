@@ -115,8 +115,10 @@ def cleanup():
         if p not in _PREEXISTING and p.exists():
             try:
                 p.unlink()
-            except OSError:
-                pass
+            except OSError as e:
+                # Said, not swallowed: a panel.db left behind makes the NEXT run of every
+                # DB-owning suite print SKIP and exit 0, with nothing to say why.
+                print("cleanup: could not remove %s (%s)" % (p, e), file=sys.stderr)
     if _CONFIG_SNAPSHOT is not None:
         try:
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config

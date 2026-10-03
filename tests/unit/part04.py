@@ -1033,8 +1033,9 @@ for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):
         try:
             p.unlink()
-        except OSError:
-            pass
+        except OSError as e:
+            # Said, not swallowed: the file stays in the data dir, and nothing else says so.
+            print("cleanup: could not remove %s (%s)" % (p, e))
 
 # ── Notifications: SSRF guards, provider validation, and event-key wiring ──
 import pathlib as _pl   # noqa: E402

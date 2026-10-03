@@ -24,11 +24,11 @@
        width — reflowing the page (large CLS). Preload URL matches the CSS request. -->
   <link rel="preload" as="font" type="font/woff2" crossorigin
         href="{{ url_for('static', filename='vendor/bootstrap-icons/fonts/bootstrap-icons.woff2') }}?dd67030699838ea613ee6dbda90effa6">
-  <link href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
+  <link href="{{ asset_url('vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
   <!-- Icon CSS is render-blocking on purpose: the min-width reservation that keeps icons
        from shifting layout depends on the ::before content this sheet defines, so deferring
        it reintroduces a large CLS on icon-heavy pages. The preloaded font keeps it fast. -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}">
+  <link rel="stylesheet" href="{{ asset_url('vendor/bootstrap-icons/bootstrap-icons.min.css') }}">
   <link rel="stylesheet" href="{{ asset_url('css/panel.css') }}">
   {# The brand accent is per-install, so it stays inline — and AFTER the stylesheet above,
      which is what lets it win the cascade over the defaults in it. #}
@@ -280,8 +280,8 @@
   </div>
 </main>
 
-<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
-<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='vendor/socketio/socket.io.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('vendor/socketio/socket.io.min.js') }}"></script>
 {# The only two values in panel.js the SERVER has to fill in. Kept inline so the 38KB of behaviour
    below can be a cacheable static file; assigned before it loads, which is the order the code there
    already assumes. This note sits outside the script element on purpose: Jinja strips it either

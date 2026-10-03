@@ -2,7 +2,7 @@
 {% block title %}{{ remote.display_name }} — Terminal{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm/xterm.min.css') }}">
+<link rel="stylesheet" href="{{ asset_url('vendor/xterm/xterm.min.css') }}">
 <style>
   /* The emulator draws its own everything; this is just the box it lives in. 70vh keeps the
      status line and the header visible on a laptop without the page scrolling. */
@@ -87,6 +87,6 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}">const REMOTE_ID = {{ remote.id|int }};</script>
-<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='vendor/xterm/xterm.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('vendor/xterm/xterm.min.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/host_terminal.js') }}"></script>
 {% endblock %}

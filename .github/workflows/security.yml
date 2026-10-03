@@ -77,12 +77,35 @@ jobs:
           # the weekly cron), scan the FULL history of the commit being judged: main went red on
           # 2026-10-03 for a test literal that existed only on an open PR's branch (1004 commits
           # scanned, 1 finding, none of it main's). Each PR's own range scan covers its branch.
+          #
+          # A PULL REQUEST IS JUDGED BY THE BASE'S ALLOWLISTS. The checkout is the PR's own tree, so
+          # `--config .github/gitleaks.toml` read the PR's copy, gitleaks also reads the
+          # .gitleaksignore at the root of the scanned tree (cmd/root.go loads it whatever
+          # --gitleaks-ignore-path says), and it skips any line marked `gitleaks:allow`: a PR could
+          # add a secret and the allowlist entry that hides it in the same diff, and pass. So the
+          # range is scanned with the base commit's config and .gitleaksignore (an allowlist entry
+          # has to reach main first, on its own), the tree's own .gitleaksignore deleted from this
+          # throwaway checkout (the scan reads history, not the working tree), inline
+          # `gitleaks:allow` ignored; and then with the PR's own config too, so a rule the PR adds
+          # applies to the PR as well. No commit on main carries `gitleaks:allow`, so ignoring it
+          # changes no main scan.
           if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
-            echo "Scanning ${BASE_SHA}..${HEAD_SHA}"
+            base_cfg="${RUNNER_TEMP}/gitleaks-base"
+            mkdir -p "${base_cfg}"
+            rm -rf -- ./.gitleaksignore
+            git show "${BASE_SHA}:.github/gitleaks.toml" > "${base_cfg}/gitleaks.toml"
+            git show "${BASE_SHA}:.gitleaksignore" > "${base_cfg}/.gitleaksignore" 2>/dev/null \
+              || : > "${base_cfg}/.gitleaksignore"
+            echo "Scanning ${BASE_SHA}..${HEAD_SHA} with the base's allowlists"
+            /tmp/gitleaks git --config "${base_cfg}/gitleaks.toml" \
+              --gitleaks-ignore-path "${base_cfg}" --ignore-gitleaks-allow \
+              --log-opts "${BASE_SHA}..${HEAD_SHA}" --redact --verbose --exit-code 1 .
+            echo "Scanning ${BASE_SHA}..${HEAD_SHA} with the pull request's own rules"
             /tmp/gitleaks git --config .github/gitleaks.toml \
+              --gitleaks-ignore-path "${base_cfg}" --ignore-gitleaks-allow \
               --log-opts "${BASE_SHA}..${HEAD_SHA}" --redact --verbose --exit-code 1 .
           else
             echo "Scanning the full history of ${GITHUB_SHA}"
-            /tmp/gitleaks git --config .github/gitleaks.toml \
+            /tmp/gitleaks git --config .github/gitleaks.toml --ignore-gitleaks-allow \
               --log-opts "${GITHUB_SHA}" --redact --verbose --exit-code 1 .
           fi

@@ -1,0 +1,19 @@
+# CodeQL model pack: models-as-data for what CodeQL's Python libraries do not model and the panel
+# depends on. A pack under .github/codeql/extensions/ is picked up by code scanning on its own, in
+# default setup and in advanced setup (codeql.yml): the CLI stores it in the database it creates.
+# No `packs:` input is needed, and that input only takes PUBLISHED packs anyway.
+#   https://codeql.github.com/docs/codeql-for-visual-studio-code/using-the-codeql-model-editor/
+#     "Using CodeQL model packs with code scanning"
+#   https://codeql.github.com/docs/codeql-language-guides/customizing-library-models-for-python/
+#
+# A model pack is `library: true`, has no dependencies, and names the packs it extends in
+# extensionTargets. Its data extensions are injected into codeql/python-all, so every Python query
+# (the security-and-quality suite codeql.yml runs) sees them. What each model is for, and the
+# canary that proves it took, is in the model files.
+name: fmsmith91/linuxgsm-panel-python-models
+version: 0.0.1
+library: true
+extensionTargets:
+  codeql/python-all: "*"
+dataExtensions:
+  - models/**/*.yml

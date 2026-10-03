@@ -1440,6 +1440,61 @@ CI-verified commit regardless of this file — this changelog is for humans.
   honours semgrep's own pin was safe and Dependabot could not open a fix. PyJWT is now pinned apart
   from semgrep's lockfile and both are installed hash-checked with `--no-deps`. This touches CI only:
   the panel does not use PyJWT.
+- **The browser's Socket.IO client is 4.8.4, past two HIGH advisories in the parser it bundles.**
+  The panel vendored socket.io-client 4.7.5, whose bundle carries socket.io-parser 4.2.4: affected
+  by GHSA-677m-j7p3-52f9 (fixed in 4.2.6) and GHSA-2m8v-j782-fhvr (fixed in 4.2.7), both of which
+  name the client too. Every page loads it. The decoder runs in the operator's browser on packets
+  from the panel's own server, so the realistic worst case was a browser tab driven out of memory by
+  a malicious or intercepted server. The new file is byte-identical to the one in the npm tarball,
+  whose integrity and registry signature were checked; its bundle carries both parser fixes, and it
+  speaks the same protocols (Engine.IO 4, Socket.IO 5) as the panel's python-socketio 5.17. Pages
+  now load it, and every other vendored file, by a URL that changes with the file's contents: the
+  fixed URL they used is cached for a week, so a browser would have kept the old client for up to a
+  week after the update. It takes the new one on its next page load.
+- **Scanners can see the vendored browser libraries now.** No scanner read `static/vendor/`: there
+  was no manifest for the dependency graph, and neither Dependabot alerts nor osv-scanner can look
+  inside a minified bundle, which is how the client above sat on a vulnerable parser with every check
+  green. `static/vendor/package.json` and `package-lock.json` now record each library and what its
+  bundle carries, the dependency audit reads the lockfile on every pull request, push and week, and
+  a unit gate ties every file to the manifest by sha256 and by the version its own banner states. A
+  library carried inside another's bundle is recorded at the version the bundle holds (Chart.js
+  carries @kurkle/color 0.3.2, which npm alone recorded as 0.3.4). A change to the two manifests
+  alone is not offered to panels as an update: nothing a panel runs reads them.
+- **gitleaks catches a Telegram bot token wherever it is written.** Its built-in rule needs a
+  `telegr…` name right before the value, so it missed the panel's own `config.json` shape, a bare
+  `token = "…"`, a function argument, the Bot API URL and prose; main's full-history scan carried a
+  real-shaped value and reported nothing. A keyword-free rule now finds all of them. Its one
+  allowlisted value is the historical synthetic fixture, matched exactly. The fixture-shape check in
+  the unit suite also caught too little: a token ending in `-` and the Bot API URL form passed it.
+- **A pull request can no longer allowlist its own leaked secret.** The secret scan read the pull
+  request's own gitleaks config and `.gitleaksignore`, and honoured `gitleaks:allow` on any line, so
+  one diff could add a secret and the exemption that hid it, and pass. A pull request is now scanned
+  with the base branch's config and ignore file, its own ignore file set aside and `gitleaks:allow`
+  ignored, then with its own config too; an exemption has to reach `main` on its own first.
+- **SECURITY.md says how to check an install set up before the setup-token fix**
+  (GHSA-cwmq-pvg9-jjfx): list the superadmins, confirm which tailnet the host is in and what it
+  publishes, and read the sign-ins. Finishing setup did not undo either takeover, so an install that
+  was already set up is not thereby in the clear.
+- **CodeQL sees Socket.IO input and the commands the panel runs.** CodeQL models python-socketio but
+  not Flask-SocketIO, so what a browser emits to the console and terminal sockets was not untrusted
+  input to any query; and the command text the panel sends to a host was not a command-injection
+  sink: neither SSH transport is modelled (paramiko's `exec_command`, or the `ssh` argument list
+  for Tailscale), and on the panel's own host CodeQL takes only the first element of
+  `["/bin/bash", "-c", cmd]` as the command. A model pack in
+  `.github/codeql/extensions` adds both. The sinks are the text as it enters `run_command`,
+  `shell_as_game_user`, `read_as_game_user` and `game_user_cmd`, which covers every transport, plus
+  the own-host shell. A value passed through `shlex.quote` counts as safe inside that text; that
+  barrier applies to every command-injection sink, so the few places that quote a whole script for
+  a second shell (`sudo bash -c '…'`), where a quote hides what is inside it, are listed and a unit
+  check fails on a new one. The `py/partial-ssrf` exclusion's justification, which said one
+  function was the panel's only outbound request, now lists all six outbound-HTTP call sites, and a
+  unit check fails on a seventh until it is reviewed.
+- **CI's Semgrep job runs on a PyJWT with no known advisory.** Every PyJWT 2.13 release has
+  published advisories (the worst critical, GHSA-ffc3-869f-jxw9), and semgrep 1.178.0 pinned
+  `~=2.13.0`, so no lockfile that honoured semgrep's own pin was safe and Dependabot could not open a
+  fix. semgrep 1.179.0 accepts PyJWT 2.15, so Semgrep's one hash lockfile now carries PyJWT 2.15.1
+  and installs with pip's dependency check on; the interim second lockfile for PyJWT alone is gone.
+  This touches CI only: the panel does not use PyJWT.
 - **Group forms reject ids that cannot be real ids.** Anyone who could manage groups could make the
   add and edit pages fail with a server error by submitting an extremely long number as an id; such
   values, and non-ASCII digits that were being read as ids, are now ignored.

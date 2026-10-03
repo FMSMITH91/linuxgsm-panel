@@ -116,8 +116,10 @@ def cleanup():
         if p not in _PREEXISTING and p.exists():
             try:
                 p.unlink()
-            except OSError:
-                pass
+            except OSError as e:
+                # Said, not swallowed: a panel.db left behind makes the NEXT run of every
+                # DB-owning suite print SKIP and exit 0, with nothing to say why.
+                print("cleanup: could not remove %s (%s)" % (p, e), file=sys.stderr)
     _restore(CONFIG_FILE, _CONFIG_SNAPSHOT)   # undo our edits to someone else's config
     _restore(_TOKEN_FILE, _TOKEN_SNAPSHOT)     # ...and to a setup token that was already there
 
@@ -319,7 +321,10 @@ def _check_claim():
               rr.status_code == 403, "got %d" % rr.status_code)
     check("token: ...and nothing ran for those either", _ts_calls == [], repr(_ts_calls))
     # Boot deletes the token once it can no longer be used — and must NOT while it still can.
-    import app as _app_mod  # noqa: E402
+    # sys.modules, not `import app as`: this file already has `from app import`, and a module
+    # imported both ways is what CodeQL's py/import-and-import-from flags (tests/ is out of its
+    # scope, so part37 holds the rule here instead).
+    _app_mod = sys.modules["app"]
     _retire = getattr(_app_mod, "_retire_setup_token", lambda: None)
     with app.app_context():
         _retire()
@@ -358,6 +363,76 @@ def _check_step_order():
           _wiz_step() == "admin_user" and load_config().get("port") == 5052, _wiz_step())
 
 
+def _lock_probe(real_hash):
+    """A third claimed browser whose admin POST arrives while the operator's is INSIDE the lock.
+
+    _check_admin_race forces its interleave inside hash_password, which runs BEFORE
+    _ADMIN_CREATE_LOCK, so it proves the re-check under the lock and not the lock: `with
+    _ADMIN_CREATE_LOCK:` replaced by `if True:` passed the whole suite. This forces the other window.
+    Once the operator's own password is hashed, its next superadmin check is the re-check it makes
+    holding the lock; there it lets a third POST run for two seconds before going on to insert and
+    commit. With the lock, the third waits at it the whole time and then finds the admin. Without
+    it, the third creates a second superadmin in that window. Nothing in the current code yields
+    there under eventlet, but anything added between the re-check and the commit that does (a log
+    line to a slow disk, a tpool call) is exactly this.
+    """
+    import threading as _thr
+    _third = app.test_client()
+    _third.get("/setup?token=" + _TOKEN)
+    _instant = real_hash(_ADMIN_PASSWORD)     # the third's hash costs nothing, so it reaches the lock
+    # Waited on with an Event, never Thread.join(timeout): under eventlet on Python 3.13+ that join
+    # raises eventlet's Timeout (a BaseException) instead of returning, which ended this suite early
+    # with a passing tally (see panel/ops/terminal_session.py for the same trap).
+    _done = _thr.Event()
+    st = {"armed": False, "fired": False, "waited": None, "resp": None, "thread": None,
+          "real_exists": _rh._superadmin_exists}
+
+    def _post():
+        try:
+            st["resp"] = _third.post("/setup", data={"step": "admin_user", "username": "third",
+                                                     "password": _ADMIN_PASSWORD,
+                                                     "confirm_password": _ADMIN_PASSWORD})
+        finally:
+            _done.set()
+
+    def _hash(pw):
+        if st["armed"]:
+            return _instant
+        out = real_hash(pw)      # the operator's: from here its next check is the one under the lock
+        st["armed"] = True
+        return out
+
+    def _exists():
+        found = st["real_exists"]()
+        if st["armed"] and not st["fired"]:
+            st["fired"] = True
+            st["thread"] = _thr.Thread(target=_post, daemon=True)
+            st["thread"].start()
+            st["waited"] = not _done.wait(2.0)    # True: still waiting after two seconds
+        return found
+
+    def _finish():
+        if st["thread"] is not None:
+            _done.wait(30)
+
+    st.update(hash=_hash, exists=_exists, finish=_finish)
+    return st
+
+
+def _check_lock_held(st):
+    """What _lock_probe's third POST did while the operator's POST held the lock."""
+    _resp = st["resp"]
+    check("lock: (control) a third admin POST was started while the first sat between its re-check "
+          "and its commit", st["fired"] and st["thread"] is not None, repr(st["fired"]))
+    check("lock: ...and it waited at _ADMIN_CREATE_LOCK until the first had committed",
+          st["waited"] is True, "it %s inside the two seconds"
+          % ("finished" if st["waited"] is False else "never ran"))
+    check("lock: ...then found the admin and created nothing (sent to sign in)",
+          _resp is not None and _resp.status_code in (301, 302, 303)
+          and "/login" in (_resp.headers.get("Location") or "") and "third" not in superadmins(),
+          "%s %s" % (_resp and _resp.status_code, superadmins()))
+
+
 def _check_admin_race():
     """The first admin, created while a second claimed browser races it; the token then retires."""
     # The happy path — raced by a second claimed browser. The superadmin-exists check ran BEFORE
@@ -369,6 +444,7 @@ def _check_admin_race():
     _racer.get("/setup?token=" + _TOKEN)
     _real_hash = _rh.hash_password
     _race_fired = []
+    _lock = _lock_probe(_real_hash)
 
     def _racing_hash(pw):
         if not _race_fired:
@@ -377,17 +453,22 @@ def _check_admin_race():
                                    "password": _ADMIN_PASSWORD,
                                    "confirm_password": _ADMIN_PASSWORD,
                                    "email": "admin@example.com"})
-        return _real_hash(pw)
+            return _real_hash(pw)
+        return _lock["hash"](pw)
     _rh.hash_password = _racing_hash
+    _rh._superadmin_exists = _lock["exists"]
     try:
         _racer.post("/setup", data={"step": "admin_user", "username": "racer",
                                     "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD})
     finally:
         _rh.hash_password = _real_hash
+        _rh._superadmin_exists = _lock["real_exists"]
+        _lock["finish"]()
     check("race: (control) the operator's POST really ran inside the racer's password hash",
           _race_fired == [1], repr(_race_fired))
     check("race: two admin_user POSTs interleaved create exactly ONE superadmin",
           superadmins() == ["firstadmin"], str(superadmins()))
+    _check_lock_held(_lock)
     check("open: a valid step=admin_user creates the first superadmin",
           superadmins() == ["firstadmin"], str(superadmins()))
     check("token: the token file is deleted once the first admin exists",
@@ -586,10 +667,86 @@ def _check_setup_rows_one_writer():
           "log_action called directly at route_helpers.py lines %r" % (_outside,))
 
 
+def _check_claim_follows_current_token():
+    """A claim holds only for the token on disk NOW: replacing or deleting the token revokes it.
+
+    The operator's way to shut out a token that leaked (pasted install output, a shared screen) is
+    to delete data/setup_token and print a new one. _setup_claimed compares the session's claim
+    with the CURRENT file for exactly that reason; a claim kept as a bare flag would survive it,
+    and nothing held that: `return bool(claim)` there passed the whole suite.
+    """
+    import secrets as _secrets
+    _held = app.test_client()
+    _held.get("/setup?token=" + _TOKEN)
+    _was = _held.get("/setup")
+    _claimed = _was.status_code == 200 and b'name="step"' in _was.data
+    _saved = _TOKEN_FILE.read_text(encoding="ascii")
+    try:
+        _TOKEN_FILE.write_text(_secrets.token_urlsafe(24) + "\n", encoding="ascii")   # rotated
+        _rot = _held.get("/setup")
+        _held.post("/setup", data={"step": "welcome", "site_title": "Stale claim", "port": "5097",
+                                   "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input
+        _TOKEN_FILE.unlink()                                                     # deleted
+        _gone = _held.get("/setup")
+    finally:
+        _TOKEN_FILE.write_text(_saved, encoding="ascii")
+    check("token: (control) the browser below had claimed the wizard", _claimed,
+          "got %d" % _was.status_code)
+    check("token: a claim made with a token that has since been replaced opens nothing",
+          _rot.status_code == 200 and _is_token_page(_rot) and load_config().get("port") != 5097,
+          "%d %s" % (_rot.status_code, load_config().get("port")))
+    check("token: ...nor once the token file is deleted",
+          _is_token_page(_gone), "got %d" % _gone.status_code)
+    _back = _held.get("/setup")
+    check("token: ...and the same claim works again once that token is back (control)",
+          _back.status_code == 200 and b'name="step"' in _back.data, "got %d" % _back.status_code)
+
+
+class _NoStartThread:
+    """A Thread for a second create_app(): records nothing and starts nothing.
+
+    The boot path is run once more near the end to see what it does to the token file. Its
+    supervised workers (pollers, sweepers) are the first boot's business, and a second copy of each
+    running against this database for the rest of the run would be a leak, not a test.
+    """
+
+    def __init__(self, target=None, **_kw):
+        self.target = target
+
+    def start(self):
+        """Never run the target."""
+
+    def join(self, timeout=None):
+        """Nothing was started."""
+
+    def is_alive(self):
+        """Nothing was started."""
+        return False
+
+
+def _boot_again():
+    """Run the panel's real start-up path (create_app) once more, with no worker started."""
+    import threading as _thr
+    import types as _types
+    _app_mod_boot = sys.modules["app"]   # imported above by `from app import`; the module itself
+    _saved_thr = _app_mod_boot.threading
+    _app_mod_boot.threading = _types.SimpleNamespace(
+        Thread=_NoStartThread, Lock=_thr.Lock, RLock=_thr.RLock, Event=_thr.Event,
+        local=_thr.local, current_thread=_thr.current_thread, enumerate=_thr.enumerate)
+    try:
+        _app2 = _app_mod_boot.create_app()
+    finally:
+        _app_mod_boot.threading = _saved_thr
+    with _app2.app_context():
+        db.engine.dispose()     # its engine's connection, not the suite's
+    return _app2
+
+
 try:
     _check_unclaimed_wizard()
     _check_unclaimed_tailscale()
     _check_claim()
+    _check_claim_follows_current_token()
 
     # Any other path funnels into the wizard — until setup is done there are no users, so even
     # /login must not be reachable (it would be a login form with nothing to log into).
@@ -817,6 +974,14 @@ try:
         _retire()
     check("locked: starting a finished install deletes a leftover setup token",
           not _TOKEN_FILE.exists(), "still on disk")
+    # ...and the start-up path itself does it. The check above calls the helper directly, so
+    # `pass` in place of create_app's call to it passed the whole suite. Run the real boot.
+    _TOKEN_FILE.write_text(_TOKEN, encoding="ascii")
+    _present = _TOKEN_FILE.exists()
+    _boot_again()
+    check("locked: the panel's real start-up (create_app) deletes a leftover setup token",
+          _present and not _TOKEN_FILE.exists(),
+          "still on disk after create_app()" if _present else "the token was never written")
 
     # REGRESSION 1: POST used to be unguarded while GET was blocked.
     r = c.post("/setup", data={"step": "admin_user", "username": "backdoor",
@@ -885,7 +1050,11 @@ try:
     # the loop above left as invalid JSON), which is the point of that refusal.
     CONFIG_FILE.write_text('{"setup_complete": true}', encoding="utf-8")
 
-except Exception:
+except BaseException:
+    # BaseException, not Exception: the finally below ends in sys.exit(), which REPLACES an
+    # exception still in flight. An eventlet Timeout (a BaseException) raised mid-suite
+    # therefore ended the run early with "N / N checks passed" and exit 0. Recorded here,
+    # it is a failure with its traceback, like any other crash.
     import traceback
     traceback.print_exc()
     results.append((False, "suite crashed before finishing — see the traceback above", ""))

@@ -27,10 +27,8 @@ regexTarget = "match"
 commits = ["12d1466321fa6c95f85dede160785208829b69b8"]
 regexes = [
   '''tskey-auth-\.{2,}''',          # Tailscale auth-key input placeholder (e.g. "tskey-auth-...")
-  '''tskey-auth-\.\.\.''',
   '''C1a[.…]''',                    # Ubuntu Pro token input placeholder (e.g. "C1a…")
   '''~/\.ssh/id_rsa''',             # default SSH key *path* shown in the add-remote form
-  '''tskey-[A-Za-z0-9]{0,6}\.\.\.''',
   '''maxBytes=\d+''',               # false positive: the auth.log RotatingFileHandler size — the
                                     # generic-api-key rule keys off "AUTH" in AUTH_LOG_PATH; not a secret
   # An eighteen-digit run IS a Discord snowflake by shape, so discord-client-id is right to flag
@@ -79,3 +77,37 @@ regexes = [
 # already cover. A README is exactly where a real token gets pasted while documenting a setup,
 # which is why security.yml refuses to be path-filtered. A unit gate keeps any future path
 # exemption anchored to one named file and off every README.
+
+# ── A Telegram bot token, wherever it lands ─────────────────────────────────────────────────────
+# The default telegram-bot-api-token rule is semi-generic: it needs a `telegr...` identifier followed
+# directly by an assignment operator, so it caught `TELEGRAM_TOKEN = "..."` and
+# `telegram_bot_token: ...` and nothing else. Measured with the pinned 8.30.1 against a freshly
+# generated token, it missed the panel's own config.json shape (`{"telegram": {"token": "..."}}`),
+# a bare `token = "..."`, a function argument, the Bot API URL (`api.telegram.org/bot<token>/...`)
+# and prose. Its generator (cmd/generate/config/rules/telegram.go) lists the URL and constructor
+# forms as TODOs. Main's full-history scan carried a real-shaped value twice and reported no leaks.
+#
+# This rule has no keywords, so it reads every fragment. The secret is `<5-16 digits>:AA<33>`:
+#   - `:AA`, not gitleaks' own `:A` + 34: that form matches gitleaks' documented false positive
+#     for this rule, an XSD name (`clm12345:Agency...`), and every bot token begins `AA` after the
+#     colon (Semgrep's detected-telegram-bot-api-key rule anchors on the same two letters).
+#   - the boundaries are character classes, not lookarounds, because gitleaks is RE2: no digit
+#     directly before the id, and no token character directly after the 35th.
+# A unit gate (tests/unit/part37.py) reads this block as text and holds it to planted tokens in
+# every placement above, to that XSD name, to a 34-character tail, and to the panel's TESTONLY
+# fixtures.
+[[rules]]
+id = "telegram-bot-token-any-context"
+description = "Telegram bot token, in any context (no keyword needed)"
+regex = '''(?:^|[^0-9])([0-9]{5,16}:AA[A-Za-z0-9_-]{33})(?:[^A-Za-z0-9_-]|$)'''
+secretGroup = 1
+
+# The one historical synthetic value in this shape: the #72 notifications fixture (74d11e8d, and
+# d73721be on its PR branch), a bot id of nine ascending digits and `AAtoken` five times. It is not
+# a credential, and history is not rewritten. Exempted as the exact secret, anchored at both ends,
+# and spelled as a repetition so this file does not itself carry the token-shaped literal that
+# opened secret-scanning alert #1. Any other value, the same id included, still fires.
+[[rules.allowlists]]
+description = "The #72 synthetic notifications fixture, history only"
+regexTarget = "secret"
+regexes = ['''^123456789:(?:AAtoken){5}$''']
