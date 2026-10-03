@@ -86,6 +86,7 @@ def _run29(argv, **kw):
 def _write_exe29(path, text):
     with open(path, "w") as fh:
         fh.write(text)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program this part runs must be executable
     os.chmod(path, 0o755)  # nosec B103 - a stand-in program this part runs; it must be executable
 
 

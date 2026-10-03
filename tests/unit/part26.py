@@ -344,3 +344,24 @@ check("required checks: the comment no longer claims the PR alerts gate covers C
       "ClusterFuzzLite/CIFuzz is not waited for" in _rq_gate26 and '"fuzz the diff"' in _rq_gate26
       and "CodeQL, Bandit, Semgrep OSS" in _rq_gate26
       and not re.search(r"ClusterFuzzLite/CIFuzz:", _rq_gate26), _rq_gate26)
+
+# SonarCloud pythonsecurity:S8705 (argument injection): read_rows passes --ref to `gh api`. Only an
+# owner/name slug, a PR merge ref or a branch ref, and a 40-hex sha pass; "--" ends gh's options.
+_val26 = [CSA.valid("FMSMITH91/linuxgsm-panel", "refs/pull/391/merge", "a" * 40),
+          CSA.valid("FMSMITH91/linuxgsm-panel", "refs/heads/main", "a" * 40),
+          CSA.valid("x/y", "--hostname=evil.example", "a" * 40),
+          CSA.valid("x/y", "refs/heads/../../etc", "a" * 40),
+          CSA.valid("x y/z", "refs/heads/main", "a" * 40),
+          CSA.valid("x/y", "refs/heads/main", "a" * 39)]
+_ref26 = []
+_saved_run26 = CSA.subprocess.run
+try:
+    CSA.subprocess.run = lambda argv, **_k: _ref26.append(list(argv))
+    _refused26 = CSA.read_rows("x/y", "-X POST")
+finally:
+    CSA.subprocess.run = _saved_run26
+check("code-scanning gates: a ref, repository or sha of any other shape is refused before gh runs "
+      "(argument injection, Sonar S8705), and gh's options end at '--'",
+      _val26 == [True, True, False, False, False, False] and _refused26 is None and _ref26 == []
+      and '["gh", "api", "--", path]' in open(_CSA26_PATH, encoding="utf-8").read(),
+      repr((_val26, _refused26, _ref26)))

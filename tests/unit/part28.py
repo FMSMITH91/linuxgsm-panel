@@ -131,15 +131,17 @@ check("codacy gate: ...an unreviewed High-level issue fails the run, and the sum
 
 # ══ Codacy: an accepted entry Codacy stops reporting is not "stale" while it stands (CD2) ═════════
 _cd2_present = _drive28([], [_acc28("pkg/small.py")], _co28)
-check("codacy gate: an accepted entry whose line is still in the file, with nothing reported, "
-      "fails the run, named",
+check("codacy gate: an accepted entry whose line is still in a file Codacy analyses, with nothing "
+      "reported, fails the run, named",
       _cd2_present[0] == 1 and "::error::Codacy reports nothing for pkg/small.py" in _cd2_present[1]
-      and "the accepted line is still in the file" in _cd2_present[1]
+      and "the accepted line is still in the file, which Codacy does analyse" in _cd2_present[1]
       and "(remove them)" not in _cd2_present[1], _cd2_present[1][-700:])
 _cd2_big = _drive28([], [_acc28("pkg/big.py", text="not in the file")], _co28)
-check("codacy gate: ...as does one whose file is over 150 KB, even with its line not found",
-      _cd2_big[0] == 1 and "::error::Codacy reports nothing for pkg/big.py" in _cd2_big[1]
-      and "over the 150 KB Codacy Cloud analyses" in _cd2_big[1], _cd2_big[1][-700:])
+check("codacy gate: ...one whose file is over 150 KB (Codacy does not analyse it) is a WARNING that "
+      "keeps the entry, not a failure: a check red on main by construction holds every update",
+      _cd2_big[0] == 0 and "::warning::Codacy does not analyse pkg/big.py" in _cd2_big[1]
+      and "over the 150 KB Codacy Cloud analyses" in _cd2_big[1] and "::error::" not in _cd2_big[1]
+      and "(remove them)" not in _cd2_big[1], _cd2_big[1][-700:])
 _cd2_gone = _drive28([], [_acc28("pkg/gone.py"), _acc28("pkg/deleted.py")], _co28)
 check("codacy gate: ...an entry whose line (or file) is really gone is only listed for removal",
       _cd2_gone[0] == 0 and "(remove them)" in _cd2_gone[1] and "pkg/gone.py" in _cd2_gone[1]
@@ -156,10 +158,10 @@ check("codacy gate: ...an accepted path outside the checkout is never read as th
 # system_ops.py is over 150 KB and holds every accepted line, so this is what the daily run sees.
 _cd2_real_rc, _cd2_real_out, _ = _drive28(
     [], _json28.loads(_read28(".github/codacy-accepted-errors.json"))["accepted"], _cg28.CHECKOUT)
-check("codacy gate: ...on this checkout, the accepted system_ops.py findings Codacy no longer "
-      "reports fail the run (it is over 150 KB)",
-      _cd2_real_rc == 1
-      and _cd2_real_out.count("::error::Codacy reports nothing for panel/ops/system_ops.py") == 3,
+check("codacy gate: ...on this checkout (what the daily run on main sees), the three accepted "
+      "system_ops.py findings are warnings and the run passes: main is never red by construction",
+      _cd2_real_rc == 0 and "::error::" not in _cd2_real_out
+      and _cd2_real_out.count("::warning::Codacy does not analyse panel/ops/system_ops.py") == 3,
       _cd2_real_out[-500:])
 _ca28 = _read28(".github/workflows/codacy-alerts.yml")
 check("codacy alerts workflow: checks the repository out before the gate reads it, and says it "

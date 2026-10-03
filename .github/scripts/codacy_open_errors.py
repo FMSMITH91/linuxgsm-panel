@@ -6,14 +6,17 @@ High and Critical (the SeverityLevel enum in https://api.codacy.com/api/api-docs
 This reads Error AND High: High sits between the two, and a pattern Codacy files at High would
 otherwise stay on main ungated.
 
-It also fails when an accepted entry matches nothing while its line is still in the file, or while
-the file is over 150 KB. Codacy Cloud does not analyse a file over 150 KB at all
-(https://docs.codacy.com/faq/troubleshooting/why-is-my-file-over-150-kb-missing/), so "no issue
-reported" there is Codacy not reading the file, not the file being clean. system_ops.py crossed
-150 KB on 2026-09-24, its three accepted findings stopped matching, and this gate reported green
-every day while telling the reader to delete the record of the documented hole. An entry is
-reported for removal only when its line is really gone from the file, decided from the checkout
-the workflow runs in.
+An accepted entry that matches nothing is never reported for removal while its line still stands,
+decided from the checkout the workflow runs in. system_ops.py crossed 150 KB on 2026-09-24, its
+three accepted findings stopped matching, and this gate told the reader every day to delete the
+record of the documented hole. Two cases now:
+- the file is over 150 KB: Codacy Cloud does not analyse it at all
+  (https://docs.codacy.com/faq/troubleshooting/why-is-my-file-over-150-kb-missing/), so nothing in
+  it can match. A WARNING, not a failure: the repository cannot change what Codacy reads, and a
+  check red on main by construction would hold every panel's update and every deploy. The PR-side
+  complexity gate runs Prospector over such files instead.
+- the file is one Codacy analyses and the line is still there: Codacy stopped reporting a finding
+  it can see (a pattern switched off, a tool dropped). That FAILS.
 
 Run by .github/workflows/codacy-alerts.yml; see the long note at the top of that file for why the
 gate exists and why it is scheduled rather than triggered by a push. Runnable by hand too:
@@ -203,10 +206,11 @@ def _checkout_file(path):
 
 
 def _still_there(key):
-    """Why Codacy must still be reporting accepted entry `key`, or None when its line is gone.
+    """(why, unanalysed) for accepted entry `key` Codacy no longer reports, or None if it is gone.
 
-    Read from the checkout: the file is over 150 KB (Codacy Cloud does not analyse it, so no issue
-    in it can match), or the accepted line, whitespace collapsed, is still one of its lines.
+    Read from the checkout. `unanalysed` is True when the file is over 150 KB: Codacy Cloud does not
+    analyse it, so nothing in it can match. Otherwise the accepted line, whitespace collapsed, is
+    still one of the file's lines, in a file Codacy does analyse.
     """
     path, _pattern, text = key
     f = _checkout_file(path)
@@ -214,27 +218,27 @@ def _still_there(key):
         return None
     size = f.stat().st_size
     if size > CODACY_MAX_BYTES:
-        return "the file is %d bytes, over the 150 KB Codacy Cloud analyses" % size
+        return "the file is %d bytes, over the 150 KB Codacy Cloud analyses" % size, True
     lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
     if any(" ".join(ln.split()) == text for ln in lines):
-        return "the accepted line is still in the file (is it over 150 KB?)"
+        return "the accepted line is still in the file, which Codacy does analyse", False
     return None
 
 
 def _split_stale(allow, seen):
     """Split the accepted entries no issue matched into (Codacy blind to them, really gone).
 
-    The first are [(key, why)]: an entry whose file Codacy cannot be analysing, or whose line is
-    still there, is not stale; Codacy has stopped reporting it, and that fails the run. Only the
-    second, whose line is gone from the file, are dead weight to remove.
+    The first are [(key, why, unanalysed)]: an entry whose file Codacy does not analyse, or whose
+    line is still there, is not stale. Only the second, whose line is gone from the file, are dead
+    weight to remove.
     """
     blind, gone = [], []
     for key in allow:
         if key in seen:
             continue
-        why = _still_there(key)
-        if why:
-            blind.append((key, why))
+        found = _still_there(key)
+        if found:
+            blind.append((key,) + found)
         else:
             gone.append(key)
     return blind, gone
@@ -242,12 +246,18 @@ def _split_stale(allow, seen):
 
 def _blind_lines(blind):
     """The summary's lines for accepted entries Codacy reports nothing for although they stand."""
-    if not blind:
-        return []
-    return (["", "**Codacy reports nothing for these accepted entries, but they are still there** "
-             "(Codacy is not analysing the file; keep the entries):", ""]
-            + ["- `%s` / `%s`: %s\n  (line: `%s`)" % (f, p.split(".")[-1], why, t)
-               for (f, p, t), why in blind])
+    out = []
+    for unanalysed, heading in (
+            (True, ("**Codacy does not analyse these files (over 150 KB), so it cannot confirm these "
+                    "accepted entries** (keep them; the PR-side complexity gate runs Prospector over "
+                    "such files):")),
+            (False, ("**Codacy reports nothing for these accepted entries, though their lines still "
+                     "stand in files it analyses** (this fails the run):"))):
+        rows = [b for b in blind if b[2] is unanalysed]
+        if rows:
+            out += ["", heading, ""] + ["- `%s` / `%s`: %s\n  (line: `%s`)"
+                                        % (f, p.split(".")[-1], why, t) for (f, p, t), why, _u in rows]
+    return out
 
 
 def _stale_lines(allow, seen):
@@ -293,14 +303,17 @@ def main():
 
     _publish("\n".join(summary))
 
-    for (path, pattern, _text), why in blind:
-        print("::error::Codacy reports nothing for %s (accepted `%s`), but %s: Codacy is not "
-              "analysing the file. Keep the entry; see the job summary."
-              % (path, pattern.split(".")[-1], why), file=sys.stderr)
+    for (path, pattern, _text), why, unanalysed in blind:
+        if unanalysed:
+            print("::warning::Codacy does not analyse %s (accepted `%s`): %s. Keep the entry; "
+                  "Codacy cannot confirm it." % (path, pattern.split(".")[-1], why), file=sys.stderr)
+        else:
+            print("::error::Codacy reports nothing for %s (accepted `%s`), but %s. Keep the entry; "
+                  "see the job summary." % (path, pattern.split(".")[-1], why), file=sys.stderr)
     if unreviewed:
         print("::error::main has %d unreviewed Critical- or High-level Codacy issue(s) — see the "
               "job summary." % len(unreviewed), file=sys.stderr)
-    return 1 if unreviewed or blind else 0
+    return 1 if unreviewed or any(not b[2] for b in blind) else 0
 
 
 if __name__ == "__main__":

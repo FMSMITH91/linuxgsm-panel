@@ -31,6 +31,7 @@ category, so its alerts say nothing about SHA.
 import argparse
 import json
 import os
+import re
 import subprocess  # nosec B404 - gh with a fixed argv, no shell
 import sys
 import time
@@ -96,13 +97,30 @@ def _state(top, has_own_row, must_be_own, sha, floor):
     return "moved" if (top.get("created_at") or "") > floor else "ok"
 
 
+# What the two gates ever pass: an owner/name slug, and a PR merge ref or a branch. Anything else is
+# refused before it reaches gh, and "--" ends gh's options, so no value can become a flag.
+_REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}\Z")
+_REF_RE = re.compile(r"refs/(?:pull/[0-9]{1,9}/merge|heads/[A-Za-z0-9._/-]{1,200})\Z")
+_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+
+
+def valid(repo, ref, sha):
+    """Whether `repo`, `ref` and `sha` have the only shapes the gates pass (and no '..' in a ref)."""
+    return bool(_REPO_RE.match(repo or "") and _REF_RE.match(ref or "") and ".." not in ref
+                and _SHA_RE.match(sha or ""))
+
+
 def read_rows(repo, ref):
     """Return the newest 100 analyses of `ref`, newest first, or None when they could not be read."""
+    if not valid(repo, ref, "0" * 40):
+        print("refusing to query: %r / %r is not a repository slug and a pull or branch ref"
+              % (repo, ref))
+        return None
     path = ("repos/%s/code-scanning/analyses?ref=%s&per_page=100&sort=created&direction=desc"
             % (repo, ref))
     try:
-        res = subprocess.run(["gh", "api", path], capture_output=True, text=True,  # nosec B603 B607
-                             timeout=60, check=False)
+        res = subprocess.run(["gh", "api", "--", path], capture_output=True,  # nosec B603 B607
+                             text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as e:
         print("could not run gh: %s" % e)
         return None
@@ -160,8 +178,10 @@ def main(argv=None):
     ap.add_argument("--interval", type=float, default=10.0)
     a = ap.parse_args(argv)
     repo = os.environ.get("GITHUB_REPOSITORY", "")
-    if not repo or len(a.sha) != 40:
-        print("::error::need GITHUB_REPOSITORY and a full commit sha (got %r)" % a.sha)
+    if not valid(repo, a.ref, a.sha):
+        print("::error::need GITHUB_REPOSITORY as owner/name, --ref as refs/pull/N/merge or "
+              "refs/heads/<branch>, and a full lowercase commit sha (got %r, %r, %r)"
+              % (repo, a.ref, a.sha))
         return MISSING
     own = own_categories(a.event, a.workflow)
     rc, rows, missing, moved = wait(repo, a.ref, a.sha, own, a.tries, a.interval)

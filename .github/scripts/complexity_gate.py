@@ -164,6 +164,9 @@ def _prospector_json(root, names):
     empty list: a crash, output that is not Prospector's JSON, a run missing one of Codacy's tools
     (the profile was not read), or a canary whose finding did not come back.
     """
+    # `names` are paths git listed in a scratch tree this gate wrote; the interpreter is this one and
+    # the argv is a list (no shell).
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     r = subprocess.run([sys.executable, "-m", "prospector", "--output-format", "json",  # nosec B603
                         "--zero-exit", *names, _CANARY[0]],
                        cwd=root, capture_output=True, text=True, check=False)
