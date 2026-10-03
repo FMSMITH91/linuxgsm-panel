@@ -14,8 +14,10 @@
 # Fuzz and ClusterFuzzLite run on every pull request too, and pass at once when it changes nothing
 # they fuzz (each job's first step reads the pull request's file list). Not here, on purpose: Aikido's
 # checks (its pull-request suite often never starts, which would hold every merge), GitHub's own
-# code-scanning checks (CodeQL, Bandit, Semgrep OSS, ClusterFuzzLite/CIFuzz: the "Open code-scanning
-# alerts (PR)" job gates on what they find), and Codacy's coverage checks.
+# code-scanning checks (CodeQL, Bandit, Semgrep OSS: the "Open code-scanning alerts (PR)" job waits
+# for each one's analysis of the pull request's merge commit and gates on what they find;
+# ClusterFuzzLite/CIFuzz is not waited for, as it uploads only when fuzzed code changes, and a crash
+# it finds fails the required "fuzz the diff" job instead), and Codacy's coverage checks.
 #
 # <app slug> | <check name>
 github-actions | checks (ubuntu-22.04 · py3.10)
