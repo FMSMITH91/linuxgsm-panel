@@ -2408,7 +2408,7 @@ try:
     _p9_patch(_p9_ms, "set_autostart",
               lambda r, s, on, l=None: (_ms_log.append("autostart"), _ms_boom("autostart"),
                                         (True, ""))[2])
-    _p9_patch(_p9_sm, "list_cron_jobs", lambda r, s, l: _ms_next("crontab"))
+    _p9_patch(_p9_sm, "list_cron_jobs", lambda r, s, _lg: _ms_next("crontab"))
     _p9_patch(_p9_ms, "ensure_content_user", _ms_ensure_cu)
     _p9_patch(_p9_ms, "install_gmod_content", _ms_install_content)
     _p9_patch(_p9_ms, "gmod_mount_setup", lambda r, s, cu, games: _ms_next("mount"))
