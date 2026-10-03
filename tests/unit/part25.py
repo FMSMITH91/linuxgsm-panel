@@ -215,6 +215,23 @@ def _p25_host_first_label():
 
 
 # ── R1 / R2 / R5: single-flight, the deadline, the memo ────────────────────────────────────────
+def _started(fn):
+    """Start fn in a thread; the Event it returns is set when fn has returned or raised.
+
+    Waited on through the Event, never Thread.join(timeout): under eventlet's patching a join that
+    times out RAISES eventlet's Timeout, a BaseException that would end the whole unit run.
+    """
+    done = _th25.Event()
+
+    def _run():
+        try:
+            fn()
+        finally:
+            done.set()
+    _th25.Thread(target=_run, daemon=True).start()
+    return done
+
+
 def _p25_single_flight_busy():
     builds, gate, got = [], _th25.Event(), {}
 
@@ -231,14 +248,13 @@ def _p25_single_flight_busy():
     with _patched():
         _patch(DR, "_build", _build)
         _patch(DR, "WAIT_S", 0.3)
-        first = _th25.Thread(target=lambda: got.setdefault("first", DR.generate()))
-        first.start()
+        first = _started(lambda: got.setdefault("first", DR.generate()))
         _time25.sleep(0.05)
-        second = _th25.Thread(target=_second)
-        second.start()
-        second.join(5)
+        second = _started(_second)
+        second.wait(3)
         gate.set()
-        first.join(5)
+        first.wait(5)
+        second.wait(5)
     check("review fix: a caller still waiting when the build passes WAIT_S is told it is busy and "
           "never starts a second build",
           builds == [1] and isinstance(got.get("second"), DR.ReportBusy)
@@ -263,13 +279,23 @@ def _p25_memo():
         calls.append(1)
         _time25.sleep(0.2)
         return "v"
-    threads = [_th25.Thread(target=lambda: got.append(ctx.memo("k", _slow))) for _ in range(3)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(5)
+    dones = [_started(lambda: got.append(ctx.memo("k", _slow))) for _ in range(3)]
+    for done in dones:
+        done.wait(5)
     check("review fix: the report's memo is single-flight: three sections asking at once make one "
           "read and get its answer", calls == [1] and got == ["v", "v", "v"], repr((calls, got)))
+    # Past the deadline a waiter may still be given a wait of its own (the privacy pass waits a
+    # little longer for the Tailscale read the Network section is still making).
+    late, calls2, got2 = Ctx(deadline_s=0.0), [], []
+    first = _started(lambda: late.memo("t", _slow))
+    _time25.sleep(0.05)
+    try:
+        got2.append(late.memo("t", lambda: calls2.append(1) or "second read", wait=2.0))
+    except TimeoutError as exc:
+        got2.append(exc)
+    first.wait(5)
+    check("review fix: a memo waiter given its own wait past the deadline gets the read in flight, "
+          "not a TimeoutError and not a second read", got2 == ["v"] and not calls2, repr((got2, calls2)))
 
 
 # ── R6 / C13: the hub-lag watch before its first tick ──────────────────────────────────────────
@@ -366,10 +392,12 @@ def _p25_nss():
     import pwd
     asked = []
 
-    def _no(name):
+    def _no(name, answer):
         def _f(*a, **k):
             asked.append(name)
-            raise AssertionError("NSS call " + name)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
         return _f
     passwd = os.path.join(_TMP25, "passwd")
     group = os.path.join(_TMP25, "group")
@@ -378,9 +406,9 @@ def _p25_nss():
     with open(group, "w", encoding="utf-8") as fh:
         fh.write("lgsmpanel-games:x:990:gameacct7731,other7731\n")
     with _patched():
-        _patch(pwd, "getpwall", _no("getpwall"))
-        _patch(pwd, "getpwnam", _no("getpwnam"))
-        _patch(grp, "getgrnam", _no("getgrnam"))
+        _patch(pwd, "getpwall", _no("getpwall", []))
+        _patch(pwd, "getpwnam", _no("getpwnam", KeyError("absent")))
+        _patch(grp, "getgrnam", _no("getgrnam", KeyError("absent")))
         _patch(PV, "ETC_PASSWD", passwd)
         _patch(PV, "ETC_GROUP", group)
         accts = PV._os_accounts()

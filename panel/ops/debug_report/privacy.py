@@ -421,7 +421,7 @@ def _tailscale_names(ctx, st, wait):
         # shared_read, not shared_info: info() answers None both for "not installed" and for a
         # status that could not be read, and only the second leaves names unmapped.
         try:
-            state, val = _src_tailscale.shared_read(ctx)
+            state, val = _src_tailscale.shared_read(ctx, wait=wait)
             if state == "error":
                 box["error"] = str(val)
             elif state == "ok":

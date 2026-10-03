@@ -136,15 +136,16 @@ class Ctx(object):
         """Seconds left before the report's deadline (never negative)."""
         return max(0.0, self.deadline - time.monotonic())
 
-    def memo(self, key, fn):
+    def memo(self, key, fn, wait=None):
         """fn() once per report under `key`; later callers get the same value, or the same raise.
 
         Single-flight: a caller arriving while another computes the key waits for that answer (at
         most until the report's deadline) instead of starting a second read -- two worker sections
         start together, and a duplicate `systemctl show` or quick_check costs most exactly when the
         source is slow. The lock guards the dicts, never the call: holding it across a subprocess
-        would serialise every section behind the slowest. A waiter past the deadline raises
-        TimeoutError (its section is then reported as unread); fn must not ask for its own key.
+        would serialise every section behind the slowest. A waiter waits until the deadline, or
+        `wait` seconds when given, and then raises TimeoutError (its section is reported as
+        unread); fn must not ask for its own key.
         """
         with self._memo_lock:
             if key in self._memo:
@@ -153,7 +154,7 @@ class Ctx(object):
             if running is None:
                 mine = self._running[key] = threading.Event()
         if running is not None:
-            running.wait(self.remaining())
+            running.wait(self.remaining() if wait is None else wait)
             with self._memo_lock:
                 if key in self._memo:
                     return self._unwrap(key)

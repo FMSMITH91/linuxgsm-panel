@@ -132,9 +132,12 @@ def cached():
 MEMO_KEY = "tailscale_read"
 
 
-def shared_read(ctx):
-    """read(), once per report: every caller gets the same ("ok"|"absent"|"error", value)."""
-    return ctx.memo(MEMO_KEY, lambda: read())  # pylint: disable=unnecessary-lambda
+def shared_read(ctx, wait=None):
+    """read(), once per report: every caller gets the same ("ok"|"absent"|"error", value).
+
+    `wait`: how long to wait for a read another section is making (default: the deadline).
+    """
+    return ctx.memo(MEMO_KEY, lambda: read(), wait=wait)  # pylint: disable=unnecessary-lambda
 
 
 def shared_info(ctx):
