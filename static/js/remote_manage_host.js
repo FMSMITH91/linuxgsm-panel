@@ -743,17 +743,30 @@ function _enableAutoUpdates(){
 function genDebugReport(){
   var btn=document.getElementById('diag-report-btn'), msg=document.getElementById('diag-report-msg');
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Generating…'; }
-  fetch(MOUNT+'/api/panel/debug-report').then(function(r){return r.json();}).then(function(d){
-    if(d.error){ if(msg) msg.innerHTML='<span class="text-danger">Could not generate the report.</span>'; return; }
+  // 429: another report is still being built (one at a time). A fixed string, never the server's.
+  fetch(MOUNT+'/api/panel/debug-report').then(function(r){
+    return r.json().then(function(d){ d._busy=(r.status===429); return d; });
+  }).then(function(d){
+    if(d.error){
+      if(msg) msg.innerHTML=d._busy
+        ? '<span class="text-warning">A debug report is still being built. Try again in a minute.</span>'
+        : '<span class="text-danger">Could not generate the report.</span>';
+      return;
+    }
     var ta=document.getElementById('diag-report-text');
     ta.value=d.report; ta.style.display='';   // .value (not innerHTML) — nothing to inject
     var dl=document.getElementById('diag-report-dl');
     dl.href=URL.createObjectURL(new Blob([d.report],{type:'text/markdown'}));
     dl.download=d.filename; dl.style.display='';
     var gh=document.getElementById('diag-report-gh');
-    var body=d.summary+'\n\n---\n**Describe the problem here.** For the full log, attach the downloaded debug file.\n';
-    gh.href=d.issues_url+'?labels=debug&title='+encodeURIComponent('Debug report')+'&body='+encodeURIComponent(body.slice(0,6000));
-    gh.style.display='';
+    // The server sizes the issue body (the prompt first, then whole summary lines) to fit a GitHub
+    // new-issue URL, from the same pseudonymised summary shown here; nothing is cut in the browser.
+    // encodeURIComponent throws on a lone surrogate, so a body that cannot be encoded hides the
+    // link rather than failing the whole report.
+    var url='';
+    try { url=d.issues_url+'?labels=debug&title='+encodeURIComponent('Debug report')+'&body='+encodeURIComponent(d.issue_body||''); }
+    catch(e){ url=''; }
+    if(url && d.issue_body){ gh.href=url; gh.style.display=''; } else { gh.style.display='none'; }
     if(msg) msg.innerHTML='<span class="text-success">Report ready — review it below before sharing.</span>';
   }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
     .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-clipboard2-data"></i> Generate debug report'; } })

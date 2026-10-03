@@ -2260,8 +2260,9 @@ def _so7_fail2ban_reads():
     SO._run_verb = _p7_verb_by({"f2b-status": ("", "", 1)})
     _jails_fail = SO._fail2ban_jails()
     SO._run, SO._run_verb = _so7_saved["_run"], _so7_saved["_run_verb"]
-    eq("so/_fail2ban_jails: only well-formed jail names; a failed read is none", (_jails, _jails_fail),
-       (["sshd", "linuxgsm-panel"], []))
+    # A failed read is None, not []: [] is "no jails configured", which a stopped fail2ban is not.
+    eq("so/_fail2ban_jails: only well-formed jail names; a failed read is None (unread), not none",
+       (_jails, _jails_fail), (["sshd", "linuxgsm-panel"], None))
     eq("so/fail2ban_overview: each readable jail's counts and banned IPs; an unreadable jail is left out",
        (_jd_bad, _ov), (None, {"installed": True, "jails": [
            {"jail": "sshd", "currently_banned": 2, "total_banned": 9, "total_failed": 40,
@@ -2488,6 +2489,7 @@ def _so7_panel_diagnostics():
     from cryptography.x509.oid import NameOID as _p7_oid  # noqa: E402
     from cryptography.hazmat.primitives import hashes as _p7_hashes, serialization as _p7_ser  # noqa: E402
     from cryptography.hazmat.primitives.asymmetric import ec as _p7_ec  # noqa: E402
+    from panel.ops.debug_report import _src_db as _p7_srcdb, _src_systemd as _p7_srcsd  # noqa: E402
     _p7_key = _p7_ec.generate_private_key(_p7_ec.SECP256R1())
 
     def _p7_cert(start_days, end_days):
@@ -2504,6 +2506,16 @@ def _so7_panel_diagnostics():
     _svc = {"on": False}
     _hv = {"res": None, "exc": None}
 
+    def _p7_unit():
+        # The shared `systemctl show` (debug_report._src_systemd), as a healthy system unit for
+        # this process, or as a bus that could not be read.
+        if not _svc["on"]:
+            return {"scope": None, "props": {}, "error": "unreadable"}
+        return {"scope": "system", "error": None,
+                "props": {"UnitFileState": "enabled", "ActiveState": "active",
+                          "SubState": "running", "MainPID": str(os.getpid()),
+                          "WorkingDirectory": _dg}}
+
     def _p7_diag(**over):
         """panel_diagnostics() with the given overrides; answers {check name: (level, detail)}."""
         _p7_cfgmod.DATA_DIR = _p7_pl.Path(over.get("data", os.path.join(_dg, "data")))
@@ -2516,15 +2528,25 @@ def _so7_panel_diagnostics():
         SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run([], _hv["res"], _hv["exc"]))
         SO.unattended_upgrades_status = over.get("ua", lambda: {"enabled": True, "detail": "on"})
         SO.PANEL_DIR = over.get("panel_dir", _dg)
+        # No path is hidden from git (the hidden-path check has its own checks in part21).
+        SO._git = lambda args, timeout=45: ("H app.py", "", 0)
+        SO._HELPER_PROBE["res"] = None          # each call is a fresh `sudo -n` probe
+        _sd_saved, _db_saved = _p7_srcsd.unit_show, _p7_srcdb.integrity
+        _p7_srcsd.unit_show = lambda timeout=5: over.get("unit", _p7_unit)()
+        if "integrity" in over:
+            _p7_srcdb.integrity = over["integrity"]
         SO.os = _Over(os, path=_Over(os.path, exists=lambda p: (
-            _svc["on"] if p.endswith("linuxgsm-panel.service") else os.path.exists(p))))
+            (_svc["on"] and p == "/etc/systemd/system/linuxgsm-panel.service")
+            if p.endswith("linuxgsm-panel.service") else os.path.exists(p))))
         try:
             _r = SO.panel_diagnostics()
         finally:
+            _p7_srcsd.unit_show, _p7_srcdb.integrity = _sd_saved, _db_saved
+            SO._HELPER_PROBE["res"] = None
             for _n in _cfg7_names:
                 setattr(_p7_cfgmod, _n, _cfg7_saved[_n])
             for _n in ("panel_integrity", "_helper_present", "subprocess", "unattended_upgrades_status",
-                       "PANEL_DIR", "os"):
+                       "PANEL_DIR", "os", "_git"):
                 setattr(SO, _n, _so7_saved[_n])
         return {c["name"]: (c["level"], c["detail"]) for c in _r["checks"]}, _r["summary"]
 
@@ -2539,12 +2561,14 @@ def _so7_panel_diagnostics():
     eq("so/diagnostics: every probe that cannot answer is a warning or a failure, never 'ok'",
        {k: _d1[k][0] for k in _d1} if isinstance(_d1, dict) else _d1,
        {"File integrity": "warn", "Data directory": "fail", "Database": "fail", "Encryption keys": "ok",
-        "Privileged helper": "warn", "Configuration": "fail", "Disk space": "warn", "Service": "warn",
-        "Automatic security updates": "warn"})
+        "Host credentials": "warn", "Privileged helper": "warn", "Configuration": "fail",
+        "Disk space": "warn", "Service": "warn", "Automatic security updates": "warn"})
     check("so/diagnostics: ...the summary is 'fail', and a missing cred_key is explained as normal",
           _d1s == "fail" and "created when the first" in _d1["Encryption keys"][1]
           and _d1["Privileged helper"][1] == "Installed, but its verb table could not be read."
-          and _d1["Configuration"][1] == "config.json could not be read or parsed.", repr(_d1))
+          and _d1["Configuration"][1] == "config.json could not be read or parsed."
+          and _d1["Service"][1].startswith("systemd state unreadable (unreadable)")
+          and _d1["Data directory"][1] == "data/ under the panel checkout does not exist.", repr(_d1))
     open(os.path.join(_dg, "data", "panel.db"), "w").close()               # empty database file
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(_p7_cert(-30, 5))
@@ -2560,7 +2584,7 @@ def _so7_panel_diagnostics_2():
           _d2["File integrity"] == ("fail", "3 panel file(s) differ from the installed version.")
           and _d2["Database"] == ("fail", "Database file is empty.")
           and _d2["Privileged helper"][0] == "fail" and ", ".join(_all_verbs[:4]) + ", …" in _d2["Privileged helper"][1]
-          and _d2["TLS certificate"] == ("warn", "Expires in 5 day(s).")
+          and _d2["TLS certificate"][0] == "warn" and _d2["TLS certificate"][1].endswith("Expires in 5 day(s).")
           and _d2["Service"][0] == "ok" and _d2["Data directory"][0] == "ok", repr(_d2))
     _p7_garbage(os.path.join(_dg, "data", "panel.db"))
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
@@ -2572,11 +2596,18 @@ def _so7_panel_diagnostics_2():
 
 def _so7_panel_diagnostics_3():
     global _d4s, _d5s, f
-    check("so/diagnostics: a clean tree, a current helper; a corrupt DB and an expired cert still fail",
+    from panel.ops.system_ops import _DB_DAMAGED_TEXT as _p7_dmg  # noqa: E402
+    # A file that is not a database at all is DAMAGE, read over a read-only connection off the hub
+    # (it used to be "Couldn't run the integrity check", from a read-write connect that raised), and
+    # with no rolling backup beside it a restart starts EMPTY -- the text says so rather than
+    # promising a restore. An expired cert this process was not seen to boot with is a warning:
+    # without the boot record nobody knows it is in use.
+    check("so/diagnostics: a clean tree, a current helper; a corrupt DB fails, an expired cert of unknown use warns",
           _d3["File integrity"] == ("ok", "All panel files match the installed version (abc1234).")
           and _d3["Privileged helper"] == ("ok", "Installed and current (%d verbs)." % len(_all_verbs))
-          and _d3["Database integrity"] == ("warn", "Couldn't run the integrity check.")
-          and _d3["TLS certificate"][0] == "fail" and _d3["TLS certificate"][1].startswith("Expired ")
+          and _d3["Database integrity"] == ("fail", _p7_dmg[None])
+          and _d3["TLS certificate"][0] == "warn" and "Expired " in _d3["TLS certificate"][1]
+          and "In use: unknown" in _d3["TLS certificate"][1]
           and _d3["Encryption keys"] == ("ok", "Session + credential keys present."), repr(_d3))
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(_p7_cert(-1, 100))
@@ -2585,126 +2616,231 @@ def _so7_panel_diagnostics_3():
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(b"-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n")
     _d5, _d5s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""})
-    _qc_real = sys.modules["sqlite3"]
-
-    class _P7QC:
-        def execute(self, _sql):
-            return self
-
-        def fetchone(self):
-            return ("*** in database main ***\nPage 7: btreeInitPage() returns error code 11",)
-
-        def close(self):
-            pass
-    sys.modules["sqlite3"] = _Over(_qc_real, connect=lambda *a, **k: _P7QC())
-    try:
-        _d6, _d6s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""})
-    finally:
-        sys.modules["sqlite3"] = _qc_real
-    eq("so/diagnostics: a database that opens but fails quick_check is a FAILURE, not a pass",
-       (_d6.get("Database integrity"), _d6s),
-       (("fail", "Corruption detected — the panel restores from backup automatically on restart."), "fail"))
+    # The card's own path reads the integrity check through debug_report._src_db (off the hub), and
+    # what a restart will do is worded by the state of the rolling backup.
+    _d6, _d6s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""},
+                         integrity=lambda timeout=20: {"state": "damaged", "backup": "ok"})
+    _d7, _d7s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""},
+                         integrity=lambda timeout=20: {"state": "not_checked", "backup": None,
+                                                       "detail_class": "OperationalError"})
+    eq("so/diagnostics: a damaged database with a healthy backup says a restart restores it; one that "
+       "could not be checked is a warning by class, never damage",
+       (_d6.get("Database integrity"), _d6s, _d7.get("Database integrity")),
+       (("fail", _p7_dmg["ok"]), "fail",
+        ("warn", "Couldn't run the integrity check (OperationalError).")))
+    check("so/diagnostics: ...and no wording promises a restore that may not happen",
+          "restores from backup automatically" not in repr((_d3, _d6, _d7))
+          and "starts EMPTY" in _p7_dmg[None], repr(_p7_dmg))
     eq("so/diagnostics: a valid cert, an unqueryable helper, and a cert that will not parse",
-       (_d4["TLS certificate"], _d4["Privileged helper"], _d4["File integrity"][1], _d5["TLS certificate"]),
-       (("ok", "Valid for 100 more day(s)."), ("warn", "Installed, but could not be queried."),
+       (_d4["TLS certificate"][0], _d4["TLS certificate"][1].endswith("Valid for 100 more day(s)."),
+        _d4["Privileged helper"], _d4["File integrity"][1], _d5["TLS certificate"]),
+       ("ok", True, ("warn", "Installed, but could not be queried."),
         "All panel files match the installed version (?).", ("warn", "Present but couldn't be parsed.")))
+    # A unit FILE on disk said "auto-starts on boot" whatever systemd thought of it. The unit file
+    # is there (_svc on) and systemd cannot be read: that is a warning saying so, never 'ok'.
+    _d8, _d8s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""},
+                         unit=lambda: {"scope": None, "props": {}, "error": "unreadable"})
+    check("so/diagnostics: a unit file on disk is not 'auto-starts on boot' -- systemd that cannot "
+          "be read is a warning", _d8.get("Service", ("", ""))[0] == "warn"
+          and _d8["Service"][1].startswith("systemd state unreadable")
+          and "auto-starts on boot" not in _d8["Service"][1], repr(_d8.get("Service")))
     _hv["exc"] = None
     _svc["on"] = False
 
 
+import importlib.metadata as _p7_md  # noqa: E402
+from panel.ops.debug_report import data as _p7_drdata  # noqa: E402
+from panel.ops.debug_report import updates as _p7_drupd  # noqa: E402
+# by importlib: this part imports _src_systemd under another name earlier (W0404 counts a reimport)
+_p7_drsd = __import__("importlib").import_module("panel.ops.debug_report._src_systemd")
+from panel.ops.debug_report import _src_tailscale as _p7_drts  # noqa: E402
+from panel.ops.debug_report import install as _p7_drinst  # noqa: E402
+from panel.ops.debug_report._base import Result as _P7Result  # noqa: E402
+
+# A different word on consecutive lines: the recent log folds a run that differs only in digits.
+_dr_log = "\n".join("line %04d %s password=hunter2 ok" % (i, ("alpha", "beta", "gamma")[i % 3])
+                    for i in range(600))
+_dr_calls = {"run": [], "verb": []}
+_dr_names = ("panel_diagnostics", "panel_version", "panel_integrity", "_run", "_run_verb", "_git",
+             "panel_update_log", "_debug_run", "_helper_present", "_is_git_checkout", "os")
+_dr_saved = {_n: getattr(SO, _n) for _n in _dr_names}
+_dr_md_dists = _p7_md.distributions
+_dr_sec_saved = (_p7_drdata.section_database, _p7_drupd.section_updates)
+# The report's own CLI readers, each on the module that runs it: left real, every report here ran
+# the real `tailscale status`, `sudo --version` and (where a unit file exists) `systemctl show`,
+# so the results differed between CI and a developer's machine.
+_dr_cli_saved = ((_p7_drts, "read", _p7_drts.read), (_p7_drinst, "run_version", _p7_drinst.run_version),
+                 (_p7_drsd, "run", _p7_drsd.run), (_p7_drsd, "scope", _p7_drsd.scope))
+_dr_cli_runs = []
+
+
+def _p7_dr_cli_stub():
+    def _cli(name, answer):
+        def _f(*_a, **_k):
+            _dr_cli_runs.append(name)
+            return answer
+        return _f
+    _p7_drts.read = _cli("tailscale", ("absent", None))
+    _p7_drinst.run_version = _cli("sudo --version", "Sudo version 1.9.15p5")
+    _p7_drsd.scope = lambda: "user"
+    _p7_drsd.run = _cli("systemctl show", ("ActiveState=active\nLoadState=loaded\n", "", 0))
+
+
+def _p7_debug_run(table):
+    """A system_ops._debug_run stub answering by the first key found in the argv."""
+    def _r(argv, timeout=5, cap=None):
+        _dr_calls["run"].append(list(argv))
+        for key, val in table:
+            if key in argv:
+                return val
+        return ("", "", 1)
+    return _r
+
+
+def _p7_dr_git(args, timeout=45):
+    return ("abc1234", "", 0) if list(args[:2]) == ["rev-parse", "--short"] else ("", "", 1)
+
+
+def _p7_dr_stub(journal_user, journal_sys, journal_unit, helper, euid):
+    """Every read the report makes, on the module that defines it."""
+    _dr_calls["run"].clear()
+    _dr_calls["verb"].clear()
+    SO.panel_version = lambda: "9.9.9"
+    SO._is_git_checkout = lambda: True
+    SO._git = _p7_dr_git
+    SO._debug_run = _p7_debug_run([("--user", (journal_user, "", 0)),
+                                   ("_SYSTEMD_USER_UNIT=linuxgsm-panel.service", (journal_unit, "", 0)),
+                                   ("timedatectl", ("yes\n", "", 0))])
+    SO._run_verb = _p7_verb_by({"journal": (journal_sys, "", 0)}, log=_dr_calls["verb"])
+    SO._helper_present = lambda: helper
+    SO.os = _Over(os, geteuid=lambda: euid, getuid=lambda: 4242)
+    SO.open = _p7_open_with({"/etc/os-release": OSError("ENOENT")})
+    _p7_cfgmod.load_config = _p7_raise(OSError("EIO"))
+    _p7_dr_cli_stub()
+    # eventlet is "not installed": one pass over the distributions, with it left out.
+    _p7_md.distributions = lambda: [d for d in _dr_md_dists()
+                                    if (d.metadata["Name"] or "").lower() != "eventlet"]
+
+
+def _p7_dr_unstub():
+    _p7_md.distributions = _dr_md_dists
+    for _owner, _n, _v in _dr_cli_saved:
+        setattr(_owner, _n, _v)
+    _p7_drdata.section_database, _p7_drupd.section_updates = _dr_sec_saved
+    SO.__dict__.pop("open", None)
+    for _n, _v in _dr_saved.items():
+        setattr(SO, _n, _v)
+    for _n in _cfg7_names:
+        setattr(_p7_cfgmod, _n, _cfg7_saved[_n])
+
+
+def _p7_report(journal_user="", journal_sys=_dr_log, journal_unit="", helper=True, euid=1000,
+               database=None, updates=None):
+    """generate_debug_report() with every read stubbed; a section may be replaced by a function."""
+    _p7_dr_stub(journal_user, journal_sys, journal_unit, helper, euid)
+    if database is not None:
+        _p7_drdata.section_database = database
+    if updates is not None:
+        _p7_drupd.section_updates = updates
+    try:
+        return SO.generate_debug_report()
+    finally:
+        _p7_dr_unstub()
+
+
+def _p7_journal_verbs():
+    """The `journal` helper calls the last report made (other sections ask the helper too)."""
+    return [c for c in _dr_calls["verb"] if c[0] == "journal"]
+
+
+def _p7_log_block(text):
+    """The fenced body of the report's Recent log section."""
+    sec = text.split("### Recent log (redacted)", 1)[-1]
+    return sec.split("```\n", 1)[-1].split("\n```", 1)[0]
+
+
+def _p7_text(rep):
+    return rep["report"] if isinstance(rep, dict) else str(rep)
+
+
 def _so7_generate_debug_report():
-    # ── generate_debug_report
-    global _p7_report, _rep, _rep_text
-    import importlib.metadata as _p7_md  # noqa: E402
-    _md_version = _p7_md.version
-    _dr_db = _p7_db(os.path.join(_s7, "dr.db"))
-    _dr_log = "\n".join("line %04d password=hunter2 ok" % i for i in range(400))
-    _dr_upd = {"v": {"exists": False}}
-
-    def _p7_report(journal_user="", journal_sys=_dr_log, update=None, **_k):
-        _dr_upd["v"] = update if update is not None else {"exists": False}
-        SO.panel_diagnostics = lambda: {"checks": [{"name": "X", "level": "ok", "detail": "fine"}]}
-        SO.panel_version = lambda: "9.9.9"
-        SO.panel_integrity = lambda force=False: {"current_sha": "abc1234"}
-        SO._run = _p7_run_by([("uname -r", ("6.1.0-p7", "", 0)), ("journalctl --user", (journal_user, "", 0))])
-        SO._run_verb = _p7_verb_by({"journal": (journal_sys, "", 0)})
-        SO._git = lambda args, timeout=45: ("", "", 1)
-        SO.panel_update_log = ((lambda: _dr_upd["v"]) if not isinstance(_dr_upd["v"], Exception)
-                               else _p7_raise(_dr_upd["v"]))
-        SO.open = _p7_open_with({"/etc/os-release": OSError("ENOENT")})
-        _p7_cfgmod.load_config = _p7_raise(OSError("EIO"))
-        _p7_cfgmod.DB_PATH = _p7_pl.Path(_dr_db)
-
-        def _p7_ver(pkg):
-            if pkg == "eventlet":
-                raise _p7_md.PackageNotFoundError(pkg)
-            return _md_version(pkg)
-        _p7_md.version = _p7_ver
-        try:
-            return SO.generate_debug_report()
-        finally:
-            _p7_md.version = _md_version
-            SO.__dict__.pop("open", None)
-            for _n in ("panel_diagnostics", "panel_version", "panel_integrity", "_run", "_run_verb", "_git",
-                       "panel_update_log"):
-                setattr(SO, _n, _so7_saved[_n])
-            for _n in _cfg7_names:
-                setattr(_p7_cfgmod, _n, _cfg7_saved[_n])
-
+    # ── generate_debug_report: a thin wrapper over panel/ops/debug_report, driven end to end here
+    # with every read stubbed on the module that defines it (system_ops, config, importlib.metadata).
+    global _rep, _rep_text
     _rep = _p7_call(_p7_report)
-    _rep_text = _rep["report"] if isinstance(_rep, dict) else str(_rep)
-    _rep_log = _rep_text.split("### Recent log (redacted)\n```\n", 1)[-1].split("\n```", 1)[0]
-    check("so/debug report: the OS falls back to the platform name; the DB health is read from the real file",
-          ("- **OS**: %s\n" % _p7_platform.system()) in _rep_text and "- **health**: ok" in _rep_text
-          and "- **Kernel**: 6.1.0-p7" in _rep_text, _rep_text[:600])
+    _rep_text = _p7_text(_rep)
+    _rep_log = _p7_log_block(_rep_text)
+    check("so/debug report: the OS falls back to the platform name; the kernel and the checkout's "
+          "HEAD are read; the running commit is 'unknown' without an app",
+          all((("- **OS**: %s\n" % _p7_platform.system()) in _rep_text,
+               ("- **Kernel**: %s\n" % os.uname().release) in _rep_text,
+               "- **Running commit**: unknown (" in _rep_text, "**Checkout HEAD**: abc1234" in _rep_text)),
+          _rep_text[:900])
     check("so/debug report: the system journal is used when the user journal is empty, redacted",
-          "hunter2" not in _rep_text and "password=[redacted]" in _rep_log and "line 0399" in _rep_log,
-          _rep_log[-200:])
-    check("so/debug report: a long log keeps its TAIL, cut on a line boundary",
-          len(_rep_log) <= 8000 and _rep_log.startswith("line ") and "line 0000" not in _rep_log, _rep_log[:80])
+          all(("hunter2" not in _rep_text, "password=[redacted]" in _rep_log, "line 0599" in _rep_log,
+               "system journal via the privileged helper" in _rep_text,
+               _p7_journal_verbs() == [("journal", ["panel", "5000"])])), _rep_log[-200:])
+    check("so/debug report: the recent log is the newest 400 lines, in order, and no older one",
+          all((_rep_log.startswith("line 0200 "), "line 0199" not in _rep_log,
+               _rep_log.find("line 0300") < _rep_log.find("line 0400"))), _rep_log[:80])
 
 
 def _so7_generate_debug_report_2():
     global _rep_none
-    check("so/debug report: an uninstalled dependency is left out, the rest listed; no config section",
-          "- **eventlet**" not in _rep_text and "- **flask**: " in _rep_text
-          and "### Config (non-secret settings only)\n- (none)\n" in _rep_text
-          and "- No panel update has been run through the panel yet." in _rep_text, _rep_text)
+    _deps = _rep_text.split("### Dependencies", 1)[-1].split("\n### ", 1)[0]
+    check("so/debug report: an uninstalled locked dependency is named as missing; an unreadable "
+          "config prints no values",
+          all(("- **1 missing**: eventlet (lock " in _deps,
+               "- config.json could not be read (OSError); values unknown" in _rep_text,
+               "- **port**" not in _rep_text)), _deps[:400])
     check("so/debug report: the filename carries the commit",
           isinstance(_rep, dict) and _rep["filename"].startswith("linuxgsm-panel-debug-abc1234-")
           and _rep["filename"].endswith(".md"), repr(_rep.get("filename") if isinstance(_rep, dict) else _rep))
     _rep_none = _p7_call(_p7_report, journal_sys="")
-    _dbm_ic = _dbm7.integrity_check
-    _dbm7.integrity_check = _p7_raise(RuntimeError("locked"))
-    try:
-        _rep_noic = _p7_call(_p7_report)
-    finally:
-        _dbm7.integrity_check = _dbm_ic
-    check("so/debug report: a DB health check that raises is left out, never reported as 'ok'",
-          isinstance(_rep_noic, dict) and "- **health**" not in _rep_noic["report"]
-          and "### Database\n" in _rep_noic["report"], str(_rep_noic)[:300])
+    _noic = _p7_text(_p7_call(_p7_report, database=_p7_raise(RuntimeError("locked"))))
+    check("so/debug report: a section that raises is never left out, never 'ok': its heading says it "
+          "could not be read, by exception class and never by message",
+          "### Database _(could not be read: RuntimeError after " in _noic
+          and "locked" not in _noic.split("### Database", 1)[-1].split("\n### ", 1)[0], _noic[:300])
 
 
 def _so7_generate_debug_report_3():
-    check("so/debug report: no journal anywhere says so rather than showing an empty block",
-          isinstance(_rep_none, dict) and "```\n(no journal available)\n```" in _rep_none["report"],
-          str(_rep_none)[:300])
-    _outcomes = []
-    for _upd in ({"exists": True, "lines": ["could not confirm health"]},
-                 {"exists": True, "lines": ["Rolling back to abc"]},
-                 {"exists": True, "lines": ["Update complete"]},
-                 {"exists": True, "lines": ["step 3 of 9"], "outcome": "running"},
-                 RuntimeError("log unreadable")):
-        _r = _p7_call(_p7_report, update=_upd)
-        _outcomes.append(_r["report"].split("### Last update\n", 1)[1].split("\n", 1)[0]
-                         if isinstance(_r, dict) else str(_r))
-    eq("so/debug report: the last update's outcome is named for each way it can end",
-       _outcomes,
-       ["- **Outcome**: FAILED — update broke health AND the automatic rollback couldn't confirm health",
-        "- **Outcome**: FAILED — update failed its health check and was rolled back to the previous version",
-        "- **Outcome**: succeeded",
-        "- **Outcome**: unknown (in progress, or the log doesn't show a final outcome)",
-        "- No panel update has been run through the panel yet."])
+    check("so/debug report: no journal anywhere says so, with what was tried, rather than an empty block",
+          all(("```\n(no journal available)\n```" in _p7_text(_rep_none),
+               "- **Source**: none (user journal: no entries, rc 0; system journal via helper: no "
+               "entries, rc 0)" in _p7_text(_rep_none))), _p7_text(_rep_none)[:300])
+    # R68: journalctl answers '-- No entries --' with rc 0; that is EMPTY, so the helper journal is read.
+    _r68_log = _p7_log_block(_p7_text(_p7_call(_p7_report, journal_user="-- No entries --\n")))
+    check("so/debug report: a user journal answering only '-- No entries --' falls through to the "
+          "helper's journal",
+          all(("line 0599" in _r68_log, "-- No entries --" not in _r68_log,
+               _p7_journal_verbs() == [("journal", ["panel", "5000"])],
+               any("-q" in a and "--user" in a for a in _dr_calls["run"]))), _r68_log[:200])
+    _so7_generate_debug_report_4()
+
+
+def _so7_generate_debug_report_4():
+    # R69: no helper and not root: the verb would be a plain, prompting sudo, so it is never run; the
+    # unprivileged system-journal read of THIS account's user unit is used instead.
+    _r69 = _p7_text(_p7_call(_p7_report, helper=False, euid=1000,
+                             journal_unit="Oct 02 10:00:00 h p[1]: unit line\n"))
+    _unit = [a for a in _dr_calls["run"] if "_SYSTEMD_USER_UNIT=linuxgsm-panel.service" in a] or [[]]
+    _verbs = list(_dr_calls["verb"])
+    _r69_none = _p7_text(_p7_call(_p7_report, helper=False, euid=1000))
+    check("so/debug report: without the helper and not root, the journal verb (a password sudo) is never "
+          "run; this account's unit is read unprivileged",
+          all((not _verbs, not _dr_calls["verb"], "_UID=4242" in _unit[0], "-q" in _unit[0],
+               "unit line" in _r69, "this account's user unit" in _r69,
+               "no journal readable without sudo" in _r69_none)), repr((_verbs, _unit, _r69[:200])))
+    # The update outcome is the updates section's: whatever it returns is printed under its heading.
+    _upd = _p7_text(_p7_call(_p7_report, updates=lambda ctx: _P7Result(lines=["- **Outcome**: FAILED — p7"])))
+    check("so/debug report: the updates section's outcome is printed under its own heading",
+          "### Updates _(read in " in _upd and "- **Outcome**: FAILED — p7" in _upd.split("### Updates", 1)[-1],
+          _upd[:300])
+    check("so/debug report: the report's own CLI reads (tailscale, sudo --version, systemctl show) "
+          "reached this part's stand-ins, so none ran for real",
+          {"tailscale", "sudo --version", "systemctl show"} <= set(_dr_cli_runs),
+          repr(sorted(set(_dr_cli_runs))))
 
 
 try:

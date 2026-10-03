@@ -89,6 +89,7 @@ del _w, _dd_del, _dd_rebind
 # away with it only because neither pulls in anything eventlet needs to green — a latent trap for
 # whichever of them grows a dependency first. tests/unit asserts this ordering now.
 from panel.core import terminal
+from panel.core import runtime_stats
 from panel.core.clock import utcnow
 
 import secrets
@@ -145,6 +146,10 @@ from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get
 from panel.ops import ssh_manager as _sm
 from panel.ops import tailscale_integration as ts
 from panel.ops import system_ops as so
+# The debug report's runtime hooks: the log handlers and error counter (R23, R24), the hub-lag watch
+# (R17) and Serve's boot outcome as a fixed reason (R20). Through the modules, at call time.
+from panel.ops.debug_report import errors as _dr_errors
+from panel.ops.debug_report import process as _dr_process
 from panel.ops import backup as bk
 from panel.services import lgsm_data
 
@@ -552,8 +557,11 @@ def _player_count_watch(app):
     live per-server counts (and a total) without a query on the request path."""
     while True:
         try:
+            _t0 = time.time()
             _refresh_player_counts(app)
+            runtime_stats.beat("player-counts", _PLAYER_POLL_SECONDS, time.time() - _t0)
         except Exception:
+            runtime_stats.bump("loopfail", "player-counts")
             _log.debug("player-count poller pass failed", exc_info=True)
         time.sleep(_PLAYER_POLL_SECONDS)
 
@@ -574,8 +582,11 @@ def _metrics_history_watch(app):
     """Background loop: sample metrics into history every _METRIC_SAMPLE_SECONDS, then prune old rows."""
     while True:
         try:
+            _t0 = time.time()
             _record_metric_samples(app)
+            runtime_stats.beat("metrics-history", _METRIC_SAMPLE_SECONDS, time.time() - _t0)
         except Exception:
+            runtime_stats.bump("loopfail", "metrics-history")
             _log.debug("metrics-history sampler pass failed", exc_info=True)
         try:
             _prune_metric_samples(app)
@@ -647,8 +658,11 @@ def _node_tools_cron_watch(app):
     """Once at startup and daily after: _node_tools_cron_pass."""
     while True:
         try:
+            _t0 = time.time()
             _node_tools_cron_pass(app)
+            runtime_stats.beat("node-tools", 86400, time.time() - _t0)
         except Exception:
+            runtime_stats.bump("loopfail", "node-tools")
             _log.debug("node-tools cron watch pass failed", exc_info=True)
         time.sleep(86400)   # daily
 
@@ -694,9 +708,12 @@ def _monitor_watch(app):
     while True:
         time.sleep(_MONITOR_SECONDS)
         try:
+            _t0 = time.time()
             with app.app_context():
                 _monitor_pass()
+            runtime_stats.beat("monitor", _MONITOR_SECONDS, time.time() - _t0)
         except Exception:
+            runtime_stats.bump("loopfail", "monitor")
             _log.debug("monitor pass failed", exc_info=True)
 
 
@@ -957,7 +974,7 @@ def _run_autoblock_now(app, remote_id):
                     _autoblock_reconcile(remote)
             except Exception:
                 _log.debug("immediate autoblock reconcile failed for %s", remote_id, exc_info=True)
-    threading.Thread(target=_go, daemon=True).start()
+    threading.Thread(target=_go, name="autoblock-now", daemon=True).start()
 
 
 def _autoblock_watch(app):
@@ -966,10 +983,12 @@ def _autoblock_watch(app):
         time.sleep(3600)
         host_ids = _autoblock_hosts()
         if not host_ids:
+            runtime_stats.beat("autoblock", 3600)
             continue
         with app.test_request_context():
             for rid, born in _autoblock_births(host_ids).items():
                 _autoblock_tick_host(rid, born)
+        runtime_stats.beat("autoblock", 3600)
 
 
 def _autoblock_births(host_ids):
@@ -1386,9 +1405,38 @@ def _session_lifetimes(cfg):
     return hours * 3600, timedelta(days=days)
 
 
+def _attach_debug_logging(app):
+    """The stderr handler and the error counter (panel/ops/debug_report/errors.py), once per process.
+
+    After app.logger exists, so Flask has already added its own default handler. Best-effort: a
+    logging setup that fails must never stop the panel starting.
+    """
+    try:
+        _dr_errors.attach_log_handlers(app.logger)
+    except Exception:
+        _log.debug("debug-report log handlers not attached", exc_info=True)
+
+
+def _spawn_daemon(fn, *args):
+    """Start `fn(*args)` on a daemon thread from this module's `threading` (green once patched)."""
+    threading.Thread(target=fn, args=args, daemon=True, name="hub-lag-watch").start()
+
+
+def _start_hub_lag_watch():
+    """The hub-lag greenlet (R17): once per process, only under eventlet's thread patching."""
+    try:
+        _dr_process.start_hub_lag_watch(spawn=_spawn_daemon)
+    except Exception:
+        _log.debug("hub-lag watch not started", exc_info=True)
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
+    # The commit this process loaded at start, for the debug report's header (R4). app.config, not
+    # the module global alone: app.py runs as __main__ while the routes import a second copy.
+    app.config["PANEL_COMMIT"] = PANEL_COMMIT
+    _attach_debug_logging(app)
 
     # One-time nudge for installs still sitting on the previous, longer session defaults
     # (12h idle / 14d remember) → the tighter 8h / 3d. Only touches values left at the old
@@ -1842,6 +1890,7 @@ def create_app():
     # reads the raw X-Forwarded-For, before ProxyFix above rewrites anything.
     app.wsgi_app = ProxiedBanGate(app.wsgi_app)
 
+    _start_hub_lag_watch()
     return app
 
 
@@ -2645,6 +2694,28 @@ def _os_updates_for(remote):
 
 
 
+def _make_supervisor(app):
+    """The supervisor register_routes hands every ticker: supervise(name, target).
+
+    Runs `target` in a thread and, if it ever exits, logs it and starts it again five seconds
+    later. Every thread is NAMED with `name` (a fixed code identifier, never a host or server
+    name) and every respawn is counted, because the debug report reads both: threading.enumerate()
+    for which workers are alive, runtime_stats' "respawn" group for how often each was restarted.
+    Module level so a check can drive one runner without building the whole app.
+    """
+    def _supervise(name, target):
+        def _runner():
+            while True:
+                t = threading.Thread(target=target, name=name, daemon=True)
+                t.start()
+                t.join()   # only returns if the worker exited unexpectedly
+                runtime_stats.bump("respawn", name)
+                app.logger.error("%s thread exited — respawning in 5s", name)
+                time.sleep(5)
+        threading.Thread(target=_runner, name="supervise-" + name, daemon=True).start()
+    return _supervise
+
+
 def register_routes(app):
     # Lazy, like every other panel.routes import here: those modules do
     # `from app import ...` at their top, so they can only be imported once
@@ -2770,15 +2841,7 @@ def register_routes(app):
     # Start the console poller under a tiny supervisor: it has an inner try/except so it
     # shouldn't die, but if it ever exits we log and respawn it — console streaming
     # self-heals instead of silently staying dead until the next full restart.
-    def _supervise(name, target):
-        def _runner():
-            while True:
-                t = threading.Thread(target=target, daemon=True)
-                t.start()
-                t.join()   # only returns if the worker exited unexpectedly
-                app.logger.error("%s thread exited — respawning in 5s", name)
-                time.sleep(5)
-        threading.Thread(target=_runner, daemon=True).start()
+    _supervise = _make_supervisor(app)
 
     from panel.routes import server_files as _r_server_files
     socketio = _r_server_files.register(app, _supervise)
@@ -2796,10 +2859,13 @@ def register_routes(app):
         time.sleep(120)
         while True:
             try:
+                _t0 = time.time()
                 bk.daily_backup_tick()
                 _run_due_game_backups(app)   # per-server schedules (each records its own last-run)
                 _run_pending_backups(app)    # 'wait until empty' full-backup queue
+                runtime_stats.beat("backup-ticker", 3600, time.time() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "backup-ticker")
                 app.logger.debug("backup tick failed", exc_info=True)
             time.sleep(3600)
     _supervise("backup-ticker", backup_ticker)
@@ -2810,8 +2876,11 @@ def register_routes(app):
         time.sleep(45)
         while True:
             try:
+                _t0 = time.time()
                 _run_due_restarts(app)   # apply queued 'restart/stop when empty' once a server empties
+                runtime_stats.beat("due-actions", 90, time.time() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "due-actions")
                 app.logger.debug("due-actions tick failed", exc_info=True)
             time.sleep(90)
     _supervise("due-actions", due_actions_ticker)
@@ -2836,6 +2905,7 @@ def register_routes(app):
         time.sleep(20)   # let boot settle; the per-server check is an SSH round trip
         while True:
             try:
+                _t0 = time.time()
                 with app.app_context():
                     for gs in GameServer.query.filter(
                             GameServer.status.in_(("installing", "configuring", "failed"))).all():
@@ -2843,7 +2913,9 @@ def register_routes(app):
                         # (and its id taken) since the query: skipped without reading it.
                         if still_held(gs):
                             _reconcile_stranded_install(app, gs)
+                runtime_stats.beat("install-reconcile", 600, time.time() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "install-reconcile")
                 app.logger.debug("install-reconcile tick failed", exc_info=True)
             time.sleep(600)
     _supervise("install-reconcile", install_reconcile_ticker)
@@ -2857,6 +2929,7 @@ def register_routes(app):
         time.sleep(60)
         while True:
             try:
+                _t0 = time.time()
                 with app.app_context():
                     by_remote = {}   # remote_id -> (remote, {short_name, …})
                     for gs in GameServer.query.filter_by(installed=True).all():
@@ -2868,7 +2941,9 @@ def register_routes(app):
                             set_game_priority_bulk(remote, sorted(users))
                         except Exception:
                             app.logger.debug("priority keeper: renice failed", exc_info=True)
+                runtime_stats.beat("priority-keeper", 120, time.time() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "priority-keeper")
                 app.logger.debug("priority keeper tick failed", exc_info=True)
             time.sleep(120)
 
@@ -3032,6 +3107,52 @@ def _f2b_record_events(app, new_bans, unbans):
                              "%d IPs were just banned from the panel login at once." % len(new_bans))
 
 
+def _boot_ssl_args(app, cfg, host, port):
+    """The self-signed TLS arguments for socketio.run, recording what really started (R20).
+
+    app.config["BOOT_TLS"] is whether the panel serves TLS itself since boot; BOOT_TLS_ERROR the
+    exception CLASS when TLS was configured and failed to start (never its message: it carries
+    paths). The flow is the one this block always had: a failure prints and serves plain HTTP.
+    """
+    ssl_args = {}
+    app.config["BOOT_TLS_ERROR"] = None
+    if _effective_https(cfg):
+        cert_path = str(DATA_DIR / "ssl" / "cert.pem")
+        key_path = str(DATA_DIR / "ssl" / "key.pem")
+        try:
+            _ensure_self_signed_cert(cert_path, key_path, cfg.get("site_domain") or host)
+            ssl_args = {"certfile": cert_path, "keyfile": key_path}
+            print(f"  🔒 HTTPS enabled (self-signed) — https://{host}:{port}")
+            print("     Browsers will show a certificate warning; click through to proceed.")
+        except Exception as e:
+            app.config["BOOT_TLS_ERROR"] = type(e).__name__
+            print(f"  [!] Could not enable HTTPS ({e}); serving plain HTTP instead.")
+    app.config["BOOT_TLS"] = bool(ssl_args)
+    return ssl_args
+
+
+def _boot_serve(app, cfg, port):
+    """Re-point Tailscale Serve at the scheme being served, recording the outcome (R20).
+
+    app.config["BOOT_SERVE"]: "ok", "failed:<fixed reason class>" or "not attempted". The failure
+    message is raw tailscale stderr (a *.ts.net name, a login URL), so only its class is kept.
+    """
+    app.config["BOOT_SERVE"] = "not attempted"
+    if not cfg.get("tailscale_setup_done"):
+        return
+    try:
+        _ok, _msg = ts.setup_tailscale_serve(
+            port=port,
+            mount=cfg.get("tailscale_mount", "/") or "/",
+            funnel=cfg.get("tailscale_use_funnel", False),
+            backend_scheme=_ts_backend_scheme(cfg),
+        )
+        app.config["BOOT_SERVE"] = "ok" if _ok else "failed:" + _dr_process.serve_reason(_msg)
+    except Exception as e:
+        app.config["BOOT_SERVE"] = "failed:" + type(e).__name__
+        _log.debug("ignored non-fatal error", exc_info=True)
+
+
 def _ts_backend_scheme(cfg):
     """Loopback scheme Tailscale Serve must use to reach us — has to match how the panel
     is actually listening right now, or Serve 502s. When we're terminating self-signed
@@ -3063,7 +3184,7 @@ if __name__ == "__main__":
                 _apply_whitelist_to_remotes(app)
             except Exception:
                 _log.debug("remote fail2ban whitelist sync failed", exc_info=True)
-    threading.Thread(target=_f2b_autostart, daemon=True).start()
+    threading.Thread(target=_f2b_autostart, name="f2b-autostart", daemon=True).start()
 
     # Record fail2ban bans/unbans of the panel-login jail in the audit log, so the activity is
     # visible even though the jail runs automatically with no management UI. Seeds from the current
@@ -3072,7 +3193,7 @@ if __name__ == "__main__":
         seen = None
         while True:
             try:
-                _taken = time.monotonic()
+                _taken = _t0 = time.monotonic()
                 reading = so.panel_fail2ban_banned_ips()
                 seen, new_bans, unbans = _f2b_ban_events(seen, reading)
                 _f2b_record_events(app, new_bans, unbans)
@@ -3084,37 +3205,45 @@ if __name__ == "__main__":
                 _banlist.set_whitelist(load_config().get("security_whitelist") or [])
                 _taken = time.monotonic()
                 _banlist.set_ufw(so.ufw_blocked_ips(), _taken)
+                runtime_stats.beat("ban-watch", 90, time.monotonic() - _t0)
             except Exception:
+                runtime_stats.bump("loopfail", "ban-watch")
                 _log.debug("fail2ban ban-watch tick failed", exc_info=True)
             time.sleep(90)
     if os.name == "posix":
-        threading.Thread(target=_f2b_ban_watch, daemon=True).start()
+        threading.Thread(target=_f2b_ban_watch, name="ban-watch", daemon=True).start()
 
     # Fire any "reboot when empty" requests once a host has no players left.
-    threading.Thread(target=lambda: _reboot_when_empty_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _reboot_when_empty_watch(app), name="reboot-when-empty",
+                     daemon=True).start()
 
     # Keep each auto-block host's rolling top-20 (7-day) UFW block list in sync.
-    threading.Thread(target=lambda: _autoblock_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _autoblock_watch(app), name="autoblock", daemon=True).start()
 
     # Keep live per-server player counts fresh for the dashboard / Game Servers page.
-    threading.Thread(target=lambda: _player_count_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _player_count_watch(app), name="player-counts",
+                     daemon=True).start()
 
     # Record CPU/RAM/player samples into history (for the trend charts on the server page).
-    threading.Thread(target=lambda: _metrics_history_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _metrics_history_watch(app), name="metrics-history",
+                     daemon=True).start()
 
     # Keep gamedig, the player-query tool, installed from its pinned lockfile on every host: the
     # weekly repair cron everywhere, and the lockfile's tree itself on remotes. See the pass above.
-    threading.Thread(target=lambda: _node_tools_cron_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _node_tools_cron_watch(app), name="node-tools",
+                     daemon=True).start()
 
     # Proactive monitor: server-down / host-unreachable / disk-low admin notifications.
-    threading.Thread(target=lambda: _monitor_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _monitor_watch(app), name="monitor", daemon=True).start()
 
     # Telegram command bot (/update, /status, …) — opt-in, locked to the configured chat.
-    threading.Thread(target=lambda: _telegram_command_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _telegram_command_watch(app), name="telegram-bot",
+                     daemon=True).start()
 
     # Discord command bot (!update, !status, …) — opt-in, locked to the configured channel. Holds a
     # persistent Gateway WebSocket; a no-op until a bot token + channel are configured with commands on.
-    threading.Thread(target=lambda: _discord_command_watch(app), daemon=True).start()
+    threading.Thread(target=lambda: _discord_command_watch(app), name="discord-bot",
+                     daemon=True).start()
 
     # If a Telegram/Discord-triggered self-update just restarted us, tell the chat/channel it's back
     # (after a short settle so "back online" is true). No-op when there's no pending update.
@@ -3125,7 +3254,7 @@ if __name__ == "__main__":
                 fn()
             except Exception:
                 _log.debug("bot pending-update report failed", exc_info=True)
-    threading.Thread(target=_bot_update_report, daemon=True).start()
+    threading.Thread(target=_bot_update_report, name="bot-update-report", daemon=True).start()
 
     # Not explicitly configured: bind where the panel is actually reachable — 127.0.0.1 if
     # Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the first-run setup wizard is
@@ -3134,6 +3263,9 @@ if __name__ == "__main__":
     # What this process really listens on, for pages that must not claim more than that: the
     # wizard's complete page (a stored loopback bind applies only from the next start).
     app.config["_BOOT_BIND"] = host
+    # The same, under the names the debug report reads (R19), with the port beside it.
+    app.config["BOOT_BIND"] = host
+    app.config["BOOT_PORT"] = port
     _scheme = "https" if _effective_https(cfg) else "http"
     print(f"LinuxGSM Panel starting on {host}:{port}")
     _proxy_bind_note = _trust_proxy_bind_warning(cfg, host)
@@ -3156,31 +3288,12 @@ if __name__ == "__main__":
 
     # Optional built-in HTTPS with a self-signed cert (for public, no-domain, no-proxy
     # setups). Browsers will warn about the self-signed cert — that's expected.
-    ssl_args = {}
-    if _effective_https(cfg):
-        cert_path = str(DATA_DIR / "ssl" / "cert.pem")
-        key_path = str(DATA_DIR / "ssl" / "key.pem")
-        try:
-            _ensure_self_signed_cert(cert_path, key_path, cfg.get("site_domain") or host)
-            ssl_args = {"certfile": cert_path, "keyfile": key_path}
-            print(f"  🔒 HTTPS enabled (self-signed) — https://{host}:{port}")
-            print("     Browsers will show a certificate warning; click through to proceed.")
-        except Exception as e:
-            print(f"  [!] Could not enable HTTPS ({e}); serving plain HTTP instead.")
+    ssl_args = _boot_ssl_args(app, cfg, host, port)
 
     # Self-heal Tailscale Serve's upstream scheme. If we flipped between self-signed HTTPS
     # and plain HTTP since Serve was configured (e.g. HTTPS during first-run setup, then
     # HTTP once Tailscale took over TLS on the next restart), re-point Serve at the scheme
     # we're actually listening on now. Idempotent when already correct; best-effort.
-    if cfg.get("tailscale_setup_done"):
-        try:
-            ts.setup_tailscale_serve(
-                port=port,
-                mount=cfg.get("tailscale_mount", "/") or "/",
-                funnel=cfg.get("tailscale_use_funnel", False),
-                backend_scheme=_ts_backend_scheme(cfg),
-            )
-        except Exception:
-            _log.debug("ignored non-fatal error", exc_info=True)
+    _boot_serve(app, cfg, port)
 
     app.socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)

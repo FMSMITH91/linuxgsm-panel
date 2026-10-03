@@ -891,8 +891,8 @@ check("unicode: isdecimal() still accepts a non-ASCII DECIMAL digit, so nothing 
 # No module may guard an int() with isdigit() again.
 _isdigit_users = []
 for _f in ("app.py", "auth.py", "manage.py", "models.py", "system_ops.py", "ssh_manager.py",
-           "notifications.py", "backup.py", "db_maintenance.py", "tailscale_integration.py",
-           "config.py", "i18n.py", "privileged.py", "clock.py"):
+           "panel/services/notifications.py", "backup.py", "db_maintenance.py",
+           "tailscale_integration.py", "config.py", "i18n.py", "privileged.py", "clock.py"):
     # _modpath, not a root join with an exists() skip: when these modules moved under panel/
     # the old form silently matched nothing and still reported green.
     for _fp2 in _modfiles(_f):
@@ -924,8 +924,9 @@ except Exception as _e:
 # raised. A new escalation written as a shell string fails this test instead of going unnoticed.
 import ast as _ast
 
-_ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
-                     "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
+_ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py",
+                     "panel/services/notifications.py", "backup.py", "db_maintenance.py",
+                     "tailscale_integration.py", "manage.py"]
 _CEILING = {"sudo=True": 2, "_sudo_sh": 0}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
@@ -7219,8 +7220,9 @@ for _py in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursiv
 # The positive control for the gate below: an AST walk that matches nothing passes it vacuously.
 # The floor tracks the real count and moves with it — it went 30 -> 29 when
 # enable_unattended_upgrades stopped hand-rolling `printf … | sudo tee` and went through the write
-# verb like every other root-owned write in that module.
-check("shell: the _run() scan actually found the call sites", _shell_seen >= 29,
+# verb like every other root-owned write in that module, and 29 -> 27 when the debug report's uname
+# and journalctl reads moved from shell _run() to the argv runner _debug_run().
+check("shell: the _run() scan actually found the call sites", _shell_seen >= 27,
       "only %d matched — the scan stopped finding them, so the gate below proves nothing"
       % _shell_seen)
 check("shell: every _run() command is a literal or shlex.quote()d", not _shell_bad,

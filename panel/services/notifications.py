@@ -20,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from panel.core import runtime_stats
 from panel.core.config import load_config, update_config, encrypt_secret, decrypt_secret
 
 _log = logging.getLogger("notifications")
@@ -466,6 +467,8 @@ def _post(url, data, headers, allow_configured_host=False, provider="?"):
         # three words; the lookup just makes that visible to a reader and to the scanner.
         _log.warning("notification rejected by %s: HTTP %d",
                      _PROVIDER_LABELS.get(provider, "?"), _code)
+        # For the debug report (R63): the provider's int status, never anything read off the body.
+        runtime_stats.put("notify", "%s|last_http" % _PROVIDER_LABELS.get(provider, "?"), _code)
         return False, "rejected"
     except (urllib.error.URLError, OSError, ValueError) as e:
         # The exception TYPE, not exc_info. A URLError renders the URL into its message and the
@@ -526,11 +529,28 @@ def telegram_get_updates(token, offset=None, timeout=25):
         # HTTPError, a URLError, so this answers None like any other failed poll.
         with _OPENER.open(req, timeout=timeout + 10) as resp:  # nosec B310 - https, host-literal, no redirects
             data = json.loads(resp.read(2_000_000).decode("utf-8", "replace"))
+        _poll_counted(bool(data.get("ok")), None)
         return (data.get("result") or []) if data.get("ok") else None
     except (urllib.error.URLError, OSError, ValueError) as e:
         # The class, not exc_info: a URLError renders the URL, and this one carries the bot token.
         _log.debug("telegram getUpdates failed (%s)", e.__class__.__name__)
+        _poll_counted(False, getattr(e, "code", None))
         return None
+
+
+def _poll_counted(ok, code):
+    """Count one command-bot poll for the debug report (R63).
+
+    ok or failed, and a failure's int HTTP status (409 is a second poller on the same token).
+    runtime_stats never raises.
+    """
+    if ok:
+        runtime_stats.bump("notify", "telegram_poll|ok")
+        runtime_stats.put("notify", "telegram_poll|last_ok", 1)
+        return
+    runtime_stats.bump("notify", "telegram_poll|failed")
+    if isinstance(code, int):
+        runtime_stats.put("notify", "telegram_poll|last_http", code)
 
 
 def telegram_get_me(token):
@@ -978,9 +998,37 @@ def _deliver_alerts(items):
                 _ok, _why = _send()
             except Exception:
                 _log.debug("notify send to %s failed", _name, exc_info=True)
+                runtime_stats.bump("notify", "%s|error" % _name)
                 continue
+            _count_delivery(_name, _ok, _why)
             if not _ok:
                 _log.warning("notification to %s failed (%s): %s", _name, keys, _why)
+
+
+# What a sender's detail text says, as the fixed word the debug report counts (R63). The detail is a
+# sentence written for a person; only these words are kept.
+_OUTCOME_WORDS = (("unreachable", ("couldn't reach",)), ("rejected", ("rejected",)),
+                  ("not-configured", ("missing", "malformed", "isn't a", "refused before",
+                                      "characters")))
+
+
+def delivery_outcome(ok, why):
+    """'sent' | 'rejected' | 'unreachable' | 'not-configured' | 'failed' for one send's result."""
+    if ok:
+        return "sent"
+    low = str(why or "").lower()
+    for word, needles in _OUTCOME_WORDS:
+        if any(n in low for n in needles):
+            return word
+    return "failed"
+
+
+def _count_delivery(name, ok, why):
+    """Count one channel's result for the debug report (R63). Never raises into the sender loop."""
+    try:
+        runtime_stats.bump("notify", "%s|%s" % (name, delivery_outcome(ok, why)))
+    except Exception:  # noqa: BLE001 - instrumentation must never change delivery
+        return
 
 
 def _next_alert_batch():
@@ -1022,6 +1070,7 @@ def _queue_alert(item):
     except queue.Full:
         _log.warning("notification queue is full (%d waiting); an alert was dropped",
                      _ALERT_QUEUE_MAX)
+        runtime_stats.bump("notify", "queue|dropped")
         return
     with _alert_lock:
         if _alert_sender[0]:

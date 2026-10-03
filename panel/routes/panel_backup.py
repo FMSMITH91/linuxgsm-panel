@@ -763,12 +763,19 @@ def _register_panel_diagnostics(app):
     @login_required
     @superadmin_required
     def api_panel_debug_report():
-        """A shareable diagnostic bundle the operator can attach to a GitHub issue.
+        """A diagnostic bundle the operator can attach to a GitHub issue.
 
-        Whitelisted fields + redacted log. No secrets by construction.
+        {report, summary, issue_body, issues_url, filename}: whitelisted fields, classes and
+        counts, and a log tail with known names pseudonymised and secrets redacted (see
+        panel/ops/debug_report). Best-effort, so the page asks the operator to review it before
+        sharing. One report is built at a time: a second request waits for the first's result.
         """
+        from panel.ops.debug_report import ReportBusy
         try:
             return jsonify(so.generate_debug_report())
+        except ReportBusy:
+            return jsonify({"error": "A debug report is still being built. Try again in a "
+                                     "minute."}), 429
         except Exception:
             return jsonify({"error": _log_and_generic("debug report failed")}), 500
 

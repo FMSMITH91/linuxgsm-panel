@@ -1635,7 +1635,12 @@ try:
     try:
         _ul_so._update_log_path = lambda: _ul_path
         _ulj = c.get("/api/panel/update-log").get_json() or {}
-        from panel.ops.system_ops import generate_debug_report as _ul_gdr
+        # The report's Updates section, which reads the run's outcome (debug_report/updates.py).
+        from panel.ops.debug_report import updates as _ul_upd
+        from panel.ops.debug_report._base import Ctx as _UlCtx
+
+        def _ul_gdr():
+            return {"report": "\n".join(_ul_upd.section_updates(_UlCtx(app=app)).lines)}
         with app.app_context():
             _ul_rep = _ul_gdr()["report"]
         # ...and a hold (exit 0, install.sh's "Not updated" line), which is not "unknown" either.
@@ -1674,11 +1679,11 @@ try:
     check("debug report: a self-update that stopped before the panel restarted is reported as FAILED "
           "with its reason, not 'unknown (in progress…)'",
           "- **Outcome**: FAILED — the installer stopped (exit 1): Couldn't reach the update source" in _ul_rep,
-          _ul_rep[_ul_rep.find("### Last update"):][:300])
+          _ul_rep[_ul_rep.find("- **Outcome**"):][:300])
     check("debug report: ...an up-to-date run as nothing to install, not 'unknown (in progress…)'",
           "- **Outcome**: nothing to install — Already up to date (version 9.9.9)"
           in _ul_reps.get("current", ""),
-          _ul_reps.get("current", "")[_ul_reps.get("current", "").find("### Last update"):][:300])
+          _ul_reps.get("current", "")[_ul_reps.get("current", "").find("- **Outcome**"):][:300])
     check("debug report: ...and the reason in a stop's or a hold's outcome is redacted like the log",
           all("s3cr3tvalue123" not in _ul_reps.get(_k, "s3cr3tvalue123")
               and "ops@example.com" not in _ul_reps.get(_k, "ops@example.com") for _k in ("failed", "held"))
@@ -1690,7 +1695,7 @@ try:
     check("debug report: ...and a hold as NOT UPDATED, with install.sh's reason",
           "- **Outcome**: NOT UPDATED — Not updated: held at 0123456789, because the pinned commit "
           "could not be verified on main." in _ul_rep_held,
-          _ul_rep_held[_ul_rep_held.find("### Last update"):][:300])
+          _ul_rep_held[_ul_rep_held.find("- **Outcome**"):][:300])
 
     # change-port validation: out-of-range ports are refused BEFORE any save/restart, so
     # these are side-effect-free. (A valid port would restart the panel — not exercised here.)
@@ -4541,15 +4546,52 @@ try:
             _dbm._run_maintenance = _rm_saved
 
         # ── Debug report: generates, and never leaks the session/credential secrets ──
+        # ...nor the names it is told about (R72): canary rows, and a canary journal handed to the
+        # report's one journal read, must come out pseudonymised in the report, the summary and the
+        # issue body, through the real app and database.
         from panel.ops.system_ops import generate_debug_report
-        _dr = generate_debug_report()
-        check("debug report: returns report/summary/issues_url/filename",
-              all(k in _dr for k in ("report", "summary", "issues_url", "filename")))
+        import panel.ops.system_ops as _dr_so
+        _dr_rem = RemoteServer(name="canary-host-7731", host="198.51.100.77", username="canarysshacct",
+                               auth_method="key", auth_credential="")
+        db.session.add(_dr_rem)
+        db.session.commit()
+        _dr_rid = _dr_rem.id
+        _dr_rows = [_dr_rem,
+                    GameServer(remote_id=_dr_rem.id, name="CanaryServer", short_name="canarysrv",
+                               game_type="csgo", port=27999),
+                    User(username="canaryadmin", password_hash="x")]  # nosec B106 - a fixture row
+        db.session.add_all(_dr_rows[1:])
+        db.session.commit()
+        _dr_journal = "\n".join(
+            "Oct 02 12:00:0%d canarybox python3[1234]: %s" % (_i, _b) for _i, _b in enumerate((
+                "install: host canary-host-7731 (198.51.100.77) unreachable",
+                "backup of CanaryServer failed for canaryadmin via canarysshacct",
+                "Open it at https://203.0.113.9:5000 or https://canarynode.tail7731ab.ts.net"))) + "\n"
+        _dr_run_saved = _dr_so._debug_run
+        _dr_so._debug_run = lambda argv, timeout=5, cap=None: (
+            (_dr_journal, "", 0) if "--user" in argv else ("", "", 1))
+        try:
+            _dr = generate_debug_report()
+        finally:
+            _dr_so._debug_run = _dr_run_saved
+            for _dr_row in reversed(_dr_rows):
+                db.session.delete(_dr_row)
+            db.session.commit()
+        check("debug report: returns report/summary/issue_body/issues_url/filename",
+              all(k in _dr for k in ("report", "summary", "issue_body", "issues_url", "filename")))
         check("debug report: issues_url is a github new-issue URL",
               _dr["issues_url"].startswith("https://github.com/")
               and _dr["issues_url"].endswith("/issues/new"))
-        check("debug report: includes a Last-update section (surfaces failed/rolled-back updates)",
-              "### Last update" in _dr["report"])
+        check("debug report: includes the Updates section (surfaces failed/rolled-back updates)",
+              "\n### Updates _(" in _dr["report"])
+        _dr_leaks = sorted({"%s in %s" % (_c, _k) for _k in ("report", "summary", "issue_body")
+                            for _c in ("canary-host-7731", "198.51.100.77", "CanaryServer", "canaryadmin",
+                                       "canarysshacct", "canarybox", "203.0.113.9", "canarynode",
+                                       "tail7731ab")
+                            if _c.lower() in _dr[_k].lower()})
+        check("debug report: seeded host, address, server, user, SSH account and journal host names are "
+              "pseudonymised in the report, the summary and the issue body",
+              not _dr_leaks and "[host-%d]" % _dr_rid in _dr["report"], "; ".join(_dr_leaks))
         for _sf in (SECRET_FILE, CRED_KEY_FILE):
             if _sf.exists():
                 _sv = _sf.read_text(errors="replace").strip()

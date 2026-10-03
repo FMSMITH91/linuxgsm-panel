@@ -4,6 +4,7 @@ Moved out of app.py, where it sat between the game-list loader and the app facto
 relation to either. It closes over nothing from app.py — it reads the mount point from
 config.load_config() on each call — so it moved verbatim.
 """
+from panel.core import runtime_stats
 from panel.core.config import load_config
 
 
@@ -140,6 +141,10 @@ class ProxiedBanGate:
         if banlist.active():
             xff = environ.get("HTTP_X_FORWARDED_FOR")
             if xff and banlist.is_banned(banlist.forwarded_client(xff)):
+                # For the debug report (R44): how many refusals, and when the last was. Counted
+                # AFTER the decision, which it cannot change; runtime_stats never raises.
+                runtime_stats.bump("bangate", "refused")
+                runtime_stats.put("bangate", "last", 1)
                 body = b"Forbidden\n"
                 start_response("403 Forbidden", [
                     ("Content-Type", "text/plain; charset=utf-8"),

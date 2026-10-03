@@ -822,6 +822,57 @@ def helper_present(recheck=False):
     return _HELPER_STATE["present"]
 
 
+def helper_on_disk():
+    """Whether the helper is on disk and executable NOW: a fresh stat, for the debug report.
+
+    Read-only on purpose: it never writes _HELPER_STATE. A diagnostic must not switch this
+    process's privilege path mid-flight; the cached answer is what the process is using, and the
+    report prints the two side by side (an install.sh run that placed the helper without
+    restarting the panel leaves them different)."""
+    try:
+        return os.path.isfile(_priv.HELPER_PATH) and os.access(_priv.HELPER_PATH, os.X_OK)
+    except Exception:  # noqa: BLE001 - unreadable is "not usable"
+        return False
+
+
+def privileged_outcome(path, out, err, rc):
+    """One fixed token -- ok, refused, unknown_verb, timeout or failed -- for how a local
+    privileged call on THIS machine ended, for the debug report's counters. stderr is reduced to a
+    class here and never kept: a sudo refusal can name the account ("<user> is not in the sudoers
+    file")."""
+    if rc == 0:
+        return "ok"
+    text = "%s\n%s" % (out or "", err or "")
+    if rc == -1 and "timed out" in text:
+        return "timeout"
+    from panel.ops.ssh_manager import firewall as _fw   # lazy: firewall imports this module
+    if _fw._SUDO_REFUSED_RE.search(text):
+        return "refused"
+    if path == "helper" and rc == 2 and "unknown verb" in text:
+        return "unknown_verb"
+    return "failed"
+
+
+def note_privileged(verb, path, res):
+    """Count one finished local privileged call in runtime_stats' "privileged" group.
+
+    Keys are "<verb>|<outcome>" and "via|<path>" (helper / root / shell), plus the latest verb to
+    be refused or to time out. Verb names come from privileged.py's fixed table. CANNOT RAISE: it
+    sits in the result path of every privileged call, and an exception here would turn a
+    finished call into a failed one."""
+    try:
+        from panel.core import runtime_stats as _rs
+        out, err, rc = res
+        outcome = privileged_outcome(path, out, err, rc)
+        name = verb if isinstance(verb, str) and len(verb) <= 64 else "?"
+        _rs.bump("privileged", "%s|%s" % (name, outcome))
+        _rs.bump("privileged", "via|%s" % path)
+        if outcome in ("refused", "timeout", "unknown_verb"):
+            _rs.put("privileged", "last|%s" % outcome, name)
+    except Exception:  # noqa: BLE001 - instrumentation must never change the call's answer  # nosec B110
+        pass
+
+
 def write_root_file(server, target, content, timeout=15):
     """Write `content` to a NAMED root-owned destination (see privileged.WRITE_TARGETS).
 
@@ -909,6 +960,7 @@ def _run_privileged(server, verb, args, timeout, merge_stderr, sudo):
     if helper_present():
         out, err, rc = _exec_local_argv(_priv.helper_argv(verb, args), timeout=timeout,
                                         stdin_text=_priv.helper_stdin(verb, args))
+        note_privileged(verb, "helper", (out, err, rc))
         if merge_stderr:
             # The shell form used `2>&1`, and callers read tool errors out of stdout. Merge here so
             # switching transport does not move a message from one stream to the other.
@@ -916,8 +968,10 @@ def _run_privileged(server, verb, args, timeout, merge_stderr, sudo):
         return out, err, rc
 
     # No helper on this host yet: the pre-helper path, byte-for-byte.
-    return _run_local(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                      timeout=timeout, sudo=True, **_secret_kw)
+    res = _run_local(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
+                     timeout=timeout, sudo=True, **_secret_kw)
+    note_privileged(verb, "shell", res)
+    return res
 
 
 
