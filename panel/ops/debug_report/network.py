@@ -22,10 +22,12 @@ import time
 from panel.core import runtime_stats
 from panel.ops import system_ops as so
 from panel.ops.debug_report import _src_db, _src_net, _src_tailscale
-from panel.ops.debug_report._base import Result, ago, unread_line
+from panel.ops.debug_report._base import Result, ago, cut_words, unread_line
 
 AREA = "Network & access"
-_MOUNT_RE = re.compile(r"/[A-Za-z0-9_-]{0,32}\Z")
+# A mount printed as itself: "/", or one plain segment, with the trailing "/" Serve keeps apart
+# ("/lgsm/" is a different route from "/lgsm"). Anything else prints as "custom".
+_MOUNT_RE = re.compile(r"/(?:[A-Za-z0-9_-]{1,32}/?)?\Z")
 _STATES = frozenset(("Running", "NeedsLogin", "Stopped", "NoState", "Starting", "NeedsMachineAuth",
                      "InUseOtherUser"))
 PANEL_JAIL = "linuxgsm-panel"
@@ -36,6 +38,20 @@ STANDARD_JAILS = frozenset(("sshd", "recidive", "sshd-ddos", "dropbear", "selinu
 F2B_TIMEOUT = 5
 UFW_TIMEOUT = 10
 NOT_READ = "not read (no helper, and passwordless sudo not confirmed; it would need sudo)"
+# Tailscale's health messages (`tailscale status --json` "Health"), printed one per line.
+HEALTH_SHOWN = 5
+HEALTH_MAX = 160
+# A domain name in a health message: a TLS dial records the server it dialled (a self-hosted relay
+# or control server), which the name map may not know. Tailscale's own domains name no one. The
+# rule runs after the name pass, so any label before the last may already be one of its tokens
+# ('[host-1].example.net', a relay named after the panel host): the run is still one domain.
+_HEALTH_LABEL = r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?|\[[a-z][\w:-]{0,40}\])"
+_HEALTH_DOMAIN_RE = re.compile(r"(?<![\w.-])(?:%s\.){1,8}[A-Za-z][A-Za-z0-9-]{0,61}[A-Za-z](?![\w-])"
+                               % _HEALTH_LABEL)
+_HEALTH_OWN_DOMAINS = ("tailscale.com", "tailscale.io", "ts.net")
+# 'certificate is self-signed by <issuer>': the issuer of an intercepting proxy's certificate is
+# often the employer's name.
+_SELF_SIGNED_RE = re.compile(r"(?i)(self-signed by)\b.*")
 
 
 # ── running the slow reads side by side, each under the report's deadline ───────────────────────
@@ -151,6 +167,12 @@ def _yn(flag):
 def _key_text(expiry, now=None):
     if not expiry:
         return "node key expiry not recorded"
+    if expiry == _src_tailscale.KEY_DISABLED:
+        return "node key expiry disabled (tagged node or expiry turned off)"
+    if expiry == _src_tailscale.KEY_NO_NETMAP:
+        return "node key expiry unknown (not in the network map)"
+    if expiry == _src_tailscale.KEY_NO_FIELD:
+        return "node key expiry unknown (this Tailscale version does not report it)"
     if expiry.startswith("0001-"):
         return "node key expiry disabled"
     try:
@@ -184,6 +206,64 @@ def _ts_head(v):
                "not recorded" if health is None else len(health)))
 
 
+def _health_domain(counted):
+    """re.sub's callback: [domain] for a match, unless it is Tailscale's own or a path's component.
+
+    After a single '/' a dotted name is a file ('/etc/resolv.conf', which a real health message
+    names); after '//' it is a URL's host, which is replaced. Each one replaced is passed to
+    `counted`, for the Privacy footer.
+    """
+    def _sub(m):
+        before = m.string[max(0, m.start() - 2):m.start()]
+        if before.endswith("/") and before != "//":
+            return m.group(0)
+        host = m.group(0).lower()
+        if any(host == d or host.endswith("." + d) for d in _HEALTH_OWN_DOMAINS):
+            return m.group(0)
+        counted(host)
+        return "[domain]"
+    return _sub
+
+
+def health_text(ctx, message):
+    """One Tailscale health message, safe to print: one line, scrubbed, then cut at a word.
+
+    Whitespace collapsed (a control-server message is arbitrary text, and a newline would break
+    the list), a self-signed certificate's issuer dropped, the report's privacy pass (the
+    Tailscale names are mapped before this is called), then every domain left outside Tailscale's
+    own as [domain] -- after the pass, whose email rule must see 'name@domain' whole -- and only
+    then the cut, so the final pass still sees every name whole. The issuer and each domain are
+    counted for the Privacy footer, which otherwise said "Redacted: nothing" above both markers.
+    """
+    from panel.ops.debug_report import privacy
+    text = " ".join(str(message).split())
+    issuer = _SELF_SIGNED_RE.search(text)
+    who = issuer.group(0)[len(issuer.group(1)):].strip() if issuer else ""
+    if who:
+        privacy.count_redacted(ctx, "tailscale-issuer", who)
+    text = _SELF_SIGNED_RE.sub(r"\1 [issuer withheld]", text)
+    text = _HEALTH_DOMAIN_RE.sub(
+        _health_domain(lambda host: privacy.count_redacted(ctx, "tailscale-domain", host)),
+        privacy.scrub_text(ctx, text))
+    return cut_words(text, HEALTH_MAX)
+
+
+def _health_lines(ctx, res, v):
+    """Each health message on its own line under the Tailscale line (at most HEALTH_SHOWN).
+
+    No finding: Health carries no severity, and benign entries (an update available, Tailscale
+    starting) would count as problems on a healthy panel.
+    """
+    health = v.get("health") or []
+    if not health:
+        return
+    from panel.ops.debug_report import privacy
+    privacy.map_tailscale(ctx, v)
+    res.lines += ["  - health: %s" % health_text(ctx, h) for h in health[:HEALTH_SHOWN]]
+    if len(health) > HEALTH_SHOWN:
+        res.add("  - health: +%d more" % (len(health) - HEALTH_SHOWN))
+
+
 def _mount(m):
     return m if _MOUNT_RE.match(m or "") else "custom"
 
@@ -192,13 +272,52 @@ def _plural(n, word):
     return "%d %s%s" % (n, word, "" if n == 1 else "s")
 
 
+def _listener(route):
+    """':443' for the listener a route is on (from its URL, which is never printed), or ':?'."""
+    from panel.ops import tailscale_integration as ts
+    flag = ts.listener_flag(route.get("url"))
+    return ":" + flag.split("=", 1)[1] if flag else ":?"
+
+
 def _route_text(r, port, want):
-    """'/lgsm → http to loopback:5000 ✓': the mount if plain, the scheme, never the URL."""
+    """One route as '/lgsm → http to loopback:5000, listener :443 ✓'.
+
+    The mount if plain, the scheme and the listener's port, never the URL. The listener decides
+    which route `off` removes, and two routes at one mount on two listeners read the same without it.
+    """
     scheme = _scheme(r)
     mark = ""
     if want:
         mark = " ✓" if scheme == want else " ✗ expected %s" % want
-    return "%s → %s to loopback:%d%s" % (_mount(r["mount"]), _tok(scheme), port, mark)
+    return "%s → %s to loopback:%d, listener %s%s" % (_mount(r["mount"]), _tok(scheme), port,
+                                                     _listener(r), mark)
+
+
+def _remedy_text(route, conf, cfg):
+    """How to remove one route the panel does not manage: the exact command, when it can be shown.
+
+    `sudo tailscale serve` works whoever the Tailscale operator is, on a system-service install and
+    under sudo-rs. The path is always named: without --set-path, `off` takes down EVERY route on
+    that listener, the panel's own one included. The panel's Disable button is never the remedy:
+    it removes the panel's own route too and clears tailscale_mount.
+    """
+    from panel.ops import tailscale_integration as ts
+    flag, mount = ts.listener_flag(route.get("url")), _mount(route.get("mount"))
+    if flag is None or mount == "custom":
+        return ("%s, listener %s → the command cannot be shown (the report does not print this "
+                "mount or listener): find it with `tailscale serve status`, then `sudo tailscale "
+                "serve --https=<port> --set-path=<mount> off`" % (mount, _listener(route)))
+    text = ("%s, listener %s → remove it with `sudo tailscale serve %s --set-path=%s off` (that "
+            "route only), or Remove beside it on the Tailscale page" % (mount, _listener(route),
+                                                                       flag, mount))
+    return text + ("; a panel restart also removes it" if _restart_removes(flag, conf, cfg) else "")
+
+
+def _restart_removes(flag, conf, cfg):
+    """Would the next boot remove this route? Only on :443, with Serve set up, after a boot that did."""
+    return (bool(cfg.get("tailscale_setup_done")) and flag == "--https=443"
+            and conf.get("BOOT_SERVE") == "ok"
+            and not str(conf.get("BOOT_SERVE_LEFTOVERS") or "").startswith("failed"))
 
 
 def _serve_text(v, port, want):
@@ -245,24 +364,72 @@ def _ts_findings(res, v, cfg, routes):
         res.find("fail", AREA, "the Tailscale node key has expired")
 
 
-def _route_findings(res, cfg, routes, want, readable):
-    """Findings for a panel route Serve cannot use.
+def _route_findings(res, cfg, routes, want, readable, conf=None):
+    """Findings for the panel's Serve routes, the one it manages apart from the rest.
 
-    The wrong backend scheme (Serve answers 502), or, once set up, a mount other than the
-    configured one (every URL the panel builds is under that one).
+    The panel manages ONE route (tailscale_integration.is_managed_route: tailscale_mount on :443,
+    once Serve is set up). A wrong scheme there is a fail: it is the panel's address, and Serve
+    answers 502. Every other route to the panel is one nothing re-points: a leftover of an earlier
+    mount, a README `tailscale serve` line, a route on another listener, or any route at all once
+    Serve is not set up. It was reported only as "a route with the wrong scheme", with no word on
+    which one or what to do, and not at all while its scheme happened to match — so the leftover
+    that would 502 at the next scheme flip went unreported. Each now has a warn, and the body names
+    it with the command that removes it (_remedy_text). With the config unreadable nothing can be
+    classified, so nothing is said.
     """
-    if want and any(_scheme(r) != want for r in routes):
-        res.find("fail", AREA, "a Tailscale Serve route reaches the panel with the wrong scheme "
-                               "(Serve answers 502)")
-    if readable and routes and cfg.get("tailscale_setup_done"):
-        if _norm_mount(cfg.get("tailscale_mount")) not in {_norm_mount(r["mount"]) for r in routes}:
-            res.find("warn", AREA, "the Serve route's mount is not the panel's configured "
-                                   "tailscale_mount (links and assets break)")
+    if not readable:
+        return
+    from panel.ops import tailscale_integration as ts
+    managed = [r for r in routes if ts.is_managed_route(r, cfg)]
+    dead = not managed and _all_wrong(routes, want)
+    if _wrong(managed, want):
+        res.find("fail", AREA, "the configured Tailscale Serve route reaches the panel with the "
+                               "wrong scheme (Serve answers 502); a panel restart re-points it"
+                 if (conf or {}).get("BOOT_SERVE") == "ok" else
+                 "the configured Tailscale Serve route reaches the panel with the wrong scheme "
+                 "(Serve answers 502), and the boot re-point did not fix it")
+    elif dead:
+        # No managed route, and every route there is answers 502: Tailscale has no way in to the
+        # panel at all. That stays a fail, as it was before the managed/unmanaged split; the warn
+        # level below is for a 502 BESIDE a route that works.
+        res.find("fail", AREA, "every Tailscale Serve route to the panel has the wrong scheme "
+                               "(Serve answers 502 on each), so none of them reaches it")
+    _unmanaged_findings(res, cfg, routes, managed, want, dead)
 
 
-def _norm_mount(mount):
-    """'/lgsm/' and '/lgsm' are one mount; empty is '/' (middleware.py reads it the same way)."""
-    return str(mount or "/").rstrip("/") or "/"
+def _wrong(routes, want):
+    """True when one of `routes` is not on the scheme the process serves (`want`, when known)."""
+    return bool(want) and any(_scheme(r) != want for r in routes)
+
+
+def _all_wrong(routes, want):
+    """True when there are `routes` and not one is on the scheme the process serves."""
+    return bool(want) and bool(routes) and all(_scheme(r) != want for r in routes)
+
+
+def _unmanaged_findings(res, cfg, routes, managed, want, dead=False):
+    """_route_findings' warns for the routes the panel does not manage, said once each way.
+
+    When none is at the configured mount, that is the finding (links and assets break) and the
+    "does not manage" warn would only say it again, unless one of them also answers 502. When
+    every route answers 502 (`dead`), the fail already says so, and the warn is not repeated.
+    """
+    others = [r for r in routes if r not in managed]
+    no_home = bool(cfg.get("tailscale_setup_done")) and bool(routes) and not managed
+    if no_home:
+        res.find("warn", AREA, "no Tailscale Serve route is at the panel's configured "
+                               "tailscale_mount on :443 (links and assets break); the routes that "
+                               "reach it are at other addresses")
+    if dead:
+        return
+    if _wrong(others, want):
+        res.find("warn", AREA, "a Tailscale Serve route the panel does not manage reaches it with "
+                               "the wrong scheme (Serve answers 502 there); the report names it "
+                               "and the command that removes it")
+    elif others and not no_home:
+        res.find("warn", AREA, "a Tailscale Serve route the panel does not manage reaches it "
+                               "(nothing re-points it when the panel's scheme changes); the report "
+                               "names it and the command that removes it")
 
 
 def _scheme(route):
@@ -300,20 +467,30 @@ def _funnel_line(cfg, readable, v, routes):
 
 
 def _tailscale_lines(ctx, res, facts, got):
-    """R36: state, Serve and Funnel from the one cached reading; names, IPs and URLs never."""
+    """R36: state, Serve and Funnel from the one cached reading; names, IPs and URLs never.
+
+    Tailscale's health messages are its own free text, printed only through health_text.
+    """
     if _ts_unread(res, facts, got):
         return
     v = got[1][1]
     cfg, readable = _load_cfg()
     cfg = cfg if readable else {}
     port = running_port(ctx, cfg)
-    want = _expected_scheme(getattr(ctx.app, "config", None) or {}, cfg) if readable else None
+    conf = getattr(ctx.app, "config", None) or {}
+    want = _expected_scheme(conf, cfg) if readable else None
     res.add("- **Tailscale**: " + _ts_head(v))
+    _health_lines(ctx, res, v)
     text, routes = _serve_text(v, port, want)
     res.add("- **Serve**: " + text)
     res.add("- **Funnel**: " + _funnel_line(cfg, readable, v, routes))
+    if readable:
+        from panel.ops import tailscale_integration as ts
+        for r in routes:
+            if not ts.is_managed_route(r, cfg):
+                res.add("- **Serve route the panel does not manage**: " + _remedy_text(r, conf, cfg))
     _ts_findings(res, v, cfg, routes)
-    _route_findings(res, cfg, routes, want, readable)
+    _route_findings(res, cfg, routes, want, readable, conf)
     state = v.get("backend_state")
     facts["ts"] = "%s, Funnel %s" % (state if state in _STATES else "other",
                                      _onoff(v.get("funnel_enabled")))
@@ -668,6 +845,19 @@ def hsts_expected(forwarded_proto, is_secure, self_tls):
     return forwarded_proto == "https" or (bool(is_secure) and not self_tls)
 
 
+def _believed_text(believed, conf):
+    """'yes (a root-owned loopback peer: tailscaled)', 'yes (a declared proxy)' or 'no'.
+
+    Without trust_proxy the headers are still believed from a root-owned loopback peer, so the
+    line names its basis rather than reading as a contradiction of 'trust_proxy: false'.
+    """
+    if not believed:
+        return "no"
+    if conf.get("_TRUST_PROXY"):
+        return "yes (a declared proxy)"
+    return "yes (a root-owned loopback peer: tailscaled)"
+
+
 def _request_lines(res, conf):
     """R38: fixed booleans and categories only. Never a header's value or an address."""
     from flask import has_request_context, request
@@ -685,7 +875,7 @@ def _request_lines(res, conf):
                 "/" if mount == "/" else _mount(mount)))
     client = _src_net.addr_class(auth.client_ip())
     res.add("- **Client address as the panel keys it**: %s · forwarded headers believed: %s" % (
-        client, _yn(auth._request_came_through_proxy(peer))))
+        client, _believed_text(auth._request_came_through_proxy(peer), conf)))
     res.add("- **HSTS on this response**: %s" % _yn(hsts_expected(
         env.get("HTTP_X_FORWARDED_PROTO", ""), request.is_secure, _self_tls(conf))))
     if client == "loopback" and env.get("HTTP_X_FORWARDED_FOR"):
@@ -898,15 +1088,32 @@ def _age(taken):
     return "read %s ago" % ago(time.monotonic() - taken)
 
 
+def _ufw_checked(banlist):
+    """' (rule files unchanged, checked X ago)' when the ban-watcher's last UFW check SKIPPED a read.
+
+    Without it, "read 14m ago" under the gate looks like a watcher that stopped. Only a skip earns
+    it: a read that answered None (ufw inactive or unreadable) or a check whose stat failed also
+    leaves the last read behind the last check, and giving either this reason would explain a UFW
+    set that was never read with something that did not happen.
+    """
+    state = banlist.ufw_gate_state() if hasattr(banlist, "ufw_gate_state") else {}
+    if state.get("last_skipped") is not True:
+        return ""
+    checked = state.get("checked_at")
+    if not isinstance(checked, float) or checked == float("-inf"):
+        return ""
+    return " (rule files unchanged, checked %s ago)" % ago(time.monotonic() - checked)
+
+
 def _bangate_line(res):
     from panel.security import banlist
     taken = dict(getattr(banlist, "_taken", {}) or {})
     gate = runtime_stats.snapshot("bangate")
     last = gate.get("last")
-    res.add("- **Ban gate (Funnel / remote proxy)**: fail2ban set %d networks, %s · UFW set %d, %s"
+    res.add("- **Ban gate (Funnel / remote proxy)**: fail2ban set %d networks, %s · UFW set %d, %s%s"
             " · whitelist %d · refusals since boot %d%s" % (
                 len(getattr(banlist, "_f2b", ()) or ()), _age(taken.get("f2b")),
-                len(getattr(banlist, "_ufw", ()) or ()), _age(taken.get("ufw")),
+                len(getattr(banlist, "_ufw", ()) or ()), _age(taken.get("ufw")), _ufw_checked(banlist),
                 len(getattr(banlist, "_allow", ()) or ()), int(gate.get("refused", 0) or 0),
                 (" (last %s ago)" % ago(time.time() - last[0])) if isinstance(last, tuple) else ""))
     if taken.get("f2b") in (None, float("-inf")):

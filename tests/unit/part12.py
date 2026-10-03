@@ -2284,7 +2284,7 @@ try:
                    listen_pre=[set()], tagged=[set()],
                    start=[("Starting", "", 0)], cmds=[[]], unset=[(True, "")],
                    cu=[{"user": "gmcontent"}], mount=[(True, "Mounted.")], aux=[{}],
-                   userdel=[("", "", 0)], boom=set())
+                   userdel=[("", "", 0)], crontab=[None], boom=set())
         _ms.update(kw)
         _ms_log.clear()
 
@@ -2308,7 +2308,8 @@ try:
             # The uninstall's "is this account root on the host?" probe (privileged_accounts):
             # every scripted account is a plain game account, in its own group only. Not logged —
             # it is a read, and the step lists below are what these checks compare.
-            _users = _p9_re.findall(r'echo "NOACCT ([a-z0-9_-]+)"', cmd)
+            # The names, read back off the probe's own `id -u <name>` question.
+            _users = _p9_re.findall(r"uid=\$\(id -u ([a-z0-9_-]+) 2>/dev/null\)", cmd)
             return ("".join("ACCT %s 1001 %s\n" % (u, u) for u in _users)
                     + "LGSM_ACCT_PROBE_DONE\n", "", 0)
         if "wget" in cmd and "linuxgsm.sh" in cmd:
@@ -2382,8 +2383,11 @@ try:
     _p9_patch(_p9_ms, "lgsm_write_config", _ms_write_cfg)
     _p9_patch(_p9_ms, "_resolve_source_aux_ports",
               lambda *a: (_ms_boom("aux"), _ms_next("aux"))[1])
+    # The cron writes answer (ok, why), as the real ones do: the install records Autostart from
+    # that answer now, and from the crontab read back (`crontab`: None is a read that failed, which
+    # changes nothing — so by default the column is what the writes reported).
     _p9_patch(_p9_ms, "install_game_cron",
-              lambda r, s, l, supported: (_ms_log.append("cron"), _ms_boom("cron"))[0])
+              lambda r, s, l, supported: (_ms_log.append("cron"), _ms_boom("cron"), (True, ""))[2])
     _p9_patch(_p9_ms, "ensure_persistent_bans",
               lambda r, s, l: (_ms_log.append("bans"), _ms_boom("bans"))[0])
     _p9_patch(_p9_ms, "detect_game_ports",
@@ -2402,7 +2406,9 @@ try:
     _p9_patch(_p9_ms, "remote_ufw_allow_game_ports",
               lambda r, ports, name: _ms_log.append("ufw-allow:%s" % sorted(ports)))
     _p9_patch(_p9_ms, "set_autostart",
-              lambda r, s, on, l=None: (_ms_log.append("autostart"), _ms_boom("autostart"))[0])
+              lambda r, s, on, l=None: (_ms_log.append("autostart"), _ms_boom("autostart"),
+                                        (True, ""))[2])
+    _p9_patch(_p9_sm, "list_cron_jobs", lambda r, s, _lg: _ms_next("crontab"))
     _p9_patch(_p9_ms, "ensure_content_user", _ms_ensure_cu)
     _p9_patch(_p9_ms, "install_gmod_content", _ms_install_content)
     _p9_patch(_p9_ms, "gmod_mount_setup", lambda r, s, cu, games: _ms_next("mount"))
@@ -2464,6 +2470,12 @@ try:
     check("install: a typed name in capitals is folded to lowercase, not refused",
           _p9_json(_r).get("success") is True and _ms_up is not None and _ms_up[1] == "p9upper",
           repr((_r.status_code, _p9_json(_r), _ms_up)))
+    _ms_clock = (_p9_bk._game_schedules(_p9_cfg.load_config()).get(str(_ms_up[0])) or {}
+                 if _ms_up is not None else {})
+    check("install: the new server's backup clock is STARTED, not recorded as a backup taken (the "
+          "debug report says none has run yet, and when the first is due)",
+          bool(_ms_clock.get("last")) and _ms_clock.get("clock_started") == _ms_clock.get("last"),
+          repr(_ms_clock))
     if _ms_up is not None:
         _p9_delete_server(_ms_up[0])
 
@@ -2566,10 +2578,12 @@ try:
     _jf = _ms_job(_ms_f)
     check("install flow F: a failed EULA write, command read and port detect are all non-fatal",
           "mc-eula" in _ms_log and _jf.get("status") == "done", repr((_ms_log, _jf)))
+    # (Its port detect raised, so step 6 failed: the audit entry says that too.)
     check("install flow F: a clean start whose port is not open yet is 'starting', not a failure",
           _jf.get("warn") is True
           and "installed and starting — it hasn't opened port 25600" in _jf.get("message", "")
-          and _p9_audit("install_complete").detail == "started; port 25600 not open after 90s",
+          and _p9_audit("install_complete").detail
+          == "started; port 25600 not open after 90s; firewall step failed",
           repr(_jf))
 
     # ── Flow G: SCP:SL — its EULA and per-port config are seeded; failures there are non-fatal ──
@@ -3600,6 +3614,21 @@ check("install.sh: the snapshot, snapshot_ok and both rollbacks go through TREE_
 # does not exist.
 _pb_ph = ("set -euo pipefail\ndie() { echo \"DIE: $*\"; exit 1; }\nSNAP_GZ='gzip -1'\n"
           + _pb_shfn("snapshot_service_unit"))
+# The same death twice: #378's snapshot_service_unit, then an update-time scheme probe, each an
+# install.sh function called inside a lifted block that the preamble did not define. Both reached
+# only CI's ROOT pass, the one place these blocks run. So, without root: every install.sh function
+# a lifted block calls must be one the preamble (or the block itself) defines.
+import re as _pb_re                                                               # noqa: E402
+_pb_fn_re = _pb_re.compile(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\(\) \{")
+_pb_inst_fns = set(_pb_fn_re.findall(_pb_inst))
+_pb_lifted = "\n".join(ln for ln in (_pb_tree + _pb_snap + _pb_rb).splitlines()
+                       if not ln.lstrip().startswith("#"))
+_pb_calls = {f for f in _pb_inst_fns
+             if _pb_re.search(r"(?<![A-Za-z0-9_${}])%s(?![A-Za-z0-9_(])" % _pb_re.escape(f), _pb_lifted)}
+_pb_undefined = _pb_calls - set(_pb_fn_re.findall(_pb_ph + _pb_snap + _pb_rb))
+check("install.sh: every install.sh function the lifted snapshot and rollback blocks call is "
+      "defined in their harness (an undefined one dies 'command not found' under set -e, as root only)",
+      not _pb_undefined and "snapshot_service_unit" in _pb_calls, repr(sorted(_pb_undefined)))
 if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
     _pb_up = tempfile.mkdtemp(prefix="lgsm-unit-pb-upd-")
     os.chmod(_pb_up, 0o755)

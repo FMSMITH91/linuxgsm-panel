@@ -641,6 +641,33 @@ def _serve_port_flag(url):
     return "--%s=%d" % (m.group(1), port)
 
 
+def listener_flag(url):
+    """`--https=<port>` / `--http=<port>` for the listener a Serve URL is on, or None."""
+    return _serve_port_flag(url)
+
+
+def norm_mount(mount):
+    """'/lgsm/' and '/lgsm' are one mount; empty is '/' (PrefixMiddleware reads it the same way)."""
+    return str(mount or "/").rstrip("/") or "/"
+
+
+def off_mount(mount):
+    """`mount` validated for `--set-path=`, spelled EXACTLY as the host stores it.
+
+    Tailscale keeps a trailing "/" (its cleanURLPath accepts "/x/" beside "/x", and they are two
+    handlers), so `off` has to name it with the slash or it answers "handler does not exist".
+    _ts_mount refuses "/x/", so the slash comes off for the check and goes back on as a literal:
+    every other character still comes from _ts_mount's alphabet.
+    """
+    m = str(mount)
+    if len(m) > 1 and m.endswith("/"):
+        inner = _priv._ts_mount(m[:-1])
+        if inner == "/":
+            raise _priv.VerbError("not a mount point")
+        return inner + "/"
+    return _priv._ts_mount(m)
+
+
 def serve_off_args(url, mount):
     """The `tailscale serve` arguments that remove ONE mapping: `mount` on the listener `url` is on.
 
@@ -652,24 +679,199 @@ def serve_off_args(url, mount):
     flag = _serve_port_flag(url)
     if not flag:
         return None
-    return ["serve", flag, "--set-path=%s" % _priv._ts_mount(mount), "off"]
+    return ["serve", flag, "--set-path=%s" % off_mount(mount), "off"]
+
+
+def route_url(route):
+    """The address a Serve route answers at: its listener's URL, then its mount."""
+    mount = norm_mount(route.get("mount"))
+    return (route.get("url") or "").rstrip("/") + ("" if mount == "/" else mount)
+
+
+def route_scheme(route):
+    """The backend scheme of a Serve route ("http", "https+insecure", ...)."""
+    target = route.get("target") or ""
+    return target.split("://", 1)[0] if "://" in target else "http"
+
+
+def managed_mount(mount):
+    """The mount the panel writes for `mount` (tailscale_mount), spelled as Serve stores it, or None.
+
+    _ts_mount's spelling, the one setup_tailscale_serve hands to --set-path: "/lgsm", never
+    "/lgsm/". Serve keeps the two apart (cleanURLPath accepts both) and looks "/lgsm/" up FIRST for
+    every /lgsm/* request (ipnlocal getServeHandler tries pth+"/" before pth at each level). So a
+    "/lgsm/" beside the "/lgsm" the boot writes is a second route, and the one that answers: on the
+    wrong scheme it 502s the whole panel while the route the boot re-pointed reads as fine. They
+    were compared normalised, so that twin counted as managed — never removed, never listed with a
+    Remove, and reported as one "a panel restart re-points". None when the panel cannot write the
+    mount at all (setup_tailscale_serve refuses it too), so no route is managed then.
+    """
+    try:
+        return _priv._ts_mount(mount or "/")
+    except _priv.VerbError:
+        return None
+
+
+def is_managed_route(route, cfg):
+    """True for THE route the panel manages: the one at tailscale_mount on the :443 listener.
+
+    The panel writes only that one (privileged.ts_serve_argv hard-codes --https=443), and the boot
+    re-point keeps only that one on the scheme the panel serves. Every other route to the panel's
+    port was made some other way, and nothing re-points it, so it answers 502 after the next flip
+    of the panel's own scheme. With Serve not set up, no route is managed. The mount is compared
+    exactly as the panel writes it (managed_mount): a trailing-slash twin is another route.
+    """
+    want = managed_mount(cfg.get("tailscale_mount"))
+    return (bool(cfg.get("tailscale_setup_done")) and want is not None
+            and _serve_port_flag(route.get("url")) == "--https=443"
+            and route.get("mount") == want)
+
+
+def panel_route(serve_config, port, mount, scheme=None):
+    """The panel's own Serve route at `mount` (normalised), or None when nothing proxies it there.
+
+    That is the one address that works: PrefixMiddleware builds every URL under tailscale_mount, so a
+    panel route at another mount is a doorway whose links all lead back to this one. The :443
+    listener comes first (the one the panel writes). With `scheme`, only a route whose backend
+    scheme is `scheme` counts: one on any other scheme answers 502.
+    """
+    want = norm_mount(mount)
+    hits = [r for r in panel_serve_routes(serve_config, port) if norm_mount(r["mount"]) == want
+            and (scheme is None or route_scheme(r) == scheme)]
+    hits.sort(key=lambda r: _serve_port_flag(r["url"]) != "--https=443")
+    return hits[0] if hits else None
+
+
+def free_panel_mount(serve_config, port, mount):
+    """Where to publish the panel: `mount`, unless ANOTHER app holds it on :443; then /lgsm.
+
+    None when both belong to other apps. A mount the panel's own route holds counts as free: that
+    route is the panel's, and publishing there replaces it rather than adding a second one beside
+    it. Counting it as taken is how the setup wizard published the panel twice, at "/" and then at
+    /lgsm, and left the "/" route behind to answer 502 at the next flip of the panel's scheme.
+    """
+    taken = {norm_mount(r.get("mount"))
+             for svc in (serve_config or {}).get("services") or []
+             if _serve_port_flag(svc.get("url")) == "--https=443"
+             for r in svc.get("routes") or []
+             if not route_targets_port(r.get("target"), port)}
+    for cand in dict.fromkeys((norm_mount(mount), "/lgsm")):
+        if cand not in taken:
+            return cand
+    return None
+
+
+def stale_panel_routes(serve_config, port, mount):
+    """The panel's own routes on :443 at a mount other than `mount`, as the panel writes it.
+
+    Only :443, the one listener the panel writes: a route to the panel on any other listener was
+    made by hand, on purpose, and is left alone. Only routes to loopback on the panel's `port`
+    (panel_serve_routes): another app's route is never one of these. "Other" is exact
+    (managed_mount): a "/lgsm/" beside the "/lgsm" just written is stale, and the one Serve would
+    answer /lgsm/* with. Nothing when `mount` is not one the panel can write.
+    """
+    want = managed_mount(mount)
+    if want is None:
+        return []
+    return [r for r in panel_serve_routes(serve_config, port)
+            if _serve_port_flag(r["url"]) == "--https=443" and r["mount"] != want]
+
+
+def _fresh_panel_route(route, port):
+    """`route` as the host reports it now: the fresh dict, False when it is gone, None when unread.
+
+    "Gone" includes a mount that now proxies something other than the panel: it is no longer the
+    panel's to remove.
+    """
+    info = get_tailscale_info(force_refresh=True)
+    if not info.installed or info.serve_unreadable:
+        return None
+    for r in panel_serve_routes(info.serve_config, port):
+        if r["url"] == route.get("url") and r["mount"] == route.get("mount"):
+            return r
+    return False
+
+
+def remove_panel_route(route, port):
+    """Remove ONE of the panel's own Serve routes; return (state, error text).
+
+    state is "removed", "gone" (not there any more, or no longer the panel's), "unread" (Serve
+    could not be read just before, so nothing ran) or "failed" (the CLI refused; its text comes
+    back). Serve is read again right before the command, so a mount another app took in the
+    meantime is not removed: the CLI has no compare-and-delete, and this is as narrow as the window
+    gets. The path is always named (serve_off_args), and only a route to loopback on `port` is ever
+    a candidate.
+
+    There is no root fallback. The helper's only Serve verb publishes (serve/funnel); a host where
+    the operator setting did not take answers "failed" here, and the caller has to say so.
+    """
+    fresh = _fresh_panel_route(route, port)
+    if fresh is None:
+        return "unread", ""
+    if fresh is False:
+        return "gone", ""
+    try:
+        args = serve_off_args(fresh["url"], fresh["mount"])
+    except _priv.VerbError:
+        return "failed", "its mount is not one the panel can name on the command line"
+    if args is None:
+        return "failed", "the listener it is on could not be read"
+    out, err, rc = _run_ts(args, timeout=10)
+    with _cache_lock:
+        _cache["info"] = None
+    if rc != 0:
+        return "failed", err or out or "tailscale exited %d" % rc
+    return "removed", ""
+
+
+def remove_stale_panel_routes(port, mount):
+    """Remove the panel's own :443 routes at mounts other than `mount`; return (state, removed, err).
+
+    state is "none" (nothing to remove), "removed" (`removed` lists the mounts), "unread" (Serve
+    could not be read, so nothing was removed) or "failed" (`err` is the CLI's text; `removed`
+    lists what went before it). Called after every successful Serve write the panel makes, with the
+    mount it just wrote, so the panel is published at ONE mount: the boot re-point, Enable on
+    /tailscale and both of the setup wizard's writes.
+
+    Each of these wrote one mount and read nothing first. So a panel route at any other mount — the
+    wizard's own "/" before it moved to /lgsm, a README `tailscale serve` line, the route an Enable
+    at a new mount left behind — stayed on the scheme it was written with, and answered 502 from
+    the next flip of the panel's own (a bind change, an update, a restore). The boot re-point still
+    said "ok", because the one mount it wrote did work.
+    """
+    info = get_tailscale_info(force_refresh=True)
+    if not info.installed or info.serve_unreadable:
+        return "unread", [], ""
+    removed = []
+    for r in stale_panel_routes(info.serve_config, port, mount):
+        state, err = remove_panel_route(r, port)
+        if state == "removed":
+            removed.append(r["mount"])
+        elif state != "gone":
+            return state, removed, err
+    return ("removed" if removed else "none"), removed, ""
 
 
 def disable_tailscale_serve(mount, port):
     """Stop publishing the panel over Tailscale Serve/Funnel; return (ok, message).
 
-    Remove the mapping at `mount` — and only if that mapping proxies the panel (loopback on
-    `port`).
+    `mount` must be one of the panel's own routes (loopback on `port`): asked for a mount that is
+    another app's, nothing is touched. Then EVERY route to the panel comes down, not only that one.
+    Removing one left the others published while the caller cleared tailscale_mount, so the page in
+    use rebuilt its links for a mount Serve no longer had. And Funnel is per listener: a second
+    panel route on a Funnel listener stayed on the public internet while the config said Funnel was
+    off.
 
-    This ran `tailscale serve --bg --remove <mount>`. No Tailscale version has a --remove flag, so
-    the CLI exited 2 ("flag provided but not defined: -remove") before doing anything, and every
-    Disable failed — including the one meant to take a Funnelled panel back off the internet.
+    This ran `tailscale serve --bg --remove <mount>`. --bg exists only in the serve CLI that has no
+    --remove (that flag belonged to the 1.34-1.36 alpha CLI), so the command exited 2 ("flag
+    provided but not defined: -remove") before doing anything, and every Disable failed —
+    including the one meant to take a Funnelled panel back off the internet.
 
     The mount is validated before it becomes an argument (CodeQL #375, py/command-line-injection:
     a value beginning with "-" would be read by `tailscale` as an OPTION). The host's Serve config
-    is then read fresh, and a mapping is removed only when it is the panel's: another app's mapping
-    at that mount is never touched. When nothing proxies the panel at all there is nothing to take
-    down, and that is reported as done, so the caller stops re-applying Serve at boot.
+    is then read fresh, and again right before each removal. When nothing proxies the panel at all
+    there is nothing to take down, and that is reported as done, so the caller stops re-applying
+    Serve at boot.
     """
     try:
         mount = _priv._ts_mount(mount or "/")
@@ -680,8 +882,7 @@ def disable_tailscale_serve(mount, port):
         return False, ("Couldn't read this host's Tailscale Serve configuration, so nothing was "
                        "removed.")
     ours = panel_serve_routes(info.serve_config, port)
-    at_mount = [r for r in ours if r["mount"] == mount]
-    if not at_mount:
+    if not any(r["mount"] == mount for r in ours):
         # Nothing at `mount` proxies the panel. Another app's mapping there is never touched.
         if ours:
             return False, ("The panel is published at %s, not at %s, so nothing was removed."
@@ -690,26 +891,29 @@ def disable_tailscale_serve(mount, port):
     # The panel user has to be the Tailscale operator to change Serve config — the same step the
     # enable path takes first.
     ensure_operator()
-    ok, msg = _remove_serve_mappings(at_mount, mount)
+    ok, msg = _remove_serve_mappings(ours, port)
     if not ok:
         return False, msg
     with _cache_lock:
         _cache["info"] = None
-    return True, "Tailscale Serve mapping removed"
+    return True, ("Tailscale Serve mapping removed" if len(ours) == 1
+                  else "Tailscale Serve mappings removed")
 
 
-def _remove_serve_mappings(routes, mount):
-    """Remove each of the panel's `routes` at `mount`; return (ok, why) — why only on failure.
+def _remove_serve_mappings(routes, port):
+    """Remove each of the panel's `routes`; return (ok, why) — why only on failure.
 
     Stops at the first route that cannot be removed, as the caller reports that one.
     """
     for r in routes:
-        args = serve_off_args(r["url"], mount)
-        if args is None:
+        if _serve_port_flag(r["url"]) is None:
             return False, "Couldn't tell which listener %s is on, so nothing was removed." % r["url"]
-        out, err, rc = _run_ts(args, timeout=10)
-        if rc != 0:
-            return False, f"Failed to remove: {err or out}"
+        state, err = remove_panel_route(r, port)
+        if state == "unread":
+            return False, ("Couldn't read this host's Tailscale Serve configuration, so not every "
+                           "mapping was removed.")
+        if state == "failed":
+            return False, f"Failed to remove: {err}"
     return True, ""
 
 
@@ -741,12 +945,16 @@ def is_tailscale_ip(host):
     return any(addr in n for n in _TS_NETS)   # a v4 network holds no v6 address, and back
 
 
-def suggest_best_bind(port=5000, scheme="http"):
+def suggest_best_bind(port=5000, scheme="http", mount=None):
     """Suggest the best way to expose the panel based on what's available.
 
     `scheme` is how the panel itself is serving on `port` ("https" when it terminates its own
     self-signed TLS, which is the default) — the direct URLs below are built with it. They were
     hardcoded http://, so the page linked the operator to plain HTTP on a port that only speaks TLS.
+
+    `mount` is the panel's tailscale_mount: the Serve link is the panel's route there when it has
+    one. It was the panel's FIRST route, and Tailscale lists "/" first, so a host with a leftover
+    "/" route beside the configured /lgsm linked the operator to the leftover — the one answering 502.
 
     Returns a dict with keys:
       - method: "tailscale-serve", "tailscale-direct", "direct"
@@ -767,7 +975,7 @@ def suggest_best_bind(port=5000, scheme="http"):
         # proxying to it, and the first-run wizard — the only way to create the first admin — was
         # reachable only through an SSH tunnel. app._resolved_bind uses this as the real bind
         # address whenever bind_host is unset, which it is until the wizard's first step.
-        return _serve_suggestion(port, ours[0])
+        return _serve_suggestion(port, _suggested_route(info.serve_config, port, mount, ours))
     elif info.running and info.tailscale_ips:
         # Tailscale running but no MagicDNS
         return _tailnet_ip_suggestion(port, scheme)
@@ -781,9 +989,15 @@ def suggest_best_bind(port=5000, scheme="http"):
         return _direct_suggestion(port, scheme, "No Tailscale detected. Bind to all interfaces.")
 
 
+def _suggested_route(serve_config, port, mount, ours):
+    """The panel's route at `mount` when it has one there, else the first of `ours`."""
+    hit = panel_route(serve_config, port, mount) if mount is not None else None
+    return hit if hit is not None else ours[0]
+
+
 def _serve_suggestion(port, route):
     """suggest_best_bind's answer when the Serve `route` proxies the panel."""
-    url = route["url"].rstrip("/") + ("" if route["mount"] == "/" else route["mount"])
+    url = route_url(route)
     return {
         "method": "tailscale-serve",
         "bind_host": "127.0.0.1",

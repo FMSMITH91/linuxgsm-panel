@@ -90,6 +90,7 @@ def register(app, supervise):
     # behind), and it logs once when a newly verified update first appears — a server-side record
     # even with nobody watching. Half-hourly is plenty for a code update.
     def update_check_ticker():
+        runtime_stats.loop_started("update-check", 30)
         time.sleep(30)   # let boot settle before the first network fetch
         # What the last notification named, as the PREVIOUS process left it: see _update_tick.
         last_logged_sha = _announced_update()

@@ -1677,6 +1677,7 @@ from panel.services import monitoring as _mon10  # noqa: E402
 
 _MON_STUBBED10 = ("run_command", "run_privileged", "_remote_listening_ports", "host_live_metrics",
                   "game_map", "server_live_metrics", "lgsm_get_values", "sm_player_slots",
+                  "sm_player_slots_batch",
                   "sm_game_engine", "sm_console_status", "sm_player_count_via_lgsm_query",
                   "sm_get_server_status", "remote_reboot", "remote_fail2ban_attempt_counts",
                   "remote_ufw_blocked_ips", "remote_ufw_deny_ip", "remote_ufw_undeny_ip",
@@ -1746,9 +1747,11 @@ try:
     _probe_bug10 = _mon10._probe_host(NS(id=8, name="h"))
     _mon_restore10("_host_reachable", "_remote_listening_ports", "_host_disk_pct",
                    "_host_load_mem", "_host_restart_flags")
+    # restart_flagged None with it: a failed scan judges no server of the host, so the flags it
+    # would have read were thrown away — a privileged call for nothing (ws4-sudo).
     check("monitor probe: a failed port scan is None (skip the servers), the rest still reported",
           _probe10 == (7, {"reachable": True, "disk": 40, "load_mem": (10, 20), "ports": None,
-                           "restart_flagged": {"gmod1"}}), repr(_probe10))
+                           "restart_flagged": None}), repr(_probe10))
     check("monitor probe: a probe that raises reads as unreachable, never as healthy",
           _probe_bug10 == (8, {"reachable": False}), repr(_probe_bug10))
 
@@ -1955,7 +1958,9 @@ try:
 
         # _monitor_pass, one sweep at a time, with the probes scripted per host.
         _probes10 = {}
-        _mon10._probe_host = lambda r: (r.id, _probes10[r.id])
+        # **_k: the sweep says whether to read restart flags (read_flags=); the script answers
+        # the same either way.
+        _mon10._probe_host = lambda r, **_k: (r.id, _probes10[r.id])
         _mon10._lgsm_maintenance_running = lambda r, gs: False
 
         def _sweep10(pa, pb):
@@ -2048,7 +2053,10 @@ try:
 
         # ── _refresh_player_counts: one-shot empty, full on the transition, peak record ────────
         _counts10 = {}
-        _mon10._query_server_slots = lambda gs: (gs.id, _counts10.get(gs.id, (None, None, None)))
+        # No batched host query here: each server goes through the stubbed per-server worker.
+        _mon10.sm_player_slots_batch = lambda *a, **k: None
+        _mon10._query_server_slots = lambda gs, primary=None: (
+            gs.id, _counts10.get(gs.id, (None, None, None)))
         _g1db10 = _db10.session.get(_GS10, _ids10["g1"])
         _g1db10.notify_when_empty = True
         _g1db10.peak_players = 3
@@ -2104,10 +2112,10 @@ try:
         check("monitor players: a peak that could not be SAVED is rolled back, not half-applied",
               _rolled10 == [1] and _db10.session.get(_GS10, _ids10["g1"]).peak_players == 10,
               repr((_p6_10, _rolled10)))
-        _mon_restore10("_query_server_slots")
+        _mon_restore10("_query_server_slots", "sm_player_slots_batch")
 
         # ── _record_metric_samples: a failed read is skipped, never written as zeros ───────────
-        _mon10._query_host_metrics = lambda work: [
+        _mon10._query_host_metrics = lambda work, **_k: [
             (_ids10["g1"], {"ram_total": 8000, "ram_used": 2000, "disk_total": 100,
                             "disk_used": 25, "cpu_percent": 12.34, "game_cpu_percent": 5.44,
                             "game_ram_mb": 700}, _ids10["rb"], ""),
@@ -4893,11 +4901,15 @@ def _tk13_check_backup_loops(loops, app):
         _run1, slept1 = _tk13_run(loops["backup-ticker"][1], 3)
     finally:
         _app10mod.bk = _CA13_SAVED.pop((_app10mod, "bk"))
+    # A daily panel backup that raises does NOT skip the game sweeps of its pass: they shared one
+    # try, so a daily backup that kept raising stopped every scheduled game backup (part33 drives
+    # each step failing on its own).
     check("app backup loop: waits 2 min first, then the daily tick, the per-server schedules and "
-          "the queue, hourly — and a failing tick skips the rest of that pass only",
+          "the queue, hourly — and a failing daily tick still runs both game sweeps of its pass",
           all((slept1 == [120, 3600, 3600],
                _TK13["calls"] == [("daily",), ("due-backups", app), ("pending-backups", app),
-                                  ("daily",)])), repr((slept1, _TK13["calls"])))
+                                  ("daily",), ("due-backups", app), ("pending-backups", app)])),
+          repr((slept1, _TK13["calls"])))
     _TK13["calls"][:] = []
     _TK13["fail_from"] = {"due-restarts": 2}
     _run2, slept2 = _tk13_run(loops["due-actions"][1], 3)
@@ -4993,10 +5005,13 @@ def _tk13_check_priority(loops, app):
             raise RuntimeError("renice refused")
 
     _ca13_set(_app10mod, "set_game_priority_bulk", _bulk)
+    # The unprivileged nice read cannot answer here: every account is reniced, as before.
+    _ca13_set(_app10mod, "game_users_off_priority", lambda *a, **k: None)
     try:
         _res, slept = _tk13_run(loops["priority-keeper"][1], 2)
     finally:
         _app10mod.set_game_priority_bulk = _CA13_SAVED.pop((_app10mod, "set_game_priority_bulk"))
+        _app10mod.game_users_off_priority = _CA13_SAVED.pop((_app10mod, "game_users_off_priority"))
     check("app priority keeper: one sorted batch per host of its INSTALLED servers, every 2 min, "
           "and a host whose renice fails does not stop the next",
           all((calls == [("pk-one", ["pka", "pkb"]), ("pk-two", ["pkq"])], slept == [60, 120])),

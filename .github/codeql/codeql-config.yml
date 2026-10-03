@@ -8,13 +8,33 @@ paths-ignore:
   - tests
   - docs
 
-# Exclude py/partial-ssrf: the one finding (notifications._post) is a CONFIRMED false positive. _post
-# only ever POSTs to a host on the _ALLOWED_PREFIXES allowlist, with the Telegram/Discord token rebuilt
-# from regex-captured groups on a CONSTANT host — nothing user-supplied can redirect the request.
-# CodeQL's partial-ssrf won't accept the allowlist/regex-rebuild as a sanitizer (verified: reworking
-# _tg_api_url didn't clear it), and a read-only token can't dismiss it. Safe to exclude repo-wide:
-# _post is the ONLY outbound-HTTP sink in the codebase (everything else is SSH/subprocess), so this
-# removes no real request-forgery coverage.
+# Exclude py/partial-ssrf. Its one finding (alert #309, notifications._post) is a false positive: the
+# Telegram bot token goes into the URL PATH of a request whose host is a constant. _tg_api_url rebuilds
+# the token from its regex-captured groups and takes the method from a fixed tuple, but the query
+# does not accept that as a sanitizer (reworking _tg_api_url did not clear it).
+#
+# The exclusion is repo-wide, so it also hides any FUTURE partial-SSRF finding. This used to say _post
+# was the only outbound-HTTP sink; that stopped being true when other modules started making requests.
+# What the exclusion covers is therefore pinned instead. These are every outbound-HTTP call site in the
+# shipped code (raw TCP probes such as hosts._tcp_reachable are not HTTP and are not listed), and
+# tests/unit/part37.py fails on any new one until it is reviewed and listed here:
+#   notifications._post               POST. Telegram or Discord: a URL on a constant host (the
+#                                      _ALLOWED_PREFIXES check runs at the call), with the id and token
+#                                      rebuilt from regex groups. ntfy (allow_configured_host): the
+#                                      server an ADMIN configured, which must match _NTFY_URL_RE, i.e.
+#                                      https://<host>[:port]/<topic> and nothing else.
+#   notifications.telegram_get_updates GET on api.telegram.org via _tg_api_url, int-only query.
+#   notifications.telegram_get_me      GET on api.telegram.org via _tg_api_url.
+#   notifications._gateway_connector   The Discord command bot's WebSocket (websocket-client), to the
+#                                      constant DISCORD_GATEWAY_URL, wss://gateway.discord.gg.
+#   system_ops._ci_fetch_page          GET on api.github.com: the owner/repo of this checkout's own
+#                                      origin remote, and a commit sha.
+#   lgsm_data._download                GET on raw.githubusercontent.com/GameServerManagers/LinuxGSM,
+#                                      with a validated release tag and a LinuxGSM data filename.
+# The three HTTP requests in notifications go through _OPENER, which refuses every redirect. The two
+# others use urlopen, which follows one, but only from GitHub's own fixed hosts. None of the six takes
+# a host or a path from a request. The ntfy server is the one host anyone chooses: it is stored in
+# config.json and read back later, a flow neither SSRF query traces, so _NTFY_URL_RE bounds it.
 query-filters:
   - exclude:
       id: py/partial-ssrf

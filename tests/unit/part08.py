@@ -214,6 +214,17 @@ _GH_TABLE = [
     # has, and sends nothing.
     ("routes._shared._drain_action_output", lambda u, s: _gh_drain(u),
      lambda r: r is True, False, ".panel-update.log"),
+    # The account probe (#374) is not a `sudo -u` command, so the gates in part07 do not see it:
+    # it is root shell text on a sudo-enabled remote, and it put the stored name RAW inside
+    # double-quoted echos. Every caller below hands it a name nothing has checked — the uninstall
+    # (its row's short_name), every file and cron write, discover's import. A name that is not a
+    # plain account word is refused by name, as a DEFINITE refusal, and the host is never asked.
+    ("routes._shared.privileged_accounts",
+     lambda u, s: (u, _gh_shared.privileged_accounts(_GH_SRV, [u])),
+     lambda r: isinstance(r[1], dict) and r[0] in r[1], False, None),
+    ("routes._shared.game_account_write_refusal",
+     lambda u, s: _gh_shared.game_account_write_refusal(_GH_SRV, u),
+     lambda r: isinstance(r, str) and r.startswith("Refused"), False, None),
 ]
 
 
@@ -583,6 +594,10 @@ finally:
     for _gh_mod, _gh_attr, _gh_val in _GH_SAVED:
         setattr(_gh_mod, _gh_attr, _gh_val)
     _gh_ps._action_output.pop(9104, None)
+    # The write-refusal rows cache their verdicts per (host, login, account): drop _GH_SRV's.
+    with _gh_shared._ACCOUNT_VERDICTS_LOCK:
+        for _gh_key in [k for k in _gh_shared._ACCOUNT_VERDICTS if k[0] == _GH_SRV.id]:
+            del _gh_shared._ACCOUNT_VERDICTS[_gh_key]
 
 
 # ── ssh_manager review fixes (change_ssh_port's firewall, ufw/crontab locks, crontab rewrite,

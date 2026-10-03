@@ -125,19 +125,14 @@ if [[ -f "${PANEL_DIR}/data/config.json" ]]; then
     PANEL_PORT="$(printf '%s' "${CONF_JSON}" | python3 -I -c "import json,sys;print(int(json.load(sys.stdin).get('port',5000)))" 2>/dev/null || echo "")"
     # The mount the panel published ITSELF at (config.py defaults "tailscale_mount" to "/"). Read
     # here, beside the port, because data/config.json is deleted a few lines below — and validated
-    # with the same shape the panel validates it with (privileged.py's _ts_mount), so a value that
-    # is not a mount point cannot reach the CLI. A value beginning with "-" would be read by
-    # `tailscale` as an OPTION, and this script runs as root on a system install.
+    # with the same shape the panel validates it with (privileged.py's _ts_mount). The Serve
+    # teardown below no longer removes by this value (it removes every route to the panel's PORT,
+    # read from the host), so it now only tells a readable config from one that is not.
     #
     # An unusable value prints NOTHING, and so does a config.json that will not parse. It used to
-    # fall back to "/", which is the worst possible default here: "/" is a real mount, and it is
-    # the one most likely to belong to something else on the node, so a config this script could
-    # not read ended in `tailscale serve --bg --remove /` — the whole-host damage the change to
-    # a single `--remove` was made to avoid, just narrower. The panel's own teardown refuses
-    # instead of substituting a default (tailscale_integration.disable_tailscale_serve() catches
-    # VerbError and returns "That isn't a usable mount point." without calling the CLI); empty
-    # here is what mirrors that. A "/" that the config genuinely RECORDS still reads back as "/"
-    # and is still removed.
+    # fall back to "/", which is the worst possible default: "/" is a real mount, and the one most
+    # likely to belong to something else on the node. A "/" that the config genuinely RECORDS still
+    # reads back as "/".
     TS_MOUNT="$(printf '%s' "${CONF_JSON}" | python3 -I -c "import json,re,sys;m=str(json.load(sys.stdin).get('tailscale_mount') or '/');print(m if m == '/' or re.fullmatch(r'(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,31}){1,3}', m) else '')" 2>/dev/null || echo "")"
     # The config file is HERE and we could not get a mount out of it — worth saying so below,
     # because `tailscale_setup_done` is read out of the same unreadable file by the grep after it.
@@ -257,30 +252,113 @@ fi
 # pointing at a backend that no longer exists, for precisely the installs where nothing else was
 # going to clean it up. The CLI call needs no root either: setup made the panel user the Tailscale
 # operator (ensure_operator()), which is the same reason the panel's own teardown calls it plain.
-if command -v tailscale >/dev/null 2>&1 \
-   && { [[ "${TS_DONE}" -eq 1 ]] || [[ "${TS_CONF_UNREAD}" -eq 1 ]]; }; then
-    # `tailscale serve reset` is the CLI's "clear the whole config" verb: it wipes EVERY serve and
-    # funnel mapping on this node, not the panel's. A host publishing anything else behind Serve —
-    # a /grafana mount, a funnel for a stats page — lost it here, with nothing listed first and
-    # nothing to restore afterwards, since serve config is not versioned. And the line printed was
-    # "it was pointing at the panel", a statement about the host's serve config that this script
-    # never read. Remove the ONE mount the panel recorded, exactly as the panel's own teardown
-    # does (tailscale_integration.py remove_serve(): serve --bg --remove <mount>).
-    if [[ -z "${TS_MOUNT}" ]]; then
-        # Nothing usable was recorded, so there is no mount this script can honestly claim as the
-        # panel's — and every mount it could guess at is one that may belong to something else on
-        # this node. Say so and remove nothing, which is what the panel's own teardown does with
-        # the same value.
-        warn "Leaving this node's Tailscale Serve config alone — the panel's own mount point"
-        warn "  could not be read back (its config.json is missing the value, has an unusable"
-        warn "  one, or would not parse). Nothing was removed, because the mount this script"
-        warn "  would have to guess at may belong to something else on this node."
+#
+# WHICH routes: every Serve web route whose backend is loopback on the panel's port, on any
+# listener, read from `tailscale serve status --json`. The panel is gone, so each of them is dead,
+# whatever mount it is at: the configured one, a leftover of an earlier mount, a README
+# `tailscale serve` line. It used to be the ONE mount config.json recorded, removed with
+# `tailscale serve --bg --remove <mount>` — a command no Tailscale accepts (--bg is the serve CLI
+# that has no --remove; that flag was the 1.34-1.36 alpha's), so it exited 2 on every host and the
+# route stayed, pointing at a backend that no longer exists. A reinstall then found "/" taken and
+# published the new panel at /lgsm beside it.
+#
+# HOW: `tailscale serve --https=<port> --set-path=<mount> off`, the CLI's own removal, with the path
+# ALWAYS named: without --set-path, `off` removes every route on that listener, other apps' with
+# the panel's. Never `serve reset`, which wipes the whole node's config. Serve is read again right
+# before each removal, so a mount another app took in the meantime is left alone. A status that
+# cannot be read, or a panel port that cannot, removes nothing.
+#
+# Gated on knowing the port and on tailscale being here, not on tailscale_setup_done: a route made
+# by hand is just as dead, and the flag says nothing about it.
+_TS_ROUTES_PY='
+import json, re, sys
+port, mode = sys.argv[1], sys.argv[2]
+raw = sys.stdin.read().strip()
+sc = json.loads(raw) if raw else {}
+sc = sc if isinstance(sc, dict) else {}
+tcp, fun = sc.get("TCP") or {}, sc.get("AllowFunnel") or {}
+plain = re.compile(r"/|(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,31}){1,3}/?").fullmatch
+loop = ("127.0.0.1", "localhost", "::1", "[::1]")
+for hp, web in sorted((sc.get("Web") or {}).items()):
+    lport = hp.rpartition(":")[2]
+    kind = tcp.get(lport) or {}
+    flag = "--https=" if kind.get("HTTPS") else "--http=" if kind.get("HTTP") else ""
+    handlers = (web or {}).get("Handlers") or {}
+    if mode == "funnel":
+        if fun.get(hp) and handlers and flag and lport.isdigit():
+            print(flag + lport)
+        continue
+    for mount, h in sorted(handlers.items()):
+        proxy = str((h or {}).get("Proxy") or "")
+        host, _, tport = proxy.split("://", 1)[-1].split("/", 1)[0].rpartition(":")
+        if host.lower() not in loop or tport != port:
+            continue
+        if not (flag and lport.isdigit() and plain(mount)):
+            print("SKIP - 0")
+            continue
+        print(flag + lport, mount, int(bool(fun.get(hp))))
+'
+# The panel's routes as "<listener flag> <mount> <funnel 0|1>" lines (mode "routes"), or the
+# listeners still funnelled with routes on them (mode "funnel"). Non-zero when Serve could not be
+# read: that is not "no routes".
+_ts_panel_routes() {
+    local _js
+    _js="$(timeout 15 tailscale serve status --json 2>/dev/null)" || return 1
+    printf '%s' "${_js}" | python3 -I -c "${_TS_ROUTES_PY}" "$1" "$2" 2>/dev/null
+}
+_ts_remove_routes() {
+    local _flag _mount _fun _now _err _gone=0 _funnelled=""
+    while read -r _flag _mount _fun; do
+        [[ -n "${_flag}" ]] || continue
+        if [[ "${_flag}" = "SKIP" ]]; then
+            warn "A Tailscale Serve route to the panel's port sits at a mount or listener this script"
+            warn "  will not hand to the CLI, so it was left. Find it with:  tailscale serve status"
+            continue
+        fi
+        if ! _now="$(_ts_panel_routes "${PANEL_PORT}" routes)"; then
+            warn "Couldn't read this node's Tailscale Serve config again, so the route at ${_mount}"
+            warn "  was left. Remove it with:  sudo tailscale serve ${_flag} --set-path=${_mount} off"
+            continue
+        fi
+        [[ $'\n'"${_now}"$'\n' == *$'\n'"${_flag} ${_mount} "* ]] || continue
+        if _err="$(timeout 15 tailscale serve "${_flag}" "--set-path=${_mount}" off 2>&1 >/dev/null)"; then
+            ok "Removed the panel's Tailscale Serve route at ${_mount} (${_flag#--}); other routes untouched"
+            _gone=$((_gone + 1))
+            [[ "${_fun}" != "1" ]] || _funnelled="${_funnelled} ${_flag}"
+        else
+            warn "Could not remove the panel's Tailscale Serve route at ${_mount} (${_flag#--}): ${_err%%$'\n'*}"
+            warn "  Remove it with:  sudo tailscale serve ${_flag} --set-path=${_mount} off"
+        fi
+    done <<< "$1"
+    # Funnel is per listener: it goes off with the LAST route on it, and not before. Another app's
+    # route left on a listener the panel had funnelled stays on the public internet.
+    if [[ -n "${_funnelled}" ]]; then
+        _now="$(_ts_panel_routes "${PANEL_PORT}" funnel || true)"
+        for _flag in ${_funnelled}; do
+            [[ $'\n'"${_now}"$'\n' == *$'\n'"${_flag}"$'\n'* ]] || continue
+            warn "Funnel is still ON for the ${_flag#--} listener, and other routes on it stay on the"
+            warn "  public internet. Check them with:  tailscale funnel status"
+        done
+    fi
+    if [[ "${_gone}" -eq 0 ]] && [[ -z "$1" ]] && [[ "${TS_DONE}" -eq 1 ]]; then
+        ok "No Tailscale Serve route pointed at the panel's port ${PANEL_PORT}; nothing to remove"
+    fi
+}
+if command -v tailscale >/dev/null 2>&1; then
+    if [[ -z "${PANEL_PORT}" ]]; then
+        # Without the port there is no telling which routes were the panel's, and every one this
+        # script could guess at may belong to something else on this node. Say so; remove nothing.
+        if [[ "${TS_DONE}" -eq 1 ]] || [[ "${TS_CONF_UNREAD}" -eq 1 ]]; then
+            warn "Leaving this node's Tailscale Serve config alone — the panel's port could not be"
+            warn "  read back (its config.json is missing or would not parse), so no route can be"
+            warn "  told apart as the panel's. Nothing was removed."
+            warn "  See what this node still publishes with:  tailscale serve status"
+        fi
+    elif ! _TS_ROUTES="$(_ts_panel_routes "${PANEL_PORT}" routes)"; then
+        warn "Couldn't read this node's Tailscale Serve config, so no route to the panel was removed."
         warn "  See what this node still publishes with:  tailscale serve status"
-    elif tailscale serve --bg --remove "${TS_MOUNT}" >/dev/null 2>&1; then
-        ok "Removed the panel's Tailscale Serve mapping at ${TS_MOUNT} (other mappings untouched)"
     else
-        warn "Could not remove the panel's Tailscale Serve mapping at ${TS_MOUNT}."
-        warn "  See what this node still publishes with:  tailscale serve status"
+        _ts_remove_routes "${_TS_ROUTES}"
     fi
 fi
 

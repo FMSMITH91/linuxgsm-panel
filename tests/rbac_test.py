@@ -3715,8 +3715,10 @@ finally:
         for _f in _managed_files() - _files_before:
             try:
                 os.remove(_f)
-            except OSError:
-                pass
+            except OSError as _e:
+                # Said, not swallowed: the leftover panel.db the comment above describes is exactly
+                # what a failed remove leaves, and the next smoke run would SKIP with no reason.
+                print("cleanup: could not remove %s (%s)" % (_f, _e), file=sys.stderr)
     else:
         # Live/configured install: remove ONLY our throwaway users/groups, never real data.
         #
@@ -4228,7 +4230,9 @@ def _ax_names(expr, var):
 
 # Calls whose action is a parameter, with where the real names come from.
 _AX_ACTION_FROM_CALLER = {
-    "_record_backup_outcome",   # its callers pass "scheduled_backup" / "queued_backup"
+    "_audit_backup_outcome",    # _record_backup_outcome's callers pass "scheduled_backup" /
+                                # "queued_backup", and _report_once's "scheduled_backup_overdue" /
+                                # "queued_backup_waiting"
     "audit_bot_action",         # the chat bots pass "moderate_say" (server=) / "panel_self_update"
     "_write_refused",           # server_files' write routes pass edit_config / edit_file /
                                 # delete_file / upload_file / cron_add / cron_update / cron_delete /

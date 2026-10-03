@@ -807,8 +807,9 @@ _tsv22 = dict(_tsx22, funnel_enabled=True, serve_services=[
     peers=[{"hostname": "peer-secret", "dns_name": "peer-secret.ts.net", "ips": ["100.99.1.1"]}])
 _tl22, _tf22f = _ts_lines(_tsv22, {"port": 5000, "tailscale_setup_done": True,
                                    "tailscale_use_funnel": False, "tailscale_mount": "/lgsm"})
-check("R36: state, Serve and Funnel print without any node name, tailnet, IP, URL, login or health "
-      "text", "1 route to the panel at /lgsm → http to loopback:5000" in _text(_tl22)
+check("R36: state, Serve and Funnel print without any node name, tailnet, IP, URL or login (the "
+      "health messages print scrubbed, part35)",
+      "1 route to the panel at /lgsm → http to loopback:5000" in _text(_tl22)
       and "1 other app route" in _text(_tl22) and "health warnings 2" in _text(_tl22)
       and not any(s in _text(_tl22) for s in ("secret-node", "tail9999", "100.10", "peer-secret",
                                                "me@github", "https://")), _text(_tl22))
@@ -1326,7 +1327,10 @@ def _boot_serve(cfg, answer):
         if isinstance(answer, Exception):
             raise answer
         return answer
-    with _patched(_ts22, setup_tailscale_serve=setup), \
+    # The boot then removes the panel's routes at other mounts; that reads the HOST's Serve config,
+    # so it is stubbed with the rest (part32 drives it against a fake CLI).
+    with _patched(_ts22, setup_tailscale_serve=setup,
+                  remove_stale_panel_routes=lambda port, mount: ("none", [], "")), \
             _patched(_app22, _ts_backend_scheme=lambda c: "http"):
         _app22._boot_serve(fake, cfg, 5000)
     return fake.config.get("BOOT_SERVE"), len(calls)

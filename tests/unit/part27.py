@@ -409,12 +409,15 @@ _GL_BIN27 = "/tmp/gitleaks"  # nosec B108 - the path security.yml installs to; r
 _gl_src27 = _re27.sub(r"\\\n\s*", " ", "\n".join(_l for _l in _GL27.splitlines()
                                                   if not _l.lstrip().startswith("#")))
 _gl_calls27 = [" ".join(_l.split()) for _l in _gl_src27.splitlines() if _GL_BIN27 + " " in _l]
-check("gitleaks: both scans run `gitleaks git` on the checkout, with the config, redacted, failing "
-      "on a finding; the PR one over the PR's range",
-      len(_gl_calls27) == 2
-      and all(_c.startswith(_GL_BIN27 + " git --config .github/gitleaks.toml ")
+# Three scans: a PR's range twice (the base's config, then its own; part37 holds why), and the full
+# history of anything else.
+check("gitleaks: every scan runs `gitleaks git` on the checkout, with a config, redacted, failing "
+      "on a finding; the PR's two over the PR's range",
+      len(_gl_calls27) == 3
+      and all(_c.startswith(_GL_BIN27 + " git --config ")
               and _c.endswith(" --redact --verbose --exit-code 1 .") for _c in _gl_calls27)
-      and sum('--log-opts "${BASE_SHA}..${HEAD_SHA}"' in _c for _c in _gl_calls27) == 1,
+      and sum(_c.startswith(_GL_BIN27 + " git --config .github/gitleaks.toml ") for _c in _gl_calls27) == 2
+      and sum('--log-opts "${BASE_SHA}..${HEAD_SHA}"' in _c for _c in _gl_calls27) == 2,
       repr(_gl_calls27))
 check("gitleaks: no deprecated command (detect, protect) is run",
       not _re27.search(_re27.escape(_GL_BIN27) + r" (detect|protect)\b", _gl_src27))

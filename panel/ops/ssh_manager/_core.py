@@ -140,11 +140,17 @@ try:
     # select.poll and makes select.select wait in the CALLING thread's hub, which a tpool thread
     # does not run. See _readiness().
     _real_select = _ev_original("select")
+    # ...and the unpatched time, for a native thread's sleep (_pause_for).
+    _real_time = _ev_original("time")
 except Exception:
     _tpool = None
     _real_subprocess = subprocess
     _real_threading = threading
     _real_select = select
+    _real_time = time
+# The unpatched Popen CLASS, held apart from the module handle above (which a test harness may
+# stand a shim over): _pause_for tells a native thread's process by it.
+_REAL_POPEN = _real_subprocess.Popen
 
 
 # In-memory SSH connection cache, keyed by _conn_key() below.
@@ -320,22 +326,79 @@ def _ufw_mutating(verb):
     return verb.startswith("ufw-") and verb != "ufw-status"
 
 
+# How long a stopped command's process group gets after SIGTERM before SIGKILL. SIGTERM FIRST
+# because of sudo: the panel can signal sudo (its real uid is the panel's) but not what sudo runs
+# as root, and sudo cannot relay a SIGKILL. A SIGKILL'd sudo left the root helper and its
+# journalctl running at 100% of a core for 5.5 minutes on the test VPS, parented to init. Classic
+# sudo and sudo-rs both relay SIGTERM to their command (exec_nopty.c / exec/no_pty.rs), and the
+# helper ends its children and exits (tools/panel-helper, READ_VERBS) -- well inside this.
+_TERM_GRACE = 2.0
+_GROUP_POLL = 0.05
+
+
+def _group_signalable(pgid):
+    """Whether process group `pgid` still has a member this process may signal (sudo, a shell)."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except OSError:      # ESRCH: nobody left; EPERM: only processes of another user (root) left
+        return False
+
+
+def _pause_for(p):
+    """The sleep that suits the thread `p` is collected in.
+
+    Real beside the unpatched Popen (tpool's native threads, which have no hub to yield to), green
+    beside eventlet's patched one (a request greenlet: a real sleep there would stop the whole
+    hub). Without eventlet both are time.sleep.
+    """
+    return _real_time.sleep if type(p) is _REAL_POPEN else time.sleep
+
+
 def _signal_process_tree(p):
-    """SIGKILL a Popen and its entire process group, so no grandchildren are left orphaned.
+    """Stop a Popen and its entire process group, so no grandchildren are left orphaned.
+
+    SIGTERM to the group; then, once `p` has exited and the group has nothing left this process
+    may signal -- or _TERM_GRACE has passed -- SIGKILL to the group, for anything of ours that
+    ignored the SIGTERM. Waiting for the group, not just `p`, matters when `p` is a shell: it
+    exits at once while the sudo under it is still relaying, and a SIGKILL then would orphan the
+    root command all over again.
 
     Signals only: it never touches p's pipes, because the capped readers own them (see
-    _collect_capped). Never raises.
+    _collect_capped); it reaps `p` when `p` exits. Never raises.
     """
     try:
-        if hasattr(os, "killpg") and hasattr(os, "getpgid"):
-            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-        else:
-            p.kill()   # Windows / no process groups
+        pgid = os.getpgid(p.pid) if hasattr(os, "killpg") and hasattr(os, "getpgid") else None
     except Exception:
-        try:
-            p.kill()
-        except Exception:  # nosec B110 - killing an already-dead process is the expected race
-            pass           # here, and there is nothing left to do about it either way.
+        pgid = None          # already reaped: there is no group left to signal
+    if pgid is None:
+        _kill_quietly(p)     # Windows / no process groups / gone
+        return
+    _killpg_quietly(pgid, signal.SIGTERM)
+    deadline = time.monotonic() + _TERM_GRACE
+    try:
+        p.wait(timeout=_TERM_GRACE)
+    except Exception:
+        _log.debug("a command outlived its SIGTERM grace", exc_info=True)
+    pause = _pause_for(p)
+    while _group_signalable(pgid) and time.monotonic() < deadline:
+        pause(_GROUP_POLL)
+    if _group_signalable(pgid):
+        _killpg_quietly(pgid, signal.SIGKILL)
+
+
+def _killpg_quietly(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except OSError:
+        pass                 # the group is gone, or only another user's processes are left in it
+
+
+def _kill_quietly(p):
+    try:
+        p.kill()
+    except Exception:  # nosec B110 - killing an already-dead process is the expected race
+        pass           # here, and there is nothing left to do about it either way.
 
 
 def _kill_process_tree(p):
@@ -636,11 +699,13 @@ def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
     are kept, and the rest is read and DISCARDED rather than left unread, so a command still
     writing is not blocked into outliving its timeout.
 
-    BOUNDED: it answers within `timeout` plus _KILL_GRACE, however the command's descendants
-    behave. `kill` only signals; the readers get _KILL_GRACE to reach EOF, are told to stop, and
-    each pipe is closed once its reader has returned (one reader per descriptor: never
-    communicate(), which is a second). Then p is reaped. What the kill cannot reach (the root
-    helper under sudo, from the panel's account) exits in its own time, and is not waited for.
+    BOUNDED: it answers within `timeout` plus _KILL_GRACE -- plus, when `kill` is
+    _signal_process_tree, up to its _TERM_GRACE -- however the command's descendants behave.
+    `kill` only signals (and may wait for `p`); the readers get _KILL_GRACE to reach EOF, are told
+    to stop, and each pipe is closed once its reader has returned (one reader per descriptor:
+    never communicate(), which is a second). Then p is reaped. What the kill cannot reach (the
+    root helper under sudo, from the panel's account) is told by sudo's relayed SIGTERM and ends
+    itself (tools/panel-helper, READ_VERBS); it is not waited for.
 
     `threads` is the caller's to choose, as a threading MODULE: the unpatched one inside tpool,
     where a green thread has no hub to run on; the patched (green) one in a request greenlet,
@@ -1065,6 +1130,30 @@ def _open_client(server):
         _close_quietly(client)
         raise
     return client
+
+
+def _drop_pooled_client(client):
+    """Take `client` out of the pool and close it, when the pool holds it. Returns whether it did.
+
+    For a client whose remote left an exec request unanswered for exec_bounded's whole bound. Its
+    transport still reads as active — the 30 s keepalive asks for no reply — so
+    _live_pooled_client went on handing it out, and every later command on the host waited the
+    bound again: about five commands per server in a backup sweep, 300 s each, under the lock
+    every backup on every host shares. Dropped, the next command reconnects, or fails fast on a
+    host that is down. The other commands on it are as stuck: an sshd that does not answer one
+    request on a connection is not serving that connection. The pool's own clients only: an
+    entry already replaced is not this client and is left alone, and a client a caller owns
+    (pooled=False) is the caller's to close.
+    """
+    with _conn_lock:
+        keys = [k for k, c in _connections.items() if c is client]
+        for key in keys:
+            del _connections[key]
+        for rid in [r for r, k in _remote_conn_keys.items() if k in keys]:
+            del _remote_conn_keys[rid]
+    if keys:
+        _close_quietly(client)
+    return bool(keys)
 
 
 def _close_quietly(client):
@@ -1698,6 +1787,61 @@ def stream_channel(out, chunk, what, ok=(0,)):
         raise StreamFailed("%s failed (exit %s)" % (what, rc))
 
 
+def exec_bounded(client, command, timeout, limit):
+    """client.exec_command(command, timeout=timeout), with the wait for the exec reply bounded.
+
+    Returns (stdin, stdout, stderr) as exec_command does. Raises paramiko.SSHException when the
+    remote has not answered the exec request after `limit` seconds.
+
+    paramiko's exec_command applies `timeout` to opening the session and to the channel's reads,
+    and to nothing else: Channel.exec_command then waits for the server's reply to the exec
+    request with `self.event.wait()`, which has NO timeout (paramiko 5.0.0, channel.py). So a
+    direct-SSH remote that opens the channel and never answers the exec — a wedged sshd, or a
+    hostile one — held its caller for ever; the drain's silence bound below never started. The
+    caller that showed it holds the GLOBAL backup lock across a sweep: one such host stopped every
+    scheduled and queued backup on every host until the panel restarted, with no audit row and no
+    alert. Closing the channel wakes that wait (Channel._set_closed sets the event, and
+    exec_command raises "Channel closed"), so a watchdog closes it once `limit` passes unanswered.
+
+    `limit` for run_command is _DRAIN_IDLE_FLOOR, the silence bound the drain applies too, and
+    NOT the caller's timeout when that is longer: the replies to the channel open and to the exec
+    request come before the command runs, so a backup's 3600 s is no reason to wait an hour for
+    either. The open keeps the caller's timeout when it is SHORTER, as exec_command gave it. Nothing
+    that answers today is cut off: a reply slower than five minutes is a remote not answering.
+
+    A client that is not a paramiko SSHClient (the suites' stand-ins) answers through its own
+    exec_command.
+
+    When the bound passes, the client is also dropped from the pool (_drop_pooled_client): its
+    transport still reads as active, so every later command on that host was handed the same
+    wedged client and waited the whole bound again.
+    """
+    if not isinstance(client, paramiko.SSHClient):
+        return client.exec_command(command, timeout=timeout)  # nosec B601  # nosemgrep
+    chan = client.get_transport().open_session(timeout=min(timeout or limit, limit))
+    answered = threading.Event()
+
+    def _watchdog():
+        if answered.wait(limit):
+            return
+        _log.warning("the remote did not answer an exec request in %ds; closing the channel "
+                     "and dropping the pooled connection", int(limit))
+        try:
+            chan.close()
+        except Exception:
+            _log.debug("could not close an unanswered exec channel", exc_info=True)
+        _drop_pooled_client(client)
+
+    threading.Thread(target=_watchdog, name="ssh-exec-watchdog", daemon=True).start()
+    try:
+        chan.settimeout(timeout)
+        # nosec B601 - `command` is the caller's, assembled from _quote()d parts (see the callers).
+        chan.exec_command(command)  # nosec B601  # nosemgrep
+    finally:
+        answered.set()
+    return chan.makefile_stdin("wb", -1), chan.makefile("r", -1), chan.makefile_stderr("r", -1)
+
+
 def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES, idle_limit=None):
     """Read stdout+stderr to EOF, then the exit status. Returns (out, err, rc, truncated).
 
@@ -1807,11 +1951,13 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
     # and pass sudo=False, so the demotion was its only surviving effect, on a form the Add Remote
     # page invited the operator to fill in.
     full_cmd = f"sudo bash -c {_quote(command)}" if use_sudo else command
+    # How long the remote may stay silent while the command runs (_drain_exec).
+    silence = max(timeout or 0, _DRAIN_IDLE_FLOOR)
 
     try:
-        # nosec B601 - full_cmd is assembled HERE from _quote()d components; there is no
-        # interpolation of caller text into it that has not been through _quote first.
-        stdin, stdout, _stderr = client.exec_command(full_cmd, timeout=timeout)  # nosec B601  # nosemgrep
+        # full_cmd is assembled HERE from _quote()d components; there is no interpolation of
+        # caller text into it that has not been through _quote first.
+        stdin, stdout, _stderr = exec_bounded(client, full_cmd, timeout, _DRAIN_IDLE_FLOOR)
         # EOF on the remote's fd 0, immediately. `stdin` was bound and thrown away: nothing was
         # ever written to it and it was never closed, so the remote process's stdin was an open SSH
         # channel that receives nothing and never ends. Any command that READS stdin — a LinuxGSM
@@ -1831,7 +1977,7 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
         except Exception:
             _log.debug("could not shut down the exec channel's stdin", exc_info=True)
         out_b, err_b, exit_code, truncated = _drain_exec(
-            stdout.channel, idle_limit=max(timeout or 0, _DRAIN_IDLE_FLOOR))
+            stdout.channel, idle_limit=silence)
         out = out_b.decode("utf-8", errors="replace")
         err = err_b.decode("utf-8", errors="replace")
         if truncated:
@@ -2145,8 +2291,7 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
     try:
         _priv.check_args("lgsm-command", verb_args)
     except Exception as exc:
-        _log.warning("refusing LinuxGSM action: %s", exc)
-        return "", str(exc), 1
+        return _lgsm_args_refused(exc)
 
     if is_local_server(server) and helper_present():
         return _lgsm_command_via_helper(verb_args, timeout)
@@ -2168,12 +2313,30 @@ def _lgsm_command_via_helper(verb_args, timeout):
         # here because this function's contract is a TUPLE and never a raise: every caller
         # unpacks (out, err, rc), and several run inside a background thread whose only
         # report to the user is that rc. A raise here reached them as silence.
-        _log.warning("refusing LinuxGSM action: %s", exc)
-        return "", str(exc), 1
+        return _lgsm_args_refused(exc)
     out, err, rc = _exec_local_argv(argv, timeout=timeout)
     # The shell form used `2>&1` and every caller reads LinuxGSM's errors out of stdout, so
     # merge here too — switching transport must not move a message from one stream to the other.
     return ("\n".join(x for x in (out, err) if x)).strip(), "", rc
+
+
+LGSM_ARGS_UNCHECKED = "the panel could not check this LinuxGSM action's arguments"
+
+
+def _lgsm_args_refused(exc):
+    """run_as_game_user's (out, err, rc) for an argument check that raised `exc`.
+
+    The rc and the stderr slot reach the operator: the sync actions put `err` into the route's
+    message (server_detail._run_sync_action). A VerbError's text is fixed by design and never
+    carries the rejected value (privileged.VerbError), so it is passed on. Anything else — a bug,
+    a KeyError, an OSError reading the helper — is not the panel's wording and may carry a path or
+    a value, so the operator gets fixed text and the log gets the exception.
+    """
+    if isinstance(exc, _priv.VerbError):
+        _log.warning("refusing LinuxGSM action: %s", exc)
+        return "", str(exc), 1
+    _log.warning("refusing LinuxGSM action: the argument check failed", exc_info=exc)
+    return "", LGSM_ARGS_UNCHECKED, 1
 
 
 def _lgsm_shell_body(user, selfname, action, answers, tee_log):
@@ -2260,6 +2423,99 @@ def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
         # rest; retrying on that would turn every keeper pass into one sudo call per server.
         for user in users:
             set_game_priority(server, user, nice)
+
+
+# A process younger than this is not judged. The panel's own reads run AS the game account at the
+# panel's nice (sudo keeps the caller's nice): gamedig for 1-3 s, the console's stat and tail, a
+# config `cat`. So does LinuxGSM's monitor cron, every few minutes. Any of them seen mid-run would
+# read as "a game process is off its priority" on almost every pass. A game that really restarted
+# at nice 0 is caught one keeper pass later.
+_PRIORITY_SETTLE_SECONDS = 30
+_PS_END = "@@lgsm-ps-end"
+
+
+def game_users_off_priority(server, users, nice=GAME_PRIORITY_NICE):
+    """The accounts in `users` that have a settled process whose nice is not `nice`.
+
+    The priority keeper renices every game account on every host every two minutes, as root — a
+    privileged call each time, three journal lines — though after the first pass the processes
+    are already there. Reading nice values needs no privilege, so the keeper reads first and
+    renices only the accounts that drifted. `[]` is "nothing to do".
+
+    None when it could not tell — the read failed or was cut short, or it could not see other
+    users' processes at all (/proc mounted hidepid: no root-owned process in the list). The caller
+    then renices every account, as it always did: an empty read is never "all at priority".
+
+    Unprivileged on both kinds of host: `ps` as the panel's account here, as the SSH login on a
+    remote. `ruid` because renice -u matches the REAL uid; uids come from getent, which still
+    answers for the accounts that exist when one of them does not (exit 2). Its exit status rides
+    along (`@@ <rc>`): a getent that is missing or whose lookup failed names no account at all, and
+    without its status that silence parsed as "no game process here" — nothing reniced, forever.
+    """
+    users = sorted({u for u in users if game_idents_ok(u)})
+    if not users:
+        return []
+    cmd = ('getent passwd %s; echo "@@ $?"; ps -e -o ruid=,etimes=,ni= && echo %s'
+           % (" ".join(_quote(u) for u in users), _PS_END))
+    try:
+        out, _, rc = run_command(server, cmd, timeout=15, sudo=False)
+    except Exception:
+        return None
+    if rc != 0:
+        return None
+    return _off_priority_from(out, users, int(nice))
+
+
+# getent's exit statuses that are an answer: 0 (every account found), 2 (some keys not found — the
+# others are still listed). 1 (database unknown), 3, and 127 (no getent) are not.
+_GETENT_ANSWERED = ("0", "2")
+
+
+def _getent_cut(lines):
+    """The index of the `@@ <rc>` line, when getent answered and ps ran to its end; else None."""
+    if not lines or lines[-1] != _PS_END:
+        return None
+    for i, ln in enumerate(lines):
+        f = ln.split()
+        if f[:1] == ["@@"]:
+            return i if len(f) == 2 and f[1] in _GETENT_ANSWERED else None
+    return None
+
+
+def _uids_named(lines, users):
+    """{uid: {account names}} from `getent passwd` lines, for the accounts in `users` only."""
+    names_by_uid = {}
+    for ln in lines:
+        parts = ln.split(":")
+        if len(parts) > 2 and parts[0] in users and parts[2].isdecimal():
+            names_by_uid.setdefault(int(parts[2]), set()).add(parts[0])
+    return names_by_uid
+
+
+def _ps_rows(lines):
+    """(real uid, age in seconds, nice as text) for each well-formed `ps -o ruid=,etimes=,ni=` line."""
+    for ln in lines:
+        f = ln.split()
+        if len(f) == 3 and f[0].isdecimal() and f[1].isdecimal():
+            yield int(f[0]), int(f[1]), f[2]
+
+
+def _off_priority_from(out, users, nice):
+    """game_users_off_priority's parse of its read; None when that read is unreadable.
+
+    The read is `getent …; echo "@@ <getent's rc>"; ps … && echo END`.
+    """
+    lines = [ln.strip() for ln in (out or "").splitlines()]
+    cut = _getent_cut(lines)
+    if cut is None:
+        return None
+    names_by_uid = _uids_named(lines[:cut], users)
+    seen_root, off = False, set()
+    for uid, age, ni in _ps_rows(lines[cut + 1:-1]):
+        seen_root = seen_root or uid == 0
+        if uid in names_by_uid and age >= _PRIORITY_SETTLE_SECONDS and ni != str(nice):
+            off |= names_by_uid[uid]
+    return sorted(off) if seen_root else None
 
 
 def _tmux_live_socket_sh(selfname):
@@ -2828,9 +3084,11 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     # Validated and quoted HERE, for the reason run_as_game_user spells out above: the model's
     # @validates hook fires on ASSIGNMENT and never on a row loaded from the database, so a row
     # written before that validator existed — or restored from a tampered backup — reaches this
-    # function unchecked. It matters more here than there: `user` went in UNQUOTED, and the
-    # pipeline below runs as ROOT, so `crontab -u <user>` was a root command-injection point one
-    # bad row away. Five cron routes reach this.
+    # function unchecked. It mattered more here than there: `user` went in UNQUOTED into a
+    # pipeline that ran as ROOT, so `crontab -u <user>` was a root command-injection point one bad
+    # row away. The pipeline now runs AS the account, through shell_as_game_user (below), which
+    # refuses such a name too; this check is the function's own, refusing before the account's
+    # crontab lock is even taken. Five cron routes reach this.
     if not game_idents_ok(user):
         _log.warning("refusing to rewrite a crontab for an unsafe account name")
         return False, "invalid account name"
@@ -2950,22 +3208,54 @@ def install_game_cron(server, user, selfname=None, supported=None):
 
 # Panel game_type -> gamedig query type (best effort). Unmapped games skip the
 # player check and just restart at the daily time.
+#
+# Every value is a game id of the gamedig the panel installs (tools/gamedig/package-lock.json pins
+# 5.3.3; its lib/games.js keys). gamedig 5 renamed several games and keeps the old name only as an
+# `old_id`, which it resolves ONLY with --checkOldIDs — a flag the panel never passes. So "cs16",
+# "cs2", "tf2", "hl2dm", "left4dead2" and "cod4" answered {"error":"Invalid game: …"} to every
+# query, and "minecraftpe" was no id at all: nine game types fell back to LinuxGSM's own query for
+# player counts, and their daily restart-when-empty check could never see an empty server. A unit
+# check holds every value to the pinned version's list (tests/unit/gamedig_game_ids.txt).
 GAMEDIG_TYPE = {
-    "gmod": "garrysmod", "cs": "cs16", "css": "css", "cs2": "cs2", "tf2": "tf2",
-    "hl2dm": "hl2dm", "dods": "dods", "left4dead2": "left4dead2", "l4d2": "left4dead2",
+    "gmod": "garrysmod", "cs": "counterstrike16", "css": "css", "cs2": "counterstrike2",
+    "tf2": "teamfortress2",
+    "hl2dm": "hl2d", "dods": "dods", "left4dead2": "l4d2", "l4d2": "l4d2",
     "insurgency": "insurgency", "ins": "insurgency", "rust": "rust",
     "valheim": "valheim", "vh": "valheim",
     "sdtd": "sdtd", "7d2d": "sdtd",
     # Minecraft: Java editions (vanilla + Paper/Velocity/Waterfall, which answer Server List Ping)
-    # use "minecraft"; Bedrock uses "minecraftpe". This is what yields count AND max-players (Minecraft
-    # keeps max in server.properties, not the LinuxGSM config, so the config-fallback can't see it).
+    # use "minecraft"; Bedrock uses "mbe" (gamedig 5's "Minecraft: Bedrock Edition"). This is what
+    # yields count AND max-players (Minecraft keeps max in server.properties, not the LinuxGSM
+    # config, so the config-fallback can't see it).
     "mc": "minecraft", "pmc": "minecraft", "vmc": "minecraft", "wmc": "minecraft",
-    "mcb": "minecraftpe", "mcbe": "minecraftpe",
+    "mcb": "mbe", "mcbe": "mbe",
     "squad": "squad", "arma3": "arma3", "mumble": "mumble",
-    # Call of Duty family — gamedig CAN query these (protocol names match the LinuxGSM shortnames),
-    # so the player count (restart/backup guards + daily-restart-when-empty) works for them too.
-    "cod": "cod", "coduo": "coduo", "cod2": "cod2", "cod4": "cod4", "codwaw": "codwaw",
+    # Call of Duty family — gamedig CAN query these, so the player count (restart/backup guards +
+    # daily-restart-when-empty) works for them too. Call of Duty 4 is "cod4mw" in gamedig 5.
+    "cod": "cod", "coduo": "coduo", "cod2": "cod2", "cod4": "cod4mw", "codwaw": "codwaw",
 }
+
+# How many PEOPLE a gamedig reply says are on — the one jq expression every player-count reader
+# (cron.player_count, player_slots, player_count_via_lgsm_query, game._gamedig_player_list and the
+# hourly restart check) counts with.
+#
+# Not `.players|length` alone. gamedig's own README says `players` "could be of a different length
+# compared to numplayers", and for several protocols it is EMPTY whoever is on: Minecraft
+# Bedrock's RakNet ping carries only the counts (protocols/minecraftbedrock.js sets numplayers and
+# maxplayers, never players: `--type mbe` against a responder advertising 7 of 10 printed
+# {"numplayers":7,"players":[],…}); a Java server with hide-online-players sends no sample, and the
+# sample stops at 12 anyway; a Source server that does not answer A2S_PLAYER (CS2 without a
+# plugin, CS:GO without host_players_show 2) leaves it empty too. Counted by the list alone, every
+# one of those read as a confident 0, and 0 is what restart-when-empty, a queued restart and the
+# reboot confirm all act on as "nobody is on".
+#
+# numplayers is the server's own count. For Source it includes bots, which gamedig reports as
+# raw.numbots and moves into `bots` when it can tell them apart — so it is taken less whichever of
+# those is larger. The answer is the LARGER of that and the list's length: the one wrong answer
+# that costs anything is a 0 that is not one. `numbers`/`arrays` drop a field of the wrong type
+# instead of failing the whole filter, so a reply without numplayers counts by its list, as before.
+GAMEDIG_HUMANS_JQ = ('([(.players|length), ((.numplayers|numbers) - '
+                     '([(.bots|arrays|length), (.raw.numbots?|numbers)] | max // 0))] | max)')
 
 
 # Registered: a deleted host's id is reused, and this decides where a player query is SENT — so a
@@ -3117,7 +3407,8 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port):
     # players, from an unattended hourly cron, and this is the one decision the feature exists to
     # avoid. `if … then … else empty end` makes jq print NOTHING unless it really saw a player
     # array, which is the same `ok:(.players|type=="array")` guard the three python-side readers in
-    # cron.py use; the shell then only acts on an exact 0.
+    # cron.py use; the shell then only acts on an exact 0. And what it counts is GAMEDIG_HUMANS_JQ,
+    # not the list's length: a Bedrock server answers with an empty list and numplayers 7.
     #
     # The no-query case stays unconditional, and that is not the same thing: when the panel knows
     # at cron-writing time that the game has no gamedig type or no port, there is no reading to
@@ -3126,7 +3417,7 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port):
         # An int, or ValueError — never stored text in a line /bin/sh runs (set_daily_restart and
         # cron.upgrade_managed_cron_tracking refuse such a port before they get here).
         port = cron_port(port)
-        jqf = 'if (.players|type=="array") then (.players|length) else empty end'
+        jqf = 'if (.players|type=="array") then %s else empty end' % GAMEDIG_HUMANS_JQ
         # gamedig by the PATH above, not cron's: see CRON_TOOL_PATH.
         getp = (f"{gamedig_cron_call()}--type {gdtype} {host}:{port} 2>/dev/null "
                 f"| jq -r {_quote(jqf)} 2>/dev/null); ")

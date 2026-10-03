@@ -170,10 +170,14 @@ def _privileged_selection(remote, items, discovered):
     """Refuse the selected accounts that are root-capable on the host; drop them from `discovered`.
 
     -> [{"user", "reason"}] for the ones refused, or None when the host could not be asked. Only
-    accounts the scan reported are probed — a name it did not report is skipped anyway.
+    accounts the scan reported are probed — a name it did not report is skipped anyway — and only
+    names that pass INSTANCE_NAME_RE, the rule _add_imported_rows imports by. That check used to
+    run AFTER this one, so the probe (shell text, run as root on a sudo-enabled remote) was handed
+    the /home listing's names exactly as the scan read them; a name the import would refuse is
+    skipped there, and never needs asking about.
     """
     picked = [(str(it.get("user") or "")).strip() for it in items[:100] if isinstance(it, dict)]
-    picked = [u for u in dict.fromkeys(picked) if u in discovered]
+    picked = [u for u in dict.fromkeys(picked) if u in discovered and INSTANCE_NAME_RE.match(u)]
     verdict = privileged_accounts(remote, picked)
     if verdict is None:
         return None

@@ -219,8 +219,10 @@ def cleanup():
         if p not in _PREEXISTING and p.exists():
             try:
                 p.unlink()
-            except OSError:
-                pass
+            except OSError as e:
+                # Said, not swallowed: a panel.db left behind makes the NEXT run of every
+                # DB-owning suite print SKIP and exit 0, with nothing to say why.
+                print("cleanup: could not remove %s (%s)" % (p, e), file=sys.stderr)
     if _CONFIG_SNAPSHOT is not None:
         try:
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
@@ -438,7 +440,8 @@ try:
     # ── /tailscale's Disable takes down the PANEL's Serve mapping, not the first one listed ──
     # The button sent services[0].routes[0].mount, and Tailscale lists "/" first — on a node where
     # another app holds "/" and the panel sits at /lgsm, that was the other app. And the removal
-    # ran `tailscale serve --bg --remove`, a flag no Tailscale version has, so it never worked.
+    # ran `tailscale serve --bg --remove`, which no Tailscale accepts (--remove was the 1.34-1.36
+    # alpha CLI's, which had no --bg), so it never worked.
     import panel.ops.tailscale_integration as _tsd
     from panel.core.config import load_config as _tsd_load, save_config as _tsd_save
     _tsd_saved = (_tsd.get_tailscale_info, _tsd._run_ts, _tsd.ensure_operator)
@@ -477,7 +480,7 @@ try:
         # re-applies Serve — so getting back in took host SSH. change-port refuses to create that
         # state; Disable created it with one click. Both a stored 127.0.0.1 and an unset bind that
         # boot resolved to 127.0.0.1 are that state.
-        import app as _tsd_app
+        _tsd_app = sys.modules["app"]   # loaded by `from app import` above
         _tsd_rb = dict(_tsd_app._RESOLVED_BIND)
         try:
             for _tsd_label, _tsd_bind, _tsd_resolved in (
@@ -617,11 +620,16 @@ try:
         save_config(_gb_cfg0)
     _gb_app_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app.py"),
                        encoding="utf-8").read()
+    # The loop runs _ban_watch_tick; the tick feeds the set from the fail2ban reading it takes, and
+    # UFW's through banlist.watch_ufw (which reads it when ufw's rule files changed; unit part34).
     _gb_watch = _gb_app_src[_gb_app_src.index("def _f2b_ban_watch"):]
     _gb_watch = _gb_watch[:_gb_watch.index("time.sleep(90)")]
+    _gb_tick = _gb_app_src[_gb_app_src.index("def _ban_watch_tick"):]
+    _gb_tick = _gb_tick[:_gb_tick.index("\ndef ")]
     check("funnel gate: the 90 s ban-watcher feeds the set from the reading it already takes",
-          "_banlist.set_f2b(reading, _taken)" in _gb_watch
-          and "_banlist.set_ufw(so.ufw_blocked_ips(), _taken)" in _gb_watch)
+          "_ban_watch_tick(app, state)" in _gb_watch
+          and "_banlist.set_f2b(reading, _taken)" in _gb_tick
+          and "_banlist.watch_ufw(so.ufw_blocked_ips)" in _gb_tick)
 
     # ── a socket opened BEFORE its client was banned is dropped when the ban lands ─────────────
     # A ban refuses new connections — the gate above, or the firewall — and nothing re-asked about
@@ -717,7 +725,7 @@ try:
     # Every commit of a day shares the date, so the footer only answers "what is deployed" with the
     # commit next to it. Rendered with known values: this suite's copy of the panel may have no
     # .git, and then its own version reads "unknown" with no commit at all.
-    import app as _fv_app
+    _fv_app = sys.modules["app"]   # loaded by `from app import` above
     _fv_saved = (_fv_app.PANEL_VERSION, _fv_app.PANEL_COMMIT)
     try:
         _fv_app.PANEL_VERSION, _fv_app.PANEL_COMMIT = "2026.9.26", "a1b2c3d"
@@ -2242,7 +2250,7 @@ try:
               _hp_go.status_code == 403 and _hp_sy.status_code == 403 and _hp_fw == [],
               "open=%d sync=%d calls=%r" % (_hp_go.status_code, _hp_sy.status_code, _hp_fw))
         # Known version and commit (see the footer's check) for the Updates card's header.
-        import app as _hp_app
+        _hp_app = sys.modules["app"]   # loaded by `from app import` above
         _hp_vsaved = (_hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT)
         try:
             _hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT = "2026.9.26", "a1b2c3d"
@@ -7862,6 +7870,9 @@ try:
                 _monmod._host_restart_flags = lambda r: {_mon_user}
                 _ps._cron_restart_pending.clear()
                 _reset_mon()
+                # Every host due for its (gated) read: when each was last read is the gate's
+                # business, tested in unit part34; this is about what a read records.
+                _monmod._restart_flags_read_at.clear()
                 _monmod._monitor_pass()
                 check("monitor: a server whose box has the restart flag is recorded",
                       _ps._cron_restart_pending.get(_mon_id) is True,
@@ -10387,7 +10398,7 @@ try:
     # the panel login" message per live ban, then a "Login attack in progress" alert once three
     # arrived together. _f2b_ban_events decides; this is what it emits, driven directly rather
     # than through the daemon thread.
-    import app as _fre
+    _fre = sys.modules["app"]   # loaded by `from app import` above
     from panel.db.models import AuditLog as _fre_AL
     _fre_notes = []
     _fre_saved = _fre.notifications.notify
@@ -11762,7 +11773,7 @@ try:
           "recovered" % (len(_fp_seen), 3000))
     check("console poller: ...and the poller refuses the advance on that answer",
           "if out is None:" in _bs_src
-          and "out = _console_whole_lines(server_id, out) if rc == 0 else None" in _bs_src,
+          and "out = _console_whole_lines(server_id, framed) if rc == 0 else None" in _bs_src,
           "the offset still moves on a read whose result was never proven to have arrived")
 
     # ── The REAL tick, against a fake log that rotates the way LinuxGSM rotates it ───────────
@@ -11790,16 +11801,26 @@ try:
         def read(self, _server, _user, sh, timeout=30, selfname=None):
             if sh.startswith("stat -c '%i %s'"):
                 return ("%d %d" % (self.ino, len(self.data)) if self.exists else "MISSING"), "", 0
-            m = _ct_re.match(r"printf B; \{ tail -c \+(\d+) \S+ 2>/dev/null \| head -c (\d+); \}; "
-                             r"printf E$", sh)
+            # The tick's one command after first sight (server_files._console_poll_cmd): the stat,
+            # the start the host picks from the inode and offset it is handed, the framed bytes.
+            m = _ct_re.match(r"L=\S+; S=\$\(stat -c '%i %s' \"\$L\" 2>/dev/null\) \|\| "
+                             r"\{ echo MISSING; exit 0; \}; set -- \$S; "
+                             r"if \[ \"\$1\" = (\d+) \] && \[ \"\$2\" -ge (\d+) \]; then P=\2; "
+                             r"else P=0; fi; D=\$\(\(\$2 - P\)\); if \[ \"\$D\" -gt (\d+) \]; "
+                             r"then D=\3; fi; ", sh)
             if not m:
                 return "", "unexpected command %r" % sh, 1
+            if not self.exists:
+                return "MISSING", "", 0
             if self.fail_chunk:
                 self.fail_chunk = False
                 return "", "SSH command timed out", -1      # tailscale/local: no raise, no frame
-            a = int(m.group(1)) - 1
+            size = len(self.data)
+            a = int(m.group(2)) if (int(m.group(1)) == self.ino and size >= int(m.group(2))) else 0
+            n = min(size - a, int(m.group(3)))
             # .strip(): what every transport does to the output before the caller sees it
-            return ("B" + self.data[a:a + int(m.group(2))] + "E").strip(), "", 0
+            return ("%d %d %d %d" % (self.ino, size, a, n)
+                    + ("\nB" + self.data[a:a + n] + "E" if n else "")).strip(), "", 0
 
     class _CtSio:
         def __init__(self):
@@ -14417,7 +14438,8 @@ try:
                     continue
                 for _bkc_c in _bkc_ast.walk(_bkc_fn):
                     if (isinstance(_bkc_c, _bkc_ast.Call) and isinstance(_bkc_c.func, _bkc_ast.Attribute)
-                            and _bkc_c.func.attr in ("record_game_backup", "record_full_backup")):
+                            and _bkc_c.func.attr in ("record_game_backup", "record_full_backup",
+                                                     "start_game_clock")):
                         _bkc_direct.append("%s:%d in %s()" % (_bkc_py.name, _bkc_c.lineno, _bkc_fn.name))
         check("backup clock: nothing but the two safe helpers calls the writers that raise on a bad "
               "config.json", not _bkc_direct,
@@ -14445,11 +14467,20 @@ try:
             return True, "", False
 
         _bkc_rec_real, _bkc_full_real = _bkops.record_game_backup, _bkops.record_full_backup
+        _bkc_start_real = _bkops.start_game_clock
         _bkc_sched_real = _bkops.get_game_schedule
 
         def _bkc_rec(sid):
             try:
                 return _bkc_rec_real(sid)
+            except _BkcCU:
+                _bkc_refused.append(sid)
+                raise
+
+        def _bkc_start(sid):
+            """start_game_clock, recording a refused write: a first sight STARTS the clock."""
+            try:
+                return _bkc_start_real(sid)
             except _BkcCU:
                 _bkc_refused.append(sid)
                 raise
@@ -14491,6 +14522,7 @@ try:
             _bksh.notifications.notify = lambda k, t, b="": _bkc_notes.append((k, t))
             _bkops.game_backup_due = lambda sid: sid == gs_id    # only OUR server is due
             _bkops.record_game_backup, _bkops.record_full_backup = _bkc_rec, _bkc_full
+            _bkops.start_game_clock = _bkc_start
             _bkc_rec_real(gs_id)                                 # a clock: not "never run before"
             _bkops.set_game_schedule(gs_id, 1, 2)                # ...and the schedule is ON
             _bksh.run_game_backup = _bkmod.run_game_backup = _bkc_break_config
@@ -14596,6 +14628,7 @@ try:
             (_bksh.notifications.notify, _bkops.game_backup_due, _bksh.run_game_backup,
              _bkmod.run_game_backup, _bkmod.threading) = _bkc_saved
             _bkops.record_game_backup, _bkops.record_full_backup = _bkc_rec_real, _bkc_full_real
+            _bkops.start_game_clock = _bkc_start_real
             _bkops.get_game_schedule = _bkc_sched_real
             _bkops.set_game_schedule(gs_id, None, None)
             with app.app_context():
@@ -15697,7 +15730,7 @@ try:
     # and still answers the panel's own. Only meaningful when the app came up without a domain,
     # which is how this suite builds it; the first check says so if that ever changes.
     _so_eio = app.socketio.server.eio
-    import app as _so_app
+    _so_app = sys.modules["app"]   # loaded by `from app import` above
     check("socket origin: the running engine.io server was built with the per-request origin check",
           _so_eio.cors_allowed_origins is _so_app._socket_origin_allowed,
           "cors_allowed_origins is %r" % (_so_eio.cors_allowed_origins,))

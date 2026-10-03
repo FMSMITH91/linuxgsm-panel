@@ -73,7 +73,7 @@ check("resolve_free_port: propagates the None rather than inventing a port",
 # running — so five STOPPED Source servers on 27015-27019 left 27020 looking free and the sixth
 # install was handed the first server's SourceTV port. That install succeeded; the cost landed
 # later, on whoever started the older server and got "Port 27020 was unavailable" from srcds.
-import app as _app_mod                                                             # noqa: E402
+_app_mod = sys.modules["app"]   # loaded by the from-imports above; never `import app as` beside them
 _o_rlp, _o_gsq = _app_mod._remote_listening_ports, _app_mod.GameServer
 _o_lgv, _o_eng = _app_mod.lgsm_get_values, _app_mod.sm_game_engine
 try:
@@ -924,7 +924,8 @@ check("daily_restart(mapped): queries gamedig for player count",
 # print nothing unless it really saw a player array.
 _dr_line = _cron["add"][1]
 check("daily_restart(mapped): jq prints nothing unless gamedig really answered",
-      'if (.players|type=="array") then (.players|length) else empty end' in _dr_line, _dr_line[:200])
+      'if (.players|type=="array") then ' in _dr_line and ' else empty end' in _dr_line,
+      _dr_line[:200])
 check("daily_restart(mapped): restarts on a counted 0, not on an empty/failed read",
       '[ "$P" = 0 ]' in _dr_line
       and '-z "$P"' not in _dr_line and '"$P" = null' not in _dr_line, _dr_line[:200])
@@ -2728,7 +2729,8 @@ check("tailscale: ...while '(tailnet only)' is private, even with 'funnel' in a 
 _tsi._cache["info"] = None
 
 # ── Disabling Serve runs a command the CLI has, and removes only the PANEL's mapping ─────────
-# It ran `tailscale serve --bg --remove <mount>`. No Tailscale version has --remove: the CLI exits 2
+# It ran `tailscale serve --bg --remove <mount>`. No Tailscale has both (--remove was the 1.34-1.36
+# alpha CLI's, --bg the serve CLI that replaced it), so the command fails on every version: exit 2
 # ("flag provided but not defined: -remove") before doing anything, so every Disable failed —
 # including taking a Funnelled panel back off the internet. The CLI's removal is
 # `serve --https=<port> --set-path=<mount> off`; without --set-path, `off` drops EVERY mount on

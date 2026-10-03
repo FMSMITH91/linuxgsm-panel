@@ -137,7 +137,8 @@ from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupSta
     row_birth, still_held)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, list_game_backups, game_engine as
-    sm_game_engine, set_game_priority_bulk, lgsm_get_values, remote_set_fail2ban_ignoreip,
+    sm_game_engine, set_game_priority_bulk, game_users_off_priority, lgsm_get_values,
+    remote_set_fail2ban_ignoreip,
     ensure_node_tools_cron, ensure_persistent_bans)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
@@ -150,6 +151,8 @@ from panel.ops import system_ops as so
 # (R17) and Serve's boot outcome as a fixed reason (R20). Through the modules, at call time.
 from panel.ops.debug_report import errors as _dr_errors
 from panel.ops.debug_report import process as _dr_process
+from panel.ops.serve_upkeep import (_boot_audit, _panel_tailscale_url,
+    _remove_serve_leftovers, _tailscale_banner)
 from panel.ops import backup as bk
 from panel.services import lgsm_data
 
@@ -595,6 +598,21 @@ def _metrics_history_watch(app):
         time.sleep(_METRIC_SAMPLE_SECONDS)
 
 
+def _keep_game_priority(remote, users):
+    """One priority-keeper step for one host: renice the game accounts that drifted off -1.
+
+    Reads the nice values first, unprivileged (game_users_off_priority), and spends the root
+    renice only on accounts with a settled process off priority. When the read cannot answer it
+    is None, and every account is reniced, which is what the keeper always did.
+    """
+    users = sorted(users)
+    due = game_users_off_priority(remote, users)
+    if due is None:
+        due = users
+    if due:
+        set_game_priority_bulk(remote, due)
+
+
 def _still_in_db(row):
     """Re-read `row` from the database. False when it has been deleted since it was loaded (by
     another session: a request deleting a host commits on its own), or cannot be read at all.
@@ -705,6 +723,7 @@ def _mark_expected_offline(server_id):
 def _monitor_watch(app):
     """Background monitor loop that feeds the admin notifications (server down, host unreachable,
     disk low)."""
+    runtime_stats.loop_started("monitor", _MONITOR_SECONDS)
     while True:
         time.sleep(_MONITOR_SECONDS)
         try:
@@ -979,6 +998,7 @@ def _run_autoblock_now(app, remote_id):
 
 def _autoblock_watch(app):
     """Reconcile every auto-block host hourly, so the block list rolls with the 7-day window."""
+    runtime_stats.loop_started("autoblock", 3600)
     while True:
         time.sleep(3600)
         host_ids = _autoblock_hosts()
@@ -1748,9 +1768,12 @@ def create_app():
 
     @app.after_request
     def _compress_and_cache(resp):
-        # 1) Cache the vendored static assets (bootstrap/icons/socketio). They ship WITH the panel
-        #    version, so a long cache is safe — a panel update restarts the process and the user
-        #    reloads. This stops the browser revalidating ~600KB of assets on every page load.
+        # 1) Cache the static assets (the vendored libraries and the panel's own JS/CSS). A long
+        #    cache is safe only because templates load every one through asset_url(), whose URL
+        #    carries a hash of the file's bytes: an update that changes a file changes its URL. A
+        #    fixed URL is NOT refreshed by a reload, so a browser kept the vendored Socket.IO client
+        #    it had for up to a week after the update that replaced it. This stops the browser
+        #    revalidating ~600KB of assets on every page load.
         try:
             if request.path.startswith(_static_prefix):
                 resp.headers["Cache-Control"] = "public, max-age=604800"   # 1 week
@@ -1993,14 +2016,7 @@ def register_context_processors(app):
     @app.context_processor
     def inject_globals():
         cfg = load_config()
-        # Get Tailscale info for URL injection
-        tailscale_url = None
-        try:
-            ts_info = ts.get_tailscale_info()
-            if ts_info.dns_name:
-                tailscale_url = f"https://{ts_info.dns_name}"
-        except Exception:
-            _log.debug("inject_globals: ignored non-fatal error", exc_info=True)
+        tailscale_url = _panel_tailscale_url(app.config, cfg, _serve_scheme_now)
         # Non-local remotes for the SYSTEM nav (one management link per remote VPS).
         nav_remotes = []
         try:
@@ -2720,8 +2736,8 @@ def register_routes(app):
     # Lazy, like every other panel.routes import here: those modules do
     # `from app import ...` at their top, so they can only be imported once
     # this module's own body has finished.
-    from panel.routes._shared import (_run_due_game_backups, _run_due_restarts,
-        _run_pending_backups)
+    from panel.routes._shared import (_backup_ticker_pass, _run_due_game_backups,
+        _run_due_restarts, _run_pending_backups)
 
     # ── Helpers ─────────────────────────────────────────────
 
@@ -2856,23 +2872,25 @@ def register_routes(app):
         # Wait before the FIRST tick so a restart (e.g. a panel self-update) doesn't immediately
         # fire this batch — which can start a due backup, archiving a server on top of the cold-start
         # and pinning the CPU. Hourly cadence is unchanged; the first run is just shifted ~2 min.
+        runtime_stats.loop_started("backup-ticker", 120)
         time.sleep(120)
         while True:
-            try:
-                _t0 = time.time()
-                bk.daily_backup_tick()
-                _run_due_game_backups(app)   # per-server schedules (each records its own last-run)
-                _run_pending_backups(app)    # 'wait until empty' full-backup queue
-                runtime_stats.beat("backup-ticker", 3600, time.time() - _t0)
-            except Exception:
-                runtime_stats.bump("loopfail", "backup-ticker")
-                app.logger.debug("backup tick failed", exc_info=True)
+            # Each step on its own, and the pass's heartbeat or failure recorded there: under one
+            # try, a daily panel backup that raised skipped both game sweeps for the pass, logged
+            # at a level production drops. See _backup_ticker_pass.
+            _backup_ticker_pass(app, (
+                ("daily panel backup", bk.daily_backup_tick, ()),
+                # per-server schedules (each records its own last-run)
+                ("scheduled game backups", _run_due_game_backups, (app,)),
+                # 'wait until empty' full-backup queue
+                ("queued game backups", _run_pending_backups, (app,))))
             time.sleep(3600)
     _supervise("backup-ticker", backup_ticker)
     # "Restart/stop when empty" needs to act PROMPTLY once the last player leaves — an hourly check
     # would leave the server up for up to an hour after it emptied. Run the deferred-action sweep on
     # a short cadence instead; it only does anything for servers that actually have a queued action.
     def due_actions_ticker():
+        runtime_stats.loop_started("due-actions", 45)
         time.sleep(45)
         while True:
             try:
@@ -2902,6 +2920,7 @@ def register_routes(app):
     # of it; it also holds the row's host check against the install-status poll asking the same
     # question at the same time.
     def install_reconcile_ticker():
+        runtime_stats.loop_started("install-reconcile", 20)
         time.sleep(20)   # let boot settle; the per-server check is an SSH round trip
         while True:
             try:
@@ -2924,8 +2943,10 @@ def register_routes(app):
     # its own start/restart, but the LinuxGSM monitor cron restarts a crashed server AS the game
     # user — which can't set a negative nice — so it falls back to nice 0. Re-apply the boost on a
     # slow cadence so every game, however it (re)started, settles at the intended priority. One
-    # batched `renice` per host; users with no running processes are a no-op.
+    # unprivileged `ps` read per host, then one batched `renice` for the accounts that drifted
+    # (all of them when the read cannot answer); see _keep_game_priority.
     def priority_keeper():
+        runtime_stats.loop_started("priority-keeper", 60)
         time.sleep(60)
         while True:
             try:
@@ -2938,7 +2959,7 @@ def register_routes(app):
                         by_remote.setdefault(gs.remote_id, (gs.remote, set()))[1].add(gs.short_name)
                     for remote, users in by_remote.values():
                         try:
-                            set_game_priority_bulk(remote, sorted(users))
+                            _keep_game_priority(remote, users)
                         except Exception:
                             app.logger.debug("priority keeper: renice failed", exc_info=True)
                 runtime_stats.beat("priority-keeper", 120, time.time() - _t0)
@@ -3107,6 +3128,50 @@ def _f2b_record_events(app, new_bans, unbans):
                              "%d IPs were just banned from the panel login at once." % len(new_bans))
 
 
+def _ban_watch_tick(app, state):
+    """One ban-watcher tick: the panel jail's bans recorded and fed to the ban gate, with UFW's.
+
+    `state` is the loop's own {"seen": ...} (see _f2b_ban_events). The decision is stored in it
+    the moment it is made, BEFORE anything that can raise: the audit rows, the whitelist from a
+    hand-edited config.json, the UFW read. A tick that failed after deciding must not leave the
+    loop holding the old `seen`, or every ban in it is announced again on every later tick — an
+    audit row and an "IP banned" notification each 90 s for the whole hour of the ban — and, before
+    the first good tick, no new ban is ever announced at all. Module level so a test drives the
+    tick itself; the loop that calls it only sleeps and counts failures.
+    """
+    _taken = _t0 = time.monotonic()
+    reading = so.panel_fail2ban_banned_ips()
+    state["seen"], new_bans, unbans = _f2b_ban_events(state.get("seen"), reading)
+    _f2b_record_events(app, new_bans, unbans)
+    # The same reading feeds the panel's own ban gate, for traffic the firewall rule never sees
+    # (Tailscale Funnel, which can also be switched on outside the panel, so this does not ask),
+    # with the UFW denies and the whitelist. Each reading carries when it was TAKEN, so a slower
+    # read cannot overwrite a newer refresh. fail2ban is read every tick, always: its bans come
+    # and go on their own clock.
+    _banlist.set_f2b(reading, _taken)
+    _banlist.set_whitelist(load_config().get("security_whitelist") or [])
+    # UFW only when its rule files changed (or every banlist.UFW_FORCED_READ seconds): the rules
+    # live in those files, and re-reading them unchanged was a privileged call every 90 s.
+    _banlist.watch_ufw(so.ufw_blocked_ips)
+    runtime_stats.beat("ban-watch", 90, time.monotonic() - _t0)
+
+
+def _f2b_ban_watch(app):
+    """The ban-watcher: _ban_watch_tick every 90 s, forever, a failed tick counted and survived.
+
+    It owns the tick's state, so a tick that raised after deciding keeps that decision (see
+    _ban_watch_tick). Module level so a test drives this loop itself, with a sleep that stops it.
+    """
+    state = {"seen": None}
+    while True:
+        try:
+            _ban_watch_tick(app, state)
+        except Exception:
+            runtime_stats.bump("loopfail", "ban-watch")
+            _log.debug("fail2ban ban-watch tick failed", exc_info=True)
+        time.sleep(90)
+
+
 def _boot_ssl_args(app, cfg, host, port):
     """The self-signed TLS arguments for socketio.run, recording what really started (R20).
 
@@ -3136,21 +3201,37 @@ def _boot_serve(app, cfg, port):
 
     app.config["BOOT_SERVE"]: "ok", "failed:<fixed reason class>" or "not attempted". The failure
     message is raw tailscale stderr (a *.ts.net name, a login URL), so only its class is kept.
+
+    Then, once the configured mount took, the panel's own routes at any OTHER mount on :443 come
+    down (_remove_serve_leftovers), recorded apart in app.config["BOOT_SERVE_LEFTOVERS"] so
+    BOOT_SERVE keeps meaning "the configured mapping was applied". The re-point used to write that
+    one mount and stop: a second route to the panel, left on the scheme it was written with, 502'd
+    from the next flip of the panel's own scheme while this said "ok".
+
+    The scheme is the one this process REALLY serves (_serve_scheme_now reads BOOT_TLS, set by
+    _boot_ssl_args just before this). It was _effective_https's answer, which says HTTPS for a TLS
+    start that failed and fell back to HTTP, so the re-point wrote https+insecure in front of a
+    plain-HTTP panel and a restart reproduced the 502 it was meant to heal.
     """
     app.config["BOOT_SERVE"] = "not attempted"
+    app.config["BOOT_SERVE_LEFTOVERS"] = "not attempted"
     if not cfg.get("tailscale_setup_done"):
         return
+    mount = cfg.get("tailscale_mount", "/") or "/"
     try:
         _ok, _msg = ts.setup_tailscale_serve(
             port=port,
-            mount=cfg.get("tailscale_mount", "/") or "/",
+            mount=mount,
             funnel=cfg.get("tailscale_use_funnel", False),
-            backend_scheme=_ts_backend_scheme(cfg),
+            backend_scheme=_serve_scheme_now(cfg, app.config),
         )
         app.config["BOOT_SERVE"] = "ok" if _ok else "failed:" + _dr_process.serve_reason(_msg)
     except Exception as e:
         app.config["BOOT_SERVE"] = "failed:" + type(e).__name__
         _log.debug("ignored non-fatal error", exc_info=True)
+    if app.config["BOOT_SERVE"] == "ok":
+        app.config["BOOT_SERVE_LEFTOVERS"] = _remove_serve_leftovers(
+            port, mount, "at boot", lambda detail, ok: _boot_audit(app, detail, ok))
 
 
 def _ts_backend_scheme(cfg):
@@ -3158,6 +3239,23 @@ def _ts_backend_scheme(cfg):
     is actually listening right now, or Serve 502s. When we're terminating self-signed
     TLS ourselves, Serve talks https+insecure to us; otherwise plain http."""
     return "https+insecure" if _effective_https(cfg) else "http"
+
+
+def _serve_scheme_now(stored, conf=None):
+    """The scheme Serve must use to reach THIS process: what it really serves since boot.
+
+    `stored` is config.json, `conf` the app's config. Its BOOT_TLS is what _boot_ssl_args found when
+    the process started; the stored config only says what the NEXT start will serve. Every
+    in-process Serve write used the stored answer (_ts_backend_scheme), and the setup wizard's Serve
+    step stores a loopback bind that applies only from the next restart: its finish then published
+    /lgsm on http in front of a process still serving TLS on every interface, a 502 until someone
+    restarted the panel. Before boot has recorded anything (a test app, or create_app without
+    __main__) the stored answer stands.
+    """
+    tls = (conf or {}).get("BOOT_TLS")
+    if tls is None:
+        return _ts_backend_scheme(stored)
+    return "https+insecure" if tls else "http"
 
 
 if __name__ == "__main__":
@@ -3189,29 +3287,8 @@ if __name__ == "__main__":
     # Record fail2ban bans/unbans of the panel-login jail in the audit log, so the activity is
     # visible even though the jail runs automatically with no management UI. Seeds from the current
     # bans on start (so existing bans aren't re-logged) and polls for changes.
-    def _f2b_ban_watch():
-        seen = None
-        while True:
-            try:
-                _taken = _t0 = time.monotonic()
-                reading = so.panel_fail2ban_banned_ips()
-                seen, new_bans, unbans = _f2b_ban_events(seen, reading)
-                _f2b_record_events(app, new_bans, unbans)
-                # The same reading feeds the panel's own ban gate, for traffic the firewall rule
-                # never sees (Tailscale Funnel, which can also be switched on outside the panel, so
-                # this does not ask), with the UFW denies and the whitelist. Each reading carries
-                # when it was TAKEN, so a slower read cannot overwrite a newer refresh.
-                _banlist.set_f2b(reading, _taken)
-                _banlist.set_whitelist(load_config().get("security_whitelist") or [])
-                _taken = time.monotonic()
-                _banlist.set_ufw(so.ufw_blocked_ips(), _taken)
-                runtime_stats.beat("ban-watch", 90, time.monotonic() - _t0)
-            except Exception:
-                runtime_stats.bump("loopfail", "ban-watch")
-                _log.debug("fail2ban ban-watch tick failed", exc_info=True)
-            time.sleep(90)
     if os.name == "posix":
-        threading.Thread(target=_f2b_ban_watch, name="ban-watch", daemon=True).start()
+        threading.Thread(target=_f2b_ban_watch, args=(app,), name="ban-watch", daemon=True).start()
 
     # Fire any "reboot when empty" requests once a host has no players left.
     threading.Thread(target=lambda: _reboot_when_empty_watch(app), name="reboot-when-empty",
@@ -3274,18 +3351,6 @@ if __name__ == "__main__":
         print("  [!] " + _proxy_bind_note)
     print(f"Open {_scheme}://{host}:{port} in your browser")
 
-    # Show Tailscale URL if available
-    try:
-        ts_info = ts.get_tailscale_info()
-        if ts_info.dns_name:
-            print(f"\n  🌐 Tailscale: https://{ts_info.dns_name}")
-            if ts_info.funnel_enabled:
-                print(f"  🌍 Funnel (public): https://{ts_info.dns_name}")
-        elif ts_info.tailscale_ips:
-            print(f"\n  🌐 Tailscale IP: http://{ts_info.tailscale_ips[0]}:{port}")
-    except Exception:
-        _log.debug("ignored non-fatal error", exc_info=True)
-
     # Optional built-in HTTPS with a self-signed cert (for public, no-domain, no-proxy
     # setups). Browsers will warn about the self-signed cert — that's expected.
     ssl_args = _boot_ssl_args(app, cfg, host, port)
@@ -3295,5 +3360,14 @@ if __name__ == "__main__":
     # HTTP once Tailscale took over TLS on the next restart), re-point Serve at the scheme
     # we're actually listening on now. Idempotent when already correct; best-effort.
     _boot_serve(app, cfg, port)
+
+    # The Tailscale address, AFTER the re-point: printed before it, the banner read Serve as it
+    # was, not as boot left it.
+    try:
+        for _line in _tailscale_banner(cfg, port, app.config, ts.get_tailscale_info(),
+                                       _serve_scheme_now):
+            print(_line)
+    except Exception:
+        _log.debug("ignored non-fatal error", exc_info=True)
 
     app.socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)

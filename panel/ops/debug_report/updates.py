@@ -9,9 +9,12 @@ which a running check holds across a fetch and up to 25 GitHub requests). The CI
 that check recorded in runtime_stats. Git reads are local, with full ref names and timeouts.
 
 Free text from the self-update log is reduced before it is printed: the origin warning to R28's
-category (install.sh prints the URL, which can carry user:token@), URL userinfo stripped, IPv4
-addresses masked (install.sh prints the api.ipify address), and _redact's secret rules; the
-assembler's privacy pass runs over it again.
+category (install.sh prints the URL, which can carry user:token@), a full commit id in the
+installer's own messages shortened to 12 characters (a 40-hex id is one "long token"), then the
+report's privacy pass: paths normalised FIRST (<data>, <panel-lib>, <gamedig>), URL userinfo and
+_redact's secret rules, then names and IP addresses by class. Without the report's ctx (a direct
+caller), URL userinfo is stripped, _redact applied and every IPv4 address masked as [ip]. The
+assembler's privacy pass runs over it all again.
 """
 import datetime as _dt
 import os
@@ -30,9 +33,30 @@ _HISTORY_MAX = 10
 _USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]{1,15}://)[^/\s]+@")
 _IPV4_RE = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 _ORIGIN_WARN = "[!] This checkout's git origin is"
-# The lines of an installer run worth keeping whatever their place in the log (R35).
-_KEEP_PREFIXES = ("[!]", "[ERROR]", "✓ sudo grant:", "Keeping ", "Updating to verified commit",
-                  "✓ Code updated (")
+# The lines of an installer run worth keeping whatever their place in the log (R35): its warnings
+# and errors always, and its key lines when the printed tail does not already show them.
+_WARN_PREFIXES = ("[!]", "[ERROR]")
+_KEEP_PREFIXES = _WARN_PREFIXES + ("✓ sudo grant:", "Keeping ", "Updating to verified commit",
+                                   "✓ Code updated (")
+# A full commit id in install.sh's own messages (_choose_update_target's 'pin'/'stay'/'hold' lines
+# and its warnings), shortened: 40 hex characters are one "long token" to _redact. Anchored to those
+# message forms, so a 40-hex value anywhere else is still redacted: 'verified commit <sha>',
+# 'the pinned commit <sha>', 'Keeping <sha>:', 'stays at <sha>:', 'pinned to, <sha>,' and
+# '(this) checkout (<sha>)' (the sideways-hold warning, and the no-safe-target error's second line).
+_INSTALLER_SHA_RE = re.compile(r"((?:verified|pinned) commit |^\s*Keeping |stays at |pinned to, |"
+                               r"checkout \()([0-9a-f]{40})(?![0-9a-f])")
+# The line install.sh prints on its way to `exit 0` on each exit-0 path, as panel_update_log reads
+# them (ANSI gone): the update's own, then update_noop_line's two. Not always its last line: the
+# update's can be followed by _post_update_scheme_hint's HTTPS hint.
+_INSTALLER_OK_ENDS = (("✓ Update complete", "done"), ("✓ Already up to date", "current"),
+                      ("[!] Not updated:", "held"))
+# Only what the log shows. Why the exit line is missing is not in it: a panel-helper from before
+# #363 never wrote one, and a run stopped after install.sh's ending (the system_ops wrapper's, or a
+# current helper's) leaves none either. The header cannot tell them apart: the old and the new
+# helper write the same one, and a long log's tail may not hold it.
+_NO_EXIT_LINE = (" · no exit line, so this outcome is install.sh's own ending line (a "
+                 "panel-helper from before 2026-09-26 never wrote an exit line; a run stopped "
+                 "after install.sh's ending leaves none either)")
 _REFLOG_ACTIONS = ("reset", "pull", "checkout", "commit", "merge", "rebase", "clone",
                    "cherry-pick", "fetch", "branch")
 # panel_self_update's and panel_switch_branch's messages, as fixed categories chosen IN SQL, so no
@@ -67,28 +91,23 @@ def _sha7(val):
     return val[:7] if _SHA_RE.match(val) else "?"
 
 
-def _scrubbed(ctx, text):
-    """`text` through the report's privacy pass BEFORE it is cut.
-
-    A name cut in half is a fragment the final pass cannot match. Without a ctx (a direct
-    caller), unchanged.
-    """
-    if ctx is None:
-        return text
-    from panel.ops.debug_report import privacy
-    return privacy.scrub_text(ctx, text)
-
-
 def clean_line(line, category="unreadable", ctx=None):
-    """One line of installer or git output, safe to print: see the module docstring."""
+    """One line of installer or git output, safe to print: see the module docstring.
+
+    With the report's ctx it goes through the privacy pass BEFORE it is cut: a name cut in half is
+    a fragment the final pass cannot match.
+    """
     so = _so()
     text = str(line or "")
     if text.startswith(_ORIGIN_WARN):
         return ("[!] This checkout's git origin is not the repository install.sh trusts (%s)"
                 % category)
-    text = _USERINFO_RE.sub(r"\1[userinfo]@", text)
-    text = so._redact(text)
-    return cut_words(_scrubbed(ctx, _IPV4_RE.sub("[ip]", text)), _LINE_MAX)
+    text = _INSTALLER_SHA_RE.sub(lambda m: m.group(1) + m.group(2)[:12], text)
+    if ctx is None:
+        text = so._redact(_USERINFO_RE.sub(r"\1[userinfo]@", text))
+        return cut_words(_IPV4_RE.sub("[ip]", text), _LINE_MAX)
+    from panel.ops.debug_report import privacy
+    return cut_words(privacy.scrub_early(ctx, text), _LINE_MAX)
 
 
 # ── R30: the cached status ────────────────────────────────────────────────────────────────────────
@@ -110,11 +129,51 @@ def _rules_line():
 
 
 def _announced():
+    """The commit the last 'update available' notification named; 'none' when unset or ''.
+
+    The update check writes "" once the announced update is installed, so "none" is the usual
+    resting state; '?' is kept for a value that is there but is not a commit id.
+    """
     from panel.core import config as cfg
     try:
-        return _sha7(cfg.load_config().get("panel_update_announced")) or "none"
+        val = cfg.load_config().get("panel_update_announced")
+        return _sha7(val) if val else "none"
     except Exception as exc:  # noqa: BLE001
         return "could not be read (%s)" % type(exc).__name__
+
+
+def _remote_words(data, branch):
+    """'origin/main 3af77a4', or the offered commit named as such.
+
+    On the update-available path the status's remote_sha is the OFFERED commit (target_sha[:7]),
+    which is below origin's tip while newer commits are still being verified.
+    """
+    remote = _sha7(data.get("remote_sha"))
+    target = data.get("target_sha")
+    if not (data.get("update_available") and target and remote == _sha7(target)):
+        return "origin/%s %s" % (branch, remote)
+    newer = data.get("newer_unverified")
+    if newer == 0:
+        return "offered %s (origin/%s's tip)" % (remote, branch)
+    if isinstance(newer, int):
+        return "offered %s (%d newer on origin/%s, not yet verified)" % (remote, newer, branch)
+    return "offered %s" % remote
+
+
+def _gate_words(data, branch, ci):
+    """The CI gate line's text: what the check asked CI, or why it asked nothing."""
+    behind = data.get("behind_tip", data.get("behind"))
+    if not data.get("target_sha"):
+        if behind == 0:
+            return ("not consulted: HEAD is not behind origin/%s, nothing newer to verify"
+                    % branch)
+        return "not consulted (the check did not get that far)"
+    unverified = not data.get("update_available") and data.get("ci_state") != "passing"
+    newer = data.get("newer_unverified")
+    docs = data.get("docs_only")
+    return "ci_state=%s · %s %s · newer_unverified %s · docs_only: %s" % (
+        ci, "newest unverified tip" if unverified else "target", _sha7(data.get("target_sha")),
+        "n/a" if newer is None else newer, "n/a" if docs is None else ("yes" if docs else "no"))
 
 
 def _status_lines(data, res):
@@ -124,12 +183,10 @@ def _status_lines(data, res):
     res.add("- **Card shows**: %s (update_available: %s)" % (
         "Update available" if data.get("update_available") else "You're up to date",
         "yes" if data.get("update_available") else "no"))
-    res.add("- **Tracked**: %s · HEAD %s · origin/%s %s · behind %s (first parent)" % (
-        branch, _sha7(data.get("current_sha")), branch, _sha7(data.get("remote_sha")),
+    res.add("- **Tracked**: %s · HEAD %s · %s · behind %s (first parent)" % (
+        branch, _sha7(data.get("current_sha")), _remote_words(data, branch),
         data.get("behind_tip", data.get("behind", "?"))))
-    res.add("- **CI gate**: ci_state=%s · target %s · newer_unverified %s · docs_only: %s" % (
-        ci, _sha7(data.get("target_sha")), data.get("newer_unverified", 0),
-        "yes" if data.get("docs_only") else "no"))
+    res.add("- **CI gate**: " + _gate_words(data, branch, ci))
     if data.get("fetched") is False:
         res.add("- **Fetch**: the last check could not fetch the update source")
         res.find("warn", "Updates", "the last update check could not fetch")
@@ -140,8 +197,9 @@ def _cache_lines(res):
     so = _so()
     data, ts = so._update_cache.get("data"), so._update_cache.get("ts") or 0
     if not data:
-        res.add("- **Card shows**: (not computed since the panel started; the first check runs "
-                "30 s after boot)")
+        from panel.ops.debug_report import workers
+        res.add("- **Card shows**: (not computed since the panel started; update check: %s)"
+                % workers.first_pass_words("update-check", time.time()))
         return None
     age = time.time() - ts
     _status_lines(data, res)
@@ -319,18 +377,41 @@ def _ok_outcome(upd, lines, category, ctx=None):
                           " (exit 0: the run went through the restart)")
 
 
+def _installer_end(lines):
+    """install.sh's own ending line on an exit-0 path, when the log holds one: (outcome, reason).
+
+    None when it does not, or when an [ERROR] came after it. Lines after it that are not an [ERROR]
+    (the HTTPS hint) are passed over. Read only for a log with no exit line.
+    """
+    for ln in reversed(lines):
+        if ln.startswith("[ERROR]"):
+            return None
+        for start, outcome in _INSTALLER_OK_ENDS:
+            if ln.startswith(start):
+                return outcome, ln.split(" ", 1)[1].strip() if outcome != "done" else ""
+    return None
+
+
 def run_outcome(upd, mtime, category="unreadable", now=None, ctx=None):
     """(level, outcome text) for a self-update log: the EXIT STATUS first, text markers second.
 
-    A log with no exit line that stopped being written _UPDATE_STALE_LOG ago is a run that DIED.
+    A log with no exit line that stopped being written _UPDATE_STALE_LOG ago is a run that DIED,
+    unless install.sh's own ending line says how it ended. The exit line is the LAUNCHER's, written
+    after install.sh returns, and the panel-helper wrote none before #363: every self-update it ran
+    ended without one, finished or not, and the report called a run whose log ends "✓ Update
+    complete" DIED, a [fail] at the top of the report.
     """
     so = _so()
     lines = upd.get("lines") or []
     if upd.get("exit_code") is None:
-        if mtime and ((now or time.time()) - mtime) > so._UPDATE_STALE_LOG:
+        if not (mtime and ((now or time.time()) - mtime) > so._UPDATE_STALE_LOG):
+            return "ok", "running (no exit line yet)"
+        end = _installer_end(lines)
+        if end is None:
             return "fail", ("DIED — the log stopped at %s with no exit line (a reboot or kill "
                             "mid-update); check the snapshot in data/.backups" % _utc(mtime))
-        return "ok", "running (no exit line yet)"
+        return "ok", (_ok_outcome(dict(upd, outcome=end[0], reason=end[1]), lines, category, ctx)
+                      + _NO_EXIT_LINE)
     if upd.get("exit_code") != 0:
         return "fail", _failed_outcome(upd, "\n".join(lines), category, ctx)
     return "ok", _ok_outcome(upd, lines, category, ctx)
@@ -364,16 +445,22 @@ def _last_run_lines(res, category, ctx=None):
 
 
 # ── R35: installer warnings, from the tail already read ──────────────────────────────────────────
-def installer_said(lines, category="unreadable", ctx=None):
-    """The warning, error and grant lines of a run (with an [ERROR]'s continuation lines)."""
+def installer_said(lines, category="unreadable", ctx=None, shown_from=None):
+    """The warning, error and grant lines of a run (with an [ERROR]'s continuation lines).
+
+    `shown_from`: the index from which the report prints the log's own tail. A key line that is
+    not a warning (the grant, 'Keeping', 'Updating to verified commit', 'Code updated') is left
+    out from there on: the tail already shows it. A warning is always kept.
+    """
     out, in_error = [], False
-    for ln in lines:
+    for i, ln in enumerate(lines):
         s = ln.strip()
         if in_error and ln[:1].isspace() and s:
             out.append("  " + clean_line(s, category, ctx))
             continue
         in_error = s.startswith("[ERROR]")
-        if s.startswith(_KEEP_PREFIXES):
+        shown = shown_from is not None and i >= shown_from
+        if s.startswith(_WARN_PREFIXES) or (s.startswith(_KEEP_PREFIXES) and not shown):
             out.append(clean_line(s, category, ctx))
     return out[-20:]
 
@@ -383,12 +470,13 @@ def _tail_lines(res, upd, category, ctx=None):
 
     `res` first: _guard calls fn(res, *args).
     """
-    said = installer_said(upd.get("lines") or [], category, ctx)
+    lines = upd.get("lines") or []
+    said = installer_said(lines, category, ctx, shown_from=max(0, len(lines) - _TAIL_LINES))
     res.add("- **Installer said**:" + ("" if said else " (no warnings)"))
     res.lines += ["  " + ln for ln in said]
     # a log line of three backticks would close the fence early
     tail = [clean_line(ln, category, ctx).replace("`" * 3, "'" * 3) for ln in
-            (upd.get("lines") or [])[-_TAIL_LINES:]]
+            lines[-_TAIL_LINES:]]
     res.add("```")
     res.lines += tail or ["(empty)"]
     res.add("```")

@@ -42,7 +42,9 @@ jobs:
   # Every lockfile something installs, audited at ANY severity, on every pull request, on main and
   # weekly. The job keeps its name (a required check, .github/required-checks.txt); pip-audit is its
   # first half. The second, osv-scanner, reads what pip-audit cannot: gamedig's npm tree, which
-  # every host installs (tools/gamedig, `npm ci`), and the CI tools' pip lockfiles, which run in
+  # every host installs (tools/gamedig, `npm ci`), the browser libraries static/vendor/ ships to
+  # every page (its package-lock.json records what the bundles carry; nothing installs from it),
+  # and the CI tools' pip lockfiles, which run in
   # jobs holding security-events: write. Until it was added the only npm check was Dependency
   # Review, which judges what a pull request ADDS, so an advisory disclosed against the tree already
   # on main (GHSA-ch52-4w7c-c8xp, 2026-10-02) turned nothing red.
@@ -132,8 +134,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
-          lockfiles=(tools/gamedig/package-lock.json requirements.txt requirements-bootstrap.txt
-                     .github/ci-requirements*/*.txt)
+          lockfiles=(tools/gamedig/package-lock.json static/vendor/package-lock.json
+                     requirements.txt requirements-bootstrap.txt .github/ci-requirements*/*.txt)
           args=()
           for f in "${lockfiles[@]}"; do
             if [ ! -f "${f}" ]; then

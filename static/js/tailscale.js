@@ -111,6 +111,15 @@ function checkPeer() {
   });
 }
 
+// After Enable or Remove: `go` is the panel's own Serve address when the route this page came
+// through was taken down (the server works that out from `page`, and builds `go` from the host's
+// own route URL). Refreshing in place fetched this page's own address, which then answered
+// Serve's 404 and left the admin on a dead page. Otherwise the section refreshes in place.
+function _tsAfterServeChange(go) {
+  if (typeof go === 'string' && /^https?:\/\//.test(go)) { window.location.assign(go); return; }
+  window.refreshSection('#ts-page', 'wireTsButtons');
+}
+
 function enableServe(btn) {
   var mount = document.querySelector('[name="mount"]').value || '/';
   var funnel = document.getElementById('funnel-check').checked;
@@ -123,13 +132,13 @@ function enableServe(btn) {
   fetch(MOUNT + '/api/tailscale/serve', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({action: 'enable', mount: mount, funnel: funnel}),
+    body: JSON.stringify({action: 'enable', mount: mount, funnel: funnel, page: location.href}),
   })
   .then(r => r.json())
   .then(data => {
     if (data.success) {
       if(window.toast) toast(data.message, 'success');
-      setTimeout(function(){ window.refreshSection('#ts-page','wireTsButtons'); }, 800);
+      setTimeout(function(){ _tsAfterServeChange(data.go); }, 800);
     } else {
       if(window.toast) toast(data.message, 'danger');
       btn.disabled = false;
@@ -165,6 +174,33 @@ function disableServe(btn) {
       })
       .catch(function() {
         if (window.toast) toast('Error disabling Tailscale Serve', 'danger');
+      });
+    }});
+}
+
+// One route to the panel that the panel does not manage (a leftover at another mount). Only that
+// route comes down: the panel's own address and its settings stay as they are, unlike Disable.
+function removeServeRoute(btn) {
+  var mount = btn.dataset.mount, url = btn.dataset.url;
+  confirmDialog({title:'Remove this Serve route', icon:'exclamation-triangle', confirmClass:'btn-danger', confirmLabel:'Remove',
+    bodyText:'Remove this Tailscale Serve route? It reaches the panel at an address the panel does not manage. The panel\'s own address and settings are not changed.',
+    onConfirm:function(){
+      fetch(MOUNT + '/api/tailscale/serve', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'remove-route', mount: mount, url: url, page: location.href}),
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          if (window.toast) toast(data.message, 'success');
+          setTimeout(function(){ _tsAfterServeChange(data.go); }, 800);
+        } else if (window.toast) {
+          toast(data.message, 'danger');
+        }
+      })
+      .catch(function() {
+        if (window.toast) toast('Error removing the Serve route', 'danger');
       });
     }});
 }

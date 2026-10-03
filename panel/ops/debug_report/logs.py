@@ -1,7 +1,10 @@
 """Debug-report sections: journal_digest (R71) and recent_log (R68, R69, R70, R73).
 
 Owner: builder B1. Both read the report's ONE journal read (_src_journal, up to 5000 lines): the
-digest summarises all of it, the recent log prints the newest 400 lines within a budget.
+digest summarises all of it, the recent log prints the newest 400 lines within a budget. That read
+is the panel's own output where journald can filter it (the sudo/pam lines every privileged call
+writes are left out BEFORE the line limit, so the window is not spent on them); the sudo lines come
+from a read of their own, which the digest counts — once — by fixed labels.
 
 Privacy: the recent log's lines go through privacy.scrub_lines BEFORE anything is selected or
 budgeted; the digest normalises first (syslog prefix stripped, digits folded) and scrubs only the
@@ -37,8 +40,42 @@ _PAM_SESSION_RE = re.compile(r"^pam_unix\((?:sudo|sudo-i|runuser|runuser-l|su|su
                              r"session (?:opened|closed) for user ")
 # Spacing differs by implementation: sudo-rs writes 'user :  PWD=...' (two blanks after the
 # colon, and a trailing blank); sudo.ws ' user : PWD=...'. sudo-rs logs no line for a refusal.
+# Groups: the target account (USER=), the program, and the rest of the command line (first line
+# only: classic sudo continues a long one on '(command continued)' lines of its own).
 _SUDO_CMD_RE = re.compile(r" :[ \t]{1,4}(?:TTY=[^;\n]{1,64};[ \t]{1,4})?PWD=[^;\n]{0,512};[ \t]{1,4}"
-                          r"USER=[^;\n]{1,64};[ \t]{1,4}COMMAND=(\S{1,512})(?: (\S{1,64}))?")
+                          r"USER=([^;\n]{1,64});[ \t]{1,4}COMMAND=(\S{1,512})(?: ([^\n]{0,2048}))?")
+_SUDO_CONTINUED_RE = re.compile(r"^[ \t]*\S{1,64} :[ \t]{1,4}\(command continued\) ")
+# Programs the panel itself runs through sudo as root, named by their basename. Anything else —
+# a script an operator ran with sudo in the panel's terminal, which lives in the same unit — is
+# 'other program': its name is the operator's, not something to print.
+_ROOT_PROGRAMS = frozenset((
+    "true", "env", "su", "runuser", "crontab", "rm", "cat", "tee", "ls", "test", "python3",
+    "journalctl", "renice", "ufw", "fail2ban-client", "apt-get", "apt", "dpkg", "tailscale",
+    "sysctl", "timedatectl", "systemctl", "systemd-run", "install", "chown", "chmod", "mkdir",
+    "mv", "cp", "useradd", "userdel", "usermod", "gpasswd", "visudo", "reboot"))
+_SHELLS = frozenset(("bash", "sh", "dash"))
+# What the panel runs AS a game account, by a fixed fingerprint of the command: (label, tokens that
+# must all appear). First match wins. Only these labels are ever printed, never the command.
+# The console's tmux bodies come first. Each opens with the panel's own socket lookup
+# (ssh_manager._core._tmux_live_socket_sh), and a console send ends with what was typed, which can
+# hold any later entry's tokens ("say gamedig jq -r"), so the fixed text has to decide. The send
+# was counted as "other": the VPS proof of #393 found 42 of them so.
+_TMUX_SOCK = "tmux-$(id -u)"
+_GAME_READS = (
+    ("console send", (_TMUX_SOCK, " send-keys ")),
+    ("console snapshot", (_TMUX_SOCK, " capture-pane ")),
+    ("console session check", (_TMUX_SOCK, "echo __LIVE__")),
+    ("gamedig map", ("gamedig", "jq -r")),
+    ("gamedig player list", ("gamedig", "[.players[]")),
+    ("gamedig players", ("gamedig", "players|length")),
+    ("gamedig", ("gamedig",)),
+    ("console poll", ("S=$(stat -c", "tail -c +")),
+    ("console stat", ("stat -c",)),
+    ("console read", ("printf B", "tail -c +")),
+    ("console window", ("printf B", "tail -")),
+    ("LinuxGSM config", ("cat ", ".cfg")),
+    ("LinuxGSM action", ("cd ", "&& ")),
+)
 _SUDO_REFUSED_RE = re.compile(r"a password is required|NOT in sudoers|not allowed to (?:run|execute)"
                               r"|incorrect password|authentication failure|command not allowed",
                               re.IGNORECASE)
@@ -168,47 +205,178 @@ def _traceback_lines(ctx, tbs):
     return out
 
 
-def _priv_verb(command, arg):
-    """The helper verb a sudo COMMAND ran, 'other verb', or 'other command'.
+GAME_ACCOUNT = "as a game account"
+# The panel's own account (the service account, or the login account of a per-user install): the
+# installer runs its snapshot and config steps as it ('sudo -u <panel> env -C / tar …', 'python3 -I
+# - …/config.json'), and those were counted as game-account work.
+PANEL_ACCOUNT = "as the panel's own account"
 
-    'other verb' is one the table does not know; 'other command' is anything but the helper. Never
-    an argument of another command, which for su is an account.
+
+def _panel_accounts():
+    """The names of the panel's own account: this process's, and the installer's service account.
+
+    Asked once per count, of the own uid only (getpwuid), as the privacy pass does. The service
+    account is named too, for a report generated as root, where this process's account is root.
+    """
+    import pwd
+    from panel.ops.debug_report.install import SERVICE_ACCOUNT
+    names = {SERVICE_ACCOUNT}
+    try:
+        names.add(pwd.getpwuid(os.geteuid()).pw_name)
+    except (KeyError, OSError):
+        pass                       # no passwd entry: the service account's name still counts
+    names.discard("root")
+    return frozenset(names)
+
+
+def _game_read(rest):
+    """The fixed label for what a command run as a game account was, from its fingerprint."""
+    for label, tokens in _GAME_READS:
+        if all(t in rest for t in tokens):
+            return label
+    return "other"
+
+
+def _priv_verb(command, rest, user="root", own=frozenset()):
+    """The label a sudo line is counted under: (label, sub-label or None). Fixed words only.
+
+    The helper's own lines are its verb ('other verb' for one the table does not know). Anything
+    run as the panel's own account (`own`, from _panel_accounts) is PANEL_ACCOUNT, by program,
+    unless it is a shell body with a game fingerprint (_own_account_label). Anything run as another
+    account (USER= not root) is the panel's game-account work — gamedig, the console reads and
+    sends, LinuxGSM configs, and every argv-form read — counted together under GAME_ACCOUNT with a
+    fixed fingerprint of what it was (_GAME_READS). Anything else is root: a program the panel
+    itself runs is named, '<program> as root'; a shell is 'shell as root'; anything else 'other
+    program as root'. Never an argument, never a path, never the account: for su the argument is
+    an account, and USER= is one.
     """
     from panel.security import privileged as _priv
-    if not command.endswith("/" + os.path.basename(_priv.HELPER_PATH)):
-        return "other command"
-    return arg if arg in set(_priv.verbs()) else "other verb"
+    rest = rest or ""
+    if command.endswith("/" + os.path.basename(_priv.HELPER_PATH)):
+        words = rest.split()
+        return (words[0] if words and words[0] in set(_priv.verbs()) else "other verb"), None
+    prog = os.path.basename(command)
+    user = (user or "").strip()
+    if user in own:
+        return _own_account_label(prog, rest)
+    if user != "root":
+        return GAME_ACCOUNT, _game_label(prog, rest)
+    return _root_label(prog), None
+
+
+def _own_account_label(prog, rest):
+    """(label, sub-label) for a call run as the panel's own account.
+
+    A shell body with a game fingerprint is game work whichever account ran it: a game server may
+    run under the panel's login account (game_idents_ok refuses only root), and its gamedig and
+    console calls are then sudo'd to that account. Everything else is PANEL_ACCOUNT, by program:
+    an argv-form call (cat, rm) carries no fingerprint, so its account decides, and its sub-label
+    is the program under either label.
+    """
+    read = _game_read(rest) if prog in _SHELLS else "other"
+    if read != "other":
+        return GAME_ACCOUNT, read
+    return PANEL_ACCOUNT, _program_label(prog)
+
+
+def _program_label(prog):
+    """A program's name when the panel itself runs it, 'shell' for a shell, else 'other'."""
+    if prog in _SHELLS:
+        return "shell"
+    return prog if prog in _ROOT_PROGRAMS else "other"
+
+
+def _game_label(prog, rest):
+    """What a command run as a game account was: a shell body's fingerprint, else its program."""
+    if prog in _SHELLS:
+        return _game_read(rest)
+    return _program_label(prog)
+
+
+def _root_label(prog):
+    """'<program> as root' for a program the panel runs, else a fixed word."""
+    if prog in _SHELLS:
+        return "shell as root"
+    return "%s as root" % prog if prog in _ROOT_PROGRAMS else "other program as root"
 
 
 def _split_priv(lines):
-    """(lines without the panel's own successful sudo/runuser/su lines, {verb: calls}, sessions)."""
+    """(lines without the panel's own successful sudo/runuser/su lines, {label: calls}, sessions).
+
+    A label counted for game-account work is a dict {sub-label: calls}; every other is an int.
+    """
     kept, verbs, sessions = [], {}, 0
+    own = _panel_accounts()
     for ln in lines:
         body = _body(ln)
         if _SUDO_REFUSED_RE.search(body):
             kept.append(ln)
         elif _PAM_SESSION_RE.match(body):
             sessions += 1
+        elif _SUDO_CONTINUED_RE.match(body):
+            continue
         else:
             m = _SUDO_CMD_RE.search(body)
             if m is None:
                 kept.append(ln)
                 continue
-            verb = _priv_verb(m.group(1), m.group(2))
-            verbs[verb] = verbs.get(verb, 0) + 1
+            _count_priv(verbs, *_priv_verb(m.group(2), m.group(3), m.group(1), own))
     return kept, verbs, sessions
 
 
-def _priv_line(verbs, sessions, span_of):
-    """'- **Privileged calls (left out below)**: N sudo calls ... (verb ×n, ...) · M session lines'."""
+def _count_priv(verbs, label, sub):
+    if sub is None:
+        verbs[label] = verbs.get(label, 0) + 1
+        return
+    slot = verbs.setdefault(label, {})
+    slot[sub] = slot.get(sub, 0) + 1
+
+
+def _priv_total(n):
+    return sum(n.values()) if isinstance(n, dict) else n
+
+
+def _priv_entry(label, n):
+    if not isinstance(n, dict):
+        return "%s ×%d" % (label, n)
+    subs = sorted(n.items(), key=lambda kv: (-kv[1], kv[0]))
+    return "%s ×%d [%s]" % (label, _priv_total(n), ", ".join("%s ×%d" % kv for kv in subs))
+
+
+def _priv_line(verbs, sessions, span_of, title="Privileged calls (left out below)"):
+    """'- **Privileged calls (left out below)**: N sudo calls ... (verb ×n, ...) · M session lines'.
+
+    The game-account work is ONE entry with its kinds nested, so a thousand gamedig runs cannot
+    push the helper's verbs out of the six shown.
+    """
     if not verbs and not sessions:
         return None
-    top = sorted(verbs.items(), key=lambda kv: (-kv[1], kv[0]))
-    shown = ", ".join("%s ×%d" % kv for kv in top[:6]) + (", …" if len(top) > 6 else "")
-    return ("- **Privileged calls (left out below)**: %d successful sudo call%s in %s%s · %d pam "
-            "session line%s" % (sum(verbs.values()), "" if sum(verbs.values()) == 1 else "s",
-                                span_of, " (%s)" % shown if shown else "", sessions,
-                                "" if sessions == 1 else "s"))
+    total = sum(_priv_total(n) for n in verbs.values())
+    top = sorted(verbs.items(), key=lambda kv: (-_priv_total(kv[1]), kv[0]))
+    shown = ", ".join(_priv_entry(k, v) for k, v in top[:6]) + (", …" if len(top) > 6 else "")
+    return ("- **%s**: %d successful sudo call%s in %s%s · %d pam session line%s"
+            % (title, total, "" if total == 1 else "s", span_of, " (%s)" % shown if shown else "",
+               sessions, "" if sessions == 1 else "s"))
+
+
+def _priv_summary(j):
+    """The privileged-call line for this report, from the separate sudo read when there was one."""
+    if j.get("sudo"):
+        _kept, verbs, sessions = _split_priv(j["sudo"])
+        return _priv_line(verbs, sessions, "the %d sudo lines of the panel's unit from %s, %s"
+                          % (len(j["sudo"]), _src_journal.window_words("panel-sudo"),
+                             _span(j["sudo"])), title="Privileged calls")
+    if j.get("filtered"):
+        return "- **Privileged calls**: not counted (%s)" % (j.get("sudo_why") or "no sudo lines read")
+    _kept, verbs, sessions = _split_priv(j["lines"])
+    return _priv_line(verbs, sessions, "this window")
+
+
+def _cut_words(j):
+    """What a CUT read holds: the window had more than the read keeps, and these are its OLDEST."""
+    return ("the oldest %d entries of the panel's own output from %s (cut off: the window held "
+            "more, and its newest lines were not read)"
+            % (_src_journal.entry_count(j["lines"]), _src_journal.window_words("panel-own")))
 
 
 def section_journal_digest(ctx):
@@ -217,10 +385,17 @@ def section_journal_digest(ctx):
     res = Result()
     if not j["lines"]:
         return res.add("_(digest unavailable: %s)_" % (j["why"] or "no journal read"))
-    lines, verbs, sessions = _split_priv(j["lines"])
+    lines, _verbs, _sessions = _split_priv(j["lines"])
     bodies = [_body(ln) for ln in lines]
-    res.add("- **Window**: the last %d lines, %s" % (len(j["lines"]), _span(j["lines"])))
-    priv = _priv_line(verbs, sessions, "this window")
+    if j.get("cut"):
+        res.add("- **Window**: %s, its sudo lines read apart, %s" % (_cut_words(j), _span(j["lines"])))
+    elif j.get("filtered"):
+        res.add("- **Window**: %d lines of the panel's own output from %s (its sudo lines read "
+                "apart), %s" % (len(j["lines"]), _src_journal.window_words("panel-own"),
+                                _span(j["lines"])))
+    else:
+        res.add("- **Window**: the last %d lines, %s" % (len(j["lines"]), _span(j["lines"])))
+    priv = _priv_summary(j)
     if priv:
         res.add(priv)
     tbs = _tracebacks(bodies, [_stamp(ln) for ln in lines])
@@ -353,9 +528,12 @@ def section_recent_log(ctx):
     res.add("- **Source**: %s · %d lines · %s · report generated %s UTC" % (
         _SOURCE_LABEL.get(j["source"], "journal"), len(tail), _span(tail),
         time.strftime("%H:%M:%S", time.gmtime())))
-    priv = _priv_line(verbs, sessions, "the %d-line journal read" % len(j["lines"]))
-    if priv:
-        res.add(priv)
+    if j.get("cut"):
+        # The block below ends at the newest of what was read, which is not the newest there is.
+        res.add("- **Read**: %s" % _cut_words(j))
+    # Counted ONCE, in Errors in the journal; this only says the lines are not in the block below.
+    if verbs or sessions or j.get("filtered"):
+        res.add("- **Privileged calls**: left out below; counted under Errors in the journal")
     if scrubbed is None:
         return res.add("_(withheld: pseudonymisation unavailable)_").find(
             "warn", "Recent log", "withheld: pseudonymisation unavailable")

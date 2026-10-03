@@ -55,6 +55,7 @@ import os
 import pwd
 import re
 import shutil
+import signal
 import socket
 import stat
 import tarfile
@@ -191,7 +192,64 @@ JOURNAL_UNITS = {
     "fail2ban": ("fail2ban",),
     "panel": ("linuxgsm-panel",),
 }
-JOURNAL_SOURCES = tuple(sorted(JOURNAL_UNITS))
+# Sources read by FIELD MATCH rather than by unit, for the debug report: the panel unit's own
+# output without the three lines every sudo call writes there (panel-own), and those sudo lines
+# alone (panel-sudo). Fixed terms, like the units above: nothing in them comes from the caller.
+# The terms are systemd's add_matches_for_unit for linuxgsm-panel.service, with the service's own
+# term narrowed to its stdout/journal output and its syslog lines at critical or worse.
+#
+# EVERY BRANCH HAS A TERM THAT IS SPARSE ON ITS OWN, or the read is not bounded by its window.
+# journalctl ORs the branches, and sd-journal finds each next line by asking every branch afresh
+# where ITS next match is (next_for_match, MATCH_OR_TERM). A branch that matches rarely is walked
+# from the current line to its next match -- or to the end of the file -- once per line printed,
+# and an AND walks one step per entry of its sparsest term. So a branch whose terms are all dense
+# is re-walked across the whole window over and over: measured on a day with 2,400 panel lines,
+# the read took 2.6 s, against 0.01 s for the same lines with these terms. The sparse terms:
+#   - the panel's own output: SYSLOG_IDENTIFIER, which systemd sets on a service's stdout to the
+#     basename of ExecStart's program (exec-invoke.c connect_logger_as), "python" for the unit
+#     install.sh writes (and every update rewrites). The unit term alone is dense -- most of its
+#     entries are the three lines each sudo call writes -- and so is _TRANSPORT=stdout (every
+#     service's). PANEL_IDENT must follow install.sh's ExecStart; a unit check holds it to it.
+#   - the unit's syslog lines: PRIORITY 0-2. A refused sudo is alert (1) and pam_unix's failed
+#     authentication crit (2), its "conversation failed" err (3) beside them. Warnings (4) are
+#     every host's ufw BLOCK lines, and errors (3) every public host's sshd scanner noise: with
+#     either, this branch alone made the read ~50-250x slower on that day.
+#   - the rest: MESSAGE_ID, UNIT=, OBJECT_SYSTEMD_UNIT= name this unit and are rare.
+_PANEL_SVC = "linuxgsm-panel.service"
+PANEL_IDENT = "python"
+JOURNAL_MATCHES = {
+    "panel-own": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=stdout", "_TRANSPORT=journal",
+                  "SYSLOG_IDENTIFIER=" + PANEL_IDENT, "+",
+                  "_SYSTEMD_UNIT=" + _PANEL_SVC, "_TRANSPORT=syslog", "PRIORITY=0", "PRIORITY=1",
+                  "PRIORITY=2", "+",
+                  "MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1", "_UID=0", "COREDUMP_UNIT=" + _PANEL_SVC,
+                  "+", "_PID=1", "UNIT=" + _PANEL_SVC, "+", "_UID=0", "OBJECT_SYSTEMD_UNIT=" + _PANEL_SVC),
+    "panel-sudo": ("_SYSTEMD_UNIT=" + _PANEL_SVC, "SYSLOG_IDENTIFIER=sudo"),
+}
+# How far back a FIELD-MATCH source reads, walking forward from there. It is what bounds the read.
+# `-n N` walks BACKWARDS from the end until N entries match, so when the whole retained journal
+# holds fewer than N, journalctl visits all of it -- and with these matches a step costs about one
+# of the panel unit's entries, sudo noise included (sd-journal next_for_match: an AND of two dense
+# terms whose intersection is sparse). On the test VPS (1.9 GB, 105 files, 1683 matching lines)
+# `-n 5000` was still running as root at 315 s. --since with -n does not help on systemd 254+ (it
+# seeks to the end and still walks back N first); --since WITHOUT -n seeks to the time and walks
+# forward, so the cost is the window's, whatever the journal's size. `--lines=+N` keeps the output
+# bounded too: the OLDEST N of the window (systemd 255+; 249-253 read `+N` as N and, with --since,
+# also stop after the first N forward). A read that returns all N has more than the window holds
+# room for, and the panel reads the newest lines instead (debug_report/_src_journal).
+JOURNAL_SINCE = {"panel-own": "-24h", "panel-sudo": "-1h"}
+JOURNAL_SOURCES = tuple(sorted(set(JOURNAL_UNITS) | set(JOURNAL_MATCHES)))
+
+
+def journal_argv(source, lines):
+    """The journalctl argv for one journal SOURCE name and a line count (already validated)."""
+    if source in JOURNAL_MATCHES:
+        return (["journalctl", "--no-pager", "-q", "--since=" + JOURNAL_SINCE[source],
+                 "--lines=+" + lines] + list(JOURNAL_MATCHES[source]))
+    return (["journalctl"] + [x for u in JOURNAL_UNITS[source] for x in ("-u", u)]
+            + ["--no-pager", "-n", lines])
+
+
 # cron's own execution log is matched by COMM, not by unit, so it needs its own verb rather than a
 # JOURNAL_UNITS entry. The window is fixed here; the caller passes nothing.
 CRON_JOURNAL_SINCE = "-14 days"
@@ -1989,8 +2047,7 @@ VERBS = {
     # no way to ask the helper to read /etc/shadow, and no path crosses the boundary at all.
     "journal": (
         [v_choice(*JOURNAL_SOURCES), v_linecount],
-        lambda a: ["journalctl"] + [x for u in JOURNAL_UNITS[a[0]] for x in ("-u", u)]
-        + ["--no-pager", "-n", a[1]],
+        lambda a: journal_argv(a[0], a[1]),
         None),
     # cron logs the command it ran, matched by _COMM rather than by unit. Fixed matcher, fixed
     # window, no argument — the caller filters the result.
@@ -4435,6 +4492,231 @@ SECRET_STDIN = {
 }
 
 
+# ── a READ the caller has given up on ends, with everything it started ──────────────────────────
+#
+# The panel waits a bounded time for a verb, then gives up on it. It used to give up with SIGKILL
+# to the process group it started: that reached `sudo` (its real uid is the panel's), which died
+# without relaying anything, and NOT this helper or its children, which are root. They ran on with
+# nobody to read their answer, parented to init: on the test VPS a `journal` read the debug report
+# had given up on kept a core busy as root for about 5.5 minutes, and two reports stacked two.
+#
+# Three things end such a read now, whichever comes first:
+#   - SIGTERM or SIGHUP. The panel sends SIGTERM first. Classic sudo (exec_nopty.c,
+#     signal_cb_nopty) and sudo-rs (exec/no_pty.rs, on_signal) both relay it to this process,
+#     and only to this process: kill(command_pid), never the group. So THIS process has to end
+#     its children; dying of the signal's default action left them behind.
+#   - The loss of its parent. sudo cannot relay a SIGKILL (from a panel older than the SIGTERM, or
+#     after the panel's grace runs out): this process is then reparented, which the watch below
+#     sees within _WATCH_TICK.
+#   - READ_DEADLINE. A backstop for anything that neither signals nor dies: no read the panel makes
+#     waits longer than 45 s (lgsm-discover), so a read still running at 60 s has no reader left.
+#     A LinuxGSM read (LGSM_READ_ACTIONS) gets LGSM_READ_DEADLINE: the panel waits up to 60 s.
+#
+# ONLY reads. A verb that CHANGES the host keeps running when its caller leaves, as it always has --
+# through the SIGTERM, and through the loss of sudo that follows it when the panel's grace runs out:
+# apt or dpkg stopped halfway leaves packages half-configured, and a multi-step verb stopped
+# between steps (the sshd drop-in written but not validated, an account created but not enrolled)
+# is worse than one that finishes late. For those a SIGTERM is noted and the verb runs to its end,
+# its own follow-up steps included -- dying of the signal would have skipped them. Which is which
+# is decided by is_read(verb, args): lgsm-command is a read for its read-only LinuxGSM actions.
+READ_VERBS = frozenset({
+    "apt-any-running", "apt-upgrade-running", "content-game-present", "content-scan",
+    "content-script-present", "crontab-list", "disk-free", "dpkg-lock-held", "f2b-log-lines",
+    "f2b-status", "f2b-status-jail", "game-backup-read", "game-dir-tar", "game-file-read",
+    "gmod-mount-read", "journal", "journal-cron", "lgsm-discover", "listening-sockets",
+    "listening-sockets-owner", "log-tail", "os-update-log", "pro-status", "restart-flags",
+    "sshd-effective-config", "sshd-socket-active", "sshd-validate", "ufw-status",
+})
+# ...of which these stream a download for as long as it takes, so they have no deadline: they end
+# when the caller stops reading (their next write fails) or by the two signals above.
+STREAMED_READS = frozenset({"game-backup-read", "game-dir-tar", "game-file-read"})
+READ_DEADLINE = 60
+# The LinuxGSM actions that only report (the panel's auth.READONLY_ACTIONS less `monitor`, which
+# restarts a crashed server, and `test-alert`, which sends one). `lgsm-command` with one of these
+# is a read: the panel waits up to 60 s for it (server_detail._run_sync_action), so its deadline
+# is longer than that.
+LGSM_READ_ACTIONS = frozenset({"details", "check-update", "postdetails"})
+LGSM_READ_DEADLINE = 120
+# How long a stopped read's processes get after SIGTERM before SIGKILL, and how often the watch for
+# a lost parent and the deadline runs.
+STOP_GRACE = 1.0
+_WATCH_TICK = 0.5
+
+
+class Stopped(BaseException):
+    """A read verb was ended (see READ_VERBS): its rc, and why, in fixed words.
+
+    A BaseException, like SystemExit: an action's own `except Exception` must not swallow it and
+    carry on reading with its children already gone.
+    """
+
+    def __init__(self, rc, why):
+        """Hold the exit status the helper answers with, and the fixed reason it prints."""
+        super().__init__(why)
+        self.rc, self.why = rc, why
+
+
+_STOP = {"pid": None, "ppid": None, "verb": None, "read": False, "deadline": None,
+         "stopping": False}
+
+
+def is_read(verb, args):
+    """Whether this run of `verb` only reads, and so is ended when its caller gives up on it."""
+    if verb == "lgsm-command":
+        return len(args) >= 3 and args[2] in LGSM_READ_ACTIONS
+    return verb in READ_VERBS
+
+
+def read_deadline(verb, args):
+    """The deadline of a read (is_read), in seconds; None for a streamed download or a writer."""
+    if not is_read(verb, args) or verb in STREAMED_READS:
+        return None
+    return LGSM_READ_DEADLINE if verb == "lgsm-command" else READ_DEADLINE
+
+
+def _live_stat(pid):
+    """(parent pid, start time) of `pid` from /proc/<pid>/stat; None when it is gone or a zombie.
+
+    A zombie has exited: it is waiting for its parent to collect it, it cannot be stopped, and
+    leaving it out keeps a SIGKILL from being aimed at it. The start time (clock ticks after boot)
+    tells a process from a later one given the same pid.
+    """
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            stat_line = fh.read()
+        fields = stat_line[stat_line.rindex(b")") + 2:].split()
+        return None if fields[0] == b"Z" else (int(fields[1]), int(fields[19]))
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _ppid_of(pid):
+    """`pid`'s parent, or None for a process that is gone or a zombie (see _live_stat)."""
+    st = _live_stat(pid)
+    return st[0] if st else None
+
+
+def _start_of(pid):
+    """`pid`'s start time, or None for a process that is gone or a zombie (see _live_stat)."""
+    st = _live_stat(pid)
+    return st[1] if st else None
+
+
+def descendants(root):
+    """Every live process descended from `root`: its children, theirs, and so on.
+
+    By parent links, read fresh each time, so a pid recycled by an unrelated process is never
+    taken for one of ours. A descendant whose parent has already exited has been reparented away
+    and is not found: stop_descendants keeps the pids it sent SIGTERM to for that.
+    """
+    kids = {}
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            ppid = _ppid_of(int(name))
+            if ppid is not None:
+                kids.setdefault(ppid, []).append(int(name))
+    found, todo = [], [root]
+    while todo:
+        for child in kids.get(todo.pop(), ()):
+            found.append(child)
+            todo.append(child)
+    return found
+
+
+def _signal_all(pids, sig):
+    for pid in pids:
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass                 # it exited in between: nothing left to stop
+
+
+def stop_descendants(grace=STOP_GRACE):
+    """SIGTERM everything this process started; SIGKILL what is still there after `grace`.
+
+    "Still there" is a fresh walk of the tree AND every process the SIGTERM went to that is still
+    running -- the same process, by its start time, never a later one given its pid. The walk
+    alone misses a process that ignored the SIGTERM while its parent died of it: it has been
+    reparented away from this process by then, and it would run on as root.
+    """
+    me = os.getpid()
+    termed = {pid: _start_of(pid) for pid in descendants(me)}
+    _signal_all(termed, signal.SIGTERM)
+
+    def left():
+        same = {pid for pid, start in termed.items() if start is not None and _start_of(pid) == start}
+        return same | set(descendants(me))
+    deadline = time.monotonic() + grace
+    while left() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    _signal_all(left(), signal.SIGKILL)
+
+
+def _stop(rc, why):
+    """End this read verb: its processes first, then the verb itself, by raising Stopped."""
+    if _STOP["stopping"]:
+        return
+    _STOP["stopping"] = True
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    stop_descendants()
+    raise Stopped(rc, why)
+
+
+def _on_stop_signal(signum, _frame):
+    if os.getpid() != _STOP["pid"]:
+        # A child this process forked (the game-user reads) inherits this handler; it gets the
+        # signal's default action, as it did before.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+        return
+    if _STOP["read"]:
+        _stop(143, "was stopped (signal %d): its caller gave up on it" % signum)
+    # Any other verb runs to its end (see READ_VERBS): the signal is not its default action.
+
+
+def _on_watch_tick(_signum, _frame):
+    if os.getpid() != _STOP["pid"]:
+        return
+    if os.getppid() != _STOP["ppid"]:
+        _stop(143, "lost its caller (its parent process exited)")
+    if _STOP["deadline"] is not None and time.monotonic() > _STOP["deadline"][0]:
+        _stop(124, "ran past its %d s limit" % _STOP["deadline"][1])
+
+
+def arm_stop(verb, args=()):
+    """Install the stop rules above for one run of `verb` with `args`.
+
+    Called by run() alone, never by main(), so a test that imports this file and calls main()
+    keeps its own signal handlers. A verb that changes the host gets the SIGTERM handler only
+    (noted, not obeyed) and no watch: it must outlive the sudo above it (see READ_VERBS).
+    """
+    limit = read_deadline(verb, args)
+    _STOP.update(pid=os.getpid(), ppid=os.getppid(), verb=verb, read=is_read(verb, args),
+                 stopping=False,
+                 deadline=(time.monotonic() + limit, limit) if limit is not None else None)
+    signal.signal(signal.SIGTERM, _on_stop_signal)
+    signal.signal(signal.SIGHUP, _on_stop_signal)
+    if _STOP["read"]:
+        signal.signal(signal.SIGALRM, _on_watch_tick)
+        signal.setitimer(signal.ITIMER_REAL, _WATCH_TICK, _WATCH_TICK)
+
+
+def run(argv):
+    """main(argv) under the stop rules above. The rc and message of a stopped read are fixed."""
+    verb = argv[1] if len(argv) >= 2 and argv[1] in VERBS else None
+    arm_stop(verb, argv[2:])
+    try:
+        return main(argv)
+    except Stopped as e:
+        print("panel-helper: %s %s; it and every process it started were ended"
+              % (verb, e.why), file=sys.stderr)
+        return e.rc
+    finally:
+        # Done, or ended: a signal from here on gets its default action, as before this existed.
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGHUP, signal.SIG_DFL)
+
 
 def validate(verb, args):
     """The checked arguments for `verb`, or ValueError. Shared by main() and by the panel's unit
@@ -4518,9 +4800,12 @@ def main(argv):
         env["DEBIAN_FRONTEND"] = "noninteractive"
     try:
         argv[0] = resolve(argv[0])
+        # A read is bounded here as well as by run()'s watch, a few seconds later so the watch
+        # (which ends the tool's children too) goes first. This one holds when main() is called
+        # without run(), as the tests do, and ends the tool's own process.
         p = subprocess.run(argv, shell=False,  # nosec B603 - argv is built from literals
                            input=stdin_text, env=env, capture_output=True, text=True,
-                           timeout=1800)
+                           timeout=READ_DEADLINE + 5 if verb in READ_VERBS else 1800)
     except FileNotFoundError:
         print("panel-helper: the tool for %s is not installed" % verb, file=sys.stderr)
         return 127
@@ -4553,4 +4838,4 @@ def _enrol_created_account(user):
 
 if __name__ == "__main__":
     _scrub_environ()
-    sys.exit(main(sys.argv))
+    sys.exit(run(sys.argv))

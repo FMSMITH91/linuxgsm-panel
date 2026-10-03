@@ -5,6 +5,7 @@ execution for running on the panel's own machine (see the package docstring for 
 resolve across its submodules).
 """
 import re
+import threading
 from panel.core import terminal
 import time
 from panel.ops.ssh_manager import (_core, cron, files, portscan)  # noqa: E402,F401  (module objects: the
@@ -463,10 +464,12 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
         return None
     # Player fields are protocol-specific in gamedig: Source/valve exposes score + time (seconds
     # connected); Quake3/idTech3 (cod) exposes `frags` and no time. Pull score from score OR frags
-    # so cod shows a score too; time stays null where the game doesn't report it.
-    jqf = ('[.players[] | {name:(.name // ""), '
+    # so cod shows a score too; time stays null where the game doesn't report it. `c` is the
+    # reply's own head count (_core.GAMEDIG_HUMANS_JQ), so an empty list can be told from an empty
+    # server: see _gamedig_players_from_output.
+    jqf = ('{p:[.players[] | {name:(.name // ""), '
            'score:(.raw.score // .score // .raw.frags // .frags // null), '
-           'time:(.raw.time // .time // null)}]')
+           'time:(.raw.time // .time // null)}], c:%s}' % _core.GAMEDIG_HUMANS_JQ)
     cmd = f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null | jq -c {_core._quote(jqf)} 2>/dev/null"
     try:
         out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
@@ -476,8 +479,17 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
 
 
 def _gamedig_players_from_output(out):
-    """The player list from the jq-reduced gamedig output, or None when there is none to read."""
-    line = next((ln.strip() for ln in (out or "").splitlines() if ln.strip().startswith("[")), "")
+    """The player list from the jq-reduced gamedig output ({p: list, c: head count}), or None.
+
+    None when there is nothing to read — and when the list has no names while the reply's own count
+    says someone is on. A Minecraft Bedrock reply never carries a list (numplayers is all its ping
+    returns), nor does a Java server hiding its players or a Source server that does not answer
+    A2S_PLAYER, and an empty list was read as a confirmed-empty server: the Players panel and the
+    chat bot's /players said "no players connected" with people on. Unknown lets the on-demand
+    console fallback answer instead.
+    """
+    line = next((ln.strip() for ln in reversed((out or "").splitlines())
+                 if ln.strip().startswith("{")), "")
     if not line:
         return None
     try:
@@ -485,11 +497,16 @@ def _gamedig_players_from_output(out):
         data = _json.loads(line)
     except (ValueError, TypeError):
         return None
-    return _gamedig_player_rows(data)
+    if not isinstance(data, dict):
+        return None
+    rows = _gamedig_player_rows(data.get("p"))
+    if not rows and data.get("c") != 0:
+        return None      # nobody named, and the count is not a counted 0: unknown, not empty
+    return rows
 
 
 def _gamedig_player_rows(data):
-    """Player rows from the decoded gamedig list: named entries only, name capped at 64."""
+    """Player rows from the decoded gamedig list (`p`): named entries only, name capped at 64."""
     players = []
     for p in (data if isinstance(data, list) else []):
         if isinstance(p, dict):
@@ -500,8 +517,56 @@ def _gamedig_player_rows(data):
     return players
 
 
+# The server page's Players card polls /playerlist every 15 s per open page, and each poll was its
+# own `sudo -u <account> gamedig` run: two viewers of one server, or one viewer and a quick re-poll,
+# paid twice for one answer. A list gamedig READ is kept this long, keyed by what was queried, and
+# a second caller that arrives while a query is running waits for it instead of starting another.
+# Shorter than the page's own period, so a lone viewer always sees a fresh list.
+_PLAYERLIST_TTL = 10
+_playerlist_cache = _core.register_remote_cache({})   # {(remote_id, port, gdtype): (expiry, list)}
+_playerlist_locks = _core.register_remote_cache({})
+_playerlist_guard = threading.Lock()
+
+
+def _playerlist_lock(key):
+    with _playerlist_guard:
+        lock = _playerlist_locks.get(key)
+        if lock is None:
+            lock = _playerlist_locks[key] = threading.Lock()
+        return lock
+
+
+def _playerlist_hit(key):
+    hit = _playerlist_cache.get(key)
+    if hit and hit[0] > time.time():
+        return [dict(p) for p in hit[1]]
+    return None
+
+
+def _gamedig_player_list_shared(server, user, game_type, port, query_type):
+    """_gamedig_player_list through the short shared cache. Only a list gamedig read is stored."""
+    gdtype = cron._gamedig_type(game_type, query_type)
+    if not _core.game_idents_ok(user) or not gdtype or not port:
+        return _gamedig_player_list(server, user, game_type, port, query_type)
+    try:
+        key = (getattr(server, "id", None), int(port), gdtype)
+    except (TypeError, ValueError):
+        return _gamedig_player_list(server, user, game_type, port, query_type)
+    hit = _playerlist_hit(key)
+    if hit is not None:
+        return hit
+    with _playerlist_lock(key):
+        hit = _playerlist_hit(key)
+        if hit is not None:
+            return hit
+        pl = _gamedig_player_list(server, user, game_type, port, query_type)
+        if pl is not None:
+            _playerlist_cache[key] = (time.time() + _PLAYERLIST_TTL, [dict(p) for p in pl])
+        return pl
+
+
 def player_list(server, user, game_type=None, port=None, query_type=None, selfname=None,
-                allow_console=False):
+                allow_console=False, shared=False):
     """Connected players for the Players panel.
 
     gamedig is the PRIMARY source (names + score/time, and it never touches the game console). The
@@ -511,8 +576,14 @@ def player_list(server, user, game_type=None, port=None, query_type=None, selfna
     Returns [{name, steamid, num, score, time}] (steamid/num set only when the list came from the
     console), an empty list for a confirmed-empty server, or None when it can't be read over the
     network and the console wasn't allowed. Never raises.
+
+    `shared=True` is for the page's timed poll: it may be answered by a list gamedig read in the
+    last _PLAYERLIST_TTL seconds. An explicit refresh (after a kick, say) passes False and asks.
     """
-    pl = _gamedig_player_list(server, user, game_type, port, query_type)
+    if shared:
+        pl = _gamedig_player_list_shared(server, user, game_type, port, query_type)
+    else:
+        pl = _gamedig_player_list(server, user, game_type, port, query_type)
     if pl is not None:
         return pl                       # gamedig answered (players, or a confirmed-empty server)
     if allow_console and game_engine(game_type):   # explicit, on-demand console read only

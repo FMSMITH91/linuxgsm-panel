@@ -1,0 +1,28 @@
+# Flask-SocketIO event handlers' parameters are remote input.
+#
+# CodeQL's Python libraries model python-socketio (semmle/python/frameworks/Socketio.qll:
+# socketio.Server / AsyncServer and Namespace) and nothing of flask_socketio, so in the panel's
+# Socket.IO handlers (panel/routes/server_files.py, panel/routes/host_terminal.py) the payload a
+# client emits was not a source for any query. Only a `request.*` read inside a handler was.
+#
+# How the paths read. The type `flask_socketio.SocketIO` is an INSTANCE of that class, which is what
+# server_files._create_console_socket constructs and hands to host_terminal.register.
+#   @socketio.on("evt")          Member[on].ReturnValue is the decorator `socketio.on("evt")`
+#   def handler(data, ...)       returns. Applying it is a call whose Argument[0] is the handler,
+#                                and Parameter[0..9] are the handler's parameters: everything the
+#                                client emitted with the event (the connect handler's `auth`
+#                                included).
+#   socketio.on_event("evt", h)  the handler is Argument[1] (or handler=).
+#   @socketio.event              the bare decorator: the handler is Argument[0] of `event` itself.
+# The kind `remote` is the default threat model, so every taint query uses these.
+#
+# Not modelled: flask_socketio.Namespace subclasses, whose handlers are `on_<event>` methods. A
+# model can name a method but not "every method starting on_", and the panel defines none.
+extensions:
+  - addsTo:
+      pack: codeql/python-all
+      extensible: sourceModel
+    data:
+      - ["flask_socketio.SocketIO", "Member[on].ReturnValue.Argument[0].Parameter[0..9]", "remote"]
+      - ["flask_socketio.SocketIO", "Member[on_event].Argument[1,handler:].Parameter[0..9]", "remote"]
+      - ["flask_socketio.SocketIO", "Member[event].Argument[0].Parameter[0..9]", "remote"]

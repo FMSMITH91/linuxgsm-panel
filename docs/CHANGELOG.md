@@ -151,6 +151,43 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **The panel makes far fewer privileged calls, so the host's journal stops being mostly its sudo
+  lines.** Every `sudo` writes three journal lines (and three to auth.log). On a host with three game
+  servers the panel made about 580 such calls an hour, and they were 99% of its unit's journal. Each
+  of these now skips work it did not need. On some hosts the restart banner can now appear later
+  than before; that is named below. (A server the panel cannot query can also read "unknown" for a
+  minute where it read 0; see the `details` entry under Fixed.)
+  - The metrics history no longer looks up each running server's map every minute. It stores no
+    map, so the answer was thrown away.
+  - The player poll reads the map in the same gamedig reply as the player count. The dashboard
+    uses that answer instead of running gamedig again, and two pages asking at once share one
+    lookup.
+  - The player poll runs one gamedig command per host instead of one per server. It runs as one of
+    that host's game accounts, never as the panel's own account or the SSH login, and on the
+    panel's host never as an account in an administrator group or one that is root by another door
+    (docker, lxd, incus-admin, libvirt, disk). A server that command could not read is asked on its
+    own, as before.
+  - The server page's player list is read only while the Console tab is showing, and two viewers
+    polling within ten seconds share one read. Refresh, and the re-read after a kick, always ask.
+  - The priority keeper checks nice values without privilege. It renices only the game accounts
+    that drifted, instead of every account on every host every two minutes.
+  - The ban watcher reads the UFW rules only when ufw's rule files have changed, and at least every
+    15 minutes. Blocks the panel makes itself are still read at once. fail2ban is read every 90 s as
+    before.
+  - The restart-banner flags are read every minute only for a host where daily restart is on or a
+    banner is showing. Other hosts are read every 10 minutes, and a host with no servers is never
+    read. So on a host without daily restart, a restart banner from a crontab the panel does not
+    manage (an imported server, an edit in the terminal) can now appear up to 10 minutes late
+    instead of within a minute.
+  - The live console reads the log's size and its new lines in one command instead of two.
+
+  The saving is a model, not yet a measurement of a running panel: one pass of each background
+  loop, with every host command stubbed and counted, multiplied by each loop's period on the live
+  host. For three servers the model gives about 9 privileged calls a minute before (the live host's
+  report measured about the same) and about 2 after.
+
+  An open console still costs one call per two seconds; the console was left as it was apart from
+  merging its two reads.
 - **The debug report says what is wrong, covers far more of the panel, and is safer to post.** It
   now opens with **At a glance**: every problem any section found, failures first, and the sections
   that could not be read. Below that is one verdict line per area. Diagnostics are sorted worst
@@ -404,6 +441,241 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
+  and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
+  `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query
+  answered "Invalid game". Player counts fell back to LinuxGSM's own query, and the daily
+  restart-when-empty check could never see these servers empty. They now use gamedig 5's names
+  (`counterstrike16`, `counterstrike2`, `teamfortress2`, `hl2d`, `l4d2`, `cod4mw`, `mbe`). Existing
+  restart-check lines are rewritten by the daily cron upgrade.
+- **A server whose query lists no player names is no longer counted as empty with people on it.**
+  The panel counted players by the length of the name list gamedig returns. A Minecraft Bedrock
+  server's reply never has that list, only the number of players. A Java server that hides its
+  players, or a Source server that does not answer the player-list query, sends an empty one. Each
+  read as 0 players whoever was on. The hourly restart-when-empty check then restarted the server,
+  a restart or stop queued for when it emptied ran at once, and the reboot warning listed nobody.
+  Every count now uses the server's own player number, less its bots, when that is larger than the
+  list. The Players panel and the chat bot's /players now say they could not read the list instead
+  of "no players connected". Existing restart-check lines are rewritten by the daily cron upgrade.
+- **Autostart shows what the server's crontab really has after an install.** A new server's
+  Autostart switch read On even when neither of the install's two attempts to write the monitor
+  cron line worked, because both attempts' results were ignored. Such a server does not come back
+  after a crash or a reboot. The switch now follows what was written and what the crontab reads back
+  as, and a failed write is logged. A write that fails changes nothing: a new server starts Off
+  until a write or the crontab says otherwise, and a retried install keeps what its earlier attempt
+  recorded, because a failed write leaves that attempt's monitor line in place. When nothing can
+  confirm the switch, the panel logs a warning. An install that failed before this version was
+  created with the switch On before anything wrote the line; the upgrade sets such a server (one
+  whose install never finished) Off, once, and its retry's first cron write or read corrects it.
+- **The panel is published over Tailscale Serve at one address, and a leftover route to it no
+  longer answers 502.** The boot re-point wrote only the configured mount (`tailscale_mount`), so a
+  second route to the panel — at "/" beside /lgsm, say — kept the scheme it was written with and
+  answered 502 from the next change of the panel's own scheme (a bind change, an update, a restore),
+  while the debug report said the re-point was "ok". At each start the panel now also removes its
+  own routes at other mounts on :443, one at a time with `tailscale serve --https=443
+  --set-path=<mount> off`, reading Serve again right before each. Another app's route, and a route
+  to the panel on another listener, are left alone, and nothing is removed when Serve cannot be
+  read. A route at the same mount with a trailing slash ("/lgsm/" beside "/lgsm") counts as another
+  route, because Serve answers every /lgsm/ page from it. Only a config set with `tailscale serve
+  set-raw` can hold both, because every other Serve write replaces the other spelling. So the
+  panel's own write at start clears such a route, and the Tailscale page and the debug report name
+  it until then. Enable at a new mount does the same, and
+  every Serve write uses the scheme the running panel serves rather than the one its next start
+  will.
+- **The setup wizard no longer publishes the panel twice.** Its finish read the "/" route its own
+  Serve step had just written (or one from a hand-run `tailscale serve`) as another app's, and
+  published a second route at /lgsm. It now adopts a route that already reaches the panel, and does
+  nothing when the Serve step has run. The Serve step no longer publishes at "/" over another app's
+  route, and the wizard says "serving" only when the panel itself is.
+- **The Tailscale page can remove a leftover route on its own.** Each route to the panel that it
+  does not manage is listed with a Remove button, which leaves the panel's address and settings
+  alone. Like Enable and Disable, it first makes the panel's account the Tailscale operator, so it
+  also works on a host where the route was made by hand. When Enable or Remove takes down the
+  route the page was opened through, the page goes to the panel's own address instead of
+  reloading into a dead one. Disable removes every route to the panel, where it removed one and
+  cleared the mount, so the page in use at /lgsm lost its prefix and a second route stayed
+  published.
+- **The startup log, the setup-complete page and Recommended Access name the panel's own
+  address.** They gave https://<machine name>, the root, which on a panel at /lgsm is another app
+  or a leftover route. They now give the route at the configured mount, and only while it works.
+- **The debug report names a leftover Serve route and how to remove it.** It said "a route reaches
+  the panel with the wrong scheme" with no word on which one, and nothing at all when its scheme
+  happened to match. Each route the panel does not manage is now listed with its listener and the
+  exact `sudo tailscale serve --https=<port> --set-path=<mount> off` that removes it, and the boot's
+  own removal is reported beside the re-point. When no route reaches the panel on the scheme it
+  serves, that is still a failure, not a warning.
+- **Uninstalling removes the panel's Tailscale Serve route.** It ran `tailscale serve --bg --remove`,
+  which no Tailscale accepts, so the route stayed behind after every uninstall (and a reinstall then
+  published the panel at /lgsm beside it). It now removes every route to the panel's port, and only
+  those, and says what it could not.
+- **An update says "this panel now serves HTTPS" only when that is new.** It said so after every
+  update of a panel serving its own TLS, with a public address even when the firewall closed the
+  port and with "set up Tailscale" when Tailscale Serve was already up. It now compares with what
+  the panel served before the update, gives the Serve address when there is one, and gives the
+  public address only when the firewall does not close the port.
+- **The README no longer gives a `tailscale serve` command to copy.** Its
+  `tailscale serve --bg --https 443 http://127.0.0.1:5000` answers 502 on a panel serving its
+  default HTTPS. Use the wizard or the Tailscale page. docs/https.md no longer says Serve always
+  takes over TLS: it does only once the panel is bound to 127.0.0.1.
+- **The debug report's journal sections cover the panel's own output, not its sudo calls.** The
+  report read the newest 5,000 journal lines and only then dropped the sudo lines. On a live host
+  4,964 of the 5,000 were sudo lines, so the window covered under three hours and the recent log
+  had 36 lines. The report now asks journald for the panel's own lines by field, over the last 24
+  hours, so the lines it reads are the panel's output and not its sudo calls. The 24-hour window
+  is what keeps the read short on any journal: asked instead for the newest 5,000 such lines,
+  journalctl walked the whole of a 1.9 GB journal that held fewer, was still running after five
+  minutes, and the report showed no journal at all. Each part of the request names something rare
+  on its own (the panel's own output stream, a critical message, the unit), so a day on which the
+  panel logged thousands of errors costs little more to read than a quiet one. When the window
+  holds more than 5,000 entries (a traceback is one entry, however many lines it prints), or the
+  filtered read fails or runs out of its half of the time, the report reads the newest 5,000 lines
+  as before; when that read has nothing either, the report says its lines are the oldest of the
+  window, cut off. Refused sudo calls and the panel's warnings are still included. The sudo calls
+  of the last hour are counted from a separate read and printed once, under *Errors in the
+  journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `console send`,
+  `LinuxGSM config`, `true as root`, and so on) instead of "other command". Account names, paths,
+  what was typed into a console and scripts an operator ran are never printed. The installer's
+  calls as the panel's own account (the service account, or the login account a per-user panel
+  runs as) are counted under their own label, not as a game account's; a game server run under
+  that same account still has its gamedig and console calls counted as game work. A system
+  install needs an updated helper for this; an older helper gets the previous read.
+- **A privileged command the panel gives up on no longer keeps running as root.** When a call
+  through the helper timed out, the panel stopped it with SIGKILL. That reached `sudo` alone, and
+  sudo cannot pass a SIGKILL on, so the helper and the program it ran carried on as root with
+  nobody waiting for the answer: on the test host a debug report's journal read kept a core busy
+  for five and a half minutes, and every further report added another. The panel now sends SIGTERM
+  first, which both classic sudo and sudo-rs pass on, and SIGKILL only after two seconds. The
+  helper ends a read, and every process it started, when that SIGTERM arrives, when the sudo above
+  it is gone, or after 60 seconds; a process that ignores the SIGTERM is killed even after the one
+  that started it has exited. A LinuxGSM `details`, `check-update` or `postdetails` counts as a
+  read (with two minutes before its own limit), so a timed-out one no longer leaves the helper
+  waiting on it as root. A call that changes the host (apt, a firewall rule, a new account, a
+  LinuxGSM start) still runs to its end when the panel stops waiting, as it always did, even
+  after the sudo above it is gone: stopping it halfway would be worse. An update installs the new
+  helper.
+- **Call of Duty servers show the capacity the game reports.** gamedig gives cod's `maxplayers` as
+  text ("16"). The panel threw it away and showed the LinuxGSM config's number instead.
+- **A running game the panel cannot query no longer runs LinuxGSM `details` every 45 seconds.**
+  This covers a game outside the gamedig list (Factorio) and one gamedig cannot reach. The `details`
+  run (several `du` passes over the server's files) and the config reads came every pass. For a
+  server the monitor sees listening, the player count is now "unknown" without asking. For up to a
+  minute after such a server stops (until the monitor's next pass), it can show "unknown" where
+  `details` would have said 0, and a reboot-when-empty or notify-when-empty waits for that pass.
+  LinuxGSM's query settings, and a config that names no capacity, are re-read every 10 minutes
+  instead of every pass.
+- **The debug report no longer calls a systemd unit an email address.** A unit started from a
+  template is written `name@instance.service` (`user@1000.service`, `getty@tty1.service`), and the
+  report's email rule printed it as `[email]`, in cgroup paths and journal lines alike; so did an npm
+  `package@1.2.3`. Neither is replaced now. Addresses still are, an address written after a unit
+  name included.
+- **The debug report's installer lines keep their paths and the commit they name.** Installer
+  output was redacted before its paths were shortened, so on the usual install the data directory,
+  the helper and gamedig all printed as `/[redacted]`, the verified commit an update moved to as
+  `verified commit [redacted]`, and every address as a bare `[ip]`. They now print as `<data>/…`,
+  `<panel-lib>/…` and `<gamedig>/…`, the commit as its first 12 characters, and an address by its
+  class, as everywhere else in the report. The "Installer said" list no longer repeats a line the
+  log tail below it already shows; its warnings are always listed.
+- **The debug report's Privacy footer counts everything it replaced.** It counted only the names
+  and addresses it pseudonymised, so a report with `[email]` and `[redacted]` in it said "nothing
+  matched". A new "Redacted" line counts email-shaped strings, long tokens, key=value secrets, URL
+  credentials and SQL parameter lists, each counted once however often it appears, and the domains
+  and certificate issuers that Tailscale's health messages print as [domain] and [issuer withheld].
+- **The debug report pseudonymises an account written before an address.** In `name@<IPv4>` the
+  address rule ran first, so the email rule no longer saw an address and the account printed
+  (`alice@[ip:tailnet]`); `name@<a known host>` was the same. The account is now an [account-N]
+  token, the same one wherever else the name appears, a mention earlier in the same text or in the
+  summary included. Names the report keeps everywhere, such as root, are kept here too, and so is a
+  word no account can be named (one starting with a digit, such as a year). An email address whose
+  local part is a name the report knows (an OS account, a panel user), or whose domain starts with
+  a known host's name, is now `[email]`; the name was replaced first, so the address was no longer
+  recognised, and its domain (or the name before the @) printed.
+- **The debug report no longer says a self-update that completed DIED.** It read a log with no
+  "installer exit" line as a run killed mid-update, and raised a [fail] at the top of the report.
+  The panel's helper wrote no such line until its version of 2026-09-26, so every self-update an
+  older helper ran ended without one, finished or not. When the log holds install.sh's own ending
+  ("Update complete", "Already up to date", "Not updated") with no error after it, the report now
+  gives that outcome, says the exit line is missing, and names what can leave it out (an older
+  helper, or a run stopped after install.sh's ending) without claiming which one did.
+- **The debug report prints Tailscale's health messages, not only how many there are.** Each one
+  is on its own line, with node and login names, addresses, a self-hosted server's domain and a
+  certificate issuer replaced, as the rest of the report replaces them; file paths and Tailscale's
+  own help links are kept. A self-hosted control server's full host name is added to the names the
+  report replaces everywhere.
+- **The debug report says "node key expiry disabled" for a node whose key does not expire.**
+  Tailscale leaves the expiry out for a tagged node or one with expiry turned off, and the report
+  read that as "not recorded". A node that is not in the network map yet (it needs login) says the
+  expiry is unknown instead, rather than claiming either.
+- **The debug report's update lines say what was actually checked.** With nothing newer to install,
+  the CI gate line read `ci_state=passing · target ?` although no CI was asked; it now says it was
+  not consulted. An unverified newest commit is named as one, not as the "target". While newer
+  commits are still being verified, the commit on offer is labelled "offered" rather than printed
+  as origin's tip. And "Last 'update available' notification" says "none" when there is none,
+  which is the usual state once an update is installed; it printed `?`.
+- **The debug report no longer says a background job never ran when it is not due yet.** Several
+  jobs wait before their first run (the monitor 60 s, the update check 30 s, auto-block an hour),
+  and a report taken just after a restart said each had "never completed a pass". It now says when
+  the first run is due, and for one that was due and has not finished, when it was due. "Not yet
+  probed" hosts say that the monitor has not made its first pass yet, and when it will.
+- **With `trust_proxy` off, forwarded headers from a local account other than root are logged and
+  counted.** They were already refused, but nothing recorded it, so the debug report's "Forwarding
+  headers ignored, last hour" always said "none". The log line no longer suggests editing
+  `trusted_proxies`, which does nothing without `trust_proxy`. The report's "forwarded headers
+  believed" line also names why: Tailscale Serve on loopback, or a proxy you declared.
+- **The Backups page and the debug report no longer read the "Back up game servers now" button's
+  last run as the automatic schedule's.** Automatic game-server backups keep one clock per server;
+  only the button writes the time both of them showed. So an install whose weekly backups had run
+  every week read "Never run" right beside the Automatic backups switch, and one whose button was
+  pressed yesterday read "Last: 1d ago" there however overdue the schedule was. The button's own
+  line now sits under the button and says whose it is, and the schedule's row shows the newest
+  automatic backup from the audit log ("Last automatic backup: 2d ago", or that it failed — and when
+  the newest failed, the newest that worked first, so one failing host does not hide the rest). The
+  debug report prints the schedule per server (by id and game: interval, whose setting it is, the
+  clock's age, "due since", "clock not started"; a clock the install or the schedule's first look
+  at a server only started says "no backup yet" and when the first is due, where it said "last 0 s
+  ago"), what the unattended backups recorded in 30 days,
+  and the button's run under its own name. A default interval of 0 reads "default: off", because a
+  server's own setting can still back it up. Unused code that would have backed every server up
+  twice (`full_backup_due`) is gone.
+- **"Back up game servers now" moves each server's schedule clock.** It did not, so every server it
+  archived was still due to the hourly schedule, which archived it again at its old time: another
+  stop and restart, another archive, and the prune evicting an older restore point early. A server
+  it skipped (players online) or that failed stays due, as before.
+- **A server that always has players on is no longer silently never backed up.** The schedule
+  skips a server with players online and retries hourly, which is right, but a server never empty
+  at the top of an hour was skipped for good with no record anywhere. Once it is a whole interval
+  overdue (twice its interval since its last backup) that is audited and alerted, once — it is
+  remembered in config.json, so the panel's daily restart does not repeat it — and again only after
+  the server has been backed up. A "wait until empty" backup on a server whose own schedule is off
+  is reported the same way after a week of waiting; pressing the button again does not restart that
+  week. The report says how old the server's backup clock is and that players were on at that
+  attempt, not that they were on at every attempt: the clock is also that old after a schedule was
+  off, or a host's backups failed, for days. It is filed as its own audit action, so it does not
+  read as a failed backup. No player is ever disconnected for it.
+- **A backup host that is down sends one alert, not one an hour.** A scheduled or queued backup
+  that raised (a direct-SSH host that is down, or a key it now refuses) is retried hourly, and every
+  retry alerted again — twice an hour for a server both due and queued. The first failure of a
+  streak alerts; the retries are still on the audit log. The next failure after a backup that
+  reached the host alerts again. An audit-log write that fails (a locked database) no longer takes
+  the alert with it, nor stops the rest of the sweep.
+- **A failing daily panel backup no longer stops the game-server backups.** The hourly backup pass
+  ran the panel's own daily backup and both game-server sweeps under one error handler, so a daily
+  backup that raised skipped the game backups for that hour, every hour, and logged nothing at the
+  default level. Each step now runs on its own, logs a failure as a warning naming the step, and a
+  pass with a failure is counted as failed in the debug report.
+- **A direct-SSH host that never answers can no longer stop every backup.** Waiting for the
+  remote's reply to a command request had no time limit, so a wedged or hostile host held the
+  caller for ever — and a backup sweep holds the one lock every backup on every host shares, so
+  all scheduled and queued backups stopped, silently, until the panel restarted. That wait (and the
+  channel open, for long commands) is now bounded at five minutes, for commands and for the backup
+  and file downloads, and the connection that did not answer is dropped, so the next command on
+  that host reconnects instead of waiting five minutes again. Hosts on the panel's own machine and
+  over Tailscale were never affected.
+- **A daily panel backup that cannot make its temp folder no longer leaves an empty "backup".** The
+  archive's name was claimed before the temp folder was made, and a failure there left a 0-byte
+  file that counted as the day's daily backup — so none was taken for 23 hours, and the Backups page
+  listed one that cannot be restored.
+- **The debug report names the notification events that are off.** It printed only a count ("15
+  of 19"), so whether "A backup fails" was one of them could not be told. It now lists them by key.
 - **Adding a tool's settings file to the repository is no longer offered as a panel update.** The
   update check decides which files the panel runs from a list, and that list lived in the panel's
   own code. Naming SonarCloud's new settings file in it, as a file the panel does not run, was then
@@ -1187,11 +1459,90 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
-- **CI's Semgrep job runs on PyJWT 2.15.** Every PyJWT 2.13 release has published advisories (the
-  worst critical, GHSA-ffc3-869f-jxw9), and semgrep 1.178.0 pins `~=2.13.0`, so no lockfile that
-  honours semgrep's own pin was safe and Dependabot could not open a fix. PyJWT is now pinned apart
-  from semgrep's lockfile and both are installed hash-checked with `--no-deps`. This touches CI only:
-  the panel does not use PyJWT.
+- **A stored server name is never put into the account check's shell text (GHSA-hh39-76g3-wxcx,
+  reopened).** The check the panel runs before deleting a server's account, writing its files or
+  cron, or importing it asks the host about the account in one shell command, as root on a remote
+  with sudo enabled. Since that check arrived it carried the name raw inside a quoted `echo`, where
+  `$(…)`, backticks and a `"` still run — and a name from a database older than the name rule, a
+  hand edit or a restore is not checked when it is loaded. A name that is not a plain account name
+  is now refused before anything is asked; the check passes every name as a quoted argument; and an
+  import checks a name before it asks the host about it, not after. Removing such a server now
+  removes it from the panel without touching the host, and the message says so without repeating
+  the name. Before, Remove asked the host about the name, which ran it, then said "couldn't check,
+  try again", so the server could never be removed.
+- **A failed firewall step during an install no longer opens SSH.** The install's last step re-reads
+  the game's ports after its first start and opens any new ones, minus the ones the firewall step
+  had held back (SSH, the panel's port, other servers' ports). If the firewall step itself failed,
+  that held-back list was empty and the re-read opened everything LinuxGSM reported, so a config
+  naming port 22 as its query port opened SSH. The re-read now works out SSH, the panel's port and
+  other servers' ports for itself. When the firewall step failed it opens only the server's own
+  port, and the install finishes with a warning that the firewall step failed instead of a clean
+  "installed and started". The warning says to ask someone who manages the host when you cannot
+  open its Firewall page, and the install's audit entry records the failed step. A port the firewall
+  step could not check is no longer re-opened by the re-read when another port was held back in the
+  same install.
+- **An action's message never carries an internal error's text.** A LinuxGSM action whose argument
+  check failed for an unexpected reason answered with that error's own text, which could name a
+  path. It now says the panel could not check the action's arguments, and the error goes to the
+  log.
+- **A malformed stored server name can no longer mute that server's offline alerts.** The check
+  for a nightly LinuxGSM update in progress built a process pattern from the stored names, and a
+  name like `x|.*` matched every maintenance process on the host. Such names are not probed now.
+- **The browser's Socket.IO client is 4.8.4, past two HIGH advisories in the parser it bundles.**
+  The panel vendored socket.io-client 4.7.5, whose bundle carries socket.io-parser 4.2.4: affected
+  by GHSA-677m-j7p3-52f9 (fixed in 4.2.6) and GHSA-2m8v-j782-fhvr (fixed in 4.2.7), both of which
+  name the client too. Every page loads it. The decoder runs in the operator's browser on packets
+  from the panel's own server, so the realistic worst case was a browser tab driven out of memory by
+  a malicious or intercepted server. The new file is byte-identical to the one in the npm tarball,
+  whose integrity and registry signature were checked; its bundle carries both parser fixes, and it
+  speaks the same protocols (Engine.IO 4, Socket.IO 5) as the panel's python-socketio 5.17. Pages
+  now load it, and every other vendored file, by a URL that changes with the file's contents: the
+  fixed URL they used is cached for a week, so a browser would have kept the old client for up to a
+  week after the update. It takes the new one on its next page load.
+- **Scanners can see the vendored browser libraries now.** No scanner read `static/vendor/`: there
+  was no manifest for the dependency graph, and neither Dependabot alerts nor osv-scanner can look
+  inside a minified bundle, which is how the client above sat on a vulnerable parser with every check
+  green. `static/vendor/package.json` and `package-lock.json` now record each library and what its
+  bundle carries, the dependency audit reads the lockfile on every pull request, push and week, and
+  a unit gate ties every file to the manifest by sha256 and by the version its own banner states. A
+  library carried inside another's bundle is recorded at the version the bundle holds (Chart.js
+  carries @kurkle/color 0.3.2, which npm alone recorded as 0.3.4). A change to the two manifests
+  alone is not offered to panels as an update: nothing a panel runs reads them.
+- **gitleaks catches a Telegram bot token wherever it is written.** Its built-in rule needs a
+  `telegr…` name right before the value, so it missed the panel's own `config.json` shape, a bare
+  `token = "…"`, a function argument, the Bot API URL and prose; main's full-history scan carried a
+  real-shaped value and reported nothing. A keyword-free rule now finds all of them. Its one
+  allowlisted value is the historical synthetic fixture, matched exactly. The fixture-shape check in
+  the unit suite also caught too little: a token ending in `-` and the Bot API URL form passed it.
+- **A pull request can no longer allowlist its own leaked secret.** The secret scan read the pull
+  request's own gitleaks config and `.gitleaksignore`, and honoured `gitleaks:allow` on any line, so
+  one diff could add a secret and the exemption that hid it, and pass. A pull request is now scanned
+  with the base branch's config and ignore file, its own ignore file set aside and `gitleaks:allow`
+  ignored, then with its own config too; an exemption has to reach `main` on its own first.
+- **SECURITY.md says how to check an install set up before the setup-token fix**
+  (GHSA-cwmq-pvg9-jjfx): list the superadmins, confirm which tailnet the host is in and what it
+  publishes, and read the sign-ins. Finishing setup did not undo either takeover, so an install that
+  was already set up is not thereby in the clear.
+- **CodeQL sees Socket.IO input and the commands the panel runs.** CodeQL models python-socketio but
+  not Flask-SocketIO, so what a browser emits to the console and terminal sockets was not untrusted
+  input to any query; and the command text the panel sends to a host was not a command-injection
+  sink: neither SSH transport is modelled (paramiko's `exec_command`, or the `ssh` argument list
+  for Tailscale), and on the panel's own host CodeQL takes only the first element of
+  `["/bin/bash", "-c", cmd]` as the command. A model pack in
+  `.github/codeql/extensions` adds both. The sinks are the text as it enters `run_command`,
+  `shell_as_game_user`, `read_as_game_user` and `game_user_cmd`, which covers every transport, plus
+  the own-host shell. A value passed through `shlex.quote` counts as safe inside that text; that
+  barrier applies to every command-injection sink, so the few places that quote a whole script for
+  a second shell (`sudo bash -c '…'`), where a quote hides what is inside it, are listed and a unit
+  check fails on a new one. The `py/partial-ssrf` exclusion's justification, which said one
+  function was the panel's only outbound request, now lists all six outbound-HTTP call sites, and a
+  unit check fails on a seventh until it is reviewed.
+- **CI's Semgrep job runs on a PyJWT with no known advisory.** Every PyJWT 2.13 release has
+  published advisories (the worst critical, GHSA-ffc3-869f-jxw9), and semgrep 1.178.0 pinned
+  `~=2.13.0`, so no lockfile that honoured semgrep's own pin was safe and Dependabot could not open a
+  fix. semgrep 1.179.0 accepts PyJWT 2.15, so Semgrep's one hash lockfile now carries PyJWT 2.15.1
+  and installs with pip's dependency check on; the interim second lockfile for PyJWT alone is gone.
+  This touches CI only: the panel does not use PyJWT.
 - **Group forms reject ids that cannot be real ids.** Anyone who could manage groups could make the
   add and edit pages fail with a server error by submitting an extremely long number as an id; such
   values, and non-ASCII digits that were being read as ids, are now ignored.

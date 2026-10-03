@@ -303,6 +303,29 @@
           </tbody>
         </table>
         </div>
+        {# Routes to the panel that the panel does not manage (panel_leftovers: a mount other than
+           tailscale_mount, another listener, or Serve not set up). Nothing re-points them, so they
+           answer 502 from the next flip of the panel's own scheme. Disable was the only control,
+           and it clears tailscale_mount: the page in use at /lgsm then built every link for "/".
+           Each one gets its own Remove, which leaves the panel's config alone. #}
+        {% if panel_leftovers and current_user.is_superadmin %}
+        <div class="p-2 border-top small" id="ts-leftovers">
+          <div class="text-warning mb-1">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            <span>The panel does not manage these routes to it, so nothing keeps them on the scheme it serves.</span>
+          </div>
+          {% for r in panel_leftovers %}
+          <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+            <code class="text-break">{{ r.mount }}</code>
+            <code class="text-break text-secondary">{{ r.url }}</code>
+            <button type="button" class="btn btn-outline-danger btn-sm py-0" data-action="removeServeRoute"
+                    data-args='["@self"]' data-mount="{{ r.mount }}" data-url="{{ r.url }}">
+              <i class="bi bi-trash"></i> Remove
+            </button>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
         {% else %}
         <div class="p-3 text-center text-secondary small">
           {# An empty serve_config was read as "nothing is configured" and stated as a fact. It is

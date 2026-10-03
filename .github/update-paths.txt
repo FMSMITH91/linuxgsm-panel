@@ -72,3 +72,8 @@ noise .codacy.yaml
 noise .prospector.yaml
 noise .sonarcloud.properties
 noise static/js/.eslintrc.json
+# static/vendor's two manifests describe the vendored files to the dependency graph and osv-scanner;
+# nothing installs from them and no panel reads them. The files they describe stay runtime (static/).
+# Classified runtime, a lockfile-only Dependabot bump would have offered every panel an update.
+noise static/vendor/package.json
+noise static/vendor/package-lock.json

@@ -344,8 +344,13 @@ def create_backup(kind="manual", encrypt=True, passphrase=None):
     name, dest = _claim_archive_name(kind, passphrase)
     if dest is None:
         return False, "Backup failed — see panel logs."
-    tmp = tempfile.mkdtemp(prefix="lgsm-bk-")
+    # mkdtemp INSIDE the try: the archive name is already claimed (a 0-byte file), and a mkdtemp
+    # that raised (an unusable TMPDIR, a full /tmp) left that empty file behind. list_backups
+    # counted it as today's daily, so daily_backup_tick took no backup for 23 h, and the Backups
+    # page listed a "backup" that cannot be restored.
+    tmp = None
     try:
+        tmp = tempfile.mkdtemp(prefix="lgsm-bk-")
         _write_archive(tmp, dest, passphrase)
         return True, name
     except Exception:
@@ -356,7 +361,8 @@ def create_backup(kind="manual", encrypt=True, passphrase=None):
             _log.debug("could not remove partial backup", exc_info=True)
         return False, "Backup failed — see panel logs."
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _backup_passphrase(encrypt, passphrase):
@@ -1170,8 +1176,16 @@ DEFAULT_FULL_KEEP = 2       # LinuxGSM backups kept per game server
 
 
 def get_full_settings():
-    cfg = load_config()
+    """The global game-backup defaults (interval, keep) and the manual full run's last/summary."""
+    return full_settings_from(load_config())
 
+
+def full_settings_from(cfg):
+    """get_full_settings, from a config dict the caller already read (one read for many servers).
+
+    `last`/`summary` are the MANUAL "Back up game servers now" run's: record_full_backup is their
+    only writer. The automatic schedule keeps one clock per server (game_schedules, below).
+    """
     def _int(k, d):
         try:
             return int(cfg.get(k, d))
@@ -1208,12 +1222,12 @@ def record_full_backup(summary):
     update_config(lambda cfg: cfg.update({"full_backup_last": ts, "full_backup_summary": note}))
 
 
-def full_backup_due():
-    """True if scheduled full backups are on and one is due (interval elapsed since the last)."""
-    s = get_full_settings()
-    if s["interval_days"] <= 0:
-        return False
-    return time.time() - s["last"] >= s["interval_days"] * 86400
+# There is deliberately no "full_backup_due()". The hourly ticker once ran the whole full backup
+# when full_backup_last was an interval old; since scheduling moved to per-server clocks the
+# ticker only ever reads game_schedules, and full_backup_last is the manual button's alone. The
+# function stayed, called by nothing, and both the debug report and the Backups page went on
+# reading full_backup_last as if it were the schedule's: "never run" beside a schedule that had
+# run every week. Re-wiring it would back every server up twice. Use game_backup_due(sid).
 
 
 # ── Per-server schedules ─────────────────────────────────────────────────────
@@ -1225,11 +1239,18 @@ def get_game_schedule(sid):
 
     Returns {interval_days, keep, last, overridden}.
     """
-    cfg = load_config()
+    return game_schedule_from(load_config(), sid)
+
+
+def game_schedule_from(cfg, sid, defaults=None):
+    """get_game_schedule, from a config dict the caller already read.
+
+    `defaults` is full_settings_from(cfg) when the caller has it (a report over every server).
+    """
     entry = _game_schedules(cfg).get(str(sid))
     if not isinstance(entry, dict):   # tolerate a corrupted config — treat as no override
         entry = {}
-    d = get_full_settings()
+    d = defaults if defaults is not None else full_settings_from(cfg)
     has_iv, has_keep = "interval_days" in entry, "keep" in entry
 
     def _clamp(v, lo, hi, dflt):
@@ -1243,6 +1264,9 @@ def get_game_schedule(sid):
         "keep": (_clamp(entry["keep"], MIN_FULL_KEEP, MAX_FULL_KEEP, d["keep"])
                  if has_keep else d["keep"]),
         "last": _clamp(entry.get("last", 0), 0, 2 ** 63, 0),
+        # The `last` that start_game_clock wrote, while no backup has moved the clock since: the
+        # clock was started (at install, or on the sweep's first sight), no backup was taken.
+        "clock_started": _clamp(entry.get("clock_started", 0), 0, 2 ** 63, 0),
         "overridden": has_iv or has_keep,
         "interval_set": has_iv,   # True → this server overrides the interval (else inherits default)
         "keep_set": has_keep,     # True → this server overrides keep
@@ -1335,8 +1359,84 @@ def record_game_backup(sid):
         if not isinstance(entry, dict):
             entry = {}
         entry["last"] = int(time.time())
+        entry.pop("clock_started", None)    # a backup moved it: no longer only started
         sched[str(sid)] = entry
     update_config(_mut)
+
+
+def start_game_clock(sid):
+    """Start a server's schedule clock with no backup taken: its first is one interval from now.
+
+    `last` is what game_backup_due measures from, so it is set as a backup sets it; the same value
+    in `clock_started` says no backup did. The install and the scheduled sweep's first sight of a
+    server start it this way, and the debug report printed such a clock as "last 0 s ago", a backup
+    that never ran. Raises like update_config.
+    """
+    def _mut(cfg):
+        now = int(time.time())
+        _schedule_entry(cfg, sid).update({"last": now, "clock_started": now})
+    update_config(_mut)
+
+
+def _schedule_entry(cfg, sid):
+    """The game_schedules entry for `sid` inside `cfg`, created (and a corrupted map repaired)."""
+    sched = _game_schedules(cfg)
+    cfg["game_schedules"] = sched
+    entry = sched.get(str(sid))
+    if not isinstance(entry, dict):
+        entry = {}
+    sched[str(sid)] = entry
+    return entry
+
+
+def _marker(sid, key):
+    """An int marker from a server's game_schedules entry; 0 when absent or not a number."""
+    entry = _game_schedules(load_config()).get(str(sid))
+    try:
+        return int(entry.get(key, 0)) if isinstance(entry, dict) else 0
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def overdue_alerted(sid):
+    """The clock value (`last`) whose overdue streak was already reported for `sid`, or 0.
+
+    Persisted, not in memory: the panel restarts daily on a self-update, and an in-memory marker
+    re-sent the same "overdue" alert after every restart. Keyed on `last`, so it re-arms by itself
+    the moment the clock moves (a backup ran, or failed and was recorded).
+    """
+    return _marker(sid, "overdue_alerted")
+
+
+def mark_overdue_alerted(sid, last):
+    """Record that the overdue streak of clock value `last` was reported. Raises like update_config."""
+    update_config(lambda cfg: _schedule_entry(cfg, sid).update({"overdue_alerted": int(last)}))
+
+
+def queued_since(sid):
+    """When server `sid` was queued for a 'wait until empty' backup (epoch s), or 0."""
+    return _marker(sid, "queued_at")
+
+
+def queued_alerted(sid):
+    """The queued_at value whose long wait was already reported for `sid`, or 0."""
+    return _marker(sid, "queued_alerted")
+
+
+def record_queued(sid):
+    """Note that `sid` was queued for a 'wait until empty' backup now. Raises like update_config.
+
+    One rule, whoever calls: the time is now. The full run calls this only when it queues a server
+    that was NOT already waiting, so a new queue starts a new wait (and re-arms its report) while
+    pressing the button again does not restart one; the queued sweep calls it only for a server
+    queued before the time was kept, which starts its wait at first sight.
+    """
+    update_config(lambda cfg: _schedule_entry(cfg, sid).update({"queued_at": int(time.time())}))
+
+
+def mark_queued_alerted(sid, queued_at):
+    """Record that the wait of the queue entry made at `queued_at` was reported."""
+    update_config(lambda cfg: _schedule_entry(cfg, sid).update({"queued_alerted": int(queued_at)}))
 
 
 def game_backup_due(sid):

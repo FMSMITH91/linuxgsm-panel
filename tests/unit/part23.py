@@ -240,13 +240,24 @@ class _Log23:
     def read(self, _server, _user, sh, timeout=30, selfname=None):
         if sh.startswith("stat -c"):
             return ("%d %d" % (self.ino, len(self.data)) if self.stat_ok else ""), "", 0
+        # The tick's one command (server_files._console_poll_cmd): stat, the start the host picks
+        # from the inode and offset it is handed, and the framed bytes from there.
+        m = _re23.search(r'= (\d+) \] && \[ "\$2" -ge (\d+) \].*-gt (\d+) \]; then D=', sh)
+        if not self.stat_ok or m is None:
+            return "", "", 0
         if self.fail_chunk:
             return "", "SSH command timed out", -1
-        if self.unframed:
-            return "a reply with no frame", "", 0
-        a = int(sh.split("tail -c +", 1)[1].split(" ", 1)[0]) - 1
-        n = int(sh.split("head -c ", 1)[1].split(";")[0])
-        return ("B" + self.data[a:a + n] + "E"), "", 0
+        return self._poll_reply(*(int(g) for g in m.groups())), "", 0
+
+    def _poll_reply(self, ino, pos, cap):
+        """What the host prints for the poll: the start it chose, then the framed bytes."""
+        size = len(self.data)
+        a = pos if (ino == self.ino and size >= pos) else 0
+        n = min(size - a, cap)
+        head = "%d %d %d %d" % (self.ino, size, a, n)
+        if not n:
+            return head
+        return head + ("\na reply with no frame" if self.unframed else "\nB" + self.data[a:a + n] + "E")
 
 
 _CSID23 = -2310
@@ -295,7 +306,7 @@ def _console23():
     log.unframed, log.ino, log.data = False, 901, "boot\n"
     f5 = tick()
     check("console feed: a rotated log is counted, and its first chunk still pushed",
-          all((not _has23(f5, rotations=1, streak=0), pushed[-1] == "boot")), repr(f5))
+          all((not _has23(f5, rotations=1, streak=0), pushed[-1:] == ["boot"])), repr(f5))
     check("console feed: the counters hold no path, line or account (fixed tokens and numbers)",
           not _leaks23(repr(f5)) and "boot" not in repr(f5), repr(f5))
     check("console feed: registered, so a deleted server's counters are forgotten",
@@ -417,9 +428,12 @@ def _calls23(path, attr):
     return out
 
 
+# panel/routes/_shared.py: the backup-ticker's pass (_backup_ticker_pass) beats there, so that a
+# pass whose daily backup raised can still run the game sweeps and be counted as failed.
 _LOOP_FILES23 = ("app.py", "panel/services/monitoring.py", "panel/routes/server_files.py",
                  "panel/routes/os_updates.py", "panel/routes/host_terminal.py",
-                 "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py")
+                 "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py",
+                 "panel/routes/_shared.py")
 
 
 def _names_gates23():

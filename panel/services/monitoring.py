@@ -13,8 +13,10 @@ is deliberate — routes may reach into monitoring; monitoring never reaches int
 """
 import concurrent.futures
 import contextlib
+import functools
 import itertools
 import logging
+import os
 import re
 import shlex
 import time
@@ -34,7 +36,8 @@ from panel.core.panel_state import (
     forget_rows, keyed_state_with_locks, register_remote_state,
 )
 from panel.ops.ssh_manager import (
-    _remote_listening_ports, game_map, host_live_metrics, lgsm_get_values, metrics_for_game,
+    _gamedig_type, _remote_listening_ports, game_idents_ok, game_map, host_live_metrics,
+    is_local_server, lgsm_get_values, metrics_for_game,
     remote_fail2ban_attempt_counts, remote_reboot,
     remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
     run_privileged,
@@ -44,6 +47,7 @@ from panel.ops.ssh_manager import (
     get_server_status as sm_get_server_status,
     player_count_via_lgsm_query as sm_player_count_via_lgsm_query,
     player_slots as sm_player_slots,
+    player_slots_batch as sm_player_slots_batch,
 )
 
 _log = logging.getLogger("panel.monitoring")
@@ -246,7 +250,7 @@ def _cached_player_count(server_id):
 _PLAYER_POLL_WORKERS = 8   # cap on concurrent per-server queries (SSH/gamedig) in one poll pass
 
 
-def _query_server_slots(gs):
+def _query_server_slots(gs, primary=None):
     """Worker for the parallel poll: (id, (count, max, name)) for one server.
 
     Takes the ALREADY-LOADED row rather than an id, and opens no app context of its own. It used to
@@ -257,13 +261,142 @@ def _query_server_slots(gs):
 
     Reads only loaded columns plus the joinedloaded host, so nothing lazy-loads on a pool thread.
     Never raises.
+
+    `primary` is this server's answer from its host's batched gamedig query, when there was one
+    (see _batched_slots): the per-server gamedig run is then not repeated, and a target the batch
+    could not read goes on down the same fallbacks a failed per-server query takes.
     """
     try:
         if gs.status == "offline":
             return gs.id, (0, _server_max_config(gs), None)
-        return gs.id, tuple(_server_slots(gs))
+        if primary is None:
+            return gs.id, tuple(_server_slots(gs))
+        return gs.id, tuple(_server_slots(gs, primary=primary))
     except Exception:
         return gs.id, (None, None, None)
+
+
+def _panel_identities(remote):
+    """Accounts on `remote` that are more than a game account: the panel's own, or its SSH login.
+
+    A batched player query runs every server's gamedig as ONE account, so it must be a game
+    account and never one of these: gamedig parses replies anyone can spoof, and the panel's own
+    account is root-capable on a per-user install (and the SSH login is the identity the panel
+    escalates with on a remote).
+    """
+    if is_local_server(remote):
+        try:
+            import pwd
+            return {pwd.getpwuid(os.getuid()).pw_name}
+        except (ImportError, KeyError, AttributeError):
+            return None          # cannot tell which account is ours: batch nothing
+    login = (getattr(remote, "username", None) or "").strip()
+    return {login, "root"} if login else None
+
+
+def _batch_account(remote, rows):
+    """The game account a host's batched player query runs as, or None to query per server.
+
+    The first of the host's own game accounts (by server id) that is a plain account name and is
+    neither the panel's account nor its SSH login. None when there is no such account — the host
+    then keeps one query per server, each as its own account, exactly as before.
+    """
+    avoid = _panel_identities(remote)
+    if avoid is None:
+        return None
+    local = is_local_server(remote)
+    for gs in sorted(rows, key=lambda g: g.id):
+        if gs.short_name in avoid or not game_idents_ok(gs.short_name):
+            continue
+        if local and _admin_account(gs.short_name):
+            continue
+        return gs.short_name
+    return None
+
+
+# The groups that make an account an administrator: sudo (admin on old Ubuntu releases, wheel
+# elsewhere), and the groups that are root by another door — lxd/lxc and incus-admin start a
+# privileged container with the host's / mounted, docker and libvirt do the same with a container or
+# a VM, and disk writes the root filesystem's block device directly.
+_ADMIN_GROUPS = frozenset(("admin", "root", "sudo", "wheel", "lxd", "lxc", "incus-admin", "docker",
+                           "libvirt", "disk"))
+
+
+def _admin_account(user):
+    """Whether `user` on this host is in an administrator group, or that could not be read.
+
+    An imported server can run as a human's own sudo-capable account. That server's own query
+    already runs as it; a batch must not make every other server's query run as it too.
+    """
+    try:
+        import grp
+        import pwd
+        gid = pwd.getpwnam(user).pw_gid
+        names = {grp.getgrgid(g).gr_name for g in os.getgrouplist(user, gid)}
+    except (ImportError, KeyError, OSError, AttributeError):
+        return True              # cannot tell: do not run anyone else's query as it
+    return bool(names & _ADMIN_GROUPS)
+
+
+def _batchable(gs):
+    """Whether one server can join its host's batched gamedig query this pass."""
+    return (gs.status != "offline" and gs.remote is not None
+            and game_idents_ok(gs.short_name) and bool(gs.port)
+            and bool(_gamedig_type(gs.game_type, gs.query_type)))
+
+
+# A host whose batch did not run (its account refused by sudo, say — an imported server outside the
+# panel's game group) is polled per server, as before, for this long before the batch is tried
+# again. Without it, every pass there paid a failed batch on top of the per-server queries.
+_BATCH_RETRY_SECONDS = 600
+_batch_failed_at = register_remote_state({})   # remote_id -> time.time() of the last failed batch
+
+
+def _query_host_slots(work):
+    """Worker: one batched gamedig query for one host's servers: {server id: (count, max, name)}.
+
+    {} when the batch could not run, so every one of them is queried on its own. Never raises.
+    """
+    remote, rows = work
+    rid = getattr(remote, "id", None)
+    if time.time() - _batch_failed_at.get(rid, float("-inf")) < _BATCH_RETRY_SECONDS:
+        return {}
+    try:
+        acct = _batch_account(remote, rows)
+        if acct is None:
+            return {}
+        got = sm_player_slots_batch(remote, acct, [(gs.id, gs.game_type, gs.port, gs.query_type)
+                                                   for gs in rows])
+    except Exception:
+        _log.debug("batched player query failed for %s", row_label(remote, "name"), exc_info=True)
+        got = None
+    if got is None:
+        _batch_failed_at[rid] = time.time()
+        return {}
+    _batch_failed_at.pop(rid, None)
+    return got
+
+
+def _batched_slots(servers):
+    """{server id: gamedig's (count, max, name)} from ONE query per host that has two or more.
+
+    Every player poll ran one `sudo -u <account> gamedig` per server — three journal lines each,
+    every 45 s, the largest single source of the panel's privileged calls. gamedig reads no file,
+    so one game account can query all of a host's games in one command. A host with one server,
+    or with no account it may use (_batch_account), is left out and queried per server as before.
+    """
+    by_host = {}
+    for gs in servers:
+        if _batchable(gs):
+            by_host.setdefault(gs.remote_id, []).append(gs)
+    work = [(rows[0].remote, rows) for rows in by_host.values() if len(rows) >= 2]
+    if not work:
+        return {}
+    out = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
+        for got in ex.map(_query_host_slots, work):
+            out.update(got)
+    return out
 
 
 def _metrics_work(servers):
@@ -294,7 +427,7 @@ def _host_metrics_work(servers):
     return list(by_host.values())
 
 
-def _query_host_metrics(work):
+def _query_host_metrics(work, want_map=True):
     """Worker: sample ONE host once, and slice it per game. [(sid, metrics|None, remote_id, map)].
 
     One round trip per host instead of one per game. The host figures each game's row carries are
@@ -302,6 +435,10 @@ def _query_host_metrics(work):
     the panel did N times to learn the same thing. Measured against an 80ms link this was the whole
     cost of /api/dashboard/metrics: ceil(servers / 8) x latency, 1.05s at 100 servers, every 10
     seconds per open dashboard, with a 2s cache that a 10s poll can never hit. Never raises.
+
+    `want_map=False` leaves every map "" and asks for none. The history sampler passes it: it
+    stores no map, and asking cost one `sudo -u <account> gamedig` per running server per minute
+    (about 30% of the privileged calls on a three-server host) for an answer it threw away.
     """
     remote, games = work
     try:
@@ -325,7 +462,7 @@ def _query_host_metrics(work):
     for sid, short_name, port, game_type, query_type in games:
         m = metrics_for_game(sample, short_name, port)
         mp = ""
-        if m.get("game_procs"):     # only query the map for a running server
+        if want_map and m.get("game_procs"):     # only query the map for a running server
             try:
                 mp = game_map(remote, short_name, game_type, port, query_type)
             except Exception:
@@ -373,10 +510,18 @@ def _refresh_player_counts(app):
                    if gs.status not in ("installing", "configuring")]
         if not servers:
             return
-        # Query all servers concurrently (bounded), then apply the results serially below.
+        # One gamedig query per host first, then every server through its own chain, with the
+        # batch's answer standing in for its first step. All concurrent (bounded); the results are
+        # applied serially below.
+        primaries = _batched_slots(servers)
+
+        def _one(gs):
+            if gs.id in primaries:
+                return _query_server_slots(gs, primaries[gs.id])
+            return _query_server_slots(gs)
         results = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(servers))) as ex:
-            for sid, slots in ex.map(_query_server_slots, servers):
+            for sid, slots in ex.map(_one, servers):
                 results[sid] = slots
         # Only the servers that are still the rows the queries were for: one deleted meanwhile,
         # its id taken, would hand the new server the old one's count and in-game name.
@@ -514,8 +659,11 @@ def _record_metric_samples(app):
         if not work:
             return
         now = utcnow()
+        # want_map=False: MetricSample and HostSample have no map column, so the map lookup the
+        # dashboard needs was a sudo'd gamedig run per running server per pass, thrown away.
+        sample_host = functools.partial(_query_host_metrics, want_map=False)
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
-            sampled = list(itertools.chain.from_iterable(ex.map(_query_host_metrics, work)))
+            sampled = list(itertools.chain.from_iterable(ex.map(sample_host, work)))
         # A sample is history kept for 14 days under the row's id, so only rows that are still the
         # ones sampled get one: a server or host deleted during the pass, its id taken, would
         # start its successor's charts with the deleted one's figures.
@@ -580,10 +728,14 @@ def _lgsm_maintenance_running(remote, gs):
         # lgsm_name is derived ("{game_type}server"), so it is falsy only when game_type is — and it
         # degrades to a bare "server", which would match ANY *server maintenance this user is running.
         selfname = (gs.lgsm_name or "").strip() if (gs.game_type or "").strip() else ""
-        if not user or not selfname:
+        # Both names go into a pgrep ERE, and nothing has checked them since they were ASSIGNED: a
+        # row loaded from an older database, a hand edit or a restore can carry `x|.*`, which makes
+        # every maintenance process on the host this server's — BUSY for ever, so its offline
+        # alerts are muted for good. game_idents_ok is the rule every command builder applies.
+        if not user or not selfname or not game_idents_ok(user, selfname):
             return False
-        # pgrep -f takes an ERE. short_name/game_type are pinned to [A-Za-z0-9._-], so "." is the one
-        # metacharacter that can reach here; make it literal so it can't match a neighbouring name.
+        # pgrep -f takes an ERE. With the names checked above, "." is the one metacharacter that
+        # can reach here; make it literal so it can't match a neighbouring name.
         pattern = "%s (%s)" % (selfname.replace(".", "[.]"), "|".join(_LGSM_MAINTENANCE_CMDS))
         out, _, _ = run_command(
             remote,
@@ -678,12 +830,16 @@ def _host_restart_flags(remote):
     return names
 
 
-def _probe_host(remote):
+def _probe_host(remote, read_flags=True):
     """Every network probe for one host, gathered off the database.
 
     Runs on a pool thread, so it touches no session and reads only already-loaded columns of
     `remote`; a slow host costs latency, never a pooled connection. Returns (remote_id, dict) and
     never raises — each probe already degrades to None/False on its own.
+
+    `read_flags=False` skips the restart-flags read ("restart_flagged": None, which _monitor_server
+    reads as "did not look" and leaves the banner as it was); so does a port scan that failed,
+    because then no server of the host is judged and the answer was always discarded.
     """
     try:
         if not _host_reachable(remote):
@@ -692,12 +848,40 @@ def _probe_host(remote):
             ports = _remote_listening_ports(remote)
         except Exception:
             ports = None
+        flags = _host_restart_flags(remote) if read_flags and ports is not None else None
         return remote.id, {"reachable": True, "disk": _host_disk_pct(remote),
                            "load_mem": _host_load_mem(remote), "ports": ports,
-                           "restart_flagged": _host_restart_flags(remote)}
+                           "restart_flagged": flags}
     except Exception:
         _log.debug("host probe failed for %s", getattr(remote, "name", "?"), exc_info=True)
         return remote.id, {"reachable": False}
+
+
+# The restart-flags read is a privileged call (a helper verb on the panel's host, `sudo` over SSH on
+# a remote) that the monitor made for every host on every 60 s sweep — about 60 an hour per host,
+# three journal lines each — to feed one display-only banner. Only a daily-restart cron line writes
+# the flag. So a host is read when one of its servers has daily restart on, or still shows the
+# banner (so it clears once the flag goes), and otherwise every _RESTART_FLAGS_REFRESH seconds:
+# that bounded re-read is what catches a cron the column does not know about (an imported server
+# keeps its old crontab with the column False until Scheduled Tasks is opened, and a crontab
+# edited in the terminal says nothing to the panel). A host with no installed server is never read:
+# its answer had nothing to apply to.
+_RESTART_FLAGS_REFRESH = 600
+_restart_flags_read_at = register_remote_state({})   # remote_id -> time.time() of the last read
+
+
+def _restart_flag_hosts(rows):
+    """The host ids whose restart flags this sweep reads, from (server id, host id, daily_restart)."""
+    by_host = {}
+    for sid, rid, daily in rows:
+        by_host.setdefault(rid, []).append((sid, daily))
+    now = time.time()
+    want = set()
+    for rid, servers in by_host.items():
+        due = now - _restart_flags_read_at.get(rid, float("-inf")) >= _RESTART_FLAGS_REFRESH
+        if due or any(daily or _cron_restart_pending.get(sid) for sid, daily in servers):
+            want.add(rid)
+    return want
 
 
 def _monitor_pass():
@@ -720,7 +904,13 @@ def _monitor_pass():
                          {row[0] for row in db.session.query(GameServer.id).all()})
     if not remotes:
         return
-    probes = _probe_hosts(remotes)
+    # Which hosts' restart flags to read is decided HERE, in this thread: the probes run on pool
+    # threads, which must not touch the session.
+    flag_hosts = _restart_flag_hosts(
+        db.session.query(GameServer.id, GameServer.remote_id, GameServer.daily_restart)
+        .filter_by(installed=True).all())
+    probes = _probe_hosts(remotes, flag_hosts)
+    _stamp_flag_reads(probes, flag_hosts)
     # The probes take seconds per host. A host deleted meanwhile, its id taken, is not judged on
     # the old host's probe: its successor's servers were checked against the OLD machine's port
     # scan and alerted on, and the old host's reachability was recorded as the new one's.
@@ -746,14 +936,29 @@ def _monitor_pass():
             _log.debug("monitor: persisting server status failed", exc_info=True)
 
 
-def _probe_hosts(remotes):
-    """Run _probe_host for every host concurrently (bounded): {remote_id: probe dict}."""
+def _probe_hosts(remotes, flag_hosts=None):
+    """Run _probe_host for every host concurrently (bounded): {remote_id: probe dict}.
+
+    `flag_hosts` is the set of host ids whose restart flags are read this sweep; None reads all.
+    """
+    def _one(remote):
+        if flag_hosts is None:
+            return _probe_host(remote)
+        return _probe_host(remote, read_flags=remote.id in flag_hosts)
     probes = {}
     with concurrent.futures.ThreadPoolExecutor(
             max_workers=min(_MONITOR_HOST_WORKERS, len(remotes))) as ex:
-        for rid, data in ex.map(_probe_host, remotes):
+        for rid, data in ex.map(_one, remotes):
             probes[rid] = data
     return probes
+
+
+def _stamp_flag_reads(probes, flag_hosts):
+    """Record when each host's restart flags were last READ — a read that failed is not stamped."""
+    now = time.time()
+    for rid in flag_hosts:
+        if (probes.get(rid) or {}).get("restart_flagged") is not None:
+            _restart_flags_read_at[rid] = now
 
 
 def _monitor_host(remote, probe, th, servers):
@@ -1085,6 +1290,7 @@ def _reboot_when_empty_watch(app):
     on a guess), so a host that can't be queried just waits. Runs forever on a 60s tick; the
     registry is in-memory.
     """
+    runtime_stats.loop_started("reboot-when-empty", 60)
     while True:
         time.sleep(60)
         with _rwe_lock:
@@ -1274,6 +1480,8 @@ def _autoblock_apply(write, ips, what, failed):
 # read per server per hour, and unlike a pop in the write path it also catches an edit made on the
 # host (LinuxGSM config, another panel, an admin in vim).
 _MAX_PLAYERS_TTL = 3600
+# A config that was READ and names no capacity at all is re-read this often instead.
+_MAX_PLAYERS_UNSET_TTL = 600
 
 
 def _server_max_config(gs):
@@ -1286,31 +1494,45 @@ def _server_max_config(gs):
     prev = None
     if cached is not None:
         prev, read_at = cached
-        if (time.time() - read_at) < _MAX_PLAYERS_TTL:
+        ttl = _MAX_PLAYERS_TTL if prev is not None else _MAX_PLAYERS_UNSET_TTL
+        if (time.time() - read_at) < ttl:
             return prev
-    mx = None
-    try:
-        # `or {}`: None is "the config could not be read". Both answers leave mx None here, and
-        # the cache below deliberately stores only a real value, so an unreadable read is retried
-        # on the next call rather than being written down as an answer.
-        vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["maxplayers", "slots"]) or {}
-        for key in ("maxplayers", "slots"):
-            v = (vals.get(key) or "").strip()
-            if v.isdecimal():
-                mx = int(v)
-                break
-    except Exception:
-        _log.debug("max-players: config read failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+    read, mx = _read_max_config(gs)
     if mx is not None:
-        _max_players_cache[gs.id] = (mx, time.time())   # only cache a real value
+        _max_players_cache[gs.id] = (mx, time.time())
         return mx
+    if read and prev is None:
+        # READ, and the config names no capacity (Minecraft keeps it in server.properties): that is
+        # an answer, so it is kept for _MAX_PLAYERS_UNSET_TTL. Uncached, every 45 s pass re-ran a
+        # `sudo -u <account>` config read to learn the same nothing, for as long as it ran.
+        _max_players_cache[gs.id] = (None, time.time())
     # The re-read failed (or the key is unset). A failed read is not a measurement: keep serving
     # the last capacity actually read rather than blanking the UI and disarming the full alert,
     # and retry on the next call — which is what an uncached server already does.
     return prev
 
 
-def _server_slots(gs, allow_console=False):
+def _read_max_config(gs):
+    """(read, capacity): whether the config was READ at all, and maxplayers/slots from it or None.
+
+    lgsm_get_values answers None for "could not be read" and a dict for a read; the two stay apart
+    here, because only a real read may be cached as "no capacity set".
+    """
+    try:
+        vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["maxplayers", "slots"])
+    except Exception:
+        _log.debug("max-players: config read failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+        return False, None
+    if not isinstance(vals, dict):
+        return False, None
+    for key in ("maxplayers", "slots"):
+        v = (vals.get(key) or "").strip()
+        if v.isdecimal():
+            return True, int(v)
+    return True, None
+
+
+def _server_slots(gs, allow_console=False, primary=None):
     """(count, max, name) for one game server. Never raises.
 
     The COUNT we can trust — gamedig first (which also yields max AND the server's advertised
@@ -1321,9 +1543,12 @@ def _server_slots(gs, allow_console=False):
     so gamedig can read the server instead). MAX is gamedig's reported capacity when it has one,
     otherwise the LinuxGSM config. NAME (the in-game hostname players see) only comes from gamedig;
     None from the other sources.
+
+    `primary`, when given, is gamedig's answer already read for this server by its host's batched
+    query; (None, None, None) there means that query could not read it, and the fallbacks run.
     """
     # Primary: gamedig gives count, max AND the advertised name in a single query.
-    cur, mx, gname = _gamedig_slots(gs)
+    cur, mx, gname = primary if primary is not None else _gamedig_slots(gs)
     if cur is not None:
         return cur, (mx if mx is not None else _server_max_config(gs)), gname
     try:
@@ -1354,7 +1579,10 @@ def _gamedig_slots(gs):
 def _lgsm_query_count(gs):
     """The player count from LinuxGSM's own network query settings, or None (never raises)."""
     try:
-        return sm_player_count_via_lgsm_query(gs.remote, gs.short_name, gs.lgsm_name, fallback_port=gs.port)
+        # cached=True: querymode/querytype/queryport are static config, and reading them cost a
+        # `sudo -u <account>` per pass for every server that gamedig could not read.
+        return sm_player_count_via_lgsm_query(gs.remote, gs.short_name, gs.lgsm_name,
+                                              fallback_port=gs.port, cached=True)
     except Exception:
         return None
 
@@ -1363,6 +1591,16 @@ def _stopped_or_unknown_slots(gs):
     """_server_slots' last resort: (0, max, None) for a stopped server, else (None, max, None)."""
     # No gamedig type, no console engine, and LinuxGSM has no network query: a stopped server is
     # definitely empty; a running one we simply can't read, so report unknown (poller won't reboot).
+    #
+    # A server the monitor found LISTENING (status "online", from its port scan) is not asked:
+    # the status check is a LinuxGSM `details` through the helper — several `du` runs over the
+    # server's files, 7-15 s on the test VPS — every 45 s, and for a running server it can only
+    # say it is running. The answer is unknown either way. The one difference: status lags the
+    # port by up to a minute, and in that window `details` could have said "stopped" (0 players)
+    # where this says unknown — the cautious direction, which delays a reboot-when-empty or a
+    # notify-when-empty by at most one monitor pass rather than acting on a guess.
+    if getattr(gs, "status", None) == "online":
+        return None, _server_max_config(gs), None
     try:
         if sm_get_server_status(gs.remote, gs) == "offline":
             return 0, _server_max_config(gs), None

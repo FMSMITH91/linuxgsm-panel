@@ -798,9 +798,12 @@ def _register_players(app):
         allow_console = (request.args.get("console") == "1"
                          and (current_user.is_superadmin
                               or has_permission(current_user, VIEW_CONSOLE)))
+        # The timed poll (no ?console=1) may share a list read seconds ago by another viewer; the
+        # refresh button and the re-read after a kick ask for a fresh one.
         try:
             players = player_list(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type,
-                                  selfname=gs.lgsm_name, allow_console=allow_console)
+                                  selfname=gs.lgsm_name, allow_console=allow_console,
+                                  shared=request.args.get("console") != "1")
         except Exception:
             players = None
         # None => couldn't read over the network (and console wasn't run). Tell the UI so it shows a

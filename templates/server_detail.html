@@ -564,7 +564,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('vendor/chartjs/chart.umd.min.js') }}"></script>
 {# Server-rendered values for server_detail.js. Kept inline (and BEFORE it, so its top-level code can
    read them) while the rest of the page script becomes a cacheable file. #}
 <script nonce="{{ csp_nonce }}">

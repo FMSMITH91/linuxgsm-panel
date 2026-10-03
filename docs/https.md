@@ -4,8 +4,10 @@
 below), so your login and session cookie are encrypted out of the box — you'll just
 see a one-time browser warning. That's the safe default; the options below give a
 *trusted* cert (no warning) and are listed best-first for a public deployment.
-Setting up Tailscale Serve or a reverse proxy automatically takes over TLS, and the
-panel stops serving its own self-signed cert.
+A reverse proxy (`trust_proxy`) takes over TLS, and the panel stops serving its own
+self-signed cert. Tailscale Serve does too, but only once the panel is also bound to
+`127.0.0.1`: on any other bind the panel keeps its own TLS, so nothing else on the
+network sees plain HTTP, and Serve reaches it with `https+insecure://`.
 
 **Never expose the panel on plain HTTP over the public internet** — your login
 password and session cookie would travel in cleartext.
@@ -29,7 +31,11 @@ The relevant `data/config.json` settings:
 Built into the panel's setup wizard. Gives a real HTTPS cert on your private
 `*.ts.net` MagicDNS name, auto-renewed, reachable only from your devices. **No
 open port, nothing to maintain.** If you don't strictly need public access, use
-this. (Setup wizard → "Secure access with Tailscale".)
+this. (Setup wizard → "Secure access with Tailscale", or **Enable Serve** on the
+`/tailscale` page.) Let the panel write the route rather than running `tailscale serve`
+yourself: it picks the scheme it is really serving, records the mount, re-points the
+route at every start, and removes its own routes at any other mount. A route written by
+hand is not managed, so it answers 502 once the panel's scheme changes.
 
 ## 2. Cloudflare Tunnel — best for *public* access (no domain of your own, no open port)
 
@@ -69,8 +75,10 @@ yourname.duckdns.org {
 This is **on by default** (`"use_https": true`). It generates a **10-year**
 self-signed cert under `data/ssl/` and serves `https://<your-ip>:5000` directly —
 no renewal, no domain. To turn it off (serve plain HTTP), set `"use_https": false`
-and restart. It automatically stands down when Tailscale Serve or a reverse proxy
-(`trust_proxy`) is configured, since those terminate TLS with a real cert.
+and restart. It stands down when a reverse proxy (`trust_proxy`) is configured, and
+when Tailscale Serve is set up AND the panel is bound to `127.0.0.1`, since those
+terminate TLS with a real cert. Behind Serve on any other bind it stays on, and Serve
+reaches it with `https+insecure://`.
 
 **Caveat:** browsers show a "Not secure / proceed anyway" warning (the cert isn't
 from a trusted CA), and it protects against *passive* eavesdropping but not a

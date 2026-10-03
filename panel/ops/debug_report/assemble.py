@@ -257,8 +257,11 @@ def assemble(ctx, results):
     summary_secs, full_secs = _parts(ctx, SECTIONS, results)
     summary = "\n".join(top + summary_secs)
     report = "\n".join(top + every + summary_secs) + "\n" + "\n".join(full_secs)
-    summary = _clean(privacy.scrub(ctx, summary))
+    # The report first: it holds all of the summary, so an account the pass maps only from the
+    # report's 'name@<address>' is known before the summary is scrubbed, and prints there as its
+    # token too, not as the name.
     report = _cap(_clean(privacy.scrub(ctx, report)))
+    summary = _clean(privacy.scrub(ctx, summary))
     if privacy.prepare(ctx).pattern_error:
         summary += "\n- [fail] Privacy: pattern redaction failed; section bodies withheld\n"
     report += "\n" + "\n".join(privacy.footer(ctx)) + (

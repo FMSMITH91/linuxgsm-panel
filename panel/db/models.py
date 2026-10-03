@@ -920,7 +920,8 @@ class AuditLog(db.Model):
 AUDIT_SERVER_ACTIONS = frozenset({
     "install_complete", "install_server", "retry_install", "uninstall_server", "edit_server",
     "game_backup", "game_backup_delete", "game_backup_download", "game_backup_schedule",
-    "scheduled_backup", "queued_backup", "sync_ports", "set_daily_restart",
+    "scheduled_backup", "queued_backup", "scheduled_backup_overdue", "queued_backup_waiting",
+    "sync_ports", "set_daily_restart",
     "set_notify_when_empty", "refresh_commands", "send_command", "set_query_type",
     "custom_command", "restart_when_empty", "stop_when_empty", "set_autostart", "edit_config",
     "server_alerts_save", "edit_file", "delete_file", "download_file", "cron_add",
@@ -1465,9 +1466,68 @@ def _run_light_migrations():
     # ...and before the rebuild below, which takes the write lock on a connection of its own.
     db.session.commit()
     _unzone_audit_ips()                 # commits its own rewrite, for the same reason
+    _run_data_migrations()              # ...and so does each data migration
     _give_keyed_tables_autoincrement()
     _create_declared_indexes(existing)
     db.session.commit()
+
+
+def _autostart_off_for_unfinished_installs():
+    """Data migration 1: Autostart Off on every install that never finished (installed is not 1).
+
+    A new install's row used to be created with the model's default, Autostart On, before anything
+    had written the monitor cron line, and steps 5 and 7 set it from what their cron writes got.
+    The install now creates its row Off and moves the column only on what a write or a crontab read
+    reports, so a retry keeps what its earlier attempt recorded. A row made before that, by an
+    install that failed before step 5, carries the default On over a crontab with no monitor line;
+    a retry whose cron calls all fail then kept that On: the server would not come back after a
+    crash or a reboot while its Details page said it would (alerts #97/#102). Off errs the less
+    harmful way, and the retry's first cron write or read that works corrects it.
+
+    Once per database (see _run_data_migrations): a row this version records On afterwards is
+    evidence, not the default, and is left alone.
+    """
+    gs = GameServer.__table__
+    db.session.execute(gs.update().where(gs.c.installed.isnot(True), gs.c.autostart.isnot(False))
+                       .values(autostart=False))
+
+
+# The data migrations, in order. PRAGMA user_version in the database file records how many have
+# run, so each runs ONCE per database, on the start that first finds it missing: a fresh database
+# (on its empty tables), an upgraded one, and a backup taken before it and restored later, which
+# carries its own count. Each entry's statement sets the count to its own number, as a literal:
+# PRAGMA takes no bound parameter. A database rebuilt by db_maintenance's dump salvage starts at
+# 0 again and runs them again, so each must be safe to repeat.
+_DATA_MIGRATIONS = (
+    (_autostart_off_for_unfinished_installs, "PRAGMA user_version = 1"),
+)
+
+
+def _run_data_migrations():
+    """Run the data migrations this database has not run yet, each committed with its count.
+
+    Committed one by one, before the id rebuild and the index build, which take SQLite's write lock
+    on connections of their own: an UPDATE left open made them wait out the busy timeout, and the
+    startup died. A migration that fails is rolled back and logged, the panel starts, and the next
+    start tries it again.
+    """
+    try:
+        done = int(db.session.execute(text("PRAGMA user_version")).scalar() or 0)
+    except Exception:
+        db.session.rollback()
+        _log.warning("could not read the database's data-migration count; none were run",
+                     exc_info=True)
+        return
+    for migrate, mark in _DATA_MIGRATIONS[done:]:
+        try:
+            migrate()
+            db.session.execute(text(mark))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            _log.warning("data migration %s failed; the next start tries again", migrate.__name__,
+                         exc_info=True)
+            return
 
 
 def _give_keyed_tables_autoincrement():
