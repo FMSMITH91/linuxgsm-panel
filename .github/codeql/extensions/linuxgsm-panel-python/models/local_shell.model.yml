@@ -1,32 +1,77 @@
-# The panel's own-host shell is a command-injection sink.
+# The panel's command-text entry points, and its own-host shell, are command-injection sinks.
 #
-# Every command run_command sends to the panel's own host ends at
+# WHY THE ENTRY POINTS. Every command the panel runs on a host is shell TEXT handed to one of four
+# functions in panel/ops/ssh_manager/_core.py:
+#   run_command(server, command, ...)          `command` is one script for one shell
+#   shell_as_game_user(server, user, sh, ...)  `sh` is one script, run as the game account
+#   read_as_game_user(server, user, sh, ...)   the same, for reads
+#   game_user_cmd(user, inner, ...)            builds `sudo -u <user> bash -c <inner>`
+# A value interpolated into that text UNQUOTED is an injection, whatever happens to the text after.
+# A value passed through shlex.quote first is one literal word in that script, and is safe.
+# So the sink is the text as it enters, which is the one level where one layer of quoting is
+# exactly the right barrier. The paramiko, Tailscale-ssh and local transports are all behind
+# run_command, so one row covers the three.
+#
+# WHY NOT ONLY THE SHELL ITSELF. Below the entry points the panel quotes the WHOLE script a second
+# time, for a second shell: run_command's sudo path sends `sudo bash -c <quote(command)>` (_run_local
+# on the panel's own host, _run_via_ssh_cli and _run_via_paramiko remotely), and game_user_cmd sends
+# `sudo -u <user> bash -c <quote(inner)>`. The inner bash then RUNS that text. With the barrier
+# below, the quote that wraps a script cuts every flow inside it, a value left unquoted in it
+# included, so a sink placed only at the final shell sees nothing whose only way there is quoted.
+# game_user_cmd has no other way, so the first version of this file, which had only that sink, was
+# blind to every game-account script; the remote transports never reach that shell at all; and an
+# own-host sudo=True command was seen only because CodeQL's Python dataflow does not prune
+# _run_local's unescalated branch by the value of `sudo` (DataFlowPrivate.qll: isUnreachableInCall
+# is none()), which is luck rather than a model. tests/unit/part37.py lists each place the panel
+# quotes a whole script for a second shell (`-c <quote(...)>`), and fails on a new one until it is
+# reviewed here.
+#
+# The rows name the module the way the panel's code reaches it. API graphs see a call only through
+# an import, so `panel.ops.ssh_manager` (how routes and services call, `_sm.run_command`) and
+# `panel.ops.ssh_manager._core` (how the package's own submodules call, `_core.run_command`) both
+# need a row; a row's type must be the undotted top-level module, because Python's MaD resolves a
+# dotted type to INSTANCES of it, not to the module. What no row can reach is a call from inside
+# _core.py to its own function (a local call is not an API-graph use): send_console_command and
+# run_as_game_user's shell path call shell_as_game_user that way. Both quote every value they
+# interpolate, and the shell sink below still sees what reaches the panel's own shell unwrapped.
+#
+# THE OWN-HOST SHELL. Every own-host command ends at
 #   panel/ops/ssh_manager/_core.py  _exec_local_shell:  _real_subprocess.Popen(["/bin/bash", "-c", shell_cmd])
-# and py/command-line-injection could not see it. CodeQL's subprocess model takes only the FIRST
-# element of an argument list as the command (Stdlib.qll, SubprocessPopenCall.getCommand, whose own
-# TODO reads 'Handle using args=["sh", "-c", <user-input>]'), and that element here is the literal
-# "/bin/bash". _real_subprocess is eventlet.patcher.original("subprocess"), the unpatched module.
+# which py/command-line-injection cannot see on its own: CodeQL's subprocess model takes only the
+# FIRST element of an argument list as the command (Stdlib.qll, SubprocessPopenCall.getCommand,
+# whose TODO reads 'Handle using args=["sh", "-c", <user-input>]'), and that element is "/bin/bash".
+# _real_subprocess is eventlet.patcher.original("subprocess"), the unpatched module. MaD cannot say
+# "the element after -c", so "/bin/bash" and "-c" are sinks too; they are literals and never carry
+# taint. ListElement reaches list-literal elements only, so _exec_local_argv's helper-built argv,
+# which runs no shell, is not a sink. This row is a backstop for flows that reach the shell without
+# passing an entry point; a flow through run_command that reaches it unwrapped is reported at both.
 #
-# The sink: every element of the argument list given to that module's Popen. Models-as-data cannot
-# say "the element after -c", so "/bin/bash" and "-c" are sinks too; they are literals and can never
-# carry taint. The other call through that module, _exec_local_argv, is handed an argv built by
-# helper_argv/tool_argv (a list concatenation or a table call), never a list literal, so the
-# ListElement step does not reach its elements; an argv runs no shell.
-#
-# The barrier: shlex.quote's result. CodeQL's own stdlib model makes shlex.quote a TAINT STEP
+# THE BARRIER: shlex.quote's result. CodeQL's stdlib model makes shlex.quote a TAINT STEP
 # (Stdlib.model.yml summaryModel), so without this every value the panel quotes correctly before it
-# reaches that shell (ssh_manager._quote is shlex.quote) would be reported as an injection. Every
-# shell the panel quotes for is bash, where a quoted value is one literal word.
+# reaches a script would be reported (ssh_manager._quote is shlex.quote). shlex.quote makes a value
+# one literal word for any POSIX shell, so the barrier is right wherever the quoted value is a WORD
+# in the script that reaches a sink. It is wrong where a whole script is quoted for a second shell,
+# and a barrier cannot be scoped: it applies to every command-injection sink, CodeQL's own
+# (os.system, subprocess with shell=True) included. That is why the double-quoted sites are listed
+# and gated in part37, and each of them sits behind an entry-point row above or quotes a constant.
 #
 # This file is separate from flask_socketio.model.yml so that it can be removed on its own. A finding
-# it raises is either a real flow into the local shell or a value the code validates in a way CodeQL
-# does not recognise (a regex check, or a routed <int:...> parameter, which is an int and still a
+# it raises is either a real flow into a script or a value the code validates in a way CodeQL does
+# not recognise (a regex check, or a routed <int:...> parameter, which is an int and still a
 # source); read the flow before deciding.
 extensions:
   - addsTo:
       pack: codeql/python-all
       extensible: sinkModel
     data:
+      - ["panel", "Member[ops].Member[ssh_manager].Member[run_command].Argument[1,command:]", "command-injection"]
+      - ["panel", "Member[ops].Member[ssh_manager].Member[shell_as_game_user].Argument[2,sh:]", "command-injection"]
+      - ["panel", "Member[ops].Member[ssh_manager].Member[read_as_game_user].Argument[2,sh:]", "command-injection"]
+      - ["panel", "Member[ops].Member[ssh_manager].Member[game_user_cmd].Argument[1,inner:]", "command-injection"]
+      - ["panel", "Member[ops].Member[ssh_manager].Member[_core].Member[run_command].Argument[1,command:]", "command-injection"]
+      - ["panel", "Member[ops].Member[ssh_manager].Member[_core].Member[shell_as_game_user].Argument[2,sh:]", "command-injection"]
+      - ["panel", "Member[ops].Member[ssh_manager].Member[_core].Member[read_as_game_user].Argument[2,sh:]", "command-injection"]
+      - ["panel", "Member[ops].Member[ssh_manager].Member[_core].Member[game_user_cmd].Argument[1,inner:]", "command-injection"]
       - ["eventlet", "Member[patcher].Member[original].ReturnValue.Member[Popen].Argument[0,args:].ListElement", "command-injection"]
   - addsTo:
       pack: codeql/python-all

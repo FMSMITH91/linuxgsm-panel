@@ -5,17 +5,25 @@ What it holds, one section each:
   (it said notifications._post was the only outbound-HTTP sink). The justification now lists every
   outbound-HTTP call site, and this part lists them too: a new one fails until it is reviewed.
 * F6: the CodeQL model pack in .github/codeql/extensions makes Flask-SocketIO handler parameters
-  remote sources and the panel's own-host shell a command-injection sink. Whether CodeQL honours it
-  is proved by the probe PR's canary; this part holds the pack's shape and the code shapes its rows
-  assume, so a refactor cannot leave a model quietly matching nothing.
+  remote sources, and the command text entering run_command, shell_as_game_user, read_as_game_user
+  and game_user_cmd (plus the own-host shell) command-injection sinks, with shlex.quote a barrier.
+  Whether CodeQL honours it is proved by the probe PR's canary; this part holds the pack's shape and
+  the code shapes its rows assume, so a refactor cannot leave a model quietly matching nothing. A
+  barrier cannot be scoped, so every place a whole script is quoted for a second shell (where the
+  quote would hide what is inside) is listed here and must sit behind an entry-point sink.
 * V2: static/vendor/ is described to scanners by package.json + package-lock.json, and every file in
-  it is tied to that manifest by sha256 and by the version its own banner states. The Socket.IO
-  client must carry socket.io-parser's two advisory fixes.
+  it is tied to that manifest by sha256 and by the version its own banner states; a package a
+  bundle names in a banner inside it is locked and pinned at that version. The Socket.IO client must
+  carry socket.io-parser's two advisory fixes. Templates load the files by a content-hashed URL, and
+  the two manifests are noise to the update card.
 * V3: gitleaks' keyword-free Telegram rule, emulated here on planted tokens built at run time (a
-  literal would itself be the thing the scanners flag), and part05's fixture-shape pattern.
+  literal would itself be the thing the scanners flag), and part05's fixture-shape pattern. A pull
+  request is scanned with the base's allowlists, never with ones it brings itself.
 * V11: every entry in gitleaks' global allowlist says why it is there (the two that did not were
   dead, and are gone).
-* V5: the CHANGELOG may not describe a PyJWT split that the CI lockfiles no longer have.
+* V4: SECURITY.md tells an operator of an install set up before the setup token what to check.
+* V5: the CHANGELOG may not describe a PyJWT split that the CI lockfiles no longer have (and need not
+  describe PyJWT at all).
 * F7: a test module imports `app` one way; a cleanup that cannot delete a file says so; and a suite
   that sys.exit()s in its finally records a BaseException as a crash instead of exiting green.
 
@@ -33,8 +41,10 @@ import re as _re37
 import secrets as _secrets37
 import string as _string37
 
+from panel.ops import system_ops as _so37
 from unit.part01 import check
 from unit.part05 import _fixture_shapes, _root
+from unit.part06 import _wf_run_block
 from unit.part29 import _read29
 
 
@@ -315,6 +325,209 @@ def _shell_shape37(tree):
     return bound and bool(fn) and _popen_list_heads37(fn[0]) == [["/bin/bash", "-c"]]
 
 
+# ── F6: the command-text entry points, and every script quoted for a second shell ───────────────
+# shlex.quote is a barrier, and a barrier cannot be scoped to some sinks: where the panel quotes a
+# WHOLE script for a second shell (`sudo bash -c <quote(cmd)>`), every flow inside that script is cut,
+# a value left unquoted in it included. The first model put its only sink below those quotes, so it
+# saw no game-account script (game_user_cmd's only way to the shell is quoted) and no remote command,
+# and an own-host sudo=True command only through a branch CodeQL happens not to prune. The sinks are
+# now the entry points the text goes in by, and each place a whole script is quoted is listed here
+# with the entry point in front.
+_CORE37 = "panel/ops/ssh_manager/_core.py"
+_ENTRY37 = (("run_command", "command"), ("shell_as_game_user", "sh"),
+            ("read_as_game_user", "sh"), ("game_user_cmd", "inner"))
+# The module paths the panel calls them by: routes and services as `_sm.<fn>` (ssh_manager), the
+# package's own submodules as `_core.<fn>`. A row needs the undotted top-level type: Python's MaD
+# reads a dotted type as an INSTANCE of it (ApiGraphModelsSpecific.qll getExtraNodeFromType).
+_ENTRY_MODS37 = ("Member[ops].Member[ssh_manager]", "Member[ops].Member[ssh_manager].Member[_core]")
+# Each place a whole script is quoted for a second shell, and what stands in front of it: the
+# entry-point sink its text arrives through, or None for a script that is a constant.
+_DOUBLE_SHELL37 = {
+    (_CORE37, "_run_local"): "run_command",
+    (_CORE37, "_run_via_ssh_cli"): "run_command",
+    (_CORE37, "_run_via_paramiko"): "run_command",
+    (_CORE37, "game_user_cmd"): "game_user_cmd",
+    ("panel/security/privileged.py", "<module>[os-update-run]"): None,
+}
+# The helpers that wrap run_command's text for a second shell. A caller outside _core.py would reach
+# one past every entry-point row, so outside it they may only be handed a constant command.
+_WRAPPERS37 = {"_run_local": 0, "_run_via_ssh_cli": 1, "_run_via_paramiko": 1, "_exec_local_shell": 0}
+# The text before the quote ends in a SHELL's -c: `bash -c `, `sh -lc `, `su - x -c `. A flag that is
+# only spelled -c (`jq -c`, `tail -c`, `ls -c`) takes a word, and a quoted word is what the barrier is for.
+_DASH_C37 = _re37.compile(r"(?:\b(?:ba|da|k|z)?sh(?:\s+-[a-z]+)*|\b(?:su|runuser)\b[^;&|]*)\s+-[a-z]*c\s+$")
+
+
+def _entry_rows37(core):
+    """The sink rows the entry points need, from _core's own signatures, and what is missing there."""
+    params = {n.name: [a.arg for a in n.args.args] for n in core.body
+              if isinstance(n, _ast37.FunctionDef)}
+    rows, missing = [], []
+    for fn, param in _ENTRY37:
+        if param not in params.get(fn, []):
+            missing.append("%s(%s)" % (fn, param))
+            continue
+        pos = params[fn].index(param)
+        rows += [["panel", "%s.Member[%s].Argument[%d,%s:]" % (mod, fn, pos, param), "command-injection"]
+                 for mod in _ENTRY_MODS37]
+    return rows, missing
+
+
+def _f6_entry_points(rows):
+    """Every command-text entry point is a sink, at its signature's position, as the panel imports it."""
+    core = _ast37.parse(_read29(*_CORE37.split("/")))
+    want, missing = _entry_rows37(core)
+    sinks = rows.get("sinkModel", [])
+    dotted = [r[0] for r in sinks if "." in r[0]]
+    check("codeql model pack: each command-text entry point (run_command, shell_as_game_user, "
+          "read_as_game_user, game_user_cmd) is a command-injection sink at the position and keyword "
+          "_core's signature gives, by both paths the panel calls it (ssh_manager and its _core)",
+          not missing and len(want) == 8 and all(r in sinks for r in want) and not dotted,
+          "signature missing %r; rows missing %r; dotted types %r"
+          % (missing, [r[1] for r in want if r not in sinks], dotted))
+
+
+def _is_quote37(node):
+    return isinstance(node, _ast37.Call) and _callee37(node.func).split(".")[-1] in ("quote", "_quote")
+
+
+def _fstring_doubles37(node):
+    """How many `... -c {quote(x)}` an f-string holds."""
+    n, prev = 0, ""
+    for v in node.values:
+        if isinstance(v, _ast37.Constant):
+            prev = str(v.value)
+            continue
+        n += bool(_DASH_C37.search(prev) and _is_quote37(v.value))
+        prev = ""
+    return n
+
+
+def _percent_doubles37(node):
+    """How many `"... -c %s" % (quote(x), ...)` a %-format holds."""
+    if not (isinstance(node.op, _ast37.Mod) and isinstance(node.left, _ast37.Constant)
+            and isinstance(node.left.value, str)):
+        return 0
+    args = node.right.elts if isinstance(node.right, _ast37.Tuple) else [node.right]
+    holes = [m for m in _re37.finditer(r"%[-#0 +]*\d*(?:\.\d+)?[a-z%]", node.left.value)
+             if m.group() != "%%"]
+    n, start = 0, 0
+    for i, m in enumerate(holes):
+        before = node.left.value[start:m.start()]
+        n += bool(i < len(args) and _DASH_C37.search(before) and _is_quote37(args[i]))
+        start = m.end()
+    return n
+
+
+def _concat_doubles37(node):
+    """How many `"... -c " + quote(x)` a concatenation chain holds (counted at its top node only)."""
+    if not isinstance(node.op, _ast37.Add):
+        return 0
+    parts, todo = [], [node]
+    while todo:
+        x = todo.pop()
+        if isinstance(x, _ast37.BinOp) and isinstance(x.op, _ast37.Add):
+            todo += [x.right, x.left]
+        else:
+            parts.append(x)
+    return sum(1 for a, b in zip(parts, parts[1:]) if isinstance(a, _ast37.Constant)
+               and isinstance(a.value, str) and _DASH_C37.search(a.value) and _is_quote37(b))
+
+
+def _node_doubles37(node, parent):
+    """Script-for-a-second-shell quotes in one node (a chained `+` is counted once, at its top)."""
+    if isinstance(node, _ast37.JoinedStr):
+        return _fstring_doubles37(node)
+    if not isinstance(node, _ast37.BinOp):
+        return 0
+    if isinstance(node.op, _ast37.Add) and isinstance(parent, _ast37.BinOp) and isinstance(parent.op, _ast37.Add):
+        return 0
+    return _percent_doubles37(node) + _concat_doubles37(node)
+
+
+def _child_scope37(child, scope):
+    """The label a child node's own sites carry: its function's name, or `<scope>[key]` for a table."""
+    if isinstance(child, (_ast37.FunctionDef, _ast37.AsyncFunctionDef)):
+        return [(child, child.name)]
+    if isinstance(child, _ast37.Dict):
+        return [(v, "%s[%s]" % (scope, k.value) if isinstance(k, _ast37.Constant) else scope)
+                for k, v in zip(child.keys, child.values)] + [(k, scope) for k in child.keys if k]
+    return [(child, scope)]
+
+
+def _double_shell_sites37(source, rel):
+    """{(rel, scope): count} of every place source quotes a whole script for a second shell."""
+    sites, todo = {}, [(_ast37.parse(source), "<module>", None)]
+    while todo:
+        node, scope, parent = todo.pop()
+        n = _node_doubles37(node, parent)
+        if n:
+            sites[(rel, scope)] = sites.get((rel, scope), 0) + n
+        for child in _ast37.iter_child_nodes(node):
+            todo += [(c, s, node) for c, s in _child_scope37(child, scope)]
+    return sites
+
+
+def _f6_double_shell():
+    """Every script the shipped code quotes for a second shell is a reviewed one."""
+    found = {}
+    for f in _shipped_py37():
+        found.update(_double_shell_sites37(open(f, encoding="utf-8").read(), _rel37(f)))
+    want = {k: 1 for k in _DOUBLE_SHELL37}
+    entries = {fn for fn, _p in _ENTRY37}
+    check("codeql model pack: every place the shipped code quotes a whole script for a second shell "
+          "(`-c <quote(...)>`, where shlex.quote's barrier hides the script) is a reviewed one, behind an "
+          "entry-point sink or quoting a constant; a new one fails until it is reviewed",
+          found == want and all(v is None or v in entries for v in _DOUBLE_SHELL37.values()),
+          "new or changed: %r; gone: %r" % (sorted(set(found.items()) - set(want.items())),
+                                             sorted(set(want) - set(found))))
+    probes = {
+        "f": 'def a(c):\n    return f"sudo bash -c {_quote(c)}"\n',
+        "pct": 'import shlex\nT = {"v": lambda a: "setsid sh -c %s & echo %s" % (shlex.quote(a), 1)}\n',
+        "add": 'import shlex\ndef b(c):\n    return "su - x -c " + shlex.quote(c) + " && true"\n',
+        "word": 'def d(p, f):\n    return f"ls -c {_quote(p)} | jq -c {_quote(f)}" + "tail -c %s" % _quote(p)\n',
+    }
+    got = {k: _double_shell_sites37(v, "p.py") for k, v in probes.items()}
+    check("codeql model pack: (control) the scan finds a script quoted for `bash -c`, `sh -c` and "
+          "`su -c` in an f-string, a %-format inside a table and a concatenation, and not a quoted word "
+          "after another program's -c (jq, tail, ls)",
+          got == {"f": {("p.py", "a"): 1}, "pct": {("p.py", "<module>[v]"): 1},
+                  "add": {("p.py", "b"): 1}, "word": {}}, repr(got))
+
+
+def _wrapper_refs37(tree):
+    """(references to a wrapper helper, those that are a call handed a constant command)."""
+    refs, ok = 0, 0
+    for n in _ast37.walk(tree):
+        if isinstance(n, _ast37.Name) and n.id in _WRAPPERS37:
+            refs += 1
+        elif isinstance(n, _ast37.Attribute) and n.attr in _WRAPPERS37:
+            refs += 1
+        if isinstance(n, _ast37.Call):
+            name = _callee37(n.func).split(".")[-1]
+            pos = _WRAPPERS37.get(name)
+            arg = n.args[pos] if pos is not None and len(n.args) > pos else None
+            ok += isinstance(arg, _ast37.Constant) and isinstance(arg.value, str)
+    return refs, ok
+
+
+def _f6_reach():
+    """Outside _core.py, the second-shell wrappers are only handed constants, and nothing imports
+    ssh_manager relatively (an API graph does not follow a relative import)."""
+    bad, relative = [], []
+    for f in _shipped_py37():
+        rel = _rel37(f)
+        tree = _ast37.parse(open(f, encoding="utf-8").read())
+        relative += ["%s:%d" % (rel, n.lineno) for n in _ast37.walk(tree)
+                     if isinstance(n, _ast37.ImportFrom) and n.level]
+        if rel != _CORE37:
+            refs, ok = _wrapper_refs37(tree)
+            bad += ["%s (%d of %d)" % (rel, refs - ok, refs)] if refs != ok else []
+    check("codeql model pack: outside _core.py the helpers that wrap run_command's text for a second "
+          "shell are only called with a constant command, and no shipped module imports relatively "
+          "(either would reach a shell past the entry-point rows)",
+          not bad and not relative, "wrapper uses %r; relative imports %r" % (bad, relative))
+
+
 # ── V2: static/vendor/, its two manifests, and the files ────────────────────────────────────────
 _VENDOR37 = os.path.join(_root, "static", "vendor")
 _VENDOR_META37 = {"VERSIONS.md", "package.json", "package-lock.json"}
@@ -432,6 +645,79 @@ def _v2_socketio(pj, lock):
     newer = bool(_re37.fullmatch(r"\d+\.\d+\.\d+", parser)) and tuple(map(int, parser.split("."))) >= (4, 2, 7)
     check("vendor: ...and the lockfile records the parser the bundle carries (an override, not npm's "
           "newest), at 4.2.7 or later", newer and pinned == parser, "lock %r, override %r" % (parser, pinned))
+
+
+# A banner line inside a comment: `<npm name> v<x.y.z>` (Chart.js's bundle keeps `@kurkle/color v0.3.2`).
+_BANNER_LINE37 = _re37.compile(r"^\s*\*?\s*(@?[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)?)\s+v(\d+\.\d+\.\d+)\b",
+                               _re37.M)
+
+
+def _embedded37(text, own, locked):
+    """{npm name: version} for each package a bundle names in a banner other than its own package:
+    a name the lockfile knows, or any scoped (@x/y) name, which can only be an npm package."""
+    out = {}
+    for m in _re37.finditer(r"/\*[!*](.*?)\*/", text, _re37.S):
+        for name, ver in _BANNER_LINE37.findall(m.group(1)):
+            key = name.lower()
+            if key != own and (key in locked or key.startswith("@")):
+                out[key] = ver
+    return out
+
+
+def _embedded_bad37(pj, locked):
+    """({name: version} the bundles carry, [what the lockfile or the overrides get wrong])."""
+    overrides, found, bad = pj.get("overrides") or {}, {}, []
+    for rel, ent in sorted((pj.get("vendored") or {}).items()):
+        if not rel.endswith((".js", ".css")):
+            continue
+        with open(os.path.join(_VENDOR37, rel), encoding="utf-8", errors="replace") as fh:
+            carried = _embedded37(fh.read(), ent.get("package"), locked)
+        found.update(carried)
+        bad += ["%s carries %s %s; the lockfile has %s, the override %s"
+                % (rel, n, v, locked.get(n), overrides.get(n)) for n, v in sorted(carried.items())
+                if locked.get(n) != v or overrides.get(n) != v]
+    return found, bad
+
+
+def _v2_embedded(pj, lock):
+    """A package a bundle names in a banner of its own is locked, and pinned, at that version."""
+    locked = {k.split("node_modules/", 1)[1]: (v or {}).get("version")
+              for k, v in (lock.get("packages") or {}).items() if k.startswith("node_modules/")}
+    found, bad = _embedded_bad37(pj, locked)
+    probe = _embedded37("/*!\n * Lib v1.0.0\n */x;/*!\n * @scope/inner v0.3.2\n * (c) x\n */y;"
+                        "/*! plain-dep v2.0.1 */z;/** Other Lib v9.9.9 */", "lib", {"plain-dep": "2.0.0"})
+    check("vendor: every package a bundle names in a banner of its own (Chart.js carries @kurkle/color) "
+          "is locked, and pinned by an override, at the version the bundle states, not npm's newest",
+          "@kurkle/color" in found and not bad
+          and probe == {"@scope/inner": "0.3.2", "plain-dep": "2.0.1"}, "%s; probe %r" % ("; ".join(bad), probe))
+
+
+def _v2_asset_urls():
+    """Templates load static/vendor's scripts and stylesheets by a URL that changes with the bytes."""
+    bare, hashed = [], set()
+    for tpl in sorted(_glob37.glob(os.path.join(_root, "templates", "**", "*.html"), recursive=True)):
+        src = open(tpl, encoding="utf-8").read()
+        bare += ["%s: %s" % (os.path.basename(tpl), m) for m in _re37.findall(
+            r"url_for\(\s*['\"]static['\"]\s*,\s*filename\s*=\s*['\"](vendor/[^'\"]+\.(?:js|css))['\"]", src)]
+        hashed |= set(_re37.findall(r"asset_url\(\s*['\"](vendor/[^'\"]+\.(?:js|css))['\"]\s*\)", src))
+    files = {"vendor/" + r for r in _vendor_files37() if r.endswith((".js", ".css"))}
+    check("vendor: templates load every vendored script and stylesheet through asset_url, whose URL "
+          "changes with the file's bytes (/static is cached for a week, so a fixed URL kept browsers on "
+          "the replaced Socket.IO client for up to a week after the update)",
+          len(files) >= 7 and not bare and hashed == files,
+          "bare url_for: %r; never loaded by asset_url: %r" % (bare, sorted(files - hashed)))
+
+
+def _v2_update_paths():
+    """The two scanner manifests are noise to the update card; the files they describe are runtime."""
+    rules = _so37._parse_update_paths(_read29(".github", "update-paths.txt")) or {}
+    manifests = ("static/vendor/package.json", "static/vendor/package-lock.json")
+    runtime = ["static/vendor/" + r for r in sorted(_vendor_files37())]
+    got = {p: _so37._is_runtime_path(p, rules) for p in manifests + tuple(runtime)}
+    check("vendor: .github/update-paths.txt makes static/vendor's two scanner manifests noise (a "
+          "lockfile-only bump offers no panel an update) and keeps every vendored file runtime",
+          bool(rules) and len(runtime) >= 9 and not any(got[p] for p in manifests)
+          and all(got[p] for p in runtime), repr({p: v for p, v in got.items() if v != (p in runtime)}))
 
 
 # ── V3: gitleaks' Telegram rule, and part05's fixture shape ──────────────────────────────────────
@@ -564,6 +850,40 @@ def _v3_fixture_shape():
           not _re37.search(pat, 'A = "12345:TESTONLYnotarealtoken00"; B = "67890:TESTONLYfixturevalue0"'))
 
 
+def _gl_branches37():
+    """The Gitleaks step's (pull-request branch, other branch) as commands: comments dropped, each
+    continued line joined to its command, whitespace collapsed."""
+    body = _wf_run_block(_read29(".github", "workflows", "security.yml"), "Gitleaks")
+    code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+    lines = [" ".join(ln.split()) for ln in _re37.sub(r"\\\n\s*", " ", code).splitlines() if ln.strip()]
+    start = next((i for i, ln in enumerate(lines) if ln.startswith('if [ -n "${BASE_SHA:-}" ]')), None)
+    if start is None or "else" not in lines[start:] or "fi" not in lines[start:]:
+        return [], []
+    els = lines.index("else", start)
+    return lines[start + 1:els], lines[els + 1:lines.index("fi", els)]
+
+
+def _v3_pr_allowlists():
+    """A pull request is scanned by the base's allowlists, never by ones it brings itself."""
+    pr, other = _gl_branches37()
+    scans = [c for c in pr + other if "gitleaks git " in c]
+    pr_scans = [c for c in pr if "gitleaks git " in c]
+    cfg = next((m.group(1) for c in pr for m in [_re37.fullmatch(
+        r'git show "\$\{BASE_SHA\}:\.github/gitleaks\.toml" > "([^"]+)"', c)] if m), None)
+    ign = next((m.group(1) for c in pr for m in [_re37.match(
+        r'git show "\$\{BASE_SHA\}:\.gitleaksignore" > "([^"]+)/\.gitleaksignore"', c)] if m), None)
+    rm_at = next((i for i, c in enumerate(pr) if c == "rm -rf -- ./.gitleaksignore"), None)
+    first = next((i for i, c in enumerate(pr) if "gitleaks git " in c), -1)
+    check("gitleaks: a pull request is scanned with the BASE commit's config and .gitleaksignore, its "
+          "own .gitleaksignore deleted first and every `gitleaks:allow` ignored, so it cannot allowlist "
+          "its own finding in the same diff",
+          cfg is not None and ign is not None and rm_at is not None and rm_at < first
+          and any('--config "%s"' % cfg in c for c in pr_scans)
+          and all('--gitleaks-ignore-path "%s"' % ign in c for c in pr_scans)
+          and len(scans) == 3 and all("--ignore-gitleaks-allow" in c for c in scans),
+          "base config %r, base ignore dir %r, rm at %r (first scan %r): %r" % (cfg, ign, rm_at, first, scans))
+
+
 def _v11_allowlist_reasons():
     """Every entry in gitleaks' global allowlist says why it is there."""
     text = _read29(".github", "gitleaks.toml")
@@ -584,17 +904,56 @@ def _v11_allowlist_reasons():
 
 
 # ── V5: the CHANGELOG describes Semgrep's PyJWT as CI installs it ───────────────────────────────
-def _v5_changelog():
-    """No [Unreleased] entry describes the PyJWT split #391 removed."""
-    text = _read29("docs", "CHANGELOG.md")
+# ── V4: what an install set up before the setup token should check ──────────────────────────────
+def _v4_prefix_doc():
+    """SECURITY.md gives an operator of a pre-fix install the checks the advisory left out."""
+    sec = _read29(".github", "SECURITY.md")
+    parts = sec.split("#### Checking an install set up before the fix (GHSA-cwmq-pvg9-jjfx)\n", 1)
+    body = parts[1].split("\n## ", 1)[0].split("\n#### ", 1)[0] if len(parts) == 2 else ""
+    need = ("`aad46a4`", "sudo linuxgsm-panel-recover list-users", "manage.py list-users", "[superadmin]",
+            "tailscale status --json | jq -r .CurrentTailnet.Name", "tailscale serve status", "`login`",
+            "not an all-clear")
+    missing = [n for n in need if n not in body]
+    manage = _read29("manage.py")
+    recover = "\n".join(ln for ln in _read29("recover.sh").splitlines() if not ln.lstrip().startswith("#"))
+    real = ('sub.add_parser("list-users"' in manage and '["superadmin"] if u.is_superadmin' in manage
+            and '"${PANEL_DIR}/manage.py" "$@"' in recover)
+    check("docs: SECURITY.md tells an operator whose install was set up before the setup token what to "
+          "check (superadmins, the tailnet, sign-ins), by commands that exist and print what it says",
+          bool(body) and not missing and real, "missing %r; commands real: %s" % (missing, real))
+
+
+def _v5_verdict(text, gone, pinned):
+    """(ok, stale entries) for a CHANGELOG: no [Unreleased] entry may describe the removed split.
+
+    The gate rejects the stale description and nothing else. It used to need a PyJWT entry to EXIST
+    as well, so dropping or rewording that bullet, or cutting [Unreleased] into a release, would
+    have failed main over a prose edit with nothing stale in it.
+    """
     unreleased = text.split("\n## [Unreleased]", 1)[-1].split("\n## [", 1)[0]
     entries = [e for e in _re37.split(r"\n(?=- )", unreleased) if "PyJWT" in e]
+    stale = [e.strip()[:70] for e in entries if _re37.search(r"pinned apart|--no-deps|semgrep-pyjwt", e)]
+    return gone and pinned and not stale, stale
+
+
+def _v5_changelog():
+    """No [Unreleased] entry describes the PyJWT split #391 removed."""
     gone = not os.path.exists(os.path.join(_root, ".github", "ci-requirements", "semgrep-pyjwt.txt"))
     pinned = "\npyjwt==" in _read29(".github", "ci-requirements", "semgrep.txt").lower()
-    stale = [e.strip()[:70] for e in entries if _re37.search(r"pinned apart|--no-deps|semgrep-pyjwt", e)]
+    ok, stale = _v5_verdict(_read29("docs", "CHANGELOG.md"), gone, pinned)
     check("changelog: [Unreleased] describes Semgrep's PyJWT as CI installs it now (one hash "
-          "lockfile, no split), not the split #391 removed",
-          gone and pinned and entries and not stale, "stale: %r" % stale)
+          "lockfile, no split), not the split #391 removed", ok, "stale: %r" % stale)
+    head = "# Changelog\n\n## [Unreleased]\n\n### Security\n\n"
+    probes = {
+        "no entry": head + "- **Other.** Text.\n\n## [2026.9.1]\n\n- PyJWT is now pinned apart.\n",
+        "a current entry": head + "- **PyJWT 2.15.** One hash lockfile.\n",
+        "the stale entry": head + "- **PyJWT.** PyJWT is now pinned apart from semgrep's lockfile, "
+                                  "and both install with `--no-deps`.\n",
+    }
+    got = {k: _v5_verdict(v, True, True)[0] for k, v in probes.items()}
+    check("changelog: (control) the PyJWT gate passes an [Unreleased] with no PyJWT entry (one in an "
+          "older release does not count) or a current one, and fails the stale text",
+          got == {"no entry": True, "a current entry": True, "the stale entry": False}, repr(got))
 
 
 # ── F7: test modules import app one way; a cleanup that cannot delete a file says so ────────────
@@ -687,15 +1046,24 @@ def _f7_crash_handlers():
 _f5_tripwire()
 _f5_controls()
 _f5_justification()
-_f6_shapes(_f6_pack())
+_ROWS37 = _f6_pack()
+_f6_shapes(_ROWS37)
+_f6_entry_points(_ROWS37)
+_f6_double_shell()
+_f6_reach()
 _PJ37, _LOCK37 = _vendor_json37("package.json"), _vendor_json37("package-lock.json")
 _v2_files(_PJ37)
 _v2_versions(_PJ37, _LOCK37)
 _v2_socketio(_PJ37, _LOCK37)
+_v2_embedded(_PJ37, _LOCK37)
+_v2_asset_urls()
+_v2_update_paths()
 _v3_rule()
 _v3_allowlist()
 _v3_fixture_shape()
+_v3_pr_allowlists()
 _v11_allowlist_reasons()
+_v4_prefix_doc()
 _v5_changelog()
 _f7_imports()
 _f7_cleanups()

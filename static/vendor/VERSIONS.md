@@ -17,8 +17,20 @@ reads the lockfile, so Dependabot alerts cover these packages, and the dependenc
 (`security-code.yml`, osv-scanner) reads it on every pull request, push and week.
 
 - `dependencies` pins each library at the exact version vendored here.
-- `overrides` pins the packages a bundle carries inside it, at the version found IN the bundle,
-  not the newest one npm would resolve (see the Socket.IO section below for how that was read).
+- `overrides` pins a package a bundle carries inside it at the version the bundle was built with,
+  not the newest one npm would resolve. Each pin says how that version is known:
+  - `@kurkle/color` 0.3.2: Chart.js's bundle keeps the color library's own banner
+    (`@kurkle/color v0.3.2`). npm alone resolved Chart.js's `^0.3.0` to 0.3.4, so until this pin
+    the scanners judged a version the panel does not ship.
+  - `socket.io-parser` 4.2.7 and `engine.io-client` 6.6.7: read from the code, since neither keeps
+    a banner (see the Socket.IO section below).
+  - `@popperjs/core` 2.11.8: Bootstrap's bundle carries Popper with no banner; Bootstrap's own
+    `package-lock.json` at its v5.3.3 tag locks 2.11.8, which is what its build bundled.
+
+  Two packages a bundle carries are NOT pinned, and are recorded at what npm resolves: the
+  Socket.IO bundle's `engine.io-parser` and `@socket.io/component-emitter`. Neither keeps a banner,
+  and nothing in the code tells their versions apart. `tests/unit/part37.py` fails when a bundle
+  states a package's version in a banner and the lockfile records another, or no override pins it.
 - `vendored` maps every file in this directory to its package, the file inside that package's npm
   tarball it was taken from, and its sha256.
 - The lockfile over-approximates on purpose: it also lists engine.io-client's Node-only
@@ -28,8 +40,19 @@ reads the lockfile, so Dependabot alerts cover these packages, and the dependenc
 
 `tests/unit/part37.py` holds the two manifests and the files to each other: every file here has a
 `vendored` entry and matches its sha256; its banner states exactly the version its package is pinned
-at; the lockfile resolves that version; this table agrees; and the Socket.IO bundle carries the
-socket.io-parser fixes. A bump is therefore a deliberate change to the file, this table and both
+at; the lockfile resolves that version; every package a bundle names in a banner of its own is
+locked, and pinned by an override, at that version; this table agrees; and the Socket.IO bundle
+carries the socket.io-parser fixes.
+
+The two manifests are scanner input, not something a panel runs, so `.github/update-paths.txt`
+names them `noise`: a change to them alone (a Dependabot bump of the lockfile, say) offers no panel
+an update. The files they describe stay `runtime`.
+
+Templates load every file here through `asset_url(...)`, never a bare `url_for('static', ...)`.
+`/static` is served with a week-long `Cache-Control`, so a fixed URL kept a browser on the file it
+already had for up to a week after an update; `asset_url` puts a hash of the bytes in the URL, so a
+new file is a new URL. The bootstrap-icons font preload is the one exception: its URL must match
+the one the stylesheet itself requests, and that carries bootstrap-icons' own hash. A bump is therefore a deliberate change to the file, this table and both
 JSON files, and it shows up in review.
 
 | Library | Version | File | Upstream |
@@ -57,8 +80,9 @@ rows to agree, so the next split fails the build instead of sitting there.
    version before using anything in it.
 2. Replace the file in place — keep the same filename, so no template changes.
 3. Update its row in the table above, its version in `package.json`, and its `vendored` sha256.
-   If the bundle carries other packages inside it, find the version it actually carries and set
-   that in `overrides`.
+   If the bundle carries other packages inside it, find the version it actually carries (a banner
+   inside the bundle, the code, or the library's own lockfile at its release tag) and set that in
+   `overrides`.
 4. Regenerate the lockfile in a scratch copy: `npm install --package-lock-only --ignore-scripts`
    beside a copy of `package.json`, then copy `package-lock.json` back.
 5. Run `./tools/run-tests.sh`; the JS parse gate and these manifest gates all run.

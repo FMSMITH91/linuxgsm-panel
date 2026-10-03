@@ -1021,5 +1021,5 @@ check("gitleaks: the non-PR scan is the full history of the commit judged (--log
       "and no gitleaks scan in the workflow runs without --log-opts (that walks every branch)",
       'Scanning the full history of ${GITHUB_SHA}' in _gl_src
       and '--log-opts "${GITHUB_SHA}"' in _gl_full and "--exit-code 1" in _gl_full
-      and _gl_code.count("gitleaks git --config") == 2
-      and _gl_code.count('--log-opts "') == 2, _gl_full[:400])
+      and _gl_code.count("gitleaks git --config") == 3
+      and _gl_code.count('--log-opts "') == 3, _gl_full[:400])

@@ -66,6 +66,28 @@ panel's port itself, so that step must not be open to whoever reaches the port f
   create the admin account. It opens nothing once the admin exists, or on an install that is already set
   up.
 
+#### Checking an install set up before the fix (GHSA-cwmq-pvg9-jjfx)
+
+The token arrived in commit `aad46a4` (version 2026.9.29; that date also has earlier commits, so check
+the commit in the footer). Before it, whoever reached the port while the wizard was open could create a
+superadmin, or join the host to a tailnet of their own with Tailscale SSH on. Finishing setup closed the
+wizard but undid neither, so "my install was already set up" is not an all-clear: every install that
+went through first-run setup on an older commit went through that window. On each one:
+
+1. **Superadmins.** `sudo linuxgsm-panel-recover list-users` (or `manage.py list-users` in the panel's
+   directory) lists every account, marking each `[superadmin]`. Look for one you did not create,
+   including a second admin made at the same moment as yours.
+2. **The tailnet.** On the panel's host, `tailscale status --json | jq -r .CurrentTailnet.Name` names the
+   tailnet the host is in, and `tailscale status` lists the machines that can reach it. If the tailnet
+   is not yours, `sudo tailscale logout`. `tailscale serve status` shows what the host publishes, and
+   whether any of it is on Funnel (the public internet).
+3. **Sign-ins.** Older versions wrote no audit row for the wizard's own steps, so the log cannot say who
+   ran setup. It does record every sign-in with its address: look in Audit Logs for `login` rows by an
+   account or from an address you do not recognise.
+
+A superadmin is root on the panel's host (see the next section). If any of these shows someone else,
+treat the host as compromised: rebuild it rather than only deleting the account.
+
 ## Known trust-model limitation: the panel has root on its own host
 
 When the installer is run as **root** it creates a dedicated service user and grants it

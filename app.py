@@ -1748,9 +1748,12 @@ def create_app():
 
     @app.after_request
     def _compress_and_cache(resp):
-        # 1) Cache the vendored static assets (bootstrap/icons/socketio). They ship WITH the panel
-        #    version, so a long cache is safe — a panel update restarts the process and the user
-        #    reloads. This stops the browser revalidating ~600KB of assets on every page load.
+        # 1) Cache the static assets (the vendored libraries and the panel's own JS/CSS). A long
+        #    cache is safe only because templates load every one through asset_url(), whose URL
+        #    carries a hash of the file's bytes: an update that changes a file changes its URL. A
+        #    fixed URL is NOT refreshed by a reload, so a browser kept the vendored Socket.IO client
+        #    it had for up to a week after the update that replaced it. This stops the browser
+        #    revalidating ~600KB of assets on every page load.
         try:
             if request.path.startswith(_static_prefix):
                 resp.headers["Cache-Control"] = "public, max-age=604800"   # 1 week
