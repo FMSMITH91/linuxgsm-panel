@@ -795,7 +795,7 @@ def browse_dir(server, user, relpath="", selfname=None):
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return None
-    inner = f"find {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%f\\n' 2>/dev/null"
+    inner = f"find {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%f\\0' 2>/dev/null"
     out, _, rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):
         return None
@@ -810,16 +810,26 @@ def browse_dir(server, user, relpath="", selfname=None):
     return {"path": base, "entries": _browse_entries(out, base, selfname)}
 
 
-def _browse_entries(out, base, selfname):
-    """The tab-separated `find -printf` listing (type, size, name) as entries, dirs first.
+def _listing_records(out):
+    """The records of a `find -printf` listing whose format ends in NUL, split on that NUL.
 
-    Split on the newline (LF) only, which is what `-printf` ends each entry with. str.splitlines()
-    also breaks on U+2028, U+2029, U+0085 and a few more, and a filename may hold any of them (an
-    upload can make one): the entry was cut at that character and listed under a name no file has,
-    so Rename on the row said "no longer there" and Delete said "Deleted" while the file stayed.
+    NUL, because no filename can hold one, and because every transport strips its whole stdout
+    (_core._finish, the Tailscale ssh path and the paramiko path all return `out.strip()`).
+    Records ended with a newline lost whatever whitespace ended the name `find` printed LAST,
+    along with the newline: `server.cfg ` was listed as `server.cfg`, so its row named a different
+    path — Rename said "no longer there", Delete said "Deleted" and left it, and beside a real
+    `server.cfg` both rows carried the same path and acted on the real file. strip() leaves a NUL
+    alone, so the last record keeps its name whole. A newline, U+2028, U+0085 or any other line
+    break a name holds is part of the name now, not the end of a record (str.splitlines() breaking
+    on those cut a name short the same way).
     """
+    return (out or "").split("\0")
+
+
+def _browse_entries(out, base, selfname):
+    """The tab-separated `find -printf` listing (type, size, name) as entries, dirs first."""
     entries = []
-    for line in (out or "").split("\n"):
+    for line in _listing_records(out):
         parts = line.split("\t")
         if len(parts) >= 3:
             typ, size = parts[0], parts[1]
@@ -961,7 +971,7 @@ def stat_upload_targets(server, user, reldir, names):
     if apdir is None:
         return None
     inner = (f"find {_core._quote(apdir)} -maxdepth 1 -mindepth 1 "
-             f"-printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null")
+             f"-printf '%y\\t%s\\t%T@\\t%f\\0' 2>/dev/null")
     out, err, rc = _core.shell_as_game_user(server, user, _guarded(user, apdir, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):
         return None
@@ -981,11 +991,11 @@ def stat_upload_targets(server, user, reldir, names):
 def _upload_dir_entries(out):
     """Map each name to {is_dir, size, mtime}, from the tab-separated `find -printf` listing.
 
-    Split on the newline only, as _browse_entries is, or a name holding U+2028 or U+0085 is never
-    found here and an upload onto it is not flagged as a conflict.
+    Read as _browse_entries reads it (_listing_records), or a name ending in whitespace, or holding
+    a line break, is never found here and an upload onto it is not flagged as a conflict.
     """
     present = {}
-    for line in (out or "").split("\n"):
+    for line in _listing_records(out):
         parts = line.split("\t")
         if len(parts) < 4:
             continue
@@ -1115,6 +1125,8 @@ RENAME_REFUSED = "Refusing to rename this path."
 RENAME_CONSOLE = ("The live console reads this path — renaming it would stop the console until the "
                   "server restarts.")
 _RENAME_CONSOLE_MARK = "__RENAME_CONSOLE__"
+RENAME_EDGE_SPACE = ("A name can't start or end with a space — it would look just like the name "
+                     "without one.")
 # Unicode's Bidi_Control characters. Each makes the text after it display in another order, so a
 # name holding one shows as something else: "\u202egnp.sh" displays as "hs.png".
 _BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e"
@@ -1133,9 +1145,10 @@ def rename_name_problem(name):
     One path component of a Linux filename: not empty, not '.' or '..', no '/', valid UTF-8, at
     most RENAME_NAME_MAX bytes, and nothing that makes the name read as something else: no control
     character (Cc: NUL, newline, DEL, U+0085...), no line or paragraph separator (U+2028, U+2029),
-    and no text-direction control. upload_file's rules ('', '.', '..', the '/' basename() removes
-    and the NUL it strips) are the subset of these an upload could meet; a rename is TYPED, so it
-    gets a reason for each instead of having its name quietly changed into one that passes.
+    no text-direction control, and no whitespace at either end. upload_file's rules ('', '.', '..',
+    the '/' basename() removes and the NUL it strips) are the subset of these an upload could meet;
+    a rename is TYPED, so it gets a reason for each instead of having its name quietly changed into
+    one that passes.
     """
     if not isinstance(name, str) or not name:
         return "Enter a new name."
@@ -1143,7 +1156,20 @@ def rename_name_problem(name):
         return "'.' and '..' are not names a file or folder can have."
     if "/" in name:
         return "A name can't contain a slash (/) — renaming never moves anything to another folder."
-    return _rename_char_problem(name)
+    return _rename_char_problem(name) or _rename_edge_problem(name)
+
+
+def _rename_edge_problem(name):
+    """Refuse whitespace at either end of a new name (whatever str.strip() would remove).
+
+    `server.cfg ` shows exactly as `server.cfg` does: a trailing space typed by mistake (a phone
+    keyboard's autocomplete adds one) made a second "server.cfg" row, and the one the user meant to
+    delete or edit was easy to confuse with the real config. The name is not trimmed into one that
+    passes: it is refused with the reason, as every other rule here is.
+    """
+    if name != name.strip():
+        return RENAME_EDGE_SPACE
+    return None
 
 
 def _rename_char_problem(name):

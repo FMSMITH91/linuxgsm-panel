@@ -3411,7 +3411,7 @@ try:
           and _calls == [], "calls=%r" % _calls)
     # The listing itself: folders before files, each group by name ignoring case, a short line
     # skipped, and the LinuxGSM script flagged protected (deleting it would break the server).
-    _fl_rc(("f\t10\tzeta.txt\nd\t4096\tMaps\nf\t7\tcs2server\nd\t4096\tcfg\nf\tjunk\n", "", 0))
+    _fl_rc(("f\t10\tzeta.txt\0d\t4096\tMaps\0f\t7\tcs2server\0d\t4096\tcfg\0f\tjunk\0", "", 0))
     _bd = _F.browse_dir(_p8_srv(), "cs2server", "", "cs2server")
     eq("files: a listing shows folders first, then files, each by name ignoring case",
        [(e["name"], e["is_dir"], e["size"]) for e in (_bd or {}).get("entries", [])],
@@ -3423,7 +3423,7 @@ try:
     eq("files: a write under the home goes through the user write, content encoded",
        (_F.write_file(_p8_srv(), "cs2server", "serverfiles/cfg/server.cfg", "sv_cheats 0\n"), _written),
        ((True, ""), [("/home/cs2server/serverfiles/cfg/server.cfg", b"sv_cheats 0\n")]))
-    _fl_rc(("f\t120\t1700000000.75\tserver.cfg\nd\t4096\tnot-a-time\tmaps\nf\t1\n", "", 0))
+    _fl_rc(("f\t120\t1700000000.75\tserver.cfg\0d\t4096\tnot-a-time\tmaps\0f\t1\0", "", 0))
     eq("upload check: existing names with size and mtime; a bad mtime is 0, a short line ignored, "
        "a repeated or path-qualified name counted once",
        _F.stat_upload_targets(_p8_srv(), "cs2server", "serverfiles",

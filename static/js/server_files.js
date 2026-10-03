@@ -418,8 +418,9 @@ function _renamed(r, want){
 function submitRename(){
   var r=_renaming;
   if(!r || r.busy) return;
-  // Sent as typed: the panel keeps a leading or trailing space, so trimming here renamed
-  // ' notes' to 'notes' on an Enter that changed nothing. trim() only tells an empty name.
+  // Sent as typed: trimming here renamed ' notes' to 'notes' on an Enter that changed nothing, and
+  // a new name with a space at either end is the panel's to refuse, with its reason under the field.
+  // trim() only tells an empty name.
   var want=r.input.value;
   if(want===r.name){ cancelRename(); return; }
   if(!want.trim()){ _renameFailed(r, 'Enter a new name.'); return; }

@@ -5084,7 +5084,8 @@ if _node:
           "js (node): Enter on a name that ends in a space, left as it was, sends nothing and "
           "closes — the name is not trimmed into a rename", repr(_rn.get("space_unchanged")))
     check(_rn.get("as_typed") == {"path": "a.txt ", "new_name": " b.txt "},
-          "js (node): an edited name is sent as typed, spaces and all — the panel keeps them",
+          "js (node): an edited name is sent as typed, spaces and all — the panel, not the page, "
+          "refuses a space at either end, with its reason",
           repr(_rn.get("as_typed")))
 else:
     _sfr_start = _js_code_only(_js_function_body(_sfr_src, "startRename"))

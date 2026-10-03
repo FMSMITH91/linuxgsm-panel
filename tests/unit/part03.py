@@ -4656,7 +4656,7 @@ try:
           and _fb_empty.get("entries") == [],
           "returned %r — an empty folder is now reported as unreadable" % (_fb_empty,))
 
-    _sm_core.run_command = lambda *a, **k: ("f\t120\tserver.cfg\nd\t0\tlogs\n", "", 0)
+    _sm_core.run_command = lambda *a, **k: ("f\t120\tserver.cfg\0d\t0\tlogs\0", "", 0)
     _fb_full = _sm_files.browse_dir(NS(id=9402, host="203.0.113.42"), "csgoserver", "cfg")
     check("file browser: ...and a directory with files still lists them (positive control)",
           len((_fb_full or {}).get("entries") or []) == 2,

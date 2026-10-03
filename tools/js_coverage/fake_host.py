@@ -136,9 +136,10 @@ def _browse(command):
     if rel is None:
         return None
     entries = _TREE.get(rel, [("f", 10, "readme.txt")])
+    # Each record ends with a NUL, as `find -printf '...\0'` ends it (files._listing_records).
     if "%T@" in command:        # the upload pre-check also asks for each entry's mtime
-        return "\n".join("%s\t%d\t%d.5\t%s" % (t, n, time.time() - 3600, f) for t, n, f in entries)
-    return "\n".join("%s\t%d\t%s" % e for e in entries)
+        return "".join("%s\t%d\t%d.5\t%s\0" % (t, n, time.time() - 3600, f) for t, n, f in entries)
+    return "".join("%s\t%d\t%s\0" % e for e in entries)
 
 
 def _read_file(command):

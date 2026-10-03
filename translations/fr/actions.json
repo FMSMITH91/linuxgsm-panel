@@ -209,6 +209,7 @@
   "That name is reserved for LinuxGSM or the game's account — choose another.": "Ce nom est réservé à LinuxGSM ou au compte du jeu — choisissez-en un autre.",
   "A name can't contain a line or paragraph separator.": "Un nom ne peut pas contenir de séparateur de ligne ou de paragraphe.",
   "A name can't contain text-direction characters — they make a name display as something it isn't.": "Un nom ne peut pas contenir de caractères de direction du texte — ils font paraître un nom pour ce qu'il n'est pas.",
+  "A name can't start or end with a space — it would look just like the name without one.": "Un nom ne peut pas commencer ni se terminer par un espace — il ressemblerait exactement au nom sans cet espace.",
   "The live console reads this path — renaming it would stop the console until the server restarts.": "La console en direct lit ce chemin — le renommer arrêterait la console jusqu'au redémarrage du serveur.",
   "Invalid path": "Chemin invalide",
   "Permission denied": "Permission refusée"

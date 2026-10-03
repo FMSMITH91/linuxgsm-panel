@@ -5,8 +5,9 @@ The owner asked to rename what was just uploaded, through the file browser. POST
 to every gate the other file-browser writes have, plus the ones a rename needs of its own:
 
 * the new name is ONE path component — no '/', no control character (NUL, newline, DEL, U+0085),
-  no line or paragraph separator, no text-direction control, not '.', '..' or empty, at most 255
-  bytes — checked before the host is asked anything (and again by the builder);
+  no line or paragraph separator, no text-direction control, no whitespace at either end, not '.',
+  '..' or empty, at most 255 bytes — checked before the host is asked anything (and again by the
+  builder), each refused with a reason the Spanish and French catalogs translate;
 * the source and the new name stay inside the game account's home: the path is resolved the way
   delete-path resolves it (lexically, then on the host with realpath and `cd -P`), and a source
   reached through a symlinked folder is refused rather than followed;
@@ -19,7 +20,10 @@ to every gate the other file-browser writes have, plus the ones a rename needs o
 * paramiko (raises) and the Tailscale and local transports (return rc -1) give one fixed answer,
   with none of the transport's own text in it;
 * every outcome is audited, like delete-path — the refusals made before the host is asked too;
-* the browser's own listing shows a name holding U+2028 or U+0085 whole, so its row can be acted on.
+* the browser's own listing shows a name holding U+2028, U+0085 or a newline whole, so its row can be
+  acted on — and a name ENDING in whitespace too, through each real transport's strip of its output:
+  the local _finish, the Tailscale ssh client and paramiko. Beside a file of the same name without
+  the space, each row names its own file, and Rename, Delete and the upload check reach that one.
 
 HOW IT RUNS. On part12's Flask app, database and client helpers (imported; part12 has run by then,
 so importing it runs nothing again), with part12's transport tripwire re-armed for this part's
@@ -27,8 +31,12 @@ duration and every stub undone in its finally. The rename's host side runs in a 
 throwaway home, as part08 runs delete_path's: route, guards and `mv` are driven end to end. For the
 race checks a bash function named `mv` stands in for one step of the host — it makes the new name
 appear just before the real `mv` runs, or drops `-n` — so a guard that is missing shows as a
-clobbered file. It ends by checking nothing it drove reached a real transport.
+clobbered file. _bash40 hands back bash's output untouched, which no transport does: the
+whitespace-name checks run the REAL transports instead, with only what is under each standing in
+(the process, the ssh client on PATH, the paramiko channel). It ends by checking nothing it drove
+reached a real host.
 """
+import json
 import os
 import shutil as _shutil40
 import subprocess as _sp40  # nosec B404 - runs bash on the rename command this part builds
@@ -49,6 +57,12 @@ _HOME40 = os.path.realpath(_tf40.mkdtemp(prefix="lgsm-unit-p40-home-"))
 _OUTSIDE40 = os.path.realpath(_tf40.mkdtemp(prefix="lgsm-unit-p40-out-"))
 _LEAK40 = "LEAKMARK-p40"              # in every transport failure's own text; never in an answer
 _REAL_SHELL40 = _p9_core.shell_as_game_user
+# The real transports, taken before _arm40 trips them: the whitespace-name checks run through them.
+_REAL_LOCAL_SHELL40 = _p9_core._exec_local_shell
+_REAL_SSH_CLI40 = _p9_core._run_via_ssh_cli
+_PATH40 = os.environ.get("PATH", "")
+_BIN40 = os.path.realpath(_tf40.mkdtemp(prefix="lgsm-unit-p40-bin-"))   # the stand-in `ssh`
+_VIA40 = []                           # the transports a command went through, in order
 _SHELLS40 = []                        # every script a rename sent to the host
 _PROBES40 = []                        # every account the write gate asked the host about
 _PRELUDE40 = {"text": ""}             # bash run before the command: a stand-in `mv` for a race
@@ -61,7 +75,9 @@ _HOSTILE40 = [("a/b", "slash"), ("..", "'..'"), (".", "'.'"), ("", "Enter a new 
               ("a\x00b", "control"), ("a\nb", "control"), ("a\x7fb", "control"),
               ("a\x85b", "control"), ("a\u2028b", "separator"), ("a\u2029b", "separator"),
               ("a\u202eb", "text-direction"), ("a\u2066b", "text-direction"),
-              ("x" * 256, "too long"), ("é" * 128, "too long"), ("\ud800", "valid text")]
+              ("x" * 256, "too long"), ("é" * 128, "too long"), ("\ud800", "valid text"),
+              ("a.cfg ", "start or end with a space"), (" a.cfg", "start or end with a space"),
+              ("a.cfg\u00a0", "start or end with a space")]
 _CONSOLE40 = "log/console/csgoserver-console.log"   # GameServer.console_log, for game_type csgo
 
 
@@ -250,8 +266,9 @@ def _hostile_names40(a_client, sid):
         if (code, why in (body.get("message") or "")) != (400, True):
             bad.append("%r -> %s %r" % (name[:12], code, body))
     check("rename route: a new name with a slash, a control character (NUL, newline, DEL, U+0085), "
-          "a line or paragraph separator, a text-direction control, '.', '..', empty, too long "
-          "(chars or UTF-8 bytes) or not valid text is refused (400), each with its own reason",
+          "a line or paragraph separator, a text-direction control, a space (or NBSP) at either "
+          "end, '.', '..', empty, too long (chars or UTF-8 bytes) or not valid text is refused "
+          "(400), each with its own reason",
           not bad, "; ".join(bad[:4]))
     check("rename route: ...before the host is asked anything — no account probe, no command",
           (_PROBES40, _SHELLS40) == ([], []), repr((_PROBES40[:2], _SHELLS40[:1])))
@@ -280,6 +297,33 @@ def _hostile_names40(a_client, sid):
     check("rename route: a name of exactly 255 bytes is still allowed (control for 'too long')",
           (code, body.get("success"), _read40("cfg/" + edge)) == (200, True, "B"),
           repr((code, body)))
+
+
+def _catalog_keys40(lang):
+    """Every key of translations/<lang>/*.json, merged as panel.core.i18n.catalog merges them."""
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                        "translations", lang)
+    keys = set()
+    for name in sorted(os.listdir(root)):
+        if name.endswith(".json"):
+            with open(os.path.join(root, name), encoding="utf-8") as fh:
+                keys |= set(json.load(fh))
+    return keys
+
+
+def _catalog40():
+    """Each reason a new name is refused for reaches a Spanish or French user in their language.
+
+    The page shows the route's message under the field, and the DOM translator swaps it only when
+    it is a catalog key verbatim, so a reason missing from a catalog shows in English.
+    """
+    reasons = sorted({_files40.rename_name_problem(n) for n, _w in _HOSTILE40} - {None})
+    keys = {lg: _catalog_keys40(lg) for lg in ("es", "fr")}
+    missing = ["%s: %s" % (lg, r[:50]) for lg in keys for r in reasons if r not in keys[lg]]
+    check("rename: every reason a new name is refused for (a space at either end among them) is in "
+          "the Spanish and French catalogs",
+          not missing and _files40.RENAME_EDGE_SPACE in reasons,
+          "%d reasons; missing: %s" % (len(reasons), "; ".join(missing[:3])))
 
 
 def _escapes40(a_client, sid):
@@ -470,15 +514,15 @@ def _console40(a_client, sid):
 
 
 def _listing40():
-    """A name holding U+2028, U+2029 or U+0085 is listed whole, so the row's actions reach it."""
+    """A name holding U+2028, U+2029, U+0085 or a newline is listed whole, so its row reaches it."""
     _reset40()
-    odd = ("a\u2028b.cfg", "c\x85d.cfg", "e\u2029f.cfg")
+    odd = ("a\u2028b.cfg", "c\x85d.cfg", "e\u2029f.cfg", "g\nh.cfg")
     for name in odd:
         _write40("cfg/" + name, "S")
     got = _files40.browse_dir(_SRV40, _USER40, "cfg")
     names = sorted(e["name"] for e in (got or {}).get("entries", []))
-    check("browse_dir (real bash): a name holding U+2028, U+2029 or U+0085 is listed as itself, "
-          "not cut at that character", names == _ls40("cfg"), repr((names, _ls40("cfg"))))
+    check("browse_dir (real bash): a name holding U+2028, U+2029, U+0085 or a newline is listed as "
+          "itself, not cut at that character", names == _ls40("cfg"), repr((names, _ls40("cfg"))))
     hits = _files40.stat_upload_targets(_SRV40, _USER40, "cfg", list(odd))
     check("stat_upload_targets (real bash): ...and an upload onto such a name is flagged as a "
           "conflict, as any other existing name is",
@@ -486,6 +530,237 @@ def _listing40():
     gone = _files40.delete_path(_SRV40, _USER40, "cfg/" + odd[0])
     check("browse_dir (real bash): ...so Delete on its row removes that file",
           (gone, _there40("cfg/" + odd[0])) == ((True, "Deleted"), False), repr(gone))
+
+
+# ── a name that ENDS in whitespace, through the real transports ────────────────────────────────
+# Every transport strips its whole stdout (_core._finish, _run_via_ssh_cli, _run_via_paramiko).
+# When the listing ended each record with a newline, the record `find` printed LAST lost the
+# whitespace that ended its name: `server.cfg ` was listed as `server.cfg`, and beside a real
+# `server.cfg` both rows carried one path — Rename or Delete on the spaced row acted on the real
+# config. _bash40 returns bash's output untouched, so nothing above could see it. These checks run
+# the transports themselves; only what is under each stands in: the command runs as this account
+# instead of `sudo -u <account>`, Tailscale's ssh client is a script on PATH, and paramiko's channel
+# serves the bytes of a real bash. No real sudo can run: the prefix game_user_cmd puts on every
+# command is dropped, and a `sudo` left anywhere is a shell function that runs its command as this
+# account (tools/nosudo_runner refuses any command that names sudo, which is why it is dropped).
+_AS40 = "sudo -u %s " % _USER40
+_SUDO40 = 'sudo(){ [ "$1" = -u ] && shift 2; "$@"; }; '
+_SSH40 = """#!/bin/bash
+# part40's ssh client: runs the remote command (its last argument) in this bash, as this account.
+printf 'tailscale\\n' >> "$P40_VIA"
+c="${@: -1}"
+c="${c#%s}"
+sudo(){ [ "$1" = -u ] && shift 2; "$@"; }
+eval "${c//\\/home\\/%s/$P40_HOME}"
+""" % (_AS40, _USER40)
+
+
+def _on_host40(cmd):
+    """`cmd` as the host would run it here: as this account, /home/<account> the throwaway home."""
+    cmd = cmd[len(_AS40):] if cmd.startswith(_AS40) else cmd
+    return _SUDO40 + cmd.replace("/home/" + _USER40, _HOME40)
+
+
+def _local40(cmd, timeout=30, sudo=False, stdin_text=None):
+    """_run_local for the panel's own host: the real _exec_local_shell, and so the real _finish."""
+    _VIA40.append("local")
+    return _REAL_LOCAL_SHELL40(_on_host40(cmd), timeout=timeout)
+
+
+class _Chan40:
+    """A paramiko exec channel whose command has finished: its stdout, its stderr, its status."""
+
+    def __init__(self, out, err, rc):
+        self.streams, self.rc = {"out": [out] if out else [], "err": [err] if err else []}, rc
+
+    def settimeout(self, _t):
+        return None
+
+    def recv_ready(self):
+        return bool(self.streams["out"])
+
+    def recv(self, _n):
+        return self.streams["out"].pop(0) if self.streams["out"] else b""
+
+    def recv_stderr_ready(self):
+        return bool(self.streams["err"])
+
+    def recv_stderr(self, _n):
+        return self.streams["err"].pop(0) if self.streams["err"] else b""
+
+    def exit_status_ready(self):
+        return True
+
+    def recv_exit_status(self):
+        return self.rc
+
+    def shutdown_write(self):
+        return None
+
+    def close(self):
+        return None
+
+
+class _Ssh40:
+    """get_connection's client for a direct-SSH host: each exec runs in a real bash, here."""
+
+    def exec_command(self, command, timeout=None):
+        _VIA40.append("paramiko")
+        p = _sp40.run(["bash", "-c", _on_host40(command)], capture_output=True,  # nosec B603 B607 - bash on this part's own command
+                      timeout=30)
+        chan = _Chan40(p.stdout, p.stderr, p.returncode)
+        return NS(write=lambda _t: None, flush=lambda: None, channel=chan), NS(channel=chan), NS()
+
+
+def _real_transports40():
+    """Route every host command through the REAL transport for its host, over the stand-ins."""
+    with open(os.path.join(_BIN40, "ssh"), "w", encoding="utf-8") as fh:
+        fh.write(_SSH40)
+    os.chmod(os.path.join(_BIN40, "ssh"), 0o700)  # nosec B103 - this part's own stand-in, in its own temp dir
+    os.environ["PATH"] = _BIN40 + os.pathsep + _PATH40
+    os.environ["P40_HOME"], os.environ["P40_VIA"] = _HOME40, os.path.join(_BIN40, "via")
+    _p9_patch(_p9_core, "shell_as_game_user", _REAL_SHELL40)
+    _p9_patch(_p9_core, "_run_local", _local40)
+    _p9_patch(_p9_core, "_run_via_ssh_cli", _REAL_SSH_CLI40)
+    # The ssh argv carries the remote command, `sudo -u <account> …` and all, and tools/nosudo_runner's
+    # shim over this module's subprocess refuses any argv naming sudo — so it would never reach the
+    # stand-in `ssh` above, which never runs sudo itself. The module the shim stands over, unshimmed.
+    _p9_patch(_p9_core, "subprocess", _sp40)
+    _p9_patch(_p9_core, "_ssh_mux_opts", lambda: [])
+    _p9_patch(_p9_core, "_ssh_connect_timeout", lambda: 5)
+    _p9_patch(_p9_core, "get_connection", lambda server, **kw: _Ssh40())
+
+
+def _stand_ins_off40():
+    """Back to the tripwires: nothing after this may reach a transport, the local one included."""
+    os.environ["PATH"] = _PATH40
+    os.environ.pop("P40_HOME", None)
+    os.environ.pop("P40_VIA", None)
+    _p9_patch(_p9_core, "_run_local", _p9_trip("local-run"))
+    _arm40()
+
+
+def _via40():
+    """The transports used since the last call (the ssh client logs its own runs), then reset."""
+    via = os.path.join(_BIN40, "via")
+    try:
+        with open(via, encoding="utf-8") as fh:
+            ts = fh.read().split()
+        os.unlink(via)
+    except OSError:
+        ts = []
+    got = set(_VIA40) | set(ts)
+    del _VIA40[:]
+    return got
+
+
+def _find_order40(rel):
+    """The names in the folder at `rel`, in the order find prints them (no transport, no strip)."""
+    p = _sp40.run(["find", os.path.join(_HOME40, rel), "-mindepth", "1", "-maxdepth", "1",  # nosec B603 B607 - find on this part's own temp dir
+                   "-printf", "%f\\0"], capture_output=True, timeout=30)
+    return [n.decode("utf-8", "replace") for n in p.stdout.split(b"\0")[:-1]]
+
+
+def _spaced_dir40():
+    """A fresh home with `<stem>` and `<stem> ` in one folder, `<stem> ` LAST in find's listing.
+
+    `<stem>` holds "real" and `<stem> ` "spaced"; the last record is the one a strip cut. Returns
+    (folder, stem), or (None, None).
+
+    find lists a folder in its directory order — creation order or its reverse on tmpfs, name-hash
+    order on ext4 — so the order is found, not assumed: stems are tried in both creation orders
+    until find's own listing ends with the spaced name.
+    """
+    _reset40()
+    for i in range(24):
+        stem = "server.cfg" if i == 0 else "server%d.cfg" % i
+        for spaced_first in (True, False):
+            rel = "dup%d%s" % (i, "s" if spaced_first else "p")
+            for name in ((stem + " ", stem) if spaced_first else (stem, stem + " ")):
+                _write40(rel + "/" + name, "spaced" if name.endswith(" ") else "real")
+            if _find_order40(rel)[-1:] == [stem + " "]:
+                return rel, stem
+            _shutil40.rmtree(os.path.join(_HOME40, rel))
+    return None, None
+
+
+def _rows40(a_client, sid, rel):
+    """The browse route's rows for `rel`: (the path the page gives each row, its size), sorted."""
+    try:
+        r = a_client.get("/api/server/%d/browse" % sid, query_string={"path": rel})
+    except Exception as exc:  # noqa: BLE001 - a crash fails the check that made it, not the part
+        return [("raised", repr(exc)[:200])]
+    # server_files.js browse(): `want ? want+'/'+e.name : e.name` — the folder asked for, plus the name.
+    return sorted((rel + "/" + e.get("name", ""), e.get("size"))
+                  for e in _p9_json(r).get("entries", []))
+
+
+def _picked40(rows, size):
+    """The path of the row showing `size` bytes: the row the user picks."""
+    return next((p for p, n in rows if n == size), "(no %d-byte row)" % size)
+
+
+def _spaced_via40(a_client, how, sid):
+    """Through one real transport: two rows, two paths, and each row's actions reach its own file."""
+    rel, stem = _spaced_dir40()
+    _via40()
+    check("whitespace names via %s: the premise — a folder where find lists the name that ends in "
+          "a space LAST" % how, rel is not None, "no stem was listed last in 48 tries")
+    if rel is None:
+        return
+    plain, spaced = rel + "/" + stem, rel + "/" + stem + " "
+    rows = _rows40(a_client, sid, rel)
+    check("file browser via %s (the real transport, its strip included): a folder whose last entry "
+          "ends in a space lists both names exactly — each row's path is its own file" % how,
+          rows == sorted([(plain, 4), (spaced, 6)]), repr(rows))
+    ino = _ino40(plain)
+    code, body = _post40(a_client, sid, _picked40(rows, 6), "picked.cfg")
+    check("file browser via %s: ...Rename on the spaced row renames that file, and the real one "
+          "keeps its name, inode and content" % how,
+          (code, body.get("success"), _read40(rel + "/picked.cfg"), _read40(plain), _ino40(plain))
+          == (200, True, "spaced", "real", ino), repr((code, body, _ls40(rel))))
+    rel, stem = _spaced_dir40()
+    if rel is None:
+        return
+    plain, spaced = rel + "/" + stem, rel + "/" + stem + " "
+    rows = _rows40(a_client, sid, rel)
+    up = _p9_json(a_client.post("/api/server/%d/upload-check" % sid,
+                                json={"path": rel, "names": [stem + " "]}))
+    check("upload check via %s: an upload onto the name that ends in a space is flagged, as the "
+          "file it would replace (6 bytes)" % how,
+          [(h.get("name"), h.get("size")) for h in up.get("existing", [])] == [(stem + " ", 6)],
+          repr(up))
+    d = a_client.post("/api/server/%d/delete-path" % sid, json={"path": _picked40(rows, 6)})
+    check("file browser via %s: ...Delete on the spaced row deletes that file, and the real one "
+          "stays" % how, (d.status_code, _p9_json(d).get("success"), _there40(spaced), _read40(plain))
+          == (200, True, False, "real"), repr((d.status_code, _p9_json(d), _ls40(rel))))
+    via = _via40()
+    check("whitespace names via %s: ...the premise — every command went through %s and nothing else"
+          % (how, how), via == {how}, repr(sorted(via)))
+
+
+def _spaced40(a_client):
+    """The whitespace-name checks, on a host of each transport."""
+    hosts = (("local", _host40("p40-sp-local", "127.0.0.1", auth_method="local", is_local=True)),
+             ("tailscale", _host40("p40-sp-ts", "box2.ts.net", auth_method="tailscale")),
+             ("paramiko", _host40("p40-sp-key", "192.0.2.142")))
+    sids = [(how, _server40(rid, _USER40, 27420 + i)) for i, (how, rid) in enumerate(hosts)]
+    _real_transports40()
+    try:
+        servers = {"local": NS(id=94010, is_local=True, auth_method="local"),
+                   "tailscale": NS(id=94011, host="box2.ts.net", port=22, username="admin",
+                                   auth_method="tailscale", is_local=False, sudo_enabled=False),
+                   "paramiko": NS(id=94012, host="192.0.2.142", port=22, username="admin",
+                                  auth_method="key", is_local=False, sudo_enabled=False)}
+        outs = {how: _p9_core.run_command(srv, "printf 'x \\n'", sudo=False)[0]
+                for how, srv in servers.items()}
+        check("whitespace names: the premise — each real transport strips its output (so a listing "
+              "must not end with the bytes it needs)", outs == dict.fromkeys(servers, "x")
+              and _via40() == set(servers), repr(outs))
+        for how, sid in sids:
+            _spaced_via40(a_client, how, sid)
+    finally:
+        _stand_ins_off40()
 
 
 # ── the built command: renames exactly, never clobbers ─────────────────────────────────────────
@@ -662,6 +937,8 @@ def _cleanup40():
         _sh40._ACCOUNT_VERDICTS.clear()
     _shutil40.rmtree(_HOME40, ignore_errors=True)
     _shutil40.rmtree(_OUTSIDE40, ignore_errors=True)
+    _shutil40.rmtree(_BIN40, ignore_errors=True)
+    os.environ["PATH"] = _PATH40
 
 
 try:
@@ -671,6 +948,7 @@ try:
     _ADMIN40, _VIEWER40 = _users40(_H40)
     _A40, _V40 = _p9_client(_ADMIN40), _p9_client(_VIEWER40)
     _hostile_names40(_A40, _S40)
+    _catalog40()
     _escapes40(_A40, _S40)
     _protected40(_A40, _S40)
     _permission40(_V40, _S40)
@@ -680,6 +958,7 @@ try:
     _gone40(_A40, _S40)
     _console40(_A40, _S40)
     _listing40()
+    _spaced40(_A40)
     _race40()
     _exact40()
     _builder_wall40()

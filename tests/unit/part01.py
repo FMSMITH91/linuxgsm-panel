@@ -1773,7 +1773,8 @@ class _FakeSrv:
 
 _orig_up_rc = _sm_core.run_command
 try:
-    _FIND_OUT = "\n".join([
+    # NUL ends each record, as the host's `find -printf '...\0'` writes it (files._listing_records).
+    _FIND_OUT = "".join(rec + "\0" for rec in [
         "f\t1234\t1700000000.1234567890\tserver.cfg",
         "d\t4096\t1700000100.0000000000\taddons",
         "f\t0\t1700000200.5000000000\tempty.txt",
@@ -1783,12 +1784,15 @@ try:
     _hits = _sm_files.stat_upload_targets(_FakeSrv(), "csgoserver", "", ["server.cfg", "nope.txt", "addons"])
     eq("stat_upload_targets: only names that exist come back",
        [h["name"] for h in _hits], ["server.cfg", "addons"])
+    # .get, not [...]: a listing this cannot parse FAILS these checks by name. A KeyError here
+    # stopped the whole suite at part01, so no later check ran to say what broke.
     _byname = {h["name"]: h for h in _hits}
-    eq("stat_upload_targets: size is parsed", _byname["server.cfg"]["size"], 1234)
+    _upcfg, _upaddons = _byname.get("server.cfg", {}), _byname.get("addons", {})
+    eq("stat_upload_targets: size is parsed", _upcfg.get("size"), 1234)
     eq("stat_upload_targets: a float epoch mtime becomes an int",
-       _byname["server.cfg"]["mtime"], 1700000000)
+       _upcfg.get("mtime"), 1700000000)
     check("stat_upload_targets: a directory is flagged, so the UI can refuse to replace it",
-          _byname["addons"]["is_dir"] is True and _byname["server.cfg"]["is_dir"] is False)
+          _upaddons.get("is_dir") is True and _upcfg.get("is_dir") is False)
     eq("stat_upload_targets: a zero-byte file still counts as existing",
        [h["name"] for h in _sm_files.stat_upload_targets(_FakeSrv(), "u", "", ["empty.txt"])], ["empty.txt"])
     eq("stat_upload_targets: a filename containing a tab survives the split",
