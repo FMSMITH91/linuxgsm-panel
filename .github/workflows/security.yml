@@ -64,19 +64,25 @@ jobs:
           echo "${GITLEAKS_SHA256}  /tmp/${TARBALL}" | sha256sum -c -
           tar -xz -C /tmp -f "/tmp/${TARBALL}" gitleaks
 
-          # SCOPED to what is under review. `detect --source .` with no --log-opts runs `git log --all`
-          # over a fetch-depth 0 checkout, which holds EVERY branch: a finding on a branch the commit
-          # does not contain turned it red, and symmetrically a branch could suppress a real finding
-          # for itself with an allowlist in its own tree. On a PR, scan the range. Everywhere else
-          # (main, the weekly cron), scan the FULL history of the commit being judged: main went red
-          # on 2026-10-03 for a test literal that existed only on an open PR's branch (1004 commits
+          # `gitleaks git <repo>`, not `detect --source`: v8.19.0 deprecated `detect` and `protect`
+          # (still there, hidden from --help); `git`, `dir` and `stdin` are the scan modes now
+          # (README, v8.30.1). In 8.30.1 both build the same `git log -p` (cmd/git.go and
+          # cmd/detect.go call sources.NewGitLogCmdContext with the same log-opts), so the scan is
+          # unchanged; a release that removes `detect` would have turned this required check red.
+          #
+          # SCOPED to what is under review. A scan with no --log-opts runs `git log --all` over a
+          # fetch-depth 0 checkout, which holds EVERY branch: a finding on a branch the commit does
+          # not contain turned it red, and symmetrically a branch could suppress a real finding for
+          # itself with an allowlist in its own tree. On a PR, scan the range. Everywhere else (main,
+          # the weekly cron), scan the FULL history of the commit being judged: main went red on
+          # 2026-10-03 for a test literal that existed only on an open PR's branch (1004 commits
           # scanned, 1 finding, none of it main's). Each PR's own range scan covers its branch.
           if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
             echo "Scanning ${BASE_SHA}..${HEAD_SHA}"
-            /tmp/gitleaks detect --source . --config .github/gitleaks.toml \
-              --log-opts "${BASE_SHA}..${HEAD_SHA}" --redact --verbose --exit-code 1
+            /tmp/gitleaks git --config .github/gitleaks.toml \
+              --log-opts "${BASE_SHA}..${HEAD_SHA}" --redact --verbose --exit-code 1 .
           else
             echo "Scanning the full history of ${GITHUB_SHA}"
-            /tmp/gitleaks detect --source . --config .github/gitleaks.toml \
-              --log-opts "${GITHUB_SHA}" --redact --verbose --exit-code 1
+            /tmp/gitleaks git --config .github/gitleaks.toml \
+              --log-opts "${GITHUB_SHA}" --redact --verbose --exit-code 1 .
           fi

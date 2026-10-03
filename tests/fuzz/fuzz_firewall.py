@@ -19,7 +19,9 @@ import atheris
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-for _dep in ("paramiko", "eventlet.tpool", "panel.core.config"):   # pre-load uninstrumented (see fuzz_game_status)
+# Pre-load uninstrumented (see fuzz_game_status).
+for _dep in ("paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
+             "sqlalchemy.dialects.sqlite", "panel.core.config"):
     importlib.import_module(_dep)
 
 with atheris.instrument_imports():

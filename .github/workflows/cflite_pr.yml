@@ -29,6 +29,7 @@ jobs:
       contents: read
       security-events: write   # upload-sarif writes the crash into code scanning
       pull-requests: read      # the scope step lists the pull request's files
+      actions: read            # the corpus, coverage and main's builds are Actions artifacts
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
       cancel-in-progress: true
@@ -77,6 +78,48 @@ jobs:
           fi
           echo "run=${run}" >> "$GITHUB_OUTPUT"
           echo "this pull request changes what this job fuzzes: ${run}"
+      # ClusterFuzzLite keeps its corpus, its coverage report and main's builds as Actions artifacts
+      # named cifuzz-* (no storage repository is configured, so its filestore is the Actions one),
+      # and reads back the newest artifact of each name from ANY run in this repository, with no
+      # branch filter (oss-fuzz infra/cifuzz/filestore/github_actions/github_api.py find_artifact).
+      # A fork's pull request runs its own copy of a workflow and can upload an artifact by that
+      # name. The build step below then takes the coverage report from it to pick which targets to
+      # keep, the run step unpacks its corpus with an unchecked tarfile.extractall (a path-traversal
+      # TODO upstream) in a container holding this job's token, and a crash makes it RUN the stored
+      # build to see whether the crash is new. So before either reads anything, every stored
+      # cifuzz-* artifact must come from a run of this repository's main: cflite_batch.yml,
+      # cflite_cron.yml and cflite_build.yml, which run nowhere else. The same block guards each of
+      # them, and part29 holds the copies equal.
+      #
+      # A check before a read is not the read: an artifact uploaded after it passes is read
+      # unchecked. So it runs three times here. Before the build, which reads the coverage report
+      # at its end, minutes later. Again directly before the fuzzing step, which reads the corpus
+      # within seconds of starting, so that window is seconds rather than the whole build. And
+      # after fuzzing, turning the job red on anything that arrived meanwhile, including the build
+      # of the base commit a crash makes the fuzzing step download and run, which no check here can
+      # reach in time. What would close the race is the repository setting that has every outside
+      # contributor's workflow approved before it runs (Settings > Actions > General > fork pull
+      # request workflows: all outside contributors). As of 2026-10-03 it is set to first-time
+      # contributors only, an owner decision; cflite_cleanup.yml deletes what a fork uploaded.
+      - name: Every stored fuzz artifact was made on main here
+        if: steps.scope.outputs.run == 'true'
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rows="$(gh api "repos/${REPO}/actions/artifacts?per_page=100" --paginate --jq '
+            .artifacts[] | select((.expired | not) and (.name | startswith("cifuzz-")))
+            | [.name, .id, .workflow_run.id, .workflow_run.head_branch,
+               .workflow_run.head_repository_id, .workflow_run.repository_id] | @tsv')"
+          foreign="$(awk -F'\t' 'NF && ($4 != "main" || $5 == "" || $5 != $6)' <<< "${rows}")"
+          echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true)"
+          if [ -n "${foreign}" ]; then
+            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: run the ClusterFuzzLite artifact cleanup workflow (cflite_cleanup.yml, also every 6 hours), or gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
+            printf '%s\n' "${foreign}"
+            exit 1
+          fi
+
       - name: Build fuzzers (${{ matrix.sanitizer }})
         id: build
         if: steps.scope.outputs.run == 'true'
@@ -89,6 +132,25 @@ jobs:
           # failure to worry about is a fuzzer that builds fine and then dies on its first import —
           # which is exactly what that check catches.
 
+      - name: Every stored fuzz artifact was made on main here, again just before fuzzing
+        if: steps.scope.outputs.run == 'true'
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rows="$(gh api "repos/${REPO}/actions/artifacts?per_page=100" --paginate --jq '
+            .artifacts[] | select((.expired | not) and (.name | startswith("cifuzz-")))
+            | [.name, .id, .workflow_run.id, .workflow_run.head_branch,
+               .workflow_run.head_repository_id, .workflow_run.repository_id] | @tsv')"
+          foreign="$(awk -F'\t' 'NF && ($4 != "main" || $5 == "" || $5 != $6)' <<< "${rows}")"
+          echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true)"
+          if [ -n "${foreign}" ]; then
+            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: run the ClusterFuzzLite artifact cleanup workflow (cflite_cleanup.yml, also every 6 hours), or gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
+            printf '%s\n' "${foreign}"
+            exit 1
+          fi
+
       - name: Fuzz the changed code (${{ matrix.sanitizer }})
         id: run
         if: steps.scope.outputs.run == 'true'
@@ -96,7 +158,14 @@ jobs:
         with:
           language: python   # run_fuzzers defaults to c++ — it does not inherit the build's setting
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          fuzz-seconds: 180   # per PR, across the targets the diff touches — fuzz.yml does the sweep
+          # The vendor's PR value. It is split evenly across the targets kept: every target when
+          # there is no coverage report yet, else the ones the diff touches. Each target's process
+          # is killed 10s after its slice, and its start-up runs outside the slice, so a target
+          # whose imports take longer than that was killed every run ("process timed out") before
+          # it finished: at 180s over six targets the four ssh_manager ones were, after ~27s of
+          # Atheris instrumenting SQLAlchemy and Flask. The harnesses now pre-load those
+          # uninstrumented (fuzz_game_status says how), and part29 holds both.
+          fuzz-seconds: 600
           mode: code-change
           sanitizer: ${{ matrix.sanitizer }}
           output-sarif: true
@@ -107,3 +176,25 @@ jobs:
         with:
           sarif_file: cifuzz-sarif/results.sarif
           checkout_path: cifuzz-sarif
+
+      # The checks above ran before the build and before fuzzing; an artifact uploaded after them
+      # was read without one. Looking again afterwards cannot undo that read, but it turns this
+      # check red rather than leaving it green over it.
+      - name: Every stored fuzz artifact was made on main here, after fuzzing too
+        if: always() && steps.scope.outputs.run == 'true'
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rows="$(gh api "repos/${REPO}/actions/artifacts?per_page=100" --paginate --jq '
+            .artifacts[] | select((.expired | not) and (.name | startswith("cifuzz-")))
+            | [.name, .id, .workflow_run.id, .workflow_run.head_branch,
+               .workflow_run.head_repository_id, .workflow_run.repository_id] | @tsv')"
+          foreign="$(awk -F'\t' 'NF && ($4 != "main" || $5 == "" || $5 != $6)' <<< "${rows}")"
+          echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true)"
+          if [ -n "${foreign}" ]; then
+            echo "::error::A cifuzz-* artifact here was not made by a run of this repository's main. Nothing is fuzzed until it is deleted: run the ClusterFuzzLite artifact cleanup workflow (cflite_cleanup.yml, also every 6 hours), or gh api -X DELETE repos/${REPO}/actions/artifacts/<id>. (name, id, run, branch, head repository id, repository id):"
+            printf '%s\n' "${foreign}"
+            exit 1
+          fi

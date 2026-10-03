@@ -629,8 +629,9 @@ if _sg_m is not None and _shutil18b.which("jq"):
 
 
 # ── Renovate keeps the workflows' sha256-pinned downloads current, and nothing else ─────────────
-# gitleaks, actionlint and the Codacy coverage reporter are release binaries fetched by tag and
-# checked against a sha256. Dependabot cannot see them, so they were bumped by hand, or not at all.
+# gitleaks, actionlint, osv-scanner and the Codacy coverage reporter are release binaries fetched by
+# tag and checked against a sha256. Dependabot cannot see them, so they were bumped by hand, or not
+# at all.
 # .github/renovate.json runs ONE regex manager over the workflows (Dependabot keeps everything
 # else, so the two never propose the same update). Its github-release-attachments lookup fetches
 # releases/tags/<value>, so the value must be the exact tag the URL downloads: `v${VERSION}` in a
@@ -683,7 +684,7 @@ for _rn_wf in sorted(_rn_glob.glob(os.path.join(_rn_root, ".github", "workflows"
 check("renovate: every sha256-checked download in a workflow is matched, and fetched by the tag "
       "Renovate looks up",
       not _rn_bad and sorted(_rn_deps) == ["codacy/codacy-coverage-reporter", "gitleaks/gitleaks",
-                                            "rhysd/actionlint"],
+                                            "google/osv-scanner", "rhysd/actionlint"],
       repr((_rn_bad, _rn_deps)))
 _rn_ctl = ("          # renovate: datasource=github-release-attachments depName=o/r\n"
            "          VERSION: 'v1.2.3'\n          SHA256: '%s'\n"
@@ -968,6 +969,34 @@ check("sonarcloud: every file it reads, sources and tests, is UTF-8 with no U+FF
       and _sq_excluded("tests/fuzz/corpus/console/esc_control", _sq_texcl),
       repr(_sq_bad[:6]))
 
+# ── ...and what SonarCloud reads is pinned here, so narrowing it has to change this test ────────
+# A pull request that adds a subtree to sonar.exclusions (or a sonar.inclusions that leaves one
+# out) takes those files out of the analysis: the pull request shows no new issues in them, and on
+# main their issues close as if fixed. Both Sonar checks stay green while judging less. The keys,
+# the source and test roots and every exclusion are pinned, and every source file the scanner could
+# read (Python, JavaScript, templates, shell, outside tests/ and static/vendor/) must not be
+# excluded, so a scope change is a change to this test as well.
+_sq_allowed_excl = {"tests/**", "static/vendor/**", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif",
+                    "**/*.webp", "**/*.ico", "**/*.woff", "**/*.woff2", "**/*.ttf"}
+_sq_keys = {_k.strip(): _v.strip() for _k, _v in _sq_props.items()}
+_sq_src = [_f for _f in _sq_walk if _f.endswith((".py", ".js", ".html", ".sh"))
+           and not _f.startswith(("tests/", "static/vendor/"))]
+_sq_scope_bad = (
+    ["keys: %r" % sorted(_sq_keys)] * (set(_sq_keys) != {
+        "sonar.python.version", "sonar.sources", "sonar.tests", "sonar.exclusions",
+        "sonar.test.exclusions", "sonar.sourceEncoding"})
+    + ["sonar.sources=%r" % _sq_keys.get("sonar.sources")] * (_sq_keys.get("sonar.sources") != ".")
+    + ["sonar.tests=%r" % _sq_keys.get("sonar.tests")] * (_sq_keys.get("sonar.tests") != "tests")
+    + ["exclusion %r is not one of the pinned set" % _p for _p in _sq_excl
+       if _p not in _sq_allowed_excl]
+    + ["sonar.test.exclusions=%r" % _sq_texcl] * (_sq_texcl != ["tests/fuzz/corpus/**"])
+    + ["%s is excluded" % _f for _f in _sq_src if _sq_excluded(_f)])
+check("sonarcloud: its scope is pinned (keys, roots, exclusions) and excludes no source file",
+      not _sq_scope_bad and len(_sq_src) >= 150
+      and {"app.py", "install.sh", "panel/ops/system_ops.py", "templates/base.html",
+           "static/js/panel.js"} <= set(_sq_src),
+      repr((_sq_scope_bad[:6], len(_sq_src))))
+
 # ── CodeQL analyses a pull request in FULL, as main does ───────────────────────────────────────
 # By default the action is diff-informed on a PR: it reports alerts only on the lines the PR
 # changes. #387 removed the last use of a module global on a line it left alone; its PR gate read
@@ -992,5 +1021,5 @@ check("gitleaks: the non-PR scan is the full history of the commit judged (--log
       "and no gitleaks scan in the workflow runs without --log-opts (that walks every branch)",
       'Scanning the full history of ${GITHUB_SHA}' in _gl_src
       and '--log-opts "${GITHUB_SHA}"' in _gl_full and "--exit-code 1" in _gl_full
-      and _gl_code.count("gitleaks detect --source") == 2
+      and _gl_code.count("gitleaks git --config") == 2
       and _gl_code.count('--log-opts "') == 2, _gl_full[:400])

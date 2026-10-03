@@ -1,11 +1,24 @@
 # The complexity job's tools (.github/workflows/complexity.yml): Lizard and Pylint, the two Codacy
-# runs whose findings its pull-request check misses (see .github/scripts/complexity_gate.py).
-# Wheels only, hash-checked.
+# runs whose findings its pull-request check misses, and Prospector, which Codacy runs on every
+# Python file EXCEPT those over 150 KB (see .github/scripts/complexity_gate.py). Wheels only,
+# hash-checked.
 #
 # pip-compile turns this into complexity.txt: every package, exact versions AND hashes, installed
 # with `--require-hashes`. Dependabot keeps it current by re-running pip-compile on the Python its
 # header names (3.11). Edit THIS file, then regenerate (run in python:3.11-slim):
-#   pip-compile --allow-unsafe --generate-hashes --no-annotate --strip-extras \
+#   pip-compile --generate-hashes --no-annotate --strip-extras --unsafe-package=pylint-celery \
 #     --output-file=complexity.txt complexity.in
+#
+# pylint-celery is left out (--unsafe-package) because it ships no wheel, only an sdist, and every
+# install here is wheels only. Prospector declares it unconditionally but loads it only as a Pylint
+# plugin for a project that uses Celery, and .prospector.yaml runs no Pylint, so the job installs
+# complexity.txt with --no-deps: the file is the whole closure apart from that one package. The
+# gate's self-test runs Prospector before its verdict counts, so a bump that needs a package this
+# file lacks fails the job rather than passing it. Dependabot keeps --unsafe-package (it reads it
+# back from the header). Without --allow-unsafe on purpose: with it, pip-compile pins the unsafe
+# package anyway.
 lizard
 pylint
+# Prospector at the version Codacy runs (codacy/codacy-prospector requirements.txt:
+# prospector[with_everything]==1.19.1), so the PR side counts what Codacy would have counted.
+prospector==1.19.1

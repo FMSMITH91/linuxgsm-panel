@@ -3593,7 +3593,13 @@ check("install.sh: the snapshot, snapshot_ok and both rollbacks go through TREE_
       "TREE_SUDO=\"sudo -u ${_tree_owner} env -C /\"" in _pb_tree
       and _pb_snap.count("${TREE_SUDO:-}") == 4 and _pb_rb.count("${TREE_SUDO:-}") == 4
       and _pb_inst.count('> "${BACKUP}/') == 0, _pb_snap + _pb_rb)
-_pb_ph = "set -euo pipefail\ndie() { echo \"DIE: $*\"; exit 1; }\nSNAP_GZ='gzip -1'\n"
+# _pb_tree (TREE_SUDO="" to the [1/6] banner) now ends by calling snapshot_service_unit, which #378
+# added; without it here the block died "command not found" under set -e. As root, three checks
+# below failed and the first passed only because nothing ran, while CI, which never ran them as
+# root, reported them skipped. The real function is loaded; its UNIT_FILE is a sandbox path that
+# does not exist.
+_pb_ph = ("set -euo pipefail\ndie() { echo \"DIE: $*\"; exit 1; }\nSNAP_GZ='gzip -1'\n"
+          + _pb_shfn("snapshot_service_unit"))
 if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
     _pb_up = tempfile.mkdtemp(prefix="lgsm-unit-pb-upd-")
     os.chmod(_pb_up, 0o755)
@@ -3616,7 +3622,8 @@ if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
     # data/.backups planted as a link to a directory the panel user cannot write.
     os.symlink(_pb_rootdir, os.path.join(_pb_pd, "data", ".backups"))
     os.lchown(os.path.join(_pb_pd, "data", ".backups"), _pb_daemon.pw_uid, _pb_daemon.pw_gid)
-    _pb_env = {"PANEL_DIR": _pb_pd, "BACKUP": os.path.join(_pb_pd, "data", ".backups", "20260101-000000")}
+    _pb_env = {"PANEL_DIR": _pb_pd, "BACKUP": os.path.join(_pb_pd, "data", ".backups", "20260101-000000"),
+               "UNIT_FILE": os.path.join(_pb_up, "no-such.service")}
     _r = _pb_run(_pb_ph + _pb_tree + _pb_snap, env=_pb_env)
     check("install.sh [1/6]: a data/.backups linked to a root-owned directory gets nothing from root"
           " (the mkdir runs as the panel user, and fails)",

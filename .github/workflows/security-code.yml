@@ -1,16 +1,16 @@
 name: Security scan (code)
 
-# The half of the security suite that only reads CODE: pip-audit (declared dependencies), Bandit
-# (Python security lint) and Semgrep (deep SAST). Split out of security.yml so it can be
+# The half of the security suite that only reads CODE: pip-audit and osv-scanner (declared
+# dependencies), Bandit (Python security lint) and Semgrep (deep SAST). Split out of security.yml so it can be
 # path-filtered, which that workflow deliberately is not — see the note at the top of it.
 #
 # A docs-only or workflow-only change cannot alter what any of these three report, and together
 # they are ~105s of runner time per pull request. The exclusion list is a paths-IGNORE rather than
 # an allowlist on purpose: an unrecognised new path should fail OPEN and be scanned, never skipped.
 #
-# The weekly cron is the reason pip-audit still catches things on a quiet week — a newly-DISCLOSED
-# CVE changes the answer without changing requirements.txt, and schedule triggers ignore path
-# filters entirely.
+# The weekly cron is the reason the dependency audit still catches things on a quiet week — a
+# newly-DISCLOSED CVE changes the answer without changing any lockfile, and schedule triggers ignore
+# path filters entirely.
 on:
   push:
     branches: [ main ]
@@ -28,14 +28,24 @@ on:
 
 # Cancel an in-progress run when a newer commit is pushed to the same ref, so rapid
 # pushes don't queue up and waste runner minutes.
+# The event is part of the group: on main, the Monday scheduled run shares the ref with a push
+# run, and without it the schedule CANCELLED an in-progress push run, leaving "cancelled" required
+# checks on that commit, which the panel's update gate and deploy.yml read as a failure.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  # Every lockfile something installs, audited at ANY severity, on every pull request, on main and
+  # weekly. The job keeps its name (a required check, .github/required-checks.txt); pip-audit is its
+  # first half. The second, osv-scanner, reads what pip-audit cannot: gamedig's npm tree, which
+  # every host installs (tools/gamedig, `npm ci`), and the CI tools' pip lockfiles, which run in
+  # jobs holding security-events: write. Until it was added the only npm check was Dependency
+  # Review, which judges what a pull request ADDS, so an advisory disclosed against the tree already
+  # on main (GHSA-ch52-4w7c-c8xp, 2026-10-02) turned nothing red.
   dependency-audit:
     name: Dependency vulnerabilities (pip-audit)
     runs-on: ubuntu-latest
@@ -43,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # pip-audit reads the lockfiles; no step here needs the job token.
+          # The audits read the lockfiles; no step here needs the job token.
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -51,15 +61,104 @@ jobs:
       - run: >-
           python -m pip install --quiet --require-hashes --only-binary :all:
           -r .github/ci-requirements/pip-audit.txt
-      # FAILS the run if any declared dependency has a known vulnerability — this
-      # is actionable (bump the version), so it's a hard gate.
-      # --no-deps: audit exactly the pinned set, which is what a host installs. Without it,
-      # pip-audit resolved a fresh environment and audited whatever was newest that day.
-      # requirements.txt lists the whole closure (a unit check keeps it closed), so nothing is
-      # left out by not resolving.
-      - run: pip-audit --no-deps -r requirements.txt
-      # ...and the pip install.sh puts in every panel venv (requirements-bootstrap.in).
-      - run: pip-audit --no-deps -r requirements-bootstrap.txt
+      # FAILS the run if any pinned dependency has a known vulnerability: that is actionable (bump
+      # the version), so it is a hard gate. requirements.txt is the panel's whole closure (a unit
+      # check keeps it closed); requirements-bootstrap.txt is the pip install.sh puts in every
+      # panel venv.
+      #   --disable-pip: read the pins as written, with no pip run. Without it pip-audit resolves
+      #     the file with `pip install --dry-run` in a fresh venv whose pip it first upgrades to the
+      #     newest, so the pinned pip was "already installed" and requirements-bootstrap.txt was
+      #     audited as ZERO packages whenever it pinned the current pip, which is always, right
+      #     after Dependabot bumps it. `No known vulnerabilities found`, exit 0, nothing read.
+      #     (--no-deps, used before, does not stop that resolution in pip-audit 2.10.)
+      #   --require-hashes: both files are hashed; pip-audit's README prefers it to --no-deps.
+      #   --strict: a pin pip-audit cannot audit (PyPI has no such name/version, or a URL
+      #     requirement) FAILS the run. Without it the pin is listed as "skipped" and the run passes.
+      #   The count: the audit must have read exactly the file's pins. A pin dropped silently (a
+      #     marker false on this runner's Python, a parser change in a pip-audit bump) fails here.
+      - name: Audit the panel's pins (pip-audit)
+        run: |
+          set -uo pipefail
+          for f in requirements.txt requirements-bootstrap.txt; do
+            out="${RUNNER_TEMP}/pip-audit-${f%.txt}.json"
+            pins="$(grep -cE '^[A-Za-z0-9._-]+==' "${f}" || true)"
+            rc=0
+            pip-audit --strict --require-hashes --disable-pip -r "${f}" -f json -o "${out}" || rc=$?
+            if [ -s "${out}" ]; then
+              jq -r '.dependencies[] | select((.vulns // []) | length > 0)
+                     | "::error::\(.name) \(.version): \([.vulns[] | "\(.id) (\(if (.fix_versions | length) > 0
+                         then "fixed in " + (.fix_versions | join(", ")) else "no fix yet" end))"] | join("; "))"' \
+                "${out}"
+            fi
+            if [ "${rc}" -ne 0 ]; then
+              echo "::error::pip-audit failed on ${f} (exit ${rc}): see above."
+              exit "${rc}"
+            fi
+            audited="$(jq '[.dependencies[] | select(has("skip_reason") | not)] | length' "${out}")"
+            echo "${f}: audited ${audited} of its ${pins} pinned packages; no known vulnerabilities."
+            if [ "${pins}" -lt 1 ] || [ "${audited}" != "${pins}" ]; then
+              echo "::error::pip-audit audited ${audited} of the ${pins} packages pinned in ${f}: the rest were NOT checked."
+              exit 1
+            fi
+          done
+      # osv-scanner, PINNED and CHECKSUMMED like gitleaks (security.yml): a release binary fetched
+      # by tag and checked against its sha256 before it runs. Renovate proposes each bump, version
+      # and sha256 together (.github/renovate.json), and the bump goes through CI. The version is
+      # the release TAG. Runs even when pip-audit failed, so an npm finding is never hidden by a
+      # Python one.
+      - name: Install osv-scanner
+        if: ${{ !cancelled() }}
+        env:
+          # renovate: datasource=github-release-attachments depName=google/osv-scanner
+          OSV_SCANNER_VERSION: 'v2.6.0'
+          OSV_SCANNER_SHA256: 'ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108'
+        run: |
+          set -euo pipefail
+          curl --proto '=https' -sSfL -o "${RUNNER_TEMP}/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  ${RUNNER_TEMP}/osv-scanner" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/osv-scanner"
+          "${RUNNER_TEMP}/osv-scanner" --version
+      # Every lockfile, at any severity. A reviewed advisory with no fix is ignored only through an
+      # osv-scanner.toml BESIDE its lockfile (the config applies to its own directory and does not
+      # propagate), with a reason and an ignoreUntil date, after which it fails again and is looked
+      # at afresh: tools/gamedig/osv-scanner.toml.
+      #   requirements.txt:<path>: osv-scanner picks a parser by file NAME, so a pip lockfile not
+      #     called requirements.txt must say how to read it (docs/scan-source.md, v2.6.0).
+      #   The count: osv-scanner prints `Scanned <path> file and found N packages` per lockfile.
+      #     Each must have been read and have yielded packages, or the run fails: a lockfile it
+      #     parsed as empty is otherwise reported clean.
+      - name: Audit every lockfile (osv-scanner)
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          lockfiles=(tools/gamedig/package-lock.json requirements.txt requirements-bootstrap.txt
+                     .github/ci-requirements*/*.txt)
+          args=()
+          for f in "${lockfiles[@]}"; do
+            if [ ! -f "${f}" ]; then
+              echo "::error::${f}: no such lockfile."
+              exit 1
+            fi
+            case "${f}" in
+              *.json) args+=(--lockfile "${f}") ;;
+              *) args+=(--lockfile "requirements.txt:${f}") ;;
+            esac
+          done
+          log="${RUNNER_TEMP}/osv-scanner.log"
+          # The runner's shell is `bash -e`: a finding must not end the step before the count below.
+          rc=0
+          "${RUNNER_TEMP}/osv-scanner" scan source "${args[@]}" 2>&1 | tee "${log}" || rc=$?
+          unread=()
+          for f in "${lockfiles[@]}"; do
+            grep -qE "/${f//./\\.} file and found [1-9][0-9]* packages?\$" "${log}" || unread+=("${f}")
+          done
+          echo "osv-scanner read $(( ${#lockfiles[@]} - ${#unread[@]} )) of ${#lockfiles[@]} lockfiles."
+          if [ "${#unread[@]}" -ne 0 ]; then
+            echo "::error::osv-scanner read no packages from: ${unread[*]}. They were NOT audited."
+            exit 1
+          fi
+          exit "${rc}"
 
   sast-bandit:
     name: Python security lint (Bandit)
@@ -139,13 +238,13 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      # --no-deps: semgrep.txt is semgrep's whole closure except PyJWT, which semgrep-pyjwt.txt pins
-      # past semgrep's own ~=2.13 (every 2.13 is vulnerable). Together they are every package the
-      # scan needs, each hash-checked; see .github/ci-requirements/semgrep.in.
+      # semgrep.txt is semgrep's whole closure, PyJWT included, each package hash-checked, and pip
+      # checks it is complete: no --no-deps, so a dependency a semgrep bump adds and the lockfile
+      # lacks fails here, by name, instead of as "wrote no SARIF" below. (semgrep 1.178 pinned a
+      # vulnerable PyJWT, which is why there was a second file; see .github/ci-requirements/semgrep.in.)
       - run: >-
-          python -m pip install --quiet --require-hashes --only-binary :all: --no-deps
+          python -m pip install --quiet --require-hashes --only-binary :all:
           -r .github/ci-requirements/semgrep.txt
-          -r .github/ci-requirements/semgrep-pyjwt.txt
       # Registry rulesets, fetched anonymously (no Semgrep account/token needed):
       # general security-audit + Python + Flask + command-injection + secrets. This
       # catches real code vulns (injection, SSRF, path traversal, unsafe redirects,

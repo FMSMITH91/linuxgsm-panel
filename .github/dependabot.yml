@@ -1,4 +1,10 @@
 version: 2
+# Every entry has the same cooldown: a release must have been out a week before it is proposed, so
+# one pulled in its first days (the usual shape of a hijacked package or action) never reaches a PR.
+# It applies to VERSION updates only; a security update is never delayed by it (GitHub's
+# dependabot-options-reference). Seven days is Renovate's minimumReleaseAge (.github/renovate.json),
+# and a unit check (part27) holds every entry here to it. On github-actions only default-days
+# exists (no semver-*-days).
 updates:
   # Python dependencies — opens a PR when a newer (or security-patched) version is available.
   # requirements.txt is pip-compile's hashed lockfile for requirements.in beside it, so Dependabot
@@ -11,6 +17,8 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     labels: ["dependencies"]
+    cooldown:
+      default-days: 7
     groups:
       # Batch all Python bumps into ONE weekly PR instead of one per package, so they
       # don't trickle in and hit the open-PR limit.
@@ -37,6 +45,8 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     labels: ["ci"]
+    cooldown:
+      default-days: 7
     groups:
       ci-python-tools:
         patterns: ["*"]
@@ -50,6 +60,8 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     labels: ["ci"]
+    cooldown:
+      default-days: 7
     groups:
       ci-check-tools:
         patterns: ["*"]
@@ -80,6 +92,8 @@ updates:
     schedule:
       interval: "weekly"
     labels: ["ci"]
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ["*"]

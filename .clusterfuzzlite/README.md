@@ -28,27 +28,39 @@ python3 /tmp/oss-fuzz/infra/helper.py check_build --external $PWD --language pyt
 python3 /tmp/oss-fuzz/infra/helper.py run_fuzzer --external $PWD fuzz_console
 ```
 
-`check_build` is the one worth running after touching `build.sh`: a PyInstaller bundle can compile
-cleanly and still die on its first import if a dynamically-imported module was not bundled. That is
-why `build.sh` names `paramiko`, `eventlet`, `eventlet.tpool` and `config` as `--hidden-import` —
-the harnesses pull them in via `importlib.import_module("...")`, a string PyInstaller cannot see.
+`check_build` is the one worth running after touching `build.sh` or a harness's imports: a
+PyInstaller bundle can compile cleanly and still die on its first import if a dynamically-imported
+module was not bundled. That is why `build.sh` collects every submodule of `eventlet`, `paramiko` and
+`dns` and names `panel.core.config` as a hidden import. The harnesses also pre-load SQLAlchemy and
+Flask by name, uninstrumented, to keep their start-up short (see `tests/fuzz/fuzz_game_status.py`).
+Those need no flag: the panel imports `flask_sqlalchemy` and `flask_login` in plain `import`
+statements, and PyInstaller's own SQLAlchemy hook bundles every `sqlalchemy.dialects` module.
 
-## Batch fuzzing, pruning and coverage — written, dormant
+## Batch fuzzing, pruning, coverage and continuous builds
 
-`cflite_batch.yml` (nightly, all targets, 15 min) and `cflite_cron.yml` (weekly prune + coverage)
-are committed and wired, but every job is guarded by `if: env.CFL_STORAGE_REPO != ''` and so does
-nothing until that secret exists. They stay dormant rather than red.
+| workflow | when | what it keeps |
+|---|---|---|
+| `cflite_batch.yml` | nightly | fuzzes every target for 15 min and keeps the corpus (`cifuzz-corpus-<target>`) |
+| `cflite_cron.yml` | weekly | prunes that corpus; reports fuzzing coverage (`cifuzz-coverage-latest`) |
+| `cflite_build.yml` | each push to main | the build of that commit (`cifuzz-build-address-<commit>`) |
 
-They need somewhere to keep the corpus between runs — without it each run restarts from the seeds
-in `tests/fuzz/corpus/` and learns nothing from the last one. To switch them on:
+All of it is kept as Actions artifacts. ClusterFuzzLite's storage repository (a second repository
+plus a write token) is optional: without one, "corpora and coverage reports will be uploaded as
+GitHub artifacts instead" (the
+[ClusterFuzzLite docs](https://google.github.io/clusterfuzzlite/running-clusterfuzzlite/github-actions/)).
+Until 2026-10 these workflows waited for a `CFL_STORAGE_REPO` secret that was never created, and did
+nothing.
 
-1. create an empty repo, e.g. `linuxgsm-panel-fuzz-corpus`
-2. create a PAT that can write to it
-3. add `CFL_STORAGE_REPO` as a repository secret here (the https URL with the token in it, per the
-   ClusterFuzzLite docs)
+`cflite_pr.yml` reads all three back: it starts from the batch corpus, fuzzes only the targets the
+coverage report says a pull request's diff reaches, and drops a crash that main's stored build
+already has.
 
-Nothing else changes; the next scheduled run picks it up. See
-<https://google.github.io/clusterfuzzlite/running-clusterfuzzlite/github-actions/>.
+**Every job that reads them first checks where they came from.** The action takes the newest artifact
+of a name from any run in the repository. A fork's pull request runs its own copy of a workflow, so
+it can upload a `cifuzz-*` artifact too, and the action unpacks it unchecked and runs what it holds.
+So each of those jobs fails, and fuzzes nothing, while any stored `cifuzz-*` artifact was made
+anywhere but a run of this repository's main. The error lists them. Delete one with
+`gh api -X DELETE repos/FMSMITH91/linuxgsm-panel/actions/artifacts/<id>`.
 
 ## Upstream OSS-Fuzz
 

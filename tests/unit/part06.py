@@ -3119,9 +3119,13 @@ try:
           repr(_py_expr and _py_expr.group(1)))
     _rq_sec = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
                    encoding="utf-8").read()
+    # The pins as written (--disable-pip), not a fresh resolution; part27 runs the step itself.
+    _rq_pa = re.search(r"^\s*for f in requirements\.txt requirements-bootstrap\.txt; do\n"
+                       r"(?:.*\n)*?\s*pip-audit --strict --require-hashes --disable-pip -r \"\$\{f\}\" ",
+                       _rq_sec, re.M)
     check("security-code: pip-audit audits the pinned set itself, not a fresh resolution",
-          re.search(r"^\s*- run: pip-audit --no-deps -r requirements\.txt\s*$", _rq_sec, re.M)
-          is not None, "pip-audit resolves its own environment again")
+          _rq_pa is not None and "pip-audit --no-deps" not in _rq_sec,
+          "pip-audit resolves its own environment again")
 
     # ── pip itself: requirements-bootstrap.txt, hash-locked and Dependabot-maintained ──────────
     # install.sh ran `pip install --upgrade pip`. Its replacement is held to the same scheme as
@@ -3164,8 +3168,7 @@ try:
           "requirements.txt; pip-audit reads it; Dependency Review runs when it changes",
           _bs_ci_boot is not None and _bs_ci_req is not None
           and _bs_ci_boot.start() < _bs_ci_req.start()
-          and re.search(r"^\s*- run: pip-audit --no-deps -r requirements-bootstrap\.txt\s*$",
-                        _rq_sec, re.M) is not None
+          and _rq_pa is not None
           # Dependency Review runs on EVERY pull request now (a required check), so a change to it
           # is reviewed without being named in a path filter.
           and re.search(r"^  pull_request:\n    branches: \[ main \]\n(?!    paths)", _bs_dr, re.M)
@@ -4768,6 +4771,11 @@ _cd_spec = _cd_ilu.spec_from_file_location(
     "codacy_gate", os.path.join(_root, ".github", "scripts", "codacy_open_errors.py"))
 _cd = _cd_ilu.module_from_spec(_cd_spec)
 _cd_spec.loader.exec_module(_cd)
+# The HTTP handling is this block's subject, so its accepted list is empty. With the real list a
+# well-formed empty answer fails on its own: system_ops.py is over 150 KB, so Codacy reports none
+# of its accepted entries (part28 holds that).
+_cd.ACCEPTED_FILE = _cd.pathlib.Path(_tf.mkdtemp(prefix="codacy-gate-p6-")) / "accepted.json"
+_cd.ACCEPTED_FILE.write_text('{"accepted": []}', encoding="utf-8")
 
 
 class _CdResp:
@@ -5668,34 +5676,6 @@ for _wf in sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml")
 check("workflows: every curl that fetches over https refuses a redirect to http (--proto '=https')",
       {"actionlint.yml", "codacy-coverage.yml", "security.yml"} <= set(_cpx_calls) and not _cpx_bad,
       "calls=%r bad=%r" % (_cpx_calls, _cpx_bad))
-
-# ── the batch fuzz job's summary says storage is configured, never what it is ─────────────────
-# CFL_STORAGE_REPO is the https URL with a write token IN it (the workflow's header, step 3), and
-# the step summary printed it verbatim for anyone who can read the run. The step is run here as
-# GitHub runs it, with a sentinel in the secret's place.
-_cfs_raw = open(os.path.join(_root, ".github", "workflows", "cflite_batch.yml"),
-                encoding="utf-8").read()
-_cfs_run = _wf_run_block(_cfs_raw, "Say whether this job is actually doing anything")
-_cfs_tmp = _tempfile.mkdtemp(prefix="cflite-summary-")
-try:
-    _cfs_out = {}
-    for _cfs_val in ("https://x-access-token:SENTINEL-corpus-token-0451@github.com/o/c.git", ""):
-        _cfs_sum = os.path.join(_cfs_tmp, "summary-%d" % len(_cfs_out))
-        _r = _sp.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", _cfs_run],
-                     env=dict(os.environ, GITHUB_STEP_SUMMARY=_cfs_sum, CFL_STORAGE_REPO=_cfs_val),
-                     capture_output=True, text=True, timeout=60)
-        _cfs_txt = open(_cfs_sum, encoding="utf-8").read() if os.path.exists(_cfs_sum) else ""
-        _cfs_out[bool(_cfs_val)] = (_r.returncode, _cfs_txt, _r.stdout + _r.stderr)
-    check("cflite_batch: with corpus storage set, the step summary says it is configured and never "
-          "prints the URL, which holds the token",
-          _cfs_out[True][0] == 0 and _cfs_out[True][1] == "Corpus storage: configured.\n"
-          and "SENTINEL-corpus-token" not in _cfs_out[True][1] + _cfs_out[True][2],
-          repr(_cfs_out[True]))
-    check("cflite_batch: ...and unset, it still says the job is DISABLED (control: the block ran)",
-          _cfs_out[False][0] == 0 and _cfs_out[False][1].startswith("DISABLED: "),
-          repr(_cfs_out[False]))
-finally:
-    _shutil.rmtree(_cfs_tmp, ignore_errors=True)
 
 # ── the fuzz image's build context: no keys, no databases, no worktree checkouts ──────────────
 # .clusterfuzzlite/Dockerfile did `COPY . $SRC/linuxgsm-panel` with the repository root as its

@@ -221,6 +221,39 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
   The panel's own warnings, and the notification service's, now reach the journal as
   `WARNING <logger>: <message>`.
+- **CI now catches on a pull request, or on main, what it used to let through.** An audit held
+  every CI configuration against its vendor's documentation and fixed each gap it found. CI only;
+  nothing on a panel changes.
+  - *Code scanning.* The pull-request alert gate waits until Bandit and Semgrep have analysed this
+    merge commit, as well as the three CodeQL languages, and fails naming any category that never
+    arrived. Before, it judged whichever analyses had landed. The main gate no longer sends a `sha=`
+    parameter that the API ignores: it checks that every category's newest analysis is this
+    commit's. The weekly CodeQL scan is now judged on main, so its findings no longer surface first
+    as a red check on an unrelated pull request.
+  - *Dependencies.* osv-scanner now audits gamedig's npm tree, which every host installs, and every
+    CI tool's pip lockfile, at any severity. It fails when a lockfile yields no packages. pip-audit
+    now runs `--strict --disable-pip`; it had audited `requirements-bootstrap.txt` as 0 of 1
+    packages. Dependency Review now blocks low and moderate advisories, not only high. Dependabot
+    waits 7 days after a release, as Renovate already did. Semgrep installs from one hash lockfile
+    with a fixed PyJWT. gitleaks uses its current `git` command and `[[allowlists]]` table.
+  - *Codacy and SonarCloud.* The main Codacy gate asks for High as well as Error issues. It fails
+    when an accepted finding vanished only because Codacy stopped reading a file over 150 KB. The
+    complexity check runs Codacy's Prospector over those large files on every pull request. A new
+    `SonarCloud open issues (main)` check fails on any issue open on main that is not known. Those
+    include issues a pull request leaves on lines it did not change, which Sonar's pull-request
+    check does not report. A test pins `.sonarcloud.properties`, so widening an exclusion fails the
+    build.
+  - *Fuzzing.* ClusterFuzzLite keeps its corpus and builds as Actions artifacts, so batch fuzzing,
+    corpus pruning and coverage run. Before, they were off waiting for a storage repository.
+    "Fuzz the diff" gets the vendor's 600 seconds, and its harnesses start in about 2 s instead of
+    about 10 s, so its targets fuzz instead of timing out. Every job that reads a stored fuzz
+    artifact first fails if any was not made on this repository's main. A fork pull request could
+    otherwise plant a build that a privileged job unpacks and runs.
+  - *The rest.* The unit checks that only run as root now run as root on every CI leg; one fixture
+    they use had broken unnoticed. actionlint fails if its shellcheck pass is not running, and
+    fails on an unknown `vars.*` name. The deploy job's Tailscale client is pinned by version and
+    sha256, with the action's unverified cache turned off. A test fails any `uses:` not pinned to a
+    full commit SHA.
 - **SonarCloud is told what it was guessing.** `.sonarcloud.properties` answers its three analysis
   warnings: the Python versions the panel supports (3.10 to 3.14), `tests/` as test code (it was
   running production rules on the suites), and UTF-8 throughout, with the vendored minified bundles

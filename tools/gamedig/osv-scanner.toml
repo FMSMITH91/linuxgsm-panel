@@ -1,0 +1,22 @@
+# osv-scanner's configuration for package-lock.json beside it (security-code.yml, the dependency
+# audit). It applies to the lockfiles in THIS directory only; it does not propagate.
+#
+# Every entry is a reviewed advisory that cannot be fixed by a bump, and every one EXPIRES: on its
+# ignoreUntil date the audit fails again and it is looked at afresh. A unit check (part27) holds each
+# entry to a reason and a date, and Dependency Review's allow-ghsas to this list.
+
+# http-cache-semantics <= 4.2.0: a shared cache can serve another user's zeroed entry to a client
+# that sends a large max-stale (CVE-2026-93748, HIGH). No fixed release exists; Dependabot alert
+# #26 tracks it.
+[[IgnoredVulns]]
+id = "GHSA-ch52-4w7c-c8xp"
+ignoreUntil = 2027-01-04
+reason = """Not reachable: nothing in gamedig 5.3.3 gives got a cache store. The package is \
+here only as got 13.0.0 -> cacheable-request 10.2.14 -> http-cache-semantics 4.2.0. got runs that \
+path only when its `cache` option is set (source/core/index.js: `if (options.cache)`, and \
+`options.cache ? this._createCacheableRequest : request`); the option defaults to undefined \
+(options.js). gamedig calls got in exactly one place, Core.request in protocols/core.js, with \
+`{...params, timeout, retry}`, and no protocol's params carry a `cache` key (grep of lib/, \
+protocols/ and bin/ in the 5.3.3 tarball, whose sha512 matches this lockfile). The advisory needs \
+a SHARED cache holding another user's response; the panel runs gamedig as a one-shot CLI per query, \
+so there is no cache, shared or not. Re-check when gamedig or got moves, or a fix ships."""
