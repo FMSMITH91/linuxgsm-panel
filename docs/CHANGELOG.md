@@ -1435,11 +1435,6 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **A malformed stored server name can no longer mute that server's offline alerts.** The check
   for a nightly LinuxGSM update in progress built a process pattern from the stored names, and a
   name like `x|.*` matched every maintenance process on the host. Such names are not probed now.
-- **CI's Semgrep job runs on PyJWT 2.15.** Every PyJWT 2.13 release has published advisories (the
-  worst critical, GHSA-ffc3-869f-jxw9), and semgrep 1.178.0 pins `~=2.13.0`, so no lockfile that
-  honours semgrep's own pin was safe and Dependabot could not open a fix. PyJWT is now pinned apart
-  from semgrep's lockfile and both are installed hash-checked with `--no-deps`. This touches CI only:
-  the panel does not use PyJWT.
 - **The browser's Socket.IO client is 4.8.4, past two HIGH advisories in the parser it bundles.**
   The panel vendored socket.io-client 4.7.5, whose bundle carries socket.io-parser 4.2.4: affected
   by GHSA-677m-j7p3-52f9 (fixed in 4.2.6) and GHSA-2m8v-j782-fhvr (fixed in 4.2.7), both of which
