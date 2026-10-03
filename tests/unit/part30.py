@@ -18,6 +18,7 @@ package the suite's CI jobs install. Nothing runs.
 """
 import ast as _ast30
 import importlib.metadata as _md30
+import inspect as _inspect30
 import os
 import re as _re30
 import sys as _sys30
@@ -143,15 +144,40 @@ def _guarded30(tree):
     return out
 
 
+def _dist_tops30():
+    """Return {top-level import name: {normalised distribution names}} for what is installed.
+
+    Not importlib.metadata.packages_distributions(): on Python 3.10, the oldest the panel supports
+    and a CI leg, it reads only top_level.txt, which flit and hatch wheels (Flask, Werkzeug, Jinja2,
+    pyotp...) do not ship, so it maps almost nothing. 3.11 also infers the names from the RECORD;
+    this does that on every version.
+    """
+    out = {}
+    for dist in _md30.distributions():
+        name = _re30.sub(r"[-_.]+", "-", dist.metadata["Name"] or "").lower()
+        for top in _tops30(dist):
+            out.setdefault(top, set()).add(name)
+    return out
+
+
+def _tops30(dist):
+    """Return the top-level import names one distribution declares or installs."""
+    tops = set((dist.read_text("top_level.txt") or "").split())
+    for f in dist.files or ():
+        first = f.parts[0]
+        tops.add(first if len(f.parts) > 1 else (_inspect30.getmodulename(first) or first))
+    return {t for t in tops if "." not in t}
+
+
 def _first_party30(top):
     return any(os.path.exists(os.path.join(_root, d, top + ext))
                for d in ("", "tests", "tools") for ext in (".py", os.sep + "__init__.py"))
 
 
 _base30 = _pins30("requirements.txt") | _pins30("requirements-bootstrap.txt")
-_dists30 = _md30.packages_distributions()
+_dists30 = _dist_tops30()
 _unit_dir30 = os.path.join(_root, "tests", "unit")
-_unknown30 = []
+_unknown30 = set()
 for _fn30 in sorted(os.listdir(_unit_dir30)) + [os.path.join("..", "unit_test.py")]:
     if not _fn30.endswith(".py"):
         continue
@@ -170,10 +196,11 @@ for _fn30 in sorted(os.listdir(_unit_dir30)) + [os.path.join("..", "unit_test.py
         for _top30 in {m.split(".", 1)[0] for m in _mods30}:
             if _top30 in _sys30.stdlib_module_names or _first_party30(_top30):
                 continue
-            _have30 = {_re30.sub(r"[-_.]+", "-", d).lower() for d in _dists30.get(_top30, [])}
+            _have30 = _dists30.get(_top30, set())
             if not _have30 & _base30:
-                _unknown30.append("%s: %s (%s)" % (os.path.basename(_fn30), _top30,
+                _unknown30.add("%s: %s (%s)" % (os.path.basename(_fn30), _top30,
                                                    ", ".join(sorted(_have30)) or "not installed"))
 check("unit suite: every third-party module a part imports unguarded is a package CI installs for it "
       "(requirements.txt or requirements-bootstrap.txt), not just something the dev venv has",
-      not _unknown30 and len(_base30) > 20, repr(_unknown30 or len(_base30)))
+      not _unknown30 and len(_base30) > 20 and {"flask", "werkzeug"} <= set(_dists30)
+      and "flask" in _dists30["flask"], repr(sorted(_unknown30) or (len(_base30), _dists30.get("flask"))))
