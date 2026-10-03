@@ -93,10 +93,12 @@ for _attr, _fns in _WATCHED.items():
 # sections; part21 imports part12 for one route check. part24 runs the cross-builder contracts as
 # real producer-consumer pairs. part29 reads the CI workflows, and imports only part01 and part06;
 # part30 reads them too (the review's fuzz and CodeQL-trigger fixes), importing part01, part05 and part29.
+# part40 (renaming in the file browser) drives routes on part12's app, importing part01 and part12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
-          "part28", "part29", "part30", "part32", "part33", "part34", "part35", "part36", "part37", "part39", "part15")
+          "part28", "part29", "part30", "part32", "part33", "part34", "part35", "part36", "part37", "part39",
+          "part40", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
