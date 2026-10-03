@@ -2308,8 +2308,8 @@ try:
             # The uninstall's "is this account root on the host?" probe (privileged_accounts):
             # every scripted account is a plain game account, in its own group only. Not logged —
             # it is a read, and the step lists below are what these checks compare.
-            # The names, read back off the probe's own NOACCT line (each a printf argument).
-            _users = _p9_re.findall(r"'NOACCT %s\\n' ([a-z0-9_-]+)", cmd)
+            # The names, read back off the probe's own `id -u <name>` question.
+            _users = _p9_re.findall(r"uid=\$\(id -u ([a-z0-9_-]+) 2>/dev/null\)", cmd)
             return ("".join("ACCT %s 1001 %s\n" % (u, u) for u in _users)
                     + "LGSM_ACCT_PROBE_DONE\n", "", 0)
         if "wget" in cmd and "linuxgsm.sh" in cmd:

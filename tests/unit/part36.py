@@ -555,6 +555,7 @@ def _maintenance_probe36():
           "`gm|.*` would match every maintenance process on the host and mute this server's "
           "offline alerts for good", got == [False, False, False] and not sent,
           repr((got, sent[:2])))
+    sent.clear()
     plain = _mon36._lgsm_maintenance_running(
         remote, NS(short_name="gm2", lgsm_name="csgoserver", game_type="csgo", name="x"))
     check("maintenance probe (control): a plain server is still probed, and BUSY still reads busy",
