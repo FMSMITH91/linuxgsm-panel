@@ -534,13 +534,18 @@ check("R16: the fixed group name is install.sh's GAME_GROUP (lgsmpanel-games)",
 # Path prefixes that may carry an account name; none may appear in the printed line.
 _ABS_DIRS22 = tuple("/%s/" % d for d in ("home", "tmp", "usr", "opt", "srv", "root"))
 _interp22 = []
-for _exe22 in ("/srv/someacct/py/bin/python3", os.path.join(_so22.PANEL_DIR, "venv", "bin", "python3"),
-               "/usr/bin/python3"):
-    with _patched(sys, executable=_exe22):
+# prefix == base_prefix is "not in a virtualenv": pinned, because this suite may itself run in one
+# (the dev machine) or not (CI), and a virtualenv now has a category of its own.
+for _exe22, _pfx22 in (("/srv/someacct/py/bin/python3", "/usr"),
+                       (os.path.join(_so22.PANEL_DIR, "venv", "bin", "python3"), "/usr"),
+                       ("/usr/bin/python3", "/usr"),
+                       ("/srv/someacct/env/bin/python3", "/srv/someacct/env")):
+    with _patched(sys, executable=_exe22, prefix=_pfx22, base_prefix="/usr"):
         _interp22.append(_inst22._interpreter())
-check("R16: the interpreter is '<panel>/venv/bin/...', 'system python' or 'other path', never an "
-      "absolute path (an account name can be in one)",
-      [i.split(",")[0] for i in _interp22] == ["other path", "<panel>/venv/bin/python3", "system python"]
+check("R16: the interpreter is '<panel>/venv/bin/...', 'system python', 'other path' or 'a "
+      "virtualenv outside this checkout', never an absolute path (an account name can be in one)",
+      [i.split(",")[0] for i in _interp22] == ["other path", "<panel>/venv/bin/python3", "system python",
+                                               "a virtualenv outside this checkout"]
       and not any(d in i for i in _interp22 for d in _ABS_DIRS22 + (_so22.PANEL_DIR,)), repr(_interp22))
 
 _vfake22 = _FakeSp22(stdout="Sudo version 1.9.15p5\nSudoers policy plugin\nLocal IP address and "
