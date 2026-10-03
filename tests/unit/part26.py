@@ -105,9 +105,10 @@ _moved26 = _rows26(*([("/language:python", _N26, "2026-10-03T11:00:00Z")]
                      + _set26(_S26, "2026-10-03T10:00:00Z")))
 # A scheduled CodeQL run over a docs-only head: CodeQL's categories are its own, Bandit's and
 # Semgrep's are the predecessor's (security-code.yml did not run for a docs-only push either).
-_sched26 = _rows26(*(_set26(_S26, "2026-10-05T05:30:00Z", sorted(_CQ26))
-                     + _set26(_P26, "2026-10-03T09:00:00Z")))
-_sched_later26 = _rows26(*([("bandit", _N26, "2026-10-05T05:40:00Z")] + _sched26))
+_sched_spec26 = (_set26(_S26, "2026-10-05T05:30:00Z", sorted(_CQ26))
+                 + _set26(_P26, "2026-10-03T09:00:00Z"))
+_sched26 = _rows26(*_sched_spec26)
+_sched_later26 = _rows26(*([("bandit", _N26, "2026-10-05T05:40:00Z")] + _sched_spec26))
 _cases26 = {
     "all five are this commit's": (CSA.assess(_whole26, _S26, _ALL26), ([], [])),
     "Semgrep still the last push's": (CSA.assess(_late26, _S26, _ALL26), (["semgrep"], [])),
