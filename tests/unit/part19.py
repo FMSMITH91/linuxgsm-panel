@@ -986,8 +986,11 @@ check("codeql: the analyze job turns diff-informed analysis OFF, so a PR is judg
 with open(os.path.join(_rn_root, ".github", "workflows", "security.yml"), encoding="utf-8") as _gl_fh:
     _gl_src = _gl_fh.read()
 _gl_full = _gl_src.split('echo "Scanning the full history of ${GITHUB_SHA}"', 1)[-1].split("fi\n", 1)[0]
+# Commands only: the comments above them mention --log-opts too.
+_gl_code = "\n".join(_l for _l in _gl_src.splitlines() if not _l.lstrip().startswith("#"))
 check("gitleaks: the non-PR scan is the full history of the commit judged (--log-opts GITHUB_SHA), "
-      "never every branch in the checkout",
+      "and no gitleaks scan in the workflow runs without --log-opts (that walks every branch)",
       'Scanning the full history of ${GITHUB_SHA}' in _gl_src
       and '--log-opts "${GITHUB_SHA}"' in _gl_full and "--exit-code 1" in _gl_full
-      and _gl_src.count("/tmp/gitleaks detect") == _gl_src.count("--log-opts"), _gl_full[:400])
+      and _gl_code.count("gitleaks detect --source") == 2
+      and _gl_code.count('--log-opts "') == 2, _gl_full[:400])
