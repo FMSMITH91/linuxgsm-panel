@@ -657,13 +657,19 @@ finally:
 #    CPU across several subprocesses) is cached for _STATUS_TTL, so a page render and its
 #    follow-up poll don't each re-run it. Mock the single subprocess entrypoint and count
 #    how often it's actually hit across cold call / cached call / after invalidation. ──
-_orig_ss_run = _so._run
-_ss = {"n": 0}
+_orig_ss_run, _orig_ss_verb = _so._run, _so._run_verb
+_ss = {"n": 0, "verbs": []}
 try:
     _so._run = lambda c, **k: (_ss.__setitem__("n", _ss["n"] + 1), ("", "", 0))[1]
+    # The ufw read goes through _run_verb, not _run: left real, its pre-helper branch ran a plain
+    # `sudo ufw status verbose` (no -n) on whatever machine runs the suite.
+    _so._run_verb = lambda v, a=(), **k: (_ss.__setitem__("n", _ss["n"] + 1),
+                                          _ss["verbs"].append(v), ("", "", 0))[2]
     _so._status_cache["data"] = None
     _so.get_server_status(force=True)          # cold: must probe the host
     check("perf: get_server_status probes the host on a cold call", _ss["n"] > 0)
+    check("perf: ...and its ufw read reached the _run_verb stand-in, so no real sudo ran",
+          "ufw-status" in _ss["verbs"], repr(_ss["verbs"]))
     _ss["n"] = 0
     _so.get_server_status()                    # within TTL: served from cache, no subprocess
     check("perf: get_server_status is cached (no host re-probe on the next render)", _ss["n"] == 0)
@@ -671,7 +677,7 @@ try:
     _so.get_server_status()                    # cache dropped: must probe again
     check("perf: invalidate_server_status forces a fresh probe", _ss["n"] > 0)
 finally:
-    _so._run = _orig_ss_run
+    _so._run, _so._run_verb = _orig_ss_run, _orig_ss_verb
     _so._status_cache["data"] = None
 
 # BOTH branches pinned, and neither may escape. restart_panel picks its path with

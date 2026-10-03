@@ -2651,6 +2651,9 @@ def _so7_panel_diagnostics_3():
 import importlib.metadata as _p7_md  # noqa: E402
 from panel.ops.debug_report import data as _p7_drdata  # noqa: E402
 from panel.ops.debug_report import updates as _p7_drupd  # noqa: E402
+from panel.ops.debug_report import _src_systemd as _p7_drsd  # noqa: E402
+from panel.ops.debug_report import _src_tailscale as _p7_drts  # noqa: E402
+from panel.ops.debug_report import install as _p7_drinst  # noqa: E402
 from panel.ops.debug_report._base import Result as _P7Result  # noqa: E402
 
 # A different word on consecutive lines: the recent log folds a run that differs only in digits.
@@ -2662,6 +2665,24 @@ _dr_names = ("panel_diagnostics", "panel_version", "panel_integrity", "_run", "_
 _dr_saved = {_n: getattr(SO, _n) for _n in _dr_names}
 _dr_md_dists = _p7_md.distributions
 _dr_sec_saved = (_p7_drdata.section_database, _p7_drupd.section_updates)
+# The report's own CLI readers, each on the module that runs it: left real, every report here ran
+# the real `tailscale status`, `sudo --version` and (where a unit file exists) `systemctl show`,
+# so the results differed between CI and a developer's machine.
+_dr_cli_saved = ((_p7_drts, "read", _p7_drts.read), (_p7_drinst, "run_version", _p7_drinst.run_version),
+                 (_p7_drsd, "run", _p7_drsd.run), (_p7_drsd, "scope", _p7_drsd.scope))
+_dr_cli_runs = []
+
+
+def _p7_dr_cli_stub():
+    def _cli(name, answer):
+        def _f(*_a, **_k):
+            _dr_cli_runs.append(name)
+            return answer
+        return _f
+    _p7_drts.read = _cli("tailscale", ("absent", None))
+    _p7_drinst.run_version = _cli("sudo --version", "Sudo version 1.9.15p5")
+    _p7_drsd.scope = lambda: "user"
+    _p7_drsd.run = _cli("systemctl show", ("ActiveState=active\nLoadState=loaded\n", "", 0))
 
 
 def _p7_debug_run(table):
@@ -2694,6 +2715,7 @@ def _p7_dr_stub(journal_user, journal_sys, journal_unit, helper, euid):
     SO.os = _Over(os, geteuid=lambda: euid, getuid=lambda: 4242)
     SO.open = _p7_open_with({"/etc/os-release": OSError("ENOENT")})
     _p7_cfgmod.load_config = _p7_raise(OSError("EIO"))
+    _p7_dr_cli_stub()
     # eventlet is "not installed": one pass over the distributions, with it left out.
     _p7_md.distributions = lambda: [d for d in _dr_md_dists()
                                     if (d.metadata["Name"] or "").lower() != "eventlet"]
@@ -2701,6 +2723,8 @@ def _p7_dr_stub(journal_user, journal_sys, journal_unit, helper, euid):
 
 def _p7_dr_unstub():
     _p7_md.distributions = _dr_md_dists
+    for _owner, _n, _v in _dr_cli_saved:
+        setattr(_owner, _n, _v)
     _p7_drdata.section_database, _p7_drupd.section_updates = _dr_sec_saved
     SO.__dict__.pop("open", None)
     for _n, _v in _dr_saved.items():
@@ -2812,6 +2836,10 @@ def _so7_generate_debug_report_4():
     check("so/debug report: the updates section's outcome is printed under its own heading",
           "### Updates _(read in " in _upd and "- **Outcome**: FAILED — p7" in _upd.split("### Updates", 1)[-1],
           _upd[:300])
+    check("so/debug report: the report's own CLI reads (tailscale, sudo --version, systemctl show) "
+          "reached this part's stand-ins, so none ran for real",
+          {"tailscale", "sudo --version", "systemctl show"} <= set(_dr_cli_runs),
+          repr(sorted(set(_dr_cli_runs))))
 
 
 try:

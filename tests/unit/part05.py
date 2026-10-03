@@ -478,6 +478,30 @@ check("no-sudo runner: ...including _core's separate eventlet handle",
 check("no-sudo runner: the submodules share ONE shim, as they shared one subprocess module",
       _nsr_core.subprocess is _nsr_files.subprocess is _nsr_cron.subprocess is _nsr_so.subprocess,
       "core=%r files=%r" % (id(_nsr_core.subprocess), id(_nsr_files.subprocess)))
+# A module that imports subprocess ITSELF is reached by no other module's shim: the debug report's
+# network.py ran a real `sudo -n ufw status verbose` past the runner while its summary printed
+# "0 refused". So the runner's list is held to every panel module (and db_maintenance) that
+# imports subprocess at its top level, found by the AST, not by a list kept by hand.
+def _nsr_subprocess_importers():
+    import importlib as _il
+    out = []
+    files = _smg_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
+    for path in sorted(files) + [os.path.join(_root, "db_maintenance.py")]:
+        tree = _smg_ast.parse(open(path, encoding="utf-8").read())
+        if any(isinstance(n, _smg_ast.Import) and any(a.name == "subprocess" and not a.asname
+                                                       for a in n.names) for n in tree.body):
+            rel = os.path.relpath(path, _root)[:-3].replace(os.sep, ".")
+            out.append(_il.import_module(rel[:-len(".__init__")] if rel.endswith(".__init__")
+                                         else rel))
+    return out
+
+
+_nsr_importers = _nsr_subprocess_importers()
+_nsr_real = [m.__name__ for m in _nsr_importers
+             if getattr(m, "subprocess", None).__class__.__name__ == "module"]
+check("no-sudo runner: every panel module that imports subprocess itself has it shimmed",
+      len(_nsr_importers) >= 10 and not _nsr_real,
+      "%d importers; still real in: %s" % (len(_nsr_importers), _nsr_real))
 # ...but _real_subprocess is a DIFFERENT module (eventlet.patcher's ungreened original), so it
 # needs its own shim over that one. Standing the greened module in for it dropped _POPEN_KW's
 # errors="replace" — eventlet's Popen re-implements communicate() without it — and a game server
@@ -6269,7 +6293,10 @@ class _CuQuery:
 
 def _cu_diag_level():
     _cu_cfg._cfg_cache["key"] = None
-    return next((c["level"] for c in _cu_so.panel_diagnostics()["checks"]
+    # unit= given: the Service check would otherwise run a real `systemctl --user show` on a
+    # machine that has the unit file.
+    return next((c["level"] for c in _cu_so.panel_diagnostics(
+        unit={"scope": None, "props": {}, "error": "unreadable", "why": "no-unit-file"})["checks"]
                  if c["name"] == "Configuration"), "missing")
 
 

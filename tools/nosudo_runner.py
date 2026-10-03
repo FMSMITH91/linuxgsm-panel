@@ -106,6 +106,13 @@ def _install():
     from panel.ops import backup
     import db_maintenance
     from panel.ops import tailscale_integration
+    from panel.ops import terminal_session
+    # The debug report's own readers: network's `sudo -n ufw|fail2ban-client`, install's
+    # `sudo --version`, _src_systemd's `systemctl show`. Each imports subprocess itself, so a shim on
+    # system_ops never reached them (unit part05 holds this list to every panel module that imports
+    # subprocess).
+    from panel.ops.debug_report import _src_systemd as _dr_systemd, install as _dr_install
+    from panel.ops.debug_report import network as _dr_network
 
     # Each ssh_manager SUBMODULE by name, not the package: `ssh_manager.subprocess` resolves
     # through __getattr__ to whichever submodule happens to define it, and the assignment then
@@ -124,7 +131,8 @@ def _install():
     # what every module above holds after eventlet.monkey_patch()
     import subprocess as _greened  # nosec B404 - the shim below is what refuses sudo
     _shim = _make_shim(_greened)
-    _targets = (system_ops, backup, db_maintenance, tailscale_integration,
+    _targets = (system_ops, backup, db_maintenance, tailscale_integration, terminal_session,
+                _dr_systemd, _dr_install, _dr_network,
                 _sm_core, _sm_cron, _sm_files, _sm_game, _sm_fw, _sm_gmod, _sm_hosts, _sm_ps)
     for mod in _targets:
         if getattr(mod, "subprocess", None) is not None:
