@@ -1452,16 +1452,24 @@ def _check_vps_prep_allows_a_remote_host():
         _it = _ci.post("/api/server/%d/tags" % accessible_id, json={"tag_ids": "not-a-list"})
         check("IDOR: ...while tagging the granted server gets past access (control)",
               _it.status_code == 400, "got %d" % _it.status_code)
-        # Rename, the same way: a name with a slash is refused (400) before the host is asked
-        # anything, so the probe renames nothing on either branch.
-        _irn = _ci.post("/api/server/%d/rename-path" % other_id,
-                        json={"path": "server.cfg", "new_name": "a/b"})
-        check("IDOR: renaming a file on a non-granted server BLOCKED (for a MANAGE_SERVERS holder)",
-              _irn.status_code == 403, "got %d" % _irn.status_code)
-        _irn = _ci.post("/api/server/%d/rename-path" % accessible_id,
-                        json={"path": "server.cfg", "new_name": "a/b"})
-        check("IDOR: ...while the same rename on the granted server gets past access (control)",
-              _irn.status_code == 400, "got %d" % _irn.status_code)
+
+
+def _check_rename_idor():
+    """Rename, probed like the action and tags above, as the MANAGE_SERVERS holder `_ci`.
+
+    A name with a slash is refused (400) before the host is asked anything, so the probe renames
+    nothing on either branch: a refused server is a 403, a server that got past access a 400.
+    """
+    if not other_id:
+        return
+    _irn = _ci.post("/api/server/%d/rename-path" % other_id,
+                    json={"path": "server.cfg", "new_name": "a/b"})
+    check("IDOR: renaming a file on a non-granted server BLOCKED (for a MANAGE_SERVERS holder)",
+          _irn.status_code == 403, "got %d" % _irn.status_code)
+    _irn = _ci.post("/api/server/%d/rename-path" % accessible_id,
+                    json={"path": "server.cfg", "new_name": "a/b"})
+    check("IDOR: ...while the same rename on the granted server gets past access (control)",
+          _irn.status_code == 400, "got %d" % _irn.status_code)
 
 
 def _check_limited_user_server_actions():
@@ -3681,6 +3689,7 @@ try:
     _check_tailscale_migrate_refuses_panel_host()
     _check_host_routes_refuse_delegated_panel_host()
     _check_vps_prep_allows_a_remote_host()
+    _check_rename_idor()
     _check_limited_user_server_actions()
     _check_legacy_super_admin_grant()
     _check_denials_and_limited_pages()
