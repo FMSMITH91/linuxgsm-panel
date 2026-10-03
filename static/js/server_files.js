@@ -181,7 +181,9 @@ function mkRow(opts){
     dl.href=MOUNT+'/server/'+serverId+'/download?path='+encodeURIComponent(opts.path);
     dl.dataset.action='download';
     var dlTitle=(opts.type==='dir'?'Download folder as .tar.gz':'Download');
-    dl.title=dlTitle; dl.setAttribute('aria-label', dlTitle+': '+opts.name);
+    // The label carries the name, so it is no catalog key the page's translator could match:
+    // its first half is translated here, the name never is.
+    dl.title=dlTitle; dl.setAttribute('aria-label', _tr(dlTitle)+': '+opts.name);
     dl.innerHTML='<i class="bi bi-download"></i>';
     right.appendChild(dl);
   }
@@ -191,7 +193,8 @@ function mkRow(opts){
     // same rule protects a path from both, because renaming lgsm/ away breaks the server exactly as
     // deleting it does. One control at every width — the row has no separate phone layout.
     var rn=document.createElement('button'); rn.type='button'; rn.className='btn btn-sm btn-link p-0 text-secondary';
-    rn.title='Rename'; rn.setAttribute('aria-label', 'Rename'+': '+opts.name); rn.dataset.action='rename';
+    rn.title='Rename'; rn.setAttribute('aria-label', _tr('Rename')+': '+opts.name);
+    rn.dataset.action='rename';
     rn.appendChild(_icon('bi-pencil'));
     right.appendChild(rn);
     var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0'; b.title='Delete'; b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b);
@@ -335,6 +338,8 @@ function deletePath(path, isDir){
 // buttons go through the data-action dispatcher like every other control; built from DOM nodes,
 // never markup, because the name is user-authored.
 var _renaming = null;   // {row, path, name, input, ok, err, busy}: the one row being renamed
+// window.t (i18n.js) where the page has it, the English otherwise.
+function _tr(s){ return window.t ? window.t(s) : s; }
 function _icon(cls){ var i=document.createElement('i'); i.className='bi '+cls; return i; }
 // Where the stem ends: before the extension, which is kept. A folder, a dotfile (.bashrc) and a
 // name with no dot have none to keep; an archive's double extension (.tar.gz) is kept whole.
@@ -352,8 +357,9 @@ function startRename(row){
   var line=document.createElement('div'); line.className='d-flex align-items-center gap-1';
   var input=document.createElement('input'); input.type='text'; input.className='form-control form-control-sm';
   input.value=name; input.spellcheck=false; input.autocomplete='off';
+  // No data-no-i18n: the page's translator never touches a field's value, and the guard also
+  // kept it from translating the field's aria-label, so "New name" stayed English.
   input.setAttribute('autocapitalize','off'); input.setAttribute('aria-label','New name');
-  input.setAttribute('data-no-i18n','');   // its value is a filename, never a translation of one
   input.dataset.action='renameKey'; input.dataset.on='keydown'; input.dataset.args='["@event"]';
   var ok=document.createElement('button'); ok.type='button'; ok.className='btn btn-sm btn-primary';
   ok.dataset.action='submitRename'; ok.textContent='Rename';
@@ -412,9 +418,11 @@ function _renamed(r, want){
 function submitRename(){
   var r=_renaming;
   if(!r || r.busy) return;
-  var want=r.input.value.trim();
-  if(!want){ _renameFailed(r, 'Enter a new name.'); return; }
+  // Sent as typed: the panel keeps a leading or trailing space, so trimming here renamed
+  // ' notes' to 'notes' on an Enter that changed nothing. trim() only tells an empty name.
+  var want=r.input.value;
   if(want===r.name){ cancelRename(); return; }
+  if(!want.trim()){ _renameFailed(r, 'Enter a new name.'); return; }
   r.busy=true; r.input.disabled=true; r.ok.disabled=true; r.err.style.display='none';
   fetch(MOUNT+'/api/server/'+serverId+'/rename-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:r.path,new_name:want})})
     .then(function(res){ return res.json(); })

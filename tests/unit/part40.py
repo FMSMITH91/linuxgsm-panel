@@ -4,18 +4,22 @@ The owner asked to rename what was just uploaded, through the file browser. POST
 /api/server/<id>/rename-path renames one file or folder within the folder it is in, and it is held
 to every gate the other file-browser writes have, plus the ones a rename needs of its own:
 
-* the new name is ONE path component — no '/', NUL or other control character, not '.', '..' or
-  empty, at most 255 bytes — checked before the host is asked anything (and again by the builder);
+* the new name is ONE path component — no '/', no control character (NUL, newline, DEL, U+0085),
+  no line or paragraph separator, no text-direction control, not '.', '..' or empty, at most 255
+  bytes — checked before the host is asked anything (and again by the builder);
 * the source and the new name stay inside the game account's home: the path is resolved the way
   delete-path resolves it (lexically, then on the host with realpath and `cd -P`), and a source
   reached through a symlinked folder is refused rather than followed;
 * an existing name is never replaced: refused before the move, and `mv -n -T` refuses one that
   appears during it — a race is reported as "taken", never clobbered, and a symlink to a folder
   at the new name is never moved INTO;
+* the live console's log and the folders it is in are never renamed away, also when the logs are
+  reached through a symlink;
 * the account write gate (a root-capable game account is refused) is the same as delete-path's;
 * paramiko (raises) and the Tailscale and local transports (return rc -1) give one fixed answer,
   with none of the transport's own text in it;
-* every outcome is audited, like delete-path.
+* every outcome is audited, like delete-path — the refusals made before the host is asked too;
+* the browser's own listing shows a name holding U+2028 or U+0085 whole, so its row can be acted on.
 
 HOW IT RUNS. On part12's Flask app, database and client helpers (imported; part12 has run by then,
 so importing it runs nothing again), with part12's transport tripwire re-armed for this part's
@@ -54,8 +58,11 @@ _TAKEN_MSG40 = ("Something with that name already exists in this folder. Nothing
                 "choose another name.")
 # The hostile names, each with the reason the panel must give for it.
 _HOSTILE40 = [("a/b", "slash"), ("..", "'..'"), (".", "'.'"), ("", "Enter a new name"),
-              ("a\x00b", "control"), ("a\nb", "control"), ("x" * 256, "too long"),
-              ("é" * 128, "too long"), ("\ud800", "valid text")]
+              ("a\x00b", "control"), ("a\nb", "control"), ("a\x7fb", "control"),
+              ("a\x85b", "control"), ("a\u2028b", "separator"), ("a\u2029b", "separator"),
+              ("a\u202eb", "text-direction"), ("a\u2066b", "text-direction"),
+              ("x" * 256, "too long"), ("é" * 128, "too long"), ("\ud800", "valid text")]
+_CONSOLE40 = "log/console/csgoserver-console.log"   # GameServer.console_log, for game_type csgo
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────────────────────────
@@ -208,8 +215,18 @@ def _audits40():
 
 
 def _post40(client, sid, path, new_name):
-    r = client.post(_RN40 % sid, json={"path": path, "new_name": new_name})
+    """(status, json), or (None, {"raised": ...}) when the request raised: a check FAILS by name."""
+    try:
+        r = client.post(_RN40 % sid, json={"path": path, "new_name": new_name})
+    except Exception as exc:  # noqa: BLE001 - a crash fails the check that made it, not the part
+        return None, {"raised": repr(exc)[:200]}
     return r.status_code, _p9_json(r)
+
+
+def _refusal_rows40(n_before, prefix):
+    """The rename_file rows since `n_before`, and whether each is a failed refusal of `prefix`."""
+    rows = _audits40()[n_before:]
+    return rows, all(r.success is False and r.detail.startswith("refused: " + prefix) for r in rows)
 
 
 def _reset40(prelude=""):
@@ -226,23 +243,38 @@ def _reset40(prelude=""):
 def _hostile_names40(a_client, sid):
     """Each hostile new name is refused (400) with its reason, before the host is asked anything."""
     _reset40()
+    n_audit = len(_audits40())
     bad = []
     for name, why in _HOSTILE40:
         code, body = _post40(a_client, sid, "cfg/a.cfg", name)
         if (code, why in (body.get("message") or "")) != (400, True):
-            bad.append("%r -> %d %r" % (name[:12], code, body))
-    check("rename route: a new name with a slash, NUL, newline, '.', '..', empty, too long "
+            bad.append("%r -> %s %r" % (name[:12], code, body))
+    check("rename route: a new name with a slash, a control character (NUL, newline, DEL, U+0085), "
+          "a line or paragraph separator, a text-direction control, '.', '..', empty, too long "
           "(chars or UTF-8 bytes) or not valid text is refused (400), each with its own reason",
           not bad, "; ".join(bad[:4]))
     check("rename route: ...before the host is asked anything — no account probe, no command",
           (_PROBES40, _SHELLS40) == ([], []), repr((_PROBES40[:2], _SHELLS40[:1])))
+    rows, refused = _refusal_rows40(n_audit, "cfg/a.cfg -> ")
+    details = " ".join(r.detail for r in rows)
+    check("rename route: ...and each is audited as a failed rename_file, the name written escaped "
+          "(NUL, U+2028, U+202E and a lone surrogate are stored as \\x00, \\u2028, \\u202e, "
+          "\\ud800)",
+          len(rows) == len(_HOSTILE40) and refused
+          and all(e in details for e in ("\\x00", "\\u2028", "\\u202e", "\\ud800")),
+          "%d rows for %d names: %r"
+          % (len(rows), len(_HOSTILE40), [r.detail[:40] for r in rows][:6]))
     check("rename route: ...and the home is exactly as it was",
           (_read40("cfg/a.cfg"), _ls40("cfg")) == ("A", ["a.cfg", "b.cfg", "c d.cfg", "dangle", "todir"]),
           repr(_ls40("cfg")))
+    n_audit = len(_audits40())
     t1 = _post40(a_client, sid, "cfg/a.cfg", 5)
     t2 = _post40(a_client, sid, ["cfg/a.cfg"], "b.cfg")
     check("rename route: a path or new name that is not text is a 400, not a crash",
           (t1[0], t2[0], _SHELLS40) == (400, 400, []), repr((t1, t2)))
+    rows, refused = _refusal_rows40(n_audit, "")
+    check("rename route: ...and both are audited as failed renames",
+          len(rows) == 2 and refused, repr(rows))
     edge = "y" * 251 + ".cfg"
     code, body = _post40(a_client, sid, "cfg/b.cfg", edge)
     check("rename route: a name of exactly 255 bytes is still allowed (control for 'too long')",
@@ -253,20 +285,29 @@ def _hostile_names40(a_client, sid):
 def _escapes40(a_client, sid):
     """A path that leaves the home, or is the home itself, is refused and runs nothing."""
     _reset40()
+    n_audit = len(_audits40())
+    paths = ("../x", "cfg/../../etc", "../../etc/passwd", "", "/", ".", "cfg/..", "cfg/\ud800")
     bad = []
-    for path in ("../x", "cfg/../../etc", "../../etc/passwd", "", "/", ".", "cfg/.."):
+    for path in paths:
         code, body = _post40(a_client, sid, path, "y")
         if (code, body.get("message")) != (400, _files40.RENAME_REFUSED):
-            bad.append("%r -> %d %r" % (path, code, body))
-    check("rename route: a path escaping the home through '..', or naming the home itself, is "
-          "refused (400)", not bad, "; ".join(bad[:4]))
+            bad.append("%r -> %s %r" % (path, code, body))
+    check("rename route: a path escaping the home through '..', naming the home itself, or that "
+          "is not valid text (a lone surrogate) is refused (400), not a crash", not bad,
+          "; ".join(bad[:4]))
     check("rename route: ...and no rename command is sent for any of them", not _SHELLS40,
           repr(_SHELLS40[:1]))
+    rows, refused = _refusal_rows40(n_audit, "")
+    check("rename route: ...and each is audited as a failed rename_file, as delete-path audits its "
+          "escapes", len(rows) == len(paths) and refused
+          and all(_files40.RENAME_REFUSED in r.detail for r in rows),
+          "%d rows for %d paths: %r" % (len(rows), len(paths), [r.detail[:50] for r in rows][:4]))
 
 
 def _protected40(a_client, sid):
     """Protected sources and destinations are refused by name, before the host runs anything."""
     _reset40()
+    n_audit = len(_audits40())
     cases = [("lgsm", "x", _files40.RENAME_PROTECTED),
              ("lgsm/config-lgsm", "x", _files40.RENAME_PROTECTED),
              ("junk", "serverfiles", "reserved"), ("uploads", ".ssh", "reserved"),
@@ -278,6 +319,13 @@ def _protected40(a_client, sid):
           "(serverfiles, .ssh), or to the name it already has is refused (400)",
           not bad, "; ".join(bad[:3]))
     check("rename route: ...and none of them sent a command", not _SHELLS40, repr(_SHELLS40[:1]))
+    rows, refused = _refusal_rows40(n_audit, "")
+    check("rename route: ...and each is audited as a failed rename_file with its reason — moving "
+          "the LinuxGSM tree away by renaming leaves the trace deleting it does",
+          len(rows) == len(cases) and refused
+          and all(r.detail.startswith("refused: %s -> %s: " % (p, n))
+                  for r, (p, n, _w) in zip(rows, cases)),
+          repr([r.detail[:60] for r in rows]))
     check("rename route: ...and the tree is untouched (no serverfiles, no .ssh, lgsm intact)",
           (_there40("serverfiles"), _there40(".ssh"), _read40("lgsm/config-lgsm/csgoserver/common.cfg"))
           == (False, False, "L"), "")
@@ -359,6 +407,12 @@ def _symlinks40(a_client, sid):
     check("rename route: a file outside the home, reached through a symlink, is refused",
           (body.get("success"), body.get("message"), os.listdir(_OUTSIDE40))
           == (False, _files40.RENAME_REFUSED, ["x.txt"]), repr((code, body)))
+    code, body = _post40(a_client, sid, "esc", "esc2")
+    check("rename route: a symlink that leads out of the home is refused, as delete-path refuses "
+          "it — the link stays as it was",
+          (code, body, _link40("esc"), _there40("esc2"))
+          == (200, {"success": False, "message": _files40.RENAME_REFUSED}, _OUTSIDE40, False),
+          repr((code, body)))
     code, body = _post40(a_client, sid, "lnk", "lnk2")
     check("rename route: a symlink itself is renamed as a link (control) — its target untouched",
           (body.get("success"), _link40("lnk2"), _read40("cfg/a.cfg")) == (True, "cfg", "A"),
@@ -374,6 +428,64 @@ def _gone40(a_client, sid):
     check("rename route: a file that is not there, or whose folder is not, is reported as gone",
           gone in (r1[1].get("message") or "") and gone in (r2[1].get("message") or "")
           and r1[1].get("success") is False and r2[1].get("success") is False, repr((r1, r2)))
+
+
+def _console40(a_client, sid):
+    """The live console's log, and the folders it is in, are never renamed away."""
+    _reset40()
+    _write40(_CONSOLE40, "CONSOLE")
+    _write40("log/console/other.log", "O")
+    n_audit = len(_audits40())
+    paths = ("log", "log/console", _CONSOLE40, "./log/", "cfg/../log/console")
+    want = (400, {"success": False, "message": _files40.RENAME_CONSOLE})
+    bad = ["%s: %r" % (p, r) for p, r in ((p, _post40(a_client, sid, p, "moved")) for p in paths)
+           if r != want]
+    check("rename route: the live console's log, log/console and log/ itself are refused (400), "
+          "however the path is written", not bad, "; ".join(bad[:3]))
+    rows, refused = _refusal_rows40(n_audit, "")
+    check("rename route: ...nothing is sent, the log stays where the console reads it, and each "
+          "refusal is audited", not _SHELLS40 and _read40(_CONSOLE40) == "CONSOLE"
+          and len(rows) == len(paths) and refused, repr((_SHELLS40[:1], rows[:2])))
+    code, body = _post40(a_client, sid, "log/console/other.log", "other-old.log")
+    check("rename route: ...another file in log/console is renamed (control)",
+          (code, body.get("success"), _read40("log/console/other-old.log")) == (200, True, "O"),
+          repr((code, body)))
+    # The logs on another folder, reached through `log -> disk/logs`: only the host sees that
+    # disk/logs, or disk, is what the console reads.
+    _reset40()
+    _write40("disk/logs/console/csgoserver-console.log", "CONSOLE")
+    _write40("disk/other/x.txt", "X")
+    os.symlink("disk/logs", os.path.join(_HOME40, "log"))
+    want = (200, {"success": False, "message": _files40.RENAME_CONSOLE})
+    got = {p: _post40(a_client, sid, p, "moved")
+           for p in ("disk/logs", "disk", "disk/logs/console")}
+    check("rename route (real bash): with log -> disk/logs, renaming disk/logs, disk or "
+          "disk/logs/console is refused on the host — the console's log stays where it reads it",
+          all(r == want for r in got.values()) and _read40(_CONSOLE40) == "CONSOLE",
+          repr(got))
+    code, body = _post40(a_client, sid, "disk/other", "other2")
+    check("rename route (real bash): ...a folder beside them is renamed (control)",
+          (code, body.get("success"), _read40("disk/other2/x.txt")) == (200, True, "X"),
+          repr((code, body)))
+
+
+def _listing40():
+    """A name holding U+2028, U+2029 or U+0085 is listed whole, so the row's actions reach it."""
+    _reset40()
+    odd = ("a\u2028b.cfg", "c\x85d.cfg", "e\u2029f.cfg")
+    for name in odd:
+        _write40("cfg/" + name, "S")
+    got = _files40.browse_dir(_SRV40, _USER40, "cfg")
+    names = sorted(e["name"] for e in (got or {}).get("entries", []))
+    check("browse_dir (real bash): a name holding U+2028, U+2029 or U+0085 is listed as itself, "
+          "not cut at that character", names == _ls40("cfg"), repr((names, _ls40("cfg"))))
+    hits = _files40.stat_upload_targets(_SRV40, _USER40, "cfg", list(odd))
+    check("stat_upload_targets (real bash): ...and an upload onto such a name is flagged as a "
+          "conflict, as any other existing name is",
+          sorted(h.get("name") for h in (hits or [])) == sorted(odd), repr(hits))
+    gone = _files40.delete_path(_SRV40, _USER40, "cfg/" + odd[0])
+    check("browse_dir (real bash): ...so Delete on its row removes that file",
+          (gone, _there40("cfg/" + odd[0])) == ((True, "Deleted"), False), repr(gone))
 
 
 # ── the built command: renames exactly, never clobbers ─────────────────────────────────────────
@@ -566,6 +678,8 @@ try:
     _existing40(_A40, _S40)
     _symlinks40(_A40, _S40)
     _gone40(_A40, _S40)
+    _console40(_A40, _S40)
+    _listing40()
     _race40()
     _exact40()
     _builder_wall40()

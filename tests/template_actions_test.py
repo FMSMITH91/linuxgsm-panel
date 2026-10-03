@@ -4792,15 +4792,35 @@ class El {
   get title(){ return this.attrs.title || ''; }
   set title(v){ this.attrs.title = String(v); }
   get firstElementChild(){ return this.children[0] || null; }
+  // Enough Node for i18n.js's walk and its MutationObserver (only fed when one observes).
+  get nodeType(){ return this.tagName === '#TEXT' ? 3 : this.tagName === '#DOCUMENT' ? 9 : 1; }
+  get nodeValue(){ return this._text; }
+  set nodeValue(v){ this._text = String(v); }
+  get firstChild(){ return this.children[0] || null; }
+  get nextSibling(){
+    const p = this.parentNode; return p ? p.children[p.children.indexOf(this) + 1] || null : null;
+  }
+  get isConnected(){
+    for (let e = this; e; e = e.parentNode) if (e === this.ownerDocument) return true;
+    return false;
+  }
+  _notify(rec){ (this.ownerDocument._observers || []).forEach(o => o.take(rec)); }
   get textContent(){ return this._text + this.children.map(c => c.textContent).join(''); }
   set textContent(v){ this._clear(); this._text = String(v); }
   get innerHTML(){ return this._html; }
   set innerHTML(v){ this._clear(); this._html = String(v); }
   _clear(){ this.children.forEach(c => { c.parentNode = null; }); this.children = []; this._text = ''; this._html = ''; }
-  appendChild(c){ if (c.parentNode) c.remove(); c.parentNode = this; this.children.push(c); return c; }
+  appendChild(c){
+    if (c.parentNode) c.remove(); c.parentNode = this; this.children.push(c);
+    if (this.isConnected) this._notify({type: 'childList', target: this, addedNodes: [c]});
+    return c;
+  }
   insertAdjacentHTML(){}
   remove(){ if (this.parentNode) { const a = this.parentNode.children; a.splice(a.indexOf(this), 1); this.parentNode = null; } }
-  setAttribute(k, v){ this.attrs[k] = String(v); }
+  setAttribute(k, v){
+    this.attrs[k] = String(v);
+    if (this.isConnected) this._notify({type: 'attributes', target: this, attributeName: k});
+  }
   getAttribute(k){ return k in this.attrs ? this.attrs[k] : null; }
   hasAttribute(k){ return k in this.attrs; }
   removeAttribute(k){ delete this.attrs[k]; }
@@ -4843,7 +4863,9 @@ function page(){
   return doc;
 }
 const flush = async () => { for (let i = 0; i < 30; i++) await new Promise(r => setImmediate(r)); };
-function load(root, respond){
+// `catalog`: load i18n.js first, in Spanish with that catalog, and give it a MutationObserver that
+// hears what the page's own does — nodes added under the body, and the attributes it filters on.
+function load(root, respond, catalog){
   const doc = page(), fetched = [], toasts = [];
   const ctx = {console, Promise, JSON, Date, Math, String, Number, Array, Object, RegExp, Error, Set,
     Map, Proxy, Headers, encodeURIComponent, decodeURIComponent, parseInt, parseFloat, isNaN, Symbol,
@@ -4863,8 +4885,21 @@ function load(root, respond){
                               json: () => Promise.resolve(r)});
     }};
   ctx.window = ctx;
+  if (catalog) {
+    doc._observers = [];
+    ctx.I18N = catalog; ctx.LANG = 'es';
+    ctx.MutationObserver = class {
+      constructor(cb){ this.cb = cb; }
+      observe(root, o){ this.filter = o.attributeFilter; doc._observers.push(this); }
+      take(rec){
+        const heard = rec.type !== 'attributes' || this.filter.indexOf(rec.attributeName) >= 0;
+        if (heard) this.cb([rec]);
+      }
+      disconnect(){}
+    };
+  }
   vm.createContext(ctx);
-  for (const f of ['panel.js', 'server_files.js'])
+  for (const f of (catalog ? ['i18n.js'] : []).concat(['panel.js', 'server_files.js']))
     vm.runInContext(fs.readFileSync(root + '/static/js/' + f, 'utf8'), ctx, {filename: f});
   ctx.toast = (m, k) => toasts.push([m, k]);
   return ctx;
@@ -4954,6 +4989,34 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
   if (field()) { field().value = 'maps2'; key(field(), 'Enter'); }
   await flush();
   out.folder_follow = c.curFile;
+  // A second page, in Spanish with i18n.js loaded, listing a name that ends in a space.
+  const S2 = {reply: {success: true, message: 'Renamed'}};
+  const c2 = load(root, url => url.indexOf('/browse?') >= 0
+    ? {path: '', entries: [ENTRY('a.txt ', false, false)]}
+    : url.indexOf('/rename-path') >= 0 ? S2.reply : {},
+    {'New name': 'Nuevo nombre', 'Rename': 'Renombrar', 'Download': 'Descargar'});
+  await flush();
+  const l2 = c2.document.getElementById('file-list');
+  // By dataset, not a selector: this small DOM's selector splits on the space inside the value.
+  const r2 = l2.querySelectorAll('[data-path]').filter(r => r.dataset.path === 'a.txt ')[0];
+  const pen2 = r2 && r2.querySelector('[data-action="rename"]');
+  const dl2 = r2 && r2.querySelector('[data-action="download"]');
+  const posts2 = () => c2.fetched.filter(f => f.url.indexOf('/rename-path') >= 0);
+  if (pen2) pen2.click();
+  const f2 = l2.querySelector('.fb-rename input');
+  out.i18n = {field: f2 && f2.getAttribute('aria-label'), value: f2 && f2.value,
+              pencil: pen2 && pen2.getAttribute('aria-label'),
+              dl: dl2 && dl2.getAttribute('aria-label')};
+  // Enter on the name as it is: nothing is sent, although trim() would make it look changed.
+  if (f2) fire(f2, 'keydown', {key: 'Enter'});
+  await flush();
+  out.space_unchanged = {sent: posts2().length, open: !!l2.querySelector('.fb-rename')};
+  if (pen2) pen2.click();
+  const f3 = l2.querySelector('.fb-rename input');
+  if (f3) { f3.value = ' b.txt '; fire(f3, 'keydown', {key: 'Enter'}); }
+  await flush();
+  const p2 = posts2();
+  out.as_typed = p2.length ? JSON.parse(p2[p2.length - 1].body) : null;
   console.log(JSON.stringify(out));
 })().catch(e => console.log(JSON.stringify({error: String(e && e.stack || e)})));"""
 _sfr_src = (STATIC_JS / "server_files.js").read_text(encoding="utf-8")
@@ -5012,6 +5075,17 @@ if _node:
           and _rn.get("folder_follow") == "maps2/server.cfg",
           "js (node): the file open in the editor follows its new name — and its folder's — so "
           "Save cannot write the old path back", repr((_rnd.get("cur"), _rn.get("folder_follow"))))
+    check(_rn.get("i18n") == {"field": "Nuevo nombre", "value": "a.txt ",
+                              "pencil": "Renombrar: a.txt ", "dl": "Descargar: a.txt "},
+          "js (node, es, real i18n.js): the rename field's accessible name is translated and its "
+          "value (the filename) is not; the row's Rename and Download labels translate the verb, "
+          "never the name", repr(_rn.get("i18n")))
+    check(_rn.get("space_unchanged") == {"sent": 0, "open": False},
+          "js (node): Enter on a name that ends in a space, left as it was, sends nothing and "
+          "closes — the name is not trimmed into a rename", repr(_rn.get("space_unchanged")))
+    check(_rn.get("as_typed") == {"path": "a.txt ", "new_name": " b.txt "},
+          "js (node): an edited name is sent as typed, spaces and all — the panel keeps them",
+          repr(_rn.get("as_typed")))
 else:
     _sfr_start = _js_code_only(_js_function_body(_sfr_src, "startRename"))
     _sfr_key = _js_code_only(_js_function_body(_sfr_src, "renameKey"))
@@ -5024,6 +5098,11 @@ else:
           "js (no node): Enter submits and Escape cancels", _sfr_key[:300])
     check("closest('.fb-renaming')) return;" in _sfr_list,
           "js (no node): a click on a row being renamed does not open it", _sfr_list[:300])
+    _sfr_submit = _js_code_only(_js_function_body(_sfr_src, "submitRename"))
+    check("data-no-i18n" not in _sfr_start and "var want=r.input.value;" in _sfr_submit
+          and 0 <= _sfr_submit.find("if(want===r.name)") < _sfr_submit.find("want.trim()"),
+          "js (no node): the field's label is left to the translator, and the name is compared "
+          "and sent as typed", _sfr_submit[:300])
 
 # ── a data-action a SCRIPT assigns must resolve too ───────────────────────────────────────────
 # Check 1 reads data-action out of markup; a script that builds a control and sets

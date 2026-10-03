@@ -20,13 +20,18 @@ CI-verified commit regardless of this file — this changelog is for humans.
   Rename sends it, Escape or Cancel puts the row back, and when the panel refuses, the reason shows
   under the field so you can fix the name where you typed it. It covers renaming something you just
   uploaded, and a file open in the editor follows its new name. A rename stays in its own folder,
-  and the same rules guard it as Delete. The new name must be a single name (no `/`, no control
-  characters, not `.` or `..`, at most 255 bytes). Protected LinuxGSM paths cannot be renamed, and
-  no other name can be renamed onto them. A path reached through a symbolic link to a folder is
-  refused, not followed. An existing name is never replaced, including one that appears while the
-  rename runs; there is no "replace" option. A game account that can become root is refused, as it
-  is for every other file write. Every rename is in the audit log (`rename_file`), refused ones
-  included. If the host doesn't confirm the rename, the panel says exactly that and asks you to
+  and the same rules guard it as Delete. The new name must be a single name: no `/`, not `.` or
+  `..`, at most 255 bytes, and no character that would make it read as another name (control
+  characters, line or paragraph separators, text-direction controls). The name is sent as typed,
+  spaces included. Protected LinuxGSM paths cannot be renamed, and no other name can be renamed
+  onto them. Nor can the live console's log or the `log` and `log/console` folders it is in, also
+  when the logs are reached through a symbolic link, because the console would stop until the
+  server restarts. A path reached through a symbolic link to a folder is refused, not followed. An
+  existing name is never replaced, including one that appears while the rename runs; there is no
+  "replace" option. A game account that can become root is refused, as it is for every other file
+  write. Every rename request from someone allowed to manage files is in the audit log
+  (`rename_file`): renamed, refused (with the reason, including a name refused for its form) or
+  unconfirmed. If the host doesn't confirm the rename, the panel says exactly that and asks you to
   reload, rather than guessing whether it happened.
 - **A terminal in the browser, for the panel's own host and for every remote.** xterm.js over the
   socket the console already uses. It needs a new "use terminal" permission (`use_terminal`) and
@@ -455,6 +460,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The file browser lists a file whose name holds a Unicode line or paragraph separator under its
+  real name.** The listing was split on every kind of line break Python knows, so a name holding
+  U+2028, U+2029 or U+0085 (an upload can create one) showed cut short, under a name no file has.
+  Delete on that row answered "Deleted" and left the file in place, and uploading a file of that
+  name was not flagged as replacing it. Both listings are now split on newlines only, which is how
+  the host writes them.
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
   and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
   `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query
