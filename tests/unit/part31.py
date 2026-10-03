@@ -17,7 +17,8 @@ What this part holds, and how each runs:
   no unified cgroup path, where nothing is scoped);
 * adopt-game-processes and terminal-scope move only what is in the panel's own cgroup, never the
   panel itself, and a group systemd refused for one exited pid is retried: driven in-process on a
-  fresh copy of the helper with /proc and cgroupfs readers stubbed;
+  fresh copy of the helper with /proc and cgroupfs readers stubbed (and cgroup.procs read from a
+  hybrid boot's /sys/fs/cgroup/unified, on a stand-in tree);
 * the four jobs start as the main process of their own transient service and run in its
   foreground (`--job`, refused anywhere else); the reboot is a transient timer, with the old
   grandchild when the timer cannot be made; no systemd (or no unified cgroup path) keeps the old
@@ -451,6 +452,31 @@ def _check_adopt_retry31():
           and sorted(p for _u, p in made) == [[300, 301, 302], [400, 401], [500]]
           and [u for u, p in made if p == [500]][0].startswith("lgsm-adopted-mcserver-500-"),
           repr((rc, out, tried, made)))
+
+
+def _check_cgroup_pids31():
+    """cgroup.procs is read from the unified hierarchy wherever it is mounted."""
+    mod = _fresh_helper31()
+    flat, hybrid = (_tf31.mkdtemp(prefix="cg31-", dir=_TMP31) for _ in range(2))
+    cg = "/system.slice/lgsm-part31-%s.service" % os.urandom(4).hex()
+    os.makedirs(hybrid + cg)
+    with open(hybrid + cg + "/cgroup.procs", "w", encoding="ascii") as fh:
+        fh.write("5\n6\n")
+    mod.CGROUP_V2_ROOTS = (flat, hybrid)
+    try:
+        got = mod._cgroup_pids(cg)
+    except OSError as exc:              # the crash a hybrid host had: a failure BY NAME, below
+        got = "raised %s" % exc
+    mod.CGROUP_V2_ROOTS = (flat,)
+    try:
+        mod._cgroup_pids(cg)
+        missing = "read nothing, and said nothing"
+    except FileNotFoundError as exc:
+        missing = str(exc)
+    check("helper _cgroup_pids: on a hybrid boot the panel's cgroup.procs is read under "
+          "/sys/fs/cgroup/unified (adoption and the terminal's scope used to crash there), and a "
+          "cgroup in neither place is an error, never an empty list",
+          got == [5, 6] and missing.startswith("no cgroup.procs for " + cg), repr((got, missing)))
 
 
 def _check_terminal_scope31():
@@ -1106,7 +1132,7 @@ def _check_uninstall_scopes31():
 
 
 for _fn31 in (_check_lgsm_start31, _check_scope_wait31, _check_scope_never31, _check_start_scope31, _check_lgsm_other31,
-              _check_cron_now31, _check_adopt31,
+              _check_cron_now31, _check_adopt31, _check_cgroup_pids31,
               _check_terminal_scope31, _check_jobs31, _check_job_entry31, _check_os_update_job31,
               _check_no_systemd31, _check_reboot31, _check_constants31, _check_backup31,
               _check_run_now31, _check_run_now_refused31, _check_user_scope31,

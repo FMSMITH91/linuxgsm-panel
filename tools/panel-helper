@@ -3829,10 +3829,26 @@ def _panel_cgroup():
     return cg if cg.endswith("/" + PANEL_UNIT) else None
 
 
+# Where the unified (v2) hierarchy is mounted: /sys/fs/cgroup itself, or /sys/fs/cgroup/unified on a
+# hybrid boot (systemd.unified_cgroup_hierarchy=0 without systemd.legacy_systemd_cgroup_controller,
+# which 22.04 and 24.04 still allow). A hybrid host's /proc/<pid>/cgroup has the real `0::` path,
+# so everything else here works there; only this read has to look in the other place.
+CGROUP_V2_ROOTS = ("/sys/fs/cgroup", "/sys/fs/cgroup/unified")
+
+
 def _cgroup_pids(cg):
-    """Return the pids in cgroup `cg` (a path _panel_cgroup accepted)."""
-    with open("/sys/fs/cgroup" + cg + "/cgroup.procs", encoding="ascii") as fh:
-        return [int(p) for p in fh.read().split()]
+    """Return the pids in cgroup `cg` (a path _panel_cgroup accepted).
+
+    Read from the unified hierarchy, wherever it is mounted (CGROUP_V2_ROOTS). FileNotFoundError
+    when it is in none of them: the caller fails out loud rather than finding nothing to move.
+    """
+    for root in CGROUP_V2_ROOTS:
+        try:
+            with open(root + cg + "/cgroup.procs", encoding="ascii") as fh:
+                return [int(p) for p in fh.read().split()]
+        except FileNotFoundError:
+            continue
+    raise FileNotFoundError("no cgroup.procs for %s under %s" % (cg, " or ".join(CGROUP_V2_ROOTS)))
 
 
 def _proc_facts(pid):
