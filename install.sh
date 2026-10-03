@@ -2484,6 +2484,10 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     BACKUP_ROOT="${PANEL_DIR}/data/.backups"
     STAMP="$(date +%Y%m%d-%H%M%S)"
     BACKUP="${BACKUP_ROOT}/${STAMP}"
+    # The scheme the panel answers on BEFORE the update, read while it still runs ([1/6] stops it):
+    # the HTTPS hint after the update is news only if this was not https already. Read here, above
+    # the TREE_SUDO block: part12 lifts TREE_SUDO="" to the [1/6] banner whole and runs it as root.
+    PRE_SCHEME="$(panel_scheme_now)"
     # Every snapshot, and every rollback, works INSIDE data/.backups and PANEL_DIR — both the panel
     # user's on every update after the first. They ran as root: `mkdir -p` and a `> code.tgz`
     # redirect followed a link the panel user had put at data/.backups or at the stamp (STAMP is a
@@ -2500,9 +2504,6 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         _tree_owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
         [[ "${_tree_owner}" != "root" ]] && TREE_SUDO="sudo -u ${_tree_owner} env -C /"
     fi
-    # The scheme the panel answers on BEFORE the update, read while it still runs ([1/6] stops it):
-    # the HTTPS hint after the update is news only if this was not https already.
-    PRE_SCHEME="$(panel_scheme_now)"
     snapshot_service_unit
     info "[1/6] Snapshotting current version + database → ${BACKUP}"
     ${TREE_SUDO:-} mkdir -p -- "${BACKUP}"

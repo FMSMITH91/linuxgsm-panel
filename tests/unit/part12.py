@@ -3608,6 +3608,21 @@ check("install.sh: the snapshot, snapshot_ok and both rollbacks go through TREE_
 # does not exist.
 _pb_ph = ("set -euo pipefail\ndie() { echo \"DIE: $*\"; exit 1; }\nSNAP_GZ='gzip -1'\n"
           + _pb_shfn("snapshot_service_unit"))
+# The same death twice: #378's snapshot_service_unit, then an update-time scheme probe, each an
+# install.sh function called inside a lifted block that the preamble did not define. Both reached
+# only CI's ROOT pass, the one place these blocks run. So, without root: every install.sh function
+# a lifted block calls must be one the preamble (or the block itself) defines.
+import re as _pb_re                                                               # noqa: E402
+_pb_fn_re = _pb_re.compile(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\(\) \{")
+_pb_inst_fns = set(_pb_fn_re.findall(_pb_inst))
+_pb_lifted = "\n".join(ln for ln in (_pb_tree + _pb_snap + _pb_rb).splitlines()
+                       if not ln.lstrip().startswith("#"))
+_pb_calls = {f for f in _pb_inst_fns
+             if _pb_re.search(r"(?<![A-Za-z0-9_${}])%s(?![A-Za-z0-9_(])" % _pb_re.escape(f), _pb_lifted)}
+_pb_undefined = _pb_calls - set(_pb_fn_re.findall(_pb_ph + _pb_snap + _pb_rb))
+check("install.sh: every install.sh function the lifted snapshot and rollback blocks call is "
+      "defined in their harness (an undefined one dies 'command not found' under set -e, as root only)",
+      not _pb_undefined and "snapshot_service_unit" in _pb_calls, repr(sorted(_pb_undefined)))
 if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
     _pb_up = tempfile.mkdtemp(prefix="lgsm-unit-pb-upd-")
     os.chmod(_pb_up, 0o755)
