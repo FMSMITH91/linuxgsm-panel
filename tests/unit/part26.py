@@ -352,7 +352,9 @@ _val26 = [CSA.valid("FMSMITH91/linuxgsm-panel", "refs/pull/391/merge", "a" * 40)
           CSA.valid("x/y", "--hostname=evil.example", "a" * 40),
           CSA.valid("x/y", "refs/heads/../../etc", "a" * 40),
           CSA.valid("x y/z", "refs/heads/main", "a" * 40),
-          CSA.valid("x/y", "refs/heads/main", "a" * 39)]
+          CSA.valid("x/y", "refs/heads/main", "a" * 39),
+          CSA.valid("x/y", "refs/heads/feature", "a" * 40),
+          CSA.safe_ref("refs/pull/007/merge") == "refs/pull/7/merge"]
 _ref26 = []
 _saved_run26 = CSA.subprocess.run
 try:
@@ -360,8 +362,10 @@ try:
     _refused26 = CSA.read_rows("x/y", "-X POST")
 finally:
     CSA.subprocess.run = _saved_run26
-check("code-scanning gates: a ref, repository or sha of any other shape is refused before gh runs "
-      "(argument injection, Sonar S8705), and gh's options end at '--'",
-      _val26 == [True, True, False, False, False, False] and _refused26 is None and _ref26 == []
+check("code-scanning gates: only a PR merge ref or main, rebuilt from validated parts, reaches gh; "
+      "any other ref, repository or sha is refused before gh runs (Sonar S8705), and gh's options "
+      "end at '--'",
+      _val26 == [True, True, False, False, False, False, False, True] and _refused26 is None
+      and _ref26 == []
       and '["gh", "api", "--", path]' in open(_CSA26_PATH, encoding="utf-8").read(),
       repr((_val26, _refused26, _ref26)))

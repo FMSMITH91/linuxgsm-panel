@@ -97,24 +97,34 @@ def _state(top, has_own_row, must_be_own, sha, floor):
     return "moved" if (top.get("created_at") or "") > floor else "ok"
 
 
-# What the two gates ever pass: an owner/name slug, and a PR merge ref or a branch. Anything else is
-# refused before it reaches gh, and "--" ends gh's options, so no value can become a flag.
+# What the two gates ever pass: an owner/name slug, and a PR merge ref or main. The ref given to gh
+# is REBUILT from validated parts (the PR number through int(), main as a constant), so no text from
+# the command line reaches gh; anything else is refused before gh runs, and "--" ends gh's options.
 _REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}\Z")
-_REF_RE = re.compile(r"refs/(?:pull/[0-9]{1,9}/merge|heads/[A-Za-z0-9._/-]{1,200})\Z")
+_PR_REF_RE = re.compile(r"refs/pull/([0-9]{1,9})/merge\Z")
+_BRANCH_REFS = {"refs/heads/main": "refs/heads/main"}
 _SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 
 
+def safe_ref(ref):
+    """`ref` rebuilt from validated parts when it is a PR merge ref or main, else None."""
+    m = _PR_REF_RE.match(ref or "")
+    if m:
+        return "refs/pull/%d/merge" % int(m.group(1))
+    return _BRANCH_REFS.get(ref)
+
+
 def valid(repo, ref, sha):
-    """Whether `repo`, `ref` and `sha` have the only shapes the gates pass (and no '..' in a ref)."""
-    return bool(_REPO_RE.match(repo or "") and _REF_RE.match(ref or "") and ".." not in ref
-                and _SHA_RE.match(sha or ""))
+    """Whether `repo`, `ref` and `sha` have the only shapes the gates pass."""
+    return bool(_REPO_RE.match(repo or "") and safe_ref(ref) and _SHA_RE.match(sha or ""))
 
 
 def read_rows(repo, ref):
     """Return the newest 100 analyses of `ref`, newest first, or None when they could not be read."""
-    if not valid(repo, ref, "0" * 40):
-        print("refusing to query: %r / %r is not a repository slug and a pull or branch ref"
-              % (repo, ref))
+    ref = safe_ref(ref)
+    if not (ref and _REPO_RE.match(repo or "")):
+        print("refusing to query: the repository is not an owner/name slug, or the ref is neither a "
+              "pull request's merge ref nor main")
         return None
     path = ("repos/%s/code-scanning/analyses?ref=%s&per_page=100&sort=created&direction=desc"
             % (repo, ref))
@@ -180,7 +190,7 @@ def main(argv=None):
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if not valid(repo, a.ref, a.sha):
         print("::error::need GITHUB_REPOSITORY as owner/name, --ref as refs/pull/N/merge or "
-              "refs/heads/<branch>, and a full lowercase commit sha (got %r, %r, %r)"
+              "refs/heads/main, and a full lowercase commit sha (got %r, %r, %r)"
               % (repo, a.ref, a.sha))
         return MISSING
     own = own_categories(a.event, a.workflow)
