@@ -35,9 +35,10 @@ HOW IT RUNS. On part12's Flask app, database and client (imported; part12 has ru
 importing it runs nothing again), with part12's transport tripwire re-armed for this part's
 duration and every stub undone in its finally. The install steps are driven through
 _configure_and_start, the install job's own call, against a scripted host; the account probe runs
-in a real bash. The gamedig readers run their own command in bash with real jq, against a
-stand-in gamedig on PATH that answers only the type the panel should send (skipped, as SKIP, where
-there is no jq). It ends by checking nothing it drove reached a transport.
+in a real bash. The gamedig readers run their own command in bash with real jq, and the hourly
+restart line runs under sh in cron's environment, each with a `gamedig` shell function that answers
+only the type the panel should send (skipped, as SKIP, where there is no jq). It ends by checking
+nothing it drove reached a transport.
 """
 import contextlib as _contextlib36
 import json as _json36
