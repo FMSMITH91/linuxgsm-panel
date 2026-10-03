@@ -743,8 +743,16 @@ function _enableAutoUpdates(){
 function genDebugReport(){
   var btn=document.getElementById('diag-report-btn'), msg=document.getElementById('diag-report-msg');
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Generating…'; }
-  fetch(MOUNT+'/api/panel/debug-report').then(function(r){return r.json();}).then(function(d){
-    if(d.error){ if(msg) msg.innerHTML='<span class="text-danger">Could not generate the report.</span>'; return; }
+  // 429: another report is still being built (one at a time). A fixed string, never the server's.
+  fetch(MOUNT+'/api/panel/debug-report').then(function(r){
+    return r.json().then(function(d){ d._busy=(r.status===429); return d; });
+  }).then(function(d){
+    if(d.error){
+      if(msg) msg.innerHTML=d._busy
+        ? '<span class="text-warning">A debug report is still being built. Try again in a minute.</span>'
+        : '<span class="text-danger">Could not generate the report.</span>';
+      return;
+    }
     var ta=document.getElementById('diag-report-text');
     ta.value=d.report; ta.style.display='';   // .value (not innerHTML) — nothing to inject
     var dl=document.getElementById('diag-report-dl');

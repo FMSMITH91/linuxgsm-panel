@@ -710,6 +710,10 @@ def _p20_js():
           "and nothing slices the text",
           "encodeURIComponent(d.issue_body||'')" in fn and "try {" in fn and "catch(e)" in fn
           and ".slice(" not in fn and "d.summary" not in fn, fn[:600])
+    check("debug report page: a 429 (a report is still being built) says so, in a fixed string, "
+          "instead of 'Could not generate the report.'",
+          "r.status===429" in fn and "still being built" in fn and "d.error" in fn
+          and "msg.innerHTML=d.error" not in fn, fn[:900])
 
 
 try:
