@@ -2720,8 +2720,8 @@ def register_routes(app):
     # Lazy, like every other panel.routes import here: those modules do
     # `from app import ...` at their top, so they can only be imported once
     # this module's own body has finished.
-    from panel.routes._shared import (_run_due_game_backups, _run_due_restarts,
-        _run_pending_backups)
+    from panel.routes._shared import (_backup_ticker_pass, _run_due_game_backups,
+        _run_due_restarts, _run_pending_backups)
 
     # ── Helpers ─────────────────────────────────────────────
 
@@ -2858,15 +2858,15 @@ def register_routes(app):
         # and pinning the CPU. Hourly cadence is unchanged; the first run is just shifted ~2 min.
         time.sleep(120)
         while True:
-            try:
-                _t0 = time.time()
-                bk.daily_backup_tick()
-                _run_due_game_backups(app)   # per-server schedules (each records its own last-run)
-                _run_pending_backups(app)    # 'wait until empty' full-backup queue
-                runtime_stats.beat("backup-ticker", 3600, time.time() - _t0)
-            except Exception:
-                runtime_stats.bump("loopfail", "backup-ticker")
-                app.logger.debug("backup tick failed", exc_info=True)
+            # Each step on its own, and the pass's heartbeat or failure recorded there: under one
+            # try, a daily panel backup that raised skipped both game sweeps for the pass, logged
+            # at a level production drops. See _backup_ticker_pass.
+            _backup_ticker_pass(app, (
+                ("daily panel backup", bk.daily_backup_tick, ()),
+                # per-server schedules (each records its own last-run)
+                ("scheduled game backups", _run_due_game_backups, (app,)),
+                # 'wait until empty' full-backup queue
+                ("queued game backups", _run_pending_backups, (app,))))
             time.sleep(3600)
     _supervise("backup-ticker", backup_ticker)
     # "Restart/stop when empty" needs to act PROMPTLY once the last player leaves — an hourly check

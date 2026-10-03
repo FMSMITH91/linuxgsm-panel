@@ -4893,11 +4893,15 @@ def _tk13_check_backup_loops(loops, app):
         _run1, slept1 = _tk13_run(loops["backup-ticker"][1], 3)
     finally:
         _app10mod.bk = _CA13_SAVED.pop((_app10mod, "bk"))
+    # A daily panel backup that raises does NOT skip the game sweeps of its pass: they shared one
+    # try, so a daily backup that kept raising stopped every scheduled game backup (part33 drives
+    # each step failing on its own).
     check("app backup loop: waits 2 min first, then the daily tick, the per-server schedules and "
-          "the queue, hourly — and a failing tick skips the rest of that pass only",
+          "the queue, hourly — and a failing daily tick still runs both game sweeps of its pass",
           all((slept1 == [120, 3600, 3600],
                _TK13["calls"] == [("daily",), ("due-backups", app), ("pending-backups", app),
-                                  ("daily",)])), repr((slept1, _TK13["calls"])))
+                                  ("daily",), ("due-backups", app), ("pending-backups", app)])),
+          repr((slept1, _TK13["calls"])))
     _TK13["calls"][:] = []
     _TK13["fail_from"] = {"due-restarts": 2}
     _run2, slept2 = _tk13_run(loops["due-actions"][1], 3)

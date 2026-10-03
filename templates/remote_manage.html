@@ -359,6 +359,10 @@
       <strong class="small"><i class="bi bi-hdd-stack"></i> Game server files (full backup)</strong>
       <button class="btn btn-sm btn-outline-success" id="fb-now" data-action="runFullBackup" data-args='["@self"]'><i class="bi bi-play-circle"></i> Back up game servers now</button>
     </div>
+    {# The button's own last run, under the button. It used to sit in the Automatic-backups row
+       below, where "Never run" read as the schedule's status; the schedule has its own line
+       there now (fb-auto-status). #}
+    <div id="fb-status" class="small text-secondary text-sm-end mb-1"></div>
     <p class="small text-secondary mb-2">
       LinuxGSM's own per-server backup, written to ~/lgsm/backup on the host. These get large, so only
       the newest few are kept, and a running server is briefly restarted while archiving.
@@ -386,7 +390,7 @@
                min="1" max="30" step="1" inputmode="numeric"
                data-action="saveBackupSettings" data-on="change">
       </div>
-      <span id="fb-status" class="small text-secondary"></span>
+      <span id="fb-auto-status" class="small text-secondary"></span>
     </div>
     <div id="fb-disk" class="small text-secondary mb-1"></div>
     <div id="fb-summary" class="small text-info-emphasis mb-2"></div>

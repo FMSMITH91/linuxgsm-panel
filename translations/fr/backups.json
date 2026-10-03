@@ -1,5 +1,6 @@
 {
   "A backup contains secrets": "Une sauvegarde contient des secrets",
+  "A backup is running now…": "Une sauvegarde est en cours…",
   "Automatic backup": "Sauvegarde automatique",
   "Automatic backups": "Sauvegardes automatiques",
   "Automatic daily backups": "Sauvegardes quotidiennes automatiques",
@@ -28,11 +29,15 @@
   "Keep newest": "Conserver les plus récentes",
   "Keep per server": "Conserver par serveur",
   "Keeps the underlying OS patched on its own (installs the unattended-upgrades package) — recommended for a box that runs unattended.": "Maintient le système d'exploitation à jour tout seul (installe le paquet unattended-upgrades) — recommandé pour une machine sans surveillance.",
+  "Last automatic backup failed:": "La dernière sauvegarde automatique a échoué :",
+  "Last automatic backup:": "Dernière sauvegarde automatique :",
+  "Last “Back up game servers now”:": "Dernier « Sauvegarder les serveurs de jeu maintenant » :",
   "Leave blank to keep current": "Laisser vide pour conserver l'actuel",
   "Loading backups…": "Chargement des sauvegardes…",
   "Loading scheduled tasks…": "Chargement des tâches planifiées…",
   "Monthly": "Mensuel",
   "Monthly (1st)": "Mensuel (le 1er)",
+  "No automatic backup has run yet.": "Aucune sauvegarde automatique n'a encore eu lieu.",
   "No backups yet.": "Aucune sauvegarde pour le moment.",
   "No safety copy": "Aucune copie de sécurité",
   "Off, one copied backup hands over the database and both encryption keys, including every stored SSH credential. On, the file is useless to anyone without the passphrase. Applies to new backups; existing ones keep whatever they were written with.": "Désactivé, une seule sauvegarde copiée livre la base de données et les deux clés de chiffrement, y compris chaque identifiant SSH enregistré. Activé, le fichier est inutilisable sans la phrase secrète. S'applique aux nouvelles sauvegardes ; les existantes conservent le chiffrement avec lequel elles ont été créées.",
@@ -53,5 +58,6 @@
   "Weekly (Sun)": "Hebdomadaire (dim)",
   "Your account password": "Le mot de passe de votre compte",
   "days": "jours",
-  "no backups yet": "aucune sauvegarde pour l'instant"
+  "no backups yet": "aucune sauvegarde pour l'instant",
+  "“Back up game servers now” has never been run.": "« Sauvegarder les serveurs de jeu maintenant » n'a jamais été lancé."
 }

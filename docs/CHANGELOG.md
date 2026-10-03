@@ -404,6 +404,51 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The Backups page and the debug report no longer read the "Back up game servers now" button's
+  last run as the automatic schedule's.** Automatic game-server backups keep one clock per server;
+  only the button writes the time both of them showed. So an install whose weekly backups had run
+  every week read "Never run" right beside the Automatic backups switch, and one whose button was
+  pressed yesterday read "Last: 1d ago" there however overdue the schedule was. The button's own
+  line now sits under the button and says whose it is, and the schedule's row shows the newest
+  automatic backup from the audit log ("Last automatic backup: 2d ago", or that it failed). The
+  debug report prints the schedule per server (by id and game: interval, whose setting it is, the
+  clock's age, "due since", "clock not started"), what the unattended backups recorded in 30 days,
+  and the button's run under its own name. A default interval of 0 reads "default: off", because a
+  server's own setting can still back it up. Unused code that would have backed every server up
+  twice (`full_backup_due`) is gone.
+- **"Back up game servers now" moves each server's schedule clock.** It did not, so every server it
+  archived was still due to the hourly schedule, which archived it again at its old time: another
+  stop and restart, another archive, and the prune evicting an older restore point early. A server
+  it skipped (players online) or that failed stays due, as before.
+- **A server that always has players on is no longer silently never backed up.** The schedule
+  skips a server with players online and retries hourly, which is right, but a server never empty
+  at the top of an hour was skipped for good with no record anywhere. Once it is a whole interval
+  overdue (twice its interval since its last backup) that is audited and alerted, once — it is
+  remembered in config.json, so the panel's daily restart does not repeat it — and again only after
+  the server has been backed up. A "wait until empty" backup on a server whose own schedule is off
+  is reported the same way after a week of waiting. No player is ever disconnected for it.
+- **A backup host that is down sends one alert, not one an hour.** A scheduled or queued backup
+  that raised (a direct-SSH host that is down, or a key it now refuses) is retried hourly, and every
+  retry alerted again — twice an hour for a server both due and queued. The first failure of a
+  streak alerts; the retries are still on the audit log. The next failure after a backup that
+  reached the host alerts again.
+- **A failing daily panel backup no longer stops the game-server backups.** The hourly backup pass
+  ran the panel's own daily backup and both game-server sweeps under one error handler, so a daily
+  backup that raised skipped the game backups for that hour, every hour, and logged nothing at the
+  default level. Each step now runs on its own, logs a failure as a warning naming the step, and a
+  pass with a failure is counted as failed in the debug report.
+- **A direct-SSH host that never answers can no longer stop every backup.** Waiting for the
+  remote's reply to a command request had no time limit, so a wedged or hostile host held the
+  caller for ever — and a backup sweep holds the one lock every backup on every host shares, so
+  all scheduled and queued backups stopped, silently, until the panel restarted. That wait (and the
+  channel open, for long commands) is now bounded at five minutes, for commands and for the backup
+  and file downloads. Hosts on the panel's own machine and over Tailscale were never affected.
+- **A daily panel backup that cannot make its temp folder no longer leaves an empty "backup".** The
+  archive's name was claimed before the temp folder was made, and a failure there left a 0-byte
+  file that counted as the day's daily backup — so none was taken for 23 hours, and the Backups page
+  listed one that cannot be restored.
+- **The debug report names the notification events that are off.** It printed only a count ("15
+  of 19"), so whether "A backup fails" was one of them could not be told. It now lists them by key.
 - **Adding a tool's settings file to the repository is no longer offered as a panel update.** The
   update check decides which files the panel runs from a list, and that list lived in the panel's
   own code. Naming SonarCloud's new settings file in it, as a file the panel does not run, was then

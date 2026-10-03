@@ -38,7 +38,7 @@ from app import (_apply_whitelist_everywhere, _autoblock_hosts, _log, _prune_job
     _run_autoblock_now, _security_whitelist, _security_whitelist_add,
     _security_whitelist_remove)
 import re
-from panel.core import (clock, terminal)
+from panel.core import (clock, runtime_stats, terminal)
 
 
 def _begin_bootstrap(app, remote_id, opts, actor_id):
@@ -255,12 +255,15 @@ def _record_backup_outcome(app, sid, gname, ok, reason, action, title, born=_NO_
     `born` (models.row_birth) is the server the backup was for. A backup runs for minutes; by id
     alone, a server deleted meanwhile was answered by the one that took its id, which then had
     the row filed under it and its tags deciding the alert.
+
+    `title` None audits the failure without alerting: a repeat the operator was already told about
+    (see _record_raised_backup).
     """
     try:
         _bk_gs = claim_row(GameServer, sid, born)
         log_action(None, action, target=gname, detail=(reason or "")[:500], success=bool(ok),
                    server=_bk_gs)
-        if ok:
+        if ok or title is None:
             return
         if _bk_gs is not None and notifications.alerts_muted(_bk_gs):
             return
@@ -270,6 +273,142 @@ def _record_backup_outcome(app, sid, gname, ok, reason, action, title, born=_NO_
         # Never the thing that breaks the sweep: this is the reporting, and the callers below run
         # the remaining servers after it.
         app.logger.warning("could not record %s of %s", action, gname, exc_info=True)
+
+
+# Servers whose last unattended backup attempt RAISED (a direct-SSH host that is down, a key it
+# now refuses), and when. Both sweeps retry such a server every hour, which is right for a
+# transient drop, and each retry alerted again: notify() has no rate limit, so one host down for a
+# weekend was ~50 "backup failed" alerts per server, two an hour for one both due and queued. One
+# map for BOTH sweeps, so one outage is one alert. An entry is dropped only once run_game_backup
+# has RETURNED for the server (_marked_backup), not on a pass that never reached the host — a
+# schedule that is off or not due says nothing about whether the host answers. In memory on
+# purpose: a restart re-alerts at most once. Registered, so a deleted server's id is forgotten.
+_backup_raise_streak = register_server_state({})
+# The overdue and long-queue reports below are persisted in config.json (they must survive the
+# daily self-update restart). These hold the same mark for when config.json refused the write,
+# so a write that keeps failing cannot turn one report into one per hour.
+_overdue_reported = register_server_state({})
+_queue_wait_reported = register_server_state({})
+
+
+def _record_raised_backup(app, ident, exc, action, title):
+    """A backup of ident=(sid, gname, born) that RAISED `exc`: audited always, alerted once.
+
+    The first raise of a streak alerts; the hourly retries after it are audit rows only. The
+    streak is marked only while the server is still the row it was (claim_row): a server deleted
+    meanwhile, its id now another's, must not have its first alert muted by this one's outage.
+    """
+    sid, gname, born = ident
+    first = sid not in _backup_raise_streak
+    if first and claim_row(GameServer, sid, born) is not None:
+        _backup_raise_streak[sid] = time.time()
+    _record_backup_outcome(app, sid, gname, False, "backup error (%s)" % type(exc).__name__,
+                           action, title if first else None, born)
+
+
+def _report_once(app, ident, marker, report):
+    """Send one escalation `report`=(reason, action, title) unless `marker` was already reported.
+
+    marker=(value, read_saved, save, fallback): read_saved(sid) is the persisted mark, save(sid,
+    value) persists it, `fallback` is the in-memory map used when that write is refused. Persisted
+    FIRST, so a report is never sent twice for one value: an in-memory-only mark sent the same
+    alert again after every restart, and the panel restarts daily on a self-update.
+    """
+    sid, gname, born = ident
+    value, read_saved, save, fallback = marker
+    if value in (read_saved(sid), fallback.get(sid)):
+        return False
+    fallback[sid] = value
+    try:
+        save(sid, value)
+    except Exception:
+        app.logger.warning("could not save that '%s' was reported for %s", report[2], gname,
+                           exc_info=True)
+    reason, action, title = report
+    _record_backup_outcome(app, sid, gname, False, reason, action, title, born)
+    return True
+
+
+def _report_overdue_skip(app, ident, sched, reason):
+    """A due server that players kept from its backup for a whole extra interval: report it once.
+
+    The scheduled sweep skips a server with players on and leaves its clock alone, so it is
+    retried every hour until it is empty at the top of an hour. A server that never is (a 24/7
+    community server) was never backed up, and nothing said so: no audit row, no alert, only a
+    status that a page had to be opened to see. Past twice its own interval since the clock last
+    moved — one full interval overdue — that is audited and alerted, once per clock value: the
+    moment a backup runs (or fails, which records the clock), it re-arms by itself. It never
+    forces the backup; no player is disconnected by this.
+    """
+    last, every = sched["last"], sched["interval_days"] * 86400
+    if not last or every <= 0 or time.time() - last < 2 * every:
+        return False
+    days = int((time.time() - last) // 86400)
+    return _report_once(app, ident, (last, bk.overdue_alerted, bk.mark_overdue_alerted,
+                                     _overdue_reported),
+                        ("not backed up for %d days: players were online at every attempt (%s)"
+                         % (days, reason or "skipped"), "scheduled_backup",
+                         "Scheduled backup overdue"))
+
+
+def _report_long_queue(app, gs, sched, reason):
+    """A 'wait until empty' backup still waiting after DEFAULT_FULL_INTERVAL days: report it once.
+
+    Only for a server whose own schedule is OFF. With a schedule on, the clock is not moved while
+    players keep the queued backup waiting either, so _report_overdue_skip already reports the
+    same wait; reporting it here too would be two alerts for one cause. The bound is the default
+    backup interval, the one a server with no override is held to.
+    """
+    if sched["interval_days"] > 0:
+        return False
+    since = bk.queued_since(gs.id)
+    if not since:
+        # Queued before the queue time was recorded (an upgrade): start its clock now.
+        _keep_queue_time(app, gs.id, gs.name)
+        return False
+    if time.time() - since < bk.DEFAULT_FULL_INTERVAL * 86400:
+        return False
+    days = int((time.time() - since) // 86400)
+    return _report_once(app, (gs.id, gs.name, row_birth(gs)),
+                        (since, bk.queued_alerted, bk.mark_queued_alerted, _queue_wait_reported),
+                        ("queued %d days ago and still waiting: players were online at every "
+                         "attempt (%s)" % (days, reason or "skipped"), "queued_backup",
+                         "Queued backup still waiting"))
+
+
+def _keep_queue_time(app, sid, gname, restart=False):
+    """Record when `sid` was queued (restart=True: now; else only when none is recorded). Logged."""
+    try:
+        bk.record_queued(sid, keep_first=not restart)
+    except Exception:
+        app.logger.warning("could not save when %s was queued for backup", gname, exc_info=True)
+
+
+def _backup_ticker_pass(app, steps):
+    """One backup-ticker pass: each (label, fn, args) of `steps` run on its own. Returns failures.
+
+    They shared ONE try, so a daily panel backup that raised (data/backups not a directory, a
+    hand-edited passphrase) skipped both game-server sweeps for that pass — every pass, for as
+    long as the cause lasted — and the except logged it at DEBUG, which production drops. Each
+    step's failure is logged at WARNING, by name, and the rest of the pass still runs.
+
+    A pass with a failed step is a failed pass, counted under the loop's own name (the debug
+    report reads loopfail by loop name, R22) and NOT a heartbeat, so the report can still say
+    "every pass since start has failed". A step-specific key would hide it from the report.
+    """
+    t0 = time.time()
+    failed = 0
+    for label, fn, args in steps:
+        try:
+            fn(*args)
+        except Exception:
+            failed += 1
+            app.logger.warning("backup tick (%s) failed", label, exc_info=True)
+    if failed:
+        runtime_stats.bump("loopfail", "backup-ticker")
+    else:
+        runtime_stats.beat("backup-ticker", 3600, time.time() - t0)
+    return failed
 
 
 def _backups_blocked_by_config(app, sweep):
@@ -354,11 +493,15 @@ def _marked_backup(sid, *args, runner=None, **kwargs):
     """
     _game_backup_status[sid] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
     try:
-        return (runner or run_game_backup)(*args, **kwargs)
+        result = (runner or run_game_backup)(*args, **kwargs)
     except Exception as e:
         _game_backup_status[sid] = {"running": False, "ok": False,
                                     "msg": "backup error (%s)" % type(e).__name__, "ts": time.time()}
         raise
+    # It RETURNED, so the host answered: a streak of raises (_backup_raise_streak) is over, and
+    # the next raise is news worth an alert again.
+    _backup_raise_streak.pop(sid, None)
+    return result
 
 
 def _back_up_if_due(app, target):
@@ -403,6 +546,7 @@ def _back_up_if_due(app, target):
         # busy=True so the UI shows why it's waiting (+ a "back up anyway").
         _game_backup_status[sid] = {"running": False, "ok": None, "busy": True,
                                     "msg": reason, "ts": time.time()}
+        _report_overdue_skip(app, (sid, gname, born), sched, reason)
         return
     _record_game_clock(app, sid, gname)
     _game_backup_status[sid] = {"running": False, "ok": ok,
@@ -439,9 +583,8 @@ def _run_due_game_backups(app):
                     _back_up_if_due(app, target)
                 except Exception as e:
                     app.logger.warning("scheduled backup of %s failed", gname, exc_info=True)
-                    _record_backup_outcome(app, sid, gname, False,
-                                           "backup error (%s)" % type(e).__name__,
-                                           "scheduled_backup", "Scheduled backup failed", born)
+                    _record_raised_backup(app, (sid, gname, born), e,
+                                          "scheduled_backup", "Scheduled backup failed")
     finally:
         _full_backup_lock.release()
 
@@ -453,9 +596,9 @@ def _back_up_queued(app, gs):
     Nothing is recorded once the server was deleted while it was archived (models.still_held):
     the flag, the clock, the status and the audit row would be the next server's with that id.
     """
+    sched = bk.get_game_schedule(gs.id)
     ok, reason, was_skipped = _marked_backup(
-        gs.id, gs.remote, gs.short_name, gs.lgsm_name,
-        bk.get_game_schedule(gs.id)["keep"],
+        gs.id, gs.remote, gs.short_name, gs.lgsm_name, sched["keep"],
         game_type=gs.game_type, port=gs.port, query_type=gs.query_type)
     if not still_held(gs):
         return
@@ -463,6 +606,9 @@ def _back_up_queued(app, gs):
         # Still players on: stays queued. Clear the running mark set above.
         _game_backup_status[gs.id] = {"running": False, "ok": None, "busy": True,
                                       "msg": reason, "ts": time.time()}
+        # ...and a wait that has gone on for a whole backup interval is reported, once. It was
+        # as silent as the scheduled skip: a queue on a server never empty waited for ever.
+        _report_long_queue(app, gs, sched, reason)
     if not was_skipped:
         # Backed up (or genuinely failed) — either way the wait is over.
         gs.backup_pending = False
@@ -517,9 +663,8 @@ def _run_pending_backups(app):
                     _back_up_queued(app, gs)
                 except Exception as e:
                     app.logger.warning("queued backup of %s failed", gname, exc_info=True)
-                    _record_backup_outcome(app, sid, gname, False,
-                                           "backup error (%s)" % type(e).__name__,
-                                           "queued_backup", "Queued backup failed", born)
+                    _record_raised_backup(app, (sid, gname, born), e,
+                                          "queued_backup", "Queued backup failed")
     finally:
         _full_backup_lock.release()
 

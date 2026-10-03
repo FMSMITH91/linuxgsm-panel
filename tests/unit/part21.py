@@ -1209,6 +1209,8 @@ def _g_backups():
     from cryptography.fernet import Fernet
     bdir = _pl21.Path(os.path.join(_T21, "backups"))
     _p21(_bk21, "BACKUP_DIR", bdir)
+    # The section reads the game servers and the audit log too: never the checkout's own database.
+    _p21(_cfg21, "DB_PATH", _pl21.Path(os.path.join(_T21, "absent-backups.db")))
     keyf = _pl21.Path(os.path.join(_T21, "bk_cred_key"))
     _p21(_cfg21, "CRED_KEY_FILE", keyf)
     foreign = "enc:v1:" + Fernet(Fernet.generate_key()).encrypt(b"passphrase-xyz").decode()
