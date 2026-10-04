@@ -46,7 +46,8 @@ def _write_exec41(path, text):
     """Write a stand-in script this part runs, and make it executable."""
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
-    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in script in this part's own temp dir, which other accounts' stand-in runs must execute
+    # A stand-in script in this part's own temp dir, which other accounts' stand-in runs execute.
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
     os.chmod(path, 0o755)  # nosec B103 - a stand-in script in this part's own temp dir must run
 
 
