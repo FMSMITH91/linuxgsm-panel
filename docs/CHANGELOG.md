@@ -732,19 +732,22 @@ CI-verified commit regardless of this file — this changelog is for humans.
   listed one that cannot be restored.
 - **The debug report names the notification events that are off.** It printed only a count ("15
   of 19"), so whether "A backup fails" was one of them could not be told. It now lists them by key.
-- **Restarting or updating the panel no longer kills the game servers it started.** Every server
-  the panel started on its own host — Start, Restart, an update, validate or backup that restarts
-  it, a scheduled task's "Run now" — ran inside the panel's own systemd unit, and every panel stop,
+- **Restarting or updating the panel no longer kills the game servers it started.** Every server the
+  panel started on its own host — Start, Restart, an update, validate or backup that restarts it, a
+  scheduled task's "Run now" — ran inside the panel's own systemd unit, and every panel stop,
   restart, crash or self-update sent it the same signals. On a root install that killed them, with
   nothing in the journal naming them, until LinuxGSM's monitor cron brought them back up to five
   minutes later (or never, with autostart off). On a per-user install it killed servers running as
   the panel's own account and filled the journal with "Failed to kill control group" for the rest.
   The privileged helper now starts each of them in a transient scope of its own, beside
-  `cron.service` in `system.slice`, before it drops to the game account. Servers an earlier version
-  started are moved out once when the panel starts. A per-user install without the helper uses its
-  own user manager (`systemd-run --user --scope`); a host without systemd is unchanged. Measured on
-  the test host: Minecraft started from the panel survived `systemctl restart linuxgsm-panel` (before:
-  killed), and the panel unit stayed at 21 tasks (before: 61, with 585 MB of the game charged to it).
+  `cron.service` in `system.slice`, before it drops to the game account. On a per-user install, the
+  servers an earlier version started under other accounts outlive the panel's stop, and are moved
+  out once when it starts again. On a root install the stop that installs this update still ends
+  them, as before; LinuxGSM's monitor cron brings back those with autostart on, and every start
+  after that is in a scope. A per-user install without the helper uses its own user manager
+  (`systemd-run --user --scope`); a host without systemd is unchanged. Measured on the test host:
+  Minecraft started from the panel survived `systemctl restart linuxgsm-panel` (before: killed), and
+  the panel unit stayed at 21 tasks (before: 61, with 585 MB of the game charged to it).
 - **Panel-started game servers run at the game priority, not the panel's.** They inherited the
   panel's low-priority tuning (nice 10, I/O best-effort 6, and its CPU weight of 30 against cron's
   100); the priority keeper could undo only the nice, and only up to two minutes later. A Start or
