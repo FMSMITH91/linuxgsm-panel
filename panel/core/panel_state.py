@@ -200,7 +200,8 @@ _last_sample_prune = [0.0]   # 1-element holder so _prune_metric_samples updates
 # "remote_misses" / "server_misses": consecutive failed checks of a host/server still recorded as
 # up, which have not yet reached monitoring._DOWN_CONFIRM_SWEEPS (see _record_host_reachability).
 # "server_unannounced": servers recorded down while the panel expected them offline, so nobody was
-# told; their return is not announced either (see monitoring._server_transition).
+# told; their return is not announced either (monitoring._server_transition; host_reboot._finish
+# marks one a reboot left stopped, and unmarks one its summary reported as not back).
 _monitor_state = {"remotes": register_remote_state({}), "servers": register_server_state({}),
                   "disk": register_remote_state({}), "load": register_remote_state({}),
                   "remote_misses": register_remote_state({}),

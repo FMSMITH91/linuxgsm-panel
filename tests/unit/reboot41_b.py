@@ -1,4 +1,4 @@
-"""Part 41's sections U to AC (clean host reboots); part41 runs them."""
+"""Part 41's sections U to AD (clean host reboots); part41 runs them."""
 import json as _json41
 import math as _math41
 import shutil as _shutil41
@@ -1463,6 +1463,31 @@ def _kept_down_checks41():
     check("alerts (real sweeps): ...while a real crash after the plan pages 'went offline' once, and "
           "its return 'back online' (control: these sweeps do page)",
           crash == [("server_down", "fctrserver"), ("server_up", "fctrserver")], repr(crash))
+
+
+def _kept_down_unscanned_checks41():
+    """A queued stop the plan honoured, on a host whose port scan fails from the plan to past its window."""
+    _fresh41()
+    r, h, rows = _std_host41()
+    rows["gmod"].stop_pending = True
+    db.session.commit()
+    _mon_stubs41(h, rows)
+    _sweep41()
+    _sweep41()
+    scanning, probe = [False], _mon41._probe_host
+    _patch(_mon41, "_probe_host", lambda remote, read_flags=True: (
+        remote.id, dict(probe(remote, read_flags)[1], ports=None) if not scanning[0]
+        else probe(remote, read_flags)[1]))
+    HR.request_reboot(r, "now", None, "web")
+    done = _plan_with_sweeps41(r, h)
+    _sweeps_after41(5)
+    scanning[0] = True
+    _sweeps_after41()
+    check("alerts (real sweeps): a queued stop the plan honoured pages nothing even when no sweep saw it "
+          "down while the plan held it — the restore records it down itself, so the window's end is not "
+          "'went offline unexpectedly'",
+          _all41(done is not None, not h.running("gmodserver"), _server_pages41() == []),
+          repr((done, _server_pages41(), _ps41._monitor_state["servers"].get(rows["gmod"].id))))
 
 
 def _failed_row_back_checks41():

@@ -2073,6 +2073,12 @@ def _finish(remote, recs, now, rollback_):
             _monitor_state["servers"][gs.id] = False   # the summary said so; no "went offline" too
             # ...and since the summary announced it down, its return is news: "back online" pages.
             _monitor_state["server_unannounced"].pop(gs.id, None)
+        elif d.get("result") == "stopped":
+            # The summary says it stays stopped: down, and its return is no news. Not left to a
+            # sweep: one that never saw it down while the plan held it (no port scan) would page
+            # "went offline unexpectedly" when the window set above ends.
+            _monitor_state["servers"][gs.id] = False
+            _monitor_state["server_unannounced"][gs.id] = True
     db.session.commit()
     log_action(None, "remote_reboot_rollback" if rollback_ else "remote_reboot_restore",
                target=remote.name, detail=text, success=ok, actor="system", remote=remote)
