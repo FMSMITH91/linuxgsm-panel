@@ -915,38 +915,80 @@ check(not _sf_missing, "files: every element holding a path segment is marked do
 # fixes both is CSS in server_files.html plus the toolbar's own classes, so that is what is read
 # here; the real-browser measurement is in the PR. Each part is its own check, because each is
 # needed: no wrap and the buttons cannot leave the path's row; no min-width:0 and neither the
-# toolbar nor the path can be narrower than the longest name in it.
+# toolbar nor the path can be narrower than the longest name in it; no one-row toolbar from lg up
+# and a deep path on a desktop pushes the buttons to a row of their own (a wrapping row breaks by
+# the path's one-line width), where before the fix the path wrapped beside them.
+def _css_decls(body):
+    """Return {property: value} for the declarations in one rule's body, whitespace collapsed."""
+    decls = {}
+    for decl in body.split(";"):
+        if ":" in decl:
+            prop, val = decl.split(":", 1)
+            decls[prop.strip().lower()] = " ".join(val.split())
+    return decls
+
+
+def _css_walk(css, outer, rules):
+    """Add each rule in `css` to `rules`, keyed by `outer` (the enclosing blocks' preludes) + selector.
+
+    A block whose body holds blocks of its own (@media, @supports, a nested rule) is walked with
+    its prelude added to `outer`. The prelude is the text since the last rule or `;`-ended
+    statement before the `{`, so an @import above a rule does not become part of its selector.
+    """
+    at = 0
+    while css.find("{", at) >= 0:
+        start = css.find("{", at)
+        prelude = " ".join(css[at:start].rsplit(";", 1)[-1].split())
+        depth, end = 1, start + 1
+        while depth and end < len(css):
+            depth += {"{": 1, "}": -1}.get(css[end], 0)
+            end += 1
+        body = css[start + 1:end - 1]
+        if "{" in body:
+            _css_walk(body, outer + prelude + " ", rules)
+        else:
+            for sel in prelude.split(","):
+                rules.setdefault(outer + " ".join(sel.split()), {}).update(_css_decls(body))
+        at = end
+
+
 def _css_rules(html):
     """Selector -> {property: value} over every <style> block of `html`, with comments stripped.
 
     A rule naming several selectors gives each the same declarations, and a later rule wins per
-    property. Rules inside @media are read as if unconditional, so check only selectors that are
-    not in one.
+    property. A rule inside a block is keyed with that block's prelude in front: `.x` inside
+    `@media (min-width: 992px)` is "@media (min-width: 992px) .x". So a check of `.x` reads only
+    the rule that applies at every width, and a rule moved into a media query reads as gone.
     """
     rules = {}
     for block in re.findall(r"<style\b[^>]*>(.*?)</style>", html, re.S):
-        block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
-        for sels, body in re.findall(r"([^{}]+)\{([^{}]*)\}", block):
-            decls = {}
-            for decl in body.split(";"):
-                if ":" in decl:
-                    prop, val = decl.split(":", 1)
-                    decls[prop.strip().lower()] = " ".join(val.split())
-            for sel in sels.split(","):
-                rules.setdefault(" ".join(sel.split()), {}).update(decls)
+        _css_walk(re.sub(r"/\*.*?\*/", "", block, flags=re.S), "", rules)
     return rules
 
 
+_css_ctl = _css_rules("<style>@import url(x.css); .a { b: c } @media (min-width: 1px) { .a { b: d }"
+                      " .e, .f { g: h } } .i{j:k}</style>")
+check(_css_ctl == {".a": {"b": "c"}, "@media (min-width: 1px) .a": {"b": "d"},
+                   "@media (min-width: 1px) .e": {"g": "h"}, "@media (min-width: 1px) .f": {"g": "h"},
+                   ".i": {"j": "k"}},
+      "files toolbar: (control) the CSS reader keys a rule inside @media by the media query, so a "
+      "rule moved into one does not pass for a rule that always applies", repr(_css_ctl))
 _sfh = srcs.get("server_files.html", "")
 _sfh_css = _css_rules(_sfh)
 _sfh_tb = re.search(r'<div class="([^"]*\bfb-toolbar\b[^"]*)">(.*?)\n    </div>', _sfh, re.S)
 _sfh_up = re.search(r'<div class="([^"]*\bfb-upload\b[^"]*)">(.*?)\n      </div>', _sfh, re.S)
+_sfh_tbc = _sfh_tb.group(1).split() if _sfh_tb else []
+_sfh_upc = _sfh_up.group(1).split() if _sfh_up else []
 check(_sfh_tb is not None and '<span id="breadcrumb"' in _sfh_tb.group(2),
       "files toolbar: (control) the toolbar holding the path is still there to check",
       "no <div class=\"... fb-toolbar\"> around #breadcrumb — re-point these gates at it")
-check(_sfh_tb is not None and "flex-wrap" in _sfh_tb.group(1).split(),
+check("flex-wrap" in _sfh_tbc,
       "files toolbar: it wraps, so the upload buttons drop below a long path instead of running "
-      "off a phone's screen", "classes: %r" % (_sfh_tb.group(1) if _sfh_tb else None))
+      "off a phone's screen", "classes: %r" % _sfh_tbc)
+check("flex-lg-nowrap" in _sfh_tbc,
+      "files toolbar: from lg up it keeps one row, so a deep path wraps beside the upload buttons "
+      "as it did before the fix instead of pushing them to a row of their own (flex-lg-nowrap)",
+      "classes: %r" % _sfh_tbc)
 _sfh_shrink = [s for s in (".fb-toolbar", "#breadcrumb")
                if _sfh_css.get(s, {}).get("min-width") != "0"]
 check(not _sfh_shrink,
@@ -955,23 +997,37 @@ check(not _sfh_shrink,
       % _sfh_shrink)
 check(_sfh_up is not None and 'data-action="_clickUpload"' in _sfh_up.group(2)
       and 'data-action="_clickUploadDir"' in _sfh_up.group(2)
-      and "flex-wrap" in _sfh_up.group(1).split(),
+      and "flex-wrap" in _sfh_upc,
       "files toolbar: Upload and Upload folder are one group, so they move to their own row "
-      "together", "group: %r" % (_sfh_up.group(1) if _sfh_up else None))
+      "together", "group: %r" % _sfh_upc)
+check("flex-lg-shrink-0" in _sfh_upc,
+      "files toolbar: from lg up the button group keeps its width, so the path takes all the "
+      "shrinking and Upload folder does not wrap under Upload (flex-lg-shrink-0)",
+      "group: %r" % _sfh_upc)
 _sfh_seg = _sfh_css.get("#breadcrumb a", {})
-check(_sfh_seg.get("white-space") == "pre",
-      "files toolbar: a path segment keeps its spaces (white-space: pre) — 'a  b' does not read as "
-      "'a b', nor ' x' as 'x'", repr(_sfh_seg))
-_sfh_ell = {"display": "inline-block", "max-width": "100%", "overflow": "hidden",
-            "text-overflow": "ellipsis"}
-check(all(_sfh_seg.get(k) == v for k, v in _sfh_ell.items()),
-      "files toolbar: a path segment longer than the card ends in an ellipsis instead of "
-      "widening the page", "want %r, have %r" % (_sfh_ell, _sfh_seg))
+check(_sfh_seg.get("white-space") == "break-spaces",
+      "files toolbar: a path segment keeps every space, one at the end too (white-space: "
+      "break-spaces) — 'a  b' does not read as 'a b', nor ' x' as 'x'", repr(_sfh_seg))
+_sfh_whole = {"max-width": "100%", "overflow-wrap": "anywhere"}
+check(all(_sfh_seg.get(k) == v for k, v in _sfh_whole.items())
+      and "text-overflow" not in _sfh_seg and _sfh_seg.get("overflow", "visible") == "visible",
+      "files toolbar: a path segment too long for the card wraps inside its link and shows the "
+      "whole name, instead of widening the page or ending in an ellipsis",
+      "want %r and no overflow/text-overflow, have %r" % (_sfh_whole, _sfh_seg))
 check(_sfh_seg.get("vertical-align") == "top"
       and _sfh_css.get("#breadcrumb", {}).get("line-height") == "1.5rem",
       "files toolbar: each path link is a 24px-tall target, level with the slashes beside it",
-      "an inline-block with overflow set sits on its bottom edge; have %r / %r"
+      "a 1.5rem line, and vertical-align:top for a wrapped name's first line; have %r / %r"
       % (_sfh_seg.get("vertical-align"), _sfh_css.get("#breadcrumb", {}).get("line-height")))
+check(_sfh_seg.get("min-inline-size") == "1.5rem"
+      and _sfh_seg.get("display") in ("inline-block", "inline-flex"),
+      "files toolbar: each path link is at least 24px wide too, so a folder called 'a' or 'tf' "
+      "is not a 7px target (min-inline-size: 1.5rem, on a box an inline <a> is not)",
+      repr(_sfh_seg))
+_sfh_dest = _sfh_css.get("#upload-dest", {})
+check(_sfh_dest.get("white-space") == "break-spaces" and _sfh_dest.get("overflow-wrap") == "anywhere",
+      "files toolbar: the drop overlay names the folder with its spaces too, and wraps a long "
+      "name (#upload-dest: white-space: break-spaces; overflow-wrap: anywhere)", repr(_sfh_dest))
 # A LinuxGSM setting's KEY is an identifier the operator types into the Raw tab, not prose: `port`
 # is a catalog key (es: "puerto") and is in nearly every _default.cfg, so a Spanish operator saw a
 # setting called "puerto" and could write puerto="27016", which LinuxGSM ignores. The input is
@@ -5104,6 +5160,7 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
   c.browse('a  b/ x');
   await flush();
   out.crumbs = doc.getElementById('breadcrumb').innerHTML;
+  out.dest = doc.getElementById('upload-dest').textContent;
   console.log(JSON.stringify(out));
 })().catch(e => console.log(JSON.stringify({error: String(e && e.stack || e)})));"""
 _sfr_src = (STATIC_JS / "server_files.js").read_text(encoding="utf-8")
@@ -5199,8 +5256,11 @@ if _node:
     check(_crumb_segs == [("a  b", "a  b"), ("a  b/ x", " x")]
           and _crumb_html.count("<a ") == 3 and "<i class=\"bi bi-house-door\"></i> home</a>" in _crumb_html,
           "js (node): each breadcrumb segment is an <a> in #breadcrumb holding the folder's name "
-          "as it is ('a  b', ' x'), so the template's white-space:pre rule reaches it",
+          "as it is ('a  b', ' x'), so the template's white-space:break-spaces rule reaches it",
           repr(_crumb_html))
+    check(_rn.get("dest") == "a  b/ x",
+          "js (node): the drop overlay's #upload-dest holds the folder's path as it is ('a  b/ x'), "
+          "so the template's white-space:break-spaces rule shows its spaces", repr(_rn.get("dest")))
 else:
     _sfr_start = _js_code_only(_js_function_body(_sfr_src, "startRename"))
     _sfr_key = _js_code_only(_js_function_body(_sfr_src, "renameKey"))

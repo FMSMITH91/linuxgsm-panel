@@ -42,20 +42,27 @@
   .fb-toolbar code { background: transparent; padding: 0; }
   /* The breadcrumb and the upload buttons. A flex item will not shrink below its longest word by
      default, and a folder name is one long word: at 375px inside "hang44-wwwwwwwwwwwwww" the
-     toolbar ran 8px past the screen and the whole page panned sideways. Now the toolbar wraps (the
-     buttons drop to a row of their own), both it and the breadcrumb may shrink to the card's
-     width, and a segment too long for that width ends in an ellipsis rather than pushing the
-     buttons off screen. The start of the name stays visible.
-     white-space:pre on each segment, as on the file list's rows: "a  b" must not read as "a b", nor
-     " x" as "x". The spaces between segments stay ordinary, so a deep path still wraps at its
-     slashes. A 1.5rem line makes each link at least 24px tall to tap; vertical-align:top because
-     an inline-block with overflow set sits on its bottom edge, a few pixels above the slashes. */
+     toolbar ran 8px past the screen and the whole page panned sideways. Now both the toolbar and
+     the breadcrumb may shrink to the card's width, and a name too long for that width wraps inside
+     its own link: overflow-wrap:anywhere breaks even a name with no space or hyphen in it, so the
+     whole name stays readable and never widens the page. Below lg the toolbar also wraps (the
+     buttons drop to a row of their own, see its classes); from lg up it keeps one row, as it always
+     had, and the path wraps beside the buttons.
+     white-space:break-spaces on each segment: every space keeps its width, a leading, doubled or
+     trailing one, so "a  b" does not read as "a b", nor " x" as "x", and the name can still wrap.
+     The spaces between segments stay ordinary, so a deep path still wraps at its slashes.
+     Each link is a target of at least 24x24px to tap (WCAG 2.5.8): a 1.5rem line for the height, a
+     1.5rem minimum for the width, so "tf" or "a" is not a 7px sliver. inline-flex centres a short
+     name in that box while a wrapped long one stays aligned to the start; vertical-align:top keeps
+     a wrapped name's first line level with the slash before it. */
   .fb-toolbar, #breadcrumb { min-width: 0; }
   #breadcrumb { line-height: 1.5rem; }
   #breadcrumb a {
-    display: inline-block; max-width: 100%; vertical-align: top;
-    overflow: hidden; text-overflow: ellipsis; white-space: pre;
+    display: inline-flex; justify-content: center; min-inline-size: 1.5rem; max-width: 100%;
+    vertical-align: top; white-space: break-spaces; overflow-wrap: anywhere;
   }
+  /* The drop overlay names the same folder, so it keeps the same spaces. */
+  #upload-dest { white-space: break-spaces; overflow-wrap: anywhere; }
   /* Editor + line-number gutter. Both sides MUST share font, size and line-height exactly or the
      numbers drift from their lines further down the file — so the shared values live here once
      rather than on each element. */
@@ -197,10 +204,16 @@
     <span><i class="bi bi-hdd"></i> File Browser</span>
     {# flex-wrap + the min-width rule above: see the comment on .fb-toolbar. The two buttons are
        one group, so when the breadcrumb takes the row they move to the next one together, rather
-       than one staying beside the path and the other dropping below it. #}
-    <div class="d-flex flex-wrap align-items-center column-gap-3 row-gap-2 fb-toolbar">
+       than one staying beside the path and the other dropping below it.
+       flex-lg-nowrap + flex-lg-shrink-0: from lg (992px) up the toolbar is one row again, as before
+       this wrapped. A wrapping toolbar breaks its row by the path's ONE-LINE width, so on a desktop
+       a deep path that used to wrap beside the buttons pushed them to a row of their own instead.
+       In one row the path takes all the shrinking and wraps; the buttons keep their size (without
+       shrink-0, Upload folder wrapped under Upload at 1280px in a nine-level path). lg, not md: at
+       768px the card is 463px wide, and one row left the path a 184px column. #}
+    <div class="d-flex flex-wrap flex-lg-nowrap align-items-center column-gap-3 row-gap-2 fb-toolbar">
       <span id="breadcrumb" class="small text-secondary"></span>
-      <div class="d-flex flex-wrap align-items-center gap-3 fb-upload">
+      <div class="d-flex flex-wrap flex-lg-shrink-0 align-items-center gap-3 fb-upload">
         <button class="btn btn-sm btn-outline-secondary" data-action="_clickUpload">
           <i class="bi bi-upload"></i> Upload
         </button>
