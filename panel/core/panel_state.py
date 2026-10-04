@@ -33,6 +33,7 @@ __all__ = [
     "_last_sample_prune",
     "_monitor_state",
     "_expected_offline",
+    "_expected_stop",
     "_cron_restart_pending",
     "_action_output",
     "_console_backlog",
@@ -199,9 +200,9 @@ _last_sample_prune = [0.0]   # 1-element holder so _prune_metric_samples updates
 # disk_pct / load_pct thresholds are user-configurable — see notifications.get_thresholds().
 # "remote_misses" / "server_misses": consecutive failed checks of a host/server still recorded as
 # up, which have not yet reached monitoring._DOWN_CONFIRM_SWEEPS (see _record_host_reachability).
-# "server_unannounced": servers recorded down while the panel expected them offline, so nobody was
-# told; their return is not announced either (monitoring._server_transition; host_reboot._finish
-# marks one a reboot left stopped, and unmarks one its summary reported as not back).
+# "server_unannounced": servers recorded down without anyone being told (a panel Stop, or a server
+# this process first saw down); their return is not announced either (monitoring._server_transition;
+# host_reboot._finish marks one a reboot left stopped, and unmarks one its summary reported on).
 _monitor_state = {"remotes": register_remote_state({}), "servers": register_server_state({}),
                   "disk": register_remote_state({}), "load": register_remote_state({}),
                   "remote_misses": register_remote_state({}),
@@ -209,6 +210,12 @@ _monitor_state = {"remotes": register_remote_state({}), "servers": register_serv
                   "server_unannounced": register_server_state({})}
 
 _expected_offline = register_server_state({})   # server_id -> ts the panel last stopped/restarted it
+
+# server_id -> the _expected_offline ts of a panel STOP (monitoring._mark_expected_offline). While the
+# two agree the server is meant to STAY down: the monitor records that down at once and never pages
+# it. Every other mark (a restart, a reboot plan's hold, the plan's end) writes a new ts to
+# _expected_offline and so ends it on its own; a server so marked is meant to come back.
+_expected_stop = register_server_state({})
 
 # Game users whose ~/.restart-pending flag is set, per host id. The DAILY-RESTART cron sets that
 # flag on the box at 05:00 and its hourly partner restarts once the server empties — a mechanism the

@@ -106,8 +106,8 @@ def _bare_job_checks41():
     check("idle host: nothing to stop — no plan rows, the reboot sent, the job waiting for it",
           _all41(code == 202, not HR.plan_rows(r.id), _trace41().count("reboot") == 1,
                  (HR.job_of(r.id) or {}).get("phase") == "rebooting"))
-    eq("idle host: the 'Rebooting' notice says nothing was running (not 'stopped 0 ... they come back')",
-       _bodies41("Rebooting vps"), ["No game servers were running, so none were stopped."])
+    eq("idle host: the 'Rebooting' notice says no running server was found (not 'stopped 0 ... they come "
+       "back')", _bodies41("Rebooting vps"), ["No running game server was found, so none were stopped."])
     sent = (HR.job_of(r.id) or {}).get("sent") or 0
     _CLOCK41.sleep(9.5)                       # the host takes a few seconds to go down and boot
     h.reboot_now()
@@ -115,11 +115,11 @@ def _bare_job_checks41():
     _CLOCK41.sleep(30)
     _pass41()
     check("idle host: its return is reported once, and the job ends",
-          _all41(_noted41("no game servers were running"), HR.job_of(r.id) is None), repr(_NOTES41))
+          _all41(_noted41("no running game server was found"), HR.job_of(r.id) is None), repr(_NOTES41))
     eq("idle host: the report says when the host's new boot started (from its own uptime, rounded up) "
        "— not 'back after 0 min'", _bodies41("Host reboot"),
-       ["vps rebooted: its new boot started within %d s of the reboot being sent (no game servers were "
-        "running)." % _math41.ceil(booted - sent)])
+       ["vps rebooted: its new boot started within %d s of the reboot being sent (no running game server "
+        "was found before it)." % _math41.ceil(booted - sent)])
 
 
 def _bare_silent_checks41():
@@ -194,11 +194,17 @@ def _debug_report_checks41():
     except (OverflowError, ValueError, TypeError) as exc:
         held = "raised %r" % exc
     st["expected"][4141] = now - 40
+    st["stop"] = {4141: now - 40}
     stopped = _dbs41._flags(gs, st, now, False)
+    st["stop"] = {}
+    restarted = _dbs41._flags(gs, st, now, False)
     check("debug report: a server held by a host reboot says so (an infinite hold is not 'a panel "
-          "stop -inf ago'), and a panel stop still reads as one",
-          (held, stopped) == (["expected offline (host reboot)"], ["expected offline (panel stop 40 s ago)"]),
-          repr((held, stopped)))
+          "stop -inf ago'), a panel stop still reads as one, and any other window (a restart) as "
+          "one the server is expected back from — the monitor pages it if it is not",
+          (held, stopped, restarted) == (["expected offline (host reboot)"],
+                                         ["expected offline (panel stop 40 s ago)"],
+                                         ["expected offline (back expected, 2 m left)"]),
+          repr((held, stopped, restarted)))
 
 
 def _ident41(ident):
@@ -1387,8 +1393,11 @@ def _sweeps_after41(n=12):
         _sweep41()
 
 
-def _restart_mid_plan41(hold):
-    """The panel restarts while a plan holds its servers (the VPS proof's run 2b): the pages sent."""
+def _restart_mid_plan41():
+    """The panel restarts while a plan holds its servers (the VPS proof's run 2b).
+
+    Returns (rows resolved, the pages sent, the host).
+    """
     _fresh41()
     r, h, rows = _std_host41()
     _mon_stubs41(h, rows)
@@ -1401,23 +1410,35 @@ def _restart_mid_plan41(hold):
     _ps41._reboot_awaiting.clear()
     with _ps41._hr_lock:
         _ps41._host_reboots.clear()
-    if hold:
-        HR.resume_reboot_state(_app41)
+    HR.resume_reboot_state(_app41)
     del _NOTES41[:]
     done = _plan_with_sweeps41(r, h)
     _sweeps_after41()
-    return done, sorted(_server_pages41())
+    return done, sorted(_server_pages41()), h
+
+
+def _crash_and_back41(h, selfname):
+    """A real crash of `selfname`, confirmed by the sweeps, then its return: the pages it sent."""
+    del _NOTES41[:]
+    h.run(selfname, False)
+    for _i in range(_mon41._DOWN_CONFIRM_SWEEPS):
+        _CLOCK41.sleep(60)
+        _sweep41()
+    h.run(selfname, True)
+    _CLOCK41.sleep(60)
+    _sweep41()
+    return _server_pages41()
 
 
 def _restart_mid_plan_checks41():
-    done, held = _restart_mid_plan41(hold=True)
-    done_unheld, unheld = _restart_mid_plan41(hold=False)
+    done, held, h = _restart_mid_plan41()
+    crash = _crash_and_back41(h, "fctrserver")
     check("alerts (real sweeps): after a panel restart mid-plan, the servers the plan brings back do "
-          "not page 'back online', during the plan or after it ends (control: without the hold the "
-          "restart puts back, all three do)",
-          _all41(done is not None, done_unheld is not None, held == [],
-                 unheld == [("server_up", s) for s in ("fctrserver", "gmodserver", "mcserver")]),
-          repr((done, held, unheld)))
+          "not page 'back online', during the plan or after it ends (control: a real crash after it "
+          "pages 'went offline' and 'back online')",
+          _all41(done is not None, held == [],
+                 crash == [("server_down", "fctrserver"), ("server_up", "fctrserver")]),
+          repr((done, held, crash)))
 
 
 def _kept_down41():
@@ -1434,8 +1455,7 @@ def _kept_down41():
     _mon_stubs41(h, rows)
     _sweep41()
     _sweep41()
-    _patch(sys.modules["app"], "time", _CLOCK41)          # the mark on this part's clock
-    _SD41._mark_expected_offline(rows["cod"].id)          # what the Stop button marks, then its stop
+    _SD41._mark_expected_offline(rows["cod"].id, "stop")  # what the Stop button marks, then its stop
     h.run("codserver", False)
     _CLOCK41.sleep(60)
     _sweep41()
@@ -1443,15 +1463,7 @@ def _kept_down41():
     done = _plan_with_sweeps41(r, h)
     _sweeps_after41()
     quiet = sorted(_server_pages41())
-    del _NOTES41[:]
-    h.run("fctrserver", False)
-    for _i in range(_mon41._DOWN_CONFIRM_SWEEPS):
-        _CLOCK41.sleep(60)
-        _sweep41()
-    h.run("fctrserver", True)
-    _CLOCK41.sleep(60)
-    _sweep41()
-    return done, quiet, _server_pages41()
+    return done, quiet, _crash_and_back41(h, "fctrserver")
 
 
 def _kept_down_checks41():
@@ -1488,6 +1500,11 @@ def _kept_down_unscanned_checks41():
           "'went offline unexpectedly'",
           _all41(done is not None, not h.running("gmodserver"), _server_pages41() == []),
           repr((done, _server_pages41(), _ps41._monitor_state["servers"].get(rows["gmod"].id))))
+    h.run("gmodserver", True)                    # the operator starts it again, later
+    _sweeps_after41(1)
+    check("alerts (real sweeps): ...nor 'back online' when the operator starts it again — the summary "
+          "said it stayed stopped, and nobody was told it went down",
+          _server_pages41() == [], repr(_server_pages41()))
 
 
 def _failed_row_back_checks41():

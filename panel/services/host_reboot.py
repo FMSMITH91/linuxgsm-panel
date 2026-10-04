@@ -145,6 +145,18 @@ def _host_label(remote):
         return "the host"
 
 
+def _unread_note(n, verbs):
+    """' N server(s) could not be read, so the panel did not <verbs> it/them.', or '' for none.
+
+    The running servers whose session the plan could not read: no plan holds them, so the panel
+    neither stops nor brings them back, and the notices must not count them as "not running".
+    """
+    if not n:
+        return ""
+    return " %d server%s could not be read, so the panel did not %s %s." % (
+        n, "" if n == 1 else "s", verbs, "it" if n == 1 else "them")
+
+
 def _actor_name(actor):
     if actor is None:
         return "system"
@@ -443,8 +455,10 @@ def safe_start(remote, ident):
         out, err, rc = _sm.run_as_game_user(remote, user, "start", timeout=300, selfname=selfname)
     except Exception:  # noqa: BLE001
         out, err, rc = "", "the start could not be run", -1
-    if rc in (0, 2):              # 2: "already running" (command_start.sh) is the same outcome
+    if rc == 0:
         return "started", ""
+    if rc == 2:                   # "already running" (command_start.sh): something else started it
+        return "running", ""
     if probe_server(remote, ident).get("session") == 1:
         return "started", ""
     from panel.routes.server_detail import _action_failure_reason, _clean_action_output
@@ -1077,6 +1091,7 @@ class _Job:
         self.remote = None
         self.entries = []          # the plan: [{id, name, user, selfname, game_type, owner, ...}]
         self.disconnected = 0
+        self.unread = 0            # running servers the plan could not read: left to the reboot
         self.bounce = False
         self.deadline = None       # the end of the stop phase's budget (STOP_PHASE_CAP)
         self.fired = False         # this job is a wait's, and its fire was audited and announced
@@ -1338,13 +1353,18 @@ class _Job:
         probes = census.get("probes") if not self.warn else None
         if probes is None:
             probes = _probe_rows(self.remote, rows)
+        unread = 0
         for gs in rows:
             p = probes.get(gs.id) or dict(_UNREAD)
             p = self._rearm_leftover(gs, p)
-            owner, _why = classify(gs, p)
+            owner, why = classify(gs, p)
             if owner is None:
+                unread += why == "unreadable"
                 continue
             self.entries.append(self._entry(gs, owner, p))
+        self.unread = unread
+        with _hr_lock:
+            self.job["unread"] = unread       # what the report of a host with no plan rows says
         self._commit_plan(rows)
         self._disarm_all()
 
@@ -1386,7 +1406,7 @@ class _Job:
                 "owner": e["owner"], "lock": e["lock"], "aside": None, "at": now, "sent": None,
                 "by": self.by, "origin": self.job["origin"], "mode": self.job["mode"],
                 "stop": None, "restore": "pending", "attempts": 0, "boot_seen": None,
-                "queued": bool(e.get("stop_pending"))}
+                "queued": bool(e.get("stop_pending")), "unread": self.unread}
 
     def _disarm_all(self):
         for e in self.entries:
@@ -1579,8 +1599,9 @@ class _Job:
 
     def _audit_and_announce(self):
         n = sum(1 for e in self.entries if e.get("stop") == "stopped")
-        detail = "%s; %d player(s) disconnected; %s" % (self.job["mode"], self.disconnected,
-                                                       self._outcomes() or "no game servers running")
+        detail = "%s; %d player(s) disconnected; %s%s" % (
+            self.job["mode"], self.disconnected, self._outcomes() or "no running game server found",
+            "; %d could not be read" % self.unread if self.unread else "")
         log_action(self._user(), "remote_reboot", target=self.remote.name, detail=detail,
                    actor=None if self.actor_id else self.by, remote=self.remote)
         notifications.notify("host_reboot", "Rebooting %s" % _host_label(self.remote),
@@ -1591,7 +1612,7 @@ class _Job:
     def _announce_text(self, n):
         """The 'Rebooting X' notice: what was stopped, and what comes back — true of every plan."""
         if not self.entries:
-            return "No game servers were running, so none were stopped."
+            return "No running game server was found, so none were stopped." + _unread_note(self.unread, "stop")
         back = sum(1 for e in self.entries if e["owner"] in ("monitor", "panel"))
         stay = len(self.entries) - back
         text = "Stopped %d game server%s cleanly (%d player%s disconnected)." % (
@@ -1601,7 +1622,7 @@ class _Job:
         if stay:
             text += (" %d stay%s stopped (a queued stop, or no Autostart with restoring turned off "
                      "in Settings)." % (stay, "s" if stay == 1 else ""))
-        return text
+        return text + _unread_note(self.unread, "stop")
 
     def _accounts(self):
         """{account: [entries]} whose locks were moved aside: the ones put back before the reboot."""
@@ -1797,11 +1818,19 @@ def _host_silent(remote, recs, meta, now):
     sent = meta.get("sent")
     if sent and now - sent >= LATE_NOTICE_AFTER and not meta.get("late"):
         _mark_all(recs, late=True)
-        notifications.notify("host_reboot", "Host not back yet",
-                             "%s hasn't come back after %d min; its %d server%s come back when it "
-                             "does." % (_host_label(remote), (now - sent) // 60, len(recs),
-                                        "" if len(recs) == 1 else "s"))
+        notifications.notify("host_reboot", "Host not back yet", _late_text(remote, recs, now - sent))
     return bool(sent)
+
+
+def _late_text(remote, recs, secs):
+    """'X hasn't come back after N min', and how many of its servers come back when it does."""
+    text = "%s hasn't come back after %d min" % (_host_label(remote), secs // 60)
+    # Only the ones that do: a queued stop, or no Autostart with restoring off, stays stopped.
+    back = sum(1 for _g, d in recs if d.get("owner") in ("monitor", "panel"))
+    if back:
+        text += "; its %d server%s come%s back when it does" % (
+            back, "" if back == 1 else "s", "s" if back == 1 else "")
+    return text + "."
 
 
 def _same_boot(remote, recs, meta, ident, now):
@@ -1832,7 +1861,10 @@ def _new_boot(remote, recs, meta, ident, now):
     """The host rebooted: once it has settled, bring back what the plan says."""
     if not meta.get("boot_seen"):
         sent = meta.get("sent") or now
-        _mark_all(recs, boot_seen=max(sent, now - float(ident.get("uptime") or 0)))
+        # From the uptime as read just now, not `now`: that is the start of a tick whose earlier
+        # work (another host's starts) can take minutes, and it would put the boot too early and
+        # make "within" false. The read is a moment before this, so this is never too early.
+        _mark_all(recs, boot_seen=max(sent, time.time() - float(ident.get("uptime") or 0)))
         _reboot_awaiting[remote.id] = {"sent": sent, "back": now}
     up = float(ident.get("uptime") or 0)
     if not ((up >= SETTLE_UPTIME and ident.get("state") != "starting") or up >= SETTLE_UPTIME_MAX):
@@ -1850,6 +1882,9 @@ def _act(remote, recs, now, rollback_):
         res = _act_one(remote, gs, d, now, rollback_)
         if res is not None:
             d["restore"], d["result"] = res
+            # When this row was confirmed — after its probe or its start returned, which the tick's
+            # `now` is not: what the summary's "running again within" measures.
+            d["back_at"] = time.time()
         if d != before:
             _set_rr(gs, d)
             db.session.commit()
@@ -1940,7 +1975,9 @@ def _act_panel(remote, gs, d, now, rollback_):
         return None
     if outcome in ("started", "running"):
         _after_start(remote, gs)
-        return "done", "panel"
+        # "running": it was up before the panel's start (the user's own @reboot, a unit): the
+        # summary must not say the panel started it.
+        return "done", "panel" if outcome == "started" else "running"
     d["attempts"] = int(d.get("attempts") or 0) + 1
     d["last_try"] = now
     d["why"] = detail
@@ -1980,11 +2017,24 @@ def _after_start(remote, gs):
         _log.debug("after-start bookkeeping failed for %s", gs.id, exc_info=True)
 
 
+# The results a summary counts as running again: brought back by Autostart, started by the panel,
+# found already running when the panel went to start it, or (a rollback) never stopped at all.
+_BACK_RESULTS = ("autostart", "panel", "running", "kept")
+
+
 def _tally(recs):
+    """({result: count} for every result a row can end with, [(name, why) of the failed rows])."""
     results = [d.get("result") for _g, d in recs]
     failed = [(gs.name, d.get("result")) for gs, d in recs if d.get("restore") == "failed"]
-    return (results.count("autostart"), results.count("panel"), results.count("stopped"),
-            results.count("kept"), failed)
+    return {k: results.count(k) for k in _BACK_RESULTS + ("stopped",)}, failed
+
+
+def _who(n):
+    """'2 by Autostart, 1 started by the panel' (and ', 1 found already running' when there is one)."""
+    text = "%d by Autostart, %d started by the panel" % (n["autostart"], n["panel"])
+    if n["running"]:
+        text += ", %d found already running" % n["running"]
+    return text
 
 
 def _within(secs):
@@ -1996,25 +2046,30 @@ def _within(secs):
 def _boot_clause(boot, sent):
     """The clause saying when the host's new boot started after the send, or '' when that is not known.
 
-    `boot` is the host's own boot time (now - its uptime, when the panel first saw the new boot),
-    so it holds even when the panel was down and saw the host back minutes later.
+    `boot` is the host's own boot time (the moment the panel first read its uptime, minus that
+    uptime), so it holds even when the panel was down and saw the host back minutes later.
     """
     if not sent or not boot or boot <= sent:
         return ""
     return ": its new boot started within %s of the reboot being sent" % _within(boot - sent)
 
 
-def _reboot_head(remote, meta, now, auto, panel, want):
+def _reboot_head(remote, recs, now, n, failed):
     """The summary's first sentences after a reboot: when the host booted, and how many are back within what.
 
-    The servers' time runs to when the restore CONFIRMED the last of them, no earlier than it came back.
+    The servers' time runs to when the restore CONFIRMED the last of them (each row's back_at, taken
+    when its probe or its start returned), no earlier than it came back. None back: no time at all.
     """
+    meta = recs[0][1]
     sent = meta.get("sent")
     text = "%s rebooted%s." % (_host_label(remote), _boot_clause(meta.get("boot_seen"), sent))
-    if want:
-        when = " within %s of the reboot being sent" % _within(now - sent) if sent else ""
-        text += " %d/%d running again%s (%d by Autostart, %d started by the panel)." % (
-            auto + panel, want, when, auto, panel)
+    back = n["autostart"] + n["panel"] + n["running"]
+    if back + failed:
+        when = ""
+        if sent and back:
+            last = max(d.get("back_at") or now for _g, d in recs if d.get("result") in _BACK_RESULTS)
+            when = " within %s of the reboot being sent" % _within(last - sent)
+        text += " %d/%d running again%s (%s)." % (back, back + failed, when, _who(n))
     return text
 
 
@@ -2047,31 +2102,67 @@ def _stayed_note(recs):
     return " %d stayed stopped, as planned (%s)." % (len(whys), _stayed_why(whys))
 
 
-def _rollback_head(remote, meta, auto, panel):
+def _rollback_head(remote, meta, n):
     """The summary's first sentences when the reboot did not happen: how many are coming back, and how.
 
     Only the rows that are: one whose start failed is named after, as not back, and the panel's
     starts can be minutes apart (a failed one is tried three times), so none is said to be "now".
+    One never stopped is said after, as kept running.
     """
-    back = auto + panel
-    return ("Reboot of %s did not happen (%s): %d server%s coming back. %d started by the panel, %d "
-            "by Autostart within 5 min." % (_host_label(remote), meta.get("reason") or "?", back,
-                                             "" if back == 1 else "s", panel, auto))
+    back = n["autostart"] + n["panel"] + n["running"]
+    text = ("Reboot of %s did not happen (%s): %d server%s coming back. %d started by the panel, %d "
+            "by Autostart within 5 min" % (_host_label(remote), meta.get("reason") or "?", back,
+                                           "" if back == 1 else "s", n["panel"], n["autostart"]))
+    if n["running"]:
+        text += ", %d found already running" % n["running"]
+    return text + "."
 
 
 def _summary(remote, recs, now, rollback_):
-    auto, panel, _stayed, kept, failed = _tally(recs)
+    n, failed = _tally(recs)
     if rollback_:
-        text = _rollback_head(remote, recs[0][1], auto, panel)
+        text = _rollback_head(remote, recs[0][1], n)
     else:
-        text = _reboot_head(remote, recs[0][1], now, auto, panel, auto + panel + len(failed))
+        text = _reboot_head(remote, recs, now, n, len(failed))
     text += _stayed_note(recs)
-    if kept:
+    if n["kept"]:
         # Only in a rollback: the plan was undone before its stop took, so it never stopped.
-        text += " %d kept running (%s not stopped)." % (kept, "it was" if kept == 1 else "they were")
+        text += " %d kept running (%s not stopped)." % (n["kept"], "it was" if n["kept"] == 1 else "they were")
     for name, why in failed:
         text += " %s didn't come back: %s." % (name, why)
+    text += _unread_note(recs[0][1].get("unread"), "stop or start")
     return text, not failed
+
+
+def _after_plan(gs, d, rollback_):
+    """Record a row its plan no longer holds as the summary says it is, for the monitor.
+
+    As the summary says, whatever this process saw of it while the plan held it (a panel restart
+    mid-plan records the held servers as first seen down): from here on the monitor's own port
+    check holds the summary to its word.
+    """
+    _expected_offline[gs.id] = time.time() + GRACE_AFTER_CLEAR
+    if d.get("restore") == "failed":
+        _monitor_state["servers"][gs.id] = False   # the summary said so; no "went offline" too
+        # ...and since the summary announced it down, its return is news: "back online" pages.
+        _monitor_state["server_unannounced"].pop(gs.id, None)
+    elif d.get("result") == "stopped":
+        # The summary says it stays stopped: down, and its return is no news. Not left to a sweep:
+        # one that never saw it down while the plan held it (no port scan) would page "went offline
+        # unexpectedly" when the window set above ends.
+        _monitor_state["servers"][gs.id] = False
+        _monitor_state["server_unannounced"][gs.id] = True
+    else:
+        # The summary says it is running again: recorded up, so a port still shut when the window
+        # ends pages "went offline unexpectedly", once, and its return "back online". The window
+        # (the monitor's 180 s from now) is for a game whose port opens a little after its session
+        # does, and a crash inside it still pages when it ends. A rollback counts an Autostart
+        # server back once its lock is in place, and LinuxGSM's monitor starts it within 5 min:
+        # that one is given NOT_BACK_AFTER first.
+        _monitor_state["servers"][gs.id] = True
+        _monitor_state["server_unannounced"].pop(gs.id, None)
+        if rollback_ and d.get("result") == "autostart":
+            _expected_offline[gs.id] += NOT_BACK_AFTER
 
 
 def _finish(remote, recs, now, rollback_):
@@ -2080,17 +2171,7 @@ def _finish(remote, recs, now, rollback_):
     quiet = any(d.get("quiet") for _g, d in recs)
     for gs, d in recs:
         gs.reboot_restore = None
-        _expected_offline[gs.id] = now + GRACE_AFTER_CLEAR
-        if d.get("restore") == "failed":
-            _monitor_state["servers"][gs.id] = False   # the summary said so; no "went offline" too
-            # ...and since the summary announced it down, its return is news: "back online" pages.
-            _monitor_state["server_unannounced"].pop(gs.id, None)
-        elif d.get("result") == "stopped":
-            # The summary says it stays stopped: down, and its return is no news. Not left to a
-            # sweep: one that never saw it down while the plan held it (no port scan) would page
-            # "went offline unexpectedly" when the window set above ends.
-            _monitor_state["servers"][gs.id] = False
-            _monitor_state["server_unannounced"][gs.id] = True
+        _after_plan(gs, d, rollback_)
     db.session.commit()
     log_action(None, "remote_reboot_rollback" if rollback_ else "remote_reboot_restore",
                target=remote.name, detail=text, success=ok, actor="system", remote=remote)
@@ -2155,9 +2236,11 @@ def _bare_job_step(remote, job, now):
 def _bare_answered(remote, job, ident, now, sent):
     if job.get("boot") and ident["boot"] != job["boot"]:
         _reboot_awaiting[remote.id] = {"sent": sent, "back": now}
-        boot = now - float(ident.get("uptime") or 0)
-        return "%s rebooted%s (no game servers were running)." % (
-            _host_label(remote), _boot_clause(boot, job.get("sent")))
+        # From the uptime as read just now, not the tick's `now` (see _new_boot).
+        boot = time.time() - float(ident.get("uptime") or 0)
+        return "%s rebooted%s (no running game server was found before it).%s" % (
+            _host_label(remote), _boot_clause(boot, job.get("sent")),
+            _unread_note(job.get("unread"), "stop or start"))
     if now - sent >= DID_NOT_HAPPEN_AFTER and ident.get("state") != "stopping":
         _reboot_awaiting.pop(remote.id, None)
         return "Reboot of %s did not happen: it is still on the same boot." % _host_label(remote)
@@ -2398,10 +2481,10 @@ def reboot_when_empty_watch(app):
 def resume_reboot_state(app):
     """At startup, BEFORE the monitor runs: hold the alerts of every server a plan still holds.
 
-    Synchronous on purpose: the monitor's first pass records a server the reboot took down as down
-    and, without the hold, would page "Server back online" when the restore brings it back; one it
-    finds up and later down would page "went offline unexpectedly". The restore worker does the
-    rest on its first tick.
+    Synchronous on purpose: without the hold, a server the monitor's first pass finds up and the
+    plan then has down would page "went offline unexpectedly". (One that pass finds down is
+    recorded as nobody told, so its return is quiet either way.) The restore worker does the rest
+    on its first tick.
     """
     with app.app_context():
         for gs in GameServer.query.filter(GameServer.reboot_restore.isnot(None)).all():

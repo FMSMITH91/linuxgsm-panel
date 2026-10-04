@@ -746,13 +746,24 @@ try:
     _p9_sh._queued_action_failures.pop(P9_GS, None)
     _qa_rc[0] = 0
     # The queued stop is the panel's own: unmarked, the monitor read it as a crash and paged "went
-    # offline unexpectedly" two sweeps later (monitoring._mon_server_went_down).
-    _p9_state._expected_offline.pop(P9_GS, None)
-    _qa_t0 = _p9_real_time.time()
-    _qa_run(stop_pending=True)
-    check("queued stop: marked as the panel's own stop, as the Stop button marks it, so the monitor "
-          "records it down without paging 'went offline unexpectedly'",
-          _p9_state._expected_offline.get(P9_GS, 0) >= _qa_t0, repr(_p9_state._expected_offline.get(P9_GS)))
+    # offline unexpectedly" two sweeps later (monitoring._mon_server_went_down). A queued restart is
+    # marked as a RESTART: it runs unattended, so a game it leaves dead must still page.
+    def _qa_mark(**flags):
+        for _m in (_p9_state._expected_offline, _p9_state._expected_stop):
+            _m.pop(P9_GS, None)
+        _t0 = _p9_real_time.time()
+        _qa_run(**flags)
+        _at = _p9_state._expected_offline.get(P9_GS)
+        return (_at is not None and _at >= _t0, _p9_state._expected_stop.get(P9_GS) == _at)
+
+    _qa_stop_mark = _qa_mark(stop_pending=True, restart_pending=False)
+    _qa_restart_mark = _qa_mark(restart_pending=True, stop_pending=False)
+    check("queued stop: marked as the panel's own STOP, as the Stop button marks it, so the monitor "
+          "records it down without paging 'went offline unexpectedly'", _qa_stop_mark == (True, True),
+          repr(_qa_stop_mark))
+    check("queued restart: marked as a RESTART, as the Restart button marks it — not a stop — so a "
+          "game it leaves dead still pages once the window ends", _qa_restart_mark == (True, False),
+          repr(_qa_restart_mark))
 
     def _qa_log_raises(*a, **k):
         raise RuntimeError("audit table locked")

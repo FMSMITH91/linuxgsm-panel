@@ -7440,6 +7440,7 @@ try:
         _saved_notify = _am.notifications.notify
         _saved_mstate = {k: dict(v) for k, v in _ps._monitor_state.items()}
         _saved_exp = dict(_ps._expected_offline)
+        _saved_stop = dict(_ps._expected_stop)
         _saved_full = dict(_ps._server_full_alerted)
         _saved_peak = dict(_ps._server_peak_notified)
         _saved_pc = dict(_ps._player_counts)
@@ -7480,7 +7481,7 @@ try:
             # ...but a panel-issued stop (inside the expected-offline window) suppresses it.
             _reset_mon()
             _ps._monitor_state["servers"][_mon_id] = True
-            _ps._expected_offline[_mon_id] = _time_mon.time()
+            _monmod._mark_expected_offline(_mon_id, "stop")      # what the Stop button marks
             _monmod._remote_listening_ports = lambda r: set()
             _rec.clear(); _monmod._monitor_pass()
             check("monitor: a panel-issued stop suppresses server_down", "server_down" not in _rec)
@@ -7501,7 +7502,7 @@ try:
             _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _exp_bodies.append((k, b)))[0]
             _monmod._remote_listening_ports = lambda r: {27100}
             _rec.clear(); _monmod._monitor_pass()
-            check("monitor: ...so coming back from a panel-issued restart is silent",
+            check("monitor: ...so coming back from a panel-issued stop is silent",
                   not [b for k, b in _exp_bodies if k == "server_up" and "mon-srv" in b],
                   str([b for k, b in _exp_bodies if k == "server_up"])[:140])
             # Positive control: a recovery the panel did NOT cause still announces itself, so the
@@ -7914,7 +7915,7 @@ try:
                       "probed %s" % _probes)
                 # A stop the PANEL issued is already known locally — that must not cost a probe either.
                 _monmod._remote_listening_ports = lambda r: set()
-                _am._mark_expected_offline(_mon_id)
+                _monmod._mark_expected_offline(_mon_id, "stop")
                 _probes.clear(); _rec.clear(); _monmod._monitor_pass()
                 check("maintenance: a panel-issued stop is handled locally, with no probe",
                       _mon_id not in _probes and "server_down" not in _rec,
@@ -8004,6 +8005,7 @@ try:
             for _k, _v in _saved_mstate.items():
                 _ps._monitor_state[_k].clear(); _ps._monitor_state[_k].update(_v)
             _ps._expected_offline.clear(); _ps._expected_offline.update(_saved_exp)
+            _ps._expected_stop.clear(); _ps._expected_stop.update(_saved_stop)
             _ps._server_full_alerted.clear(); _ps._server_full_alerted.update(_saved_full)
             _ps._server_peak_notified.clear(); _ps._server_peak_notified.update(_saved_peak)
             _ps._player_counts.clear(); _ps._player_counts.update(_saved_pc)

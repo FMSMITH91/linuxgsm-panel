@@ -540,6 +540,7 @@ def _state_monitor23(ids, now):
     _ps23._monitor_state["server_misses"][ids["b"]] = 1
     _ps23._player_counts[ids["a"]] = {"count": 3, "max": 10, "name": "p23-INGAME", "ts": now - 20}
     _ps23._expected_offline[ids["b"]] = now - 40
+    _ps23._expected_stop[ids["b"]] = now - 40          # a panel Stop's window, as the Stop button marks it
     _mon23._probe_record[ids["ts"]] = {"ok": False, "token": _TIMEOUT23, "rc": -1, "at": now - 41,
                                        "ok_at": now - 11520, "fail_since": now - 11520,
                                        "streak": 187}

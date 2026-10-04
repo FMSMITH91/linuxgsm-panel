@@ -692,7 +692,8 @@ def _safe_start_checks41():
     h.flag("already", "mcserver")                           # LinuxGSM says so, with no session the panel saw
     out = HR.safe_start(r, g)
     h.flag("already", "mcserver", on=False)
-    check("safe start: LinuxGSM's 'already running' (exit 2) counts as started", out[0] == "started", repr(out))
+    check("safe start: LinuxGSM's 'already running' (exit 2) is 'running' — something else started it, "
+          "so the summary must not say the panel did", out == ("running", ""), repr(out))
     h.flag("fail_start", "mcserver")
     out = HR.safe_start(r, g)
     check("safe start: a start that fails says why, in LinuxGSM's words",

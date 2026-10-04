@@ -30,7 +30,7 @@ from panel.core.validation import ip_address_or_none, ip_network_or_none, unzone
 from panel.db.models import (GameServer, HostSample, MetricSample, RemoteServer, db,
     row_label, rows_still_held)
 from panel.core.panel_state import (
-    _cron_restart_pending, _expected_offline, _host_reboots, _hr_lock, _max_players_cache,
+    _cron_restart_pending, _expected_offline, _expected_stop, _host_reboots, _hr_lock, _max_players_cache,
     _monitor_state, _player_counts, _reboot_awaiting, _server_full_alerted, _server_peak_notified,
     forget_rows, keyed_state_with_locks, register_remote_state,
 )
@@ -674,7 +674,7 @@ def _host_sample_row(rid, now, m):
 _MONITOR_SECONDS = 60
 
 
-_EXPECT_OFFLINE_WINDOW = 180    # a panel-issued stop/restart suppresses "server down" for this long
+_EXPECT_OFFLINE_WINDOW = 180    # a panel restart holds "server down" this long (_mark_expected_offline)
 
 
 # LinuxGSM commands that legitimately take a server down for a while. Every entry widens the window
@@ -1114,9 +1114,42 @@ def _monitor_server(remote, gs, probe, ports):
     return False
 
 
+def _mark_expected_offline(server_id, action):
+    """Note a power action the PANEL is about to run on a server, for the monitor's alerts.
+
+    "stop": the server is meant to STAY down. Its down is recorded at once and never paged, and its
+    return is not announced either (it was never announced down). "restart": it is meant to come
+    BACK. Its down is not paged inside _EXPECT_OFFLINE_WINDOW, but one still down when the window
+    ends pages "went offline unexpectedly", as does a crash inside the window after it came back.
+    "start": a Stop's window ends, so a crash after the start pages as usual.
+    """
+    if action == "start":
+        _end_stop_window(server_id)
+        return
+    now = time.time()
+    _expected_offline[server_id] = now
+    if action == "stop":
+        _expected_stop[server_id] = now
+    else:
+        _expected_stop.pop(server_id, None)
+
+
 def _offline_expected(server_id):
     """Whether the panel itself has this server down: a panel stop/restart's window, or a reboot plan's hold (inf)."""
     return time.time() - _expected_offline.get(server_id, 0) <= _EXPECT_OFFLINE_WINDOW
+
+
+def _stop_expected(server_id):
+    """Whether that window is a Stop's (the server is meant to stay down), not one it comes back from."""
+    ts = _expected_stop.get(server_id)
+    return ts is not None and ts == _expected_offline.get(server_id) and _offline_expected(server_id)
+
+
+def _end_stop_window(server_id):
+    """A Stop's window is over: the down it explains was recorded, or a start overtook it."""
+    ts = _expected_stop.pop(server_id, None)
+    if ts is not None and _expected_offline.get(server_id) == ts:
+        _expected_offline.pop(server_id, None)
 
 
 def _mon_server_went_down(remote, gs, up, prev_up, muted):
@@ -1126,14 +1159,20 @@ def _mon_server_went_down(remote, gs, up, prev_up, muted):
     # an intentional stop costs no SSH round trip.
     if _offline_expected(gs.id):
         misses.pop(gs.id, None)
-        # Recorded DOWN at once, and nobody is told. It used to keep the previous value (up)
-        # for the whole window, so that its return would not page "Server back online" for an
-        # outage nobody was told about; but a Stop is MEANT to stay down, so when the window
-        # ended the sweeps after it declared the server down and paged "went offline
-        # unexpectedly" about every panel Stop, four or five minutes after it. The return is
-        # kept quiet by the mark instead (_server_transition), however long after the window.
-        _monitor_state["server_unannounced"][gs.id] = True
-        return up
+        if _stop_expected(gs.id):
+            # A Stop: meant to stay down. Recorded DOWN at once, and nobody is told. Kept recorded
+            # up (as below), the sweeps after the window declared it down and paged "went offline
+            # unexpectedly" about every panel Stop, four or five minutes after it. The mark keeps its
+            # return quiet, however late; the window has done its work, so a crash after the server
+            # is started again pages as usual.
+            _monitor_state["server_unannounced"][gs.id] = True
+            _end_stop_window(gs.id)
+            return up
+        # A restart, or a reboot's hold: meant to come back. The previous value is kept, so its
+        # return is no news. If it never comes back, or comes back and crashes before the window
+        # ends, the sweeps after the window find it down and page "went offline unexpectedly"
+        # (once confirmed) — for an unattended queued restart that is the only notice there is.
+        return prev_up
     # Not declared down until the port has been shut for _DOWN_CONFIRM_SWEEPS sweeps in a
     # row (see there). Until then the server stays recorded as up, so the sweep that
     # finds it listening again has nothing to announce. Counted BEFORE the maintenance
@@ -1159,9 +1198,10 @@ def _server_transition(remote, gs, up, prev_up, muted):
     """Alert on one server's up/down transition and answer what to record for it.
 
     The answer is usually `up`; the previous value for a down not yet confirmed by
-    _DOWN_CONFIRM_SWEEPS sweeps; or _IN_MAINTENANCE when LinuxGSM's own maintenance has the port
-    shut. A down the panel expected (_offline_expected) is recorded at once and marked
-    unannounced, and the return of a server so marked is not announced either.
+    _DOWN_CONFIRM_SWEEPS sweeps, or inside the window of a panel restart or a reboot's hold; or
+    _IN_MAINTENANCE when LinuxGSM's own maintenance has the port shut. A panel Stop's down is
+    recorded at once and marked unannounced, as is a server this process first sees down, and the
+    return of a server so marked is not announced either.
     """
     misses = _monitor_state["server_misses"]
     if up or prev_up is not True:
@@ -1170,12 +1210,13 @@ def _server_transition(remote, gs, up, prev_up, muted):
         return _mon_server_went_down(remote, gs, up, prev_up, muted)
     if up:
         _mon_server_came_up(remote, gs, prev_up, muted)
-    elif prev_up is None and _offline_expected(gs.id):
-        # Never seen by this process (its first sweep after a panel restart), and down while the
-        # panel expects it: a reboot plan still holds it (host_reboot.resume_reboot_state put the
-        # hold back before this sweep could run), or a Stop came first. Nobody was told it went
-        # down, so its return is not announced either; a plan's own summary reports that.
+    elif prev_up is None:
+        # Never seen by this process (its first sweep after a panel restart), and down. Nobody was
+        # told it went down — this process never paged it — so its return is not announced either:
+        # a reboot plan's own summary reports what it brings back, and an operator's Start of a
+        # server stopped before the panel restarted is no news. A Stop's window is done with.
         _monitor_state["server_unannounced"][gs.id] = True
+        _end_stop_window(gs.id)
     return up
 
 
@@ -1244,13 +1285,19 @@ _REBOOT_EXPECT_OFFLINE_EXTRA = 300
 def _mark_host_expected_offline(remote_id, extra=_REBOOT_EXPECT_OFFLINE_EXTRA):
     """Mark every game server on a host the panel is about to reboot as expected-offline.
 
-    The same way a panel-issued stop marks one server. Returns the previous marks.
+    As a panel restart marks one server: meant to come back, so one still down when the mark ends
+    pages. A Stop's open window stays a Stop's. Returns the previous marks.
     """
     until = time.time() + extra
     prev = {}
     for (gid,) in db.session.query(GameServer.id).filter_by(remote_id=remote_id).all():
         prev[gid] = _expected_offline.get(gid)
+        stop = _stop_expected(gid)
         _expected_offline[gid] = until
+        if stop:
+            # A Stop no sweep has seen yet stays a Stop: that server is meant to stay down, not to
+            # come back with the host, so its down must not page when this longer window ends.
+            _expected_stop[gid] = until
     return prev
 
 

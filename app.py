@@ -130,7 +130,7 @@ from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SE
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _record_metric_samples, _refresh_player_counts)
 from panel.services import host_reboot as _host_reboot
-from panel.core.panel_state import (_expected_offline, _install_jobs, _install_lock,
+from panel.core.panel_state import (_install_jobs, _install_lock,
     _last_sample_prune, _monitor_state, _os_update_seen, _player_counts)
 from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupState, User, db,
     init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, RowReplaced, claim_row,
@@ -712,12 +712,6 @@ def _live_run_state(gs, remote):
 
 
 # ── Proactive monitor → admin notifications ────────────────────
-
-
-def _mark_expected_offline(server_id):
-    """Record that the PANEL just took a server offline, so the monitor won't alert on an
-    intentional stop/restart."""
-    _expected_offline[server_id] = time.time()
 
 
 def _monitor_watch(app):
@@ -3307,9 +3301,9 @@ if __name__ == "__main__":
 
     # Clean reboots (panel/services/host_reboot.py). FIRST, synchronously, before the monitor
     # thread below exists: every server a reboot plan still holds is marked expected-offline, or the
-    # monitor would page "Server back online" when the restore brings back a server its first pass
-    # found down (and "went offline unexpectedly" about one it found up and then down). Then the
-    # two supervised loops: the restore (bring back what was running, or
+    # monitor would page "went offline unexpectedly" about one its first pass found up and the plan
+    # then had down. (One it first finds down returns quietly anyway: nobody was told it went
+    # down.) Then the two supervised loops: the restore (bring back what was running, or
     # undo a reboot that did not happen) and "reboot when everyone has left". A wait that was
     # pending when this process stopped is gone — on purpose — and the operator is told so.
     try:

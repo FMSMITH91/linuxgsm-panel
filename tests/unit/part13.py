@@ -1701,69 +1701,148 @@ def _raiser10(exc):
     return _f
 
 
+_clock10 = [0.0]      # the moved clock of the expected-window checks (monitoring.time reads it)
+
+
+def _win_sweeps10(n, up, step=60):
+    """`n` REAL sweeps `step` s apart on the moved clock, gmod1's port open or shut: the alert keys sent."""
+    got = []
+    for _i in range(n):
+        _clock10[0] += step
+        got += _sweep10({"reachable": False}, dict(_UP10) if up else dict(_UP10, ports={27017}))
+    return got
+
+
+def _win_fresh10(action=None):
+    """gmod1 up and recorded up, nothing marked; then `action` marked the way its button marks it."""
+    g1 = _ids10["g1"]
+    for m in (_mon10._expected_offline, _mon10._expected_stop, _mon10._monitor_state["server_unannounced"]):
+        m.pop(g1, None)
+    _win_sweeps10(1, True)
+    if action:
+        _mon10._mark_expected_offline(g1, action)
+
+
+def _stop_window_checks10():
+    """A panel Stop: down at once, never paged — and a crash once it is running again still is."""
+    _win_fresh10("stop")
+    stopped = _win_sweeps10(1, False)
+    recorded = _mon10._monitor_state["servers"].get(_ids10["g1"])
+    later = _win_sweeps10(8, False)
+    check("monitor pass: a panel Stop is recorded DOWN at once, and nothing is paged",
+          (stopped, recorded) == ([], False), repr((stopped, recorded)))
+    check("monitor pass: ...and when its window ends, minutes later, still nothing — no 'went "
+          "offline unexpectedly' for a server the panel stopped", later == [], repr(later))
+    check("monitor pass: ...nor 'back online' when it is started again, however much later",
+          _win_sweeps10(1, True, step=3600) == [], repr(_alerts10))
+    crash, back = _win_sweeps10(_mon10._DOWN_CONFIRM_SWEEPS, False), _win_sweeps10(1, True)
+    check("monitor pass: a crash outside any window still pages 'went offline unexpectedly', "
+          "once, and its return still pages 'back online'",
+          (crash, back) == (["server_down"], ["server_up"]), repr((crash, back)))
+    # Started again INSIDE the Stop's 180 s, then a crash, also inside them: by the Start button
+    # before any sweep saw it down, or from a shell once a sweep had.
+    _win_fresh10("stop")
+    _clock10[0] += 20
+    _mon10._mark_expected_offline(_ids10["g1"], "start")
+    by_button = _win_sweeps10(1, True, step=30) + _win_sweeps10(2, False, step=30)
+    _win_fresh10("stop")
+    by_hand = (_win_sweeps10(1, False, step=30) + _win_sweeps10(1, True, step=30)
+               + _win_sweeps10(2, False, step=30))
+    check("monitor pass: a server started again after a panel Stop, by the Start button or by hand, "
+          "that crashes inside the Stop's window pages 'went offline unexpectedly' — the Stop's "
+          "window ends with the Start, or with the down it explained",
+          (by_button, by_hand) == (["server_down"], ["server_down"]), repr((by_button, by_hand)))
+
+
+def _restart_window_checks10():
+    """A panel Restart is meant to come back: one that does not, or crashes once back, still pages."""
+    _win_fresh10("restart")
+    never, back = _win_sweeps10(8, False), _win_sweeps10(1, True)
+    _win_fresh10("restart")
+    crash = (_win_sweeps10(1, False, step=30) + _win_sweeps10(1, True, step=30)
+             + _win_sweeps10(8, False, step=30))
+    _win_fresh10("restart")
+    fine = _win_sweeps10(1, False, step=30) + _win_sweeps10(8, True)
+    check("monitor pass: a panel Restart whose server never comes back pages 'went offline "
+          "unexpectedly' once its window ends, once, and its return 'back online'",
+          (never, back) == (["server_down"], ["server_up"]), repr((never, back)))
+    check("monitor pass: ...one that came back and crashed inside its window pages it too, once",
+          crash == ["server_down"], repr(crash))
+    check("monitor pass: ...while one that came back pages nothing either way (control)",
+          fine == [], repr(fine))
+
+
+def _first_seen_down_checks10():
+    """After a panel restart: a server first seen down returns quietly, a reboot plan's or not."""
+    g1 = _ids10["g1"]
+
+    def restarted(hold, ends=True):
+        # A restarted panel has recorded nothing yet; host_reboot.resume_reboot_state puts a plan's
+        # hold back first. The plan ends (the row's window from now) before it is back, or still
+        # holds it when it is. No hold: a server stopped before the restart, started an hour later.
+        for m in (_mon10._monitor_state["servers"], _mon10._monitor_state["server_unannounced"],
+                  _mon10._expected_offline, _mon10._expected_stop):
+            m.pop(g1, None)
+        if hold:
+            _mon10._expected_offline[g1] = float("inf")
+        got = _win_sweeps10(1, False)
+        if hold and ends:
+            _mon10._expected_offline[g1] = _clock10[0]
+        return got + _win_sweeps10(1, True, step=900 if hold else 3600)
+
+    held, still, unheld = restarted(True), restarted(True, ends=False), restarted(False)
+    crash = _win_sweeps10(_mon10._DOWN_CONFIRM_SWEEPS, False) + _win_sweeps10(1, True)
+    check("monitor pass: after a panel restart, a server first seen down pages nothing on its way "
+          "back — one a reboot plan holds, during the plan or after it, and one stopped before the "
+          "restart (control: once seen up, a crash pages both ways)",
+          (held, still, unheld, crash) == ([], [], [], ["server_down", "server_up"]),
+          repr((held, still, unheld, crash)))
+    # No restart: up and recorded up when the plan takes it down, back while the plan holds it.
+    _win_fresh10()
+    _mon10._expected_offline[g1] = float("inf")
+    in_plan = _win_sweeps10(3, False) + _win_sweeps10(1, True, step=600)
+    _mon10._expected_offline.pop(g1, None)
+    check("monitor pass: a server a reboot plan takes down and brings back pages nothing either way",
+          in_plan == [], repr(in_plan))
+
+
+def _host_mark_window_checks10():
+    """A host the panel reboots: a server stopped just before stays a Stop; one that never returns pages."""
+    _win_fresh10("stop")
+    _clock10[0] += 10
+    _mon10._mark_host_expected_offline(_ids10["rb"])
+    stopped = _win_sweeps10(12, False)
+    _win_fresh10()
+    _mon10._mark_host_expected_offline(_ids10["rb"])
+    gone = _win_sweeps10(12, False)
+    check("monitor pass: a server stopped just before its host's reboot stays down without paging "
+          "when the reboot's longer mark ends — the Stop stays a Stop — while one the reboot took "
+          "down that never comes back pages 'went offline unexpectedly' once (control)",
+          (stopped, gone) == ([], ["server_down"]), repr((stopped, gone)))
+
+
 def _expected_window_checks10():
     """A down the panel expected, through the REAL sweep (_monitor_pass) with its clock moved on.
 
     Run inside the database-backed passes below: gmod1 (port 27015) on beta is up and recorded up,
     gmod3 is muted. A panel Stop used to stay recorded UP for its whole window, and the sweeps after
     the window declared it down and paged "went offline unexpectedly" four or five minutes after
-    every Stop. A real crash must still page exactly as before.
+    every Stop. A Restart, and a reboot, are meant to come back: one that does not still pages, as
+    does a crash after it came back. A real crash must still page exactly as before.
     """
-    g1, clock = _ids10["g1"], [time.time()]
-    shut, up = dict(_UP10, ports={27017}), dict(_UP10)
-
-    def sweeps(n, probe, step=60):
-        got = []
-        for _i in range(n):
-            clock[0] += step
-            got += _sweep10({"reachable": False}, probe)
-        return got
-
-    _mon10.time = NS(time=lambda: clock[0], monotonic=lambda: clock[0], sleep=lambda s: None)
+    marks = (dict(_mon10._expected_offline), dict(_mon10._expected_stop))
+    _clock10[0] = time.time()
+    _mon10.time = NS(time=lambda: _clock10[0], monotonic=lambda: _clock10[0], sleep=lambda s: None)
     try:
-        _mon10._expected_offline[g1] = clock[0]                    # what the Stop button marks
-        stopped = sweeps(1, shut)
-        recorded = _mon10._monitor_state["servers"].get(g1)
-        later = sweeps(8, shut)
-        check("monitor pass: a panel Stop is recorded DOWN at once, and nothing is paged",
-              (stopped, recorded) == ([], False), repr((stopped, recorded)))
-        check("monitor pass: ...and when its window ends, minutes later, still nothing — no 'went "
-              "offline unexpectedly' for a server the panel stopped", later == [], repr(later))
-        check("monitor pass: ...nor 'back online' when it is started again, however much later",
-              sweeps(1, up, step=3600) == [], repr(_alerts10))
-        crash, back = sweeps(_mon10._DOWN_CONFIRM_SWEEPS, shut), sweeps(1, up)
-        check("monitor pass: a crash outside any window still pages 'went offline unexpectedly', "
-              "once, and its return still pages 'back online'",
-              (crash, back) == (["server_down"], ["server_up"]), repr((crash, back)))
-
-        def restarted(hold, ends=True):
-            # A restarted panel has recorded nothing yet; host_reboot.resume_reboot_state puts a
-            # plan's hold back first. The plan ends (the row's window from now) before it is back,
-            # or still holds it when it is.
-            _mon10._monitor_state["servers"].pop(g1, None)
-            _mon10._monitor_state["server_unannounced"].pop(g1, None)
-            if hold:
-                _mon10._expected_offline[g1] = float("inf")
-            else:
-                _mon10._expected_offline.pop(g1, None)
-            got = sweeps(1, shut)
-            if hold and ends:
-                _mon10._expected_offline[g1] = clock[0]
-            return got + sweeps(1, up, step=900)
-
-        held, still, unheld = restarted(True), restarted(True, ends=False), restarted(False)
-        check("monitor pass: after a panel restart, a server a reboot plan holds pages nothing on its "
-              "way back, while the plan still holds it or after its window (control: one no plan holds "
-              "pages 'back online')", (held, still, unheld) == ([], [], ["server_up"]),
-              repr((held, still, unheld)))
-        # No restart: up and recorded up when the plan takes it down, back while the plan holds it.
-        sweeps(1, up)
-        _mon10._expected_offline[g1] = float("inf")
-        in_plan = sweeps(3, shut) + sweeps(1, up, step=600)
-        check("monitor pass: a server a reboot plan takes down and brings back pages nothing either way",
-              in_plan == [], repr(in_plan))
+        _stop_window_checks10()
+        _restart_window_checks10()
+        _first_seen_down_checks10()
+        _host_mark_window_checks10()
     finally:
-        _mon10._expected_offline.pop(g1, None)
+        for m, snap in zip((_mon10._expected_offline, _mon10._expected_stop), marks):
+            m.clear()
+            m.update(snap)
+        _win_fresh10()              # gmod1 up and recorded up, as the checks after these expect
         _mon_restore10("time")
 
 

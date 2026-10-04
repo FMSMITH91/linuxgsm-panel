@@ -21,14 +21,13 @@ from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIO
     allowed_custom_commands,
     can_access_server, can_moderate_action, can_run_custom_command, get_game,
     get_user_permissions, has_permission, log_action, server_access_required)
-from panel.services.monitoring import (_PLAYER_POLL_WORKERS)
+from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _mark_expected_offline)
 import concurrent.futures
 import functools
 import re
 import threading
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
-from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log,
-    _mark_expected_offline)
+from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
     _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons)
 
@@ -204,8 +203,10 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
     refusal = _noop_power_refusal(gs, remote, action)
     if refusal:
         return False, refusal
-    if action in ("stop", "restart"):
-        _mark_expected_offline(gs.id)   # so the monitor doesn't alert on an intentional stop
+    if action in ("start", "stop", "restart"):
+        # What the monitor's alerts need to know: a Stop stays down (never paged), a Restart comes
+        # back (paged only if it does not), and a Start ends a Stop's window.
+        _mark_expected_offline(gs.id, action)
     if action in LONG_ACTIONS:
         _bg_action(app, gs, remote, action, on_done=on_done)
         log_action(actor, f"{action}_server", target=gs.name, actor=origin, server=gs)
