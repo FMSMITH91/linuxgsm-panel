@@ -1658,6 +1658,11 @@ def host_boot_identity(server):
                     "systemctl is-system-running 2>/dev/null || true", timeout=12)
     except Exception:
         return None
+    return _parse_boot_identity(out)
+
+
+def _parse_boot_identity(out):
+    """host_boot_identity's answer from its command's output, or None when it is not one."""
     lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
     if len(lines) < 4 or not _BOOT_ID_RE.match(lines[0]) or not _MACHINE_ID_RE.match(lines[1]):
         return None
@@ -1841,7 +1846,7 @@ GAME_SESSIONS_PROBE = ("if pgrep -x 'tmux: server|tmux|SCREEN|screen' >/dev/null
 
 def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lgsm_deps=True,
                            username="", install_fail2ban=True, do_reboot=True,
-                           progress=None, servers_online=False):
+                           progress=None):
     """One-shot bootstrap of a fresh Ubuntu VPS.
 
     Runs: system updates → essential packages → timezone → UFW firewall →
@@ -1850,8 +1855,8 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     `progress`, if given, is called as progress(step, total, name, status) after
     each step so the caller can stream live status ("running" / "rebooting" / ...).
 
-    `servers_online` is the panel's own answer: a game server it manages on this host was last
-    seen online. A host with one is never rebooted here, whatever the process probe says.
+    A caller that knows a game server it manages here was last seen online passes do_reboot=False:
+    the reboot step then only reports a pending reboot, whatever the process probe says.
 
     Returns (success, message, log).
     """
@@ -2116,7 +2121,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         gs_known = _gs_rc == 0 and ("YES" in _gs_txt or "NO" in _gs_txt)
         # Unknown counts as running. The cost of being wrong that way is a reboot the operator
         # does by hand; the other way it is every player on the box disconnected mid-bootstrap.
-        servers_running = (not gs_known) or "YES" in _gs_txt or bool(servers_online)
+        servers_running = (not gs_known) or "YES" in _gs_txt
         if not reboot_known:
             emit("Could not check whether a reboot is needed", status="reboot-required",
                  detail="The host did not answer the reboot-required check, so this was left "

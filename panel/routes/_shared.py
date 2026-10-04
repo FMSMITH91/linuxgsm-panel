@@ -1004,10 +1004,11 @@ class _BootstrapRun:
         online = db.session.query(GameServer.id).filter_by(
             remote_id=self.remote_id, status="online").first() is not None
         db.session.expunge(remote)
+        if online:
+            opts = dict(opts, do_reboot=False)   # it then only reports a pending reboot
         success = False
         try:
-            success, msg, _ = remote_bootstrap_vps(remote, progress=self.progress,
-                                                   servers_online=online, **opts)
+            success, msg, _ = remote_bootstrap_vps(remote, progress=self.progress, **opts)
         finally:
             # However the run ended: a pin first contact learned was kept even when a later step
             # raised, back when first contact committed it itself.

@@ -2155,9 +2155,10 @@ try:
           and "Server is back online." in _bs[2], "result=%r" % (_bs[1],))
     _H._wait_for_reboot = lambda server, on_wait=None, **k: (_bs_waits.append(server.id), True)[1]
     _w = _bs_wire(cmds=[("reboot-required", ("YES", "", 0))])
-    _bs = _H.remote_bootstrap_vps(_p8_srv(), servers_online=True)
-    check("bootstrap: no session found, but a server the panel manages there was last seen online "
-          "-> NOT rebooted, and the log says to reboot from the Power card",
+    _bs = _H.remote_bootstrap_vps(_p8_srv(), do_reboot=False)
+    check("bootstrap: no session found, but told not to reboot (what the panel passes when a server "
+          "it manages there was last seen online) -> NOT rebooted, and the log says to reboot from "
+          "the Power card",
           _bs_idx(_w, "reboot-delayed") == -1 and "stopped cleanly first" in _bs[2], _bs[2][-300:])
     _H._wait_for_reboot = lambda server, on_wait=None, **k: False
     _bs_wire(cmds=[("reboot-required", ("YES", "", 0))])
