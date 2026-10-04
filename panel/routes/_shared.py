@@ -34,8 +34,8 @@ from panel.security.auth import (RESTART_SERVER, START_SERVER, STOP_SERVER, UPDA
 from panel.services import (notifications)
 import threading
 import time
-from app import (_apply_whitelist_everywhere, _autoblock_hosts, _log, _prune_jobs,
-    _run_autoblock_now, _security_whitelist, _security_whitelist_add,
+from app import (_apply_whitelist_everywhere, _autoblock_hosts, _log, _mark_expected_offline,
+    _prune_jobs, _run_autoblock_now, _security_whitelist, _security_whitelist_add,
     _security_whitelist_remove)
 import re
 from panel.core import (clock, runtime_stats, terminal)
@@ -812,6 +812,10 @@ def _run_queued_action(app, gs):
     safe, or after _QUEUED_ACTION_ATTEMPTS failures in a row, and every attempt is audited.
     """
     act = "stop" if gs.stop_pending else "restart"
+    # The panel's own stop/restart, marked as the Stop and Restart buttons mark theirs
+    # (server_detail._run_action): unmarked, the monitor read a queued stop as a crash and paged
+    # "went offline unexpectedly" two sweeps after it.
+    _mark_expected_offline(gs.id)
     _out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, act,
                                          timeout=90, selfname=gs.lgsm_name)
     ok = (rc == 0)

@@ -745,6 +745,14 @@ try:
           repr(_qa_aud))
     _p9_sh._queued_action_failures.pop(P9_GS, None)
     _qa_rc[0] = 0
+    # The queued stop is the panel's own: unmarked, the monitor read it as a crash and paged "went
+    # offline unexpectedly" two sweeps later (monitoring._mon_server_went_down).
+    _p9_state._expected_offline.pop(P9_GS, None)
+    _qa_t0 = _p9_real_time.time()
+    _qa_run(stop_pending=True)
+    check("queued stop: marked as the panel's own stop, as the Stop button marks it, so the monitor "
+          "records it down without paging 'went offline unexpectedly'",
+          _p9_state._expected_offline.get(P9_GS, 0) >= _qa_t0, repr(_p9_state._expected_offline.get(P9_GS)))
 
     def _qa_log_raises(*a, **k):
         raise RuntimeError("audit table locked")
