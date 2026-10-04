@@ -45,11 +45,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
   `*/5 monitor` run can read it, with no LinuxGSM command in flight — so Autostart servers come back
   by LinuxGSM's own monitor exactly as after a plain reboot, even with the panel down. Running
   servers WITHOUT Autostart are started by the panel once the host is back (a new setting turns that
-  off); stopped servers stay stopped. One summary notification (a new `host_reboot` event) says what
-  came back, and a server that has not, about 12 minutes after the host is back. A reboot that did
-  not happen — refused by the host, or a panel restart before it was sent — is undone: every server
-  is put back as it was, including one restoring would have left stopped (only a queued stop stays
-  stopped), and you are told.
+  off); stopped servers stay stopped. One summary notification (a new `host_reboot` event) says how
+  soon after the reboot was sent the host's new boot started and its servers were running again,
+  how many stayed stopped and why, and which have not come back (one left to LinuxGSM's monitor gets
+  12 minutes from the host's new boot). A reboot that did not happen — refused by the host, or a
+  panel restart before it was sent — is undone: every server is put back as it was, including one
+  restoring would have left stopped (only a queued stop stays stopped), and you are told.
 - **With players on, the reboot asks.** The dialog lists who is on each server (and which counts
   can't be read) and offers **Wait: reboot when everyone has left** or **Reboot now**. A forced
   reboot warns players in-game at 60, 30 and 10 seconds where the game can show a message (Source,
@@ -236,7 +237,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   until the reboot is sent, and the queued-restart and backup sweeps skip it. After that, an
   operator's own Start or Stop takes the server out of the restore. The panel's own "server
   offline / back online" and "host unreachable / back online" alerts are held for the servers and
-  hosts a reboot took down: the summary replaces them.
+  hosts a reboot took down, also when the panel restarts in the middle of the reboot (it always does
+  when the host is its own): the summary replaces them. A server the summary reports as not back
+  still pages "back online" when it returns, if that alert is on.
 - The panel host's helper now runs LinuxGSM as `./<script>` from the game home instead of by its
   absolute path, so LinuxGSM's own monitor can see a start or stop the panel is running there and
   backs off instead of starting a second copy.
@@ -549,6 +552,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
   bootstrap also counts any server the panel last saw online.
 - **The Power card said "Autostart servers come back on their own"** and the reboot banner's
   "Reboot now" skipped the player check the Power card made. Both open the same dialog now.
+- **Every Stop from the panel paged "went offline unexpectedly" about four and a half minutes
+  later** (since #346, on by default). A server the panel stopped stayed recorded as running for the
+  three minutes the panel expects it offline, so when that window ended with the server still
+  stopped, as intended, the monitor declared it down and sent the alert. A server the panel takes
+  down (Stop, Restart, a queued stop or restart when empty, a reboot) is now recorded as down at
+  once with no alert, and its return isn't announced either. A crash outside that window alerts
+  exactly as before, and its return still pages "back online" if that alert is on. A queued "stop
+  when empty" was not marked as the panel's own at all, so it paged as a crash within about two
+  minutes of running.
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
   and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
   `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query
