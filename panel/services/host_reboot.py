@@ -1838,7 +1838,7 @@ def _new_boot(remote, recs, meta, ident, now):
     if not ((up >= SETTLE_UPTIME and ident.get("state") != "starting") or up >= SETTLE_UPTIME_MAX):
         return True
     _act(remote, recs, now, rollback_=False)
-    return True
+    return bool(plan_rows(remote.id))     # the fast tick only while a row still waits
 
 
 def _act(remote, recs, now, rollback_):

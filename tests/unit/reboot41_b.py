@@ -1302,3 +1302,24 @@ def _own_account_checks41():
                  _trace41().count("reboot") == 1), repr((rec, _trace41())))
 
 
+
+
+def _idle_tick_checks41():
+    _fresh41()
+    r, h, _rows = _std_host41()
+    h.players.update({"gmodserver": 0, "mcserver": 0, "fctrserver": None})
+    HR.request_reboot(r, "now", None, "web")
+    h.reboot_now()
+    _CLOCK41.sleep(120)
+    monitor = _monitor_cron41(h, {})
+    ticks = []
+    for n in range(30):
+        monitor(n)
+        ticks.append(_pass41())
+        if not HR.plan_rows(r.id):
+            break
+        _CLOCK41.sleep(15.0)
+    check("restore: the worker polls fast while a row still waits, and the pass that resolves the last "
+          "one asks for the idle tick — not another fast one",
+          _all41(not HR.plan_rows(r.id), HR.BUSY_TICK in ticks[:-1], ticks[-1:] == [HR.IDLE_TICK]),
+          repr(ticks))
