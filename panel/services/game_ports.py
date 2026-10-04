@@ -95,15 +95,20 @@ def shared_port_note(names, port):
     """What it means that the servers `names` (two or more, on one host) are all set to `port`.
 
     Storing that port is right: it IS their configured port (Minecraft and PaperMC both default to
-    25565). But every up/down read here is by port, so the panel cannot tell them apart. Said by the
-    import's reply and the startup re-read's audit. A server bound to a single address of its own
-    can share the port with one bound to another, so "only one" is not said without that exception.
+    25565). But every up/down read here is by port number alone (`ss -lntu`), so the panel cannot
+    tell them apart. Said by the import's reply and the startup re-read's audit. What it says of
+    running at once is a condition on any two of them, so it holds for three as for two. Two can
+    run at once when each is bound to an address of its own, and when one uses the port for TCP
+    only and the other for UDP only: TCP's and UDP's ports are separate, and LinuxGSM's Terraria
+    (game port TCP) and ARK (game port UDP) both default to 7777. "Only" matters: Garry's Mod's
+    27015 is its UDP game port and its TCP RCON port both.
     """
     names = list(names)
     who = names[0] if len(names) < 2 else "%s and %s" % (", ".join(names[:-1]), names[-1])
-    return ("%s are set to the same port, %d. Only one of them can run at a time, unless each is "
-            "bound to its own IP address. While one runs, the panel cannot tell them apart by "
-            "port, so a stopped one may read online." % (who, port))
+    return ("%s are set to the same port, %d. No two of them can run at the same time unless one "
+            "uses only TCP on it and the other only UDP, or each is bound to its own IP address. "
+            "While one runs, the panel cannot tell them apart by port, so a stopped one may read "
+            "online." % (who, port))
 
 
 # One game server row as the re-read found it: plain values. A commit expires every row the session
@@ -116,6 +121,9 @@ _Host = collections.namedtuple("_Host", "remote protected listening rows")
 # manage_servers' two port rules, handed in so this package imports nothing from the routes:
 # withheld_game_ports(rows, gs, protected) and sibling_port_blocks(rows, gs).
 _Rules = collections.namedtuple("_Rules", "withheld siblings")
+# One port the pass stored, kept for its audit row: the row as it was, the port it now has, what
+# else the move did (notes for the audit), and the GameServer the row is about.
+_Move = collections.namedtuple("_Move", "row port notes server")
 
 
 def _row(gs):
@@ -202,26 +210,28 @@ def _reconcile_host(remote_id, rules):
         return        # nothing answered with another port: no reason to ask the host anything else
     host = _Host(remote, _sm.protected_host_ports(remote),
                  functools.lru_cache(maxsize=1)(lambda: _sm._remote_listening_ports(remote)), rows)
+    moves = []
     for row, reading in moving:
         try:
-            _reconcile_row(host, row, reading, rules)
+            moves.append(_reconcile_row(host, row, reading, rules))
         except Exception:  # noqa: BLE001 - one row never stops the rest of its host
             db.session.rollback()
             _log.warning("%s: the port re-read at startup failed", row.name, exc_info=True)
+    _audit_moves(remote_id, [m for m in moves if m])
 
 
 def _reconcile_row(host, row, reading, rules):
-    """Store the port LinuxGSM reports for one server, or log why it is not stored."""
+    """Store the port LinuxGSM reports for one server, or log why not. -> the _Move, or None."""
     now = _host_rows(row.remote_id)
     cur = next((r for r in now if r.id == row.id), None)
     if cur is None or cur.port != row.port:
-        return        # deleted, or moved by something else, since this pass read it
+        return None   # deleted, or moved by something else, since this pass read it
     why = _reconcile_refusal(host, cur, reading, now, rules)
     if why:
         _log.warning("%s: LinuxGSM reports port %s; not stored (%s) — keeping %s",
                      row.name, reading.port, why, row.port)
-        return
-    _store_read_port(host, cur, reading.port, now, rules)
+        return None
+    return _store_read_port(host, cur, reading.port, now, rules)
 
 
 def _reconcile_refusal(host, row, reading, now, rules):
@@ -254,28 +264,62 @@ def _stored_not_its(host, row, reading, rules):
 
 
 def _store_read_port(host, row, port, now, rules):
-    """Store `port` on the row, then move what was set up on the old one, and audit the move."""
+    """Store `port` on the row, then move what was set up on the old one. -> the _Move, or None."""
     gs = db.session.get(GameServer, row.id)
     if gs is None:
-        return
+        return None
     gs.port = port
     db.session.commit()
     _mon.forget_updown(row.id)
-    shared = _sharing_note(row, port, now)
     notes = [n for n in (_cron_follows(host.remote, row, port),
-                         _close_old_rule(host, row, now, rules, port), shared) if n]
-    log_action(None, "port_resync", target=row.name, server=gs,
-               detail="%s -> %s (read from LinuxGSM details at panel start; %s)"
-               % (row.port, port, "; ".join(notes)))
+                         _close_old_rule(host, row, now, rules, port)) if n]
     _log.info("%s: stored port %s -> %s, as LinuxGSM reports", row.name, row.port, port)
+    return _Move(row, port, notes, gs)
+
+
+def _audit_moves(remote_id, moves):
+    """Audit each of the host's moves as `port_resync`, once the pass has made all of them.
+
+    Whether a moved row shares its new port is read from where the pass leaves the host's rows,
+    not from where they stood at the move. A row moved onto a port another row is still stored on
+    shares nothing when the same pass then moves that one away (its config has changed since:
+    PaperMC set off Minecraft's 25565 to end the clash), and a row the pass moves onto a port
+    shares it with one it moves there later. Read afresh: a row this session loaded keeps what it
+    loaded until expired, so a request's move since the last commit would not be seen. Each move
+    is in the log (INFO) as it is made; a panel stopped before the host's last move is done leaves
+    the moves made so far there, without their audit rows.
+    """
+    if not moves:
+        return
+    db.session.expire_all()
+    rows = _host_rows(remote_id)
+    for move in moves:
+        try:
+            _audit_move(move, rows)
+        except Exception:  # noqa: BLE001 - the move stands; one audit row never stops the rest
+            db.session.rollback()
+            _log.warning("%s: its port move could not be audited", move.row.name, exc_info=True)
+
+
+def _audit_move(move, rows):
+    """Write the `port_resync` audit row for one move, and log a warning when it shares its port."""
+    row, port = move.row, move.port
+    shared = _sharing_note(row, port, rows)
+    log_action(None, "port_resync", target=row.name, server=move.server,
+               detail="%s -> %s (read from LinuxGSM details at panel start; %s)"
+               % (row.port, port, "; ".join(move.notes + ([shared] if shared else []))))
     if shared:
         _log.warning("%s", shared)
 
 
-def _sharing_note(row, port, now):
-    """shared_port_note for `row` moved to `port`, when another of the host's rows (`now`) is on it; else ""."""
-    names = [r.name for r in now if r.port == port or r.id == row.id]
-    return shared_port_note(names, port) if len(names) > 1 else ""
+def _sharing_note(row, port, rows):
+    """shared_port_note for `row` moved to `port`, when it and another of the host's `rows` are on it; else "".
+
+    Only while `row` is still on it: a request can move it again, or delete it, before the audit.
+    """
+    on = [r for r in rows if r.port == port]
+    return (shared_port_note([r.name for r in on], port)
+            if len(on) > 1 and any(r.id == row.id for r in on) else "")
 
 
 def _cron_follows(remote, row, port):

@@ -585,20 +585,25 @@ CI-verified commit regardless of this file — this changelog is for humans.
     because it is the port its config sets: on the test VPS, PaperMC's `server.properties` sets
     25565, as Minecraft's does. The import now says so, under "Import selected" and in its reply:
     it names each shared port and the servers on it, whether the other server came in the same
-    import or was already in the panel, and says that only one of them can run at a time (unless
-    each is bound to its own IP address). It also says that while one runs, the panel cannot tell
-    them apart by port, so a stopped one may read online. A server on another host does not count.
-    That note, the ones for servers not imported and for accounts not added to the game-account
-    group, and the "—" port's tooltip are now in the viewer's language. The card holds account
-    names, so the page's translator is kept out of it, and they had stayed in English.
+    import or was already in the panel, and says that no two of them can run at the same time
+    unless one uses only TCP on that port and the other only UDP (LinuxGSM's Terraria and ARK both
+    default to 7777, one TCP and one UDP), or each is bound to its own IP address. It also says
+    that while one runs, the panel cannot tell them apart by port, so a stopped one may read online.
+    A server on another host does not count. That note, the ones for servers not imported and for
+    accounts not added to the game-account group, and the "—" port's tooltip are now in the
+    viewer's language. The card holds account names, so the page's translator is kept out of it,
+    and they had stayed in English.
   - Servers imported before this are re-read a minute after each panel start: the panel reads
     every installed server's port from LinuxGSM again and stores it where it differs (audited as
     `port_resync`). When the stored port is certainly not the server's — another server's, or one
     something else listens on while the server is stopped — the new port is stored even when
     another server shares it, as the import itself allows (Minecraft and PaperMC both default to
-    25565), and its audit row then says so in the import's words. Otherwise the new port is stored
-    only when it is free: in no other server's block and not listened on, because LinuxGSM says
-    STARTED even for a game that failed to bind. SSH's and the panel's ports are never taken. A
+    25565), and its audit row then says so in the import's words. The audit rows are written once
+    the host's moves are done, so the share they name is the one the pass leaves: a server moved
+    onto a port that another one is leaving in the same pass (its config was changed to end the
+    clash) is not said to share it. Otherwise the new port is stored only when it is free: in no
+    other server's block and not listened on, because LinuxGSM says STARTED even for a game that
+    failed to bind. SSH's and the panel's ports are never taken. A
     server that does not answer, or whose new port is not free, keeps its port until the next
     start, with the reason in the log; "Open all ports" on the host's Firewall page reads it again
     on demand. A move also points the server's restart-when-empty check at the new port, keeps the

@@ -632,11 +632,13 @@ def _shared_batch43(client, rid):
           == {"sha43": 25580, "shb43": 25580, "shx43": 25583}, repr(pair))
     check("import shared port: ...and the reply names that port and both servers, and not the "
           "third server's own port", ports == {25580: ["sha43", "shb43"]}, repr(pair))
-    check("import shared port: ...and says only one can run at a time, and that the panel cannot "
-          "tell them apart by port while one runs", notes == [
-              "sha43 and shb43 are set to the same port, 25580. Only one of them can run at a "
-              "time, unless each is bound to its own IP address. While one runs, the panel cannot "
-              "tell them apart by port, so a stopped one may read online."], repr(notes))
+    check("import shared port: ...and says no two can run at once unless one uses only TCP on it "
+          "and the other only UDP (Terraria and ARK both default to 7777) or each has its own "
+          "address, and that the panel cannot tell them apart by port while one runs", notes == [
+              "sha43 and shb43 are set to the same port, 25580. No two of them can run at the same "
+              "time unless one uses only TCP on it and the other only UDP, or each is bound to its "
+              "own IP address. While one runs, the panel cannot tell them apart by port, so a "
+              "stopped one may read online."], repr(notes))
     three = _post43(client, [{"user": "shc43", "game_type": "mc"}], rid=rid)
     ports, notes = _shared_reply43(three)
     check("import shared port: a third server on 25580 names all three, the two already in the "
@@ -710,12 +712,21 @@ _HEAL_HOSTS43 = (
         ("rb43", "mc", 27015, True))),      # on rg43's port: needs no listening read
     ("p43-heal-raise2", "192.0.2.147", {22, 2222}, (("rc43", "mc", 25750, True),)),
     ("p43-heal-after", "192.0.2.148", {22, 2222}, (("qc43", "mc", 25740, True),)),
+    # Where the pass leaves the rows decides what its audit says they share.
+    ("p43-heal-apart", "192.0.2.139", {22, 2222}, (
+        ("gma43", "gmod", 27015, True),
+        ("mca43", "mc", 27015, True),       # an old import on gmod's port; its own is 25565...
+        ("pma43", "mc", 25565, True),       # ...where this one is stored, whose config now says 25570
+        ("mcr43", "mc", 27015, True),       # moved onto pmr43's 25575, then by a request to 25590
+        ("pmr43", "mc", 25575, True),       # right where it is
+        ("refa43", "mc", 25595, True))),    # reports SSH's 2222: refused, after reading every row
 )
 _HEAL_PROPS43 = {"pmc43": 25565, "sibl43": 25650, "sshp43": 2222, "sshq43": 2200,
                  "foreign43": 25620, "velo43": 25720, "squat43": 25680, "quiet43": 25640,
                  "nib43": 25660, "stop43": 25655, "pmcb43": 25565, "mcb43": 25565, "qa43": 25700,
                  "del43": 25706, "mv43": 25761, "qb43": 25710, "ra43": 25731, "rb43": 25732, "rc43": 25751,
-                 "qc43": 25741}
+                 "qc43": 25741, "mca43": 25565, "pma43": 25570, "mcr43": 25575, "pmr43": 25575,
+                 "refa43": 2222}
 
 
 def _heal_rows43():
@@ -753,6 +764,9 @@ def _restart_listing43(user, port):
 def _heal_run43(want, hosts):
     """The re-read over every heal host, with a row deleted and one host's port read raising."""
     orig_read, orig_protected = _gp43.read_reported_ports, _p9_sm.protected_host_ports
+    # Absent (a pass that audits each move as it makes it): no request moves mcr43, and the apart
+    # host's ports check says so by name.
+    orig_audit = getattr(_gp43, "_audit_moves", None)
 
     def _read_then_delete(remote, wanted):
         got = orig_read(remote, wanted)
@@ -767,8 +781,17 @@ def _heal_run43(want, hosts):
         if remote.host == "192.0.2.147":
             raise RuntimeError("an unforeseen failure reading this host (part43)")
         return orig_protected(remote)
+
+    def _moved_before_audit(remote_id, moves):
+        if remote_id == hosts["192.0.2.139"]:
+            with _p9.app_context():         # a request, after the pass moved mcr43 and before its audit
+                db.session.get(GameServer, want["mcr43"]).port = 25590
+                db.session.commit()
+        return orig_audit(remote_id, moves)
     _p9_patch(_gp43, "read_reported_ports", _read_then_delete)
     _p9_patch(_p9_sm, "protected_host_ports", _protected)
+    if orig_audit is not None:
+        _p9_patch(_gp43, "_audit_moves", _moved_before_audit)
     try:
         _gp43.reconcile_stored_ports(_p9, _ms43.withheld_game_ports, _ms43.sibling_port_blocks)
     except Exception as exc:  # noqa: BLE001 - a raise is a named failure here, never a crash
@@ -776,6 +799,8 @@ def _heal_run43(want, hosts):
     finally:
         _p9_patch(_gp43, "read_reported_ports", orig_read)
         _p9_patch(_p9_sm, "protected_host_ports", orig_protected)
+        if orig_audit is not None:
+            _p9_patch(_gp43, "_audit_moves", orig_audit)
     forget_rows(server_ids=(want["del43"],))
 
 
@@ -799,10 +824,10 @@ def _heal43():
     _heal_kept43(got)
     _heal_survives43(got)
     _heal_follows43(want, hosts, audits)
-    _heal_shared43()
+    _heal_shared43(got)
 
 
-def _heal_shared43():
+def _heal_shared43(got):
     """A move onto a port another server is on says so in its audit row, as the import does."""
     with _p9.app_context():
         said = {a.target: a.detail or "" for a in AuditLog.query.filter_by(action="port_resync")}
@@ -810,14 +835,30 @@ def _heal_shared43():
     check("startup port re-read: the stopped row moved onto 25565 beside the running one names "
           "the shared port in its audit row, as the import's reply does",
           pair in said.get("heal-pmc43", ""), repr(said.get("heal-pmc43")))
+    check("startup port re-read: ...and so does the running one, moved there before the stopped "
+          "one joined it in the same pass: the share is read where the pass leaves the rows",
+          pair in said.get("heal-mc43", ""), repr(said.get("heal-mc43")))
     check("startup port re-read: ...and so does the old import moved onto the 25565 a newer "
           "import holds", _gp43.shared_port_note(["heal-pmcb43", "heal-mcb43"], 25565)
           in said.get("heal-mcb43", ""), repr(said.get("heal-mcb43")))
-    check("startup port re-read: a row moved while no other row was on its new port claims no "
-          "share — nor does one moved to a free port (controls)",
+    _heal_apart43(got, said)
+
+
+def _heal_apart43(got, said):
+    """Check that a share the same pass ends, or a request ends before the audit, is not named."""
+    check("startup port re-read: the apart host's rows end where their configs and the request "
+          "put them", [got[u] for u in ("mca43", "pma43", "mcr43", "pmr43", "refa43")]
+          == [25565, 25570, 25590, 25575, 25595], repr(got))
+    check("startup port re-read: a row moved onto the port another row was stored on, which the "
+          "same pass then moved to the port its config now says, claims no share — nor does that "
+          "other row, nor one moved to a free port",
           [t in said and "set to the same port" not in said[t]
-           for t in ("heal-mc43", "heal-quiet43")] == [True, True],
-          repr({t: said.get(t) for t in ("heal-mc43", "heal-quiet43")}))
+           for t in ("heal-mca43", "heal-pma43", "heal-quiet43")] == [True, True, True],
+          repr({t: said.get(t) for t in ("heal-mca43", "heal-pma43", "heal-quiet43")}))
+    check("startup port re-read: a row a request moved again between the pass's move and its audit "
+          "claims no share of the port it left — though its audit row still says where the pass "
+          "put it", said.get("heal-mcr43", "").startswith("27015 -> 25575 (")
+          and "set to the same port" not in said.get("heal-mcr43", ""), repr(said.get("heal-mcr43")))
 
 
 def _heal_moved43(got, audits):
@@ -840,9 +881,10 @@ def _heal_moved43(got, audits):
           got["quiet43"] == 25640, repr(got))
     check("startup port re-read: only the moved rows are audited",
           [d.split(" (")[0] for d in audits] == [
-              "25630 -> 25640", "25670 -> 25680", "25701 -> 25700", "25711 -> 25710",
-              "25740 -> 25741", "27015 -> 25565", "27015 -> 25565", "27015 -> 25565",
-              "27015 -> 25655", "27015 -> 25732"], repr(audits))
+              "25565 -> 25570", "25630 -> 25640", "25670 -> 25680", "25701 -> 25700",
+              "25711 -> 25710", "25740 -> 25741", "27015 -> 25565", "27015 -> 25565",
+              "27015 -> 25565", "27015 -> 25565", "27015 -> 25575", "27015 -> 25655",
+              "27015 -> 25732"], repr(audits))
 
 
 def _heal_kept43(got):

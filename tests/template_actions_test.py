@@ -5404,9 +5404,9 @@ async function scan(root, catalog, lang){
   console.log(JSON.stringify(out));
 })().catch(e => console.log(JSON.stringify({error: String(e && e.stack || e)})));"""
 _SHARED_HEAD = "Servers that share a port:"
-_SHARED_TAIL = ("Only one of the servers on a port can run at a time, unless each is bound to its own "
-                "IP address. While one runs, the panel cannot tell them apart by port, so a stopped "
-                "one may read online.")
+_SHARED_TAIL = ("No two servers on the same port can run at the same time unless one uses only TCP on "
+                "it and the other only UDP, or each is bound to its own IP address. While one runs, "
+                "the panel cannot tell them apart by port, so a stopped one may read online.")
 _SHARED_ROWS = [["25580: sha43, <img src=x onerror=alert(1)>", True, "font-monospace text-break"],
                 ["27015: Online, gmc43", True, "font-monospace text-break"]]
 if _node:
@@ -5432,10 +5432,11 @@ if _node:
     # The notes with lines of their own (the "Skipped" span has none).
     _in_es = [b for b in (_inres.get("es") or {}).get("boxes") or [] if b]
     check(_in_es[-1:] == [[["Servidores que comparten un puerto:", False, ""]] + _SHARED_ROWS
-                          + [["Solo uno de los servidores de un puerto puede ejecutarse a la vez, "
-                              "salvo que cada uno esté vinculado a su propia dirección IP. Mientras "
-                              "uno se ejecuta, el panel no puede distinguirlos por el puerto, así que "
-                              "uno detenido puede aparecer en línea.", False, ""]]],
+                          + [["Dos servidores en el mismo puerto no pueden ejecutarse a la vez, "
+                              "salvo que uno use solo TCP en él y el otro solo UDP, o que cada uno "
+                              "esté vinculado a su propia dirección IP. Mientras uno se ejecuta, el "
+                              "panel no puede distinguirlos por el puerto, así que uno detenido "
+                              "puede aparecer en línea.", False, ""]]],
           "js (node, es, real i18n.js and catalog, inside the template's untranslated "
           "#disc-result): the note's two sentences are in Spanish, and each port's line (the "
           "port, the server names) is left as it is", repr(_in_es))
@@ -5449,10 +5450,11 @@ if _node:
           repr(_in_es[:-1]))
     _in_fr = (_inres.get("fr") or {}).get("boxes") or [[]]
     check(_in_fr == [[["Serveurs qui partagent un port :", False, ""]] + _SHARED_ROWS
-                     + [["Un seul des serveurs d'un port peut fonctionner à la fois, sauf si chacun "
-                         "est lié à sa propre adresse IP. Tant que l'un fonctionne, le panneau ne "
-                         "peut pas les distinguer par le port : un serveur arrêté peut donc "
-                         "apparaître en ligne.", False, ""]]],
+                     + [["Deux serveurs sur le même port ne peuvent pas fonctionner en même temps, "
+                         "sauf si l'un n'y utilise que TCP et l'autre que UDP, ou si chacun est lié "
+                         "à sa propre adresse IP. Tant que l'un fonctionne, le panneau ne peut pas "
+                         "les distinguer par le port : un serveur arrêté peut donc apparaître en "
+                         "ligne.", False, ""]]],
           "js (node, fr, real i18n.js and catalog): ...and in French", repr(_in_fr))
     check([(_inres.get(k) or {}).get("boxes") for k in ("none", "absent")] == [[], []]
           and "Imported 2" in ((_inres.get("absent") or {}).get("text") or ""),

@@ -726,7 +726,8 @@ function appendNotImportedNote(msg, items){
   msg.appendChild(box);
 }
 // Imported servers set to the same port as another server on this host (both new, or one already
-// in the panel). They ARE imported — it is their configured port — but only one of them can run,
+// in the panel). They ARE imported — it is their configured port — but two of them run at once only
+// when one uses the port for TCP only and the other for UDP only, or each has an address of its own;
 // and the panel reads up/down by port, so a stopped one may read online while the other runs. The
 // two sentences are fixed, and translated (_discT); each port's line is data — a number and server
 // names, which are user-authored — so it is text, and kept from the translator.
@@ -743,7 +744,7 @@ function appendSharedPortNote(msg, shared){
     box.appendChild(row);
   });
   var tail=document.createElement('div');
-  tail.textContent=_discT('Only one of the servers on a port can run at a time, unless each is bound to its own IP address. While one runs, the panel cannot tell them apart by port, so a stopped one may read online.');
+  tail.textContent=_discT('No two servers on the same port can run at the same time unless one uses only TCP on it and the other only UDP, or each is bound to its own IP address. While one runs, the panel cannot tell them apart by port, so a stopped one may read online.');
   box.appendChild(tail);
   msg.appendChild(box);
 }

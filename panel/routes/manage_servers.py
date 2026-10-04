@@ -1590,9 +1590,11 @@ def withheld_game_ports(rows, gs, protected):
 
     Except `gs`'s OWN stored port from the first half: the panel allocated it, adopted it or
     imported it, and two imported servers configured on one default port are an ordinary host
-    (only one of them runs). What `details` reports can move nothing onto it — the adoption and
-    the re-sync both refuse a port in this set — and a rule another server already holds on it is
-    left to that server by remote_ufw_allow_game_ports. SSH and the panel are refused regardless.
+    (they do not run at once, unless one uses it for TCP only and the other for UDP only, or each
+    is bound to an address of its own). What `details` reports can move nothing onto it — the
+    adoption and the re-sync both refuse a port in this set — and a rule another server already
+    holds on it is left to that server by remote_ufw_allow_game_ports. SSH and the panel are
+    refused regardless.
     """
     held = {p: "'%s' on this host" % n for p, n in sibling_port_blocks(rows, gs).items()
             if p != gs.port}

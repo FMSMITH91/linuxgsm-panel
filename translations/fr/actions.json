@@ -94,7 +94,7 @@
   "Game CPU %": "Processeur du jeu %",
   "Imported, but not added to the panel’s game-account group. Where the panel’s sudo is limited to its helper, it cannot control these servers.": "Importé, mais non ajouté au groupe de comptes de jeu du panneau. Là où le sudo du panneau se limite à son assistant, il ne peut pas contrôler ces serveurs.",
   "Servers that share a port:": "Serveurs qui partagent un port :",
-  "Only one of the servers on a port can run at a time, unless each is bound to its own IP address. While one runs, the panel cannot tell them apart by port, so a stopped one may read online.": "Un seul des serveurs d'un port peut fonctionner à la fois, sauf si chacun est lié à sa propre adresse IP. Tant que l'un fonctionne, le panneau ne peut pas les distinguer par le port : un serveur arrêté peut donc apparaître en ligne.",
+  "No two servers on the same port can run at the same time unless one uses only TCP on it and the other only UDP, or each is bound to its own IP address. While one runs, the panel cannot tell them apart by port, so a stopped one may read online.": "Deux serveurs sur le même port ne peuvent pas fonctionner en même temps, sauf si l'un n'y utilise que TCP et l'autre que UDP, ou si chacun est lié à sa propre adresse IP. Tant que l'un fonctionne, le panneau ne peut pas les distinguer par le port : un serveur arrêté peut donc apparaître en ligne.",
   "Not imported:": "Non importé :",
   "Not in its LinuxGSM config: read from LinuxGSM when imported": "Absent de sa configuration LinuxGSM : lu depuis LinuxGSM à l'importation",
   "Incorrect password.": "Mot de passe incorrect.",
