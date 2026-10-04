@@ -26,10 +26,11 @@ against a real `/bin/bash ./<s> start` process (and must not count the shell tha
 bootstrap / install.sh "game servers running?" probe is run by the real pgrep against a process
 named "tmux: server".
 """
+import shutil as _shutil41
 
+from unit.part20 import _patched
 from unit.reboot41_fixtures import (
-    _TMP41, _ctx41, _patched, _pstate_snap41, _shutil41, _std_patches41,
-    check, db)
+    _TMP41, _ctx41, _pstate_snap41, _std_patches41, check, db)
 from unit.reboot41_a import (
     _api_route_checks41, _bootstrap_run_checks41, _bot_checks41, _bounce_checks41, _cancel_checks41, _classify_checks41,
     _countdown_checks41, _flush_identity_checks41, _gate_checks41, _gate_route_checks41, _helper_checks41, _migration_checks41,

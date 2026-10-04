@@ -1,14 +1,20 @@
-"""Part 41's sections A to T (clean host reboots); part41 runs them.
-"""
+"""Part 41's sections A to T (clean host reboots); part41 runs them."""
+import importlib.machinery as _mach41
+import importlib.util as _ilu41
+import json as _json41
+import sys
+import time as _time41
+from types import SimpleNamespace as NS
+
+from unit.part01 import eq, skip
+from panel.ops.ssh_manager import hosts as _hosts41
 from unit.reboot41_fixtures import (
-    AuditLog, GameServer, HR, NS, _CLOCK41, _Flask41,
-    _NOTES41, _ROOT41, _TMP41, _TRACE41, _all41, _app41,
-    _audit41, _core41, _events41, _fresh41, _gs41, _hosts41,
-    _ilu41, _json41, _lockfile41, _mach41, _mon41, _notif41,
-    _patch, _popen41, _ps41, _remote41, _rr41, _run41,
-    _sa_text41, _shlex41, _sm41, _so41, _std_host41, _tf41,
-    _time41, _uuid41, _write_exec41, check, db, eq,
-    os, skip, sys)
+    AuditLog, GameServer, HR, _CLOCK41, _Flask41, _NOTES41,
+    _ROOT41, _TMP41, _TRACE41, _all41, _app41, _audit41,
+    _core41, _events41, _fresh41, _gs41, _lockfile41, _mon41,
+    _notif41, _patch, _popen41, _ps41, _remote41, _rr41,
+    _run41, _sa_text41, _shlex41, _sm41, _so41, _std_host41,
+    _tf41, _uuid41, _write_exec41, check, db, os)
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # A. Reading a server: the probe, run for real against a stand-in host

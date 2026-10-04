@@ -1,13 +1,18 @@
-"""Part 41's sections U to AC (clean host reboots); part41 runs them.
-"""
+"""Part 41's sections U to AC (clean host reboots); part41 runs them."""
+import json as _json41
+import shutil as _shutil41
+import sys
+from types import SimpleNamespace as NS
+
+from unit.part01 import eq, skip
+from unit.part20 import _patched
 from unit.reboot41_fixtures import (
-    GameServer, HR, NS, RemoteServer, _CLOCK41, _NOTES41,
-    _REAL_PARAMIKO41, _REAL_SSHCLI41, _ROOT41, _STAMPS41, _TMP41, _all41,
-    _app41, _audit41, _core41, _events41, _fresh41, _gs41,
-    _json41, _lockfile41, _mon41, _patch, _patched, _ps41,
-    _remote41, _rr41, _run41, _shlex41, _shutil41, _sm41,
-    _so41, _std_host41, _tf41, _th41, _write_exec41, check,
-    db, eq, os, skip, sys)
+    GameServer, HR, RemoteServer, _CLOCK41, _NOTES41, _REAL_PARAMIKO41,
+    _REAL_SSHCLI41, _ROOT41, _STAMPS41, _TMP41, _all41, _app41,
+    _audit41, _core41, _events41, _fresh41, _gs41, _lockfile41,
+    _mon41, _patch, _ps41, _remote41, _rr41, _run41,
+    _shlex41, _sm41, _so41, _std_host41, _tf41, _th41,
+    _write_exec41, check, db, os)
 from unit.reboot41_a import (
     _ADMIN41, _AN41, _WAITER41, _actions41, _as_admin41, _asides41,
     _bodies41, _bounce_stubs41, _lines41, _monitor_cron41, _noted41, _pass41,
@@ -1258,7 +1263,7 @@ def _connect_fail_checks41():
     check("paramiko: a command that fails once the connection is open raises a ConnectionError marked "
           "command_started (its type unchanged for every caller and message); one that never "
           "connected is not marked",
-          _all41(type(on_exec) is ConnectionError, getattr(on_exec, "command_started", False) is True,
+          _all41(on_exec.__class__ is ConnectionError,   # exactly it: a subclass broke two callers getattr(on_exec, "command_started", False) is True,
                  not getattr(on_connect, "command_started", False)), repr((on_exec, on_connect)))
     _fresh41()
     r, _h, _rows = _std_host41(auth="key")
