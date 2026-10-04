@@ -1843,20 +1843,8 @@ try:
     check("ufw unblock: an invalid IP is still refused before any command runs",
           _sm_hosts.remote_ufw_undeny_ip(object(), "not-an-ip")[0] is False)
 
-    # ── reboot: a refusal is knowable even though success is not ─────────────────────────────
-    # A reboot's success looks like a failure (the host goes down mid-command), so this cannot
-    # simply fail on non-zero. But a REFUSAL answers promptly and positively — sudo declining, an
-    # unknown verb, no helper — while -1 is the transport giving up. Both callers use the boolean,
-    # and monitoring writes it as `success=` on the audit row.
-    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "sudo: a password is required", 1)
-    _ok, _msg = _sm_hosts.remote_reboot(object())
-    check("reboot: a refused reboot is reported as refused", _ok is False, str(_msg))
-    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "SSH command timed out", -1)
-    check("reboot: ...but a dropped connection still counts as sent, which is what a reboot IS",
-          _sm_hosts.remote_reboot(object())[0] is True)
-    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
-    check("reboot: ...and a clean send is sent (positive control)",
-          _sm_hosts.remote_reboot(object())[0] is True)
+    # Reboot: a refusal is knowable even though success is not. hosts.remote_reboot is gone: every
+    # reboot goes through host_reboot.send_reboot, whose refusal/sent checks are in part41.
 finally:
     # BOTH, not just run_command. This block stubs run_privileged too (saved as _orig_rp above)
     # and never put it back, so every later check in this flat script ran against the last stub

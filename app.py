@@ -128,9 +128,9 @@ from panel.core.validation import (MAX_PORT, MIN_PORT, _valid_hex_color, canonic
                                    canonical_ip_or_network, ip_address_or_none)
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
-    _host_reachable, _monitor_pass, _reboot_when_empty_watch, _record_metric_samples,
-    _refresh_player_counts)
-from panel.core.panel_state import (_expected_offline, _install_jobs, _install_lock,
+    _host_reachable, _monitor_pass, _record_metric_samples, _refresh_player_counts)
+from panel.services import host_reboot as _host_reboot
+from panel.core.panel_state import (_install_jobs, _install_lock,
     _last_sample_prune, _monitor_state, _os_update_seen, _player_counts)
 from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupState, User, db,
     init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, RowReplaced, claim_row,
@@ -712,12 +712,6 @@ def _live_run_state(gs, remote):
 
 
 # ── Proactive monitor → admin notifications ────────────────────
-
-
-def _mark_expected_offline(server_id):
-    """Record that the PANEL just took a server offline, so the monitor won't alert on an
-    intentional stop/restart."""
-    _expected_offline[server_id] = time.time()
 
 
 def _monitor_watch(app):
@@ -3305,9 +3299,21 @@ if __name__ == "__main__":
     if os.name == "posix":
         threading.Thread(target=_f2b_ban_watch, args=(app,), name="ban-watch", daemon=True).start()
 
-    # Fire any "reboot when empty" requests once a host has no players left.
-    threading.Thread(target=lambda: _reboot_when_empty_watch(app), name="reboot-when-empty",
-                     daemon=True).start()
+    # Clean reboots (panel/services/host_reboot.py). FIRST, synchronously, before the monitor
+    # thread below exists: every server a reboot plan still holds is marked expected-offline, or the
+    # monitor would page "went offline unexpectedly" about one its first pass found up and the plan
+    # then had down. (One it first finds down returns quietly anyway: nobody was told it went
+    # down.) Then the two supervised loops: the restore (bring back what was running, or
+    # undo a reboot that did not happen) and "reboot when everyone has left". A wait that was
+    # pending when this process stopped is gone — on purpose — and the operator is told so.
+    try:
+        _host_reboot.resume_reboot_state(app)
+        _host_reboot.announce_dropped_waits(app)
+    except Exception:
+        _log.exception("resuming the reboot state failed")
+    _supervise = _make_supervisor(app)
+    _supervise("host-reboot", lambda: _host_reboot.host_reboot_worker(app))
+    _supervise("reboot-when-empty", lambda: _host_reboot.reboot_when_empty_watch(app))
 
     # Keep each auto-block host's rolling top-20 (7-day) UFW block list in sync.
     threading.Thread(target=lambda: _autoblock_watch(app), name="autoblock", daemon=True).start()

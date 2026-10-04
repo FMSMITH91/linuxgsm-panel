@@ -26,6 +26,9 @@ def register(app):
         refused = _refuse_on_panel_host(remote, "VPS bootstrap")
         if refused:
             return refused
+        from panel.services import host_reboot as _hr
+        if _hr.reboot_busy(remote.id):
+            return jsonify({"success": False, "message": _hr.BUSY_MESSAGE % remote.display_name}), 409
         data = _json_body()
         opts = {
             "set_timezone": data.get("timezone", "UTC"),

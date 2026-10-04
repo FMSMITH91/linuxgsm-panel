@@ -120,7 +120,8 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 
 - One-click install of any LinuxGSM game (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more), including LinuxGSM itself and the ports it needs.
 - Real-time WebSocket console, command sending, per-game CPU/RAM/uptime tiles, and live current/max player counts (gamedig, with console + LinuxGSM-query fallbacks). gamedig is installed on each host from a hash-locked lockfile in `tools/gamedig`, updated through reviewed Dependabot pull requests.
-- Player-aware control — start/stop/restart/update/validate and more; restart, stop, backups, mod changes, and host reboots can wait until a server is empty.
+- Player-aware control — start/stop/restart/update/validate and more; restart, stop, backups and mod changes can wait until a server is empty.
+- **Clean host reboots** — rebooting a host from the panel stops its running game servers cleanly first, then brings back the ones that were running (stopped servers stay stopped; a setting can leave a server without Autostart stopped). With players on, you choose: reboot once everyone has left, or now (players are warned in-game with a 60-second countdown where the game can show a message). See [Rebooting a host](#rebooting-a-host).
 - Mods & addons (SourceMod, MetaMod, Oxide, ULX…), FastDL generation, per-server cron with autostart and daily-restart-when-empty, and a config/file browser with upload, download (a folder comes down as a `.tar.gz`) and in-browser editing.
 - **Garry's Mod content mounting** — install Counter-Strike: Source and other Source-engine games' content (via LinuxGSM) so GMod maps and props render instead of showing missing-texture errors. One shared copy per host, mounted read-only into each GMod server, with per-server enable/disable, one-click uninstall, a free-disk readout, and a weekly content auto-update cron.
 - Per-server LinuxGSM alerts (Discord, Telegram, email, Pushover, Slack, Gotify, ntfy…).
@@ -136,11 +137,33 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 - Fine-grained moderation (**kick / ban / announce** individually) and superadmin-defined **custom console commands** with a charset-validated argument, granted per group.
 - One host page for the panel and every remote: specs, live per-core resources, OS updates, UFW firewall, power controls, Ubuntu Pro, SSH lockdown, and lockout-safe port/bind changes.
 - **Brute-force defense** — fail2ban integration with per-jail logs, top offenders, one-click UFW blocking, and an optional rolling **auto-block** that firewalls every IP over a failed-attempt threshold (default 20 / 7 days) and releases it once its count drops back below. A whitelist (IP/CIDR) is never banned or blocked, on any jail of any host; your Tailscale peers are never banned from the panel or auto-blocked. A ban also closes any console or terminal already open from that address, and API-token guessing that carries on past its rate limit is banned too.
-- **Proactive admin alerts** to Telegram, Discord and/or [ntfy](https://ntfy.sh) for 19 events — server down, host unreachable, disk low, sustained high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more — with tunable thresholds (disk %, CPU-load %, memory %, and how long load must stay high before it pages you). ntfy needs no account — subscribe to a topic in its app and alerts reach your phone; point it at ntfy.sh or your own instance.
+- **Proactive admin alerts** to Telegram, Discord and/or [ntfy](https://ntfy.sh) for 20 events — server down, host unreachable, disk low, sustained high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more — with tunable thresholds (disk %, CPU-load %, memory %, and how long load must stay high before it pages you). ntfy needs no account — subscribe to a topic in its app and alerts reach your phone; point it at ntfy.sh or your own instance.
 - **Two-way command bot** (Telegram *or* Discord) — drive the panel from chat: `/status`, `/servers`, `/hosts`, `/players <name>`, `/update`, and `/start` / `/stop` / `/restart <name>`. Opt-in and locked to the configured chat/channel.
 - Tailscale integration (private Serve, MagicDNS, SSH-over-tailnet), multiple SSH remotes with host-key pinning, diagnostics with file-integrity self-heal, and audit logging.
 
 **Also** — a superadmin **Settings** page (branding: site name, accent colour, login tagline; default UI language; session & security tuning), all applied live; HTTPS by default, TOTP 2FA with backup codes, revocable sessions, CSRF + strict CSP; light on small VPSes; multi-language (English, Spanish, French); and a first-run setup wizard.
+
+### Rebooting a host
+
+Every reboot the panel makes — the host's **Power** card (the panel host's too), the reboot-needed banner, the command palette, "reboot when everyone has left" and the API below — goes the same way:
+
+1. **Who is on.** Each running game server's players are counted. With anyone on (or a server whose count can't be read), you choose **Wait: reboot when everyone has left** or **Reboot now**. Work that a reboot would cut off — an install, a backup, LinuxGSM maintenance, a package upgrade — refuses "now" and lets you wait for it instead.
+2. **Stop cleanly.** On a forced reboot, players are warned in-game first (60, 30 and 10 seconds) on every server whose game can show a message — one whose player count can't be read included — then each running server gets LinuxGSM's own graceful `stop` (saves written, players told), verified by its tmux session, never by the exit code.
+3. **Reboot**, then **bring back exactly what was running**. A server with Autostart comes back the way it always has: LinuxGSM's `*/5` monitor restarts it about 5 minutes after boot, because the panel leaves its LinuxGSM monitoring lock exactly as it found it. A running server *without* Autostart is started by the panel once the host is back (a setting turns this off). A stopped server stays stopped.
+4. **One summary** in the panel's notifications: how soon after the reboot was sent the host's new boot started and its servers were running again ("X rebooted: its new boot started within 20 s of the reboot being sent. 4/4 running again within 6 min of the reboot being sent …"), how many stayed stopped and why, and which have not come back (one LinuxGSM's monitor brings back gets 12 minutes from the new boot). If the reboot did not happen (the host refused it, or the panel restarted before sending it), every server is put back as it was, except one whose stop was queued, and you are told.
+
+A pending "reboot when everyone has left" shows on the host's Power card with a **Cancel** button, gives up after 24 hours by default (Settings → Host reboots, `reboot_wait_max_hours`; 0 waits for as long as it takes), and is cancelled — with a notification — if the panel itself restarts. It is refused when asked for if the panel could not reboot that host (sudo refused, or no answer); if that happens later, when it fires, it says so once and tries again every 10 minutes. A Cancel the panel accepts is never followed by the reboot. Reboots made outside the panel (`sudo reboot` in a terminal, your provider's console) are not changed.
+
+The API takes a session cookie or an `Authorization: Bearer <token>` (Account → API access), with the same permissions as the page (`manage_remotes` and access to the host; the panel's own host is superadmin-only):
+
+| Request | Does |
+|---------|------|
+| `POST /api/remote/<id>/reboot` `{"mode": "now" \| "when_empty"}` | Reboot cleanly now (202), or arm the wait (200). With no `mode` and players on, answers **409** `{"error": "players_online", "needs_choice": true, "choices": [...], "players": {...}}` instead of rebooting; a host the panel could not reboot answers **409** `{"error": "preflight"}` for either mode. The older `{"when_empty": true}` / `{"force": true}` still work. |
+| `POST /api/remote/<id>/reboot-cancel` | Cancel the wait, or a reboot that has not been sent yet |
+| `GET /api/remote/<id>/players` | Who is on: `{state, total, busy, unknown, blockers}` |
+| `GET /api/remote/<id>/reboot-plan` | What a reboot is doing: `{wait, job, rows, last}`; with `?preview=1`, what it would do to each server |
+| `GET /api/remote/<id>/reboot-required` | Whether a reboot is needed, plus any `wait` or `job` |
+| `POST /api/server-management/reboot` `{"delay": 0-300, "mode": ...}` | The panel's own host, the same way (superadmin) |
 
 ## Screenshots
 
@@ -169,8 +192,10 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `session_lifetime_hours` | 8 | Idle session timeout (sliding) |
 | `remember_days` | 3 | "Remember me" cookie lifetime |
 | `ssh_timeout` | 10 | SSH connection timeout (seconds) |
+| `reboot_wait_max_hours` | 24 | How long "reboot when everyone has left" waits before it gives up (0 = no limit) |
+| `reboot_restore_no_autostart` | true | After a panel reboot, start again the servers that were running without Autostart |
 
-Branding (site name, accent colour, login tagline), the default UI language for new users, the session timeouts and protection level, and the brute-force auto-block threshold are editable in-app at **Administration → Settings** (superadmin) and apply live. The panel's `port` and `bind_host` are changed at **Server management → Panel binding** (superadmin), which also updates the firewall and restarts the panel; `trust_proxy` stays in `config.json`.
+Branding (site name, accent colour, login tagline), the default UI language for new users, the session timeouts and protection level, the brute-force auto-block threshold and the two host-reboot settings are editable in-app at **Administration → Settings** (superadmin) and apply live. The panel's `port` and `bind_host` are changed at **Server management → Panel binding** (superadmin), which also updates the firewall and restarts the panel; `trust_proxy` stays in `config.json`.
 
 ## Permissions
 

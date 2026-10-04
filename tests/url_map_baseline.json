@@ -937,6 +937,17 @@
       "POST"
     ]
   },
+  "/api/remote/<int:remote_id>/reboot-plan": {
+    "endpoint": "api_remote_reboot_plan",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_reboot_plan"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "/api/remote/<int:remote_id>/reboot-required": {
     "endpoint": "api_remote_reboot_required",
     "guards": [

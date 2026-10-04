@@ -876,6 +876,10 @@ def _register_panel_host_os(app):
     @superadmin_required
     def api_os_update_run():
         """Run apt upgrade."""
+        from panel.services import host_reboot as _hr
+        _busy = _hr.panel_host_busy()
+        if _busy:
+            return jsonify({"success": False, "message": _busy}), 409
         success, msg = so.os_run_update()
         if success:
             log_action(current_user, "os_update_run", target=LOCAL_HOST_LABEL, detail=msg)
@@ -893,34 +897,40 @@ def _register_panel_host_os(app):
     @login_required
     @superadmin_required
     def api_server_reboot():
-        """Reboot the server."""
+        """Reboot the panel's own host: {delay 0-300 s, mode}. The same clean reboot as its Power card.
+
+        Its game servers are stopped first and brought back as the plan says (host_reboot); with
+        players on and no mode it answers 409 needs_choice. The delay is waited out by the job,
+        which then reads the host again: a server started in the meantime is in the plan too. With
+        no local host row (a panel with no servers on its own host) there is nothing to stop, and
+        it reboots as before.
+        """
+        from panel.services import host_reboot as _hr
         data = _json_body()
         delay = data.get("delay", 5)
         # OverflowError is the one server_reboot's clamp does not catch: `{"delay": Infinity}`.
         if isinstance(delay, float) and not delay.is_integer():
             return jsonify({"success": False,
                             "message": "The reboot delay must be a number of seconds (0-300)."}), 400
-        # Through the same expected-offline path Reboot now on a remote host takes
-        # (monitoring._reboot_expecting_offline). This one called server_reboot bare, so every
-        # game server on the panel host was still "up" in the monitor's memory when the reboot
-        # verb ran — and the shutdown stops the games before it stops the panel, so a monitor pass
-        # in that window pushed "went offline unexpectedly" for each of them, about a reboot the
-        # panel had itself just made. No local host row (a panel with no servers on its own host)
-        # means nothing to mark, so it reboots as before.
-        from panel.services.monitoring import _reboot_expecting_offline
+        mode, err = _hr.parse_mode(data)
+        if err:
+            return jsonify({"success": False, "error": "bad_mode", "message": err}), 400
         try:
             _local = RemoteServer.query.filter_by(is_local=True).first()
         except Exception:
-            # Marking is a courtesy to the alert channel; a reboot the operator asked for is not
-            # refused because the row could not be read.
+            # A reboot the operator asked for is not refused because the row could not be read.
             import logging
-            logging.getLogger("panel").debug("reboot: no local host row to mark expected-offline",
-                                             exc_info=True)
+            logging.getLogger("panel").debug("reboot: no local host row", exc_info=True)
             _local = None
         if _local is not None:
-            success, msg = _reboot_expecting_offline(_local, lambda _r: so.server_reboot(delay))
-        else:
-            success, msg = so.server_reboot(delay)
+            try:
+                secs = max(0, min(300, int(delay)))
+            except (TypeError, ValueError, OverflowError):
+                return jsonify({"success": False,
+                                "message": "The reboot delay must be a number of seconds (0-300)."}), 400
+            code, body = _hr.request_reboot(_local, mode, current_user, "api", delay=secs)
+            return jsonify(body), code
+        success, msg = so.server_reboot(delay)
         if success:
             log_action(current_user, "server_reboot", target=LOCAL_HOST_LABEL, detail=f"delay={delay}s")
             return jsonify({"success": True, "message": msg})

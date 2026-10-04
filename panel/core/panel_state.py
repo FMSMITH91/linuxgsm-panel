@@ -22,6 +22,9 @@ import threading   # noqa: F401  (locks below are constructed from it)
 __all__ = [
     "_reboot_when_empty",
     "_rwe_lock",
+    "_host_reboots",
+    "_hr_lock",
+    "_reboot_awaiting",
     "_max_players_cache",
     "_os_update_seen",
     "_player_counts",
@@ -30,6 +33,7 @@ __all__ = [
     "_last_sample_prune",
     "_monitor_state",
     "_expected_offline",
+    "_expected_stop",
     "_cron_restart_pending",
     "_action_output",
     "_console_backlog",
@@ -145,13 +149,31 @@ def forget_rows(remote_ids=(), server_ids=()):
 _rwe_lock = threading.Lock()
 
 # Hosts the operator asked to "reboot when empty" — reboot once every game server on them is idle.
-# remote_id -> {"by": username, "since": epoch}. In-memory on purpose: a panel restart clears any
-# pending request, so no surprise reboot ever survives a restart.
+# remote_id -> {"by": username, "since": epoch, "origin", "expires", "boot", "waiting_on",
+# "checked_at", "unknown_since", "reminded", "bounces", "not_before"} (host_reboot.arm_wait writes
+# it). In-memory on purpose: a panel restart clears any pending request, so no surprise reboot
+# ever survives a restart — and the restart says so (host_reboot.announce_dropped_waits).
 #
 # Registered WITH its lock rather than pruned by name in _forget_deleted_rows, which is what it
 # used to be: it was the one row-keyed map the registry could not express, so it stayed a
 # hand-written special case beside the loop that walks everything else.
 _reboot_when_empty = register_remote_state({}, _rwe_lock)
+
+# The clean reboot the panel is running for a host RIGHT NOW (panel/services/host_reboot.py):
+# remote_id -> {plan, phase, mode, by, origin, since, sent, servers, done, total, left, cancel}. In
+# memory on purpose, like the wait above: a panel restart loses the job, and what it had already
+# done is in GameServer.reboot_restore, which the restore worker reads back and either finishes or
+# undoes. Every read and write is under _hr_lock, and each holds it for a dict operation only. Where
+# both locks are held at once, _hr_lock is taken FIRST and _rwe_lock inside it (host_reboot.cancel
+# says why); nothing takes them the other way round.
+_hr_lock = threading.Lock()
+_host_reboots = register_remote_state({}, _hr_lock)
+
+# Hosts whose clean reboot has been SENT: remote_id -> {"sent": epoch, "back": epoch|None}. While
+# the host is down, and for a few minutes after it is seen to have rebooted, the monitor records its
+# reachability but does not page "Host unreachable" / "Host back online" about it: the panel made
+# that outage, and its own summary says when the host is back (monitoring._reboot_alerts_muted).
+_reboot_awaiting = register_remote_state({})
 
 _max_players_cache = register_server_state({})   # server_id -> int  (capacity is ~static, so read it once and reuse)
 
@@ -178,12 +200,22 @@ _last_sample_prune = [0.0]   # 1-element holder so _prune_metric_samples updates
 # disk_pct / load_pct thresholds are user-configurable — see notifications.get_thresholds().
 # "remote_misses" / "server_misses": consecutive failed checks of a host/server still recorded as
 # up, which have not yet reached monitoring._DOWN_CONFIRM_SWEEPS (see _record_host_reachability).
+# "server_unannounced": servers recorded down without anyone being told (a panel Stop, or a server
+# this process first saw down); their return is not announced either (monitoring._server_transition;
+# host_reboot._finish marks one a reboot left stopped, and unmarks one its summary reported on).
 _monitor_state = {"remotes": register_remote_state({}), "servers": register_server_state({}),
                   "disk": register_remote_state({}), "load": register_remote_state({}),
                   "remote_misses": register_remote_state({}),
-                  "server_misses": register_server_state({})}
+                  "server_misses": register_server_state({}),
+                  "server_unannounced": register_server_state({})}
 
 _expected_offline = register_server_state({})   # server_id -> ts the panel last stopped/restarted it
+
+# server_id -> the _expected_offline ts of a panel STOP (monitoring._mark_expected_offline). While the
+# two agree the server is meant to STAY down: the monitor records that down at once and never pages
+# it. Every other mark (a restart, a reboot plan's hold, the plan's end) writes a new ts to
+# _expected_offline and so ends it on its own; a server so marked is meant to come back.
+_expected_stop = register_server_state({})
 
 # Game users whose ~/.restart-pending flag is set, per host id. The DAILY-RESTART cron sets that
 # flag on the box at 05:00 and its hourly partner restarts once the server empties — a mechanism the

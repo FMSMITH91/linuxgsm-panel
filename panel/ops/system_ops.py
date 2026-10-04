@@ -4109,6 +4109,28 @@ def _linger_on():
         return None
 
 
+def panel_starts_at_boot():
+    """Whether the panel's own unit starts at boot: True, False, or None when it cannot be read.
+
+    A system unit must be enabled; a per-user unit must be enabled AND its account lingering,
+    or the user manager — and the panel with it — does not start until somebody logs in. A clean
+    reboot of the panel's own host asks this before it stops anything: the servers the PANEL brings
+    back (running ones without Autostart) come back only once the panel does. Never raises.
+    """
+    try:
+        from panel.ops.debug_report import _src_systemd
+        res = _src_systemd.unit_show()
+    except Exception:  # noqa: BLE001 - "could not tell" is None, never a guess
+        return None
+    if res.get("error") or not res.get("props"):
+        return None
+    if res["props"].get("UnitFileState") not in ("enabled", "enabled-runtime"):
+        return False
+    if res.get("scope") == "user":
+        return _linger_on()
+    return True
+
+
 def _same_dir(a, b):
     try:
         return os.path.realpath(a) == os.path.realpath(b)

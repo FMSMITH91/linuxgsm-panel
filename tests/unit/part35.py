@@ -652,18 +652,21 @@ def _drive35(owner, fn):
 
 
 def _p35_loops_record():
-    from panel.services import monitoring as _mon35
+    from panel.services import host_reboot as _hr35
     app_mod = _sys35.modules["app"]
     got = _groups35(lambda: (_drive35(app_mod, lambda: app_mod._monitor_watch(None)),
-                             _drive35(_mon35, lambda: _mon35._reboot_when_empty_watch(None)),
-                             _drive35(app_mod, lambda: app_mod._autoblock_watch(None))))
-    check("loops: the monitor, reboot-when-empty and autoblock loops record their first pass's "
-          "delay BEFORE they sleep",
+                             _drive35(_hr35, lambda: _hr35.reboot_when_empty_watch(None)),
+                             _drive35(app_mod, lambda: app_mod._autoblock_watch(None)),
+                             _drive35(_hr35, lambda: _hr35.host_reboot_worker(None))))
+    check("loops: the monitor, reboot-when-empty, autoblock and host-reboot loops record their "
+          "first pass's delay BEFORE they sleep",
           [{k: v[1] for k, v in g.items()} for g in got]
-          == [{"monitor": 60}, {"reboot-when-empty": 60}, {"autoblock": 3600}], repr(got))
+          == [{"monitor": 60}, {"reboot-when-empty": 60}, {"autoblock": 3600},
+              {"host-reboot": 15}], repr(got))
 
 
-_LOOP_FILES35 = ("app.py", "panel/services/monitoring.py", "panel/routes/server_files.py",
+_LOOP_FILES35 = ("app.py", "panel/services/monitoring.py", "panel/services/host_reboot.py",
+                 "panel/routes/server_files.py",
                  "panel/routes/os_updates.py", "panel/routes/host_terminal.py",
                  "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py")
 
@@ -727,8 +730,9 @@ def _p35_loops_gate():
             if problem:
                 bad.append("%s:%s %s" % (rel, node.name, problem))
     check("loops: every beating loop that sleeps before its first pass records that delay first, "
-          "and the delay it records is the one it sleeps (all eight)",
-          not bad and recorded == 8, repr((bad, recorded)))
+          "and the delay it records is the one it sleeps (all nine: host_reboot's restore loop "
+          "is the ninth)",
+          not bad and recorded == 9, repr((bad, recorded)))
 
 
 # ── 7. trust_proxy off: a refused loopback account is counted, the believed basis named ────────

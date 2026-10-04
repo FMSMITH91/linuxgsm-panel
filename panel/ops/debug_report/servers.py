@@ -101,6 +101,7 @@ def _state():
     ms = ps._monitor_state
     return {"mon": snap(ms["servers"]), "misses": snap(ms["server_misses"]),
             "players": snap(ps._player_counts), "expected": snap(ps._expected_offline),
+            "stop": snap(ps._expected_stop),
             "cron_restart": snap(ps._cron_restart_pending),
             "scan": snap(mod("panel.ops.ssh_manager.portscan")._port_scan_cache)}
 
@@ -148,8 +149,15 @@ def _flags(gs, st, now, muted):
     out = []
     since = st["expected"].get(gs.id)
     window = mod("panel.services.monitoring")._EXPECT_OFFLINE_WINDOW
-    if isinstance(since, (int, float)) and now - since <= window:
-        out.append("expected offline (panel stop %s ago)" % ago(now - since))
+    if since == float("inf"):          # host_reboot: held for as long as its host's reboot plan runs
+        out.append("expected offline (host reboot)")
+    elif isinstance(since, (int, float)) and now - since <= window:
+        # A Stop's down is never paged; any other window (a restart, a reboot's mark, a plan's end)
+        # pages a server still down when it ends — the monitor reads the two differently.
+        if (st.get("stop") or {}).get(gs.id) == since:
+            out.append("expected offline (panel stop %s ago)" % ago(now - since))
+        else:
+            out.append("expected offline (back expected, %s left)" % ago(since + window - now))
     if gs.restart_pending:
         out.append("restart_pending")
     if st["cron_restart"].get(gs.id):

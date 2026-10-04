@@ -2213,9 +2213,10 @@ try:
             with app.app_context():
                 db.session.delete(db.session.get(GameServer, _hp_gsid))
                 db.session.commit()
-        # Rebooting the panel host marks its servers expected-offline first, as Reboot now on a
-        # remote does — else each one pushed "went offline unexpectedly" about the panel's own
-        # reboot. The reboot itself is stubbed; the mark is read from the monitor's own table.
+        # Rebooting the panel host goes through the clean reboot's gate (host_reboot), as Reboot now
+        # on a remote does: here its one server cannot be read (this machine refuses the sudo -u
+        # the probe needs), so the answer is the choice — never a reboot. Nothing is marked and
+        # the plain reboot underneath is never called. tests/unit/part41 drives the rest.
         from panel.ops import system_ops as _hp_so
         from panel.core.panel_state import _expected_offline as _hp_expected
         with app.app_context():
@@ -2227,25 +2228,23 @@ try:
             _hp_rgid = _hp_rg.id
         _hp_so_saved = _hp_so.server_reboot
         _hp_expected.pop(_hp_rgid, None)
+        _hp_plain = []
         try:
-            _hp_so.server_reboot = lambda d: (True, "Server will reboot in %s seconds." % d)
+            _hp_so.server_reboot = lambda d: (_hp_plain.append(d), (True, "Server will reboot"))[1]
             _hp_rb = c.post("/api/server-management/reboot", json={"delay": 10})
-            _hp_marked = _hp_rgid in _hp_expected
-            _hp_so.server_reboot = lambda d: (False, "Sudo access required for reboot.")
-            _hp_expected.pop(_hp_rgid, None)
-            c.post("/api/server-management/reboot", json={"delay": 10})
-            _hp_unmarked = _hp_rgid not in _hp_expected
+            _hp_body = _hp_rb.get_json() or {}
+            _hp_bad = c.post("/api/server-management/reboot", json={"mode": "later"})
         finally:
             _hp_so.server_reboot = _hp_so_saved
-            _hp_expected.pop(_hp_rgid, None)
             with app.app_context():
                 db.session.delete(db.session.get(GameServer, _hp_rgid))
                 db.session.commit()
-        check("panel host reboot: its servers are marked expected-offline before it goes down",
-              _hp_rb.status_code == 200 and _hp_marked, "status=%d marked=%s"
-              % (_hp_rb.status_code, _hp_marked))
-        check("panel host reboot: ...and a refused reboot leaves no mark behind",
-              _hp_unmarked)
+        check("panel host reboot: a server whose state cannot be read gets the choice (409), not a "
+              "reboot — nothing marked, the plain reboot never called",
+              _hp_rb.status_code == 409 and _hp_body.get("needs_choice") is True
+              and _hp_rgid not in _hp_expected and _hp_plain == [],
+              "status=%d body=%r plain=%r" % (_hp_rb.status_code, _hp_body, _hp_plain))
+        check("panel host reboot: ...and a mode it does not know is a 400", _hp_bad.status_code == 400)
         check("panel host firewall: a delegated admin cannot open a game port on it, nor sync one",
               _hp_go.status_code == 403 and _hp_sy.status_code == 403 and _hp_fw == [],
               "open=%d sync=%d calls=%r" % (_hp_go.status_code, _hp_sy.status_code, _hp_fw))
@@ -7441,6 +7440,7 @@ try:
         _saved_notify = _am.notifications.notify
         _saved_mstate = {k: dict(v) for k, v in _ps._monitor_state.items()}
         _saved_exp = dict(_ps._expected_offline)
+        _saved_stop = dict(_ps._expected_stop)
         _saved_full = dict(_ps._server_full_alerted)
         _saved_peak = dict(_ps._server_peak_notified)
         _saved_pc = dict(_ps._player_counts)
@@ -7481,26 +7481,28 @@ try:
             # ...but a panel-issued stop (inside the expected-offline window) suppresses it.
             _reset_mon()
             _ps._monitor_state["servers"][_mon_id] = True
-            _ps._expected_offline[_mon_id] = _time_mon.time()
+            _monmod._mark_expected_offline(_mon_id, "stop")      # what the Stop button marks
             _monmod._remote_listening_ports = lambda r: set()
             _rec.clear(); _monmod._monitor_pass()
             check("monitor: a panel-issued stop suppresses server_down", "server_down" not in _rec)
-            # ...and the RECORDED state must not flip either. Only the alert was suppressed; the
-            # pass still wrote False, so the next sweep read False -> True and pushed "Server back
-            # online" for an outage the operator was deliberately never told about. With a 60s
-            # sweep and a ~30s restart that lands on roughly half the restarts of a slow-booting
-            # game — a channel showing recoveries from outages it never reported. This is the
-            # treatment the maintenance branch already had.
-            check("monitor: ...and leaves the recorded state alone, so there is no phantom recovery",
-                  _ps._monitor_state["servers"].get(_mon_id) is True,
-                  "recorded %r" % _ps._monitor_state["servers"].get(_mon_id))
+            # ...and it is recorded DOWN at once, marked as the panel's own. It used to stay recorded
+            # UP for the whole window (so its return would not page "Server back online" for an
+            # outage nobody was told about), and when a Stop's window ended with the server still
+            # down, as a Stop intends, the sweeps after it paged "went offline unexpectedly". The
+            # mark is what keeps the return quiet now (next check), however late it comes.
+            check("monitor: ...records it down at once, marked as the panel's own, so neither the end "
+                  "of its window nor its return pages",
+                  (_ps._monitor_state["servers"].get(_mon_id),
+                   _ps._monitor_state["server_unannounced"].get(_mon_id)) == (False, True),
+                  "recorded %r / %r" % (_ps._monitor_state["servers"].get(_mon_id),
+                                        _ps._monitor_state["server_unannounced"].get(_mon_id)))
             # Drive the next sweep for real: _rec holds only event KEYS and other fixture servers
             # transition too, so record the BODIES and look for this server by name.
             _exp_bodies = []
             _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _exp_bodies.append((k, b)))[0]
             _monmod._remote_listening_ports = lambda r: {27100}
             _rec.clear(); _monmod._monitor_pass()
-            check("monitor: ...so coming back from a panel-issued restart is silent",
+            check("monitor: ...so coming back from a panel-issued stop is silent",
                   not [b for k, b in _exp_bodies if k == "server_up" and "mon-srv" in b],
                   str([b for k, b in _exp_bodies if k == "server_up"])[:140])
             # Positive control: a recovery the panel did NOT cause still announces itself, so the
@@ -7516,17 +7518,14 @@ try:
             _am.notifications.notify = lambda key, title, body="": _rec.append(key)
             _ps._expected_offline.pop(_mon_id, None)
 
-            # ── A reboot the PANEL fires is not "went offline unexpectedly" ─────────────────────
-            # Reboot-when-empty and Reboot now rebooted the host without marking its servers.
-            # While the host was down the monitor skipped them, so they stayed "up"; when it
-            # answered again the games were still waiting for LinuxGSM's */5 monitor cron, and
-            # each read up -> down: one "offline unexpectedly" per server, then "back online".
-            # Driven for real: the fire, then a sweep seven minutes later with the port still shut.
-            import panel.routes.remote_vps as _rw_route
-            _rw_saved = (_monmod.remote_reboot, _monmod.log_action, _monmod.time,
-                         _monmod._remote_listening_ports, _rw_route.remote_reboot)
-            _rw_bodies = []
+            # ── A server a reboot plan holds is not "went offline unexpectedly" ──────────────────
+            # A clean reboot (panel/services/host_reboot.py) marks every server its plan stops as
+            # expected-offline for as long as the plan runs — not for a fixed eight minutes, which
+            # a big host's stop phase alone could outlast. Driven through a real sweep seven
+            # minutes later with the port still shut; the control without the mark alerts.
             _rw_real_time = _monmod.time
+            _rw_saved_ports = _monmod._remote_listening_ports
+            _rw_bodies = []
 
             def _rw_sweep_later(secs):
                 """One real monitor pass `secs` from now, the port still shut, mon-srv last seen up.
@@ -7538,8 +7537,6 @@ try:
                     _reset_mon()
                     _ps._monitor_state["servers"][_mon_id] = True
                     _monmod._remote_listening_ports = lambda r: set()
-                    # As many sweeps as it takes to CONFIRM a down, or the control below would
-                    # pass on the confirmation rule rather than on the reboot marks.
                     _rw_bodies.clear()
                     for _ in range(_monmod._DOWN_CONFIRM_SWEEPS):
                         _monmod._monitor_pass()
@@ -7548,60 +7545,35 @@ try:
                 return [b for k, t, b in _rw_bodies if k == "server_down" and "mon-srv" in b]
 
             try:
-                _monmod.remote_reboot = lambda r: (True, "Reboot scheduled")
-                _monmod.log_action = lambda *a, **k: None
                 _am.notifications.notify = \
                     lambda k, t, b="": (_rec.append(k), _rw_bodies.append((k, t, b)))[0]
-                _ps._expected_offline.pop(_mon_id, None)
-                _monmod._fire_reboot_when_empty(RemoteServer.query.get(_r1_id), {"by": "admin"})
+                _ps._expected_offline[_mon_id] = float("inf")
                 _rw_down = _rw_sweep_later(420)
-                check("monitor: a reboot the panel fired does not report its servers 'offline unexpectedly'",
+                check("monitor: a server a reboot plan holds does not report 'offline unexpectedly'",
                       not _rw_down, str(_rw_down)[:160])
-                # Positive control: a reboot that was refused marks nothing and says it failed,
-                # and the SAME sweep then does alert — a real outage in that window is still told.
                 _ps._expected_offline.pop(_mon_id, None)
-                _monmod.remote_reboot = lambda r: (False, "the host refused")
-                _rw_bodies.clear()
-                _monmod._fire_reboot_when_empty(RemoteServer.query.get(_r1_id), {"by": "admin"})
-                _rw_titles = [t for k, t, b in _rw_bodies if k == "auto_reboot"]
                 _rw_down = _rw_sweep_later(420)
-                check("monitor: ...while a refused reboot leaves no mark, says it failed, and the outage alerts (control)",
-                      _mon_id not in _ps._expected_offline and _rw_titles == ["Auto-reboot failed"]
-                      and len(_rw_down) == 1, "%s %s" % (_rw_titles, _rw_down))
-
-                # Reboot now, through the real route: the same marks, from the route's own
-                # remote_reboot (stubbed where the route resolves it).
+                check("monitor: ...while one no plan holds does (control)", len(_rw_down) == 1,
+                      str(_rw_down)[:160])
+                # Reboot now, through the real route, on a host the panel cannot reach: refused,
+                # and nothing marked — a reboot is never sent on a guess.
                 _rw_c = app.test_client()
                 _rw_c.post("/login", data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
-                _ps._expected_offline.pop(_mon_id, None)
-                _rw_route.remote_reboot = lambda r: (True, "Reboot command sent to remote")
-                _rw_resp = _rw_c.post("/api/remote/%d/reboot" % _r1_id, json={})
-                _rw_mark = _ps._expected_offline.get(_mon_id, 0)
-                check("reboot now: the host's servers are marked expected-offline past boot and the monitor cron",
-                      _rw_resp.status_code == 200 and _rw_mark >= _rw_real_time.time() + 250,
-                      "%s mark=%r" % (_rw_resp.status_code, _rw_mark))
-                _ps._expected_offline.pop(_mon_id, None)
-                _rw_route.remote_reboot = lambda r: (False, "a password is required")
-                _rw_resp = _rw_c.post("/api/remote/%d/reboot" % _r1_id, json={})
-                check("reboot now: ...while a refused reboot marks nothing (control)",
-                      _rw_resp.status_code == 200 and _mon_id not in _ps._expected_offline,
-                      "%s %r" % (_rw_resp.status_code, _ps._expected_offline.get(_mon_id)))
+                _rw_resp = _rw_c.post("/api/remote/%d/reboot" % _r1_id, json={"mode": "now"})
+                # This fixture host answers nothing real: whichever refusal the census reaches first
+                # (unreachable, a preflight that cannot escalate, an install row left by an earlier
+                # block), the answer is a 409 and nothing is marked or started.
+                check("reboot now: a host the panel cannot really reach is not rebooted, and nothing is marked",
+                      _rw_resp.status_code == 409
+                      and (_rw_resp.get_json() or {}).get("error") in ("unreachable", "preflight", "blocked")
+                      and _mon_id not in _ps._expected_offline,
+                      "%s %r" % (_rw_resp.status_code, _rw_resp.get_json()))
                 _rw_c.get("/logout")
             finally:
-                (_monmod.remote_reboot, _monmod.log_action, _monmod.time,
-                 _monmod._remote_listening_ports, _rw_route.remote_reboot) = _rw_saved
+                _monmod.time = _rw_real_time
+                _monmod._remote_listening_ports = _rw_saved_ports
                 _ps._expected_offline.pop(_mon_id, None)
                 _am.notifications.notify = lambda key, title, body="": _rec.append(key)
-            # ...and the watcher's loop is what calls it (by AST: comments name it too), with no
-            # remote_reboot of its own left beside it.
-            import ast as _rw_ast
-            import inspect as _rw_inspect
-            _rw_calls = [getattr(n.func, "id", "") for n in _rw_ast.walk(_rw_ast.parse(
-                _rw_inspect.getsource(_monmod._reboot_when_empty_watch)))
-                if isinstance(n, _rw_ast.Call)]
-            check("monitor: the reboot-when-empty loop fires through _fire_reboot_when_empty",
-                  "_fire_reboot_when_empty" in _rw_calls and "remote_reboot" not in _rw_calls,
-                  repr(_rw_calls))
 
             # ── The sweep must WRITE DOWN what it measured ────────────────────────────────────
             # It computed `up` from a live port scan every 60s and kept it only in an in-memory
@@ -7786,6 +7758,17 @@ try:
             # watcher rebooted it inside 60s — steamcmd killed, a half-written serverfiles tree,
             # and the job reconciled later as "the panel restarted before this install finished".
             _sv_slots_idle = _monmod._server_slots
+            import panel.services.host_reboot as _idle_hr
+            _idle_hr_saved = (_idle_hr._probe_rows, _idle_hr._host_blockers, _monmod._host_reachable,
+                              _monmod._batched_slots)
+            # The census reads each server's tmux session on the host; this host is a fixture, so
+            # every installed server reads as running, and the host as reachable with nothing of
+            # its own in flight (dpkg, apt). What is under test is the rows and the counts.
+            _idle_hr._probe_rows = lambda remote, rows: {g.id: {"ok": True, "session": 1, "maint": 0}
+                                                         for g in rows}
+            _idle_hr._host_blockers = lambda remote: []
+            _monmod._host_reachable = lambda remote: True
+            _monmod._batched_slots = lambda servers: {}
             _idle_extra = None
             # Settle every row already on this host first. This suite is a flat script and earlier
             # blocks leave rows behind mid-install; now that _host_idle_state enumerates ALL rows
@@ -7797,7 +7780,7 @@ try:
                 _g.installed, _g.status = True, "online"
             db.session.commit()
             try:
-                _monmod._server_slots = lambda gs: (0, 16, None)   # every server: a confident 0
+                _monmod._server_slots = lambda gs, **k: (0, 16, None)   # every server: a confident 0
                 check("idle state: a host whose servers all report 0 players is idle",
                       _monmod._host_idle_state(_r1) == "idle", _monmod._host_idle_state(_r1))
                 _idle_extra = GameServer(remote_id=_r1_id, name="inst-srv", short_name="instserver",
@@ -7816,15 +7799,17 @@ try:
                 check("idle state: ...while a failed install does not block the reboot forever",
                       _monmod._host_idle_state(_r1) == "idle", _monmod._host_idle_state(_r1))
                 # ...and a server with players on it is still 'busy', so the gate is not blanket.
-                _monmod._server_slots = lambda gs: (3, 16, None)
+                _monmod._server_slots = lambda gs, **k: (3, 16, None)
                 check("idle state: a host with players connected is busy",
                       _monmod._host_idle_state(_r1) == "busy", _monmod._host_idle_state(_r1))
                 # ...and a count the panel could not read is 'unknown', never 'idle'.
-                _monmod._server_slots = lambda gs: (None, 16, None)
+                _monmod._server_slots = lambda gs, **k: (None, 16, None)
                 check("idle state: an unreadable count is unknown, not idle",
                       _monmod._host_idle_state(_r1) == "unknown", _monmod._host_idle_state(_r1))
             finally:
                 _monmod._server_slots = _sv_slots_idle
+                (_idle_hr._probe_rows, _idle_hr._host_blockers, _monmod._host_reachable,
+                 _monmod._batched_slots) = _idle_hr_saved
                 if _idle_extra is not None:
                     db.session.delete(_idle_extra); db.session.commit()
                 for _gid, _inst, _st in _idle_saved:
@@ -7930,7 +7915,7 @@ try:
                       "probed %s" % _probes)
                 # A stop the PANEL issued is already known locally — that must not cost a probe either.
                 _monmod._remote_listening_ports = lambda r: set()
-                _am._mark_expected_offline(_mon_id)
+                _monmod._mark_expected_offline(_mon_id, "stop")
                 _probes.clear(); _rec.clear(); _monmod._monitor_pass()
                 check("maintenance: a panel-issued stop is handled locally, with no probe",
                       _mon_id not in _probes and "server_down" not in _rec,
@@ -8020,93 +8005,79 @@ try:
             for _k, _v in _saved_mstate.items():
                 _ps._monitor_state[_k].clear(); _ps._monitor_state[_k].update(_v)
             _ps._expected_offline.clear(); _ps._expected_offline.update(_saved_exp)
+            _ps._expected_stop.clear(); _ps._expected_stop.update(_saved_stop)
             _ps._server_full_alerted.clear(); _ps._server_full_alerted.update(_saved_full)
             _ps._server_peak_notified.clear(); _ps._server_peak_notified.update(_saved_peak)
             _ps._player_counts.clear(); _ps._player_counts.update(_saved_pc)
             db.session.delete(_mon); db.session.commit()
 
     # ── reboot-when-empty: the POP is the commit point ────────────────────────────────────────────
-    # The watcher snapshots the pending hosts at the top of a tick, then spends tens of seconds of
-    # SSH on _host_reachable + _host_idle_state before popping the entry. An operator who clicks
-    # Cancel inside that window is told "Auto-reboot canceled." and reboot-required then reports
-    # pending_empty=false — but the pop came back None and the watcher rebooted anyway, taking
-    # every game server on the host with it, and logged it under actor "system" so the audit row
-    # did not explain it either. The `(info or {})` fallback was the tell.
+    # The wait (host_reboot.wait_pass) snapshots the pending hosts, then spends tens of seconds of
+    # SSH on the census before popping the entry. An operator who clicks Cancel inside that window
+    # is told "Auto-reboot canceled." — and the pop must come back empty, so nothing reboots.
     with app.app_context():
-        _rw_mod = sys.modules["panel.services.monitoring"]
+        _rw_hr = sys.modules["panel.services.host_reboot"]
+        _rw_mon = sys.modules["panel.services.monitoring"]
         _rw_ps = sys.modules["panel.core.panel_state"]
+        _rw_hosts = sys.modules["panel.ops.ssh_manager.hosts"]
         _rw_rid = RemoteServer.query.filter_by(name="smoke-host").first().id
-        _rw_saved = {n: getattr(_rw_mod, n) for n in
-                     ("time", "remote_reboot", "_host_reachable", "_host_idle_state", "log_action")}
-        _rw_saved_notify = _rw_mod.notifications.notify
+        # The REAL start_clean_reboot: the hand-over from the wait to the job is the commit point
+        # under test. Only the job's thread is stubbed (_spawn), so nothing runs on the host.
+        _rw_saved = [(_rw_hr, n, getattr(_rw_hr, n)) for n in
+                     ("host_player_state", "_spawn", "log_action")]
+        _rw_saved += [(_rw_mon, "_host_reachable", _rw_mon._host_reachable),
+                      (_rw_hosts, "host_boot_identity", _rw_hosts.host_boot_identity)]
+        _rw_saved_notify = _rw_hr.notifications.notify
         _rw_saved_reg = dict(_rw_ps._reboot_when_empty)
-        _rw_saved_exp = dict(_rw_ps._expected_offline)   # a fired reboot marks the host's servers
         _rw_reboots = []
 
-        class _OneTick(Exception):
-            """Breaks the watcher's `while True` after exactly one pass through the body."""
-
-        def _rw_run(idle_probe):
-            """Run ONE tick of the real watcher with the given _host_idle_state, and report what
-            it rebooted. time.sleep is what ends the loop, so nothing is left running behind us."""
+        def _rw_run(state, cancel=False):
+            """ONE pass of the real wait with the census answering `state`; what it started."""
             _rw_reboots.clear()
-            _ticks = {"n": 0}
 
-            def _sleep(_secs):
-                _ticks["n"] += 1
-                if _ticks["n"] > 1:
-                    raise _OneTick()
-
-            _rw_mod.time = type(sys)("_rw_clock")
-            _rw_mod.time.sleep, _rw_mod.time.time = _sleep, _rw_saved["time"].time
-            _rw_mod._host_reachable = lambda r: True
-            _rw_mod._host_idle_state = idle_probe
-            _rw_mod.remote_reboot = lambda r: (_rw_reboots.append(r.id), (True, "rebooting"))[1]
-            _rw_mod.log_action = lambda *a, **k: None
-            _rw_mod.notifications.notify = lambda *a, **k: None
+            def _census(remote, probes=None):
+                if cancel:
+                    with _rw_ps._rwe_lock:
+                        _rw_ps._reboot_when_empty.pop(remote.id, None)
+                return {"state": state, "busy": [], "unknown": [], "blockers": [], "total": 0}
+            _rw_hr.host_player_state = _census
+            _rw_hr._spawn = lambda target: _rw_reboots.append(target.__self__.remote_id)
+            _rw_hr.log_action = lambda *a, **k: None
+            _rw_mon._host_reachable = lambda r: True
+            _rw_hosts.host_boot_identity = lambda r: None
+            _rw_hr.notifications.notify = lambda *a, **k: None
             try:
-                _rw_mod._reboot_when_empty_watch(app)
-            except _OneTick:
-                pass
+                _rw_hr.wait_pass(app)
+            finally:
+                with _rw_ps._hr_lock:
+                    _rw_ps._host_reboots.pop(_rw_rid, None)    # the job that never ran
             return list(_rw_reboots)
 
-        try:
-            # The probe CANCELS mid-flight, exactly as the route's Cancel button does.
-            def _idle_then_cancel(remote):
-                with _rw_ps._rwe_lock:
-                    _rw_ps._reboot_when_empty.pop(remote.id, None)
-                return "idle"
+        def _rw_arm():
+            with _rw_ps._rwe_lock:
+                _rw_ps._reboot_when_empty.clear()
+                _rw_ps._reboot_when_empty[_rw_rid] = {"by": "smoke", "since": _time_mon.time()}
 
-            with _rw_ps._rwe_lock:
-                _rw_ps._reboot_when_empty.clear()
-                _rw_ps._reboot_when_empty[_rw_rid] = {"by": "smoke", "since": _time_mon.time()}
-            check("reboot-when-empty: a reboot cancelled while the idle probe ran does not fire",
-                  _rw_run(_idle_then_cancel) == [],
+        try:
+            _rw_arm()
+            check("reboot-when-empty: a reboot cancelled while the census ran does not fire",
+                  _rw_run("idle", cancel=True) == [],
                   "rebooted %s after the operator was told it was cancelled" % _rw_reboots)
-            # Positive control: still queued at the pop, so the host really does get rebooted.
-            with _rw_ps._rwe_lock:
-                _rw_ps._reboot_when_empty.clear()
-                _rw_ps._reboot_when_empty[_rw_rid] = {"by": "smoke", "since": _time_mon.time()}
+            _rw_arm()
             check("reboot-when-empty: ...while a queued, idle host still reboots",
-                  _rw_run(lambda remote: "idle") == [_rw_rid], str(_rw_reboots))
+                  _rw_run("idle") == [_rw_rid], str(_rw_reboots))
             check("reboot-when-empty: ...and firing removes it from the registry",
                   _rw_rid not in _rw_ps._reboot_when_empty)
-            # ...and a host that is not idle is left alone, entry intact, as before.
-            with _rw_ps._rwe_lock:
-                _rw_ps._reboot_when_empty.clear()
-                _rw_ps._reboot_when_empty[_rw_rid] = {"by": "smoke", "since": _time_mon.time()}
+            _rw_arm()
             check("reboot-when-empty: a busy host is not rebooted and stays queued",
-                  _rw_run(lambda remote: "busy") == [] and _rw_rid in _rw_ps._reboot_when_empty,
-                  str(_rw_reboots))
+                  _rw_run("busy") == [] and _rw_rid in _rw_ps._reboot_when_empty, str(_rw_reboots))
         finally:
-            for _n, _v in _rw_saved.items():
-                setattr(_rw_mod, _n, _v)
-            _rw_mod.notifications.notify = _rw_saved_notify
+            for _m, _n, _v in _rw_saved:
+                setattr(_m, _n, _v)
+            _rw_hr.notifications.notify = _rw_saved_notify
             with _rw_ps._rwe_lock:
                 _rw_ps._reboot_when_empty.clear()
                 _rw_ps._reboot_when_empty.update(_rw_saved_reg)
-            _rw_ps._expected_offline.clear()
-            _rw_ps._expected_offline.update(_rw_saved_exp)
 
     # ── An unreachable host is a normal condition, not a panel fault ──────────────────────────────
     # The fixture hosts point at 127.0.0.1:22 with nothing listening, so every endpoint below has to
@@ -14716,15 +14687,21 @@ try:
             db.session.commit()
 
     # ── a host reboot must not report a server it could not read as an empty one ───────────────
-    # player_count returns None for BOTH "the query failed" and "this game is not queryable", and
-    # the reboot check folded that into its `pc > 0` test — so an online server the panel could
-    # not read was simply absent from the answer, the confirm dialog said nothing, and the reboot
-    # disconnected whoever was on it. Verified on the test box before the fix: an online server
-    # with a query_type override answered {"busy":[],"total":0}.
-    import panel.routes.remote_vps as _rpmod
+    # A None count is "the query failed" or "this game is not queryable", never "empty": folded into
+    # a `pc > 0` test, an online server the panel could not read was simply absent from the answer,
+    # the confirm said nothing, and the reboot disconnected whoever was on it (verified on the test
+    # box: an online server with a query_type override answered {"busy":[],"total":0}). The census
+    # is host_reboot.host_player_state; this host is a fixture, so the session read is stubbed and
+    # the gamedig query recorded.
+    import panel.services.host_reboot as _rphr
+    import panel.services.monitoring as _rpmon
 
-    _rp_saved = _rpmod.sm_player_count
-    _rp_args = []
+    _rp_saved = [(_rphr, "_probe_rows", _rphr._probe_rows), (_rphr, "_host_blockers", _rphr._host_blockers),
+                 (_rpmon, "_host_reachable", _rpmon._host_reachable),
+                 (_rpmon, "_batched_slots", _rpmon._batched_slots),
+                 (_rpmon, "sm_player_slots", _rpmon.sm_player_slots),
+                 (_rpmon, "_lgsm_query_count", _rpmon._lgsm_query_count)]
+    _rp_args, _rp_sess = [], {}
 
     def _rp_get():
         return (c.get("/api/remote/%d/players" % remote_id).get_json() or {})
@@ -14735,22 +14712,26 @@ try:
     def _rp_busy(d):
         return [b["name"] for b in (d.get("busy") or [])]
 
+    _rp_count = {"n": None}
+
+    def _rp_slots(server, short, game_type=None, port=None, query_type=None):
+        _rp_args.append({"short": short, "query_type": query_type})
+        return _rp_count["n"], None, None
     try:
-        # Named, not counted: other checks leave their own servers on this host, so "the answer
-        # has one entry" is not a fact about the server under test. The first version of these
-        # checks asserted totals and failed on somebody else's rows.
         with app.app_context():
             _rp_gs = db.session.get(GameServer, gs_id)
             _rp_status_before, _rp_qt_before = _rp_gs.status, _rp_gs.query_type
             _rp_gs.status, _rp_gs.query_type = "online", "unreal3"
             db.session.commit()
             _rp_name, _rp_short = _rp_gs.name, _rp_gs.short_name
-
-        def _rp_stub(server, short, game_type=None, port=None, query_type=None):
-            _rp_args.append({"short": short, "query_type": query_type})
-            return None                      # the read failed / the game cannot be queried
-        _rpmod.sm_player_count = _rp_stub
-
+        _rphr._probe_rows = lambda remote, rows: {g.id: {"ok": True, "session": _rp_sess.get(g.id, 0),
+                                                         "maint": 0} for g in rows}
+        _rphr._host_blockers = lambda remote: []
+        _rpmon._host_reachable = lambda remote: True
+        _rpmon._batched_slots = lambda servers: {}
+        _rpmon.sm_player_slots = _rp_slots
+        _rpmon._lgsm_query_count = lambda g: None
+        _rp_sess[gs_id] = 1
         _rp = _rp_get()
         check("host reboot: a running server whose player count could not be read is reported",
               _rp_name in _rp_unknown(_rp) and _rp_name not in _rp_busy(_rp),
@@ -14759,36 +14740,25 @@ try:
         _rp_mine = [a for a in _rp_args if a["short"] == _rp_short]
         check("host reboot: ...and the per-server query type override reaches the query",
               _rp_mine and _rp_mine[-1]["query_type"] == "unreal3",
-              "called with %r — a game with no built-in gamedig type is queryable ONLY through "
-              "the override, so dropping it makes every one of them unreadable here while the "
-              "Players panel reads them fine" % (_rp_mine[-1:] or None,))
-
-        # A STOPPED server is unreadable because nothing is running. Listing it would put a
-        # warning on every reboot of a host with an idle server on it, which is how a real warning
-        # gets ignored.
-        with app.app_context():
-            db.session.get(GameServer, gs_id).status = "offline"
-            db.session.commit()
+              "called with %r" % (_rp_mine[-1:] or None,))
+        _rp_sess[gs_id] = 0
         check("host reboot: ...but a stopped server is not reported as unreadable",
               _rp_name not in _rp_unknown(_rp_get()),
               "every idle server raises a warning, so the real one stops being read")
-
-        # ...and a server that DOES answer still counts, both ways round.
-        with app.app_context():
-            db.session.get(GameServer, gs_id).status = "online"
-            db.session.commit()
-        _rpmod.sm_player_count = lambda *a, **k: 3
+        _rp_sess[gs_id] = 1
+        _rp_count["n"] = 3
         _rp = _rp_get()
         check("host reboot: a server with players is still reported as busy (positive control)",
               _rp_name in _rp_busy(_rp) and _rp_name not in _rp_unknown(_rp)
               and _rp.get("total", 0) >= 3,
               "busy=%r unknown=%r total=%r" % (_rp_busy(_rp), _rp_unknown(_rp), _rp.get("total")))
-        _rpmod.sm_player_count = lambda *a, **k: 0
+        _rp_count["n"] = 0
         check("host reboot: ...and a server that answers ZERO is empty, not unknown",
               _rp_name not in _rp_unknown(_rp_get()),
               "a confirmed-empty server is being reported as unreadable")
     finally:
-        _rpmod.sm_player_count = _rp_saved
+        for _m, _n, _v in _rp_saved:
+            setattr(_m, _n, _v)
         with app.app_context():
             _rp_gs = db.session.get(GameServer, gs_id)
             _rp_gs.status, _rp_gs.query_type = _rp_status_before, _rp_qt_before

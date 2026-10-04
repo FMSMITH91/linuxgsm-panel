@@ -695,6 +695,10 @@ class GameServer(db.Model):
     restart_pending = db.Column(db.Boolean, default=False)  # a mod change needs a restart to load it
     backup_pending = db.Column(db.Boolean, default=False)   # queued to back up once players leave
     stop_pending = db.Column(db.Boolean, default=False)     # queued to stop once players leave
+    # The panel is rebooting this server's host: what it found the server doing, who brings it
+    # back, and how far that has got (JSON, see panel/services/host_reboot.py). NULL otherwise.
+    # In the database, not in memory, because the panel host's own reboot takes the panel with it.
+    reboot_restore = db.Column(db.Text, nullable=True)
     commands = db.Column(db.Text, default="[]")  # JSON list of {cmd, short, desc} from LinuxGSM
     created_at = db.Column(db.DateTime, default=utcnow)
     remote = db.relationship("RemoteServer", back_populates="games")
@@ -926,14 +930,14 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "custom_command", "restart_when_empty", "stop_when_empty", "set_autostart", "edit_config",
     "server_alerts_save", "edit_file", "delete_file", "download_file", "cron_add",
     "cron_update", "cron_delete", "cron_run_now", "set_log_timestamps", "gmod_content",
-    "gmod_content_uninstall", "upload_file", "server_tags_set", "rename_file",
+    "gmod_content_uninstall", "upload_file", "server_tags_set", "rename_file", "remote_reboot_exclude",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({
     "autoblock_reconcile", "import_servers", "terminal_open", "terminal_close",
     "retrust_hostkey", "change_ssh_port", "game_port_open", "reboot_when_empty_arm",
-    "reboot_when_empty_cancel", "reboot_when_empty_fire", "add_remote", "edit_remote",
-    "add_local_remote",
+    "reboot_when_empty_cancel", "reboot_when_empty_fire", "reboot_when_empty_drop",
+    "reboot_when_empty_expire", "add_remote", "edit_remote", "add_local_remote",
 })
 AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
 # Host actions whose rows carry remote_id from the call site but are NOT backfilled: their old
@@ -1406,6 +1410,8 @@ _LIGHT_MIGRATIONS = {
         "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
     ("game_server", "content_games"):
         "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
+    # NULL on upgrade: no reboot the panel made before this column existed has anything to restore.
+    ("game_server", "reboot_restore"): "ALTER TABLE game_server ADD COLUMN reboot_restore TEXT",
     # NULL on upgrade, then backfilled once by _backfill_audit_object_ids (see there).
     ("audit_log", "game_server_id"): "ALTER TABLE audit_log ADD COLUMN game_server_id INTEGER",
     ("audit_log", "remote_id"): "ALTER TABLE audit_log ADD COLUMN remote_id INTEGER",

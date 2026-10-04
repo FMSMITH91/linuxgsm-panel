@@ -493,6 +493,9 @@ def _register_install(app):
         remote = gs.remote
         if remote is None:
             return _form_err("That server's host is gone.", "manage_servers")
+        _busy = _reboot_refusal(remote)
+        if _busy is not None:
+            return _busy
         _retry_content = _ms_retry_content(gs)
         # Queued BEFORE the row says "installing", and refused while an uninstall holds the row:
         # an uninstall checks for a live install once and then spends minutes on SSH, and a retry
@@ -529,10 +532,20 @@ def _install_form_refusal(remote, game_type, server_name):
     """
     refusal = _game_type_refusal(game_type)
     if refusal is None:
+        refusal = _reboot_refusal(remote)
+    if refusal is None:
         refusal = _os_cap_refusal(remote, game_type)
     if refusal is None:
         refusal = _server_name_refusal(server_name)
     return refusal
+
+
+def _reboot_refusal(remote):
+    """Refuse an install on a host the panel is rebooting right now. -> answer or None."""
+    from panel.services import host_reboot as _hr
+    if _hr.reboot_busy(remote.id):
+        return _form_err(_hr.BUSY_MESSAGE % remote.display_name, "manage_servers")
+    return None
 
 
 def _game_type_refusal(game_type):

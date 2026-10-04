@@ -44,7 +44,9 @@ SKIP = ["Sign out", "_acctSignOutAll"]
 # database, update, re-bind or repair itself. Faked or not, the panel then behaves as though that
 # were under way (a restore really does replace the throwaway database the walk is signed in to),
 # which is not a state the pages after it should be measured in.
-SKIP_CONFIRMING = SKIP + ["rebootNagNow", "restoreBackup", "doPanelUpdate", "switchPanelBranch",
+# (A host reboot has no confirmDialog to accept any more: its own dialog's buttons all say "reboot",
+# and helpers.js never presses a control whose text does.)
+SKIP_CONFIRMING = SKIP + ["restoreBackup", "doPanelUpdate", "switchPanelBranch",
                           "changePanelBinding", "repairPanel"]
 
 # The i18n pass: these pages, in Spanish, a few controls each.

@@ -429,7 +429,9 @@ try:
           _bs_job.get("status") == "done" and _bs_job.get("step_name") == "Complete"
           and _bs_job.get("message") == "Bootstrapped." and _bs_job.get("step") == 2
           and "[1/2] Updating packages" in _bs_job.get("log", [])
-          and _bs_seen == [("p9-host2", {"timezone": "UTC"})], repr((_bs_job, _bs_seen)))
+          and [(n, {k: v for k, v in o.items() if k != "do_reboot"}) for n, o in _bs_seen]
+          == [("p9-host2", {"timezone": "UTC"})],
+          repr((_bs_job, _bs_seen)))
     check("bootstrap: success marks the host online and writes a successful audit row",
           _p9_host_row(P9_HOST2).is_online is True
           and (_p9_audit("remote_vps_bootstrap") or NS(success=None)).success is True)
@@ -743,6 +745,25 @@ try:
           repr(_qa_aud))
     _p9_sh._queued_action_failures.pop(P9_GS, None)
     _qa_rc[0] = 0
+    # The queued stop is the panel's own: unmarked, the monitor read it as a crash and paged "went
+    # offline unexpectedly" two sweeps later (monitoring._mon_server_went_down). A queued restart is
+    # marked as a RESTART: it runs unattended, so a game it leaves dead must still page.
+    def _qa_mark(**flags):
+        for _m in (_p9_state._expected_offline, _p9_state._expected_stop):
+            _m.pop(P9_GS, None)
+        _t0 = _p9_real_time.time()
+        _qa_run(**flags)
+        _at = _p9_state._expected_offline.get(P9_GS)
+        return (_at is not None and _at >= _t0, _p9_state._expected_stop.get(P9_GS) == _at)
+
+    _qa_stop_mark = _qa_mark(stop_pending=True, restart_pending=False)
+    _qa_restart_mark = _qa_mark(restart_pending=True, stop_pending=False)
+    check("queued stop: marked as the panel's own STOP, as the Stop button marks it, so the monitor "
+          "records it down without paging 'went offline unexpectedly'", _qa_stop_mark == (True, True),
+          repr(_qa_stop_mark))
+    check("queued restart: marked as a RESTART, as the Restart button marks it — not a stop — so a "
+          "game it leaves dead still pages once the window ends", _qa_restart_mark == (True, False),
+          repr(_qa_restart_mark))
 
     def _qa_log_raises(*a, **k):
         raise RuntimeError("audit table locked")

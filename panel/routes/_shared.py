@@ -37,6 +37,7 @@ import time
 from app import (_apply_whitelist_everywhere, _autoblock_hosts, _log, _prune_jobs,
     _run_autoblock_now, _security_whitelist, _security_whitelist_add,
     _security_whitelist_remove)
+from panel.services.monitoring import _mark_expected_offline
 import re
 from panel.core import (clock, runtime_stats, terminal)
 
@@ -629,9 +630,12 @@ def _run_due_game_backups(app):
             # type for the games that need one (Project Zomboid, ARK, ...), answers None, and
             # run_game_backup reads None as EMPTY and runs LinuxGSM `backup`, which stops the
             # server with its players on it. Every backup and player-count caller passes it.
+            # Not a server its host's clean reboot holds: the backup would stop and start it in
+            # the middle of the plan (host_reboot), and the next tick takes it once that is done.
             targets = [(gs.id, gs.remote, gs.short_name, gs.lgsm_name, gs.name, gs.game_type, gs.port,
                         gs.query_type, row_birth(gs))
-                       for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
+                       for gs in GameServer.query.filter_by(installed=True).all()
+                       if gs.remote_id and not _reboot_holds(gs)]
             for target in targets:
                 sid, gname, born = target[0], target[4], target[8]
                 try:
@@ -642,6 +646,12 @@ def _run_due_game_backups(app):
                                           "scheduled_backup", "Scheduled backup failed")
     finally:
         _full_backup_lock.release()
+
+
+def _reboot_holds(gs):
+    """Whether a clean reboot of gs's host holds it: the plan is running, or still restoring it."""
+    from panel.services import host_reboot as _hr
+    return _hr.reboot_busy(gs.remote_id) or bool(gs.reboot_restore)
 
 
 def _back_up_queued(app, gs):
@@ -712,8 +722,8 @@ def _run_pending_backups(app):
                 if not still_held(gs):
                     continue
                 sid, gname, born = gs.id, gs.name, row_birth(gs)
-                if not gs.remote_id or _button_backup_running(sid):
-                    continue   # (a Backup-button run in flight: stays queued, see the ticker)
+                if not gs.remote_id or _button_backup_running(sid) or _reboot_holds(gs):
+                    continue   # (a Backup-button run in flight, or a reboot: stays queued)
                 try:
                     _back_up_queued(app, gs)
                 except Exception as e:
@@ -803,6 +813,11 @@ def _run_queued_action(app, gs):
     safe, or after _QUEUED_ACTION_ATTEMPTS failures in a row, and every attempt is audited.
     """
     act = "stop" if gs.stop_pending else "restart"
+    # The panel's own stop/restart, marked as the Stop and Restart buttons mark theirs
+    # (server_detail._run_action): unmarked, the monitor read a queued stop as a crash and paged
+    # "went offline unexpectedly" two sweeps after it. A queued restart is marked as a restart: it
+    # runs unattended, so if the game does not come back, that page is the only notice there is.
+    _mark_expected_offline(gs.id, act)
     _out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, act,
                                          timeout=90, selfname=gs.lgsm_name)
     ok = (rc == 0)
@@ -891,8 +906,9 @@ def _run_due_restarts(app):
             # Don't restart/stop a server that's being backed up right now — the backup already
             # stops+starts it, and racing it could fail the backup. Leave it queued for next tick.
             # Both ways a backup can be running: the runners' flag, and the Backup button's long
-            # action, which sets no flag at all.
-            if _backup_in_progress(gs.id):
+            # action, which sets no flag at all. Nor one its host's reboot holds: the reboot's
+            # stop honours a queued stop, and its restore clears a queued restart.
+            if _backup_in_progress(gs.id) or _reboot_holds(gs):
                 continue
             try:
                 _settle_queued_action(app, gs)
@@ -989,7 +1005,13 @@ class _BootstrapRun:
             raise RuntimeError("Remote no longer exists")
         self.remote, self.created, self.pinned = remote, remote.created_at, remote.host_key
         name = remote.name
+        # The panel's own record of what runs here, beside the process probe the reboot step asks:
+        # a host whose managed server was last seen online is never rebooted by a bootstrap.
+        online = db.session.query(GameServer.id).filter_by(
+            remote_id=self.remote_id, status="online").first() is not None
         db.session.expunge(remote)
+        if online:
+            opts = dict(opts, do_reboot=False)   # it then only reports a pending reboot
         success = False
         try:
             success, msg, _ = remote_bootstrap_vps(remote, progress=self.progress, **opts)

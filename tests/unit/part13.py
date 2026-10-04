@@ -1679,12 +1679,12 @@ _MON_STUBBED10 = ("run_command", "run_privileged", "_remote_listening_ports", "h
                   "game_map", "server_live_metrics", "lgsm_get_values", "sm_player_slots",
                   "sm_player_slots_batch",
                   "sm_game_engine", "sm_console_status", "sm_player_count_via_lgsm_query",
-                  "sm_get_server_status", "remote_reboot", "remote_fail2ban_attempt_counts",
+                  "sm_get_server_status", "remote_fail2ban_attempt_counts",
                   "remote_ufw_blocked_ips", "remote_ufw_deny_ip", "remote_ufw_undeny_ip",
                   "tailnet_exempt_ips", "load_config", "notifications", "time", "db",
                   "_probe_host", "_query_server_slots", "_query_host_metrics",
                   "_lgsm_maintenance_running", "_host_reachable", "_host_idle_state",
-                  "_fire_reboot_when_empty", "_host_disk_pct", "_host_load_mem",
+                  "_host_disk_pct", "_host_load_mem",
                   "_host_restart_flags", "_server_max_config")
 _mon_saved10 = {k: getattr(_mon10, k) for k in _MON_STUBBED10}
 _alerts10 = []
@@ -1699,6 +1699,151 @@ def _raiser10(exc):
     def _f(*a, **k):
         raise exc
     return _f
+
+
+_clock10 = [0.0]      # the moved clock of the expected-window checks (monitoring.time reads it)
+
+
+def _win_sweeps10(n, up, step=60):
+    """`n` REAL sweeps `step` s apart on the moved clock, gmod1's port open or shut: the alert keys sent."""
+    got = []
+    for _i in range(n):
+        _clock10[0] += step
+        got += _sweep10({"reachable": False}, dict(_UP10) if up else dict(_UP10, ports={27017}))
+    return got
+
+
+def _win_fresh10(action=None):
+    """gmod1 up and recorded up, nothing marked; then `action` marked the way its button marks it."""
+    g1 = _ids10["g1"]
+    for m in (_mon10._expected_offline, _mon10._expected_stop, _mon10._monitor_state["server_unannounced"]):
+        m.pop(g1, None)
+    _win_sweeps10(1, True)
+    if action:
+        _mon10._mark_expected_offline(g1, action)
+
+
+def _stop_window_checks10():
+    """A panel Stop: down at once, never paged — and a crash once it is running again still is."""
+    _win_fresh10("stop")
+    stopped = _win_sweeps10(1, False)
+    recorded = _mon10._monitor_state["servers"].get(_ids10["g1"])
+    later = _win_sweeps10(8, False)
+    check("monitor pass: a panel Stop is recorded DOWN at once, and nothing is paged",
+          (stopped, recorded) == ([], False), repr((stopped, recorded)))
+    check("monitor pass: ...and when its window ends, minutes later, still nothing — no 'went "
+          "offline unexpectedly' for a server the panel stopped", later == [], repr(later))
+    check("monitor pass: ...nor 'back online' when it is started again, however much later",
+          _win_sweeps10(1, True, step=3600) == [], repr(_alerts10))
+    crash, back = _win_sweeps10(_mon10._DOWN_CONFIRM_SWEEPS, False), _win_sweeps10(1, True)
+    check("monitor pass: a crash outside any window still pages 'went offline unexpectedly', "
+          "once, and its return still pages 'back online'",
+          (crash, back) == (["server_down"], ["server_up"]), repr((crash, back)))
+    # Started again INSIDE the Stop's 180 s, then a crash, also inside them: by the Start button
+    # before any sweep saw it down, or from a shell once a sweep had.
+    _win_fresh10("stop")
+    _clock10[0] += 20
+    _mon10._mark_expected_offline(_ids10["g1"], "start")
+    by_button = _win_sweeps10(1, True, step=30) + _win_sweeps10(2, False, step=30)
+    _win_fresh10("stop")
+    by_hand = (_win_sweeps10(1, False, step=30) + _win_sweeps10(1, True, step=30)
+               + _win_sweeps10(2, False, step=30))
+    check("monitor pass: a server started again after a panel Stop, by the Start button or by hand, "
+          "that crashes inside the Stop's window pages 'went offline unexpectedly' — the Stop's "
+          "window ends with the Start, or with the down it explained",
+          (by_button, by_hand) == (["server_down"], ["server_down"]), repr((by_button, by_hand)))
+
+
+def _restart_window_checks10():
+    """A panel Restart is meant to come back: one that does not, or crashes once back, still pages."""
+    _win_fresh10("restart")
+    never, back = _win_sweeps10(8, False), _win_sweeps10(1, True)
+    _win_fresh10("restart")
+    crash = (_win_sweeps10(1, False, step=30) + _win_sweeps10(1, True, step=30)
+             + _win_sweeps10(8, False, step=30))
+    _win_fresh10("restart")
+    fine = _win_sweeps10(1, False, step=30) + _win_sweeps10(8, True)
+    check("monitor pass: a panel Restart whose server never comes back pages 'went offline "
+          "unexpectedly' once its window ends, once, and its return 'back online'",
+          (never, back) == (["server_down"], ["server_up"]), repr((never, back)))
+    check("monitor pass: ...one that came back and crashed inside its window pages it too, once",
+          crash == ["server_down"], repr(crash))
+    check("monitor pass: ...while one that came back pages nothing either way (control)",
+          fine == [], repr(fine))
+
+
+def _first_seen_down_checks10():
+    """After a panel restart: a server first seen down returns quietly, a reboot plan's or not."""
+    g1 = _ids10["g1"]
+
+    def restarted(hold, ends=True):
+        # A restarted panel has recorded nothing yet; host_reboot.resume_reboot_state puts a plan's
+        # hold back first. The plan ends (the row's window from now) before it is back, or still
+        # holds it when it is. No hold: a server stopped before the restart, started an hour later.
+        for m in (_mon10._monitor_state["servers"], _mon10._monitor_state["server_unannounced"],
+                  _mon10._expected_offline, _mon10._expected_stop):
+            m.pop(g1, None)
+        if hold:
+            _mon10._expected_offline[g1] = float("inf")
+        got = _win_sweeps10(1, False)
+        if hold and ends:
+            _mon10._expected_offline[g1] = _clock10[0]
+        return got + _win_sweeps10(1, True, step=900 if hold else 3600)
+
+    held, still, unheld = restarted(True), restarted(True, ends=False), restarted(False)
+    crash = _win_sweeps10(_mon10._DOWN_CONFIRM_SWEEPS, False) + _win_sweeps10(1, True)
+    check("monitor pass: after a panel restart, a server first seen down pages nothing on its way "
+          "back — one a reboot plan holds, during the plan or after it, and one stopped before the "
+          "restart (control: once seen up, a crash pages both ways)",
+          (held, still, unheld, crash) == ([], [], [], ["server_down", "server_up"]),
+          repr((held, still, unheld, crash)))
+    # No restart: up and recorded up when the plan takes it down, back while the plan holds it.
+    _win_fresh10()
+    _mon10._expected_offline[g1] = float("inf")
+    in_plan = _win_sweeps10(3, False) + _win_sweeps10(1, True, step=600)
+    _mon10._expected_offline.pop(g1, None)
+    check("monitor pass: a server a reboot plan takes down and brings back pages nothing either way",
+          in_plan == [], repr(in_plan))
+
+
+def _host_mark_window_checks10():
+    """A host the panel reboots: a server stopped just before stays a Stop; one that never returns pages."""
+    _win_fresh10("stop")
+    _clock10[0] += 10
+    _mon10._mark_host_expected_offline(_ids10["rb"])
+    stopped = _win_sweeps10(12, False)
+    _win_fresh10()
+    _mon10._mark_host_expected_offline(_ids10["rb"])
+    gone = _win_sweeps10(12, False)
+    check("monitor pass: a server stopped just before its host's reboot stays down without paging "
+          "when the reboot's longer mark ends — the Stop stays a Stop — while one the reboot took "
+          "down that never comes back pages 'went offline unexpectedly' once (control)",
+          (stopped, gone) == ([], ["server_down"]), repr((stopped, gone)))
+
+
+def _expected_window_checks10():
+    """A down the panel expected, through the REAL sweep (_monitor_pass) with its clock moved on.
+
+    Run inside the database-backed passes below: gmod1 (port 27015) on beta is up and recorded up,
+    gmod3 is muted. A panel Stop used to stay recorded UP for its whole window, and the sweeps after
+    the window declared it down and paged "went offline unexpectedly" four or five minutes after
+    every Stop. A Restart, and a reboot, are meant to come back: one that does not still pages, as
+    does a crash after it came back. A real crash must still page exactly as before.
+    """
+    marks = (dict(_mon10._expected_offline), dict(_mon10._expected_stop))
+    _clock10[0] = time.time()
+    _mon10.time = NS(time=lambda: _clock10[0], monotonic=lambda: _clock10[0], sleep=lambda s: None)
+    try:
+        _stop_window_checks10()
+        _restart_window_checks10()
+        _first_seen_down_checks10()
+        _host_mark_window_checks10()
+    finally:
+        for m, snap in zip((_mon10._expected_offline, _mon10._expected_stop), marks):
+            m.clear()
+            m.update(snap)
+        _win_fresh10()              # gmod1 up and recorded up, as the checks after these expect
+        _mon_restore10("time")
 
 
 _mon10.notifications = NS(
@@ -2024,6 +2169,7 @@ try:
         check("monitor pass: a panel-issued stop and its restart produce NO alert at all",
               "server_down" not in _exp10 and "server_up" not in _exp_back10,
               repr((_exp10, _exp_back10)))
+        _expected_window_checks10()
         # LinuxGSM's own maintenance: the down is suppressed and so is the recovery.
         _mon10._lgsm_maintenance_running = lambda r, gs: True
         # Two sweeps: the first only counts a miss and never reaches the maintenance probe.
@@ -2131,85 +2277,17 @@ try:
               repr(([(m.server_id, m.cpu) for m in _ms10], [(h.remote_id, h.cpu) for h in _hs10])))
         _mon_restore10("_query_host_metrics")
 
-        # ── reboot-when-empty: the marks, the fire, and the watcher's commit point ─────────────
+        # ── a host the panel reboots: its servers' marks ───────────────────────────────────────
+        # (The reboot itself, its wait and the wait's commit point are host_reboot's: part41.)
         _pstate10._expected_offline.pop(_ids10["g1"], None)
         _pstate10._expected_offline[_ids10["g3"]] = 12345.0
-        _rbok10, _ = _mon10._reboot_expecting_offline(_rb10, lambda r: (False, "refused"))
-        check("monitor reboot: a refused reboot puts back exactly the marks that were there",
-              _rbok10 is False and _ids10["g1"] not in _pstate10._expected_offline
-              and _pstate10._expected_offline.get(_ids10["g3"]) == 12345.0,
-              repr({k: _pstate10._expected_offline.get(k) for k in (_ids10["g1"], _ids10["g3"])}))
-        _mon10._reboot_expecting_offline(_rb10, lambda r: (True, "rebooting"))
-        check("monitor reboot: a reboot that ran marks every server on the host expected-offline",
+        _prev10 = _mon10._mark_host_expected_offline(_rb10.id)
+        check("monitor reboot: every server on the host is marked expected-offline, and the "
+              "previous marks are handed back",
               all(_pstate10._expected_offline.get(_ids10[k], 0) > time.time()
-                  for k in ("g1", "g2", "g3")), "")
-
-        _mon10.remote_reboot = lambda r: (True, "rebooting now")
-        del _alerts10[:]
-        with _dbapp10.test_request_context():
-            _fire_ok10 = _mon10._fire_reboot_when_empty(_rb10, {"by": "alice"})
-            _mon10.remote_reboot = lambda r: (False, "no sudo")
-            _fire_bad10 = _mon10._fire_reboot_when_empty(_rb10, {})
-        _audit10 = [(a.action, a.username, a.success) for a in
-                    _Audit10.query.filter_by(action="reboot_when_empty_fire").order_by(_Audit10.id)]
-        check("monitor reboot: a fired reboot is audited under the operator who queued it",
-              _fire_ok10 == (True, "rebooting now")
-              and _audit10 == [("reboot_when_empty_fire", "alice", True),
-                               ("reboot_when_empty_fire", "system", False)],
-              repr(_audit10))
-        check("monitor reboot: a refused reboot is announced as FAILED, not as having run",
-              [a[1] for a in _alerts10] == ["Host auto-rebooted", "Auto-reboot failed"]
-              and _fire_bad10 == (False, "no sudo"), repr(_alerts10))
-        _mon_restore10("remote_reboot")
-
-        _fired10, _sleeps10 = [], {"n": 0}
-        _rc10 = _mk_remote10("gamma")
-        _rd10 = _mk_remote10("delta")
-        _re10 = _mk_remote10("epsilon")
-        _gone_id10 = 424242
-
-        def _watch_sleep10(s):
-            _sleeps10["n"] += 1
-            if _sleeps10["n"] == 2:
-                with _pstate10._rwe_lock:
-                    _pstate10._reboot_when_empty.update({
-                        _gone_id10: {"by": "x"}, _ra10.id: {"by": "x"}, _rb10.id: {"by": "x"},
-                        _rc10.id: {"by": "alice"}, _rd10.id: {"by": "x"}, _re10.id: {"by": "x"}})
-            elif _sleeps10["n"] >= 3:
-                raise _Stop10()
-
-        def _idle_state10(r):
-            if r.id == _rb10.id:
-                return "busy"
-            if r.id == _rd10.id:                        # cancelled while the probes ran
-                with _pstate10._rwe_lock:
-                    _pstate10._reboot_when_empty.pop(r.id, None)
-            if r.id == _re10.id:
-                raise RuntimeError("probe bug")
-            return "idle"
-
-        with _pstate10._rwe_lock:
-            _rwe_saved10 = dict(_pstate10._reboot_when_empty)
-            _pstate10._reboot_when_empty.clear()
-        _mon10.time = _Clock10(time.time(), sleep=_watch_sleep10)
-        _mon10._host_reachable = lambda r: r.id != _ra10.id
-        _mon10._host_idle_state = _idle_state10
-        _mon10._fire_reboot_when_empty = lambda r, info: _fired10.append((r.name, dict(info)))
-        try:
-            _wr10 = _try10(_mon10._reboot_when_empty_watch, _dbapp10)
-            with _pstate10._rwe_lock:
-                _left10 = sorted(_pstate10._reboot_when_empty)
-                _pstate10._reboot_when_empty.clear()
-                _pstate10._reboot_when_empty.update(_rwe_saved10)
-        finally:
-            _mon_restore10("time", "_host_reachable", "_host_idle_state", "_fire_reboot_when_empty")
-        check("monitor reboot watch: only the reachable, IDLE, still-queued host is rebooted",
-              _fired10 == [("gamma", {"by": "alice"})], repr(_fired10))
-        check("monitor reboot watch: a deleted host is dequeued; unreachable, busy and failing "
-              "hosts stay queued; a cancelled one is not rebooted",
-              _left10 == sorted([_ra10.id, _rb10.id, _re10.id]) and _sleeps10["n"] == 3
-              and _wr10 == ("RAISED", repr(_Stop10())),
-              repr((_left10, _sleeps10, _wr10)))
+                  for k in ("g1", "g2", "g3"))
+              and _prev10.get(_ids10["g3"]) == 12345.0 and _prev10.get(_ids10["g1"]) is None,
+              repr(_prev10))
 
         # With no installed servers at all, the poll and the sampler do nothing.
         _GS10.query.delete()

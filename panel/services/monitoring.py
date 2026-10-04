@@ -1,7 +1,8 @@
 """The monitor loop and everything that feeds it.
 
-That is: player counts, host probes, metric samples, LinuxGSM maintenance detection, autoblock
-reconciliation, and the deferred reboot watch.
+That is: player counts, host probes, metric samples, LinuxGSM maintenance detection and autoblock
+reconciliation. The reboot-when-empty wait moved to panel/services/host_reboot.py with the clean
+reboot it now starts.
 
 Lifted out of app.py, where these sat interleaved with route registration and the chat bots across
 roughly a thousand lines. Nothing here is per-app: each function takes what it needs as an argument
@@ -23,22 +24,20 @@ import time
 
 from panel.services import notifications
 from panel.ops import system_ops as so
-from panel.security.auth import log_action
-from panel.core import runtime_stats
 from panel.core.clock import utcnow
 from panel.core.config import load_config
 from panel.core.validation import ip_address_or_none, ip_network_or_none, unzoned_ip_or_network
 from panel.db.models import (GameServer, HostSample, MetricSample, RemoteServer, db,
     row_label, rows_still_held)
 from panel.core.panel_state import (
-    _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state,
-    _player_counts, _reboot_when_empty, _rwe_lock, _server_full_alerted, _server_peak_notified,
+    _cron_restart_pending, _expected_offline, _expected_stop, _host_reboots, _hr_lock, _max_players_cache,
+    _monitor_state, _player_counts, _reboot_awaiting, _server_full_alerted, _server_peak_notified,
     forget_rows, keyed_state_with_locks, register_remote_state,
 )
 from panel.ops.ssh_manager import (
     _gamedig_type, _remote_listening_ports, game_idents_ok, game_map, host_live_metrics,
     is_local_server, lgsm_get_values, metrics_for_game,
-    remote_fail2ban_attempt_counts, remote_reboot,
+    remote_fail2ban_attempt_counts,
     remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
     run_privileged,
     server_live_metrics, tailnet_exempt_ips, ufw_lock,
@@ -71,7 +70,6 @@ __all__ = [
     "_metrics_work",
     "_monitor_pass",
     "_query_server_metrics",
-    "_reboot_when_empty_watch",
     "_record_metric_samples",
     "_refresh_player_counts",
     "_whitelisted",
@@ -79,38 +77,15 @@ __all__ = [
 
 
 def _host_idle_state(remote):
-    """Classify a host as 'idle', 'busy' or 'unknown' for the reboot-when-empty poller.
+    """Classify a host as 'idle', 'busy' or 'unknown': host_reboot.host_player_state, folded.
 
-    'idle' is no players on any game server, confidently; 'busy' is someone connected; 'unknown' is
-    at least one server that couldn't be read, or one that is mid-install. The reboot-when-empty
-    poller only acts on 'idle', so a game the panel can't query is never rebooted out from under
-    its players.
+    The census every reboot path asks (panel/services/host_reboot.py) is the one predicate: a host
+    mid-install, mid-backup or mid-update, or one that is not answering, folds into 'unknown' here,
+    so nothing that reads this ever reboots into work in flight or on a guess.
     """
-    unknown = False
-    # EVERY row on the host, not just the installed ones. `installed=True` hid the one state in
-    # which a reboot does irreversible damage: through install steps 1-4 — the SteamCMD download,
-    # the long part — the row is installed=False/status="installing", so it was not in this query
-    # at all and contributed neither "busy" nor "unknown". A host part-way through a 30 GB download
-    # therefore reported a confident "idle", the watcher rebooted it inside 60s, and the install
-    # died mid-write to be reconciled later as "the panel restarted before this install finished".
-    # The two siblings in this file already filter on exactly these statuses (_refresh_player_counts
-    # and _monitor_server, the _monitor_pass per-server step); this is the same filter, read the
-    # other way round.
-    for gs in GameServer.query.filter_by(remote_id=remote.id).all():
-        if gs.status in ("installing", "configuring"):
-            unknown = True   # work in flight: no players to count, but certainly not idle
-            continue
-        # Not installed and nothing in flight (a failed or abandoned install): no game is running,
-        # so it is not something a reboot can interrupt — and treating it as unknown would strand
-        # "reboot when empty" on that host for as long as the row exists.
-        if not gs.installed:
-            continue
-        pc = _server_players_confident(gs)
-        if pc is None:
-            unknown = True
-        elif pc > 0:
-            return "busy"
-    return "unknown" if unknown else "idle"
+    from panel.services import host_reboot
+    state = host_reboot.host_player_state(remote)["state"]
+    return state if state in ("idle", "busy") else "unknown"
 
 
 def _host_reachable(remote):
@@ -553,7 +528,10 @@ def _notify_if_emptied(gs, count):
     # A muting tag skips the whole block, flag included: the request stays ARMED, so it
     # fires the next time the server empties after the tag comes off — rather than being
     # silently consumed while nobody could be told.
-    if gs.notify_when_empty and count == 0 and not notifications.alerts_muted(gs):
+    # A server its host's reboot plan stopped reads 0 too, and that is not "the players left": the
+    # flag stays armed for the real moment, after the server is back.
+    if (gs.notify_when_empty and count == 0 and not gs.reboot_restore
+            and not notifications.alerts_muted(gs)):
         # DISARM FIRST, then send — the order the peak block below already uses.
         # notifications.notify never raises (it dispatches on a thread of its own), so the
         # only statement the except could ever catch was the commit; and when it did catch
@@ -696,7 +674,7 @@ def _host_sample_row(rid, now, m):
 _MONITOR_SECONDS = 60
 
 
-_EXPECT_OFFLINE_WINDOW = 180    # a panel-issued stop/restart suppresses "server down" for this long
+_EXPECT_OFFLINE_WINDOW = 180    # a panel restart holds "server down" this long (_mark_expected_offline)
 
 
 # LinuxGSM commands that legitimately take a server down for a while. Every entry widens the window
@@ -1004,6 +982,9 @@ def _record_host_reachability(remote, reachable):
     prev = _monitor_state["remotes"].get(remote.id)
     misses = _monitor_state["remote_misses"]
     recorded = reachable
+    # A reboot the panel made: the outage is recorded as usual, and the panel's own host_reboot
+    # summary says when it is back — so neither page is sent about it.
+    muted = _reboot_alerts_muted(remote.id)
     if reachable or prev is not True:
         misses.pop(remote.id, None)
     else:
@@ -1012,9 +993,10 @@ def _record_host_reachability(remote, reachable):
             recorded = True                  # not declared yet: one more sweep to be sure
         else:
             misses.pop(remote.id, None)
-            notifications.notify("remote_unreachable", "Host unreachable",
-                                 "%s stopped responding." % remote.display_name)
-    if prev is False and reachable:
+            if not muted:
+                notifications.notify("remote_unreachable", "Host unreachable",
+                                     "%s stopped responding." % remote.display_name)
+    if prev is False and reachable and not muted:
         notifications.notify("remote_recovered", "Host back online",
                              "%s is responding again." % remote.display_name)
     _monitor_state["remotes"][remote.id] = recorded
@@ -1029,6 +1011,26 @@ def _record_host_reachability(remote, reachable):
         remote.is_online = reachable
         return True
     return False
+
+
+# After the panel sees a host it rebooted come back, this long before its reachability alerts are
+# its own again: the monitor's sweep that notices it is back runs up to a minute later.
+_REBOOT_BACK_GRACE = 300
+# A host with no plan rows (nothing was running) is muted this long after the reboot was sent.
+_REBOOT_BARE_MUTE = 900
+
+
+def _reboot_alerts_muted(remote_id, now=None):
+    """Whether a host's unreachable/recovered alerts are held because the panel rebooted it."""
+    now = time.time() if now is None else now
+    ent = _reboot_awaiting.get(remote_id)
+    if ent:
+        back = ent.get("back")
+        return back is None or now - back < _REBOOT_BACK_GRACE
+    with _hr_lock:
+        job = _host_reboots.get(remote_id)
+        sent = job.get("sent") if job else None
+    return bool(sent) and now - sent < _REBOOT_BARE_MUTE
 
 
 def _check_host_disk(remote, pct, th):
@@ -1112,22 +1114,64 @@ def _monitor_server(remote, gs, probe, ports):
     return False
 
 
+def _mark_expected_offline(server_id, action):
+    """Note a power action the PANEL is about to run on a server, for the monitor's alerts.
+
+    "stop": the server is meant to STAY down. Its down is recorded at once and never paged, and its
+    return is not announced either (it was never announced down). "restart": it is meant to come
+    BACK. Its down is not paged inside _EXPECT_OFFLINE_WINDOW, but one still down when the window
+    ends pages "went offline unexpectedly", as does a crash inside the window after it came back.
+    "start": a Stop's window ends, so a crash after the start pages as usual.
+    """
+    if action == "start":
+        _end_stop_window(server_id)
+        return
+    now = time.time()
+    _expected_offline[server_id] = now
+    if action == "stop":
+        _expected_stop[server_id] = now
+    else:
+        _expected_stop.pop(server_id, None)
+
+
+def _offline_expected(server_id):
+    """Whether the panel itself has this server down: a panel stop/restart's window, or a reboot plan's hold (inf)."""
+    return time.time() - _expected_offline.get(server_id, 0) <= _EXPECT_OFFLINE_WINDOW
+
+
+def _stop_expected(server_id):
+    """Whether that window is a Stop's (the server is meant to stay down), not one it comes back from."""
+    ts = _expected_stop.get(server_id)
+    return ts is not None and ts == _expected_offline.get(server_id) and _offline_expected(server_id)
+
+
+def _end_stop_window(server_id):
+    """A Stop's window is over: the down it explains was recorded, or a start overtook it."""
+    ts = _expected_stop.pop(server_id, None)
+    if ts is not None and _expected_offline.get(server_id) == ts:
+        _expected_offline.pop(server_id, None)
+
+
 def _mon_server_went_down(remote, gs, up, prev_up, muted):
     """The down leg of _server_transition (prev_up True, now down): alert and answer what to record."""
     misses = _monitor_state["server_misses"]
     # The panel's own stop/restart is already accounted for locally — check that FIRST so
-    # an intentional stop keeps its existing semantics and costs no SSH round trip.
-    expected = time.time() - _expected_offline.get(gs.id, 0) <= _EXPECT_OFFLINE_WINDOW
-    if expected:
+    # an intentional stop costs no SSH round trip.
+    if _offline_expected(gs.id):
         misses.pop(gs.id, None)
-        # Same reasoning as the maintenance branch below, which this leg was missing:
-        # the down-transition is deliberately never told, so recording False here made
-        # the NEXT sweep read False -> True and push "Server back online" for an outage
-        # the operator was never notified of — on roughly half the restarts of a
-        # slow-booting game, which is what trains people to ignore the channel.
-        # Keeping the previous value also preserves the case that matters: if the
-        # restart never comes back, _EXPECT_OFFLINE_WINDOW expires and the sweeps after it
-        # report a genuine "went offline unexpectedly" from prev_up=True (once confirmed).
+        if _stop_expected(gs.id):
+            # A Stop: meant to stay down. Recorded DOWN at once, and nobody is told. Kept recorded
+            # up (as below), the sweeps after the window declared it down and paged "went offline
+            # unexpectedly" about every panel Stop, four or five minutes after it. The mark keeps its
+            # return quiet, however late; the window has done its work, so a crash after the server
+            # is started again pages as usual.
+            _monitor_state["server_unannounced"][gs.id] = True
+            _end_stop_window(gs.id)
+            return up
+        # A restart, or a reboot's hold: meant to come back. The previous value is kept, so its
+        # return is no news. If it never comes back, or comes back and crashes before the window
+        # ends, the sweeps after the window find it down and page "went offline unexpectedly"
+        # (once confirmed) — for an unattended queued restart that is the only notice there is.
         return prev_up
     # Not declared down until the port has been shut for _DOWN_CONFIRM_SWEEPS sweeps in a
     # row (see there). Until then the server stays recorded as up, so the sweep that
@@ -1153,19 +1197,35 @@ def _mon_server_went_down(remote, gs, up, prev_up, muted):
 def _server_transition(remote, gs, up, prev_up, muted):
     """Alert on one server's up/down transition and answer what to record for it.
 
-    The answer is usually `up`; the previous value for a panel-issued stop still inside
-    _EXPECT_OFFLINE_WINDOW, or for a down not yet confirmed by _DOWN_CONFIRM_SWEEPS sweeps; or
-    _IN_MAINTENANCE when LinuxGSM's own maintenance has the port shut.
+    The answer is usually `up`; the previous value for a down not yet confirmed by
+    _DOWN_CONFIRM_SWEEPS sweeps, or inside the window of a panel restart or a reboot's hold; or
+    _IN_MAINTENANCE when LinuxGSM's own maintenance has the port shut. A panel Stop's down is
+    recorded at once and marked unannounced, as is a server this process first sees down, and the
+    return of a server so marked is not announced either.
     """
     misses = _monitor_state["server_misses"]
     if up or prev_up is not True:
         misses.pop(gs.id, None)
     if prev_up is True and not up:
         return _mon_server_went_down(remote, gs, up, prev_up, muted)
-    if prev_up is False and up and not muted:
+    if up:
+        _mon_server_came_up(remote, gs, prev_up, muted)
+    elif prev_up is None:
+        # Never seen by this process (its first sweep after a panel restart), and down. Nobody was
+        # told it went down — this process never paged it — so its return is not announced either:
+        # a reboot plan's own summary reports what it brings back, and an operator's Start of a
+        # server stopped before the panel restarted is no news. A Stop's window is done with.
+        _monitor_state["server_unannounced"][gs.id] = True
+        _end_stop_window(gs.id)
+    return up
+
+
+def _mon_server_came_up(remote, gs, prev_up, muted):
+    """The up leg of _server_transition: "back online", unless nobody was told the server went down."""
+    quiet = _monitor_state["server_unannounced"].pop(gs.id, False)
+    if prev_up is False and not muted and not quiet:
         notifications.notify("server_up", "Server back online",
                              "%s on %s is back online." % (gs.name, remote.display_name))
-    return up
 
 
 def _forget_deleted_rows(remote_ids, server_ids):
@@ -1216,114 +1276,29 @@ def _forget_deleted_rows(remote_ids, server_ids):
     forget_rows(remote_ids=gone[0], server_ids=gone[1])
 
 
-# How long PAST _EXPECT_OFFLINE_WINDOW a reboot the panel fires keeps its servers' "down" quiet. The
-# host has to boot, and the games do not come back with it: LinuxGSM's own `*/5 * * * * monitor`
-# cron starts them, up to five minutes after the host answers again.
+# How long PAST _EXPECT_OFFLINE_WINDOW a host's servers stay expected-offline when the panel reboots
+# the host. Only for the servers a clean reboot does NOT hold in its plan (stopped ones, and ones it
+# could not read): a planned server is held for as long as its plan runs (host_reboot).
 _REBOOT_EXPECT_OFFLINE_EXTRA = 300
 
 
 def _mark_host_expected_offline(remote_id, extra=_REBOOT_EXPECT_OFFLINE_EXTRA):
     """Mark every game server on a host the panel is about to reboot as expected-offline.
 
-    The same way a panel-issued stop marks one server. Returns the previous marks, so a reboot that
-    did not happen can put them back.
+    As a panel restart marks one server: meant to come back, so one still down when the mark ends
+    pages. A Stop's open window stays a Stop's. Returns the previous marks.
     """
     until = time.time() + extra
     prev = {}
     for (gid,) in db.session.query(GameServer.id).filter_by(remote_id=remote_id).all():
         prev[gid] = _expected_offline.get(gid)
+        stop = _stop_expected(gid)
         _expected_offline[gid] = until
+        if stop:
+            # A Stop no sweep has seen yet stays a Stop: that server is meant to stay down, not to
+            # come back with the host, so its down must not page when this longer window ends.
+            _expected_stop[gid] = until
     return prev
-
-
-def _reboot_expecting_offline(remote, reboot):
-    """Run `reboot(remote)` -> (ok, msg) with the host's servers marked expected-offline first.
-
-    Both reboots the panel issues go through this: reboot-when-empty below, and Reboot now
-    (routes/remote_vps.py, which passes its own `remote_reboot`). They rebooted the host without
-    marking anything; while the host was down the monitor skipped its servers, so they stayed "up"
-    in its memory, and when the host answered again — before LinuxGSM's monitor cron had started
-    any game — each one read up -> down and pushed "went offline unexpectedly", then "back online"
-    minutes later: two alerts per server about a reboot the panel had itself just made.
-
-    A reboot that was refused (or raised) restores the previous marks, so a real outage in the
-    next eight minutes still alerts.
-    """
-    prev = _mark_host_expected_offline(remote.id)
-    ok = False
-    try:
-        ok, msg = reboot(remote)
-    finally:
-        if not ok:
-            for gid, ts in prev.items():
-                if ts is None:
-                    _expected_offline.pop(gid, None)
-                else:
-                    _expected_offline[gid] = ts
-    return ok, msg
-
-
-def _fire_reboot_when_empty(remote, info):
-    """Reboot an idle host whose reboot-when-empty was queued: log it, announce it.
-
-    It announced "Host auto-rebooted" whatever remote_reboot answered, so a refused reboot was
-    reported as one that happened.
-    """
-    ok, msg = _reboot_expecting_offline(remote, remote_reboot)
-    log_action(None, "reboot_when_empty_fire", target=remote.name,
-               detail="host idle — %s" % msg, success=ok,
-               actor=info.get("by") or "system", remote=remote)
-    if ok:
-        notifications.notify("auto_reboot", "Host auto-rebooted",
-                             "%s was empty of players, so its queued reboot ran." % remote.display_name)
-    else:
-        notifications.notify("auto_reboot", "Auto-reboot failed",
-                             "%s was empty of players, but its queued reboot couldn't be started."
-                             % remote.display_name)
-    return ok, msg
-
-
-def _reboot_when_empty_watch(app):
-    """Reboot each 'reboot when empty' host once it is reachable AND every game server on it is empty.
-
-    Empty is every game server reporting 0 players. Unreachable hosts are skipped (never rebooted
-    on a guess), so a host that can't be queried just waits. Runs forever on a 60s tick; the
-    registry is in-memory.
-    """
-    runtime_stats.loop_started("reboot-when-empty", 60)
-    while True:
-        time.sleep(60)
-        with _rwe_lock:
-            pending = list(_reboot_when_empty.keys())
-        runtime_stats.beat("reboot-when-empty", 60)   # the debug report's "is it alive" (R22)
-        if not pending:
-            continue
-        with app.test_request_context():   # DB + log_action context for the background thread
-            for rid in pending:
-                try:
-                    remote = RemoteServer.query.get(rid)
-                    if not remote:
-                        with _rwe_lock:
-                            _reboot_when_empty.pop(rid, None)
-                        continue
-                    if not _host_reachable(remote):
-                        continue   # can't reach it — don't reboot a host we can't confirm is idle
-                    if _host_idle_state(remote) != "idle":
-                        continue   # someone's connected, or a server's count is unknown — wait
-                    with _rwe_lock:
-                        info = _reboot_when_empty.pop(rid, None)
-                    # The pop is the COMMIT POINT. `pending` was snapshotted at the top of the
-                    # tick and the two probes above are tens of seconds of SSH, so an operator can
-                    # cancel (or /reboot?now can fire and dequeue) in that window: the route pops
-                    # the entry, answers "Auto-reboot canceled." and reboot-required then reports
-                    # pending_empty=false. This popped nothing and rebooted anyway, taking every
-                    # game server with it — and the `(info or {})` below logged it under "system",
-                    # so the audit row did not explain it either. Nothing queued, nothing to do.
-                    if info is None:
-                        continue
-                    _fire_reboot_when_empty(remote, info)
-                except Exception:
-                    _log.debug("reboot-when-empty tick failed for remote %s", rid, exc_info=True)
 
 
 _AUTOBLOCK_TAG = "panel-autoblock"

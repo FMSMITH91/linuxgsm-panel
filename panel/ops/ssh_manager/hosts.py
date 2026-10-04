@@ -1598,29 +1598,6 @@ def remote_os_update_status(server):
     return {"running": running, "done": False, "rc": None, "log": log}
 
 
-def remote_reboot(server):
-    """Reboot the remote server. (ok, msg).
-
-    A reboot is the one command whose SUCCESS looks like a failure: the host goes down mid-command,
-    so the transport reports a dropped connection. That is why this returned True unconditionally,
-    and why it must not simply start failing on non-zero — `rc == 0` would reject most real
-    reboots.
-
-    What it CAN tell apart is a refusal, which comes back promptly and positively: sudo declining
-    ("a password is required"), an unknown verb, a helper that is not installed. `_core` uses -1 for
-    "the transport gave up" (a timeout or a dropped connection), so a POSITIVE rc is the helper
-    having answered and said no. Only that is reported as a failure.
-
-    It matters because both callers use the boolean: panel/routes/remote_vps.py hands it to the
-    operator, and monitoring._reboot_when_empty_watch writes it as `success=ok` on the audit row —
-    so a refused auto-reboot was recorded as a reboot that happened, on a host that never went
-    down."""
-    out, err, rc = _core.run_privileged(server, "reboot", [], timeout=10)
-    if rc is not None and rc > 0:
-        return False, ((out or err or "Reboot refused").replace("\n", " ")[:200])
-    return True, "Reboot command sent to remote"
-
-
 def remote_reboot_required(server):
     """Whether a host needs a reboot to finish applying updates. Debian/Ubuntu drop
     /var/run/reboot-required after a kernel/libc upgrade, and list the responsible packages in
@@ -1652,6 +1629,50 @@ def remote_reboot_required(server):
     except Exception:
         packages = []
     return {"required": True, "packages": packages, "known": True}
+
+
+_BOOT_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+_MACHINE_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
+# `systemctl is-system-running` answers one word; these are all it can say (systemctl(1)).
+_SYSTEM_STATES = frozenset(("initializing", "starting", "running", "degraded", "maintenance",
+                            "stopping", "offline", "unknown"))
+
+
+def host_boot_identity(server):
+    """{boot, mid, uptime, now, state} for a host, from ONE command, or None. Never raises.
+
+    `boot` is the kernel's boot id, which changes on every boot and on nothing else, so it is what
+    tells "the host rebooted" from "the host stopped answering for a while" — the monitor's
+    down-then-up never could (a fast reboot is not seen as down at all). `mid` is the machine id,
+    which tells "the same machine" from "another machine now answering at this address". `state`
+    is systemd's own word for where the host is ("starting" just after a boot, "stopping" while it
+    shuts down), or None where there is no systemd to ask.
+
+    None unless the host answered with a boot id and a machine id in their own formats: the
+    tailscale and local transports return ("", "...timed out", -1) without raising, and an empty
+    answer is not "a boot id of nothing".
+    """
+    try:
+        out, _err, _rc = _core.run_command(
+            server, "cat /proc/sys/kernel/random/boot_id /etc/machine-id /proc/uptime; date +%s; "
+                    "systemctl is-system-running 2>/dev/null || true", timeout=12)
+    except Exception:
+        return None
+    return _parse_boot_identity(out)
+
+
+def _parse_boot_identity(out):
+    """host_boot_identity's answer from its command's output, or None when it is not one."""
+    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    if len(lines) < 4 or not _BOOT_ID_RE.match(lines[0]) or not _MACHINE_ID_RE.match(lines[1]):
+        return None
+    try:
+        uptime = float(lines[2].split()[0])
+        now = int(lines[3])
+    except (ValueError, IndexError):
+        return None
+    state = lines[4] if len(lines) > 4 and lines[4] in _SYSTEM_STATES else None
+    return {"boot": lines[0], "mid": lines[1], "uptime": uptime, "now": now, "state": state}
 
 
 _uptime_cache = _core.register_remote_cache({})   # server.id -> (expiry, dict), de-dups viewers
@@ -1815,6 +1836,14 @@ def _bootstrap_node(server):
     return lines
 
 
+# The "are game servers running here?" probe the bootstrap's reboot step asks, and install.sh's
+# twin of it. `pgrep -x` matches the WHOLE process name, and tmux renames its server process to
+# "tmux: server" — so the old `pgrep -x tmux` matched nothing on a host running four LinuxGSM
+# servers (measured on the test VPS), and both places rebooted a busy host. The client is "tmux".
+GAME_SESSIONS_PROBE = ("if pgrep -x 'tmux: server|tmux|SCREEN|screen' >/dev/null 2>&1; "
+                       "then echo YES; else echo NO; fi")
+
+
 def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lgsm_deps=True,
                            username="", install_fail2ban=True, do_reboot=True,
                            progress=None):
@@ -1825,6 +1854,9 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     `progress`, if given, is called as progress(step, total, name, status) after
     each step so the caller can stream live status ("running" / "rebooting" / ...).
+
+    A caller that knows a game server it manages here was last seen online passes do_reboot=False:
+    the reboot step then only reports a pending reboot, whatever the process probe says.
 
     Returns (success, message, log).
     """
@@ -2084,8 +2116,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         _rb_txt = reboot_req or ""
         reboot_known = _rb_rc == 0 and ("YES" in _rb_txt or "NO" in _rb_txt)
         needs_reboot = reboot_known and "YES" in _rb_txt
-        gs_out, _, _gs_rc = _core.run_command(server, "if pgrep -x tmux >/dev/null 2>&1 || pgrep -x SCREEN "
-                                   ">/dev/null 2>&1; then echo YES; else echo NO; fi", timeout=10)
+        gs_out, _, _gs_rc = _core.run_command(server, GAME_SESSIONS_PROBE, timeout=10)
         _gs_txt = gs_out or ""
         gs_known = _gs_rc == 0 and ("YES" in _gs_txt or "NO" in _gs_txt)
         # Unknown counts as running. The cost of being wrong that way is a reboot the operator
@@ -2099,12 +2130,14 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             emit("No reboot needed", detail="Updates applied without requiring a reboot.")
         elif servers_running or not do_reboot:
             emit("Reboot required — skipped to protect running servers", status="reboot-required",
-                 detail=("A kernel/library update needs a reboot. Reboot this host from its page "
-                         "once its game servers are empty.") if gs_known else
+                 detail=("A kernel/library update needs a reboot. Reboot this host from its "
+                         "Power card: running game servers are stopped cleanly first, and its "
+                         "dialog lists which come back.") if gs_known else
                         ("A kernel/library update needs a reboot. The host did not answer the "
                          "check for running game servers, so it was not rebooted — a reboot "
-                         "would drop any players on it. Reboot it from its page once you know "
-                         "it is empty."))
+                         "would drop any players on it. Reboot it from its Power card: running "
+                         "game servers are stopped cleanly first, and its dialog lists which "
+                         "come back."))
         else:
             emit("Rebooting to apply a kernel/library update", status="rebooting",
                  detail="A system update requires a reboot and no game servers are running.")
