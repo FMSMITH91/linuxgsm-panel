@@ -559,6 +559,63 @@ CI-verified commit regardless of this file — this changelog is for humans.
   label collapsed the spaces in a folder's name, so `a  b` read as `a b` and ` x` as `x`. Both now
   show each name exactly as it is, as the file list does, including a space at the end. Found by
   the real-browser check of file rename on the test VPS.
+- **An imported server is stored on the port it really uses, read on its host.** Importing a
+  discovered server stored the port the browser sent, and 27015 when it sent none. Discovery read
+  the first `port=` line it found in three of LinuxGSM's config files, and 46 of the 140 games
+  LinuxGSM lists keep their port in the game's own config instead (Minecraft and PaperMC in
+  `server.properties`, Teamspeak 3 in its `.ini`, 7 Days to Die in its `.xml`, and so on), so for
+  those the card showed "—" and the import stored 27015. On the test VPS that is Garry's Mod's port:
+  an imported Minecraft server read as up whenever Garry's Mod was, so its crash never paged, and
+  Start was refused as "already running". Its player count, its "when empty" actions and its restart
+  cron asked the wrong server, and 27015 stayed reserved for it, so a later install could not use
+  it. Now:
+  - Discovery reads the five config files in LinuxGSM's own order, secrets files included, takes
+    the last `port=` (as bash does), and counts it only when the game's start line passes
+    `${port}`. San Andreas MP's `port="7777"`, which the game never sees, no longer counts. It
+    reads only regular files, never a symlink or a fifo, at most 1 MiB of each, and keeps only the
+    two lines it needs: a fifo or a huge file in a game account's config folder can no longer
+    stall the scan, or fill the memory of the root shell it runs in on a remote host.
+  - The import stores the port its own scan read, never one sent with the request. When the scan
+    has none, it asks LinuxGSM's `details`, which reads the game's own config. A server whose port
+    still cannot be read is not imported, and the reason says what was seen: LinuxGSM did not
+    answer (try again), or the game's own config is missing or does not set the port (set it there;
+    a game that writes that file itself when it first starts, such as Vintage Story, needs one start
+    first). A port that is the host's SSH or the panel's own is refused.
+  - A server set to the same port as another server on its host is still imported on that port,
+    because it is the port its config sets: on the test VPS, PaperMC's `server.properties` sets
+    25565, as Minecraft's does. The import now says so, under "Import selected" and in its reply:
+    it names each shared port and the servers on it, whether the other server came in the same
+    import or was already in the panel, and says that no two of them can run at the same time
+    unless one uses only TCP on that port and the other only UDP (LinuxGSM's Terraria and ARK both
+    default to 7777, one TCP and one UDP), or each is bound to its own IP address. It also says
+    that while one runs, the panel cannot tell them apart by port, so a stopped one may read online.
+    A server on another host does not count. That note, the ones for servers not imported and for
+    accounts not added to the game-account group, and the "—" port's tooltip are now in the
+    viewer's language. The card holds account names, so the page's translator is kept out of it,
+    and they had stayed in English.
+  - Servers imported before this are re-read a minute after each panel start: the panel reads
+    every installed server's port from LinuxGSM again and stores it where it differs (audited as
+    `port_resync`). When the stored port is certainly not the server's — another server's, or one
+    something else listens on while the server is stopped — the new port is stored even when
+    another server shares it, as the import itself allows (Minecraft and PaperMC both default to
+    25565), and its audit row then says so in the import's words. The audit rows are written once
+    the host's moves are done, so the share they name is the one the pass leaves: a server moved
+    onto a port that another one is leaving in the same pass (its config was changed to end the
+    clash) is not said to share it. Otherwise the new port is stored only when it is free: in no
+    other server's block and not listened on, because LinuxGSM says STARTED even for a game that
+    failed to bind. SSH's and the panel's ports are never taken. A
+    server that does not answer, or whose new port is not free, keeps its port until the next
+    start, with the reason in the log; "Open all ports" on the host's Firewall page reads it again
+    on demand. A move also points the server's restart-when-empty check at the new port, keeps the
+    monitor from paging the move as a crash, and closes this server's own firewall rule on the old
+    port when no other server can need it. It opens no firewall rule: "Open all ports" does that.
+  - The same gap on the install side: when LinuxGSM reported no port before the first start, the
+    install kept the port the panel chose as if it were confirmed. It now reads the port again after
+    the first start and adopts it when nothing else held it before the start. When the host's
+    listening ports could not be read before the start, it is not adopted, because the panel can't
+    tell. If the port still can't be read, or is not adopted, the install says which and why,
+    instead of promising the server will show as online "once it opens" a port the game may never
+    use.
 - **The file browser lists every file under its real name, including one whose name ends in a
   space or holds a line break.** The host's listing ended each entry with a newline, and every
   connection type (local, Tailscale, SSH) trims the whitespace at the end of a command's output. So

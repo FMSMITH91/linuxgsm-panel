@@ -925,7 +925,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "install_complete", "install_server", "retry_install", "uninstall_server", "edit_server",
     "game_backup", "game_backup_delete", "game_backup_download", "game_backup_schedule",
     "scheduled_backup", "queued_backup", "scheduled_backup_overdue", "queued_backup_waiting",
-    "sync_ports", "set_daily_restart",
+    "sync_ports", "port_resync", "set_daily_restart",
     "set_notify_when_empty", "refresh_commands", "send_command", "set_query_type",
     "custom_command", "restart_when_empty", "stop_when_empty", "set_autostart", "edit_config",
     "server_alerts_save", "edit_file", "delete_file", "download_file", "cron_add",

@@ -2599,12 +2599,17 @@ try:
     _jf = _ms_job(_ms_f)
     check("install flow F: a failed EULA write, command read and port detect are all non-fatal",
           "mc-eula" in _ms_log and _jf.get("status") == "done", repr((_ms_log, _jf)))
-    # (Its port detect raised, so step 6 failed: the audit entry says that too.)
-    check("install flow F: a clean start whose port is not open yet is 'starting', not a failure",
+    # (Its port detect raised, so step 6 failed: the audit entry says that too.) LinuxGSM never
+    # reported a port, before the first start or after it, so the sentence does not promise the
+    # server shows online "once it opens port 25600": nobody read that it ever will.
+    check("install flow F: a clean start whose port is not open yet is 'starting', not a failure "
+          "— and with no port from LinuxGSM, it says the port is unconfirmed",
           _jf.get("warn") is True
-          and "installed and starting — it hasn't opened port 25600" in _jf.get("message", "")
+          and "p9mc installed and starting, but LinuxGSM has not reported its game port, so the "
+              "panel cannot confirm the game uses port 25600" in _jf.get("message", "")
           and _p9_audit("install_complete").detail
-          == "started; port 25600 not open after 90s; firewall step failed",
+          == "started; port 25600 not open after 90s; port not reported by LinuxGSM; "
+             "firewall step failed",
           repr(_jf))
 
     # ── Flow G: SCP:SL — its EULA and per-port config are seeded; failures there are non-fatal ──

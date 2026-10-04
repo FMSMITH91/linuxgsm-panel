@@ -3293,6 +3293,16 @@ if __name__ == "__main__":
     # every stop signals them — from before the helper gave each its own scope. Move them out once.
     threading.Thread(target=_adopt_game_processes, name="cgroup-adopt", daemon=True).start()
 
+    # Every installed server's port, read again from LinuxGSM once per start: an import used to
+    # store whatever port the browser sent, and 27015 when it sent none, so a Minecraft server
+    # could be monitored on Garry's Mod's port. A minute in, so the start itself is not slowed.
+    def _port_reconcile():
+        time.sleep(60)
+        from panel.routes.manage_servers import sibling_port_blocks, withheld_game_ports
+        from panel.services.game_ports import reconcile_stored_ports
+        reconcile_stored_ports(app, withheld_game_ports, sibling_port_blocks)
+    threading.Thread(target=_port_reconcile, name="port-reconcile", daemon=True).start()
+
     # Record fail2ban bans/unbans of the panel-login jail in the audit log, so the activity is
     # visible even though the jail runs automatically with no management UI. Seeds from the current
     # bans on start (so existing bans aren't re-logged) and polls for changes.

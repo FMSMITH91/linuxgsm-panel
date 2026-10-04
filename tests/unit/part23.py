@@ -468,7 +468,7 @@ def _thread_gates23():
              "autoblock", "ban-watch", "telegram-bot", "discord-bot"}
     check("workers: every long-running thread app.py names is a worker the report lists",
           loops <= named <= known | {"f2b-autostart", "bot-update-report", "autoblock-now",
-                                     "cgroup-adopt"},   # one-shots: they run once and end
+                                     "cgroup-adopt", "port-reconcile"},   # one-shots: run once, end
           repr(sorted(named)))
 
 

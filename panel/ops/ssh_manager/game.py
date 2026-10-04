@@ -1128,7 +1128,16 @@ def detect_game_ports(server, user, selfname=None):
     game lists a separate Query port (for server-browser visibility). Optional/admin/
     outbound ports (SourceTV, RCON/telnet, Client) are deliberately left CLOSED — e.g.
     Garry's Mod lists Game 27015 + SourceTV 27020, but only 27015 is needed. Returns:
-      {"game_port": int|None, "open_ports": [ports to open], "ports": [all parsed]}.
+      {"game_port": int|None, "open_ports": [ports to open], "ports": [all parsed],
+       "answered": whether `details` printed its port table or its Server IP line at all,
+       "started": its Status line — True for STARTED, False for STOPPED, None for neither}.
+
+    "answered" tells the two kinds of no game port apart: a `details` that never ran (a timeout, a
+    refused account — try again), and one that ran and has no port to report ("Server IP:
+    0.0.0.0:0", "Game 0 tcp"). A game that keeps its port in its own config prints that when the
+    config is missing or does not set the port. Most such games get a default config at install
+    (Minecraft's server.properties already says 25565); only some, Vintage Story among them, write
+    theirs the first time they start.
     """
     out, _, _ = _core.run_as_game_user(server, user, "details", timeout=45, selfname=selfname)
     text = terminal.strip_escapes(out or "")
@@ -1147,7 +1156,16 @@ def detect_game_ports(server, user, selfname=None):
     # unexpected description for it.
     if game_port and game_port not in open_ports:
         open_ports = sorted(set(open_ports) | {game_port})
-    return {"game_port": game_port, "open_ports": open_ports, "ports": ports}
+    answered = bool(re.search(r"DESCRIPTION\s+PORT\s+PROTOCOL|(?:server|internet)\s+ip:", text,
+                              re.I))
+    return {"game_port": game_port, "open_ports": open_ports, "ports": ports,
+            "answered": answered, "started": _details_started(text)}
+
+
+def _details_started(text):
+    """`details`' Status line: True for STARTED, False for STOPPED, None when it has neither."""
+    status = re.search(r"^\s*status:\s*(started|stopped)\b", text, re.I | re.M)
+    return status.group(1).lower() == "started" if status else None
 
 
 def get_server_status(server, game_server, distinguish_unresponsive=False):

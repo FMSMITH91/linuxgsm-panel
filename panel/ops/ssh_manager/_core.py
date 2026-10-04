@@ -2007,38 +2007,80 @@ def _quote(s):
     return shlex.quote(s)
 
 
-def discover_linuxgsm_servers(server):
-    """Find LinuxGSM instances ALREADY installed on `server`, across every user account.
+# The LinuxGSM config files, in the order linuxgsm.sh sources them: each is read over the one before,
+# so the LAST assignment of a setting wins. `{inst}` is the instance (script) name.
+LGSM_CFG_ORDER = ("_default.cfg", "common.cfg", "secrets-common.cfg", "{inst}.cfg",
+                  "secrets-{inst}.cfg")
+# The most of any one of them the discovery scan reads: a LinuxGSM config is a few KB. The helper's
+# form of the scan reads the same.
+LGSM_CFG_READ_MAX = 1 << 20
 
-    Each LinuxGSM server usually lives under its own Ubuntu user. One sudo round trip: for each
-    /home/<user> that has an lgsm/config-lgsm/<gameservername>/ dir and a matching executable
-    ./<gameservername> script, report (user, lgsm_name, port). The port is read from the LinuxGSM
-    config as a hint — the panel re-reads the authoritative port(s) after import. The caller maps
-    <gameservername> to the panel's game_type and skips servers already added. Sudo is required
-    because game-user home dirs aren't world-readable. Best-effort — returns [] on any failure.
+
+def _discover_scan_script(home="/home"):
+    """The one-shot discovery scan as a POSIX-sh script, over the accounts under `home`.
+
+    For each instance it prints `FOUND|user|instance|port|backups|mods|cronlines|autostart`, and
+    counts what already exists — LinuxGSM backups (~/lgsm/backup), installed mods
+    (~/lgsm/mods/installed-mods.txt), the user's cron lines, and whether an @reboot autostart is set
+    — so the preview shows the full picture and import can adopt the autostart state. The crontab
+    is read once per user. Variables are quoted; the only inputs are on-host filenames (users /
+    LinuxGSM dirs), never anything panel-supplied. `home` is a parameter only so a test can run
+    this very text over fixture accounts.
+
+    THE PORT. Only the port LinuxGSM's own config hands the game, else 0. The files are read in
+    linuxgsm.sh's order (LGSM_CFG_ORDER, the secrets files included) and the LAST `port=` wins, as
+    it does when bash sources them. And the value counts only when the start line in effect passes
+    `${port}`: 46 of the 140 games LinuxGSM lists keep their port in the game's own config instead
+    — Minecraft in server.properties, Teamspeak in its .ini, 7 Days to Die in its .xml — and either
+    have no `port=` at all or (San Andreas MP) one the game never sees. This used to grep the first
+    `port=` it met in three of the files, so those games came back as 0 and the import stored 27015
+    for them: on the test box, Garry's Mod's port, which made an imported Minecraft server read as
+    up whenever Garry's Mod was.
+
+    WHAT IT READS of those files, as root on a remote: only a regular file that is not a symlink,
+    at most LGSM_CFG_READ_MAX bytes of it, and only its `port=` and `startparameters=` lines are
+    kept. The game account owns that directory and can put anything there. Holding all five files
+    whole in a shell variable took 1.3 GB for a 256 MB common.cfg, and a FIFO, or a symlink to
+    /dev/urandom, at secrets-common.cfg (which the scan never used to read) ran root's shell until
+    the 45 s timeout — and a scan that times out finds nothing, for every account on the host.
     """
-    # A single POSIX-sh script so the whole scan is one SSH command. For each instance it also
-    # counts what already exists — LinuxGSM backups (~/lgsm/backup), installed mods
-    # (~/lgsm/mods/installed-mods.txt), the user's cron lines, and whether an @reboot autostart
-    # is set — so the preview shows the full picture and import can adopt the autostart state.
-    # The crontab is read once per user. Variables are quoted; the only inputs are on-host
-    # filenames (users / LinuxGSM dirs), never anything panel-supplied.
-    script = (
-        'for u in $(ls -1 /home/ 2>/dev/null); do '
-        '  d="/home/$u/lgsm/config-lgsm"; [ -d "$d" ] || continue; '
+    cfgs = " ".join('"%s"' % f.format(inst="$g") for f in LGSM_CFG_ORDER)
+    return (
+        "h=%s; " % _quote(home.rstrip("/") or "/") +
+        'for u in $(ls -1 "$h/" 2>/dev/null); do '
+        '  d="$h/$u/lgsm/config-lgsm"; [ -d "$d" ] || continue; '
         '  cj=$(crontab -u "$u" -l 2>/dev/null); '
         '  for g in $(ls -1 "$d" 2>/dev/null); do '
-        '    [ -x "/home/$u/$g" ] || continue; '
-        '    p=$(grep -hE "^[[:space:]]*port=" "$d/$g/$g.cfg" "$d/$g/common.cfg" '
-        '        "$d/$g/_default.cfg" 2>/dev/null | grep -oE "[0-9]+" | head -1); '
-        '    b=$(ls -1 "/home/$u/lgsm/backup/" 2>/dev/null | grep -cE "\\.(tar|tgz|zip)"); '
-        '    m=$(grep -c . "/home/$u/lgsm/mods/installed-mods.txt" 2>/dev/null); '
+        '    [ -x "$h/$u/$g" ] || continue; '
+        '    cf=$(for f in ' + cfgs + '; do x="$d/$g/$f"; [ -f "$x" ] && [ ! -L "$x" ] || continue; '
+        '        head -c %d "$x" 2>/dev/null | grep -E "^[[:space:]]*(port|startparameters)="; '
+        '        done); ' % LGSM_CFG_READ_MAX +
+        '    p=$(printf "%s\\n" "$cf" | grep -E "^[[:space:]]*port=" | tail -n 1 '
+        '        | sed "s/^[^=]*=//" | grep -oE "[0-9]+" | head -n 1); '
+        '    sp=$(printf "%s\\n" "$cf" | grep -E "^[[:space:]]*startparameters=" | tail -n 1); '
+        '    case "$sp" in *"\\${port}"*|*"\\$port"|*"\\$port"[!A-Za-z0-9_]*) ;; *) p=0;; esac; '
+        '    b=$(ls -1 "$h/$u/lgsm/backup/" 2>/dev/null | grep -cE "\\.(tar|tgz|zip)"); '
+        '    m=$(grep -c . "$h/$u/lgsm/mods/installed-mods.txt" 2>/dev/null); '
         '    c=$(printf "%s\\n" "$cj" | grep -vE "^[[:space:]]*(#|$)" | grep -c .); '
         '    a=$(printf "%s\\n" "$cj" | grep -cE "@reboot|monitor"); '
         '    echo "FOUND|$u|$g|${p:-0}|${b:-0}|${m:-0}|${c:-0}|${a:-0}"; '
         '  done; '
         'done'
     )
+
+
+def discover_linuxgsm_servers(server):
+    """Find LinuxGSM instances ALREADY installed on `server`, across every user account.
+
+    Each LinuxGSM server usually lives under its own Ubuntu user. One sudo round trip: for each
+    /home/<user> that has an lgsm/config-lgsm/<gameservername>/ dir and a matching executable
+    ./<gameservername> script, report (user, lgsm_name, port). The port is the one LinuxGSM's own
+    config gives the game, or None when it gives none (see _discover_scan_script); the import reads
+    a None from LinuxGSM's `details` before it stores anything. The caller maps <gameservername> to
+    the panel's game_type and skips servers already added. Sudo is required because game-user home
+    dirs aren't world-readable. Best-effort — returns [] on any failure.
+    """
+    script = _discover_scan_script()
     try:
         # On the panel's OWN host with the helper installed, this is a verb: the helper walks /home
         # itself and reads the crontabs, which is the only part that ever needed root. Remote hosts

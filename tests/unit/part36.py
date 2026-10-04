@@ -57,7 +57,7 @@ import sqlalchemy as _sa36
 from unit import REPO_ROOT as _ROOT36
 from unit.part01 import check, skip
 from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_app, _p9_audit, _p9_client, _p9_core,
-                         _p9_json, _p9_patch, _p9_restore_all, _p9_sm, _p9_so, _p9_trip)
+                         _p9_json, _p9_patch, _p9_restore_all, _p9_row, _p9_sm, _p9_so, _p9_trip)
 from panel.db.models import GameServer, RemoteServer, db
 from panel.ops.ssh_manager import cron as _cron36
 from panel.ops.ssh_manager import files as _files36
@@ -575,6 +575,111 @@ def _f2_no_false_warning36(rid):
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
+# F4 — an install LinuxGSM gave no game port: read again after the first start, never assumed
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 46 of LinuxGSM's 140 games keep their port in their own config, which some write only when they
+# first start: `details` reports port 0 until then (and nothing at all when it times out). Step 6
+# took "no port" for "the same port", so the panel's own allocation stood as if confirmed — for most
+# of those games the form's 27015 — and the install ended "it hasn't opened port X yet ... it will
+# show as online once it does" about a port the game never binds.
+_UNREAD36 = {"game_port": 0, "open_ports": [0], "ports": [{"desc": "Game", "port": 0,
+                                                            "protocol": "tcp"}]}
+
+
+def _f4_port_read36(rid):
+    """Step 6 got no port: the post-start read adopts LinuxGSM's, unless someone else holds it."""
+    sid = _install36(rid, "p36pr1", 27700,
+                     detect=[_UNREAD36, {"game_port": 25565, "open_ports": [25565]}],
+                     listen=[{25565}])
+    check("F4 install: a game LinuxGSM gave no port before its first start is stored on the port "
+          "it reports after it (25565), not left on the panel's 27700",
+          _p9_row(sid).port == 25565, "port %r" % (_p9_row(sid).port,))
+    check("F4 install: ...and, listening there, it ends 'installed and started' and online",
+          _fin36[-1:] == [("p36pr1 installed and started", False)]
+          and _p9_row(sid).status == "online", repr((_fin36, _p9_row(sid).status)))
+    check("F4 install: ...and the post-start re-open opens that port, under this server's name",
+          _opened36("post") == [[25565]], repr(_ufw36))
+    sid = _install36(rid, "p36pr2", 27710, listen=[set()])
+    msg, warn = _fin36[-1] if _fin36 else ("", None)
+    check("F4 install: with no port from LinuxGSM before or after the first start, the install "
+          "says the port is unconfirmed — not that the server will show online once it opens "
+          "the panel's port", warn is True and msg.startswith(
+              "p36pr2 installed and starting, but LinuxGSM has not reported its game port, so "
+              "the panel cannot confirm the game uses port 27710") and "hasn't opened" not in msg,
+          repr(_fin36))
+    check("F4 install: ...and its audit entry says the port was not reported",
+          _p9_audit("install_complete").detail
+          == "started; port 27710 not open after 90s; port not reported by LinuxGSM",
+          repr(_p9_audit("install_complete").detail))
+    # Every read after step 6's fails: only step 6's own reading can confirm the port here.
+    _install36(rid, "p36pr3", 27720, detect=[{"game_port": 27720, "open_ports": [27720]},
+                                             ConnectionError("details timed out")],
+               listen=[set()])
+    check("F4 install (control): a port LinuxGSM reported at step 6 keeps the 'still booting' "
+          "sentence", _fin36[-1:] and _fin36[-1][0].startswith(
+              "p36pr3 installed and starting — it hasn't opened port 27720 yet"), repr(_fin36))
+
+
+def _sibling_f4_36(rid):
+    """A server on 25575, added on the host while p36pr4 installs (from inside its start step)."""
+    gs = GameServer(remote_id=rid, name="p36-sib4", short_name="p36sib4", game_type="csgo",
+                    port=25575, installed=True, status="offline")
+    db.session.add(gs)
+    db.session.commit()
+    _mine36["servers"].append(gs.id)
+
+
+def _f4_port_refused36(rid):
+    """What the post-start read reports is not adopted where it may not be."""
+    # Added while this one installs, so step 6's job.withheld has never heard of it: only the
+    # post-start read's own look at the host's servers stands between it and that port.
+    sid = _install36(rid, "p36pr4", 27730,
+                     detect=[_UNREAD36, {"game_port": 25575, "open_ports": [25575]}],
+                     listen=[set()], on_start=lambda: _sibling_f4_36(rid))
+    check("F4 install: a port another panel server holds is not adopted after the first start, "
+          "even one added while this server installed",
+          _p9_row(sid).port == 27730, "port %r" % (_p9_row(sid).port,))
+    check("F4 install: ...and the install names the port LinuxGSM reported and who holds it — not "
+          "'LinuxGSM has not reported its game port', which it has",
+          _fin36[-1:] and _fin36[-1][0].startswith(
+              "p36pr4 installed and starting, but LinuxGSM reports port 25575 for it, which the "
+              "panel did not take: it is held by 'p36-sib4' on this host"), repr(_fin36))
+    # SSH's port: refused by step 6's withheld set and by the post-start read's own, both.
+    sid = _install36(rid, "p36pr5", 27740,
+                     detect=[_UNREAD36, {"game_port": 22, "open_ports": [22]}], listen=[set()])
+    check("F4 install: ...nor SSH's port", _p9_row(sid).port == 27740,
+          "port %r" % (_p9_row(sid).port,))
+    sid = _install36(rid, "p36pr6", 27750,
+                     detect=[_UNREAD36, {"game_port": 25585, "open_ports": [25585]}],
+                     listen_pre=[{25585}], listen=[{25585}])
+    check("F4 install: ...nor one something was listening on before this server first started",
+          _p9_row(sid).port == 27750, "port %r" % (_p9_row(sid).port,))
+    check("F4 install: ...and the install says so",
+          _fin36[-1:] and "which the panel did not take: something else was listening on it "
+          "before this server started" in _fin36[-1][0], repr(_fin36))
+    # A Tailscale or local host returns a failed `ss` as empty output, without raising: step 6
+    # then FINISHES (job.withheld is set) without knowing what was listening before the start.
+    sid = _install36(rid, "p36pr8", 27770,
+                     detect=[_UNREAD36, {"game_port": 25605, "open_ports": [25605]}],
+                     listen_pre=[None], listen=[{25605}])
+    check("F4 install: ...nor any port when step 6 finished without READING what was listening "
+          "(a failed `ss` on a Tailscale or local host, which does not raise)",
+          _p9_row(sid).port == 27770, "port %r" % (_p9_row(sid).port,))
+    check("F4 install: ...and the install says the port is not taken because that could not be "
+          "read, not that it is 'installed and started'",
+          _fin36[-1:] and _fin36[-1][0].startswith(
+              "p36pr8 installed and starting, but LinuxGSM reports port 25605 for it, which the "
+              "panel did not take: the ports already in use on the host could not be read before "
+              "it started"), repr(_fin36))
+    sid = _install36(rid, "p36pr7", 27760,
+                     detect=[ConnectionError("details timed out"),
+                             {"game_port": 25595, "open_ports": [25595]}], listen=[{25595}])
+    check("F4 install: ...nor any port when step 6 never got as far as looking — with the server "
+          "running, what held a port before it started can no longer be told",
+          _p9_row(sid).port == 27760, "port %r" % (_p9_row(sid).port,))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
 # F3 — no exception text from the argument check reaches an action's message
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _SECRET36 = "/root/.ssh/id_ed25519 could not be read"
@@ -1009,7 +1114,8 @@ try:
     _H36 = _host36("p36-install-host", "192.0.2.68")
     for _fn36 in (_f1_step6_raises36, _f1_listen_raises36, _f1_listen_unreadable36,
                   _f1_sibling_after_step6, _f1_foreign_listener36, _f1_happy36, _f1_warning36,
-                  _f2_checks36, _f2_retry36, _f2_retry_paths36, _f2_no_false_warning36):
+                  _f2_checks36, _f2_retry36, _f2_retry_paths36, _f2_no_false_warning36,
+                  _f4_port_read36, _f4_port_refused36):
         _fn36(_H36)
     _p9_restore_all()
 

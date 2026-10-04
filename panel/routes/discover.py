@@ -14,8 +14,9 @@ from panel.security.auth import (MANAGE_SERVERS, can_access_remote, get_remote, 
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (INSTANCE_NAME_RE)
 from app import (lgsm_name_to_game_type, load_game_list)
-from panel.routes._shared import (_bg_cache_commands, _json_int, privileged_accounts)
+from panel.routes._shared import (_bg_cache_commands, privileged_accounts)
 from panel.ops import ssh_manager as _sm
+from panel.services import game_ports as _gp
 
 
 # "Could not read" is not "nothing is there", and discover_linuxgsm_servers cannot tell its caller
@@ -141,15 +142,21 @@ def register(app):
                 "Couldn't check the selected accounts on %s — the host did not answer, and the "
                 "panel only imports an account it has confirmed is not an administrator or root "
                 "account. Nothing was imported; try again." % remote.name)}), 200
-        added, skipped = _add_imported_rows(remote_id, items, discovered)
-        not_enrolled = []
-        if added:
-            added, not_enrolled = _finish_import(app, remote, remote_id, added)
-        return jsonify(_discover_import_outcome(remote, added, skipped, not_enrolled, refused))
+        picked, skipped = _import_selection(remote_id, items, discovered)
+        added, not_enrolled, unread = [], [], []
+        if picked:
+            added, not_enrolled, unread, raced = _import_picked(app, remote, remote_id, picked)
+            skipped += raced
+        return jsonify(_discover_import_outcome(remote, added, skipped, not_enrolled, refused,
+                                                unread))
 
 
-def _discover_import_outcome(remote, added, skipped, not_enrolled, refused):
-    """The import route's JSON answer, once the selected rows are in (or are not)."""
+def _discover_import_outcome(remote, added, skipped, not_enrolled, refused, unread=()):
+    """The import route's JSON answer, once the selected rows are in (or are not).
+
+    `unread` are the servers left out because their port could not be read, each with the reason.
+    `shared_ports` (see _shared_ports) names each port an imported server shares with another.
+    """
     # On the panel's own host an account the helper would not enrol was imported ANYWAY: the
     # row was committed first, and only then was the helper asked. The helper refuses an
     # account that can already reach root, so its refusal is the same verdict as the probe's
@@ -157,13 +164,39 @@ def _discover_import_outcome(remote, added, skipped, not_enrolled, refused):
     if _sm.is_local_server(remote):
         refused += not_enrolled
         not_enrolled = []
-    skipped += [r["user"] for r in refused if r["user"] not in skipped]
+    unread = list(unread)
+    skipped += [r["user"] for r in refused + unread if r["user"] not in skipped]
     out = {"success": bool(added), "added": added, "skipped": skipped,
-           "not_enrolled": not_enrolled, "refused": refused}
-    if refused and not added:
+           "not_enrolled": not_enrolled, "refused": refused, "unread": unread,
+           "shared_ports": _shared_ports(remote.id, added)}
+    if (refused or unread) and not added:
         out["message"] = "Not imported: " + "; ".join(
-            "%s (%s)" % (r["user"], r["reason"]) for r in refused) + "."
+            "%s (%s)" % (r["user"], r["reason"]) for r in refused + unread) + "."
     return out
+
+
+def _shared_ports(remote_id, added):
+    """[{"port", "servers", "note"}]: each port an imported server shares with another of the host's.
+
+    Imported anyway: the port is the one its config sets, and Minecraft and PaperMC both default
+    to 25565. But a port-only monitor then reads a STOPPED one online while the other runs (found
+    on the test box: pmcsrv beside mcserver), so the reply says so. Read from the host's rows after
+    the commit: another server imported in the same batch counts, as does one already in the panel
+    (its display name), and a server on another host does not. `servers` are in the order the rows
+    were made; `note` is game_ports.shared_port_note.
+    """
+    if not added:
+        return []
+    new, by_port = set(added), collections.defaultdict(list)
+    for port, name, short in (GameServer.query.filter_by(remote_id=remote_id)
+                              .order_by(GameServer.id)
+                              .with_entities(GameServer.port, GameServer.name,
+                                             GameServer.short_name)):
+        by_port[port].append((name, short in new))
+    return [{"port": port, "servers": [n for n, _new in held],
+             "note": _gp.shared_port_note([n for n, _new in held], port)}
+            for port, held in sorted(by_port.items())
+            if len(held) > 1 and any(is_new for _n, is_new in held)]
 
 
 def _privileged_selection(remote, items, discovered):
@@ -223,7 +256,10 @@ def _content_game_label(f, gt, games):
 
 
 def _importable_entry(f, user, gt, games):
-    """One importable server as the discover card lists it."""
+    """One importable server as the discover card lists it.
+
+    `port` 0 is "not in its LinuxGSM config": the import reads it from LinuxGSM's `details`.
+    """
     return {"user": user, "game_type": gt, "game_name": games.get(gt, gt),
             "port": f.get("port") or 0,
             "backups": f.get("backups", 0), "mods": f.get("mods", 0),
@@ -231,7 +267,12 @@ def _importable_entry(f, user, gt, games):
 
 
 def _scanned_game_types(found):
-    """{account: {game types}} a scan found; content boxes are left out, as discover leaves them."""
+    """{account: {game type: the port the scan read, or None}} a scan found.
+
+    Content boxes are left out, as discover leaves them. The port is the import's to store: the
+    one LinuxGSM's own config gives the game (discover_linuxgsm_servers), or None when it gives
+    none and the import has to ask LinuxGSM's `details`.
+    """
     _content = content_box_users(found)
     discovered = {}
     for _f in found:
@@ -240,15 +281,18 @@ def _scanned_game_types(found):
             continue      # a GMod content box is not a server — api_remote_discover skips it
         _gt = lgsm_name_to_game_type(_f.get("lgsm_name") or "")
         if _gt:
-            discovered.setdefault(_u, set()).add(_gt)
+            discovered.setdefault(_u, {})[_gt] = _f.get("port") or None
     return discovered
 
 
-def _add_imported_rows(remote_id, items, discovered):
-    """Add a GameServer row per selected server the scan confirmed; returns (added, skipped)."""
+def _import_selection(remote_id, items, discovered):
+    """The selected servers the scan confirmed. -> ([(account, game type, scanned port)], skipped).
+
+    The scanned port is None where the scan read none. Nothing the client sent about a port is
+    kept: the import stores a port read on the host or no row at all (see _import_ports).
+    """
     existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
-    game_names = {g["shortname"]: g["name"] for g in load_game_list()}
-    valid_games = set(game_names)
+    valid_games = {g["shortname"] for g in load_game_list()}
     # A host's servers are keyed on the Linux user (short_name), so two games under ONE account
     # cannot both become servers. The loop below would take the first and drop the rest as
     # duplicates — picking a game essentially at random and reporting partial success as
@@ -256,27 +300,16 @@ def _add_imported_rows(remote_id, items, discovered):
     # Refuse the whole account instead: an arbitrary winner is not a better answer than none.
     items, per_user = _selected_items(items)
     rules = (valid_games, discovered, existing, per_user)
-    added, skipped = [], []
+    picked, skipped = [], []
     for it in items:
         user = (str(it.get("user") or "")).strip()
         gt = _json_str(it, "game_type").lower()
         if _import_refused(user, gt, rules):
             skipped.append(user or "?")
             continue
-        # Import never starts or stops a discovered server, and leaves its game files, backups
-        # and mods as they are (they are read live once imported). It does turn Autostart on,
-        # as an install does: the background step below writes LinuxGSM's `monitor` cron once
-        # the command list shows the game has it, and sets the flag then. monitor keeps a
-        # server in its intended state, so a running one comes back after a reboot or a crash
-        # and a stopped one stays down. It starts False here because nothing is written yet.
-        db.session.add(GameServer(
-            remote_id=remote_id, name=user, short_name=user, game_type=gt,
-            game_display=game_names.get(gt, ""),
-            port=_import_port(it), installed=True, status="offline",
-            autostart=False))
         existing.add(user)
-        added.append(user)
-    return added, skipped
+        picked.append((user, gt, discovered[user][gt]))
+    return picked, skipped
 
 
 def _selected_items(items):
@@ -287,55 +320,121 @@ def _selected_items(items):
 
 
 def _import_refused(user, gt, rules):
-    """Whether one selected server must be skipped; `rules` is _add_imported_rows' tuple."""
+    """Whether one selected server must be skipped; `rules` is _import_selection's tuple."""
     valid_games, discovered, existing, per_user = rules
     return bool(not INSTANCE_NAME_RE.match(user) or gt not in valid_games
                 or gt not in discovered.get(user, ())
                 or user in existing or per_user.get(user, 0) > 1)
 
 
-def _import_port(it):
-    """The port a selected server named, or 27015 when it named none in range."""
-    # _json_int, not int(): `{"port": Infinity}` raised OverflowError past `except (TypeError,
-    # ValueError)` and 500'd the import after the scan had already run.
-    port = _json_int(it.get("port") or 0) or 0
-    return port if 1 <= port <= 65535 else 27015
+def _import_picked(app, remote, remote_id, picked):
+    """Enrol the picked accounts, read the ports the scan could not, then add and commit the rows.
 
+    -> (accounts imported, accounts the helper would not enrol (with its reason), servers left out
+    because their port could not be read (with the reason), accounts another import added first).
 
-def _finish_import(app, remote, remote_id, added):
-    """Enrol the imported accounts, commit and audit their rows, and fetch their command lists.
-
-    Returns (the accounts imported, the accounts the helper would not enrol, each with its reason).
-    On the panel's own host a refused account's row is dropped before the commit, so it is in the
-    second list and not the first.
-
-    Enrolment runs BEFORE the commit. It ran after, so on the panel host an account the helper
-    refused — one that can already reach root — was a committed GameServer row by the time the
-    refusal came back, and the panel went on driving it as a game account. Nothing between the
-    session.add and here queries the database, so the pending rows are not flushed (and no write
-    lock is held) while the helper runs.
+    Enrolment runs FIRST, before any row exists. It ran after the rows were added, and before that
+    after the commit, so on the panel host an account the helper refused — one that can already
+    reach root — was a committed GameServer row by the time the refusal came back. And it has to
+    precede the port read now: on a narrow-grant install the helper runs `details` only as an
+    enrolled account. An account enrolled here whose port then cannot be read is left out of the
+    import but stays enrolled; importing it again needs that anyway.
     """
-    not_enrolled = _enrol_imported(remote, added)
+    not_enrolled = _enrol_imported(remote, [user for user, _gt, _port in picked])
     if not_enrolled and _sm.is_local_server(remote):
-        added = _discover_drop_unenrolled(remote_id, added, not_enrolled)
+        drop = {n["user"] for n in not_enrolled}
+        picked = [p for p in picked if p[0] not in drop]
+    ready, unread = _import_ports(remote, picked)
+    added, raced = _add_imported_rows(remote_id, ready)
     if not added:
         db.session.rollback()
-        return added, not_enrolled
+        return added, not_enrolled, unread, raced
     db.session.commit()
+    ports = {user: port for user, _gt, port in ready}
     log_action(current_user, "import_servers", target=remote.name,
-               detail="added=%s" % ",".join(added), remote=remote)
+               detail="added=%s" % ",".join("%s:%s" % (u, ports[u]) for u in added), remote=remote)
     _discover_cache_imported(app, remote_id, added, not_enrolled)
-    return added, not_enrolled
+    return added, not_enrolled, unread, raced
 
 
-def _discover_drop_unenrolled(remote_id, added, not_enrolled):
-    """Take the accounts the helper would not enrol out of the pending session; return the rest."""
-    drop = {n["user"] for n in not_enrolled}
-    for obj in list(db.session.new):
-        if (isinstance(obj, GameServer) and obj.remote_id == remote_id
-                and obj.short_name in drop):
-            db.session.expunge(obj)
-    return [u for u in added if u not in drop]
+def _import_ports(remote, picked):
+    """The port each picked server is stored on, READ on the host. -> (ready, unread).
+
+    ready: [(account, game type, port)]. unread: [{"user", "reason"}] — the servers no row is made
+    for, because no port could be read for them.
+
+    The scan's port where it read one: LinuxGSM's own config, and only when the game's start line
+    uses it. Otherwise LinuxGSM's `details`, which reads the game's own config for the 46 games that
+    keep their port there (Minecraft's server.properties, ...). Never the port the browser sent and
+    never a default: the import stored the client's port, and 27015 when it sent none — so a
+    Minecraft server imported on the test box was stored on Garry's Mod's port, read as up
+    whenever Garry's Mod was, and its crash never paged. A port that cannot be read is no port; a
+    row on a guessed one is worse than no row, because every consumer treats it as a fact.
+    """
+    if not picked:
+        return [], []
+    readings = _gp.read_reported_ports(
+        remote, [(user, user, "%sserver" % gt) for user, gt, port in picked if not port])
+    protected = _sm.protected_host_ports(remote)
+    ready, unread = [], []
+    for user, gt, port in picked:
+        answered = True
+        if not port:
+            port, answered = readings.get(user, _gp.NO_READING)[:2]
+        why = _import_port_problem(port, answered, protected)
+        if why:
+            unread.append({"user": user, "reason": why})
+        else:
+            ready.append((user, gt, port))
+    return ready, unread
+
+
+def _import_port_problem(port, answered, protected):
+    """Why a server cannot be imported on `port` (None: no port was read), or None when it can."""
+    if port is None and not answered:
+        return ("its game port is not set in its LinuxGSM config, and LinuxGSM's details did not "
+                "answer, so its port could not be read — try the import again")
+    if port is None:
+        # What was SEEN, not a guess at why: most games get a default config at install that
+        # already sets the port (Minecraft's server.properties says 25565), so "never started" was
+        # wrong for them, and starting such a server changes nothing.
+        return ("its game port is not set in its LinuxGSM config, and LinuxGSM's details reports "
+                "none either: the game's own config (the file details names under \"Change ports "
+                "by editing\") is missing or does not set the port. Set it there, then import it "
+                "again. A game that writes that file itself the first time it starts needs one "
+                "start with LinuxGSM first")
+    why = _gp.port_refusal(port, protected)
+    return ("its port could not be used: %s — correct it in the game's config, then import it"
+            % why) if why else None
+
+
+def _add_imported_rows(remote_id, ready):
+    """Add a GameServer row per server in `ready`. -> (added, accounts another import added first).
+
+    The panel's rows are read again here: the port reads take seconds, and an import running
+    alongside this one could have added the same account meanwhile.
+    """
+    existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
+    game_names = {g["shortname"]: g["name"] for g in load_game_list()}
+    added, raced = [], []
+    for user, gt, port in ready:
+        if user in existing:
+            raced.append(user)
+            continue
+        # Import never starts or stops a discovered server, and leaves its game files, backups
+        # and mods as they are (they are read live once imported). It does turn Autostart on,
+        # as an install does: the background step below writes LinuxGSM's `monitor` cron once
+        # the command list shows the game has it, and sets the flag then. monitor keeps a
+        # server in its intended state, so a running one comes back after a reboot or a crash
+        # and a stopped one stays down. It starts False here because nothing is written yet.
+        db.session.add(GameServer(
+            remote_id=remote_id, name=user, short_name=user, game_type=gt,
+            game_display=game_names.get(gt, ""),
+            port=port, installed=True, status="offline",
+            autostart=False))
+        existing.add(user)
+        added.append(user)
+    return added, raced
 
 
 def _discover_cache_imported(app, remote_id, added, not_enrolled):
