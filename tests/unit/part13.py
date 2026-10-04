@@ -1736,9 +1736,10 @@ def _expected_window_checks10():
               "once, and its return still pages 'back online'",
               (crash, back) == (["server_down"], ["server_up"]), repr((crash, back)))
 
-        def restarted(hold):
+        def restarted(hold, ends=True):
             # A restarted panel has recorded nothing yet; host_reboot.resume_reboot_state puts a
-            # plan's hold back first. The plan ends (the row's window from now) before it is back.
+            # plan's hold back first. The plan ends (the row's window from now) before it is back,
+            # or still holds it when it is.
             _mon10._monitor_state["servers"].pop(g1, None)
             _mon10._monitor_state["server_unannounced"].pop(g1, None)
             if hold:
@@ -1746,14 +1747,21 @@ def _expected_window_checks10():
             else:
                 _mon10._expected_offline.pop(g1, None)
             got = sweeps(1, shut)
-            if hold:
+            if hold and ends:
                 _mon10._expected_offline[g1] = clock[0]
             return got + sweeps(1, up, step=900)
 
-        held, unheld = restarted(True), restarted(False)
+        held, still, unheld = restarted(True), restarted(True, ends=False), restarted(False)
         check("monitor pass: after a panel restart, a server a reboot plan holds pages nothing on its "
-              "way back, even after the plan's window (control: one no plan holds pages 'back online')",
-              (held, unheld) == ([], ["server_up"]), repr((held, unheld)))
+              "way back, while the plan still holds it or after its window (control: one no plan holds "
+              "pages 'back online')", (held, still, unheld) == ([], [], ["server_up"]),
+              repr((held, still, unheld)))
+        # No restart: up and recorded up when the plan takes it down, back while the plan holds it.
+        sweeps(1, up)
+        _mon10._expected_offline[g1] = float("inf")
+        in_plan = sweeps(3, shut) + sweeps(1, up, step=600)
+        check("monitor pass: a server a reboot plan takes down and brings back pages nothing either way",
+              in_plan == [], repr(in_plan))
     finally:
         _mon10._expected_offline.pop(g1, None)
         _mon_restore10("time")

@@ -1164,22 +1164,27 @@ def _server_transition(remote, gs, up, prev_up, muted):
     unannounced, and the return of a server so marked is not announced either.
     """
     misses = _monitor_state["server_misses"]
-    unannounced = _monitor_state["server_unannounced"]
     if up or prev_up is not True:
         misses.pop(gs.id, None)
     if prev_up is True and not up:
         return _mon_server_went_down(remote, gs, up, prev_up, muted)
     if up:
-        quiet = unannounced.pop(gs.id, False)
-        if prev_up is False and not muted and not quiet:
-            notifications.notify("server_up", "Server back online",
-                                 "%s on %s is back online." % (gs.name, remote.display_name))
+        _mon_server_came_up(remote, gs, prev_up, muted)
     elif prev_up is None and _offline_expected(gs.id):
-        # Never seen by this process: the first sweep after a panel restart. A reboot plan that
-        # still holds the server (host_reboot.resume_reboot_state put the hold back before this
-        # sweep could run) took it down, and the plan's own summary reports its return.
-        unannounced[gs.id] = True
+        # Never seen by this process (its first sweep after a panel restart), and down while the
+        # panel expects it: a reboot plan still holds it (host_reboot.resume_reboot_state put the
+        # hold back before this sweep could run), or a Stop came first. Nobody was told it went
+        # down, so its return is not announced either; a plan's own summary reports that.
+        _monitor_state["server_unannounced"][gs.id] = True
     return up
+
+
+def _mon_server_came_up(remote, gs, prev_up, muted):
+    """The up leg of _server_transition: "back online", unless nobody was told the server went down."""
+    quiet = _monitor_state["server_unannounced"].pop(gs.id, False)
+    if prev_up is False and not muted and not quiet:
+        notifications.notify("server_up", "Server back online",
+                             "%s on %s is back online." % (gs.name, remote.display_name))
 
 
 def _forget_deleted_rows(remote_ids, server_ids):
