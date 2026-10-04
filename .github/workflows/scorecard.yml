@@ -20,10 +20,10 @@ on:
 # block REPLACES the top-level one, and the single job below declares its own — so its token is
 # unaffected either way. It matters because read-all grants every read scope in the token to any
 # future job that does not declare its own, and because scorecard's own Token-Permissions check
-# reads these files and scores a top-level read-all as weaker than an explicit list.
+# reads these files and scores a top-level read-all as weaker than an explicit list. `actions: read`
+# was listed here too, and nothing used it: the one job replaces this block with its own.
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: scorecard
@@ -37,6 +37,11 @@ jobs:
     permissions:
       id-token: write   # publish results to the OpenSSF API (this is what powers the badge)
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

@@ -55,9 +55,18 @@ on:
   workflow_run:
     workflows: [ "CI" ]
     types: [ completed ]
+  # zizmor: ignore[dangerous-triggers] main's copy runs with no checkout; the report is checked as untrusted data first
 
 permissions:
   contents: read
+
+# One upload per commit at a time: the reporter's partial reports and its `final` for a commit must
+# not interleave with a second run's for the same commit (a re-run of CI). Different commits never
+# share a group, and nothing reads this job's check (system_ops._CI_IGNORE), so a cancelled pending
+# upload costs nothing; the run that replaced it sends the same reports.
+concurrency:
+  group: codacy-coverage-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
 
 jobs:
   upload:
@@ -87,6 +96,10 @@ jobs:
     permissions:
       actions: read   # to download an artifact of the CI run this follows; nothing else
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       # No checkout: nothing from the repository is needed, and nothing of the tested code is run.
       - name: Download the coverage report CI made
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

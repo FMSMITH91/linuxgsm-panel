@@ -30,6 +30,7 @@ on:
   schedule:
     - cron: '29 */6 * * *'
   workflow_dispatch:
+  # zizmor: ignore[concurrency-limits] its check lands on main's head, where a cancelled pending run reads as a failure
 
 permissions:
   contents: read
@@ -43,6 +44,10 @@ jobs:
     permissions:
       actions: write   # list and delete artifacts; nothing is downloaded or checked out
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - name: Delete every cifuzz-* artifact that provably came from elsewhere
         env:
           REPO: ${{ github.repository }}

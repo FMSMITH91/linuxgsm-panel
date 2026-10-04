@@ -8432,8 +8432,8 @@ _dp_top = _deploy_wf[:_deploy_wf.index("\njobs:\n")]
 _dp_join = _deploy_wf[_deploy_wf.index("- name: Join the tailnet"):]
 _dp_join = _dp_join[:_dp_join.index("\n      - name: ", 1)]
 check("deploy: the Tailscale login is OIDC (job-level id-token: write, an audience, no secret)",
-      re.search(r"^    permissions:\n      contents: read\n      id-token: write$", _dp_job, re.M)
-      is not None
+      re.search(r"^    permissions:\n      contents: read\n      id-token: write(?: +#[^\n]*)?$", _dp_job,
+                re.M) is not None
       and "id-token" not in _dp_top
       and re.search(r"^          audience: \$\{\{ secrets\.TS_AUDIENCE \}\}$", _dp_join, re.M) is not None
       and "oauth-secret" not in _deploy_wf and "TS_OAUTH_SECRET" not in _deploy_wf,

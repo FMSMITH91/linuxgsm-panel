@@ -216,7 +216,8 @@ _jcj_uses = re.findall(r"uses: (\S+)", _jcj)
 _jcj_pip = re.findall(r"pip install[^\n]*", _jcj)
 check("js coverage (CI): the job pins every action to a commit, reads the repository only, and "
       "keeps no token in .git",
-      len(_jcj_uses) == 3 and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", _u) for _u in _jcj_uses)
+      len(_jcj_uses) == 4 and _jcj_uses[0].startswith("step-security/harden-runner@")
+      and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", _u) for _u in _jcj_uses)
       and re.search(r"\n    permissions:\n      contents: read\n    steps:", _jcj) is not None
       and "secrets." not in _jcj and "persist-credentials: false" in _jcj,
       repr((_jcj_uses, _jcj[:200])))
@@ -865,7 +866,7 @@ check("update gate: the alerts workflow POSTS the required 'Open code-scanning a
       and re.search(r"^    name: Code-scanning alerts gate$", _cqa_wf14, re.M) is not None
       and "Code-scanning alerts gate" in _so14._CI_IGNORE, "")
 _pi14 = {}
-for _wfn in ("ci.yml", "codeql.yml", "security-code.yml"):
+for _wfn in ("ci.yml", "codeql.yml", "security-code.yml", "zizmor.yml"):
     _t = _wf14(_wfn)
     _pi14[_wfn] = [sorted(re.findall(r"^      - '([^']+)'$", _blk, re.M))
                    for _blk in re.findall(r"    paths-ignore:\n((?:      - .*\n)+)", _t)]
@@ -873,7 +874,8 @@ _pi14_all = {tuple(b) for v in _pi14.values() for b in v}
 # One block each, on `push`: their `pull_request` triggers have no path filter, because their jobs
 # are checks a pull request must pass to merge (.github/required-checks.txt) and a required check
 # whose workflow did not run would hold the pull request forever.
-check("update gate: ci.yml, codeql.yml and security-code.yml share one paths-ignore list, on push",
+check("update gate: ci.yml, codeql.yml, security-code.yml and zizmor.yml share one paths-ignore list, "
+      "on push",
       len(_pi14_all) == 1 and all(len(v) == 1 for v in _pi14.values()), repr(_pi14))
 _pi14_list = list(next(iter(_pi14_all))) if len(_pi14_all) == 1 else []
 check("update gate: ...and it is the list _ci_path_ignored applies",
@@ -885,9 +887,9 @@ check("update gate: ...and it is the list _ci_path_ignored applies",
 
 # ── 5. codeql-alerts.yml: the verdict lands on the commit it judged ───────────────────────────
 _cqa_raw14 = _wf14("codeql-alerts.yml")
-check("codeql-alerts: it waits for BOTH uploaders (CodeQL and the Bandit/Semgrep workflow), and "
-      "may post checks",
-      'workflows: [ "CodeQL", "Security scan (code)" ]' in _cqa_raw14
+check("codeql-alerts: it waits for EVERY uploader (CodeQL, the Bandit/Semgrep workflow and zizmor's), "
+      "and may post checks",
+      'workflows: [ "CodeQL", "Security scan (code)", "Security scan (workflows)" ]' in _cqa_raw14
       and "checks: write" in _cqa_wf14 and "actions: read" in _cqa_wf14, "")
 _sb14 = _tf14.mkdtemp(prefix="cqa14-")
 try:
@@ -899,6 +901,7 @@ try:
                   'case "$*" in\n'
                   '  *actions/workflows/codeql.yml/*) echo "${OPEN_CODEQL:-0}" ;;\n'
                   '  *actions/workflows/security-code.yml/*) echo "${OPEN_SEC:-0}" ;;\n'
+                  '  *actions/workflows/zizmor.yml/*) echo "${OPEN_ZZ:-0}" ;;\n'
                   '  *code-scanning/alerts*) echo "${ALERTS:-[]}" ;;\n'
                   '  *check-runs*) : ;;\n'
                   'esac\n')
@@ -919,17 +922,25 @@ try:
         return p.returncode, outs, open(log).read()
 
     _S14 = "d" * 40
-    _wait_busy = _cqa14("Wait for the other uploader", GITHUB_EVENT_NAME="workflow_run",
+    _wait_busy = _cqa14("Wait for the other uploaders", GITHUB_EVENT_NAME="workflow_run",
                         WR_SHA=_S14, WR_NAME="CodeQL", WR_EVENT="push", OPEN_SEC="1")
-    _wait_done = _cqa14("Wait for the other uploader", GITHUB_EVENT_NAME="workflow_run",
+    # zizmor's run still going holds the verdict too, whichever uploader finished first.
+    _wait_busy_zz = _cqa14("Wait for the other uploaders", GITHUB_EVENT_NAME="workflow_run",
+                           WR_SHA=_S14, WR_NAME="Security scan (code)", WR_EVENT="push",
+                           OPEN_ZZ="1")
+    _wait_done = _cqa14("Wait for the other uploaders", GITHUB_EVENT_NAME="workflow_run",
                         WR_SHA=_S14, WR_NAME="CodeQL", WR_EVENT="push")
-    _wait_man = _cqa14("Wait for the other uploader", GITHUB_EVENT_NAME="workflow_dispatch",
+    _wait_man = _cqa14("Wait for the other uploaders", GITHUB_EVENT_NAME="workflow_dispatch",
                        WR_SHA="", WR_NAME="")
-    check("codeql-alerts: the first uploader to finish posts nothing while the other still runs; "
-          "the second judges; a manual run judges at once",
-          _wait_busy[:2] == (0, {"judge": "false"}) and _wait_done[:2] == (0, {"judge": "true"})
-          and "head_sha=%s" % _S14 in _wait_done[2] and _wait_man[:2] == (0, {"judge": "true"}),
-          repr((_wait_busy, _wait_done, _wait_man)))
+    check("codeql-alerts: an uploader that finishes posts nothing while another still runs (the "
+          "Bandit/Semgrep workflow's run, or zizmor's)",
+          _wait_busy[:2] == (0, {"judge": "false"}) and _wait_busy_zz[:2] == (0, {"judge": "false"})
+          and "actions/workflows/zizmor.yml/runs?head_sha=%s&event=push" % _S14 in _wait_busy_zz[2],
+          repr((_wait_busy, _wait_busy_zz)))
+    check("codeql-alerts: ...with none of them running the last to finish judges, having asked about "
+          "this commit; a manual run judges at once",
+          _wait_done[:2] == (0, {"judge": "true"}) and "head_sha=%s" % _S14 in _wait_done[2]
+          and _wait_man[:2] == (0, {"judge": "true"}), repr((_wait_done, _wait_man)))
     # The judge step (clean, open alerts, no analysis of this commit, moved on) is run in part26,
     # against the per-category analyses it now waits for (.github/scripts/code_scanning_analyses.py).
     _posts = {}

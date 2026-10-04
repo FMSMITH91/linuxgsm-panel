@@ -45,6 +45,11 @@ jobs:
       matrix:
         target: [ game_status, firewall, config, fail2ban, console, cron ]
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       # The workflow runs on EVERY pull request, so this job can be a required check: a required
       # check whose workflow did not run holds the pull request forever. A pull request that
       # changes none of `scope` passes here without fuzzing; the list is what this workflow's

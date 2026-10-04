@@ -26,10 +26,11 @@ name: Code-scanning alerts
 #   CodeQL is path-filtered and skips docs-only pushes, so this skips them too — correctly: with no
 #   code change there is nothing for the alert set to have become.
 #
-#   "Security scan (code)" is a trigger too: Bandit and Semgrep upload their SARIF to code scanning
-#   from there, and the same race applies to them. Whichever of the two workflows finishes FIRST
-#   finds the other still running and posts nothing; the one that finishes second judges the
-#   settled alert set (see "Wait for the other uploader").
+#   "Security scan (code)" and "Security scan (workflows)" are triggers too: Bandit and Semgrep
+#   upload their SARIF to code scanning from the first, zizmor from the second, and the same race
+#   applies to them. A run that finds another of the three workflows still running for the same
+#   commit posts nothing; the one that finishes last judges the settled alert set (see "Wait for the
+#   other uploaders").
 #
 # WHERE THE VERDICT LANDS
 #   GitHub files a workflow_run job's check run under the default branch's NEWEST commit, not the
@@ -41,9 +42,10 @@ name: Code-scanning alerts
 #   be present. The job itself is named differently, and the gate ignores it (_CI_IGNORE).
 on:
   workflow_run:
-    workflows: [ "CodeQL", "Security scan (code)" ]
+    workflows: [ "CodeQL", "Security scan (code)", "Security scan (workflows)" ]
     types: [ completed ]
   workflow_dispatch:
+  # zizmor: ignore[dangerous-triggers] judges main only, reads the API and runs only main's own script
 
 permissions:
   contents: read
@@ -86,8 +88,9 @@ jobs:
     #   run (173 workflow_run runs, 0 workflow_dispatch).
     #
     #   SCHEDULED runs are judged too. CodeQL's weekly run exists to apply newly published queries to
-    #   code that has not changed, and security-code.yml's re-runs Bandit and Semgrep; an alert either
-    #   opens lands on main with no push. Skipped here, main's head kept its push-time success, the
+    #   code that has not changed, security-code.yml's re-runs Bandit and Semgrep, and zizmor.yml's
+    #   re-runs zizmor's online audits; an alert any of them opens lands on main with no push.
+    #   Skipped here, main's head kept its push-time success, the
     #   panel kept offering it, and the alert first surfaced as a red check on an unrelated PR.
     #   A scheduled run's head_branch is main and its head_sha is main's head, the commit it analysed.
     if: >-
@@ -99,10 +102,15 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      security-events: read
-      actions: read    # "Wait for the other uploader" lists the other workflow's runs
+      security-events: read   # the code-scanning analyses and alerts of the judged ref
+      actions: read    # "Wait for the other uploaders" lists the other workflows' runs
       checks: write    # the verdict is posted as a check run on the judged commit
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       - name: Resolve which ref to judge
         id: ref
         env:
@@ -135,19 +143,21 @@ jobs:
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
 
-      # Two workflows upload to code scanning for a push — CodeQL (codeql.yml) and Bandit + Semgrep
-      # (security-code.yml) — and each one's completion triggers this. The first to finish would
-      # judge an alert set the other has not reported into yet: the race this workflow exists to
-      # avoid, one uploader along. So a run that finds the OTHER workflow's run for the same commit
-      # still going posts nothing; that one's completion triggers the run that judges. A commit one
-      # of them never ran for (none found) does not wait. A manual run judges at once.
-      # The other workflow's runs are looked up for this commit under BOTH events that reach the
+      # Three workflows upload to code scanning for a push — CodeQL (codeql.yml), Bandit + Semgrep
+      # (security-code.yml) and zizmor (zizmor.yml) — and each one's completion triggers this. The
+      # first to finish would judge an alert set the others have not reported into yet: the race
+      # this workflow exists to avoid, one uploader along. So a run that finds ANOTHER of them still
+      # going for the same commit posts nothing; the last one's completion triggers the run that
+      # judges. A commit one of them never ran for (none found) does not wait. A manual run judges
+      # at once. The list is code_scanning_analyses.py's CATEGORIES' workflows (a unit check holds
+      # the two equal).
+      # The other workflows' runs are looked up for this commit under BOTH events that reach the
       # gate, push and schedule, whichever event triggered this one. Looking only under its own
-      # event, a scheduled run for a commit just pushed missed the other workflow's push run still
+      # event, a scheduled run for a commit just pushed missed another workflow's push run still
       # uploading, and judged its predecessor's analyses as this commit's (review finding E5). A
       # pull_request run never counts: its commit is a merge commit, and its completion judges
       # nothing here, so waiting on one could leave a commit unjudged.
-      - name: Wait for the other uploader
+      - name: Wait for the other uploaders
         id: settled
         if: steps.ref.outputs.skip != 'true'
         env:
@@ -161,7 +171,7 @@ jobs:
             echo "judge=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          for wf in codeql.yml security-code.yml; do
+          for wf in codeql.yml security-code.yml zizmor.yml; do
             for ev in push schedule; do
               open="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?head_sha=${WR_SHA}&event=${ev}&per_page=20" \
                         --jq '[.workflow_runs[] | select(.status != "completed")] | length')"

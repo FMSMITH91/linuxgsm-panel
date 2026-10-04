@@ -171,6 +171,30 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **Two more CI scanners: zizmor on the workflows, and Harden-Runner in every job but deploy.**
+  CI only; nothing on a panel changes, and no panel is offered an update for it.
+  - *zizmor* audits the GitHub Actions setup itself: template injection, over-wide token
+    permissions, credentials left behind by checkout, dangerous triggers and, online, impostor
+    commits and action versions with a known advisory. A new workflow, `Security scan (workflows)`,
+    runs it on every pull request, on pushes to main and weekly, at its pedantic persona, and
+    uploads the findings to code scanning, where both alert gates wait for them as they do for
+    CodeQL, Bandit and Semgrep. The scanner runs with a read-only token; a second job uploads.
+    Its first run found 19 things at the strictest persona. Fixed: a version comment that named no
+    tag, five permissions with no comment saying why and one (`actions: read`) that nothing used,
+    two unnamed jobs, an optional Codacy token readable outside a main-only environment, and a
+    coverage upload that two runs for one commit could interleave. Accepted, each marked beside the
+    code with its reason:
+    the three `workflow_run` workflows, and five workflows whose check lands on main and so carry no
+    concurrency group on purpose. A unit check names every accepted finding.
+  - *Harden-Runner* (StepSecurity) is the first step of every job but one, in audit mode. Audit mode
+    applies no allow-list, but it is not passive. It routes each job's DNS, docker's included,
+    through its own proxy. It blocks any host on StepSecurity's global blocklist, which it fetches
+    when the job starts, so the list can change without a commit here. It prints what it saw into
+    the job's public log: each address the job connected to, and the command line of each process
+    the job ran as root. The same records go to StepSecurity. A job fails if the agent's download or
+    start fails. The deploy job is the exception. It holds the tailnet identity that reaches the
+    live panel, so a deploy does not depend on StepSecurity's runtime blocklist, and its log does
+    not list the deploy host's address or every command it ran as root.
 - **The panel makes far fewer privileged calls, so the host's journal stops being mostly its sudo
   lines.** Every `sudo` writes three journal lines (and three to auth.log). On a host with three game
   servers the panel made about 580 such calls an hour, and they were 99% of its unit's journal. Each

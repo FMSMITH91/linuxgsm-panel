@@ -888,6 +888,9 @@ for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/sy
                                             ".clusterfuzzlite/**", "requirements.txt"))):
     _sc_txt = _rq_jobs.get(_sc_wf, ("", []))[0]
     _sc_steps = _sc_txt[_sc_txt.find("    steps:\n"):]
+    # Harden-Runner is every job's first step (part42 holds that); the scope step comes next.
+    _sc_steps = _sg_re.sub(r"\A(    steps:\n)      - name: Harden Runner\n(?:        .*\n)+\n?", r"\1",
+                           _sc_steps)
     _sc_at = _sc_steps.find("        id: scope\n")
     _sc_list = _sc_steps[_sc_steps.find("scope=(", _sc_at):_sc_steps.find("            )", _sc_at)]
     _sc_after = [_b for _b in _sc_steps[_sc_at:].split("\n      - ")[1:]
@@ -900,8 +903,8 @@ for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/sy
                 for _b in _sc_after if "steps.scope.outputs.run == 'true'" not in _b]
     if len(_sc_after) < 2:
         _sc_bad.append("%s: read %d gated steps" % (_sc_wf, len(_sc_after)))
-check("fuzz workflows: a scope step first, listing what the path filter did, and every build or fuzz "
-      "step waits on it",
+check("fuzz workflows: a scope step first (after Harden-Runner), listing what the path filter did, "
+      "and every build or fuzz step waits on it",
       not _sc_bad, repr(_sc_bad))
 # SonarCloud's free-plan gate cannot be made "0 new issues", so a required job checks that itself:
 # pull requests only, self-test first, the pull request's number and head commit passed as env.

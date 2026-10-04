@@ -199,7 +199,8 @@ def _cf2_no_secret(cfl):
 
 def _producer_bad(name, text, job):
     """What is wrong with one artifact-making job: it must run only on this repository's main."""
-    on = text[text.find("\non:\n"):text.find("\npermissions:")]
+    # Comment lines dropped: a `# zizmor: ignore[...]` line sits in the `on:` block it is about.
+    on = _code29(text[text.find("\non:\n"):text.find("\npermissions:")])
     jt = _job29(text, job)
     m = _re29.search(r"^    if: (.*)$", jt, _re29.M)
     cond = m.group(1) if m else ""

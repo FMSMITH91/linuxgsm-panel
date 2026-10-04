@@ -17,6 +17,7 @@ on:
   schedule:
     - cron: '17 3 * * *'     # daily, off the hour so it does not collide with everything else
   workflow_dispatch:
+  # zizmor: ignore[concurrency-limits] its check lands on main's head, where a cancelled pending run reads as a failure
 
 permissions:
   contents: read
@@ -37,6 +38,11 @@ jobs:
       matrix:
         sanitizer: [ address ]
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       # What cflite_pr.yml says about this step holds here too: the run step below unpacks the
       # stored corpus unchecked, so every stored cifuzz-* artifact must be main's first.
       - name: Every stored fuzz artifact was made on main here

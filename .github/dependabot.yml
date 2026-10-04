@@ -87,6 +87,9 @@ updates:
       - dependency-name: "gamedig"
         update-types: ["version-update:semver-major"]
 
+  # Every `uses:` under .github/workflows, step-security/harden-runner (the first step of every job)
+  # included; each moves SHA and version comment together. zizmor's pin is the pip entry above
+  # (.github/ci-requirements/zizmor.txt).
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
