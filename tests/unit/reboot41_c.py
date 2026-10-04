@@ -6,8 +6,8 @@ restore, so the alert a server pages, or does not, is the one the panel would se
 import re as _re41
 
 from unit.reboot41_fixtures import (
-    HR, _CLOCK41, _NOTES41, _all41, _app41, _fresh41, _gs41, _kind41, _mon41, _patch, _ps41,
-    _remote41, _rr41, _std_host41, check)
+    HR, GameServer, _CLOCK41, _NOTES41, _all41, _app41, _fresh41, _gs41, _kind41, _mon41, _patch,
+    _ps41, _remote41, _rr41, _std_host41, check, db)
 from unit.reboot41_a import (
     _SD41, _bodies41, _gate_stubs41, _monitor_cron41, _pass41, _plan_with_sent41, _restore_until41)
 from unit.reboot41_b import (
@@ -110,6 +110,27 @@ def _finish_crash_checks41():
           "offline unexpectedly', once — the plan's last window delays it, never swallows it",
           _all41(done is not None, _server_pages41() == [("server_down", "fctrserver")]),
           repr((done, _NOTES41)))
+
+
+def _excluded_crash_checks41():
+    """After the reboot is sent, the operator starts a held server themselves; it crashes 2 min later."""
+    r, h, rows = _rebooted41()
+    _gate_stubs41([])
+    h.reboot_now()
+    db.session.expire_all()                   # the job wrote the plan rows in its own session
+    mc = db.session.get(GameServer, rows["mc"].id)
+    held = HR.rr(mc) is not None
+    ok, _msg = _SD41._run_action(_app41, mc, r, "start", None)
+    h.run("mcserver", True)                   # what the stubbed-out start would have done
+    _sweeps_after41(1)
+    _CLOCK41.sleep(60)
+    h.run("mcserver", False)
+    _sweeps_after41(8)
+    check("alerts (real sweeps): a server the operator started out of a reboot's plan that crashes "
+          "inside the window its exclusion leaves pages 'went offline unexpectedly' once that window "
+          "ends — the window delays it, never swallows it",
+          _all41(held, ok, _rr41(mc.id) is None, _server_pages41() == [("server_down", "mcserver")]),
+          repr((held, ok, _NOTES41)))
 
 
 def _rolled_back41():

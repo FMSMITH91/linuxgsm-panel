@@ -48,7 +48,8 @@ from unit.reboot41_b import (
     _rescan_checks41, _restart_mid_plan_checks41, _settings_checks41, _stop_pending_checks41, _summary_reason_checks41,
     _summary_time_checks41, _unknown_warning_checks41, _warning_text_checks41, _window_job_checks41)
 from unit.reboot41_c import (
-    _already_running_checks41, _finish_crash_checks41, _late_notice_checks41, _port_never_opens_checks41,
+    _already_running_checks41, _excluded_crash_checks41, _finish_crash_checks41, _late_notice_checks41,
+    _port_never_opens_checks41,
     _power_marks_checks41, _rollback_hold_checks41, _summary_clock_checks41, _unread_idle_checks41,
     _unread_plan_checks41)
 
@@ -101,6 +102,7 @@ _SECTIONS41 = [
     ("power buttons' marks", _power_marks_checks41),
     ("a restored server whose port never opens", _port_never_opens_checks41),
     ("a crash just after the summary", _finish_crash_checks41),
+    ("a crash after an operator's start mid-reboot", _excluded_crash_checks41),
     ("a rollback's Autostart servers", _rollback_hold_checks41),
     ("an unreadable server, nothing else", _unread_idle_checks41),
     ("an unreadable server beside a planned one", _unread_plan_checks41),
