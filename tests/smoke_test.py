@@ -7484,15 +7484,17 @@ try:
             _monmod._remote_listening_ports = lambda r: set()
             _rec.clear(); _monmod._monitor_pass()
             check("monitor: a panel-issued stop suppresses server_down", "server_down" not in _rec)
-            # ...and the RECORDED state must not flip either. Only the alert was suppressed; the
-            # pass still wrote False, so the next sweep read False -> True and pushed "Server back
-            # online" for an outage the operator was deliberately never told about. With a 60s
-            # sweep and a ~30s restart that lands on roughly half the restarts of a slow-booting
-            # game — a channel showing recoveries from outages it never reported. This is the
-            # treatment the maintenance branch already had.
-            check("monitor: ...and leaves the recorded state alone, so there is no phantom recovery",
-                  _ps._monitor_state["servers"].get(_mon_id) is True,
-                  "recorded %r" % _ps._monitor_state["servers"].get(_mon_id))
+            # ...and it is recorded DOWN at once, marked as the panel's own. It used to stay recorded
+            # UP for the whole window (so its return would not page "Server back online" for an
+            # outage nobody was told about), and when a Stop's window ended with the server still
+            # down, as a Stop intends, the sweeps after it paged "went offline unexpectedly". The
+            # mark is what keeps the return quiet now (next check), however late it comes.
+            check("monitor: ...records it down at once, marked as the panel's own, so neither the end "
+                  "of its window nor its return pages",
+                  (_ps._monitor_state["servers"].get(_mon_id),
+                   _ps._monitor_state["server_unannounced"].get(_mon_id)) == (False, True),
+                  "recorded %r / %r" % (_ps._monitor_state["servers"].get(_mon_id),
+                                        _ps._monitor_state["server_unannounced"].get(_mon_id)))
             # Drive the next sweep for real: _rec holds only event KEYS and other fixture servers
             # transition too, so record the BODIES and look for this server by name.
             _exp_bodies = []

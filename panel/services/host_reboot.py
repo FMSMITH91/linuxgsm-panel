@@ -2019,6 +2019,8 @@ def _finish(remote, recs, now, rollback_):
         _expected_offline[gs.id] = now + GRACE_AFTER_CLEAR
         if d.get("restore") == "failed":
             _monitor_state["servers"][gs.id] = False   # the summary said so; no "went offline" too
+            # ...and since the summary announced it down, its return is news: "back online" pages.
+            _monitor_state["server_unannounced"].pop(gs.id, None)
     db.session.commit()
     log_action(None, "remote_reboot_rollback" if rollback_ else "remote_reboot_restore",
                target=remote.name, detail=text, success=ok, actor="system", remote=remote)
@@ -2325,8 +2327,10 @@ def reboot_when_empty_watch(app):
 def resume_reboot_state(app):
     """At startup, BEFORE the monitor runs: hold the alerts of every server a plan still holds.
 
-    Synchronous on purpose: the monitor's first pass would otherwise read a server the reboot took
-    down as "went offline unexpectedly". The restore worker does the rest on its first tick.
+    Synchronous on purpose: the monitor's first pass records a server the reboot took down as down
+    and, without the hold, would page "Server back online" when the restore brings it back; one it
+    finds up and later down would page "went offline unexpectedly". The restore worker does the
+    rest on its first tick.
     """
     with app.app_context():
         for gs in GameServer.query.filter(GameServer.reboot_restore.isnot(None)).all():

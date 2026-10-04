@@ -10,11 +10,11 @@ from unit.reboot41_fixtures import (
     GameServer, HR, RemoteServer, _CLOCK41, _NOTES41, _REAL_PARAMIKO41,
     _REAL_SSHCLI41, _ROOT41, _STAMPS41, _TMP41, _all41, _app41,
     _audit41, _core41, _events41, _fresh41, _gs41, _lockfile41,
-    _mon41, _patch, _ps41, _remote41, _rr41, _run41,
+    _mon41, _notif41, _patch, _ps41, _remote41, _rr41, _run41,
     _shlex41, _sm41, _so41, _std_host41, _tf41, _th41,
     _write_exec41, check, db, os)
 from unit.reboot41_a import (
-    _ADMIN41, _AN41, _WAITER41, _actions41, _as_admin41, _asides41,
+    _ADMIN41, _AN41, _SD41, _WAITER41, _actions41, _as_admin41, _asides41,
     _bodies41, _bounce_stubs41, _lines41, _monitor_cron41, _noted41, _pass41,
     _rapp41, _restore_until41, _stamp_stops41, _trace41, _wait_entry41, _wpass41)
 
@@ -1323,3 +1323,154 @@ def _idle_tick_checks41():
           "one asks for the idle tick — not another fast one",
           _all41(not HR.plan_rows(r.id), HR.BUSY_TICK in ticks[:-1], ticks[-1:] == [HR.IDLE_TICK]),
           repr(ticks))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# AD. The monitor's own server alerts around a plan, through its REAL sweep
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _mon_stubs41(h, rows):
+    """The REAL monitor sweep, reading this stand-in host: its port scan is the sessions running.
+
+    Plain values only in the probe: it runs on the sweep's pool threads, which must not touch a row.
+    """
+    ports = {g.lgsm_name: g.port for g in rows.values()}
+    _patch(_mon41, "time", _CLOCK41)
+    _patch(_mon41, "_lgsm_maintenance_running", lambda remote, g: False)
+    _patch(_notif41, "alerts_muted", lambda g: False)
+    _patch(_mon41, "_probe_host", lambda remote, read_flags=True: (remote.id, {
+        "reachable": not h.down, "disk": 10, "load_mem": (1, 1), "restart_flagged": None,
+        "ports": {p for s_, p in ports.items() if h.running(s_)}}))
+
+
+def _sweep41():
+    """One REAL monitor sweep (_monitor_pass), the rows read afresh as its own thread would."""
+    db.session.expire_all()
+    _mon41._monitor_pass()
+    db.session.expire_all()
+
+
+def _server_pages41():
+    """(event, server) of every 'went offline' / 'back online' page so far."""
+    return [(k, b.split(" ")[0]) for k, _t, b in _NOTES41 if k in ("server_down", "server_up")]
+
+
+def _plan_with_sweeps41(r, h, passes=60, between=None):
+    """The host reboots and the restore runs, the monitor sweeping once a minute meanwhile."""
+    between = between or _monitor_cron41(h, {})
+
+    def _tick(n):
+        between(n)
+        if n % 4 == 0:
+            _sweep41()
+    h.reboot_now()
+    _CLOCK41.sleep(60)
+    return _restore_until41(r.id, passes=passes, between=_tick)
+
+
+def _sweeps_after41(n=12):
+    """`n` more sweeps a minute apart: well past every window a plan leaves behind."""
+    for _i in range(n):
+        _CLOCK41.sleep(60)
+        _sweep41()
+
+
+def _restart_mid_plan41(hold):
+    """The panel restarts while a plan holds its servers (the VPS proof's run 2b): the pages sent."""
+    _fresh41()
+    r, h, rows = _std_host41()
+    _mon_stubs41(h, rows)
+    _sweep41()
+    _sweep41()
+    HR.request_reboot(r, "now", None, "web")
+    for m in _ps41._monitor_state.values():
+        m.clear()
+    _ps41._expected_offline.clear()
+    _ps41._reboot_awaiting.clear()
+    with _ps41._hr_lock:
+        _ps41._host_reboots.clear()
+    if hold:
+        HR.resume_reboot_state(_app41)
+    del _NOTES41[:]
+    done = _plan_with_sweeps41(r, h)
+    _sweeps_after41()
+    return done, sorted(_server_pages41())
+
+
+def _restart_mid_plan_checks41():
+    done, held = _restart_mid_plan41(hold=True)
+    done_unheld, unheld = _restart_mid_plan41(hold=False)
+    check("alerts (real sweeps): after a panel restart mid-plan, the servers the plan brings back do "
+          "not page 'back online', during the plan or after it ends (control: without the hold the "
+          "restart puts back, all three do)",
+          _all41(done is not None, done_unheld is not None, held == [],
+                 unheld == [("server_up", s) for s in ("fctrserver", "gmodserver", "mcserver")]),
+          repr((done, held, unheld)))
+
+
+def _kept_down41():
+    """Down on purpose through a plan: one the operator stopped just before it, one with a queued stop.
+
+    Then a real crash after the plan. Returns (rows resolved, pages during and after the plan,
+    pages for the crash).
+    """
+    _fresh41()
+    r, h, rows = _std_host41()
+    h.run("codserver", True)
+    rows["gmod"].stop_pending = True
+    db.session.commit()
+    _mon_stubs41(h, rows)
+    _sweep41()
+    _sweep41()
+    _patch(sys.modules["app"], "time", _CLOCK41)          # the mark on this part's clock
+    _SD41._mark_expected_offline(rows["cod"].id)          # what the Stop button marks, then its stop
+    h.run("codserver", False)
+    _CLOCK41.sleep(60)
+    _sweep41()
+    HR.request_reboot(r, "now", None, "web")
+    done = _plan_with_sweeps41(r, h)
+    _sweeps_after41()
+    quiet = sorted(_server_pages41())
+    del _NOTES41[:]
+    h.run("fctrserver", False)
+    for _i in range(_mon41._DOWN_CONFIRM_SWEEPS):
+        _CLOCK41.sleep(60)
+        _sweep41()
+    h.run("fctrserver", True)
+    _CLOCK41.sleep(60)
+    _sweep41()
+    return done, quiet, _server_pages41()
+
+
+def _kept_down_checks41():
+    done, quiet, crash = _kept_down41()
+    check("alerts (real sweeps): a server the operator stopped just before the plan, and one whose "
+          "queued stop the plan honoured, stay down without ever paging 'went offline unexpectedly' "
+          "— not during the plan, not when its window ends", _all41(done is not None, quiet == []),
+          repr((done, quiet)))
+    check("alerts (real sweeps): ...while a real crash after the plan pages 'went offline' once, and "
+          "its return 'back online' (control: these sweeps do page)",
+          crash == [("server_down", "fctrserver"), ("server_up", "fctrserver")], repr(crash))
+
+
+def _failed_row_back_checks41():
+    """A server the summary reported as not back: its later return is news, and pages."""
+    _fresh41()
+    r, h, rows = _std_host41()
+    _mon_stubs41(h, rows)
+    _sweep41()
+    _sweep41()
+    HR.request_reboot(r, "now", None, "web")
+    h.flag("fail_start", "mcserver")
+    done = _plan_with_sweeps41(r, h, passes=80,
+                               between=lambda n: h.run("gmodserver", True) if n == 10 else None)
+    summary = "".join(_bodies41("Host reboot"))
+    during = _server_pages41()
+    del _NOTES41[:]
+    h.run("fctrserver", True)
+    _CLOCK41.sleep(60)
+    _sweep41()
+    check("alerts (real sweeps): a server the summary said did not come back pages 'back online' when "
+          "it does (the summary told the operator it was down); the plan's held servers did not",
+          _all41(done is not None, "fctrserver didn't come back" in summary, during == [],
+                 _server_pages41() == [("server_up", "fctrserver")]), repr((done, summary, during, _NOTES41)))
+

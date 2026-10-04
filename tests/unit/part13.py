@@ -1701,6 +1701,64 @@ def _raiser10(exc):
     return _f
 
 
+def _expected_window_checks10():
+    """A down the panel expected, through the REAL sweep (_monitor_pass) with its clock moved on.
+
+    Run inside the database-backed passes below: gmod1 (port 27015) on beta is up and recorded up,
+    gmod3 is muted. A panel Stop used to stay recorded UP for its whole window, and the sweeps after
+    the window declared it down and paged "went offline unexpectedly" four or five minutes after
+    every Stop. A real crash must still page exactly as before.
+    """
+    g1, clock = _ids10["g1"], [time.time()]
+    shut, up = dict(_UP10, ports={27017}), dict(_UP10)
+
+    def sweeps(n, probe, step=60):
+        got = []
+        for _i in range(n):
+            clock[0] += step
+            got += _sweep10({"reachable": False}, probe)
+        return got
+
+    _mon10.time = NS(time=lambda: clock[0], monotonic=lambda: clock[0], sleep=lambda s: None)
+    try:
+        _mon10._expected_offline[g1] = clock[0]                    # what the Stop button marks
+        stopped = sweeps(1, shut)
+        recorded = _mon10._monitor_state["servers"].get(g1)
+        later = sweeps(8, shut)
+        check("monitor pass: a panel Stop is recorded DOWN at once, and nothing is paged",
+              (stopped, recorded) == ([], False), repr((stopped, recorded)))
+        check("monitor pass: ...and when its window ends, minutes later, still nothing — no 'went "
+              "offline unexpectedly' for a server the panel stopped", later == [], repr(later))
+        check("monitor pass: ...nor 'back online' when it is started again, however much later",
+              sweeps(1, up, step=3600) == [], repr(_alerts10))
+        crash, back = sweeps(_mon10._DOWN_CONFIRM_SWEEPS, shut), sweeps(1, up)
+        check("monitor pass: a crash outside any window still pages 'went offline unexpectedly', "
+              "once, and its return still pages 'back online'",
+              (crash, back) == (["server_down"], ["server_up"]), repr((crash, back)))
+
+        def restarted(hold):
+            # A restarted panel has recorded nothing yet; host_reboot.resume_reboot_state puts a
+            # plan's hold back first. The plan ends (the row's window from now) before it is back.
+            _mon10._monitor_state["servers"].pop(g1, None)
+            _mon10._monitor_state["server_unannounced"].pop(g1, None)
+            if hold:
+                _mon10._expected_offline[g1] = float("inf")
+            else:
+                _mon10._expected_offline.pop(g1, None)
+            got = sweeps(1, shut)
+            if hold:
+                _mon10._expected_offline[g1] = clock[0]
+            return got + sweeps(1, up, step=900)
+
+        held, unheld = restarted(True), restarted(False)
+        check("monitor pass: after a panel restart, a server a reboot plan holds pages nothing on its "
+              "way back, even after the plan's window (control: one no plan holds pages 'back online')",
+              (held, unheld) == ([], ["server_up"]), repr((held, unheld)))
+    finally:
+        _mon10._expected_offline.pop(g1, None)
+        _mon_restore10("time")
+
+
 _mon10.notifications = NS(
     notify=lambda key, title, body="": _alerts10.append((key, title, body)),
     alerts_muted=_n10.alerts_muted,
@@ -2024,6 +2082,7 @@ try:
         check("monitor pass: a panel-issued stop and its restart produce NO alert at all",
               "server_down" not in _exp10 and "server_up" not in _exp_back10,
               repr((_exp10, _exp_back10)))
+        _expected_window_checks10()
         # LinuxGSM's own maintenance: the down is suppressed and so is the recovery.
         _mon10._lgsm_maintenance_running = lambda r, gs: True
         # Two sweeps: the first only counts a miss and never reaches the maintenance probe.

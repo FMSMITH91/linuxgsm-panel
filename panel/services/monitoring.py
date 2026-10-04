@@ -1114,23 +1114,26 @@ def _monitor_server(remote, gs, probe, ports):
     return False
 
 
+def _offline_expected(server_id):
+    """Whether the panel itself has this server down: a panel stop/restart's window, or a reboot plan's hold (inf)."""
+    return time.time() - _expected_offline.get(server_id, 0) <= _EXPECT_OFFLINE_WINDOW
+
+
 def _mon_server_went_down(remote, gs, up, prev_up, muted):
     """The down leg of _server_transition (prev_up True, now down): alert and answer what to record."""
     misses = _monitor_state["server_misses"]
     # The panel's own stop/restart is already accounted for locally — check that FIRST so
-    # an intentional stop keeps its existing semantics and costs no SSH round trip.
-    expected = time.time() - _expected_offline.get(gs.id, 0) <= _EXPECT_OFFLINE_WINDOW
-    if expected:
+    # an intentional stop costs no SSH round trip.
+    if _offline_expected(gs.id):
         misses.pop(gs.id, None)
-        # Same reasoning as the maintenance branch below, which this leg was missing:
-        # the down-transition is deliberately never told, so recording False here made
-        # the NEXT sweep read False -> True and push "Server back online" for an outage
-        # the operator was never notified of — on roughly half the restarts of a
-        # slow-booting game, which is what trains people to ignore the channel.
-        # Keeping the previous value also preserves the case that matters: if the
-        # restart never comes back, _EXPECT_OFFLINE_WINDOW expires and the sweeps after it
-        # report a genuine "went offline unexpectedly" from prev_up=True (once confirmed).
-        return prev_up
+        # Recorded DOWN at once, and nobody is told. It used to keep the previous value (up)
+        # for the whole window, so that its return would not page "Server back online" for an
+        # outage nobody was told about; but a Stop is MEANT to stay down, so when the window
+        # ended the sweeps after it declared the server down and paged "went offline
+        # unexpectedly" about every panel Stop, four or five minutes after it. The return is
+        # kept quiet by the mark instead (_server_transition), however long after the window.
+        _monitor_state["server_unannounced"][gs.id] = True
+        return up
     # Not declared down until the port has been shut for _DOWN_CONFIRM_SWEEPS sweeps in a
     # row (see there). Until then the server stays recorded as up, so the sweep that
     # finds it listening again has nothing to announce. Counted BEFORE the maintenance
@@ -1155,18 +1158,27 @@ def _mon_server_went_down(remote, gs, up, prev_up, muted):
 def _server_transition(remote, gs, up, prev_up, muted):
     """Alert on one server's up/down transition and answer what to record for it.
 
-    The answer is usually `up`; the previous value for a panel-issued stop still inside
-    _EXPECT_OFFLINE_WINDOW, or for a down not yet confirmed by _DOWN_CONFIRM_SWEEPS sweeps; or
-    _IN_MAINTENANCE when LinuxGSM's own maintenance has the port shut.
+    The answer is usually `up`; the previous value for a down not yet confirmed by
+    _DOWN_CONFIRM_SWEEPS sweeps; or _IN_MAINTENANCE when LinuxGSM's own maintenance has the port
+    shut. A down the panel expected (_offline_expected) is recorded at once and marked
+    unannounced, and the return of a server so marked is not announced either.
     """
     misses = _monitor_state["server_misses"]
+    unannounced = _monitor_state["server_unannounced"]
     if up or prev_up is not True:
         misses.pop(gs.id, None)
     if prev_up is True and not up:
         return _mon_server_went_down(remote, gs, up, prev_up, muted)
-    if prev_up is False and up and not muted:
-        notifications.notify("server_up", "Server back online",
-                             "%s on %s is back online." % (gs.name, remote.display_name))
+    if up:
+        quiet = unannounced.pop(gs.id, False)
+        if prev_up is False and not muted and not quiet:
+            notifications.notify("server_up", "Server back online",
+                                 "%s on %s is back online." % (gs.name, remote.display_name))
+    elif prev_up is None and _offline_expected(gs.id):
+        # Never seen by this process: the first sweep after a panel restart. A reboot plan that
+        # still holds the server (host_reboot.resume_reboot_state put the hold back before this
+        # sweep could run) took it down, and the plan's own summary reports its return.
+        unannounced[gs.id] = True
     return up
 
 

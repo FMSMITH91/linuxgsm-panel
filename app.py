@@ -3307,8 +3307,9 @@ if __name__ == "__main__":
 
     # Clean reboots (panel/services/host_reboot.py). FIRST, synchronously, before the monitor
     # thread below exists: every server a reboot plan still holds is marked expected-offline, or the
-    # monitor's first pass would read the servers the reboot took down as "went offline
-    # unexpectedly". Then the two supervised loops: the restore (bring back what was running, or
+    # monitor would page "Server back online" when the restore brings back a server its first pass
+    # found down (and "went offline unexpectedly" about one it found up and then down). Then the
+    # two supervised loops: the restore (bring back what was running, or
     # undo a reboot that did not happen) and "reboot when everyone has left". A wait that was
     # pending when this process stopped is gone — on purpose — and the operator is told so.
     try:
