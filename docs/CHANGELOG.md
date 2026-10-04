@@ -542,6 +542,18 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The file browser fits a phone inside a folder with a long name, and its path shows a name's
+  spaces.** The path and the Upload / Upload folder buttons shared one row that could not wrap or
+  shrink. On a 375px phone, inside a folder named `hang44-wwwwwwwwwwwwww`, Upload folder ended 8px
+  past the screen, so the whole page panned sideways and taps landed off target. With a 40- or
+  80-character folder name the buttons were off screen altogether (the page was 587 and 957px wide).
+  An 80-character name pushed a desktop page 20px wider than the window too. Now the buttons move to
+  a row of their own when the path needs the room. A folder name too long for the card ends in "…",
+  with its start still shown. At 375px the page stays 375px wide in folders named 21, 40 and 80
+  characters and seven levels deep, and both buttons stay whole and tappable. Separately, the path
+  collapsed the spaces in a folder's name, so `a  b` read as `a b` and ` x` as `x`. It now shows
+  each name exactly as it is, as the file list does. A path that fits looks the same on a desktop
+  as before. Found by the real-browser check of file rename on the test VPS.
 - **The file browser lists every file under its real name, including one whose name ends in a
   space or holds a line break.** The host's listing ended each entry with a newline, and every
   connection type (local, Tailscale, SSH) trims the whitespace at the end of a command's output. So

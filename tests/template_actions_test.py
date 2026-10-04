@@ -905,6 +905,73 @@ for _label, _needle in (
         _sf_missing.append(_label)
 check(not _sf_missing, "files: every element holding a path segment is marked do-not-translate",
       "unguarded: %s" % _sf_missing)
+
+
+# ── the file browser's toolbar fits a phone, and its path keeps a name's spaces ────────────────
+# The path and the two upload buttons shared one flex row that could neither wrap nor shrink, and a
+# folder name is one long word: at 375px inside "hang44-wwwwwwwwwwwwww" Upload folder ended at
+# x=383, the page was 383px wide and panned sideways under the finger (measured in a real browser,
+# as was the fix). Separately the path's segments collapsed spaces, so "a  b" read as "a b". What
+# fixes both is CSS in server_files.html plus the toolbar's own classes, so that is what is read
+# here; the real-browser measurement is in the PR. Each part is its own check, because each is
+# needed: no wrap and the buttons cannot leave the path's row; no min-width:0 and neither the
+# toolbar nor the path can be narrower than the longest name in it.
+def _css_rules(html):
+    """Selector -> {property: value} over every <style> block of `html`, with comments stripped.
+
+    A rule naming several selectors gives each the same declarations, and a later rule wins per
+    property. Rules inside @media are read as if unconditional, so check only selectors that are
+    not in one.
+    """
+    rules = {}
+    for block in re.findall(r"<style\b[^>]*>(.*?)</style>", html, re.S):
+        block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
+        for sels, body in re.findall(r"([^{}]+)\{([^{}]*)\}", block):
+            decls = {}
+            for decl in body.split(";"):
+                if ":" in decl:
+                    prop, val = decl.split(":", 1)
+                    decls[prop.strip().lower()] = " ".join(val.split())
+            for sel in sels.split(","):
+                rules.setdefault(" ".join(sel.split()), {}).update(decls)
+    return rules
+
+
+_sfh = srcs.get("server_files.html", "")
+_sfh_css = _css_rules(_sfh)
+_sfh_tb = re.search(r'<div class="([^"]*\bfb-toolbar\b[^"]*)">(.*?)\n    </div>', _sfh, re.S)
+_sfh_up = re.search(r'<div class="([^"]*\bfb-upload\b[^"]*)">(.*?)\n      </div>', _sfh, re.S)
+check(_sfh_tb is not None and '<span id="breadcrumb"' in _sfh_tb.group(2),
+      "files toolbar: (control) the toolbar holding the path is still there to check",
+      "no <div class=\"... fb-toolbar\"> around #breadcrumb — re-point these gates at it")
+check(_sfh_tb is not None and "flex-wrap" in _sfh_tb.group(1).split(),
+      "files toolbar: it wraps, so the upload buttons drop below a long path instead of running "
+      "off a phone's screen", "classes: %r" % (_sfh_tb.group(1) if _sfh_tb else None))
+_sfh_shrink = [s for s in (".fb-toolbar", "#breadcrumb")
+               if _sfh_css.get(s, {}).get("min-width") != "0"]
+check(not _sfh_shrink,
+      "files toolbar: the toolbar and the path may shrink below their longest folder name "
+      "(min-width: 0)", "a flex item never shrinks below its longest word without it: %r"
+      % _sfh_shrink)
+check(_sfh_up is not None and 'data-action="_clickUpload"' in _sfh_up.group(2)
+      and 'data-action="_clickUploadDir"' in _sfh_up.group(2)
+      and "flex-wrap" in _sfh_up.group(1).split(),
+      "files toolbar: Upload and Upload folder are one group, so they move to their own row "
+      "together", "group: %r" % (_sfh_up.group(1) if _sfh_up else None))
+_sfh_seg = _sfh_css.get("#breadcrumb a", {})
+check(_sfh_seg.get("white-space") == "pre",
+      "files toolbar: a path segment keeps its spaces (white-space: pre) — 'a  b' does not read as "
+      "'a b', nor ' x' as 'x'", repr(_sfh_seg))
+_sfh_ell = {"display": "inline-block", "max-width": "100%", "overflow": "hidden",
+            "text-overflow": "ellipsis"}
+check(all(_sfh_seg.get(k) == v for k, v in _sfh_ell.items()),
+      "files toolbar: a path segment longer than the card ends in an ellipsis instead of "
+      "widening the page", "want %r, have %r" % (_sfh_ell, _sfh_seg))
+check(_sfh_seg.get("vertical-align") == "top"
+      and _sfh_css.get("#breadcrumb", {}).get("line-height") == "1.5rem",
+      "files toolbar: each path link is a 24px-tall target, level with the slashes beside it",
+      "an inline-block with overflow set sits on its bottom edge; have %r / %r"
+      % (_sfh_seg.get("vertical-align"), _sfh_css.get("#breadcrumb", {}).get("line-height")))
 # A LinuxGSM setting's KEY is an identifier the operator types into the Raw tab, not prose: `port`
 # is a catalog key (es: "puerto") and is in nearly every _default.cfg, so a Spanish operator saw a
 # setting called "puerto" and could write puerto="27016", which LinuxGSM ignores. The input is
@@ -5033,6 +5100,10 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
   await flush();
   const p2 = posts2();
   out.as_typed = p2.length ? JSON.parse(p2[p2.length - 1].body) : null;
+  // The path of a folder whose names hold spaces, as the breadcrumb renders it.
+  c.browse('a  b/ x');
+  await flush();
+  out.crumbs = doc.getElementById('breadcrumb').innerHTML;
   console.log(JSON.stringify(out));
 })().catch(e => console.log(JSON.stringify({error: String(e && e.stack || e)})));"""
 _sfr_src = (STATIC_JS / "server_files.js").read_text(encoding="utf-8")
@@ -5119,6 +5190,17 @@ if _node:
           "js (node): an edited name is sent as typed, spaces and all — the panel, not the page, "
           "refuses a space at either end, with its reason",
           repr(_rn.get("as_typed")))
+    # The CSS that keeps a path segment's spaces is `#breadcrumb a` in server_files.html (gated
+    # above), so each segment must still be an <a> in #breadcrumb, holding the name as it
+    # is and guarded from the translator. A segment built as a <span> or <button> would lose that
+    # rule and read "a  b" as "a b" again, with every other check here still green.
+    _crumb_html = _rn.get("crumbs") or ""
+    _crumb_segs = re.findall(r'<a href="#" data-nav="([^"]*)" data-no-i18n>([^<]*)</a>', _crumb_html)
+    check(_crumb_segs == [("a  b", "a  b"), ("a  b/ x", " x")]
+          and _crumb_html.count("<a ") == 3 and "<i class=\"bi bi-house-door\"></i> home</a>" in _crumb_html,
+          "js (node): each breadcrumb segment is an <a> in #breadcrumb holding the folder's name "
+          "as it is ('a  b', ' x'), so the template's white-space:pre rule reaches it",
+          repr(_crumb_html))
 else:
     _sfr_start = _js_code_only(_js_function_body(_sfr_src, "startRename"))
     _sfr_key = _js_code_only(_js_function_body(_sfr_src, "renameKey"))
