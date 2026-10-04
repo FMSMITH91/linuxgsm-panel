@@ -1390,6 +1390,41 @@ _SERVICE34 = [
 ]
 
 
+def _backup_bodies34():
+    """[the shell each backup/version builder runs as the game account], from the builders."""
+    srv = NS(id=-3408, host="192.0.2.34", username="local", is_local=True, auth_method="local",
+             sudo_enabled=True)
+    got = []
+
+    def _rec(server, user, sh, timeout=30, selfname=None):
+        got.append(sh)
+        return "", "", 0
+    with _patched():
+        _patch(_core34, "shell_as_game_user", _rec)
+        _cron34.prune_game_backups(srv, "mcsrv7731", keep=3)
+        _game34._steam_build(srv, "mcsrv7731", selfname="mcserver")
+    # The sweep runs ahead of the backup itself, in _run_linuxgsm_backup; its body is built here.
+    return got[:2] + [_game34._stale_backup_lock_sweep("mcsrv7731") + "true"]
+
+
+def _section_report_backup_labels34():
+    bodies = _backup_bodies34()
+    lines = [_PFX34 % (i, 2300 + i) + ("  ubuntu : PWD=/home/ubuntu ; USER=mcsrv7731 ; "
+                                        "COMMAND=/usr/bin/bash -c %s" % b) for i, b in enumerate(bodies)]
+    _kept, verbs, _s = _lg34._split_priv(lines)
+    check("I labels: the backup prune, the installed-version read and the stale-lock sweep are named "
+          "as a game account's work — not 'other', and the version read (it opens with cd and holds "
+          "&&) not 'LinuxGSM action'",
+          len(bodies) == 3 and verbs.get(_lg34.GAME_ACCOUNT)
+          == {"backup prune": 1, "installed version": 1, "backup lock sweep": 1},
+          repr((verbs, [b[:50] for b in bodies])))
+    git = _PFX34 % (9, 2309) + ("root :  PWD=/root ; USER=lgsmpanel ; COMMAND=/usr/bin/git -C "
+                                "/home/lgsmpanel/linuxgsm-panel fetch --quiet origin main ")
+    _kept, verbs, _s = _lg34._split_priv([git])
+    check("I labels: the installer's git as the panel's own account is 'git', not 'other'",
+          verbs.get(_lg34.PANEL_ACCOUNT) == {"git": 1}, repr(verbs))
+
+
 def _section_report_panel_account34():
     lines = [_PFX34 % (i, 2200 + i) + b for i, b in enumerate(_SERVICE34)]
     _kept, verbs, _s = _lg34._split_priv(lines)
@@ -1622,6 +1657,7 @@ def _run_sections34():
     _section_report_classifier34()
     _section_report_console_labels34()
     _section_report_panel_account34()
+    _section_report_backup_labels34()
     _section_report_process_account34()
     _section_report_reads34()
     _section_report_once34()
