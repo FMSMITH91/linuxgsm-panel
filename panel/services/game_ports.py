@@ -210,6 +210,11 @@ def _reconcile_host(remote_id, rules):
         return        # nothing answered with another port: no reason to ask the host anything else
     host = _Host(remote, _sm.protected_host_ports(remote),
                  functools.lru_cache(maxsize=1)(lambda: _sm._remote_listening_ports(remote)), rows)
+    _audit_moves(remote_id, _reconcile_rows(host, moving, rules))
+
+
+def _reconcile_rows(host, moving, rules):
+    """_reconcile_row for each (row, reading) of one host, each on its own. -> the moves made."""
     moves = []
     for row, reading in moving:
         try:
@@ -217,7 +222,7 @@ def _reconcile_host(remote_id, rules):
         except Exception:  # noqa: BLE001 - one row never stops the rest of its host
             db.session.rollback()
             _log.warning("%s: the port re-read at startup failed", row.name, exc_info=True)
-    _audit_moves(remote_id, [m for m in moves if m])
+    return [m for m in moves if m]
 
 
 def _reconcile_row(host, row, reading, rules):
