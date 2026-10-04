@@ -46,11 +46,14 @@ CI-verified commit regardless of this file — this changelog is for humans.
   by LinuxGSM's own monitor exactly as after a plain reboot, even with the panel down. Running
   servers WITHOUT Autostart are started by the panel once the host is back (a new setting turns that
   off); stopped servers stay stopped. One summary notification (a new `host_reboot` event) says how
-  soon after the reboot was sent the host's new boot started and its servers were running again,
-  how many stayed stopped and why, and which have not come back (one left to LinuxGSM's monitor gets
-  12 minutes from the host's new boot). A reboot that did not happen — refused by the host, or a
-  panel restart before it was sent — is undone: every server is put back as it was, including one
-  restoring would have left stopped (only a queued stop stays stopped), and you are told.
+  soon after the reboot was sent the host's new boot started and its servers were running again
+  (by Autostart, started by the panel, or found already running), how many stayed stopped and why,
+  which have not come back (one left to LinuxGSM's monitor gets 12 minutes from the host's new
+  boot), and how many running servers could not be read (the panel neither stops nor restarts
+  those). A reboot that did not happen —
+  refused by the host, or a panel restart before it was sent — is undone: every server is put back
+  as it was, including one restoring would have left stopped (only a queued stop stays stopped),
+  and you are told.
 - **With players on, the reboot asks.** The dialog lists who is on each server (and which counts
   can't be read) and offers **Wait: reboot when everyone has left** or **Reboot now**. A forced
   reboot warns players in-game at 60, 30 and 10 seconds where the game can show a message (Source,
@@ -235,11 +238,17 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **While a host is being rebooted, actions on its servers wait.** Start, stop, restart, update,
   Autostart, installs, OS updates, a bootstrap and the panel's self-update are refused for that host
   until the reboot is sent, and the queued-restart and backup sweeps skip it. After that, an
-  operator's own Start or Stop takes the server out of the restore. The panel's own "server
-  offline / back online" and "host unreachable / back online" alerts are held for the servers and
-  hosts a reboot took down, also when the panel restarts in the middle of the reboot (it always does
-  when the host is its own): the summary replaces them. A server the summary reports as not back
-  still pages "back online" when it returns, if that alert is on.
+  operator's own Start or Stop takes the server out of the restore. While the reboot runs, the
+  panel's own "server offline / back online" and "host unreachable / back online" alerts are held
+  for the servers and hosts it took down, also when the panel restarts in the middle of it (it
+  always does when the host is its own); the summary reports on every server the plan held. Once
+  the summary is sent, the monitor holds it to its word: a server it counts as running again whose
+  port is still shut three minutes later (12 more minutes for an Autostart server after a reboot
+  that did not happen, which LinuxGSM's monitor restarts), or that crashes, pages "went offline
+  unexpectedly"; one it reports as not back pages "back online" when it returns, if that alert is
+  on. A running server whose state could not be read is not in the plan: the notices count it, and
+  on a remote host one still down eight minutes after the panel began stopping the host's servers
+  pages "went offline unexpectedly" (on the panel's own host the panel restarts too and does not).
 - The panel host's helper now runs LinuxGSM as `./<script>` from the game home instead of by its
   absolute path, so LinuxGSM's own monitor can see a start or stop the panel is running there and
   backs off instead of starting a second copy.
@@ -555,12 +564,19 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **Every Stop from the panel paged "went offline unexpectedly" about four and a half minutes
   later** (since #346, on by default). A server the panel stopped stayed recorded as running for the
   three minutes the panel expects it offline, so when that window ended with the server still
-  stopped, as intended, the monitor declared it down and sent the alert. A server the panel takes
-  down (Stop, Restart, a queued stop or restart when empty, a reboot) is now recorded as down at
-  once with no alert, and its return isn't announced either. A crash outside that window alerts
-  exactly as before, and its return still pages "back online" if that alert is on. A queued "stop
-  when empty" was not marked as the panel's own at all, so it paged as a crash within about two
-  minutes of running.
+  stopped, as intended, the monitor declared it down and sent the alert. A Stop (the button, a bot,
+  the palette, bulk, or a queued "stop when empty") is now recorded as down at once with no alert,
+  and its return isn't announced either. Its window ends with a Start from the panel, or once the
+  monitor has seen the server down, so a crash after that alerts as usual. A Restart (the button, a
+  bot, the palette, bulk, or a queued "restart when empty") is meant to come back: nothing is sent
+  while it does, but a server still down when its three minutes are up, or one that came back and
+  crashed within them, pages "went offline unexpectedly" then, as the Restart button already did.
+  A crash outside these windows alerts exactly as before, and its return still pages "back online"
+  if that alert is on. A queued "stop when empty" was not marked as the panel's own at all, so it
+  paged as a crash within about two minutes of running; a queued restart that leaves its game dead
+  now pages when the Restart's three minutes are up, where it paged about two minutes after it ran.
+  A server the panel first sees down after it starts (an update, a reboot of its own host) was
+  never announced as down, so its return isn't announced either; it used to page "back online".
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
   and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
   `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query
