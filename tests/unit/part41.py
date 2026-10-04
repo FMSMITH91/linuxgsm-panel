@@ -3333,6 +3333,46 @@ def _none_rollback_checks41():
           repr((h.events(), summary)))
 
 
+def _none_stopped_rollback41(queued):
+    """mc (no Autostart, restoring off) is stopped, then the reboot is cancelled: (host, summary).
+
+    Its stubs end with it (_patched): the two variants run back to back, and the first one's hook
+    left in place cancelled the FIRST host from inside the second's stop.
+    """
+    _fresh41()
+    r, h, rows = _std_host41()
+    with _patched():
+        _patch(HR, "restore_no_autostart", lambda: False)
+        if queued:
+            rows["mc"].stop_pending = True
+            db.session.commit()
+        real = _core41.run_as_game_user
+
+        def _cancel_after_mc(server, user, action, timeout=30, selfname=None, **kw):
+            out = real(server, user, action, timeout=timeout, selfname=selfname, **kw)
+            if action == "stop" and (selfname or user) == "mcserver":
+                HR.cancel(r, _OPS41)
+            return out
+        _patch(_core41, "run_as_game_user", _cancel_after_mc)
+        _patch(HR, "STOP_WORKERS", 1)
+        HR.request_reboot(r, "now", None, "web")
+        return h, "".join(_bodies41("Host reboot"))
+
+
+def _none_stopped_rollback_checks41():
+    h, summary = _none_stopped_rollback41(queued=False)
+    check("rollback: a server restoring would have left stopped (no Autostart, restoring off) whose "
+          "stop DID run is started again when the reboot is cancelled — it is put back as it was",
+          _all41(_lines41(h, "stop mcserver"), _lines41(h, "start mcserver"), h.running("mcserver"),
+                 "cancel" in summary.lower()),
+          repr((h.events(), summary)))
+    h, summary = _none_stopped_rollback41(queued=True)
+    check("rollback: ...but a server with a queued stop stays stopped (its stop was due)",
+          _all41(_lines41(h, "stop mcserver"), not _lines41(h, "start mcserver"),
+                 not h.running("mcserver"), "cancel" in summary.lower()),
+          repr((h.events(), summary)))
+
+
 def _unknown_warning_checks41():
     _fresh41()
     r, h, _rows = _std_host41()
@@ -3512,6 +3552,7 @@ _SECTIONS41 = [
     ("window at the job", _window_job_checks41),
     ("in flight on a panel-started server", _inflight_panel_owned_checks41),
     ("rollback of an unstopped server", _none_rollback_checks41),
+    ("rollback of a stopped no-restore server", _none_stopped_rollback_checks41),
     ("warning an unknown count", _unknown_warning_checks41), ("warning text", _warning_text_checks41),
     ("warning text on the panel host", _local_warning_text_checks41),
     ("re-scan budget", _rescan_budget_checks41), ("send's connection", _connect_fail_checks41),

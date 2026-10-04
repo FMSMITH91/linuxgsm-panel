@@ -1385,7 +1385,8 @@ class _Job:
         return {"v": 1, "plan": self.job["plan"], "boot": self.job["boot"], "mid": self.job["mid"],
                 "owner": e["owner"], "lock": e["lock"], "aside": None, "at": now, "sent": None,
                 "by": self.by, "origin": self.job["origin"], "mode": self.job["mode"],
-                "stop": None, "restore": "pending", "attempts": 0, "boot_seen": None}
+                "stop": None, "restore": "pending", "attempts": 0, "boot_seen": None,
+                "queued": bool(e.get("stop_pending"))}
 
     def _disarm_all(self):
         for e in self.entries:
@@ -1869,6 +1870,11 @@ def _act_one(remote, gs, d, now, rollback_):
         return _act_panel(remote, gs, d, now, rollback_)
     # 'none': stopped, and its lock (moved aside) dropped, as an operator's stop drops it.
     put_locks_back(remote, gs.short_name, [(gs.lgsm_name, "none")])
+    if rollback_ and d.get("queued") is False:
+        # The reboot it was to stay stopped through never happened, so it is put back as it was:
+        # running. Only a queued stop stays stopped (it was due). A plan recorded before "queued"
+        # existed keeps the old answer.
+        return _act_panel(remote, gs, d, now, rollback_)
     return "done", "stopped"
 
 

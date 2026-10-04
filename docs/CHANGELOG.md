@@ -36,19 +36,20 @@ CI-verified commit regardless of this file — this changelog is for humans.
   exactly that and asks you to reload, rather than guessing whether it happened.
 - **Clean host reboots: running game servers are stopped first and come back after.** Every reboot
   the panel makes — a host's Power card (the panel's own host too), the reboot-needed banner, the
-  command palette, "reboot when everyone has left", `POST /api/remote/<id>/reboot` and
-  `POST /api/server-management/reboot` — now stops the host's running game servers with LinuxGSM's
-  graceful `stop` first (verified by the tmux session, never the exit code), reboots, and brings back
-  exactly the servers that were running. Before, the reboot's SIGTERM killed them ungracefully, and
-  a stop beforehand would have deleted LinuxGSM's monitoring lock, so nothing came back. Now the lock
-  is moved aside for the stop and put back before the reboot — at a second of the minute no
-  `*/5 monitor` run can read it, with no LinuxGSM command in flight — so Autostart servers come
-  back by LinuxGSM's own monitor exactly as after a plain reboot, even with the panel down. Running
+  command palette, "reboot when everyone has left", `POST /api/remote/<id>/reboot` and `POST
+  /api/server-management/reboot` — now stops the host's running game servers with LinuxGSM's
+  graceful `stop` first (verified by the tmux session, never the exit code), reboots, and brings
+  back exactly the servers that were running. Before, the reboot's SIGTERM killed them ungracefully,
+  and a stop beforehand would have deleted LinuxGSM's monitoring lock, so nothing came back. Now the
+  lock is moved aside for the stop and put back before the reboot — at a second of the minute no
+  `*/5 monitor` run can read it, with no LinuxGSM command in flight — so Autostart servers come back
+  by LinuxGSM's own monitor exactly as after a plain reboot, even with the panel down. Running
   servers WITHOUT Autostart are started by the panel once the host is back (a new setting turns that
   off); stopped servers stay stopped. One summary notification (a new `host_reboot` event) says what
   came back, and a server that has not, about 12 minutes after the host is back. A reboot that did
   not happen — refused by the host, or a panel restart before it was sent — is undone: every server
-  is put back as it was, and you are told.
+  is put back as it was, including one restoring would have left stopped (only a queued stop stays
+  stopped), and you are told.
 - **With players on, the reboot asks.** The dialog lists who is on each server (and which counts
   can't be read) and offers **Wait: reboot when everyone has left** or **Reboot now**. A forced
   reboot warns players in-game at 60, 30 and 10 seconds where the game can show a message (Source,
