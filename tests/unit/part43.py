@@ -19,12 +19,17 @@ Held here, each against fixture files in a throwaway "home":
   what was seen (details did not answer, or raised; the game's own config is missing or does not
   set the port); SSH's port is refused; an account another import adds while the reads run is
   skipped, not doubled; on the panel's own host, the account is enrolled before `details` runs;
+* a port an imported server shares with another server on its host (found on the test box:
+  PaperMC's server.properties sets mcserver's 25565): imported on it, and the reply names the port
+  and the servers and says what it means — two in one batch, one already in the panel (by its
+  display name), three; a server on another host or one not imported is no share;
 * the monitor's up/down probe on what the import stored: the Minecraft server's crash pages while
   Garry's Mod keeps 27015 open;
 * the startup re-read (game_ports.reconcile_stored_ports) heals a row stored on another server's
   port, even onto a port it shares, keeps a port it cannot read or may not take, survives a row
   deleted and a host failing mid-pass, and moves the monitor's state, the restart cron line and its
-  own firewall rule along with the port; app.py starts it.
+  own firewall rule along with the port, and says in its audit row when the new port is shared;
+  app.py starts it.
 
 HOW IT RUNS. On part12's Flask app and database (imported; part12 has run by then), with the
 transports tripped. The scan's shell text runs in a real sh/bash over the fixture home, and the
@@ -451,6 +456,8 @@ def _stored43(first, rows):
     audit = _audit_detail43("import_servers")
     check("import: the audit row names each imported server with the port it was stored on",
           "mc43:25565" in audit and "cod43:28960" in audit, audit)
+    check("import: five servers on five ports: the reply names no shared port (control)",
+          first.get("shared_ports") == [], repr(first.get("shared_ports")))
 
 
 def _left_out43(first, rows):
@@ -580,6 +587,94 @@ def _monitor43():
           up_status == "online", "status %r" % (up_status,))
 
 
+# ── a port another server shares ────────────────────────────────────────────────────────────────
+# Found by the VPS proof: pmcsrv's server.properties sets 25565, as mcserver's does. Both are
+# stored there (it IS their port), and the reply has to say what that means. Each case on a host
+# of its own making: (account, its server.properties port).
+_SHARE_ACCOUNTS43 = (("sha43", 25580), ("shb43", 25580), ("shx43", 25583), ("shc43", 25580),
+                     ("shd43", 25584), ("shy43", 25585), ("shz43", 25580))
+
+
+def _shared_reply43(reply):
+    """{port: servers} from a reply's shared_ports, and every note, in order."""
+    got = reply.get("shared_ports")
+    if not isinstance(got, list):
+        return None, []
+    return {s.get("port"): s.get("servers") for s in got}, [s.get("note") or "" for s in got]
+
+
+def _shared43(client):
+    """The import names each port an imported server shares with another server on its host."""
+    for user, port in _SHARE_ACCOUNTS43:
+        _mc43(user, port)
+    _account43("gmc43", "gmodserver", {"_default.cfg": _GMOD_DEFAULT43})      # cfg port 27015
+    rid, other = _host43("p43-share", "192.0.2.149"), _host43("p43-share-b", "192.0.2.150")
+    with _p9.app_context():
+        for host, short, name, gt, port in ((rid, "gex43", "p43 gmod main", "gmod", 27015),
+                                            (other, "oth43", "oth43", "mc", 25584)):
+            gs = GameServer(remote_id=host, name=name, short_name=short, game_type=gt, port=port,
+                            installed=True, status="offline")
+            db.session.add(gs)
+            db.session.commit()
+            _mine43["servers"].append(gs.id)
+    _shared_batch43(client, rid)
+    _shared_existing43(client, rid)
+    _shared_apart43(client, rid)
+
+
+def _shared_batch43(client, rid):
+    """Two servers of one batch on one port, and then a third."""
+    pair = _post43(client, [{"user": u, "game_type": "mc"} for u in ("sha43", "shb43", "shx43")],
+                   rid=rid)
+    ports, notes = _shared_reply43(pair)
+    check("import shared port: two servers of one batch set to 25580 are both imported on it",
+          {u: p for u, p in _rows43(rid).items() if u.startswith("sh")}
+          == {"sha43": 25580, "shb43": 25580, "shx43": 25583}, repr(pair))
+    check("import shared port: ...and the reply names that port and both servers, and not the "
+          "third server's own port", ports == {25580: ["sha43", "shb43"]}, repr(pair))
+    check("import shared port: ...and says only one can run at a time, and that the panel cannot "
+          "tell them apart by port while one runs", notes == [
+              "sha43 and shb43 are set to the same port, 25580. Only one of them can run at a "
+              "time, unless each is bound to its own IP address. While one runs, the panel cannot "
+              "tell them apart by port, so a stopped one may read online."], repr(notes))
+    three = _post43(client, [{"user": "shc43", "game_type": "mc"}], rid=rid)
+    ports, notes = _shared_reply43(three)
+    check("import shared port: a third server on 25580 names all three, the two already in the "
+          "panel included", (ports, [n.split(" are set to")[0] for n in notes])
+          == ({25580: ["sha43", "shb43", "shc43"]}, ["sha43, shb43 and shc43"]), repr(three))
+
+
+def _shared_existing43(client, rid):
+    """A server whose LinuxGSM cfg port (the scan's) is one a server already in the panel has."""
+    reply = _post43(client, [{"user": "gmc43", "game_type": "gmod"}], rid=rid)
+    ports, notes = _shared_reply43(reply)
+    check("import shared port: a server on the port of one already in the panel is imported, and "
+          "the reply names that one by its display name",
+          (_rows43(rid).get("gmc43"), ports) == (27015, {27015: ["p43 gmod main", "gmc43"]}),
+          repr(reply))
+    check("import shared port: ...with the same statement", notes[:1] == [
+        _gp43.shared_port_note(["p43 gmod main", "gmc43"], 27015)], repr(notes))
+
+
+def _shared_apart43(client, rid):
+    """What is NOT a shared port: a server on another host, and a server that was not imported."""
+    apart = _post43(client, [{"user": "shd43", "game_type": "mc"}], rid=rid)
+    check("import shared port: a port only a server on ANOTHER host has is not shared — and the "
+          "pairs already on this host are not named again", (_rows43(rid).get("shd43"),
+                                                             apart.get("shared_ports"))
+          == (25584, []), repr(apart))
+    _SILENT43.add("shz43")
+    try:
+        left = _post43(client, [{"user": "shy43", "game_type": "mc"},
+                                {"user": "shz43", "game_type": "mc"}], rid=rid)
+    finally:
+        _SILENT43.discard("shz43")
+    check("import shared port: a server left out (its port could not be read) shares nothing: the "
+          "one imported beside it is on a port of its own",
+          (sorted(left.get("added") or ()), left.get("shared_ports"), "shz43" in _rows43(rid))
+          == (["shy43"], [], False), repr(left))
+
+
 # ── the startup re-read ─────────────────────────────────────────────────────────────────────────
 # Each heal host: (name, address, what `ss` lists there or None when it raises, its rows). A row is
 # (account, game type, the port stored on it, installed). The accounts' own ports (what LinuxGSM
@@ -704,6 +799,25 @@ def _heal43():
     _heal_kept43(got)
     _heal_survives43(got)
     _heal_follows43(want, hosts, audits)
+    _heal_shared43()
+
+
+def _heal_shared43():
+    """A move onto a port another server is on says so in its audit row, as the import does."""
+    with _p9.app_context():
+        said = {a.target: a.detail or "" for a in AuditLog.query.filter_by(action="port_resync")}
+    pair = _gp43.shared_port_note(["heal-mc43", "heal-pmc43"], 25565)
+    check("startup port re-read: the stopped row moved onto 25565 beside the running one names "
+          "the shared port in its audit row, as the import's reply does",
+          pair in said.get("heal-pmc43", ""), repr(said.get("heal-pmc43")))
+    check("startup port re-read: ...and so does the old import moved onto the 25565 a newer "
+          "import holds", _gp43.shared_port_note(["heal-pmcb43", "heal-mcb43"], 25565)
+          in said.get("heal-mcb43", ""), repr(said.get("heal-mcb43")))
+    check("startup port re-read: a row moved while no other row was on its new port claims no "
+          "share — nor does one moved to a free port (controls)",
+          [t in said and "set to the same port" not in said[t]
+           for t in ("heal-mc43", "heal-quiet43")] == [True, True],
+          repr({t: said.get(t) for t in ("heal-mc43", "heal-quiet43")}))
 
 
 def _heal_moved43(got, audits):
@@ -863,6 +977,7 @@ try:
     _import43(_p9_client(P9_ADMIN))
     _monitor43()
     _heal43()
+    _shared43(_p9_client(P9_ADMIN))
     _wired43()
 finally:
     _p9_restore_all()

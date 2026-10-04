@@ -155,6 +155,7 @@ def _discover_import_outcome(remote, added, skipped, not_enrolled, refused, unre
     """The import route's JSON answer, once the selected rows are in (or are not).
 
     `unread` are the servers left out because their port could not be read, each with the reason.
+    `shared_ports` (see _shared_ports) names each port an imported server shares with another.
     """
     # On the panel's own host an account the helper would not enrol was imported ANYWAY: the
     # row was committed first, and only then was the helper asked. The helper refuses an
@@ -166,11 +167,36 @@ def _discover_import_outcome(remote, added, skipped, not_enrolled, refused, unre
     unread = list(unread)
     skipped += [r["user"] for r in refused + unread if r["user"] not in skipped]
     out = {"success": bool(added), "added": added, "skipped": skipped,
-           "not_enrolled": not_enrolled, "refused": refused, "unread": unread}
+           "not_enrolled": not_enrolled, "refused": refused, "unread": unread,
+           "shared_ports": _shared_ports(remote.id, added)}
     if (refused or unread) and not added:
         out["message"] = "Not imported: " + "; ".join(
             "%s (%s)" % (r["user"], r["reason"]) for r in refused + unread) + "."
     return out
+
+
+def _shared_ports(remote_id, added):
+    """[{"port", "servers", "note"}]: each port an imported server shares with another of the host's.
+
+    Imported anyway: the port is the one its config sets, and Minecraft and PaperMC both default
+    to 25565. But a port-only monitor then reads a STOPPED one online while the other runs (found
+    on the test box: pmcsrv beside mcserver), so the reply says so. Read from the host's rows after
+    the commit: another server imported in the same batch counts, as does one already in the panel
+    (its display name), and a server on another host does not. `servers` are in the order the rows
+    were made; `note` is game_ports.shared_port_note.
+    """
+    if not added:
+        return []
+    new, by_port = set(added), collections.defaultdict(list)
+    for port, name, short in (GameServer.query.filter_by(remote_id=remote_id)
+                              .order_by(GameServer.id)
+                              .with_entities(GameServer.port, GameServer.name,
+                                             GameServer.short_name)):
+        by_port[port].append((name, short in new))
+    return [{"port": port, "servers": [n for n, _new in held],
+             "note": _gp.shared_port_note([n for n, _new in held], port)}
+            for port, held in sorted(by_port.items())
+            if len(held) > 1 and any(is_new for _n, is_new in held)]
 
 
 def _privileged_selection(remote, items, discovered):

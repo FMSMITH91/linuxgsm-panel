@@ -91,6 +91,21 @@ def port_refusal(port, protected):
     return None
 
 
+def shared_port_note(names, port):
+    """What it means that the servers `names` (two or more, on one host) are all set to `port`.
+
+    Storing that port is right: it IS their configured port (Minecraft and PaperMC both default to
+    25565). But every up/down read here is by port, so the panel cannot tell them apart. Said by the
+    import's reply and the startup re-read's audit. A server bound to a single address of its own
+    can share the port with one bound to another, so "only one" is not said without that exception.
+    """
+    names = list(names)
+    who = names[0] if len(names) < 2 else "%s and %s" % (", ".join(names[:-1]), names[-1])
+    return ("%s are set to the same port, %d. Only one of them can run at a time, unless each is "
+            "bound to its own IP address. While one runs, the panel cannot tell them apart by "
+            "port, so a stopped one may read online." % (who, port))
+
+
 # One game server row as the re-read found it: plain values. A commit expires every row the session
 # has loaded, and touching an expired row that a request deleted meanwhile raises — so with the rows
 # held as models, one row deleted while the pass ran ended the pass for every row and host after it.
@@ -246,12 +261,21 @@ def _store_read_port(host, row, port, now, rules):
     gs.port = port
     db.session.commit()
     _mon.forget_updown(row.id)
+    shared = _sharing_note(row, port, now)
     notes = [n for n in (_cron_follows(host.remote, row, port),
-                         _close_old_rule(host, row, now, rules, port)) if n]
+                         _close_old_rule(host, row, now, rules, port), shared) if n]
     log_action(None, "port_resync", target=row.name, server=gs,
                detail="%s -> %s (read from LinuxGSM details at panel start; %s)"
                % (row.port, port, "; ".join(notes)))
     _log.info("%s: stored port %s -> %s, as LinuxGSM reports", row.name, row.port, port)
+    if shared:
+        _log.warning("%s", shared)
+
+
+def _sharing_note(row, port, now):
+    """shared_port_note for `row` moved to `port`, when another of the host's rows (`now`) is on it; else ""."""
+    names = [r.name for r in now if r.port == port or r.id == row.id]
+    return shared_port_note(names, port) if len(names) > 1 else ""
 
 
 def _cron_follows(remote, row, port):

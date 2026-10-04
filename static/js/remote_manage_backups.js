@@ -650,7 +650,8 @@ function scanExisting(){
         +' data-game="'+escapeHtml(g.game_type)+'" data-autostart="'+(g.autostart?1:0)+'"></td>'
         +'<td class="font-monospace">'+escapeHtml(g.user)+(g.autostart?' <span class="badge bg-success" style="font-size:.58rem;">autostart</span>':'')+'</td>'
         +'<td>'+escapeHtml(g.game_name||g.game_type)+'</td>'
-        +(g.port ? '<td>'+Number(g.port)+'</td>' : '<td title="Not in its LinuxGSM config: read from LinuxGSM when imported">—</td>')
+        +(g.port ? '<td>'+Number(g.port)+'</td>'
+                 : '<td title="'+escapeHtml(_discT('Not in its LinuxGSM config: read from LinuxGSM when imported'))+'">—</td>')
         +'<td>'+(g.backups||0)+'</td>'
         +'<td>'+(g.mods||0)+'</td>'
         +'<td>'+(g.cron||0)+'</td></tr>';
@@ -676,6 +677,11 @@ function scanExisting(){
 // produce more than one server — a host keys its servers on the Linux user — and reporting only
 // the successes made a partial import read as a clean one. Appended as a node for the same reason
 // as prependContentNotes: these names came off the host.
+// #disc-result is data-no-i18n as a whole (the template's guard: it holds account names read off
+// the host), so the page's translator never reaches anything built inside it, and a fixed sentence
+// there stayed English whatever its catalog entry. Such a sentence is translated as it is built,
+// with i18n.js's t(); every name and reason beside it stays as it is.
+function _discT(s){ return window.t ? window.t(s) : s; }
 function appendSkippedNote(msg, skipped){
   var sk=(skipped||[]).filter(function(u,i,a){ return a.indexOf(u)===i; });
   if(!msg || !sk.length) return;
@@ -691,7 +697,7 @@ function appendEnrolNote(msg, notEnrolled){
   if(!msg || !notEnrolled || !notEnrolled.length) return;
   var box=document.createElement('div'); box.className='text-warning small mt-1';
   var head=document.createElement('div');
-  head.textContent='Imported, but not added to the panel\u2019s game-account group. Where the panel\u2019s sudo is limited to its helper, it cannot control these servers.';
+  head.textContent=_discT('Imported, but not added to the panel\u2019s game-account group. Where the panel\u2019s sudo is limited to its helper, it cannot control these servers.');
   box.appendChild(head);
   notEnrolled.forEach(function(n){
     var row=document.createElement('div'); row.className='font-monospace text-break';
@@ -709,7 +715,7 @@ function appendNotImportedNote(msg, items){
   if(!msg || !items || !items.length) return;
   var box=document.createElement('div'); box.className='text-warning small mt-1';
   var head=document.createElement('div');
-  head.textContent='Not imported:';
+  head.textContent=_discT('Not imported:');
   box.appendChild(head);
   items.forEach(function(n){
     var row=document.createElement('div'); row.className='font-monospace text-break';
@@ -717,6 +723,28 @@ function appendNotImportedNote(msg, items){
     row.textContent=(n.user||'?')+': '+(n.reason||'');
     box.appendChild(row);
   });
+  msg.appendChild(box);
+}
+// Imported servers set to the same port as another server on this host (both new, or one already
+// in the panel). They ARE imported — it is their configured port — but only one of them can run,
+// and the panel reads up/down by port, so a stopped one may read online while the other runs. The
+// two sentences are fixed, and translated (_discT); each port's line is data — a number and server
+// names, which are user-authored — so it is text, and kept from the translator.
+function appendSharedPortNote(msg, shared){
+  if(!msg || !shared || !shared.length) return;
+  var box=document.createElement('div'); box.className='text-warning small mt-1';
+  var head=document.createElement('div');
+  head.textContent=_discT('Servers that share a port:');
+  box.appendChild(head);
+  shared.forEach(function(s){
+    var row=document.createElement('div'); row.className='font-monospace text-break';
+    row.setAttribute('data-no-i18n','');
+    row.textContent=Number(s.port)+': '+(s.servers||[]).join(', ');
+    box.appendChild(row);
+  });
+  var tail=document.createElement('div');
+  tail.textContent=_discT('Only one of the servers on a port can run at a time, unless each is bound to its own IP address. While one runs, the panel cannot tell them apart by port, so a stopped one may read online.');
+  box.appendChild(tail);
   msg.appendChild(box);
 }
 function prependContentNotes(out, content){
@@ -758,6 +786,7 @@ function importExisting(btn){
       appendSkippedNote(msg, d.skipped);
       if(n) appendNotImportedNote(msg, (d.refused||[]).concat(d.unread||[]));
       appendEnrolNote(msg, d.not_enrolled);
+      appendSharedPortNote(msg, d.shared_ports);
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Import failed.</span>';
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; });
 }

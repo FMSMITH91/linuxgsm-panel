@@ -5279,6 +5279,202 @@ else:
           "js (no node): the field's label is left to the translator, and the name is compared "
           "and sent as typed", _sfr_submit[:300])
 
+# ── the import reply's notes, driven: rendered, translated, kept as text ─────────────────────────
+# Two servers imported onto one port are imported (it is their configured port), and the reply's
+# shared_ports says so. The page shows it under "Import selected", beside the other notes: fixed
+# sentences in the viewer's language, and a line per port holding the port and the server names —
+# names are user-authored (a display name, an account off the host's /home), so they must be TEXT,
+# never markup, and kept from the translator. All of it sits in #disc-result, which the template
+# marks data-no-i18n as a whole, so the DOM translator never reaches it: a fixed sentence there is
+# translated as it is built (t()), or not at all — "Not imported:" had a catalog entry and still
+# read English. DRIVEN in Node: remote_manage_backups.js's real importExisting and scanExisting,
+# fetch scripted, in a DOM whose textContent makes a Text child as a browser's does and whose
+# #disc-result carries the template's guard, with i18n.js's real walker (loaded first, with the REAL
+# merged es and fr catalogs). The catalog is the only gate on the colon-ended heads: the JS
+# coverage scan skips a literal ending in ':'.
+_IMPORT_NOTE_HARNESS = r"""
+const vm = require('vm'), fs = require('fs'), path = require('path');
+class El {
+  constructor(tag, doc){
+    this.tagName = String(tag).toUpperCase(); this.doc = doc; this.childNodes = [];
+    this.parentNode = null; this.attrs = {}; this._v = ''; this._html = ''; this.disabled = false;
+  }
+  get nodeType(){ return this.tagName === '#TEXT' ? 3 : 1; }
+  get nodeValue(){ return this._v; }
+  set nodeValue(v){ this._v = String(v); }
+  get firstChild(){ return this.childNodes[0] || null; }
+  get nextSibling(){
+    const p = this.parentNode; return p ? p.childNodes[p.childNodes.indexOf(this) + 1] || null : null;
+  }
+  get parentElement(){ return this.parentNode; }
+  get children(){ return this.childNodes.filter(c => c.nodeType === 1); }
+  get className(){ return this.attrs['class'] || ''; }
+  set className(v){ this.attrs['class'] = String(v); }
+  // innerHTML is kept as a string (no parser here); its text counts, its tags do not.
+  get textContent(){
+    return this.nodeType === 3 ? this._v
+      : this._html.replace(/<[^>]*>/g, '') + this.childNodes.map(c => c.textContent).join('');
+  }
+  set textContent(v){ this._clear(); this._add(this.doc.createTextNode(v)); }
+  get innerHTML(){ return this._html; }
+  set innerHTML(v){ this._clear(); this._html = String(v); }
+  get isConnected(){ for (let e = this; e; e = e.parentNode) if (e === this.doc.body) return true; return false; }
+  _clear(){ this.childNodes.forEach(c => { c.parentNode = null; }); this.childNodes = []; this._html = ''; }
+  _add(c){
+    c.parentNode = this; this.childNodes.push(c);
+    if (this.isConnected) (this.doc.observers || []).forEach(o => o.cb([{type: 'childList', target: this, addedNodes: [c]}]));
+    return c;
+  }
+  appendChild(c){ return this._add(c); }
+  setAttribute(k, v){ this.attrs[k] = String(v); }
+  getAttribute(k){ return k in this.attrs ? this.attrs[k] : null; }
+  hasAttribute(k){ return k in this.attrs; }
+  all(){ return this.children.reduce((a, c) => a.concat([c], c.all()), []); }
+}
+const flush = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r)); };
+// One page: <div id="disc-result" data-no-i18n> (as remote_manage.html has it) holding #disc-msg.
+function load(root, reply, catalog, lang){
+  const doc = {observers: [], readyState: 'complete', documentElement: {}, addEventListener(){}};
+  doc.createElement = t => new El(t, doc);
+  doc.createTextNode = s => { const t = new El('#text', doc); t._v = String(s); return t; };
+  doc.body = new El('body', doc);
+  const result = doc.body.appendChild(new El('div', doc));
+  result.setAttribute('id', 'disc-result'); result.setAttribute('data-no-i18n', '');
+  const msg = result.appendChild(new El('span', doc));
+  const chk = u => ({getAttribute: k => ({'data-user': u, 'data-game': 'mc', 'data-autostart': '0'})[k]});
+  doc.getElementById = id => ({'disc-msg': msg, 'disc-result': result})[id] || null;
+  doc.querySelectorAll = sel => sel === '.disc-chk:checked' ? [chk('sha43'), chk('shb43')] : [];
+  const ctx = {console, Promise, JSON, Number, String, Array, Object, RegExp, Error, Set, Map, Math, Date,
+    document: doc, MOUNT: '', REMOTE_ID: 3, IS_LOCAL: false, setTimeout: () => 0, setInterval: () => 0,
+    clearTimeout(){}, clearInterval(){}, addEventListener(){}, _da: a => ' data-action="' + a + '"',
+    escapeHtml: s => String(s == null ? '' : s).replace(/[&<>"']/g, ch => '&#' + ch.charCodeAt(0) + ';'),
+    MutationObserver: class { constructor(cb){ this.cb = cb; } observe(){ doc.observers.push(this); } disconnect(){} },
+    fetch: url => /\/(import|discover)$/.test(String(url))
+      ? Promise.resolve({json: () => reply}) : new Promise(() => {})};
+  ctx.window = ctx;
+  ctx.toast = () => {}; ctx.refreshSection = () => {};
+  if (catalog) { ctx.I18N = catalog; ctx.LANG = lang; }
+  vm.createContext(ctx);
+  if (catalog) vm.runInContext(fs.readFileSync(root + '/static/js/i18n.js', 'utf8'), ctx, {filename: 'i18n.js'});
+  try {
+    vm.runInContext(fs.readFileSync(root + '/static/js/remote_manage_backups.js', 'utf8'), ctx,
+                    {filename: 'remote_manage_backups.js'});
+  } catch (e) { /* its page-start calls need the whole page; the functions are defined first */ }
+  return {ctx, doc, msg, result};
+}
+async function run(root, reply, catalog, lang){
+  const p = load(root, reply, catalog, lang), msg = p.msg;
+  p.ctx.importExisting(new El('button', p.doc));
+  await flush();
+  // Each note under the message, as its lines: [text, guarded, class].
+  return {boxes: msg.children.map(b => b.children.map(r => [r.textContent, r.hasAttribute('data-no-i18n'),
+                                                          r.className])),
+          elements: msg.all().map(e => e.tagName).filter(t => t !== 'DIV'),
+          text: msg.textContent};
+}
+async function scan(root, catalog, lang){
+  const p = load(root, {servers: [{user: 'mc1', game_type: 'mc', game_name: 'Minecraft', port: 0}],
+                        content: []}, catalog, lang);
+  p.ctx.scanExisting();
+  await flush();
+  return (/<td title="([^"]*)">/.exec(p.result.innerHTML) || [])[1] || null;
+}
+(async () => {
+  process.on('unhandledRejection', () => {});
+  const root = process.argv[2], out = {};
+  const base = {success: true, added: ['sha43', 'shb43'], skipped: [], refused: [], unread: [],
+                not_enrolled: []};
+  const shared = [{port: 25580, servers: ['sha43', '<img src=x onerror=alert(1)>'], note: 'N1'},
+                  {port: 27015, servers: ['Online', 'gmc43'], note: 'N2'}];
+  const notes = Object.assign({}, base, {shared_ports: shared, skipped: ['shz43'],
+    unread: [{user: 'shz43', reason: 'R1'}], not_enrolled: [{user: 'sha43', reason: 'R2'}]});
+  // Each language's section files merged into one catalog, as panel/core/i18n.py serves it.
+  const catalog = lang => {
+    const dir = path.join(root, 'translations', lang), c = {};
+    fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort()
+      .forEach(f => Object.assign(c, JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))));
+    return c;
+  };
+  out.en = await run(root, Object.assign({}, base, {shared_ports: shared}));
+  out.es = await run(root, notes, catalog('es'), 'es');
+  out.fr = await run(root, Object.assign({}, base, {shared_ports: shared}), catalog('fr'), 'fr');
+  out.none = await run(root, Object.assign({}, base, {shared_ports: []}));
+  out.absent = await run(root, base);
+  out.scan_title = {en: await scan(root), es: await scan(root, catalog('es'), 'es')};
+  console.log(JSON.stringify(out));
+})().catch(e => console.log(JSON.stringify({error: String(e && e.stack || e)})));"""
+_SHARED_HEAD = "Servers that share a port:"
+_SHARED_TAIL = ("Only one of the servers on a port can run at a time, unless each is bound to its own "
+                "IP address. While one runs, the panel cannot tell them apart by port, so a stopped "
+                "one may read online.")
+_SHARED_ROWS = [["25580: sha43, <img src=x onerror=alert(1)>", True, "font-monospace text-break"],
+                ["27015: Online, gmc43", True, "font-monospace text-break"]]
+if _node:
+    with _tf_ta.NamedTemporaryFile("w", suffix=".js", delete=False) as _inh:
+        _inh.write(_IMPORT_NOTE_HARNESS)
+    try:
+        _inr = _sp_ta.run([_node, _inh.name, str(ROOT)], capture_output=True, text=True, timeout=60)
+    finally:
+        _os_ta.unlink(_inh.name)
+    try:
+        _inres = json.loads((_inr.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _inres = {"error": (_inr.stdout + _inr.stderr)[-600:]}
+    check("error" not in _inres, "js (node): the import-note harness ran", repr(_inres)[:600])
+    _in_en = _inres.get("en") or {}
+    check(_in_en.get("boxes") == [[[_SHARED_HEAD, False, ""]] + _SHARED_ROWS + [[_SHARED_TAIL, False, ""]]],
+          "js (node): an import whose reply names shared ports shows one note under 'Import "
+          "selected': what it is, a line per port with its servers, and what it means",
+          repr(_in_en.get("boxes")))
+    check(_in_en.get("elements") == [] and "<img src=x onerror=alert(1)>" in (_in_en.get("text") or ""),
+          "js (node): a server name in that note is text, never markup — '<img …>' reads as itself "
+          "and makes no element", repr((_in_en.get("elements"), _in_en.get("text"))))
+    # The notes with lines of their own (the "Skipped" span has none).
+    _in_es = [b for b in (_inres.get("es") or {}).get("boxes") or [] if b]
+    check(_in_es[-1:] == [[["Servidores que comparten un puerto:", False, ""]] + _SHARED_ROWS
+                          + [["Solo uno de los servidores de un puerto puede ejecutarse a la vez, "
+                              "salvo que cada uno esté vinculado a su propia dirección IP. Mientras "
+                              "uno se ejecuta, el panel no puede distinguirlos por el puerto, así que "
+                              "uno detenido puede aparecer en línea.", False, ""]]],
+          "js (node, es, real i18n.js and catalog, inside the template's untranslated "
+          "#disc-result): the note's two sentences are in Spanish, and each port's line (the "
+          "port, the server names) is left as it is", repr(_in_es))
+    check([b[0][0] for b in _in_es[:-1]] == [
+              "No importado:", "Importado, pero no se añadió al grupo de cuentas de juego del "
+              "panel. Donde el sudo del panel se limita a su asistente, no puede controlar estos "
+              "servidores."]
+          and [b[1][:2] for b in _in_es[:-1]] == [["shz43: R1", True], ["sha43: R2", True]],
+          "js (node, es): ...as are the heads of the import's other notes there (not imported, "
+          "not enrolled) — each had a catalog entry and read English — and their lines are not",
+          repr(_in_es[:-1]))
+    _in_fr = (_inres.get("fr") or {}).get("boxes") or [[]]
+    check(_in_fr == [[["Serveurs qui partagent un port :", False, ""]] + _SHARED_ROWS
+                     + [["Un seul des serveurs d'un port peut fonctionner à la fois, sauf si chacun "
+                         "est lié à sa propre adresse IP. Tant que l'un fonctionne, le panneau ne "
+                         "peut pas les distinguer par le port : un serveur arrêté peut donc "
+                         "apparaître en ligne.", False, ""]]],
+          "js (node, fr, real i18n.js and catalog): ...and in French", repr(_in_fr))
+    check([(_inres.get(k) or {}).get("boxes") for k in ("none", "absent")] == [[], []]
+          and "Imported 2" in ((_inres.get("absent") or {}).get("text") or ""),
+          "js (node): no shared port, or a reply without the key, shows no note — and the import "
+          "still reads as done", repr([(_inres.get(k) or {}).get("text") for k in ("none", "absent")]))
+    check(_inres.get("scan_title") == {
+              "en": "Not in its LinuxGSM config: read from LinuxGSM when imported",
+              "es": "No está en su configuración de LinuxGSM: se lee de LinuxGSM al importar"},
+          "js (node, es): the scan's '—' port explains itself in the viewer's language — a title "
+          "in #disc-result is never reached by the translator either",
+          repr(_inres.get("scan_title")))
+else:
+    _rmb_asn = _js_code_only(_js_function_body(_rmb, "appendSharedPortNote") or "")
+    check("row.textContent=" in _rmb_asn and "innerHTML" not in _rmb_asn
+          and "row.setAttribute('data-no-i18n','')" in _rmb_asn
+          and "head.textContent=_discT(" in _rmb_asn
+          and "appendSharedPortNote(msg, d.shared_ports)" in _js_code_only(
+              _js_function_body(_rmb, "importExisting") or ""),
+          "js (no node): the shared-port note is built from text nodes, its sentences translated "
+          "as built and its port lines kept from the translator, and the import shows it",
+          _rmb_asn[:300])
+
 # ── a data-action a SCRIPT assigns must resolve too ───────────────────────────────────────────
 # Check 1 reads data-action out of markup; a script that builds a control and sets
 # `el.dataset.action = 'x'` is invisible to it, and a name that resolves to nothing is a control
