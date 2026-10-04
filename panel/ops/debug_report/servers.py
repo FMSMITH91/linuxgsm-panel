@@ -313,7 +313,7 @@ def section_console(ctx):
     ids = sorted(set(maps["viewers"]) | set(maps["feed"]) | set(maps["action"]),
                  key=lambda k: (not isinstance(k, int), str(k)))
     if not maps["viewers"]:
-        res.add("- no consoles open (poller idle)")
+        res.add("- no console is being watched (poller idle)")
     try:
         by_id = {r["id"]: r for r in gs_cols(ctx)}
     except Exception as exc:  # noqa: BLE001 - the lines still print, without game types

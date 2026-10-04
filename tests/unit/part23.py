@@ -864,7 +864,7 @@ def _console_section23(ids):
           repr(_leaks23(text)))
     _sf23._console_viewers.clear()
     idle = _text23(_section23(_s23.section_console))
-    check("console: nobody watching is said as such", "- no consoles open (poller idle)" in idle,
+    check("console: nobody watching is said as such", "- no console is being watched (poller idle)" in idle,
           idle)
 
 
