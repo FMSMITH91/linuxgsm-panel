@@ -84,6 +84,8 @@ def _account43(user, inst, cfgs, props=None):
             fh.write(props)
     launcher = os.path.join(_HOME43, user, inst)
     open(launcher, "w").close()
+    # A fixture launcher in this part's own throwaway dir, which the stand-in account runs.
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
     os.chmod(launcher, 0o755)  # nosec B103 - a fixture launcher in a throwaway dir
 
 
