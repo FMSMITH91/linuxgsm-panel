@@ -376,11 +376,18 @@ def _other_loops23():
         _one_pass23(lambda _loop=getattr(_app23mod, loop): _loop(_app23))
         check("heartbeat: the %s loop beats on a completed pass" % name,
               _hb23(name).get("passes", 0) == b + 1, repr(_hb23(name)))
-    _patch23(_mon23, "time", _sleeper23(2))
+    from panel.services import host_reboot as _hr23
+    _patch23(_hr23, "time", _sleeper23(2))
     b = _hb23("reboot-when-empty").get("passes", 0)
-    _one_pass23(lambda: _mon23._reboot_when_empty_watch(_app23))
+    _one_pass23(lambda: _hr23.reboot_when_empty_watch(_app23))
     check("heartbeat: the reboot-when-empty loop beats on a tick with nothing queued",
           _hb23("reboot-when-empty").get("passes", 0) == b + 1, repr(_hb23("reboot-when-empty")))
+    _patch23(_hr23, "run_restore_pass", lambda app, now=None: 60)
+    _patch23(_hr23, "time", _sleeper23(2))
+    b = _hb23("host-reboot").get("passes", 0)
+    _one_pass23(lambda: _hr23.host_reboot_worker(_app23))
+    check("heartbeat: the host-reboot loop beats on a completed pass",
+          _hb23("host-reboot").get("passes", 0) == b + 1, repr(_hb23("host-reboot")))
 
 
 class _RecThread23:
@@ -430,7 +437,8 @@ def _calls23(path, attr):
 
 # panel/routes/_shared.py: the backup-ticker's pass (_backup_ticker_pass) beats there, so that a
 # pass whose daily backup raised can still run the game sweeps and be counted as failed.
-_LOOP_FILES23 = ("app.py", "panel/services/monitoring.py", "panel/routes/server_files.py",
+_LOOP_FILES23 = ("app.py", "panel/services/monitoring.py", "panel/services/host_reboot.py",
+                 "panel/routes/server_files.py",
                  "panel/routes/os_updates.py", "panel/routes/host_terminal.py",
                  "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py",
                  "panel/routes/_shared.py")
@@ -456,7 +464,7 @@ def _thread_gates23():
     check("workers: every thread app.py starts is named (threading.enumerate() can tell them apart)",
           bool(threads) and not unnamed, "unnamed at app.py lines %r" % unnamed)
     named = {kw["name"].value for kw in kws if isinstance(kw.get("name"), _ast23.Constant)}
-    loops = {"monitor", "player-counts", "metrics-history", "node-tools", "reboot-when-empty",
+    loops = {"monitor", "player-counts", "metrics-history", "node-tools",
              "autoblock", "ban-watch", "telegram-bot", "discord-bot"}
     check("workers: every long-running thread app.py names is a worker the report lists",
           loops <= named <= known | {"f2b-autostart", "bot-update-report", "autoblock-now",

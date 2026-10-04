@@ -2,16 +2,15 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
-from flask import (jsonify, render_template, url_for)
+from flask import (jsonify, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.config import (load_config)
-from panel.core.panel_state import (_os_update_seen, _reboot_when_empty, _rwe_lock)
+from panel.core.panel_state import (_os_update_seen)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_game_ports,
-    host_specs, is_player_queryable as sm_is_player_queryable, player_count as sm_player_count,
-    remote_os_run_updates, remote_os_update_start, remote_os_update_status,
-    remote_public_ssh_status, remote_reboot, remote_reboot_required, remote_set_public_ssh,
+    host_specs, remote_os_run_updates, remote_os_update_start, remote_os_update_status,
+    remote_public_ssh_status, remote_reboot_required, remote_set_public_ssh,
     remote_ufw_allow_game_port, remote_ufw_allow_game_ports, remote_ufw_close_port,
     remote_ufw_allow_from, remote_ufw_delete_rule, remote_ufw_limit_port,
     remote_ufw_open_port, remote_ufw_status, remote_uptime)
@@ -28,10 +27,10 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     get_host_remote, get_remote, has_permission, log_action, permission_required, server_access_required)
 import collections
 import threading
-import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from panel.core.validation import (NOT_AN_IP)
 from panel.security import privileged as _priv
+from panel.services import host_reboot as _hr
 from app import (_log, _os_update_born, _os_update_current, _os_update_note)
 from panel.routes.manage_servers import (withheld_game_ports)
 
@@ -770,6 +769,8 @@ def _register_os_update_checks(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_run_updates(remote_id):
         remote = get_host_remote(remote_id)
+        if _hr.reboot_busy(remote.id):
+            return jsonify({"success": False, "message": _hr.BUSY_MESSAGE % remote.display_name}), 409
         success, msg = remote_os_run_updates(remote)
         log_action(current_user, "remote_os_update", target=remote.name, success=success,
                    remote=remote)
@@ -784,6 +785,8 @@ def _register_os_update_jobs(app):
     def api_remote_os_update_start(remote_id):
         """Start a detached, watchable OS update; the popup polls .../os-update/status for live output."""
         remote = get_host_remote(remote_id)
+        if _hr.reboot_busy(remote.id):
+            return jsonify({"success": False, "message": _hr.BUSY_MESSAGE % remote.display_name}), 409
         try:
             ok, msg = remote_os_update_start(remote)
             if ok:
@@ -815,115 +818,90 @@ def _register_host_players(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_players(remote_id):
-        """Players connected across ALL installed game servers on this host.
+        """Players connected across ALL installed game servers on this host, before a reboot.
 
-        A reboot uses it to warn before disconnecting everyone. Returns
-        {total, busy:[{name, players}], unknown:[{name}]}.
+        host_reboot.host_player_state, the one census the reboot gate, the wait and this dialog all
+        read: {state: idle|busy|unknown|blocked|unreachable, total, running, busy:[{id, name,
+        players}], unknown:[{id, name, reason, queryable}], blockers:[{kind, name, detail}]}.
 
-        `unknown` is the whole point of the third field: player_count returns None both for "the
-        query failed" and "this game cannot be queried", and a None folded into the busy check is
-        a server reported as EMPTY. Verified on the test box — an online server the panel could
-        not read answered {"busy":[],"total":0}, and the reboot confirm then said nothing about
-        it and disconnected whoever was on. Servers the panel believes are STOPPED are not listed:
-        they are unreadable because nothing is running, which is not a warning.
-
-        query_type is passed. Without it a server whose game has no built-in gamedig type and an
-        operator-set override — the only way those games are queryable at all — was unreadable
-        here while the Players panel read it fine.
+        `unknown` is the whole point: a count that could not be read (or a server whose state
+        could not be) is NOT an empty server. Verified on the test box: an online server the panel
+        could not read answered {"busy":[],"total":0}, and the reboot confirm then said nothing
+        about it and disconnected whoever was on. A server that is not running is not listed: it
+        has nobody on it, which is not a warning.
         """
         remote = get_remote(remote_id)
-        busy, unknown = [], []
-        total = 0
-        for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all():
-            try:
-                pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
-            except Exception:
-                pc = None
-            if pc and pc > 0:
-                busy.append({"name": gs.name, "players": pc})
-                total += pc
-            elif pc is None and (gs.status or "") != "offline":
-                unknown.append({"name": gs.name,
-                                "queryable": bool(sm_is_player_queryable(gs.game_type,
-                                                                        gs.query_type))})
-        return jsonify({"total": total, "busy": busy, "unknown": unknown})
+        census = _hr.host_player_state(remote)
+        census.pop("probes", None)
+        return jsonify(census)
 
 
 def _register_reboot(app):
-    """Reboot: whether one is needed, schedule it, cancel it."""
+    """Reboot: whether one is needed, ask for one, see it run, cancel it."""
     @app.route("/api/remote/<int:remote_id>/reboot-required")
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_reboot_required(remote_id):
-        """Whether this host needs a reboot, and whether one is already scheduled for it.
+        """Whether this host needs a reboot, and whether one is pending or running for it.
 
-        Does this host need a reboot to finish applying updates, and is an auto-reboot-when-empty
-        already scheduled for it? {required, packages[], pending_empty}.
+        {required, packages[], known, pending_empty, wait, job}: `wait` is a pending "reboot when
+        everyone has left", `job` a reboot the panel is running now. Either keeps the banner up even
+        when no reboot is required, so a wait is never invisible (or uncancellable).
         """
         remote = get_remote(remote_id)
         try:
             info = dict(remote_reboot_required(remote))
         except Exception:
             info = {"required": False, "packages": []}
-        with _rwe_lock:
-            info["pending_empty"] = remote_id in _reboot_when_empty
+        st = _hr.status(remote)
+        info["pending_empty"] = st["wait"] is not None
+        info["wait"], info["job"] = st["wait"], st["job"]
         return jsonify(info)
+
+    @app.route("/api/remote/<int:remote_id>/reboot-plan")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_reboot_plan(remote_id):
+        """The Power card's state: {wait, job, rows, last}; with ?preview=1, what a reboot would do.
+
+        The preview reads every installed server (read-only) and answers per server who brings it
+        back: [{id, name, session, owner, why, text}], plus `panel_wont_return` on the panel host.
+        """
+        remote = get_host_remote(remote_id)
+        if request.args.get("preview") == "1":
+            pv = _hr.preview(remote)
+            warn = _hr.preflight_warning(remote, pv)
+            return jsonify({"servers": pv, "panel_wont_return": warn is not None, "warning": warn,
+                            "wait_hours": _hr.wait_max_hours()})
+        return jsonify(_hr.status(remote))
 
     @app.route("/api/remote/<int:remote_id>/reboot", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_reboot(remote_id):
-        """Reboot a host now, or schedule it for when every game server on it is empty.
+        """Reboot a host cleanly: its game servers are stopped first and brought back as planned.
 
-        The schedule is when_empty=true: it reboots once every game server on the host is empty.
-        An explicit 'now' supersedes any pending when-empty request.
+        Body {mode}: 'now', or 'when_empty' (reboot once nobody is on any of its game servers).
+        With no mode, a host with players on — or with a count nobody can read — answers 409
+        {error: "players_online", needs_choice, choices, players} instead of rebooting, and the
+        caller asks again with the mode the person chose. The older {when_empty: true|false} and
+        {force: true} still work. 202 when the reboot is under way, 200 when the wait is armed.
         """
         remote = get_host_remote(remote_id)
-        when_empty = bool((_json_body() or {}).get("when_empty"))
-        if when_empty:
-            with _rwe_lock:
-                _reboot_when_empty[remote_id] = {"by": current_user.username, "since": time.time()}
-            log_action(current_user, "reboot_when_empty_arm", target=remote.name, remote=remote)
-            # Warn if any game here can't be player-queried (no gamedig type AND no console engine):
-            # the panel can't confirm it's empty while it's running, so the reboot waits until it is
-            # stopped. Cheap, offline check — no network calls.
-            try:
-                unq = [gs.name for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all()
-                       if not sm_is_player_queryable(gs.game_type, getattr(gs, "query_type", None))]
-            except Exception:
-                unq = []
-            note = ""
-            if unq:
-                note = (" Note: the panel can't read the player count for %s, so it'll reboot only "
-                        "once that server is stopped (or the rest of the host is empty and it is too)."
-                        % ", ".join(unq[:4]))
-            return jsonify({"success": True, "pending": True,
-                            "message": ("Scheduled — %s will reboot once every game server on it is "
-                                        "empty." % remote.name) + note})
-        with _rwe_lock:
-            _reboot_when_empty.pop(remote_id, None)
-        # Through the monitor, which marks the host's servers expected-offline first: without it
-        # each one alerted "went offline unexpectedly" when the host came back before its game did.
-        from panel.services.monitoring import _reboot_expecting_offline
-        success, msg = _reboot_expecting_offline(remote, remote_reboot)
-        # success=, or log_action's default (True) records a refused reboot as one that happened —
-        # and /logs filtered to failures hides it. The OS-update sibling on this page passes it.
-        log_action(current_user, "remote_reboot", target=remote.name, success=success,
-                   remote=remote)
-        return jsonify({"success": success, "message": msg})
+        mode, err = _hr.parse_mode(_json_body())
+        if err:
+            return jsonify({"success": False, "error": "bad_mode", "message": err}), 400
+        code, body = _hr.request_reboot(remote, mode, current_user, "web")
+        return jsonify(body), code
 
     @app.route("/api/remote/<int:remote_id>/reboot-cancel", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_reboot_cancel(remote_id):
-        """Cancel a pending 'reboot when empty' for this host."""
+        """Cancel this host's pending wait, or a reboot that has not been sent yet."""
         remote = get_host_remote(remote_id)
-        with _rwe_lock:
-            had = _reboot_when_empty.pop(remote_id, None)
-        if had:
-            log_action(current_user, "reboot_when_empty_cancel", target=remote.name, remote=remote)
-        return jsonify({"success": True, "pending": False,
-                        "message": "Auto-reboot canceled." if had else "Nothing was scheduled."})
+        code, body = _hr.cancel(remote, current_user)
+        return jsonify(body), code
 
 
 def _register_host_pages(app):

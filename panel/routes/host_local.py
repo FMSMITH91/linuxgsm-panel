@@ -163,6 +163,11 @@ def _register_panel_update(app):
     @superadmin_required
     def api_panel_update():
         """Pull the latest panel code and restart (one-click self-update)."""
+        # Not while the panel is rebooting its own host: the restart would cut the plan in two.
+        from panel.services import host_reboot as _hr
+        _busy = _hr.panel_host_busy()
+        if _busy:
+            return jsonify({"success": False, "message": _busy}), 409
         success, msg = so.panel_self_update()
         log_action(current_user, "panel_self_update", target=LOCAL_HOST_LABEL, detail=msg, success=success)
         return jsonify({"success": success, "message": msg})

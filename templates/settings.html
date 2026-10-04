@@ -91,6 +91,26 @@
         </div>
       </div>
     </div>
+
+    <!-- Host reboots -->
+    <div class="col-lg-6 mb-3">
+      <div class="card" id="sec-reboots">
+        <div class="card-header"><i class="bi bi-power"></i> Host reboots</div>
+        <div class="card-body">
+          <label class="form-label small mb-1" for="s-reboot-wait">"Reboot when everyone has left" gives up after (hours)</label>
+          <input type="number" id="s-reboot-wait" name="reboot_wait_max_hours" min="0" max="720"
+                 class="form-control form-control-sm" value="{{ settings.reboot_wait_max_hours }}">
+          <div class="small text-secondary mt-1">0 waits for as long as it takes. You are notified when it gives up.</div>
+
+          <div class="form-check mt-3">
+            <input class="form-check-input" type="checkbox" id="s-reboot-restore" name="reboot_restore_no_autostart"
+                   {% if settings.reboot_restore_no_autostart %}checked{% endif %}>
+            <label class="form-check-label small" for="s-reboot-restore">After a reboot, start again the servers that were running without Autostart</label>
+          </div>
+          <div class="small text-secondary mt-1">Servers with Autostart always come back by LinuxGSM's own monitor. With this off, a running server without Autostart stays stopped after a panel reboot.</div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Save settings</button>

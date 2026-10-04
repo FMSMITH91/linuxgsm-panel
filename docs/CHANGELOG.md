@@ -34,6 +34,32 @@ CI-verified commit regardless of this file — this changelog is for humans.
   files is in the audit log (`rename_file`): renamed, refused (with the reason, including a name
   refused for its form) or unconfirmed. If the host doesn't confirm the rename, the panel says
   exactly that and asks you to reload, rather than guessing whether it happened.
+- **Clean host reboots: running game servers are stopped first and come back after.** Every reboot
+  the panel makes — a host's Power card (the panel's own host too), the reboot-needed banner, the
+  command palette, "reboot when everyone has left", `POST /api/remote/<id>/reboot` and
+  `POST /api/server-management/reboot` — now stops the host's running game servers with LinuxGSM's
+  graceful `stop` first (verified by the tmux session, never the exit code), reboots, and brings back
+  exactly the servers that were running. Before, the reboot's SIGTERM killed them ungracefully, and
+  a stop beforehand would have deleted LinuxGSM's monitoring lock, so nothing came back. Now the lock
+  is moved aside for the stop and put back before the reboot — at a second of the minute no
+  `*/5 monitor` run can read it, with no LinuxGSM command in flight — so Autostart servers come
+  back by LinuxGSM's own monitor exactly as after a plain reboot, even with the panel down. Running
+  servers WITHOUT Autostart are started by the panel once the host is back (a new setting turns that
+  off); stopped servers stay stopped. One summary notification (a new `host_reboot` event) says what
+  came back, and a server that has not, about 12 minutes after the host is back. A reboot that did
+  not happen — refused by the host, or a panel restart before it was sent — is undone: every server
+  is put back as it was, and you are told.
+- **With players on, the reboot asks.** The dialog lists who is on each server (and which counts
+  can't be read) and offers **Wait: reboot when everyone has left** or **Reboot now**. A forced
+  reboot warns players in-game at 60, 30 and 10 seconds where the game can show a message (Source,
+  GoldSrc, idTech3 and Minecraft consoles). Work a reboot would cut off (an install, a backup,
+  LinuxGSM maintenance, a package upgrade, a panel update) refuses "now" and can be waited for.
+- **The wait is visible and bounded.** A pending "reboot when everyone has left" shows on the
+  host's Power card and in the banner (with who it is waiting on and a Cancel button) even when no
+  reboot is required, gives up after 24 hours (setting `reboot_wait_max_hours`, 0 for no limit) with
+  a notification, reminds you once when a server's count has been unreadable for 30 minutes, re-checks
+  each server right before stopping it (a player who joins in that moment puts it back to waiting),
+  and is cancelled with a notification when the panel restarts.
 - **A terminal in the browser, for the panel's own host and for every remote.** xterm.js over the
   socket the console already uses. It needs a new "use terminal" permission (`use_terminal`) and
   access to the host; on the panel's own host it is superadmin-only whatever the grants say, because
@@ -195,6 +221,24 @@ CI-verified commit regardless of this file — this changelog is for humans.
     start fails. The deploy job is the exception. It holds the tailnet identity that reaches the
     live panel, so a deploy does not depend on StepSecurity's runtime blocklist, and its log does
     not list the deploy host's address or every command it ran as root.
+- **A reboot request with no mode and players on now answers 409 instead of rebooting.**
+  `POST /api/remote/<id>/reboot` with no body used to reboot at once; with players on (or a count
+  nobody can read) it now answers `{"error": "players_online", "needs_choice": true, "choices":
+  ["when_empty", "now"], ...}` and the caller asks again with `{"mode": "now"}` or
+  `{"mode": "when_empty"}`. `{"when_empty": "false"}` no longer arms a wait (a string was read as
+  true), and an unknown mode is a 400.
+- **Host reboots from a bootstrap or install.sh never reboot a host with game servers on it.** They
+  leave the reboot-needed banner and say to reboot from the host's Power card, where the servers are
+  stopped cleanly and brought back.
+- **While a host is being rebooted, actions on its servers wait.** Start, stop, restart, update,
+  Autostart, installs, OS updates, a bootstrap and the panel's self-update are refused for that host
+  until the reboot is sent, and the queued-restart and backup sweeps skip it. After that, an
+  operator's own Start or Stop takes the server out of the restore. The panel's own "server
+  offline / back online" and "host unreachable / back online" alerts are held for the servers and
+  hosts a reboot took down: the summary replaces them.
+- The panel host's helper now runs LinuxGSM as `./<script>` from the game home instead of by its
+  absolute path, so LinuxGSM's own monitor can see a start or stop the panel is running there and
+  backs off instead of starting a second copy.
 - **The panel makes far fewer privileged calls, so the host's journal stops being mostly its sudo
   lines.** Every `sudo` writes three journal lines (and three to auth.log). On a host with three game
   servers the panel made about 580 such calls an hour, and they were 99% of its unit's journal. Each
@@ -497,6 +541,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
   In each case, uploading a file of that name was not flagged as replacing it. Both listings now end
   each entry with a NUL, which no filename can hold and the trim leaves alone, and are split on that
   alone. Found by the real-browser check of file rename on the test VPS.
+- **Bootstrap and install.sh rebooted hosts with game servers running.** Their "are game servers
+  running?" check was `pgrep -x tmux`, and tmux renames its server process `tmux: server`: on the
+  test VPS, with four LinuxGSM servers up, it found nothing, so a bootstrap re-run or an install.sh
+  update that needed a reboot rebooted the busy host. Both now match the server's real name, and the
+  bootstrap also counts any server the panel last saw online.
+- **The Power card said "Autostart servers come back on their own"** and the reboot banner's
+  "Reboot now" skipped the player check the Power card made. Both open the same dialog now.
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
   and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
   `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query

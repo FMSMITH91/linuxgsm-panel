@@ -57,6 +57,32 @@ const box = document.getElementById('cmdk'); if (box) box.click();
 return 1;
 """
 
+# ── a host's reboot dialog (nags.js rebootHost): opened from the Power card's two buttons and
+#    the palette, then closed each way it closes — never answered, since every way to answer it
+#    asks the panel to reboot a host ─────────────────────────────────────────────────────────────
+REBOOT_DIALOG = r"""
+const pw = document.querySelector('[data-action="rebootRemote"]');
+if (!pw) return 0;
+const close = async (how) => {
+  await J.sleep(1500);
+  const ov = document.querySelector('.rb-overlay');
+  if (!ov) return;
+  if (how === 'key') { J.key(document, 'Escape'); return; }
+  if (how === 'backdrop') { ov.click(); return; }
+  const b = Array.from(ov.querySelectorAll('button')).find(x => /^(Cancel|Close)$/.test(x.textContent.trim()));
+  if (b) b.click(); else J.key(document, 'Escape');
+};
+pw.click(); await close('button');
+const we = document.querySelector('[data-action="rebootRemoteWhenEmpty"]');
+if (we) { we.click(); await close('key'); }
+pw.click(); await close('backdrop');
+J.key(document, 'k', {ctrlKey: true}); await J.sleep(300);
+J.type('#cmdk-input', 'reboot'); await J.sleep(200);
+const row = Array.from(document.querySelectorAll('.cmdk-item')).find(r => r.dataset.reboot);
+if (row) { row.click(); await close('button'); } else { J.key(document, 'Escape'); }
+return 1;
+"""
+
 # ── the dashboard ──────────────────────────────────────────────────────────────────────────────
 DASH_FILTERS = r"""
 for (const q of ['sur', 'zzzz', 'rust', '']) { J.type('#srv-search', q); await J.sleep(150); }
@@ -838,9 +864,9 @@ FLOWS = {
                         ("config", js(GAME_CONFIG)), ("rename", files_rename)],
     "/server-management": [("tabs", js(HOST_TABS)), ("security", js(HOST_SECURITY)),
                            ("controls", js(HOST_CONTROLS)), ("maintenance", js(HOST_MAINTENANCE)),
-                           ("backups", js(BACKUPS))],
+                           ("backups", js(BACKUPS)), ("reboot", js(REBOOT_DIALOG))],
     "/remote/2/manage": [("tabs", js(HOST_TABS)), ("security", js(HOST_SECURITY)),
-                         ("controls", js(HOST_CONTROLS))],
+                         ("controls", js(HOST_CONTROLS)), ("reboot", js(REBOOT_DIALOG))],
     "/remote/2/firewall": [("firewall", js(FIREWALL))],
     "/remote/3/firewall": [("firewall", js(FIREWALL))],
     "/remotes": [("remotes", js(REMOTES)), ("tailscale", remotes_tailscale)],

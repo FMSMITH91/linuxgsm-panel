@@ -310,6 +310,15 @@ _version_file() {
     esac
 }
 
+# Whether a game server session is running on this host — what decides that a pending reboot is
+# left to the operator rather than done here. `pgrep -x` matches the WHOLE process name, and tmux
+# renames its server process to "tmux: server": the old `pgrep -x tmux` (the client's name) found
+# nothing on a host running four LinuxGSM servers (measured on the test VPS), so this script
+# rebooted a busy host. The panel's bootstrap asks the same question (hosts.GAME_SESSIONS_PROBE).
+game_sessions_running() {
+    pgrep -x 'tmux: server|tmux|SCREEN|screen' >/dev/null 2>&1
+}
+
 panel_version() {
     local ts="" sha="" ver=""
     if [[ -d "${PANEL_DIR}/.git" ]]; then
@@ -2775,9 +2784,10 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
                 ${UPG_SUDO} apt-get -y autoremove --purge >/dev/null 2>&1 || true
                 if [[ ! -f /var/run/reboot-required ]]; then
                     ok "System updated — no reboot required."
-                elif pgrep -x tmux >/dev/null 2>&1 || pgrep -x SCREEN >/dev/null 2>&1; then
+                elif game_sessions_running; then
                     warn "The update needs a reboot, but game servers are running (tmux/screen) —"
-                    warn "not rebooting so players aren't dropped. Reboot when they're empty:  ${UPG_SUDO} reboot"
+                    warn "not rebooting so players aren't dropped. Reboot the host from its Power card in the"
+                    warn "panel: running game servers are stopped cleanly first, and its dialog lists which come back."
                 else
                     warn "Rebooting to bake in the system update — reconnect in ~1 minute; the panel"
                     warn "restarts automatically. (Press Ctrl-C in the next 15s to skip.)"
@@ -3074,10 +3084,11 @@ if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && [[ "${PANEL_NO_REBOOT:-0}" != "1" ]]
     RB_SUDO=""; [[ "$(id -u)" -ne 0 ]] && RB_SUDO="sudo"
     if [[ ! -f /var/run/reboot-required ]]; then
         ok "No reboot needed — nothing pending requires one."
-    elif pgrep -x tmux >/dev/null 2>&1 || pgrep -x SCREEN >/dev/null 2>&1; then
+    elif game_sessions_running; then
         warn "A system update needs a reboot to finish (e.g. a new kernel), but this host is running"
         warn "game servers (tmux/screen sessions detected) — NOT rebooting so players aren't dropped."
-        warn "Reboot it yourself once your servers are empty:  ${RB_SUDO} reboot"
+        warn "Reboot it from the panel's Power card: running game servers are stopped cleanly first,"
+        warn "and its dialog lists which come back."
     else
         warn "A system update needs a reboot to finish; no game servers are running, so rebooting now"
         warn "to bake it in and confirm a clean boot. Reconnect in ~1 minute; the panel comes back"

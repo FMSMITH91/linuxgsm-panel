@@ -1985,7 +1985,12 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
                          _MAX_OUTPUT_BYTES)
         return out.strip(), err.strip(), exit_code
     except Exception as e:
-        raise ConnectionError(f"Command failed: {e}")
+        failed = ConnectionError(f"Command failed: {e}")
+        # Marked, not a subclass (callers and messages name the type): the connection was open and
+        # the exec under way, so a reboot sent this way is one in progress, not a refusal — which
+        # host_reboot.send_reboot has to tell from a connection that never opened.
+        failed.command_started = True
+        raise failed
 
 
 
@@ -2208,6 +2213,17 @@ def user_scope_argv():
             ok = rc == 0
         _USER_SCOPE.update(ok=ok, at=now)
     return list(USER_SCOPE_ARGV) if _USER_SCOPE["ok"] else []
+
+
+def reset_user_scope_probe():
+    """Forget user_scope_argv's answer, so the next call asks the user manager again.
+
+    A FAILED probe is believed for _USER_SCOPE_RETRY seconds. Right after the panel host boots,
+    the panel can start before the user manager answers, and a start made inside those ten minutes
+    would put the game in the panel's own cgroup — where the next panel stop ends it. The restore
+    after a reboot asks this first, then waits for a scope (host_reboot._await_user_scope).
+    """
+    _USER_SCOPE.update(ok=None, at=0.0)
 
 
 def create_game_user(server, user, timeout=30):

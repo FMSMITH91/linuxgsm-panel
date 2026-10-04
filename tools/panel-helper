@@ -2147,7 +2147,9 @@ VERBS = {
 
     # Two process probes with FIXED patterns. pgrep takes a regex, so the pattern is written here
     # and never comes from a caller.
-    "apt-any-running": ([], lambda a: ["pgrep", "-f", "apt-get"], None),
+    # `[a]pt-get`: the panel's table has it so (a remote's sudo, waiting, would match its own
+    # command line), and the two tables must build the same argv.
+    "apt-any-running": ([], lambda a: ["pgrep", "-f", "[a]pt-get"], None),
     "apt-upgrade-running": (
         [], lambda a: ["pgrep", "-f", "apt-get (upgrade|dist-upgrade|full-upgrade)"], None),
     "dpkg-lock-held": ([], lambda a: ["fuser", "/var/lib/dpkg/lock-frontend"], None),
@@ -4156,8 +4158,15 @@ def _lgsm_child(pw, home, selfname, action, stdin_text, tee):
             except OSError:
                 tee = False               # no log to tail, but the action still runs
         try:
+            # `./<selfname>` from cwd=home, not the resolved path: the command line is then
+            # `/bin/bash ./<selfname> <action>`, which is exactly what LinuxGSM's monitor looks for
+            # (`pgrep -fcx "/bin/bash ./<selfname> start"`, command_monitor.sh) before it starts or
+            # restarts a server itself. Given the absolute path, a */5 monitor tick could not see a
+            # start or stop this helper was running and started a second copy beside it -- one that
+            # took the console log's pipe from the first. The containment check above still decides
+            # WHETHER it runs; it runs as the game account, so the name resolves as that account's.
             proc = subprocess.Popen(          # nosec B603 - argv from an allowlisted action
-                [script, action], cwd=home, env=env, stdin=subprocess.PIPE,
+                ["./" + selfname, action], cwd=home, env=env, stdin=subprocess.PIPE,
                 stdout=(log_fd if tee else out_fd), stderr=subprocess.STDOUT)
             proc.communicate(stdin_text.encode())
             rc = proc.returncode

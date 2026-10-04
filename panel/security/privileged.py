@@ -1115,7 +1115,12 @@ _ARGV = {
     "apt-add-repo": ([_choice(*REPOS)], lambda a: ["add-apt-repository", "-y", a[0]], None),
     "dpkg-add-arch": ([_choice("i386")], lambda a: ["dpkg", "--add-architecture", a[0]], None),
     # Fixed pgrep patterns: pgrep takes a regex, so it is written here and never comes from a caller.
-    "apt-any-running": ([], lambda a: ["pgrep", "-f", "apt-get"], None),
+    # `[a]pt-get`, not `apt-get`: on a remote this runs as `sudo bash -c 'pgrep -f …'`, and sudo
+    # (with pam_session, Ubuntu's default) forks and WAITS, so its own process — whose command line
+    # holds the pattern — was the match: "apt is running" on every remote, always. The bracket
+    # matches the same processes and never its own text. (apt-upgrade-running's pattern cannot
+    # match its own text: "apt-get (" is not "apt-get upgrade".)
+    "apt-any-running": ([], lambda a: ["pgrep", "-f", "[a]pt-get"], None),
     "apt-upgrade-running": ([], lambda a: ["pgrep", "-f",
                                            "apt-get (upgrade|dist-upgrade|full-upgrade)"], None),
     "dpkg-lock-held": ([], lambda a: ["fuser", "/var/lib/dpkg/lock-frontend"], None),

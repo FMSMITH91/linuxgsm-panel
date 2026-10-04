@@ -211,11 +211,14 @@
     <div class="card h-100">
       <div class="card-header" id="sec-power"><i class="bi bi-power"></i> Power</div>
       <div class="card-body">
-        <p class="small text-secondary">{% if remote.is_local %}Takes down the panel and every game server running on it.{% else %}Autostart servers come back on their own.{% endif %}</p>
+        <p class="small text-secondary">{% if remote.is_local %}Takes the panel down too, for a few minutes. Running game servers are stopped cleanly first; the reboot dialog lists which come back after it.{% else %}Running game servers are stopped cleanly first; the reboot dialog lists which come back after it.{% endif %}</p>
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-warning" data-action="rebootRemote"><i class="bi bi-power"></i> Reboot now</button>
           <button class="btn btn-sm btn-outline-secondary" data-action="rebootRemoteWhenEmpty" title="Reboot once no players are connected to any game server on this host"><i class="bi bi-hourglass-split"></i> Reboot when empty</button>
         </div>
+        {# What a reboot of this host is doing — a wait, the stop phase, the restore, the last result.
+           Always rendered, filled by nags.js rebootStateWatch; empty when nothing is going on. #}
+        <div id="power-state" class="small mt-2" aria-live="polite"></div>
       </div>
     </div>
   </div>

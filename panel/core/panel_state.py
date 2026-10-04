@@ -22,6 +22,9 @@ import threading   # noqa: F401  (locks below are constructed from it)
 __all__ = [
     "_reboot_when_empty",
     "_rwe_lock",
+    "_host_reboots",
+    "_hr_lock",
+    "_reboot_awaiting",
     "_max_players_cache",
     "_os_update_seen",
     "_player_counts",
@@ -145,13 +148,31 @@ def forget_rows(remote_ids=(), server_ids=()):
 _rwe_lock = threading.Lock()
 
 # Hosts the operator asked to "reboot when empty" — reboot once every game server on them is idle.
-# remote_id -> {"by": username, "since": epoch}. In-memory on purpose: a panel restart clears any
-# pending request, so no surprise reboot ever survives a restart.
+# remote_id -> {"by": username, "since": epoch, "origin", "expires", "boot", "waiting_on",
+# "checked_at", "unknown_since", "reminded", "bounces", "not_before"} (host_reboot.arm_wait writes
+# it). In-memory on purpose: a panel restart clears any pending request, so no surprise reboot
+# ever survives a restart — and the restart says so (host_reboot.announce_dropped_waits).
 #
 # Registered WITH its lock rather than pruned by name in _forget_deleted_rows, which is what it
 # used to be: it was the one row-keyed map the registry could not express, so it stayed a
 # hand-written special case beside the loop that walks everything else.
 _reboot_when_empty = register_remote_state({}, _rwe_lock)
+
+# The clean reboot the panel is running for a host RIGHT NOW (panel/services/host_reboot.py):
+# remote_id -> {plan, phase, mode, by, origin, since, sent, servers, done, total, left, cancel}. In
+# memory on purpose, like the wait above: a panel restart loses the job, and what it had already
+# done is in GameServer.reboot_restore, which the restore worker reads back and either finishes or
+# undoes. Every read and write is under _hr_lock, and each holds it for a dict operation only. Where
+# both locks are held at once, _hr_lock is taken FIRST and _rwe_lock inside it (host_reboot.cancel
+# says why); nothing takes them the other way round.
+_hr_lock = threading.Lock()
+_host_reboots = register_remote_state({}, _hr_lock)
+
+# Hosts whose clean reboot has been SENT: remote_id -> {"sent": epoch, "back": epoch|None}. While
+# the host is down, and for a few minutes after it is seen to have rebooted, the monitor records its
+# reachability but does not page "Host unreachable" / "Host back online" about it: the panel made
+# that outage, and its own summary says when the host is back (monitoring._reboot_alerts_muted).
+_reboot_awaiting = register_remote_state({})
 
 _max_players_cache = register_server_state({})   # server_id -> int  (capacity is ~static, so read it once and reuse)
 

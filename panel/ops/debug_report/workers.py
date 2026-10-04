@@ -27,7 +27,7 @@ AREA = "Background workers"
 # (name -- both the heartbeat key and the thread name, cadence in s, None for an event loop)
 WORKERS = (
     ("monitor", 60), ("player-counts", 45), ("metrics-history", 60), ("node-tools", 86400),
-    ("reboot-when-empty", 60), ("autoblock", 3600), ("ban-watch", 90),
+    ("reboot-when-empty", 60), ("host-reboot", 60), ("autoblock", 3600), ("ban-watch", 90),
     ("console-poller", 2), ("backup-ticker", 3600), ("due-actions", 90),
     ("install-reconcile", 600), ("priority-keeper", 120), ("update-check", 1800),
     ("telegram-bot", None), ("discord-bot", None),

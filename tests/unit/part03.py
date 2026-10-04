@@ -4355,7 +4355,7 @@ try:
         def _run(server, cmd, **k):
             if "reboot-required" in cmd:
                 return ("YES\n", "", 0)
-            if "pgrep -x tmux" in cmd:
+            if "pgrep -x 'tmux: server" in cmd:
                 return gs_answer
             return ("", "", 0)
         return _run

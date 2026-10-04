@@ -854,13 +854,22 @@ def _reboot_confirm36():
     with _p9.app_context():
         db.session.get(GameServer, sid).status = "online"
         db.session.commit()
+    from panel.services import host_reboot as _hr36
     with _fake_gamedig36(_bedrock36(7)) as fake:
         _p9_patch(_p9_core, "shell_as_game_user", _sh_with36(fake))
         _p9_patch(_p9_core, "_gamedig_host", lambda server: _GD_HOST36)
+        # The census (host_reboot.host_player_state) reads each server's session and the host's
+        # own work first; this host is a fixture, so those say "running, nothing in flight".
+        _p9_patch(_mon36, "_host_reachable", lambda remote: True)
+        _p9_patch(_mon36, "_batched_slots", lambda servers: {})
+        _p9_patch(_hr36, "_host_blockers", lambda remote: [])
+        _p9_patch(_hr36, "_probe_rows", lambda remote, rows: {g.id: {"ok": True, "session": 1,
+                                                                     "maint": 0} for g in rows})
         body = _p9_json(_p9_client(P9_ADMIN).get("/api/remote/%d/players" % rid))
     check("V8 count: the reboot confirm's player read lists the Bedrock server as busy with 7 — "
           "it reported nobody, neither busy nor unknown",
-          body.get("total") == 7 and body.get("busy") == [{"name": "p36-p36mcbr", "players": 7}],
+          body.get("total") == 7
+          and body.get("busy") == [{"id": sid, "name": "p36-p36mcbr", "players": 7}],
           repr(body))
 
 

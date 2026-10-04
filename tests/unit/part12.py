@@ -429,7 +429,10 @@ try:
           _bs_job.get("status") == "done" and _bs_job.get("step_name") == "Complete"
           and _bs_job.get("message") == "Bootstrapped." and _bs_job.get("step") == 2
           and "[1/2] Updating packages" in _bs_job.get("log", [])
-          and _bs_seen == [("p9-host2", {"timezone": "UTC"})], repr((_bs_job, _bs_seen)))
+          and [(n, {k: v for k, v in o.items() if k != "servers_online"}) for n, o in _bs_seen]
+          == [("p9-host2", {"timezone": "UTC"})]
+          and all(isinstance(o.get("servers_online"), bool) for _n, o in _bs_seen),
+          repr((_bs_job, _bs_seen)))
     check("bootstrap: success marks the host online and writes a successful audit row",
           _p9_host_row(P9_HOST2).is_online is True
           and (_p9_audit("remote_vps_bootstrap") or NS(success=None)).success is True)

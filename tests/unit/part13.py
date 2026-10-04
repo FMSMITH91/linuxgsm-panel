@@ -1679,12 +1679,12 @@ _MON_STUBBED10 = ("run_command", "run_privileged", "_remote_listening_ports", "h
                   "game_map", "server_live_metrics", "lgsm_get_values", "sm_player_slots",
                   "sm_player_slots_batch",
                   "sm_game_engine", "sm_console_status", "sm_player_count_via_lgsm_query",
-                  "sm_get_server_status", "remote_reboot", "remote_fail2ban_attempt_counts",
+                  "sm_get_server_status", "remote_fail2ban_attempt_counts",
                   "remote_ufw_blocked_ips", "remote_ufw_deny_ip", "remote_ufw_undeny_ip",
                   "tailnet_exempt_ips", "load_config", "notifications", "time", "db",
                   "_probe_host", "_query_server_slots", "_query_host_metrics",
                   "_lgsm_maintenance_running", "_host_reachable", "_host_idle_state",
-                  "_fire_reboot_when_empty", "_host_disk_pct", "_host_load_mem",
+                  "_host_disk_pct", "_host_load_mem",
                   "_host_restart_flags", "_server_max_config")
 _mon_saved10 = {k: getattr(_mon10, k) for k in _MON_STUBBED10}
 _alerts10 = []
@@ -2131,85 +2131,17 @@ try:
               repr(([(m.server_id, m.cpu) for m in _ms10], [(h.remote_id, h.cpu) for h in _hs10])))
         _mon_restore10("_query_host_metrics")
 
-        # ── reboot-when-empty: the marks, the fire, and the watcher's commit point ─────────────
+        # ── a host the panel reboots: its servers' marks ───────────────────────────────────────
+        # (The reboot itself, its wait and the wait's commit point are host_reboot's: part41.)
         _pstate10._expected_offline.pop(_ids10["g1"], None)
         _pstate10._expected_offline[_ids10["g3"]] = 12345.0
-        _rbok10, _ = _mon10._reboot_expecting_offline(_rb10, lambda r: (False, "refused"))
-        check("monitor reboot: a refused reboot puts back exactly the marks that were there",
-              _rbok10 is False and _ids10["g1"] not in _pstate10._expected_offline
-              and _pstate10._expected_offline.get(_ids10["g3"]) == 12345.0,
-              repr({k: _pstate10._expected_offline.get(k) for k in (_ids10["g1"], _ids10["g3"])}))
-        _mon10._reboot_expecting_offline(_rb10, lambda r: (True, "rebooting"))
-        check("monitor reboot: a reboot that ran marks every server on the host expected-offline",
+        _prev10 = _mon10._mark_host_expected_offline(_rb10.id)
+        check("monitor reboot: every server on the host is marked expected-offline, and the "
+              "previous marks are handed back",
               all(_pstate10._expected_offline.get(_ids10[k], 0) > time.time()
-                  for k in ("g1", "g2", "g3")), "")
-
-        _mon10.remote_reboot = lambda r: (True, "rebooting now")
-        del _alerts10[:]
-        with _dbapp10.test_request_context():
-            _fire_ok10 = _mon10._fire_reboot_when_empty(_rb10, {"by": "alice"})
-            _mon10.remote_reboot = lambda r: (False, "no sudo")
-            _fire_bad10 = _mon10._fire_reboot_when_empty(_rb10, {})
-        _audit10 = [(a.action, a.username, a.success) for a in
-                    _Audit10.query.filter_by(action="reboot_when_empty_fire").order_by(_Audit10.id)]
-        check("monitor reboot: a fired reboot is audited under the operator who queued it",
-              _fire_ok10 == (True, "rebooting now")
-              and _audit10 == [("reboot_when_empty_fire", "alice", True),
-                               ("reboot_when_empty_fire", "system", False)],
-              repr(_audit10))
-        check("monitor reboot: a refused reboot is announced as FAILED, not as having run",
-              [a[1] for a in _alerts10] == ["Host auto-rebooted", "Auto-reboot failed"]
-              and _fire_bad10 == (False, "no sudo"), repr(_alerts10))
-        _mon_restore10("remote_reboot")
-
-        _fired10, _sleeps10 = [], {"n": 0}
-        _rc10 = _mk_remote10("gamma")
-        _rd10 = _mk_remote10("delta")
-        _re10 = _mk_remote10("epsilon")
-        _gone_id10 = 424242
-
-        def _watch_sleep10(s):
-            _sleeps10["n"] += 1
-            if _sleeps10["n"] == 2:
-                with _pstate10._rwe_lock:
-                    _pstate10._reboot_when_empty.update({
-                        _gone_id10: {"by": "x"}, _ra10.id: {"by": "x"}, _rb10.id: {"by": "x"},
-                        _rc10.id: {"by": "alice"}, _rd10.id: {"by": "x"}, _re10.id: {"by": "x"}})
-            elif _sleeps10["n"] >= 3:
-                raise _Stop10()
-
-        def _idle_state10(r):
-            if r.id == _rb10.id:
-                return "busy"
-            if r.id == _rd10.id:                        # cancelled while the probes ran
-                with _pstate10._rwe_lock:
-                    _pstate10._reboot_when_empty.pop(r.id, None)
-            if r.id == _re10.id:
-                raise RuntimeError("probe bug")
-            return "idle"
-
-        with _pstate10._rwe_lock:
-            _rwe_saved10 = dict(_pstate10._reboot_when_empty)
-            _pstate10._reboot_when_empty.clear()
-        _mon10.time = _Clock10(time.time(), sleep=_watch_sleep10)
-        _mon10._host_reachable = lambda r: r.id != _ra10.id
-        _mon10._host_idle_state = _idle_state10
-        _mon10._fire_reboot_when_empty = lambda r, info: _fired10.append((r.name, dict(info)))
-        try:
-            _wr10 = _try10(_mon10._reboot_when_empty_watch, _dbapp10)
-            with _pstate10._rwe_lock:
-                _left10 = sorted(_pstate10._reboot_when_empty)
-                _pstate10._reboot_when_empty.clear()
-                _pstate10._reboot_when_empty.update(_rwe_saved10)
-        finally:
-            _mon_restore10("time", "_host_reachable", "_host_idle_state", "_fire_reboot_when_empty")
-        check("monitor reboot watch: only the reachable, IDLE, still-queued host is rebooted",
-              _fired10 == [("gamma", {"by": "alice"})], repr(_fired10))
-        check("monitor reboot watch: a deleted host is dequeued; unreachable, busy and failing "
-              "hosts stay queued; a cancelled one is not rebooted",
-              _left10 == sorted([_ra10.id, _rb10.id, _re10.id]) and _sleeps10["n"] == 3
-              and _wr10 == ("RAISED", repr(_Stop10())),
-              repr((_left10, _sleeps10, _wr10)))
+                  for k in ("g1", "g2", "g3"))
+              and _prev10.get(_ids10["g3"]) == 12345.0 and _prev10.get(_ids10["g1"]) is None,
+              repr(_prev10))
 
         # With no installed servers at all, the poll and the sampler do nothing.
         _GS10.query.delete()

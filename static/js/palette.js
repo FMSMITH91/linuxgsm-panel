@@ -57,6 +57,8 @@ var PALETTE_SECTIONS = [
     kw: 'language localization default locale translate' },
   { page: '/settings', hash: 'sec-security',     label: 'Sessions & security',
     kw: 'security session timeout remember proxy https cookie hardening' },
+  { page: '/settings', hash: 'sec-reboots',      label: 'Host reboots',
+    kw: 'reboot reboots wait empty autostart restore give up hours' },
   { page: '/users',    hash: 'sec-invites',      label: 'Invite links',
     kw: 'invite invitation onboard new user link signup join' },
   { page: '/servers/install', hash: 'install-server', label: 'Install a game server',
@@ -88,7 +90,12 @@ var PALETTE_SECTIONS = [
   { page: '/server-management', hash: 'sec-top', label: 'Top offenders',
     kw: 'offenders attackers top ips worst repeat autoblock automatic blocking threshold' },
   { page: '/server-management', hash: 'sec-events', label: 'Recent security events',
-    kw: 'security events intrusion attempts breach' }
+    kw: 'security events intrusion attempts breach' },
+  // The panel host's own Power card. Its remote twin is a per-host section below, which the
+  // sidebar's host links expand — and the sidebar lists remote hosts only, so typing "reboot"
+  // never offered the panel host's.
+  { page: '/server-management', hash: 'sec-power', label: 'Power — panel host',
+    kw: 'power reboot restart shutdown panel host' }
 ];
 
 // Sections that exist on EVERY host page. The host's own id is not knowable here, so these are
@@ -259,13 +266,28 @@ var PALETTE_HOST_SECTIONS = [
       var id = rest.slice(0, rest.length - HOST_SUFFIX.length);
       return /^[0-9]+$/.test(id) ? id : null;
     }
+    // "Reboot <host>…": opens the same reboot dialog as the host's Power card (nags.js
+    // rebootHost), which asks who is on first. Offered for exactly the hosts whose page the
+    // sidebar offers, and for the panel host when its page is offered (a superadmin).
+    function addReboot(hostId, name, isLocal, order) {
+      consider({
+        label: t('Reboot') + ' ' + name + '…',
+        reboot: hostId, rname: name, rlocal: isLocal ? '1' : '',
+        icon: 'bi bi-power'
+      }, 'reboot restart power ' + name, 'actions', order);
+    }
     available.forEach(function (p, hi) {
       var href = pathOf(p.href);
-      if (hostIdOf(href) === null) return;
+      var hid = hostIdOf(href);
+      if (hid === null) return;
       PALETTE_HOST_SECTIONS.forEach(function (hs, j) {
         addSection(hs, href, 100 + hi * 10 + j, p.label);
       });
+      addReboot(hid, p.label, false, 900 + hi);
     });
+    if (window.LOCAL_HOST_ID != null && reachable[pathOf((window.MOUNT || '') + '/server-management')]) {
+      addReboot(String(window.LOCAL_HOST_ID), t('the panel host'), true, 899);
+    }
     PALETTE_SECTIONS.forEach(function (sec, i) {
       var full = (window.MOUNT || '') + sec.page;
       if (!reachable[pathOf(full)]) return;
@@ -313,6 +335,8 @@ var PALETTE_HOST_SECTIONS = [
     if (entry.href) li.dataset.href = entry.href;
     if (entry.act) { li.dataset.act = entry.act; li.dataset.sid = entry.sid;
                      li.dataset.sname = entry.sname; }
+    if (entry.reboot) { li.dataset.reboot = entry.reboot; li.dataset.rname = entry.rname;
+                        li.dataset.rlocal = entry.rlocal; }
 
     var icon = document.createElement('i');
     icon.className = entry.icon;
@@ -424,6 +448,10 @@ var PALETTE_HOST_SECTIONS = [
     close();
     // Closed BEFORE acting either way, so the confirm dialog is not stacked under the palette.
     if (act) { runAction(act, el.dataset.sid, el.dataset.sname); return; }
+    if (el.dataset.reboot && window.rebootHost) {
+      window.rebootHost(Number(el.dataset.reboot), el.dataset.rname, el.dataset.rlocal === '1');
+      return;
+    }
     if (href) window.location.href = href;
   }
 

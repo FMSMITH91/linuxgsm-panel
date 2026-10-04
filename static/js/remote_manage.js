@@ -539,46 +539,14 @@ function _osuStillRunning(d, spin, stEl){
     stEl.innerHTML='<i class="bi bi-hourglass-split"></i> Installing… (safe to close this popup — it keeps running)'; }
   return true;
 }
+// The Power card's two buttons open the one reboot dialog (nags.js rebootHost): it asks who is on,
+// shows what the reboot would do to each server, and offers to wait for everyone to leave. They
+// differ only in which choice is the primary button.
+function _rebootLabel(){ return IS_LOCAL ? 'the panel host' : REMOTE_NAME; }
 function rebootRemote(){
-  // Check for players on ANY game server on this host first — a reboot disconnects them all.
-  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/players').then(r=>r.json()).then(function(d){
-    var busy=(d&&d.busy)||[], total=(d&&d.total)||0, unknown=(d&&d.unknown)||[];
-    var base = IS_LOCAL ? 'Reboot the PANEL HOST now? The panel and all its game servers will go down briefly.'
-                        : 'Reboot this server now? It will be briefly unreachable.';
-    var q = base;
-    if(total>0){
-      var list = busy.map(function(b){ return b.name+' ('+b.players+')'; }).join(', ');
-      q = '⚠ '+total+' player'+(total===1?' is':'s are')+' currently connected across '+busy.length+' server'+(busy.length===1?'':'s')+':\n  '+list
-        + '\n\nRebooting will DISCONNECT all of them. '+base+'\n\nAre you sure?';
-    }
-    // A server the panel could not read is NOT an empty one. Saying nothing about it is how a
-    // reboot disconnects players it reported as absent — the count came back unknown, and the
-    // dialog turned that into silence.
-    if(unknown.length){
-      var un = unknown.map(function(u){ return u.name + (u.queryable ? '' : ' (not queryable)'); }).join(', ');
-      q = (total>0 ? q.replace('\n\nAre you sure?','') : q)
-        + '\n\n⚠ The player count could not be read for '+unknown.length+' running server'
-        + (unknown.length===1?'':'s')+': '+un
-        + '\nAnyone on '+(unknown.length===1?'it':'them')+' will be disconnected without warning.'
-        + '\n\nAre you sure?';
-    }
-    _confirmReboot(q);
-  }).catch(function(){
-    // Couldn't check — fall back to the plain confirm rather than blocking.
-    var q = IS_LOCAL ? 'Reboot the PANEL HOST now? The panel and all its game servers will go down briefly.'
-                     : 'Reboot this server now? It will be briefly unreachable.';
-    _confirmReboot(q);
-  });
-}
-function _confirmReboot(q){
-  confirmDialog({title:'Reboot server', icon:'arrow-clockwise', confirmClass:'btn-warning', confirmLabel:'Reboot',
-    bodyText:q, onConfirm:doRebootRemote});
-}
-function doRebootRemote(){
-  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/reboot',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ if(window.toast) toast(d.message||'Reboot requested','info'); }).catch(()=>{ if(window.toast) toast('Reboot failed','danger'); });
+  if (window.rebootHost) window.rebootHost(REMOTE_ID, _rebootLabel(), IS_LOCAL, {prefer: 'now'});
 }
 function rebootRemoteWhenEmpty(){
-  // Schedule a reboot once every game server on this host is empty (reuses the shared banner flow).
-  if (window.rebootNagWhenEmpty) window.rebootNagWhenEmpty(REMOTE_ID, IS_LOCAL ? 'the panel host' : REMOTE_NAME);
+  if (window.rebootHost) window.rebootHost(REMOTE_ID, _rebootLabel(), IS_LOCAL, {prefer: 'when_empty'});
 }
+if (window.rebootStateWatch) { window.rebootStateWatch(REMOTE_ID, _rebootLabel(), IS_LOCAL); }

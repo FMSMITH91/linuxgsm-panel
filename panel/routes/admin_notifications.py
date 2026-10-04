@@ -15,6 +15,7 @@ from panel.security.auth import (MANAGE_USERS, accessible_remote_ids, can_admini
     permission_required, superadmin_required)
 from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
+from panel.services import host_reboot as _hr
 from datetime import (timedelta)
 from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body, _json_str)
 from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
@@ -49,6 +50,8 @@ def _register_panel_settings(app):
             "remember_days": int(cfg.get("remember_days", 3) or 3),
             "session_protection": cfg.get("session_protection", "strong"),
             "autoblock_threshold": _autoblock_threshold(),
+            "reboot_wait_max_hours": _hr.wait_max_hours(),
+            "reboot_restore_no_autostart": _hr.restore_no_autostart(),
         })
 
     @app.route("/settings/save", methods=["POST"])
@@ -67,6 +70,9 @@ def _register_panel_settings(app):
         days = max(1, min(_int_or(f.get("remember_days"), 3), 90))                # 1 .. 90 days
         autoblock = max(1, min(_int_or(f.get("autoblock_threshold"),
                                       _AUTOBLOCK_DEFAULT_THRESHOLD), 100000))
+        reboot_wait = max(0, min(_int_or(f.get("reboot_wait_max_hours"),
+                                         _hr.DEFAULT_WAIT_HOURS), 720))
+        reboot_restore = bool(f.get("reboot_restore_no_autostart"))
 
         def _mut(cfg):
             cfg.update({
@@ -74,6 +80,8 @@ def _register_panel_settings(app):
                 "accent_color": accent, "default_language": lang, "session_protection": protection,
                 "session_lifetime_hours": hours, "remember_days": days,
                 "autoblock_threshold": autoblock,
+                "reboot_wait_max_hours": reboot_wait,
+                "reboot_restore_no_autostart": reboot_restore,
             })
         update_config(_mut)
         # Session/security keys are read from app.config per request, so apply them live —

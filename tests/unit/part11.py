@@ -1944,13 +1944,7 @@ try:
     eq("os update start: rc 0 without the marker is NOT a start",
        _H.remote_os_update_start(_p8_srv()), (False, "Couldn't start the update."))
 
-    # ── reboot probes ──────────────────────────────────────────────────────────────────────────
-    _wire(verbs={"reboot": ("sudo: a password is required\n", "", 1)})
-    eq("reboot: a positive rc is the host REFUSING — reported as a failure",
-       _H.remote_reboot(_p8_srv()), (False, "sudo: a password is required "))
-    _wire(verbs={"reboot": ("", "SSH command timed out", -1)})
-    eq("reboot: a dropped connection (-1) is what a real reboot looks like",
-       _H.remote_reboot(_p8_srv()), (True, "Reboot command sent to remote"))
+    # ── reboot probes (the reboot command itself: host_reboot.send_reboot, checked in part41) ────
     _wire(cmds=[("reboot-required.pkgs", ConnectionError("dropped")), ("reboot-required", ("YES", "", 0))])
     eq("reboot required: YES with a package list that could not be read is still required",
        _H.remote_reboot_required(_p8_srv(auth_method="key")),
@@ -2047,7 +2041,7 @@ try:
         v.update(verbs or {})
         c = list(cmds or []) + [("node -v", ("v22.1.0", "", 0)), ("command -v npm", ("/usr/bin/npm", "", 0)),
                                 ("swapon", ("0", "", 0)), ("echo 'EXISTS'", ("NOTEXISTS", "", 0)),
-                                ("reboot-required", ("NO", "", 0)), ("pgrep -x tmux", ("NO", "", 0))]
+                                ("reboot-required", ("NO", "", 0)), ("pgrep -x 'tmux: server", ("NO", "", 0))]
         return _wire(verbs=v, cmds=c)
 
     def _bs_idx(w, verb, args=None):
@@ -2137,7 +2131,7 @@ try:
           "isn't a valid username" in _bs[2] and not _w.verbs_called("user-lock-password"))
 
     # The reboot decision: unknown never reboots.
-    _w = _bs_wire(cmds=[("reboot-required", ("YES", "", 0)), ("pgrep -x tmux", ("", "timed out", -1))])
+    _w = _bs_wire(cmds=[("reboot-required", ("YES", "", 0)), ("pgrep -x 'tmux: server", ("", "timed out", -1))])
     _bs = _H.remote_bootstrap_vps(_p8_srv())
     check("bootstrap: reboot needed but the running-servers probe did not answer -> NOT rebooted, "
           "and the log says why", _bs_idx(_w, "reboot-delayed") == -1
@@ -2146,10 +2140,10 @@ try:
     _bs = _H.remote_bootstrap_vps(_p8_srv())
     check("bootstrap: an unanswered reboot-required probe leaves the host alone",
           _bs_idx(_w, "reboot-delayed") == -1 and "Could not check whether a reboot is needed" in _bs[2])
-    _w = _bs_wire(cmds=[("reboot-required", ("YES", "", 0)), ("pgrep -x tmux", ("YES", "", 0))])
+    _w = _bs_wire(cmds=[("reboot-required", ("YES", "", 0)), ("pgrep -x 'tmux: server", ("YES", "", 0))])
     _bs = _H.remote_bootstrap_vps(_p8_srv())
     check("bootstrap: reboot needed with game servers running -> skipped to protect players",
-          _bs_idx(_w, "reboot-delayed") == -1 and "once its game servers are empty" in _bs[2])
+          _bs_idx(_w, "reboot-delayed") == -1 and "stopped cleanly first" in _bs[2])
     _H._wait_for_reboot = lambda server, on_wait=None, **k: (on_wait and on_wait("waiting"), True)[1]
     del _bs_closed[:]
     _rs = _p8_srv()
@@ -2159,6 +2153,12 @@ try:
           "dropped, and the job waits for it to come back",
           _bs[0] is True and _bs_idx(_w, "reboot-delayed") > -1 and _bs_closed == [_rs.id]
           and "Server is back online." in _bs[2], "result=%r" % (_bs[1],))
+    _H._wait_for_reboot = lambda server, on_wait=None, **k: (_bs_waits.append(server.id), True)[1]
+    _w = _bs_wire(cmds=[("reboot-required", ("YES", "", 0))])
+    _bs = _H.remote_bootstrap_vps(_p8_srv(), servers_online=True)
+    check("bootstrap: no session found, but a server the panel manages there was last seen online "
+          "-> NOT rebooted, and the log says to reboot from the Power card",
+          _bs_idx(_w, "reboot-delayed") == -1 and "stopped cleanly first" in _bs[2], _bs[2][-300:])
     _H._wait_for_reboot = lambda server, on_wait=None, **k: False
     _bs_wire(cmds=[("reboot-required", ("YES", "", 0))])
     eq("bootstrap: a host that does not come back is a failure",
@@ -2809,8 +2809,8 @@ _RV_NAMES = ("current_user", "get_remote", "get_host_remote", "get_game", "GameS
              "remote_ufw_limit_port", "remote_ufw_close_port", "remote_ufw_delete_rule",
              "remote_ufw_status", "remote_ufw_allow_game_port", "remote_ufw_allow_game_ports",
              "detect_game_ports", "remote_uptime", "remote_os_run_updates", "remote_os_update_start",
-             "sm_player_count", "sm_is_player_queryable", "remote_reboot_required", "can_access_remote",
-             "has_permission", "host_specs", "_sm")
+             "remote_reboot_required", "can_access_remote",
+             "has_permission", "host_specs", "_sm", "_hr")
 _rv_saved = {n: getattr(_rv, n) for n in _RV_NAMES}
 _rv_auth_saved = {"current_user": _rv_auth.current_user}
 _rv_rwe_ids = []
@@ -3195,54 +3195,53 @@ try:
     eq("os update start: a raise is a generic 500", (_st, _body),
        (500, {"success": False, "message": "Internal server error"}))
 
-    # ── players before a reboot: an unreadable server is UNKNOWN, not empty ────────────────────
-    _rv_games.append(NS(id=next(_p8_ids), remote_id=_r.id, port=7777, short_name="terraria", name="Terraria",
-                        installed=True, game_type="terraria", query_type=None, status="online", remote=_r))
-    _rv_games.append(NS(id=next(_p8_ids), remote_id=_r.id, port=2456, short_name="valheim", name="Valheim",
-                        installed=True, game_type="vh", query_type=None, status="offline", remote=_r))
-
-    def _pc(remote, short, gtype, port, qtype):
-        if short == "cs2server":
-            return 3
-        raise ConnectionError("query timed out")
-    _rv.sm_player_count = _pc
-    _rv.sm_is_player_queryable = lambda gtype, qtype: gtype != "terraria"
+    # ── players and reboots: the routes hand everything to host_reboot ─────────────────────────
+    # The census, the gate, the wait and the job are host_reboot's, and part41 drives them against
+    # a real database. Here: what the ROUTES add — the body's mode parsed strictly (a 400, never a
+    # guess), the status code and body passed through, the census's probes never sent to a browser.
+    _rv_calls = []
+    _real_hr = _rv_saved["_hr"]
+    _rv._hr = NS(
+        host_player_state=lambda remote: {"state": "busy", "total": 3, "busy": [{"name": "CS2"}],
+                                          "unknown": [], "blockers": [], "running": 1,
+                                          "probes": {1: {"session": 1}}},
+        parse_mode=_real_hr.parse_mode,
+        request_reboot=lambda remote, mode, actor, origin, delay=0: (
+            _rv_calls.append(("reboot", remote.id, mode, origin)),
+            (409, {"success": False, "error": "players_online", "needs_choice": True}))[1],
+        cancel=lambda remote, actor: (_rv_calls.append(("cancel", remote.id)),
+                                      (200, {"success": True, "message": "Auto-reboot canceled."}))[1],
+        status=lambda remote: {"wait": {"by": "admin"}, "job": None, "rows": [], "last": None},
+        reboot_busy=lambda rid: False)
     _st, _body = _rv_json(_rv_client.get("/api/remote/%d/players" % _r.id))
-    eq("players: a query that RAISES on a running server is listed as unknown (with whether it is "
-       "queryable at all); a stopped one is not a warning",
-       _body, {"total": 3, "busy": [{"name": "CS2", "players": 3}],
-               "unknown": [{"name": "Terraria", "queryable": False}]})
-
-    # ── reboot ─────────────────────────────────────────────────────────────────────────────────
+    check("players: the census is the answer, without the per-server probe records",
+          _st == 200 and _body["state"] == "busy" and _body["total"] == 3 and "probes" not in _body,
+          repr(_body))
     _rv.remote_reboot_required = lambda remote: (_ for _ in ()).throw(ConnectionError("down"))
     _st, _body = _rv_json(_rv_client.get("/api/remote/%d/reboot-required" % _r.id))
-    eq("reboot required: a raise answers not-required with the pending flag",
-       _body, {"required": False, "packages": [], "pending_empty": False})
-    _rv_rwe_ids.append(_r.id)
-    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/reboot" % _r.id, json={"when_empty": True}))
-    with _rv_state._rwe_lock:
-        _armed = dict(_rv_state._reboot_when_empty.get(_r.id) or {})
-    check("reboot when empty: armed for this host, by this user, and nothing rebooted now",
-          _body["pending"] is True and _body["success"] is True and _armed.get("by") == "admin"
-          and _rv_log[-1] == ("reboot_when_empty_arm", _r.name, None, True), repr(_body))
-    check("reboot when empty: the servers the panel cannot count are named in the note",
-          "can't read the player count for Terraria" in _body["message"], _body["message"])
-    _st, _body = _rv_json(_rv_client.get("/api/remote/%d/reboot-required" % _r.id))
-    check("reboot required: ...and the pending flag now reads true", _body["pending_empty"] is True)
-    _rv.GameServer = NS(query=NS(filter_by=lambda **kw: (_ for _ in ()).throw(RuntimeError("db locked"))))
-    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/reboot" % _r.id, json={"when_empty": True}))
-    check("reboot when empty: a server list that cannot be read still arms it — just without the note",
-          _st == 200 and _body["pending"] is True and "Note:" not in _body["message"], repr(_body))
-    _rv.GameServer = NS(query=_RvQuery(_rv_games))
+    eq("reboot required: a raise answers not-required, with the wait and the job beside it",
+       _body, {"required": False, "packages": [], "pending_empty": True, "wait": {"by": "admin"},
+               "job": None})
+    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/reboot" % _r.id, json={}))
+    check("reboot: a body-less request goes to the gate with no mode, and its 409 comes back as is",
+          _st == 409 and _body.get("needs_choice") is True and _rv_calls[-1] == ("reboot", _r.id, None, "web"),
+          repr((_st, _body, _rv_calls[-1:])))
+    for _bad in ({"mode": "soon"}, {"when_empty": "maybe"}, {"when_empty": 7}):
+        _n = len(_rv_calls)
+        _st, _body = _rv_json(_rv_client.post("/api/remote/%d/reboot" % _r.id, json=_bad))
+        check("reboot: %r is a 400 and asks host_reboot nothing" % (_bad,),
+              _st == 400 and _body.get("error") == "bad_mode" and len(_rv_calls) == _n, repr(_body))
+    for _body_in, _mode in (({"mode": "now"}, "now"), ({"force": True}, "now"),
+                            ({"when_empty": True}, "when_empty"), ({"when_empty": "false"}, None),
+                            ({"mode": "when_empty"}, "when_empty")):
+        _rv_client.post("/api/remote/%d/reboot" % _r.id, json=_body_in)
+        check("reboot: %r reaches the gate as mode %r" % (_body_in, _mode),
+              _rv_calls[-1] == ("reboot", _r.id, _mode, "web"), repr(_rv_calls[-1:]))
     _st, _body = _rv_json(_rv_client.post("/api/remote/%d/reboot-cancel" % _r.id))
-    check("reboot cancel: a pending reboot is cancelled and audited",
-          _body == {"success": True, "pending": False, "message": "Auto-reboot canceled."}
-          and _r.id not in _rv_state._reboot_when_empty
-          and _rv_log[-1] == ("reboot_when_empty_cancel", _r.name, None, True), repr(_body))
-    _n_log = len(_rv_log)
-    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/reboot-cancel" % _r.id))
-    check("reboot cancel: nothing pending says so and writes no row",
-          _body["message"] == "Nothing was scheduled." and len(_rv_log) == _n_log)
+    check("reboot cancel: goes to host_reboot.cancel and answers what it said",
+          _st == 200 and _body["message"] == "Auto-reboot canceled." and _rv_calls[-1] == ("cancel", _r.id),
+          repr(_body))
+    _rv._hr = _real_hr
 
     # ── specs ──────────────────────────────────────────────────────────────────────────────────
     _rv._sm = NS(host_os_slug=lambda remote: (_ for _ in ()).throw(ConnectionError("down")))

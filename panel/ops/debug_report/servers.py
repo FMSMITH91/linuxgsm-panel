@@ -148,7 +148,9 @@ def _flags(gs, st, now, muted):
     out = []
     since = st["expected"].get(gs.id)
     window = mod("panel.services.monitoring")._EXPECT_OFFLINE_WINDOW
-    if isinstance(since, (int, float)) and now - since <= window:
+    if since == float("inf"):          # host_reboot: held for as long as its host's reboot plan runs
+        out.append("expected offline (host reboot)")
+    elif isinstance(since, (int, float)) and now - since <= window:
         out.append("expected offline (panel stop %s ago)" % ago(now - since))
     if gs.restart_pending:
         out.append("restart_pending")

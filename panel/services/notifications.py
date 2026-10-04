@@ -37,6 +37,7 @@ EVENTS = {
     "high_load":          ("A host's CPU or memory is sustained high", True),
     "disk_low":           ("A host's disk is running low", True),
     "auto_reboot":        ("A host auto-reboots once empty (reboot-when-empty)", True),
+    "host_reboot":        ("A host the panel reboots: servers stopped, and what came back", True),
     "backup_failed":      ("A backup fails", True),
     "update_available":   ("A panel update is available", True),
     "os_updates":         ("A host has OS package updates waiting (security ones called out)", True),
@@ -1082,6 +1083,26 @@ def _queue_alert(item):
         with _alert_lock:
             _alert_sender[0] = False
         _log.debug("notify could not start its sender", exc_info=True)
+
+
+def flush(timeout=10.0):
+    """Wait until every queued alert has been handed to its channels; True when that happened.
+
+    notify() only queues. The panel's own host is about to reboot when this is called, and an
+    alert still in the queue then dies with the process — "Rebooting X" was the message most
+    likely to be lost, sent a moment before the reboot it announces. Done when the queue is empty
+    AND the sender has stood down (it stands down only after delivering what it took). Never
+    raises; False when `timeout` seconds pass first.
+    """
+    end = time.monotonic() + max(0.0, float(timeout))
+    while True:
+        with _alert_lock:
+            idle = _alert_queue.empty() and not _alert_sender[0]
+        if idle:
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.1)
 
 
 def notify(event_key, title, body=""):

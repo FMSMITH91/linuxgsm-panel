@@ -191,6 +191,15 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
     synchronous branch never calls it, because there the return value already IS the
     outcome.
     """
+    # The host is being rebooted cleanly: its plan has decided who brings each server back, and a
+    # start, stop or update in the middle of the stop phase would be a second hand on the same
+    # server (panel/services/host_reboot.py). After the reboot is sent, an operator's own Start or
+    # Stop wins instead: the server leaves the plan, so the restore never acts behind their back.
+    from panel.services import host_reboot as _hr
+    if _hr.reboot_busy(remote.id):
+        return False, _hr.BUSY_MESSAGE % remote.display_name
+    if action in ("start", "stop", "restart") and gs.reboot_restore:
+        _hr.exclude_row(gs, actor, action, origin=origin)
     # A power action that is already a no-op is refused — see _noop_power_refusal.
     refusal = _noop_power_refusal(gs, remote, action)
     if refusal:
@@ -986,6 +995,21 @@ def _register_when_empty(app):
                         "message": "Queued — %s will stop automatically once it's empty." % gs.name})
 
 
+def _autostart_reboot_gate(gs, enabled):
+    """The Autostart switch while its host is being rebooted: a 409 to return, or None to go on.
+
+    The reboot plan read this server's Autostart line to decide who brings it back, so the switch
+    waits while the plan is being made and run; after the reboot is sent, the operator's change
+    wins and the server leaves the plan (host_reboot.exclude_row).
+    """
+    from panel.services import host_reboot as _hr
+    if _hr.reboot_busy(gs.remote_id):
+        return jsonify({"success": False, "message": _hr.BUSY_MESSAGE % gs.remote.display_name}), 409
+    if gs.reboot_restore:
+        _hr.exclude_row(gs, current_user, "Autostart %s" % ("on" if enabled else "off"))
+    return None
+
+
 def _register_schedules(app):
     """Autostart, the daily restart schedule and the one-shot 'tell me when it's empty' flag."""
     @app.route("/api/server/<int:server_id>/autostart", methods=["POST"])
@@ -1002,6 +1026,9 @@ def _register_schedules(app):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         data = _json_body()
         enabled = bool(data.get("enabled"))
+        refused = _autostart_reboot_gate(gs, enabled)
+        if refused is not None:
+            return refused
         try:
             ok, detail = set_autostart(gs.remote, gs.short_name, enabled, gs.lgsm_name)
             if ok:

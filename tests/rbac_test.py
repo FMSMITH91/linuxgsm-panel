@@ -245,6 +245,7 @@ import panel.routes.remote_bootstrap as _rb_mod  # noqa: E402
 import panel.routes.remote_tailscale as _rts_mod  # noqa: E402
 import panel.routes.remote_vps as _rvps_mod  # noqa: E402
 from panel.ops import system_ops as _so_mod  # noqa: E402
+from panel.services import host_reboot as _hr_mod  # noqa: E402
 _trapped = []
 
 
@@ -260,7 +261,10 @@ _TRAPS = ((_rts_mod, "remote_install_tailscale", (False, "trapped by rbac_test",
           (_rts_mod, "remote_tailscale_up_url", (False, "trapped by rbac_test")),
           (_rb_mod, "_begin_bootstrap", (False, "trapped by rbac_test")),
           (_so_mod, "server_reboot", (False, "trapped by rbac_test")),
-          (_rvps_mod, "remote_reboot", (False, "trapped by rbac_test")))
+          # Every reboot the panel makes is the clean-reboot job (host_reboot): it is never started
+          # from here, and the reboot command underneath it is never sent.
+          (_hr_mod, "start_clean_reboot", False),
+          (_hr_mod, "send_reboot", "trapped by rbac_test"))
 _traps_saved = [(_m, _n, getattr(_m, _n)) for _m, _n, _r in _TRAPS]
 for _m, _n, _r in _TRAPS:
     setattr(_m, _n, _trap(_n, _r))
