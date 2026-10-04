@@ -284,7 +284,7 @@ def _summary_clock_checks41():
 
 def _late_text41(owner_map):
     """The 'Host not back yet' body for a plan whose rows have these owners."""
-    r, h, _rows = _plan_with_sent41(owner_map=owner_map)
+    _r, h, _rows = _plan_with_sent41(owner_map=owner_map)
     h.down = True
     _CLOCK41.sleep(700)
     _pass41()
