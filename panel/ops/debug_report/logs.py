@@ -52,7 +52,7 @@ _ROOT_PROGRAMS = frozenset((
     "true", "env", "su", "runuser", "crontab", "rm", "cat", "tee", "ls", "test", "python3",
     "journalctl", "renice", "ufw", "fail2ban-client", "apt-get", "apt", "dpkg", "tailscale",
     "sysctl", "timedatectl", "systemctl", "systemd-run", "install", "chown", "chmod", "mkdir",
-    "mv", "cp", "useradd", "userdel", "usermod", "gpasswd", "visudo", "reboot"))
+    "mv", "cp", "useradd", "userdel", "usermod", "gpasswd", "visudo", "reboot", "git"))
 _SHELLS = frozenset(("bash", "sh", "dash"))
 # What the panel runs AS a game account, by a fixed fingerprint of the command: (label, tokens that
 # must all appear). First match wins. Only these labels are ever printed, never the command.
@@ -73,6 +73,13 @@ _GAME_READS = (
     ("console stat", ("stat -c",)),
     ("console read", ("printf B", "tail -c +")),
     ("console window", ("printf B", "tail -")),
+    # Three bodies that would otherwise fall to "other" or to "LinuxGSM action" (the version read
+    # opens with `cd` and holds `&&`): the backup prune (cron.prune_game_backups), the stale-lock
+    # sweep before a backup (game._stale_backup_lock_sweep) and the installed-build read
+    # (game._steam_build).
+    ("backup prune", ("find -H ", "xargs -0 -r rm -f --")),
+    ("backup lock sweep", ("-x tar", "backup.lock")),
+    ("installed version", ("appmanifest_", "version_history.json")),
     ("LinuxGSM config", ("cat ", ".cfg")),
     ("LinuxGSM action", ("cd ", "&& ")),
 )

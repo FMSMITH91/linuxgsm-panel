@@ -575,26 +575,27 @@ CI-verified commit regardless of this file — this changelog is for humans.
   takes over TLS: it does only once the panel is bound to 127.0.0.1.
 - **The debug report's journal sections cover the panel's own output, not its sudo calls.** The
   report read the newest 5,000 journal lines and only then dropped the sudo lines. On a live host
-  4,964 of the 5,000 were sudo lines, so the window covered under three hours and the recent log
-  had 36 lines. The report now asks journald for the panel's own lines by field, over the last 24
-  hours, so the lines it reads are the panel's output and not its sudo calls. The 24-hour window
-  is what keeps the read short on any journal: asked instead for the newest 5,000 such lines,
-  journalctl walked the whole of a 1.9 GB journal that held fewer, was still running after five
-  minutes, and the report showed no journal at all. Each part of the request names something rare
-  on its own (the panel's own output stream, a critical message, the unit), so a day on which the
-  panel logged thousands of errors costs little more to read than a quiet one. When the window
-  holds more than 5,000 entries (a traceback is one entry, however many lines it prints), or the
-  filtered read fails or runs out of its half of the time, the report reads the newest 5,000 lines
-  as before; when that read has nothing either, the report says its lines are the oldest of the
-  window, cut off. Refused sudo calls and the panel's warnings are still included. The sudo calls
-  of the last hour are counted from a separate read and printed once, under *Errors in the
-  journal*. Each is labelled by what it did (`gamedig players`, `console poll`, `console send`,
-  `LinuxGSM config`, `true as root`, and so on) instead of "other command". Account names, paths,
-  what was typed into a console and scripts an operator ran are never printed. The installer's
-  calls as the panel's own account (the service account, or the login account a per-user panel
-  runs as) are counted under their own label, not as a game account's; a game server run under
-  that same account still has its gamedig and console calls counted as game work. A system
-  install needs an updated helper for this; an older helper gets the previous read.
+  4,964 of the 5,000 were sudo lines, so the window covered under three hours and the recent log had
+  36 lines. The report now asks journald for the panel's own lines by field, over the last 24 hours,
+  so the lines it reads are the panel's output and not its sudo calls. The 24-hour window is what
+  keeps the read short on any journal: asked instead for the newest 5,000 such lines, journalctl
+  walked the whole of a 1.9 GB journal that held fewer, was still running after five minutes, and
+  the report showed no journal at all. Each part of the request names something rare on its own (the
+  panel's own output stream, a critical message, the unit), so a day on which the panel logged
+  thousands of errors costs little more to read than a quiet one. When the window holds more than
+  5,000 entries (a traceback is one entry, however many lines it prints), or the filtered read fails
+  or runs out of its half of the time, the report reads the newest 5,000 lines as before; when that
+  read has nothing either, the report says its lines are the oldest of the window, cut off. Refused
+  sudo calls and the panel's warnings are still included. The sudo calls of the last hour are
+  counted from a separate read and printed once, under *Errors in the journal*. Each is labelled by
+  what it did (`gamedig players`, `console poll`, `console send`, `LinuxGSM config`, `backup prune`,
+  `backup lock sweep`, `installed version`, `git` as the panel's own account, `true as root`, and so
+  on) instead of "other command". Account names, paths, what was typed into a console and scripts an
+  operator ran are never printed. The installer's calls as the panel's own account (the service
+  account, or the login account a per-user panel runs as) are counted under their own label, not as
+  a game account's; a game server run under that same account still has its gamedig and console
+  calls counted as game work. A system install needs an updated helper for this; an older helper
+  gets the previous read.
 - **A privileged command the panel gives up on no longer keeps running as root.** When a call
   through the helper timed out, the panel stopped it with SIGKILL. That reached `sudo` alone, and
   sudo cannot pass a SIGKILL on, so the helper and the program it ran carried on as root with
