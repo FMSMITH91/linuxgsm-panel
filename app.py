@@ -3298,9 +3298,9 @@ if __name__ == "__main__":
     # could be monitored on Garry's Mod's port. A minute in, so the start itself is not slowed.
     def _port_reconcile():
         time.sleep(60)
-        from panel.routes.manage_servers import withheld_game_ports
+        from panel.routes.manage_servers import sibling_port_blocks, withheld_game_ports
         from panel.services.game_ports import reconcile_stored_ports
-        reconcile_stored_ports(app, withheld_game_ports)
+        reconcile_stored_ports(app, withheld_game_ports, sibling_port_blocks)
     threading.Thread(target=_port_reconcile, name="port-reconcile", daemon=True).start()
 
     # Record fail2ban bans/unbans of the panel-login jail in the audit log, so the activity is

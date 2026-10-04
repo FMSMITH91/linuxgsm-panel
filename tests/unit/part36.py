@@ -639,6 +639,11 @@ def _f4_port_refused36(rid):
     check("F4 install: a port another panel server holds is not adopted after the first start, "
           "even one added while this server installed",
           _p9_row(sid).port == 27730, "port %r" % (_p9_row(sid).port,))
+    check("F4 install: ...and the install names the port LinuxGSM reported and who holds it — not "
+          "'LinuxGSM has not reported its game port', which it has",
+          _fin36[-1:] and _fin36[-1][0].startswith(
+              "p36pr4 installed and starting, but LinuxGSM reports port 25575 for it, which the "
+              "panel did not take: it is held by 'p36-sib4' on this host"), repr(_fin36))
     # SSH's port: refused by step 6's withheld set and by the post-start read's own, both.
     sid = _install36(rid, "p36pr5", 27740,
                      detect=[_UNREAD36, {"game_port": 22, "open_ports": [22]}], listen=[set()])
@@ -649,6 +654,23 @@ def _f4_port_refused36(rid):
                      listen_pre=[{25585}], listen=[{25585}])
     check("F4 install: ...nor one something was listening on before this server first started",
           _p9_row(sid).port == 27750, "port %r" % (_p9_row(sid).port,))
+    check("F4 install: ...and the install says so",
+          _fin36[-1:] and "which the panel did not take: something else was listening on it "
+          "before this server started" in _fin36[-1][0], repr(_fin36))
+    # A Tailscale or local host returns a failed `ss` as empty output, without raising: step 6
+    # then FINISHES (job.withheld is set) without knowing what was listening before the start.
+    sid = _install36(rid, "p36pr8", 27770,
+                     detect=[_UNREAD36, {"game_port": 25605, "open_ports": [25605]}],
+                     listen_pre=[None], listen=[{25605}])
+    check("F4 install: ...nor any port when step 6 finished without READING what was listening "
+          "(a failed `ss` on a Tailscale or local host, which does not raise)",
+          _p9_row(sid).port == 27770, "port %r" % (_p9_row(sid).port,))
+    check("F4 install: ...and the install says the port is not taken because that could not be "
+          "read, not that it is 'installed and started'",
+          _fin36[-1:] and _fin36[-1][0].startswith(
+              "p36pr8 installed and starting, but LinuxGSM reports port 25605 for it, which the "
+              "panel did not take: the ports already in use on the host could not be read before "
+              "it started"), repr(_fin36))
     sid = _install36(rid, "p36pr7", 27760,
                      detect=[ConnectionError("details timed out"),
                              {"game_port": 25595, "open_ports": [25595]}], listen=[{25595}])

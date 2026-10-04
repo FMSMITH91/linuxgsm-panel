@@ -1133,9 +1133,11 @@ def detect_game_ports(server, user, selfname=None):
        "started": its Status line — True for STARTED, False for STOPPED, None for neither}.
 
     "answered" tells the two kinds of no game port apart: a `details` that never ran (a timeout, a
-    refused account — try again), and one that ran and has no port to report, which is what a game
-    keeping its port in its own config prints until that config exists (Minecraft before its first
-    start: "Server IP: 0.0.0.0:0", "Game 0 tcp").
+    refused account — try again), and one that ran and has no port to report ("Server IP:
+    0.0.0.0:0", "Game 0 tcp"). A game that keeps its port in its own config prints that when the
+    config is missing or does not set the port. Most such games get a default config at install
+    (Minecraft's server.properties already says 25565); only some, Vintage Story among them, write
+    theirs the first time they start.
     """
     out, _, _ = _core.run_as_game_user(server, user, "details", timeout=45, selfname=selfname)
     text = terminal.strip_escapes(out or "")

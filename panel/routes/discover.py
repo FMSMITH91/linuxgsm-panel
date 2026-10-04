@@ -369,9 +369,14 @@ def _import_port_problem(port, answered, protected):
         return ("its game port is not set in its LinuxGSM config, and LinuxGSM's details did not "
                 "answer, so its port could not be read — try the import again")
     if port is None:
-        return ("its game port is not set in its LinuxGSM config, and LinuxGSM reports none yet: "
-                "this game writes its own config the first time it starts — start it once with "
-                "LinuxGSM, then import it")
+        # What was SEEN, not a guess at why: most games get a default config at install that
+        # already sets the port (Minecraft's server.properties says 25565), so "never started" was
+        # wrong for them, and starting such a server changes nothing.
+        return ("its game port is not set in its LinuxGSM config, and LinuxGSM's details reports "
+                "none either: the game's own config (the file details names under \"Change ports "
+                "by editing\") is missing or does not set the port. Set it there, then import it "
+                "again. A game that writes that file itself the first time it starts needs one "
+                "start with LinuxGSM first")
     why = _gp.port_refusal(port, protected)
     return ("its port could not be used: %s — correct it in the game's config, then import it"
             % why) if why else None

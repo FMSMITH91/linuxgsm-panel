@@ -12,34 +12,41 @@ Held here, each against fixture files in a throwaway "home":
   helper's on the panel host): LinuxGSM's load order with the secrets files, the last `port=` wins,
   and a port only when the start line in effect passes `${port}` — none for Minecraft (its port is
   in server.properties), San Andreas MP (its cfg port is never used) or a start line overridden
-  without it;
+  without it. And what it reads: only a regular file, not a symlink or a fifo, and at most 1 MiB;
 * the import route, end to end: the scan's port is stored, never the client's (22, Infinity, none
   at all); a port the scan could not read is read from LinuxGSM's `details` (Minecraft: 25565 from
   its server.properties); a server whose port cannot be read is not imported, and the reason says
-  why (details did not answer; the game has never started); SSH's port is refused;
+  what was seen (details did not answer, or raised; the game's own config is missing or does not
+  set the port); SSH's port is refused; an account another import adds while the reads run is
+  skipped, not doubled; on the panel's own host, the account is enrolled before `details` runs;
 * the monitor's up/down probe on what the import stored: the Minecraft server's crash pages while
   Garry's Mod keeps 27015 open;
-* the startup re-read (game_ports.reconcile_stored_ports) heals a row stored on 27015, and keeps a
-  port it cannot read or may not take; app.py starts it.
+* the startup re-read (game_ports.reconcile_stored_ports) heals a row stored on another server's
+  port, even onto a port it shares, keeps a port it cannot read or may not take, survives a row
+  deleted and a host failing mid-pass, and moves the monitor's state, the restart cron line and its
+  own firewall rule along with the port; app.py starts it.
 
 HOW IT RUNS. On part12's Flask app and database (imported; part12 has run by then), with the
-transports tripped. The scan's shell text runs in a real sh/bash over the fixture home; `details`
-is a stand-in that reads the fixture's server.properties with LinuxGSM's own sed expression
+transports tripped. The scan's shell text runs in a real sh/bash over the fixture home, and the
+helper in a python of its own (a fifo would block this monkey-patched process whole); `details` is
+a stand-in that reads the fixture's server.properties with LinuxGSM's own sed expression
 (info_game.sh fn_info_game_java_properties) and prints LinuxGSM's port table; everything else
-(detect_game_ports' parser, protected_host_ports, the route) is real. Every stub is undone in the
-finally, and the part ends by checking nothing reached a transport.
+(detect_game_ports' parser, protected_host_ports, the route, the cron upgrade) is real. Every stub
+is undone in the finally, and the part ends by checking nothing reached a transport.
 """
 import ast
 import os
 import shutil as _shutil43
-import subprocess as _sp43  # nosec B404 - runs sh/bash/sed on this part's own fixture files
+import signal as _signal43
+import subprocess as _sp43  # nosec B404 - runs sh/bash/sed/python on this part's own fixture files
+import sys as _sys43
 import tempfile as _tf43
+from types import SimpleNamespace as _NS43
 
 from unit import REPO_ROOT as _ROOT43
 from unit.part01 import check
-from unit.part05 import _helper
-from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_app, _p9_client, _p9_core, _p9_json,
-                         _p9_patch, _p9_restore_all, _p9_so, _p9_trip)
+from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_app, _p9_client, _p9_core,
+                         _p9_json, _p9_patch, _p9_restore_all, _p9_sm, _p9_so, _p9_trip)
 from panel.core.panel_state import forget_rows
 from panel.db.models import AuditLog, GameServer, RemoteServer, db
 from panel.routes import discover as _disc43
@@ -52,21 +59,45 @@ from panel.services import notifications as _notif43
 _TRIP43_START = len(_P9_TRIPPED)
 _HOME43 = os.path.realpath(_tf43.mkdtemp(prefix="lgsm-unit-p43-home-"))
 _mine43 = {"hosts": [], "servers": []}
-_SILENT43 = set()          # accounts whose `details` never answers
+_SILENT43 = set()          # accounts whose `details` never answers (tailscale/local: rc -1)
+_RAISE43 = set()           # accounts whose `details` raises (paramiko)
 _STARTED43 = set()         # accounts whose `details` says STARTED (the rest: STOPPED)
+_ENROLLED43 = set()        # accounts the helper has put in the game group (gameuser-group)
 _LISTEN43 = {}             # host address -> the ports `ss` lists as listening there
+_SS_RAISE43 = set()        # host addresses whose `ss` raises (paramiko)
 _ASKED43 = []              # every account `details` was run for
+_DETAILS_HOSTS43 = []      # server.host as each `details` call read it, in its pool thread
+_ON_DETAILS43 = {}         # account -> a callable run as its `details` is (another import, ...)
+_CRON43 = {}               # account -> its crontab listing
+_CRON_WRITTEN43 = {}       # account -> the lines a crontab rewrite installed
+_CLOSED43 = []             # (port, server name) for every firewall rule close asked for
 _NOTIFIED43 = []
+_FIFO_FDS43 = []           # the fixture fifo's own open end: a writer that has written to it
 _MC_START43 = 'startparameters="nogui"\n'                       # LinuxGSM's mcserver _default.cfg
 _COD_DEFAULT43 = ('port="28960"\nstartparameters="+set dedicated 2 +set net_ip ${ip} '
                   '+set net_port ${port} +map ${defaultmap} +exec ${servercfg}"\n')
 _GMOD_DEFAULT43 = ('port="27015"\nstartparameters="-game garrysmod -strictportbind -ip ${ip} '
                    '-port ${port} +map ${defaultmap} -maxplayers ${maxplayers}"\n')
 _SAMP_DEFAULT43 = 'port="7777"\nstartparameters=""\n'
+# Vintage Story: no port in the LinuxGSM config, and no game config until its first start
+# (install_config.sh: "Config is generated on first run").
+_VINTS_DEFAULT43 = 'startparameters="--dataPath ${datadir}"\n'
 # LinuxGSM's serverlist rows for the games here (the suite's own cached list has three others).
 _ROWS43 = [{"shortname": sn, "gameservername": sn + "server", "gamename": name, "os": "ubuntu-24.04"}
            for sn, name in (("mc", "Minecraft"), ("cod", "Call of Duty"), ("gmod", "Garry's Mod"),
-                            ("samp", "San Andreas Multiplayer"))]
+                            ("samp", "San Andreas Multiplayer"), ("vints", "Vintage Story"))]
+# sshd's own config names 2200 as well as 22: a port the panel does NOT connect on (the fixture
+# hosts' RemoteServer.port is 2222), so only protected_host_ports' read of sshd can refuse it.
+_SSHD43 = "port 22\nport 2200\npermitrootlogin no\n"
+_SCAN_TIMEOUT43 = 20      # a scan of the fixture home takes well under a second
+# What a timed-out communicate() raises. This suite is monkey-patched, and eventlet's green Popen
+# runs the ORIGINAL subprocess module's communicate, which raises that module's TimeoutExpired: one
+# `except subprocess.TimeoutExpired` does not catch (measured; ssh_manager._core catches both too).
+try:
+    from eventlet import patcher as _patcher43
+    _TIMEOUTS43 = (_sp43.TimeoutExpired, _patcher43.original("subprocess").TimeoutExpired)
+except ImportError:
+    _TIMEOUTS43 = (_sp43.TimeoutExpired,)
 
 
 # ── the fixture home ────────────────────────────────────────────────────────────────────────────
@@ -87,6 +118,7 @@ def _account43(user, inst, cfgs, props=None):
     # A fixture launcher in this part's own throwaway dir, which the stand-in account runs.
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
     os.chmod(launcher, 0o755)  # nosec B103 - a fixture launcher in a throwaway dir
+    return cfgdir
 
 
 def _mc_props43(port):
@@ -94,26 +126,40 @@ def _mc_props43(port):
             "server-port=%d\nmotd=p43\n" % (port, port))
 
 
+def _mc43(user, port):
+    """A Minecraft account whose server.properties sets `port`."""
+    _account43(user, "mcserver", {"_default.cfg": _MC_START43}, props=_mc_props43(port))
+
+
 # The accounts, and the port discovery must report for each (None: not in the LinuxGSM config).
 _SCAN_WANT43 = {
     "mc43": None,          # Minecraft: no port=, its port is server-port in server.properties
     "cod43": 28960,        # Call of Duty: port= in the cfg, and the start line passes ${port}
     "gm43": 27015,         # Garry's Mod, the neighbour on 27015
+    "nop43": 27030,        # Garry's Mod moved off its default in the instance cfg
     "secret43": 27017,     # secrets-<instance>.cfg is sourced last and wins
     "last43": 27021,       # within a file the later line wins, as when bash sources it
     "samp43": None,        # San Andreas MP: port="7777" in the cfg, never passed to the game
     "start43": None,       # the instance cfg's start line drops ${port}: the cfg port is unused
-    "fresh43": None,       # Minecraft never started: no server.properties yet
+    "vint43": None,        # Vintage Story before its first start: no game config at all yet
+    "noprop43": None,      # Minecraft whose server.properties does not set server-port
     "down43": None,        # Minecraft whose `details` will not answer
-    "ssh43": 2222,         # a cfg port that is this host's SSH port
+    "boom43": None,        # Minecraft whose `details` raises
+    "race43": None,        # Minecraft another import adds while this one reads its port
+    "loc43": None,         # Minecraft on the panel's own host
+    "ssh43": 2200,         # a cfg port that is this host's SSH port (sshd's config names it)
+    "big43": 27032,        # a 1 MiB+ secrets file: what lies past 1 MiB is never read
+    "lnk43": 27033,        # the last cfg is a symlink to another file: never followed
+    "fifo43": 27034,       # the last cfg is a fifo with a writer: never read, never stalls the scan
 }
 
 
 def _build_home43():
-    _account43("mc43", "mcserver", {"_default.cfg": _MC_START43, "mcserver.cfg": "# instance\n"},
-               props=_mc_props43(25565))
+    _mc43("mc43", 25565)
     _account43("cod43", "codserver", {"_default.cfg": _COD_DEFAULT43})
     _account43("gm43", "gmodserver", {"_default.cfg": _GMOD_DEFAULT43})
+    _account43("nop43", "gmodserver", {"_default.cfg": _GMOD_DEFAULT43,
+                                       "gmodserver.cfg": 'port="27030"\n'})
     _account43("secret43", "gmodserver", {
         "_default.cfg": _GMOD_DEFAULT43, "common.cfg": 'port="27018"\n',
         "gmodserver.cfg": 'port="27016"\n', "secrets-gmodserver.cfg": 'port="27017"\n'})
@@ -123,24 +169,75 @@ def _build_home43():
     _account43("samp43", "sampserver", {"_default.cfg": _SAMP_DEFAULT43})
     _account43("start43", "gmodserver", {"_default.cfg": _GMOD_DEFAULT43,
                                          "gmodserver.cfg": 'startparameters="-game garrysmod"\n'})
-    _account43("fresh43", "mcserver", {"_default.cfg": _MC_START43})
-    _account43("down43", "mcserver", {"_default.cfg": _MC_START43}, props=_mc_props43(25566))
+    _account43("vint43", "vintsserver", {"_default.cfg": _VINTS_DEFAULT43})
+    _account43("noprop43", "mcserver", {"_default.cfg": _MC_START43},
+               props="#Minecraft server properties\nmotd=p43\nmax-players=8\n")
+    for user, port in (("down43", 25566), ("boom43", 25568), ("race43", 25569), ("loc43", 25567)):
+        _mc43(user, port)
     _account43("ssh43", "codserver", {"_default.cfg": _COD_DEFAULT43,
-                                      "codserver.cfg": 'port="2222"\n'})
+                                      "codserver.cfg": 'port="2200"\n'})
+    _odd_accounts43()
+
+
+def _odd_accounts43():
+    """The files a game account can put where the scan reads, which it must read safely.
+
+    Each odd file sits AFTER the file that sets the right port, so reading it would change the
+    answer: past the 1 MiB cap, a symlink's target, a fifo (which blocks whoever opens it).
+    """
+    d = _account43("big43", "gmodserver", {"_default.cfg": _GMOD_DEFAULT43,
+                                           "common.cfg": 'port="27032"\n'})
+    with open(os.path.join(d, "secrets-common.cfg"), "w", encoding="utf-8") as fh:
+        fh.write(("# " + "x" * 1021 + "\n") * 1024)        # exactly 1 MiB of comment lines
+        fh.write('port="27999"\n')                          # ...and a port past it
+    d = _account43("lnk43", "gmodserver", {"_default.cfg": _GMOD_DEFAULT43,
+                                           "gmodserver.cfg": 'port="27033"\n'})
+    elsewhere = os.path.join(_HOME43, "lnk43", "elsewhere.cfg")
+    with open(elsewhere, "w", encoding="utf-8") as fh:
+        fh.write('port="27998"\n')
+    os.symlink(elsewhere, os.path.join(d, "secrets-gmodserver.cfg"))
+    d = _account43("fifo43", "gmodserver", {"_default.cfg": _GMOD_DEFAULT43,
+                                            "gmodserver.cfg": 'port="27034"\n'})
+    fifo = os.path.join(d, "secrets-gmodserver.cfg")
+    os.mkfifo(fifo)
+    # Held open for writing, with a port waiting in it, as a game account's process could: a
+    # reader that opens it without blocking still reads that port, and one that reads to EOF
+    # waits for as long as the writer lives. (O_RDWR: a fifo opened so never blocks.)
+    fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+    _FIFO_FDS43.append(fd)
+    os.write(fd, b'port="27997"\n')
 
 
 # ── the host, as the fixture home answers it ────────────────────────────────────────────────────
+def _run_bounded43(argv):
+    """(stdout, stderr, rc) of `argv`, killed with everything it started after _SCAN_TIMEOUT43.
+
+    Its own session, and the whole group killed: a `cat` blocked opening a fifo outlives a killed
+    shell, keeps the pipe open, and communicate() would then wait for it forever.
+    """
+    p = _sp43.Popen(argv, stdout=_sp43.PIPE, stderr=_sp43.PIPE, text=True,  # nosec B603 - fixture
+                    start_new_session=True)
+    try:
+        out, err = p.communicate(timeout=_SCAN_TIMEOUT43)
+    except _TIMEOUTS43:
+        os.killpg(p.pid, _signal43.SIGKILL)
+        out, err = p.communicate()
+        return out or "", "timed out", -1
+    return out, err, p.returncode
+
+
 def _scan_in43(shell):
     """run_command for discover_linuxgsm_servers: its script, run by `shell` over the fixture home."""
     def _run(server, command, timeout=30, sudo=None, stdin_text=None):
+        if command.startswith("ss -H -lntu") and server.host in _SS_RAISE43:
+            raise ConnectionError("SSH connection failed (part43)")
         if command.startswith("ss -H -lntu") and server.host in _LISTEN43:
             return "\n".join("0.0.0.0:%d" % p for p in sorted(_LISTEN43[server.host])), "", 0
         if "/home" not in command or "FOUND|" not in command:
             _P9_TRIPPED.append(("p43 run_command", command[:120]))
             return ("", "refused by part43", -1)
-        p = _sp43.run([shell, "-c", command.replace("/home", _HOME43)],  # nosec B603 - this part's fixture
-                      capture_output=True, text=True, timeout=60)
-        return p.stdout.strip(), p.stderr.strip(), p.returncode
+        out, err, rc = _run_bounded43([shell, "-c", command.replace("/home", _HOME43)])
+        return out.strip(), err.strip(), rc
     return _run
 
 
@@ -148,8 +245,8 @@ def _lgsm_port43(user):
     """The port LinuxGSM's `details` reports for a fixture account.
 
     A Minecraft account's is read from its server.properties with info_game.sh's own sed
-    (fn_info_game_java_properties "port" "server-port"); with no server.properties yet it is 0, as
-    info_game.sh's `port="${port:-"0"}"` makes it. Any other account's is its LinuxGSM cfg port.
+    (fn_info_game_java_properties "port" "server-port"); with no server-port in it, or no file, it is
+    0, as info_game.sh's `port="${port:-"0"}"` makes it. Any other account's is its LinuxGSM cfg port.
     """
     props = os.path.join(_HOME43, user, "serverfiles", "server.properties")
     if not os.path.exists(props):
@@ -172,20 +269,37 @@ def _details_text43(port, started=False):
 
 
 def _run_as43(server, user, action, timeout=30, selfname=None, answers=None, tee_log=False):
-    """run_as_game_user: `details` answered from the fixture; any other action is a trip."""
+    """run_as_game_user: `details` answered from the fixture; any other action is a trip.
+
+    It reads server.host first, as every real transport does — from a pool thread, for the
+    import's and the re-read's parallel reads. On the panel's own host it refuses an account not
+    enrolled yet, as the helper does on a narrow-grant install.
+    """
     if action != "details":
         _P9_TRIPPED.append(("p43 run_as_game_user", action))
         return ("", "refused by part43", 1)
+    _DETAILS_HOSTS43.append(server.host)
     _ASKED43.append(user)
+    if user in _ON_DETAILS43:
+        _ON_DETAILS43.pop(user)()
+    if user in _RAISE43:
+        raise ConnectionError("SSH connection failed (part43)")
     if user in _SILENT43:
         return ("", "SSH command timed out", -1)       # tailscale/local: no raise, rc -1
+    if getattr(server, "is_local", False) and user not in _ENROLLED43:
+        return ("", "panel-helper: %s is not a game account" % user, 1)
     return (_details_text43(_lgsm_port43(user), user in _STARTED43), "", 0)
 
 
 def _privileged43(server, verb, args=(), **_k):
-    """run_privileged: only sshd's effective config is asked (protected_host_ports)."""
+    """run_privileged: sshd's effective config, a crontab listing, the game-group enrolment."""
     if verb == "sshd-effective-config":
-        return ("port 22\nport 2222\npermitrootlogin no\n", "", 0)
+        return (_SSHD43, "", 0)
+    if verb == "crontab-list" and args:
+        return (_CRON43.get(args[0], ""), "", 0)
+    if verb == "gameuser-group" and args:
+        _ENROLLED43.add(args[0])
+        return ("", "", 0)
     _P9_TRIPPED.append(("p43 run_privileged", verb))
     return ("", "refused by part43", 1)
 
@@ -202,6 +316,14 @@ def _arm43():
     _p9_patch(_p9_core, "run_command", _scan_in43("sh"))
     _p9_patch(_p9_core, "run_as_game_user", _run_as43)
     _p9_patch(_p9_core, "run_privileged", _privileged43)
+    _p9_patch(_p9_core, "helper_present", lambda recheck=False: False)
+    _p9_patch(_p9_core, "_rewrite_crontab",
+              lambda s, u, grep, add, extra_pre="": (_CRON_WRITTEN43.setdefault(u, []).extend(add),
+                                                     (True, "ok"))[1])
+    _p9_patch(_p9_core, "_gamedig_host", lambda server: server.host)
+    _p9_patch(_p9_sm, "remote_ufw_close_game_port",
+              lambda r, port, name="", legacy=False, ports=(): (
+                  _CLOSED43.append((port, name)), (1, "Port %s: 1 rule(s) removed" % port, []))[1])
     _p9_patch(_disc43, "privileged_accounts", lambda remote, users: {})
     _p9_patch(_disc43, "_bg_cache_commands", lambda *a, **k: None)
     _p9_patch(_notif43, "notify", lambda key, title, body="": _NOTIFIED43.append((key, body)))
@@ -240,25 +362,24 @@ def _shell_scan43():
     _p9_patch(_p9_core, "run_command", _scan_in43("sh"))
 
 
+# The helper's discover verb, run in a python of its own over the fixture home: in this
+# monkey-patched process a fifo opened by the helper would block every green thread, the check's
+# own timeout included, so the suite would hang instead of failing by name.
+_HELPER_RUN43 = ("import importlib.machinery as m, importlib.util as u, sys\n"
+                 "ld = m.SourceFileLoader('panel_helper_p43', sys.argv[1])\n"
+                 "h = u.module_from_spec(u.spec_from_loader(ld.name, ld))\n"
+                 "ld.exec_module(h)\n"
+                 "h.HOME_ROOT = sys.argv[2]\n"
+                 "h.do_lgsm_discover([], None)\n")
+
+
 def _helper_scan43():
     """The helper's form, which the panel host runs: the same fixture, the same answers."""
-    out = []
-
-    class _Cap:
-        def write(self, t):
-            out.append(t)
-
-        def flush(self):
-            pass
-    saved = (_helper.HOME_ROOT, _helper.sys.stdout)
-    try:
-        _helper.HOME_ROOT, _helper.sys.stdout = _HOME43, _Cap()
-        _helper.do_lgsm_discover([], None)
-    except Exception as exc:  # noqa: BLE001 - a raise is a named failure here, never a crash
-        out.append("RAISED %r" % (exc,))
-    finally:
-        _helper.HOME_ROOT, _helper.sys.stdout = saved
-    found = [e for e in (_p9_core._discovered_instance(ln) for ln in "".join(out).splitlines())
+    out, err, rc = _run_bounded43([_sys43.executable, "-c", _HELPER_RUN43,
+                                   os.path.join(_ROOT43, "tools", "panel-helper"), _HOME43])
+    check("discover helper: the scan finishes, a fifo among the configs included",
+          rc == 0, "rc %r: %s" % (rc, err[-300:]))
+    found = [e for e in (_p9_core._discovered_instance(ln) for ln in out.splitlines())
              if e is not None]
     got = _scan_ports43(found)
     for user, want in sorted(_SCAN_WANT43.items()):
@@ -267,13 +388,17 @@ def _helper_scan43():
 
 
 # ── the import route ────────────────────────────────────────────────────────────────────────────
-def _post43(client, servers):
-    return _p9_json(client.post("/api/remote/%d/import" % _H43, json={"servers": servers}))
+def _post43(client, servers, rid=None):
+    try:
+        resp = client.post("/api/remote/%d/import" % (rid or _H43), json={"servers": servers})
+    except Exception as exc:  # noqa: BLE001 - a raise is a named failure here, never a crash
+        return {"raised": repr(exc)}
+    return dict(_p9_json(resp), http_status=resp.status_code)
 
 
-def _rows43():
+def _rows43(rid=None):
     with _p9.app_context():
-        rows = GameServer.query.filter_by(remote_id=_H43).all()
+        rows = GameServer.query.filter_by(remote_id=rid or _H43).all()
         _mine43["servers"] += [g.id for g in rows if g.id not in _mine43["servers"]]
         return {g.short_name: g.port for g in rows}
 
@@ -287,18 +412,26 @@ def _reason43(reply, user):
 def _import43(client):
     """One import of every kind of server, sent with what the old card and a client would send."""
     _SILENT43.add("down43")
+    _RAISE43.add("boom43")
     first = _post43(client, [
         {"user": "mc43", "game_type": "mc", "port": 0},           # what the card sent for it
         {"user": "cod43", "game_type": "cod", "port": 22},        # a client naming SSH's port
         {"user": "gm43", "game_type": "gmod"},                    # no port at all
+        {"user": "nop43", "game_type": "gmod"},                   # no port, and not 27015
         {"user": "last43", "game_type": "gmod", "port": float("inf")},
-        {"user": "fresh43", "game_type": "mc", "port": 27015},
+        {"user": "vint43", "game_type": "vints", "port": 27015},
+        {"user": "noprop43", "game_type": "mc", "port": 27015},
         {"user": "down43", "game_type": "mc", "port": 25565},
+        {"user": "boom43", "game_type": "mc", "port": 25565},
         {"user": "ssh43", "game_type": "cod", "port": 28960}])
     _SILENT43.discard("down43")
+    _RAISE43.discard("boom43")
     _stored43(first, _rows43())
     _left_out43(first, _rows43())
     _again43(client)
+    _raced43(client)
+    _local43(client)
+    _expired_remote43()
 
 
 def _stored43(first, rows):
@@ -307,11 +440,12 @@ def _stored43(first, rows):
           "port LinuxGSM reads from its server.properties (25565), not 27015",
           rows.get("mc43") == 25565, "stored %r; reply %r" % (rows.get("mc43"), first))
     check("import: ...and LinuxGSM's details was asked only for the servers the scan had no port "
-          "for", sorted(set(_ASKED43)) == ["down43", "fresh43", "mc43"], repr(_ASKED43))
+          "for", sorted(set(_ASKED43)) == ["boom43", "down43", "mc43", "noprop43", "vint43"],
+          repr(_ASKED43))
     check("import: a port the CLIENT names is never stored — the scan's 28960, not the body's 22",
           rows.get("cod43") == 28960, "stored %r" % (rows.get("cod43"),))
-    check("import: a body with no port stores the scan's port, not 27015's fallback (gmod 27015 "
-          "is the scan's own reading here)", rows.get("gm43") == 27015, repr(rows))
+    check("import: a body with no port stores the scan's port (27030), not 27015's fallback",
+          rows.get("nop43") == 27030, repr(rows))
     check("import: a body port of Infinity is ignored, not raised on: the scan's last line wins",
           rows.get("last43") == 27021, repr(rows))
     audit = _audit_detail43("import_servers")
@@ -322,22 +456,37 @@ def _stored43(first, rows):
 def _left_out43(first, rows):
     """The servers the first import left out, and what it said about them."""
     unread = repr(first.get("unread"))
-    check("import: a Minecraft server that has never started (LinuxGSM reports port 0) gets NO "
-          "row — not the body's 27015", "fresh43" not in rows, repr(rows))
-    check("import: ...and the reply says to start it once first",
-          "start it once" in _reason43(first, "fresh43"), unread)
+    for user, what in (("vint43", "a Vintage Story server that has no game config yet"),
+                       ("noprop43", "a Minecraft server whose server.properties sets no port")):
+        check("import: %s (LinuxGSM reports port 0) gets NO row — not the body's 27015" % what,
+              user not in rows, repr(rows))
+        check("import: ...and the reply says what was seen: the game's own config is missing or "
+              "does not set the port (%s)" % user,
+              "is missing or does not set the port" in _reason43(first, user), unread)
+    check("import: ...and says a first start helps only a game that writes its own config — not "
+          "'it has never started', which is false for most",
+          "A game that writes that file itself the first time it starts" in _reason43(first, "vint43")
+          and "never started" not in _reason43(first, "vint43"), unread)
     check("import: a server whose details does not answer gets NO row — not the body's 25565",
           "down43" not in rows, repr(rows))
     check("import: ...and the reply says details did not answer, and to try again",
           all(w in _reason43(first, "down43") for w in ("did not answer", "try the import again")),
           unread)
-    check("import: a cfg port that is this host's SSH port (2222, from sshd's own config) is "
-          "refused, with the reason", ("ssh43" not in rows, "SSH" in _reason43(first, "ssh43"))
-          == (True, True), repr(rows) + unread)
-    taken = (first.get("success"), set(first.get("skipped") or ()) >= {"fresh43", "down43", "ssh43"},
+    check("import: a server whose details RAISES (paramiko) gets no row and reads 'did not "
+          "answer' — the import is not a 500",
+          "boom43" not in rows and "did not answer" in _reason43(first, "boom43")
+          and first.get("http_status") == 200, repr((first.get("http_status"), first.get("raised"),
+                                                     unread)))
+    check("import: a cfg port that is this host's SSH port (2200, named only by sshd's own config, "
+          "not the port the panel connects on) is refused, with the reason",
+          ("ssh43" not in rows, "SSH" in _reason43(first, "ssh43")) == (True, True),
+          repr(rows) + unread)
+    taken = (first.get("success"),
+             set(first.get("skipped") or ()) >= {"vint43", "noprop43", "down43", "boom43", "ssh43"},
              sorted(first.get("added") or ()))
     check("import: the servers left out are named as skipped, and the import still succeeds for "
-          "the rest", taken == (True, True, ["cod43", "gm43", "last43", "mc43"]), repr(first))
+          "the rest", taken == (True, True, ["cod43", "gm43", "last43", "mc43", "nop43"]),
+          repr(first))
 
 
 def _again43(client):
@@ -345,10 +494,54 @@ def _again43(client):
     again = _post43(client, [{"user": "down43", "game_type": "mc"}])
     check("import: ...and once details answers, the same server imports on its own port",
           _rows43().get("down43") == 25566 and again.get("added") == ["down43"], repr(again))
-    alone = _post43(client, [{"user": "fresh43", "game_type": "mc"}])
+    alone = _post43(client, [{"user": "noprop43", "game_type": "mc"}])
     check("import: with nothing imported, the message names the server and why",
-          alone.get("success") is False and "fresh43" in (alone.get("message") or "")
-          and "start it once" in (alone.get("message") or ""), repr(alone))
+          alone.get("success") is False and "noprop43" in (alone.get("message") or "")
+          and "does not set the port" in (alone.get("message") or ""), repr(alone))
+
+
+def _raced43(client):
+    """Another import adds the account while this one reads its port: skipped, never doubled."""
+    def _other_import():
+        with _p9.app_context():
+            db.session.add(GameServer(remote_id=_H43, name="race43-other", short_name="race43",
+                                      game_type="mc", port=25569, installed=True, status="offline"))
+            db.session.commit()
+    _ON_DETAILS43["race43"] = _other_import
+    reply = _post43(client, [{"user": "race43", "game_type": "mc"}])
+    _ON_DETAILS43.pop("race43", None)
+    with _p9.app_context():
+        ids = [g.id for g in GameServer.query.filter_by(remote_id=_H43, short_name="race43").all()]
+    _mine43["servers"] += ids
+    check("import: an account another import added while this one read its port is reported as "
+          "skipped, and gets no second row",
+          (len(ids), "race43" in (reply.get("skipped") or ()), reply.get("added")) == (1, True, []),
+          repr((ids, reply)))
+
+
+def _local43(client):
+    """On the panel's own host the helper runs `details` only as an enrolled account."""
+    reply = _post43(client, [{"user": "loc43", "game_type": "mc"}], rid=P9_LOCAL)
+    with _p9.app_context():
+        rows = [(g.id, g.port) for g in GameServer.query.filter_by(remote_id=P9_LOCAL,
+                                                                   short_name="loc43").all()]
+    _mine43["servers"] += [i for i, _p in rows]
+    check("import (panel host): the account is enrolled BEFORE its port is read, so details "
+          "answers and the server is stored on its own port (25567)",
+          [p for _i, p in rows] == [25567] and "loc43" in _ENROLLED43, repr((rows, reply)))
+
+
+def _expired_remote43():
+    """read_reported_ports given a host row a commit has expired: its pool threads still read it."""
+    del _DETAILS_HOSTS43[:]
+    with _p9.app_context():
+        remote = _remote43(_H43)
+        db.session.commit()      # expires every row the session holds, this one included
+        got = _gp43.read_reported_ports(remote, [("k", "mc43", "mcserver")])
+    check("port read: a host row expired by a commit is still read in the pool thread (its "
+          "columns are loaded before the threads start), and the port comes back",
+          (got.get("k", _gp43.NO_READING).port, _DETAILS_HOSTS43) == (25565, ["192.0.2.43"]),
+          repr((got, _DETAILS_HOSTS43)))
 
 
 def _audit_detail43(action):
@@ -388,64 +581,223 @@ def _monitor43():
 
 
 # ── the startup re-read ─────────────────────────────────────────────────────────────────────────
-def _heal_rows43(rid):
-    """The heal host's rows, each on the port an old import might have stored. -> {account: id}."""
-    want = {}
-    with _p9.app_context():
-        for short, gt, port in (("gm43", "gmod", 27015), ("mc43", "mc", 27015),
-                                ("down43", "mc", 25570), ("sibl43", "mc", 25590),
-                                ("sshp43", "mc", 25580), ("fresh43", "mc", 25600),
-                                ("foreign43", "mc", 25610), ("quiet43", "mc", 25630)):
-            gs = GameServer(remote_id=rid, name="heal-" + short, short_name=short, game_type=gt,
-                            port=port, installed=True, status="offline")
-            db.session.add(gs)
-            db.session.commit()
-            _mine43["servers"].append(gs.id)
-            want[short] = gs.id
-    # sibl43's server.properties names Garry's Mod's 27015, sshp43's SSH's 2222; foreign43's 25620
-    # is held by a process outside the panel while foreign43 is stopped; quiet43's 25640 is free.
-    for user, port in (("sibl43", 27015), ("sshp43", 2222), ("foreign43", 25620),
-                       ("quiet43", 25640)):
-        _account43(user, "mcserver", {"_default.cfg": _MC_START43}, props=_mc_props43(port))
-    return want
+# Each heal host: (name, address, what `ss` lists there or None when it raises, its rows). A row is
+# (account, game type, the port stored on it, installed). The accounts' own ports (what LinuxGSM
+# reports) are _HEAL_PROPS43; an account with none there reports port 0.
+_HEAL_HOSTS43 = (
+    ("p43-heal", "192.0.2.143", {22, 2222, 27015, 25565, 25620, 25670, 25680, 25720}, (
+        ("gm43", "gmod", 27015, True),      # Garry's Mod, right where it is
+        ("mc43", "mc", 27015, True),        # an old import on gmod's port; runs on its 25565
+        ("pmc43", "mc", 27015, True),       # ...and a stopped one whose own port mc43 shares
+        ("down43", "mc", 25570, True),      # details does not answer
+        ("sibl43", "mc", 25590, True),      # reports 25650: blk43's block, nothing listening
+        ("blk43", "mc", 25650, True),       # a stopped server reporting nothing
+        ("sshp43", "mc", 25580, True),      # reports 2222, the port the panel connects on
+        ("sshq43", "mc", 27015, True),      # on gmod's port, and reports sshd's 2200
+        ("noprop43", "mc", 25600, True),    # reports port 0
+        ("foreign43", "mc", 25610, True),   # reports 25620, which a process outside the panel has
+        ("velo43", "mc", 25710, True),      # STARTED, reports 25720 — another process's socket
+        ("squat43", "mc", 25670, True),     # stopped, and something else listens on 25670
+        ("quiet43", "mc", 25630, True),     # reports a free 25640
+        ("nib43", "mc", 25690, True),       # reports 25660: a failed install's block
+        ("unins43", "mc", 25660, False),    # that failed install
+        ("stop43", "mc", 27015, True))),    # stopped, on gmod's port; its own 25655 is free
+    ("p43-heal-b", "192.0.2.144", {22, 2222}, (
+        ("gmb43", "gmod", 27015, True),
+        ("pmcb43", "mc", 25565, True),      # imported by the new code on its own 25565
+        ("mcb43", "mc", 27015, True))),     # the old import of the bug report, on gmod's 27015
+    ("p43-heal-del", "192.0.2.145", {22, 2222}, (
+        ("qa43", "mc", 25701, True), ("del43", "mc", 25705, True), ("mv43", "mc", 25760, True),
+        ("qb43", "mc", 25711, True))),
+    ("p43-heal-raise", "192.0.2.146", None, (
+        ("ra43", "mc", 25730, True),        # needs the listening ports, whose read raises
+        ("rg43", "gmod", 27015, True),
+        ("rb43", "mc", 27015, True))),      # on rg43's port: needs no listening read
+    ("p43-heal-raise2", "192.0.2.147", {22, 2222}, (("rc43", "mc", 25750, True),)),
+    ("p43-heal-after", "192.0.2.148", {22, 2222}, (("qc43", "mc", 25740, True),)),
+)
+_HEAL_PROPS43 = {"pmc43": 25565, "sibl43": 25650, "sshp43": 2222, "sshq43": 2200,
+                 "foreign43": 25620, "velo43": 25720, "squat43": 25680, "quiet43": 25640,
+                 "nib43": 25660, "stop43": 25655, "pmcb43": 25565, "mcb43": 25565, "qa43": 25700,
+                 "del43": 25706, "mv43": 25761, "qb43": 25710, "ra43": 25731, "rb43": 25732, "rc43": 25751,
+                 "qc43": 25741}
+
+
+def _heal_rows43():
+    """Every heal host and its rows. -> {account on the host: row id} and {address: host id}."""
+    want, hosts = {}, {}
+    for name, ip, listen, rows in _HEAL_HOSTS43:
+        rid = hosts[ip] = _host43(name, ip)
+        if listen is None:
+            _SS_RAISE43.add(ip)
+        else:
+            _LISTEN43[ip] = listen
+        with _p9.app_context():
+            for short, gt, port, installed in rows:
+                gs = GameServer(remote_id=rid, name="heal-" + short, short_name=short,
+                                game_type=gt, port=port, installed=installed, status="offline")
+                db.session.add(gs)
+                db.session.commit()
+                _mine43["servers"].append(gs.id)
+                want[short] = gs.id
+    for user, port in _HEAL_PROPS43.items():
+        _mc43(user, port)
+    return want, hosts
+
+
+def _restart_listing43(user, port):
+    """[flag line, check line] as set_daily_restart writes them for a Minecraft `user` on `port`."""
+    before = list(_CRON_WRITTEN43.get(user, ()))
+    _p9_core.set_daily_restart(_NS43(id=None, host="192.0.2.143"), user, "mcserver",
+                               game_type="mc", port=port, enabled=True)
+    lines = _CRON_WRITTEN43.get(user, [])[len(before):]
+    _CRON_WRITTEN43[user] = before
+    return "\n".join(lines)
+
+
+def _heal_run43(want, hosts):
+    """The re-read over every heal host, with a row deleted and one host's port read raising."""
+    orig_read, orig_protected = _gp43.read_reported_ports, _p9_sm.protected_host_ports
+
+    def _read_then_delete(remote, wanted):
+        got = orig_read(remote, wanted)
+        if any(key == want["del43"] for key, _u, _s in wanted):
+            with _p9.app_context():         # other requests, with their own session, meanwhile:
+                db.session.delete(db.session.get(GameServer, want["del43"]))     # delete one row
+                db.session.get(GameServer, want["mv43"]).port = 25762            # move another
+                db.session.commit()
+        return got
+
+    def _protected(remote):
+        if remote.host == "192.0.2.147":
+            raise RuntimeError("an unforeseen failure reading this host (part43)")
+        return orig_protected(remote)
+    _p9_patch(_gp43, "read_reported_ports", _read_then_delete)
+    _p9_patch(_p9_sm, "protected_host_ports", _protected)
+    try:
+        _gp43.reconcile_stored_ports(_p9, _ms43.withheld_game_ports, _ms43.sibling_port_blocks)
+    except Exception as exc:  # noqa: BLE001 - a raise is a named failure here, never a crash
+        check("startup port re-read: runs without raising", False, repr(exc))
+    finally:
+        _p9_patch(_gp43, "read_reported_ports", orig_read)
+        _p9_patch(_p9_sm, "protected_host_ports", orig_protected)
+    forget_rows(server_ids=(want["del43"],))
 
 
 def _heal43():
-    """Rows stored before the import read ports: one on Garry's Mod's 27015 is healed."""
-    rid = _host43("p43-heal", "192.0.2.143")
-    want = _heal_rows43(rid)
-    _LISTEN43["192.0.2.143"] = {22, 2222, 27015, 25565, 25620}    # mc43 runs on its 25565
+    """Rows stored before the import read ports, across six hosts: what moves, and what does not."""
+    want, hosts = _heal_rows43()
+    _CRON43["stop43"] = _restart_listing43("stop43", 27015)
     _SILENT43.add("down43")
-    _STARTED43.add("mc43")
+    _STARTED43.update(("mc43", "velo43"))
+    _mon43._monitor_state["servers"][want["stop43"]] = True     # read up on gmod's 27015 at boot
+    del _CLOSED43[:]
     try:
-        _gp43.reconcile_stored_ports(_p9, _ms43.withheld_game_ports)
-    except Exception as exc:  # noqa: BLE001 - a raise is a named failure here, never a crash
-        check("startup port re-read: runs without raising", False, repr(exc))
-    _SILENT43.discard("down43")
-    _STARTED43.discard("mc43")
+        _heal_run43(want, hosts)
+    finally:
+        _SILENT43.discard("down43")
+        _STARTED43.difference_update(("mc43", "velo43"))
     with _p9.app_context():
-        got = {s: db.session.get(GameServer, i).port for s, i in want.items()}
+        got = {s: getattr(db.session.get(GameServer, i), "port", None) for s, i in want.items()}
         audits = sorted(a.detail for a in AuditLog.query.filter_by(action="port_resync").all())
-    check("startup port re-read: a Minecraft row stored on 27015 is moved to the 25565 LinuxGSM "
-          "reads from its server.properties", got["mc43"] == 25565, repr(got))
+    _heal_moved43(got, audits)
+    _heal_kept43(got)
+    _heal_survives43(got)
+    _heal_follows43(want, hosts, audits)
+
+
+def _heal_moved43(got, audits):
+    """The rows whose stored port is certainly not theirs, and the free reading: moved."""
+    check("startup port re-read: a Minecraft row stored on Garry's Mod's 27015 is moved to the "
+          "25565 LinuxGSM reads from its server.properties", got["mc43"] == 25565, repr(got))
     check("startup port re-read: ...and audited, old and new",
           any(d.startswith("27015 -> 25565") for d in audits), repr(audits))
+    check("startup port re-read: a STOPPED row on Garry's Mod's 27015 is moved to its own 25565 "
+          "although a running neighbour shares that default — the import's own rule",
+          got["pmc43"] == 25565, repr(got))
+    check("startup port re-read: an old import on 27015 is moved to its 25565 although a server "
+          "the new import stored there holds it (the bug report's row, the other order)",
+          got["mcb43"] == 25565, repr(got))
+    check("startup port re-read: a stopped row whose stored port something else listens on is "
+          "moved, even onto a port that is listened on too", got["squat43"] == 25680, repr(got))
     check("startup port re-read: Garry's Mod, already right, is left as it is (control)",
           got["gm43"] == 27015, repr(got))
-    check("startup port re-read: a server whose details does not answer keeps its port",
-          got["down43"] == 25570, repr(got))
-    check("startup port re-read: a server that reports port 0 (never started) keeps its port",
-          got["fresh43"] == 25600, repr(got))
-    check("startup port re-read: a reported port in another server's block is not taken",
-          got["sibl43"] == 25590, repr(got))
-    check("startup port re-read: a reported port that is this host's SSH is not taken",
-          got["sshp43"] == 25580, repr(got))
-    check("startup port re-read: a reported port something else listens on while the server is "
-          "stopped is not taken", got["foreign43"] == 25610, repr(got))
-    check("startup port re-read: ...while a stopped server's free reported port is (control)",
+    check("startup port re-read: ...while a stopped server's free reported port is taken (control)",
           got["quiet43"] == 25640, repr(got))
     check("startup port re-read: only the moved rows are audited",
-          [d.split(" (")[0] for d in audits] == ["25630 -> 25640", "27015 -> 25565"], repr(audits))
+          [d.split(" (")[0] for d in audits] == [
+              "25630 -> 25640", "25670 -> 25680", "25701 -> 25700", "25711 -> 25710",
+              "25740 -> 25741", "27015 -> 25565", "27015 -> 25565", "27015 -> 25565",
+              "27015 -> 25655", "27015 -> 25732"], repr(audits))
+
+
+def _heal_kept43(got):
+    """The readings the re-read may not take."""
+    check("startup port re-read: a server whose details does not answer keeps its port",
+          got["down43"] == 25570, repr(got))
+    check("startup port re-read: a server that reports port 0 keeps its port",
+          got["noprop43"] == 25600, repr(got))
+    check("startup port re-read: a reported port in another server's block is not taken — one "
+          "nothing listens on, so only the block refuses it", got["sibl43"] == 25590, repr(got))
+    check("startup port re-read: ...nor one in the block of a server whose install failed",
+          got["nib43"] == 25690, repr(got))
+    check("startup port re-read: a reported port that is this host's SSH is not taken",
+          got["sshp43"] == 25580, repr(got))
+    check("startup port re-read: ...nor SSH's port from sshd's config, even for a row whose "
+          "stored port is another server's", got["sshq43"] == 27015, repr(got))
+    check("startup port re-read: a reported port something else listens on while the server is "
+          "stopped is not taken", got["foreign43"] == 25610, repr(got))
+    check("startup port re-read: ...nor while LinuxGSM says STARTED: a game that failed to bind "
+          "keeps its tmux session, so STARTED does not make the listener this server",
+          got["velo43"] == 25710, repr(got))
+
+
+def _heal_survives43(got):
+    """A deleted row, a raising port read and a failing host stop nothing after them."""
+    check("startup port re-read: a row deleted while the pass ran is skipped, and the rows after "
+          "it on its host are still healed", (got["del43"], got["qa43"], got["qb43"])
+          == (None, 25700, 25710), repr(got))
+    check("startup port re-read: a row whose port something else changed while the pass ran is "
+          "left on that port, not overwritten with the pass's older reading",
+          got["mv43"] == 25762, repr(got))
+    check("startup port re-read: a row whose listening-port read RAISES (paramiko) keeps its port, "
+          "and the next row on that host is still healed", (got["ra43"], got["rb43"])
+          == (25730, 25732), repr(got))
+    check("startup port re-read: a host that fails outright keeps its rows, and the host after it "
+          "is still read", (got["rc43"], got["qc43"]) == (25750, 25741), repr(got))
+
+
+def _heal_follows43(want, hosts, audits):
+    """What a move carries along: the monitor's state, the cron line, this server's own rule."""
+    n = len(_NOTIFIED43)
+    with _p9.app_context():
+        gs = db.session.get(GameServer, want["stop43"])
+        remote = _remote43(hosts["192.0.2.143"])
+        for _ in range(_mon43._DOWN_CONFIRM_SWEEPS):
+            _mon43._monitor_server(remote, gs, {}, {27015})       # its own 25655: nothing there
+        paged = [b for k, b in _NOTIFIED43[n:] if k == "server_down" and "heal-stop43" in b]
+        db.session.rollback()
+    forget_rows(server_ids=(want["stop43"],))
+    check("startup port re-read: a stopped server the monitor read up on its neighbour's port, and "
+          "moved to its own, does not page 'went offline unexpectedly'", paged == [],
+          repr(_NOTIFIED43[n:]))
+    _heal_carried43(audits)
+
+
+def _heal_carried43(audits):
+    """The cron line and this server's own firewall rule, after a move."""
+    lines = _CRON_WRITTEN43.get("stop43", [])
+    check("startup port re-read: a moved server's restart-when-empty check asks its new port, not "
+          "the neighbour's", any("192.0.2.143:25655 " in ln for ln in lines)
+          and not any(":27015" in ln for ln in lines), repr(lines))
+    check("startup port re-read: this server's own firewall rule on its old port is closed where "
+          "nothing else can need it", (25630, "quiet43") in _CLOSED43, repr(_CLOSED43))
+    check("startup port re-read: ...and never on a port another server's block covers, or that "
+          "something listens on", not [c for c in _CLOSED43 if c[0] in (27015, 25670)],
+          repr(_CLOSED43))
+    check("startup port re-read: ...and the audit row says so, and that the new port is not opened",
+          any(d.startswith("25630 -> 25640") and "closed this server's firewall rule on 25630" in d
+              and "not opened on 25640: 'Open all ports'" in d for d in audits), repr(audits))
 
 
 def _main_block43():
@@ -493,6 +845,8 @@ def _cleanup43():
                 db.session.delete(r)
         db.session.commit()
     forget_rows(server_ids=tuple(_mine43["servers"]), remote_ids=tuple(_mine43["hosts"]))
+    for fd in _FIFO_FDS43:
+        os.close(fd)
     _shutil43.rmtree(_HOME43, ignore_errors=True)
 
 

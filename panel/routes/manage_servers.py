@@ -1500,6 +1500,10 @@ def _open_game_ports(job, remote, gs):
     # None tells the post-start re-read so (see _reopen_runtime_ports), where an empty set would
     # say "nothing withheld" and open every port `details` reports.
     job.withheld = None
+    # And whether the look at what was listening (below) was READ: a Tailscale or local host
+    # returns a failed `ss` as empty output, without raising, so step 6 can finish with no foreign
+    # listener known — not with none there. The post-start read must not take that for "free".
+    job.listening_read = False
     job.firewall_failed = False
     # Whether LinuxGSM gave this server a game port at all. No port is not "the same port": a game
     # that keeps its port in its own config (46 of LinuxGSM's 140) reports 0 until that config
@@ -1546,7 +1550,8 @@ def _open_game_ports(job, remote, gs):
         # routinely, and holding back every port of a new server over it is the worse failure.
         to_open, port_conflict, foreign = _hold_back_listening(remote, short_name, to_open,
                                                                port_conflict)
-        job.withheld = frozenset(withheld) | foreign
+        job.listening_read = foreign is not None
+        job.withheld = frozenset(withheld) | (foreign or frozenset())
         remote_ufw_allow_game_ports(remote, to_open, short_name)
     except Exception:
         # Still not fatal — the files are there — but no longer silent: it was logged at debug,
@@ -1617,8 +1622,8 @@ def _ports_not_in(ports, skip):
 def _hold_back_listening(remote, short_name, to_open, port_conflict):
     """Drop from `to_open` every port something is listening on right now.
 
-    -> (to_open, port_conflict, the ports held by someone else). Nothing held back when the scan
-    cannot be read. A port a rule TAGGED with this server's name already opens is not held back:
+    -> (to_open, port_conflict, the ports held by someone else — None when the scan could not be
+    read). Nothing held back then. A port a rule TAGGED with this server's name already opens is not held back:
     that is a retry of an install whose server an earlier attempt started (a panel restart
     mid-install fails the row) finding that server on its own port. The port is open already, and
     was checked when it was opened; holding it back would only report "another process" about the
@@ -1626,7 +1631,7 @@ def _hold_back_listening(remote, short_name, to_open, port_conflict):
     """
     live = _listening_now(remote)
     if live is None:
-        return to_open, port_conflict, frozenset()
+        return to_open, port_conflict, None
     foreign = frozenset(live)
     if foreign.intersection(to_open):
         foreign -= _sm.remote_ufw_tagged_ports(remote, short_name)
@@ -1963,9 +1968,11 @@ def _read_port_after_start(job, remote, gs, started):
     if port == gs.port:
         job.port_read = True
         return started
-    if _post_start_port_refused(job, remote, gs, port):
-        _log.warning("install %s: %s reports port %s after its first start; not adopted — "
-                     "keeping %s", job.short_name, gs.lgsm_name, port, gs.port)
+    why = _post_start_port_refused(job, remote, gs, port)
+    if why:
+        job.port_refused = (port, why)
+        _log.warning("install %s: %s reports port %s after its first start; not adopted (%s) — "
+                     "keeping %s", job.short_name, gs.lgsm_name, port, why, gs.port)
         return started
     old_port, gs.port = gs.port, port
     db.session.commit()
@@ -1978,17 +1985,24 @@ def _read_port_after_start(job, remote, gs, started):
 
 
 def _post_start_port_refused(job, remote, gs, port):
-    """Whether the port LinuxGSM reports after the first start may NOT be adopted.
+    """Why the port LinuxGSM reports after the first start may NOT be adopted, or None when it may.
 
     Not a port; another server's block, SSH or the panel's (withheld_game_ports); or one something
     was listening on before this server first started (step 6's job.withheld). And any port when
-    step 6 never got that far (job.withheld is None): with this server running now, a port in use
-    can no longer be told apart from one that was taken before it started.
+    step 6 never got that far (job.withheld is None), or got there without reading what was
+    listening (job.listening_read): with this server running now, a port in use can no longer be
+    told apart from one that was taken before it started.
     """
-    if job.withheld is None or port in job.withheld or not MIN_PORT <= port <= MAX_PORT:
-        return True
+    if not MIN_PORT <= port <= MAX_PORT:
+        return "it is not a port"
+    if job.withheld is None or not getattr(job, "listening_read", False):
+        return ("the ports already in use on the host could not be read before it started, so "
+                "whether another process had it cannot be told")
+    if port in job.withheld:
+        return "something else was listening on it before this server started"
     rows = GameServer.query.filter_by(remote_id=remote.id).all()
-    return port in withheld_game_ports(rows, gs, _sm.protected_host_ports(remote))
+    holder = withheld_game_ports(rows, gs, _sm.protected_host_ports(remote)).get(port)
+    return ("it is held by %s" % holder) if holder else None
 
 
 def _rescan_started(remote, gs, started):
@@ -2089,13 +2103,7 @@ def _report_not_started(job, gs, s_rc, start_out):
         note += (" — " + reason) if reason else " — check the console for the reason."
         _detail = ("start failed: " + reason) if reason else "start failed"
     elif not getattr(job, "port_read", True):
-        # The sentence below promises the server shows online "once it opens port X" — about a
-        # port nobody read: the game may well be listening on its own one already.
-        note = (f"{short_name} installed and starting, but LinuxGSM has not reported its game "
-                f"port, so the panel cannot confirm the game uses port {gs.port}. The panel reads "
-                f"it again each time it restarts; 'Open all ports' on the host's Firewall page "
-                f"reads it now.")
-        _detail = "started; port %s not open after 90s; port not reported by LinuxGSM" % gs.port
+        note, _detail = _port_unconfirmed_note(job, gs)
     else:
         note = (f"{short_name} installed and starting — it hasn't opened port "
                 f"{gs.port} yet, which some games take a few minutes to do. "
@@ -2103,6 +2111,29 @@ def _report_not_started(job, gs, s_rc, start_out):
         _detail = "started; port %s not open after 90s" % gs.port
     _finish(note, warn=True)
     _audit_install(job, gs, False, _detail)
+
+
+def _port_unconfirmed_note(job, gs):
+    """(message, audit detail) for an install whose game port LinuxGSM never confirmed.
+
+    The usual sentence promises the server shows online "once it opens port X" — about a port
+    nobody read: the game may well be listening on its own one already. Either LinuxGSM reported
+    no port at all, or it reported one after the first start that the panel would not take
+    (_post_start_port_refused), and then the message names that port and why.
+    """
+    short_name, refused = job.short_name, getattr(job, "port_refused", None)
+    if refused:
+        port, why = refused
+        return ((f"{short_name} installed and starting, but LinuxGSM reports port {port} for it, "
+                 f"which the panel did not take: {why}. It is monitored on port {gs.port} for "
+                 f"now; 'Open all ports' on the host's Firewall page reads LinuxGSM's port again "
+                 f"and stores it unless another server, SSH or the panel has it."),
+                "started; port %s not open after 90s; LinuxGSM reports %s, not taken: %s"
+                % (gs.port, port, why))
+    return ((f"{short_name} installed and starting, but LinuxGSM has not reported its game "
+             f"port, so the panel cannot confirm the game uses port {gs.port}. 'Open all ports' "
+             f"on the host's Firewall page reads it again."),
+            "started; port %s not open after 90s; port not reported by LinuxGSM" % gs.port)
 
 
 def _register_uninstall_and_edit(app):

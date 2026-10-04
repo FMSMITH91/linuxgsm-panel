@@ -1114,6 +1114,20 @@ def _monitor_server(remote, gs, probe, ports):
     return False
 
 
+def forget_updown(server_id):
+    """Forget the up/down the monitor last read for a server, as if this process had never seen it.
+
+    For a server whose STORED port just changed under the monitor (game_ports' re-read at panel
+    start). What it last read was the old port — for the rows that re-read heals, a neighbour's:
+    an old import stored on Garry's Mod's 27015 read as up while Garry's Mod ran. The next pass
+    would then compare the new port with that, and a stopped server moved onto its own port paged
+    "went offline unexpectedly". Seen fresh, a server that is down is recorded without a word, and
+    one that is up is no news.
+    """
+    _monitor_state["servers"].pop(server_id, None)
+    _monitor_state["server_misses"].pop(server_id, None)
+
+
 def _mark_expected_offline(server_id, action):
     """Note a power action the PANEL is about to run on a server, for the monitor's alerts.
 

@@ -3370,6 +3370,36 @@ LGSM_CFG_ORDER = ("_default.cfg", "common.cfg", "secrets-common.cfg", "{inst}.cf
 _START_USES_PORT_RE = r"\$\{port\}|\$port(?![A-Za-z0-9_])"
 
 
+# The most of any one LinuxGSM config file the scan reads: they are a few KB. The shell form of the
+# scan (ssh_manager's LGSM_CFG_READ_MAX) reads the same.
+LGSM_CFG_READ_MAX = 1 << 20
+
+
+def _discover_cfg_text(path):
+    """At most LGSM_CFG_READ_MAX bytes of the config file at `path`, as text; "" for anything else.
+
+    Only a regular file, opened without following a symlink (O_NOFOLLOW) or waiting on a fifo
+    (O_NONBLOCK): the game account owns the directory and can put anything there, and a fifo at
+    secrets-common.cfg blocked open() — the whole scan, for every account — while a symlink to
+    /dev/urandom read until the cap. The shell form reads the same files the same way.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        with os.fdopen(fd, "rb") as fh:
+            fd = None
+            return fh.read(LGSM_CFG_READ_MAX).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 def _discover_cfg_port(inst_dir, inst):
     """The game port LinuxGSM's own config gives instance `inst`, or 0 when it gives none.
 
@@ -3379,16 +3409,11 @@ def _discover_cfg_port(inst_dir, inst):
     server.properties, Teamspeak's .ini, ...) and have no `port=`, or one the game never sees. 0 is
     "not in the LinuxGSM config", which the import then reads from LinuxGSM's `details`; reading
     the first `port=` of three files here is what had a Minecraft server imported on Garry's Mod's
-    port. Reads at most 1 MiB of each file: a LinuxGSM config is a few KB.
+    port. What it reads is _discover_cfg_text's.
     """
     port_line = start_line = None
     for name in LGSM_CFG_ORDER:
-        try:
-            with open(os.path.join(inst_dir, name.format(inst=inst)), encoding="utf-8",
-                      errors="replace") as fh:
-                text = fh.read(1 << 20)
-        except OSError:
-            continue
+        text = _discover_cfg_text(os.path.join(inst_dir, name.format(inst=inst)))
         for line in text.split("\n"):     # grep's lines, as the shell form reads them
             if re.match(r"\s*port=", line):
                 port_line = line

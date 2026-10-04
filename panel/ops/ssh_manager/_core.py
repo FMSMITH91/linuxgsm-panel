@@ -2011,6 +2011,9 @@ def _quote(s):
 # so the LAST assignment of a setting wins. `{inst}` is the instance (script) name.
 LGSM_CFG_ORDER = ("_default.cfg", "common.cfg", "secrets-common.cfg", "{inst}.cfg",
                   "secrets-{inst}.cfg")
+# The most of any one of them the discovery scan reads: a LinuxGSM config is a few KB. The helper's
+# form of the scan reads the same.
+LGSM_CFG_READ_MAX = 1 << 20
 
 
 def _discover_scan_script(home="/home"):
@@ -2033,6 +2036,13 @@ def _discover_scan_script(home="/home"):
     `port=` it met in three of the files, so those games came back as 0 and the import stored 27015
     for them: on the test box, Garry's Mod's port, which made an imported Minecraft server read as
     up whenever Garry's Mod was.
+
+    WHAT IT READS of those files, as root on a remote: only a regular file that is not a symlink,
+    at most LGSM_CFG_READ_MAX bytes of it, and only its `port=` and `startparameters=` lines are
+    kept. The game account owns that directory and can put anything there. Holding all five files
+    whole in a shell variable took 1.3 GB for a 256 MB common.cfg, and a FIFO, or a symlink to
+    /dev/urandom, at secrets-common.cfg (which the scan never used to read) ran root's shell until
+    the 45 s timeout — and a scan that times out finds nothing, for every account on the host.
     """
     cfgs = " ".join('"%s"' % f.format(inst="$g") for f in LGSM_CFG_ORDER)
     return (
@@ -2042,7 +2052,9 @@ def _discover_scan_script(home="/home"):
         '  cj=$(crontab -u "$u" -l 2>/dev/null); '
         '  for g in $(ls -1 "$d" 2>/dev/null); do '
         '    [ -x "$h/$u/$g" ] || continue; '
-        '    cf=$(for f in ' + cfgs + '; do cat "$d/$g/$f" 2>/dev/null; echo; done); '
+        '    cf=$(for f in ' + cfgs + '; do x="$d/$g/$f"; [ -f "$x" ] && [ ! -L "$x" ] || continue; '
+        '        head -c %d "$x" 2>/dev/null | grep -E "^[[:space:]]*(port|startparameters)="; '
+        '        done); ' % LGSM_CFG_READ_MAX +
         '    p=$(printf "%s\\n" "$cf" | grep -E "^[[:space:]]*port=" | tail -n 1 '
         '        | sed "s/^[^=]*=//" | grep -oE "[0-9]+" | head -n 1); '
         '    sp=$(printf "%s\\n" "$cf" | grep -E "^[[:space:]]*startparameters=" | tail -n 1); '
