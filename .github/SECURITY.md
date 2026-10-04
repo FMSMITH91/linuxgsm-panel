@@ -140,7 +140,8 @@ this number against `privileged.verbs()`, so it cannot drift from the table agai
 has no `pam_systemd`), so everything the helper started used to run inside
 `linuxgsm-panel.service`'s cgroup, which every panel stop signals. Two things changed, neither of
 which widens what the helper will run:
-* A LinuxGSM action that can leave a server running (`lgsm-command` start, restart, monitor,
+
+- A LinuxGSM action that can leave a server running (`lgsm-command` start, restart, monitor,
   update, force-update, validate, backup, mods-update) and a scheduled task's `cron-run-now` fork a
   child that WAITS while root moves it into a new transient scope under the system manager
   (`busctl call … StartTransientUnit` with that one pid — a fixed argv) and sets its nice and I/O
@@ -152,7 +153,7 @@ which widens what the helper will run:
   whose cgroup is `…/linuxgsm-panel.service`, and for the terminal only a process of the account
   that invoked sudo, leading its own session, and never the helper's own ancestors (the panel's
   main process is a session leader of that account in that cgroup, so it is refused by name).
-* The four jobs that stop the panel's unit (`panel-db-repair`, `panel-restore`,
+- The four jobs that stop the panel's unit (`panel-db-repair`, `panel-restore`,
   `panel-self-update`) or must outlive it (`os-update-run`) start as the main process of a
   transient service of their own (`systemd-run --unit=<fixed name> -- <the helper> --job <name>`)
   and run in its foreground. `--job` is not a verb: it refuses to run anywhere but inside that
