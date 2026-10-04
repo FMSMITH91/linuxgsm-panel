@@ -5971,10 +5971,11 @@ try:
 finally:
     _sm_core.run_command = _o_rc4
 
-# ...and the three console sites must actually USE it — covering the helper is not covering them.
+# ...and the four console sites must actually USE it — covering the helper is not covering them: the
+# window, the poller's first look and tick, and the catch-up a page coming back asks for.
 _sf_src = open(os.path.join(_root, "panel", "routes", "server_files.py"), encoding="utf-8").read()
-check("console read: all three console reads go through it",
-      _sf_src.count("read_as_game_user(") == 3, "found %d" % _sf_src.count("read_as_game_user("))
+check("console read: all four console reads go through it",
+      _sf_src.count("read_as_game_user(") == 4, "found %d" % _sf_src.count("read_as_game_user("))
 check("console read: ...and none of them is a bare run_command on the log any more",
       "run_command(\n                                    remote, f\"stat -c%s" not in _sf_src)
 

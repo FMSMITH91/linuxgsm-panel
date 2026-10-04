@@ -27,8 +27,9 @@ from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can
     server_access_required,
     superadmin_required)
 from panel.services import (lgsm_data)
-from itertools import groupby
+from itertools import count, groupby
 import re
+import secrets
 import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
@@ -176,6 +177,12 @@ def _gmod_removal_result(asked, removed):
 # each tick, and it needs to know whose socket it is asking about.
 _console_viewers = {}
 _viewers_lock = threading.Lock()
+
+# server_id -> {socket sid: {"id", "since", "tries", "waits"}}: the catch-ups pages asked for when they rejoined
+# a console they had left (static/js/server_detail.js leaves the console of a tab hidden for 30 s).
+# The console poller answers each on its next pass (_serve_console_catchups). Guarded by
+# _viewers_lock; a sid's entry goes when it leaves or disconnects.
+_console_catchups = register_server_state({}, _viewers_lock)
 
 # socket sid -> (login id, token digest or None): the CREDENTIAL a console socket joined with, not
 # only whose it is. The per-tick re-check used to ask only about the user ROW, and none of the
@@ -502,7 +509,9 @@ def _console_tick(app, socketio, gs, server_id):
     if out is None:
         _feed_tick(server_id, "read-unframed" if rc == 0 else "read-failed")
         return
-    _emit_console_lines(socketio, remote, server_id, out)
+    # The partial line held from here on is the poller's own (see _console_catchup).
+    state["fresh"] = False
+    _emit_console_lines(socketio, remote, server_id, out, [_console_chain(state), ino, pos + diff])
     # Advance by what was ACTUALLY READ. `head -c diff` emits exactly diff bytes (diff is clamped
     # to what the file holds), and this line is reached only past the frame check above.
     state["pos"] = pos + diff
@@ -603,23 +612,32 @@ def _console_read_start(server_id, ino, size):
     """
     state = _console_offsets.get(server_id)
     if state is None:
-        _console_offsets[server_id] = {"ino": ino, "pos": size}
+        # `fresh`: the end was recorded and nothing read, so whether it lies inside a line — and
+        # what of that line came before it — is not known yet (a catch-up can say: _console_catchup).
+        _console_offsets[server_id] = {"ino": ino, "pos": size, "chain": next(_console_chains),
+                                       "fresh": True}
         return None
     pos = state["pos"]
     if ino != state["ino"] or size < pos:
         # Rotated (LinuxGSM's start mv's the log to a dated name) or truncated. Persist the reset
         # BEFORE reading, so a read that fails below retries from 0 of the NEW file next tick
         # rather than detecting the same rotation again. Drop the half-line held from the OLD
-        # file — gluing it onto the new one's first line is a line that never existed.
+        # file — gluing it onto the new one's first line is a line that never existed. A new
+        # chain: a truncated log's positions start again from 0, so they are not the old ones.
         pos = 0
-        state["ino"], state["pos"] = ino, 0
+        state.update(ino=ino, pos=0, chain=next(_console_chains), fresh=False)
         _console_partial.pop(server_id, None)
         _feed_mark(server_id, "rotations", counter=True)
     return state, pos
 
 
-def _emit_console_lines(socketio, remote, server_id, out):
-    """Push a chunk of whole console lines to the server's room, once cleaned (nothing if empty)."""
+def _emit_console_lines(socketio, remote, server_id, out, at=None):
+    """Push a chunk of whole console lines to the server's room, once cleaned (nothing if empty).
+
+    `at` is where in the log those lines END, as [chain, inode, byte offset] (see _console_chain):
+    a page that has caught up to a place in the log (_console_catchup) drops a push that ends at or
+    before it, and goes on from any that ends after it — by position, never by the lines' text.
+    """
     if out:
         out = _clean_console_text(out)
     if out:
@@ -627,9 +645,10 @@ def _emit_console_lines(socketio, remote, server_id, out):
         # than the moment the poller happened to read it. `ts` is when the panel READ these
         # bytes, alongside the payload rather than inside it (see _console_push).
         rows = _console_rows(out.split("\n"), _host_timezone_cached(remote))
-        socketio.emit("console_output",
-                      {"server_id": server_id, "data": out, "rows": rows, "ts": time.time()},
-                      room=f"console_{server_id}")
+        payload = {"server_id": server_id, "data": out, "rows": rows, "ts": time.time()}
+        if at is not None:
+            payload["at"] = at
+        socketio.emit("console_output", payload, room=f"console_{server_id}")
         _feed_mark(server_id, "pushed_at")
 
 
@@ -645,6 +664,252 @@ def _forget_unwatched_consoles(watched_ids):
     for sid in [k for k in list(_console_offsets) if k not in watched]:
         _console_offsets.pop(sid, None)
         _console_partial.pop(sid, None)
+    with _viewers_lock:
+        for sid in [k for k in list(_console_catchups) if k not in watched]:
+            _console_catchups.pop(sid, None)
+
+
+# Each run of the poller's reads of one console log — begun by a first look, a catch-up or a
+# rotation — is a CHAIN, numbered in the order it began. A byte offset means something only in its
+# own log (inode); the number is what tells a page which of two chains came later, which offsets
+# alone cannot once a log has been truncated and begun again from 0.
+_console_chains = count(1)
+
+
+def _console_chain(state):
+    """The chain number of this read state (one made without a chain gets one now)."""
+    if state.get("chain") is None:
+        state["chain"] = next(_console_chains)
+    return state["chain"]
+
+
+# A catch-up reads at most this much of the log, back from where it is cut. A page that left
+# further back than that is shown the last lines before the cut, under a notice that some are
+# missing — 2000 of them at most, as many as a return ever showed.
+_CATCHUP_REACH = 1024 * 1024
+# How many passes a catch-up whose read did not run is tried on before the page is told so.
+_CATCHUP_TRIES = 3
+
+
+def _catchup_request(raw):
+    """A join's `catchup` as {"id", "since", "tries"}, or None when it carries none (or not one).
+
+    `since` is (inode, byte offset): the [chain, inode, offset] the page last saw — the `at` of the
+    last push it showed, of its last catch-up, or of the leave's answer — or None when it has none.
+    """
+    if not isinstance(raw, dict):
+        return None
+    rid = _json_int(raw.get("id"))
+    if rid is None or not 0 < rid < 2 ** 31:
+        return None
+    since, at = None, raw.get("since")
+    if isinstance(at, list) and len(at) == 3:
+        ino, pos = _json_int(at[1]), _json_int(at[2])
+        if ino is not None and pos is not None and 0 <= ino < 2 ** 64 and 0 <= pos < 2 ** 62:
+            since = (ino, pos)
+    return {"id": rid, "since": since, "tries": 0}
+
+
+def _serve_console_catchups(app, socketio, gs, server_id):
+    """Answer the catch-ups asked for on this console since the last pass.
+
+    Here, in the poller's own pass and before its tick, because the answer has to say exactly where
+    in the log the poller's pushes go on from, and only here is that where the poller stands: no
+    tick of this console is half done, and nothing else moves its offset. The answer goes to the
+    asking socket alone, on the connection the pushes use, so it arrives after every push made
+    before it and before every push made after it. See _console_catchup.
+    """
+    with _viewers_lock:
+        reqs = _console_catchups.pop(server_id, None) or {}
+        watching = set(_console_viewers.get(server_id) or ())
+    for sid, req in reqs.items():
+        if sid not in watching:
+            continue          # left again, or its socket dropped: there is no one to answer
+        if _catchup_ahead(server_id, sid, req):
+            continue
+        try:
+            reply = _console_catchup(gs, server_id, req)
+        except Exception:  # nosec B110 - answered as a read that did not run: tried again, then told
+            app.logger.debug("console catch-up for server %s failed", server_id, exc_info=True)
+            reply = None
+        if reply is None and req["tries"] + 1 < _CATCHUP_TRIES:
+            req["tries"] += 1
+            with _viewers_lock:
+                _console_catchups.setdefault(server_id, {}).setdefault(sid, req)
+            continue
+        if reply is None:
+            reply = {"server_id": server_id, "id": req["id"], "readable": False, "lines": [],
+                     "panel_lines": list(_console_backlog.get(server_id, []))}
+        socketio.emit("console_catchup", reply, to=sid)
+
+
+# How many passes a catch-up from a place ahead of the poller's waits for it (a tick reads 64 KB).
+_CATCHUP_WAITS = 30
+
+
+def _catchup_ahead(server_id, sid, req):
+    """True when the page's place is past where the poller stands in the same log: asked again next pass.
+
+    It can be: with its socket down a page reads the time away from /api/console, which reads to the
+    log's end, and another tab can keep the poller a tick or more behind that. Answered now, the cut
+    would be where the poller stands, BEFORE the page's place, and the pushes after it would start
+    with lines the page has — a push cannot be split at the page's place. So it waits for the poller's
+    ticks to pass it, a few passes at most; one that never does is answered as any other.
+    """
+    state = _console_offsets.get(server_id)
+    since = req["since"]
+    if not (state and since and since[0] == state["ino"] and since[1] > state["pos"]):
+        return False
+    if req.get("waits", 0) >= _CATCHUP_WAITS:
+        return False
+    req["waits"] = req.get("waits", 0) + 1
+    with _viewers_lock:
+        _console_catchups.setdefault(server_id, {}).setdefault(sid, req)
+    return True
+
+
+def _console_catchup(gs, server_id, req):
+    """What a page coming back to this console missed, cut exactly where the poller's pushes go on.
+
+    ONE read of the log (_catchup_cmd), cut where the poller stands — or, when it has not looked at
+    this log yet, at its end, which then becomes where it stands. From `since` (where the page's
+    lines end) when that is in this log and within reach: exactly the lines written since, which
+    nothing has to match by their text. Otherwise the log's last lines, for the page to place by
+    their text, with `gap` when it had a place they do not reach back to (a new log: the server
+    restarted; or more was written than the reach). Returns the `console_catchup` payload, or None
+    when the read did not run (or the log moved under it: the poller's next tick sees that).
+
+    The line the cut lies inside, if it does, is not in the answer: the poller holds it until it is
+    whole (_console_whole_lines) and pushes it then. Where the poller has only taken its first look,
+    this read is what tells it the start of that line, and it holds that from here on — taken from
+    the offset alone, its first push began mid-line ('done' under a 'Loading map...' the page had
+    already shown).
+    """
+    state = _console_offsets.get(server_id)
+    got = _catchup_read(gs, (state["ino"], state["pos"]) if state else None, req["since"])
+    if got is None:
+        return None
+    ino, pos, since_ok, text = got
+    state, lines = _catchup_lines(server_id, state, ino, pos, text)
+    rows, gap = _placed_rows(gs, lines, req["since"], since_ok)
+    return {"server_id": server_id, "id": req["id"], "readable": True, "lines": rows,
+            "at": [_console_chain(state), ino, pos], "since": since_ok, "gap": gap,
+            "now": time.time(), "log_timestamps": any(r.get("t") for r in rows),
+            "panel_lines": list(_console_backlog.get(server_id, []))}
+
+
+def _catchup_read(gs, cut, since):
+    """Run _catchup_cmd for this console: (inode, cut, from `since`?, text), or None when it did not run."""
+    nonce = secrets.token_hex(12)
+    # selfname=: the path names the LinuxGSM script, as the poller's own reads do.
+    out, _, rc = _sm.read_as_game_user(gs.remote, gs.short_name,
+                                       _catchup_cmd(gs.console_log, cut, since, nonce),
+                                       timeout=15, selfname=gs.lgsm_name)
+    return _catchup_parse(out if rc == 0 else "", nonce)
+
+
+def _placed_rows(gs, lines, since, since_ok):
+    """(rows, gap) for whole lines read from a place in the log: at most _CONSOLE_LINES_MAX of them.
+
+    `gap` when the page had a place (`since`) the lines do not start at — another log, or further
+    back than the read reaches — or start at it but more were written than are shown. The log's last
+    lines, read for a page with no place, are placed by their text: nothing is said to be missing.
+    """
+    gap = since is not None and not since_ok
+    if len(lines) > _CONSOLE_LINES_MAX:
+        lines, gap = lines[-_CONSOLE_LINES_MAX:], gap or since_ok
+    rows = (_console_rows(_clean_console_text("\n".join(lines)).split("\n"),
+                          _host_timezone_cached(gs.remote)) if lines else [])
+    return rows, gap
+
+
+def _catchup_lines(server_id, state, ino, pos, text):
+    """(read state, whole lines) of a catch-up's text cut at `pos`: what of the line `pos` lies in is shown.
+
+    No read state (the poller has not looked at this log) or only a first look (`fresh`): this read
+    tells the poller where it stands and what of a line it is inside — it holds that from here on,
+    and pushes it whole. Otherwise what the poller already holds of that line it pushes later; what
+    it does not hold — there is none, or it pushed the line on its own, being longer than it holds
+    (_CONSOLE_PARTIAL_MAX) — is a line here.
+    """
+    whole, nl, frag = text.rpartition("\n")
+    lines = whole.split("\n") if nl else []
+    if state is None or state.get("fresh"):
+        if state is None:
+            state = _console_offsets[server_id] = {"ino": ino, "pos": pos, "chain": next(_console_chains)}
+        state["fresh"] = False
+        if frag:
+            _console_partial[server_id] = frag
+        else:
+            _console_partial.pop(server_id, None)
+        return state, lines
+    held = _console_partial.get(server_id, "")
+    keep = frag if not held else (frag[:-len(held)] if frag.endswith(held) else "")
+    return state, lines + ([keep] if keep.strip() else [])
+
+
+def _catchup_cmd(log_path, cut, since, nonce):
+    """The catch-up's one read: `<inode> <size> <cut> <S|T>` on the first line, then the bytes, framed.
+
+    The log is opened ONCE (fd 3), so its inode, its size and every byte come from the same file
+    even when LinuxGSM rotates it meanwhile; each piece is read through /dev/fd/3, from its own
+    offset. The cut is `cut`'s offset while the file is still that inode and not shorter than it
+    (MOVED otherwise), or the file's end when there is no `cut` (the poller has not looked yet).
+
+    * S, from `since` — in this file, at or before the cut, and within _CATCHUP_REACH of it: the
+      line `since` lies inside, from its start (`tail -n 1` of what is before it), `nonce`, then the
+      bytes from `since` to the cut. Split there as the poller's own reads split, so the two are
+      read alike (a CR ending one piece is a line's end in both).
+    * T, otherwise: the last lines before the cut, from the first newline in the reach's first byte
+      on, so the first one is whole.
+    """
+    reach, back, want = _CATCHUP_REACH, _CONSOLE_PARTIAL_MAX, _CONSOLE_LINES_MAX
+    if cut is None:
+        at = "C=$S; "
+    else:
+        ino, pos = int(cut[0]), int(cut[1])
+        at = (f"if [ \"$I\" != {ino} ] || [ \"$S\" -lt {pos} ]; then echo \"MOVED $I $S\"; exit 0; fi; "
+              f"C={pos}; ")
+    last = (f"Y=$((C > {reach} ? C - {reach} : 0)); if [ \"$Y\" -gt 0 ]; then "
+            f"tail -c +$Y /dev/fd/3 2>/dev/null | head -c $((C - Y + 1)) | tail -n +2; "
+            f"else head -c \"$C\" /dev/fd/3 2>/dev/null; fi | tail -n {want + 1}; ")
+    if since is None:
+        mode, body = "M=T; ", last
+    else:
+        sino, x = int(since[0]), int(since[1])
+        mode = (f"if [ \"$I\" = {sino} ] && [ {x} -le \"$C\" ] && [ $((C - {x})) -le {reach} ]; "
+                f"then M=S; else M=T; fi; ")
+        body = (f"if [ \"$M\" = S ]; then Y=$(({x} > {back} ? {x} - {back} : 0)); "
+                f"tail -c +$((Y + 1)) /dev/fd/3 2>/dev/null | head -c $(({x} - Y)) | tail -n 1; "
+                f"printf %s {nonce}; tail -c +{x + 1} /dev/fd/3 2>/dev/null | head -c $((C - {x})); "
+                f"else {last}fi; ")
+    return (f"L={log_path}; exec 3<\"$L\" 2>/dev/null || {{ echo MISSING; exit 0; }}; "
+            f"set -- $(stat -L -c '%i %s' /dev/fd/3 2>/dev/null); "
+            f"[ \"$#\" = 2 ] || {{ echo MISSING; exit 0; }}; I=$1; S=$2; {at}{mode}"
+            f"echo \"$I $S $C $M\"; printf B; {body}printf E")
+
+
+def _catchup_head(head):
+    """(inode, cut, how) from the first line of _catchup_cmd's answer, or None (MISSING, MOVED, nothing)."""
+    parts = head.split()
+    if len(parts) != 4 or not all(p.isdecimal() for p in parts[:3]) or parts[3] not in ("S", "T"):
+        return None
+    return int(parts[0]), int(parts[2]), parts[3]
+
+
+def _catchup_parse(out, nonce):
+    """(inode, cut, from `since`?, text) from _catchup_cmd's answer, or None when it is not one."""
+    head, _nl, rest = (out or "").partition("\n")
+    got = _catchup_head(head)
+    if got is None or not (rest.startswith("B") and rest.endswith("E")):
+        return None
+    (ino, cut, how), body = got, rest[1:-1]
+    if how == "T":
+        return ino, cut, False, body
+    before, sep, after = body.partition(nonce)
+    if not sep or nonce in after:
+        return None
+    return ino, cut, True, before.rpartition("\n")[2] + after
 
 
 def _evict_unauthorized_viewers(app, socketio, server_id):
@@ -1154,6 +1419,39 @@ def _read_console_window(remote, gs, want, host_tz):
     except Exception:
         lines = []
     return readable, lines
+
+
+def _since_arg(raw):
+    """`?since=<inode>-<offset>` as (inode, offset), or None when absent or not that."""
+    ino, sep, pos = str(raw or "").partition("-")
+    if not (sep and ino.isdecimal() and pos.isdecimal() and len(ino) < 21 and len(pos) < 19):
+        return None
+    return int(ino), int(pos)
+
+
+def _console_place_read(gs, server_id, since):
+    """/api/console's read for a page catching up with its socket down: from its place in the log.
+
+    The same read a catch-up makes (_catchup_cmd), to the log's end, and the poller left alone: there
+    is no stream on this page's socket to cut it for. The lines written since `since` (the page's
+    place), or the log's last lines for a page with none; never the line the end lies inside of —
+    `at` is the end itself, and a read from there brings that line whole. So the page keeps a place
+    in the log through a spell with its socket down, and its reconnect is caught up from it.
+    """
+    got = None
+    try:
+        got = _catchup_read(gs, None, since)
+    except Exception:
+        _log.debug("console place read for server %s failed", server_id, exc_info=True)
+    if got is None:
+        return {"readable": False, "lines": [], "now": time.time(),
+                "panel_lines": list(_console_backlog.get(server_id, []))}
+    ino, pos, since_ok, text = got
+    whole, nl, _frag = text.rpartition("\n")
+    rows, gap = _placed_rows(gs, whole.split("\n") if nl else [], since, since_ok)
+    return {"readable": True, "lines": rows, "at": [0, ino, pos], "since": since_ok, "gap": gap,
+            "now": time.time(), "log_timestamps": any(r.get("t") for r in rows),
+            "panel_lines": list(_console_backlog.get(server_id, []))}
 
 
 def _console_to_poll(app, socketio, server_id):
@@ -1887,6 +2185,8 @@ def _register_console_routes(app):
         gs = get_game(server_id)
         if not current_user.is_superadmin and not has_permission(current_user, VIEW_CONSOLE):
             return jsonify({"error": "Permission denied", "lines": []}), 403
+        if request.args.get("place") == "1":
+            return jsonify(_console_place_read(gs, server_id, _since_arg(request.args.get("since"))))
         remote = gs.remote
         want = _console_lines_wanted()
         host_tz = _host_timezone_cached(remote, app)
@@ -2072,9 +2372,15 @@ def _register_console_viewers(socketio):
             return
         join_room(f"console_{server_id}")
         _cred = _viewer_credential()
+        # A page coming back to a console it left asks, with its join, to be caught up: the poller
+        # answers on its next pass (_serve_console_catchups). Asked here, after the checks above,
+        # so only a socket that may watch this console is ever answered.
+        _req = _catchup_request(data.get("catchup"))
         with _viewers_lock:
             _console_viewers.setdefault(server_id, {})[request.sid] = current_user.id
             _viewer_creds[request.sid] = _cred
+            if _req is not None:
+                _console_catchups.setdefault(server_id, {})[request.sid] = _req
 
     @socketio.on("leave_console")
     def on_leave_console(data):
@@ -2089,13 +2395,21 @@ def _register_console_viewers(socketio):
         # both straight past `except (TypeError, ValueError)` into the socket's error handler.
         server_id = _json_int(data.get("server_id")) if isinstance(data, dict) else None
         if server_id is None:
-            return
+            return None
         leave_room(f"console_{server_id}")
         with _viewers_lock:
+            was = request.sid in _console_viewers.get(server_id, {})
             if server_id in _console_viewers:
                 _console_viewers[server_id].pop(request.sid, None)
                 if not _console_viewers[server_id]:
                     del _console_viewers[server_id]
+            (_console_catchups.get(server_id) or {}).pop(request.sid, None)
+        # The answer (the leave's ack) is where in the log the poller stands — [chain, inode,
+        # offset], as each push's `at` — for a page whose last lines came from a read and not from a
+        # push: it asks to be caught up from there when it comes back. Every push made before this
+        # reached it first, on the same connection. Only to a socket that was watching this console.
+        state = _console_offsets.get(server_id) if was else None
+        return [_console_chain(state), state["ino"], state["pos"]] if state else None
 
     @socketio.on("disconnect")
     def on_console_disconnect():
@@ -2109,6 +2423,8 @@ def _register_console_viewers(socketio):
                 watchers.pop(sid, None)
             for k in [k for k, v in _console_viewers.items() if not v]:
                 del _console_viewers[k]
+            for reqs in list(_console_catchups.values()):
+                reqs.pop(sid, None)
             _viewer_creds.pop(sid, None)
             _socket_addrs.pop(sid, None)
         _socket_hooks.run_disconnect_hooks(sid)
@@ -2139,6 +2455,9 @@ def _start_console_poller(app, socketio, supervise):
                                 # stayed silent for the whole of an update the panel had just told
                                 # the operator to watch it for.
                                 _drain_action_output(app, gs.remote, server_id)
+                                # A page back from a hidden spell is caught up first, from where
+                                # the poller stands before this tick (_serve_console_catchups).
+                                _serve_console_catchups(app, socketio, gs, server_id)
                                 _console_tick(app, socketio, gs, server_id)
                             except Exception as exc:  # nosec B112 - try/except/continue is the point:
                                 # one unreadable console must not stop the poll for every OTHER

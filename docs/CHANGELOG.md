@@ -296,15 +296,19 @@ CI-verified commit regardless of this file — this changelog is for humans.
   about 1,800 an hour, for each console left open in another tab, a minimised window or a locked
   phone. A quick switch away costs nothing. Coming back rejoins straight away and fills in what was
   written in the meantime from the log file, each line once and in order, along with the panel's
-  own lines that went to the console meanwhile, such as an update's result. That includes a return
-  whose connection dropped while the tab was away, as it does on a phone that slept. The catch-up
-  reads back at most 2,000 lines. If more was written, or the server was restarted while the tab
-  was away (a restart starts a new log file, and the catch-up reads the current one), or the host
-  never answered the catch-up's read, the console says that some output is not shown, at the point
-  where it is missing. Lines filled in this way have no time beside them unless the log itself
-  stamps them, since the panel did not see when they were written. A tab stays in while an update
-  or another long panel action it saw start is still running, so that action's output keeps
-  arriving as it is written.
+  own lines that went to the console meanwhile, such as an update's result. The panel works out
+  where the page left off by its position in the log file, not by matching text, so lines the
+  game repeats word for word, such as a heartbeat or an autosave notice, are neither dropped nor
+  shown twice. That includes a return whose connection dropped while the tab was away, as it does
+  on a phone that slept. A tab whose connection was already down when it left, and that had been
+  sent no new line since it last read the log, has no position to go on and is still matched by
+  text. The catch-up shows at most 2,000 lines. If more was written, or the server
+  was restarted while the tab was away (a restart starts a new log file, and the catch-up reads the
+  current one), or the host never answered the catch-up's read, the console says that some output
+  is not shown, at the point where it is missing. Lines filled in this way have no time beside them
+  unless the log itself stamps them, since the panel did not see when they were written. A tab
+  stays in while an update or another long panel action it saw start is still running, so that
+  action's output keeps arriving as it is written.
 - **The debug report says what is wrong, covers far more of the panel, and is safer to post.** It
   now opens with **At a glance**: every problem any section found, failures first, and the sections
   that could not be read. Below that is one verdict line per area. Diagnostics are sorted worst
