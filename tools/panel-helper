@@ -4064,6 +4064,8 @@ def _cron_job_exec(pw, home, job_id, b64):
     devnull = os.open(os.devnull, os.O_RDWR)
     for fd in (0, 1, 2):
         os.dup2(devnull, fd)
+    if devnull > 2:
+        os.close(devnull)                 # dup2 kept the copies; this one would leak
     os.chdir(home)
     # nosec B606 - no shell here: the runner is the account's own script, run AS that account
     # after the drop above, with arguments that passed v_cron_job_id and v_cron_b64.
