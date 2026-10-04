@@ -29,6 +29,7 @@ Nothing here reaches a real transport: the console's reads go to the rig, the re
 """
 import json as _json38
 import os
+import re as _re38
 import shutil as _shutil38
 import subprocess as _sp38  # nosec B404 - runs node and bash on this part's own fixtures
 import tempfile as _tf38
@@ -1751,7 +1752,26 @@ class _ActRig38:
         return new
 
 
-def _unwatched_update38(loop, gs_id, admin, sio, n, label, width=64):
+def _end_pushes38(gs_id, remote, action="update"):
+    """End `action`'s tail as its worker does; return the lines each _console_push carried, per push."""
+    pushes = []
+    push = _sh38._console_push
+
+    def _seen(app, server_id, text, ts=None):
+        pushes.append([ln for ln in str(text).split("\n") if ln.strip()])
+        push(app, server_id, text, ts)
+    _sh38._console_push = _seen
+    try:
+        _sh38._end_action_tail(_p9, gs_id, remote, action, 0)
+    finally:
+        _sh38._console_push = push
+    return pushes
+
+
+_NOTICE38 = "(earlier output of this update is not shown here; all of it is in /home/mcsrv38/.panel-update.log)"
+
+
+def _unwatched_update38(loop, gs_id, admin, sio, n, label, width=64, cut=True):
     """An update writing n lines of `width` bytes that runs start to end while its only tab is away."""
     real = _sh38._action_log_path("mcsrv38", "update")
     act = _ActRig38(real)
@@ -1766,31 +1786,74 @@ def _unwatched_update38(loop, gs_id, admin, sio, n, label, width=64):
     for _ in range(3):
         _pass38(loop)
     drained = len(act.calls)
-    pushed = []
-    push = _sh38._console_push
-
-    def _seen(app, server_id, text, ts=None):
-        pushed.extend(ln for ln in str(text).split("\n") if ln.strip())
-        push(app, server_id, text, ts)
-    _sh38._console_push = _seen
-    try:
-        _sh38._end_action_tail(_p9, gs_id, NS(host="192.0.2.38", name="p38-host"), "update", 0)
-    finally:
-        _sh38._console_push = push
+    pushes = _end_pushes38(gs_id, NS(host="192.0.2.38", name="p38-host"))
     sio.emit("join_console", {"server_id": gs_id})        # back in view: the page reads the backlog
     body = _p9_client(admin).get("/api/console/%d" % gs_id).get_json() or {}
     rows = [r.get("line") for r in body.get("panel_lines") or []]
-    tail = [r for r in rows if r.startswith("UPD ")]
-    told = pushed[:-1]
+    end = pushes[0] if len(pushes) == 2 else []
+    told = [ln for ln in end if ln.startswith("UPD ")]
+    # What a page coming back replays: the notice (when lines were left out) right above them.
+    head = [_NOTICE38] if cut else []
     check("B server: an update writing %s of output while its only tab is away: nothing is drained while "
           "nobody watches, and its end makes ONE read, of the update's last whole lines — no more than the "
           "backlog keeps beside the end marker, every one kept — so the returning page shows them, in "
-          "order, then how it ended" % label,
-          (drained, len(act.calls) - drained, rows[-1:], tail == told, told == out[-len(told):], len(told) >= 100,
+          "order, then how it ended%s" % (label, ", under a line that says the rest is in the output file"
+                                           if cut else ", every line, and nothing said to be missing"),
+          (drained, len(act.calls) - drained, pushes[-1:], end == head + told, told == out[-len(told):],
+           len(told) >= 100, (len(told) == n) != cut, rows[-len(end) - 1:] == end + pushes[-1],
            gs_id in _sh38._action_output)
-          == (0, 1, ["[panel] update finished successfully."], True, True, True, False),
-          repr((drained, len(act.calls) - drained, len(tail), len(told), told[:1], rows[-2:], out[-1][:20])))
+          == (0, 1, [["[panel] update finished successfully."]], True, True, True, True, True, False),
+          repr((drained, len(act.calls) - drained, len(told), n, end[:1], rows[-len(end) - 1:][:2], rows[-1:],
+                out[-1][:20])))
     sio.emit("leave_console", {"server_id": gs_id})
+
+
+def _watched_end38(gs_id):
+    """A WATCHED update's end, its last lines short and many: every one of them goes to the page."""
+    remote = NS(host="192.0.2.38", name="p38-host")
+    real = _sh38._action_log_path("mcsrv38", "update")
+    act = _ActRig38(real)
+    _set38(_core38, "shell_as_game_user", act)
+    _sh38._console_backlog.pop(gs_id, None)
+    _sh38._begin_action_tail(_p9, gs_id, "update", real, "mcsrv38")
+    act.write(200, "OLD", width=49)
+    _sh38._drain_action_output(_p9, remote, gs_id)        # the poller's tick, two seconds ago
+    out = act.write(700, "FIN", width=49)                  # 34 KB in its last two seconds, then it exits
+    pushes = _end_pushes38(gs_id, remote)
+    check("B server: a watched update whose last two seconds print 700 short lines (34 KB, one drain's worth): its "
+          "end pushes all 700 to the console being watched, in order, and says nothing is missing",
+          pushes == [out, ["[panel] update finished successfully."]],
+          repr(([len(p) for p in pushes], pushes[0][:1] if pushes else None)))
+    _sh38._console_backlog.pop(gs_id, None)
+
+
+# LinuxGSM's colour, an erase-line, a window title (OSC) and a progress line redrawn with \r.
+_COLOUR38 = "\x1b[0;32m[  OK  ]\x1b[0m Starting\x1b[K\n\x1b]0;steamcmd\x07done\nProgress 10%\rProgress 20%\rProgress 100%\n"
+
+
+def _end_colour38(gs_id):
+    """The end read's push is rendered as the drain's is: colour canonical, every other escape gone."""
+    remote = NS(host="192.0.2.38", name="p38-host")
+    real = _sh38._action_log_path("mcsrv38", "update")
+    for label, before in (("a watched action's end", 0), ("an unwatched action's end (its last lines)", 300 * 1024)):
+        act = _ActRig38(real)
+        _set38(_core38, "shell_as_game_user", act)
+        _sh38._console_backlog.pop(gs_id, None)
+        _sh38._begin_action_tail(_p9, gs_id, "update", real, "mcsrv38")
+        act.write(before // 64, "PRE")
+        with open(act.paths[real], "a", encoding="utf-8") as fh:
+            fh.write(_COLOUR38)
+        _end_pushes38(gs_id, remote)
+        sent = "\n".join(r["line"] for r in _sh38._console_backlog.get(gs_id, []))
+        bare = _re38.sub(r"\x1b\[[0-9;]*m", "", sent)
+        check("B server: " + label + " reaches the console coloured as LinuxGSM wrote it — [  OK  ] still green — "
+              "and nothing else of the terminal's: no erase-line, no window title, no carriage return of a redrawn "
+              "progress line, and no control byte but the colour's own",
+              all(("\x1b[32m[  OK  ]\x1b[0m Starting" in sent, "\x1b[K" not in sent, "\x1b]" not in sent,
+                   "steamcmd" not in sent, "\ndone\n" in sent, "\nProgress 100%\n" in sent,
+                   not [ch for ch in bare if ord(ch) < 32 and ch != "\n"])),
+              repr(sent[-160:]))
+    _sh38._console_backlog.pop(gs_id, None)
 
 
 def _server_ended_entry38(loop, gs_id, sio):
@@ -1886,6 +1949,10 @@ def _section_server38(rig, gs_id, admin):
         _unwatched_update38(loop, gs_id, admin, a, 3000, "192 KB")
         _unwatched_update38(loop, gs_id, admin, a, 16384, "1 MB")
         _unwatched_update38(loop, gs_id, admin, a, 600, "600 KB in 1 KB lines", width=1000)
+        _unwatched_update38(loop, gs_id, admin, a, 150, "300 KB in lines of 2047 characters", width=2048)
+        _unwatched_update38(loop, gs_id, admin, a, 300, "80 KB in 300 lines", width=270, cut=False)
+        _watched_end38(gs_id)
+        _end_colour38(gs_id)
         _server_ended_entry38(loop, gs_id, a)
         _inflight_end38(gs_id)
         _begun_during_end38(gs_id)

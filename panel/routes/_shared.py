@@ -1352,39 +1352,52 @@ def _drain_action_output(app, remote, server_id):
     return True
 
 
-def _final_drain_cmd(path, pos):
-    """The end-of-action read: what is left of `path` past byte `pos`, as much as the backlog keeps.
+# The end read leaves room in the backlog for the line that says output was left out: one row, and
+# a little of the byte budget (a backlog of long lines can otherwise fill all of it, and the oldest
+# row — that line — would be the one to go).
+_FINAL_ROWS = _CONSOLE_BACKLOG_MAX - 2
+_FINAL_BYTES = _CONSOLE_BACKLOG_BYTES - 1024
 
-    Prints the size on its own first line, as _drain_action_output's command does, then the output's
-    last lines: as many as the backlog keeps beside the end marker that follows them — one row is
-    left for it, and the bytes are counted raw, newlines and all, which is more than the backlog
-    counts, so the marker always fits beside them. A cut that lands inside a line drops that line:
-    the byte before the cut is read too, and everything up to the first newline from there is
-    skipped, so what is kept starts on a line of its own.
+
+def _final_drain_cmd(path, pos):
+    """The end-of-action read: what is left of `path` past byte `pos`.
+
+    Prints `<size> <how>` on its first line, then the bytes:
+
+    * `A`: no more than one drain (_ACTION_TAIL_CHUNK) is left, so ALL of it, from `pos`, as the
+      poller's own drain reads it. This is a watched action: the poller has drained it up to a few
+      seconds ago, and its viewer sees every line it printed since, however many short ones.
+    * `W` or `C`: more is left than that: an action that ran with nobody watching. Its last lines,
+      as many as the backlog keeps beside the line saying output was left out and the end marker
+      (_FINAL_ROWS), from at most its last _FINAL_BYTES, starting a byte early and skipping to the
+      first newline from there, so what is kept starts on a line of its own. `C` says lines were
+      left out (the byte bound cut, or more lines than that were left), `W` that none were.
     """
-    pos, keep, rows = int(pos), _CONSOLE_BACKLOG_BYTES, _CONSOLE_BACKLOG_MAX - 1
-    return (f"s=$(stat -c%s {path} 2>/dev/null || echo 0); printf '%s\\n' \"$s\"; "
-            f"if [ \"$s\" -gt {pos + keep} ]; then "
-            f"tail -c +$((s - {keep})) {path} 2>/dev/null | head -c {keep + 1} | tail -n +2; "
-            f"elif [ \"$s\" -gt {pos} ]; then "
-            f"tail -c +{pos + 1} {path} 2>/dev/null | head -c $((s - {pos})); "
-            f"fi | tail -n {rows}")
+    pos, keep, rows, chunk = int(pos), _FINAL_BYTES, _FINAL_ROWS, _ACTION_TAIL_CHUNK
+    return (f"s=$(stat -c%s {path} 2>/dev/null || echo 0); "
+            f"if [ \"$s\" -le {pos + chunk} ]; then printf '%s A\\n' \"$s\"; "
+            f"if [ \"$s\" -gt {pos} ]; then tail -c +{pos + 1} {path} 2>/dev/null | head -c $((s - {pos})); fi; "
+            f"else if [ \"$s\" -gt {pos + keep} ]; then b=$((s - {keep})); else b={pos}; fi; "
+            f"n=$(tail -c +$((b + 1)) {path} 2>/dev/null | head -c $((s - b)) | LC_ALL=C grep -ac ''); "
+            f"if [ \"$b\" -gt {pos} ] || [ \"$n\" -gt {rows} ]; then m=C; else m=W; fi; "
+            f"printf '%s %s\\n' \"$s\" \"$m\"; "
+            f"if [ \"$b\" -gt {pos} ]; then tail -c +$((b)) {path} 2>/dev/null | head -c $((s - b + 1)) "
+            f"| tail -n +2; else tail -c +$((b + 1)) {path} 2>/dev/null | head -c $((s - b)); fi | tail -n {rows}; fi")
 
 
 def _drain_action_to_end(app, remote, server_id, entry):
-    """Send what is left of `entry`'s output as its action finishes: ONE read, to the output's end.
+    """Send what is left of `entry`'s output as its action finishes: ONE read (_final_drain_cmd).
 
     The poller drains an action's output only for a console someone is watching, so an action that
     ran with nobody watching — every tab on it left (static/js/server_detail.js leaves a console
     hidden for 30 s), or started by a bot or from the dashboard with no console open — had read
     nothing when it ended, and one 64 KB chunk from byte 0 was all it got: an update's start, and
-    never the lines that say whether it worked. A watched action is usually a few lines behind; an
-    unwatched one can be megabytes. Either way the read is of the output's last whole lines, as many
-    as the backlog keeps beside the end marker (_final_drain_cmd): that is all a page coming back can
-    replay, and it ends with how the action ended. Read in 64 KB chunks from the stale offset
-    instead, it pushed the action's first 64 KB (then trimmed from the backlog) and every later
-    chunk began and ended inside a line, each piece shown as a line of its own; and each extra read
-    held back "[panel] … finished" a little longer.
+    never the lines that say whether it worked. Now a watched action's end reads what is left whole,
+    as the drain always did, and an unwatched one's reads its last lines — all a page coming back can
+    replay — with a line first that says the rest is in the output file, when any is left out. Read
+    in 64 KB chunks from the stale offset instead, it pushed the action's first 64 KB (then trimmed
+    from the backlog) and every later chunk began and ended inside a line, each piece shown as a
+    line of its own; and each extra read held back "[panel] … finished" a little longer.
     """
     try:
         # Through the module, as _drain_action_output calls it (see the note there).
@@ -1394,9 +1407,17 @@ def _drain_action_to_end(app, remote, server_id, entry):
         _log.debug("final action-output read for server %s failed", server_id, exc_info=True)
         return
     head, _, body = (out or "").partition("\n")
+    size, _, how = head.strip().partition(" ")
     # The size line first is the sign the read ran: a failed or timed-out transport answers "".
-    if head.strip().isdigit() and body.strip():
-        _console_push(app, server_id, terminal.render_colour(body))
+    if not size.isdigit() or how not in ("A", "W", "C") or not body.strip():
+        return
+    # render_colour, as the drain does: LinuxGSM's colour kept, every other escape gone.
+    text = terminal.render_colour(body)
+    if how == "C":
+        # Not "[panel] ": the page counts a line with that in it as an action's start or end.
+        text = (f"(earlier output of this {entry['action']} is not shown here; all of it is in "
+                f"{entry['path']})\n{text}")
+    _console_push(app, server_id, text)
 
 
 # Which registration THIS worker made, per (server_id, action). A thread-local (a greenlet-local

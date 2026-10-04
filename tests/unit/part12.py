@@ -842,14 +842,15 @@ try:
 
     _p9_state._action_output[90003] = {"action": "update", "path": "/x", "user": "u", "pos": 0,
                                        "prev": None}
-    _p9_patch(_p9_sh, "_drain_action_output", _dr_raise)
+    # The end's own read: _end_action_tail calls _drain_action_to_end, not the poller's drain.
+    _p9_patch(_p9_sh, "_drain_action_to_end", _dr_raise)
     _P9_EMITS.clear()
     _eat_ok = True
     try:
         _p9_sh._end_action_tail(_p9, 90003, None, "update", 3)
     except Exception:
         _eat_ok = False
-    _p9_patch(_p9_sh, "_drain_action_output", _P9_PATCHED[(_p9_sh, "_drain_action_output")])
+    _p9_patch(_p9_sh, "_drain_action_to_end", _P9_PATCHED[(_p9_sh, "_drain_action_to_end")])
     check("action tail: a final drain that raises still deregisters and reports the exit code",
           _eat_ok and 90003 not in _p9_state._action_output
           and any("update failed (exit 3)" in (e[1] or {}).get("data", "") for e in _P9_EMITS),
@@ -1206,7 +1207,8 @@ try:
     _p9_patch(_p9_sm, "invalidate_game_version", lambda rid, s: _sd_side.append(("version", rid, s)))
     _p9_patch(_p9_sm, "set_game_priority", lambda remote, user, *a, **k: _sd_side.append(("prio", user)))
     _p9_patch(_p9_sm, "server_live_metrics", lambda *a, **k: {"ram_total": 0})   # "can't tell"
-    _p9_patch(_p9_sh, "_drain_action_output", lambda app, remote, sid: False)
+    # The end of a long action reads its output once more (_drain_action_to_end): nothing here.
+    _p9_patch(_p9_sh, "_drain_action_to_end", lambda app, remote, sid, entry: None)
 
     # ── the synchronous action path (update-lgsm is the one runnable action that is neither long,
     #    a power action, nor read-only) and the read-only one ─────────────────────────────────────
