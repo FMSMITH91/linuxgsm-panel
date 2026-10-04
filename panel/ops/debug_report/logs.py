@@ -69,6 +69,9 @@ _GAME_READS = (
     ("gamedig player list", ("gamedig", "[.players[]")),
     ("gamedig players", ("gamedig", "players|length")),
     ("gamedig", ("gamedig",)),
+    # A page coming back to a console it left, caught up from its place in the log
+    # (server_files._catchup_cmd): before "console read", whose tokens it also holds.
+    ("console catch-up", ("exec 3<", "/dev/fd/3")),
     ("console poll", ("S=$(stat -c", "tail -c +")),
     ("console stat", ("stat -c",)),
     ("console read", ("printf B", "tail -c +")),

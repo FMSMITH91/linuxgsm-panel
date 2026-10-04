@@ -287,8 +287,28 @@ CI-verified commit regardless of this file — this changelog is for humans.
   host. For three servers the model gives about 9 privileged calls a minute before (the live host's
   report measured about the same) and about 2 after.
 
-  An open console still costs one call per two seconds; the console was left as it was apart from
-  merging its two reads.
+  A console you are looking at still costs one call per two seconds; apart from merging its two
+  reads, the console was left as it was. A console tab left in the background no longer costs
+  anything (next entry).
+- **A console tab left in the background stops costing the host a privileged read every two
+  seconds.** Once a server page's tab has been hidden for 30 seconds it leaves the live console, and
+  the panel stops reading that log when nobody else is watching it: one sudo call every two seconds,
+  about 1,800 an hour, for each console left open in another tab, a minimised window or a locked
+  phone. A quick switch away costs nothing. Coming back rejoins straight away and fills in what was
+  written in the meantime from the log file, each line once and in order, along with the panel's
+  own lines that went to the console meanwhile, such as an update's result. The panel works out
+  where the page left off by its position in the log file, not by matching text, so lines the
+  game repeats word for word, such as a heartbeat or an autosave notice, are neither dropped nor
+  shown twice. That includes a return whose connection dropped while the tab was away, as it does
+  on a phone that slept. A tab whose connection was already down when it left, and that had been
+  sent no new line since it last read the log, has no position to go on and is still matched by
+  text. The catch-up shows at most 2,000 lines. If more was written, or the server
+  was restarted while the tab was away (a restart starts a new log file, and the catch-up reads the
+  current one), or the host never answered the catch-up's read, the console says that some output
+  is not shown, at the point where it is missing. Lines filled in this way have no time beside them
+  unless the log itself stamps them, since the panel did not see when they were written. A tab
+  stays in while an update or another long panel action it saw start is still running, so that
+  action's output keeps arriving as it is written.
 - **The debug report says what is wrong, covers far more of the panel, and is safer to post.** It
   now opens with **At a glance**: every problem any section found, failures first, and the sections
   that could not be read. Below that is one verdict line per area. Diagnostics are sorted worst
@@ -651,6 +671,17 @@ CI-verified commit regardless of this file — this changelog is for humans.
   now pages when the Restart's three minutes are up, where it paged about two minutes after it ran.
   A server the panel first sees down after it starts (an update, a reboot of its own host) was
   never announced as down, so its return isn't announced either; it used to page "back online".
+- **An update's output no longer appears twice in the live console.** On a server page opened
+  before any panel action had run, an update's lines showed as they came, and a later console poll
+  appended the whole update again beneath them.
+- **An update that ran with no console open keeps its result.** The panel reads a long action's
+  output only while someone has its console open. An update started from the dashboard, by a bot,
+  or with the console closed got one read when it ended, of its first 64 KB, so a long one lost the
+  lines that say whether it worked. The end now reads the last of the output in one read, as much
+  as the console's history keeps (its last 598 lines, within 255 KB, whole lines only), so opening
+  the console afterwards shows how it ended. When that leaves earlier lines out, a line above them
+  says so and names the file on the host that holds all of the output. An action someone is
+  watching still shows every line it printed, however many it wrote in its last seconds.
 - **Player counts work for Counter-Strike 1.6 and 2, TF2, HL2:DM, Left 4 Dead 2, Call of Duty 4
   and Minecraft Bedrock.** The panel asked gamedig for them by names gamedig 5 renamed (`cs16`,
   `cs2`, `tf2`, `hl2dm`, `left4dead2`, `cod4`) or never had (`minecraftpe`), and every query
