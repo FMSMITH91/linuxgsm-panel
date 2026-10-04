@@ -1548,8 +1548,14 @@ def _summary_reason_checks41():
                        reason="cancelled by ops", sent=None)
     eq("summary: a rollback's server that stayed stopped is explained by its own reason only — the "
        "rollback restarts one with no Autostart, so a queued stop is all it can be", rollback,
-       "Reboot of vps-test did not happen (cancelled by ops): 1 server coming back. 1 started now, 0 by "
-       "Autostart within 5 min. 1 stayed stopped, as planned (a queued stop).")
+       "Reboot of vps-test did not happen (cancelled by ops): 1 server coming back. 1 started by the "
+       "panel, 0 by Autostart within 5 min. 1 stayed stopped, as planned (a queued stop).")
+    failed = _said41([("mc", "FAIL: no tmux session", False), ("gmod", "autostart", False)], _T41 + 200,
+                     rollback_=True, reason="cancelled by ops", sent=None)
+    eq("summary: a rollback counts as coming back only the servers that are — one whose start failed "
+       "is named as not back, not counted among them too", failed,
+       "Reboot of vps-test did not happen (cancelled by ops): 1 server coming back. 0 started by the "
+       "panel, 1 by Autostart within 5 min. mc didn't come back: FAIL: no tmux session.")
     only_off = _said41([("mc", "stopped", False)], _T41 + 300, sent=_T41, boot_seen=_T41 + 20)
     eq("summary: after a reboot, one kept down because restoring is off says that, and no 'running "
        "again' when nothing was to come back", only_off,

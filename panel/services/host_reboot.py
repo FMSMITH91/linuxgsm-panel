@@ -2030,29 +2030,41 @@ def _queued_kind(q):
     return q if q is True or q is False else None
 
 
+def _stayed_why(whys):
+    """The reasons for these _queued_kind values: one reason alone, else each with its count."""
+    named = [(k, whys.count(k)) for k in (True, False, None) if k in whys]
+    if len(named) == 1:
+        return _STAYED_WHY[named[0][0]]
+    return "; ".join("%d: %s" % (n, _STAYED_WHY[k]) for k, n in named)
+
+
 def _stayed_note(recs):
     """The 'N stayed stopped, as planned (why).' sentence, naming only the reasons these rows have, or ''."""
     whys = [_queued_kind(d.get("queued")) for _g, d in recs if d.get("result") == "stopped"]
-    kinds = [k for k in (True, False, None) if any(w is k for w in whys)]
-    if not kinds:
+    if not whys:
         return ""
-    if len(kinds) == 1:
-        why = _STAYED_WHY[kinds[0]]
-    else:
-        why = "; ".join("%d: %s" % (sum(1 for w in whys if w is k), _STAYED_WHY[k]) for k in kinds)
     # They were RUNNING before the reboot (a stopped server is never in a plan): not "as before".
-    return " %d stayed stopped, as planned (%s)." % (len(whys), why)
+    return " %d stayed stopped, as planned (%s)." % (len(whys), _stayed_why(whys))
+
+
+def _rollback_head(remote, meta, auto, panel):
+    """The summary's first sentences when the reboot did not happen: how many are coming back, and how.
+
+    Only the rows that are: one whose start failed is named after, as not back, and the panel's
+    starts can be minutes apart (a failed one is tried three times), so none is said to be "now".
+    """
+    back = auto + panel
+    return ("Reboot of %s did not happen (%s): %d server%s coming back. %d started by the panel, %d "
+            "by Autostart within 5 min." % (_host_label(remote), meta.get("reason") or "?", back,
+                                             "" if back == 1 else "s", panel, auto))
 
 
 def _summary(remote, recs, now, rollback_):
     auto, panel, _stayed, kept, failed = _tally(recs)
-    want = auto + panel + len(failed)
     if rollback_:
-        text = ("Reboot of %s did not happen (%s): %d server%s coming back. %d started now, %d by "
-                "Autostart within 5 min." % (_host_label(remote), recs[0][1].get("reason") or "?",
-                                             want, "" if want == 1 else "s", panel, auto))
+        text = _rollback_head(remote, recs[0][1], auto, panel)
     else:
-        text = _reboot_head(remote, recs[0][1], now, auto, panel, want)
+        text = _reboot_head(remote, recs[0][1], now, auto, panel, auto + panel + len(failed))
     text += _stayed_note(recs)
     if kept:
         # Only in a rollback: the plan was undone before its stop took, so it never stopped.
