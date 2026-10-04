@@ -1,5 +1,6 @@
 """Part 41's sections U to AC (clean host reboots); part41 runs them."""
 import json as _json41
+import math as _math41
 import shutil as _shutil41
 import sys
 from types import SimpleNamespace as NS
@@ -85,9 +86,10 @@ def _stop_pending_checks41():
     _CLOCK41.sleep(120)
     _restore_until41(r.id, between=_monitor_cron41(h, {}))
     db.session.expire_all()
-    check("queued stop: ...after the boot it stays stopped, and the summary says so",
+    check("queued stop: ...after the boot it stays stopped, and the summary says so, naming its own "
+          "reason only",
           _all41(not h.running("gmodserver"),
-                 "1 stayed stopped, as planned (a queued stop" in "".join(_bodies41("Host reboot")),
+                 "1 stayed stopped, as planned (a queued stop)." in "".join(_bodies41("Host reboot")),
                  "as before" not in "".join(_bodies41("Host reboot"))),
           repr(_NOTES41))
     check("queued restart: the restore's start does the restart that was waiting, and clears it",
@@ -106,11 +108,18 @@ def _bare_job_checks41():
                  (HR.job_of(r.id) or {}).get("phase") == "rebooting"))
     eq("idle host: the 'Rebooting' notice says nothing was running (not 'stopped 0 ... they come back')",
        _bodies41("Rebooting vps"), ["No game servers were running, so none were stopped."])
+    sent = (HR.job_of(r.id) or {}).get("sent") or 0
+    _CLOCK41.sleep(9.5)                       # the host takes a few seconds to go down and boot
     h.reboot_now()
+    booted = h.booted_at
     _CLOCK41.sleep(30)
     _pass41()
     check("idle host: its return is reported once, and the job ends",
           _all41(_noted41("no game servers were running"), HR.job_of(r.id) is None), repr(_NOTES41))
+    eq("idle host: the report says when the host's new boot started (from its own uptime, rounded up) "
+       "— not 'back after 0 min'", _bodies41("Host reboot"),
+       ["vps rebooted: its new boot started within %d s of the reboot being sent (no game servers were "
+        "running)." % _math41.ceil(booted - sent)])
 
 
 def _bare_silent_checks41():
@@ -1155,6 +1164,10 @@ def _none_stopped_rollback_checks41():
           _all41(_lines41(h, "stop mcserver"), not _lines41(h, "start mcserver"),
                  not h.running("mcserver"), "cancel" in summary.lower()),
           repr((h.events(), summary)))
+    check("rollback: ...and its summary gives the queued stop as the reason, and only that — a rollback "
+          "restarts a server with no Autostart, so that reason would be false here",
+          _all41("1 stayed stopped, as planned (a queued stop)." in summary, "no Autostart" not in summary,
+                 "restoring" not in summary), summary)
 
 
 def _unknown_warning_checks41():
@@ -1326,7 +1339,7 @@ def _idle_tick_checks41():
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# AD. The monitor's own server alerts around a plan, through its REAL sweep
+# AD. The monitor's own server alerts around a plan, through its REAL sweep; the summary's words
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _mon_stubs41(h, rows):
     """The REAL monitor sweep, reading this stand-in host: its port scan is the sessions running.
@@ -1474,3 +1487,52 @@ def _failed_row_back_checks41():
           _all41(done is not None, "fctrserver didn't come back" in summary, during == [],
                  _server_pages41() == [("server_up", "fctrserver")]), repr((done, summary, during, _NOTES41)))
 
+
+_VPS41 = NS(display_name="vps-test")
+_T41 = 1791000000.0
+
+
+def _said41(rows, now, rollback_=False, **meta):
+    """HR._summary's text for rows given as (name, result, queued), each carrying `meta`."""
+    recs = [(NS(name=n), dict(meta, result=res, queued=q,
+                             restore="failed" if res.startswith("FAIL") else "done"))
+            for n, res, q in rows]
+    return HR._summary(_VPS41, recs, now, rollback_)[0]
+
+
+_BACK41 = [("mc", "panel", False), ("gmod", "autostart", False), ("fctr", "autostart", False)]
+
+
+def _summary_time_checks41():
+    fast = _said41(_BACK41, _T41 + 299.5, sent=_T41, boot_seen=_T41 + 9.4)
+    slow = _said41(_BACK41, _T41 + 400, sent=_T41, boot_seen=_T41 + 150)
+    unsent = _said41(_BACK41, _T41 + 400, sent=None, boot_seen=_T41 + 150)
+    eq("summary: the host's new boot and the servers' return are each said as what they measure, "
+       "rounded UP so 'within' is true — not 'back after 4 min' for a host that booted in seconds", fast,
+       "vps-test rebooted: its new boot started within 10 s of the reboot being sent. 3/3 running again "
+       "within 5 min of the reboot being sent (2 by Autostart, 1 started by the panel).")
+    eq("summary: ...a host slow to boot is said in minutes, rounded up too", slow,
+       "vps-test rebooted: its new boot started within 3 min of the reboot being sent. 3/3 running again "
+       "within 7 min of the reboot being sent (2 by Autostart, 1 started by the panel).")
+    eq("summary: ...and with no send time on record it claims no time at all", unsent,
+       "vps-test rebooted. 3/3 running again (2 by Autostart, 1 started by the panel).")
+
+
+def _summary_reason_checks41():
+    rollback = _said41([("mc", "panel", False), ("cod", "stopped", True)], _T41 + 60, rollback_=True,
+                       reason="cancelled by ops", sent=None)
+    eq("summary: a rollback's server that stayed stopped is explained by its own reason only — the "
+       "rollback restarts one with no Autostart, so a queued stop is all it can be", rollback,
+       "Reboot of vps-test did not happen (cancelled by ops): 1 server coming back. 1 started now, 0 by "
+       "Autostart within 5 min. 1 stayed stopped, as planned (a queued stop).")
+    only_off = _said41([("mc", "stopped", False)], _T41 + 300, sent=_T41, boot_seen=_T41 + 20)
+    eq("summary: after a reboot, one kept down because restoring is off says that, and no 'running "
+       "again' when nothing was to come back", only_off,
+       "vps-test rebooted: its new boot started within 20 s of the reboot being sent. 1 stayed stopped, "
+       "as planned (no Autostart, and restoring is turned off).")
+    mixed = _said41([("a", "stopped", True), ("b", "stopped", False), ("c", "stopped", None)],
+                    _T41 + 300, sent=_T41, boot_seen=_T41 + 20)
+    check("summary: ...mixed reasons are each counted, and a plan from before the reason was recorded "
+          "keeps the either/or", mixed.endswith(
+              " 3 stayed stopped, as planned (1: a queued stop; 1: no Autostart, and restoring is turned "
+              "off; 1: a queued stop, or no Autostart with restoring turned off)."), mixed)

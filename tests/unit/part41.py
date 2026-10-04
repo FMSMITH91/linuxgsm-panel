@@ -44,7 +44,8 @@ from unit.reboot41_b import (
     _fire_race41, _fired_wait_cancel_checks41, _idle_tick_checks41, _inflight_panel_owned_checks41, _job_numbers_checks41, _kept_down_checks41,
     _leftover_checks41, _local_warning_text_checks41, _lock_order_checks41, _none_rollback_checks41, _none_stopped_rollback_checks41,
     _own_account_checks41, _page_checks41, _refused_wait_checks41, _rescan_budget_checks41, _rescan_cancel_checks41, _rescan_checks41,
-    _restart_mid_plan_checks41, _settings_checks41, _stop_pending_checks41, _unknown_warning_checks41, _warning_text_checks41, _window_job_checks41)
+    _restart_mid_plan_checks41, _settings_checks41, _stop_pending_checks41, _summary_reason_checks41, _summary_time_checks41,
+    _unknown_warning_checks41, _warning_text_checks41, _window_job_checks41)
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # Run everything under one set of stubs, and put the world back afterwards.
@@ -90,6 +91,7 @@ _SECTIONS41 = [
     ("panel restart mid-plan: no 'back online'", _restart_mid_plan_checks41),
     ("kept down through a plan: no 'went offline'", _kept_down_checks41),
     ("a server reported not back, back later", _failed_row_back_checks41),
+    ("summary times", _summary_time_checks41), ("summary reasons", _summary_reason_checks41),
 ]
 
 

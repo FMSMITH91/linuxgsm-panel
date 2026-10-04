@@ -2,6 +2,7 @@
 import importlib.machinery as _mach41
 import importlib.util as _ilu41
 import json as _json41
+import math as _math41
 import sys
 import time as _time41
 from types import SimpleNamespace as NS
@@ -343,10 +344,14 @@ def _monitor_cron41(h, started):
 
 def _restore_flow_checks41(auth, r, h, rows):
     """The host reboots; the monitor restarts its own; the panel starts the rest."""
+    sent = (_rr41(rows["gmod"].id) or {}).get("sent") or 0
     h.reboot_now()
+    booted = h.booted_at
     _CLOCK41.sleep(120)
     monitor_started = {}
     passes = _restore_until41(r.id, between=_monitor_cron41(h, monitor_started))
+    # Rounded UP, as "within" needs: the boot (from the host's own uptime) and the last confirmation.
+    within = (_math41.ceil(booted - sent), _math41.ceil(_math41.ceil(_CLOCK41.time() - sent) / 60.0))
     starts = _lines41(h, "start ")
     check("restore (%s): the host is back and every plan row resolved" % auth, passes is not None,
           repr([_rr41(g.id) for g in rows.values()]))
@@ -358,9 +363,11 @@ def _restore_flow_checks41(auth, r, h, rows):
     check("restore (%s): the Autostart servers came back by the monitor alone" % auth,
           sorted(monitor_started) == ["fctrserver", "gmodserver"], repr(monitor_started))
     back = _bodies41("Host reboot", "host_reboot")
-    check("restore (%s): ONE summary: back, 3/3 running again, 2 by Autostart and 1 by the panel"
-          % auth, _all41(len(back) == 1, "3/3 running again (2 by Autostart, 1 started by the panel)"
-                         in "".join(back)), repr(_NOTES41))
+    check("restore (%s): ONE summary: when the host's new boot started, and 3/3 running again within "
+          "the time to the last one confirmed, 2 by Autostart and 1 by the panel" % auth,
+          back == ["vps rebooted: its new boot started within %d s of the reboot being sent. 3/3 running "
+                   "again within %d min of the reboot being sent (2 by Autostart, 1 started by the panel)."
+                   % within], repr((within, _NOTES41)))
     check("restore (%s): the rows are cleared and the outcome audited" % auth,
           _all41(not HR.plan_rows(r.id),
                  [(a, s) for a, s, _d in _audit41("remote_reboot_restore")] == [("remote_reboot_restore", True)]))

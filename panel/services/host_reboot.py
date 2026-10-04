@@ -1987,21 +1987,73 @@ def _tally(recs):
             results.count("kept"), failed)
 
 
+def _within(secs):
+    """A duration rounded UP, so "within" it is true: seconds under 2 min, else whole minutes."""
+    secs = max(0, int(-(-secs // 1)))
+    return "%d s" % secs if secs < 120 else "%d min" % -(-secs // 60)
+
+
+def _boot_clause(boot, sent):
+    """The clause saying when the host's new boot started after the send, or '' when that is not known.
+
+    `boot` is the host's own boot time (now - its uptime, when the panel first saw the new boot),
+    so it holds even when the panel was down and saw the host back minutes later.
+    """
+    if not sent or not boot or boot <= sent:
+        return ""
+    return ": its new boot started within %s of the reboot being sent" % _within(boot - sent)
+
+
+def _reboot_head(remote, meta, now, auto, panel, want):
+    """The summary's first sentences after a reboot: when the host booted, and how many are back within what.
+
+    The servers' time runs to when the restore CONFIRMED the last of them, no earlier than it came back.
+    """
+    sent = meta.get("sent")
+    text = "%s rebooted%s." % (_host_label(remote), _boot_clause(meta.get("boot_seen"), sent))
+    if want:
+        when = " within %s of the reboot being sent" % _within(now - sent) if sent else ""
+        text += " %d/%d running again%s (%d by Autostart, %d started by the panel)." % (
+            auto + panel, want, when, auto, panel)
+    return text
+
+
+# Why a server stayed stopped, by its row's "queued": a queued stop (True), no Autostart with
+# restoring turned off (False), or a plan recorded before "queued" was (None): either of the two.
+# A rollback restarts the False case, so only the reasons the rows really have are named.
+_STAYED_WHY = {True: "a queued stop", False: "no Autostart, and restoring is turned off",
+               None: "a queued stop, or no Autostart with restoring turned off"}
+
+
+def _queued_kind(q):
+    """A row's "queued" as True, False or None (anything else is read as not recorded)."""
+    return q if q is True or q is False else None
+
+
+def _stayed_note(recs):
+    """The 'N stayed stopped, as planned (why).' sentence, naming only the reasons these rows have, or ''."""
+    whys = [_queued_kind(d.get("queued")) for _g, d in recs if d.get("result") == "stopped"]
+    kinds = [k for k in (True, False, None) if any(w is k for w in whys)]
+    if not kinds:
+        return ""
+    if len(kinds) == 1:
+        why = _STAYED_WHY[kinds[0]]
+    else:
+        why = "; ".join("%d: %s" % (sum(1 for w in whys if w is k), _STAYED_WHY[k]) for k in kinds)
+    # They were RUNNING before the reboot (a stopped server is never in a plan): not "as before".
+    return " %d stayed stopped, as planned (%s)." % (len(whys), why)
+
+
 def _summary(remote, recs, now, rollback_):
-    auto, panel, stayed, kept, failed = _tally(recs)
+    auto, panel, _stayed, kept, failed = _tally(recs)
     want = auto + panel + len(failed)
     if rollback_:
         text = ("Reboot of %s did not happen (%s): %d server%s coming back. %d started now, %d by "
                 "Autostart within 5 min." % (_host_label(remote), recs[0][1].get("reason") or "?",
                                              want, "" if want == 1 else "s", panel, auto))
     else:
-        mins = max(0, int((now - (recs[0][1].get("sent") or now)) // 60))
-        text = ("%s is back after %d min: %d/%d running again (%d by Autostart, %d started by the "
-                "panel)." % (_host_label(remote), mins, auto + panel, want, auto, panel))
-    if stayed:
-        # They were RUNNING before the reboot (a stopped server is never in a plan): not "as before".
-        text += (" %d stayed stopped, as planned (a queued stop, or no Autostart with restoring "
-                 "turned off)." % stayed)
+        text = _reboot_head(remote, recs[0][1], now, auto, panel, want)
+    text += _stayed_note(recs)
     if kept:
         # Only in a rollback: the plan was undone before its stop took, so it never stopped.
         text += " %d kept running (%s not stopped)." % (kept, "it was" if kept == 1 else "they were")
@@ -2085,8 +2137,9 @@ def _bare_job_step(remote, job, now):
 def _bare_answered(remote, job, ident, now, sent):
     if job.get("boot") and ident["boot"] != job["boot"]:
         _reboot_awaiting[remote.id] = {"sent": sent, "back": now}
-        return "%s is back after %d min (no game servers were running)." % (
-            _host_label(remote), max(0, int((now - sent) // 60)))
+        boot = now - float(ident.get("uptime") or 0)
+        return "%s rebooted%s (no game servers were running)." % (
+            _host_label(remote), _boot_clause(boot, job.get("sent")))
     if now - sent >= DID_NOT_HAPPEN_AFTER and ident.get("state") != "stopping":
         _reboot_awaiting.pop(remote.id, None)
         return "Reboot of %s did not happen: it is still on the same boot." % _host_label(remote)
