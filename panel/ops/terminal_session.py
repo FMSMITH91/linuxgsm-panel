@@ -709,11 +709,12 @@ def _open_local(sess, cols, rows):
         except (OSError, ValueError):  # nosec B110
             pass
 
+    scope = _user_scope_argv()
     try:
-        proc = subprocess.Popen(  # nosec B603  # nosemgrep - argv list, no shell=True; argv[0] is
-            # this account's own passwd shell, never caller input and never read from the
-            # environment.
-            [shell, "-l"], stdin=slave, stdout=slave, stderr=slave,
+        proc = subprocess.Popen(  # nosec B603  # nosemgrep - argv list, no shell=True; the shell
+            # is this account's own passwd shell, never caller input and never read from the
+            # environment, behind at most the fixed systemd-run prefix of _user_scope_argv.
+            scope + [shell, "-l"], stdin=slave, stdout=slave, stderr=slave,
             preexec_fn=_attach_ctty,  # nosec B606 - not a shell; see the docstring above
             start_new_session=True, env=env, cwd=os.path.expanduser("~"))
     except Exception:
@@ -725,12 +726,49 @@ def _open_local(sess, cols, rows):
         os.close(slave)
         raise
     os.close(slave)
+    if not scope:
+        _scope_started_shell(proc.pid)
     os.set_blocking(master, False)      # see _write_fd: a blocking write here stops the whole hub
     sess._fd = master
     sess._proc = proc
     sess.resize(cols, rows)
     sess._pump = threading.Thread(target=_pump_fd, args=(sess,), daemon=True)
     sess._pump.start()
+
+
+# ── The local shell's own cgroup ──────────────────────────────────────────────────────────────
+# The local terminal's shell is a child of the panel, so it lived in the panel unit's cgroup:
+# anything an operator started there that outlives the tab — `./gmodserver start` under the
+# panel's own account, `sudo -u mcserver ./mcserver start`, any tmux, screen or nohup job — was
+# ended at the next panel restart or self-update, silently. So the shell gets a scope of its own:
+#   * a per-user install starts it in one of its user manager's (`systemd-run --user --scope`,
+#     the same probe and prefix the game starts use), which costs nothing and leaves no window;
+#   * a system install has no user manager for the panel's account, so the helper moves the shell
+#     — and whatever its session has already forked — into a system scope right after it starts;
+#   * neither available: where it always was.
+# Closing the tab is unchanged: the shell's process group gets its SIGHUP as before. Nothing kills
+# the scope, so a job the operator detached keeps running, as it did until the next restart.
+def _user_scope_argv():
+    """The --user scope prefix for the shell, or [] (see _core.user_scope_argv). Never raises."""
+    try:
+        from panel.ops.ssh_manager import _core
+        return _core.user_scope_argv()
+    except (ImportError, OSError, ValueError):
+        _log.debug("user scope probe failed", exc_info=True)
+        return []
+
+
+def _scope_started_shell(pid):
+    """Ask the helper to move the just-started shell into a scope of its own.
+
+    Never raises: a shell that stays in the panel's cgroup is today's behaviour, not a failed
+    terminal.
+    """
+    try:
+        from panel.ops import system_ops as _so
+        _so.terminal_scope(pid)
+    except (ImportError, OSError, ValueError):
+        _log.debug("terminal scope request failed", exc_info=True)
 
 
 def _open_paramiko(sess, server, cols, rows):

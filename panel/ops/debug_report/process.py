@@ -209,8 +209,15 @@ def _service_lines(ctx, res, facts):
             % ("n/a" if facts["restarts"] is None else facts["restarts"],
                _tok(props.get("Result")), _tok(props.get("NeedDaemonReload")),
                _tok(props.get("KillMode"))))
-    res.add("- **Unit cgroup memory**: %s now, peak %s · tasks %s"
-            % (_mb(props.get("MemoryCurrent")), _mb(props.get("MemoryPeak")),
+    # The UNIT's figure, not this process's: everything started inside the unit is charged to it,
+    # page cache included — which stays charged after the process that read it has exited — and
+    # the peak covers the cgroup's whole life, which game servers inside it keep going across
+    # panel restarts. A live report read "20976 MB" beside a 112 MB panel, most of it file cache.
+    # So the anon/file split is printed beside it, and the line says whose memory it is.
+    res.add("- **Unit cgroup memory** (the panel and everything started inside its unit; this "
+            "process's own RSS is under Process): %s now%s, peak %s over the cgroup's life · "
+            "tasks %s"
+            % (_mb(props.get("MemoryCurrent")), _memory_split(), _mb(props.get("MemoryPeak")),
                _tok(props.get("TasksCurrent"))))
     wd = props.get("WorkingDirectory")
     res.add("- **Unit's WorkingDirectory is this checkout**: %s"
@@ -220,6 +227,7 @@ def _service_lines(ctx, res, facts):
 
 # ── R18: resources, descriptors, the cgroup's other processes ────────────────────────────────────
 PROC = "/proc"
+CGROUP_ROOT = "/sys/fs/cgroup"
 _COMM_ALLOW = frozenset(("python3", "python", "ssh", "bash", "sh", "sudo", "tmux: server", "tmux",
                          "systemd-run", "journalctl", "git", "ufw", "fail2ban-client", "tailscale",
                          "timeout", "node", "gamedig"))
@@ -275,6 +283,43 @@ def _cgroup_path():
     return None
 
 
+def _unit_cgroup_dir(path):
+    """The panel unit's cgroup directory, from `path`.
+
+    CGROUP_ROOT + `path` when `path` is the panel unit's cgroup; ValueError for a path that climbs,
+    None for any other cgroup (cgroup v1, or not started by the unit).
+    """
+    if not path or not path.endswith("/" + _src_systemd.UNIT):
+        return None
+    # Kernel data, but it is joined onto CGROUP_ROOT, so a '..' segment is refused, not followed.
+    if not path.startswith("/") or ".." in path.split("/"):
+        raise ValueError("cgroup path")
+    return CGROUP_ROOT + path
+
+
+def _memory_split():
+    """The unit cgroup's memory split into anon and file cache, as text for its line.
+
+    ' (anon N MB, file cache M MB)' from memory.stat; '' outside the unit or on cgroup v1; the
+    reason class when the file could not be read.
+    """
+    try:
+        base = _unit_cgroup_dir(_cgroup_path())
+        if base is None:
+            return ""
+        stat = {}
+        with open(base + "/memory.stat", encoding="ascii", errors="replace") as fh:
+            for line in fh:
+                key, _, val = line.partition(" ")
+                if key in ("anon", "file"):
+                    stat[key] = int(val)
+    except (OSError, ValueError) as exc:
+        return " (anon/file split unreadable: %s)" % type(exc).__name__
+    if len(stat) != 2:
+        return ""
+    return " (anon %s, file cache %s)" % (_mb(stat["anon"]), _mb(stat["file"]))
+
+
 def _uptime():
     with open(os.path.join(PROC, "uptime"), encoding="ascii") as fh:
         return float(fh.read().split()[0])
@@ -291,32 +336,42 @@ def _pid_info(pid, uptime, hz, me):
     cpu = (int(rest[11]) + int(rest[12])) / hz
     uid = os.stat(base).st_uid
     return {"comm": comm if comm in _COMM_ALLOW else "other", "state": rest[0], "age": age,
-            "cpu_pct": 100.0 * cpu / age,
-            "owner": "panel" if uid == me else "root" if uid == 0 else "other"}
+            "cpu_pct": 100.0 * cpu / age, "pid": pid, "ppid": int(rest[1]),
+            "owner": "panel" if uid == me else "root" if uid == 0 else "another account"}
 
 
 def _cgroup_others(path):
-    """The OTHER processes in this cgroup, at most MAX_PIDS; a pid that vanished is skipped."""
-    # The path comes from /proc/self/cgroup: kernel data, but it is joined onto /sys/fs/cgroup,
-    # so a '..' segment is refused rather than followed.
+    """(the OTHER processes in this cgroup, at most MAX_PIDS; how many could not be read).
+
+    A pid that could not be read is COUNTED, not dropped: under a hidepid /proc another account's
+    processes are simply not there, and a silent skip made the line an undercount of exactly the
+    processes it exists to show. (One that exited in between counts too; the line says both.)
+    """
+    # The path comes from /proc/self/cgroup: kernel data, but it is joined onto CGROUP_ROOT, so a
+    # '..' segment is refused rather than followed.
     if not path.startswith("/") or ".." in path.split("/"):
         raise ValueError("cgroup path")
-    with open("/sys/fs/cgroup" + path + "/cgroup.procs", encoding="ascii") as fh:
+    with open(CGROUP_ROOT + path + "/cgroup.procs", encoding="ascii") as fh:
         pids = [int(p) for p in fh.read().split()[:MAX_PIDS + 1]]
     me, hz, up = os.geteuid(), os.sysconf("SC_CLK_TCK"), _uptime()
-    out = []
+    out, unreadable = [], 0
     for pid in pids:
         if pid == os.getpid():
             continue
         try:
             out.append(_pid_info(pid, up, hz, me))
         except (OSError, ValueError, IndexError):
-            continue
-    return out[:MAX_PIDS]
+            unreadable += 1
+    return out[:MAX_PIDS], unreadable
 
 
 def _group_procs(procs):
-    """'ssh ×2 (up 4 s), other ×1 (up 3 h, R, 98% CPU, root)': comm from the allowlist only."""
+    """The cgroup's other processes, grouped: 'ssh ×2 (up 4 s), other ×1 (up 3 h, R)'.
+
+    The comm is from the allowlist only, and a group says its owner when that is not the panel.
+    Every state a member is in is shown, not only the oldest's: a short-lived R process used to
+    merge invisibly into an older group of the same name and owner.
+    """
     groups = {}
     for p in procs:
         groups.setdefault((p["comm"], p["owner"]), []).append(p)
@@ -324,8 +379,7 @@ def _group_procs(procs):
     for (comm, owner), ps in sorted(groups.items()):
         oldest = max(ps, key=lambda q: q["age"])
         extra = [] if owner == "panel" else [owner]
-        if oldest["state"] in ("R", "D", "Z"):
-            extra.append(oldest["state"])
+        extra.extend(st for st in ("R", "D", "Z") if any(q["state"] == st for q in ps))
         if oldest["cpu_pct"] >= 50:
             extra.append("%d%% CPU" % oldest["cpu_pct"])
         parts.append("%s ×%d (up %s%s)" % (comm, len(ps), ago(oldest["age"]),
@@ -333,23 +387,105 @@ def _group_procs(procs):
     return ", ".join(parts)
 
 
-def _cgroup_line(res):
+def _self_age(uptime, hz):
+    """How long this process has been running, from /proc/self/stat."""
+    with open(os.path.join(PROC, "self", "stat"), encoding="utf-8", errors="replace") as fh:
+        raw = fh.read()
+    return max(uptime - int(raw[raw.rindex(")") + 2:].split()[19]) / hz, 0.0)
+
+
+def _game_procs(procs, panel_age, main_pid=None):
+    """The cgroup's GAME-SERVER processes.
+
+    Every 'tmux: server' and everything descended from one, and anything older than this process
+    (left over from an earlier run of the panel) other than the unit's MainPID, the panel itself
+    when something else is reading. Not by owner: on the supported single-box
+    install LinuxGSM runs as the panel's own account, and there an owner test sees the panel's own
+    children; but the panel never runs `tmux new-session` itself, so a tmux server here is a game
+    server whoever owns it.
+    """
+    by_pid = {p["pid"]: p for p in procs}
+    found = []
+    for p in procs:
+        older = (panel_age is not None and p["age"] > panel_age + 1.0
+                 and str(p["pid"]) != str(main_pid))
+        if older or _under_tmux(p, by_pid):
+            found.append(p)
+    return found
+
+
+def _under_tmux(p, by_pid):
+    """True when `p` is a 'tmux: server', or descends from one, among the cgroup's processes."""
+    q, seen = p, set()
+    while q is not None and q["pid"] not in seen:
+        if q["comm"] == "tmux: server":
+            return True
+        seen.add(q["pid"])
+        q = by_pid.get(q["ppid"])
+    return False
+
+
+def _game_finding(game, scope):
+    """The warning's text.
+
+    What a panel stop does to these processes depends on who owns them and which manager runs the
+    panel.
+    """
+    n, own = len(game), any(p["owner"] == "panel" for p in game)
+    head = "%d game-server process%s run%s inside the panel's cgroup" % (
+        n, "" if n == 1 else "es", "s" if n == 1 else "")
+    them = "it" if n == 1 else "them"
+    if scope == "system":
+        return head + ": every panel stop, restart or self-update kills %s, silently" % them
+    if scope == "user" and own:
+        return (head + ", some as the panel's own account: every panel stop, restart or "
+                "self-update kills those, silently")
+    if scope == "user":
+        return (head + " as other accounts: systemd fails to stop them with the panel (Operation "
+                "not permitted, in the journal), so they survive, but their memory and CPU count "
+                "as the panel's")
+    return head + ": every panel stop signals %s" % them
+
+
+def _game_lines(res, procs, unit):
+    """R18: the game-server processes in the cgroup, and a warning when there are any."""
+    try:
+        hz = os.sysconf("SC_CLK_TCK")
+        panel_age = _self_age(_uptime(), hz)
+    except (OSError, ValueError, IndexError):
+        panel_age = None
+    game = _game_procs(procs, panel_age, (unit.get("props") or {}).get("MainPID"))
+    owners = {}
+    for p in game:
+        owners[p["owner"]] = owners.get(p["owner"], 0) + 1
+    res.add("- **Game-server processes in the panel's cgroup** (tmux servers, what they started, "
+            "and anything older than this process): %d%s"
+            % (len(game), "" if not game else " (%s)" % ", ".join(
+                "%s ×%d" % (o, owners[o]) for o in sorted(owners))))
+    if game:
+        res.find("warn", AREA, _game_finding(game, unit.get("scope")))
+
+
+def _cgroup_line(res, facts=None):
     try:
         path = _cgroup_path()
-        if not path or not path.endswith("/" + _src_systemd.UNIT):
+        if _unit_cgroup_dir(path) is None:
             res.add("- **Other processes in the panel's cgroup**: unavailable (cgroup v1, or not "
                     "running under the panel's unit)")
             return
-        procs = _cgroup_others(path)
+        procs, unreadable = _cgroup_others(path)
     except (OSError, ValueError) as exc:
         res.add(unread_line("Other processes in the panel's cgroup", exc))
         return
-    res.add("- **Other processes in the panel's cgroup**: %d%s"
-            % (len(procs), (": " + _group_procs(procs)) if procs else ""))
+    res.add("- **Other processes in the panel's cgroup**: %d%s%s"
+            % (len(procs), (": " + _group_procs(procs)) if procs else "",
+               "; %d more could not be read (exited, or hidden by hidepid)" % unreadable
+               if unreadable else ""))
     zombies = sum(1 for p in procs if p["state"] == "Z")
     res.add("- **Zombie processes in the cgroup**: %d" % zombies)
     if zombies:
         res.find("warn", AREA, "zombie processes in the panel's cgroup (children not reaped)")
+    _game_lines(res, procs, (facts or {}).get("unit") or {})
 
 
 def _resource_lines(ctx, res, facts):
@@ -366,7 +502,7 @@ def _resource_lines(ctx, res, facts):
             ", ".join("%s %d" % (k, fds[k]) for k in sorted(fds)) or "none"))
     except OSError as exc:
         res.add(unread_line("File descriptors", exc))
-    _cgroup_line(res)
+    _cgroup_line(res, facts)
 
 
 # ── R17: the eventlet runtime ────────────────────────────────────────────────────────────────────

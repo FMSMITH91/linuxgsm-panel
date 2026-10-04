@@ -740,8 +740,8 @@ try:
     # in the second half — an UnboundLocalError on the success line of every restore, which no
     # suite would have hit because restore is destructive and nothing called it. flake8 caught
     # that one; this check is what makes it stay caught.
-    _o_hp, _o_rv = _bk._helper_present, _bk._run_verb
-    _bk._helper_present = lambda: True
+    _o_hp, _o_rv, _o_ss = _bk._helper_present, _bk._run_verb, _bk._is_system_service
+    _bk._helper_present = _bk._is_system_service = lambda: True
     _bk._run_verb = lambda *a, **k: ("", "", 0)
     try:
         _rok, _rmsg = _bk.restore_backup(_ename, passphrase=_bk_pass)
@@ -891,7 +891,7 @@ try:
               oct(_osb.stat(str(_bk._safe_path(_uname))).st_mode & 0o777))
         _sh2.rmtree(_stage_dir, ignore_errors=True)
     finally:
-        _bk._helper_present, _bk._run_verb = _o_hp, _o_rv
+        _bk._helper_present, _bk._run_verb, _bk._is_system_service = _o_hp, _o_rv, _o_ss
 finally:
     _bk.get_passphrase = _orig_getpass
 

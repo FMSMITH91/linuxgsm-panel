@@ -130,9 +130,35 @@ detached OS update, Tailscale's join, the panel's own restore/self-update, the V
 steps, running a LinuxGSM action as the game user, enrolling a game account in the group the
 grant names, installing a game's dependencies, reading the pending-restart flags, freeing
 Steam's per-account crash-dump slots, configuring NodeSource's repository on a remote with its
-signing key pinned, installing gamedig on a remote from its hash-locked lockfile and deleting a
-ufw rule by number only while it is still the rule that was checked** — 104 verbs. (`tests/unit_test.py` asserts
+signing key pinned, installing gamedig on a remote from its hash-locked lockfile, deleting a
+ufw rule by number only while it is still the rule that was checked, a scheduled task's "Run now",
+moving game servers and the local terminal's shell out of the panel's own cgroup, and removing an
+uninstalled server's crontab** — 108 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
+
+**Where what the helper starts runs (cgroups).** sudo opens no session on Ubuntu (its PAM stack
+has no `pam_systemd`), so everything the helper started used to run inside
+`linuxgsm-panel.service`'s cgroup, which every panel stop signals. Two things changed, neither of
+which widens what the helper will run:
+
+- A LinuxGSM action that can leave a server running (`lgsm-command` start, restart, monitor,
+  update, force-update, validate, backup, mods-update) and a scheduled task's `cron-run-now` fork a
+  child that WAITS while root moves it into a new transient scope under the system manager
+  (`busctl call … StartTransientUnit` with that one pid — a fixed argv) and sets its nice and I/O
+  class (`ionice -c 0 -p <pid>`); only then does it drop to the game account through the same
+  `_drop_to`, initgroups included. `systemd-run --scope --uid=` is not used: up to systemd v261 it
+  keeps root's supplementary groups. `cron-run-now` execs the account's own `~/.lgsm-cron/run`
+  AS that account, the reach the panel's `sudo -u` grant already gives it. `adopt-game-processes`
+  and `terminal-scope` move processes OUT of the panel's own cgroup and nowhere else: only one
+  whose cgroup is `…/linuxgsm-panel.service`, and for the terminal only a process of the account
+  that invoked sudo, leading its own session, and never the helper's own ancestors (the panel's
+  main process is a session leader of that account in that cgroup, so it is refused by name).
+- The four jobs that stop the panel's unit (`panel-db-repair`, `panel-restore`,
+  `panel-self-update`) or must outlive it (`os-update-run`) start as the main process of a
+  transient service of their own (`systemd-run --unit=<fixed name> -- <the helper> --job <name>`)
+  and run in its foreground. `--job` is not a verb: it refuses to run anywhere but inside that
+  unit, and re-validates its arguments. Without systemd as PID 1, or without a unified (v2)
+  cgroup path to find that unit by, the old detached child is kept.
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
 said the panel had "113" privileged call sites and tracked them down to 42. That counted only

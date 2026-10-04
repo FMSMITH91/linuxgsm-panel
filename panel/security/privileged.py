@@ -864,6 +864,30 @@ def _answers(s):
     return s
 
 
+def _pid(s):
+    """A process id, 2..4194304 — see tools/panel-helper's v_pid."""
+    s = str(s)
+    if not re.fullmatch(r"[1-9][0-9]{0,6}", s) or not 2 <= int(s) <= 4194304:
+        raise VerbError("not a process id")
+    return s
+
+
+def _cron_job_id(s):
+    """A scheduled task's recorder id (hex) — see tools/panel-helper's v_cron_job_id."""
+    s = str(s)
+    if not re.fullmatch(r"[0-9a-f]{6,64}", s):
+        raise VerbError("not a job id")
+    return s
+
+
+def _cron_b64(s):
+    """A scheduled task's command, base64 as the crontab line carries it — see v_cron_b64."""
+    s = str(s)
+    if len(s) > 16384 or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", s):
+        raise VerbError("not a base64 command")
+    return s
+
+
 _ARGV = {
     "ufw-status": ([_choice("plain", "numbered", "verbose")],
                    lambda a: [UFW, "status"] if a[0] == "plain" else [UFW, "status", a[0]], None),
@@ -997,6 +1021,9 @@ _ARGV = {
 
     # ── cron and user accounts ──
     "crontab-list": ([_managed_user], lambda a: ["crontab", "-u", a[0], "-l"], None),
+    # An uninstalled server's crontab, removed before its account (userdel -r leaves it behind).
+    # A destroy verb: the panel's own account is refused, as for userdel. See tools/panel-helper.
+    "crontab-remove": ([_destroyable_user], lambda a: ["crontab", "-u", a[0], "-r"], None),
     "user-create": ([_managed_user], lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
     "user-lock-password": ([_managed_user], lambda a: ["passwd", "-l", a[0]], None),
     "user-delete": ([_destroyable_user], lambda a: ["userdel", "-r", a[0]], None),
@@ -1054,6 +1081,15 @@ _ARGV = {
     # see run_as_game_user, which picks the transport and keeps the remote form unchanged.
     "lgsm-command": ([_managed_user, _ident, _choice(*LGSM_ACTIONS), _answers,
                       _choice("yes", "no")], lambda a: [], None),
+    # A scheduled task's "Run now", as its account, in a transient scope of its own so a task that
+    # starts the server does not leave it in the panel's cgroup. Local-only, like lgsm-command:
+    # run_cron_job_now picks the transport and keeps the remote shell form. See tools/panel-helper.
+    "cron-run-now": ([_managed_user, _cron_job_id, _cron_b64], lambda a: [], None),
+    # Game-server processes already in the panel's own cgroup, moved into scopes of their own, once
+    # at panel start; and the panel's local web terminal shell, given one when it opens. Both act
+    # only on the panel's own cgroup on the panel's own host. See tools/panel-helper.
+    "adopt-game-processes": ([], lambda a: [], None),
+    "terminal-scope": ([_pid], lambda a: [], None),
     # Put a game account in the group the local sudoers grant names. Local-only: on a remote host
     # the panel's rights are the operator's sudoers to arrange, and this group means nothing there.
     "gameuser-group": ([_managed_user], lambda a: [], None),
@@ -1165,6 +1201,9 @@ def _content_grant_remote(a):
 LOCAL_ONLY_VERBS = frozenset({
     "gameuser-group",    # the group the LOCAL sudoers grant names; it means nothing on a remote
     "lgsm-command",      # run_as_game_user picks the transport itself and never routes this here
+    "cron-run-now",      # run_cron_job_now picks the transport itself, like lgsm-command
+    "adopt-game-processes",  # the panel's OWN cgroup, which only exists on the panel's host
+    "terminal-scope",    # the panel's local terminal; a remote shell is not in the panel's cgroup
     "lgsm-discover",     # called through _exec_local_argv directly, never via run_privileged
     "panel-db-repair",   # the panel's own database, which only exists on the panel's own host
     "panel-restore",     # likewise — restoring the panel onto another machine is not a thing

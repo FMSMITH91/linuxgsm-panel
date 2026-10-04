@@ -459,7 +459,8 @@ def _thread_gates23():
     loops = {"monitor", "player-counts", "metrics-history", "node-tools", "reboot-when-empty",
              "autoblock", "ban-watch", "telegram-bot", "discord-bot"}
     check("workers: every long-running thread app.py names is a worker the report lists",
-          loops <= named <= known | {"f2b-autostart", "bot-update-report", "autoblock-now"},
+          loops <= named <= known | {"f2b-autostart", "bot-update-report", "autoblock-now",
+                                     "cgroup-adopt"},   # one-shots: they run once and end
           repr(sorted(named)))
 
 

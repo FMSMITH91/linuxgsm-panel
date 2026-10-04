@@ -1450,6 +1450,17 @@ def _start_hub_lag_watch():
         _log.debug("hub-lag watch not started", exc_info=True)
 
 
+def _adopt_game_processes():
+    """Move game servers an earlier run started out of this unit's cgroup, once per panel start.
+
+    They go into scopes of their own (system_ops.adopt_game_processes). Never raises.
+    """
+    try:
+        so.adopt_game_processes()
+    except Exception:
+        _log.debug("moving game processes out of the panel's cgroup failed", exc_info=True)
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
@@ -3283,6 +3294,10 @@ if __name__ == "__main__":
             except Exception:
                 _log.debug("remote fail2ban whitelist sync failed", exc_info=True)
     threading.Thread(target=_f2b_autostart, name="f2b-autostart", daemon=True).start()
+
+    # Game servers a previous run of the panel started may still be in this unit's cgroup — where
+    # every stop signals them — from before the helper gave each its own scope. Move them out once.
+    threading.Thread(target=_adopt_game_processes, name="cgroup-adopt", daemon=True).start()
 
     # Record fail2ban bans/unbans of the panel-login jail in the audit log, so the activity is
     # visible even though the jail runs automatically with no management UI. Seeds from the current

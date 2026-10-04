@@ -122,6 +122,8 @@ _CRON_WRAP_RE = re.compile(r"^/home/[^/\s]+/\.lgsm-cron/run\s+([0-9a-f]{6,})\s+(
 # operator's next move was to wait for a job that could never fire.
 _RUNNER_FAILED = ("Couldn't install the job recorder on the host — nothing was scheduled. "
                   "Check that the host is reachable and that ~/.lgsm-cron isn't a file.")
+_RUNNER_FAILED_NOW = ("Couldn't install the job recorder on the host — nothing was run. "
+                      "Check that ~/.lgsm-cron isn't a file.")
 
 
 def _cron_job_id(command):
@@ -758,30 +760,70 @@ def run_cron_job_now(server, user, raw, selfname=None):
     the request). The command is taken from the crontab line `raw` and un-wrapped to its core
     first. Best-effort; returns (ok, message).
     """
-    import base64
     _sched, cmd = _split_cron_line((raw or "").strip())
     core, jid = _unwrap_cron_command(cmd if cmd is not None else (raw or "").strip())
     core = (core or "").strip()
     if not core:
         return False, "Nothing to run."
-    d = "/home/%s/.lgsm-cron" % user
     jid = jid or _cron_job_id(core)
+    if _core.is_local_server(server) and _core.helper_present():
+        return _run_now_in_scope(server, user, core, jid)
+    return _run_now_detached(server, user, core, jid)
+
+
+def _run_now_detached(server, user, core, jid):
+    """run_cron_job_now's shell form: a remote, or the panel's host without the helper."""
+    import base64
+    d = "/home/%s/.lgsm-cron" % user
     rec = (f"{core} > {d}/{jid}.log 2>&1; R=$?; T=$(date +%s); "
            f'echo "$R $T $T" > {d}/{jid}.status')
     b64 = base64.b64encode(rec.encode()).decode()
     # setsid detaches the run so a long command records its result later instead of blocking;
-    # `sudo -u` confines it to the game user's own privileges (same as a scheduled run).
+    # `sudo -u` confines it to the game user's own privileges (same as a scheduled run). setsid
+    # leaves the SESSION, not the cgroup: on the panel's own host, without the helper, `scope`
+    # starts it in a user-manager scope where a per-user install has one (_core.user_scope_argv).
     inner = f"mkdir -p {d}; echo {b64} | base64 -d | setsid bash >/dev/null 2>&1 &"
-    out, err, rc = _core.shell_as_game_user(server, user, inner, timeout=15)
-    # The job itself is DETACHED, so this rc says nothing about how the job ends — that lands in
-    # the .status file and shows up under Last run. What it DOES say is whether the launch
-    # happened at all. Discarding it meant an unreachable host, a refused sudo or a missing
-    # directory all answered "Started — the result will appear under Last run shortly", with an
-    # audit row recording success, for a job that was never started and whose Last run therefore
-    # never changes. run_command does not raise for those, so the route's except never saw it.
+    return _run_now_result(*_core.shell_as_game_user(server, user, inner, timeout=15, scope=True))
+
+
+def _run_now_result(out, err, rc):
+    """(ok, message) for a Run now launch.
+
+    The job itself is DETACHED, so this rc says nothing about how the job ends — that lands in
+    the .status file and shows up under Last run. What it DOES say is whether the launch happened
+    at all. Discarding it meant an unreachable host, a refused sudo or a missing directory all
+    answered "Started — the result will appear under Last run shortly", with an audit row
+    recording success, for a job that was never started and whose Last run therefore never
+    changes. run_command does not raise for those, so the route's except never saw it.
+    """
     if rc != 0:
         return False, ((err or out or "Couldn't start the job on the host").replace("\n", " ")[:200])
     return True, "Started — the result will appear under Last run shortly."
+
+
+def _run_now_in_scope(server, user, core, jid):
+    """run_cron_job_now on the panel's own host with the helper: the `cron-run-now` verb.
+
+    The `sudo -u … | setsid bash &` form left a task that starts the server — monitor, restart,
+    update — in the panel's cgroup, where the next panel restart ended it. The helper runs the
+    account's own recorder (~/.lgsm-cron/run, what a scheduled run of the same line runs) as that
+    account, in a transient scope of its own. The recorder is (re)installed first, as the account,
+    because an unwrapped legacy line never needed it.
+    """
+    import base64
+    if _install_cron_runner(server, user) != 0:
+        return False, _RUNNER_FAILED_NOW
+    b64 = base64.b64encode(core.encode()).decode()
+    try:
+        out, err, rc = _core.run_privileged(server, "cron-run-now", [user, jid, b64], timeout=30,
+                                            merge_stderr=False)
+    except _priv.VerbError as exc:
+        # The verb's own bounds refused an argument, and nothing was started: a command over 16 KB
+        # of base64, or a job id longer than the verb's 64 hex characters (the crontab parser
+        # accepts any length, so a hand-edited line can carry one). The reason is the validator's
+        # own, which never echoes the value it refused.
+        return False, "This task can't be run from here: %s." % exc
+    return _run_now_result(out, err, rc)
 
 
 def add_cron_job(server, user, schedule, command, selfname=None):

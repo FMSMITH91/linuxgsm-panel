@@ -109,6 +109,9 @@ _probe = (
     "s=u.spec_from_loader('p', m.SourceFileLoader('p', %r));"
     "mod=u.module_from_spec(s); s.loader.exec_module(mod);"
     "mod.resolve=lambda p: %r; mod.REBOOT_DELAY_SECONDS=1;"
+    # The no-systemd path: on a host booted with systemd the helper asks for a transient timer
+    # instead (part31 drives that one, with systemd-run stubbed).
+    "mod.SYSTEMD_BOOTED_DIR='/nonexistent-systemd-dir';"
     "t=time.time(); mod.do_reboot_delayed([], None);"
     "print('ELAPSED=%%.2f' %% (time.time()-t))" % (_helper_path, _fake_reboot)
 )
@@ -548,6 +551,8 @@ if _osu:
         "s=u.spec_from_loader('p', m.SourceFileLoader('p', %r));"
         "mod=u.module_from_spec(s); s.loader.exec_module(mod);"
         "mod.OS_UPDATE_LOG=%r; mod.resolve=lambda p, f=%r: f;"
+        # The detached runner is the no-systemd path; part31 drives the transient-unit one.
+        "mod.SYSTEMD_BOOTED_DIR='/nonexistent-systemd-dir';"
         "t=time.time(); mod.do_os_update_run([], None);"
         "sys.stderr.write('ELAPSED=%%.2f' %% (time.time()-t))"
         % (_helper_path, _oslog, _fake_apt)
@@ -591,7 +596,7 @@ if _osu:
         "import importlib.util as u, importlib.machinery as m;"
         "s=u.spec_from_loader('p', m.SourceFileLoader('p', %r));"
         "mod=u.module_from_spec(s); s.loader.exec_module(mod);"
-        "mod.OS_UPDATE_LOG=%r;"
+        "mod.OS_UPDATE_LOG=%r; mod.SYSTEMD_BOOTED_DIR='/nonexistent-systemd-dir';"
         "mod.resolve=lambda p: (_ for _ in ()).throw(FileNotFoundError('apt-get'));"
         "mod.do_os_update_run([], None)" % (_helper_path, _osfail)
     )
@@ -2134,8 +2139,10 @@ _su_probe = _rs_sub.run(
 check("helper self-update: ...and install.sh reads that environment as a run the panel started",
       "PANEL-STARTED" in _su_probe.stdout, _su_probe.stdout + _su_probe.stderr)
 import ast as _su_ast
+# _self_update_run: the self-update's body, which the detached path and the transient unit's job
+# both run (_self_update_detached is now only the detach in front of it).
 _su_fn2 = next(n for n in _su_ast.walk(_su_ast.parse(open(_helper_path, encoding="utf-8").read()))
-               if isinstance(n, _su_ast.FunctionDef) and n.name == "_self_update_detached")
+               if isinstance(n, _su_ast.FunctionDef) and n.name == "_self_update_run")
 check("helper self-update: the detached run takes its environment from _self_update_env",
       any(isinstance(n, _su_ast.Call) and isinstance(n.func, _su_ast.Name)
           and n.func.id == "_self_update_env" for n in _su_ast.walk(_su_fn2))
@@ -2298,7 +2305,7 @@ check("helper self-update: ...the log is a fresh file owned like its directory",
       os.stat(_sul_log).st_nlink == 1 and os.stat(_sul_log).st_uid == os.stat(_sul_data).st_uid
       and open(_sul_log, encoding="utf-8").read() == "new run\n")
 _sul_fn = next(n for n in _sul_ast.walk(_sul_ast.parse(open(_helper_path, encoding="utf-8").read()))
-               if isinstance(n, _sul_ast.FunctionDef) and n.name == "_self_update_detached")
+               if isinstance(n, _sul_ast.FunctionDef) and n.name == "_self_update_run")
 _sul_calls = [n.func.id for n in _sul_ast.walk(_sul_fn)
               if isinstance(n, _sul_ast.Call) and isinstance(n.func, _sul_ast.Name)]
 check("helper self-update: the detached run opens its log through _open_log_in_dir, never open()",

@@ -29,8 +29,9 @@ parent, a streamed download given the deadline, a writer slipped into READ_VERBS
      grandchild: a read's whole tree ends on a relayed SIGTERM, on the loss of its parent (sudo
      SIGKILLed), and at its deadline, a grandchild that ignores SIGTERM after its parent died of it
      included; lgsm-command is a read for LinuxGSM's reporting actions; a verb that CHANGES the
-     host runs to its end through a SIGTERM and through the loss of its sudo, follow-up included;
-     a streamed download has no deadline; READ_VERBS is an explicit set; main()'s own bound on a
+     host runs to its end through a SIGTERM and through the loss of its sudo, follow-up included,
+     and a LinuxGSM start asks only this part's stand-in busctl for its scope, never the host's
+     system manager; a streamed download has no deadline; READ_VERBS is an explicit set; main()'s own bound on a
      read's tool; and no panel call waits on a read as long as its deadline;
 * D. the panel stops a command SIGTERM first: through a stand-in sudo that relays (and one that is
      slow to), the stand-in root command ends; a member of the group that ignores SIGTERM still
@@ -42,7 +43,9 @@ the panel's process group cannot reach it -- as a root command under real sudo c
 from the panel's account -- and relays SIGTERM/SIGHUP to the command's pid only, as classic sudo
 (exec_nopty.c) and sudo-rs (exec/no_pty.rs) do. Nothing here runs real sudo: the shell-form check
 passes sudo=False, the helper path's argv is this part's own, and system_ops.os is geteuid-less
-there (part16's _Os16(None)), so the shell branch could not prefix sudo either.
+there (part16's _Os16(None)), so the shell branch could not prefix sudo either. Nor real busctl or
+ionice, which a LinuxGSM start runs as root before its drop: the helper's TOOLS point them at
+recorders that refuse (see _HELPER_WRAP39).
 """
 import ast as _ast39
 import os
@@ -129,6 +132,14 @@ h = u.module_from_spec(spec)
 spec.loader.exec_module(h)
 for tool in ("journalctl", "systemctl"):
     h.TOOLS[tool] = (standin,)
+# What lgsm-command's start runs as root before it drops -- busctl asking the SYSTEM manager for a
+# scope, then ionice -- goes to this scenario's recorders, which refuse. Run as a user, the real
+# busctl reached polkit and sat on a desktop password prompt until its 15 s timeout, and a typed
+# password would have made a real scope. The scope path is forced on, so the start asks on every
+# host, and takes the helper's own fallback: it runs where it was.
+for tool in ("busctl", "ionice"):
+    h.TOOLS[tool] = (os.path.join(here, tool),)
+h._systemd_booted = h._cgroup_v2_placed = lambda: True
 if os.path.exists(os.path.join(here, "deadline")):
     h.READ_DEADLINE = h.LGSM_READ_DEADLINE = float(open(os.path.join(here, "deadline")).read())
 if os.path.exists(os.path.join(here, "actions")):
@@ -158,6 +169,11 @@ def _scenario39(name, standin_args=(), relay_delay=None, deadline=None, actions=
         fh.write("#!%s\nimport sys\nsys.argv += %r\n%s" % (_PY39, list(standin_args), _STANDIN39))
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
     os.chmod(standin, 0o700)
+    for tool in ("busctl", "ionice"):
+        with open(os.path.join(d, tool), "w") as fh:
+            fh.write("#!%s\n%s" % (_PY39, _TOOL_REC39))
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
+        os.chmod(os.path.join(d, tool), 0o700)
     if relay_delay is not None:
         with open(os.path.join(d, "relay_delay"), "w") as fh:
             fh.write(str(relay_delay))
@@ -168,6 +184,17 @@ def _scenario39(name, standin_args=(), relay_delay=None, deadline=None, actions=
         with open(os.path.join(d, "actions"), "w") as fh:
             fh.write(" ".join(actions))
     return d
+
+
+# The stand-in for a tool the helper runs as root and that must never reach the host (busctl,
+# ionice): it records its argv, one line per call, in tools.log, and refuses.
+_TOOL_REC39 = '''
+import os, sys
+here = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(here, "tools.log"), "a") as fh:
+    fh.write(" ".join([os.path.basename(sys.argv[0])] + sys.argv[1:]) + "\\n")
+sys.exit(1)
+'''
 
 
 _NAMES39 = ("sudo", "helper", "lgsmchild", "child", "grandchild")
@@ -717,6 +744,13 @@ def _section_helper_lgsm39():
     check("C helper: ...and with an action that changes something (start) it runs to its end",
           all((left == {}, p.returncode == 0, _read39(d, "work.done") == "done")),
           repr((left, p.returncode, _read39(d, "err")[-300:])))
+    asked, child = _read39(d, "tools.log"), _pids39(d).get("lgsmchild")
+    check("C helper: ...and the scope that start asks root's system manager for, and the I/O class "
+          "it resets, went to this part's stand-in busctl and ionice, for the child it forked: "
+          "never to the host's own (as a user, a real busctl reached polkit and waited on a desktop "
+          "password prompt until its timeout, and the start never came up in time)",
+          bool(child) and "StartTransientUnit" in asked and ("PIDs au 1 %d " % child) in asked
+          and ("ionice -c 0 -p %d" % child) in asked, repr((child, asked[-400:])))
     check("C helper: the LinuxGSM reads are exactly details, check-update and postdetails (not "
           "monitor, which restarts a crashed server), and their deadline outlasts every panel wait "
           "for one (the sync action's 60 s)",

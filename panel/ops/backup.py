@@ -26,7 +26,7 @@ import urllib.parse
 
 # Imported for the restore's privileged step only. system_ops does not import
 # backup, so this direction is safe.
-from panel.ops.system_ops import _helper_present, _run_verb
+from panel.ops.system_ops import _helper_present, _is_system_service, _run_verb
 import time
 
 from panel.core.config import (DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE,
@@ -1060,9 +1060,19 @@ def _stage_archive(src):
 
 
 def _dispatch_restore(stage, name, safety, typed):
-    """Start the detached swap of the staged files; return _restore_validated's (ok, message)."""
+    """Start the detached swap of the staged files; return _restore_validated's (ok, message).
+
+    The helper's panel-restore only on a SYSTEM install. It stops and starts the system unit
+    linuxgsm-panel.service as root; on a per-user install that unit does not exist, so the stop
+    did nothing and the files were swapped under the RUNNING panel — its open database replaced and
+    its WAL deleted beneath it. A per-user install restores as itself, through its own user manager
+    (_legacy_restore_dispatch's `systemctl --user`), which is no escalation: it is the panel's own
+    account acting on its own files. The test is system_ops._is_system_service, the one
+    panel_repair_database and the self-update use, so a host with neither unit file is not a
+    system install for any of the three.
+    """
     try:
-        if _helper_present():
+        if _helper_present() and _is_system_service():
             out, err, rc = _run_verb("panel-restore", [], timeout=20)
             if rc == 0:
                 return True, _restore_started_msg(name, safety, typed)
@@ -1070,7 +1080,7 @@ def _dispatch_restore(stage, name, safety, typed):
             shutil.rmtree(stage, ignore_errors=True)
             return False, "Could not start the restore."
         # Pre-helper fallback, unchanged in shape: a host that has not re-run install.sh as root
-        # still needs to be able to restore.
+        # still needs to be able to restore, and a per-user install restores this way (above).
         return _legacy_restore_dispatch(stage, name, safety, typed)
     except Exception:
         _log.exception("restore dispatch failed")
@@ -1102,10 +1112,12 @@ def _restore_started_msg(name, safety, typed_passphrase=False):
 
 
 def _legacy_restore_dispatch(stage, name, safety="", typed_passphrase=False):
-    """The pre-helper restore: write a script and run it under `sudo systemd-run`.
+    """Restore without the helper's verb: write a script and run it under systemd-run.
 
-    Kept ONLY for a host that has the new code but has not had install.sh re-run as root, which is
-    also the reason the sudoers grant cannot narrow yet — see the escalation census in the tests.
+    A per-user install restores this way through its own user manager (`systemd-run --user`). On a
+    system install it is kept ONLY for a host that has the new code but has not had install.sh
+    re-run as root (`sudo systemd-run`), which is also the reason the sudoers grant cannot narrow
+    yet — see the escalation census in the tests.
     """
     ufl = "--user " if os.path.exists(os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")) else ""
     lines = ["#!/bin/bash", "sleep 1",
@@ -1129,9 +1141,21 @@ def _legacy_restore_dispatch(stage, name, safety="", typed_passphrase=False):
     # there is no shell here. The script's CONTENT is composed — every value interpolated into
     # it goes through _sh() (shlex.quote), which is where the scrutiny belongs and is not what
     # this rule inspects.
+    #
+    # CHECKED. This was Popen with both streams to DEVNULL and the status never read, so it said
+    # only that systemd-run was spawned: a refusal (no user manager to ask, `sudo systemd-run`
+    # denied) answered "Restoring…" for a restore that never ran, and left the staged plaintext
+    # database and both keys in data/.restore-stage. systemd-run returns as soon as the unit has
+    # started, with a real status. A raise (timeout, no systemd-run) reaches _dispatch_restore,
+    # which wipes the stage the same way.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    subprocess.Popen(_service_restart_launcher(script),  # nosec B603 - fixed systemd-run argv, no shell
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
+    r = subprocess.run(_service_restart_launcher(script),  # nosec B603 - fixed systemd-run argv, no shell
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                       text=True, timeout=15, check=False, env=os.environ.copy())
+    if r.returncode != 0:
+        _log.error("restore launcher failed: rc=%s %s", r.returncode, (r.stderr or "")[:200])
+        shutil.rmtree(stage, ignore_errors=True)
+        return False, "Could not start the restore."
     return True, _restore_started_msg(name, safety, typed_passphrase)
 
 

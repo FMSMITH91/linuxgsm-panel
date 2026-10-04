@@ -45,7 +45,7 @@ def _gh_make_db(path, game_rows=(), remote_rows=()):
 
 # ── restore: the archive's rows are checked before anything is touched ──────────────────────────
 _GH_BK_ATTRS = ("BACKUP_DIR", "DATA_DIR", "DB_PATH", "CONFIG_FILE", "SECRET_FILE", "CRED_KEY_FILE",
-                "_helper_present", "_run_verb", "create_backup", "get_passphrase")
+                "_helper_present", "_run_verb", "create_backup", "get_passphrase", "_is_system_service")
 _gh_bk_saved = {a: getattr(_gh_bk, a) for a in _GH_BK_ATTRS}
 _gh_archive_key = _GhFernet.generate_key()
 _gh_live_key = _GhFernet.generate_key()          # a DIFFERENT key: the archive's own must be used
@@ -99,7 +99,7 @@ def _gh_redirect_backup():
     _gh_bk.CRED_KEY_FILE.write_bytes(_gh_live_key)
     _gh_make_db(str(_gh_bk.DB_PATH), game_rows=[(1, "livesrv", "csgo", 27015)])
     live_bytes = _gh_bk.DB_PATH.read_bytes()
-    _gh_bk._helper_present = lambda: True
+    _gh_bk._helper_present = _gh_bk._is_system_service = lambda: True
     _gh_bk._run_verb = lambda verb, args, **k: (_gh_calls.append(("verb", verb)), ("", "", 0))[1]
     _gh_bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
         _gh_calls.append(("safety", kind)), (True, "panel-backup-20260926-000000-prerestore.tar.gz"))[1]
