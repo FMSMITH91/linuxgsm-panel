@@ -1442,7 +1442,7 @@ def _console_place_read(gs, server_id, since):
     try:
         got = _catchup_read(gs, None, since)
     except Exception:
-        _log.debug("console place read for server %s failed", server_id, exc_info=True)
+        _log.debug("console place read for server %s failed", gs.id, exc_info=True)
     if got is None:
         return {"readable": False, "lines": [], "now": time.time(),
                 "panel_lines": list(_console_backlog.get(server_id, []))}
