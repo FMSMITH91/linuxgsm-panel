@@ -4420,6 +4420,10 @@ try:
     os.makedirs(os.path.join(_u, "lgsm", "mods"))
     with open(os.path.join(_u, "lgsm", "config-lgsm", "csgoserver", "csgoserver.cfg"), "w") as _fh:
         _fh.write("port=27015\n")
+    # The start line that passes the port, as LinuxGSM's csgoserver _default.cfg has it: discovery
+    # reports a cfg port only when the game is started with it (part43 holds why).
+    with open(os.path.join(_u, "lgsm", "config-lgsm", "csgoserver", "_default.cfg"), "w") as _fh:
+        _fh.write('startparameters="-game csgo -strictportbind -ip ${ip} -port ${port}"\n')
     for _b in ("a.tar.gz", "b.tgz", "notes.txt"):
         open(os.path.join(_u, "lgsm", "backup", _b), "w").close()
     with open(os.path.join(_u, "lgsm", "mods", "installed-mods.txt"), "w") as _fh:

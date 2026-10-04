@@ -1309,6 +1309,8 @@ def _configure_and_start(job, remote, gs):
     _enable_autostart(job, remote, gs, cron_written)
     start_step = _install_gmod_content(job, remote)
     started = _start_and_verify(job, remote, gs, start_step)
+    if not getattr(job, "port_read", True):
+        started = _read_port_after_start(job, remote, gs, started)
     # None, not an empty set, when step 6 never reached its decision: an empty set read as "step 6
     # withheld nothing", and the re-read then opened every port `details` reported — SSH included.
     _reopen_runtime_ports(remote, job.short_name, gs, port_conflict, port_unchecked,
@@ -1499,9 +1501,15 @@ def _open_game_ports(job, remote, gs):
     # say "nothing withheld" and open every port `details` reports.
     job.withheld = None
     job.firewall_failed = False
+    # Whether LinuxGSM gave this server a game port at all. No port is not "the same port": a game
+    # that keeps its port in its own config (46 of LinuxGSM's 140) reports 0 until that config
+    # exists, and a `details` that timed out reports nothing — and both used to leave the port the
+    # panel chose standing as if LinuxGSM had confirmed it. See _read_port_after_start.
+    job.port_read = False
     try:
         info = detect_game_ports(remote, short_name, gs.lgsm_name)
         real_port = info.get("game_port")
+        job.port_read = bool(real_port)
         rows = GameServer.query.filter_by(remote_id=remote.id).all()
         protected = _sm.protected_host_ports(remote)
         port_conflict, port_unchecked = _adopt_reported_port(job, remote, gs, real_port,
@@ -1934,6 +1942,66 @@ def _reopen_runtime_ports(remote, short_name, gs, port_conflict, port_unchecked,
         _log.debug("_run: post-start port re-detect failed", exc_info=True)
 
 
+def _read_port_after_start(job, remote, gs, started):
+    """Step 6 got no game port from LinuxGSM: read it again now the server has run once.
+
+    -> `started` (really_up, s_rc, start_out), with really_up read again on the adopted port.
+
+    The panel's own port stood unconfirmed: the one it allocated, written into a LinuxGSM config
+    key that these games never read — for most of them the install form's 27015, which the monitor
+    then reads for up/down for good. Their own config exists once they have started, and the port
+    LinuxGSM reports then is adopted unless _post_start_port_refused says otherwise. The same port
+    as the panel's: confirmed.
+    """
+    try:
+        port = detect_game_ports(remote, job.short_name, gs.lgsm_name).get("game_port")
+    except Exception:
+        _log.debug("install %s: the post-start port read failed", job.short_name, exc_info=True)
+        return started
+    if not port:
+        return started
+    if port == gs.port:
+        job.port_read = True
+        return started
+    if _post_start_port_refused(job, remote, gs, port):
+        _log.warning("install %s: %s reports port %s after its first start; not adopted — "
+                     "keeping %s", job.short_name, gs.lgsm_name, port, gs.port)
+        return started
+    old_port, gs.port = gs.port, port
+    db.session.commit()
+    job.port_read = True
+    try:
+        remote_ufw_close_game_port(remote, old_port, job.short_name)
+    except Exception:
+        _log.debug("_run: ignored non-fatal error", exc_info=True)
+    return _rescan_started(remote, gs, started)
+
+
+def _post_start_port_refused(job, remote, gs, port):
+    """Whether the port LinuxGSM reports after the first start may NOT be adopted.
+
+    Not a port; another server's block, SSH or the panel's (withheld_game_ports); or one something
+    was listening on before this server first started (step 6's job.withheld). And any port when
+    step 6 never got that far (job.withheld is None): with this server running now, a port in use
+    can no longer be told apart from one that was taken before it started.
+    """
+    if job.withheld is None or port in job.withheld or not MIN_PORT <= port <= MAX_PORT:
+        return True
+    rows = GameServer.query.filter_by(remote_id=remote.id).all()
+    return port in withheld_game_ports(rows, gs, _sm.protected_host_ports(remote))
+
+
+def _rescan_started(remote, gs, started):
+    """`started` with really_up (and the status column) read again on gs's port, when the host answers."""
+    really_up, s_rc, start_out = started
+    live = _listening_now(remote)
+    if live is not None:
+        really_up = gs.port in live
+        gs.status = "online" if really_up else "offline"
+        db.session.commit()
+    return really_up, s_rc, start_out
+
+
 def _runtime_ports(remote, short_name, gs, withheld):
     """The ports the post-start re-open starts from: `details` read again, or ours alone."""
     if withheld is None:
@@ -2020,6 +2088,14 @@ def _report_not_started(job, gs, s_rc, start_out):
         note = f"{short_name} installed, but it didn't start"
         note += (" — " + reason) if reason else " — check the console for the reason."
         _detail = ("start failed: " + reason) if reason else "start failed"
+    elif not getattr(job, "port_read", True):
+        # The sentence below promises the server shows online "once it opens port X" — about a
+        # port nobody read: the game may well be listening on its own one already.
+        note = (f"{short_name} installed and starting, but LinuxGSM has not reported its game "
+                f"port, so the panel cannot confirm the game uses port {gs.port}. The panel reads "
+                f"it again each time it restarts; 'Open all ports' on the host's Firewall page "
+                f"reads it now.")
+        _detail = "started; port %s not open after 90s; port not reported by LinuxGSM" % gs.port
     else:
         note = (f"{short_name} installed and starting — it hasn't opened port "
                 f"{gs.port} yet, which some games take a few minutes to do. "

@@ -5910,7 +5910,11 @@ try:
     # it (privileged_accounts). The fixture host is blackholed, so that question is answered here
     # — "a plain game account" — for the checks about everything else, and driven for real below.
     _imp_priv_orig = _imp_mod.privileged_accounts
+    # The import refuses a port that is this host's SSH or the panel's: it asks the host's sshd for
+    # its ports, which the blackholed fixture host would only answer with a connect timeout.
+    _imp_prot_orig = _sm_hosts.protected_host_ports
     try:
+        _sm_hosts.protected_host_ports = lambda _r: {22}
         _imp_mod.privileged_accounts = lambda _r, _users: {}
         _imp_mod.discover_linuxgsm_servers = lambda _s: [
             {"user": "importedcs", "lgsm_name": "csgoserver", "port": 27015,
@@ -5986,11 +5990,16 @@ try:
             _pa_rows = {g.short_name for g in GameServer.query.filter(
                 GameServer.remote_id == remote_id,
                 GameServer.short_name.in_(["adminacct", "plaingame"])).all()}
+            _pa_port = [g.port for g in GameServer.query.filter_by(
+                remote_id=remote_id, short_name="plaingame").all()]
             GameServer.query.filter(GameServer.remote_id == remote_id,
                                     GameServer.short_name == "plaingame").delete()
             db.session.commit()
         check("import: ...and no row was ever written for the sudoer", _pa_rows == {"plaingame"},
               str(_pa_rows))
+        # The body asked for 27021; the scan read 27015. The import stores what it read on the host.
+        check("import: the port stored is the one the scan read on the host, not the one the "
+              "request named", _pa_port == [27015], str(_pa_port))
 
         # An account imported on the panel's OWN host goes into the panel's game-account group —
         # the step create_game_user takes for an account the panel makes. The import used to add
@@ -6135,6 +6144,7 @@ try:
     finally:
         _imp_mod.discover_linuxgsm_servers = _imp_orig
         _imp_mod.privileged_accounts = _imp_priv_orig
+        _sm_hosts.protected_host_ports = _imp_prot_orig
     imp_denied = client_as(mru_id).post("/api/remote/%d/import" % remote_id,
                                         json={"servers": [{"user": "x", "game_type": "csgo"}]})
     check("import: caller without manage_servers is denied",

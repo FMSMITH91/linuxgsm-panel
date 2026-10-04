@@ -569,7 +569,6 @@ import subprocess as _rv_sub  # noqa: E402  # nosec B404 - runs bash on the pane
 from types import SimpleNamespace as _RvNS  # noqa: E402
 
 import panel.routes._shared as _rv_sh  # noqa: E402
-import panel.routes.discover as _rv_disc  # noqa: E402
 import panel.routes.host_terminal as _rv_ht  # noqa: E402
 import panel.routes.manage_servers as _rv_ms  # noqa: E402
 import panel.routes.remote_vps as _rv_vps  # noqa: E402
@@ -598,9 +597,8 @@ check("bulk action ids: Infinity and 3.5 are dropped, the real ids kept (was a 5
 check("tag ids: Infinity is dropped from a tag set and a layout order (was a 500)",
       _rv_tags._int_ids([_RV_INF, 1, "2"]) == [1, 2]
       and _rv_tags._clean_ids([_RV_INF, 1, 1, 2, _RV_NAN], {1, 2}) == [1, 2])
-check("discover import: a port of Infinity falls back to the default instead of raising",
-      (_rv_disc._import_port({"port": _RV_INF}), _rv_disc._import_port({"port": 28015}),
-       _rv_disc._import_port({"port": 27015.5})) == (27015, 28015, 27015))
+# (The discover import's port is no longer read from the request at all: a body port of Infinity,
+# 22 or none stores the scan's port — driven through the route in part43.)
 check("firewall routes: a port of Infinity or 22.5 is no port; 22.0 is 22; a string passes as sent",
       [_rv_vps._fw_port_arg(v) for v in (_RV_INF, 22.5, 22.0, True, None, [22], "27015:27020", 80)]
       == ["", "", 22, "", "", "", "27015:27020", 80])

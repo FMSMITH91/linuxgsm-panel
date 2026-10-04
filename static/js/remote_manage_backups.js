@@ -646,10 +646,11 @@ function scanExisting(){
     if(!s.length){ out.innerHTML='<span class="text-secondary small"><i class="bi bi-check2"></i> No new LinuxGSM servers found — anything already in the panel is skipped.</span>'; prependContentNotes(out, d.content); return; }
     var rows=s.map(function(g){
       return '<tr>'
-        +'<td><input type="checkbox" class="form-check-input disc-chk" checked data-user="'+escapeHtml(g.user)+'" data-game="'+escapeHtml(g.game_type)+'" data-port="'+(g.port||0)+'" data-autostart="'+(g.autostart?1:0)+'"></td>'
+        +'<td><input type="checkbox" class="form-check-input disc-chk" checked data-user="'+escapeHtml(g.user)+'"'
+        +' data-game="'+escapeHtml(g.game_type)+'" data-autostart="'+(g.autostart?1:0)+'"></td>'
         +'<td class="font-monospace">'+escapeHtml(g.user)+(g.autostart?' <span class="badge bg-success" style="font-size:.58rem;">autostart</span>':'')+'</td>'
         +'<td>'+escapeHtml(g.game_name||g.game_type)+'</td>'
-        +'<td>'+(g.port||'—')+'</td>'
+        +(g.port ? '<td>'+Number(g.port)+'</td>' : '<td title="Not in its LinuxGSM config: read from LinuxGSM when imported">—</td>')
         +'<td>'+(g.backups||0)+'</td>'
         +'<td>'+(g.mods||0)+'</td>'
         +'<td>'+(g.cron||0)+'</td></tr>';
@@ -700,6 +701,24 @@ function appendEnrolNote(msg, notEnrolled){
   });
   msg.appendChild(box);
 }
+// Why each server that was asked for was left out, when others were imported (with nothing
+// imported, the server's message already names them). An account the host says can reach root, or
+// a server whose port could not be read: the panel stores only a port it read on the host, so a
+// server it cannot read one for is not imported rather than imported on a guess.
+function appendNotImportedNote(msg, items){
+  if(!msg || !items || !items.length) return;
+  var box=document.createElement('div'); box.className='text-warning small mt-1';
+  var head=document.createElement('div');
+  head.textContent='Not imported:';
+  box.appendChild(head);
+  items.forEach(function(n){
+    var row=document.createElement('div'); row.className='font-monospace text-break';
+    row.setAttribute('data-no-i18n','');
+    row.textContent=(n.user||'?')+': '+(n.reason||'');
+    box.appendChild(row);
+  });
+  msg.appendChild(box);
+}
 function prependContentNotes(out, content){
   if(!out || !content || !content.length) return;
   var frag=document.createDocumentFragment();
@@ -720,8 +739,8 @@ function discToggleAll(cb){ document.querySelectorAll('.disc-chk').forEach(funct
 function importExisting(btn){
   var picks=[], msg=document.getElementById('disc-msg');
   document.querySelectorAll('.disc-chk:checked').forEach(function(c){
+    // No port: the panel stores only a port it reads on the host itself, never one sent from here.
     picks.push({user:c.getAttribute('data-user'), game_type:c.getAttribute('data-game'),
-                port:Number.parseInt(c.getAttribute('data-port'),10)||0,
                 autostart:c.getAttribute('data-autostart')==='1'});
   });
   if(!picks.length){ if(msg) msg.innerHTML='<span class="text-warning">Select at least one.</span>'; return; }
@@ -737,6 +756,7 @@ function importExisting(btn){
       else { if(msg) msg.innerHTML='<span class="text-danger">'+escapeHtml(d.message||'Nothing imported.')+'</span>';  // nosemgrep
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; }
       appendSkippedNote(msg, d.skipped);
+      if(n) appendNotImportedNote(msg, (d.refused||[]).concat(d.unread||[]));
       appendEnrolNote(msg, d.not_enrolled);
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Import failed.</span>';
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; });
