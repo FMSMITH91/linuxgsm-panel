@@ -164,12 +164,29 @@ def start_chrome(binary, profile, tmp):
     raise Abort("Chrome (%s) did not open its DevTools port. %s" % (binary, err))
 
 
-def devtools_json(port, path):
-    """GET one of the browser's DevTools JSON endpoints."""
+DEVTOOLS_WAIT = 60   # seconds a DevTools endpoint gets to answer, across retries
+
+
+def devtools_json(port, path, wait=DEVTOOLS_WAIT):
+    """GET one of the browser's DevTools JSON endpoints, retrying until `wait` seconds have passed.
+
+    The port being open is not the browser being ready: on a busy runner Chrome accepted the
+    connection and then took longer than one 5 s read to answer /json/version, and that single
+    read failed main's run of code that had just passed on its pull request. So a read that times
+    out or is refused is tried again until the deadline, and only then is it the browser's fault.
+    """
     url = "http://127.0.0.1:%d%s" % (port, path)
-    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- 127.0.0.1 DevTools endpoint
-    with urllib.request.urlopen(url, timeout=5) as r:  # nosec B310 - loopback only
-        return json.load(r)
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- 127.0.0.1 DevTools endpoint
+            with urllib.request.urlopen(url, timeout=5) as r:  # nosec B310 - loopback only
+                return json.load(r)
+        except OSError as e:     # TimeoutError and URLError are both OSErrors
+            if time.monotonic() >= deadline:
+                raise Abort("Chrome's DevTools %s did not answer within %d s: %s"
+                            % (path, wait, e)) from None
+            time.sleep(0.5)
 
 
 # ── the panel ──────────────────────────────────────────────────────────────────────────────────

@@ -1226,3 +1226,58 @@ check("switch-branch (UI): the confirm dialog says which it installs — main's 
       "version, or another branch's tip as UNVERIFIED",
       "It installs the newest version of main that has passed its automated checks." in _rmh14
       and "UNVERIFIED: this installs the newest commit on" in _rmh14, "")
+
+# ── the DevTools endpoint: a slow answer is waited for, not a failed run ─────────────────────────
+# main's js coverage job died on one 5 s read of Chrome's /json/version (the browser had accepted
+# the connection and was still starting) on code its pull request had just measured green. run.py
+# puts its own directory on sys.path and imports its siblings, so both are put back afterwards.
+_dt14_path, _dt14_mods = list(sys.path), set(sys.modules)
+try:
+    _dt14_run = _jc_load("run")
+finally:
+    sys.path[:] = _dt14_path
+    for _m14 in set(sys.modules) - _dt14_mods:
+        if not _m14.startswith("jscov_"):
+            del sys.modules[_m14]
+_dt14_calls = []
+
+
+class _DtAnswer14:
+    def __enter__(self):
+        return _io14.BytesIO(b'{"Browser": "Chrome/1"}')
+
+    def __exit__(self, *_a):
+        return False
+
+
+def _dt14_urlopen(url, timeout=None):
+    _dt14_calls.append(timeout)
+    if len(_dt14_calls) <= 2:
+        raise TimeoutError("timed out")
+    return _DtAnswer14()
+
+
+_dt14_real = _dt14_run.urllib.request.urlopen
+_dt14_run.urllib.request.urlopen = _dt14_urlopen
+try:
+    try:
+        _dt14_got = _dt14_run.devtools_json(1, "/json/version")
+    except Exception as _e14:  # noqa: BLE001 - the check names what escaped
+        _dt14_got = _e14
+    _dt14_calls.clear()
+    _dt14_late = None
+    try:
+        _dt14_run.devtools_json(1, "/json/version", wait=0)
+    except _dt14_run.Abort as _e14:
+        _dt14_late = str(_e14)
+    except Exception:  # noqa: BLE001 - anything else is the failure this check names
+        _dt14_late = None
+finally:
+    _dt14_run.urllib.request.urlopen = _dt14_real
+check("js coverage: a DevTools read that times out is tried again until the browser answers "
+      "(one slow /json/version failed main's run)",
+      _dt14_got == {"Browser": "Chrome/1"}, repr(_dt14_got))
+check("js coverage: ...and past its deadline it stops with a message naming the endpoint, not a "
+      "traceback",
+      _dt14_late is not None and "/json/version" in _dt14_late and len(_dt14_calls) == 1,
+      repr((_dt14_late, _dt14_calls)))
