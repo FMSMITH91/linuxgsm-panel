@@ -1947,9 +1947,12 @@ try:
           repr((_hmaps10, [x[3] for x in _hm2_10])))
     # A row whose port reads as text (SQLite keeps it in an INTEGER column) raised ValueError out
     # of this "never raises" worker, and through ex.map took every host's metrics down with it.
-    _hm3_10 = _mon10._query_host_metrics((_R10, [(1, "run", "27015x", "css", None),
-                                                 (2, "idle", 27016, "css", None),
-                                                 (3, "run", "27015", "css", None)]))
+    try:
+        _hm3_10 = _mon10._query_host_metrics((_R10, [(1, "run", "27015x", "css", None),
+                                                     (2, "idle", 27016, "css", None),
+                                                     (3, "run", "27015", "css", None)]))
+    except ValueError as _hm3_exc:          # what it raised; failed below BY NAME, not as a crash
+        _hm3_10 = [repr(_hm3_exc)]
     check("monitor host metrics: a non-numeric port is 'port shut' for that server alone, never a raise",
           len(_hm3_10) == 3 and _hm3_10[0][1]["port_open"] is False
           and _hm3_10[0][1]["game_cpu_percent"] == 30.0 and _hm3_10[2][1]["port_open"] is True,
