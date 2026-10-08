@@ -971,7 +971,8 @@ def _no_account_home_check(s):
     LDAP user's home went the same way while NSS was down. What userdel leaves behind is a real
     directory owned by a uid that no longer has an account, so that is what is accepted — or no
     home at all, where there is nothing to remove. A symlink, a root-owned directory, or one whose
-    owner still resolves to an account is refused."""
+    owner still resolves to an account is refused.
+    """
     try:
         st = os.lstat(home_of(s))
     except FileNotFoundError:
@@ -2819,7 +2820,8 @@ def _conf_path_link(path):
     database the panel user chose (_db_repair_account read the owner THROUGH the link: root's
     tree, so root's repair), and restore and the self-update log followed it too. A link root
     owns is an operator's (data/ moved to another disk) and is followed; the panel user cannot
-    make one."""
+    make one.
+    """
     cur = "/"
     for part in [p for p in path.split("/") if p]:
         cur = os.path.join(cur, part)

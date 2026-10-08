@@ -140,8 +140,9 @@ def _privileged_allowed(so):
 
 
 def _first_lines(reads, n):
-    """Run the (filtered, read[, windowed]) reads in order until one has content: (lines, filtered,
-    state, cut).
+    """Run the (filtered, read[, windowed]) reads in order until one has content.
+
+    Returns (lines, filtered, state, cut).
 
     A filtered read that came back FULL -- `n` entries, the oldest n of its window, so its newest
     are past them -- gives way to the plain read after it, which reads the newest n. The full read

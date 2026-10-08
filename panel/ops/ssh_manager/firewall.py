@@ -169,7 +169,8 @@ def _fwssh_served_ports(server):
     remote_ufw_delete_rule, which gates only on protected, deleted it. sshd's effective config
     (`sshd -T`) says what it serves; the port the panel connects on is kept beside it, because
     that connection is the proof it is served. A config that cannot be read keeps the old answer:
-    a failed read must never leave a rule LESS protected than it was."""
+    a failed read must never leave a rule LESS protected than it was.
+    """
     try:
         live = {int(p) for p in hosts._sshd_current_ports(server)}
     except Exception:

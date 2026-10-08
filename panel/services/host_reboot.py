@@ -2280,7 +2280,9 @@ def _rebooted_since(ident, info):
 
 
 def _wait_may_look(remote, info, now):
-    """Not before a bounce's back-off, not while a job runs or an earlier plan's rows are still being
+    """Whether the wait may look at the host now.
+
+    Not before a bounce's back-off, not while a job runs or an earlier plan's rows are still being
     brought back, and never on a host that is not answering.
 
     The rows are request_reboot's _pending_conflict check, which this path skipped: a bounce's

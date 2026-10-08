@@ -84,7 +84,7 @@ def _rbhold_unread_slots_stubs41(seen):
 def _rbhold_unread_count_checks41():
     """A player count that cannot be read just before a server's stop, three times over."""
     _fresh41()
-    r, h, _rows = _std_host41()
+    r, _h, _rows = _std_host41()
     seen = {"n": 0, "stopping": False}
     _rbhold_unread_slots_stubs41(seen)
     HR.request_reboot(r, "when_empty", _WAITER41, "web")
@@ -111,7 +111,7 @@ def _rbhold_unread_count_checks41():
 def _rbhold_wait_over_rows_checks41():
     """A wait whose host still has an earlier plan's rows pending does not fire over them."""
     _fresh41()
-    r, h, rows = _std_host41()
+    r, _h, rows = _std_host41()
     HR.request_reboot(r, "when_empty", _WAITER41, "web")
     real = HR.plan_rows
     _patch(HR, "plan_rows", lambda rid: [rows["gmod"]] if rid == r.id else real(rid))

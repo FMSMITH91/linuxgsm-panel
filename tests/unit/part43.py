@@ -1240,6 +1240,11 @@ def _rv43_installing(admin):
 
 
 # ── file-browser READS as an account that can become root ────────────────────────────────────────
+def _rv43_refused_as_root(r):
+    """A file-browser answer that is the 409 refusing a root-capable game account."""
+    return r.status_code == 409 and "can become root" in (_p9_json(r).get("error") or "")
+
+
 def _rv43_reads(admin):
     seen = []
     for name in ("browse_dir", "read_file", "stat_path", "stream_path", "stat_upload_targets"):
@@ -1256,11 +1261,9 @@ def _rv43_reads(admin):
         _p9_patch(_sh43, "privileged_accounts", lambda remote, users: {})
         _sh43._ACCOUNT_VERDICTS.clear()
     check("file browser: a listing as a root-capable account is refused (409), as its writes are",
-          b.status_code == 409 and "can become root" in (_p9_json(b).get("error") or ""),
-          "%d %r" % (b.status_code, _p9_json(b)))
+          _rv43_refused_as_root(b), "%d %r" % (b.status_code, _p9_json(b)))
     check("file browser: ...and so is reading a file as it",
-          f.status_code == 409 and "can become root" in (_p9_json(f).get("error") or ""),
-          "%d %r" % (f.status_code, _p9_json(f)))
+          _rv43_refused_as_root(f), "%d %r" % (f.status_code, _p9_json(f)))
     check("file browser: ...and the upload pre-check's listing",
           u.status_code == 409, "%d %r" % (u.status_code, _p9_json(u)))
     check("file browser: ...and a download is a redirect that says why, with nothing streamed",
@@ -1274,6 +1277,9 @@ def _rv43_reads(admin):
 
 
 # ── the setup wizard's first admin: the same username rules as every other path ──────────────────
+_RV43_SETUP_PW = "Str0ng!passw0rd-rv43"  # nosec B105 - a fixture password for a stubbed setup
+
+
 def _rv43_setup_username():
     made = []
     _p9_patch(_rh43, "User", _NS43(query=_NS43(filter_by=lambda **k: _NS43(first=lambda: None))))
@@ -1281,8 +1287,8 @@ def _rv43_setup_username():
     try:
         for name in ("ad\tmin", "ad min", "ad\x1bmin", "a" * 81, "admin"):
             with _p9.test_request_context("/setup", method="POST", data={
-                    "username": name, "password": "Str0ng!passw0rd-rv43",
-                    "confirm_password": "Str0ng!passw0rd-rv43"}):
+                    "username": name, "password": _RV43_SETUP_PW,
+                    "confirm_password": _RV43_SETUP_PW}):
                 _rh43._setup_admin_user(None, {})
     finally:
         for name in ("User", "_create_first_admin"):
@@ -1482,7 +1488,7 @@ def _rv43_run_page(html, expr=None):
         return None
     cfg = {"ids": sorted(set(_re43.findall(r'\bid="([^"]+)"', html))),
            "scripts": _rv43_page_scripts(html), "eval": expr}
-    r = _sp43.run([node, "-e", _RV43_PAGE_JS], input=_json43.dumps(cfg), capture_output=True,
+    r = _sp43.run([node, "-e", _RV43_PAGE_JS], input=_json43.dumps(cfg), capture_output=True,  # nosec B603 - node on this part's own harness
                   text=True, timeout=120, check=False)
     try:
         out = _json43.loads(r.stdout)
@@ -1492,8 +1498,10 @@ def _rv43_run_page(html, expr=None):
 
 
 def _rv43_js_offers():
-    """How many places manage_remotes.js builds the migrate offer through _tsMigrateOffer, and none
-    that builds the button itself."""
+    """Count the places manage_remotes.js builds the migrate offer through _tsMigrateOffer.
+
+    -1 when any place builds the button itself instead.
+    """
     with open(os.path.join(_ROOT43, "static", "js", "manage_remotes.js"), encoding="utf-8") as fh:
         src = fh.read()
     body = src.split("function _tsMigrateOffer", 1)
@@ -1515,6 +1523,13 @@ def _rv43_host_page(admin, deleg):
     check("host page: ...while on a REMOTE host the same delegate still has every one of them "
           "(positive control)", all('id="%s"' % i in remote for i in host_ids),
           repr([i for i in host_ids if 'id="%s"' % i not in remote]))
+    _rv43_migrate_button(admin, deleg)
+    _rv43_page_scripts_run(html, remote)
+    _rv43_hosts_offer()
+
+
+def _rv43_migrate_button(admin, deleg):
+    """A password-auth remote's host page: the Migrate button is a superadmin's only."""
     _p9_set_host(P9_HOST, auth_method="password")
     try:
         mine = deleg.get("/remote/%d/manage" % P9_HOST).get_data(as_text=True)
@@ -1525,6 +1540,10 @@ def _rv43_host_page(admin, deleg):
           "them), and says who can",
           'data-action="switchToTailscale"' not in mine and "A superadmin can switch" in mine
           and 'data-action="switchToTailscale"' in theirs)
+
+
+def _rv43_page_scripts_run(html, remote):
+    """The host page's scripts, for a delegate on the panel host and on a remote, run cleanly."""
     for label, page in (("the panel host, as a delegate", html), ("a remote host", remote)):
         errs = _rv43_run_page(page)
         if errs is None:
@@ -1533,6 +1552,10 @@ def _rv43_host_page(admin, deleg):
             continue
         check("host page: its scripts run without touching a missing element (%s)" % label,
               errs == [], repr(errs[:5]))
+
+
+def _rv43_hosts_offer():
+    """The hosts page's after-join Migrate offer, run with and without the superadmin marker."""
     # The hosts page: manage_remotes.js builds the offer after a join; the template says, by one
     # marker element, whether this viewer may migrate. The script is run with and without it.
     with open(os.path.join(_ROOT43, "templates", "manage_remotes.html"), encoding="utf-8") as fh:

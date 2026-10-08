@@ -870,6 +870,13 @@ function _showTsOffNote(data) {
   if (offEl) offEl.hidden = !data.log_timestamps;
 }
 
+// The rows of a Load-older answer's list that hold a line of text (none for a missing list).
+function _loadOlderRows(list) {
+  return (list || []).filter(function (r) {
+    return r && typeof r.line === 'string' && r.line.trim();
+  });
+}
+
 // "Load older" — ask for a much bigger tail of the log and show that.
 //
 // It REPLACES the scrollback rather than trying to splice the deeper window in around what is
@@ -907,9 +914,7 @@ function loadMoreConsole(btn) {
         if (window.toast) toast('Could not read the console log on this host', 'danger');
         return;
       }
-      var older = (data.lines || []).filter(function (r) {
-        return r && typeof r.line === 'string' && r.line.trim();
-      });
+      var older = _loadOlderRows(data.lines);
       _consoleLines = [];
       consoleEl.innerHTML = '';
       _appendConsoleRows(older, null);
@@ -921,9 +926,7 @@ function loadMoreConsole(btn) {
       // The panel's own lines (an update's output and markers) are not in the log, so a rebuild
       // from the log alone threw them away for good. Put the kept backlog back after it, the same
       // way the first load does.
-      _renderPanelLines((data.panel_lines || []).filter(function (r) {
-        return r && typeof r.line === 'string' && r.line.trim();
-      }));
+      _renderPanelLines(_loadOlderRows(data.panel_lines));
       _consoleSig = null;   // let the next poll re-evaluate against the new buffer
       if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
     })

@@ -607,7 +607,8 @@ class RemoteServer(db.Model):
         time.time(), not utcnow().timestamp(): utcnow() is a NAIVE UTC datetime, and .timestamp()
         on a naive one reads it as LOCAL time, so on a panel host at UTC-5 the stamp was 5 h in the
         future and the day-long cache (_pro_status_cached compares it with time.time()) lasted
-        29 h; at UTC+9 it lasted 15 h."""
+        29 h; at UTC+9 it lasted 15 h.
+        """
         self.pro_cache = json.dumps({"data": data, "ts": int(time.time())})
 
     @property
@@ -1809,14 +1810,13 @@ def _db_quick_check(path):
 def _quick_check_patiently(path, attempts=3, pause=2.0):
     """_db_quick_check, retried while the file is locked or busy; the last error is re-raised."""
     import sqlite3
-    import time as _t
     for i in range(attempts):
         try:
             return _db_quick_check(path)
         except sqlite3.OperationalError:
             if i == attempts - 1:
                 raise
-            _t.sleep(pause)
+            time.sleep(pause)
     return _db_quick_check(path)   # attempts < 1: one plain try
 
 
@@ -1893,8 +1893,7 @@ def _refresh_rolling_backup(path, backup):
 def _db_aside_name(path):
     """A timestamped `<path>.corrupt-<epoch>[-n]` name that no file (nor its -wal/-shm) holds yet."""
     import os
-    import time as _t
-    stamp = "%s.corrupt-%d" % (path, int(_t.time()))
+    stamp = "%s.corrupt-%d" % (path, int(time.time()))
     aside, n = stamp, 0
     while any(os.path.lexists(aside + ext) for ext in ("", "-wal", "-shm")):
         n += 1

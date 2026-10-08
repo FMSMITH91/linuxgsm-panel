@@ -1193,7 +1193,6 @@ def _content_grant_remote(a):
     return "_cgr=0; " + "; ".join("%s || _cgr=1" % p for p in parts) + '; [ "$_cgr" = 0 ]'
 
 
-
 # Verbs the helper implements itself, with no tool to run. A REMOTE host has no helper, so each one
 # needs the shell form it has always been sent — kept here, beside the verb, so the two renderings
 # cannot drift. These are byte-identical to what the call sites used to build inline.

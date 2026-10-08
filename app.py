@@ -107,7 +107,7 @@ from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, authori
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     encrypt_secret, is_encrypted, harden_data_permissions, read_setup_token, remove_setup_token,
-)
+    autoblock_host_ids)
 from panel.services import notifications
 # The two chat bots. They import nothing from app.py — every dependency they have comes from
 # the module that owns it — so unlike panel.routes.* this needs no lazy import to break a cycle.
@@ -736,24 +736,13 @@ def _monitor_watch(app):
 # ── blocks and any other UFW rules are left untouched.
 
 
-def _autoblock_ids(raw):
-    """config.json's autoblock_hosts as a set of remote ids; empty for anything not a list of ints.
-
-    config.json is hand-editable, and `set(5)` or `set([[1]])` raised TypeError out of every
-    caller — the hourly loop (which died of it), the Security tab, the toggle. The panel itself
-    only ever writes a sorted list of ints, so anything else in it is not an id it stored."""
-    if not isinstance(raw, list):
-        return set()
-    return {h for h in raw if isinstance(h, int) and not isinstance(h, bool)}
-
-
 def _autoblock_hosts():
-    return _autoblock_ids(load_config().get("autoblock_hosts", []))
+    return autoblock_host_ids(load_config().get("autoblock_hosts", []))
 
 
 def _set_autoblock_host(remote_id, enabled):
     def _mut(cfg):   # read-modify-write under the config lock (toggled alongside threshold/whitelist)
-        hosts = _autoblock_ids(cfg.get("autoblock_hosts", []))
+        hosts = autoblock_host_ids(cfg.get("autoblock_hosts", []))
         hosts.add(remote_id) if enabled else hosts.discard(remote_id)
         cfg["autoblock_hosts"] = sorted(hosts)
     update_config(_mut)

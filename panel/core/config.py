@@ -115,6 +115,18 @@ def config_unreadable():
         return True
 
 
+def autoblock_host_ids(raw):
+    """config.json's autoblock_hosts as a set of remote ids; empty for anything not a list of ints.
+
+    config.json is hand-editable, and `set(5)` or `set([[1]])` raised TypeError out of every
+    caller — the hourly loop (which died of it), the Security tab, the toggle. The panel itself
+    only ever writes a sorted list of ints, so anything else in it is not an id it stored.
+    """
+    if not isinstance(raw, list):
+        return set()
+    return {h for h in raw if isinstance(h, int) and not isinstance(h, bool)}
+
+
 def load_config():
     config = dict(DEFAULT_CONFIG)
     try:

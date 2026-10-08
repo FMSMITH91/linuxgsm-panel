@@ -559,7 +559,8 @@ def _apply_cfg_updates(lines, updates):
     EVERY uncommented line for the key, not the first: LinuxGSM sources the file, so the LAST
     assignment wins (and _parse_cfg reads it the same way). A hand-edited cfg holding the key twice
     had only its first line rewritten — the save said "Saved", the server kept the old value, and
-    the form read the old value back."""
+    the form read the old value back.
+    """
     for key, val in (updates or {}).items():
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\Z", key or ""):
             continue

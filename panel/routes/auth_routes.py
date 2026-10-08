@@ -781,7 +781,8 @@ def _login_second_factor(attempt, pending_id):
 def _login_totp_code(attempt, u, entered, stamp=None):
     """Sign `u` in on a valid, unspent authenticator code; None when `entered` is not a valid one.
 
-    `stamp` is the slot _login_second_factor reserved; it is given back only on a sign-in."""
+    `stamp` is the slot _login_second_factor reserved; it is given back only on a sign-in.
+    """
     _step = verify_totp_step(u.totp_secret_plain, entered)
     if _step is None:
         return None

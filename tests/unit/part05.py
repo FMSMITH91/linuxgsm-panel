@@ -7045,9 +7045,7 @@ finally:
 #    self-update log at a tree of its choosing. A non-root link anywhere on the path is refused.
 # 3. _caller_reaches_root answered True ("already root") for any sudoers it could not parse, which
 #    switched v_game_account off for every account on that host. It answers False now.
-import contextlib as _rv5_ctx
-import io as _rv5_io
-import pwd as _rv5_real_pwd
+_rv5_ctx, _rv5_io, _rv5_real_pwd = _gdi_ctx, _sec_io, _dbr_pwd   # contextlib, io, pwd
 
 _rv5_dir = os.path.realpath(_tempfile.mkdtemp(prefix="rv5-helper-"))
 _rv5_saved = (_helper.HOME_ROOT, _helper.pwd, _helper.PANEL_CONF, _helper.DBM_PATH,
@@ -7184,7 +7182,7 @@ finally:
 # that failed answered 0. The helper threw usermod's status away, and gmod's caller ignored the
 # verb's rc on both transports, so the mount said "Mounted" for a server that could read nothing.
 # The rendered string is RUN under bash with usermod/runuser as shell functions answering per case.
-from panel.ops.ssh_manager import _core as _bx_core, gmod as _bx_gmod
+_bx_core, _bx_gmod = _nsr_core, _sm_gmod     # panel.ops.ssh_manager's _core and gmod
 
 
 def _bx_remote_rc(usermod_rc, chmod_rc):

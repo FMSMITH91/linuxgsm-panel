@@ -508,12 +508,16 @@ def _card_checks41(out):
     check("Power card: ...in the page's language, not the browser's (English day names were on a "
           "Spanish page)", _all41(bool(clock.get("far_fr")), clock.get("far_fr") != clock.get("far_en")),
           repr(clock))
-    fail = out.get("card_fail_remote") or {}
-    check("Power card: a remote host's card whose reboot-plan read fails polls again in 10 s (one blip stopped "
-          "it for good)", _all41(fail.get("reads") == 1, fail.get("timers") == [10000]), repr(fail))
+    _card_fail_remote_checks41(out)
     check("Power card: a restore shows how many are back, and the last outcome once it is over",
           _all41((out.get("card_rows") or {}).get("text", "").startswith("Coming back: 1/2"),
                  (out.get("card_idle") or {}).get("text") == "vps is back"), repr(out.get("card_rows")))
+
+
+def _card_fail_remote_checks41(out):
+    fail = out.get("card_fail_remote") or {}
+    check("Power card: a remote host's card whose reboot-plan read fails polls again in 10 s (one blip stopped "
+          "it for good)", _all41(fail.get("reads") == 1, fail.get("timers") == [10000]), repr(fail))
 
 
 def _banner_checks41(out):

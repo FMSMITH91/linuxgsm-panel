@@ -1008,9 +1008,15 @@ def authlog_scan(path, now=None):
         out[key] += now - at <= 86400
         out["unknown"] += m.group(3) == "unknown"
     out["last_age"] = None if last is None else now - last
-    out["covers_24h"] = ((first is not None and now - first >= 86400)
-                         or not (size > AUTHLOG_MAX or os.path.exists(path + ".1")))
+    out["covers_24h"] = _authlog_covers_24h(path, size, first, now)
     return out
+
+
+def _authlog_covers_24h(path, size, first, now):
+    """Whether a read whose oldest stamp is `first` holds the whole last 24 h (see authlog_scan)."""
+    if first is not None and now - first >= 86400:
+        return True
+    return not (size > AUTHLOG_MAX or os.path.exists(path + ".1"))
 
 
 def _authlog_handler():

@@ -132,6 +132,17 @@ def _gmod47():
           repr(out))
 
 
+def _creds_pw_field_ok47(pw):
+    return pw.get("type") == "password" and pw.get("ac") == "new-password" and pw.get("value") == ""
+
+
+def _creds_fields_ok47(out):
+    key, ts = out.get("key") or {}, out.get("tailscale") or {}
+    return (_creds_pw_field_ok47(out.get("password") or {})
+            and key.get("type") == "text" and key.get("value") == "~/.ssh/id_rsa" and ts.get("type") == "text"
+            and (out.get("password2") or {}).get("type") == "password")
+
+
 def _creds47():
     src = _read47(_JS47, "manage_remotes.js")
     prog = ("const els = {'credential-group': {style: {}}, 'cred-label': {}};\n"
@@ -149,12 +160,9 @@ def _creds47():
     if out is None:
         skip("Add Remote: a password is typed into a password field", "node is not installed here")
         return
-    pw, key, ts = out.get("password") or {}, out.get("key") or {}, out.get("tailscale") or {}
     check("Add Remote: with auth Password the credential is a password field (new-password), so the host's "
           "SSH password is not shown in clear; a key path or Tailscale makes it a text field again",
-          pw.get("type") == "password" and pw.get("ac") == "new-password" and pw.get("value") == ""
-          and key.get("type") == "text" and key.get("value") == "~/.ssh/id_rsa" and ts.get("type") == "text"
-          and (out.get("password2") or {}).get("type") == "password", repr(out))
+          _creds_fields_ok47(out), repr(out))
     tpl = _read47(_TPL47, "manage_remotes.html")
     grp = _re47.search(r'<div class="col-md-2" id="edit-cred-group-\{\{ remote\.id \}\}"[^>]*>', tpl)
     check("Edit remote: the Credential box of a host already on Tailscale SSH is hidden from the start "
@@ -249,6 +257,14 @@ def _ts_serve47():
           and "data-prevent" in tag, repr((out, tag)))
 
 
+def _cred_dialog_ok47(out):
+    inv, pwd = out.get("invite") or {}, out.get("password") or {}
+    return (inv.get("seen") == ["invite", "invite"] and inv.get("label") == "Invite Link"
+            and inv.get("copied") == "Link copied" and pwd.get("seen") == ["password", "password"]
+            and pwd.get("label") == "One-time password" and pwd.get("copied") == "Password copied"
+            and pwd.get("shown") == 2)
+
+
 def _cred_dialog47():
     src = _read47(_JS47, "manage_users.js")
     prog = ("const mk = k => ({kind: k, hidden: k === 'invite', getAttribute: () => k});\n"
@@ -274,13 +290,9 @@ def _cred_dialog47():
     if out is None:
         skip("credential dialog: an invite link is shown as one", "node is not installed here")
         return
-    inv, pwd = out.get("invite") or {}, out.get("password") or {}
     check("credential dialog: an invite link is shown under its own title and copy (not \"One-time password\", "
           "\"reset the password\"), and a password under the password's again after it",
-          inv.get("seen") == ["invite", "invite"] and inv.get("label") == "Invite Link"
-          and inv.get("copied") == "Link copied" and pwd.get("seen") == ["password", "password"]
-          and pwd.get("label") == "One-time password" and pwd.get("copied") == "Password copied"
-          and pwd.get("shown") == 2, repr(out))
+          _cred_dialog_ok47(out), repr(out))
     tpl = _read47(_TPL47, "manage_users.html")
     modal = tpl[tpl.index('id="credentialModal"'):]
     modal = modal[:modal.index('<div class="modal-footer">')]
@@ -429,17 +441,25 @@ def _left_in_place47(tmp):
           and none.stdout == "" and none.returncode == 0, repr((some, none.stdout)))
 
 
+def _lhci_call_kind47(c):
+    """"term" for a signal.signal(signal.SIGTERM, ...) call, "run" for a socketio.run, else None."""
+    if not isinstance(c, _ast47.Call):
+        return None
+    f = _ast47.unparse(c.func)
+    if f == "signal.signal" and c.args and _ast47.unparse(c.args[0]) == "signal.SIGTERM":
+        return "term"
+    return "run" if f.endswith("socketio.run") else None
+
+
 def _lhci47():
     tree = _ast47.parse(_read47(_root, "tools", "lhci_serve.py"))
     term = run = None
     for n in tree.body:
         for c in _ast47.walk(n):
-            if not isinstance(c, _ast47.Call):
-                continue
-            f = _ast47.unparse(c.func)
-            if f == "signal.signal" and c.args and _ast47.unparse(c.args[0]) == "signal.SIGTERM" and term is None:
+            kind = _lhci_call_kind47(c)
+            if kind == "term" and term is None:
                 term = n.lineno
-            if f.endswith("socketio.run") and run is None:
+            if kind == "run" and run is None:
                 run = n.lineno
     check("tools/lhci_serve.py: SIGTERM — how the Lighthouse workflow stops it — becomes an exit that runs its "
           "cleanup, set at the top level before the server runs (atexit alone never ran on SIGTERM)",

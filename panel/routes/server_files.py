@@ -1683,6 +1683,17 @@ def _register_mods(app):
             return jsonify({"success": False, "message": _log_and_generic("mods action failed")}), 200
 
 
+def _file_editor_read(gs):
+    """api_server_file's GET: one file's contents, or the refusal or error response."""
+    refused = _read_refused(gs, "read_file", request.args.get("path", ""))
+    if refused is not None:
+        return refused
+    content, err = read_file(gs.remote, gs.short_name, request.args.get("path", ""))
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({"content": content, "path": request.args.get("path", "")})
+
+
 def _register_file_editor(app):
     """The file browser's listing, and reading and writing one file."""
     @app.route("/api/server/<int:server_id>/browse")
@@ -1711,13 +1722,7 @@ def _register_file_editor(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
-            refused = _read_refused(gs, "read_file", request.args.get("path", ""))
-            if refused is not None:
-                return refused
-            content, err = read_file(gs.remote, gs.short_name, request.args.get("path", ""))
-            if err:
-                return jsonify({"error": err}), 400
-            return jsonify({"content": content, "path": request.args.get("path", "")})
+            return _file_editor_read(gs)
         data = _json_body()
         rel = data.get("path", "")
         # The contents must be present and be TEXT, as api_server_config's `raw` must. This was
@@ -1871,6 +1876,21 @@ def _register_file_rename(app):
             return jsonify({"success": False, "message": _log_and_generic("rename_path failed")}), 500
 
 
+def _download_refusal(gs, server_id):
+    """server_file_download's permission and game-account gates: a flash and redirect, else None."""
+    if not _can_manage_files():
+        flash("You don't have permission to manage server files.", "danger")
+        return redirect(url_for("server_detail", server_id=server_id))
+    why = game_account_write_refusal(gs.remote, gs.short_name, reading=True)
+    if why is None:
+        return None
+    # A link the browser follows, so a flash and a redirect like every refusal after it.
+    log_action(current_user, "download_file", target=gs.name,
+               detail=("refused: " + why)[:250], success=False, server=gs)
+    flash(why, "danger")
+    return redirect(url_for("server_files", server_id=server_id))
+
+
 def _register_download(app):
     """Downloading a file, or a directory as a .tar.gz, from the file browser."""
     @app.route("/server/<int:server_id>/download")
@@ -1889,17 +1909,10 @@ def _register_download(app):
         may take a copy of one.
         """
         gs = get_game(server_id)
-        if not _can_manage_files():
-            flash("You don't have permission to manage server files.", "danger")
-            return redirect(url_for("server_detail", server_id=server_id))
+        refused = _download_refusal(gs, server_id)
+        if refused is not None:
+            return refused
         rel = request.args.get("path", "")
-        why = game_account_write_refusal(gs.remote, gs.short_name, reading=True)
-        if why is not None:
-            # A link the browser follows, so a flash and a redirect like every refusal below.
-            log_action(current_user, "download_file", target=gs.name,
-                       detail=("refused: " + why)[:250], success=False, server=gs)
-            flash(why, "danger")
-            return redirect(url_for("server_files", server_id=server_id))
 
         # Every failure below ends in a flash and a redirect rather than an abort(), because this
         # is a LINK the browser follows: an error page would replace the file browser with a bare

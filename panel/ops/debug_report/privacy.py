@@ -393,10 +393,10 @@ def _names_bot(st, conf, key):
         st.add(str(value or ""), "id")
         # a group's chat id is negative; logs and API errors often print it without the sign
         st.add(str(value or "").strip().lstrip("-"), "id")
-    for secret in ("token", "bot_token", "webhook"):
-        for form in _dbr_secret_forms(conf.get(secret)):
+    for field in ("token", "bot_token", "webhook"):
+        for form in _dbr_secret_forms(conf.get(field)):
             st.add(form, "secret", "")
-            if secret == "webhook":
+            if field == "webhook":
                 st.add(_dbr_webhook_token(form), "secret", "")
 
 

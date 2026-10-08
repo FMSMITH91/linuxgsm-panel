@@ -3522,16 +3522,10 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
         if "yes" not in (have2 or ""):
             return False, "Couldn't install fail2ban on this host."
 
-    # Each write's rc decides, before anything reloads. The status poll below only asks "is a jail
-    # named linuxgsm-panel up", which the OLD jail answers yes to: a refused rewrite (an older
-    # helper, a narrow grant without tee) came back "now protecting" on the old port and without
-    # a newly whitelisted address, and the caller audited the change as applied.
-    for _path, _body in ((_F2B_PANEL_FILTER, _panel_f2b_filter_body()),
-                         (_F2B_PANEL_JAIL, _panel_f2b_jail_body(auth_log, web_port, ignore_ips))):
-        if _write_root_file(_path, _body)[2] != 0:
-            return False, ("Couldn't write the panel's fail2ban %s file, so the jail keeps its "
-                           "previous settings." % ("filter" if _path == _F2B_PANEL_FILTER
-                                                   else "jail"))
+    # Each write's rc decides, before anything reloads (see _f2b_write_panel_files).
+    _wrote = _f2b_write_panel_files(auth_log, web_port, ignore_ips)
+    if _wrote:
+        return False, _wrote
 
     _run_verb("service-enable-now", ["fail2ban"], timeout=45)
     # Was `fail2ban-client reload || systemctl restart fail2ban` in one root shell.
@@ -3552,6 +3546,29 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     if panel_fail2ban_status().get("enabled"):
         return True, _f2b_ok_msg
     # Give up — but surface the REAL reason instead of a generic message.
+    reason = _f2b_jail_down_reason()
+    return False, ("Configured fail2ban, but the jail didn't come up. %s"
+                   % (reason or "Check `fail2ban-client status linuxgsm-panel` and the panel logs."))
+
+
+def _f2b_write_panel_files(auth_log, web_port, ignore_ips):
+    """Write the panel's fail2ban filter, then its jail; the failure message, or "" when both landed.
+
+    Each write's rc decides, before anything reloads. The status poll in configure_panel_fail2ban
+    only asks "is a jail named linuxgsm-panel up", which the OLD jail answers yes to: a refused
+    rewrite (an older helper, a narrow grant without tee) came back "now protecting" on the old
+    port and without a newly whitelisted address, and the caller audited the change as applied.
+    """
+    for _path, _body in ((_F2B_PANEL_FILTER, _panel_f2b_filter_body()),
+                         (_F2B_PANEL_JAIL, _panel_f2b_jail_body(auth_log, web_port, ignore_ips))):
+        if _write_root_file(_path, _body)[2] != 0:
+            return ("Couldn't write the panel's fail2ban %s file, so the jail keeps its "
+                    "previous settings." % ("filter" if _path == _F2B_PANEL_FILTER else "jail"))
+    return ""
+
+
+def _f2b_jail_down_reason():
+    """Why the panel jail is not up, in at most 200 characters on one line; "" when nothing says."""
     detail, derr, _ = _run_verb("f2b-status-jail", ["linuxgsm-panel"], timeout=10)
     reason = (detail or derr or "").strip()
     if not reason:
@@ -3561,9 +3578,7 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
         _hits = [ln for ln in (_j or "").splitlines()
                  if re.search(r"linuxgsm-panel|have not found|log file|error", ln, re.I)]
         reason = "\n".join(_hits[-2:])
-    reason = (reason or "").replace("\n", " ").strip()[:200]
-    return False, ("Configured fail2ban, but the jail didn't come up. %s"
-                   % (reason or "Check `fail2ban-client status linuxgsm-panel` and the panel logs."))
+    return (reason or "").replace("\n", " ").strip()[:200]
 
 
 # What panel_jail_health checks, each of which must hold for the panel jail to count as healthy.

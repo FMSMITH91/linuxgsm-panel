@@ -47,8 +47,11 @@ def _raise_te44(*a, **_k):
 
 
 def _so_defined44(name, *roots):
-    """system_ops.<name> as the module defines it: by this part, _run is an earlier part's stub
-    (part03 assigns one and never puts it back; see part10's _p7_defined)."""
+    """Return system_ops.<name> as the module defines it.
+
+    By this part, _run is an earlier part's stub (part03 assigns one and never puts it back; see
+    part10's _p7_defined).
+    """
     fn = _p7_defined(SO, name, *(roots or (getattr(SO, name),)))
     return fn if fn is not None else (lambda *a, **k: "definition not found")
 
