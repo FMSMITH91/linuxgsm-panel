@@ -893,7 +893,7 @@ def _readers36(reply, game_type="mcb", gdtype="mbe"):
             fh.write('#!/bin/sh\nif [ "$1 $2" = "--type %s" ]; then cat "%s"; '
                      'else echo \'{"error":"Invalid game"}\'; fi\n'
                      % (gdtype, os.path.join(root, "reply.json")))
-        os.chmod(exe, 0o755)  # nosec B103 - a stand-in program in this part's own temp dir
+        os.chmod(exe, 0o755)  # nosec B103 - a stand-in program in this part's own temp dir  # nosemgrep
 
         def _batch_sh(_server, _user, sh, **_k):
             p = _sp36.run(["bash", "-c", sh],  # nosec B603 B607 - bash on the panel's own batch command

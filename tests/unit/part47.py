@@ -367,7 +367,7 @@ def _uninstall_copy47(tmp):
     os.makedirs(fake, exist_ok=True)
     with open(os.path.join(fake, "id"), "w", encoding="utf-8") as fh:
         fh.write('#!/bin/sh\ncase "$1" in -u) echo 1000 ;; -un) echo bob ;; *) exit 0 ;; esac\n')
-    os.chmod(os.path.join(fake, "id"), 0o700)  # nosec B103 - an owner-only stand-in this part runs
+    os.chmod(os.path.join(fake, "id"), 0o700)  # nosec B103 - an owner-only stand-in this part runs  # nosemgrep
     copy = os.path.join(tmp, "uninstall.sh")
     with open(copy, "w", encoding="utf-8") as fh:
         fh.write("#!/bin/bash\n")
