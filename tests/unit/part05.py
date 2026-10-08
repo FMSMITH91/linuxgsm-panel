@@ -33,9 +33,13 @@ try:
           _ok4 is False and not _sent_rm, "ran: %s" % _sent_rm[:1])
     _sent_rm.clear()
     _ok3, _ = _sm_files.delete_path(object(), _SELF, "addons/junk.txt", selfname=_SELF)
+    # The parent is resolved on the host (`cd -P`) and the name joined to it, so the command names
+    # the two halves; part08 deletes through it for real.
     check("file guard: a real file still gets deleted, at its resolved path",
           _ok3 is True and len(_sent_rm) == 1
-          and "/home/%s/addons/junk.txt" % _SELF in _sent_rm[0], "ran: %s" % _sent_rm[:1])
+          and "cd -P -- /home/%s/addons " % _SELF in _sent_rm[0]
+          and 't="$d"/junk.txt' in _sent_rm[0] and 'rm -rf -- "$t"' in _sent_rm[0],
+          "ran: %s" % _sent_rm[:1])
 finally:
     _sm_core.run_command = _orig_rc2
 

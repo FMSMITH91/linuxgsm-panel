@@ -1008,10 +1008,15 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     if refusal:
         return False, refusal, False
     ok, lock_refused, out, err = _run_linuxgsm_backup(server, user, selfname)
-    try:
-        cron.prune_game_backups(server, user, keep)
-    except Exception:
-        _core._log.debug("game backup prune failed", exc_info=True)
+    # Only after a backup that WORKED. LinuxGSM leaves the archive of a failed run behind (a full
+    # disk, the 3600 s timeout), the prune keeps the newest `keep` by mtime, and that partial
+    # archive is the newest — so each failure deleted one more good backup, until a host on an
+    # hourly schedule and a tight disk had only partial archives left.
+    if ok:
+        try:
+            cron.prune_game_backups(server, user, keep)
+        except Exception:
+            _core._log.debug("game backup prune failed", exc_info=True)
     if ok:
         return True, ("Backed up — " + headroom_note if headroom_note else "Backed up"), False
     if lock_refused:

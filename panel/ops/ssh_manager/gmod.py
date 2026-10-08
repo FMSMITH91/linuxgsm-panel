@@ -613,9 +613,18 @@ def _grant_content_read(server, gmod_user, content_user, games):
                 "Check the account exists on this host." % content_user)
     # Read access: add the GMod user to the content group, and make the content group-traversable
     # (home) + group-readable (each game tree). Best-effort per command.
-    _core.run_privileged(server, "content-grant-read",
-                         [content_user, group, gmod_user] + list(games), timeout=180,
-                         merge_stderr=False)
+    #
+    # ...but the verb as a whole is not: its rc was discarded, so a helper that refused it (rc 2,
+    # one older than the panel) or a transport that timed out (("", "…", -1), no raise) went on to
+    # write mount.cfg and report "Mounted: …" — and after the restart srcds could read none of the
+    # content and GMod silently mounted nothing.
+    out, err, rc = _core.run_privileged(server, "content-grant-read",
+                                        [content_user, group, gmod_user] + list(games), timeout=180,
+                                        merge_stderr=False)
+    if rc != 0:
+        return ("Couldn't give %s read access to %s's content, so nothing was mounted (%s)."
+                % (gmod_user, content_user,
+                   (err or out or "exit %s" % rc).replace("\n", " ").strip()[:160]))
     return None
 
 

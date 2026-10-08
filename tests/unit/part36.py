@@ -881,10 +881,30 @@ def _readers36(reply, game_type="mcb", gdtype="mbe"):
         _p9_patch(_files36, "lgsm_get_values",
                   lambda *a, **k: {"querymode": "2", "querytype": gdtype, "queryport": "19132",
                                    "port": "19132"})
-        return {"count": _cron36.player_count(srv, "p36mcb", game_type, 19132),
-                "slots": _cron36.player_slots(srv, "p36mcb", game_type, 19132),
-                "lgsm": _cron36.player_count_via_lgsm_query(srv, "p36mcb", "bedrockserver"),
-                "list": _game36._gamedig_player_list(srv, "p36mcb", game_type, 19132)}
+        got = {"count": _cron36.player_count(srv, "p36mcb", game_type, 19132),
+               "slots": _cron36.player_slots(srv, "p36mcb", game_type, 19132),
+               "lgsm": _cron36.player_count_via_lgsm_query(srv, "p36mcb", "bedrockserver"),
+               "list": _game36._gamedig_player_list(srv, "p36mcb", game_type, 19132)}
+        # The batched poll (two or more servers on a host) runs gamedig under `timeout`, which
+        # execs a program — so the stand-in is also a FILE on PATH, answering the same way.
+        root, _define = fake
+        exe = os.path.join(root, "gamedig")
+        with open(exe, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\nif [ "$1 $2" = "--type %s" ]; then cat "%s"; '
+                     'else echo \'{"error":"Invalid game"}\'; fi\n'
+                     % (gdtype, os.path.join(root, "reply.json")))
+        os.chmod(exe, 0o755)  # nosec B103 - a stand-in program in this part's own temp dir
+
+        def _batch_sh(_server, _user, sh, **_k):
+            p = _sp36.run(["bash", "-c", sh],  # nosec B603 B607 - bash on the panel's own batch command
+                          env={"PATH": root + ":/usr/bin:/bin", "HOME": root},
+                          capture_output=True, text=True, timeout=60, check=False)
+            return p.stdout, p.stderr, p.returncode
+        _p9_patch(_p9_core, "shell_as_game_user", _batch_sh)
+        got["batch"] = (_cron36.player_slots_batch(srv, "p36mcb", [(1, game_type, 19132, None),
+                                                                   (2, game_type, 19132, None)])
+                        or {}).get(1)
+        return got
 
 
 def _count_readers36():
@@ -898,6 +918,9 @@ def _count_readers36():
           got["slots"] == (7, 10, "Fake BDS"), repr(got))
     check("V8 count: ...and to player_count_via_lgsm_query (LinuxGSM's own querytype), which the "
           "reboot-when-empty poller reads", got["lgsm"] == 7, repr(got))
+    check("V8 count: ...and to the BATCHED player poll (a host with two or more servers), which "
+          "counted the empty list and fired 'server emptied' with 7 on",
+          got["batch"] == (7, 10, "Fake BDS"), repr(got))
     check("V8 count: ...and the player LIST is unknown (None), not the confirmed-empty server [] is "
           "— the Players panel and the chat bot said 'no players connected' with 7 on",
           got["list"] is None, repr(got))

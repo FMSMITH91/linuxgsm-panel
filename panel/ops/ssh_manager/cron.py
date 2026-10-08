@@ -775,8 +775,14 @@ def _run_now_detached(server, user, core, jid):
     """run_cron_job_now's shell form: a remote, or the panel's host without the helper."""
     import base64
     d = "/home/%s/.lgsm-cron" % user
-    rec = (f"{core} > {d}/{jid}.log 2>&1; R=$?; T=$(date +%s); "
-           f'echo "$R $T $T" > {d}/{jid}.status')
+    # The command runs as `bash -c "<decoded>"`, as the scheduled runner (_CRON_RUNNER_SCRIPT) runs
+    # it — never pasted into this line. Pasted, the operator's free text was part of the recorder's
+    # own syntax: `backup.sh # nightly` commented out the redirect AND the status write, so "Run
+    # now" said "Started" and Last run never changed; `a; b` logged only b; a trailing `&` was a
+    # syntax error. Base64 has no character the shell reads.
+    core_b64 = base64.b64encode(core.encode()).decode()
+    rec = (f'bash -c "$(printf %s {core_b64} | base64 -d)" > {d}/{jid}.log 2>&1; R=$?; '
+           f'T=$(date +%s); echo "$R $T $T" > {d}/{jid}.status')
     b64 = base64.b64encode(rec.encode()).decode()
     # setsid detaches the run so a long command records its result later instead of blocking;
     # `sudo -u` confines it to the game user's own privileges (same as a scheduled run). setsid
@@ -1473,9 +1479,14 @@ def _batch_target_filter(key):
 
     The name and map are cut in jq, so one reply stays a short single line: replies from several
     queries running at once share one pipe, and a short write is never interleaved with another.
+
+    The count is _core.GAMEDIG_HUMANS_JQ, as in player_slots. It was `.players|length`, so a
+    Bedrock server (an EMPTY list and numplayers 7) read as a confident 0 whenever its host had two
+    or more batchable servers: the dashboard, the bots and the backup "busy" prompt said nobody was
+    on, and "server emptied" fired. Polled alone, the same server read 7.
     """
-    return ('{k:%d, c:(.players|length), m:.maxplayers, n:((.name // "")|tostring|.[:120]), '
-            'p:(.map // ""), ok:(.players|type=="array")}' % int(key))
+    return ('{k:%d, c:%s, m:.maxplayers, n:((.name // "")|tostring|.[:120]), '
+            'p:(.map // ""), ok:(.players|type=="array")}' % (int(key), _core.GAMEDIG_HUMANS_JQ))
 
 
 def _batch_body(server, queries):

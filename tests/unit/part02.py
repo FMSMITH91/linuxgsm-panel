@@ -628,9 +628,40 @@ try:
           "sudo -u gm bash -c" in _c and "setsid bash" in _c)
     _m = _rern.search(r"echo ([A-Za-z0-9+/=]+) \| base64 -d", _c)
     _rec = _b64rn.b64decode(_m.group(1)).decode() if _m else ""
-    check("run now: runs the unwrapped core command", "/home/gm/backup.sh --full >" in _rec)
+    _rn_core = _rern.search(r"printf %s ([A-Za-z0-9+/=]+) \| base64 -d", _rec)
+    check("run now: runs the unwrapped core command",
+          bool(_rn_core) and _b64rn.b64decode(_rn_core.group(1)).decode() == "/home/gm/backup.sh --full",
+          _rec[:200])
     check("run now: records to the job's own status file",
           ("/home/gm/.lgsm-cron/" + _sm_cron._cron_job_id("/home/gm/backup.sh --full") + ".status") in _rec)
+
+    # Driven: the recorder line itself, in bash, for commands whose own syntax used to swallow it.
+    # Pasted in, `# nightly` commented out the log redirect and the status write (Last run never
+    # updated), `a; b` logged only b, and a trailing `&` was a syntax error.
+    import subprocess as _rn_sp
+    import tempfile as _rn_tf
+    import shutil as _rn_sh
+    _rn_dir = _rn_tf.mkdtemp(prefix="lgsm-unit-runnow-")
+    try:
+        for _rn_cmd, _rn_log in (("echo one # nightly", "one\n"), ("echo a; echo b", "a\nb\n"),
+                                 ("echo bg &", None)):
+            _rncap.clear()
+            _sm_cron.run_cron_job_now(None, "gm", "* * * * * " + _rn_cmd, "gmodserver")
+            _m = _rern.search(r"echo ([A-Za-z0-9+/=]+) \| base64 -d", _rncap.get("cmd", ""))
+            _rec = _b64rn.b64decode(_m.group(1)).decode().replace("/home/gm/.lgsm-cron", _rn_dir) if _m else ""
+            _rn_p = _rn_sp.run(["bash", "-c", _rec], capture_output=True, text=True,  # nosec B603 B607 - bash on the panel's own recorder line, into a temp dir
+                               timeout=20, check=False)
+            _rn_id = _sm_cron._cron_job_id(_rn_cmd)
+            _rn_st = os.path.join(_rn_dir, _rn_id + ".status")
+            _rn_lg = os.path.join(_rn_dir, _rn_id + ".log")
+            _rn_status = open(_rn_st).read().split() if os.path.exists(_rn_st) else []
+            _rn_logged = open(_rn_lg).read() if os.path.exists(_rn_lg) else None
+            check("run now: %r records its status and its whole output" % _rn_cmd,
+                  _rn_p.returncode == 0 and _rn_status[:1] == ["0"]
+                  and (_rn_log is None or _rn_logged == _rn_log),
+                  repr((_rn_p.returncode, _rn_p.stderr[:120], _rn_status, _rn_logged)))
+    finally:
+        _rn_sh.rmtree(_rn_dir, ignore_errors=True)
 finally:
     _sm_core.run_command = _orig_run6
 
@@ -1291,6 +1322,20 @@ try:
     _lok, _lmsg, _lskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2)
     check("run_game_backup: 'Lockfile found' at exit 0 is treated as failure",
           _lok is False and _lskip is False and "lock" in _lmsg.lower())
+    # A FAILED backup prunes nothing: its partial archive is the newest file, so the prune kept it
+    # and deleted the oldest GOOD backup — one more per failure.
+    for _bkp_name, _bkp_ans in (("a backup that exited non-zero", ("tar: write error", "", 1)),
+                                ("a lock-refused backup", ("Lockfile found", "", 0))):
+        _bkp_cmds = []
+
+        def _bkp_run(s, c, _ans=_bkp_ans, **k):
+            _bkp_cmds.append(c)
+            return _ans if "./gmodserver backup" in c else ("", "", 0)
+        _sm_core.run_command = _bkp_run
+        _bkp_r = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, force=True)
+        check("run_game_backup: %s deletes no backups (no prune)" % _bkp_name,
+              _bkp_r[0] is False and any("./gmodserver backup" in c for c in _bkp_cmds)
+              and not any("tail -z -n +" in c for c in _bkp_cmds), repr((_bkp_r, _bkp_cmds[-1:])))
 finally:
     _sm_core.run_command = _orig_lock
 
@@ -1995,17 +2040,19 @@ check("ufw grouping: ...and no two groups share one (positive control)",
 
 # ── firewall lock-out protection ──────────────────────────────
 def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False),
-            cfg_unreadable=None):
+            cfg_unreadable=None, sshd_ports=()):
     # Restores what it replaces. It used to leave sm.is_local_server stubbed for the REST of the
     # suite — every later test saw whatever the last protect() call happened to pass, which is how
     # a stub stops being scaffolding and starts being a silent global. Nothing depended on the leak
     # (this fix changed no other result), but the transport tests further down do read the real
     # is_local_server, and would have been testing the wrong branch.
     _saved = (_sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config,
-              _sm_firewall._config_unreadable)
+              _sm_firewall._config_unreadable, _sm_hosts._sshd_current_ports)
     try:
         _sm_core.is_local_server = lambda s: is_local
         _sm_hosts._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic
+        # sshd's listen ports as `sshd -T` gives them (strings); () = the read failed.
+        _sm_hosts._sshd_current_ports = lambda s: [str(p) for p in sshd_ports]
         if cfg is not None:
             config.load_config = lambda: cfg
             # config.json is consulted TWICE now: through load_config, and RAW by
@@ -2018,7 +2065,7 @@ def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(Fa
         return _sm_firewall._annotate_firewall_protection(server, enabled, _sm_firewall._group_ufw_rules(_rules(rules)))
     finally:
         (_sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config,
-         _sm_firewall._config_unreadable) = _saved
+         _sm_firewall._config_unreadable, _sm_hosts._sshd_current_ports) = _saved
 
 
 # SSH-only: port 22 is the last way in -> protected.
@@ -2081,6 +2128,31 @@ g = protect(NS(port=2222), ["2222/tcp ALLOW IN Anywhere",
                             "Anywhere ALLOW IN Anywhere on tailscale0"], tailscale=(False, False))
 gp = {x["port_num"]: x for x in g}
 check("2222 protected when Tailscale is down (no real fallback)", gp["2222"]["protected"])
+
+# sshd moved to 2222 by hand, the stock 22 rules still in UFW. They let nothing in: sshd does not
+# listen on 22. Counted as SSH, they made the 2222 rule merely warn ("another way in exists"),
+# and the delete — gated only on protected — removed the one rule sshd answers behind.
+for _fwssh_22 in ("22/tcp ALLOW IN Anywhere", "OpenSSH ALLOW IN Anywhere"):
+    g = protect(NS(port=2222), ["2222/tcp ALLOW IN Anywhere", _fwssh_22], sshd_ports=(2222,))
+    gp = {x["port_num"]: x for x in g}
+    _fwssh_k = _fwssh_22.split()[0].split("/")[0]
+    check("custom sshd port: a leftover '%s' is not a way in, so 2222 stays protected" % _fwssh_22,
+          gp["2222"]["protected"] and not gp[_fwssh_k]["is_ssh"],
+          repr({k: (v["is_ssh"], v["protected"], v["warn"]) for k, v in gp.items()}))
+    # ...and the same rules on a host whose sshd DOES serve both ports: two ways in (positive
+    # control), as is the old answer when sshd -T cannot be read (a failed read never protects less).
+    for _fwssh_live, _fwssh_why in (((22, 2222), "sshd serves both"), ((), "sshd -T unreadable")):
+        g = protect(NS(port=2222), ["2222/tcp ALLOW IN Anywhere", _fwssh_22], sshd_ports=_fwssh_live)
+        gp = {x["port_num"]: x for x in g}
+        check("custom sshd port: '%s' counts as a second way in when %s" % (_fwssh_22, _fwssh_why),
+              gp["2222"]["warn"] and not gp["2222"]["protected"] and gp[_fwssh_k]["is_ssh"],
+              repr({k: (v["is_ssh"], v["protected"], v["warn"]) for k, v in gp.items()}))
+# The tailscale0 rule's own guard reads the same count: with only a dead 22 beside it, it is the
+# last way in.
+g = protect(NS(port=2222), ["22/tcp ALLOW IN Anywhere", "Anywhere ALLOW IN Anywhere on tailscale0"],
+            tailscale=(True, False), sshd_ports=(2222,))
+ts = next(x for x in g if x["is_tailscale"])
+check("custom sshd port: a dead 22 rule does not unprotect the tailscale0 rule", ts["protected"])
 
 # Tailscale SSH enabled -> a guaranteed way in -> the sole SSH rule can be removed (warn).
 g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere"], tailscale=(True, True))
@@ -3199,6 +3271,23 @@ try:
     _ok5, _msg5 = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "gmodcontent", ["cstrike"])
     check("gmod mounts: a write that never printed its __OK__ is a failure, not 'Mounted'",
           _ok5 is False and "Mounted" not in _msg5, _msg5)
+
+    # The read grant's rc: a helper that refused the verb, or a transport that timed out, wrote
+    # mount.cfg anyway and said "Mounted" — and the restarted server could read none of it.
+    _sm_core.run_command = _gm_run
+    for _gmg_ans in (("", "unknown verb", 2), ("", "SSH command timed out", -1)):
+        _gmg_writes = []
+
+        def _gm_run_w(server, cmd, _inner=_gm_run, **kw):
+            if "base64 -d" in cmd:
+                _gmg_writes.append(cmd)
+            return _inner(server, cmd, **kw)
+        _sm_core.run_command = _gm_run_w
+        _sm_core.run_privileged = lambda *a, _ans=_gmg_ans, **k: _ans
+        _ok6, _msg6 = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "gmodcontent", ["cstrike"])
+        check("gmod mounts: a read grant answering rc %s is a failure, and no mount.cfg is written"
+              % _gmg_ans[2], _ok6 is False and "Mounted" not in _msg6 and "read access" in _msg6
+              and not _gmg_writes, repr((_msg6, len(_gmg_writes))))
 finally:
     _sm_core.run_command, _sm_core.run_privileged = _orig_gm_run, _orig_gm_priv
 
