@@ -16,6 +16,18 @@ import urllib.request
 
 _log = logging.getLogger("panel.system_ops")
 
+# Every class a timed-out subprocess can raise in this process. Under eventlet.monkey_patch,
+# subprocess.run(capture_output=True, timeout=) and Popen.communicate(timeout=) raise the ORIGINAL
+# module's TimeoutExpired -- a different class, not a subclass of the green one -- so a bare
+# `except subprocess.TimeoutExpired` let a git, sudo or tailscale stall escape as an exception
+# (a 500 from switch-branch, "could not be queried" for a 10 s helper stall). The same pair
+# ssh_manager/_core.py catches; outside eventlet (CLI, tests) both entries are the one class.
+try:
+    from eventlet.patcher import original as _sops_ev_original
+    _SOPS_TIMEOUTS = (subprocess.TimeoutExpired, _sops_ev_original("subprocess").TimeoutExpired)
+except Exception:  # noqa: BLE001 - no eventlet: the plain module is the only one
+    _SOPS_TIMEOUTS = (subprocess.TimeoutExpired,)
+
 # The panel's own install directory — used for the git-based self-update feature. Taken from
 # panel/__init__.py rather than this file's dirname: this module lives in panel/ops/ now, and
 # self-update, integrity-repair and the db_maintenance lookup all need the CHECKOUT root.
@@ -358,7 +370,7 @@ def _run(cmd, timeout=30, sudo=False, text=True):
             stdin=subprocess.DEVNULL,
         )
         return r.stdout.strip(), r.stderr.strip(), r.returncode
-    except subprocess.TimeoutExpired:
+    except _SOPS_TIMEOUTS:
         return "", "Command timed out", -1
     except FileNotFoundError:
         return "", "Command not found", -1
@@ -1043,7 +1055,7 @@ def _git(args, timeout=45):
         r = subprocess.run(gitcmd, capture_output=True, check=False,  # nosec B603  # nosemgrep
                            text=True, timeout=timeout, env=genv)
         return r.stdout.strip(), r.stderr.strip(), r.returncode
-    except subprocess.TimeoutExpired:
+    except _SOPS_TIMEOUTS:
         return "", "git timed out", -1
     except (FileNotFoundError, OSError):
         return "", "git not found", -1
@@ -3498,8 +3510,16 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
         if "yes" not in (have2 or ""):
             return False, "Couldn't install fail2ban on this host."
 
-    _write_root_file(_F2B_PANEL_FILTER, _panel_f2b_filter_body())
-    _write_root_file(_F2B_PANEL_JAIL, _panel_f2b_jail_body(auth_log, web_port, ignore_ips))
+    # Each write's rc decides, before anything reloads. The status poll below only asks "is a jail
+    # named linuxgsm-panel up", which the OLD jail answers yes to: a refused rewrite (an older
+    # helper, a narrow grant without tee) came back "now protecting" on the old port and without
+    # a newly whitelisted address, and the caller audited the change as applied.
+    for _path, _body in ((_F2B_PANEL_FILTER, _panel_f2b_filter_body()),
+                         (_F2B_PANEL_JAIL, _panel_f2b_jail_body(auth_log, web_port, ignore_ips))):
+        if _write_root_file(_path, _body)[2] != 0:
+            return False, ("Couldn't write the panel's fail2ban %s file, so the jail keeps its "
+                           "previous settings." % ("filter" if _path == _F2B_PANEL_FILTER
+                                                   else "jail"))
 
     _run_verb("service-enable-now", ["fail2ban"], timeout=45)
     # Was `fail2ban-client reload || systemctl restart fail2ban` in one root shell.
@@ -3892,7 +3912,7 @@ def _helper_probe_run():
         r = subprocess.run(_helper_probe_argv(), shell=False,  # nosec B603
                            capture_output=True, text=True, timeout=10,
                            stdin=subprocess.DEVNULL, start_new_session=True)
-    except subprocess.TimeoutExpired:
+    except _SOPS_TIMEOUTS:
         return {"outcome": "timeout", "verbs": set(), "refusal": None}
     except Exception as exc:  # noqa: BLE001 - reported by class
         return {"outcome": "error", "verbs": set(), "refusal": None, "error": type(exc).__name__}

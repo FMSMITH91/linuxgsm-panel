@@ -180,7 +180,14 @@ def _service_findings(res, props, facts):
 
 def _service_lines(ctx, res, facts):
     """R15: one `systemctl show`, shared with R8 and R21 through the memo."""
-    unit = _src_systemd.shared(ctx)
+    try:
+        unit = _src_systemd.shared(ctx)
+    except Exception:
+        # Recorded as UNREAD before section_process prints the failure: Unit file and the verdict
+        # read facts["unit"], and its absence printed "none at either path" -- a measurement of a
+        # file nobody looked for -- and a "NOT the unit's MainPID" verdict from the defaults.
+        facts["unit"] = {"scope": None, "props": {}, "error": "unreadable", "why": "error"}
+        raise
     facts["unit"] = unit
     if unit.get("why") == "no-unit-file":
         # A measurement (neither unit file exists), not a failed read.
@@ -890,7 +897,10 @@ def _drift_lines(ctx, res, facts):
     unit = facts.get("unit") or {}
     scope = unit.get("scope")
     if scope is None:
-        res.add("- **Unit file**: none at either path")
+        # scope None is a measurement only with "no-unit-file"; any other reason never looked.
+        measured = unit.get("why") == "no-unit-file"
+        res.add("- **Unit file**: %s" % ("none at either path" if measured
+                                         else "unknown (systemd state could not be read)"))
         return
     text, ok = _unit_line(scope)
     res.add("- **Unit file**: " + text)

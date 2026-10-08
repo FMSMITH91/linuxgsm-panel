@@ -87,7 +87,10 @@ def unit_show(timeout=5):
         return res
     try:
         out, err, rc = run(argv(which), min(float(timeout), MAX_TIMEOUT))
-    except subprocess.TimeoutExpired:
+    except so._SOPS_TIMEOUTS:
+        # BOTH classes: in the panel process run() is eventlet's, whose capture_output path raises
+        # the ORIGINAL module's TimeoutExpired, which `except subprocess.TimeoutExpired` misses --
+        # and this function promises never to raise.
         res["error"], res["why"] = "unreadable", "timeout"
         return res
     except OSError:
