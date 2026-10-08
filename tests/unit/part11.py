@@ -2000,8 +2000,10 @@ try:
           "raises counts as down",
           _H._wait_for_reboot(_rb_srv, down_timeout=20, up_timeout=30) is False)
     _H.ssh_test_connection = _updown([True])
-    check("reboot wait: a host that never went down but is up is back (down phase times out)",
-          _H._wait_for_reboot(_rb_srv, down_timeout=20, up_timeout=30) is True)
+    # It used to say True here: phase 2's first look found the host up, so a reboot that never
+    # happened was "back online" and the bootstrap reported complete with the update still pending.
+    eq("reboot wait: a host that never went down is NOT 'back' — it says the reboot did not happen",
+       _H._wait_for_reboot(_rb_srv, down_timeout=20, up_timeout=30), _H._RBWAIT_NEVER_DOWN)
     # The pin is handed over AS IS: `host_key or ""` turned an unreadable pin into first contact,
     # and the wait loop then offered the stored credential to whatever answered on that address.
     from panel.db.models import UnreadableSecret as _rb_Unreadable  # noqa: E402
@@ -2165,6 +2167,63 @@ try:
     eq("bootstrap: a host that does not come back is a failure",
        _H.remote_bootstrap_vps(_p8_srv())[:2],
        (False, "Server was rebooted but did not come back online within the timeout."))
+    # A reboot that was refused, or never brought the host down, is not "complete".
+    _w = _bs_wire(cmds=[("reboot-required", ("YES", "", 0))],
+                  verbs={"reboot-delayed": ("", "sudo: a password is required", 1)})
+    del _bs_waits[:], _bs_closed[:]
+    _bs = _H.remote_bootstrap_vps(_p8_srv())
+    check("bootstrap: a reboot whose command FAILED is reported pending, not waited on or 'complete'",
+          _bs[0] is False and "reboot" in _bs[1] and "was not sent" in _bs[1]
+          and "password is required" in _bs[1] and _bs_waits == [] and _bs_closed == []
+          and "Server is back online." not in _bs[2], "result=%r waits=%r" % (_bs[1], _bs_waits))
+    _H._wait_for_reboot = lambda server, on_wait=None, **k: _H._RBWAIT_NEVER_DOWN
+    _bs_wire(cmds=[("reboot-required", ("YES", "", 0))])
+    _bs = _H.remote_bootstrap_vps(_p8_srv())
+    check("bootstrap: a host that never went down for its reboot is reported pending, not 'back online'",
+          _bs[0] is False and "never went down" in _bs[1] and "Server is back online." not in _bs[2],
+          "result=%r" % (_bs[1],))
+
+    # The account step: a probe answering neither token is unknown, and a create that failed is not
+    # followed by a password lock of whatever account has that name.
+    del _bs_users[:]
+    _w = _bs_wire(cmds=[("echo 'EXISTS'", ("", "SSH command timed out", -1))])
+    _bs = _H.remote_bootstrap_vps(_p8_srv(), username="lgsm")
+    check("bootstrap: an unanswered account probe creates nothing and locks nothing, and says so",
+          _bs[0] is False and _bs_users == [] and not _w.verbs_called("user-lock-password")
+          and "did not answer whether it already exists" in _bs[1], "result=%r" % (_bs[1],))
+    _sm_core.create_game_user = lambda server, user, timeout=30: ("", "useradd: user 'lgsm' already exists", 9)
+    _w = _bs_wire()
+    _bs = _H.remote_bootstrap_vps(_p8_srv(), username="lgsm")
+    check("bootstrap: a FAILED account creation locks no password and is not reported as created",
+          _bs[0] is False and not _w.verbs_called("user-lock-password")
+          and "created (login password locked)" not in _bs[2] and "already exists" in _bs[1],
+          "result=%r" % (_bs[1],))
+    _sm_core.create_game_user = lambda server, user, timeout=30: (_bs_users.append(user), ("", "", 0))[1]
+    _w = _bs_wire(verbs={"user-lock-password": ("", "passwd: Authentication token manipulation error", 1)})
+    _bs = _H.remote_bootstrap_vps(_p8_srv(), username="lgsm")
+    check("bootstrap: a password lock that failed is said, not 'login password locked'",
+          _bs[0] is False and "could not be locked" in _bs[1]
+          and "created (login password locked)" not in _bs[2], "result=%r" % (_bs[1],))
+
+    # Values the verbs would refuse are refused BEFORE anything runs, not at their step after the
+    # upgrades (which left UFW, SSH hardening and fail2ban undone on a fresh host).
+    for _bsv_kw, _bsv_what in (({"set_timezone": "America/New York"}, "timezone"),
+                               ({"set_timezone": "UTC+5:30"}, "timezone"),
+                               ({"set_timezone": 5}, "timezone"),
+                               ({"username": "a" * 33}, "username"),
+                               ({"username": "root"}, "username")):
+        _w = _bs_wire()
+        _bs = _H.remote_bootstrap_vps(_p8_srv(), **_bsv_kw)
+        check("bootstrap: %r is refused before ANY step runs" % (_bsv_kw,),
+              _bs[0] is False and _bsv_what in _bs[1] and "before any change" in _bs[1]
+              and _w.calls == [], "result=%r calls=%r" % (_bs[1], _w.names()[:3]))
+    _w = _bs_wire()
+    _bs = _H.remote_bootstrap_vps(_p8_srv(), set_timezone="America/Argentina/Buenos_Aires",
+                                  username="a" * 32)
+    check("bootstrap: a real three-part zone and a 32-character name still run (positive control)",
+          ("set-timezone", ["America/Argentina/Buenos_Aires"]) in _w.verbs_called()
+          and _bs_users[-1:] == ["a" * 32], "result=%r" % (_bs[1],))
+
     _H._wait_for_reboot = lambda server, on_wait=None, **k: (_bs_waits.append(server.id), False)[1]
     _w = _bs_wire()
     _bs = _H.remote_bootstrap_vps(_p8_srv(is_local=True))

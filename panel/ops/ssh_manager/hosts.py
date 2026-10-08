@@ -1749,9 +1749,16 @@ def remote_uptime(server, force=False):
 # ─── Full VPS Bootstrap ─────────────────────────────────
 
 
+# What _wait_for_reboot answers when the host never went down: truthy like "came back", so a
+# caller must test for it FIRST.
+_RBWAIT_NEVER_DOWN = "never-down"
+
+
 def _wait_for_reboot(server, on_wait=None, down_timeout=150, up_timeout=480):
     """After issuing a reboot, wait for the remote to drop then come back on SSH.
-    Returns True if it came back online within the timeout."""
+    Returns True if it came back online within the timeout, False if it went down and did not,
+    and _RBWAIT_NEVER_DOWN if it never went down at all — a reboot that did not happen, which
+    phase 2's first look would otherwise report as "back online" with the update still pending."""
     def _up():
         try:
             ok, _ = ssh_test_connection(
@@ -1765,12 +1772,16 @@ def _wait_for_reboot(server, on_wait=None, down_timeout=150, up_timeout=480):
 
     # Phase 1: wait for it to actually go down (confirms the reboot began).
     t0 = time.time()
+    went_down = False
     while time.time() - t0 < down_timeout:
         if not _up():
+            went_down = True
             break
         if on_wait:
             on_wait("Waiting for server to go down for reboot…")
         time.sleep(5)
+    if not went_down:
+        return _RBWAIT_NEVER_DOWN
 
     # Phase 2: wait for SSH to come back.
     t0 = time.time()
@@ -1836,6 +1847,28 @@ def _bootstrap_node(server):
     return lines
 
 
+def _bsval_refusal(set_timezone, username):
+    """Why remote_bootstrap_vps must not start with these values, or None when it may."""
+    if set_timezone:
+        try:
+            _priv.check_args("set-timezone", [set_timezone])
+        except (_priv.VerbError, TypeError):
+            return ("Refused before any change: '%s' isn't a timezone name (use one like "
+                    "Etc/UTC or America/New_York)." % str(set_timezone)[:40])
+    if username:
+        try:
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9._-]*\Z", username):
+                raise _priv.VerbError("charset")
+            # user-lock-password's validator is user-create's (_managed_user: the shape, at most
+            # 32 characters, never a uid-0 name); naming the create verb here would be a second
+            # call site of it outside create_game_user, which part05 gates against.
+            _priv.check_args("user-lock-password", [username])
+        except (_priv.VerbError, TypeError):
+            return ("Refused before any change: '%s' isn't a valid username (a letter or _, then "
+                    "letters, digits, . _ or -, at most 32 characters)." % str(username)[:40])
+    return None
+
+
 # The "are game servers running here?" probe the bootstrap's reboot step asks, and install.sh's
 # twin of it. `pgrep -x` matches the WHOLE process name, and tmux renames its server process to
 # "tmux: server" — so the old `pgrep -x tmux` matched nothing on a host running four LinuxGSM
@@ -1860,6 +1893,15 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     Returns (success, message, log).
     """
+    # Both values arrive raw from the request and reach verbs whose validators RAISE. Checked here,
+    # before anything runs, with the verbs' own validators: found at their step, a timezone like
+    # "America/New York" stopped the job after the upgrades and before UFW, SSH hardening and
+    # fail2ban — a fresh internet-facing host left half prepared — and a 33-character account name
+    # (the charset test below has no length cap) stopped it before fail2ban and the reboot.
+    refused = _bsval_refusal(set_timezone, username)
+    if refused:
+        return False, refused, refused
+
     log = []
     step = 0
 
@@ -2073,20 +2115,40 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # @validates), and it's interpolated into root-run useradd/id/passwd — so validate it to a
     # safe Linux-username charset (must start with a letter/underscore; no shell metacharacters,
     # no leading dash) and refuse anything else rather than let it reach the shell.
+    # (Refused up front by _bsval_refusal, with the user-create verb's own length cap; the test
+    # stays here so this step can never be the one that lets a bad name through.)
+    user_msg = ""
     if username and not re.match(r"^[A-Za-z_][A-Za-z0-9._-]*\Z", username):
         note(f"Skipped account creation: '{username[:32]}' isn't a valid username")
     elif username:
         emit(f"Creating LinuxGSM user: {username}")
         out, _, _ = _core.run_command(server, f"id {_core._quote(username)} 2>/dev/null && echo 'EXISTS' || echo 'NOTEXISTS'", timeout=10)
+        out = out or ""
         # Same correction: an unread probe is not "the account is already there". Reading it that
         # way SKIPPED the account creation below, and the bootstrap then carried on against a user
-        # that does not exist.
+        # that does not exist. Nor is it "the account is NOT there": that fell into the create
+        # branch, whose `useradd` then failed on an existing account while `passwd -l` still
+        # locked it — the operator's own password login, if that is the name they typed.
         if "NOTEXISTS" not in out and "EXISTS" in out:
             note(f"User {username} already exists")
+        elif "NOTEXISTS" in out:
+            _cu_out, _cu_err, _cu_rc = _core.create_game_user(server, username, timeout=15)
+            if _cu_rc != 0:
+                user_msg = "the account %s was not created (%s)" % (
+                    username, (_cu_err or _cu_out or "exit %s" % _cu_rc).replace("\n", " ").strip()[:160])
+                note("NOT DONE: %s; its password was not touched." % user_msg)
+            else:
+                _lk_out, _lk_err, _lk_rc = _core.run_privileged(server, "user-lock-password",
+                                                                [username], timeout=10)
+                if _lk_rc != 0:
+                    user_msg = "the account %s was created but its login password could not be locked" % username
+                    note("NOT DONE: %s." % user_msg)
+                else:
+                    note(f"User {username} created (login password locked)")
         else:
-            _core.create_game_user(server, username, timeout=15)
-            _core.run_privileged(server, "user-lock-password", [username], timeout=10)
-            note(f"User {username} created (login password locked)")
+            user_msg = ("the account %s was not created: the host did not answer whether it "
+                        "already exists" % username)
+            note("NOT DONE: %s." % user_msg)
 
     # ── 10. Configure fail2ban ──
     if install_fail2ban:
@@ -2105,6 +2167,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     #        servers (a reboot would drop the players). We check /var/run/reboot-required and, before
     #        rebooting, that no tmux/screen game-server sessions are live — otherwise we just flag the
     #        pending reboot so the operator can do it when the host is empty. ──
+    reboot_msg = ""
     if not is_local:
         # Both probes are read for rc AND for one of their own two answers, because run_command
         # does not raise: a dropped connection returns ("", "...timed out", -1), and `"YES" in ""`
@@ -2142,12 +2205,28 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             emit("Rebooting to apply a kernel/library update", status="rebooting",
                  detail="A system update requires a reboot and no game servers are running.")
             # Schedule the reboot slightly in the future so this command returns cleanly.
-            _core.run_privileged(server, "reboot-delayed", [], timeout=15, merge_stderr=False)
-            _core.close_connection(server)
-            came_back = _wait_for_reboot(server, on_wait=lambda t: note(t, status="rebooting"))
-            if not came_back:
-                return False, "Server was rebooted but did not come back online within the timeout.", "\n".join(log)
-            note("Server is back online.", status="running")
+            # Its rc and the host going down are both read: a refused or timed-out reboot left the
+            # host up, phase 2's first look said "back online", and the job reported "complete"
+            # with the kernel update still waiting for a reboot nobody was told about.
+            _rb_out, _rb_err, _rb_send_rc = _core.run_privileged(server, "reboot-delayed", [],
+                                                                 timeout=15, merge_stderr=False)
+            if _rb_send_rc != 0:
+                reboot_msg = ("the reboot a kernel/library update needs was not sent (%s) — reboot "
+                              "this host from its Power card" % (
+                                  (_rb_err or _rb_out or "exit %s" % _rb_send_rc)
+                                  .replace("\n", " ").strip()[:160]))
+                note("NOT DONE: %s." % reboot_msg, status="reboot-required")
+            else:
+                _core.close_connection(server)
+                came_back = _wait_for_reboot(server, on_wait=lambda t: note(t, status="rebooting"))
+                if came_back == _RBWAIT_NEVER_DOWN:
+                    reboot_msg = ("the host never went down for the reboot a kernel/library update "
+                                  "needs — reboot it from its Power card")
+                    note("NOT DONE: %s." % reboot_msg, status="reboot-required")
+                elif not came_back:
+                    return False, "Server was rebooted but did not come back online within the timeout.", "\n".join(log)
+                else:
+                    note("Server is back online.", status="running")
     else:
         note("Reboot check skipped — this is the panel's own host.")
 
@@ -2155,6 +2234,8 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     ufw_msg = (("the firewall was NOT enabled: %s, and turning UFW on without a rule letting SSH "
                 "in would have locked this host out. Fix ufw on the host and run the bootstrap "
                 "again." % ufw_not_enabled) if ufw_not_enabled else "")
+    # Steps that were asked for and did not happen; each is "finished, but", never "complete".
+    ufw_msg = "; and ".join(m for m in (ufw_msg, user_msg, reboot_msg) if m)
     if hardening_failed:
         # Not "complete": the one step whose whole point is closing a door reported the door is
         # still open. The rest of the work did happen, and the message says both.
@@ -3470,6 +3551,46 @@ def tailnet_exempt_ips(server, ips):
     return cand if running else set()
 
 
+# A kernel interface name as /sys/class/net lists it (IFNAMSIZ is 16 including the NUL).
+_TSIFACE_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,15}")
+
+
+def _tsiface_names(server):
+    """The host's Tailscale TUN interfaces (names containing "tailscale"), from /sys/class/net.
+
+    [] when there is none — tailscaled in userspace-networking mode has no TUN, so no UFW interface
+    rule can carry SSH there — AND when the listing could not be read: this feeds a lockout guard,
+    so "unknown" must answer the same as "absent". Every Linux host lists `lo`, so a listing
+    without it (an empty answer from a transport that timed out) is not a reading.
+    """
+    try:
+        out, _err, rc = _core.run_command(server, "ls -1 /sys/class/net", timeout=10)
+    except Exception:
+        _core._log.debug("tailscale interface probe failed", exc_info=True)
+        return []
+    names = [n.strip() for n in (out or "").splitlines() if _TSIFACE_NAME_RE.fullmatch(n.strip())]
+    if rc != 0 or "lo" not in names:
+        return []
+    return [n for n in names if "tailscale" in n.lower()]
+
+
+def _tsiface_ufw_rules(status_out):
+    """`ufw status verbose` rows as system_ops._ufw_rule_split shapes them, in UFW's order.
+
+    Not system_ops.ufw_status's loop: that one drops every row with a parenthesis in it, which
+    takes a `DENY IN` on tailscale0 whose comment says "(old)" out of the first-match walk and
+    lets the allow below it answer. Every row is kept here; a `(v6)` To column cannot read as the
+    whole-interface allow (ufw_allows_iface_in compares it exactly), so it can only answer False.
+    """
+    from panel.ops import system_ops as _so
+    rules = []
+    for line in (status_out or "").splitlines():
+        rule = _so._ufw_rule_split(line.strip())
+        if rule:
+            rules.append(rule)
+    return rules
+
+
 def _tailnet_ssh_state(server):
     """(running, ssh_enabled, iface_allowed) — the inputs to deciding whether removing
     public SSH is safe. iface_allowed = the tailscale0 interface is allowed in UFW (so
@@ -3477,9 +3598,19 @@ def _tailnet_ssh_state(server):
     running, ssh_enabled = _tailscale_conn_state(server)
     iface_allowed = False
     if running:
-        try:  # tailscale interface allowed in UFW → sshd is reachable over the tailnet
-            out, _, _ = _core.run_privileged(server, "ufw-status", ["verbose"], timeout=12)
-            iface_allowed = any("tailscale" in ln.lower() for ln in (out or "").splitlines())
+        # The same structured, first-match, IN-only test the panel host's own page uses
+        # (system_ops.ufw_allows_iface_in — its docstring has the history). This was a substring
+        # match for "tailscale" over the whole `ufw status verbose` text, so `ALLOW OUT ... on
+        # tailscale0`, `on tailscale0 DENY IN`, or any rule commented "tailscale" (the common
+        # `41641/udp ALLOW # tailscale`) read as "sshd is reachable over the tailnet", and "Disable
+        # public SSH" / "Close port 22" then removed the only way in. A failed read, a rule set
+        # that does not open the interface, or no Tailscale interface on the host all answer False.
+        try:
+            out, _, rc = _core.run_privileged(server, "ufw-status", ["verbose"], timeout=12)
+            if rc == 0:
+                from panel.ops import system_ops as _so
+                rules = _tsiface_ufw_rules(out)
+                iface_allowed = any(_so.ufw_allows_iface_in(rules, i) for i in _tsiface_names(server))
         except Exception:
             iface_allowed = False   # fail safe
     return running, ssh_enabled, iface_allowed

@@ -159,6 +159,31 @@ def _ssh_ports(server):
     return ports
 
 
+def _fwssh_served_ports(server):
+    """The ports an SSH rule must name to be a WORKING way in: the ones sshd listens on.
+
+    _ssh_ports always says 22, which is right for what it is also used for (ports no game may
+    take) and wrong here. On a host whose sshd was moved to 2222 by hand, the stock `22/tcp ALLOW`
+    (or `OpenSSH ALLOW`) left in UFW counted as a second way in, so the 2222 rule — the only one
+    sshd answers on — came back warn ("another way in exists") instead of protected, and
+    remote_ufw_delete_rule, which gates only on protected, deleted it. sshd's effective config
+    (`sshd -T`) says what it serves; the port the panel connects on is kept beside it, because
+    that connection is the proof it is served. A config that cannot be read keeps the old answer:
+    a failed read must never leave a rule LESS protected than it was."""
+    try:
+        live = {int(p) for p in hosts._sshd_current_ports(server)}
+    except Exception:
+        _core._log.debug("firewall protection: sshd's ports could not be read", exc_info=True)
+        live = set()
+    if not live:
+        return _ssh_ports(server)
+    try:
+        stored = {int(server.port)} if getattr(server, "port", None) else set()
+    except (TypeError, ValueError):
+        stored = set()
+    return live | stored
+
+
 def _last_parsed_panel_port():
     """The web port the RUNNING panel bound, for when config.json can no longer be parsed.
 
@@ -285,7 +310,8 @@ def _is_ssh_rule(g, pn, inbound, ts_iface, ssh_ports):
     A tailscale-scoped rule stays out of is_ssh so the two categories remain disjoint;
     is_tailscale already covers it and the messages below differ.
     """
-    _named_ssh = pn.strip().lower() in _SSH_APP_PROFILES
+    # Both profiles are port 22, so they are a way in only where sshd serves 22.
+    _named_ssh = pn.strip().lower() in _SSH_APP_PROFILES and 22 in ssh_ports
     return (g.get("action") in ("ALLOW", "LIMIT") and inbound and not ts_iface
             and ((pn.isdecimal() and int(pn) in ssh_ports) or _named_ssh))
 
@@ -399,7 +425,8 @@ def _annotate_firewall_protection(server, enabled, groups):
     alternate route (otherwise you'd delete your only way into the panel UI). If UFW
     is disabled it isn't enforcing anything, so nothing is protected.
     """
-    ssh_ports = _ssh_ports(server)
+    # Disabled, nothing is protected below, so sshd is not asked.
+    ssh_ports = _fwssh_served_ports(server) if enabled else _ssh_ports(server)
     for g in groups:
         _classify_access_rule(g, ssh_ports)
 

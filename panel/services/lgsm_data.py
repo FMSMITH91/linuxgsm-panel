@@ -193,6 +193,12 @@ def _text(name, allow_fetch=True):
 # A refetch that failed is tried again after this long, not a week later. The copy it fell back to
 # is served meanwhile.
 _RETRY_SECONDS = 3600
+# How long an EMPTY read is remembered when there was no copy at all to fall back to (a first boot
+# with GitHub unreachable and no data/lgsm yet). It was not remembered, so every request that read
+# the game list — the dashboard, the install page — ran its own fetch and waited out its 10-second
+# timeout. Short, because the list it stands for is empty: the next fetch is a minute away, and the
+# Retry button (refresh()) clears it at once.
+_LGD_EMPTY_RETRY_SECONDS = 60
 # Keys whose re-read is running right now, outside _lock (see _memoised).
 _inflight = set()
 # Bumped (under _lock) whenever the memo is dropped because the files under it were rewritten —
@@ -256,6 +262,8 @@ def _memo_store(key, hit, value, age, allow_fetch):
     """_memoised's store, under _lock: keep `value` (or `hit`'s copy when it is empty) and return it."""
     if not value:
         if hit is None:
+            if allow_fetch:
+                _mem[key] = (time.time() + _LGD_EMPTY_RETRY_SECONDS, value)
             return value
         value = hit[1]
         age = None

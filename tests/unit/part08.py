@@ -1051,6 +1051,14 @@ os.makedirs(os.path.join(_rv_home, "lgsm", "config-lgsm", "zz9server"))
 os.makedirs(os.path.join(_rv_home, "junk"))
 os.symlink("lgsm", os.path.join(_rv_home, "x"))
 os.symlink(".", os.path.join(_rv_home, "dot"))
+# A link out of the home (a mod's stale `libstdc++.so.6 -> /usr/lib/...`), and a folder reached
+# THROUGH one. The first is the account's own file; the second is not.
+_rv_out = _rv_tf.mkdtemp(prefix="rv_out_")
+with open(os.path.join(_rv_out, "lib.so"), "w") as _fh:
+    _fh.write("L")
+os.makedirs(os.path.join(_rv_home, "bin"))
+os.symlink(os.path.join(_rv_out, "lib.so"), os.path.join(_rv_home, "bin", "libstdc++.so.6"))
+os.symlink(_rv_out, os.path.join(_rv_home, "esc"))
 
 
 def _rv_home_shell(server, user, sh, timeout=30, selfname=None):
@@ -1066,8 +1074,17 @@ try:
     _rv_d2 = _sm_files.delete_path(_rv_srv, "zz9", "dot/lgsm", selfname="zz9server")
     _rv_d3 = _sm_files.delete_path(_rv_srv, "zz9", "x", selfname="zz9server")
     _rv_d4 = _sm_files.delete_path(_rv_srv, "zz9", "junk", selfname="zz9server")
+    _rv_d5 = _sm_files.delete_path(_rv_srv, "zz9", "bin/libstdc++.so.6", selfname="zz9server")
+    _rv_d6 = _sm_files.delete_path(_rv_srv, "zz9", "esc/lib.so", selfname="zz9server")
 finally:
     _sm_core.shell_as_game_user = _rv_saved_sh
+check("delete_path: a symlink in the home that points OUT of it is deleted — the link, never its "
+      "target (it was refused outright, so a stale outward link could not be removed)",
+      _rv_d5 == (True, "Deleted") and not os.path.lexists(os.path.join(_rv_home, "bin", "libstdc++.so.6"))
+      and os.path.exists(os.path.join(_rv_out, "lib.so")), repr(_rv_d5))
+check("delete_path: ...while a file reached THROUGH a link out of the home is still refused",
+      _rv_d6 == (False, "Refusing to delete this path") and os.path.exists(os.path.join(_rv_out, "lib.so")),
+      repr(_rv_d6))
 _rv_lgsm_ok = os.path.isdir(os.path.join(_rv_home, "lgsm", "config-lgsm", "zz9server"))
 check("delete_path: lgsm/ reached through a symlinked directory is refused as protected",
       _rv_d1[0] is False and _rv_d2[0] is False and "protected" in _rv_d1[1]
@@ -1079,3 +1096,4 @@ check("delete_path: an ordinary directory is still deleted",
       _rv_d4 == (True, "Deleted") and not os.path.exists(os.path.join(_rv_home, "junk")),
       repr(_rv_d4))
 _rv_sh.rmtree(_rv_home, ignore_errors=True)
+_rv_sh.rmtree(_rv_out, ignore_errors=True)

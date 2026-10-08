@@ -1818,7 +1818,15 @@ def exec_bounded(client, command, timeout, limit):
     """
     if not isinstance(client, paramiko.SSHClient):
         return client.exec_command(command, timeout=timeout)  # nosec B601  # nosemgrep
-    chan = client.get_transport().open_session(timeout=min(timeout or limit, limit))
+    try:
+        chan = client.get_transport().open_session(timeout=min(timeout or limit, limit))
+    except Exception as e:
+        # No exec request has gone out: the pooled transport is gone (get_transport() is None) or
+        # the session was refused (sshd's MaxSessions reached by concurrent channels). Marked so
+        # _run_via_paramiko does not report the command as started — a reboot "sent" this way
+        # was waited on for a boot that never came, instead of rolled back at once.
+        e.exec_not_sent = True
+        raise
     answered = threading.Event()
 
     def _watchdog():
@@ -1988,8 +1996,9 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
         failed = ConnectionError(f"Command failed: {e}")
         # Marked, not a subclass (callers and messages name the type): the connection was open and
         # the exec under way, so a reboot sent this way is one in progress, not a refusal — which
-        # host_reboot.send_reboot has to tell from a connection that never opened.
-        failed.command_started = True
+        # host_reboot.send_reboot has to tell from a connection that never opened. Not when the
+        # failure came before the exec request (exec_bounded marks those exec_not_sent).
+        failed.command_started = not getattr(e, "exec_not_sent", False)
         raise failed
 
 
@@ -2919,7 +2928,15 @@ def metrics_for_game(sample, short_name, game_port):
     m.update(sample["users"].get(short_name or "",
                                  {"game_cpu_percent": 0.0, "game_ram_mb": 0, "game_procs": 0,
                                   "game_uptime_secs": 0, "game_ram_percent": 0.0}))
-    m["port_open"] = bool(game_port) and int(game_port) in sample["ports"]
+    # cron_port, not int(): a loaded row is never type-checked, and one GameServer whose port reads
+    # as text (a restored backup, a hand edit — SQLite keeps it) raised out of
+    # monitoring._query_host_metrics, which calls this outside its try, and through ex.map took the
+    # dashboard's metrics for EVERY host, and every history sample, down with it.
+    try:
+        _port = cron_port(game_port)
+    except ValueError:
+        _port = None
+    m["port_open"] = bool(_port) and _port in sample["ports"]
     return m
 
 
