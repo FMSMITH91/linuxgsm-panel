@@ -589,7 +589,7 @@ try:
     eq("gamedig: a remote runs the gamedig-install verb and reports its output and rc",
        (_H.install_gamedig(_p8_srv()), _w.verbs_called()),
        (("added 42 packages", 0), [("gamedig-install", [])]))
-    _w = _wire(verbs={"gamedig-install": ConnectionError("Command failed: socket closed")})
+    _wire(verbs={"gamedig-install": ConnectionError("Command failed: socket closed")})
     eq("gamedig: a transport that RAISES (paramiko) is (message, -1), never an exception",
        _H.install_gamedig(_p8_srv(auth_method="key")),
        ("gamedig install could not be run: ConnectionError", -1))
@@ -615,7 +615,7 @@ try:
           and _w.names() == ["node-tools-cron"], repr(_w.names()))
 
     # ── Ubuntu Pro ─────────────────────────────────────────────────────────────────────────────
-    _w = _wire(verbs={"pro-status": ("", "bash: pro: command not found", 127)})
+    _wire(verbs={"pro-status": ("", "bash: pro: command not found", 127)})
     eq("pro: rc 127 is a READING — not installed, and not flagged unreadable",
        _H._compute_pro_status(_p8_srv()), {"installed": False, "attached": False, "services": []})
     _wire(verbs={"pro-status": ("", "SSH command timed out", -1)})
@@ -972,7 +972,7 @@ try:
     _fu = _FakeUfw(("27015", "ALLOW", "gamea"), ("27016", "DENY", "gamea"),
                    ("27017", "ALLOW", "gameb"), ("27018/udp", "ALLOW", "gamea"),
                    ("27019", "ALLOW", "gamea2"))
-    _w = _wire(verbs=_fu.verbs())
+    _wire(verbs=_fu.verbs())
     eq("tagged ports: only ALLOWs carrying exactly this server's name",
        getattr(_H, "remote_ufw_tagged_ports", lambda s, n: None)(_p8_srv(), "gamea"), {27015, 27018})
     _wire(verbs={"ufw-status": ("", "SSH command timed out", -1)})
@@ -980,7 +980,7 @@ try:
        getattr(_H, "remote_ufw_tagged_ports", lambda s, n: None)(_p8_srv(), "gamea"), set())
 
     # ── which ports no game server may take ───────────────────────────────────────────────────
-    _w = _wire(verbs={"sshd-effective-config": ("port 2200\nport 443\npermitrootlogin no\n", "", 0)})
+    _wire(verbs={"sshd-effective-config": ("port 2200\nport 443\npermitrootlogin no\n", "", 0)})
     _php = getattr(_H, "protected_host_ports", lambda s: set())
     eq("protected ports: 22, the port the panel connects on, and every port sshd names",
        _php(_p8_srv(port=2222)), {22, 2222, 2200, 443})
@@ -1069,7 +1069,7 @@ try:
         _n_status["n"] += 1
         return {"installed": True, "groups": []}
     _sm_firewall.remote_ufw_status = _count_status
-    _w = _wire(verbs={"ufw-delete-num": ("", "ERROR: Could not find rule '9'", 1)})
+    _wire(verbs={"ufw-delete-num": ("", "ERROR: Could not find rule '9'", 1)})
     eq("ufw delete: force=True without a key skips the read entirely and reports ufw's refusal",
        (_H.remote_ufw_delete_rule(_p8_srv(), 9, force=True), _n_status["n"]),
        ((False, "ERROR: Could not find rule '9'"), 0))
@@ -1268,7 +1268,7 @@ try:
     # it stayed open, v4 and v6, under "2 rule(s) removed for probeH".
     _u = _Ufw36(*_VPS_H)
     _u.hook = lambda u, n: n == 2 and u.add("47829", comment="intruder", top=True)
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _r = _cbn3(_p8_srv(), "probeH")
     check("close by name: a rule whose number MOVED between the read and the delete is read again "
           "and removed — the server's port does not stay open, v4 or v6",
@@ -1309,7 +1309,7 @@ try:
     # rules are ONE group (v4 + v6), so one moved number used to give up both rows.
     _u = _Ufw36(*_VPS_H)
     _u.hook = lambda u, n: n == 2 and u.add("47829", comment="intruder", top=True)
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _r = _cgp3(_p8_srv(), 47827, "probeH")
     check("close game port: a rule whose number moved is read again and removed, v4 and v6",
           _r[:3] == (2, "Port 47827: 2 rule(s) removed", [])
@@ -1318,7 +1318,7 @@ try:
     _u = _Ufw36(*_VPS_H)
     _u.hook = lambda u, n: n % 2 == 0 and u.add("Anywhere", "DENY", "203.0.113.%d" % n,
                                                 "panel-autoblock", top=True)
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _r = _cgp3(_p8_srv(), 47827, "probeH")
     check("close game port: ...and one that keeps moving is tried three times, then named as still "
           "open",
@@ -1355,8 +1355,8 @@ try:
               "22 ALLOW IN Anywhere # probeA", "22 (v6) ALLOW", "2222/tcp ALLOW", "2222/tcp (v6)"))
           and _w.verbs_called("sshd-effective-config"), "left=%r" % (_u.left(),))
     check("close by name: ...and every rule it left is NAMED in the result",
-          _r[2] == ["Left in place, as the panel does not make rules like these: 47828 DENY, "
-                    "47829/tcp LIMIT, 47810/tcp from 10.0.0.0/8.",
+          _r[2] == [("Left in place, as the panel does not make rules like these: 47828 DENY, "
+                     "47829/tcp LIMIT, 47810/tcp from 10.0.0.0/8."),
                     "Left in place on SSH's or the panel's own port: 22, 2222/tcp."]
           and _r[1] == "4 rule(s) removed for probeA. " + " ".join(_r[2]), "result=%r" % (_r,))
 
@@ -1419,7 +1419,7 @@ try:
     # The VPS's scenario L: probeL's port opened as an install opens it, its tcp rate limited from
     # the Firewall page, an untagged limit on another port, and an OUTBOUND rule on the number.
     _u = _Ufw36L(*_VPS_BASE)
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _H.remote_ufw_allow_game_ports(_p8_srv(), [47856], "probeL")
     _lim = _H.remote_ufw_limit_port(_p8_srv(), 47856, "tcp")
     _u.add("47858/tcp", "LIMIT")
@@ -1456,7 +1456,7 @@ try:
           "47858" not in str(_r) and "OUT" not in str(_r), repr(_r))
     _u = _Ufw36L(*_VPS_BASE + (("47857", "ALLOW", "Anywhere", "probeM"),
                                ("47858/tcp", "LIMIT", "Anywhere", "")))
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     eq("own ports: a clean cleanup names nothing (control)",
        _own_ports_cbn(_p8_srv(), "probeM", ports=[47857]), (2, "2 rule(s) removed for probeM", []))
     # Which rules on the block are named: none with a name on it (another server's or service's —
@@ -1468,7 +1468,7 @@ try:
                                ("47855,47857/tcp", "DENY", "Anywhere", ""),
                                ("47857/tcp", "ALLOW", "10.0.0.0/8", ""),
                                ("22", "ALLOW", "Anywhere", "")))
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _r = _own_ports_cbn(_p8_srv(), "probeN", ports=[22, 47856, 47857])
     check("own ports: a range or a list covering the block and a rule from one network are named; "
           "another name's rule and SSH's port are not",
@@ -1481,7 +1481,7 @@ try:
     # sweep is refused there, but the rest of the block is still read and named, and 22 never is.
     _u = _Ufw36L(*_VPS_BASE + (("22", "ALLOW", "Anywhere", ""),
                                ("23/tcp", "LIMIT", "Anywhere", "")))
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     eq("own ports (legacy sweep): on SSH's port nothing is taken, and the block's other port is "
        "still named",
        _own_ports_cgp(_p8_srv(), 22, legacy=True, ports=[22, 23]),
@@ -1495,7 +1495,7 @@ try:
     # untagged allow it takes is gone, so it is not named as left, and one that would not go is
     # named once — as still open — not a second time as left in place.
     _u = _Ufw36L(*_VPS_BASE + (("47856", "ALLOW", "Anywhere", ""),))
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _H.remote_ufw_limit_port(_p8_srv(), 47856, "tcp")
     _r = _own_ports_cgp(_p8_srv(), 47856, legacy=True, ports=[47856])
     check("own ports (legacy sweep): the untagged allow it takes goes, and only the LIMIT is named",
@@ -1506,12 +1506,12 @@ try:
                                ("47856/tcp", "LIMIT", "Anywhere", "")))
     _u.hook = lambda u, n: n % 2 == 0 and u.add("Anywhere", "DENY", "203.0.113.%d" % n,
                                                 "panel-autoblock", top=True)
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _r = _own_ports_cgp(_p8_srv(), 47856, legacy=True, ports=[47856])
     check("own ports (legacy sweep): a rule it could not remove is named once, as still open",
           _r[0] == 0 and _r[2] == [
-              "Still open, as it could not be removed: 47856/udp — remove it from the host's "
-              "Firewall page.", "Left in place on its port: 47856/tcp LIMIT."], "result=%r" % (_r,))
+              ("Still open, as it could not be removed: 47856/udp — remove it from the host's "
+               "Firewall page."), "Left in place on its port: 47856/tcp LIMIT."], "result=%r" % (_r,))
     # A port the server's own tagged allow was on is its own too, inside its game's span or not:
     # the install tags the ports LinuxGSM reports, and Rust's Query port (28017 by LinuxGSM's
     # default) sits outside the 2-port span the panel reserves. A limit there was the item's defect
@@ -1521,7 +1521,7 @@ try:
                           ("47842/tcp", "LIMIT", "Anywhere", ""),
                           ("47844/tcp", "LIMIT", "Anywhere", ""))
     _u = _Ufw36L(*_OWN_Q)
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _own_seen = set()
     _r = _own_ports_cbn(_p8_srv(), "probeR", ports=[47840, 47841], tagged=_own_seen)
     check("own ports: a port its own tagged allow was on, outside its game's span, is its own too "
@@ -1532,7 +1532,7 @@ try:
     check("own ports: ...and the ports its tagged allows were on are handed back, for a sweep that "
           "names what is left instead", _own_seen == {47840, 47842}, repr(_own_seen))
     _u = _Ufw36L(*_OWN_Q)
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     eq("own ports: ...unless another server holds that port: its LIMIT there is that server's",
        _own_ports_cbn(_p8_srv(), "probeR", ports=[47840, 47841], held={47842}),
        (4, "4 rule(s) removed for probeR", []))
@@ -1544,7 +1544,7 @@ try:
                                ("47857 on eth1", "ALLOW", "Anywhere", ""),
                                ("47857/tcp", "ALLOW", "198.51.100.7", "")))
     _u.v4.append(["203.0.113.10 47856/tcp", "LIMIT", "Anywhere", ""])
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _r = _own_ports_cbn(_p8_srv(), "probeS", ports=[47856, 47857])
     check("own ports: a rule on one interface, one from one address and one to one of the host's "
           "addresses are named too",
@@ -1577,7 +1577,7 @@ try:
     # in, rate limited) and UDP the allow, so the port IS open on both — the claim is honest; what
     # it did not say is that TCP is somebody's LIMIT. It says so now.
     _u = _Ufw36(*_VPS_BASE + (("47817/tcp", "LIMIT", "Anywhere", ""),))
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47817], "probeB")
     check("game ports: a port a LIMIT holds for TCP is open, and the LIMIT is named as what TCP is "
           "left to",
@@ -1594,14 +1594,14 @@ try:
               _op[0] == _open and ("47819 %s" % _act) in _op[1]
               and not _w.verbs_called("ufw-allow-port"), repr((_op, _w.verbs_called())))
     _u = _Ufw36(*_VPS_BASE + (("47811:47813/udp", "DENY", "Anywhere", "operator"),))
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47812], "probeB")
     check("game ports: a DENY RANGE covering the port blocks its protocol too",
           _op[0] == [] and "47811:47813/udp DENY" in _op[1]
           and _first(_u, 47812, "udp") == "47811:47813/udp DENY IN Anywhere # operator",
           repr(_op))
     _u = _Ufw36(*_VPS_BASE)
-    _w = _wire(verbs=_u.verbs())
+    _wire(verbs=_u.verbs())
     _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47826], "probeB")
     check("game ports: a port no rule names still gets one bare allow, v4 and v6, and is reported "
           "opened (positive control)",
@@ -1874,7 +1874,7 @@ try:
               repr((_gd, _p8_apt, _p8_rel_calls, _p8_master_calls)))
         # The refresh on refusal is rate-limited: a name that is simply not LinuxGSM's must not
         # turn every retry of every install into a request to GitHub.
-        for _i in range(3):
+        for _ in range(3):
             _p8_install("vints", "evilpkg", _P8_V, **_P8_ACCT)
         check("game deps: the refresh on refusal is rate-limited — three more refusals within the "
               "hour fetch master no more", _p8_master_calls == ["ubuntu-24.04.csv"],
@@ -2090,8 +2090,8 @@ try:
           and _bs_idx(_w, "ufw-enable") == -1 and _bs_idx(_w, "ufw-default") == -1
           and _bs_idx(_w, "ufw-delete-allow-app") == -1, "result=%r" % (_bs[1],))
 
-    _w = _bs_wire(verbs={"sshd-effective-config": ("port 22\npermitrootlogin yes\n"
-                                                   "passwordauthentication yes\n", "", 0)})
+    _bs_wire(verbs={"sshd-effective-config": ("port 22\npermitrootlogin yes\n"
+                                              "passwordauthentication yes\n", "", 0)})
     _bs = _H.remote_bootstrap_vps(_p8_srv())
     check("bootstrap: sshd still reporting password login after the edit FAILS the bootstrap and "
           "names what is still on",
@@ -2168,8 +2168,8 @@ try:
        _H.remote_bootstrap_vps(_p8_srv())[:2],
        (False, "Server was rebooted but did not come back online within the timeout."))
     # A reboot that was refused, or never brought the host down, is not "complete".
-    _w = _bs_wire(cmds=[("reboot-required", ("YES", "", 0))],
-                  verbs={"reboot-delayed": ("", "sudo: a password is required", 1)})
+    _bs_wire(cmds=[("reboot-required", ("YES", "", 0))],
+             verbs={"reboot-delayed": ("", "sudo: a password is required", 1)})
     del _bs_waits[:], _bs_closed[:]
     _bs = _H.remote_bootstrap_vps(_p8_srv())
     check("bootstrap: a reboot whose command FAILED is reported pending, not waited on or 'complete'",
@@ -2199,7 +2199,7 @@ try:
           and "created (login password locked)" not in _bs[2] and "already exists" in _bs[1],
           "result=%r" % (_bs[1],))
     _sm_core.create_game_user = lambda server, user, timeout=30: (_bs_users.append(user), ("", "", 0))[1]
-    _w = _bs_wire(verbs={"user-lock-password": ("", "passwd: Authentication token manipulation error", 1)})
+    _bs_wire(verbs={"user-lock-password": ("", "passwd: Authentication token manipulation error", 1)})
     _bs = _H.remote_bootstrap_vps(_p8_srv(), username="lgsm")
     check("bootstrap: a password lock that failed is said, not 'login password locked'",
           _bs[0] is False and "could not be locked" in _bs[1]
@@ -2495,8 +2495,8 @@ try:
     check("ssh port: ...and fail2ban is not repointed at the squatter's port",
           not _w.verbs_called("f2b-set-sshd-ports") and "fail2ban-panel-sshd" not in _w.names(),
           repr(_w.names()))
-    _w = _csp_wire(**_own("LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4300 sk:3 "
-                          "cgroup:/system.slice/docker.service <->\n"))
+    _csp_wire(**_own("LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4300 sk:3 "
+                     "cgroup:/system.slice/docker.service <->\n"))
     _cp = _H.change_ssh_port(_p8_srv(), 2222)
     check("ssh port: ...as is one held by another root SERVICE (docker-proxy took it first)",
           _cp[0] is False and "docker.service" in _cp[1], repr(_cp))
@@ -2509,18 +2509,18 @@ try:
           repr(_cp))
     # Socket activation: systemd (pid 1, init.scope) holds sshd's socket — right there, wrong elsewhere.
     _INIT = "LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4500 sk:6 cgroup:/init.scope <->\n"
-    _w = _csp_wire(**dict(_own(_INIT), **{"sshd-socket-active": ("active", "", 0)}))
+    _csp_wire(**dict(_own(_INIT), **{"sshd-socket-active": ("active", "", 0)}))
     _cp_sock = _H.change_ssh_port(_p8_srv(), 2222)
-    _w = _csp_wire(**_own(_INIT))
+    _csp_wire(**_own(_INIT))
     _cp_nosock = _H.change_ssh_port(_p8_srv(), 2222)
     check("ssh port: a socket held by systemd passes only on a socket-activated host",
           _cp_sock[0] is True and _cp_nosock[0] is False and "init.scope" in _cp_nosock[1],
           repr((_cp_sock, _cp_nosock)))
     # With BPF firewalling (Ubuntu 24.04) systemd creates the socket inside ssh.socket's OWN cgroup.
     _SOCKU = "LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4501 sk:9 cgroup:/system.slice/ssh.socket <->\n"
-    _w = _csp_wire(**dict(_own(_SOCKU), **{"sshd-socket-active": ("active", "", 0)}))
+    _csp_wire(**dict(_own(_SOCKU), **{"sshd-socket-active": ("active", "", 0)}))
     _cp_socku = _H.change_ssh_port(_p8_srv(), 2222)
-    _w = _csp_wire(**_own(_SOCKU))
+    _csp_wire(**_own(_SOCKU))
     _cp_socku_no = _H.change_ssh_port(_p8_srv(), 2222)
     check("ssh port: ...including in ssh.socket's own cgroup, again only when socket-activated",
           _cp_socku[0] is True and "could not confirm" not in _cp_socku[1]
@@ -2538,8 +2538,8 @@ try:
     _w = _csp_wire(**_own("LISTEN 0 128 198.51.100.4:2222 0.0.0.0:* uid:1001 ino:4600 sk:7 <->\n"))
     _cp_bind_squat = _H.change_ssh_port(_p8_srv(), 2222, bind_addr="198.51.100.4")
     _bind_squat_names = _w.names()
-    _w = _csp_wire(**_own("LISTEN 0 128 [fd00::5]:2222 [::]:* ino:4700 sk:8 "
-                          "cgroup:/system.slice/ssh.service <->\n"))
+    _csp_wire(**_own("LISTEN 0 128 [fd00::5]:2222 [::]:* ino:4700 sk:8 "
+                     "cgroup:/system.slice/ssh.service <->\n"))
     _cp_bind_ok = _H.change_ssh_port(_p8_srv(), 2222, bind_addr="fd00:0:0::5")
     _H._tcp_reachable = _h_saved["_tcp_reachable"]
     check("ssh port (bind): a reachable address held by a non-root account is reverted too",
@@ -3240,7 +3240,6 @@ try:
     check("run updates: the helper's answer is returned and audited with its success flag",
           _body == {"success": False, "message": "E: Could not get lock"}
           and _rv_log[-1] == ("remote_os_update", _r.name, None, False), repr(_body))
-    _n_log = len(_rv_log)
     _rv.remote_os_update_start = lambda remote: (True, "Update started.")
     _st, _body = _rv_json(_rv_client.post("/api/remote/%d/os-update/start" % _r.id))
     check("os update start: a started update is audited as started",

@@ -1,0 +1,29 @@
+# Semgrep's built-in ignore list (semgrep 1.179, OSS/src/targeting/Semgrepignore.ml), minus its
+# "Common test paths" block: test/, tests/, testsuite/, *_test.go.
+#
+# Semgrep uses its built-in list only when this file does not exist, and that list skips tests/, so
+# `--exclude tests` coming off the command line was not enough: the suites stayed unscanned. They are
+# scanned on purpose (see .github/workflows/security-code.yml, sast-semgrep), and a test's deliberate
+# stand-in carries a `# nosemgrep: <rule> -- <reason>` at the line instead.
+#
+# Everything else below is the built-in list unchanged. .gitignore is still read as well.
+
+# Administrative folder or file used by popular version control systems
+.git
+.svn
+_darcs
+# Paths to files and folders that are typically large and ignorable
+build/
+vendor/
+dist/
+*.min.js
+.env/
+.tox/
+# Package managers
+node_modules/
+.npm/
+.yarn/
+.venv/
+_opam/
+_build/
+_cargo/

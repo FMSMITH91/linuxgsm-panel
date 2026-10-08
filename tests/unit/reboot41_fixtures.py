@@ -417,6 +417,7 @@ def _argv41(argv, timeout=30, stdin_text=None):
 
 # ── the app and its database ───────────────────────────────────────────────────────────────────
 _app41 = _Flask41("unit_part41")
+# nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
 _app41.config.update(SECRET_KEY="unit-part41",  # nosec B106 - this part's throwaway app
                      SQLALCHEMY_TRACK_MODIFICATIONS=False, TESTING=True,
                      SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_TMP41, "p41.db"))

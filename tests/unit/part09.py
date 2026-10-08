@@ -303,8 +303,8 @@ _GH_F2_SHAPES = [
                      "status VARCHAR(32), game_type VARCHAR(64), port INTEGER, query_port INTEGER, "
                      "short_name TEXT GENERATED ALWAYS AS (CASE status WHEN 'online' THEN '%s' "
                      "ELSE 'gmodserver' END) VIRTUAL)" % _GH_PAYLOAD,
-                     "INSERT INTO game_server (id, remote_id, status, game_type, port) "
-                     "VALUES (15, 1, 'offline', 'gmod', 27015)"])),
+                     ("INSERT INTO game_server (id, remote_id, status, game_type, port) "
+                      "VALUES (15, 1, 'offline', 'gmod', 27015)")])),
     ("a game_server table with no game_type column", "no game_type column",
      _gh_db(_GH_CLEAN, sql=["ALTER TABLE game_server DROP COLUMN game_type"])),
     # An index whose entries disagree with its table: the TABLE holds a clean account and the
@@ -330,8 +330,8 @@ _GH_F2_SHAPES = [
                      "status VARCHAR(32), game_type VARCHAR(64), port INTEGER, query_port INTEGER, "
                      "short_name TEXT GENERATED ALWAYS AS (CASE status WHEN 'online' THEN '%s' "
                      "ELSE 'gmodserver' END) STORED)" % _GH_PAYLOAD,
-                     "INSERT INTO game_server (id, remote_id, status, game_type, port) "
-                     "VALUES (15, 1, 'offline', 'gmod', 27015)"])),
+                     ("INSERT INTO game_server (id, remote_id, status, game_type, port) "
+                      "VALUES (15, 1, 'offline', 'gmod', 27015)")])),
     # A trigger whose CREATE carries a comment that says TABLE. SQLite reads past a comment to
     # what the statement creates, and so must the check: a reader that stopped inside the comment
     # would take this for a table. SQLite writes its own "CREATE TRIGGER …" into sqlite_master, so

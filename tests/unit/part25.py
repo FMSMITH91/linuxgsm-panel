@@ -569,12 +569,12 @@ _VPS25_LOG = "\n".join(
      for i in range(150)]
     + ["Oct 03 02:%02d:41 vps sudo[%d]: pam_unix(sudo:session): session opened for user root(uid=0) by "
        "(uid=999)" % (i % 60, 1000 + i) for i in range(150)]
-    + ["Oct 03 02:59:49 vps sudo[2999]: lgsmpanel :  PWD=/home/x ; USER=root ; "
-       "COMMAND=/usr/local/lib/linuxgsm-panel/panel-helper ufw-status plain ",
-       "Oct 03 02:59:50 vps sudo[3000]: lgsmpanel : PWD=/home/x ; USER=root ; COMMAND=/usr/bin/su "
-       "canarygameacct7731",
-       "Oct 03 02:59:51 vps sudo[3001]: lgsmpanel : a password is required ; PWD=/home/x ; USER=root ; "
-       "COMMAND=/usr/bin/true",
+    + [("Oct 03 02:59:49 vps sudo[2999]: lgsmpanel :  PWD=/home/x ; USER=root ; "
+        "COMMAND=/usr/local/lib/linuxgsm-panel/panel-helper ufw-status plain "),
+       ("Oct 03 02:59:50 vps sudo[3000]: lgsmpanel : PWD=/home/x ; USER=root ; COMMAND=/usr/bin/su "
+        "canarygameacct7731"),
+       ("Oct 03 02:59:51 vps sudo[3001]: lgsmpanel : a password is required ; PWD=/home/x ; USER=root ; "
+        "COMMAND=/usr/bin/true"),
        "Oct 03 02:59:52 vps python3[1234]: WARNING panel.monitor: canary panel line 7731"])
 
 

@@ -202,6 +202,16 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **The security scanners now read the tests too.** CI only; nothing on a panel changes. Bandit,
+  Semgrep and CodeQL used to skip `tests/`, so a mistake in a test, such as a check that can never
+  fail, went unnoticed. They read it now, and the first scan found a few. One check read a value
+  only after the next step had already reset it, so it could not fail. Three refusal checks counted
+  any crash as a refusal. The inline-script checks missed an upper-case `<SCRIPT>` tag. All are
+  fixed. Semgrep had also been silently skipping files over 1 MB and stopping rules early on the
+  largest suites. It now reads every file in full and fails if it can't. CodeQL now fails its run
+  if the root-run helper, `tools/panel-helper` (a Python file with no `.py` extension), is missing
+  from what it analysed. CodeQL skips one 1 MB test file, which takes it 24 minutes to read.
+  Bandit, Semgrep and SonarCloud still read that file.
 - **Two more CI scanners: zizmor on the workflows, and Harden-Runner in every job but deploy.**
   CI only; nothing on a panel changes, and no panel is offered an update for it.
   - *zizmor* audits the GitHub Actions setup itself: template injection, over-wide token

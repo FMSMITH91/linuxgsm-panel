@@ -285,7 +285,7 @@ def _loop_run22():
         try:
             _proc22.hub_lag_loop(sleep, lambda: next(clock))
         except _Stop22:
-            pass
+            pass  # the stub ends the loop by raising this
     return slept[:3], st
 
 
@@ -963,7 +963,7 @@ def _run_ro22(queries, timeout=10):
 
 with _patched(_db22, run_ro=_run_ro22), \
         _patched(_nw22, auth_log_path=lambda: os.path.join(_TMP22, "no-auth.log")):
-    _sa22 = _nw22.section_access(_ctx())
+    _nw22.section_access(_ctx())
 check("access: the counts go through _src_db.run_ro (off the hub), once per report",
       _seen_ro22 == [sorted(_nw22.signin_queries())], repr(_seen_ro22))
 
@@ -1030,9 +1030,9 @@ try:
         return [b"ok"]
     _gate22 = _mw22.ProxiedBanGate(_inner22)
     _st22 = []
-    _body22a = _gate22({"HTTP_X_FORWARDED_FOR": "203.0.113.9"}, lambda s, h: _st22.append(s))
+    _gate22({"HTTP_X_FORWARDED_FOR": "203.0.113.9"}, lambda s, h: _st22.append(s))
     _n22a = _rs22.snapshot("bangate").get("refused")
-    _body22b = _gate22({"HTTP_X_FORWARDED_FOR": "198.51.100.1"}, lambda s, h: _st22.append(s))
+    _gate22({"HTTP_X_FORWARDED_FOR": "198.51.100.1"}, lambda s, h: _st22.append(s))
     _n22b = _rs22.snapshot("bangate").get("refused")
 finally:
     _bl22._by_len = _saved_bl22[0]

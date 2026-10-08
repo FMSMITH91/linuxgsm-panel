@@ -103,7 +103,8 @@ check("f2b: a host with no jail.local is a no-op, not a failure",
 _fake_reboot = os.path.join(_sandbox, "fake-reboot")
 _marker = os.path.join(_sandbox, "fired")
 open(_fake_reboot, "w").write("#!/bin/sh\necho fired > %s\n" % _marker)
-os.chmod(_fake_reboot, 0o755)
+# nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+os.chmod(_fake_reboot, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 _probe = (
     "import importlib.util as u, importlib.machinery as m, time, sys;"
     "s=u.spec_from_loader('p', m.SourceFileLoader('p', %r));"
@@ -518,6 +519,7 @@ try:
     check("content-game-present / -script-present: asked as the named account, never as root",
           _s_drops == sorted("%s:True" % _u for _u in ("srcds", "moved", "gmodserver", "locked",
                                                         "nodrop")), repr(_s_drops))
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
     os.chmod(os.path.join(_scandisk, "shut"), 0o700)
     _shutil.rmtree(_scanroot, ignore_errors=True)
     _shutil.rmtree(_scandisk, ignore_errors=True)
@@ -544,7 +546,8 @@ if _osu:
     _fake_apt = os.path.join(_osu, "fake-apt")
     open(_fake_apt, "w").write("#!/bin/sh\necho \"fake apt: $*\"\n"
                                "case \"$*\" in *full-upgrade*) exit 7 ;; esac\nexit 0\n")
-    os.chmod(_fake_apt, 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+    os.chmod(_fake_apt, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _oslog = os.path.join(_osu, "os-update.log")
     _osprobe = (
         "import importlib.util as u, importlib.machinery as m, time, sys;"
@@ -573,7 +576,7 @@ if _osu:
             if _ho_done_marker in _olog:
                 break
         except OSError:
-            pass
+            pass  # not written yet: poll again
         _time.sleep(0.2)
     check("os update: the log opens with a dated header", _olog.startswith("=== OS update started"),
           _olog[:60])
@@ -611,7 +614,7 @@ if _osu:
             if _ho_done_marker in _osftxt:
                 break
         except OSError:
-            pass
+            pass  # not written yet: poll again
         _time.sleep(0.2)
     check("os update: and it writes a FAILURE sentinel, so the popup stops waiting",
           (_ho_done_marker + "-1") in _osftxt, repr(_osftxt))
@@ -1195,7 +1198,7 @@ try:
         try:
             _dbo._db_repair_detached(_dbo_db)
         except _DboExit:
-            pass
+            pass  # the stubbed exit ends the repair here
         return [c for c in _dbo_calls if "repair" in c[0]]
 
     _dbo_rep = _dbo_drive()
@@ -1272,15 +1275,15 @@ try:
           _dbo_notmine == [], repr(_dbo_notmine))
     # A drop that does not take must stop the repair, not let it carry on as root.
     _dbo._drop_to = lambda pw, own_groups=False: False
-    _dbo_raised = False
+    _dbo_raised, _dbo_other = False, None
     try:
         _dbo_pre()
     except OSError:
         _dbo_raised = True
-    except Exception:
-        pass
+    except Exception as _e:
+        _dbo_other = _e
     check("db-repair: a drop that does not take raises in the child instead of running as root",
-          _dbo_raised)
+          _dbo_raised, "raised %r, not OSError" % (_dbo_other,))
     # And with no account at all, nothing is stopped and nothing is repaired.
     _dbo._db_repair_account = lambda p: None
     _dbo_drive()
@@ -1592,7 +1595,7 @@ def _rm_nowrite_tmp():
     try:
         os.rmdir(_NOWRITE_TMP)
     except OSError:
-        pass
+        pass  # cleanup only
 
 
 atexit.register(_rm_nowrite_tmp)
@@ -1602,10 +1605,10 @@ def _needs_tmpfile(repo, ref, env=None):
     """(premise) `repo`'s first-parent line from `ref` is over 128 KiB, and under _NOWRITE_TMP bash
     cannot write a here-string of it — so the checks run under it can tell a stream from either
     shape that fails."""
-    _r = _rs_sub.run(["bash", "-c", 'l="$(git -C "$1" rev-list --first-parent "$2")"\n'
-                      '[ "${#l}" -gt 131072 ] || { echo "only ${#l} bytes"; exit 2; }\n'
-                      'cat <<< "$l" > /dev/null 2>&1 && { echo "here-string written"; exit 3; }\n'
-                      'exit 0\n', "_", repo, ref],
+    _r = _rs_sub.run(["bash", "-c", ('l="$(git -C "$1" rev-list --first-parent "$2")"\n'
+                                     '[ "${#l}" -gt 131072 ] || { echo "only ${#l} bytes"; exit 2; }\n'
+                                     'cat <<< "$l" > /dev/null 2>&1 && { echo "here-string written"; exit 3; }\n'
+                                     'exit 0\n'), "_", repo, ref],
                      capture_output=True, text=True, env=dict(env or os.environ, TMPDIR=_NOWRITE_TMP))
     return _r.returncode == 0, "rc=%s %s (euid %d, TMPDIR=%s)" % (
         _r.returncode, _r.stdout.strip(), os.geteuid(), _NOWRITE_TMP)
@@ -1642,7 +1645,6 @@ try:
         _f.write("#!/bin/bash\n%s\n" % _RS_FLOOR_LINE)
     _rs_git("add", "-A", cwd=_rs_up)
     _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
-    _rs_first = _rs_git("rev-parse", "HEAD", cwd=_rs_up)
 
     def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None, seed=None,
                  env=None, up=None, branch="main", floor=None, floor_seed=None, run_env=None,
@@ -1823,14 +1825,16 @@ try:
     check("install.sh: ...but not from a tree the panel user owns",
           "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
     _rs_t = _rs_srctree("srcworld")
-    os.chmod(os.path.join(_rs_t, "tools"), 0o777)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- world-writable on purpose, in this test's temp dir
+    os.chmod(os.path.join(_rs_t, "tools"), 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     _rs_out = _rs_case("srcworld", _rs_no_git, src=_rs_t, panel_user=_rs_other)
     check("install.sh: ...nor through a directory anyone can write",
           "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
     # ...nor from a tree in a directory the panel user could swap it out of.
     _rs_par = os.path.join(_rs_sb, "srcparent-dir")
     os.makedirs(_rs_par)
-    os.chmod(_rs_par, 0o777)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- world-writable on purpose, in this test's temp dir
+    os.chmod(_rs_par, 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     _rs_out = _rs_case("srcparent", _rs_no_git, src=_rs_srctree("srcparent", parent=_rs_par),
                        panel_user=_rs_other)
     check("install.sh: ...nor from a tree whose parent directory anyone can write",
@@ -1866,7 +1870,8 @@ try:
     _rs_t = _rs_srctree("srclink")
     _rs_drop = os.path.join(_rs_sb, "drop")
     os.makedirs(_rs_drop)
-    os.chmod(_rs_drop, 0o777)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- world-writable on purpose, in this test's temp dir
+    os.chmod(_rs_drop, 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     with open(os.path.join(_rs_drop, "helper"), "w") as _f:
         _f.write("DROPPED-HELPER\n")
     os.unlink(os.path.join(_rs_t, "tools", "panel-helper"))
@@ -2161,7 +2166,6 @@ _g_i = _inst.find('if { [[ "${HELPER_OK}"')
 _g_j = _inst.find("chmod 440 /etc/sudoers.d")
 check("install.sh: the sudoers grant block is where this gate expects it",
       _g_i != -1 and _g_j > _g_i, "start=%d end=%d" % (_g_i, _g_j))
-_narrow = _inst[_g_i:_g_j] if (_g_i != -1 and _g_j > _g_i) else ""
 # Scanned as the LINES THAT ARE WRITTEN, not as the whole block. The block's comments explain what
 # the grant deliberately excludes, and naming `sudo -u` or `/bin/bash` in prose must not read as
 # granting them — but the substring scan said it did. Extracting the echoed lines is also the
@@ -3247,10 +3251,10 @@ try:
                                           '      -r "${PANEL_DIR}/requirements.txt"\n'
                                           "  pip install --require-hashes --only-binary :all: "
                                           "-r x.txt\n") == ([], [
-                                              'pip" install --quiet -r '
-                                              '"${PANEL_DIR}/requirements.txt"',
-                                              "pip install --require-hashes --only-binary :all: "
-                                              "-r x.txt"]))
+                                              ('pip" install --quiet -r '
+                                               '"${PANEL_DIR}/requirements.txt"'),
+                                              ("pip install --require-hashes --only-binary :all: "
+                                               "-r x.txt")]))
 
     # origin: the URL the root-owned installs are taken from, compared against this file's own
     # REPO_URL — which the panel cannot edit, because install.sh runs from outside the checkout.
@@ -3651,6 +3655,7 @@ try:
         with open(_stk_py, "w", encoding="utf-8") as _fh:
             _fh.write('#!/bin/bash\n[ "$2" = setup-token ] && [ "$3" = --raw ] || exit 9\n'
                       'echo "noise on stdout first" ; cat "$STK_OUT"; exit "${STK_RC:-0}"\n')
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
         os.chmod(_stk_py, 0o700)
         _stk_out = os.path.join(_stk_dir, "out")
         _stk_as = os.path.join(_stk_dir, "as")      # who the sudo shim ran it as
@@ -4439,7 +4444,8 @@ try:
         _fh.write("metamod\nsourcemod\n")
     _launcher = os.path.join(_u, "csgoserver")
     open(_launcher, "w").close()
-    os.chmod(_launcher, 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+    os.chmod(_launcher, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     # A game account names its own config-lgsm entries, and the scan is a newline- and '|'-split
     # line protocol: these are the forgeries (a second record naming ANOTHER account, a shifted
     # field), plus a second real instance and a /home name that is not an account name.
@@ -4451,7 +4457,8 @@ try:
             os.makedirs(os.path.join(_disc_home, _du, "lgsm", "config-lgsm", _di))
             _dl = os.path.join(_disc_home, _du, _di)
             open(_dl, "w").close()
-            os.chmod(_dl, 0o755)
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+            os.chmod(_dl, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 
     class _DiscCap:
         def write(self, t):
@@ -4475,8 +4482,8 @@ check("helper: lgsm-discover reports only real instances — no record forged by
       sorted(tuple(_l.split("|")[1:3]) + (len(_l.split("|")),) for _l in _disc_lines)
       == [("csgoserver", "csgoserver", 8), ("gmodserver", "gmodserver-2", 8)],
       repr(_disc_lines))
-check("helper: lgsm-discover emits a FOUND line for an installed instance",
-      _disc_line.startswith("FOUND|"), repr(_disc_line[:120]))
+check("helper: lgsm-discover emits a FOUND line for an installed instance, and exits 0",
+      _rc_disc == 0 and _disc_line.startswith("FOUND|"), "rc=%r %r" % (_rc_disc, _disc_line[:120]))
 _disc_parts = _disc_line.split("|")
 check("helper: lgsm-discover emits the 8 fields ssh_manager splits on",
       len(_disc_parts) >= 8, "%d fields: %r" % (len(_disc_parts), _disc_line[:120]))
@@ -4523,6 +4530,65 @@ _bandit_flags = " ".join(l.strip() for l in _bandit_src.splitlines()
                          if "FLAGS=" in l or "bandit -r" in l)
 check("coverage: panel-helper is bandit-scanned (bandit -r . globs *.py and would miss it)",
       "-r ." in _bandit_flags and "tools/panel-helper" in _bandit_flags, _bandit_flags[:140])
+
+# ── the suites are scanned too: a mistake in a test makes a check pass while proving nothing ────
+# Bandit, Semgrep and CodeQL all left tests/ out. Each now reads it; what a test does on purpose is
+# triaged at the line. Semgrep needs the repo's own .semgrepignore: its BUILT-IN list (used only
+# when there is none) skips tests/, so dropping `--exclude tests` alone scanned nothing new.
+_scan_x = re.search(r"-x (\S+)", _bandit_flags)
+_scan_x = _scan_x.group(1).strip("\x22").split(",") if _scan_x else ["<no -x>"]
+_bd_sarif = _bandit_src[_bandit_src.index("-f sarif -o bandit.sarif"):
+                        _bandit_src.index("-f json -o bandit.json")]
+check("coverage: Bandit walks tests/, and drops only B105-B107 there (fixture credentials)",
+      not [_x for _x in _scan_x if _x.strip("./").startswith("tests")]
+      and 'IN("B105", "B106", "B107")' in _bd_sarif and 'startswith("tests/")' in _bd_sarif
+      and _bd_sarif.count("IN(") == 1, "excluded=%r" % _scan_x)
+_sg_step = _bandit_src[_bandit_src.index("      - name: Semgrep scan\n"):
+                       _bandit_src.index("--sarif-output=semgrep.sarif")]
+_sgi_path = os.path.join(_root, ".semgrepignore")
+_sgi = ([_l.strip() for _l in open(_sgi_path, encoding="utf-8")
+         if _l.strip() and not _l.lstrip().startswith("#")] if os.path.isfile(_sgi_path) else None)
+check("coverage: Semgrep scans tests/ (no --exclude tests, and a .semgrepignore without test paths "
+      "that still skips vendored and installed code)",
+      "--exclude tests" not in _sg_step and _sgi is not None
+      and not {"tests/", "test/", "testsuite/", "tests", "test"} & set(_sgi)
+      and {"vendor/", "node_modules/", ".venv/", "*.min.js"} <= set(_sgi), repr(_sgi))
+# Semgrep's defaults skip a file over 1 MB (tests/smoke_test.py) and give up on a rule after 5 s per
+# file, reporting either only as a warning: 23 findings in the suites sat behind them.
+_sg_after = _bandit_src[_bandit_src.index("      - name: Semgrep scan\n"):
+                        _bandit_src.index("      - name: Upload Semgrep results")]
+_sg_after = "\n".join(_l for _l in _sg_after.splitlines() if not _l.lstrip().startswith("#"))
+check("coverage: Semgrep reads every file whole (no per-rule timeout, no size cut-off) and fails on "
+      "any file it did not",
+      "--timeout 0 " in _sg_step and "--max-target-bytes 0 " in _sg_step
+      and "[.runs[].invocations[]?.toolExecutionNotifications[]?] | length' semgrep.sarif)\" != \"0\""
+      in _sg_after and _sg_after.count("exit 1") >= 2, "")
+_cq_cfg = open(os.path.join(_root, ".github", "codeql", "codeql-config.yml"), encoding="utf-8").read()
+_cq_ign = re.search(r"^paths-ignore:\n((?:  - .*\n)+)", _cq_cfg, re.M)
+check("coverage: CodeQL analyses tests/ (paths-ignore is docs/, and the one suite its extractor "
+      "cannot finish in time)",
+      _cq_ign is not None and _cq_ign.group(1).split() == ["-", "docs", "-", "tests/smoke_test.py"]
+      and not re.search(r"^paths:", _cq_cfg, re.M), _cq_ign and _cq_ign.group(1))
+_cq_wf = open(os.path.join(_root, ".github", "workflows", "codeql.yml"), encoding="utf-8").read()
+_cq_gate = _cq_wf[_cq_wf.index("      - name: The helper and the tests are in the analysed Python database"):
+                  _cq_wf.index("\n  pr-alerts:")] if "analysed Python database" in _cq_wf else ""
+check("coverage: CodeQL's Python job fails when panel-helper or the tests are missing from the "
+      "database it analysed (an extensionless file is the extractor's call, not ours)",
+      "steps.analyze.outputs.db-locations" in _cq_gate and "src.zip" in _cq_gate
+      and '"tools/panel-helper"' in _cq_gate and '"tests/unit_test.py"' in _cq_gate
+      and "sys.exit(1)" in _cq_gate and "id: analyze" in _cq_wf, _cq_gate[:120])
+# CodeQL cannot read a suppression comment, so two rules whose every finding in tests/ was read and
+# found deliberate are dropped from its SARIF between the analysis and the upload — for tests/ only.
+_cq_code = "\n".join(_l for _l in _cq_wf.splitlines() if not _l.lstrip().startswith("#"))
+_cq_at = [_cq_code.find(_k) for _k in ("upload: never", "Leave out two deliberate test patterns",
+                                       "uses: github/codeql-action/upload-sarif@")]
+_cq_filter = re.findall(r'\.ruleId \| IN\(([^)]*)\)', _cq_code)
+check("coverage: CodeQL's own upload follows a filter that drops two named rules, under tests/ only",
+      -1 not in _cq_at and _cq_at == sorted(_cq_at) and _cq_code.count("upload: never") == 1
+      and _cq_filter == ['"py/file-not-closed", "py/overly-permissive-file"']
+      and 'artifactLocation.uri | startswith("tests/")' in _cq_code
+      and 'category: "/language:${{ matrix.language }}"' in _cq_code[_cq_at[2]:],
+      repr((_cq_at, _cq_filter)))
 
 # ── No source file carries a literal bidi control, zero-width or line-separator character ──────
 # They make a line read differently from how it runs ("Trojan Source", CVE-2021-42574), and a test
@@ -4960,7 +5026,8 @@ try:
     os.makedirs(os.path.join(_cqa_sb, "bin"))
     with open(os.path.join(_cqa_sb, "bin", "gh"), "w") as _fh:
         _fh.write("#!/bin/sh\necho 42\n")      # the open PR whose head the run was for
-    os.chmod(os.path.join(_cqa_sb, "bin", "gh"), 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+    os.chmod(os.path.join(_cqa_sb, "bin", "gh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 
     def _cqa_case(event_name, wr_event, head_branch, ref_name="main"):
         _out = os.path.join(_cqa_sb, "out-%s-%s-%s" % (event_name, wr_event, head_branch or "none"))
@@ -5223,8 +5290,10 @@ try:
     with open(os.path.join(_cc_bin, "sha256sum"), "w") as _fh:
         _fh.write("#!/bin/sh\ncat >/dev/null\n")
     for _f in ("curl", "sha256sum"):
-        os.chmod(os.path.join(_cc_bin, _f), 0o755)
-    os.chmod(_cc_fake, 0o755)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+        os.chmod(os.path.join(_cc_bin, _f), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+    os.chmod(_cc_fake, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _cc_sha = "c" * 40
     _cc_good = ('<?xml version="1.0" ?>\n<coverage version="7.6" line-rate="0.5">\n'
                 '<sources><source>/home/runner/work/x/x</source></sources>\n<packages><package '
@@ -6425,7 +6494,7 @@ class _TsInfo(object):
         self.__dict__.update(kw)
 
 
-_ts_tmpl = _TsEnv().from_string(_ts_card)
+_ts_tmpl = _TsEnv(autoescape=True).from_string(_ts_card)
 _ts_svc = {"url": "https://host.example.ts.net", "funnel": False,
            "routes": [{"mount": "/panel", "target": "http://127.0.0.1:5000"}]}
 
@@ -6504,8 +6573,8 @@ check("tailscale.html: ...and a stopped daemon still reads as stopped, not as un
       "Tailscale is not running." in _ts_down, " ".join(_ts_down.split())[-160:])
 # The Accept Routes row: RouteAll, which is None when the prefs could not be read — and that is
 # not "No". (The row used to print the TUN flag as if it were this.)
-_ts_nd = _TsEnv().from_string(_ts_tpl[_ts_tpl.index("<!-- Node Details -->"):
-                                      _ts_tpl.index("<!-- Peer Reachability Checker -->")])
+_ts_nd = _TsEnv(autoescape=True).from_string(_ts_tpl[_ts_tpl.index("<!-- Node Details -->"):
+                                                     _ts_tpl.index("<!-- Peer Reachability Checker -->")])
 
 
 def _ts_ar_row(v):
@@ -6798,7 +6867,6 @@ _unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
 # summary), and splitting on the first occurrence puts the whole cleanup block on the wrong side
 # — which is how this check first reported a fix that was already in place.
 _uninst_cut = _uninst.rindex('if [[ "${MODE}" = "system" ]]; then')
-_uninst_sys = _uninst[_uninst_cut:]
 _uninst_common = _uninst[:_uninst_cut]
 _user_created = ["/usr/local/lib/linuxgsm-panel", "/etc/cron.d/lgsm-node-tools",
                  "/usr/local/bin/linuxgsm-panel-recover"]
@@ -8549,7 +8617,8 @@ try:
                     "'Analyze (python)' 'Open code-scanning alerts'; do\n"
                     "  printf '{\"name\":\"%s\",\"status\":\"completed\",\"conclusion\":\"success\"}\\n'"
                     " \"$n\"\ndone\n")
-    os.chmod(os.path.join(_dp_ghbin, "gh"), 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+    os.chmod(os.path.join(_dp_ghbin, "gh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _dp_genv["PATH"] = _dp_ghbin + os.pathsep + _dp_genv.get("PATH", "")
     _dp_genv["GITHUB_REPOSITORY"] = "o/r"     # set on every runner; the step reads it under set -u
 
@@ -8584,7 +8653,7 @@ try:
     # was reverted (F) before the merge, and G, its final state. E, F and G are ancestors of main
     # only through the merge's SECOND parent — main was never at any of them — while the merge
     # commit M is on main's own (first-parent) line.
-    _dp_before = _dp_commit(_dp_inst("BEFORE-MERGE-INSTALLER"), "main before the merge")
+    _dp_commit(_dp_inst("BEFORE-MERGE-INSTALLER"), "main before the merge")
     _dp_git("checkout", "-q", "-b", "side")
     _dp_side = [_dp_commit(_dp_inst("INTERMEDIATE-INSTALLER"), "E: intermediate"),
                 _dp_commit(_dp_inst("BEFORE-MERGE-INSTALLER"), "F: E reverted"),
@@ -9677,7 +9746,7 @@ try:
     # Now the foxtrot (as in the fixture above): O1 on another branch from B2, X merges main (S1)
     # into it, and main fast-forwards to X. B2 is on X's first-parent line.
     _fp_git("-C", _sw_up, "checkout", "-q", "-b", "other", _sw_b2)
-    _sw_o1 = _sw_commit("O1")
+    _sw_commit("O1")
     _fp_git("-C", _sw_up, "merge", "-q", "--no-ff", "-m", "X", "main")
     _fp_git("-C", _sw_up, "checkout", "-q", "main")
     _fp_git("-C", _sw_up, "merge", "-q", "--ff-only", "other")
@@ -9748,7 +9817,7 @@ try:
                     if "=== installer exit" in _uc_fh.read():
                         break
             except OSError:
-                pass
+                pass  # not written yet: poll again
             _time.sleep(0.1)
         return _uc_read(pd)
 
@@ -10408,7 +10477,7 @@ try:
         try:
             _bad6.append((_h6, _tsm6._ssh_argv(_HostileRemote6(_h6))))
         except _core6.UnsafeSshDestination:
-            pass
+            pass  # refused: the outcome wanted
         except Exception as _e6:            # refused, but not by the check this is about
             _bad6.append((_h6, repr(_e6)))
     check("terminal: a hostile remote host is refused — never handed to ssh", not _bad6,
@@ -10788,7 +10857,7 @@ try:
             return (_loglines6, "", 0)
         return _ab_run6(verb, args, **k)
     SO._run_verb = _ab_run6b
-    _res6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    _mon6._autoblock_reconcile(_FakeRemote6())
     _blocked6 = {a[0] for v, a in _ab_verbs6 if v == "ufw-deny-ip"}
     check("autoblock: every address over the threshold is blocked, not just the top 100",
           _blocked6 == set(_wave6), "blocked %d of %d" % (len(_blocked6 & set(_wave6)), len(_wave6)))
@@ -11205,7 +11274,7 @@ for _fd, _owner in ((_lk_w, None), (_lk2_w, None), (_lk_r, _lk_sess), (_lk2_r, _
         try:
             os.close(_fd)
         except OSError:
-            pass
+            pass  # already closed
 _tsmod._PUMP_JOIN = _lk_saved_join
 
 # ...and a pump that DOES retire ends the wait as soon as it returns, which is what the join gave:
@@ -11317,7 +11386,7 @@ try:
             _tsmod7.open_session("leak-%d" % _i7, _FailRemote7(), True, user_key=1,
                                  on_output=lambda s, d: None, on_exit=lambda s, r: None)
         except Exception:
-            pass
+            pass  # a failed start raises; the descriptors are what is measured
     _after7 = _open_fds7()
 finally:
     _tsmod7.subprocess.Popen = _saved_popen7
@@ -11484,7 +11553,7 @@ _sess7.close("done")
 try:
     os.close(_ds7)
 except OSError:
-    pass
+    pass  # already closed
 check("terminal: a character split across two reads survives intact",
       "\ufffd" not in _seen7 and _seen7.count("─") == 3,
       "the pump emitted %r — a box-drawing run, an accented name or an emoji in a MOTD arrives "
@@ -11661,7 +11730,7 @@ finally:
     try:
         _tsmod7.close_for_sid("ctty-sid", "test over")
     except Exception:
-        pass
+        pass  # cleanup only
 
 # ── the update card's count and its list must be the same set ─────────────────────────────────
 # Reported from a live panel: "Update available: v0.10.0-alpha (1 commit behind)" with no commits

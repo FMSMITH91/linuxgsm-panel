@@ -1539,6 +1539,7 @@ try:
                    "print('PROBE ctty=%%s sigint_ignored=%%s term=%%s' %% (ctty, "
                    "signal.getsignal(signal.SIGINT) is signal.SIG_IGN, "
                    "os.environ.get('TERM')), flush=True)\n" % _sys10.executable)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
     os.chmod(_probe10, 0o700)
     _lo10, _lx10, _ldone10 = [], [], threading.Event()
     _ls10 = _ts10.Session("local10", "local", lambda s, d: _lo10.append(d),
@@ -1586,6 +1587,7 @@ from panel.db.models import (AuditLog as _Audit10, GameServer as _GS10, HostSamp
                              db as _db10)
 
 _dbapp10 = _Flask10("unit_part13_db")
+# nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
 _dbapp10.config.update(SQLALCHEMY_DATABASE_URI="sqlite://", SQLALCHEMY_TRACK_MODIFICATIONS=False,
                        SECRET_KEY="unit-part13", TESTING=True)
 _db10.init_app(_dbapp10)
@@ -2161,7 +2163,7 @@ try:
         _down_once10 = _sweep10({"reachable": False}, dict(_UP10, ports=set()))
         check("monitor pass: one sweep with the port shut is not yet an outage",
               "server_down" not in _down_once10, repr(_down_once10))
-        _down10 = _sweep10({"reachable": False}, dict(_UP10, ports=set()))
+        _sweep10({"reachable": False}, dict(_UP10, ports=set()))
         check("monitor pass: a server that stops listening alerts 'offline' — unless muted",
               [a for a in _alerts10 if a[0] == "server_down"]
               == [("server_down", "Server offline", "gmod1 on beta went offline unexpectedly.")],
@@ -2169,7 +2171,7 @@ try:
         check("monitor pass: the status COLUMN follows what the sweep measured",
               _db10.session.get(_GS10, _ids10["g1"]).status == "offline"
               and _db10.session.get(_GS10, _ids10["g2"]).status == "installing", "")
-        _up10 = _sweep10({"reachable": False}, dict(_UP10))
+        _sweep10({"reachable": False}, dict(_UP10))
         check("monitor pass: it coming back alerts 'back online' (the muted one stays quiet)",
               [a[2] for a in _alerts10 if a[0] == "server_up"] == ["gmod1 on beta is back online."],
               repr(_alerts10))
@@ -2718,7 +2720,8 @@ try:
     # One that exists but others can write: a socket planted in it would get every command.
     _cm_loose10 = os.path.join(_cm_tmp10, "loose")
     os.mkdir(_cm_loose10)
-    os.chmod(_cm_loose10, 0o777)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- world-writable on purpose, in this test's temp dir
+    os.chmod(_cm_loose10, 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     _sm_core._SSH_CM_DIR = _cm_loose10
     _cap_cm10, _cap_cmoff10 = _cap10("panel.ssh")
     try:
@@ -3261,6 +3264,7 @@ try:
         _sm_core._pin_app = None
         _phk10 = _try10(_core_saved10["_persist_host_key"], _PinRefuses10(), "ssh-rsa X")
         _nodb_app10 = _Flask10("unit_part13_nodb")
+        # nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
         _nodb_app10.config.update(
             SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_nodb_dir10, "gone", "x.db"),
             SQLALCHEMY_TRACK_MODIFICATIONS=False, SECRET_KEY="unit-part13", TESTING=True)
@@ -3383,6 +3387,7 @@ try:
     _core_restore10("_persist_host_key", "get_connection")
     _pin_dir10 = _tmp10.mkdtemp(prefix="unit-pin-")
     _pinapp10 = _Flask10("unit_part13_pin")
+    # nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
     _pinapp10.config.update(
         SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_pin_dir10, "pin.db"),
         SQLALCHEMY_TRACK_MODIFICATIONS=False, SECRET_KEY="unit-part13", TESTING=True)
@@ -3479,6 +3484,7 @@ try:
     _pl_dir10 = _tmp10.mkdtemp(prefix="unit-pinlock-")
     _pl_path10 = os.path.join(_pl_dir10, "pinlock.db")
     _plapp10 = _Flask10("unit_part13_pinlock")
+    # nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
     _plapp10.config.update(
         SQLALCHEMY_DATABASE_URI="sqlite:///" + _pl_path10, SQLALCHEMY_TRACK_MODIFICATIONS=False,
         SECRET_KEY="unit-part13", TESTING=True,
@@ -3919,7 +3925,7 @@ try:
     _wl_net10 = _app10mod._security_whitelist_add("198.51.100.0/24")
     check("app whitelist: an address is stored canonical; a zone id (a line break in a jail file) "
           "is refused", _wl_ok10 == "203.0.113.7" and _wl_zone10 is None
-          and _wl_zone_only10 is None
+          and _wl_zone_only10 is None and _wl_net10 == "198.51.100.0/24"
           and _acfg10["security_whitelist"] == ["198.51.100.0/24", "203.0.113.7"],
           repr(_acfg10.get("security_whitelist")))
     _wl_rm10 = _app10mod._security_whitelist_remove("203.0.113.7")
@@ -4024,8 +4030,7 @@ try:
         _css2_10 = _mk_gs10(_ea10, "css2", game_type="css", port=27016)
         _css3_10 = _mk_gs10(_we10, "css3", game_type="css", port=27015)
         _gm10 = _mk_gs10(_we10, "gmodx", game_type="rust", port=28015)
-        _css_off10 = _mk_gs10(_we10, "css4", game_type="css", port=27030, installed=False,
-                              status="failed")
+        _mk_gs10(_we10, "css4", game_type="css", port=27030, installed=False, status="failed")
         _E10 = {"ea": _ea10.id, "we": _we10.id, "lo": _lo_row10.id, "css1": _css1_10.id,
                 "css2": _css2_10.id, "css3": _css3_10.id, "gm": _gm10.id}
 
@@ -4198,10 +4203,10 @@ try:
         _db10.session.add_all([_User10(username="boss", password_hash="x", is_superadmin=True),
                                _User10(username="pleb", password_hash="x"),
                                _User10(username="boss2", password_hash="x", is_superadmin=True)])
-        for _i10 in range(5):
+        for _ in range(5):
             _db10.session.add(_Audit10(username="boss", action="login_failed"))
             _db10.session.add(_Audit10(username="pleb", action="login_failed"))
-        for _i10 in range(4):
+        for _ in range(4):
             _db10.session.add(_Audit10(username="boss2", action="login_failed"))
         _db10.session.commit()
         _bf10 = []
@@ -4713,7 +4718,7 @@ def _ca13_add_probes(app):
     """Routes for the response hooks and error handler; added before the app's first request."""
     app.add_url_rule("/_p13/big", "p13_big", _ca13_probe_big)
     app.add_url_rule("/_p13/small", "p13_small", lambda: {"ok": True})
-    app.add_url_rule("/_p13/ip", "p13_ip", lambda: _req13.remote_addr or "")
+    app.add_url_rule("/_p13/ip", "p13_ip", lambda: {"ip": _req13.remote_addr or ""})   # JSON, not HTML
     app.add_url_rule("/_p13/boom", "p13_boom", _raiser10(RuntimeError("page view bug")))
     app.add_url_rule("/api/_p13/boom", "p13_api_boom", _raiser10(RuntimeError("api view bug")))
     app.add_url_rule("/api/_p13/unauth", "p13_unauth", lambda: _abort13(401))
@@ -4818,8 +4823,8 @@ def _ca13_check_proxy(app, client):
     """trust_proxy puts ProxyFix in front, inside the ban gate, and the client IP is the hop's."""
     names = [type(w).__name__ for w in _ca13_wsgi_chain(app)]
     fix = [w for w in _ca13_wsgi_chain(app) if type(w).__name__ == "ProxyFix"]
-    got = client.get("/_p13/ip", environ_base={"REMOTE_ADDR": "127.0.0.1"},
-                     headers={"X-Forwarded-For": "198.51.100.7"}).get_data(as_text=True)
+    got = (client.get("/_p13/ip", environ_base={"REMOTE_ADDR": "127.0.0.1"},
+                      headers={"X-Forwarded-For": "198.51.100.7"}).get_json(silent=True) or {}).get("ip")
     check("create_app: trust_proxy wraps the app in ProxyFix (one hop), inside the ban gate",
           all((app.config.get("_TRUST_PROXY") is True, names[:2] == ["ProxiedBanGate", "ProxyFix"],
                bool(fix) and fix[0].x_for == 1, got == "198.51.100.7")), repr((names, got)))
@@ -4858,6 +4863,7 @@ def _ca13_check_login_behind_proxy(app, client):
     fails = _app10mod._LOGIN_FAILS
     saved_csrf = app.config.get("WTF_CSRF_ENABLED", True)
     saved_uid = _ca13_auth._loopback_peer_uid
+    # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
     app.config["WTF_CSRF_ENABLED"] = False
     try:
         fails.clear()

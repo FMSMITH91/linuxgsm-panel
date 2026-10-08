@@ -289,11 +289,11 @@ def _health_checks35(final, shown, res):
 
 def _p35_health_domains():
     ctx, _st = _ctx_with(("zephyrhost7731", "host", 1))
-    health = ["TLS handshake with zephyrhost7731.smithfam7731.net:443 failed: x509: certificate "
-              "signed by unknown authority",
+    health = [("TLS handshake with zephyrhost7731.smithfam7731.net:443 failed: x509: certificate "
+               "signed by unknown authority"),
               "dial tcp: lookup derp1.zephyrbox7731.quokkanet7731.org: no such host",
-              "Linux DNS config not ideal. /etc/resolv.conf overwritten. See "
-              "https://tailscale.com/s/dns-fight"]
+              ("Linux DNS config not ideal. /etc/resolv.conf overwritten. See "
+               "https://tailscale.com/s/dns-fight")]
     v = _tinfo35({"BackendState": "Running", "Health": health,
                   "Self": {"HostName": "zephyrbox7731", "InNetworkMap": True}}, {})
     res = Result()
@@ -317,10 +317,10 @@ def _p35_health_domains():
 def _p35_health_footer():
     """The VPS proof of #393: the footer said 'Redacted: nothing' above both health markers."""
     ctx, _st = _ctx_with()
-    health = ["Linux DNS config not ideal. /etc/resolv.conf overwritten. See "
-              "https://tailscale.com/s/dns-fight",
-              "TLS handshake with panel7731.corp7731.example:443 failed: likely intercepted "
-              "connection; certificate is self-signed by Corp7731 Inspection CA",
+    health = [("Linux DNS config not ideal. /etc/resolv.conf overwritten. See "
+               "https://tailscale.com/s/dns-fight"),
+              ("TLS handshake with panel7731.corp7731.example:443 failed: likely intercepted "
+               "connection; certificate is self-signed by Corp7731 Inspection CA"),
               "dial tcp: lookup derp1.relay7731.example: no such host"]
     v = _tinfo35({"BackendState": "Running", "Health": health,
                   "Self": {"HostName": "zephyrbox7731", "InNetworkMap": True}}, {})
@@ -647,7 +647,7 @@ def _drive35(owner, fn):
         try:
             fn()
         except _Stop35:
-            pass
+            pass  # the stub ends the loop by raising this
     return dict(_rs35._GROUPS.get("loop_start") or {})
 
 

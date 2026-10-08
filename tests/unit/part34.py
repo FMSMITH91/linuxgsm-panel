@@ -133,6 +133,7 @@ def _bash34(sh, env_path=None, timeout=60):
 
 # ── this part's own database ─────────────────────────────────────────────────────────────────────
 _app34 = _Flask34("unit_part34_db")
+# nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
 _app34.config.update(SECRET_KEY="unit-part34",  # nosec B106 - this part's throwaway app
                      SQLALCHEMY_DATABASE_URI="sqlite://", SQLALCHEMY_TRACK_MODIFICATIONS=False,
                      TESTING=True)
@@ -1010,7 +1011,7 @@ def _ban_loop34(readings, whitelist=None, ufw_raises=False, record_raises=0):
             return ["NO MODULE-LEVEL LOOP"]
         loop(_p9)
     except _LoopStop34:
-        pass
+        pass  # the stub ends the loop by raising this
     finally:
         for name in ("_f2b_record_events", "load_config", "time"):
             _restore_one34(_app34mod, name)
@@ -1277,23 +1278,23 @@ def _section_stitch34(rig):
 _PFX34 = "Oct 03 05:%02d:01 livebox7731 sudo[%d]: "
 _SUDO_LINES34 = [
     # sudo.ws 1.9.15, a game account's player poll (the batch) and the dashboard's map lookup
-    "  ubuntu : PWD=/home/ubuntu/linuxgsm-panel ; USER=codsrv7731 ; COMMAND=/usr/bin/bash -c "
-    "'q() { timeout 20 gamedig --type \"$1\" \"$2\" 2>/dev/null | jq -c \"$3\" 2>/dev/null; }; q cod "
-    "192.0.2.5:28960 '{k:3, c:(.players|length), m:.maxplayers}' &'",
-    "  ubuntu : PWD=/home/ubuntu ; USER=gmodsrv7731 ; COMMAND=/usr/bin/bash -c 'gamedig --type "
-    "garrysmod 192.0.2.5:27015 2>/dev/null | jq -r '.map // \"\"' 2>/dev/null'",
+    ("  ubuntu : PWD=/home/ubuntu/linuxgsm-panel ; USER=codsrv7731 ; COMMAND=/usr/bin/bash -c "
+     "'q() { timeout 20 gamedig --type \"$1\" \"$2\" 2>/dev/null | jq -c \"$3\" 2>/dev/null; }; q cod "
+     "192.0.2.5:28960 '{k:3, c:(.players|length), m:.maxplayers}' &'"),
+    ("  ubuntu : PWD=/home/ubuntu ; USER=gmodsrv7731 ; COMMAND=/usr/bin/bash -c 'gamedig --type "
+     "garrysmod 192.0.2.5:27015 2>/dev/null | jq -r '.map // \"\"' 2>/dev/null'"),
     # sudo-rs spacing, the console's one round trip
-    "ubuntu :  PWD=/home/ubuntu ; USER=mcsrv7731 ; COMMAND=/usr/bin/bash -c "
-    "L=/home/mcsrv7731/log/console/mcserver-console.log; S=$(stat -c \\'%i %s\\' \"$L\" "
-    "2>/dev/null) ... tail -c +$((P + 1)) \"$L\" ",
-    "  ubuntu : PWD=/home/ubuntu ; USER=codsrv7731 ; COMMAND=/usr/bin/bash -c 'cat "
-    "/home/codsrv7731/lgsm/config-lgsm/codserver/_default.cfg 2>/dev/null; echo'",
+    ("ubuntu :  PWD=/home/ubuntu ; USER=mcsrv7731 ; COMMAND=/usr/bin/bash -c "
+     "L=/home/mcsrv7731/log/console/mcserver-console.log; S=$(stat -c \\'%i %s\\' \"$L\" "
+     "2>/dev/null) ... tail -c +$((P + 1)) \"$L\" "),
+    ("  ubuntu : PWD=/home/ubuntu ; USER=codsrv7731 ; COMMAND=/usr/bin/bash -c 'cat "
+     "/home/codsrv7731/lgsm/config-lgsm/codserver/_default.cfg 2>/dev/null; echo'"),
     "  ubuntu : PWD=/home/ubuntu ; USER=gmodsrv7731 ; COMMAND=/usr/bin/rm -f /home/gmodsrv7731/x7731",
     # an operator's own script in the panel terminal (TTY=), and the panel's sudo -n probe
     "  ubuntu : TTY=pts/3 ; PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/local/bin/rotate-acme7731.sh --now",
     "  ubuntu : PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/bin/true",
-    "  ubuntu : PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/local/lib/linuxgsm-panel/panel-helper "
-    "renice-users -1 codsrv7731",
+    ("  ubuntu : PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/local/lib/linuxgsm-panel/panel-helper "
+     "renice-users -1 codsrv7731"),
     "  ubuntu : (command continued) {k:4, c:(.players|length)} acct7731",
     "pam_unix(sudo:session): session opened for user codsrv7731(uid=1502) by ubuntu(uid=1000)",
     "  ubuntu : a password is required ; PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/bin/true",
@@ -1380,12 +1381,12 @@ def _section_report_console_labels34():
 # The installer's own steps as the panel's service account, as sudo-rs logged them on the test VPS
 # (the 14:33 deploy, in the proof of #393): counted 'as a game account [env ×7, python3 ×2]'.
 _SERVICE34 = [
-    "root :  PWD=/root ; USER=lgsmpanel ; COMMAND=/usr/bin/env -C / tar -C /home/lgsmpanel/"
-    "linuxgsm-panel --ignore-failed-read --exclude=./venv -czf - . ",
-    "root :  PWD=/root ; USER=lgsmpanel ; COMMAND=/usr/bin/env -C / mkdir -p -- /home/lgsmpanel/"
-    "linuxgsm-panel/data/.backups/20261003-143328 ",
-    "root :  PWD=/root ; USER=lgsmpanel ; COMMAND=/usr/bin/python3 -I - /home/lgsmpanel/"
-    "linuxgsm-panel/data/config.json ",
+    ("root :  PWD=/root ; USER=lgsmpanel ; COMMAND=/usr/bin/env -C / tar -C /home/lgsmpanel/"
+     "linuxgsm-panel --ignore-failed-read --exclude=./venv -czf - . "),
+    ("root :  PWD=/root ; USER=lgsmpanel ; COMMAND=/usr/bin/env -C / mkdir -p -- /home/lgsmpanel/"
+     "linuxgsm-panel/data/.backups/20261003-143328 "),
+    ("root :  PWD=/root ; USER=lgsmpanel ; COMMAND=/usr/bin/python3 -I - /home/lgsmpanel/"
+     "linuxgsm-panel/data/config.json "),
     "  ubuntu : PWD=/home/ubuntu ; USER=mcsrv7731 ; COMMAND=/usr/bin/rm -f /home/mcsrv7731/x7731",
 ]
 

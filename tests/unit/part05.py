@@ -265,7 +265,7 @@ def _run_watch(scripted, cfg=None):
         try:
             _TG._telegram_command_watch(None)
         except _StopWatch:
-            pass
+            pass  # the stub ends the watch loop by raising this
     finally:
         (_TG.notifications._cfg, _TG.notifications.telegram_get_updates,
          _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
@@ -459,6 +459,7 @@ check("ssh_manager: no test stubs onto the PACKAGE (it would shadow __getattr__)
 # stub is in place, and _is_sudo is a pure function.
 _nsr_src = open(os.path.join(_root, "tools", "nosudo_runner.py"), encoding="utf-8").read()
 _nsr_ns = {"__name__": "nsr_probe", "__file__": os.path.join(_root, "tools", "nosudo_runner.py")}
+# nosemgrep: python.lang.security.audit.exec-detected.exec-detected -- this repo's own tools/nosudo_runner.py, minus its __main__ block
 exec(compile(_nsr_src.split("if __name__ ==")[0], "nosudo_runner.py", "exec"), _nsr_ns)   # nosec
 _nsr_ns["_install"]()
 from panel.ops.ssh_manager import _core as _nsr_core, cron as _nsr_cron, files as _nsr_files
@@ -1407,7 +1408,8 @@ try:
                       'for a in "$@"; do case "$a" in file:*) f="${a#file:}";; esac\n'
                       '  [ "$prev" = --attach-config ] && f="$a"; prev="$a"; done\n'
                       'echo "$f" > "$OUT/path"; stat -c %a "$f" > "$OUT/mode"; cat "$f" > "$OUT/got"\n')
-        os.chmod(os.path.join(_sec_bin, _tool), 0o755)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+        os.chmod(os.path.join(_sec_bin, _tool), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _sm_core_isl = _sm_core.is_local_server
     _sm_core.is_local_server = lambda s: True
     _sec_ran = {}
@@ -1476,7 +1478,7 @@ check("privileged: the remote sweep names every slot in that list",
 # ...and the two that were broken really do send something now.
 check("privileged: steam-dumps-sweep has a remote rendering that names the account",
       "gmodserver" in _priv.remote_command("steam-dumps-sweep", ["gmodserver"])
-      and "/tmp/dumps" in _priv.remote_command("steam-dumps-sweep", ["gmodserver"]))
+      and "/tmp/dumps" in _priv.remote_command("steam-dumps-sweep", ["gmodserver"]))  # nosec B108 - the helper's slot names; I/O stubbed
 # Fail CLOSED remotely, exactly as the helper does locally: `getent` answers 2 for "no such key"
 # and other codes for "could not look", so only 2 may delete a slot.
 check("privileged: ...and only a definite 'no such uid' frees a slot remotely",
@@ -1563,9 +1565,9 @@ try:
     # dumps04 is a SYMLINK owned by the same gone-account uid as dumps02, so ownership gives it no
     # protection at all: only the directory test can save it. (Owned by a live account it passed
     # whether or not the guard was there — a check that proves nothing.)
-    _sd_owner = {"/tmp/dumps": 500, "/tmp/dumps01": 501, "/tmp/dumps02": 502,
-                 "/tmp/dumps03": 503, "/tmp/dumps04": 502}
-    _sd_link = "/tmp/dumps04"
+    _sd_owner = {"/tmp/dumps": 500, "/tmp/dumps01": 501, "/tmp/dumps02": 502,  # nosec B108 - the helper's slot names; I/O stubbed
+                 "/tmp/dumps03": 503, "/tmp/dumps04": 502}  # nosec B108 - the helper's slot names; I/O stubbed
+    _sd_link = "/tmp/dumps04"  # nosec B108 - the helper's slot names; I/O stubbed
 
     class _SdStat(object):
         def __init__(self, uid, isdir): self.st_uid, self.st_mode = uid, (0o040755 if isdir else 0o120777)
@@ -1589,14 +1591,14 @@ try:
 
     _helper.do_steam_dumps_sweep(["gmodserver"], None)
     check("steam dumps: the swept account's own slot is freed",
-          "/tmp/dumps" in _sd_removed, _sd_removed)
+          "/tmp/dumps" in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
     check("steam dumps: a slot whose owner no longer exists is freed",
-          "/tmp/dumps02" in _sd_removed, _sd_removed)
+          "/tmp/dumps02" in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
     check("steam dumps: a LIVE account's slot is left alone",
-          "/tmp/dumps01" not in _sd_removed, _sd_removed)
+          "/tmp/dumps01" not in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
     # Fail closed: an unreadable passwd database must not make every slot look orphaned.
     check("steam dumps: a slot whose owner cannot be looked up is kept",
-          "/tmp/dumps03" not in _sd_removed, _sd_removed)
+          "/tmp/dumps03" not in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
     # A symlink wearing one of the ten names is never followed out of /tmp.
     check("steam dumps: a symlink in a slot's place is not removed",
           _sd_link not in _sd_removed, _sd_removed)
@@ -1608,13 +1610,13 @@ try:
     _helper.pwd.getpwnam = _sd_missing
     _helper.do_steam_dumps_sweep(["gmodserver"], None)
     check("steam dumps: an already-deleted account's slot is still freed, as an orphan",
-          "/tmp/dumps02" in _sd_removed and "/tmp/dumps01" not in _sd_removed, _sd_removed)
+          "/tmp/dumps02" in _sd_removed and "/tmp/dumps01" not in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
 finally:
     (_helper.os.lstat, _helper.pwd.getpwuid, _helper.pwd.getpwnam, _helper.shutil.rmtree) = _sd_orig
 
 # The paths must be a constant in the helper, not anything a caller can influence.
 check("steam dumps: the ten slot paths are fixed, and only those ten",
-      _helper.STEAM_DUMP_SLOTS == ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i for i in range(1, 10)),
+      _helper.STEAM_DUMP_SLOTS == ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i for i in range(1, 10)),  # nosec B108 - the helper's slot names; I/O stubbed
       _helper.STEAM_DUMP_SLOTS)
 
 
@@ -1891,29 +1893,39 @@ _uid0_verbs = [("game-file-read", ["root", ".ssh/id_rsa"]), ("game-dir-tar", ["r
                ("content-grant-read", ["root", "root", "somegmod", "cstrike"]),
                ("content-cron-write", ["root"]), ("gmod-mount-read", ["root"]),
                ("tailscale-set-operator", ["root"])]
-_uid0_through = []
+# A refusal counts only when it is refused for the reason under test. These loops caught Exception,
+# so an unknown verb (a rename), a wrong argument count or a crash read as "refused", and the check
+# passed without testing the name at all.
+_uid0_through, _uid0_why = [], []
 for _v, _a in _uid0_verbs:
     try:
         _helper.validate(_v, _a)
         _uid0_through.append(_v)
-    except Exception:
-        pass
+    except ValueError as _e:
+        if "rejected (refusing a uid-0 account)" not in str(_e):
+            _uid0_why.append("%s: %s" % (_v, _e))
 check("helper: no verb accepts a uid-0 account", not _uid0_through,
       "still accepted: %s" % _uid0_through)
+check("helper: ...each refused as a uid-0 account, not for a wrong verb or argument count",
+      not _uid0_why, "; ".join(_uid0_why[:3]))
+
 # ...and the PANEL's copy of the table must refuse the same names. It did not: twenty slots still
 # held _username, so `remote_command("user-delete", ["root"])` rendered `userdel -r root` and sent
 # it. Locally the helper is the second check; a REMOTE host has no helper, so this copy is the
 # only one there is. The argv-comparison gate above cannot see this — every content verb builds []
 # on both sides, so identical argv says nothing about which names were let through.
-_uid0_panel = []
+_uid0_panel, _uid0_pwhy = [], []
 for _v, _a in _uid0_verbs:
     try:
         _priv.check_args(_v, _a)
         _uid0_panel.append(_v)
-    except Exception:
-        pass
+    except _priv.VerbError as _e:
+        if str(_e) != "refusing a uid-0 account":
+            _uid0_pwhy.append("%s: %s" % (_v, _e))
 check("privileged: the panel's table refuses a uid-0 account everywhere the helper does",
       not _uid0_panel, "still accepted: %s" % _uid0_panel)
+check("privileged: ...each refused as a uid-0 account, not for a wrong verb or argument count",
+      not _uid0_pwhy, "; ".join(_uid0_pwhy[:3]))
 # The general form, so a verb added later cannot drift the same way: for EVERY verb and every
 # argument slot, if the helper refuses "root" there, the panel must too.
 _slot_drift = []
@@ -1938,15 +1950,18 @@ check("privileged: no argument slot is stricter in the helper than in the panel"
 # helper checks it against the content user's real primary group; the remote form cannot, so the
 # groups that hand out privilege are refused by name.
 _grp_ok = _priv.remote_command("content-grant-read", ["cu", "cu", "gm", "cstrike"])
-_grp_bad = []
+_grp_bad, _grp_why = [], []
 for _g in ("root", "sudo", "wheel", "docker", "shadow"):
     try:
         _priv.remote_command("content-grant-read", ["cu", _g, "gm", "cstrike"])
         _grp_bad.append(_g)
-    except Exception:
-        pass
+    except _priv.VerbError as _e:
+        if str(_e) != "refusing to grant membership of that group":
+            _grp_why.append("%s: %s" % (_g, _e))
 check("privileged: the remote content grant refuses a privileged group", not _grp_bad,
       "rendered usermod -aG for: %s" % _grp_bad)
+check("privileged: ...refused for the group, not for a wrong verb or argument count",
+      not _grp_why, "; ".join(_grp_why[:3]))
 check("privileged: ...and still renders the real one", "usermod -aG cu gm" in _grp_ok, _grp_ok[:60])
 check("helper: _game_home_path refuses uid 0 even if a name got past the validator",
       _helper._game_home_path("root", ".ssh/id_rsa") == (None, None),
@@ -2096,17 +2111,17 @@ try:
     else:
         skip("db repair as root: a root-owned directory is worked in as root (no drop)",
              "/ is not a root-owned, non-writable directory here")
-    _tmp_st = os.stat("/tmp")
+    _tmp_st = os.stat("/tmp")  # nosec B108 - reads /tmp's own mode to pick the case
     if _tmp_st.st_uid == 0 and _tmp_st.st_mode & 0o002:
         del _dbr_repaired[:]
-        _dbr_rc = _dbr.main(["db_maintenance.py", "repair", "/tmp/panel-db-that-is-not-there.db"])
+        _dbr_rc = _dbr.main(["db_maintenance.py", "repair", "/tmp/panel-db-that-is-not-there.db"])  # nosec B108 - absent path; repair stubbed
         os.chdir(_dbr_cwd)
         check("db repair as root: a root-owned directory others can write is refused",
               _dbr_rc == 1 and not _dbr_repaired and not _dbr_became,
               "rc=%r repaired=%r became=%r" % (_dbr_rc, _dbr_repaired, _dbr_became))
     else:
         skip("db repair as root: a root-owned directory others can write is refused",
-             "/tmp is not a root-owned world-writable directory here")
+             "/tmp is not a root-owned world-writable directory here")  # nosec B108 - a skip message
 finally:
     os.chdir(_dbr_cwd)
     _dbr._euid, _dbr._become, _dbr.repair, _dbr._reclaim_db_files = _dbr_o
@@ -2176,7 +2191,7 @@ try:
     _dep_cmd = _dep_seen.get("cmd", "")
     check("deps: the pipeline still escalates (so this test is testing the root path)",
           _dep_seen.get("kw", {}).get("sudo") is True, str(_dep_seen.get("kw")))
-    for _payload in ("$(id", "`whoami`", "a;b", "/tmp/pwned"):
+    for _payload in ("$(id", "`whoami`", "a;b", "/tmp/pwned"):  # nosec B108 - an injection payload the validator must refuse
         check("deps: %r never reaches the root pipeline" % _payload, _payload not in _dep_cmd)
     check("deps: ...and the legitimate packages still do",
           "curl" in _dep_cmd and "libstdc++5:i386" in _dep_cmd, _dep_cmd[:120])
@@ -2552,6 +2567,7 @@ try:
     with open(_cs_o2_file, "w", encoding="utf-8") as _fh:
         _fh.write("rcon_password secret\n")
     os.chmod(_cs_o2_file, 0o600)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
     os.chmod(os.path.join(_cs_o2, "serverfiles", "cstrike"), 0o700)
     os.rename(_cs_sf, _cs_sf + ".real2")
     os.symlink(os.path.join(_cs_o2, "serverfiles"), _cs_sf)
@@ -2738,7 +2754,8 @@ check("helper restore: ...at mode 0600",
 #     caller — the fchown is observed through a stub to prove it is asked for, with the dir's ids.)
 with open(os.path.join(_rs_stage, "cred_key"), "w", encoding="utf-8") as _fh:
     _fh.write("KEY")
-os.chmod(os.path.join(_rs_stage, "cred_key"), 0o4755)
+# nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a setuid bit the restore must strip; this test's temp dir
+os.chmod(os.path.join(_rs_stage, "cred_key"), 0o4755)  # nosec B103 - a setuid bit the restore must strip; this test's temp dir
 _rs_chown = []
 _rs_o_fchown = _helper.os.fchown
 try:
@@ -3203,13 +3220,15 @@ def _gds_new(npm_global=True):
     with open(os.path.join(gd, "install-gamedig.sh"), "w", encoding="utf-8") as fh:
         fh.write(_GDS_SCRIPT.replace(_GDS_LINKS, "LINK_DIRS=(%s %s)" % (
             _gd_q(os.path.join(root, "usr-local-bin")), _gd_q(os.path.join(root, "usr-bin")))))
-    os.chmod(os.path.join(gd, "install-gamedig.sh"), 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+    os.chmod(os.path.join(gd, "install-gamedig.sh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     with open(os.path.join(root, "stub", "npm"), "w", encoding="utf-8") as fh:
         fh.write(_GDS_NPM)
     with open(os.path.join(root, "stub", "id"), "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\necho \"${GDS_UID:-0}\"\n")
     for _n in ("npm", "id"):
-        os.chmod(os.path.join(root, "stub", _n), 0o755)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+        os.chmod(os.path.join(root, "stub", _n), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     if npm_global:
         os.makedirs(os.path.join(root, "npm-global", "gamedig"))
         os.symlink("../lib/node_modules/gamedig/bin/gamedig.js", os.path.join(root, "usr-bin", "gamedig"))
@@ -3248,7 +3267,7 @@ def _gds_rm(p):
     try:
         os.unlink(p)
     except FileNotFoundError:
-        pass
+        pass  # already gone
 
 
 def _gds_read(p):
@@ -3905,7 +3924,7 @@ for _v, _bads in _BAD.items():
             _priv.check_args(_v, _args[:_nargs] if _nargs else [])
             _leaked.append("%s <- %r" % (_v, _b))
         except _priv.VerbError:
-            pass
+            pass  # refused: the outcome wanted
 check("privileged: injection and out-of-range arguments are refused, not quoted",
       not _leaked, "; ".join(_leaked[:3]))
 
@@ -4622,6 +4641,7 @@ try:
                                 _sp.CompletedProcess(argv, 0, b"", b""))[1])
     _hgr.resolve = lambda name: "/usr/sbin/" + name
     os.makedirs(_gr_box + "/" + _me, mode=0o700)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
     os.chmod(_gr_box + "/" + _me, 0o700)
     _gr_rc = _hgr.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon", _me],
                                         None)
@@ -5167,7 +5187,8 @@ try:
             # line, pause, line, then prove it ran to the end, and exit 3.
             _tl_f.write("#!/bin/bash\necho first-line\nsleep 1.5\necho last-line\n"
                         "touch %s/finished\nexit 3\n" % _tl_home)
-        os.chmod(os.path.join(_tl_home, "gmodserver"), 0o755)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+        os.chmod(os.path.join(_tl_home, "gmodserver"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
         with open(os.path.join(_tl_home, ".panel-update.log"), "w") as _tl_f:
             _tl_f.write("STALE output of the previous run\n")
         _tl_script = _tl_inner.replace("/home/gmodserver", _tl_home)
@@ -6657,7 +6678,7 @@ try:
           _fw2._config_unreadable() is False)
     # ...and the CALLER has to consult it. Covering _config_unreadable is not covering the guard:
     # a mutation that deleted the `if _config_unreadable(): return True` line survived a green run.
-    _o_local6 = _core_mod_is_local = _sm_core.is_local_server
+    _o_local6 = _sm_core.is_local_server
     try:
         _sm_core.is_local_server = lambda s: True
         _bad = _pl2.Path(_cfg_dir, "broken.json"); _bad.write_text("{ nope")

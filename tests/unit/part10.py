@@ -1220,6 +1220,7 @@ _pb7_app.secret_key = "unit-suite"  # nosec B105 - a stand-in app's key
 _pb7_app.config["LOGIN_DISABLED"] = True     # login_required is not what is under test
 _pb7_app.logger.disabled = True
 _pb7_c = None
+_pb7_gbs_snap = {}
 try:
     _pb7.register(_pb7_app)
     _pb7_c = _pb7_app.test_client()
@@ -1545,7 +1546,7 @@ finally:
         setattr(_pb7, _k, _pb7_saved[_k])
     _p7_auth.current_user = _pb7_auth_user
     _pb7._game_backup_status.clear()
-    _pb7._game_backup_status.update(globals().get("_pb7_gbs_snap", {}))
+    _pb7._game_backup_status.update(_pb7_gbs_snap)
 
 
 # ══ panel/ops/system_ops.py ══════════════════════════════════════════════════════════════════════
@@ -2928,6 +2929,7 @@ from panel.routes import server_files as _p10_sf  # noqa: E402
 from panel.security import auth as _p10_auth  # noqa: E402
 
 _p10a = _P10Flask("p10_auth")
+# nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
 _p10a.config.update(SECRET_KEY="p10-auth", SQLALCHEMY_DATABASE_URI="sqlite://",
                     SQLALCHEMY_TRACK_MODIFICATIONS=False, TESTING=True,
                     SESSION_PROTECTION="strong")

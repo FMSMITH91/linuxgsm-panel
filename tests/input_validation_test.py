@@ -85,6 +85,7 @@ from panel.db.models import db, User, RemoteServer, GameServer, SetupState
 from panel.security import auth
 
 app = create_app()
+# nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
 app.config["WTF_CSRF_ENABLED"] = False
 app.config["SESSION_PROTECTION"] = None
 app.config["SESSION_COOKIE_SECURE"] = False
@@ -123,7 +124,7 @@ def cleanup():
         try:
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
         except OSError:
-            pass
+            pass  # cleanup only: a config it cannot restore must not hide the result
 
 
 # The values a port field must never accept. Not a random fuzz list — each one is a real shape:
@@ -393,7 +394,7 @@ def _check_remote_ssh_port():
                data={"name": "iv-host", "host": "192.0.2.10", "ssh_user": "root",
                      "ssh_port": "2222", "auth_method": "key"}, follow_redirects=False)
     check("/remotes/edit accepts a valid ssh_port (positive control)", stored_remote_port() == 2222,
-          "stored port is %s" % stored_remote_port())
+          "stored port is %s (HTTP %d)" % (stored_remote_port(), r.status_code))
 
 
 def _check_remote_edit_auth_method():

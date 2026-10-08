@@ -207,7 +207,7 @@ def _pids39(d, names=_NAMES39):
             with open(os.path.join(d, n + ".pid")) as fh:
                 out[n] = int(fh.read())
         except (OSError, ValueError):
-            pass
+            pass  # no pid file yet, or a partial one
     return out
 
 
@@ -241,7 +241,7 @@ def _sweep39(d):
         try:
             os.kill(pid, signal.SIGKILL)
         except OSError:
-            pass
+            pass  # already exited
 
 
 def _start39(d, verb_args):
@@ -695,7 +695,7 @@ def _helper_tree39(name, act, standin_args=(), deadline=None,
         try:
             p.wait(timeout=10)
         except _sp39.TimeoutExpired:
-            pass
+            pass  # still running: what it left behind is checked next
         return left, d, p
     finally:
         _sweep39(d)

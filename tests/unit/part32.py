@@ -863,7 +863,8 @@ def _p32_uninstall():
           "tailscale_setup_done or not", (_table(), r.returncode) == ({}, 0), repr(r.stdout))
     r = _uninst({"8080": {"/": _P}}, http=["8080"])
     check("uninstall: an HTTP listener is named with --http=",
-          _offs() == [["serve", "--http=8080", "--set-path=/", "off"]], repr(_calls()))
+          _offs() == [["serve", "--http=8080", "--set-path=/", "off"]] and r.returncode == 0,
+          repr((r.returncode, _calls())))
 
 
 def _p32_uninstall_refusals():

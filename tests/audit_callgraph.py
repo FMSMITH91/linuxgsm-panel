@@ -317,13 +317,13 @@ class CallGraph:
     def _fn_keys(self, binding, call):
         """The functions a call, or a function value passed on, reaches (a class runs __init__)."""
         if binding is None:
-            return ()
+            return []
         if binding[0] == "fn":
-            return (binding[1],)
+            return [binding[1]]
         if binding[0] == "cls" and call:
             init = self._method(binding[1], "__init__", 0)
-            return (init[1],) if init and init[0] == "fn" else ()
-        return ()
+            return [init[1]] if init and init[0] == "fn" else []
+        return []
 
     def _log_key(self):
         found = self._member(("mod", LOG_MODULE), LOG_NAME, 0)

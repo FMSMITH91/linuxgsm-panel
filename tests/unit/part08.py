@@ -394,7 +394,7 @@ def _gh_check_as_user_argv():
             _sm_cron._as_user_argv(name, "cat", "/x")
             argv_bad.append(repr(name))
         except _sm_core.UnsafeGameAccount:
-            pass
+            pass  # refused: the outcome wanted
     check("GHSA-hh39 cron._as_user_argv: an argv has no shell, but sudo still resolves the name — "
           "every unsafe one is refused", not argv_bad, ", ".join(argv_bad))
     check("GHSA-hh39 cron._as_user_argv: ...and a plain one is the same argv as before",
@@ -450,7 +450,7 @@ def _gh_check_f3_builder():
             line = _sm_core.daily_restart_check_cmd("gm2", "gmodserver", "garrysmod", "1.2.3.4", port)
             bad3.append("%r built %r" % (port, line[-60:]))
         except ValueError:
-            pass
+            pass  # refused: the outcome wanted
     check("GHSA-hh39 F3 daily_restart_check_cmd: the line's own builder refuses what int() refuses "
           "(and a fractional or boolean port int() would quietly change)", not bad3,
           "; ".join(bad3))

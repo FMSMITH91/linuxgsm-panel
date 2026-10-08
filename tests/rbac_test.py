@@ -55,6 +55,7 @@ def _managed_files():
 _files_before = _managed_files()
 
 app = create_app()
+# nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
 app.config["SESSION_PROTECTION"] = None  # tests inject the session directly (no IP/UA fingerprint)
 app.config["SESSION_COOKIE_SECURE"] = False  # test client talks http://; Secure cookies wouldn't round-trip
@@ -2776,7 +2777,9 @@ def _check_audit_backfill_on_upgrade():
         _hA.name, _sY.name = tag + "_hA", tag + "_prod"     # hA unique again; tag_prod ambiguous
         db.session.commit()
         for _c in ("game_server_id", "remote_id"):
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- names from a literal tuple (an old schema)
             db.session.execute(_t("DROP INDEX IF EXISTS ix_audit_log_%s" % _c))
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- names from a literal tuple (an old schema)
             db.session.execute(_t("ALTER TABLE audit_log DROP COLUMN %s" % _c))
         db.session.commit()
         _ids = {}
@@ -3020,7 +3023,7 @@ def _check_invites():
             return inv.id, tok
 
 
-    def _accept(tok, username, password="Sufficient1!pass"):  # nosec B107 - a throwaway invitee's password
+    def _accept(tok, username, password="Sufficient1!pass"):  # nosec B107 - a throwaway invitee's password  # nosemgrep
         return _anon_inv.post("/invite/%s" % tok,
                               data={"username": username, "password": password,
                                     "confirm_password": password})
@@ -3489,6 +3492,7 @@ def _check_held_body_with_csrf_on(hb_uid):
         r_form = c.post("/account/profile", data={"display_name": tag + " csrf form",
                                                   "csrf_token": _m.group(1) if _m else ""})
     finally:
+        # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
         app.config["WTF_CSRF_ENABLED"] = False
     with app.app_context():
         _shown = db.session.get(User, hb_uid).display_name
@@ -3566,6 +3570,7 @@ def _check_held_body_refused_by_csrf_unread(hb_uid):
     try:
         r, read = _hb_post_tag(c, tag + "_hbnocsrf", lambda: None)
     finally:
+        # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
         app.config["WTF_CSRF_ENABLED"] = False
     check("held body: with CSRF on, a session's JSON post with no CSRF token is refused unread",
           _signed_in and r.status_code == 400 and not read and not _hb_tag_made(tag + "_hbnocsrf"),

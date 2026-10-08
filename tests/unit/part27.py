@@ -28,8 +28,6 @@ import tempfile as _tf27
 from unit.part01 import _root, check
 from unit.part06 import _ci_installs, _wf_run_block
 
-_WF27 = os.path.join(_root, ".github", "workflows")
-
 
 def _read27(*parts):
     with open(os.path.join(_root, *parts), encoding="utf-8") as fh:

@@ -1,12 +1,27 @@
-# Scope CodeQL to the application's own source. tests/ (unit + smoke + the fuzz harnesses and their
-# corpus) and docs/ aren't shipped code, so analysing them only adds noise — Bandit and Semgrep
-# already exclude tests/ for the same reason. Security queries still cover all of app.py, the
-# ssh/system modules, the templates' inline JS, and the workflow files (actions).
+# Scope: everything but docs/ (prose and screenshots, no code) and one test file (below).
+#
+# tests/ IS analysed (security-and-quality, like the application). It used to be ignored as "not
+# shipped", but the suites are where the panel's security properties are pinned, and a mistake in a
+# test - a comparison that is always true, a result that is never asserted, a path outside the
+# test's temp dir - makes a check pass while proving nothing, which nothing else would notice.
+# A test's deliberate stand-ins are fixed or triaged where they are reported, not hidden here.
+#
+# tools/panel-helper (the root-run end of the sudo boundary) is Python with a shebang and no .py
+# extension. The Python extractor still takes it: its traverser accepts a file with no extension
+# whose first line is a Python shebang (semmle/traverser.py base_filter, modules.is_script). That is
+# not taken on trust: codeql.yml fails the Python analysis when the helper is missing from the
+# database it analysed.
+#
+# One test file is left out, tests/smoke_test.py, for time alone. It is a single 1 MB module of
+# top-level code, and the Python extractor took 1,446 s (24 minutes) on it alone, measured by a
+# probe run with no time limit: the whole Python analysis took 50 minutes with it and 9.5 without.
+# The next largest file, the 750 KB tests/unit/part06.py, takes about 2 minutes. Bandit, Semgrep
+# (which reads it whole: see security-code.yml) and SonarCloud still analyse it.
 name: "linuxgsm-panel CodeQL config"
 
 paths-ignore:
-  - tests
   - docs
+  - tests/smoke_test.py
 
 # Exclude py/partial-ssrf. Its one finding (alert #309, notifications._post) is a false positive: the
 # Telegram bot token goes into the URL PATH of a request whose host is a constant. _tg_api_url rebuilds

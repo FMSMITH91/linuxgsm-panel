@@ -197,8 +197,12 @@ jobs:
       # and shell identifiers are @validates-guarded), the auto-add host-key policy, and
       # the intentional best-effort try/except pattern. B105 (hardcoded secrets), eval,
       # unsafe deserialization, weak crypto, etc. stay ON — so real signal surfaces.
-      # tests/ is excluded (its fixture passwords are not secrets; Gitleaks scans the
-      # whole repo for real ones). This step does not fail on findings (`|| true`: Bandit exits 1
+      # tests/ is scanned too: a test that chmods a real path or writes into the shared /tmp is a
+      # mistake like any other. Its deliberate stand-ins carry a `# nosec Bxxx - reason` at the
+      # line. Only the three hardcoded-credential checks (B105-B107) are dropped for tests/, after
+      # the scan: every one of their 129 findings there was a fixture credential on purpose (a login
+      # form's password, a fake bot token, a test app's SECRET_KEY), and Gitleaks scans the whole
+      # repo, tests included, for real ones. This step does not fail on findings (`|| true`: Bandit exits 1
       # on any): they become code-scanning alerts, and an open alert fails "Open code-scanning
       # alerts" (codeql-alerts.yml, which waits for this workflow) — that is where Bandit gates.
       - name: Bandit (SARIF)
@@ -208,10 +212,16 @@ jobs:
         # named explicitly alongside the recursive walk. (flake8 and compileall had the same blind
         # spot; see tools/run-tests.sh.)
         run: |
-          FLAGS="-r . tools/panel-helper -x ./venv,./.github,./tests"
+          FLAGS="-r . tools/panel-helper -x ./venv,./.github"
           SKIPS="B101,B104,B404,B601,B602,B603,B604,B607,B507,B110,B112"
           # shellcheck disable=SC2086  # deliberate word-splitting of the flag list
           bandit $FLAGS --skip "$SKIPS" -f sarif -o bandit.sarif || true
+          # B105-B107 under tests/ only (see above); the rules list is untouched, so ruleIndex holds.
+          jq '.runs |= map(.results |= map(select(
+                ((.ruleId | IN("B105", "B106", "B107"))
+                 and (.locations[0].physicalLocation.artifactLocation.uri | startswith("tests/")))
+                | not)))' bandit.sarif > bandit.kept.sarif
+          mv bandit.kept.sarif bandit.sarif
           # ...and again as JSON, purely to read errors[]. A file Bandit cannot PARSE is recorded
           # there, contributes zero results, and exits 0 — so the file is reported clean and the
           # SARIF says nothing about it. Proven by execution: with a syntax error in
@@ -278,13 +288,25 @@ jobs:
       # new. One rule is excluded outright: var-in-script-tag flags EVERY value inside a
       # <script>, |tojson included — 23 findings, none real. tests/template_actions_test.py
       # enforces what it is for (|tojson, |int or a literal choice) and fails the build.
+      #
+      # tests/ is scanned too. Semgrep's BUILT-IN ignore list skips tests/ whenever the repo has no
+      # .semgrepignore, so dropping `--exclude tests` alone changed nothing: the repo's .semgrepignore
+      # is that list without its test paths. Each deliberate stand-in in a test (a stub program made
+      # executable in the test's temp dir, CSRF off for a test client) carries a `nosemgrep` line.
+      #
+      # No rule is cut short and no file is skipped for size: `--timeout 0 --max-target-bytes 0`.
+      # The defaults (5 s per rule per file, and nothing over 1 MB) skipped tests/smoke_test.py whole
+      # and stopped rules early on five other suites, which hid 23 findings, and it said so only as
+      # warnings. The step now fails on any notification Semgrep records (a timeout, a file it could
+      # not parse), so a file left unread can no longer read as a clean one.
       - name: Semgrep scan
         run: |
           semgrep scan \
             --config p/security-audit --config p/python --config p/flask \
             --config p/command-injection --config p/secrets \
             --exclude-rule generic.html-templates.security.var-in-script-tag.var-in-script-tag \
-            --exclude venv --exclude .github --exclude data --exclude tests \
+            --exclude venv --exclude .github --exclude data \
+            --timeout 0 --max-target-bytes 0 \
             --sarif-output=semgrep.sarif \
             --metrics=off > semgrep.txt 2>&1 || rc=$?
           {
@@ -299,6 +321,11 @@ jobs:
           # would otherwise upload nothing, and nothing reads as clean.
           if [ ! -s semgrep.sarif ]; then
             echo "::error::Semgrep wrote no SARIF (exit ${rc:-0}) — the code was not scanned; see the summary."
+            exit 1
+          fi
+          if [ "$(jq '[.runs[].invocations[]?.toolExecutionNotifications[]?] | length' semgrep.sarif)" != "0" ]; then
+            echo "::error::Semgrep did not read everything — these were NOT fully scanned:"
+            jq -r '.runs[].invocations[]?.toolExecutionNotifications[]? | "  \(.descriptor.id // "?"): \(.message.text | split("\n")[0])"' semgrep.sarif
             exit 1
           fi
           # Semgrep writes the findings a `nosemgrep` comment suppresses into the SARIF too, marked

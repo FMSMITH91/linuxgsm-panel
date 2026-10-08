@@ -80,6 +80,7 @@ from app import create_app  # noqa: E402
 from panel.db.models import db, User, SetupState  # noqa: E402
 
 app = create_app()
+# nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
 app.config["WTF_CSRF_ENABLED"] = False
 app.config["SESSION_PROTECTION"] = None
 app.config["SESSION_COOKIE_SECURE"] = False
@@ -98,7 +99,7 @@ def _restore(path, snapshot):
     try:
         path.write_bytes(snapshot)
     except OSError:
-        pass
+        pass  # cleanup only: a config it cannot restore must not hide the result
 
 
 def cleanup():
@@ -286,6 +287,7 @@ def _check_unclaimed_tailscale():
             check("token: a cookie-less Bearer request (CSRF on) is refused %s" % _ep,
                   rr.status_code == 403, "got %d" % rr.status_code)
     finally:
+        # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
         app.config["WTF_CSRF_ENABLED"] = False
     check("token: ...and nothing was run on the host for any of them", _ts_calls == [],
           repr(_ts_calls))
@@ -560,7 +562,8 @@ def _check_restart_now():
     """The complete page's Restart now: the owner's alone, and only when there is a bind to apply."""
     # "Restart now" is the owner's explicit choice, and nobody else's.
     rr = _att.post("/setup/restart")
-    check("complete: another browser cannot restart the panel", _restarts == [], repr(_restarts))
+    check("complete: another browser cannot restart the panel", _restarts == [],
+          "%d %r" % (rr.status_code, _restarts))
     rr = c.post("/setup/restart")
     check("complete: the owner's Restart now restarts the panel once",
           _restarts == [1] and rr.status_code == 200, "%d %r" % (rr.status_code, _restarts))
@@ -808,6 +811,10 @@ try:
         check("open: step=welcome refuses bind_host=%r" % _bad,
               r.status_code < 500 and load_config().get("bind_host") == _bind_before,
               "status %d, config bind_host is now %r" % (r.status_code, load_config().get("bind_host")))
+    # Read HERE, straight after the refusals. It used to be read after the next good post had saved
+    # "Test Panel" again, so it held whatever the refused posts did.
+    check("open: a refused bind address leaves the rest of step 1 unsaved too",
+          load_config().get("site_title") == "Test Panel", load_config().get("site_title"))
     # A BLANK field is not a bad value — it means "use the default", which is what the form offers
     # when the operator leaves the box alone. Asserted rather than assumed, because the refusals
     # above would otherwise be free to swallow it.
@@ -818,9 +825,6 @@ try:
           repr(load_config().get("bind_host")))
     c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                            "port": "5052", "bind_host": "127.0.0.1"})
-    _bind_before = load_config().get("bind_host")
-    check("open: a refused bind address leaves the rest of step 1 unsaved too",
-          load_config().get("site_title") == "Test Panel", load_config().get("site_title"))
     for _good in ("0.0.0.0", "::", "127.0.0.1", "::1"):  # nosec B104 - inputs posted to the wizard
         r = c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                                    "port": "5052", "bind_host": _good})
@@ -854,7 +858,7 @@ try:
     # so an unauthenticated POST reconfigured the host.
     check("open: nobody has been created yet (the precondition for the next check)",
           superadmins() == [], str(superadmins()))
-    _r_jump = c.post("/setup", data={"step": "remote_server", "action": "skip"})
+    c.post("/setup", data={"step": "remote_server", "action": "skip"})
     with app.app_context():
         _st_jump = SetupState.query.first()
         _complete_jump = bool(getattr(_st_jump, "complete", False))
