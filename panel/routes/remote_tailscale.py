@@ -8,9 +8,11 @@ from panel.db.models import (db)
 from panel.ops.ssh_manager import (close_connection, remote_bootstrap_tailscale,
     remote_check_tailscale, remote_install_tailscale, remote_migrate_to_tailscale,
     remote_tailscale_finalize, remote_tailscale_up_url)
-from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required)
+from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action,
+    permission_required)
 from panel.security import privileged as _priv
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
+from panel.core.validation import HOST_RE
 from app import (_refuse_on_panel_host)
 
 # Why migrate and finalize refuse the panel host. Not the generic "it would reboot the panel": they
@@ -33,7 +35,9 @@ def _register_status_and_link_join(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_tailscale_check(remote_id):
         """Check if Tailscale is installed/running on the remote VPS."""
-        remote = get_remote(remote_id)
+        # get_host_remote: on the panel's own host this is superadmin-only — it hands back the host's
+        # tailnet IP and MagicDNS name, which tailscale.py's _sees_panel_host_tailnet hides from others.
+        remote = get_host_remote(remote_id)
         try:
             status = remote_check_tailscale(remote)
             return jsonify({"success": True, **status})
@@ -205,6 +209,21 @@ def _register_key_join_and_migrate(app):
         refused = _refuse_on_panel_host(remote, "Tailscale migration", _NOT_A_REMOTE_JOIN)
         if refused:
             return refused
+        # Superadmin only, for the reason remotes._delegated_retarget_refusal gives on the edit
+        # form: this REPOINTS the row (its new address is whatever the host's own `tailscale
+        # status` names) and moves it onto the panel's own tailnet identity. A delegated admin who
+        # is root on a host they added with a password could make it report any node of the
+        # panel's tailnet, and the login test would pass — it proves the PANEL can reach that
+        # node, not that the requester may — after which every MANAGE_REMOTES action on "their"
+        # row ran as root on a machine they were never granted.
+        if not current_user.is_superadmin:
+            log_action(current_user, "remote_tailscale_migrate", target=remote.name,
+                       detail="refused: only a superadmin can migrate a host", success=False,
+                       remote=remote)
+            return jsonify({"success": False, "message": (
+                "Only a superadmin can move a host onto the panel's Tailscale identity — a "
+                "successful Tailscale login proves the panel can reach the host, not that you "
+                "can. Ask a superadmin to migrate it.")}), 403
         try:
             new_host, status = remote_migrate_to_tailscale(remote)
             if not new_host:
@@ -216,6 +235,12 @@ def _register_key_join_and_migrate(app):
                     status if isinstance(status, str) and status
                     else "Tailscale is not running on the remote")}), 400
 
+            if not (isinstance(new_host, str) and HOST_RE.match(new_host)):
+                # The name came from the host's own stdout; it becomes the stored address, which
+                # every later command is built from. Store only what the add form would accept.
+                return jsonify({"success": False, "message": (
+                    "The host reported a Tailscale address the panel can't use, so nothing was "
+                    "changed.")}), 400
             old_host = remote.host
             remote.host = new_host
             remote.auth_method = "tailscale"

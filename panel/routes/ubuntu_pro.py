@@ -24,8 +24,9 @@ def _register_pro_status(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_pro_status(remote_id):
         force = request.args.get("force") in ("1", "true", "yes")
+        # get_host_remote: superadmin-only on the panel's own host, as the attach/detach twins are.
         try:
-            return jsonify(_pro_status_cached(get_remote(remote_id), force=force))
+            return jsonify(_pro_status_cached(get_host_remote(remote_id), force=force))
         except ConnectionError:
             return _unreachable("remote pro-status")
 

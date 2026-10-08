@@ -138,7 +138,9 @@ def _register_firewall_view(app):
     @permission_required(MANAGE_REMOTES)
     def remote_firewall(remote_id):
         """Remote VPS firewall management page."""
-        remote = get_remote(remote_id)
+        # get_host_remote: on the panel's own host this read is superadmin-only, as its write twins
+        # and its /server-management page are; a delegable whole-host grant does not reach it.
+        remote = get_host_remote(remote_id)
         try:
             status = remote_ufw_status(remote)
         except ConnectionError:
@@ -163,7 +165,9 @@ def _register_firewall_view(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_firewall(remote_id):
-        remote = get_remote(remote_id)
+        # get_host_remote: on the panel's own host this read is superadmin-only, as its write twins
+        # and its /server-management page are; a delegable whole-host grant does not reach it.
+        remote = get_host_remote(remote_id)
         try:
             return jsonify(remote_ufw_status(remote))
         except ConnectionError:
@@ -375,7 +379,9 @@ def _register_ssh_settings(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_ssh_status(remote_id):
-        remote = get_remote(remote_id)
+        # get_host_remote: on the panel's own host this read is superadmin-only, as its write twins
+        # and its /server-management page are; a delegable whole-host grant does not reach it.
+        remote = get_host_remote(remote_id)
         try:
             # On the panel host, also report whether the panel's own public web port is
             # still open, so the UI can disable "Close public panel port" once it's closed.
@@ -694,7 +700,9 @@ def _register_os_update_checks(app):
         The panel host runs it locally rather than over SSH to itself, which is what the daily sweep
         does too.
         """
-        remote = get_remote(remote_id)
+        # get_host_remote: on the panel's own host this read is superadmin-only, as its write twins
+        # and its /server-management page are; a delegable whole-host grant does not reach it.
+        remote = get_host_remote(remote_id)
         born = _os_update_born(remote)   # before any SSH — see _os_update_born
         try:
             result = (so.os_update_available(refresh=True) if remote.is_local

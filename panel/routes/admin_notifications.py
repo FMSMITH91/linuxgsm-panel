@@ -21,6 +21,7 @@ from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body, 
 from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
                                    password_problem, username_problem)
 from app import (_new_user_language)
+from panel.routes.groups import _posted_ids
 
 
 def register(app):
@@ -177,7 +178,6 @@ def _register_user_edits(app):
         email = request.form.get("email", "").strip()
         display_name = request.form.get("display_name", username).strip()
         is_superadmin = request.form.get("is_superadmin") == "on"
-        group_ids = request.form.getlist("groups")
 
         # Only a superadmin may grant superadmin — otherwise a user with just MANAGE_USERS
         # could create a superadmin account and log in as it (privilege escalation).
@@ -212,7 +212,7 @@ def _register_user_edits(app):
         # Add to selected groups — same rule as edit_user. Creating an account in a group you
         # could not join yourself is the same escalation with an extra step (the generated
         # password is handed straight back, so the attacker just logs in as it).
-        user.groups = grantable_groups({int(g) for g in group_ids if str(g).isdecimal()})
+        user.groups = grantable_groups(_posted_ids("groups"))
 
         db.session.add(user)
         db.session.commit()
@@ -274,11 +274,13 @@ def _register_user_edits(app):
         # MANAGE_USERS admin could otherwise edit their OWN account and tick a privileged group,
         # picking up its permissions on the next request — the exact escalation _grantable_perms
         # exists to stop, reached from the membership side instead of the permission side.
-        # isdecimal() like every sibling parse (add_user, create_invite, _assign_command_groups).
-        # This one was bare int(), so `groups=abc` raised straight out of the handler — a 500, and
-        # worse in combination: the password-reset branch above used to have committed by now, so
-        # the account was left with a reset password and revoked sessions that nobody ever saw.
-        group_ids = {int(gid) for gid in request.form.getlist("groups") if str(gid).isdecimal()}
+        # groups._posted_ids, like add_user and create_invite. This one was bare int(), so
+        # `groups=abc` raised straight out of the handler — a 500, and worse in combination: the
+        # password-reset branch above used to have committed by now, so the account was left with
+        # a reset password and revoked sessions that nobody ever saw. The isdecimal() that
+        # replaced it was not "an id" either: 5,000 ASCII digits passed it and int() raised (the
+        # same 500), 2**64 overflowed the SQLite driver, and '١٢' was read as group 12.
+        group_ids = _posted_ids("groups")
         user.groups = grantable_groups(group_ids, existing=list(user.groups or []))
 
         db.session.commit()
@@ -309,7 +311,7 @@ def _register_invites(app):
         hours = _int_or(request.form.get("hours"), Invite.INVITE_TTL_HOURS)
         hours = max(1, min(int(hours), 24 * 30))        # an hour to a month
         want_super = request.form.get("is_superadmin") == "on"
-        group_ids = {int(g) for g in request.form.getlist("groups") if str(g).isdecimal()}
+        group_ids = _posted_ids("groups")
         # Through grantable_groups, exactly like add_user: a superadmin minting an invite still
         # cannot hand out a group the escalation guard would refuse them directly.
         groups = grantable_groups(group_ids)

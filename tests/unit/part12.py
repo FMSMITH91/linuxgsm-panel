@@ -1384,7 +1384,7 @@ try:
     _sd_done.clear()
     _sd_runs.clear()
     with _p9.app_context():
-        _p9._run_action(NS(id=90010, status="offline", short_name="ghostserver",
+        _p9._run_action(NS(id=90010, status="offline", installed=True, short_name="ghostserver",
                            lgsm_name="csgoserver", name="ghost"), NS(id=99904), "fastdl", None,
                         on_done=lambda ok, d: _sd_done.append((ok, d)))
     _p9_drain()
