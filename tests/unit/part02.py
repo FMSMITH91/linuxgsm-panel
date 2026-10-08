@@ -647,7 +647,7 @@ try:
             _m = _rern.search(r"echo ([A-Za-z0-9+/=]+) \| base64 -d", _rncap.get("cmd", ""))
             _rec = (_b64rn.b64decode(_m.group(1)).decode() if _m else "").replace("/home/gm/.lgsm-cron",
                                                                                  _rn_dir)
-            _rn_p = _gh_sp.run(["bash", "-c", _rec], capture_output=True, text=True,  # nosec B603 B607 - bash on the panel's own recorder line, into a temp dir
+            _rn_p = _gh_sp.run(["bash", "-c", _rec], capture_output=True, text=True,  # nosec B603 B607 - bash on the recorder line, into a temp dir
                                timeout=20, check=False)
             _rn_id = _sm_cron._cron_job_id(_rn_cmd)
             _rn_st = os.path.join(_rn_dir, _rn_id + ".status")
