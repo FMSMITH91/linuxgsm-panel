@@ -615,7 +615,7 @@ def _grant_content_read(server, gmod_user, content_user, games):
     # (home) + group-readable (each game tree). Every step is attempted, and any that
     # fails fails the verb (its exit status says so on both transports).
     #
-    # ...but the verb as a whole is not: its rc was discarded, so a helper that refused it (rc 2,
+    # Its rc used to be discarded, so a helper that refused it (rc 2,
     # one older than the panel) or a transport that timed out (("", "…", -1), no raise) went on to
     # write mount.cfg and report "Mounted: …" — and after the restart srcds could read none of the
     # content and GMod silently mounted nothing.
