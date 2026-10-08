@@ -92,6 +92,7 @@ from panel.security import auth
 from panel.ops import backup as bk
 
 app = create_app()
+# nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
 # The Funnel ban gate refreshes its set in a background thread after a failed login (where proxied
 # traffic can arrive) and after Block / Unban / Whitelist. Left live, those threads outlive the
@@ -4294,6 +4295,7 @@ try:
         check("CSRF: a Bearer header alongside a SESSION COOKIE is still protected",
               _both.status_code == 400, "got %d" % _both.status_code)
     finally:
+        # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
         app.config["WTF_CSRF_ENABLED"] = False
 
     # ── Login brute-force lockout kicks in after repeated failures ─

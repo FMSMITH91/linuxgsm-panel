@@ -103,6 +103,7 @@ check("f2b: a host with no jail.local is a no-op, not a failure",
 _fake_reboot = os.path.join(_sandbox, "fake-reboot")
 _marker = os.path.join(_sandbox, "fired")
 open(_fake_reboot, "w").write("#!/bin/sh\necho fired > %s\n" % _marker)
+# nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
 os.chmod(_fake_reboot, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 _probe = (
     "import importlib.util as u, importlib.machinery as m, time, sys;"
@@ -518,6 +519,7 @@ try:
     check("content-game-present / -script-present: asked as the named account, never as root",
           _s_drops == sorted("%s:True" % _u for _u in ("srcds", "moved", "gmodserver", "locked",
                                                         "nodrop")), repr(_s_drops))
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
     os.chmod(os.path.join(_scandisk, "shut"), 0o700)
     _shutil.rmtree(_scanroot, ignore_errors=True)
     _shutil.rmtree(_scandisk, ignore_errors=True)
@@ -544,6 +546,7 @@ if _osu:
     _fake_apt = os.path.join(_osu, "fake-apt")
     open(_fake_apt, "w").write("#!/bin/sh\necho \"fake apt: $*\"\n"
                                "case \"$*\" in *full-upgrade*) exit 7 ;; esac\nexit 0\n")
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
     os.chmod(_fake_apt, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _oslog = os.path.join(_osu, "os-update.log")
     _osprobe = (
@@ -1823,6 +1826,7 @@ try:
     check("install.sh: ...but not from a tree the panel user owns",
           "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
     _rs_t = _rs_srctree("srcworld")
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- world-writable on purpose, in this test's temp dir
     os.chmod(os.path.join(_rs_t, "tools"), 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     _rs_out = _rs_case("srcworld", _rs_no_git, src=_rs_t, panel_user=_rs_other)
     check("install.sh: ...nor through a directory anyone can write",
@@ -1830,6 +1834,7 @@ try:
     # ...nor from a tree in a directory the panel user could swap it out of.
     _rs_par = os.path.join(_rs_sb, "srcparent-dir")
     os.makedirs(_rs_par)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- world-writable on purpose, in this test's temp dir
     os.chmod(_rs_par, 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     _rs_out = _rs_case("srcparent", _rs_no_git, src=_rs_srctree("srcparent", parent=_rs_par),
                        panel_user=_rs_other)
@@ -1866,6 +1871,7 @@ try:
     _rs_t = _rs_srctree("srclink")
     _rs_drop = os.path.join(_rs_sb, "drop")
     os.makedirs(_rs_drop)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- world-writable on purpose, in this test's temp dir
     os.chmod(_rs_drop, 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     with open(os.path.join(_rs_drop, "helper"), "w") as _f:
         _f.write("DROPPED-HELPER\n")
@@ -3651,6 +3657,7 @@ try:
         with open(_stk_py, "w", encoding="utf-8") as _fh:
             _fh.write('#!/bin/bash\n[ "$2" = setup-token ] && [ "$3" = --raw ] || exit 9\n'
                       'echo "noise on stdout first" ; cat "$STK_OUT"; exit "${STK_RC:-0}"\n')
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
         os.chmod(_stk_py, 0o700)
         _stk_out = os.path.join(_stk_dir, "out")
         _stk_as = os.path.join(_stk_dir, "as")      # who the sudo shim ran it as
@@ -4439,6 +4446,7 @@ try:
         _fh.write("metamod\nsourcemod\n")
     _launcher = os.path.join(_u, "csgoserver")
     open(_launcher, "w").close()
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
     os.chmod(_launcher, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     # A game account names its own config-lgsm entries, and the scan is a newline- and '|'-split
     # line protocol: these are the forgeries (a second record naming ANOTHER account, a shifted
@@ -4451,6 +4459,7 @@ try:
             os.makedirs(os.path.join(_disc_home, _du, "lgsm", "config-lgsm", _di))
             _dl = os.path.join(_disc_home, _du, _di)
             open(_dl, "w").close()
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
             os.chmod(_dl, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 
     class _DiscCap:
@@ -4546,6 +4555,16 @@ check("coverage: Semgrep scans tests/ (no --exclude tests, and a .semgrepignore 
       "--exclude tests" not in _sg_step and _sgi is not None
       and not {"tests/", "test/", "testsuite/", "tests", "test"} & set(_sgi)
       and {"vendor/", "node_modules/", ".venv/", "*.min.js"} <= set(_sgi), repr(_sgi))
+# Semgrep's defaults skip a file over 1 MB (tests/smoke_test.py) and give up on a rule after 5 s per
+# file, reporting either only as a warning: 23 findings in the suites sat behind them.
+_sg_after = _bandit_src[_bandit_src.index("      - name: Semgrep scan\n"):
+                        _bandit_src.index("      - name: Upload Semgrep results")]
+_sg_after = "\n".join(_l for _l in _sg_after.splitlines() if not _l.lstrip().startswith("#"))
+check("coverage: Semgrep reads every file whole (no per-rule timeout, no size cut-off) and fails on "
+      "any file it did not",
+      "--timeout 0 " in _sg_step and "--max-target-bytes 0 " in _sg_step
+      and "[.runs[].invocations[]?.toolExecutionNotifications[]?] | length' semgrep.sarif)\" != \"0\""
+      in _sg_after and _sg_after.count("exit 1") >= 2, "")
 _cq_cfg = open(os.path.join(_root, ".github", "codeql", "codeql-config.yml"), encoding="utf-8").read()
 _cq_ign = re.search(r"^paths-ignore:\n((?:  - .*\n)+)", _cq_cfg, re.M)
 check("coverage: CodeQL analyses tests/ (paths-ignore is docs/ alone)",
@@ -4996,6 +5015,7 @@ try:
     os.makedirs(os.path.join(_cqa_sb, "bin"))
     with open(os.path.join(_cqa_sb, "bin", "gh"), "w") as _fh:
         _fh.write("#!/bin/sh\necho 42\n")      # the open PR whose head the run was for
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
     os.chmod(os.path.join(_cqa_sb, "bin", "gh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 
     def _cqa_case(event_name, wr_event, head_branch, ref_name="main"):
@@ -5259,7 +5279,9 @@ try:
     with open(os.path.join(_cc_bin, "sha256sum"), "w") as _fh:
         _fh.write("#!/bin/sh\ncat >/dev/null\n")
     for _f in ("curl", "sha256sum"):
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
         os.chmod(os.path.join(_cc_bin, _f), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
     os.chmod(_cc_fake, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _cc_sha = "c" * 40
     _cc_good = ('<?xml version="1.0" ?>\n<coverage version="7.6" line-rate="0.5">\n'
@@ -8585,6 +8607,7 @@ try:
                     "'Analyze (python)' 'Open code-scanning alerts'; do\n"
                     "  printf '{\"name\":\"%s\",\"status\":\"completed\",\"conclusion\":\"success\"}\\n'"
                     " \"$n\"\ndone\n")
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
     os.chmod(os.path.join(_dp_ghbin, "gh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _dp_genv["PATH"] = _dp_ghbin + os.pathsep + _dp_genv.get("PATH", "")
     _dp_genv["GITHUB_REPOSITORY"] = "o/r"     # set on every runner; the step reads it under set -u

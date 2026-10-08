@@ -459,6 +459,7 @@ check("ssh_manager: no test stubs onto the PACKAGE (it would shadow __getattr__)
 # stub is in place, and _is_sudo is a pure function.
 _nsr_src = open(os.path.join(_root, "tools", "nosudo_runner.py"), encoding="utf-8").read()
 _nsr_ns = {"__name__": "nsr_probe", "__file__": os.path.join(_root, "tools", "nosudo_runner.py")}
+# nosemgrep: python.lang.security.audit.exec-detected.exec-detected -- this repo's own tools/nosudo_runner.py, minus its __main__ block
 exec(compile(_nsr_src.split("if __name__ ==")[0], "nosudo_runner.py", "exec"), _nsr_ns)   # nosec
 _nsr_ns["_install"]()
 from panel.ops.ssh_manager import _core as _nsr_core, cron as _nsr_cron, files as _nsr_files
@@ -1407,6 +1408,7 @@ try:
                       'for a in "$@"; do case "$a" in file:*) f="${a#file:}";; esac\n'
                       '  [ "$prev" = --attach-config ] && f="$a"; prev="$a"; done\n'
                       'echo "$f" > "$OUT/path"; stat -c %a "$f" > "$OUT/mode"; cat "$f" > "$OUT/got"\n')
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
         os.chmod(os.path.join(_sec_bin, _tool), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _sm_core_isl = _sm_core.is_local_server
     _sm_core.is_local_server = lambda s: True
@@ -2552,6 +2554,7 @@ try:
     with open(_cs_o2_file, "w", encoding="utf-8") as _fh:
         _fh.write("rcon_password secret\n")
     os.chmod(_cs_o2_file, 0o600)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
     os.chmod(os.path.join(_cs_o2, "serverfiles", "cstrike"), 0o700)
     os.rename(_cs_sf, _cs_sf + ".real2")
     os.symlink(os.path.join(_cs_o2, "serverfiles"), _cs_sf)
@@ -2738,6 +2741,7 @@ check("helper restore: ...at mode 0600",
 #     caller — the fchown is observed through a stub to prove it is asked for, with the dir's ids.)
 with open(os.path.join(_rs_stage, "cred_key"), "w", encoding="utf-8") as _fh:
     _fh.write("KEY")
+# nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a setuid bit the restore must strip; this test's temp dir
 os.chmod(os.path.join(_rs_stage, "cred_key"), 0o4755)  # nosec B103 - a setuid bit the restore must strip; this test's temp dir
 _rs_chown = []
 _rs_o_fchown = _helper.os.fchown
@@ -3203,12 +3207,14 @@ def _gds_new(npm_global=True):
     with open(os.path.join(gd, "install-gamedig.sh"), "w", encoding="utf-8") as fh:
         fh.write(_GDS_SCRIPT.replace(_GDS_LINKS, "LINK_DIRS=(%s %s)" % (
             _gd_q(os.path.join(root, "usr-local-bin")), _gd_q(os.path.join(root, "usr-bin")))))
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
     os.chmod(os.path.join(gd, "install-gamedig.sh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     with open(os.path.join(root, "stub", "npm"), "w", encoding="utf-8") as fh:
         fh.write(_GDS_NPM)
     with open(os.path.join(root, "stub", "id"), "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\necho \"${GDS_UID:-0}\"\n")
     for _n in ("npm", "id"):
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
         os.chmod(os.path.join(root, "stub", _n), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     if npm_global:
         os.makedirs(os.path.join(root, "npm-global", "gamedig"))
@@ -4622,6 +4628,7 @@ try:
                                 _sp.CompletedProcess(argv, 0, b"", b""))[1])
     _hgr.resolve = lambda name: "/usr/sbin/" + name
     os.makedirs(_gr_box + "/" + _me, mode=0o700)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
     os.chmod(_gr_box + "/" + _me, 0o700)
     _gr_rc = _hgr.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon", _me],
                                         None)
@@ -5167,6 +5174,7 @@ try:
             # line, pause, line, then prove it ran to the end, and exit 3.
             _tl_f.write("#!/bin/bash\necho first-line\nsleep 1.5\necho last-line\n"
                         "touch %s/finished\nexit 3\n" % _tl_home)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
         os.chmod(os.path.join(_tl_home, "gmodserver"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
         with open(os.path.join(_tl_home, ".panel-update.log"), "w") as _tl_f:
             _tl_f.write("STALE output of the previous run\n")

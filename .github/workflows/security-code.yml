@@ -293,6 +293,12 @@ jobs:
       # .semgrepignore, so dropping `--exclude tests` alone changed nothing: the repo's .semgrepignore
       # is that list without its test paths. Each deliberate stand-in in a test (a stub program made
       # executable in the test's temp dir, CSRF off for a test client) carries a `nosemgrep` line.
+      #
+      # No rule is cut short and no file is skipped for size: `--timeout 0 --max-target-bytes 0`.
+      # The defaults (5 s per rule per file, and nothing over 1 MB) skipped tests/smoke_test.py whole
+      # and stopped rules early on five other suites, which hid 23 findings, and it said so only as
+      # warnings. The step now fails on any notification Semgrep records (a timeout, a file it could
+      # not parse), so a file left unread can no longer read as a clean one.
       - name: Semgrep scan
         run: |
           semgrep scan \
@@ -300,6 +306,7 @@ jobs:
             --config p/command-injection --config p/secrets \
             --exclude-rule generic.html-templates.security.var-in-script-tag.var-in-script-tag \
             --exclude venv --exclude .github --exclude data \
+            --timeout 0 --max-target-bytes 0 \
             --sarif-output=semgrep.sarif \
             --metrics=off > semgrep.txt 2>&1 || rc=$?
           {
@@ -314,6 +321,11 @@ jobs:
           # would otherwise upload nothing, and nothing reads as clean.
           if [ ! -s semgrep.sarif ]; then
             echo "::error::Semgrep wrote no SARIF (exit ${rc:-0}) — the code was not scanned; see the summary."
+            exit 1
+          fi
+          if [ "$(jq '[.runs[].invocations[]?.toolExecutionNotifications[]?] | length' semgrep.sarif)" != "0" ]; then
+            echo "::error::Semgrep did not read everything — these were NOT fully scanned:"
+            jq -r '.runs[].invocations[]?.toolExecutionNotifications[]? | "  \(.descriptor.id // "?"): \(.message.text | split("\n")[0])"' semgrep.sarif
             exit 1
           fi
           # Semgrep writes the findings a `nosemgrep` comment suppresses into the SARIF too, marked
