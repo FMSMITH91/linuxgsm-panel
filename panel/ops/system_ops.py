@@ -474,7 +474,9 @@ def ufw_status():
         rule = _ufw_rule_split(line)
         if not rule:
             continue
-        key = tuple(re.sub(r"\s*\(v6\)", "", rule[k]) for k in ("to", "action", "direction", "from"))
+        # Words, not a regex: `\s*\(v6\)` backtracks quadratically over a long run of spaces.
+        key = tuple(" ".join(w for w in rule[k].split() if w != "(v6)")
+                    for k in ("to", "action", "direction", "from"))
         if key in seen and "(v6)" in rule["to"]:
             continue
         seen.add(key)
