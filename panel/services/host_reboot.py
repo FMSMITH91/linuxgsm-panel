@@ -1076,6 +1076,7 @@ class _Job:
         self.disconnected = 0
         self.unread = 0            # running servers the plan could not read: left to the reboot
         self.bounce = False
+        self.bounce_joined = False  # the bounce saw a player (not only a count it could not read)
         self.deadline = None       # the end of the stop phase's budget (STOP_PHASE_CAP)
         self.fired = False         # this job is a wait's, and its fire was audited and announced
         self.rolled_back = False   # a bounce has already (quietly) undone the stops
@@ -1234,13 +1235,13 @@ class _Job:
         self._finish_note(False, "%s was not rebooted: %s" % (_host_label(self.remote), reason))
         return None
 
-    def _back_to_waiting(self, census, bounce, reason=None, refused=False):
+    def _back_to_waiting(self, census, bounce, reason=None, refused=False, backoff=False):
         """The wait this job fired goes back to waiting — unless the operator cancelled meanwhile.
 
         Raises _Cancelled then: the check and the put-back are one step under _hr_lock, as cancel()
         takes it, so an accepted Cancel never leaves a wait behind to reboot the host later.
         """
-        info = self._wait_back(census, bounce, reason, refused)
+        info = self._wait_back(census, bounce, reason, refused or backoff)
         tell = refused and not info.get("refused_told")
         if tell:
             info["refused_told"] = True
@@ -1422,7 +1423,7 @@ class _Job:
     def _stop_phase(self):
         """Stop every plan server: parallel across accounts, serial within one, verified by state."""
         self._phase("stopping", done=0, total=len(self.entries))
-        self.bounce = False
+        self.bounce = self.bounce_joined = False
         self.deadline = time.monotonic() + STOP_PHASE_CAP
         loaded = self._loaded_rows()
         groups = {}
@@ -1453,8 +1454,13 @@ class _Job:
         for e in group:
             if self.bounce or self._cancelled() or self._past_deadline():
                 return
-            if self.job["mode"] == "when_empty" and not self._still_empty(loaded.get(e["id"])):
+            empty = (self._still_empty(loaded.get(e["id"])) if self.job["mode"] == "when_empty"
+                     else True)
+            if empty is not True:
+                # Unread (None) still stops the reboot -- the server may hold a player -- but it is
+                # not a player joining: _bounced neither counts it nor says so.
                 self.bounce = True
+                self.bounce_joined = self.bounce_joined or empty is False
                 return
             self._stop_one(e)
             done = sum(1 for x in self.entries if x.get("stop"))
@@ -1462,12 +1468,14 @@ class _Job:
                 self.job["done"], self.job["total"] = done, len(self.entries)
 
     def _still_empty(self, gs):
+        """True when the server reads 0 players, False when it reads more, None when unread."""
         if gs is None:
             return True
         try:
-            return _mon._server_slots(gs)[0] == 0
+            n = _mon._server_slots(gs)[0]
         except Exception:  # noqa: BLE001 - an unread count is not an empty server
-            return False
+            return None
+        return None if n is None else n == 0
 
     def _stop_one(self, e):
         budget = STOP_BUDGET_TELNET if e["game_type"] in _TELNET_STOP_GAMES else STOP_BUDGET
@@ -1497,9 +1505,16 @@ class _Job:
         """
         if not self.bounce:
             return False
-        rollback(self.remote_id, "a player joined", wait=75, quiet=True)
+        # A count that could not be read (one gamedig timeout while the host is busy stopping the
+        # last server) backs off the same, but is no bounce: three of those paged "Players keep
+        # joining" about an empty host.
+        why = "a player joined" if self.bounce_joined else "a player count could not be read"
+        rollback(self.remote_id, why, wait=75, quiet=True)
         self.rolled_back = True
-        self._back_to_waiting(None, bounce=True)
+        if self.bounce_joined:
+            self._back_to_waiting(None, bounce=True)
+        else:
+            self._back_to_waiting(None, bounce=False, reason=why, backoff=True)
         return True
 
     def _rescan(self):
@@ -1838,6 +1853,7 @@ def _new_boot(remote, recs, meta, ident, now):
         # make "within" false. The read is a moment before this, so this is never too early.
         _mark_all(recs, boot_seen=max(sent, time.time() - float(ident.get("uptime") or 0)))
         _reboot_awaiting[remote.id] = {"sent": sent, "back": now}
+        _rbhold_remark_unplanned(remote.id)
     up = float(ident.get("uptime") or 0)
     if not ((up >= SETTLE_UPTIME and ident.get("state") != "starting") or up >= SETTLE_UPTIME_MAX):
         return True
@@ -2075,34 +2091,55 @@ def exclude_row(gs, actor, what, origin=None):
     return True
 
 
+def _rbhold_remark_unplanned(remote_id):
+    """Hold the host's servers no plan holds (stopped, unreadable) from the new boot, not the plan.
+
+    _commit_plan marked them for _EXPECT_OFFLINE_WINDOW + _REBOOT_EXPECT_OFFLINE_EXTRA (480 s) from
+    the moment the plan was committed. The stop phase (up to STOP_PHASE_CAP), the arm wait and the
+    reboot itself can use all of that, so a running server the plan could not read came back on
+    LinuxGSM's */5 monitor after its mark had ended, and the reboot the panel made paged "went
+    offline unexpectedly". The same window again from the first sight of the new boot covers its
+    Autostart; one that never comes back still pages when it ends. Plan rows keep their hold.
+    """
+    _mon._mark_host_expected_offline(remote_id)
+
+
 def _bare_job_step(remote, job, now):
     """A host rebooted with no game servers to bring back: just watch for it to return."""
     ident = _sm.hosts.host_boot_identity(remote)
     sent = job.get("sent") or now
-    text = (_bare_answered(remote, job, ident, now, sent) if ident is not None
-            else _bare_silent(remote, now, sent))
-    if text:
-        _last_result[remote.id] = {"at": now, "text": text, "ok": "did not" not in text}
+    # Each answer says itself whether it is a success. `ok` was "did not" not in the text: an idle
+    # reboot with an unread server ("...so the panel did not stop or start it") showed in warning
+    # colour, and a host that never came back ("has not come back") showed green.
+    res = (_bare_answered(remote, job, ident, now, sent) if ident is not None
+           else _bare_silent(remote, now, sent))
+    if res:
+        text, ok = res
+        _last_result[remote.id] = {"at": now, "text": text, "ok": ok}
         notifications.notify("host_reboot", "Host reboot", text)
         with _hr_lock:
             _host_reboots.pop(remote.id, None)
 
 
 def _bare_answered(remote, job, ident, now, sent):
+    """(text, ok) once the bare job has an answer, else None."""
     if job.get("boot") and ident["boot"] != job["boot"]:
         _reboot_awaiting[remote.id] = {"sent": sent, "back": now}
+        _rbhold_remark_unplanned(remote.id)
         # From the uptime as read just now, not the tick's `now` (see _new_boot).
         boot = time.time() - float(ident.get("uptime") or 0)
         return "%s rebooted%s (no running game server was found before it).%s" % (
             _host_label(remote), _boot_clause(boot, job.get("sent")),
-            _unread_note(job.get("unread"), "stop or start"))
+            _unread_note(job.get("unread"), "stop or start")), True
     if now - sent >= DID_NOT_HAPPEN_AFTER and ident.get("state") != "stopping":
         _reboot_awaiting.pop(remote.id, None)
-        return "Reboot of %s did not happen: it is still on the same boot." % _host_label(remote)
+        return ("Reboot of %s did not happen: it is still on the same boot." % _host_label(remote),
+                False)
     return None
 
 
 def _bare_silent(remote, now, sent):
+    """(text, False) once a silent host has been gone a day, else None."""
     with _hr_lock:
         job = _host_reboots.get(remote.id) or {}
         late = now - sent >= LATE_NOTICE_AFTER and not job.get("late")
@@ -2116,7 +2153,7 @@ def _bare_silent(remote, now, sent):
         # The hold on its unreachable/recovered alerts ends with this notice: without the pop it
         # held them for as long as the panel ran, so its next real outage would never alert.
         _reboot_awaiting.pop(remote.id, None)
-        return "%s has not come back after a day." % _host_label(remote)
+        return "%s has not come back after a day." % _host_label(remote), False
     return None
 
 
@@ -2243,8 +2280,15 @@ def _rebooted_since(ident, info):
 
 
 def _wait_may_look(remote, info, now):
-    """Not before a bounce's back-off, not while a job runs, and never on a host that is not answering."""
-    if now < (info.get("not_before") or 0) or job_of(remote.id):
+    """Not before a bounce's back-off, not while a job runs or an earlier plan's rows are still being
+    brought back, and never on a host that is not answering.
+
+    The rows are request_reboot's _pending_conflict check, which this path skipped: a bounce's
+    rollback can leave a row to the restore worker (act "now"), and a job fired over it reboots
+    with that row beside the new plan's, so the restore after the reboot ran as a ROLLBACK over
+    both -- and audited a reboot that happened as one that did not.
+    """
+    if now < (info.get("not_before") or 0) or job_of(remote.id) or plan_rows(remote.id):
         return False
     return bool(_mon._host_reachable(remote))
 

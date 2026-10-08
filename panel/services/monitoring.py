@@ -1300,12 +1300,16 @@ def _mark_host_expected_offline(remote_id, extra=_REBOOT_EXPECT_OFFLINE_EXTRA):
     """Mark every game server on a host the panel is about to reboot as expected-offline.
 
     As a panel restart marks one server: meant to come back, so one still down when the mark ends
-    pages. A Stop's open window stays a Stop's. Returns the previous marks.
+    pages. A Stop's open window stays a Stop's. A server a reboot plan holds (marked for as long as
+    the plan runs) is left held: the reboot marks again when the host's new boot is first seen, and
+    that must not cut a planned server's hold to this window. Returns the previous marks.
     """
     until = time.time() + extra
     prev = {}
     for (gid,) in db.session.query(GameServer.id).filter_by(remote_id=remote_id).all():
         prev[gid] = _expected_offline.get(gid)
+        if prev[gid] == float("inf"):
+            continue
         stop = _stop_expected(gid)
         _expected_offline[gid] = until
         if stop:

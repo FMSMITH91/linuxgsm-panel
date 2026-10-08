@@ -49,6 +49,15 @@ _STOP_WORDS = frozenset((
     # one, and "home" would turn every /home/[user] path into a token
     "www", "mail", "vps", "srv", "node", "box", "web", "app", "api", "home", "data", "dev",
     "prod", "cloud", "gateway", "router", "remote",
+    # the report's OWN vocabulary: address classes, marker and token words. The final pass
+    # re-scrubs text that already holds "[ip:public]" and "[tag-3]", and a name may match after
+    # the '[' or ':' -- so a tag named "Public" turned every "public 2 · tailnet 1" and
+    # "[ip:public]" into "[tag-3]". These identify no one. (Not a "never after '['" rule instead:
+    # a log's own "[mcserver] started" must still be pseudonymised.)
+    "public", "private", "tailnet", "loopback", "link-local", "multicast", "redacted", "email",
+    "withheld", "failed", "secret", "account", "domain", "steamid", "ts-name", "tailscale-url",
+    "panel-host", "site-domain", "site-title", "ntfy-topic", "ntfy-host", "tailnet-name", "tag",
+    "group", "name", "login", "cut", "end", "parameters",
 ))
 ETC_PASSWD = "/etc/passwd"  # nosec B105 - a file path, not a password
 ETC_GROUP = "/etc/group"
@@ -385,7 +394,35 @@ def _names_bot(st, conf, key):
         # a group's chat id is negative; logs and API errors often print it without the sign
         st.add(str(value or "").strip().lstrip("-"), "id")
     for secret in ("token", "bot_token", "webhook"):
-        st.add(str(conf.get(secret) or ""), "secret", "")
+        for form in _dbr_secret_forms(conf.get(secret)):
+            st.add(form, "secret", "")
+            if secret == "webhook":
+                st.add(_dbr_webhook_token(form), "secret", "")
+
+
+def _dbr_secret_forms(value):
+    """A configured secret as config.json holds it, and its plaintext when that is ciphertext.
+
+    notifications.py stores every token and webhook encrypted ("enc:v1:...") and load_config does
+    not decrypt, so mapping only the stored form never matched the secret a log line carries. The
+    plaintext is read only while cred_key exists: decrypt_secret CREATES a missing key (as
+    _read_host_names says), and a report must never write one.
+    """
+    from panel.core import config as cfgmod
+    raw = str(value or "")
+    forms = [raw]
+    if cfgmod.is_encrypted(raw) and not cfgmod._key_missing(cfgmod.CRED_KEY_FILE):
+        forms.append(cfgmod.decrypt_secret(raw))
+    return forms
+
+
+def _dbr_webhook_token(url):
+    """The token segment of a webhook URL (its last path segment), which can be logged alone."""
+    from urllib.parse import urlsplit
+    try:
+        return urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]
+    except ValueError:
+        return ""
 
 
 def _names_ntfy(st, ntfy):
@@ -393,7 +430,8 @@ def _names_ntfy(st, ntfy):
     if not isinstance(ntfy, dict):
         return
     st.add(str(ntfy.get("topic") or ""), "ntfy-topic", "")
-    st.add(str(ntfy.get("token") or ""), "secret", "")
+    for form in _dbr_secret_forms(ntfy.get("token")):
+        st.add(form, "secret", "")
     try:
         st.add(urlsplit(str(ntfy.get("server") or "")).hostname or "", "ntfy-host", "")
     except ValueError:

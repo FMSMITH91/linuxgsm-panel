@@ -979,15 +979,21 @@ def _authlog_tail(path):
 
 
 def authlog_scan(path, now=None):
-    """{size, lines_24h, blocked_24h, last_age, unknown} of auth.log's last 512 KB.
+    """{size, lines_24h, blocked_24h, last_age, unknown, covers_24h} of auth.log's last 512 KB.
 
     lines_24h counts 'login failed' lines only (one per failed sign-in); blocked_24h the refusals.
     The stamps are the handler's local time, as logging writes them. Raises OSError.
+
+    covers_24h: whether what was read holds the whole last 24 h. app.py rotates the file at 512 KB
+    (backupCount 3), so after a burst of failures the current file starts mid-day and lines_24h is
+    only its part of the day -- not a count to hold against the audit log's. It holds the day when
+    its oldest line is a day old, or when nothing older was ever cut off (no tail cut, no
+    rotation): then the file is the whole history.
     """
     now = time.time() if now is None else now
     size, tail = _authlog_tail(path)
     out = {"size": size, "lines_24h": 0, "blocked_24h": 0, "last_age": None, "unknown": 0}
-    last = None
+    last = first = None
     for line in tail:
         m = _AUTHLOG_RE.match(line)
         if not m:
@@ -997,10 +1003,13 @@ def authlog_scan(path, now=None):
         except ValueError:
             continue
         last = at if last is None else max(last, at)
+        first = at if first is None else min(first, at)
         key = "lines_24h" if m.group(2) == "login failed" else "blocked_24h"
         out[key] += now - at <= 86400
         out["unknown"] += m.group(3) == "unknown"
     out["last_age"] = None if last is None else now - last
+    out["covers_24h"] = ((first is not None and now - first >= 86400)
+                         or not (size > AUTHLOG_MAX or os.path.exists(path + ".1")))
     return out
 
 
@@ -1010,8 +1019,12 @@ def _authlog_handler():
 
 
 def _authlog_text(scan, attached, want):
-    agree = "" if want is None else " (audit log says %d %s)" % (
-        want, "✓" if want == scan["lines_24h"] else "✗")
+    if want is None:
+        agree = ""
+    elif not scan.get("covers_24h", True):
+        agree = " (audit log says %d; not compared: auth.log was rotated within the 24 h)" % want
+    else:
+        agree = " (audit log says %d %s)" % (want, "✓" if want == scan["lines_24h"] else "✗")
     return ("handler attached %s · %d failed-login lines in 24 h%s · %d refusal lines · last line "
             "%s · %d KB · 'unknown' addresses: %d" % (
                 "✓" if attached else "✗", scan["lines_24h"], agree, scan["blocked_24h"],

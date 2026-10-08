@@ -235,7 +235,8 @@ def run_version(path, timeout=5):
 def _sudo_version(path):
     try:
         first = run_version(path)
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError) + so._SOPS_TIMEOUTS as exc:
+        # + the eventlet-original TimeoutExpired, which is not a green SubprocessError.
         return "version unreadable (%s)" % type(exc).__name__
     m = _SUDO_VER_RE.search(first)
     if not m:
