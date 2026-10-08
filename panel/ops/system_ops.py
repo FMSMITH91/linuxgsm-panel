@@ -449,14 +449,21 @@ def ufw_status():
     status_text = "active" if enabled else "inactive"
     rules = []
 
-    # Parse rules
+    # Parse rules. EVERY line goes to _ufw_rule_split, which answers None for anything that is not
+    # a rule row (Status/Logging/Default/New profiles, the "To Action From" header and its dashes),
+    # as the debug report's ufw_classify reads the same text. Lines used to be dropped by content:
+    # any with "(" and ")" (meant for "(v6)"), or naming "Default:" etc. anywhere. That dropped
+    # every v6 row and every row whose comment had parentheses -- a `DENY IN` on tailscale0 among
+    # them, so ufw_allows_iface_in read the allow below it and unlocked "Disable (tailnet-only)".
+    # A row dropped here is a rule the lockout guard never sees, so none may be. The one row left
+    # out is a (v6) row whose v4 twin -- the same rule with "(v6)" taken off -- is already listed:
+    # it says nothing that row does not, and the list stays one row per rule. A v6 row with no
+    # twin (a DENY added for v6 only) is kept.
+    seen = set()
     for line in out.split("\n"):
         line = line.strip()
-        # Match: "Anywhere on <interface>" or "Anywhere                   ALLOW      192.168.1.0/24"
-        if not line or "Status:" in line or "Logging:" in line or "Default:" in line or "New:" in line:
+        if not line:
             continue
-        if "(" in line and ")" in line:
-            continue  # Skip header lines like (v6)
 
         # The verb runs `ufw status verbose`, whose columns are "To  Action  From" — there are
         # NO rule numbers (only `ufw status numbered` has those). The branch here tested
@@ -465,8 +472,13 @@ def ufw_status():
         # tailscale0 allow, app profiles like OpenSSH, and every `panel-block` DENY. Split on the
         # ACTION instead, which is the one column with a fixed vocabulary.
         rule = _ufw_rule_split(line)
-        if rule:
-            rules.append(rule)
+        if not rule:
+            continue
+        key = tuple(re.sub(r"\s*\(v6\)", "", rule[k]) for k in ("to", "action", "direction", "from"))
+        if key in seen and "(v6)" in rule["to"]:
+            continue
+        seen.add(key)
+        rules.append(rule)
 
     return {"enabled": enabled, "status_text": status_text, "rules": rules}
 

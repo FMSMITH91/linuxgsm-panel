@@ -245,3 +245,39 @@ check("auth.log: rotated within the 24 h, its count is not held against the audi
       "says the fail2ban feed is broken); a file that is its whole history still is",
       "3 failed-login lines in 24 h (audit log says 6000; not compared" in _ar44 and "✗" not in
       _ar44.split("·")[1] and "(audit log says 6000 ✗)" in _af44, repr((_ar44, _af44)))
+
+
+# ── ufw_status: no rule row is dropped (B-extra) ────────────────────────────────────────────────
+_UFW_OUT44 = """Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), deny (routed)
+New profiles: skip
+
+To                         Action      From
+--                         ------      ----
+Anywhere on tailscale0     DENY IN     Anywhere                   # lock (temporary)
+Anywhere on tailscale0     ALLOW IN    Anywhere
+22/tcp                     ALLOW IN    Anywhere
+Anywhere (v6) on tailscale0  DENY IN    Anywhere (v6)
+80/tcp (v6)                DENY IN     Anywhere (v6)
+22/tcp (v6)                ALLOW IN    Anywhere (v6)
+"""
+
+
+def _ufw_rows44():
+    with _patched():
+        _patch(SO, "_run_verb", lambda verb, args=(), timeout=30, merge_stderr=True:
+               (_UFW_OUT44, "", 0) if verb == "ufw-status" else ("", "", 1))
+        st = SO.ufw_status()
+    return st
+
+
+_uf44 = _ufw_rows44()
+check("ufw_status: a row whose comment has parentheses is a rule too, so a tailscale0 DENY IN "
+      "above the allow keeps the 'Disable (tailnet-only)' guard at Not allowed; a (v6) row with no "
+      "v4 twin is kept, one with a twin is not listed twice",
+      [(r["to"], r["action"]) for r in _uf44["rules"]]
+      == [("Anywhere on tailscale0", "DENY"), ("Anywhere on tailscale0", "ALLOW"), ("22/tcp", "ALLOW"),
+          ("Anywhere (v6) on tailscale0", "DENY"), ("80/tcp (v6)", "DENY")]
+      and SO.ufw_allows_iface_in(_uf44["rules"], "tailscale0") is False,
+      repr(_uf44))
