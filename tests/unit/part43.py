@@ -1468,7 +1468,7 @@ process.stdout.write(JSON.stringify({errors, value}));
 def _rv43_page_scripts(html):
     """[(name, code)] for every script the page runs, in order, vendor bundles skipped."""
     out = []
-    for m in _re43.finditer(r"<script\b([^>]*)>(.*?)</script>", html, _re43.S | _re43.I):
+    for m in _re43.finditer(r"<script\b([^>]*)>(.*?)</script\b[^>]*>", html, _re43.S | _re43.I):
         src = _re43.search(r'src="([^"]+)"', m.group(1))
         if not src:
             out.append(("inline#%d" % len(out), m.group(2)))

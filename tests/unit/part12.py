@@ -1255,10 +1255,12 @@ try:
           and "ssh down" in _p9_audit("details_server").detail, repr((_fl, _p9_audit("details_server"))))
     _r = _A.post("/server/%d/action" % P9_GS, data={"action": "rm -rf"})
     check("action (form): an action outside the runnable set is refused by name",
-          _p9_flashes(_A) == ["Unknown or unsupported action: rm -rf"])
+          _r.status_code == 302 and _p9_flashes(_A) == ["Unknown or unsupported action: rm -rf"],
+          "HTTP %d" % _r.status_code)
     _r = _V.post("/server/%d/action" % P9_GS, data={"action": "restart"})
     check("action (form): a viewer without RESTART is told so, and nothing runs",
-          _p9_flashes(_V) == ["You don't have permission to run 'restart'."])
+          _r.status_code == 302 and _p9_flashes(_V) == ["You don't have permission to run 'restart'."],
+          "HTTP %d" % _r.status_code)
     _sd_result[0] = ("Status: STOPPED", "", 0)
     _r = _V.post("/server/%d/action" % P9_GS, data={"action": "details"})
     check("action (form): a viewer MAY run a read-only action and sees its output",
@@ -3365,7 +3367,7 @@ _pb_lines = open(_pb_sud, encoding="utf-8").read().splitlines() if os.path.exist
 check("install.sh: the grant opens with `Defaults!<helper> env_reset, secure_path=...`",
       _pb_lines[:1] == ['Defaults!/usr/local/lib/linuxgsm-panel/panel-helper env_reset, '
                         'secure_path="/usr/sbin:/usr/bin:/sbin:/bin"'] and len(_pb_lines) == 3,
-      repr(_pb_lines))
+      repr((_pb_lines, _r.returncode, _r.stderr[-300:])))
 _pb_visudo = _pb_shutil.which("visudo") or ("/usr/sbin/visudo" if os.path.exists("/usr/sbin/visudo") else "")
 if _pb_visudo and _PB_ROOT:
     _r = _pb_sp.run([_pb_visudo, "-cf", _pb_sud], capture_output=True, text=True, check=False)  # nosec B603 - fixed argv

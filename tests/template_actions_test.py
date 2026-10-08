@@ -77,7 +77,7 @@ check(_n_js >= 20, "sweep: the static/js/ scan found files to read",
 # so Jinja inside it cannot produce the syntax error this check exists to prevent.
 _INLINE_SCRIPT = re.compile(
     r"<script\b(?![^>]*\bsrc=)(?![^>]*\btype=\"(?:application|text)/(?!javascript)[\w.+-]+\")"
-    r"[^>]*>(.*?)</script>", re.S | re.I)      # re.I: <SCRIPT> is a script too, and was not checked
+    r"[^>]*>(.*?)</script\b[^>]*>", re.S | re.I)   # <SCRIPT> and </script > end a script too
 _jinja_in_js = []
 for _name, _src in srcs.items():
     if not _name.endswith(".html"):
@@ -1687,7 +1687,7 @@ def _branch_paths(src):
 # emits id="ts-out" in three branches of one function, each of which returns. Blank the script
 # bodies out (keeping the byte count, so offsets and the Jinja scan stay aligned) and judge only
 # the markup the template actually renders.
-_SCRIPT_BODY = re.compile(r"(<script\b[^>]*>)(.*?)(</script>)", re.S | re.I)
+_SCRIPT_BODY = re.compile(r"(<script\b[^>]*>)(.*?)(</script\b[^>]*>)", re.S | re.I)
 
 
 def _without_scripts(src):
@@ -2486,7 +2486,7 @@ _SCRIPT_EXPR_OK = re.compile(
 _script_exprs, _script_bad = 0, []
 for _p in sorted(TEMPLATES.rglob("*.html")):
     _t = _p.read_text(encoding="utf-8")
-    for _m in re.finditer(r"<script\b[^>]*>(.*?)</script>", _t, re.S | re.I):
+    for _m in re.finditer(r"<script\b[^>]*>(.*?)</script\b[^>]*>", _t, re.S | re.I):
         for _e in re.finditer(r"\{\{(.*?)\}\}", _m.group(1), re.S):
             _script_exprs += 1
             if not _SCRIPT_EXPR_OK.match(_e.group(1).strip()):
