@@ -612,10 +612,15 @@ def _grant_content_read(server, gmod_user, content_user, games):
         return ("Couldn't read %s's group, so the content mount was not granted. "
                 "Check the account exists on this host." % content_user)
     # Read access: add the GMod user to the content group, and make the content group-traversable
-    # (home) + group-readable (each game tree). Best-effort per command.
-    _core.run_privileged(server, "content-grant-read",
-                         [content_user, group, gmod_user] + list(games), timeout=180,
-                         merge_stderr=False)
+    # (home) + group-readable (each game tree). Every step is attempted; any that fails fails the
+    # grant (the verb's exit status says so on both transports). Its rc used to be ignored, so a
+    # failed usermod left a mount that read nothing reported as "Mounted".
+    out, err, rc = _core.run_privileged(server, "content-grant-read",
+                                        [content_user, group, gmod_user] + list(games), timeout=180,
+                                        merge_stderr=False)
+    if rc != 0:
+        return ("Couldn't give %s read access to %s's content: %s"
+                % (gmod_user, content_user, ((err or out or "").strip() or "rc %s" % rc)[-200:]))
     return None
 
 

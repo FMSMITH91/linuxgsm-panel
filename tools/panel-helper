@@ -5203,8 +5203,8 @@ def do_content_grant_read(args, content):
     """Let a GMod user read a content user's game trees.
 
     Was `usermod -aG <grp> <gmod>; chmod g+x /home/<content>; chmod -R g+rX …` in one root shell.
-    Each step is best-effort here exactly as it was there — a host where one of them fails should
-    still get the others."""
+    Each step is still attempted when another fails, but a failed usermod is the verb's answer:
+    1, not 0 (see below)."""
     content_user, group, gmod_user, games = args[0], args[1], args[2], args[3:]
     content_pw = pwd.getpwnam(content_user)
     # The group is derived from an account the CALLER names, so the equality check below is
@@ -5227,8 +5227,12 @@ def do_content_grant_read(args, content):
         print("panel-helper: content-grant-read group does not match the content user",
               file=sys.stderr)
         return 2
-    subprocess.run([resolve("usermod"), "-aG", group, gmod_user],  # nosec B603 - validated argv
-                   shell=False, capture_output=True, timeout=60)
+    joined = subprocess.run([resolve("usermod"), "-aG", group, gmod_user],  # nosec B603 - validated argv
+                            shell=False, capture_output=True, timeout=60)
+    # The membership IS the grant: without it the GMod server reads none of the content, whatever
+    # the bits below say. So a usermod that failed fails the verb (after the bits are still set,
+    # best-effort as before) — its exit status was thrown away, and the mount reported "Mounted".
+    rc = 0 if getattr(joined, "returncode", 1) == 0 else 1
     # Traversal, outermost first: the home, then serverfiles, then each granted game tree. The
     # shell form skipped serverfiles because content-dir-create had already made it group-readable;
     # it does not any more, so the grant is what opens the path.
@@ -5242,7 +5246,7 @@ def do_content_grant_read(args, content):
     try:
         home_fd = os.open(home_of(content_user), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError:
-        return 0                  # no home to grant anything in; best-effort, as before
+        return rc                 # no home to grant anything in; best-effort, as before
     try:
         try:
             _chmod_nofollow(home_of(content_user), stat.S_IXGRP)
@@ -5252,7 +5256,7 @@ def do_content_grant_read(args, content):
             sf_fd = os.open(CONTENT_SUBDIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                             dir_fd=home_fd)
         except OSError:
-            return 0              # no serverfiles, or a link where it should be: nothing to open
+            return rc             # no serverfiles, or a link where it should be: nothing to open
         try:
             try:
                 _chmod_nofollow(CONTENT_SUBDIR, stat.S_IXGRP, dir_fd=home_fd)
@@ -5282,7 +5286,7 @@ def do_content_grant_read(args, content):
             os.close(sf_fd)
     finally:
         os.close(home_fd)
-    return 0
+    return rc
 
 
 def do_write_file(args, content):

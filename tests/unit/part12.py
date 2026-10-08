@@ -3575,8 +3575,8 @@ _pb_rg = _pb_priv.remote_command("content-grant-read", ["cu", "cu", "gm", "cstri
 _pb_rr = _pb_priv.remote_command("content-game-remove", ["cu", "cstrike", "cssserver"])
 check("privileged: the remote content grant's chmods run as the content account (a link in its "
       "tree cannot aim root's chmod -R), usermod stays root's",
-      _pb_rg.startswith("usermod -aG cu gm; ")
-      and all(p.startswith("runuser -u cu -- chmod ") for p in _pb_rg.split("; ")[1:])
+      _pb_rg.startswith("_cgr=0; usermod -aG cu gm || _cgr=1; ")
+      and all(p.startswith("runuser -u cu -- chmod ") for p in _pb_rg.split("; ")[2:-1])
       and _pb_rg.count("runuser -u cu -- chmod") == 3, _pb_rg)
 check("privileged: ...and the remote content removal's rm -rf runs as that account too",
       _pb_rr.count("runuser -u cu -- rm -rf ") == 3 and "; rm -rf" not in _pb_rr, _pb_rr)
@@ -3599,7 +3599,7 @@ if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("runuser"):
     os.chown(_pb_game, _pb_daemon.pw_uid, -1)
     os.symlink(_pb_rootdir, os.path.join(_pb_game, "cstrike"))
     os.lchown(os.path.join(_pb_game, "cstrike"), _pb_daemon.pw_uid, -1)
-    _pb_cmd = _pb_rg.split("; ")[-1].replace("/home/cu/serverfiles/cstrike",
+    _pb_cmd = _pb_rg.split("; ")[-2].split(" || ")[0].replace("/home/cu/serverfiles/cstrike",
                                              os.path.join(_pb_game, "cstrike")).replace("-u cu", "-u daemon")
     _r = _pb_run(_pb_cmd)
     check("privileged: (driven) the remote grant's chmod -R through a link to a root-owned tree "

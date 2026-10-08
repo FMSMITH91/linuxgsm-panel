@@ -7173,3 +7173,59 @@ finally:
     else:
         os.environ["SUDO_UID"] = _rv5_uid
     _shutil.rmtree(_rv5_dir, ignore_errors=True)
+
+
+# ── content-grant-read: a failed step fails the verb (review 2026-10-08, B-extra) ──────────────────
+# The remote form chained its steps with `;`, so its exit status was the last chmod's: a usermod
+# that failed answered 0. The helper threw usermod's status away, and gmod's caller ignored the
+# verb's rc on both transports, so the mount said "Mounted" for a server that could read nothing.
+# The rendered string is RUN under bash with usermod/runuser as shell functions answering per case.
+from panel.ops.ssh_manager import _core as _bx_core, gmod as _bx_gmod
+
+
+def _bx_remote_rc(usermod_rc, chmod_rc):
+    cmd = _priv.remote_command("content-grant-read", ["cu", "cu", "gm", "cstrike"])
+    prelude = "usermod() { return %d; }; runuser() { return %d; }; " % (usermod_rc, chmod_rc)
+    return _sub.run(["bash", "-c", prelude + cmd], capture_output=True, timeout=30).returncode
+
+
+_bx_rcs = {k: _bx_remote_rc(*k) for k in ((1, 0), (0, 1), (0, 0))}
+check("privileged: the remote content grant fails when its usermod fails (not the last chmod's 0)",
+      _bx_rcs[(1, 0)] != 0, repr(_bx_rcs))
+check("privileged: ...and when a chmod fails, while all succeeding is still 0 (positive control)",
+      _bx_rcs[(0, 1)] != 0 and _bx_rcs[(0, 0)] == 0, repr(_bx_rcs))
+
+_bx_saved = (_helper.pwd, _helper.grp, _helper.subprocess, _helper.HOME_ROOT)
+_bx_dir = _tempfile.mkdtemp(prefix="bx-grant-")
+try:
+    _helper.HOME_ROOT = _bx_dir               # no home there: the grant stops after usermod
+    _helper.pwd = NS(getpwnam=lambda n: NS(pw_gid=4321, pw_uid=4321, pw_name=n))
+    _helper.grp = NS(getgrgid=lambda g: NS(gr_name="cu", gr_gid=g, gr_mem=[]))
+    _bx_hrc = {}
+    for _bx_um in (1, 0):
+        _helper.subprocess = NS(run=lambda *a, _r=_bx_um, **k: NS(returncode=_r))
+        try:
+            _bx_hrc[_bx_um] = _helper.do_content_grant_read(["cu", "cu", "gm", "cstrike"], "")
+        except Exception as _e:
+            _bx_hrc[_bx_um] = repr(_e)
+finally:
+    (_helper.pwd, _helper.grp, _helper.subprocess, _helper.HOME_ROOT) = _bx_saved
+    _shutil.rmtree(_bx_dir, ignore_errors=True)
+check("helper content-grant-read: a usermod that failed is the verb's answer (non-zero)",
+      _bx_hrc.get(1) not in (0, None) and not isinstance(_bx_hrc.get(1), str), repr(_bx_hrc))
+check("helper content-grant-read: ...and one that worked still answers 0 (positive control)",
+      _bx_hrc.get(0) == 0, repr(_bx_hrc))
+
+_bx_saved_c = (_bx_core.run_privileged, _bx_gmod._user_primary_group)
+try:
+    _bx_gmod._user_primary_group = lambda server, user: "cu"
+    _bx_core.run_privileged = lambda s, v, a=(), **k: ("", "usermod: group 'cu' does not exist", 1)
+    _bx_fail = _bx_gmod._grant_content_read(object(), "gm", "cu", ["cstrike"])
+    _bx_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    _bx_ok = _bx_gmod._grant_content_read(object(), "gm", "cu", ["cstrike"])
+finally:
+    (_bx_core.run_privileged, _bx_gmod._user_primary_group) = _bx_saved_c
+check("gmod mount: a content grant the host refused is reported, not passed over as mounted",
+      isinstance(_bx_fail, str) and "does not exist" in _bx_fail, repr(_bx_fail))
+check("gmod mount: ...and a grant that worked still returns None (positive control)",
+      _bx_ok is None, repr(_bx_ok))
