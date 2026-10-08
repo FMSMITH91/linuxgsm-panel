@@ -1192,8 +1192,8 @@ try:
     _cm_res["fresh"] = _sm_core._ssh_mux_opts()
     _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "loose")
     os.mkdir(_sm_core._SSH_CM_DIR)
-    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a world-writable dir in this test's temp dir: the case refused
-    os.chmod(_sm_core._SSH_CM_DIR, 0o777)  # nosec B103 - a world-writable dir in this test's temp dir: the case refused
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- world-writable on purpose, in this test's temp dir
+    os.chmod(_sm_core._SSH_CM_DIR, 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     _cm_res["loose"] = _sm_core._ssh_mux_opts()
     os.mkdir(os.path.join(_cm_root, "target"), 0o700)
     _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "link")

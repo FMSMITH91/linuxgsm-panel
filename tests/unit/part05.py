@@ -2099,7 +2099,7 @@ try:
     _tmp_st = os.stat("/tmp")  # nosec B108 - reads /tmp's own mode to pick the case
     if _tmp_st.st_uid == 0 and _tmp_st.st_mode & 0o002:
         del _dbr_repaired[:]
-        _dbr_rc = _dbr.main(["db_maintenance.py", "repair", "/tmp/panel-db-that-is-not-there.db"])  # nosec B108 - a path that does not exist; repair is stubbed
+        _dbr_rc = _dbr.main(["db_maintenance.py", "repair", "/tmp/panel-db-that-is-not-there.db"])  # nosec B108 - absent path; repair stubbed
         os.chdir(_dbr_cwd)
         check("db repair as root: a root-owned directory others can write is refused",
               _dbr_rc == 1 and not _dbr_repaired and not _dbr_became,

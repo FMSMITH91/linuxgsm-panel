@@ -2777,9 +2777,9 @@ def _check_audit_backfill_on_upgrade():
         _hA.name, _sY.name = tag + "_hA", tag + "_prod"     # hA unique again; tag_prod ambiguous
         db.session.commit()
         for _c in ("game_server_id", "remote_id"):
-            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- identifiers from a literal tuple, replaying an old schema
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- names from a literal tuple (an old schema)
             db.session.execute(_t("DROP INDEX IF EXISTS ix_audit_log_%s" % _c))
-            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- identifiers from a literal tuple, replaying an old schema
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- names from a literal tuple (an old schema)
             db.session.execute(_t("ALTER TABLE audit_log DROP COLUMN %s" % _c))
         db.session.commit()
         _ids = {}
@@ -3023,8 +3023,7 @@ def _check_invites():
             return inv.id, tok
 
 
-    # nosemgrep: python.lang.security.audit.hardcoded-password-default-argument.hardcoded-password-default-argument -- a throwaway invitee's password
-    def _accept(tok, username, password="Sufficient1!pass"):  # nosec B107 - a throwaway invitee's password
+    def _accept(tok, username, password="Sufficient1!pass"):  # nosec B107 - a throwaway invitee's password  # nosemgrep
         return _anon_inv.post("/invite/%s" % tok,
                               data={"username": username, "password": password,
                                     "confirm_password": password})

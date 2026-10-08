@@ -1823,14 +1823,14 @@ try:
     check("install.sh: ...but not from a tree the panel user owns",
           "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
     _rs_t = _rs_srctree("srcworld")
-    os.chmod(os.path.join(_rs_t, "tools"), 0o777)  # nosec B103 - a world-writable dir in this test's temp dir: the case refused
+    os.chmod(os.path.join(_rs_t, "tools"), 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     _rs_out = _rs_case("srcworld", _rs_no_git, src=_rs_t, panel_user=_rs_other)
     check("install.sh: ...nor through a directory anyone can write",
           "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
     # ...nor from a tree in a directory the panel user could swap it out of.
     _rs_par = os.path.join(_rs_sb, "srcparent-dir")
     os.makedirs(_rs_par)
-    os.chmod(_rs_par, 0o777)  # nosec B103 - a world-writable dir in this test's temp dir: the case refused
+    os.chmod(_rs_par, 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     _rs_out = _rs_case("srcparent", _rs_no_git, src=_rs_srctree("srcparent", parent=_rs_par),
                        panel_user=_rs_other)
     check("install.sh: ...nor from a tree whose parent directory anyone can write",
@@ -1866,7 +1866,7 @@ try:
     _rs_t = _rs_srctree("srclink")
     _rs_drop = os.path.join(_rs_sb, "drop")
     os.makedirs(_rs_drop)
-    os.chmod(_rs_drop, 0o777)  # nosec B103 - a world-writable dir in this test's temp dir: the case refused
+    os.chmod(_rs_drop, 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     with open(os.path.join(_rs_drop, "helper"), "w") as _f:
         _f.write("DROPPED-HELPER\n")
     os.unlink(os.path.join(_rs_t, "tools", "panel-helper"))
@@ -6541,7 +6541,7 @@ check("tailscale.html: ...and a stopped daemon still reads as stopped, not as un
 # The Accept Routes row: RouteAll, which is None when the prefs could not be read — and that is
 # not "No". (The row used to print the TUN flag as if it were this.)
 _ts_nd = _TsEnv(autoescape=True).from_string(_ts_tpl[_ts_tpl.index("<!-- Node Details -->"):
-                                      _ts_tpl.index("<!-- Peer Reachability Checker -->")])
+                                                     _ts_tpl.index("<!-- Peer Reachability Checker -->")])
 
 
 def _ts_ar_row(v):

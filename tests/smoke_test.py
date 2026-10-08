@@ -15804,7 +15804,7 @@ try:
             db.session.commit()
             _gh_ids[_gh_k] = _gh_row.id
             # Past @validates, exactly as a restored or hand-edited database would be.
-            db.session.execute(_gh_sql("UPDATE game_server SET %s = :n WHERE id = :i" % _gh_col),  # nosec B608 - identifiers from a literal tuple; values are bound
+            db.session.execute(_gh_sql("UPDATE game_server SET %s = :n WHERE id = :i" % _gh_col),  # nosec B608 - names from a literal tuple
                                {"n": _gh_val, "i": _gh_row.id})
             db.session.commit()
     _gh_sent, _gh_sent_lock = [], _gh_thr.Lock()
@@ -15943,7 +15943,7 @@ try:
         # Raw, like the insert, and the samples the metrics pass wrote go with them: the ORM's
         # after_delete prune does not see a raw DELETE.
         for _gh_tbl, _gh_col in (("metric_sample", "server_id"), ("game_server", "id")):
-            db.session.execute(_gh_sql("DELETE FROM %s WHERE %s IN (:a, :b, :c, :d)" % (_gh_tbl, _gh_col)),  # nosec B608 - identifiers from a literal tuple; values are bound
+            db.session.execute(_gh_sql("DELETE FROM %s WHERE %s IN (:a, :b, :c, :d)" % (_gh_tbl, _gh_col)),  # nosec B608 - names from a literal tuple
                                {"a": _gh_ids["bad"], "b": _gh_ids["ctl"], "c": _gh_ids["type"],
                                 "d": _gh_ids["port"]})
         db.session.commit()

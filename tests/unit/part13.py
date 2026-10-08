@@ -2720,8 +2720,8 @@ try:
     # One that exists but others can write: a socket planted in it would get every command.
     _cm_loose10 = os.path.join(_cm_tmp10, "loose")
     os.mkdir(_cm_loose10)
-    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a world-writable dir in this test's temp dir: the case refused
-    os.chmod(_cm_loose10, 0o777)  # nosec B103 - a world-writable dir in this test's temp dir: the case refused
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- world-writable on purpose, in this test's temp dir
+    os.chmod(_cm_loose10, 0o777)  # nosec B103 - world-writable on purpose, in this test's temp dir
     _sm_core._SSH_CM_DIR = _cm_loose10
     _cap_cm10, _cap_cmoff10 = _cap10("panel.ssh")
     try:
