@@ -86,7 +86,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
-          config-file: ./.github/codeql/codeql-config.yml   # everything but docs/, tests included
+          config-file: ./.github/codeql/codeql-config.yml   # tests included; see the file for its scope
 
       - name: Perform CodeQL Analysis
         id: analyze

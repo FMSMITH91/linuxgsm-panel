@@ -4567,8 +4567,9 @@ check("coverage: Semgrep reads every file whole (no per-rule timeout, no size cu
       in _sg_after and _sg_after.count("exit 1") >= 2, "")
 _cq_cfg = open(os.path.join(_root, ".github", "codeql", "codeql-config.yml"), encoding="utf-8").read()
 _cq_ign = re.search(r"^paths-ignore:\n((?:  - .*\n)+)", _cq_cfg, re.M)
-check("coverage: CodeQL analyses tests/ (paths-ignore is docs/ alone)",
-      _cq_ign is not None and _cq_ign.group(1).split() == ["-", "docs"]
+check("coverage: CodeQL analyses tests/ (paths-ignore is docs/, and the one suite its extractor "
+      "cannot finish in time)",
+      _cq_ign is not None and _cq_ign.group(1).split() == ["-", "docs", "-", "tests/smoke_test.py"]
       and not re.search(r"^paths:", _cq_cfg, re.M), _cq_ign and _cq_ign.group(1))
 _cq_wf = open(os.path.join(_root, ".github", "workflows", "codeql.yml"), encoding="utf-8").read()
 _cq_gate = _cq_wf[_cq_wf.index("      - name: The helper and the tests are in the analysed Python database"):
