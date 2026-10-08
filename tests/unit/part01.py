@@ -1192,7 +1192,8 @@ try:
     _cm_res["fresh"] = _sm_core._ssh_mux_opts()
     _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "loose")
     os.mkdir(_sm_core._SSH_CM_DIR)
-    os.chmod(_sm_core._SSH_CM_DIR, 0o777)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a world-writable dir in this test's temp dir: the case refused
+    os.chmod(_sm_core._SSH_CM_DIR, 0o777)  # nosec B103 - a world-writable dir in this test's temp dir: the case refused
     _cm_res["loose"] = _sm_core._ssh_mux_opts()
     os.mkdir(os.path.join(_cm_root, "target"), 0o700)
     _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "link")
@@ -2927,7 +2928,8 @@ try:
         _py = os.path.join(_pd, "venv", "bin", "python3")
         with open(_py, "w") as _f:
             _f.write('#!/bin/sh\necho DBM-UPDATE >> %s\necho "DBM $*"\n' % _iw_shlex.quote(_log))
-        os.chmod(_py, 0o755)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+        os.chmod(_py, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
         return _pd, os.path.join(_iw_dir, tag + "-backup"), _log
 
     _o_pd, _o_bk, _o_log = _iw_stage_fixture("stage12")

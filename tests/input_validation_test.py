@@ -85,6 +85,7 @@ from panel.db.models import db, User, RemoteServer, GameServer, SetupState
 from panel.security import auth
 
 app = create_app()
+# nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
 app.config["WTF_CSRF_ENABLED"] = False
 app.config["SESSION_PROTECTION"] = None
 app.config["SESSION_COOKIE_SECURE"] = False

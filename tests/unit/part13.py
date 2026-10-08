@@ -1539,6 +1539,7 @@ try:
                    "print('PROBE ctty=%%s sigint_ignored=%%s term=%%s' %% (ctty, "
                    "signal.getsignal(signal.SIGINT) is signal.SIG_IGN, "
                    "os.environ.get('TERM')), flush=True)\n" % _sys10.executable)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
     os.chmod(_probe10, 0o700)
     _lo10, _lx10, _ldone10 = [], [], threading.Event()
     _ls10 = _ts10.Session("local10", "local", lambda s, d: _lo10.append(d),
@@ -1586,6 +1587,7 @@ from panel.db.models import (AuditLog as _Audit10, GameServer as _GS10, HostSamp
                              db as _db10)
 
 _dbapp10 = _Flask10("unit_part13_db")
+# nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
 _dbapp10.config.update(SQLALCHEMY_DATABASE_URI="sqlite://", SQLALCHEMY_TRACK_MODIFICATIONS=False,
                        SECRET_KEY="unit-part13", TESTING=True)
 _db10.init_app(_dbapp10)
@@ -2718,7 +2720,8 @@ try:
     # One that exists but others can write: a socket planted in it would get every command.
     _cm_loose10 = os.path.join(_cm_tmp10, "loose")
     os.mkdir(_cm_loose10)
-    os.chmod(_cm_loose10, 0o777)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a world-writable dir in this test's temp dir: the case refused
+    os.chmod(_cm_loose10, 0o777)  # nosec B103 - a world-writable dir in this test's temp dir: the case refused
     _sm_core._SSH_CM_DIR = _cm_loose10
     _cap_cm10, _cap_cmoff10 = _cap10("panel.ssh")
     try:
@@ -3261,6 +3264,7 @@ try:
         _sm_core._pin_app = None
         _phk10 = _try10(_core_saved10["_persist_host_key"], _PinRefuses10(), "ssh-rsa X")
         _nodb_app10 = _Flask10("unit_part13_nodb")
+        # nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
         _nodb_app10.config.update(
             SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_nodb_dir10, "gone", "x.db"),
             SQLALCHEMY_TRACK_MODIFICATIONS=False, SECRET_KEY="unit-part13", TESTING=True)
@@ -3383,6 +3387,7 @@ try:
     _core_restore10("_persist_host_key", "get_connection")
     _pin_dir10 = _tmp10.mkdtemp(prefix="unit-pin-")
     _pinapp10 = _Flask10("unit_part13_pin")
+    # nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
     _pinapp10.config.update(
         SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_pin_dir10, "pin.db"),
         SQLALCHEMY_TRACK_MODIFICATIONS=False, SECRET_KEY="unit-part13", TESTING=True)
@@ -3479,6 +3484,7 @@ try:
     _pl_dir10 = _tmp10.mkdtemp(prefix="unit-pinlock-")
     _pl_path10 = os.path.join(_pl_dir10, "pinlock.db")
     _plapp10 = _Flask10("unit_part13_pinlock")
+    # nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
     _plapp10.config.update(
         SQLALCHEMY_DATABASE_URI="sqlite:///" + _pl_path10, SQLALCHEMY_TRACK_MODIFICATIONS=False,
         SECRET_KEY="unit-part13", TESTING=True,
@@ -4858,6 +4864,7 @@ def _ca13_check_login_behind_proxy(app, client):
     fails = _app10mod._LOGIN_FAILS
     saved_csrf = app.config.get("WTF_CSRF_ENABLED", True)
     saved_uid = _ca13_auth._loopback_peer_uid
+    # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
     app.config["WTF_CSRF_ENABLED"] = False
     try:
         fails.clear()

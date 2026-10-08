@@ -1062,6 +1062,7 @@ from panel.routes import _shared as _SH41  # noqa: E402
 import panel.security.auth as _auth41  # noqa: E402
 
 _rapp41 = _Flask41("unit_part41_routes")
+# nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
 _rapp41.config.update(SECRET_KEY="unit-part41-routes",  # nosec B106 - this part's throwaway app
                       LOGIN_DISABLED=True, TESTING=True, SQLALCHEMY_TRACK_MODIFICATIONS=False,
                       SQLALCHEMY_DATABASE_URI=_app41.config["SQLALCHEMY_DATABASE_URI"])

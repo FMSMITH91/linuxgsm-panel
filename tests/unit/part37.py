@@ -1015,7 +1015,7 @@ def _f7_imports():
         if plain and frm:
             both.append("%s: import at %s, from-import at %s" % (_rel37(f), plain[:3], frm[:3]))
     check("tests: no test module imports app both ways (`import app as X` beside `from app import`; "
-          "CodeQL's py/import-and-import-from, which does not read tests/)",
+          "CodeQL's py/import-and-import-from, held here before CodeQL read tests/ too)",
           len(files) >= 40 and not both, "; ".join(both))
 
 

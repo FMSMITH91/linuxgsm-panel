@@ -1407,7 +1407,7 @@ try:
                       'for a in "$@"; do case "$a" in file:*) f="${a#file:}";; esac\n'
                       '  [ "$prev" = --attach-config ] && f="$a"; prev="$a"; done\n'
                       'echo "$f" > "$OUT/path"; stat -c %a "$f" > "$OUT/mode"; cat "$f" > "$OUT/got"\n')
-        os.chmod(os.path.join(_sec_bin, _tool), 0o755)
+        os.chmod(os.path.join(_sec_bin, _tool), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _sm_core_isl = _sm_core.is_local_server
     _sm_core.is_local_server = lambda s: True
     _sec_ran = {}
@@ -1476,7 +1476,7 @@ check("privileged: the remote sweep names every slot in that list",
 # ...and the two that were broken really do send something now.
 check("privileged: steam-dumps-sweep has a remote rendering that names the account",
       "gmodserver" in _priv.remote_command("steam-dumps-sweep", ["gmodserver"])
-      and "/tmp/dumps" in _priv.remote_command("steam-dumps-sweep", ["gmodserver"]))
+      and "/tmp/dumps" in _priv.remote_command("steam-dumps-sweep", ["gmodserver"]))  # nosec B108 - the helper's slot names; I/O stubbed
 # Fail CLOSED remotely, exactly as the helper does locally: `getent` answers 2 for "no such key"
 # and other codes for "could not look", so only 2 may delete a slot.
 check("privileged: ...and only a definite 'no such uid' frees a slot remotely",
@@ -1563,9 +1563,9 @@ try:
     # dumps04 is a SYMLINK owned by the same gone-account uid as dumps02, so ownership gives it no
     # protection at all: only the directory test can save it. (Owned by a live account it passed
     # whether or not the guard was there — a check that proves nothing.)
-    _sd_owner = {"/tmp/dumps": 500, "/tmp/dumps01": 501, "/tmp/dumps02": 502,
-                 "/tmp/dumps03": 503, "/tmp/dumps04": 502}
-    _sd_link = "/tmp/dumps04"
+    _sd_owner = {"/tmp/dumps": 500, "/tmp/dumps01": 501, "/tmp/dumps02": 502,  # nosec B108 - the helper's slot names; I/O stubbed
+                 "/tmp/dumps03": 503, "/tmp/dumps04": 502}  # nosec B108 - the helper's slot names; I/O stubbed
+    _sd_link = "/tmp/dumps04"  # nosec B108 - the helper's slot names; I/O stubbed
 
     class _SdStat(object):
         def __init__(self, uid, isdir): self.st_uid, self.st_mode = uid, (0o040755 if isdir else 0o120777)
@@ -1589,14 +1589,14 @@ try:
 
     _helper.do_steam_dumps_sweep(["gmodserver"], None)
     check("steam dumps: the swept account's own slot is freed",
-          "/tmp/dumps" in _sd_removed, _sd_removed)
+          "/tmp/dumps" in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
     check("steam dumps: a slot whose owner no longer exists is freed",
-          "/tmp/dumps02" in _sd_removed, _sd_removed)
+          "/tmp/dumps02" in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
     check("steam dumps: a LIVE account's slot is left alone",
-          "/tmp/dumps01" not in _sd_removed, _sd_removed)
+          "/tmp/dumps01" not in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
     # Fail closed: an unreadable passwd database must not make every slot look orphaned.
     check("steam dumps: a slot whose owner cannot be looked up is kept",
-          "/tmp/dumps03" not in _sd_removed, _sd_removed)
+          "/tmp/dumps03" not in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
     # A symlink wearing one of the ten names is never followed out of /tmp.
     check("steam dumps: a symlink in a slot's place is not removed",
           _sd_link not in _sd_removed, _sd_removed)
@@ -1608,13 +1608,13 @@ try:
     _helper.pwd.getpwnam = _sd_missing
     _helper.do_steam_dumps_sweep(["gmodserver"], None)
     check("steam dumps: an already-deleted account's slot is still freed, as an orphan",
-          "/tmp/dumps02" in _sd_removed and "/tmp/dumps01" not in _sd_removed, _sd_removed)
+          "/tmp/dumps02" in _sd_removed and "/tmp/dumps01" not in _sd_removed, _sd_removed)  # nosec B108 - the helper's slot names; I/O stubbed
 finally:
     (_helper.os.lstat, _helper.pwd.getpwuid, _helper.pwd.getpwnam, _helper.shutil.rmtree) = _sd_orig
 
 # The paths must be a constant in the helper, not anything a caller can influence.
 check("steam dumps: the ten slot paths are fixed, and only those ten",
-      _helper.STEAM_DUMP_SLOTS == ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i for i in range(1, 10)),
+      _helper.STEAM_DUMP_SLOTS == ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i for i in range(1, 10)),  # nosec B108 - the helper's slot names; I/O stubbed
       _helper.STEAM_DUMP_SLOTS)
 
 
@@ -2096,17 +2096,17 @@ try:
     else:
         skip("db repair as root: a root-owned directory is worked in as root (no drop)",
              "/ is not a root-owned, non-writable directory here")
-    _tmp_st = os.stat("/tmp")
+    _tmp_st = os.stat("/tmp")  # nosec B108 - reads /tmp's own mode to pick the case
     if _tmp_st.st_uid == 0 and _tmp_st.st_mode & 0o002:
         del _dbr_repaired[:]
-        _dbr_rc = _dbr.main(["db_maintenance.py", "repair", "/tmp/panel-db-that-is-not-there.db"])
+        _dbr_rc = _dbr.main(["db_maintenance.py", "repair", "/tmp/panel-db-that-is-not-there.db"])  # nosec B108 - a path that does not exist; repair is stubbed
         os.chdir(_dbr_cwd)
         check("db repair as root: a root-owned directory others can write is refused",
               _dbr_rc == 1 and not _dbr_repaired and not _dbr_became,
               "rc=%r repaired=%r became=%r" % (_dbr_rc, _dbr_repaired, _dbr_became))
     else:
         skip("db repair as root: a root-owned directory others can write is refused",
-             "/tmp is not a root-owned world-writable directory here")
+             "/tmp is not a root-owned world-writable directory here")  # nosec B108 - a skip message
 finally:
     os.chdir(_dbr_cwd)
     _dbr._euid, _dbr._become, _dbr.repair, _dbr._reclaim_db_files = _dbr_o
@@ -2176,7 +2176,7 @@ try:
     _dep_cmd = _dep_seen.get("cmd", "")
     check("deps: the pipeline still escalates (so this test is testing the root path)",
           _dep_seen.get("kw", {}).get("sudo") is True, str(_dep_seen.get("kw")))
-    for _payload in ("$(id", "`whoami`", "a;b", "/tmp/pwned"):
+    for _payload in ("$(id", "`whoami`", "a;b", "/tmp/pwned"):  # nosec B108 - an injection payload the validator must refuse
         check("deps: %r never reaches the root pipeline" % _payload, _payload not in _dep_cmd)
     check("deps: ...and the legitimate packages still do",
           "curl" in _dep_cmd and "libstdc++5:i386" in _dep_cmd, _dep_cmd[:120])
@@ -2738,7 +2738,7 @@ check("helper restore: ...at mode 0600",
 #     caller — the fchown is observed through a stub to prove it is asked for, with the dir's ids.)
 with open(os.path.join(_rs_stage, "cred_key"), "w", encoding="utf-8") as _fh:
     _fh.write("KEY")
-os.chmod(os.path.join(_rs_stage, "cred_key"), 0o4755)
+os.chmod(os.path.join(_rs_stage, "cred_key"), 0o4755)  # nosec B103 - a setuid bit the restore must strip; this test's temp dir
 _rs_chown = []
 _rs_o_fchown = _helper.os.fchown
 try:
@@ -3203,13 +3203,13 @@ def _gds_new(npm_global=True):
     with open(os.path.join(gd, "install-gamedig.sh"), "w", encoding="utf-8") as fh:
         fh.write(_GDS_SCRIPT.replace(_GDS_LINKS, "LINK_DIRS=(%s %s)" % (
             _gd_q(os.path.join(root, "usr-local-bin")), _gd_q(os.path.join(root, "usr-bin")))))
-    os.chmod(os.path.join(gd, "install-gamedig.sh"), 0o755)
+    os.chmod(os.path.join(gd, "install-gamedig.sh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     with open(os.path.join(root, "stub", "npm"), "w", encoding="utf-8") as fh:
         fh.write(_GDS_NPM)
     with open(os.path.join(root, "stub", "id"), "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\necho \"${GDS_UID:-0}\"\n")
     for _n in ("npm", "id"):
-        os.chmod(os.path.join(root, "stub", _n), 0o755)
+        os.chmod(os.path.join(root, "stub", _n), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     if npm_global:
         os.makedirs(os.path.join(root, "npm-global", "gamedig"))
         os.symlink("../lib/node_modules/gamedig/bin/gamedig.js", os.path.join(root, "usr-bin", "gamedig"))
@@ -5167,7 +5167,7 @@ try:
             # line, pause, line, then prove it ran to the end, and exit 3.
             _tl_f.write("#!/bin/bash\necho first-line\nsleep 1.5\necho last-line\n"
                         "touch %s/finished\nexit 3\n" % _tl_home)
-        os.chmod(os.path.join(_tl_home, "gmodserver"), 0o755)
+        os.chmod(os.path.join(_tl_home, "gmodserver"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
         with open(os.path.join(_tl_home, ".panel-update.log"), "w") as _tl_f:
             _tl_f.write("STALE output of the previous run\n")
         _tl_script = _tl_inner.replace("/home/gmodserver", _tl_home)

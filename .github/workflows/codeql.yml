@@ -86,12 +86,44 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
-          config-file: ./.github/codeql/codeql-config.yml   # scope analysis out of tests/ and docs/
+          config-file: ./.github/codeql/codeql-config.yml   # everything but docs/, tests included
 
       - name: Perform CodeQL Analysis
+        id: analyze
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: "/language:${{ matrix.language }}"
+
+      # The extractor decides which files are Python, and an analysis that silently left a file out
+      # reports it as clean. tools/panel-helper, the root-run privileged helper, has no .py extension
+      # (it is taken for its shebang), and tests/ was out of scope until it was added. Both are read
+      # back from the source archive of the database that was analysed: a file missing from it fails
+      # the job, by name, instead of reading as "no alerts".
+      - name: The helper and the tests are in the analysed Python database
+        if: matrix.language == 'python'
+        env:
+          DB_LOCATIONS: ${{ steps.analyze.outputs.db-locations }}
+        run: |
+          set -euo pipefail
+          db="$(jq -r '.python[0] // empty' <<<"${DB_LOCATIONS}")"
+          if [ -z "${db}" ] || [ ! -f "${db}/src.zip" ]; then
+            echo "::error::no Python database source archive (db-locations: ${DB_LOCATIONS})"
+            exit 1
+          fi
+          python3 - "${db}/src.zip" <<'PY'
+          import sys
+          import zipfile
+
+          names = {n.rstrip("/") for n in zipfile.ZipFile(sys.argv[1]).namelist()}
+          missing = [p for p in ("tools/panel-helper", "tests/unit_test.py", "tests/unit/part01.py")
+                     if not any(n.endswith("/" + p) for n in names)]
+          print("source archive: %d files" % len(names))
+          if missing:
+              print("::error::not in the analysed Python database: %s" % ", ".join(missing))
+              sys.exit(1)
+          print("analysed: tools/panel-helper, and %d files under tests/"
+                % sum("/tests/" in n for n in names))
+          PY
 
   # ── The PR half of the alert gate ────────────────────────────────────────────────────────────
   # codeql-alerts.yml already asks "does this ref carry an open alert?", and its `if:` reads as

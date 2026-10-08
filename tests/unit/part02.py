@@ -453,13 +453,15 @@ else:
         os.makedirs(_gh_home)
         with open(os.path.join(_gh_home, "gmodserver"), "w") as _fh:
             _fh.write("#!/bin/sh\necho restarted >> %s/restarts\n" % _gh_dir)
-        os.chmod(os.path.join(_gh_home, "gmodserver"), 0o755)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+        os.chmod(os.path.join(_gh_home, "gmodserver"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 
         def _gh_drive(line, reply):
             """Did `line`'s command restart the server, with gamedig printing `reply`?"""
             with open(os.path.join(_gh_bin, "gamedig"), "w") as _fh:
                 _fh.write("#!/bin/sh\necho '%s'\n" % reply)
-            os.chmod(os.path.join(_gh_bin, "gamedig"), 0o755)
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+            os.chmod(os.path.join(_gh_bin, "gamedig"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
             open(os.path.join(_gh_home, ".restart-pending"), "w").close()
             if os.path.exists(os.path.join(_gh_dir, "restarts")):
                 os.remove(os.path.join(_gh_dir, "restarts"))
@@ -776,7 +778,7 @@ try:
         _rok, _rmsg = _bk.restore_backup(_ename, passphrase=_bk_pass)
         check("backup/enc: restoring an encrypted archive succeeds end to end", _rok, str(_rmsg))
         check("backup/enc: ...and the message names the backup, not the temp file",
-              _ename in str(_rmsg) and "/tmp" not in str(_rmsg), str(_rmsg))
+              _ename in str(_rmsg) and "/tmp" not in str(_rmsg), str(_rmsg))  # nosec B108 - asserts the message does NOT name /tmp
         # The REAL safety copy this restore wrote: encrypted, and it opens with the passphrase that
         # was configured, which the message tells the operator.
         _safety_names = [b["name"] for b in _bk.list_backups()
@@ -1171,7 +1173,8 @@ try:
         os.utime(_bl_lock, (_bl_old, _bl_old))
         with open(os.path.join(_bl_bin, "pgrep"), "w") as _bl_f:
             _bl_f.write("#!/bin/sh\nexit %d\n" % _bl_rc)
-        os.chmod(os.path.join(_bl_bin, "pgrep"), 0o755)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+        os.chmod(os.path.join(_bl_bin, "pgrep"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
         _bl_sp.run(["bash", "-c", _sm_game._stale_backup_lock_sweep("gm", home=_bl_home) + "true"],
                    env=dict(os.environ, PATH=_bl_bin + os.pathsep + os.environ.get("PATH", "")),
                    timeout=20, check=False)
@@ -2547,6 +2550,7 @@ if _lp6_srv is not None:
 # row is in /proc/net/tcp. Looking it up in tcp6 found nothing, so Tailscale Serve dialling
 # 127.0.0.1 was never trusted there and every Serve user shared one throttle bucket.
 try:
+    # nosemgrep: python.lang.security.audit.network.bind.avoid-bind-to-all-interfaces -- '::' with V6ONLY off IS the dual-stack case; port 0, closed at once
     _lpd_srv = _lp_sock.socket(_lp_sock.AF_INET6, _lp_sock.SOCK_STREAM)
     _lpd_srv.setsockopt(_lp_sock.IPPROTO_IPV6, _lp_sock.IPV6_V6ONLY, 0)
     _lpd_srv.bind(("::", 0))
@@ -3108,6 +3112,7 @@ _pu = _User()
 _pu.password_hash = _hp("First1!pass")
 check("history: the CURRENT password counts as reused", _pu.password_reused("First1!pass"))
 check("history: an unrelated password does not", not _pu.password_reused("Totally2@other"))
+# nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- pre-hashed fixtures; the history logic is what is under test
 _pu.set_password(_hp("Second2@pass"))
 check("history: after a change, the new one is current", _pu.password_reused("Second2@pass"))
 check("history: ...and the one it replaced is remembered", _pu.password_reused("First1!pass"))
@@ -3115,6 +3120,7 @@ check("history: ...and the one it replaced is remembered", _pu.password_reused("
 # change would cost another bcrypt comparison.
 _chain = ["Third3#pass", "Fourth4$pass", "Fifth5%pass", "Sixth6^pass"]
 for _p in _chain:
+    # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- pre-hashed fixtures; the history logic is what is under test
     _pu.set_password(_hp(_p))
 _pu_hist = _hist(_pu)
 check("history: the window holds exactly PASSWORD_HISTORY_LEN previous passwords",
@@ -3127,8 +3133,11 @@ check("history: one older than the window is allowed again",
 # window by pushing a genuinely older password out and remembering the same one twice.
 _du = _User()
 _du.password_hash = _hp("Alpha1!pass")
+# nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- pre-hashed fixtures; the history logic is what is under test
 _du.set_password(_hp("Beta2@pass"))
+# nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- pre-hashed fixtures; the history logic is what is under test
 _du.set_password(_hp("Alpha1!pass"))
+# nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- pre-hashed fixtures; the history logic is what is under test
 _du.set_password(_hp("Gamma3#pass"))
 _du_hist = _hist(_du)
 check("history: a repeated password is de-duped, not stored twice",
@@ -3144,12 +3153,14 @@ for _bad in ("", "not json", "null", '{"not": "a list"}', '[123, null]'):
     check("history: a malformed history column is ignored, not fatal (%r)" % _bad[:12],
           _bu.password_reused("Only1!pass") and not _bu.password_reused("Other2@pass"))
 _bu.password_history = "not json"
+# nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- pre-hashed fixtures; the history logic is what is under test
 _bu.set_password(_hp("Next2@pass"))
 check("history: ...and set_password replaces the garbage with a real one-entry history",
       len(_hist(_bu)) == 1 and _bu.password_reused("Only1!pass"),
       repr(_bu.password_history)[:80])
 # A brand-new account has nothing to remember.
 _nu = _User()
+# nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- pre-hashed fixtures; the history logic is what is under test
 _nu.set_password(_hp("Brand1!new"))
 check("history: a first password records no history", not _hist(_nu))
 

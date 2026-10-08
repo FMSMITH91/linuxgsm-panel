@@ -117,6 +117,7 @@ _p9.config.update(
     SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_P9_TMP, "p09.db"),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"timeout": 5}},
+    # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
     WTF_CSRF_ENABLED=False, WTF_CSRF_CHECK_DEFAULT=False,
     SESSION_PROTECTION=None, SESSION_COOKIE_SECURE=False, REMEMBER_COOKIE_SECURE=False,
     _MOUNT_PREFIX="/", _TRUST_PROXY=False,
@@ -3302,8 +3303,8 @@ check("helper: the shebang names /usr/bin/python3 outright, isolated (-I), not `
       _pb_first.strip() == "#!/usr/bin/python3 -I", repr(_pb_first))
 _pb_env_saved = dict(os.environ)
 try:
-    os.environ.update({"BASH_ENV": "/tmp/pb-evil", "PATH": "/tmp/pb-evil:/usr/bin",
-                       "PYTHONPATH": "/tmp/pb", "http_proxy": "http://pb.invalid",
+    os.environ.update({"BASH_ENV": "/tmp/pb-evil", "PATH": "/tmp/pb-evil:/usr/bin",  # nosec B108 - hostile env the scrub must drop
+                       "PYTHONPATH": "/tmp/pb", "http_proxy": "http://pb.invalid",  # nosec B108 - hostile env the scrub must drop
                        "SUDO_UID": "998", "FOO": "1"})
     _pb_ce = _pbh._clean_env(DEBIAN_FRONTEND="noninteractive")
     check("helper _clean_env: a fixed PATH and locale, sudo's identity kept, nothing else inherited",
@@ -3342,7 +3343,7 @@ _r = _pb_sp.run([_pb_sys.executable, "-I", "-c",
                  "h._scrub_environ(); print(sorted(os.environ.items()))",
                  os.path.join(_pb_root, "tools", "panel-helper")],
                 capture_output=True, text=True, check=False, timeout=30,
-                env={"BASH_ENV": "/x", "FOO": "1", "SUDO_UID": "5", "PATH": "/tmp:/usr/bin"})
+                env={"BASH_ENV": "/x", "FOO": "1", "SUDO_UID": "5", "PATH": "/tmp:/usr/bin"})  # nosec B108 - hostile env the scrub must drop
 check("helper: the __main__ block scrubs its own environment before any verb runs",
       "_scrub_environ()" in open(os.path.join(_pb_root, "tools", "panel-helper"), encoding="utf-8")
       .read().split('if __name__ == "__main__":')[1][:80]
@@ -3515,14 +3516,19 @@ check("install.sh _owner_read: a FIFO in place of config.json is refused, not wa
 if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
     os.remove(_pb_cfg)
     _pb_shutil.copy(_pb_secret, _pb_cfg)                      # a REAL file, root's, mode 0600
-    os.chmod(_PB, 0o755)
-    os.chmod(os.path.join(_PB, "reads"), 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- traversable by the daemon account; this test's temp dir
+    os.chmod(_PB, 0o755)  # nosec B103 - traversable by the daemon account; this test's temp dir
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- traversable by the daemon account; this test's temp dir
+    os.chmod(os.path.join(_PB, "reads"), 0o755)  # nosec B103 - traversable by the daemon account; this test's temp dir
     os.chown(_pb_rd, _pb_daemon.pw_uid, -1)
-    os.chmod(_pb_rd, 0o755)
-    os.chmod(os.path.join(_pb_rd, "data"), 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- traversable by the daemon account; this test's temp dir
+    os.chmod(_pb_rd, 0o755)  # nosec B103 - traversable by the daemon account; this test's temp dir
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- traversable by the daemon account; this test's temp dir
+    os.chmod(os.path.join(_pb_rd, "data"), 0o755)  # nosec B103 - traversable by the daemon account; this test's temp dir
     _r = _pb_run(_pb_ver_sh + "panel_port", env={"PANEL_DIR": _pb_rd})
     check("install.sh panel_port: as root, a panel-owned tree is read AS ITS OWNER (a root-only "
           "file there is not read)", _r.stdout.strip() == "5000", repr(_r.stdout + _r.stderr))
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
     os.chmod(_PB, 0o700)
 else:
     _pb_skip("install.sh panel_port: read as the owner", "needs root, sudo and a daemon account")
@@ -3602,7 +3608,8 @@ check("privileged: ...and the remote mount.cfg read is the game account's (a lin
 # is a link to a root-owned one. root's chmod -R used to follow it; the account's cannot touch it.
 if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("runuser"):
     _pb_ct = tempfile.mkdtemp(prefix="lgsm-unit-pb-ct-")
-    os.chmod(_pb_ct, 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- traversable by the daemon account; this test's temp dir
+    os.chmod(_pb_ct, 0o755)  # nosec B103 - traversable by the daemon account; this test's temp dir
     _pb_rootdir = os.path.join(_pb_ct, "rootdir")
     os.makedirs(_pb_rootdir)
     with open(os.path.join(_pb_rootdir, "f"), "w") as _fh:
@@ -3673,7 +3680,8 @@ check("install.sh: every install.sh function the lifted snapshot and rollback bl
       not _pb_undefined and "snapshot_service_unit" in _pb_calls, repr(sorted(_pb_undefined)))
 if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
     _pb_up = tempfile.mkdtemp(prefix="lgsm-unit-pb-upd-")
-    os.chmod(_pb_up, 0o755)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- traversable by the daemon account; this test's temp dir
+    os.chmod(_pb_up, 0o755)  # nosec B103 - traversable by the daemon account; this test's temp dir
     _pb_pd = os.path.join(_pb_up, "panel")
     _pb_rootdir = os.path.join(_pb_up, "rootonly")
     os.makedirs(os.path.join(_pb_pd, "data"))

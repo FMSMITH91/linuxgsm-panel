@@ -953,7 +953,8 @@ else:
     try:
         with open(os.path.join(_dr_bin, "gamedig"), "w") as _fh:
             _fh.write("#!/bin/sh\necho '{\"players\":[{\"name\":\"a\"},{\"name\":\"b\"}]}'\n")
-        os.chmod(os.path.join(_dr_bin, "gamedig"), 0o755)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
+        os.chmod(os.path.join(_dr_bin, "gamedig"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
         _dr_saved_path = _sm_core.CRON_TOOL_PATH
         _sm_core.CRON_TOOL_PATH = _dr_bin + ":/usr/bin:/bin"
         try:
@@ -1743,7 +1744,7 @@ import random as _sl_random                                                     
 import re as _sl_re                                                                # noqa: E402
 import time as _sl_time                                                            # noqa: E402
 
-_sl_rng = _sl_random.Random(8786)
+_sl_rng = _sl_random.Random(8786)  # nosec B311 - a seeded, reproducible input, not a secret
 
 
 def _sl_gen(alphabet, n, max_parts=14):

@@ -133,6 +133,7 @@ def _bash34(sh, env_path=None, timeout=60):
 
 # ── this part's own database ─────────────────────────────────────────────────────────────────────
 _app34 = _Flask34("unit_part34_db")
+# nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
 _app34.config.update(SECRET_KEY="unit-part34",  # nosec B106 - this part's throwaway app
                      SQLALCHEMY_DATABASE_URI="sqlite://", SQLALCHEMY_TRACK_MODIFICATIONS=False,
                      TESTING=True)

@@ -1,11 +1,19 @@
-# Scope CodeQL to the application's own source. tests/ (unit + smoke + the fuzz harnesses and their
-# corpus) and docs/ aren't shipped code, so analysing them only adds noise — Bandit and Semgrep
-# already exclude tests/ for the same reason. Security queries still cover all of app.py, the
-# ssh/system modules, the templates' inline JS, and the workflow files (actions).
+# Scope: everything but docs/. docs/ is prose and screenshots, with no code to analyse.
+#
+# tests/ IS analysed (security-and-quality, like the application). It used to be ignored as "not
+# shipped", but the suites are where the panel's security properties are pinned, and a mistake in a
+# test - a comparison that is always true, a result that is never asserted, a path outside the
+# test's temp dir - makes a check pass while proving nothing, which nothing else would notice.
+# A test's deliberate stand-ins are fixed or triaged where they are reported, not hidden here.
+#
+# tools/panel-helper (the root-run end of the sudo boundary) is Python with a shebang and no .py
+# extension. The Python extractor still takes it: its traverser accepts a file with no extension
+# whose first line is a Python shebang (semmle/traverser.py base_filter, modules.is_script). That is
+# not taken on trust: codeql.yml fails the Python analysis when the helper is missing from the
+# database it analysed.
 name: "linuxgsm-panel CodeQL config"
 
 paths-ignore:
-  - tests
   - docs
 
 # Exclude py/partial-ssrf. Its one finding (alert #309, notifications._post) is a false positive: the

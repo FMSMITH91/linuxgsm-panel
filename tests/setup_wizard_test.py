@@ -80,6 +80,7 @@ from app import create_app  # noqa: E402
 from panel.db.models import db, User, SetupState  # noqa: E402
 
 app = create_app()
+# nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
 app.config["WTF_CSRF_ENABLED"] = False
 app.config["SESSION_PROTECTION"] = None
 app.config["SESSION_COOKIE_SECURE"] = False
@@ -286,6 +287,7 @@ def _check_unclaimed_tailscale():
             check("token: a cookie-less Bearer request (CSRF on) is refused %s" % _ep,
                   rr.status_code == 403, "got %d" % rr.status_code)
     finally:
+        # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
         app.config["WTF_CSRF_ENABLED"] = False
     check("token: ...and nothing was run on the host for any of them", _ts_calls == [],
           repr(_ts_calls))

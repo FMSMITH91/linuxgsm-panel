@@ -2928,6 +2928,7 @@ from panel.routes import server_files as _p10_sf  # noqa: E402
 from panel.security import auth as _p10_auth  # noqa: E402
 
 _p10a = _P10Flask("p10_auth")
+# nosemgrep: python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING -- a throwaway app this test builds
 _p10a.config.update(SECRET_KEY="p10-auth", SQLALCHEMY_DATABASE_URI="sqlite://",
                     SQLALCHEMY_TRACK_MODIFICATIONS=False, TESTING=True,
                     SESSION_PROTECTION="strong")

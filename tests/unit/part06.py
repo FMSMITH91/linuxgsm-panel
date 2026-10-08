@@ -103,7 +103,7 @@ check("f2b: a host with no jail.local is a no-op, not a failure",
 _fake_reboot = os.path.join(_sandbox, "fake-reboot")
 _marker = os.path.join(_sandbox, "fired")
 open(_fake_reboot, "w").write("#!/bin/sh\necho fired > %s\n" % _marker)
-os.chmod(_fake_reboot, 0o755)
+os.chmod(_fake_reboot, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 _probe = (
     "import importlib.util as u, importlib.machinery as m, time, sys;"
     "s=u.spec_from_loader('p', m.SourceFileLoader('p', %r));"
@@ -544,7 +544,7 @@ if _osu:
     _fake_apt = os.path.join(_osu, "fake-apt")
     open(_fake_apt, "w").write("#!/bin/sh\necho \"fake apt: $*\"\n"
                                "case \"$*\" in *full-upgrade*) exit 7 ;; esac\nexit 0\n")
-    os.chmod(_fake_apt, 0o755)
+    os.chmod(_fake_apt, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _oslog = os.path.join(_osu, "os-update.log")
     _osprobe = (
         "import importlib.util as u, importlib.machinery as m, time, sys;"
@@ -1823,14 +1823,14 @@ try:
     check("install.sh: ...but not from a tree the panel user owns",
           "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
     _rs_t = _rs_srctree("srcworld")
-    os.chmod(os.path.join(_rs_t, "tools"), 0o777)
+    os.chmod(os.path.join(_rs_t, "tools"), 0o777)  # nosec B103 - a world-writable dir in this test's temp dir: the case refused
     _rs_out = _rs_case("srcworld", _rs_no_git, src=_rs_t, panel_user=_rs_other)
     check("install.sh: ...nor through a directory anyone can write",
           "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
     # ...nor from a tree in a directory the panel user could swap it out of.
     _rs_par = os.path.join(_rs_sb, "srcparent-dir")
     os.makedirs(_rs_par)
-    os.chmod(_rs_par, 0o777)
+    os.chmod(_rs_par, 0o777)  # nosec B103 - a world-writable dir in this test's temp dir: the case refused
     _rs_out = _rs_case("srcparent", _rs_no_git, src=_rs_srctree("srcparent", parent=_rs_par),
                        panel_user=_rs_other)
     check("install.sh: ...nor from a tree whose parent directory anyone can write",
@@ -1866,7 +1866,7 @@ try:
     _rs_t = _rs_srctree("srclink")
     _rs_drop = os.path.join(_rs_sb, "drop")
     os.makedirs(_rs_drop)
-    os.chmod(_rs_drop, 0o777)
+    os.chmod(_rs_drop, 0o777)  # nosec B103 - a world-writable dir in this test's temp dir: the case refused
     with open(os.path.join(_rs_drop, "helper"), "w") as _f:
         _f.write("DROPPED-HELPER\n")
     os.unlink(os.path.join(_rs_t, "tools", "panel-helper"))
@@ -4439,7 +4439,7 @@ try:
         _fh.write("metamod\nsourcemod\n")
     _launcher = os.path.join(_u, "csgoserver")
     open(_launcher, "w").close()
-    os.chmod(_launcher, 0o755)
+    os.chmod(_launcher, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     # A game account names its own config-lgsm entries, and the scan is a newline- and '|'-split
     # line protocol: these are the forgeries (a second record naming ANOTHER account, a shifted
     # field), plus a second real instance and a /home name that is not an account name.
@@ -4451,7 +4451,7 @@ try:
             os.makedirs(os.path.join(_disc_home, _du, "lgsm", "config-lgsm", _di))
             _dl = os.path.join(_disc_home, _du, _di)
             open(_dl, "w").close()
-            os.chmod(_dl, 0o755)
+            os.chmod(_dl, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 
     class _DiscCap:
         def write(self, t):
@@ -4523,6 +4523,42 @@ _bandit_flags = " ".join(l.strip() for l in _bandit_src.splitlines()
                          if "FLAGS=" in l or "bandit -r" in l)
 check("coverage: panel-helper is bandit-scanned (bandit -r . globs *.py and would miss it)",
       "-r ." in _bandit_flags and "tools/panel-helper" in _bandit_flags, _bandit_flags[:140])
+
+# ── the suites are scanned too: a mistake in a test makes a check pass while proving nothing ────
+# Bandit, Semgrep and CodeQL all left tests/ out. Each now reads it; what a test does on purpose is
+# triaged at the line. Semgrep needs the repo's own .semgrepignore: its BUILT-IN list (used only
+# when there is none) skips tests/, so dropping `--exclude tests` alone scanned nothing new.
+_scan_x = re.search(r"-x (\S+)", _bandit_flags)
+_scan_x = _scan_x.group(1).strip("\x22").split(",") if _scan_x else ["<no -x>"]
+_bd_sarif = _bandit_src[_bandit_src.index("-f sarif -o bandit.sarif"):
+                        _bandit_src.index("-f json -o bandit.json")]
+check("coverage: Bandit walks tests/, and drops only B105-B107 there (fixture credentials)",
+      not [_x for _x in _scan_x if _x.strip("./").startswith("tests")]
+      and 'IN("B105", "B106", "B107")' in _bd_sarif and 'startswith("tests/")' in _bd_sarif
+      and _bd_sarif.count("IN(") == 1, "excluded=%r" % _scan_x)
+_sg_step = _bandit_src[_bandit_src.index("      - name: Semgrep scan\n"):
+                       _bandit_src.index("--sarif-output=semgrep.sarif")]
+_sgi_path = os.path.join(_root, ".semgrepignore")
+_sgi = ([_l.strip() for _l in open(_sgi_path, encoding="utf-8")
+         if _l.strip() and not _l.lstrip().startswith("#")] if os.path.isfile(_sgi_path) else None)
+check("coverage: Semgrep scans tests/ (no --exclude tests, and a .semgrepignore without test paths "
+      "that still skips vendored and installed code)",
+      "--exclude tests" not in _sg_step and _sgi is not None
+      and not {"tests/", "test/", "testsuite/", "tests", "test"} & set(_sgi)
+      and {"vendor/", "node_modules/", ".venv/", "*.min.js"} <= set(_sgi), repr(_sgi))
+_cq_cfg = open(os.path.join(_root, ".github", "codeql", "codeql-config.yml"), encoding="utf-8").read()
+_cq_ign = re.search(r"^paths-ignore:\n((?:  - .*\n)+)", _cq_cfg, re.M)
+check("coverage: CodeQL analyses tests/ (paths-ignore is docs/ alone)",
+      _cq_ign is not None and _cq_ign.group(1).split() == ["-", "docs"]
+      and not re.search(r"^paths:", _cq_cfg, re.M), _cq_ign and _cq_ign.group(1))
+_cq_wf = open(os.path.join(_root, ".github", "workflows", "codeql.yml"), encoding="utf-8").read()
+_cq_gate = _cq_wf[_cq_wf.index("      - name: The helper and the tests are in the analysed Python database"):
+                  _cq_wf.index("\n  pr-alerts:")] if "analysed Python database" in _cq_wf else ""
+check("coverage: CodeQL's Python job fails when panel-helper or the tests are missing from the "
+      "database it analysed (an extensionless file is the extractor's call, not ours)",
+      "steps.analyze.outputs.db-locations" in _cq_gate and "src.zip" in _cq_gate
+      and '"tools/panel-helper"' in _cq_gate and '"tests/unit_test.py"' in _cq_gate
+      and "sys.exit(1)" in _cq_gate and "id: analyze" in _cq_wf, _cq_gate[:120])
 
 # ── No source file carries a literal bidi control, zero-width or line-separator character ──────
 # They make a line read differently from how it runs ("Trojan Source", CVE-2021-42574), and a test
@@ -4960,7 +4996,7 @@ try:
     os.makedirs(os.path.join(_cqa_sb, "bin"))
     with open(os.path.join(_cqa_sb, "bin", "gh"), "w") as _fh:
         _fh.write("#!/bin/sh\necho 42\n")      # the open PR whose head the run was for
-    os.chmod(os.path.join(_cqa_sb, "bin", "gh"), 0o755)
+    os.chmod(os.path.join(_cqa_sb, "bin", "gh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 
     def _cqa_case(event_name, wr_event, head_branch, ref_name="main"):
         _out = os.path.join(_cqa_sb, "out-%s-%s-%s" % (event_name, wr_event, head_branch or "none"))
@@ -5223,8 +5259,8 @@ try:
     with open(os.path.join(_cc_bin, "sha256sum"), "w") as _fh:
         _fh.write("#!/bin/sh\ncat >/dev/null\n")
     for _f in ("curl", "sha256sum"):
-        os.chmod(os.path.join(_cc_bin, _f), 0o755)
-    os.chmod(_cc_fake, 0o755)
+        os.chmod(os.path.join(_cc_bin, _f), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
+    os.chmod(_cc_fake, 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _cc_sha = "c" * 40
     _cc_good = ('<?xml version="1.0" ?>\n<coverage version="7.6" line-rate="0.5">\n'
                 '<sources><source>/home/runner/work/x/x</source></sources>\n<packages><package '
@@ -6425,7 +6461,7 @@ class _TsInfo(object):
         self.__dict__.update(kw)
 
 
-_ts_tmpl = _TsEnv().from_string(_ts_card)
+_ts_tmpl = _TsEnv(autoescape=True).from_string(_ts_card)
 _ts_svc = {"url": "https://host.example.ts.net", "funnel": False,
            "routes": [{"mount": "/panel", "target": "http://127.0.0.1:5000"}]}
 
@@ -6504,7 +6540,7 @@ check("tailscale.html: ...and a stopped daemon still reads as stopped, not as un
       "Tailscale is not running." in _ts_down, " ".join(_ts_down.split())[-160:])
 # The Accept Routes row: RouteAll, which is None when the prefs could not be read — and that is
 # not "No". (The row used to print the TUN flag as if it were this.)
-_ts_nd = _TsEnv().from_string(_ts_tpl[_ts_tpl.index("<!-- Node Details -->"):
+_ts_nd = _TsEnv(autoescape=True).from_string(_ts_tpl[_ts_tpl.index("<!-- Node Details -->"):
                                       _ts_tpl.index("<!-- Peer Reachability Checker -->")])
 
 
@@ -8549,7 +8585,7 @@ try:
                     "'Analyze (python)' 'Open code-scanning alerts'; do\n"
                     "  printf '{\"name\":\"%s\",\"status\":\"completed\",\"conclusion\":\"success\"}\\n'"
                     " \"$n\"\ndone\n")
-    os.chmod(os.path.join(_dp_ghbin, "gh"), 0o755)
+    os.chmod(os.path.join(_dp_ghbin, "gh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
     _dp_genv["PATH"] = _dp_ghbin + os.pathsep + _dp_genv.get("PATH", "")
     _dp_genv["GITHUB_REPOSITORY"] = "o/r"     # set on every runner; the step reads it under set -u
 

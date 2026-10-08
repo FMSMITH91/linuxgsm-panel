@@ -176,6 +176,7 @@ from panel.security import auth  # noqa: E402
 from panel.ops.ssh_manager import _core as _sm_core  # noqa: E402
 
 app = create_app()
+# nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
 app.config.update(WTF_CSRF_ENABLED=False, SESSION_PROTECTION=None, SESSION_COOKIE_SECURE=False)
 
 # Stub at the DEFINITION site: panel.ops.ssh_manager resolves names through __getattr__, so this one
