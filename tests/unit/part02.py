@@ -1566,11 +1566,78 @@ try:
             return ('{"RunSSH": false}', "", 0)
         if "ufw status" in cmd:
             return ("Anywhere on tailscale0     ALLOW IN    Anywhere", "", 0)  # tailscale0 allowed
+        if "/sys/class/net" in cmd:
+            return ("eth0\nlo\ntailscale0\n", "", 0)   # the host has a Tailscale TUN
         return ("", "", 0)
     _sm_core.run_command = _rc_iface
     _ufw_says("off", tailscale_iface=True)
     check("ssh off ALLOWED when tailscale0 allowed in UFW",
           _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
+
+    # ── the tailscale0 rule is READ as a rule, not found as a word ───────────────────────────
+    # _tailnet_ssh_state matched "tailscale" anywhere in `ufw status verbose`, so each row below
+    # unlocked "off" on a host whose firewall still blocks tailscale0 inbound: removing public 22
+    # then left sshd reachable from nowhere. Each is the panel-host twin's own documented case
+    # (system_ops.ufw_allows_iface_in). The deletes are what must not happen, so the verbs sent
+    # are what is checked, not only the answer.
+    _TSIF_HDR = "Status: active\n\nTo                         Action      From\n--                         ------      ----\n"
+    for _tsif_name, _tsif_rows in (
+            ("an ALLOW OUT on tailscale0",
+             "22/tcp                     LIMIT IN    Anywhere\n"
+             "Anywhere                   ALLOW OUT   Anywhere on tailscale0\n"),
+            ("a DENY IN on tailscale0 above the allow",
+             "Anywhere on tailscale0     DENY IN     Anywhere\n"
+             "Anywhere on tailscale0     ALLOW IN    Anywhere\n"),
+            ("a DENY IN on tailscale0 commented with parentheses, above the allow",
+             "Anywhere on tailscale0     DENY IN     Anywhere                   # off (for now)\n"
+             "Anywhere on tailscale0     ALLOW IN    Anywhere\n"),
+            ("a rule whose COMMENT says tailscale",
+             "41641/udp                  ALLOW IN    Anywhere                   # tailscale\n"),
+            ("one port allowed on tailscale0 (not all traffic)",
+             "8080 on tailscale0         ALLOW IN    Anywhere\n")):
+        _tsif_sent = []
+
+        def _tsif_rp(s, v, a=(), _rows=_tsif_rows, **k):
+            _tsif_sent.append(v)
+            if v == "ufw-status":
+                return (_TSIF_HDR + _rows, "", 0)
+            return ("", "", 0)
+        _sm_core.run_privileged = _tsif_rp
+        _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "off")
+        check("ssh off REFUSED with %s and Tailscale SSH off (tailnet lockout)" % _tsif_name,
+              _ok is False and "lock you out" in _msg.lower()
+              and not [v for v in _tsif_sent if v.startswith("ufw-delete")], "%s %r" % (_msg, _tsif_sent))
+
+    # ...the allow itself, with an ALLOW OUT and a comment beside it, still unlocks it (positive
+    # control, through the same header-bearing listing)...
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (
+        (_TSIF_HDR + "Anywhere on tailscale0     ALLOW IN    Anywhere                   # tailscale\n"
+         "Anywhere                   ALLOW OUT   Anywhere on tailscale0\n", "", 0)
+        if v == "ufw-status" and list(a)[:1] == ["verbose"] else (_UFW_BY_MODE["off"], "", 0)
+        if v == "ufw-status" else ("", "", 0))
+    eq("tailnet ssh state: ALLOW IN on tailscale0 reads as a way in (positive control)",
+       _sm_hosts._tailnet_ssh_state(object()), (True, False, True))
+    # ...but not on a host with no Tailscale TUN (userspace networking), nor when the interface
+    # listing could not be read: the rule then carries nothing, and unknown is not "allowed".
+    for _tsif_name, _tsif_ans in (("no tailscale interface", ("eth0\nlo\n", "", 0)),
+                                  ("an unreadable interface listing", ("", "timed out", -1)),
+                                  ("an empty interface listing", ("", "", 0))):
+        def _rc_tsif(server, cmd, _ans=_tsif_ans, **kw):
+            if "/sys/class/net" in cmd:
+                return _ans
+            return _rc_iface(server, cmd, **kw)
+        _sm_core.run_command = _rc_tsif
+        eq("tailnet ssh state: the tailscale0 allow does not count with %s" % _tsif_name,
+           _sm_hosts._tailnet_ssh_state(object()), (True, False, False))
+    # A host whose Tailscale TUN is named otherwise is asked about THAT interface.
+    _sm_core.run_command = lambda s, c, **k: (
+        ("eth0\nlo\ntailscale1\n", "", 0) if "/sys/class/net" in c else _rc_iface(s, c, **k))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (
+        (_TSIF_HDR + "Anywhere on tailscale1     ALLOW IN    Anywhere\n", "", 0)
+        if v == "ufw-status" else ("", "", 0))
+    eq("tailnet ssh state: the host's own tailscale interface name is the one checked",
+       _sm_hosts._tailnet_ssh_state(object()), (True, False, True))
+    _sm_core.run_command = _rc_iface
 
     _sm_core.run_command = lambda *a, **k: ("", "", 0)
     _ufw_says("allow")
