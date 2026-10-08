@@ -49,7 +49,7 @@ import tempfile as _tf43
 from types import SimpleNamespace as _NS43
 
 from unit import REPO_ROOT as _ROOT43
-from unit.part01 import check
+from unit.part01 import check, skip
 from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_app, _p9_client, _p9_core,
                          _p9_json, _p9_patch, _p9_restore_all, _p9_sm, _p9_so, _p9_trip)
 from panel.core.panel_state import forget_rows
@@ -1416,6 +1416,147 @@ def _rv43_posted_ids(admin):
           cmd_groups == [], repr(cmd_groups))
 
 
+# ── the host page for a delegate on the panel host: no card whose route answers them 403 ─────────
+# Rendered for real, then every script it loads (the vendor bundles aside) is RUN in node against
+# the rendered markup: a vm context whose unknown globals are inert stubs, and a document whose
+# getElementById answers only the ids the page really has. So a script that dereferences one of
+# the hidden cards' elements at load throws here, by name.
+_RV43_PAGE_JS = r"""
+const vm = require('vm'), fs = require('fs');
+const cfg = JSON.parse(fs.readFileSync(0, 'utf8'));
+const errors = [];
+const stub = new Proxy(function(){}, {
+  get: (t, k) => k === Symbol.toPrimitive ? (() => '') : k === 'then' ? undefined
+               : k === Symbol.iterator ? function*(){} : k === 'length' ? 0 : stub,
+  apply: () => stub, construct: () => stub, set: () => true});
+const ids = new Set(cfg.ids);
+const handlers = [];
+const document = {
+  getElementById: id => ids.has(id) ? stub : null,
+  querySelector: () => null, querySelectorAll: () => [], getElementsByClassName: () => [],
+  addEventListener: (ev, fn) => { if (ev === 'DOMContentLoaded') handlers.push(fn); },
+  createElement: () => stub, body: stub, documentElement: stub, head: stub, cookie: '',
+  readyState: 'loading'};
+const real = {console: {log(){}, warn(){}, error(){}, info(){}, debug(){}}, document, JSON, Math, Date,
+  Promise, Object, Array, String, Number, Boolean, RegExp, Error, Map, Set, WeakMap, Symbol, parseInt,
+  parseFloat, isNaN, encodeURIComponent, decodeURIComponent, setTimeout: () => 0, setInterval: () => 0,
+  clearTimeout(){}, clearInterval(){}, requestAnimationFrame: () => 0,
+  fetch: () => new Promise(() => {}), localStorage: {getItem: () => null, setItem(){}, removeItem(){}},
+  sessionStorage: {getItem: () => null, setItem(){}, removeItem(){}}, MOUNT: ''};
+const g = new Proxy(real, {has: () => true,
+  get: (t, k) => k in t ? t[k] : (k === Symbol.unscopables ? undefined : stub),
+  set: (t, k, v) => { t[k] = v; return true; }});
+real.window = g; real.self = g; real.globalThis = g;
+const ctx = vm.createContext(g);
+for (const [name, code] of cfg.scripts) {
+  try { vm.runInContext(code, ctx, {filename: name}); }
+  catch (e) { errors.push(name + ': ' + (e && e.message)); }
+}
+for (const fn of handlers) { try { fn(); } catch (e) { errors.push('DOMContentLoaded: ' + (e && e.message)); } }
+let value = null;
+if (cfg.eval) { try { value = String(vm.runInContext(cfg.eval, ctx)); } catch (e) { value = 'threw: ' + e.message; } }
+process.stdout.write(JSON.stringify({errors, value}));
+"""
+
+
+def _rv43_page_scripts(html):
+    """[(name, code)] for every script the page runs, in order, vendor bundles skipped."""
+    out = []
+    for m in _re43.finditer(r"<script\b([^>]*)>(.*?)</script>", html, _re43.S):
+        src = _re43.search(r'src="([^"]+)"', m.group(1))
+        if not src:
+            out.append(("inline#%d" % len(out), m.group(2)))
+            continue
+        rel = _re43.sub(r"^.*?/static/", "", src.group(1)).split("?")[0]
+        if rel.startswith("vendor/"):
+            continue
+        with open(os.path.join(_ROOT43, "static", rel), encoding="utf-8") as fh:
+            out.append((rel, fh.read()))
+    return out
+
+
+def _rv43_run_page(html, expr=None):
+    """The page's scripts' load-time errors (a list), or (errors, value of `expr`); None: no node."""
+    node = _shutil43.which("node")
+    if not node:
+        return None
+    cfg = {"ids": sorted(set(_re43.findall(r'\bid="([^"]+)"', html))),
+           "scripts": _rv43_page_scripts(html), "eval": expr}
+    r = _sp43.run([node, "-e", _RV43_PAGE_JS], input=_json43.dumps(cfg), capture_output=True,
+                  text=True, timeout=120, check=False)
+    try:
+        out = _json43.loads(r.stdout)
+    except ValueError:
+        out = {"errors": ["harness: " + (r.stdout + r.stderr)[-500:]], "value": None}
+    return out.get("errors") if expr is None else (out.get("errors"), out.get("value"))
+
+
+def _rv43_js_offers():
+    """How many places manage_remotes.js builds the migrate offer through _tsMigrateOffer, and none
+    that builds the button itself."""
+    with open(os.path.join(_ROOT43, "static", "js", "manage_remotes.js"), encoding="utf-8") as fh:
+        src = fh.read()
+    body = src.split("function _tsMigrateOffer", 1)
+    rest = body[0] + (body[1].split("\n}\n", 1)[1] if len(body) > 1 else "")
+    return -1 if "_da('migrateToTailscale'" in rest else rest.count("_tsMigrateOffer(remoteId)")
+
+
+def _rv43_host_page(admin, deleg):
+    host_ids = ("sec-osupdates", "sec-firewall", "sec-power", "sec-ubuntupro", "conn-ssh-card")
+    _p9_patch(_p9_so, "get_server_status", lambda *a, **k: None)   # remote_manage reads it for the panel host
+    local = deleg.get("/remote/%d/manage" % P9_LOCAL)
+    html = local.get_data(as_text=True)
+    shown = [i for i in host_ids if 'id="%s"' % i in html]
+    check("host page: a delegate on the PANEL host is not offered OS updates, firewall, power, "
+          "Ubuntu Pro or Connection & SSH (each answers them 403)",
+          local.status_code == 200 and not shown and "UPro.load(" not in html,
+          "%d still shown: %r" % (local.status_code, shown))
+    remote = deleg.get("/remote/%d/manage" % P9_HOST).get_data(as_text=True)
+    check("host page: ...while on a REMOTE host the same delegate still has every one of them "
+          "(positive control)", all('id="%s"' % i in remote for i in host_ids),
+          repr([i for i in host_ids if 'id="%s"' % i not in remote]))
+    _p9_set_host(P9_HOST, auth_method="password")
+    try:
+        mine = deleg.get("/remote/%d/manage" % P9_HOST).get_data(as_text=True)
+        theirs = admin.get("/remote/%d/manage" % P9_HOST).get_data(as_text=True)
+    finally:
+        _p9_set_host(P9_HOST, auth_method="key")
+    check("host page: 'Migrate to Tailscale SSH' is not offered to a delegate (the route refuses "
+          "them), and says who can",
+          'data-action="switchToTailscale"' not in mine and "A superadmin can switch" in mine
+          and 'data-action="switchToTailscale"' in theirs)
+    for label, page in (("the panel host, as a delegate", html), ("a remote host", remote)):
+        errs = _rv43_run_page(page)
+        if errs is None:
+            skip("host page: its scripts run without touching a missing element (%s)" % label,
+                 "no node on this host")
+            continue
+        check("host page: its scripts run without touching a missing element (%s)" % label,
+              errs == [], repr(errs[:5]))
+    # The hosts page: manage_remotes.js builds the offer after a join; the template says, by one
+    # marker element, whether this viewer may migrate. The script is run with and without it.
+    with open(os.path.join(_ROOT43, "templates", "manage_remotes.html"), encoding="utf-8") as fh:
+        tpl = fh.read()
+    with open(os.path.join(_ROOT43, "static", "js", "manage_remotes.js"), encoding="utf-8") as fh:
+        js = "<script>%s</script>" % fh.read()
+    prelude = ("<script>function _da(n, a) { return ' data-action=\"' + n + '\"'; }"
+               "function escapeHtml(s) { return String(s); }</script>")
+    offers = {}
+    for who, marker in (("delegate", ""), ("superadmin", '<span id="ts-migrate-allowed" hidden></span>')):
+        got = _rv43_run_page(marker + prelude + js, "_tsMigrateOffer(5)")
+        offers[who] = None if got is None else (got[1] or "")
+    marked = _re43.search(r"\{% if current_user\.is_superadmin %\}<span id=\"ts-migrate-allowed\"", tpl)
+    if offers["delegate"] is None:
+        skip("hosts page: the after-join 'Migrate' offer is a superadmin's only", "no node on this host")
+    else:
+        check("hosts page: the after-join 'Migrate' offer is a superadmin's only; a delegate is told "
+              "who can (manage_remotes.js, all three places it is built)",
+              marked is not None and "migrateToTailscale" not in offers["delegate"]
+              and "A superadmin can" in offers["delegate"]
+              and "migrateToTailscale" in offers["superadmin"] and _rv43_js_offers() == 3,
+              "marker in template: %s, offers %r, built %d" % (bool(marked), offers, _rv43_js_offers()))
+
+
 def _rv43_cleanup():
     with _p9.app_context():
         for uid in _RV43["users"]:
@@ -1454,6 +1595,7 @@ try:
     _rv43_totp()
     _rv43_panel_host_reads(_RV43_ADMIN, _RV43_DELEG)
     _rv43_posted_ids(_RV43_ADMIN)
+    _rv43_host_page(_RV43_ADMIN, _RV43_DELEG)
 finally:
     _p9_restore_all()
     _rv43_cleanup()

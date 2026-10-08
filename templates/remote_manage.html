@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block title %}{% if remote.is_local %}Panel Server{% else %}{{ remote.display_name }} — Manage{% endif %}{% endblock %}
 {% block content %}
+{# Host-level controls whose routes are superadmin-only on the panel's OWN host (get_host_remote):
+   OS updates, firewall, power, Ubuntu Pro, Connection & SSH. A delegate whose group covers the
+   panel host reaches this page, and every one of those cards answered them 403 — so they are not
+   offered. On a remote host the grant is enough, as before. #}
+{% set _host_ctl = (not remote.is_local) or current_user.is_superadmin %}
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
@@ -125,6 +130,7 @@
 </div>
 
 <div class="row" data-mtab="controls">
+  {% if _host_ctl %}
   <!-- OS Updates -->
   <div class="col-md-4 mb-3" id="os-updates">
     <div class="card h-100">
@@ -167,6 +173,8 @@
     </div>
   </div>
 
+  {% endif %}
+
   <!-- Firewall -->
   {# Gated on the permission, not merely on being logged in: a shell is the most powerful grant
      in the table, so an account without it should not see the door either. On the panel's own
@@ -194,6 +202,7 @@
   </div>
   {% endif %}
 
+  {% if _host_ctl %}
   <div class="col-md-4 mb-3">
     <div class="card h-100">
       <div class="card-header" id="sec-firewall"><i class="bi bi-shield-fill-check"></i> Firewall</div>
@@ -222,6 +231,7 @@
       </div>
     </div>
   </div>
+  {% endif %}
 </div>
 
 {% if current_user.is_superadmin or has_permission('manage_servers') %}
@@ -619,6 +629,7 @@
 </div>
 {% endif %}
 
+{% if _host_ctl %}
 <!-- Ubuntu Pro -->
 <div class="card mb-3" data-mtab="maintenance">
   <div class="card-header" id="sec-ubuntupro"><i class="bi bi-shield-shaded"></i> Ubuntu Pro <span class="text-secondary ms-1" style="font-size:.7rem;font-weight:400;">free security updates (ESM) &amp; Livepatch</span></div>
@@ -626,6 +637,7 @@
     <div id="ubuntu-pro-body"><div class="text-secondary small">Checking Ubuntu Pro…</div></div>
   </div>
 </div>
+
 
 <!-- Connection & SSH -->
 <div class="card mb-3" data-mtab="controls" id="conn-ssh-card">
@@ -775,9 +787,15 @@
           <strong id="conn-method">{{ remote.auth_method }}</strong> → <code>{{ remote.username }}@{{ remote.host }}:{{ remote.port }}</code>
         </div>
         {% if remote.auth_method != 'tailscale' %}
+        {# Superadmin-only: the migrate route refuses anyone else (it moves the row onto the
+           panel's own tailnet identity — remote_tailscale.api_remote_tailscale_migrate). #}
+        {% if current_user.is_superadmin %}
         <p class="small text-secondary mb-1">Switch the panel to reach this server over the tailnet (Tailscale SSH) and use its Tailscale address — then you can safely lock down public SSH.</p>
         <button class="btn btn-sm btn-success" data-action="switchToTailscale"><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button>
         <div id="migrate-msg" class="small mt-1"></div>
+        {% else %}
+        <p class="small text-secondary mb-1">A superadmin can switch the panel to reach this server over the tailnet (Tailscale SSH).</p>
+        {% endif %}
         {% else %}
         <p class="small text-success mb-0"><i class="bi bi-check-circle"></i> Already using Tailscale SSH.</p>
         {% endif %}
@@ -831,6 +849,7 @@
     {% endif %}
   </div>
 </div>
+{% endif %}
 
 {% if remote.games %}
 <div class="card" data-mtab="overview" id="host-servers-card">
@@ -899,7 +918,9 @@ var REMOTE_NAME = {{ remote.name|tojson }};
    and later parts define functions the earlier ones call (always deferred and guarded). #}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_host.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_backups.js') }}"></script>
+{% if (not remote.is_local) or current_user.is_superadmin %}{# the Ubuntu Pro card's own gate #}
 <script nonce="{{ csp_nonce }}">
 UPro.load(REMOTE_ID, 'ubuntu-pro-body', {{ (remote.cached_pro.data if remote.cached_pro else None) | tojson }});
 </script>
+{% endif %}
 {% endblock %}
