@@ -442,7 +442,7 @@ def _left_in_place47(tmp):
 
 
 def _lhci_call_kind47(c):
-    """"term" for a signal.signal(signal.SIGTERM, ...) call, "run" for a socketio.run, else None."""
+    """Classify `c`: "term" for signal.signal(signal.SIGTERM, ...), "run" for socketio.run, else None."""
     if not isinstance(c, _ast47.Call):
         return None
     f = _ast47.unparse(c.func)
