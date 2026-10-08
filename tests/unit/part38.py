@@ -939,12 +939,16 @@ async function checkInStepAfterReturn(cfg) {
   w.write(1); await w.pass();
   const inStep = !w.page.ctx._resync && !w.page.ctx._returnOwed && w.exact();
   const joined = w.page.emitted.length;
+  const place = w.page.ctx._logAt;
   await w.disconnect(); w.pass(); w.write(2);
   await w.reconnect();
   const reads = w.pending().map(f => f.url), joins = w.page.emitted.slice(joined).map(e => e[1]);
-  check('a return that has caught up leaves the console as it always was: a later reconnect joins plainly and reads '
-        + 'the one 250-line window a reconnect always read', inStep && JSON.stringify(reads) === JSON.stringify(['/api/console/7'])
-        && JSON.stringify(joins) === JSON.stringify([{server_id: 7}]), JSON.stringify({inStep, reads, joins}));
+  await w.pass(); w.write(1); await w.pass();
+  check('a return that has caught up leaves the console in step: a later reconnect is caught up as any reconnect is, '
+        + 'from the end of the last push the page showed, with no window read — and shows what was written meanwhile, once',
+        inStep && reads.length === 0 && joins.length === 2 && JSON.stringify(joins[0]) === JSON.stringify({server_id: 7})
+        && JSON.stringify(joins[1].catchup.since) === JSON.stringify(place) && w.exact(),
+        JSON.stringify({inStep, reads, joins, place, exact: w.exact()}));
 }
 
 // The socket drops after the return's join but before its answer (and the 30 s poll's own window
@@ -966,6 +970,100 @@ async function checkDropBeforeAnswer(cfg) {
         && JSON.stringify(w.pagePanel()) === JSON.stringify(w.backlog.map(b => b.line)) && versions(w) - v0 === 1,
         JSON.stringify({asks, exact: w.exact(), shown: w.pageLog().length, want: w.log().length,
                         panel: w.pagePanel().length, backlog: w.backlog.length, versions: versions(w) - v0}));
+}
+
+// A plain reconnect, the tab in view the whole time: lines written while the socket was down, then a
+// push that reaches the page BEFORE the reconnect's catch-up is answered (another tab kept the
+// poller reading, or a slow read). Caught up with the 250-line window and the push appended as it
+// came, the window no longer stitched to the page's end and was appended whole a second time.
+// `other`: a second tab keeps the poller's place; without one the poller starts again from "now".
+async function checkReconnectPushFirst(cfg) {
+  for (const other of [true, false]) {
+    const w = await manualWorld(cfg);
+    w.other(other);
+    w.pass(); w.write(2); await w.pass();
+    await w.disconnect();
+    w.write(5); w.pass();                          // written while the socket was down
+    await w.reconnect();
+    w.write(1); await w.tick();                    // pushed before the catch-up is answered
+    for (const f of w.pending()) await w.answer(f);
+    await w.pass(); w.write(1); await w.pass();
+    const got = w.pageLog();
+    check('a reconnect with the tab in view, a push arriving before its catch-up is answered (' + (other ? 'another '
+          + 'tab keeping the poller\'s place' : 'nobody else watching') + '): the lines written while the socket was '
+          + 'down show once, in order, and nothing twice', w.exact() && new Set(got).size === got.length
+          && w.page.gaps().length === 0 && !w.page.ctx._resync && !w.page.ctx._returnOwed,
+          JSON.stringify({got: got.slice(-10), want: w.log().slice(-10), shown: got.length, n: w.log().length,
+                          gaps: w.page.gaps().length}));
+    w.other(false);
+  }
+  // No answer ever comes: given up, under a notice that names the dropped connection — this tab was
+  // in view the whole time, so the hidden-tab wording would be false here.
+  const w = await manualWorld(cfg);
+  w.pass(); w.write(2); await w.pass();
+  await w.disconnect();
+  w.write(3);
+  w.serveOff = true;
+  await w.reconnect();
+  w.write(1); await w.pass();
+  await w.advance(46000);
+  const notice = w.page.lines().filter((l, i) => w.page.gaps().indexOf(i) >= 0);
+  check('a reconnect\'s catch-up never answered: given up under a notice that says the connection dropped, not that '
+        + 'the tab was in the background', notice.length === 1 && /connection/.test(notice[0])
+        && !/background/.test(notice[0]) && !w.page.ctx._resync, JSON.stringify(notice));
+}
+
+// The first window is read, then a line is written and pushed, and the push reaches the page before
+// the window's answer does (a phone: the bigger HTTP answer lands later). Adopting the window wiped
+// the pushed line and nothing brought it back. And the other order: the push's line is IN the window
+// (the read came after it was written) — it must not show twice.
+async function checkPrimePushFirst(cfg) {
+  for (const inWindow of [false, true]) {
+    const w = makeWorld({manual: true, src: cfg.src, panel: cfg.panel, code: cfg.code});
+    w.write(20);
+    await w.reconnect();                           // the page's first connect: it joins
+    w.pass();                                      // the poller's first look
+    let rd = null;
+    if (!inWindow) rd = w.read(w.pending()[0]);    // the window read now...
+    w.write(2); await w.pass();                    // ...two lines written and pushed...
+    if (inWindow) rd = w.read(w.pending()[0]);
+    await w.reply(rd);                             // ...and then the window's answer arrives
+    w.write(1); await w.pass();
+    const got = w.pageLog();
+    check('a push that reaches the page before its first window does, ' + (inWindow ? 'its lines in that window'
+          : 'written after the window was read') + ': every line shows, once, in order', w.exact()
+          && new Set(got).size === got.length, JSON.stringify({got: got.slice(-6), want: w.log().slice(-6)}));
+  }
+  // Pushed, then a line more written (not pushed yet), then the window read: the window holds the
+  // pushed lines but does not END with them. They are shown already, and must not be put back again.
+  const w = makeWorld({manual: true, src: cfg.src, panel: cfg.panel, code: cfg.code});
+  w.write(20);
+  await w.reconnect();
+  w.pass();
+  w.write(2); await w.pass();
+  w.write(1);
+  await w.reply(w.read(w.pending()[0]));
+  const got = w.pageLog(), pushed = w.log().slice(20, 22);
+  check('a push that reaches the page before its first window does, its lines inside that window with more after '
+        + 'them: the pushed lines show once', pushed.every(l => got.filter(x => x === l).length === 1),
+        JSON.stringify({got: got.slice(-6), pushed}));
+}
+
+// Clear, then Load older: the 2000-line history it shows must not be swapped for the 250-line window
+// by the next 30 s poll, which took the cleared console as never primed.
+async function checkLoadOlderAfterClear(cfg) {
+  const w = makeWorld({manual: true, src: cfg.src, panel: cfg.panel, code: cfg.code});
+  w.write(400);
+  await w.start();
+  w.page.ctx.clearConsole();
+  w.page.ctx.loadMoreConsole(null);
+  for (const f of w.pending(/lines=2000/)) await w.answer(f);
+  const loaded = w.pageLog().length;
+  await w.advance(30000);
+  for (const f of w.pending()) await w.answer(f);
+  w.pass(); w.write(1); await w.pass(); w.write(1); await w.pass();
+  check('Clear, then Load older: the 30 s poll keeps the history it loaded, and what follows shows after it',
+        loaded === 400 && w.exact(), JSON.stringify({loaded, shown: w.pageLog().length, want: w.log().length}));
 }
 
 // Unlocked (the join kept for the reconnect), then locked again past the grace before the socket is
@@ -1318,6 +1416,18 @@ async function backDown(w) {
   await w.settle();
   w.write(1); await w.pass();
 }
+// A hole of `lost` lines in what the page shows: its lines replaced by a window read before they were
+// written, with the poller's first look after them, so no push brings them either. A reconnect's
+// 250-line window used to leave one this way; reconnects are now caught up from the page's place, so
+// it is made the way a page still meets it — the window that primes a console (here a Cleared one,
+// which a reconnect primes again) read before the poller's first look at the console it rejoined.
+async function holeByWindow(w, down, lost) {
+  w.page.ctx.clearConsole();
+  await w.disconnect(); w.pass(); w.write(down); await w.reconnect();
+  const rd = w.read(w.pending()[0]);
+  w.write(lost); w.pass();
+  await w.reply(rd);
+}
 const PIECE = 'L00020 ine';     // the end of a line, as a read that landed inside it shows it
 const pushPiece = w => w.page.push({server_id: 7, data: PIECE, rows: [{t: null, line: PIECE}], ts: 1700000001});
 const minus = (log, gone) => log.filter(l => gone.indexOf(l) < 0);
@@ -1328,8 +1438,8 @@ function withoutRepeat(got, log, n) {
   return got.slice(0, i).concat(got.slice(i + n));
 }
 
-// A break in the page's last 250 lines, so base's rule finds nothing — a line lost 33 back (base's
-// own reconnect race), or a piece of a line 30 back — and the page's last line one the game repeats.
+// A break in the page's last 250 lines, so base's rule finds nothing — a line lost 33 back (the
+// priming window's race, holeByWindow), or a piece of a line 30 back — and the page's last line one the game repeats.
 // While away the game writes on and repeats it. The copy written last is not the page's place: taken
 // for it, everything written before it was a "hole" the page lacked, none of it shown, with no notice.
 async function checkRepeatAfterBreak(cfg) {
@@ -1340,10 +1450,7 @@ async function checkRepeatAfterBreak(cfg) {
     w.pass();
     if (shape === 'lost') {
       w.write(2); await w.pass();
-      await w.disconnect(); w.pass(); w.write(5); await w.reconnect();
-      const rd = w.read(w.pending()[0]);       // the reconnect's window, read…
-      w.write(3); w.pass();                    // …before these and the poller's first look: lost
-      await w.reply(rd);
+      await holeByWindow(w, 5, 3);             // a window read before 3 lines and the poller's first look
     } else await pushPiece(w);
     w.write(29); w.log().push(X); await w.pass();
     const lost = w.log().filter(l => w.pageLog().indexOf(l) < 0);
@@ -1360,7 +1467,7 @@ async function checkRepeatAfterBreak(cfg) {
   }
 }
 
-// Base's race lost lines just before the page's last line — one line came after them, then the console
+// The priming window's race lost lines just before the page's last line — one line came after them, then the console
 // went quiet — and the game repeats that line while away. The break is right at the page's end, and
 // the page's own place, the EARLIEST that fits across it, is taken: every line written while away
 // shows, and nothing says output is missing.
@@ -1368,17 +1475,14 @@ async function checkBreakBeforeLast(cfg) {
   const X = 'L99999 Server empty for 60 seconds, pausing';
   const w = await manualWorld(cfg);
   w.pass(); w.write(30); await w.pass();
-  await w.disconnect(); w.pass(); w.write(2); await w.reconnect();
-  const rd = w.read(w.pending()[0]);
-  w.write(3); w.pass();                        // lost: after the reconnect's window, before the first look
-  await w.reply(rd);
+  await holeByWindow(w, 2, 3);                 // lost: after the priming window, before the first look
   w.log().push(X); await w.pass();             // one line, then quiet
   const lost = w.log().filter(l => w.pageLog().indexOf(l) < 0);
   await w.hide(true); await w.advance(GRACE);
   w.pass(); w.write(10); w.log().push(X);
   await backDown(w);
   const got = w.pageLog();
-  check('placed by its text: lines lost to a reconnect just before the page\'s last line, a line the game repeats '
+  check('placed by its text: lines lost to a window\'s race just before the page\'s last line, a line the game repeats '
         + 'while the tab is away: back in view everything written since shows, once, and no notice',
         lost.length === 3 && JSON.stringify(got) === JSON.stringify(minus(w.log(), lost)) && w.page.gaps().length === 0,
         JSON.stringify({lost: lost.length, shown: got.length, want: w.log().length - lost.length, gaps: w.page.gaps(),
@@ -1435,10 +1539,7 @@ async function checkUnbrokenLatest(cfg) {
   const block = Array.from({length: 25}, (_, i) => 'status row ' + String(i + 1).padStart(2, '0'));
   const w = await manualWorld(cfg);
   w.pass(); w.say(...block); w.write(5); await w.pass();
-  await w.disconnect(); w.pass(); w.write(2); await w.reconnect();
-  const rd = w.read(w.pending()[0]);
-  w.write(3); w.pass();
-  await w.reply(rd);
+  await holeByWindow(w, 2, 3);
   w.write(5); w.say(...block); await w.pass();
   const lost = w.log().filter(l => w.pageLog().indexOf(l) < 0);
   await w.hide(true); await w.advance(GRACE);
@@ -1451,7 +1552,7 @@ async function checkUnbrokenLatest(cfg) {
         JSON.stringify({lost: lost.length, shown: got.length, want: w.log().length - lost.length, gaps: w.page.gaps()}));
 }
 
-// The same hole, by text: base's reconnect race lost 3 lines, 5 shown since, and the console an idle
+// The same hole, by text: the priming window's race lost 3 lines, 5 shown since, and the console an idle
 // one whose log begins with the heartbeat the page ends on.
 async function checkHoleByText(cfg) {
   const H = 'heartbeat: 0 players online';
@@ -1459,10 +1560,7 @@ async function checkHoleByText(cfg) {
   w.say(H); w.write(19);
   await w.start();
   w.pass(); w.write(2); await w.pass();
-  await w.disconnect(); w.pass(); w.write(10); await w.reconnect();
-  const rd = w.read(w.pending()[0]);
-  w.write(3); w.pass();                        // lost to the reconnect's race
-  await w.reply(rd);
+  await holeByWindow(w, 10, 3);                // lost to the priming window's race
   for (let i = 0; i < 4; i++) { w.write(1); await w.pass(); }
   w.say(H); await w.pass();
   const lost = w.log().filter(l => w.pageLog().indexOf(l) < 0);
@@ -1470,7 +1568,7 @@ async function checkHoleByText(cfg) {
   w.pass(); w.write(5); w.say(H);
   await backDown(w);
   const got = w.pageLog(), dups = got.length - (w.log().length - lost.length);
-  check('placed by its text: a page with a hole (3 lines lost to the reconnect\'s race, 5 shown since) on an idle '
+  check('placed by its text: a page with a hole (3 lines lost to a window\'s race, 5 shown since) on an idle '
         + 'console whose log begins with the heartbeat the page ends on: back in view nothing shows twice, nothing '
         + 'written since the hole is missing, and no notice', lost.length === 3 && dups === 0
         && JSON.stringify(got) === JSON.stringify(minus(w.log(), lost)) && w.page.gaps().length === 0,
@@ -1787,7 +1885,8 @@ async function replay(cfg) {
                     checkDropBeforeGrace, checkAction, checkFinishedAway, checkBackground, checkLateTimer,
                     checkFocusFallback, checkSilentReturn, checkNoConsole, checkNoView, checkIndicator, checkBacklogOnce,
                     checkRotation, checkPrimeAfterPush, checkUnlockExpired, checkGiveUpWhileDown, checkInStepAfterReturn,
-                    checkDropBeforeAnswer, checkReplayedJoin, checkLongAway, checkHoleThenAway, checkRepeats, checkGiveUpHeld,
+                    checkDropBeforeAnswer, checkReconnectPushFirst, checkPrimePushFirst, checkLoadOlderAfterClear,
+                    checkReplayedJoin, checkLongAway, checkHoleThenAway, checkRepeats, checkGiveUpHeld,
                     checkLeaveAnswer, checkRepeatAfterBreak, checkBreakBeforeLast, checkPageOnlyLines, checkUnbrokenLatest,
                     checkHoleByText, checkUnreadable, checkGiveUpRepeat, checkClearThenReturn, checkAwayStamps,
                     checkRotatedBeforeAnswer, checkPlaceKept, checkKeptJoinAnswered, checkNeverPrimed,
