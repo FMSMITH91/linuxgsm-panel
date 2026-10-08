@@ -52,6 +52,9 @@ from unit.reboot41_c import (
     _port_never_opens_checks41,
     _power_marks_checks41, _rollback_hold_checks41, _summary_clock_checks41, _unread_idle_checks41,
     _unread_plan_checks41)
+from unit.reboot41_d import (
+    _rbhold_bare_ok_checks41, _rbhold_slow_return_checks41, _rbhold_unread_count_checks41,
+    _rbhold_wait_over_rows_checks41)
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # Run everything under one set of stubs, and put the world back afterwards.
@@ -108,6 +111,10 @@ _SECTIONS41 = [
     ("an unreadable server beside a planned one", _unread_plan_checks41),
     ("summary clock", _summary_clock_checks41), ("'not back yet' text", _late_notice_checks41),
     ("already running", _already_running_checks41),
+    ("an unread server back late after a slow boot", _rbhold_slow_return_checks41),
+    ("the Power card's mark after an idle reboot", _rbhold_bare_ok_checks41),
+    ("an unread count in the stop phase", _rbhold_unread_count_checks41),
+    ("a wait over an earlier plan's rows", _rbhold_wait_over_rows_checks41),
 ]
 
 
