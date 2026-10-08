@@ -98,14 +98,25 @@ window.showCredential = function(cred){
   if (!cred || !cred.password) return;
   var who = document.getElementById('cred-user'), pw = document.getElementById('cred-pw');
   if (!who || !pw) return;
+  // A one-time password, or an invite link (kind "invite"): each with its own title and copy. The
+  // invite's used to read "One-time password", with "reset the password" as the remedy for a link
+  // that has no password to reset.
+  var kind = cred.kind === 'invite' ? 'invite' : 'password';
+  var modal = document.getElementById('credentialModal');
+  Array.prototype.forEach.call(modal.querySelectorAll('[data-cred-kind]'), function(el){
+    el.hidden = el.getAttribute('data-cred-kind') !== kind;
+  });
   who.textContent = cred.username || '';
   pw.value = cred.password;
-  new bootstrap.Modal(document.getElementById('credentialModal')).show();
+  pw.setAttribute('aria-label', kind === 'invite' ? 'Invite Link' : 'One-time password');
+  pw.setAttribute('data-cred-kind-shown', kind);
+  new bootstrap.Modal(modal).show();
 };
 window.copyCredential = function(){
   var pw = document.getElementById('cred-pw');
   if (!pw) return;
-  if (window.copyText) copyText(pw.value, 'Password copied');
+  var copied = pw.getAttribute('data-cred-kind-shown') === 'invite' ? 'Link copied' : 'Password copied';
+  if (window.copyText) copyText(pw.value, copied);
   // Best-effort: if the copy is refused, the password is still on screen to copy by hand.
   else if (navigator.clipboard) navigator.clipboard.writeText(pw.value).catch(function(){ /* see above */ });
 };

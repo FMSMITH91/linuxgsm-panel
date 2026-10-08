@@ -197,12 +197,23 @@ ok "Python ${PY_MM} found"
 # the running installer to be that tree's install.sh); the copy of the code was not. The helper
 # now starts the installer from "/", and a self-update means "update the checkout in place" in
 # any case, so the working directory is simply not consulted when PANEL_SELF_UPDATE is set.
+#
+# And only the tree THIS installer came from: the working directory is the source when the running
+# script is its install.sh, as _operator_src asks of root's own pieces. On file presence alone, the
+# README's `curl … | bash` one-liner ($0 is then "bash") took ANY directory holding an app.py and a
+# requirements.txt for the panel — an old clone it was run from was copied over the install with
+# its .git, a downgrade the update path waves through for a local source, and a fresh install from
+# some other Flask project installed that project as the panel.
 SRC=""
 if [[ -n "${PANEL_SELF_UPDATE:-}" ]]; then
     :   # the panel chose this run: fetch_code updates PANEL_DIR itself (see above)
 elif [[ -f "./app.py" ]] && [[ -f "./requirements.txt" ]]; then
-    SRC="$(pwd)"
-    ok "Using the current checkout as source: ${SRC}"
+    if [[ "$(readlink -f -- "${SCRIPT_PATH}" 2>/dev/null)" = "$(pwd -P)/install.sh" ]]; then
+        SRC="$(pwd)"
+        ok "Using the current checkout as source: ${SRC}"
+    else
+        warn "Not using $(pwd) as the source: this installer was not started from it (run its own install.sh to install from it)."
+    fi
 fi
 
 # ─────────────────────────────────────────────────────────
@@ -629,8 +640,11 @@ ufw_port_state() {
         *"Status: inactive"*) echo inactive; return 0 ;;
         *) echo unknown; return 0 ;;
     esac
+    # Open to the PUBLIC: the From column is Anywhere. A rule for this port from one range only (a
+    # Tailscale-only `5000/tcp ALLOW 100.64.0.0/10`) read as "open", and the address printed for it
+    # was one the firewall drops.
     while IFS= read -r line; do
-        if [[ "${line}" =~ ^${port}(/tcp)?(\ \(v6\))?[[:space:]]+(ALLOW|LIMIT) ]]; then
+        if [[ "${line}" =~ ^${port}(/tcp)?(\ \(v6\))?[[:space:]]+(ALLOW|LIMIT)([[:space:]]+IN)?[[:space:]]+Anywhere ]]; then
             echo open; return 0
         fi
     done <<< "${out}"
@@ -1899,6 +1913,17 @@ install_recovery_command() {
         warn "Recovery command points into the checkout — no root-owned copy could be placed."
         warn "Re-run this installer as root so \`sudo linuxgsm-panel-recover\` is not panel-writable."
     fi
+    # The uninstaller, root-owned beside it, for the same reason: README's root uninstall runs it
+    # as root, and the copy in the checkout is the panel user's to rewrite — a compromised panel
+    # waited for the operator to do the obvious thing at the moment they suspected it. Placed from
+    # the same commit on every install and update; when it cannot be staged, a root-owned copy
+    # already there is kept, and nothing in the checkout is ever pointed at.
+    local ustage=""
+    if ustage="$(stage_root_source uninstall.sh uninstall.sh)"; then
+        ${H_SUDO} install -o root -g root -m 0755 "${ustage}" "${HELPER_DIR}/uninstall.sh" 2>/dev/null \
+            || warn "Could not place the root-owned uninstaller at ${HELPER_DIR}/uninstall.sh."
+        ${H_SUDO} rm -f "${ustage}" 2>/dev/null || true
+    fi
     [[ -n "${target}" ]] || return 0
     ${H_SUDO} ln -sf "${target}" "${link}" 2>/dev/null || true
 }
@@ -3018,7 +3043,16 @@ if command -v ufw >/dev/null 2>&1; then
         UFW_READ=1
         printf '%s' "${UFW_STATUS}" | grep -q "Status: active" && UFW_ACTIVE=1
         printf '%s' "${UFW_STATUS}" | grep -qi "tailscale0"    && TS_UFW=1
-        printf '%s' "${UFW_STATUS}" | grep -qw "${PORT}"       && PORT_OPEN=1
+        # Open means open to the PUBLIC — an ALLOW or LIMIT on the port from Anywhere, matched as
+        # ufw_port_state matches it on the update path. `grep -w PORT` over the whole status took
+        # any rule naming the port for an open one: a Tailscale-only `5000/tcp ALLOW 100.64.0.0/10`,
+        # even a DENY. The auto-open below was then skipped, and the banner printed the public
+        # address with no "firewalled" caveat while the firewall dropped it.
+        while IFS= read -r _ufw_line; do
+            if [[ "${_ufw_line}" =~ ^${PORT}(/tcp)?(\ \(v6\))?[[:space:]]+(ALLOW|LIMIT)([[:space:]]+IN)?[[:space:]]+Anywhere ]]; then
+                PORT_OPEN=1
+            fi
+        done <<< "${UFW_STATUS}"
     fi
 fi
 
@@ -3071,7 +3105,15 @@ warn "The panel binds 0.0.0.0:${PORT}. For real use, put it behind Tailscale Ser
 warn "no open port needed) from the setup wizard — don't leave the admin panel open to the internet."
 echo ""
 echo -e "${CYAN}Forgot the admin password?${NC} From a shell on this server (no web login needed):"
-echo -e "    sudo linuxgsm-panel-recover        ${YELLOW}# or: cd ${PANEL_DIR} && bash reset-password.sh${NC}"
+# The checkout's reset-password.sh only for a per-user install, run as its own user. On a root
+# install that directory is the panel user's (and its home 0750, so reaching it takes root): the
+# alternative had ROOT run reset-password.sh and recover.sh out of a tree a compromised panel can
+# rewrite — the very thing the root-owned copy behind linuxgsm-panel-recover exists to prevent.
+if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
+    echo -e "    sudo linuxgsm-panel-recover"
+else
+    echo -e "    sudo linuxgsm-panel-recover        ${YELLOW}# or: cd ${PANEL_DIR} && bash reset-password.sh${NC}"
+fi
 echo ""
 
 # ── Reboot ONLY if an update actually requires one — and NEVER out from under running game

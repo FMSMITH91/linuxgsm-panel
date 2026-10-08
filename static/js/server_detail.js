@@ -319,12 +319,22 @@ socket.on('connect', function() {
   // A RE-connect (a network blip, or the page coming back from the back/forward cache, which
   // closes the socket on pagehide) rejoins a poller that no longer holds this console's offset —
   // it forgets consoles nobody watches, so it starts again from "now". Whatever the game wrote
-  // during the gap is only in the log file, so catch up from it once: this one poll may append
-  // its delta even though the socket is connected again. Back from a hidden spell whose catch-up
-  // has not finished — the socket was down at the return, or dropped before the page was back in
-  // step — that gap is the whole spell, and the return's own catch-up is the one that covers it.
+  // during the gap is only in the log file, so catch up from it once. Back from a hidden spell
+  // whose catch-up has not finished — the socket was down at the return, or dropped before the
+  // page was back in step — that gap is the whole spell, and the return's own catch-up covers it.
+  //
+  // A primed console is caught up the way a return is (_catchUpReturn): asked of the poller from the
+  // page's own place in the log, with pushes HELD until the answer places them. It used to read the
+  // 250-line window and stitch it to the page's end by text while pushes went on being appended: a
+  // push that landed before the window's answer left the page ending on a line the window has only
+  // after the time away, nothing matched, and all 250 lines were appended a second time. Not primed,
+  // nothing on screen is the log yet and the window that primes it replaces it whole.
   if (_returnOwed) _catchUpReturn();
-  else if (_socketEverConnected) refreshConsole(false, null, true);
+  else if (_socketEverConnected && _consolePrimed && consoleEl) {
+    _returnOwed = true;
+    _gapFromDrop = true;
+    _catchUpReturn();
+  } else if (_socketEverConnected) refreshConsole(false, null, true);
   _socketEverConnected = true;
 });
 
@@ -360,9 +370,11 @@ socket.on('console_output', function(data) {
     // Per-line rows: a LinuxGSM-stamped line carries the time the GAME wrote it, which beats the
     // moment the poller happened to read it. data.ts is the fallback for lines with no stamp —
     // those the panel did watch arrive, so it is an honest time for them.
-    _appendConsoleRows(data.rows.filter(function (r) {
+    var pushedRows = data.rows.filter(function (r) {
       return r && typeof r.line === 'string' && r.line.trim();
-    }), data.ts, data.at);
+    });
+    _appendConsoleRows(pushedRows, data.ts, data.at);
+    _rebuildNotePush(pushedRows, data.ts, data.at);
     updateTsNotice();
   } else {
     appendConsole(data.data, data.ts, fromLog);
@@ -551,6 +563,67 @@ function _newConsoleRows(haveLines, rows) {
   return fresh.length ? rows.slice(rows.length - fresh.length) : [];
 }
 
+// The poller's last pushes, as shown, each numbered. A read that REPLACES the console — the priming
+// window, Load older — wipes every line on screen, the pushes with it, and the read holds only what
+// was in the log when the host read it: a push of lines written after that, which reached the page
+// before the (bigger, slower) answer did, was wiped and never came back (the delta branch is off
+// while the socket is up). So such a read notes the number at its start (_rebuildMark) and, once it
+// has rebuilt the console, puts back what was pushed since that its window lacks (_rebuildRestore).
+var _rebuildPushes = [];
+var _rebuildSeq = 0;
+var _REBUILD_KEEP = 2000;      // rows kept: a read's window is at most this long
+
+function _rebuildNotePush(rows, ts, at) {
+  if (!rows.length) return;
+  _rebuildPushes.push({n: ++_rebuildSeq, rows: rows, ts: ts, at: at});
+  var kept = 0;
+  for (var i = _rebuildPushes.length - 1; i >= 0; i--) {
+    kept += _rebuildPushes[i].rows.length;
+    if (kept > _REBUILD_KEEP) { _rebuildPushes.splice(0, i); break; }
+  }
+}
+
+function _rebuildMark() { return _rebuildSeq; }
+
+// Whether `run` stands unbroken somewhere in `lines`.
+function _rebuildHasRun(lines, run) {
+  for (var k = lines.length - run.length; k >= 0; k--) {
+    if (_eqRange(lines, k, run, 0, run.length)) return true;
+  }
+  return false;
+}
+
+// After a rebuild from a read started at `mark`: the lines pushed since that the rebuilt console
+// lacks, appended. The pushes are one stretch of the log in order, so it is placed by its text the
+// way a poll's window is: what lies past the console's last line. A stretch the console holds whole
+// was written before the host read the log, and is already shown.
+function _rebuildRestore(mark) {
+  var since = _rebuildPushes.filter(function (p) { return p.n > mark; });
+  if (!since.length || !_consoleLines.length) return;
+  var rows = [];
+  since.forEach(function (p) { p.rows.forEach(function (r) { rows.push({row: r, p: p}); }); });
+  var lines = rows.map(function (x) { return x.row.line; });
+  var fresh = _newConsoleLines(_consoleLines, lines).length;
+  if (fresh === lines.length && _rebuildHasRun(_consoleLines, lines)) return;
+  // Appended push by push: each keeps its own arrival time and place in the log.
+  rows.slice(rows.length - fresh).forEach(function (x, i, all) {
+    if (i && all[i - 1].p === x.p) return;
+    var mine = all.filter(function (y) { return y.p === x.p; }).map(function (y) { return y.row; });
+    _appendConsoleRows(mine, x.p.ts, x.p.at);
+  });
+}
+
+// A line of output, marked do-not-translate: i18n.js swaps any text node whose whole text is a
+// catalog key, so a game line that was exactly "Done", "Saved" or "Stopped" read "Listo", "Guardado"
+// or "Detenido" to a Spanish viewer — not what the server printed. Per line rather than on
+// #console-output: that also holds the panel's own "Waiting for console output..." copy, which is.
+function _consoleLineEl() {
+  var div = document.createElement('div');
+  div.className = 'console-line';
+  div.setAttribute('data-no-i18n', '');
+  return div;
+}
+
 // Each row may carry its own time (LinuxGSM stamped the log). `fallbackTs` is the panel's clock
 // for rows that do not — used only where the caller knows the panel WATCHED them arrive. `at` is
 // where in the log the rows end, when the caller knows it (a push, a catch-up): _logAt.
@@ -558,8 +631,7 @@ function _appendConsoleRows(rows, fallbackTs, at) {
   if (!rows.length) return;
   var frag = document.createDocumentFragment();
   rows.forEach(function (row) {
-    var div = document.createElement('div');
-    div.className = 'console-line';
+    var div = _consoleLineEl();
     var ts = row.t || fallbackTs;
     if (ts) { div.dataset.ts = ts; stampLine(div, ts); }
     renderAnsi(div, row.line);
@@ -577,8 +649,7 @@ function _appendConsole(lines, ts, track) {
   if (!lines.length) return;
   var frag = document.createDocumentFragment();
   lines.forEach(function(line) {
-    var div = document.createElement('div');
-    div.className = 'console-line';
+    var div = _consoleLineEl();
     if (ts) { div.dataset.ts = ts; stampLine(div, ts); }
     renderAnsi(div, line);
     frag.appendChild(div);
@@ -708,8 +779,7 @@ function _renderPanelLines(panelLines) {
   // are not in the file would only ever confuse the match.
   var frag = document.createDocumentFragment();
   panelLines.forEach(function (row) {
-    var div = document.createElement('div');
-    div.className = 'console-line';
+    var div = _consoleLineEl();
     // The backlog is the ONE source that carries a real time for lines you did not watch arrive:
     // the panel wrote them, so it knows exactly when. That is why an update's output still reads
     // with its timestamps after a reload, where the game log's own window cannot.
@@ -726,6 +796,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
   if (!consoleEl || window._CAN_VIEW_CONSOLE === false) return;
   // Don't yank the user to the bottom unless they were already there (or it's the initial load).
   var stick = forceScroll || consoleAtBottom();
+  var mark = _rebuildMark();
   fetch(MOUNT + '/api/console/' + serverId + (wantLines ? '?lines=' + wantLines : ''))
     .then(r => r.json())
     .then(data => {
@@ -762,6 +833,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         // LinuxGSM's own stamp keeps it, which is the whole point: that one is a real time for a
         // line written long before the panel looked.
         _appendConsoleRows(rows);
+        _rebuildRestore(mark);
       } else if (!socket.connected || catchUp) {
         // A poll DELTA is new output the panel just watched arrive — accurate to the poll
         // interval — so it is stamped, exactly like a socket push. Only the priming window above
@@ -810,6 +882,7 @@ function _showTsOffNote(data) {
 function loadMoreConsole(btn) {
   var orig = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+  var mark = _rebuildMark();
   fetch(MOUNT + '/api/console/' + serverId + '?lines=2000')
     .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
     .then(function(res) {
@@ -840,6 +913,11 @@ function loadMoreConsole(btn) {
       _consoleLines = [];
       consoleEl.innerHTML = '';
       _appendConsoleRows(older, null);
+      _rebuildRestore(mark);
+      // A deeper window of the log is a superset of the priming one, so this console is primed. Left
+      // unprimed (after Clear, or pressed before the first window came back) the next 30 s poll took
+      // it for a console never primed and swapped the 2000 lines just loaded for its 250.
+      if (older.length) _consolePrimed = true;
       // The panel's own lines (an update's output and markers) are not in the log, so a rebuild
       // from the log alone threw them away for good. Put the kept backlog back after it, the same
       // way the first load does.
@@ -899,6 +977,7 @@ function _pauseConsole() {
   var inStep = !_returnOwed;
   _consolePaused = true;
   _returnOwed = true;
+  _gapFromDrop = false;
   _awayRead = false;
   _endResync();
   // With the socket down the server has already let this console go; the flag alone keeps a
@@ -1245,10 +1324,17 @@ function _appendReturnRows(rows, now) {
   _awayRead = true;
 }
 
+// What the catch-up owed is for: a hidden spell (false), or a dropped connection with the tab in view
+// the whole time (true, set by the connect handler; a hidden spell after it sets it back). The notice
+// says which, since "while this tab was in the background" is false of a tab that never left.
+var _gapFromDrop = false;
+
 function _showReturnGap() {
   var div = document.createElement('div');
   div.className = 'console-line console-gap text-warning';
-  div.textContent = t('Some output from while this tab was in the background is not shown. The server keeps it in its console log files.');
+  div.textContent = _gapFromDrop
+    ? t('Some output from while the connection was down is not shown. The server keeps it in its console log files.')
+    : t('Some output from while this tab was in the background is not shown. The server keeps it in its console log files.');
   consoleEl.appendChild(div);
 }
 
@@ -1814,7 +1900,12 @@ function _gmcPost(bodyObj, okMsg){
   }).then(function(r){ return r.json(); }).then(function(d){
     if(window.toast) toast(d.message || (d.success?okMsg:'Failed'), d.success?'success':'danger');
     setTimeout(loadGmodContent, 1500);
-  }).catch(function(){ if(window.toast) toast('Request failed','danger'); });
+  }).catch(function(){
+    if(window.toast) toast('Request failed','danger');
+    // The card is drawn again, as after an answer: Apply had been disabled under a spinner, and a
+    // request that never answered (the panel restarting, a proxy's 502) left it dead until a reload.
+    loadGmodContent();
+  });
 }
 
 function applyGmodContent(btn){

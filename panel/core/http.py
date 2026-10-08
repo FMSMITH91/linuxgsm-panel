@@ -63,11 +63,12 @@ def _form_ok(message, endpoint, **values):
     return redirect(url_for(endpoint, **values))
 
 
-def _form_credential(message, endpoint, username, password, **values):
+def _form_credential(message, endpoint, username, password, kind="password", **values):
     """Success for an action that MINTED a credential.
 
     The plaintext rides back in the JSON so the page can show it once, and is never put anywhere it
-    would persist.
+    would persist. `kind` is what it is — "password" or "invite" (a link, shown once the same way) —
+    so the page words it to fit: an invite was shown as a "One-time password", to be "reset" if lost.
 
     Not a flash and not the session — a flash is stored in the signed session cookie, so a generated
     password would sit in the browser's cookie jar (and any proxy log that captured the Set-Cookie)
@@ -77,9 +78,12 @@ def _form_credential(message, endpoint, username, password, **values):
     """
     if _wants_json():
         return jsonify({"success": True, "message": message,
-                        "credential": {"username": username, "password": password}})
-    flash("%s Temporary password for %s: %s — copy it now, it is not shown again."
-          % (message, username, password), "success")
+                        "credential": {"username": username, "password": password, "kind": kind}})
+    if kind == "invite":
+        flash("%s %s — copy it now, it is not shown again." % (message, password), "success")
+    else:
+        flash("%s Temporary password for %s: %s — copy it now, it is not shown again."
+              % (message, username, password), "success")
     return redirect(url_for(endpoint, **values))
 
 

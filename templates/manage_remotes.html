@@ -223,7 +223,10 @@
               {% endif %}
             </select>
           </div>
-          <div class="col-md-2" id="edit-cred-group-{{ remote.id }}">
+          {# Hidden from the start for a host already on Tailscale SSH, which uses no credential:
+             toggleEditCreds runs only on a CHANGE of the select, so the preselected option never
+             hid it, and anything typed there was stored for a transport that never reads it. #}
+          <div class="col-md-2" id="edit-cred-group-{{ remote.id }}"{% if remote.auth_method == 'tailscale' %} style="display:none"{% endif %}>
             <label class="form-label" for="manage-remotes-credential-{{ remote.id }}">Credential</label>
             <input id="manage-remotes-credential-{{ remote.id }}" type="password" name="credential" class="form-control" value=""
                    autocomplete="off" placeholder="Leave blank to keep current">

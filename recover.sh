@@ -210,7 +210,13 @@ if [[ "$(id -un)" = "${SVC_USER}" ]]; then
 elif [[ "$(id -u)" -eq 0 ]]; then
     exec sudo -u "${SVC_USER}" "${PY}" "${PANEL_DIR}/manage.py" "$@"
 else
-    echo "Re-run with sudo so it can read the panel's owner-only database:" >&2
-    echo "    sudo ${0##*/} $*" >&2
+    # Through the root-owned recovery command, not `sudo <this file>`: run from the checkout, that is
+    # root running a file the panel user can rewrite (install_recovery_command in install.sh), and
+    # as a bare name ("sudo recover.sh") it was not even on PATH.
+    echo "Re-run as root so it can read the panel's owner-only database:" >&2
+    echo "    sudo linuxgsm-panel-recover $*" >&2
+    if ! command -v linuxgsm-panel-recover >/dev/null 2>&1; then
+        echo "(or, with no linuxgsm-panel-recover on this host, run this as ${SVC_USER}, the panel's own account)" >&2
+    fi
     exit 1
 fi

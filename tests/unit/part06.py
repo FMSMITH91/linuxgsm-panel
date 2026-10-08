@@ -4005,7 +4005,7 @@ try:
                      'info() { echo "INFO $*"; echo "INFO $*" >> "${TRACE}"; }\n'
                      '_fakeufw() { case "$1 $2" in\n'
                      '  "show added") echo "Added user rules:"; cat "${UFW_STATE}" 2>/dev/null ;;\n'
-                     '  "delete allow") grep -vxF "ufw allow $3" "${UFW_STATE}" > "${UFW_STATE}.n";'
+                     '  "delete allow"|"delete limit") grep -vxF "ufw $2 $3" "${UFW_STATE}" > "${UFW_STATE}.n";'
                      ' mv -f "${UFW_STATE}.n" "${UFW_STATE}" ;;\n'
                      '  esac; return 0; }\n'
                      'ufw() { echo "UFW $*" >> "${TRACE}"; _fakeufw "$@"; }\n'
@@ -4059,6 +4059,15 @@ try:
         check("uninstall.sh: ...and a host that never had the rule is not told it was removed",
               "Removed the panel's UFW rule" not in _rnr.stdout
               and "No UFW rule for port 5000 was found" in _rnr.stdout, repr(_rnr.stdout[-200:]))
+        # The panel's firewall page can rate-limit the panel's own port, and `ufw limit` rewrites the
+        # installer's allow in place: the rule left is a LIMIT, which was neither counted nor deleted.
+        _rlim, _trlim = _fw_run('MODE=user\nFAKE_UID=1000\nPANEL_PORT=5000\n'
+                                'TS_DONE=0\nTS_CONF_UNREAD=0\nTS_MOUNT=/\n', rules=("ufw limit 5000/tcp",))
+        with open(_ufw_state, encoding="utf-8") as _fh:
+            _lim_left = _fh.read()
+        check("uninstall.sh: a rate-limited panel port (a LIMIT, not an ALLOW) is removed too, and said so",
+              "OK Removed the panel's UFW rule for port 5000" in _rlim.stdout and "limit" not in _lim_left,
+              repr((_rlim.stdout[-200:], _lim_left)))
 
         # ── not knowing the port is not the same as there being no rule ────────────────────────
         # PANEL_PORT is blanked whenever data/config.json cannot be read or parsed, and the guard

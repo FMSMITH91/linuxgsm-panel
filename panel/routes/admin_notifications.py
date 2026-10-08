@@ -323,7 +323,7 @@ def _register_invites(app):
         # Shown once, like a generated password: only the hash is stored, so if this is missed the
         # link is gone and a new invite has to be minted.
         return _form_credential("Invite link created — send it to them. It works once.",
-                                "manage_users", username="Invite link",
+                                "manage_users", username="Invite link", kind="invite",
                                 # Shown only to the superadmin who minted it, on the host they
                                 # reached the panel by.
                                 # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
