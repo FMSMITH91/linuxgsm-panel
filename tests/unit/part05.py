@@ -7032,3 +7032,204 @@ try:
           % (_dp_want, _dp_ugot, _dp_um))
 finally:
     _shutil.rmtree(_rc_root, ignore_errors=True)
+
+
+# ── helper: three holes in the privilege boundary (review 2026-10-08) ─────────────────────────────
+# 1. A name with no passwd entry passed v_game_account outright, so `user-remove-home backups`
+#    ran `rm -rf -- /home/backups` as root on an admin's directory (or an LDAP user's home while
+#    NSS was down), and content-game-remove walked into it the same way. Now a name with no
+#    account is taken only when its home is absent, or a real directory owned by a uid that has no
+#    account either (what userdel leaves).
+# 2. panel.conf's db_path/data_dir pass through directories the PANEL USER owns, and each check
+#    covered one component, so a link at ~/linuxgsm-panel aimed the root-run repair, restore and
+#    self-update log at a tree of its choosing. A non-root link anywhere on the path is refused.
+# 3. _caller_reaches_root answered True ("already root") for any sudoers it could not parse, which
+#    switched v_game_account off for every account on that host. It answers False now.
+import contextlib as _rv5_ctx
+import io as _rv5_io
+import pwd as _rv5_real_pwd
+
+_rv5_dir = os.path.realpath(_tempfile.mkdtemp(prefix="rv5-helper-"))
+_rv5_saved = (_helper.HOME_ROOT, _helper.pwd, _helper.PANEL_CONF, _helper.DBM_PATH,
+              _helper.INSTALLER_PATH, _helper.SUDOERS_FILE, _helper.SUDOERS_DIR, _helper._groups_of,
+              os.environ.get("SUDO_UID"))
+_RV5_ORPHAN_UID = 3999111          # a uid no account on any test machine holds
+
+
+def _rv5_refused(verb, args):
+    try:
+        _helper.validate(verb, args)
+    except ValueError:
+        return True
+    return False
+
+
+try:
+    # ── 1. a name with no account, and whose home that is ──────────────────────────────────────
+    _rv5_homes = os.path.join(_rv5_dir, "home")
+    os.makedirs(_rv5_homes)
+    _helper.HOME_ROOT = _rv5_homes
+    _rv5_live = _rv5_real_pwd
+
+    def _rv5_getpwnam(name):
+        if name.startswith("rv5"):
+            raise KeyError(name)           # none of this block's names is an account
+        return _rv5_live.getpwnam(name)
+
+    def _rv5_getpwuid(uid):
+        if uid == _RV5_ORPHAN_UID:
+            raise KeyError(uid)
+        return _rv5_live.getpwuid(uid)
+
+    _helper.pwd = NS(getpwnam=_rv5_getpwnam, getpwuid=_rv5_getpwuid, getpwall=_rv5_live.getpwall)
+    os.makedirs(os.path.join(_rv5_homes, "rv5other"))       # owned by THIS (existing) account
+    os.makedirs(os.path.join(_rv5_homes, "rv5orphan"))
+    os.makedirs(os.path.join(_rv5_homes, "rv5target"))
+    os.symlink(os.path.join(_rv5_homes, "rv5target"), os.path.join(_rv5_homes, "rv5link"))
+    if os.geteuid() == 0:
+        # Run as root (CI does), a directory this creates is root's, which the check refuses for
+        # being root's — so give the "orphan" the orphan uid for real.
+        os.chown(os.path.join(_rv5_homes, "rv5orphan"), _RV5_ORPHAN_UID, _RV5_ORPHAN_UID)
+    else:
+        _rv5_me = os.getuid()
+        _helper.pwd = NS(getpwnam=_rv5_getpwnam, getpwall=_rv5_live.getpwall,
+                         getpwuid=lambda u: (_ for _ in ()).throw(KeyError(u))
+                         if u == _rv5_me and _rv5_orphan_view[0] else _rv5_getpwuid(u))
+    _rv5_orphan_view = [False]
+    check("helper user-remove-home: a name with no account whose /home dir belongs to an account "
+          "is refused (no rm -rf of someone else's home)",
+          _rv5_refused("user-remove-home", ["rv5other"]))
+    check("helper content-game-remove: ...and the same home is not walked for removal either",
+          _rv5_refused("content-game-remove", ["rv5other", "cstrike", "cssserver"]))
+    check("helper user-remove-home: ...nor a /home entry that is a symlink",
+          _rv5_refused("user-remove-home", ["rv5link"]))
+    check("helper user-remove-home: ...while a name whose home is not there at all is still taken",
+          not _rv5_refused("user-remove-home", ["rv5gone"]))
+    _rv5_orphan_view[0] = True
+    check("helper user-remove-home: ...and so is what userdel leaves: a home owned by a uid with no "
+          "account (positive control)",
+          not _rv5_refused("user-remove-home", ["rv5orphan"]))
+    _rv5_orphan_view[0] = False
+
+    # ── 2. panel.conf paths through a link the panel user made ─────────────────────────────────
+    _rv5_real = os.path.join(_rv5_dir, "real-panel")
+    os.makedirs(os.path.join(_rv5_real, "data", ".restore-stage"))
+    with open(os.path.join(_rv5_real, "data", "panel.db"), "w") as _fh:
+        _fh.write("x")
+    _rv5_lnk = os.path.join(_rv5_dir, "linuxgsm-panel")     # the panel user's swapped-in link
+    os.symlink(_rv5_real, _rv5_lnk)
+    if os.geteuid() == 0:
+        os.lchown(_rv5_lnk, 65534, 65534)                    # a link root did NOT make
+    _rv5_dbm = os.path.join(_rv5_dir, "db_maintenance.py")
+    open(_rv5_dbm, "w").close()
+    _helper.DBM_PATH = _rv5_dbm
+    _helper.INSTALLER_PATH = _rv5_dbm                       # any file: only its existence is read
+    _rv5_conf = os.path.join(_rv5_dir, "panel.conf")
+    _helper.PANEL_CONF = _rv5_conf
+
+    def _rv5_targets(base):
+        with open(_rv5_conf, "w", encoding="utf-8") as _fh:
+            _fh.write("db_path=%s/data/panel.db\ndata_dir=%s/data\npanel_dir=%s\n" % (base, base, base))
+        with _rv5_ctx.redirect_stderr(_rv5_io.StringIO()):
+            return (_helper._db_repair_target(), _helper._restore_target(),
+                    _helper._self_update_target(),
+                    _helper._db_repair_account(base + "/data/panel.db"))
+
+    _rv5_via_link = _rv5_targets(_rv5_lnk)
+    _rv5_direct = _rv5_targets(_rv5_real)
+    check("helper panel-db-repair: a database path through a non-root symlink is refused",
+          _rv5_via_link[0] is None, repr(_rv5_via_link[0]))
+    check("helper panel-restore: ...and so is a data_dir through one",
+          _rv5_via_link[1] is None, repr(_rv5_via_link[1]))
+    check("helper panel-self-update: ...where root creates its log, too",
+          _rv5_via_link[2] is None, repr(_rv5_via_link[2]))
+    check("helper panel-db-repair: ...and the account the repair runs as is not read through it",
+          _rv5_via_link[3] is None, repr(_rv5_via_link[3]))
+    check("helper: ...while the same tree reached without the link is still repaired, restored and "
+          "updated (positive control)",
+          _rv5_direct[0] == _rv5_real + "/data/panel.db" and _rv5_direct[1] == _rv5_real + "/data"
+          and _rv5_direct[2] == (_rv5_real, _rv5_real + "/data") and _rv5_direct[3] is not None,
+          repr(_rv5_direct))
+
+    # ── 3. a sudo policy the parser cannot read ────────────────────────────────────────────────
+    _rv5_sudoers = os.path.join(_rv5_dir, "sudoers")
+    with open(_rv5_sudoers, "w", encoding="utf-8") as _fh:
+        _fh.write("@include /etc/sudoers.d/%h\n")            # documented sudoers(5); refused here
+    _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _rv5_sudoers, os.path.join(_rv5_dir, "none")
+    _helper._groups_of = lambda _name: set()
+    _helper.pwd = _rv5_live
+    _rv5_caller = _rv5_live.getpwuid(os.getuid()).pw_name
+    _rv5_err = _rv5_io.StringIO()
+    with _rv5_ctx.redirect_stderr(_rv5_err):
+        try:
+            _rv5_reach = _helper._caller_reaches_root(_rv5_caller)
+        except Exception as _e:
+            _rv5_reach = repr(_e)
+    check("helper: a sudo policy it cannot parse does not make the caller root-capable",
+          _rv5_reach is False, repr(_rv5_reach))
+    check("helper: ...and it says so on stderr", "sudo policy" in _rv5_err.getvalue(),
+          repr(_rv5_err.getvalue()))
+finally:
+    (_helper.HOME_ROOT, _helper.pwd, _helper.PANEL_CONF, _helper.DBM_PATH, _helper.INSTALLER_PATH,
+     _helper.SUDOERS_FILE, _helper.SUDOERS_DIR, _helper._groups_of, _rv5_uid) = _rv5_saved
+    if _rv5_uid is None:
+        os.environ.pop("SUDO_UID", None)
+    else:
+        os.environ["SUDO_UID"] = _rv5_uid
+    _shutil.rmtree(_rv5_dir, ignore_errors=True)
+
+
+# ── content-grant-read: a failed step fails the verb (review 2026-10-08, B-extra) ──────────────────
+# The remote form chained its steps with `;`, so its exit status was the last chmod's: a usermod
+# that failed answered 0. The helper threw usermod's status away, and gmod's caller ignored the
+# verb's rc on both transports, so the mount said "Mounted" for a server that could read nothing.
+# The rendered string is RUN under bash with usermod/runuser as shell functions answering per case.
+from panel.ops.ssh_manager import _core as _bx_core, gmod as _bx_gmod
+
+
+def _bx_remote_rc(usermod_rc, chmod_rc):
+    cmd = _priv.remote_command("content-grant-read", ["cu", "cu", "gm", "cstrike"])
+    prelude = "usermod() { return %d; }; runuser() { return %d; }; " % (usermod_rc, chmod_rc)
+    return _sub.run(["bash", "-c", prelude + cmd], capture_output=True, timeout=30).returncode
+
+
+_bx_rcs = {k: _bx_remote_rc(*k) for k in ((1, 0), (0, 1), (0, 0))}
+check("privileged: the remote content grant fails when its usermod fails (not the last chmod's 0)",
+      _bx_rcs[(1, 0)] != 0, repr(_bx_rcs))
+check("privileged: ...and when a chmod fails, while all succeeding is still 0 (positive control)",
+      _bx_rcs[(0, 1)] != 0 and _bx_rcs[(0, 0)] == 0, repr(_bx_rcs))
+
+_bx_saved = (_helper.pwd, _helper.grp, _helper.subprocess, _helper.HOME_ROOT)
+_bx_dir = _tempfile.mkdtemp(prefix="bx-grant-")
+try:
+    _helper.HOME_ROOT = _bx_dir               # no home there: the grant stops after usermod
+    _helper.pwd = NS(getpwnam=lambda n: NS(pw_gid=4321, pw_uid=4321, pw_name=n))
+    _helper.grp = NS(getgrgid=lambda g: NS(gr_name="cu", gr_gid=g, gr_mem=[]))
+    _bx_hrc = {}
+    for _bx_um in (1, 0):
+        _helper.subprocess = NS(run=lambda *a, _r=_bx_um, **k: NS(returncode=_r))
+        try:
+            _bx_hrc[_bx_um] = _helper.do_content_grant_read(["cu", "cu", "gm", "cstrike"], "")
+        except Exception as _e:
+            _bx_hrc[_bx_um] = repr(_e)
+finally:
+    (_helper.pwd, _helper.grp, _helper.subprocess, _helper.HOME_ROOT) = _bx_saved
+    _shutil.rmtree(_bx_dir, ignore_errors=True)
+check("helper content-grant-read: a usermod that failed is the verb's answer (non-zero)",
+      _bx_hrc.get(1) not in (0, None) and not isinstance(_bx_hrc.get(1), str), repr(_bx_hrc))
+check("helper content-grant-read: ...and one that worked still answers 0 (positive control)",
+      _bx_hrc.get(0) == 0, repr(_bx_hrc))
+
+_bx_saved_c = (_bx_core.run_privileged, _bx_gmod._user_primary_group)
+try:
+    _bx_gmod._user_primary_group = lambda server, user: "cu"
+    _bx_core.run_privileged = lambda s, v, a=(), **k: ("", "usermod: group 'cu' does not exist", 1)
+    _bx_fail = _bx_gmod._grant_content_read(object(), "gm", "cu", ["cstrike"])
+    _bx_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    _bx_ok = _bx_gmod._grant_content_read(object(), "gm", "cu", ["cstrike"])
+finally:
+    (_bx_core.run_privileged, _bx_gmod._user_primary_group) = _bx_saved_c
+check("gmod mount: a content grant the host refused is reported, not passed over as mounted",
+      isinstance(_bx_fail, str) and "does not exist" in _bx_fail, repr(_bx_fail))
+check("gmod mount: ...and a grant that worked still returns None (positive control)",
+      _bx_ok is None, repr(_bx_ok))

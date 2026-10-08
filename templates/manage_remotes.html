@@ -260,6 +260,10 @@
 </div>
 {% endfor %}
 </div><!-- /#remotes-list -->
+{# Tells manage_remotes.js whether to offer "Migrate to Tailscale SSH" after a join: the migrate
+   route is superadmin-only (it moves the host onto the panel's own tailnet identity). Outside the
+   refreshed list, so an AJAX refresh never drops it. #}
+{% if current_user.is_superadmin %}<span id="ts-migrate-allowed" hidden></span>{% endif %}
 
 {% endblock %}
 

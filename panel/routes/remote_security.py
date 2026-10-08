@@ -62,7 +62,9 @@ def _register_ban_lists(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_security_bans(remote_id):
-        remote = get_remote(remote_id)
+        # get_host_remote: on the panel's own host its bans are superadmin-only, as the
+        # /api/panel/security/* twins are; a delegable whole-host grant does not reach them.
+        remote = get_host_remote(remote_id)
         try:
             return jsonify(remote_fail2ban_overview(remote))
         except Exception:
@@ -73,7 +75,9 @@ def _register_ban_lists(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_security_top_ips(remote_id):
         """Top offending IPs on a remote host (last 7 days), aggregated from its fail2ban log."""
-        remote = get_remote(remote_id)
+        # get_host_remote: on the panel's own host its bans are superadmin-only, as the
+        # /api/panel/security/* twins are; a delegable whole-host grant does not reach them.
+        remote = get_host_remote(remote_id)
         # The auto-block SETTINGS come from config.json, not from the host, so a host read that
         # fails must not take them down with it. They were inside this try: an exception building
         # the IP list answered {"ips": [], "error": ...} with no `autoblock` key at all, and the

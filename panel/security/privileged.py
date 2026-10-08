@@ -1187,7 +1187,11 @@ def _content_grant_remote(a):
              as_cu + "chmod g+x %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR))]
     parts += [as_cu + "chmod -R g+rX %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR, g))
               for g in games]
-    return "; ".join(parts)
+    # Every step still runs when one fails, as it did, but the exit status is now ANY step's
+    # failure, not the last chmod's: `a; b; c` answered 0 after a usermod that failed, and the
+    # GMod mount then said "Mounted" for a server that could read none of the content.
+    return "_cgr=0; " + "; ".join("%s || _cgr=1" % p for p in parts) + '; [ "$_cgr" = 0 ]'
+
 
 
 # Verbs the helper implements itself, with no tool to run. A REMOTE host has no helper, so each one

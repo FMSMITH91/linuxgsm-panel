@@ -1353,6 +1353,21 @@ def _write_refused(gs, action, detail=""):
     return jsonify({"success": False, "message": why}), 409
 
 
+def _read_refused(gs, action, detail=""):
+    """_write_refused for a file-browser READ: a refusal response, else None.
+
+    Listings, reads and downloads run as the game account too, and for a legacy row bound to the
+    host's sudo login they handed its ~/.ssh keys and shell history to a delegated admin. JSON with
+    both keys: the browser's readers look at `error`, its writers at `message`.
+    """
+    why = game_account_write_refusal(gs.remote, gs.short_name, reading=True)
+    if why is None:
+        return None
+    log_action(current_user, action, target=gs.name, detail=("refused: " + why)[:250],
+               success=False, server=gs)
+    return jsonify({"success": False, "error": why, "message": why}), 409
+
+
 def _store_upload(gs, reldir, f, data, overwrite):
     """Write an uploaded file onto the host and audit it: the upload route's answer."""
     ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data,
@@ -1677,6 +1692,9 @@ def _register_file_editor(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
+        refused = _read_refused(gs, "browse_files", request.args.get("path", ""))
+        if refused is not None:
+            return refused
         try:
             result = browse_dir(gs.remote, gs.short_name, request.args.get("path", ""), gs.lgsm_name)
             if result is None:
@@ -1693,6 +1711,9 @@ def _register_file_editor(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
+            refused = _read_refused(gs, "read_file", request.args.get("path", ""))
+            if refused is not None:
+                return refused
             content, err = read_file(gs.remote, gs.short_name, request.args.get("path", ""))
             if err:
                 return jsonify({"error": err}), 400
@@ -1872,6 +1893,13 @@ def _register_download(app):
             flash("You don't have permission to manage server files.", "danger")
             return redirect(url_for("server_detail", server_id=server_id))
         rel = request.args.get("path", "")
+        why = game_account_write_refusal(gs.remote, gs.short_name, reading=True)
+        if why is not None:
+            # A link the browser follows, so a flash and a redirect like every refusal below.
+            log_action(current_user, "download_file", target=gs.name,
+                       detail=("refused: " + why)[:250], success=False, server=gs)
+            flash(why, "danger")
+            return redirect(url_for("server_files", server_id=server_id))
 
         # Every failure below ends in a flash and a redirect rather than an abort(), because this
         # is a LINK the browser follows: an error page would replace the file browser with a bare
@@ -2162,6 +2190,9 @@ def _register_uploads(app):
         names = body.get("names")
         if not isinstance(names, list) or len(names) > 500:
             return jsonify({"error": "Invalid request"}), 400
+        refused = _read_refused(gs, "upload_check", str(body.get("path", ""))[:200])
+        if refused is not None:
+            return refused
         try:
             hits = stat_upload_targets(gs.remote, gs.short_name, body.get("path", ""), names)
             if hits is None:

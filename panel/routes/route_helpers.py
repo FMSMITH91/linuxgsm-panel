@@ -14,7 +14,7 @@ import json
 import os
 import threading
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
-    _port_or, bind_host_error, can_bind_address, password_problem)
+    _port_or, bind_host_error, can_bind_address, password_problem, username_problem)
 from panel.routes.remotes import (_add_remote_field_error, _add_remote_target_error)
 from panel.ops.serve_upkeep import (_leftover_note, _remove_serve_leftovers)
 from app import (_bind_is_loopback, _current_lang, _log, _serve_scheme_now, _setup_open,
@@ -407,8 +407,11 @@ def _setup_admin_user(state, data):
     confirm = request.form.get("confirm_password", "")
     email = request.form.get("email", "").strip()
 
-    if not username or len(username) < 3:
-        flash("Username must be at least 3 characters.", "danger")
+    # username_problem, not a length test: the first admin is created here and nowhere else, and
+    # every other create/rename path refuses a tab or interior space (an account the login box
+    # cannot reproduce), a control or bidi character, and a name longer than the column.
+    if username_problem(username):
+        flash(username_problem(username), "danger")
     elif password_problem(password):
         flash(password_problem(password), "danger")
     elif password != confirm:

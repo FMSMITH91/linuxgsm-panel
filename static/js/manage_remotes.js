@@ -201,7 +201,7 @@ function renderTailscaleStatus(remoteId, name, status) {
     // via setModalBody below.
     if (status.tailscale_ip) html += '<p class="small mb-1"><strong>IP:</strong> <code>' + escapeHtml(status.tailscale_ip) + '</code></p>';
     if (status.dns_name) html += '<p class="small mb-1"><strong>DNS:</strong> <code>' + escapeHtml(status.dns_name) + '</code></p>';
-    html += '<hr><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button>';
+    html += '<hr>' + _tsMigrateOffer(remoteId);
   } else if (installed) {
     html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> Tailscale is <strong>installed</strong> but <strong>not running</strong>.</div>';
     html += renderAuthKeyForm(remoteId, name);
@@ -292,8 +292,7 @@ function tailscaleUp(remoteId) {
                 : 'UFW was not changed: it is inactive, not installed, or could not be read or updated.';
               if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: <code>' + escapeHtml(ip) + '</code>'  // nosemgrep
                 + '<br><span class="small">' + escapeHtml(ufwText) + '</span></span>'
-                + '<div class="mt-2"><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '>'
-                + '<i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
+                + '<div class="mt-2">' + _tsMigrateOffer(remoteId) + '</div>';
             })
             // escapeHtml here too: the success path above escapes this exact value, and it is the
             // remote host's `tailscale status --json` output either way — a finalize failure does
@@ -362,7 +361,7 @@ function bootstrapTailscale(remoteId) {
   .then(data => {
     if (data.success) {
       logEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + escapeHtml(data.message) + '</span>'  // nosemgrep
-        + '<div class="mt-2"><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
+        + '<div class="mt-2">' + _tsMigrateOffer(remoteId) + '</div>';
     } else {
       logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</span>'  // nosemgrep
         + (data.log ? '<pre class="text-secondary small mt-1" style="max-height:200px;overflow-y:auto;">' + escapeHtml(data.log.slice(-2000)) + '</pre>' : '');
@@ -371,6 +370,17 @@ function bootstrapTailscale(remoteId) {
   .catch(function() {
     logEl.innerHTML = '<span class="text-danger">Error during bootstrap</span>';
   });
+}
+
+// The "Migrate to Tailscale SSH" offer after a join, or — for anyone the migrate route refuses (it
+// is superadmin-only: it moves the host onto the panel's own tailnet identity) — a line saying who
+// can, instead of a button that answers 403. manage_remotes.html renders #ts-migrate-allowed for a
+// superadmin only.
+function _tsMigrateOffer(remoteId) {
+  if (document.getElementById('ts-migrate-allowed')) {
+    return '<button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button>';
+  }
+  return '<span class="small text-secondary">' + escapeHtml('A superadmin can now switch the panel to reach this host over Tailscale SSH.') + '</span>';
 }
 
 function migrateToTailscale(remoteId) {

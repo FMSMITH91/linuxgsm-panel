@@ -49,7 +49,7 @@ import tempfile as _tf43
 from types import SimpleNamespace as _NS43
 
 from unit import REPO_ROOT as _ROOT43
-from unit.part01 import check
+from unit.part01 import check, skip
 from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_app, _p9_client, _p9_core,
                          _p9_json, _p9_patch, _p9_restore_all, _p9_sm, _p9_so, _p9_trip)
 from panel.core.panel_state import forget_rows
@@ -1030,3 +1030,575 @@ finally:
 
 check("part43: nothing it drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP43_START, repr(_P9_TRIPPED[_TRIP43_START:][:6]))
+
+
+# ══ Review 2026-10-08: core, routes and auth fixes, on part12's app ══════════════════════════════
+# Each section drives the real route or function; part12's tripwire is armed again around them,
+# and every row, stub and in-memory entry made here is undone in the finally.
+import json as _json43
+import re as _re43
+import time as _time43
+
+import pyotp as _pyotp43
+
+from unit.part12 import (P9_GM, P9_GS, P9_HOST, _P9_PATCHED, _P9Thread, _p9_flashes, _p9_queue,
+                         _p9_set, _p9_set_host, _p9_host_row, _p9_threading)
+from panel.core import runtime_stats as _rs43
+from panel.core.config import encrypt_secret as _enc43
+from panel.core import panel_state as _state43
+from panel.db import models as _models43
+from panel.db.models import Group as _Group43, User as _User43
+from panel.routes import _shared as _sh43
+from panel.routes import remote_tailscale as _rts43
+from panel.routes import route_helpers as _rh43
+from panel.routes import server_detail as _sd43
+from panel.routes import server_files as _sf43
+from panel.ops import tailscale_integration as _ts43
+from panel.security import auth as _pauth43
+
+_TRIP_RV43 = len(_P9_TRIPPED)
+_RV43 = {"users": [], "groups": [], "ips": []}
+
+
+class _Rv43Stop(BaseException):
+    """Ends a `while True` loop under test; BaseException so the loop's own except cannot eat it."""
+
+
+def _rv43_arm():
+    _p9_patch(_p9_core, "get_connection",
+              _p9_trip("paramiko", exc=ConnectionError("refused by part43's tripwire")))
+    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
+    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
+    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
+    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+    _p9_patch(_ts43, "get_tailscale_info", lambda force_refresh=False: _NS43(dns_name=None))
+    _p9_patch(_notif43, "notify", lambda key, title, body="": None)
+    _p9_patch(_p9.socketio, "emit", lambda *a, **k: None)
+    _p9_patch(_sd43, "threading", _p9_threading(_P9Thread))
+    _p9_patch(_sh43, "privileged_accounts", lambda remote, users: {})
+
+
+def _rv43_user(name, perms=(), hosts=(), superadmin=False, **kw):
+    with _p9.app_context():
+        u = _User43(username=name, password_hash=_pauth43.hash_password("Str0ng!passw0rd"),
+                    display_name=name, is_superadmin=superadmin, is_active=True, **kw)
+        if perms or hosts:
+            grp = _Group43(name=name + "_grp", description="", is_default=False)
+            grp.set_permissions(list(perms))
+            for rid in hosts:
+                grp.servers.append(db.session.get(RemoteServer, rid))
+            db.session.add(grp)
+            db.session.flush()
+            _RV43["groups"].append(grp.id)
+            u.groups.append(grp)
+        db.session.add(u)
+        db.session.commit()
+        _RV43["users"].append(u.id)
+        return u.id
+
+
+# ── init_db: the default group is found by is_default, not by its name ────────────────────────────
+def _rv43_default_group():
+    with _p9.app_context():
+        g = _Group43(name="rv43 Members", description="", is_default=True)
+        g.set_permissions({"view_servers"})
+        db.session.add(g)
+        db.session.commit()
+        gid = g.id
+        try:
+            _models43._ensure_default_group()
+            second = _Group43.query.filter_by(name="Everyone").first()
+            check("init_db: a renamed default group does not bring back a second 'Everyone' "
+                  "(with view_console) at the next start",
+                  second is None, "made %r" % (second and second.get_permissions()))
+        except Exception as e:
+            check("init_db: a renamed default group does not bring back a second 'Everyone' "
+                  "(with view_console) at the next start", False, repr(e))
+        finally:
+            _Group43.query.filter_by(name="Everyone").delete()
+            db.session.delete(db.session.get(_Group43, gid))
+            db.session.commit()
+        _models43._ensure_default_group()
+        made = _Group43.query.filter_by(name="Everyone", is_default=True).first()
+        check("init_db: ...while a database with no default group still gets one (positive control)",
+              made is not None and "view_console" in made.get_permissions())
+        _Group43.query.filter_by(name="Everyone").delete()
+        db.session.commit()
+
+
+# ── app.py run as __main__: one copy of the module ───────────────────────────────────────────────
+def _rv43_one_module():
+    main = _main_block43() or ast.Module(body=[], type_ignores=[])
+    first = next((i for i, st in enumerate(main.body) if _calls43(st, "create_app")), None)
+    before = "\n".join(ast.unparse(st) for st in main.body[:first or 0])
+    check("app.py: run as __main__, it registers itself as 'app' before create_app imports a route "
+          "module (no second copy of its globals)",
+          first is not None and _re43.search(
+              r"modules\.setdefault\('app', \w+\.modules\['__main__'\]\)", before) is not None,
+          before[-300:])
+
+
+# ── the auto-block loop: a malformed config value, and an exception in a pass ─────────────────
+def _rv43_autoblock():
+    got = []
+    for raw in (5, True, "1,2", [[1], 2, True, "3", None]):
+        _p9_patch(_p9_app, "load_config", lambda raw=raw: {"autoblock_hosts": raw})
+        try:
+            got.append(_p9_app._autoblock_hosts())
+        except Exception as e:
+            got.append(repr(e))
+    check("autoblock: a hand-edited autoblock_hosts that is not a list of ids reads as those ids "
+          "(none), not a TypeError", got == [set(), set(), set(), {2}], repr(got))
+    sleeps = []
+
+    def _sleep(_s):
+        sleeps.append(_s)
+        if len(sleeps) >= 2:
+            raise _Rv43Stop()
+
+    def _births(_ids):
+        raise RuntimeError("a pass that fails")
+
+    _p9_patch(_p9_app, "time", _NS43(sleep=_sleep, time=_time43.time, monotonic=_time43.monotonic))
+    _p9_patch(_p9_app, "_autoblock_hosts", lambda: {1})
+    _p9_patch(_p9_app, "_autoblock_births", _births)
+    before = _rs43.snapshot("loopfail").get("autoblock", 0)
+    try:
+        _p9_app._autoblock_watch(_p9)
+        outcome = "returned"
+    except _Rv43Stop:
+        outcome = "survived"
+    except Exception as e:
+        outcome = repr(e)
+    finally:
+        for name in ("time", "_autoblock_hosts", "_autoblock_births", "load_config"):
+            _p9_patch(_p9_app, name, _P9_PATCHED[(_p9_app, name)])
+    check("autoblock: a pass that raises does not end the (unsupervised) loop; it goes on to the "
+          "next hour", outcome == "survived" and len(sleeps) == 2, "%s after %d sleep(s)"
+          % (outcome, len(sleeps)))
+    check("autoblock: ...and the failure is counted where the debug report reads it",
+          _rs43.snapshot("loopfail").get("autoblock", 0) == before + 1,
+          repr(_rs43.snapshot("loopfail")))
+
+
+# ── Ubuntu Pro cache stamp: real epoch seconds on a non-UTC host ─────────────────────────────────
+def _rv43_pro_stamp():
+    saved = os.environ.get("TZ")
+    os.environ["TZ"] = "RVT+5"           # POSIX form: UTC-5, no tz database needed
+    _time43.tzset()
+    try:
+        offset = _time43.timezone
+        r = RemoteServer(name="rv43-pro", host="192.0.2.99")
+        r.update_pro_cache({"attached": False})
+        ts = _json43.loads(r.pro_cache)["ts"]
+        now = _time43.time()
+    finally:
+        if saved is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = saved
+        _time43.tzset()
+    check("Ubuntu Pro cache: stamped in epoch seconds on a host 5 h behind UTC, not 5 h ahead",
+          offset == 18000 and abs(ts - now) < 60, "offset=%s ts-now=%.0f" % (offset, ts - now))
+
+
+# ── actions on a server that is still installing ─────────────────────────────────────────────────
+def _rv43_installing(admin):
+    reasons = {}
+    for label, fields in (("installing", dict(status="installing", installed=False)),
+                          ("configuring", dict(status="configuring", installed=True)),
+                          ("failed", dict(status="failed", installed=False))):
+        _p9_set(P9_GM, **fields)
+        r = admin.post("/api/servers/bulk-action", json={"action": "restart", "server_ids": [P9_GM]})
+        d = _p9_json(r)
+        reasons[label] = ([s.get("reason") for s in d.get("skipped", [])], len(d.get("queued", [])))
+    _p9_set(P9_GM, status="offline", installed=True)
+    with _state43._install_lock:
+        _state43._install_jobs[P9_GM] = {"status": "running"}
+    try:
+        r = admin.post("/api/servers/bulk-action", json={"action": "update", "server_ids": [P9_GM]})
+        d = _p9_json(r)
+        reasons["job"] = ([s.get("reason") for s in d.get("skipped", [])], len(d.get("queued", [])))
+        single = _p9_json(admin.post("/api/server/%d/action" % P9_GM, json={"action": "restart"}))
+    finally:
+        with _state43._install_lock:
+            _state43._install_jobs.pop(P9_GM, None)
+    leaked = len(_p9_queue)
+    _p9_queue.clear()
+    check("bulk action: a server still installing (or configuring) is skipped, not handed a second "
+          "SteamCMD or a start",
+          reasons.get("installing") == (["still installing"], 0)
+          and reasons.get("configuring") == (["still installing"], 0)
+          and reasons.get("job") == (["still installing"], 0), repr(reasons))
+    check("bulk action: ...and a failed install is skipped as not installed",
+          reasons.get("failed") == (["not installed"], 0), repr(reasons))
+    check("server action: the single route refuses it too (it, the bulk worker and the chat bots "
+          "share _run_action)",
+          single.get("success") is False and "still installing" in (single.get("message") or "")
+          and leaked == 0, "%r, %d worker(s) queued" % (single, leaked))
+
+
+# ── file-browser READS as an account that can become root ────────────────────────────────────────
+def _rv43_reads(admin):
+    seen = []
+    for name in ("browse_dir", "read_file", "stat_path", "stream_path", "stat_upload_targets"):
+        _p9_patch(_sf43, name, lambda *a, _n=name, **k: (seen.append(_n), None)[1])
+    _sh43._ACCOUNT_VERDICTS.clear()
+    _p9_patch(_sh43, "privileged_accounts", lambda remote, users: {u: "in the sudo group" for u in users})
+    try:
+        b = admin.get("/api/server/%d/browse?path=.ssh" % P9_GS)
+        f = admin.get("/api/server/%d/file?path=.bash_history" % P9_GS)
+        u = admin.post("/api/server/%d/upload-check" % P9_GS, json={"path": "", "names": ["a"]})
+        dl = admin.get("/server/%d/download?path=.ssh" % P9_GS)
+        flashes = _p9_flashes(admin)
+    finally:
+        _p9_patch(_sh43, "privileged_accounts", lambda remote, users: {})
+        _sh43._ACCOUNT_VERDICTS.clear()
+    check("file browser: a listing as a root-capable account is refused (409), as its writes are",
+          b.status_code == 409 and "can become root" in (_p9_json(b).get("error") or ""),
+          "%d %r" % (b.status_code, _p9_json(b)))
+    check("file browser: ...and so is reading a file as it",
+          f.status_code == 409 and "can become root" in (_p9_json(f).get("error") or ""),
+          "%d %r" % (f.status_code, _p9_json(f)))
+    check("file browser: ...and the upload pre-check's listing",
+          u.status_code == 409, "%d %r" % (u.status_code, _p9_json(u)))
+    check("file browser: ...and a download is a redirect that says why, with nothing streamed",
+          dl.status_code == 302 and any("can become root" in m for m in flashes) and not seen,
+          "%d flashes=%r host reads=%r" % (dl.status_code, flashes, seen))
+    _sh43._ACCOUNT_VERDICTS.clear()
+    _p9_patch(_sf43, "browse_dir", lambda *a, **k: {"path": "", "entries": []})
+    ok = admin.get("/api/server/%d/browse?path=" % P9_GS)
+    check("file browser: ...while a plain game account is still listed (positive control)",
+          ok.status_code == 200 and _p9_json(ok).get("entries") == [], "%d" % ok.status_code)
+
+
+# ── the setup wizard's first admin: the same username rules as every other path ──────────────────
+def _rv43_setup_username():
+    made = []
+    _p9_patch(_rh43, "User", _NS43(query=_NS43(filter_by=lambda **k: _NS43(first=lambda: None))))
+    _p9_patch(_rh43, "_create_first_admin", lambda state, data, u, p, e: (made.append(u), "made")[1])
+    try:
+        for name in ("ad\tmin", "ad min", "ad\x1bmin", "a" * 81, "admin"):
+            with _p9.test_request_context("/setup", method="POST", data={
+                    "username": name, "password": "Str0ng!passw0rd-rv43",
+                    "confirm_password": "Str0ng!passw0rd-rv43"}):
+                _rh43._setup_admin_user(None, {})
+    finally:
+        for name in ("User", "_create_first_admin"):
+            _p9_patch(_rh43, name, _P9_PATCHED[(_rh43, name)])
+    check("setup wizard: the first admin's username is refused with a tab, a space, a control "
+          "character or 81 characters, as on every other path",
+          made == ["admin"], repr(made))
+
+
+# ── Tailscale migrate: a delegated MANAGE_REMOTES admin may not repoint a host ──────────────────
+def _rv43_migrate(admin, deleg):
+    calls = []
+    _p9_patch(_rts43, "remote_migrate_to_tailscale",
+              lambda remote: (calls.append(remote.id), ("prod-db.tail0000.ts.net",
+                                                        {"tailscale_ip": "100.64.0.9", "dns_name": ""}))[1])
+    _p9_patch(_rts43, "close_connection", lambda remote: None)
+    before = _p9_host_row(P9_HOST)
+    r = deleg.post("/api/remote/%d/tailscale-migrate" % P9_HOST, json={})
+    after = _p9_host_row(P9_HOST)
+    check("tailscale migrate: a delegated MANAGE_REMOTES admin is refused (403) before the host is "
+          "asked anything",
+          r.status_code == 403 and not calls, "%d %r calls=%r" % (r.status_code, _p9_json(r), calls))
+    check("tailscale migrate: ...and the row still points where it did, on its own credential",
+          (after.host, after.auth_method) == (before.host, before.auth_method),
+          "%s/%s -> %s/%s" % (before.host, before.auth_method, after.host, after.auth_method))
+    r = admin.post("/api/remote/%d/tailscale-migrate" % P9_HOST, json={})
+    moved = _p9_host_row(P9_HOST)
+    _p9_set_host(P9_HOST, host=before.host, auth_method=before.auth_method,
+                 auth_credential=before.auth_credential, port=before.port)
+    check("tailscale migrate: ...while a superadmin still migrates it (positive control)",
+          r.status_code == 200 and moved.host == "prod-db.tail0000.ts.net", "%d" % r.status_code)
+
+
+# ── sign-in's second step: a per-account budget for codes ───────────────────────────────────────
+def _rv43_totp_client(uid, ip):
+    c = _p9.test_client()
+    c.environ_base["REMOTE_ADDR"] = ip
+    _RV43["ips"].append(ip)
+    with c.session_transaction() as s:
+        s["_2fa_pending"] = uid
+        s["_2fa_at"] = _time43.time()
+    return c
+
+
+def _rv43_totp():
+    secret = _pyotp43.random_base32()
+    uid = _rv43_user("rv43_totp", totp_enabled=True, totp_secret=_enc43(secret))
+    totp = _pyotp43.TOTP(secret)
+    live = {totp.at(_time43.time() + d * totp.interval) for d in (-1, 0, 1, 2)}
+    wrong = next(c for c in ("%06d" % n for n in range(123456, 999999, 7919)) if c not in live)
+    for i in range(_p9_app.LOGIN_MAX_FAILS):
+        _rv43_totp_client(uid, "198.51.100.%d" % (10 + i)).post("/login", data={"totp_code": wrong})
+    late = _rv43_totp_client(uid, "198.51.100.99")
+    r = late.post("/login", data={"totp_code": totp.now()})
+    with late.session_transaction() as s:
+        signed_in, pending = s.get("_user_id"), s.get("_2fa_pending")
+    check("sign-in 2FA: wrong codes from many addresses use up the ACCOUNT's budget — a right code "
+          "after them does not sign in",
+          r.status_code != 302 and signed_in is None, "%d user=%r" % (r.status_code, signed_in))
+    check("sign-in 2FA: ...and the pending login is dropped, so the password step comes first again",
+          pending is None, repr(pending))
+    with _sh43._REAUTH_LOCK:
+        _sh43._REAUTH_FAILS.pop(uid, None)
+    with _p9.app_context():
+        _p9_u = db.session.get(_User43, uid)
+        _p9_u.last_totp_step = 0
+        db.session.commit()
+    ok = _rv43_totp_client(uid, "198.51.100.98")
+    r = ok.post("/login", data={"totp_code": totp.now()})
+    with ok.session_transaction() as s:
+        signed = s.get("_user_id")
+    with _sh43._REAUTH_LOCK:
+        left = list(_sh43._REAUTH_FAILS.get(uid, []))
+    check("sign-in 2FA: ...while a right code inside the budget signs in, and gives its slot back "
+          "(positive control)", r.status_code == 302 and signed is not None and not left,
+          "%d user=%r slots=%r" % (r.status_code, signed, left))
+
+
+# ── panel-host reads a delegable whole-host grant must not reach ─────────────────────────────────
+def _rv43_panel_host_reads(admin, deleg):
+    _p9_patch(_rts43, "remote_check_tailscale",
+              lambda remote: {"running": True, "tailscale_ip": "100.64.0.1", "dns_name": "p.ts.net"})
+    paths = ["/api/remote/%d/tailscale-check", "/api/remote/%d/security/bans",
+             "/api/remote/%d/security/top-ips", "/remote/%d/firewall", "/api/remote/%d/firewall",
+             "/api/remote/%d/ssh-status", "/api/remote/%d/check-updates", "/api/remote/%d/pro-status"]
+    got = {p: deleg.get(p % P9_LOCAL).status_code for p in paths}
+    check("panel host: its tailnet name, bans, firewall, SSH state, apt refresh and Pro status are "
+          "superadmin-only on the /api/remote/<id> twins too (403 to a delegated grant)",
+          all(c == 403 for c in got.values()), repr({p: c for p, c in got.items() if c != 403}))
+    check("panel host: ...while the delegate still reads its own remote, and a superadmin the panel "
+          "host (positive control)",
+          deleg.get("/api/remote/%d/tailscale-check" % P9_HOST).status_code == 200
+          and admin.get("/api/remote/%d/tailscale-check" % P9_LOCAL).status_code == 200)
+
+
+# ── group ids from a form: what an id is ─────────────────────────────────────────────────────────
+def _rv43_posted_ids(admin):
+    with _p9.app_context():
+        target = _Group43(name="rv43_posted", description="", is_default=False)
+        db.session.add(target)
+        db.session.commit()
+        gid = target.id
+    _RV43["groups"].append(gid)
+    arabic = "".join(chr(0x0660 + int(ch)) for ch in str(gid))
+    huge = "9" * 5000
+    r1 = admin.post("/users/add", data={"username": "rv43_k1", "groups": [huge]})
+    r2 = admin.post("/users/add", data={"username": "rv43_k2", "groups": [arabic, str(2 ** 64)]})
+    edit_uid = _rv43_user("rv43_k3")
+    r3 = admin.post("/users/%d/edit" % edit_uid, data={"display_name": "k3", "groups": [huge]})
+    r4 = admin.post("/users/invite", data={"hours": "1", "groups": [huge]})
+    with _p9.app_context():
+        made = {n: (u.id, sorted(g.id for g in u.groups)) for n in ("rv43_k1", "rv43_k2")
+                for u in [_User43.query.filter_by(username=n).first()] if u is not None}
+        _RV43["users"].extend(v[0] for v in made.values())
+        with _p9.test_request_context("/", method="POST", data={"groups": [str(2 ** 64), arabic]}):
+            cmd = _NS43(groups=None)
+            try:
+                _p9_app._assign_command_groups(cmd)
+                cmd_groups = cmd.groups
+            except Exception as e:
+                cmd_groups = repr(e)
+        from panel.db.models import Invite as _Inv43
+        _Inv43.query.delete()
+        db.session.commit()
+    codes = [r.status_code for r in (r1, r2, r3, r4)]
+    check("users: a 5,000-digit or 2**64 group id on add, edit and invite is skipped, not a 500",
+          500 not in codes and "rv43_k1" in made, "codes=%r made=%r" % (codes, made))
+    check("users: ...and non-ASCII digits are not read as a group nobody ticked",
+          made.get("rv43_k2", (0, None))[1] == [], repr(made))
+    check("custom commands: the same parse for which groups may run a command (no OverflowError)",
+          cmd_groups == [], repr(cmd_groups))
+
+
+# ── the host page for a delegate on the panel host: no card whose route answers them 403 ─────────
+# Rendered for real, then every script it loads (the vendor bundles aside) is RUN in node against
+# the rendered markup: a vm context whose unknown globals are inert stubs, and a document whose
+# getElementById answers only the ids the page really has. So a script that dereferences one of
+# the hidden cards' elements at load throws here, by name.
+_RV43_PAGE_JS = r"""
+const vm = require('vm'), fs = require('fs');
+const cfg = JSON.parse(fs.readFileSync(0, 'utf8'));
+const errors = [];
+const stub = new Proxy(function(){}, {
+  get: (t, k) => k === Symbol.toPrimitive ? (() => '') : k === 'then' ? undefined
+               : k === Symbol.iterator ? function*(){} : k === 'length' ? 0 : stub,
+  apply: () => stub, construct: () => stub, set: () => true});
+const ids = new Set(cfg.ids);
+const handlers = [];
+const document = {
+  getElementById: id => ids.has(id) ? stub : null,
+  querySelector: () => null, querySelectorAll: () => [], getElementsByClassName: () => [],
+  addEventListener: (ev, fn) => { if (ev === 'DOMContentLoaded') handlers.push(fn); },
+  createElement: () => stub, body: stub, documentElement: stub, head: stub, cookie: '',
+  readyState: 'loading'};
+const real = {console: {log(){}, warn(){}, error(){}, info(){}, debug(){}}, document, JSON, Math, Date,
+  Promise, Object, Array, String, Number, Boolean, RegExp, Error, Map, Set, WeakMap, Symbol, parseInt,
+  parseFloat, isNaN, encodeURIComponent, decodeURIComponent, setTimeout: () => 0, setInterval: () => 0,
+  clearTimeout(){}, clearInterval(){}, requestAnimationFrame: () => 0,
+  fetch: () => new Promise(() => {}), localStorage: {getItem: () => null, setItem(){}, removeItem(){}},
+  sessionStorage: {getItem: () => null, setItem(){}, removeItem(){}}, MOUNT: ''};
+const g = new Proxy(real, {has: () => true,
+  get: (t, k) => k in t ? t[k] : (k === Symbol.unscopables ? undefined : stub),
+  set: (t, k, v) => { t[k] = v; return true; }});
+real.window = g; real.self = g; real.globalThis = g;
+const ctx = vm.createContext(g);
+for (const [name, code] of cfg.scripts) {
+  try { vm.runInContext(code, ctx, {filename: name}); }
+  catch (e) { errors.push(name + ': ' + (e && e.message)); }
+}
+for (const fn of handlers) { try { fn(); } catch (e) { errors.push('DOMContentLoaded: ' + (e && e.message)); } }
+let value = null;
+if (cfg.eval) { try { value = String(vm.runInContext(cfg.eval, ctx)); } catch (e) { value = 'threw: ' + e.message; } }
+process.stdout.write(JSON.stringify({errors, value}));
+"""
+
+
+def _rv43_page_scripts(html):
+    """[(name, code)] for every script the page runs, in order, vendor bundles skipped."""
+    out = []
+    for m in _re43.finditer(r"<script\b([^>]*)>(.*?)</script>", html, _re43.S):
+        src = _re43.search(r'src="([^"]+)"', m.group(1))
+        if not src:
+            out.append(("inline#%d" % len(out), m.group(2)))
+            continue
+        rel = _re43.sub(r"^.*?/static/", "", src.group(1)).split("?")[0]
+        if rel.startswith("vendor/"):
+            continue
+        with open(os.path.join(_ROOT43, "static", rel), encoding="utf-8") as fh:
+            out.append((rel, fh.read()))
+    return out
+
+
+def _rv43_run_page(html, expr=None):
+    """The page's scripts' load-time errors (a list), or (errors, value of `expr`); None: no node."""
+    node = _shutil43.which("node")
+    if not node:
+        return None
+    cfg = {"ids": sorted(set(_re43.findall(r'\bid="([^"]+)"', html))),
+           "scripts": _rv43_page_scripts(html), "eval": expr}
+    r = _sp43.run([node, "-e", _RV43_PAGE_JS], input=_json43.dumps(cfg), capture_output=True,
+                  text=True, timeout=120, check=False)
+    try:
+        out = _json43.loads(r.stdout)
+    except ValueError:
+        out = {"errors": ["harness: " + (r.stdout + r.stderr)[-500:]], "value": None}
+    return out.get("errors") if expr is None else (out.get("errors"), out.get("value"))
+
+
+def _rv43_js_offers():
+    """How many places manage_remotes.js builds the migrate offer through _tsMigrateOffer, and none
+    that builds the button itself."""
+    with open(os.path.join(_ROOT43, "static", "js", "manage_remotes.js"), encoding="utf-8") as fh:
+        src = fh.read()
+    body = src.split("function _tsMigrateOffer", 1)
+    rest = body[0] + (body[1].split("\n}\n", 1)[1] if len(body) > 1 else "")
+    return -1 if "_da('migrateToTailscale'" in rest else rest.count("_tsMigrateOffer(remoteId)")
+
+
+def _rv43_host_page(admin, deleg):
+    host_ids = ("sec-osupdates", "sec-firewall", "sec-power", "sec-ubuntupro", "conn-ssh-card")
+    _p9_patch(_p9_so, "get_server_status", lambda *a, **k: None)   # remote_manage reads it for the panel host
+    local = deleg.get("/remote/%d/manage" % P9_LOCAL)
+    html = local.get_data(as_text=True)
+    shown = [i for i in host_ids if 'id="%s"' % i in html]
+    check("host page: a delegate on the PANEL host is not offered OS updates, firewall, power, "
+          "Ubuntu Pro or Connection & SSH (each answers them 403)",
+          local.status_code == 200 and not shown and "UPro.load(" not in html,
+          "%d still shown: %r" % (local.status_code, shown))
+    remote = deleg.get("/remote/%d/manage" % P9_HOST).get_data(as_text=True)
+    check("host page: ...while on a REMOTE host the same delegate still has every one of them "
+          "(positive control)", all('id="%s"' % i in remote for i in host_ids),
+          repr([i for i in host_ids if 'id="%s"' % i not in remote]))
+    _p9_set_host(P9_HOST, auth_method="password")
+    try:
+        mine = deleg.get("/remote/%d/manage" % P9_HOST).get_data(as_text=True)
+        theirs = admin.get("/remote/%d/manage" % P9_HOST).get_data(as_text=True)
+    finally:
+        _p9_set_host(P9_HOST, auth_method="key")
+    check("host page: 'Migrate to Tailscale SSH' is not offered to a delegate (the route refuses "
+          "them), and says who can",
+          'data-action="switchToTailscale"' not in mine and "A superadmin can switch" in mine
+          and 'data-action="switchToTailscale"' in theirs)
+    for label, page in (("the panel host, as a delegate", html), ("a remote host", remote)):
+        errs = _rv43_run_page(page)
+        if errs is None:
+            skip("host page: its scripts run without touching a missing element (%s)" % label,
+                 "no node on this host")
+            continue
+        check("host page: its scripts run without touching a missing element (%s)" % label,
+              errs == [], repr(errs[:5]))
+    # The hosts page: manage_remotes.js builds the offer after a join; the template says, by one
+    # marker element, whether this viewer may migrate. The script is run with and without it.
+    with open(os.path.join(_ROOT43, "templates", "manage_remotes.html"), encoding="utf-8") as fh:
+        tpl = fh.read()
+    with open(os.path.join(_ROOT43, "static", "js", "manage_remotes.js"), encoding="utf-8") as fh:
+        js = "<script>%s</script>" % fh.read()
+    prelude = ("<script>function _da(n, a) { return ' data-action=\"' + n + '\"'; }"
+               "function escapeHtml(s) { return String(s); }</script>")
+    offers = {}
+    for who, marker in (("delegate", ""), ("superadmin", '<span id="ts-migrate-allowed" hidden></span>')):
+        got = _rv43_run_page(marker + prelude + js, "_tsMigrateOffer(5)")
+        offers[who] = None if got is None else (got[1] or "")
+    marked = _re43.search(r"\{% if current_user\.is_superadmin %\}<span id=\"ts-migrate-allowed\"", tpl)
+    if offers["delegate"] is None:
+        skip("hosts page: the after-join 'Migrate' offer is a superadmin's only", "no node on this host")
+    else:
+        check("hosts page: the after-join 'Migrate' offer is a superadmin's only; a delegate is told "
+              "who can (manage_remotes.js, all three places it is built)",
+              marked is not None and "migrateToTailscale" not in offers["delegate"]
+              and "A superadmin can" in offers["delegate"]
+              and "migrateToTailscale" in offers["superadmin"] and _rv43_js_offers() == 3,
+              "marker in template: %s, offers %r, built %d" % (bool(marked), offers, _rv43_js_offers()))
+
+
+def _rv43_cleanup():
+    with _p9.app_context():
+        for uid in _RV43["users"]:
+            u = db.session.get(_User43, uid)
+            if u is not None:
+                u.groups = []
+                db.session.delete(u)
+        db.session.commit()
+        for gid in _RV43["groups"]:
+            g = db.session.get(_Group43, gid)
+            if g is not None:
+                db.session.delete(g)
+        db.session.commit()
+    with _sh43._REAUTH_LOCK:
+        for uid in _RV43["users"]:
+            _sh43._REAUTH_FAILS.pop(uid, None)
+    with _p9_app._LOGIN_FAILS_LOCK:
+        for ip in _RV43["ips"]:
+            _p9_app._LOGIN_FAILS.pop(_pauth43.throttle_key(ip), None)
+    _p9_queue.clear()
+
+
+try:
+    _rv43_arm()
+    _RV43_ADMIN = _p9_client(P9_ADMIN)
+    _RV43_DELEG = _p9_client(_rv43_user("rv43_deleg", perms=[_pauth43.MANAGE_REMOTES],
+                                        hosts=[P9_LOCAL, P9_HOST]))
+    _rv43_default_group()
+    _rv43_one_module()
+    _rv43_autoblock()
+    _rv43_pro_stamp()
+    _rv43_installing(_RV43_ADMIN)
+    _rv43_reads(_RV43_ADMIN)
+    _rv43_setup_username()
+    _rv43_migrate(_RV43_ADMIN, _RV43_DELEG)
+    _rv43_totp()
+    _rv43_panel_host_reads(_RV43_ADMIN, _RV43_DELEG)
+    _rv43_posted_ids(_RV43_ADMIN)
+    _rv43_host_page(_RV43_ADMIN, _RV43_DELEG)
+finally:
+    _p9_restore_all()
+    _rv43_cleanup()
+
+check("part43 review section: nothing it drove reached a real transport",
+      len(_P9_TRIPPED) == _TRIP_RV43, repr(_P9_TRIPPED[_TRIP_RV43:][:6]))

@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import time
 import bcrypt
 from panel.core.clock import utcnow
 from panel.core.validation import unzoned_ip_address_or_none, unzoned_ip_or_network
@@ -601,8 +602,13 @@ class RemoteServer(db.Model):
             return None
 
     def update_pro_cache(self, data):
-        """Persist a fresh Ubuntu Pro status dict with a timestamp (survives restarts)."""
-        self.pro_cache = json.dumps({"data": data, "ts": int(utcnow().timestamp())})
+        """Persist a fresh Ubuntu Pro status dict with a timestamp (survives restarts).
+
+        time.time(), not utcnow().timestamp(): utcnow() is a NAIVE UTC datetime, and .timestamp()
+        on a naive one reads it as LOCAL time, so on a panel host at UTC-5 the stamp was 5 h in the
+        future and the day-long cache (_pro_status_cached compares it with time.time()) lasted
+        29 h; at UTC+9 it lasted 15 h."""
+        self.pro_cache = json.dumps({"data": data, "ts": int(time.time())})
 
     @property
     def host_key_fingerprint(self):
@@ -931,6 +937,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "server_alerts_save", "edit_file", "delete_file", "download_file", "cron_add",
     "cron_update", "cron_delete", "cron_run_now", "set_log_timestamps", "gmod_content",
     "gmod_content_uninstall", "upload_file", "server_tags_set", "rename_file", "remote_reboot_exclude",
+    "browse_files", "read_file", "upload_check",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({
@@ -2434,10 +2441,24 @@ def init_db(app):
             db.session.rollback()
         db.create_all()
         _run_light_migrations()
-        # Create default group if not exists
-        default_group = Group.query.filter_by(name="Everyone").first()
-        if not default_group:
-            default_group = Group(name="Everyone", description="All authenticated users", is_default=True)
-            default_group.set_permissions({"view_servers", "view_console"})
-            db.session.add(default_group)
-            db.session.commit()
+        _ensure_default_group()
+
+
+def _ensure_default_group():
+    """Create the default group "Everyone" on a fresh install, and only then.
+
+    Looked up by is_default, not by NAME: the default group can be renamed (groups.edit_group only
+    refuses deleting it), and a lookup by name found no "Everyone" after a rename and made a SECOND
+    default group on the next start, with view_console back in it. Every is_default group is ticked
+    by default on the Add-user and Invite forms, so each new account got console view again, and the
+    new group could not be deleted either. A group already NAMED "Everyone" (an install from before
+    is_default existed) is left as it was, as the name lookup left it.
+    """
+    if Group.query.filter_by(is_default=True).first() is not None:
+        return
+    if Group.query.filter_by(name="Everyone").first() is not None:
+        return
+    default_group = Group(name="Everyone", description="All authenticated users", is_default=True)
+    default_group.set_permissions({"view_servers", "view_console"})
+    db.session.add(default_group)
+    db.session.commit()

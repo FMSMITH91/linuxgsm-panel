@@ -750,7 +750,19 @@ def _login_second_factor(attempt, pending_id):
     u = db.session.get(User, pending_id)
     entered = request.form.get("totp_code", "")
     if u and u.is_active and u.totp_enabled:
-        by_code = _login_totp_code(attempt, u, entered)
+        # A per-ACCOUNT budget, the one every other live-code check spends (reauth_reserve). The
+        # only limit here was _login_throttled's, per address, and the pending login lives in the
+        # signed cookie, bound to no address: replayed from an IPv6 /48 (65,536 buckets of 8) it
+        # bought half a million guesses per five-minute prompt, about three valid codes in a
+        # million each. A wrong code keeps its slot; a code that signs in gives it back.
+        stamp = reauth_reserve(u)
+        if stamp is None:
+            # Out of guesses: drop the pending login too, so the next try has to pass the
+            # password step again (under the same per-account cap).
+            session.pop("_2fa_pending", None)
+            return _login_fail(attempt, REAUTH_BLOCKED_MSG, attempted=u.username,
+                               reason="2FA attempts throttled")
+        by_code = _login_totp_code(attempt, u, entered, stamp)
         if by_code is not None:
             return by_code
         # Fall back to a one-time backup code (for a lost authenticator) — only for
@@ -760,13 +772,16 @@ def _login_second_factor(attempt, pending_id):
             db.session.commit()
             log_action(u, "2fa_backup_code_used", target=u.username,
                        detail=f"{u.backup_codes_remaining} codes left")
+            reauth_release(u, stamp)
             return _login_succeed(attempt, u, bool(session.get("_2fa_remember")))
     return _login_fail(attempt, "Invalid authentication code or backup code.",
                        attempted=(u.username if u else None), reason="wrong 2FA code", two_factor=True)
 
 
-def _login_totp_code(attempt, u, entered):
-    """Sign `u` in on a valid, unspent authenticator code; None when `entered` is not a valid one."""
+def _login_totp_code(attempt, u, entered, stamp=None):
+    """Sign `u` in on a valid, unspent authenticator code; None when `entered` is not a valid one.
+
+    `stamp` is the slot _login_second_factor reserved; it is given back only on a sign-in."""
     _step = verify_totp_step(u.totp_secret_plain, entered)
     if _step is None:
         return None
@@ -790,6 +805,7 @@ def _login_totp_code(attempt, u, entered):
         db.session.rollback()
         return _login_totp_replayed(attempt, u)   # another request spent this step first
     db.session.commit()
+    reauth_release(u, stamp)
     return _login_succeed(attempt, u, bool(session.get("_2fa_remember")))
 
 
