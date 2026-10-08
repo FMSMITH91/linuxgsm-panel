@@ -2546,3 +2546,36 @@ check("tools: ...and --json writes both sweeps",
       [_r["servers"] for _r in _pb4_out["by_servers"]] == [10, 50]
       and [_r["groups"] for _r in _pb4_out["by_groups"]] == [2, 20], repr(_pb4_out)[:200])
 _sh.rmtree(_pb4_dir, ignore_errors=True)
+
+
+# ── db repair: no copy of the original, no repair (review 2026-10-08) ─────────────────────────────
+# _aside() answers "" when the forensic copy fails (EIO on a bad sector, ENOSPC), and repair() went
+# on to swap a rebuild — or the backup — over the original anyway, deleting its -wal with it. The
+# rebuild is driven for real here, on a healthy file it would otherwise rebuild and rename over.
+_rv4_dir = _tf.mkdtemp(prefix="rv4-dbm-")
+_rv4_db = os.path.join(_rv4_dir, "panel.db")
+_mk_db(_rv4_db, rows=50)
+_rv4_bk = _rv4_db + ".backup"
+_mk_db(_rv4_bk, rows=50)
+with open(_rv4_db, "rb") as _fh:
+    _rv4_before = _fh.read()
+_rv4_ino = os.stat(_rv4_db).st_ino
+_rv4_saved_aside = _dbm._aside
+try:
+    _dbm._aside = lambda _p: ""
+    try:
+        _rv4_ok, _rv4_msg = _dbm.repair(_rv4_db, _rv4_bk)
+    except Exception as _e:
+        _rv4_ok, _rv4_msg = repr(_e), ""
+finally:
+    _dbm._aside = _rv4_saved_aside
+with open(_rv4_db, "rb") as _fh:
+    _rv4_after = _fh.read()
+check("db-maint: repair refuses when the original could not be copied aside",
+      _rv4_ok is False and "aside" in _rv4_msg, "ok=%r msg=%r" % (_rv4_ok, _rv4_msg))
+check("db-maint: ...and leaves the original file itself in place, byte for byte",
+      _rv4_after == _rv4_before and os.stat(_rv4_db).st_ino == _rv4_ino)
+_rv4_ok2, _rv4_msg2 = _dbm.repair(_rv4_db, _rv4_bk)
+check("db-maint: ...while with the copy made, the same file is repaired as before (positive control)",
+      _rv4_ok2 is True and "original kept at" in _rv4_msg2, "ok=%r msg=%r" % (_rv4_ok2, _rv4_msg2))
+_sh.rmtree(_rv4_dir, ignore_errors=True)
