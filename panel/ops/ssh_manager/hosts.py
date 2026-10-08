@@ -3556,11 +3556,13 @@ _TSIFACE_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,15}")
 
 
 def _tsiface_names(server):
-    """The host's Tailscale TUN interfaces (names containing "tailscale"), read from
-    /sys/class/net. [] when there is none — tailscaled in userspace-networking mode has no TUN, so
-    no UFW interface rule can carry SSH there — AND when the listing could not be read: this feeds a
-    lockout guard, so "unknown" must answer the same as "absent". Every Linux host lists `lo`, so a
-    listing without it (an empty answer from a transport that timed out) is not a reading."""
+    """The host's Tailscale TUN interfaces (names containing "tailscale"), from /sys/class/net.
+
+    [] when there is none — tailscaled in userspace-networking mode has no TUN, so no UFW interface
+    rule can carry SSH there — AND when the listing could not be read: this feeds a lockout guard,
+    so "unknown" must answer the same as "absent". Every Linux host lists `lo`, so a listing
+    without it (an empty answer from a transport that timed out) is not a reading.
+    """
     try:
         out, _err, rc = _core.run_command(server, "ls -1 /sys/class/net", timeout=10)
     except Exception:
@@ -3578,7 +3580,8 @@ def _tsiface_ufw_rules(status_out):
     Not system_ops.ufw_status's loop: that one drops every row with a parenthesis in it, which
     takes a `DENY IN` on tailscale0 whose comment says "(old)" out of the first-match walk and
     lets the allow below it answer. Every row is kept here; a `(v6)` To column cannot read as the
-    whole-interface allow (ufw_allows_iface_in compares it exactly), so it can only answer False."""
+    whole-interface allow (ufw_allows_iface_in compares it exactly), so it can only answer False.
+    """
     from panel.ops import system_ops as _so
     rules = []
     for line in (status_out or "").splitlines():

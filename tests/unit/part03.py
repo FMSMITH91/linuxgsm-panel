@@ -4680,11 +4680,7 @@ finally:
 # Driven: the browser's REAL command, run in bash over a temp tree standing in for the home.
 # `%y` typed a link `l` (listed as a file: its editor said "File not found"), and plain find does
 # not descend a symlinked starting point (nothing printed, rc 0: "this folder is empty").
-import shlex as _fbl_shlex  # noqa: E402
-import subprocess as _fbl_sp  # noqa: E402
-import tempfile as _fbl_tf  # noqa: E402
-import shutil as _fbl_sh  # noqa: E402
-_fbl_home = os.path.realpath(_fbl_tf.mkdtemp(prefix="lgsm-unit-fblink-"))
+_fbl_home = os.path.realpath(_dr_tmp.mkdtemp(prefix="lgsm-unit-fblink-"))
 _fbl_saved = _sm_core.run_command
 try:
     os.makedirs(os.path.join(_fbl_home, "log", "real"))
@@ -4696,8 +4692,8 @@ try:
     os.symlink(os.path.join(_fbl_home, "log", "gone"), os.path.join(_fbl_home, "log", "dangling"))
 
     def _fbl_run(_s, c, **_k):
-        inner = _fbl_shlex.split(c)[-1].replace("/home/csgoserver", _fbl_home)
-        p = _fbl_sp.run(["bash", "-c", inner], capture_output=True, text=True,  # nosec B603 B607 - bash on the browser's own command, over a temp tree
+        inner = _tss_shlex.split(c)[-1].replace("/home/csgoserver", _fbl_home)
+        p = _qsp.run(["bash", "-c", inner], capture_output=True, text=True,  # nosec B603 B607 - bash on the browser's own command, over a temp tree
                         timeout=20, check=False)
         return p.stdout, p.stderr, p.returncode
     _sm_core.run_command = _fbl_run
@@ -4712,7 +4708,7 @@ try:
           and not _fbl_in.get("unreadable"), repr(_fbl_in))
 finally:
     _sm_core.run_command = _fbl_saved
-    _fbl_sh.rmtree(_fbl_home, ignore_errors=True)
+    _dr_shutil.rmtree(_fbl_home, ignore_errors=True)
 
 # ── two more bootstrap probes that answered from a read that never happened ──────────────────
 # Same shape as the reboot probe beside them: run_command returns ("", "...timed out", -1) and

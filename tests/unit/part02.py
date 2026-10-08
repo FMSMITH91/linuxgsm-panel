@@ -638,18 +638,16 @@ try:
     # Driven: the recorder line itself, in bash, for commands whose own syntax used to swallow it.
     # Pasted in, `# nightly` commented out the log redirect and the status write (Last run never
     # updated), `a; b` logged only b, and a trailing `&` was a syntax error.
-    import subprocess as _rn_sp
-    import tempfile as _rn_tf
-    import shutil as _rn_sh
-    _rn_dir = _rn_tf.mkdtemp(prefix="lgsm-unit-runnow-")
+    _rn_dir = _gh_tmp.mkdtemp(prefix="lgsm-unit-runnow-")
     try:
         for _rn_cmd, _rn_log in (("echo one # nightly", "one\n"), ("echo a; echo b", "a\nb\n"),
                                  ("echo bg &", None)):
             _rncap.clear()
             _sm_cron.run_cron_job_now(None, "gm", "* * * * * " + _rn_cmd, "gmodserver")
             _m = _rern.search(r"echo ([A-Za-z0-9+/=]+) \| base64 -d", _rncap.get("cmd", ""))
-            _rec = _b64rn.b64decode(_m.group(1)).decode().replace("/home/gm/.lgsm-cron", _rn_dir) if _m else ""
-            _rn_p = _rn_sp.run(["bash", "-c", _rec], capture_output=True, text=True,  # nosec B603 B607 - bash on the panel's own recorder line, into a temp dir
+            _rec = (_b64rn.b64decode(_m.group(1)).decode() if _m else "").replace("/home/gm/.lgsm-cron",
+                                                                                 _rn_dir)
+            _rn_p = _gh_sp.run(["bash", "-c", _rec], capture_output=True, text=True,  # nosec B603 B607 - bash on the panel's own recorder line, into a temp dir
                                timeout=20, check=False)
             _rn_id = _sm_cron._cron_job_id(_rn_cmd)
             _rn_st = os.path.join(_rn_dir, _rn_id + ".status")
@@ -661,7 +659,7 @@ try:
                   and (_rn_log is None or _rn_logged == _rn_log),
                   repr((_rn_p.returncode, _rn_p.stderr[:120], _rn_status, _rn_logged)))
     finally:
-        _rn_sh.rmtree(_rn_dir, ignore_errors=True)
+        _gh_shutil.rmtree(_rn_dir, ignore_errors=True)
 finally:
     _sm_core.run_command = _orig_run6
 

@@ -1290,7 +1290,7 @@ def _connect_fail_checks41():
         def open_session(self, timeout=None):
             raise _pm.ChannelException(1, "Administratively prohibited")
     _refused = _pm.SSHClient()
-    _refused.get_transport = lambda: _RefusingTransport41()
+    _refused.get_transport = _RefusingTransport41
     _pre = []
     for _cli41 in (_no_transport, _refused):
         _fresh41()
