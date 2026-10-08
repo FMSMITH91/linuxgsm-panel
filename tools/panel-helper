@@ -947,7 +947,7 @@ def v_game_account(s):
     try:
         pwd.getpwnam(s)
     except KeyError:
-        return s
+        return _no_account_home_check(s)
     caller = _pw_name(_int_or_none(os.environ.get("SUDO_UID")))
     if not caller or caller == s:
         return s
@@ -961,14 +961,45 @@ def v_game_account(s):
     raise ValueError("%s is not a game account (not in %s)" % (s, GAME_GROUP))
 
 
+def _no_account_home_check(s):
+    """`s`, a name with no passwd entry, when /home/<s> is not someone else's; else ValueError.
+
+    v_game_account accepts a name that does not resolve, because `user-remove-home` is called just
+    after `user-delete` removed the account. But "the account I just deleted" and "a name that was
+    never an account" look the same to a lookup, and the destroy verbs then remove /home/<s> (or
+    paths under it) as root: `user-remove-home backups` removed an admin's /home/backups, and an
+    LDAP user's home went the same way while NSS was down. What userdel leaves behind is a real
+    directory owned by a uid that no longer has an account, so that is what is accepted — or no
+    home at all, where there is nothing to remove. A symlink, a root-owned directory, or one whose
+    owner still resolves to an account is refused."""
+    try:
+        st = os.lstat(home_of(s))
+    except FileNotFoundError:
+        return s
+    except OSError as exc:
+        raise ValueError("cannot check /home/%s (%s)" % (s, type(exc).__name__)) from exc
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid == 0:
+        raise ValueError("refusing: /home/%s is not an orphaned account's home" % s)
+    try:
+        pwd.getpwuid(st.st_uid)
+    except KeyError:
+        return s                  # owned by a uid with no account: what userdel -r leaves
+    raise ValueError("refusing: /home/%s belongs to another account" % s)
+
+
 def _caller_reaches_root(caller):
     """True if `caller` can already run anything as root without the helper: a privileged group,
     or a sudoers rule granting it every command as root with NOPASSWD.
 
-    Unlike _can_already_escalate this is not a guard against a hostile policy: sudoers is root's,
-    and the panel user cannot write it. So a policy this cannot read answers True — the check it
-    feeds is then simply off on that host, which is where it was before, rather than refusing
-    every game account there."""
+    A policy this cannot read answers FALSE, and says so on stderr. It answered True ("already
+    root"), on the grounds that sudoers is root's and the panel user cannot write it — true, and
+    beside the point: a policy this parser refuses (a documented `@include .../%h`, a User_Alias it
+    cannot follow) does not make the caller root-capable. True switched v_game_account off for
+    every account on that host, so a narrow-grant panel user could `game-file-read <a human
+    login> .ssh/id_ed25519`. Everywhere else here the same parse errors fail closed
+    (_escalation_verdict maps them to "unknown"). A panel user that really is root-capable is still
+    answered by the privileged-group test, which runs before any sudoers is read; one whose rule
+    cannot be read has its accounts enrolled in the game group instead."""
     try:
         names = _groups_of(caller)
         if names & set(PRIVILEGED_GROUPS):
@@ -979,8 +1010,10 @@ def _caller_reaches_root(caller):
         for path in [SUDOERS_FILE] + sorted(glob.glob(os.path.join(SUDOERS_DIR, "*"))):
             lines.extend(_sudoers_lines(path, seen))
         rules = _sudoers_rules_for(lines, caller, names, pw.pw_uid, gids)
-    except Exception:
-        return True
+    except Exception as exc:
+        sys.stderr.write("panel-helper: could not read the sudo policy for %s (%s); treating it as "
+                         "not root-capable\n" % (caller, type(exc).__name__))
+        return False
     return any(_rule_is_nopasswd_root_all(rest) for rest in rules)
 
 
@@ -2775,6 +2808,38 @@ def _os_update_run():
     return 1
 
 
+def _conf_path_link(path):
+    """The first component of absolute `path` that is a symlink root did not make, or "".
+
+    Callers pass the directory ABOVE data/. panel.conf's db_path and data_dir are root's, but the
+    directories below the panel user's home on the way to them are the PANEL USER'S: it can swap
+    ~/linuxgsm-panel for a link to a tree of its own holding data/panel.db. Every check on these
+    paths covered the LAST component only — islink on the database, an lstat of data/ (whose
+    owner then decides the account), O_NOFOLLOW on the final open — so the repair ran as root on a
+    database the panel user chose (_db_repair_account read the owner THROUGH the link: root's
+    tree, so root's repair), and restore and the self-update log followed it too. A link root
+    owns is an operator's (data/ moved to another disk) and is followed; the panel user cannot
+    make one."""
+    cur = "/"
+    for part in [p for p in path.split("/") if p]:
+        cur = os.path.join(cur, part)
+        try:
+            st = os.lstat(cur)
+        except OSError:
+            return ""             # not there: the caller's own existence test says so
+        if stat.S_ISLNK(st.st_mode) and st.st_uid != 0:
+            return cur
+    return ""
+
+
+def _refuse_conf_path_link(path, what):
+    """True (and why, on stderr) when `path` passes through a symlink the panel user could make."""
+    link = _conf_path_link(path)
+    if link:
+        sys.stderr.write("refusing: the %s path goes through a symlink (%s)\n" % (what, link))
+    return bool(link)
+
+
 def _db_repair_account(db_path):
     """The account the offline repair runs as: whoever owns the directory the database lives in.
     None when that cannot be established, and the caller then does not repair at all.
@@ -2792,6 +2857,11 @@ def _db_repair_account(db_path):
     repair back to root. A link ROOT made (an operator who moved data/ to another disk) is
     followed, because then the directory it names is the panel's."""
     d = os.path.dirname(db_path)
+    # ...and the same for every directory ABOVE it (_conf_path_link): the lstat below covers only
+    # data/ itself, so ~/linuxgsm-panel swapped for a link to a root-owned tree lent its owner too.
+    # Checked here as well as in _db_repair_target, because this is where the account is decided.
+    if _conf_path_link(os.path.dirname(d)):
+        return None
     try:
         st = os.lstat(d)
         if stat.S_ISLNK(st.st_mode) and st.st_uid == 0:
@@ -3106,6 +3176,8 @@ def _restore_target():
     if not data_dir or not os.path.isabs(data_dir) or not os.path.isdir(data_dir):
         sys.stderr.write("panel.conf has no usable data_dir\n")
         return None
+    if _refuse_conf_path_link(os.path.dirname(data_dir), "data directory"):
+        return None
     if not os.path.isdir(os.path.join(data_dir, RESTORE_STAGE)):
         sys.stderr.write("nothing staged to restore\n")
         return None
@@ -3282,6 +3354,8 @@ def _self_update_target():
     if not panel_dir or not os.path.isdir(panel_dir) or not data_dir or not os.path.isdir(data_dir):
         sys.stderr.write("panel.conf has no usable panel_dir/data_dir\n")
         return None
+    if _refuse_conf_path_link(os.path.dirname(data_dir), "data directory"):
+        return None              # the self-update log is created in it, as root
     if not os.path.isfile(INSTALLER_PATH):
         sys.stderr.write("installer is not installed root-owned; re-run install.sh as root\n")
         return None
@@ -4572,6 +4646,8 @@ def _db_repair_target():
     # the privilege boundary, so it does not rely on that one.
     if os.path.islink(db_path):
         sys.stderr.write("refusing: the database path is a symlink\n")
+        return None
+    if _refuse_conf_path_link(os.path.dirname(os.path.dirname(db_path)), "database"):
         return None
     if not os.path.isfile(DBM_PATH):
         sys.stderr.write("db_maintenance is not installed root-owned; re-run install.sh as root\n")
