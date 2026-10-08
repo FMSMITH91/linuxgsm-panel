@@ -96,6 +96,7 @@ for _attr, _fns in _WATCHED.items():
 # part40 (renaming in the file browser) drives routes on part12's app, importing part01 and part12.
 # part42 (zizmor and Harden-Runner) reads the workflows as text, importing part01, 03, 05, 06, 29 and 30.
 # part43 (the port an import stores) drives the import route on part12's app, importing part01, 05, 12.
+# part44 (system_ops and debug-report fixes from the 2026-10-08 review) imports part01, 02, 10 and 20.
 # part47 (small page behaviours from the 2026-10-08 review, run in node) imports part01, 05 and 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
