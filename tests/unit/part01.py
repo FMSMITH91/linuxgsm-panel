@@ -2107,6 +2107,15 @@ try:
             _okn, _ = _sm_files._write_file_as_user(_FakeSrv(), "u", _np, b"N" * _size)
             check("write still creates a file that did not exist (%s)" % _label,
                   _okn is True and os.path.getsize(_np) == _size, "%r" % _okn)
+            # A FOLDER at the destination: `mv -f` moved the file INTO it and exited 0, so the
+            # upload said "Uploaded" with nothing at that name. Refused, and nothing left behind.
+            _dp = os.path.join(_mode_dir, "cfg-%s" % _label)
+            os.makedirs(os.path.join(_dp, "keep"))
+            _okd, _ = _sm_files._write_file_as_user(_FakeSrv(), "u", _dp, b"N" * _size)
+            _left = sorted(n for n in os.listdir(_mode_dir) if n.startswith("cfg-%s" % _label))
+            check("write onto a FOLDER's name fails, moves nothing into it, and leaves no staged copy (%s)"
+                  % _label, _okd is False and os.listdir(_dp) == ["keep"]
+                  and _left == ["cfg-%s" % _label], repr((_okd, os.listdir(_dp), _left)))
     finally:
         _sm_files._guarded = _orig_guarded
         import shutil as _shm
@@ -2461,8 +2470,50 @@ try:
     check("lgsm_write_config: the read command is framed, not a bare cat",
           len(_wc_cmds) == 1 and _sm_files._READ_BEGIN in _wc_cmds[0] and "__NOFILE__" in _wc_cmds[0],
           (_wc_cmds[0][:140] if _wc_cmds else "none"))
+
+    # 7. A key set twice by hand: bash keeps the LAST, so rewriting only the first changed nothing
+    #    the server or the form would ever read, while the save said "Saved".
+    _wc["written"] = []
+    _wc_transport(_framed('maxplayers="16"\nport="27015"\nmaxplayers="24"\n# maxplayers="8"\n'))
+    _sm_files.lgsm_write_config(NS(), "fctrserver", "fctrserver", {"maxplayers": "32"})
+    _body = _wc["written"][0][1] if _wc["written"] else ""
+    check("lgsm_write_config: a key assigned twice is set on EVERY uncommented line (bash reads the last)",
+          _sm_files._parse_cfg(_body).get("maxplayers") == "32" and 'maxplayers="24"' not in _body
+          and '# maxplayers="8"' in _body and 'port="27015"' in _body, repr(_body))
+
+    # 8. logtimestamp "on" freezes the live console; whatever asks, the write refuses it unsent.
+    for _lts_val in ("on", '"on"', "ON", "yes"):
+        _wc["written"] = []
+        _wc_cmds = []
+        _sm_core.run_command = lambda s, c, **k: (_wc_cmds.append(c), _framed(EXISTING))[1]
+        _ok, _msg = _sm_files.lgsm_write_config(NS(), "fctrserver", "fctrserver",
+                                                {"maxplayers": "20", "logtimestamp": _lts_val})
+        check("lgsm_write_config: logtimestamp=%r is refused before anything is read or written" % _lts_val,
+              _ok is False and "freezes the live console" in (_msg or "") and not _wc["written"]
+              and not _wc_cmds, repr((_msg, _wc_cmds[:1])))
+    _wc["written"] = []
+    _wc_transport(_framed(EXISTING))
+    _ok, _msg = _sm_files.lgsm_write_config(NS(), "fctrserver", "fctrserver", {"logtimestamp": "off"})
+    check("lgsm_write_config: ...while turning it OFF (the log-timestamps route) still writes",
+          _ok is True and _wc["written"] and 'logtimestamp="off"' in _wc["written"][0][1], repr(_msg))
 finally:
     _sm_core.run_command, _sm_files._write_file_as_user = _wc_orig
+
+# The "every setting" form is built from _default.cfg's keys, and upstream's carries
+# logtimestamp="off": rendered as a text input, a save posted "on" past the route that refuses it.
+_lts_default = ('#### Logging ####\nconsolelogging="on"\nlogtimestamp="off"\n'
+                'logtimestampformat="%Y-%m-%d %H:%M:%S"\nlogdays="7"\n')
+_lts_frames = "".join("__LGSMP_%s_B__%s__LGSMP_%s_E__" % (t, _wc_b64.b64encode(x.encode()).decode(), t)
+                      for t, x in (("DEFAULT", _lts_default), ("COMMON", ""), ("INSTANCE", 'logdays="3"\n')))
+_lts_orig = _sm_core.run_command
+try:
+    _sm_core.run_command = lambda s, c, **k: (_lts_frames, "", 0)
+    _lts_cfg = _sm_files.lgsm_read_config(NS(), "fctrserver", "fctrserver")
+    _lts_keys = [x["key"] for g in _lts_cfg.get("groups", []) for x in g["settings"]]
+    check("lgsm_read_config: the settings form never offers logtimestamp (or its format)",
+          _lts_keys == ["consolelogging", "logdays"], repr(_lts_cfg)[:300])
+finally:
+    _sm_core.run_command = _lts_orig
 
 
 # ── lgsm_read_config: a marker that can fuse to file content, and no failure detection ──────────

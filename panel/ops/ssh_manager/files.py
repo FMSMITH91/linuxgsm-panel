@@ -37,6 +37,13 @@ _COMMON_CFG_KEYS = [
 # run. Starting on a non-blank leaves one way, and the groups are the ones `\s*(.*)$` gave.
 _CFG_LINE_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*((?:\S.*)?)$")
 
+# LinuxGSM settings the "every setting" form must not offer. With `logtimestamp="on"` LinuxGSM
+# pipes the console through gawk, which block-buffers, and the panel's live console freezes (see
+# routes/server_files.py's log-timestamps route, which only ever turns it OFF). _default.cfg
+# carries both keys, so the grouped form rendered them as text inputs and a save posted "on"
+# straight past that route's refusal. The format means nothing without the switch.
+_CFGFORM_HIDDEN_KEYS = frozenset({"logtimestamp", "logtimestampformat"})
+
 
 def _parse_cfg(text):
     """Parse LinuxGSM-style `key="value"` lines (uncommented only) into a dict."""
@@ -170,8 +177,13 @@ def _write_file_as_user(server, user, abspath, data_bytes):
 
 def _write_one_shot(server, user, abspath, b64, tmp, mk):
     """Write a small base64 payload in ONE guarded command: decode to `tmp`, keep mode, rename."""
+    # `mv -T`: the destination is the file's own name, never a directory to move INTO. Plain
+    # `mv -f tmp cfg`, with a folder named cfg there, put the file inside it as cfg/cfg.paneltmp
+    # and exited 0 — "Uploaded", a success audit row, and no file at `cfg`. -T refuses instead,
+    # and the staged copy is removed rather than left beside it.
     inner = (f"{mk} && printf %s {_core._quote(b64)} | base64 -d > {_core._quote(tmp)} "
-             f"&& {_keep_mode(abspath, tmp)} && mv -f {_core._quote(tmp)} {_core._quote(abspath)}")
+             f"&& {_keep_mode(abspath, tmp)} && {{ mv -f -T {_core._quote(tmp)} {_core._quote(abspath)} "
+             f"|| {{ rm -f {_core._quote(tmp)}; false; }}; }}")
     out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, inner), timeout=60)
     if _OUTSIDE_HOME in (out or ""):
         return False, "Invalid path"
@@ -195,9 +207,12 @@ def _write_chunked(server, user, abspath, b64, tmp, mk):
             return False, e or "write failed"
         op = ">>"
         first = False
+    # `mv -T` for the reason _write_one_shot gives; a refused rename removes both staged copies.
     fin = (f"base64 -d {_core._quote(tmp)} > {_core._quote(abspath)}.new "
            f"&& {_keep_mode(abspath, abspath + '.new')} "
-           f"&& mv -f {_core._quote(abspath)}.new {_core._quote(abspath)} && rm -f {_core._quote(tmp)}")
+           f"&& {{ mv -f -T {_core._quote(abspath)}.new {_core._quote(abspath)} "
+           f"|| {{ rm -f {_core._quote(abspath)}.new {_core._quote(tmp)}; false; }}; }} "
+           f"&& rm -f {_core._quote(tmp)}")
     o, e, rc = _core.shell_as_game_user(server, user, fin, timeout=60)
     return (rc == 0), (e or o or "")
 
@@ -294,7 +309,7 @@ def _grouped_cfg_settings(default_text, merged, defaults, instance, common):
         if line.strip().startswith("#"):
             continue
         m = _CFG_LINE_RE.match(line)
-        if m:
+        if m and m.group(1) not in _CFGFORM_HIDDEN_KEYS:
             key = m.group(1)
             if cur is None:
                 cur = {"section": "Server Settings", "settings": []}
@@ -454,6 +469,12 @@ def lgsm_write_config(server, user, selfname, updates):
     """
     if not _idents_ok(user, selfname):
         return False, "Invalid account or script name"
+    # Every writer of the instance cfg comes through here, so this is where "logtimestamp is only
+    # ever turned off" holds whichever form or request asked.
+    if "logtimestamp" in (updates or {}) and \
+            str(updates["logtimestamp"]).strip().strip('"').lower() != "off":
+        return False, ("Turning LinuxGSM's log timestamps on freezes the live console, so the "
+                       "panel only turns them off — nothing has been changed.")
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
     lines = _read_instance_cfg_lines(server, user, selfname, inst)
@@ -533,7 +554,13 @@ def _cfg_dq_escape(val):
 
 
 def _apply_cfg_updates(lines, updates):
-    """Set each valid key in `lines` IN PLACE: replace its uncommented line, else append one."""
+    """Set each valid key in `lines` IN PLACE: replace its uncommented lines, else append one.
+
+    EVERY uncommented line for the key, not the first: LinuxGSM sources the file, so the LAST
+    assignment wins (and _parse_cfg reads it the same way). A hand-edited cfg holding the key twice
+    had only its first line rewritten — the save said "Saved", the server kept the old value, and
+    the form read the old value back.
+    """
     for key, val in (updates or {}).items():
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\Z", key or ""):
             continue
@@ -545,7 +572,6 @@ def _apply_cfg_updates(lines, updates):
             if pat.match(ln) and not ln.strip().startswith("#"):
                 lines[i] = newline
                 replaced = True
-                break
         if not replaced:
             lines.append(newline)
 
@@ -795,7 +821,13 @@ def browse_dir(server, user, relpath="", selfname=None):
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return None
-    inner = f"find {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%f\\0' 2>/dev/null"
+    # `-H` and `%Y`: a symlinked folder is a folder. Plain find does not descend a symlinked
+    # starting point — it printed nothing and exited 0, so `log/server` (LinuxGSM's own link) or a
+    # serverfiles moved to a bigger disk read as "this folder is empty" — and `%y` types a link
+    # `l`, so the parent listed it as a file whose editor said "File not found". `%Y` is the
+    # target's type (`N` for a dangling link, which stays a file). prune_game_backups fixed the
+    # same find trap with the same `-H`.
+    inner = f"find -H {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%Y\\t%s\\t%f\\0' 2>/dev/null"
     out, _, rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):
         return None
@@ -1087,12 +1119,16 @@ def delete_path(server, user, relpath, selfname=None):
     # `"$t"`: the path _protected_resolved checked — the real parent plus this name — so what is
     # removed is exactly what was judged.
     inner = 'rm -rf -- "$t" && echo __OK__'
-    # The most destructive of the six, so it gets the same host-side resolution check: a symlink
-    # under the home dir must not turn `rm -rf` loose on whatever it points at — nor on a
-    # protected tree reached through a symlinked directory (_protected_resolved).
+    # The most destructive of the six, so it gets a host-side resolution check: a symlink under
+    # the home dir must not turn `rm -rf` loose on whatever it points at — nor on a protected tree
+    # reached through a symlinked directory. _protected_resolved is that check, and its containment
+    # test is made on what `rm` removes: the real parent plus the name, the LINK itself when the
+    # name is one. It used to run inside _guarded too, whose `realpath -m` follows the final link,
+    # so a link in the home pointing out of it (`bin/libstdc++.so.6 -> /usr/lib/...`, a mod's
+    # stale link) could not be deleted at all — "Refusing to delete this path" for a file the
+    # account owns, although only the link was ever going to be touched.
     out, e, rc = _core.shell_as_game_user(
-        server, user, _guarded(user, ap, _protected_resolved(user, ap, selfname, inner)),
-        timeout=30)
+        server, user, _protected_resolved(user, ap, selfname, inner), timeout=30)
     return _files_delete_outcome(out, e, rc)
 
 
@@ -1295,9 +1331,11 @@ def rename_path(server, user, relpath, new_name, selfname=None):
 
     -> (ok, message); message is RENAME_EXISTS when the new name is taken. Never overwrites.
 
-    Guarded as delete_path is — _safe_abspath, then _guarded and _protected_resolved on the host,
-    in the same command as the move — plus _rename_inner's own refusals: a source reached through
-    a symlinked folder, and a destination that exists (even as a dangling symlink).
+    Guarded as delete_path is — _safe_abspath, then _protected_resolved on the host, in the same
+    command as the move — plus _rename_inner's own refusals: a source reached through a symlinked
+    folder, and a destination that exists (even as a dangling symlink). Not _guarded: `mv` moves
+    a link, not its target, and following the final link refused renaming one that points out of
+    the home (see delete_path).
     """
     refusal = rename_refusal(user, relpath, new_name, selfname)
     if refusal:
@@ -1305,8 +1343,7 @@ def rename_path(server, user, relpath, new_name, selfname=None):
     ap = _safe_abspath(user, relpath)
     inner = _rename_inner(ap, new_name, user, selfname)
     out, e, rc = _core.shell_as_game_user(
-        server, user, _guarded(user, ap, _protected_resolved(user, ap, selfname, inner)),
-        timeout=30)
+        server, user, _protected_resolved(user, ap, selfname, inner), timeout=30)
     return _rename_outcome(out, e, rc)
 
 

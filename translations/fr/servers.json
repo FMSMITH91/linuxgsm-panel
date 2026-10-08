@@ -193,6 +193,7 @@
   "Show the controls for rearranging this tab": "Afficher les contrôles pour réorganiser cet onglet",
   "Show the time the panel saw each line, in your own timezone": "Affiche l'heure à laquelle le panneau a vu chaque ligne, dans votre fuseau horaire",
   "Show this panel again": "Afficher à nouveau ce panneau",
+  "Some output from while the connection was down is not shown. The server keeps it in its console log files.": "Une partie de la sortie produite pendant que la connexion était coupée n'est pas affichée. Le serveur la conserve dans ses fichiers journaux de console.",
   "Some output from while this tab was in the background is not shown. The server keeps it in its console log files.": "Une partie de la sortie produite pendant que cet onglet était en arrière-plan n'est pas affichée. Le serveur la conserve dans ses fichiers journaux de console.",
   "Stamping is off. Restart the server to restore the live console.": "L'horodatage est désactivé. Redémarrez le serveur pour restaurer la console en direct.",
   "Start by adding a remote server, then install a game server from the Game Servers page.": "Commencez par ajouter un serveur distant, puis installez un serveur de jeu depuis la page Serveurs de jeu.",

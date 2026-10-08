@@ -1898,27 +1898,33 @@ _ACCOUNT_VERDICTS = {}        # (remote id, host, login, account) -> (expires at
 _ACCOUNT_VERDICTS_LOCK = threading.Lock()
 
 
-def game_account_write_refusal(remote, user, now=None):
+def game_account_write_refusal(remote, user, now=None, reading=False):
     """Why a write as `user` on `remote` is refused, or None when it is a plain game account.
 
     -> a message for the operator; None only when the host confirmed `user` is not root-capable
     (see privileged_accounts). A host that cannot be asked is refused, not waved through.
+
+    `reading`: the same question for a file-browser READ (a listing, a file, a download). As the
+    host's sudo login those hand over ~/.ssh's private keys and a shell history with typed
+    passwords in it to anyone who may manage that server's files — the same rows the writes were
+    closed for, and uninstall already refuses to touch the account. Only the wording differs.
     """
     now = time.monotonic() if now is None else now
     key = (getattr(remote, "id", None), getattr(remote, "host", None),
            getattr(remote, "username", None), user)
     why = _cached_account_verdict(key, now)
     if why is not None:
-        return _privileged_write_msg(user, why) if why else None
+        return _privileged_write_msg(user, why, reading) if why else None
     verdict = privileged_accounts(remote, [user])
     if verdict is None:
         return ("Couldn't check whether the '%s' account can become root on this host, and the "
-                "panel only writes files or scheduled tasks as an account it has confirmed is not "
-                "an administrator or root account. Nothing was changed; try again when the host "
-                "answers." % user)
+                "panel only %s files or scheduled tasks as an account it has confirmed is not "
+                "an administrator or root account. Nothing was %s; try again when the host "
+                "answers." % (user, "reads" if reading else "writes",
+                              "read" if reading else "changed"))
     why = verdict.get(user) or ""
     _store_account_verdict(key, now, why)
-    return _privileged_write_msg(user, why) if why else None
+    return _privileged_write_msg(user, why, reading) if why else None
 
 
 def _cached_account_verdict(key, now):
@@ -1936,14 +1942,19 @@ def _store_account_verdict(key, now, why):
         _ACCOUNT_VERDICTS[key] = (now + _ACCOUNT_VERDICT_TTL, why)
 
 
-def _privileged_write_msg(user, why):
+def _privileged_write_msg(user, why, reading=False):
     if why == INVALID_ACCOUNT_NAME:
         # Not "can become root": nothing was asked of the host. And the name is not repeated —
         # it is exactly the text the panel refuses to handle.
         return ("Refused: this server's account name is not a plain account name, so the panel "
-                "puts it into no command on the host and writes none of its files or scheduled "
+                "puts it into no command on the host and %s none of its files or scheduled "
                 "tasks. Remove the server from the panel (that leaves the host untouched) and "
-                "import or install it again under a valid name.")
+                "import or install it again under a valid name." % ("reads" if reading else "writes"))
+    if reading:
+        return ("Refused: the '%s' account on this host can become root (%s), so the panel does not "
+                "read its files — they include that login's SSH keys and shell history. This server "
+                "was imported before the panel refused such accounts; remove it from the panel and "
+                "run the game under a plain account." % (user, why))
     return ("Refused: the '%s' account on this host can become root (%s), so the panel does not "
             "write its files or scheduled tasks — that would be root on the host. This server was "
             "imported before the panel refused such accounts; remove it from the panel and run the "

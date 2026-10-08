@@ -2156,14 +2156,21 @@ try:
             db.session.commit()
             _hp_lid = _hp_l.id
         _hp_loc = mrc.get("/remote/%d/manage" % _hp_lid).get_data(as_text=True)
+        # Nor the Connection & SSH card (its public-SSH and SSH-port rows): ssh-status, ssh-mode and
+        # ssh-port all go through get_host_remote, so on the panel host they 403 this operator too.
         check("panel host page: a non-superadmin is not shown the Security tab its endpoints refuse",
-              'id="ssh-port-input"' in _hp_loc and 'data-mtab-btn="security"' not in _hp_loc
+              'id="ssh-port-input"' not in _hp_loc and 'id="conn-ssh-card"' not in _hp_loc
+              and 'data-mtab-btn="security"' not in _hp_loc
               and 'id="sec-bans"' not in _hp_loc, "the tab renders 403s as an all-clear")
         check("panel host page: ...nor an SSH login, Migrate button or host key it does not have",
               "Migrate to Tailscale SSH" not in _hp_loc and "Panel connects via" not in _hp_loc
               and "Pinned SSH host key" not in _hp_loc, "remote-only copy on the panel host")
+        # Migrate is superadmin-only (the route refuses everyone else), so on a remote the operator
+        # is told who can, and the superadmin's page has the button.
         check("host page: ...while a REMOTE's page keeps all of them (positive control)",
-              'data-mtab-btn="security"' in _hp_rem and "Migrate to Tailscale SSH" in _hp_rem
+              'data-mtab-btn="security"' in _hp_rem and 'id="ssh-port-input"' in _hp_rem
+              and "A superadmin can switch the panel" in _hp_rem
+              and "Migrate to Tailscale SSH" in _hp_adm
               and "Pinned SSH host key" in _hp_rem, "the gate hides them on every host")
         # A block or unban on the PANEL host through its row id is followed in the panel's own ban
         # gate at once, as host_local's twins are; on a remote there is nothing of the panel's to

@@ -1384,7 +1384,7 @@ try:
     _sd_done.clear()
     _sd_runs.clear()
     with _p9.app_context():
-        _p9._run_action(NS(id=90010, status="offline", short_name="ghostserver",
+        _p9._run_action(NS(id=90010, status="offline", installed=True, short_name="ghostserver",
                            lgsm_name="csgoserver", name="ghost"), NS(id=99904), "fastdl", None,
                         on_done=lambda ok, d: _sd_done.append((ok, d)))
     _p9_drain()
@@ -3447,14 +3447,28 @@ _pb_ck = os.path.join(_PB, "checkout")
 os.makedirs(_pb_ck)
 for _n in ("app.py", "requirements.txt"):
     open(os.path.join(_pb_ck, _n), "w").close()
-_pb_src = "ok() { :; }\nPANEL_SELF_UPDATE=\"${PSU:-}\"\n" + _pb_src_blk + 'echo "SRC=[${SRC}]"'
-_r1 = _pb_run(_pb_src, cwd=_pb_ck)
-_r2 = _pb_run(_pb_src, cwd=_pb_ck, env={"PSU": "1"})
-check("install.sh: an operator run from a checkout uses it as the source (control)",
+open(os.path.join(_pb_ck, "install.sh"), "w").close()
+_pb_other = os.path.join(_PB, "other-tree")
+os.makedirs(_pb_other)
+open(os.path.join(_pb_other, "install.sh"), "w").close()
+_pb_src = ("ok() { :; }\nwarn() { echo \"WARN $*\"; }\nPANEL_SELF_UPDATE=\"${PSU:-}\"\nSCRIPT_PATH=\"${SP}\"\n"
+           + _pb_src_blk + 'echo "SRC=[${SRC}]"')
+_r1 = _pb_run(_pb_src, cwd=_pb_ck, env={"SP": os.path.join(_pb_ck, "install.sh")})
+_r2 = _pb_run(_pb_src, cwd=_pb_ck, env={"PSU": "1", "SP": os.path.join(_pb_ck, "install.sh")})
+check("install.sh: an operator run of a checkout's own install.sh, from it, uses it as the source (control)",
       "SRC=[%s]" % os.path.realpath(_pb_ck) in _r1.stdout or "SRC=[%s]" % _pb_ck in _r1.stdout,
       _r1.stdout + _r1.stderr)
 check("install.sh: ...but a panel self-update never takes its working directory as the source",
       "SRC=[]" in _r2.stdout, _r2.stdout + _r2.stderr)
+# `curl … | bash` from a directory that merely holds an app.py and a requirements.txt (an old clone,
+# another Flask project): $0 is "bash", so SCRIPT_PATH is "<cwd>/bash". And an installer from another
+# tree run with this one as its working directory. Neither may take the directory for the panel.
+_r3 = _pb_run(_pb_src, cwd=_pb_ck, env={"SP": os.path.join(_pb_ck, "bash")})
+_r4 = _pb_run(_pb_src, cwd=_pb_ck, env={"SP": os.path.join(_pb_other, "install.sh")})
+check("install.sh: `curl … | bash` run in a directory with an app.py and a requirements.txt does not take it "
+      "for the panel's source, and says why; nor does another tree's installer",
+      "SRC=[]" in _r3.stdout and "WARN Not using" in _r3.stdout and "SRC=[]" in _r4.stdout,
+      _r3.stdout + _r3.stderr + _r4.stdout)
 _pb_fc = _pb_shfn("fetch_code")
 check("install.sh fetch_code: the extracting tar runs as PANEL_DIR's owner when that is not root",
       'x_as="sudo -u ${x_owner}"' in _pb_fc and '${x_as} tar -C "${PANEL_DIR}" --no-same-owner -xf -'
@@ -3575,8 +3589,8 @@ _pb_rg = _pb_priv.remote_command("content-grant-read", ["cu", "cu", "gm", "cstri
 _pb_rr = _pb_priv.remote_command("content-game-remove", ["cu", "cstrike", "cssserver"])
 check("privileged: the remote content grant's chmods run as the content account (a link in its "
       "tree cannot aim root's chmod -R), usermod stays root's",
-      _pb_rg.startswith("usermod -aG cu gm; ")
-      and all(p.startswith("runuser -u cu -- chmod ") for p in _pb_rg.split("; ")[1:])
+      _pb_rg.startswith("_cgr=0; usermod -aG cu gm || _cgr=1; ")
+      and all(p.startswith("runuser -u cu -- chmod ") for p in _pb_rg.split("; ")[2:-1])
       and _pb_rg.count("runuser -u cu -- chmod") == 3, _pb_rg)
 check("privileged: ...and the remote content removal's rm -rf runs as that account too",
       _pb_rr.count("runuser -u cu -- rm -rf ") == 3 and "; rm -rf" not in _pb_rr, _pb_rr)
@@ -3599,7 +3613,7 @@ if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("runuser"):
     os.chown(_pb_game, _pb_daemon.pw_uid, -1)
     os.symlink(_pb_rootdir, os.path.join(_pb_game, "cstrike"))
     os.lchown(os.path.join(_pb_game, "cstrike"), _pb_daemon.pw_uid, -1)
-    _pb_cmd = _pb_rg.split("; ")[-1].replace("/home/cu/serverfiles/cstrike",
+    _pb_cmd = _pb_rg.split("; ")[-2].split(" || ")[0].replace("/home/cu/serverfiles/cstrike",
                                              os.path.join(_pb_game, "cstrike")).replace("-u cu", "-u daemon")
     _r = _pb_run(_pb_cmd)
     check("privileged: (driven) the remote grant's chmod -R through a link to a root-owned tree "

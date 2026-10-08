@@ -376,6 +376,13 @@ async function dialog(state, opts, postAnswer, planBody){
   out.card_sent = await card({wait: null, job: {phase: 'rebooting', done: null, total: null, left: null, sent: now}, rows: []});
   out.card_rows = await card({wait: null, job: null, rows: [{restore: 'done'}, {restore: 'pending'}]});
   out.card_idle = await card({wait: null, job: null, rows: [], last: {text: 'vps is back', ok: true}});
+  // A remote's card whose read of /reboot-plan fails (no answer: the fetch rejects): it polls again.
+  const longTimers = [], realST = global.setTimeout;
+  global.setTimeout = (f, ms) => { if (ms >= 1000) { longTimers.push(ms); return 0; } return realST(f, ms); };
+  calls.length = 0; answers = {};
+  window.rebootStateWatch(7, 'vps', false); await settle();
+  global.setTimeout = realST;
+  out.card_fail_remote = {timers: longTimers, reads: calls.filter(c => c.url === P + '/reboot-plan').length};
 
   // The banner.
   const nag = doc.body.appendChild(new E('div'));
@@ -501,9 +508,16 @@ def _card_checks41(out):
     check("Power card: ...in the page's language, not the browser's (English day names were on a "
           "Spanish page)", _all41(bool(clock.get("far_fr")), clock.get("far_fr") != clock.get("far_en")),
           repr(clock))
+    _card_fail_remote_checks41(out)
     check("Power card: a restore shows how many are back, and the last outcome once it is over",
           _all41((out.get("card_rows") or {}).get("text", "").startswith("Coming back: 1/2"),
                  (out.get("card_idle") or {}).get("text") == "vps is back"), repr(out.get("card_rows")))
+
+
+def _card_fail_remote_checks41(out):
+    fail = out.get("card_fail_remote") or {}
+    check("Power card: a remote host's card whose reboot-plan read fails polls again in 10 s (one blip stopped "
+          "it for good)", _all41(fail.get("reads") == 1, fail.get("timers") == [10000]), repr(fail))
 
 
 def _banner_checks41(out):
@@ -1278,11 +1292,41 @@ def _paramiko_drop41(fail_at):
 
 
 def _connect_fail_checks41():
+    # (Run first: _paramiko_drop41 below stubs exec_bounded for the rest of the section.)
+    # Failures BEFORE the exec request — through the real exec_bounded — are not "started" either:
+    # the pooled transport gone (get_transport() is None), or the session refused (MaxSessions).
+    # Marked started, a reboot that was never sent was waited on for a boot that never came.
+    _pm = _core41.paramiko
+    _no_transport = _pm.SSHClient()
+    _no_transport.get_transport = lambda: None
+
+    class _RefusingTransport41:
+        def open_session(self, timeout=None):
+            raise _pm.ChannelException(1, "Administratively prohibited")
+    _refused = _pm.SSHClient()
+    _refused.get_transport = _RefusingTransport41
+    _pre = []
+    for _cli41 in (_no_transport, _refused):
+        _fresh41()
+        r, _h = _remote41("drop", auth="key")
+        _patch(_core41, "get_connection", lambda server, _c=_cli41, **_k: _c)
+        try:
+            _REAL_PARAMIKO41(r, "true", 10, True, None)
+            _pre.append(None)
+        except Exception as exc:  # noqa: BLE001 - the check is which one
+            _pre.append(exc)
+    check("paramiko: a failure before the exec request (no transport; session refused) raises a "
+          "ConnectionError NOT marked command_started",
+          _all41(all(e.__class__ is ConnectionError for e in _pre),
+                 not any(getattr(e, "command_started", False) for e in _pre)), repr(_pre))
     on_exec, on_connect = _paramiko_drop41("exec"), _paramiko_drop41("connect")
     check("paramiko: a command that fails once the connection is open raises a ConnectionError marked "
           "command_started (its type unchanged for every caller and message); one that never "
           "connected is not marked",
-          _all41(on_exec.__class__ is ConnectionError,   # exactly it: a subclass broke two callers getattr(on_exec, "command_started", False) is True,
+          # exactly ConnectionError: a subclass broke two callers. (The middle condition had been
+          # swallowed into this comment, so the check no longer read the mark it names.)
+          _all41(on_exec.__class__ is ConnectionError,
+                 getattr(on_exec, "command_started", False) is True,
                  not getattr(on_connect, "command_started", False)), repr((on_exec, on_connect)))
     _fresh41()
     r, _h, _rows = _std_host41(auth="key")

@@ -214,7 +214,7 @@
       <div class="card-body p-0">
         <div class="console-output" id="console-output">
           {% if not _can_view_console %}<div class="text-secondary">You don't have permission to view this server's console.</div>
-          {% else %}{% for line in console_lines if line.strip() %}<div class="console-line">{{ line }}</div>{% else %}<div class="text-secondary">Waiting for console output...</div>{% endfor %}{% endif %}
+          {% else %}{% for line in console_lines if line.strip() %}<div class="console-line" data-no-i18n>{{ line }}</div>{% else %}<div class="text-secondary">Waiting for console output...</div>{% endfor %}{% endif %}
         </div>
       </div>
       {% if can_send_command %}

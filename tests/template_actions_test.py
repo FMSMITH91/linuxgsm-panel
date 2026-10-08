@@ -831,6 +831,31 @@ for _tpl, _expr in (("manage_groups.html", "{{ group.name }}</strong>"),
 check(not _ug_missing,
       "i18n: user-authored names on the groups page and the sidebar user are marked do-not-translate",
       "unguarded: %s" % _ug_missing)
+# ...and the same names on the users page and the audit log: a group called "Admin" or "Moderator"
+# (the Quick-role presets' names) read "Administrador"/"Moderador" on /users, and a user or target
+# called "Test" or "Server" was translated in the audit trail. The server-rendered console lines too:
+# a game line that was exactly "Done" or "Saved" was shown as "Listo" or "Guardado".
+_ug2_missing = []
+for _tpl, _expr in (("manage_users.html", "{{ user.username }}</strong>"),
+                    ("manage_users.html", "{{ user.display_name }}</td>"),
+                    ("manage_users.html", "{{ g.name }}"),
+                    ("logs.html", "{{ entry.username }}</td>"),
+                    ("logs.html", "{{ entry.target }}</td>"),
+                    ("server_detail.html", "{{ line }}</div>")):
+    _src2 = (TEMPLATES / _tpl).read_text(encoding="utf-8")
+    _tags = []
+    for _m in re.finditer(re.escape(_expr), _src2):
+        _lt = _src2.rindex("<", 0, _m.start())
+        _tag = _src2[_lt:_src2.index(">", _lt) + 1]
+        if _tag.startswith("<strong"):          # the username is bold inside its guarded cell
+            _lt = _src2.rindex("<", 0, _lt)
+            _tag = _src2[_lt:_src2.index(">", _lt) + 1]
+        _tags.append(_tag)
+    if not _tags or any("data-no-i18n" not in _t for _t in _tags):
+        _ug2_missing.append("%s %s -> %s" % (_tpl, _expr, [_t for _t in _tags if "data-no-i18n" not in _t][:1] or "none"))
+check(not _ug2_missing,
+      "i18n: names on the users page and in the audit log, and the console's server-rendered lines, are "
+      "marked do-not-translate", "unguarded: %s" % _ug2_missing)
 # ...which only helps an element that CARRIES the guard. manage_users.js writes the username into
 # #eu-name (the Edit dialog's title) and #cred-user (beside a one-time password that is shown once)
 # and neither had it, so on a Spanish panel the account "Admin" was handed on as "Administrador".

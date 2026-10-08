@@ -4676,6 +4676,40 @@ try:
 finally:
     _sm_core.run_command = _fb_saved
 
+# ── a symlinked folder is a folder, and browsing one lists it ─────────────────────────────────
+# Driven: the browser's REAL command, run in bash over a temp tree standing in for the home.
+# `%y` typed a link `l` (listed as a file: its editor said "File not found"), and plain find does
+# not descend a symlinked starting point (nothing printed, rc 0: "this folder is empty").
+_fbl_home = os.path.realpath(_dr_tmp.mkdtemp(prefix="lgsm-unit-fblink-"))
+_fbl_saved = _sm_core.run_command
+try:
+    os.makedirs(os.path.join(_fbl_home, "log", "real"))
+    with open(os.path.join(_fbl_home, "log", "real", "console.log"), "w") as _fh:
+        _fh.write("x")
+    with open(os.path.join(_fbl_home, "log", "notes.txt"), "w") as _fh:
+        _fh.write("y")
+    os.symlink(os.path.join(_fbl_home, "log", "real"), os.path.join(_fbl_home, "log", "server"))
+    os.symlink(os.path.join(_fbl_home, "log", "gone"), os.path.join(_fbl_home, "log", "dangling"))
+
+    def _fbl_run(_s, c, **_k):
+        inner = _tss_shlex.split(c)[-1].replace("/home/csgoserver", _fbl_home)
+        p = _qsp.run(["bash", "-c", inner], capture_output=True, text=True,  # nosec B603 B607 - bash on the browser's own command, over a temp tree
+                        timeout=20, check=False)
+        return p.stdout, p.stderr, p.returncode
+    _sm_core.run_command = _fbl_run
+    _fbl_top = _sm_files.browse_dir(NS(id=9404, host="203.0.113.44"), "csgoserver", "log") or {}
+    _fbl_dirs = {e["name"]: e["is_dir"] for e in _fbl_top.get("entries", [])}
+    check("file browser: a symlinked folder is listed as a folder; a file and a dangling link are files",
+          _fbl_dirs == {"real": True, "server": True, "notes.txt": False, "dangling": False},
+          repr(_fbl_top))
+    _fbl_in = _sm_files.browse_dir(NS(id=9405, host="203.0.113.45"), "csgoserver", "log/server") or {}
+    check("file browser: ...and browsing a symlinked folder lists what is in it, not 'empty'",
+          [e["name"] for e in _fbl_in.get("entries", [])] == ["console.log"]
+          and not _fbl_in.get("unreadable"), repr(_fbl_in))
+finally:
+    _sm_core.run_command = _fbl_saved
+    _dr_shutil.rmtree(_fbl_home, ignore_errors=True)
+
 # ── two more bootstrap probes that answered from a read that never happened ──────────────────
 # Same shape as the reboot probe beside them: run_command returns ("", "...timed out", -1) and
 # does not raise, so the answer a failed read produces is whatever `""` happens to satisfy.

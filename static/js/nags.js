@@ -293,7 +293,10 @@ window.rebootStateWatch = function(hostId, label, isLocal){
         if (st.job && st.job.phase === 'rebooting') wentDown = false;
         schedule(active ? 10000 : 0);
       })
-      .catch(function(){ if (isLocal) { wentDown = true; schedule(10000); } });
+      // A failed read polls again for every host: one blip (a phone's network, a 502 while the panel
+      // restarts) used to stop a remote's card for good, still "Waiting to reboot…" after the host was
+      // back. Only the panel's own host takes a failure as it going down, and reloads once it answers.
+      .catch(function(){ if (isLocal) wentDown = true; schedule(10000); });
   }
   function schedule(ms){
     if (timer) { clearTimeout(timer); timer = null; }

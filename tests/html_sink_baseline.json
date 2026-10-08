@@ -11,6 +11,7 @@
   "manage_remotes.js": [
     "_da",
     "_da,remoteId",
+    "_tsMigrateOffer,remoteId",
     "body,title",
     "data.log"
   ],

@@ -16,6 +16,18 @@ import urllib.request
 
 _log = logging.getLogger("panel.system_ops")
 
+# Every class a timed-out subprocess can raise in this process. Under eventlet.monkey_patch,
+# subprocess.run(capture_output=True, timeout=) and Popen.communicate(timeout=) raise the ORIGINAL
+# module's TimeoutExpired -- a different class, not a subclass of the green one -- so a bare
+# `except subprocess.TimeoutExpired` let a git, sudo or tailscale stall escape as an exception
+# (a 500 from switch-branch, "could not be queried" for a 10 s helper stall). The same pair
+# ssh_manager/_core.py catches; outside eventlet (CLI, tests) both entries are the one class.
+try:
+    from eventlet.patcher import original as _sops_ev_original
+    _SOPS_TIMEOUTS = (subprocess.TimeoutExpired, _sops_ev_original("subprocess").TimeoutExpired)
+except Exception:  # noqa: BLE001 - no eventlet: the plain module is the only one
+    _SOPS_TIMEOUTS = (subprocess.TimeoutExpired,)
+
 # The panel's own install directory — used for the git-based self-update feature. Taken from
 # panel/__init__.py rather than this file's dirname: this module lives in panel/ops/ now, and
 # self-update, integrity-repair and the db_maintenance lookup all need the CHECKOUT root.
@@ -358,7 +370,7 @@ def _run(cmd, timeout=30, sudo=False, text=True):
             stdin=subprocess.DEVNULL,
         )
         return r.stdout.strip(), r.stderr.strip(), r.returncode
-    except subprocess.TimeoutExpired:
+    except _SOPS_TIMEOUTS:
         return "", "Command timed out", -1
     except FileNotFoundError:
         return "", "Command not found", -1
@@ -437,14 +449,21 @@ def ufw_status():
     status_text = "active" if enabled else "inactive"
     rules = []
 
-    # Parse rules
+    # Parse rules. EVERY line goes to _ufw_rule_split, which answers None for anything that is not
+    # a rule row (Status/Logging/Default/New profiles, the "To Action From" header and its dashes),
+    # as the debug report's ufw_classify reads the same text. Lines used to be dropped by content:
+    # any with "(" and ")" (meant for "(v6)"), or naming "Default:" etc. anywhere. That dropped
+    # every v6 row and every row whose comment had parentheses -- a `DENY IN` on tailscale0 among
+    # them, so ufw_allows_iface_in read the allow below it and unlocked "Disable (tailnet-only)".
+    # A row dropped here is a rule the lockout guard never sees, so none may be. The one row left
+    # out is a (v6) row whose v4 twin -- the same rule with "(v6)" taken off -- is already listed:
+    # it says nothing that row does not, and the list stays one row per rule. A v6 row with no
+    # twin (a DENY added for v6 only) is kept.
+    seen = set()
     for line in out.split("\n"):
         line = line.strip()
-        # Match: "Anywhere on <interface>" or "Anywhere                   ALLOW      192.168.1.0/24"
-        if not line or "Status:" in line or "Logging:" in line or "Default:" in line or "New:" in line:
+        if not line:
             continue
-        if "(" in line and ")" in line:
-            continue  # Skip header lines like (v6)
 
         # The verb runs `ufw status verbose`, whose columns are "To  Action  From" — there are
         # NO rule numbers (only `ufw status numbered` has those). The branch here tested
@@ -453,8 +472,15 @@ def ufw_status():
         # tailscale0 allow, app profiles like OpenSSH, and every `panel-block` DENY. Split on the
         # ACTION instead, which is the one column with a fixed vocabulary.
         rule = _ufw_rule_split(line)
-        if rule:
-            rules.append(rule)
+        if not rule:
+            continue
+        # Words, not a regex: `\s*\(v6\)` backtracks quadratically over a long run of spaces.
+        key = tuple(" ".join(w for w in rule[k].split() if w != "(v6)")
+                    for k in ("to", "action", "direction", "from"))
+        if key in seen and "(v6)" in rule["to"]:
+            continue
+        seen.add(key)
+        rules.append(rule)
 
     return {"enabled": enabled, "status_text": status_text, "rules": rules}
 
@@ -1043,7 +1069,7 @@ def _git(args, timeout=45):
         r = subprocess.run(gitcmd, capture_output=True, check=False,  # nosec B603  # nosemgrep
                            text=True, timeout=timeout, env=genv)
         return r.stdout.strip(), r.stderr.strip(), r.returncode
-    except subprocess.TimeoutExpired:
+    except _SOPS_TIMEOUTS:
         return "", "git timed out", -1
     except (FileNotFoundError, OSError):
         return "", "git not found", -1
@@ -3498,8 +3524,10 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
         if "yes" not in (have2 or ""):
             return False, "Couldn't install fail2ban on this host."
 
-    _write_root_file(_F2B_PANEL_FILTER, _panel_f2b_filter_body())
-    _write_root_file(_F2B_PANEL_JAIL, _panel_f2b_jail_body(auth_log, web_port, ignore_ips))
+    # Each write's rc decides, before anything reloads (see _f2b_write_panel_files).
+    _wrote = _f2b_write_panel_files(auth_log, web_port, ignore_ips)
+    if _wrote:
+        return False, _wrote
 
     _run_verb("service-enable-now", ["fail2ban"], timeout=45)
     # Was `fail2ban-client reload || systemctl restart fail2ban` in one root shell.
@@ -3520,6 +3548,29 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     if panel_fail2ban_status().get("enabled"):
         return True, _f2b_ok_msg
     # Give up — but surface the REAL reason instead of a generic message.
+    reason = _f2b_jail_down_reason()
+    return False, ("Configured fail2ban, but the jail didn't come up. %s"
+                   % (reason or "Check `fail2ban-client status linuxgsm-panel` and the panel logs."))
+
+
+def _f2b_write_panel_files(auth_log, web_port, ignore_ips):
+    """Write the panel's fail2ban filter, then its jail; the failure message, or "" when both landed.
+
+    Each write's rc decides, before anything reloads. The status poll in configure_panel_fail2ban
+    only asks "is a jail named linuxgsm-panel up", which the OLD jail answers yes to: a refused
+    rewrite (an older helper, a narrow grant without tee) came back "now protecting" on the old
+    port and without a newly whitelisted address, and the caller audited the change as applied.
+    """
+    for _path, _body in ((_F2B_PANEL_FILTER, _panel_f2b_filter_body()),
+                         (_F2B_PANEL_JAIL, _panel_f2b_jail_body(auth_log, web_port, ignore_ips))):
+        if _write_root_file(_path, _body)[2] != 0:
+            return ("Couldn't write the panel's fail2ban %s file, so the jail keeps its "
+                    "previous settings." % ("filter" if _path == _F2B_PANEL_FILTER else "jail"))
+    return ""
+
+
+def _f2b_jail_down_reason():
+    """Why the panel jail is not up, in at most 200 characters on one line; "" when nothing says."""
     detail, derr, _ = _run_verb("f2b-status-jail", ["linuxgsm-panel"], timeout=10)
     reason = (detail or derr or "").strip()
     if not reason:
@@ -3529,9 +3580,7 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
         _hits = [ln for ln in (_j or "").splitlines()
                  if re.search(r"linuxgsm-panel|have not found|log file|error", ln, re.I)]
         reason = "\n".join(_hits[-2:])
-    reason = (reason or "").replace("\n", " ").strip()[:200]
-    return False, ("Configured fail2ban, but the jail didn't come up. %s"
-                   % (reason or "Check `fail2ban-client status linuxgsm-panel` and the panel logs."))
+    return (reason or "").replace("\n", " ").strip()[:200]
 
 
 # What panel_jail_health checks, each of which must hold for the panel jail to count as healthy.
@@ -3892,7 +3941,7 @@ def _helper_probe_run():
         r = subprocess.run(_helper_probe_argv(), shell=False,  # nosec B603
                            capture_output=True, text=True, timeout=10,
                            stdin=subprocess.DEVNULL, start_new_session=True)
-    except subprocess.TimeoutExpired:
+    except _SOPS_TIMEOUTS:
         return {"outcome": "timeout", "verbs": set(), "refusal": None}
     except Exception as exc:  # noqa: BLE001 - reported by class
         return {"outcome": "error", "verbs": set(), "refusal": None, "error": type(exc).__name__}

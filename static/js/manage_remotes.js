@@ -124,16 +124,26 @@ function toggleCreds(select) {
   var group = document.getElementById('credential-group');
   var label = document.getElementById('cred-label');
   var input = select.closest('form').querySelector('[name="credential"]');
+  // The one field carries a key PATH or a PASSWORD, so its type follows the method, as the setup
+  // wizard's copy of this control does (setup_remote.js). It stayed type="text" for a password: the
+  // host's SSH password was readable on screen as it was typed, and the browser kept it as an
+  // ordinary autofill entry for any input named "credential".
   if (select.value === 'password') {
     group.style.display = '';
     label.textContent = 'Password';
     input.placeholder = 'Enter SSH password';
     input.value = '';
+    input.type = 'password';
+    input.autocomplete = 'new-password';
   } else if (select.value === 'tailscale') {
     group.style.display = 'none';
     input.value = '';
+    input.type = 'text';
+    input.autocomplete = 'off';
   } else {
     group.style.display = '';
+    input.type = 'text';
+    input.autocomplete = 'off';
     label.textContent = 'SSH Key Path';
     input.placeholder = '~/.ssh/id_rsa';
     input.value = '~/.ssh/id_rsa';
@@ -191,7 +201,7 @@ function renderTailscaleStatus(remoteId, name, status) {
     // via setModalBody below.
     if (status.tailscale_ip) html += '<p class="small mb-1"><strong>IP:</strong> <code>' + escapeHtml(status.tailscale_ip) + '</code></p>';
     if (status.dns_name) html += '<p class="small mb-1"><strong>DNS:</strong> <code>' + escapeHtml(status.dns_name) + '</code></p>';
-    html += '<hr><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button>';
+    html += '<hr>' + _tsMigrateOffer(remoteId);
   } else if (installed) {
     html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> Tailscale is <strong>installed</strong> but <strong>not running</strong>.</div>';
     html += renderAuthKeyForm(remoteId, name);
@@ -282,8 +292,7 @@ function tailscaleUp(remoteId) {
                 : 'UFW was not changed: it is inactive, not installed, or could not be read or updated.';
               if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: <code>' + escapeHtml(ip) + '</code>'  // nosemgrep
                 + '<br><span class="small">' + escapeHtml(ufwText) + '</span></span>'
-                + '<div class="mt-2"><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '>'
-                + '<i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
+                + '<div class="mt-2">' + _tsMigrateOffer(remoteId) + '</div>';
             })
             // escapeHtml here too: the success path above escapes this exact value, and it is the
             // remote host's `tailscale status --json` output either way — a finalize failure does
@@ -297,7 +306,15 @@ function tailscaleUp(remoteId) {
   .catch(function() { el.innerHTML = '<span class="text-danger">Connection failed starting Tailscale.</span>'; });
 }
 
-function installTailscale(remoteId, name) {
+// `btn` is the Install button: disabled while the request runs, and for good once it succeeded. A
+// double tap sent two installs, two apt runs on the remote at once — one lost the dpkg lock, and
+// whichever answer came last said "Install failed" over an install that worked — and each success
+// added another login form, with ids the first copy already had.
+function installTailscale(remoteId, name, btn) {
+  if (btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+  }
   var logEl = document.getElementById('install-log');
   logEl.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Installing Tailscale on ' + escapeHtml(name) + '...</span>';  // nosemgrep
 
@@ -307,14 +324,18 @@ function installTailscale(remoteId, name) {
       if (data.success) {
         logEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + escapeHtml(data.message) + '</span>';  // nosemgrep
         // Show auth form
-        var extra = renderAuthKeyForm(remoteId, name);
+        var shown = document.getElementById('ts-install-auth');
+        if (shown) shown.remove();
+        var extra = '<div id="ts-install-auth">' + renderAuthKeyForm(remoteId, name) + '</div>';
         logEl.insertAdjacentHTML('afterend', extra);  // nosemgrep
       } else {
+        if (btn) btn.disabled = false;
         logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</span>'  // nosemgrep
           + (data.log ? '<pre class="text-secondary small mt-1" style="max-height:200px;overflow-y:auto;">' + escapeHtml(data.log.slice(-2000)) + '</pre>' : '');
       }
     })
     .catch(function() {
+      if (btn) btn.disabled = false;
       logEl.innerHTML = '<span class="text-danger">Error installing Tailscale</span>';
     });
 }
@@ -340,7 +361,7 @@ function bootstrapTailscale(remoteId) {
   .then(data => {
     if (data.success) {
       logEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + escapeHtml(data.message) + '</span>'  // nosemgrep
-        + '<div class="mt-2"><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
+        + '<div class="mt-2">' + _tsMigrateOffer(remoteId) + '</div>';
     } else {
       logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</span>'  // nosemgrep
         + (data.log ? '<pre class="text-secondary small mt-1" style="max-height:200px;overflow-y:auto;">' + escapeHtml(data.log.slice(-2000)) + '</pre>' : '');
@@ -349,6 +370,17 @@ function bootstrapTailscale(remoteId) {
   .catch(function() {
     logEl.innerHTML = '<span class="text-danger">Error during bootstrap</span>';
   });
+}
+
+// The "Migrate to Tailscale SSH" offer after a join, or — for anyone the migrate route refuses (it
+// is superadmin-only: it moves the host onto the panel's own tailnet identity) — a line saying who
+// can, instead of a button that answers 403. manage_remotes.html renders #ts-migrate-allowed for a
+// superadmin only.
+function _tsMigrateOffer(remoteId) {
+  if (document.getElementById('ts-migrate-allowed')) {
+    return '<button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button>';
+  }
+  return '<span class="small text-secondary">' + escapeHtml('A superadmin can now switch the panel to reach this host over Tailscale SSH.') + '</span>';
 }
 
 function migrateToTailscale(remoteId) {
@@ -597,7 +629,7 @@ document.addEventListener('click', function(e){
   var b = t.closest && t.closest('[data-ts-bootstrap]');
   if (b) { showBootstrap(Number(b.getAttribute('data-remote-id')), b.getAttribute('data-remote-name')); return; }
   var i = t.closest && t.closest('[data-install-ts]');
-  if (i) { installTailscale(Number(i.getAttribute('data-ts-remote')), i.getAttribute('data-ts-name')); return; }
+  if (i) { installTailscale(Number(i.getAttribute('data-ts-remote')), i.getAttribute('data-ts-name'), i); return; }
   var rm = t.closest && t.closest('.remove-remote-btn');
   if (rm && !rm.disabled) { removeRemote(rm); return; }
 });

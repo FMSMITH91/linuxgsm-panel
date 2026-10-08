@@ -580,10 +580,17 @@ def _section_user_reads39():
     filtered = [a for a in seen if "_TRANSPORT=stdout" in a]
     plain = [a for a in seen if "_TRANSPORT=stdout" not in a]
     check("B user reads: the per-user and the unprivileged system read are windowed the same way "
-          "(--since=-24h --lines=+5000, no -n), and the plain reads after them keep -n 5000",
+          "(--since=-24h --lines=+5000, no -n); the per-user journal's plain read keeps -n 5000, and "
+          "the system journal's is a forward window too (-n over field matches walked all of it)",
           len(filtered) == 2 and all(_windowed39(a, "-24h") for a in filtered)
-          and len(plain) == 2 and all(_plain39(a) for a in plain), repr(seen))
+          and _user_plain_reads39(plain), repr(seen))
     _section_user_sudo39()
+
+
+def _user_plain_reads39(plain):
+    """The per-user journal's plain read keeps -n; the system journal's is a forward window."""
+    return (len(plain) == 2 and _plain39(plain[0]) and "--user" in plain[0]
+            and _windowed39(plain[1], _sj39._PLAIN_FIELD_SINCE))
 
 
 def _windowed39(argv, since):

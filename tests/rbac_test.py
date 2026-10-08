@@ -3970,7 +3970,6 @@ _NO_AUDIT_OK = {
     "api_account_ui_order",          # the viewer's own dashboard tile order — a UI preference
     "api_remote_bootstrap_dismiss",  # dismisses a banner
     "api_server_install_dismiss",    # dismisses a banner (it does carry a permission gate now)
-    "api_server_upload_check",       # pre-flight check before an upload; changes nothing
     "api_tailscale_check_peer",      # connectivity probe; changes nothing
     "set_language",                  # the viewer's own UI language; usable pre-login
     # SSH reachability probe. It records is_online / last_seen, and pins the key it met on a host
@@ -4266,6 +4265,8 @@ _AX_ACTION_FROM_CALLER = {
                                 # delete_file / rename_file / upload_file / cron_add / cron_update /
                                 # cron_delete / cron_run_now — each the action that route audits on
                                 # success
+    "_read_refused",            # server_files' read routes pass browse_files / read_file /
+                                # upload_check — the refusal of a read as a root-capable account
 }
 _ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
 _ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)

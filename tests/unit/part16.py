@@ -1947,4 +1947,32 @@ finally:
     _lg16h._mem.clear()
     _lg16h._mem.update(_h16_saved_lg[1])
     _lg16h._inflight.clear()
+
+# ── 10. no copy at all and GitHub unreachable: one fetch, not one per request ─────────────────
+# An empty read with nothing to fall back to was not remembered, so every page that read the game
+# list ran its own fetch and waited out its 10-second timeout.
+_h16_saved_lg = (_lg16h._load_serverlist, dict(_lg16h._mem))
+_h16_fetches = []
+try:
+    _lg16h._load_serverlist = lambda allow_fetch: (_h16_fetches.append(allow_fetch) or [],
+                                                   _lg16h.SERVERLIST)
+    _lg16h._mem.clear()
+    _h16_reads = [_lg16h.serverlist() for _ in range(5)]
+    check("game list: with no copy and the fetch failing, five reads make ONE fetch, each answered []",
+          _h16_fetches == [True] and _h16_reads == [[]] * 5, repr((_h16_fetches, _h16_reads)))
+    _lg16h._mem["serverlist"] = (_time16.time() - 1, [])      # the empty answer's time is up
+    _lg16h.serverlist()
+    check("game list: ...and once that short wait is over, the next read fetches again",
+          _h16_fetches == [True, True], repr(_h16_fetches))
+    _lg16h._mem.clear()
+    _lg16h.serverlist(allow_fetch=False)
+    _lg16h.serverlist(allow_fetch=False)
+    check("game list: a read that may not fetch (status()) remembers nothing, so the next one that "
+          "may fetch still does", _h16_fetches == [True, True, False, False]
+          and "serverlist" not in _lg16h._mem, repr(_h16_fetches))
+finally:
+    _lg16h._load_serverlist = _h16_saved_lg[0]
+    _lg16h._mem.clear()
+    _lg16h._mem.update(_h16_saved_lg[1])
+    _lg16h._inflight.clear()
 _shutil16.rmtree(_H16_DIR, ignore_errors=True)

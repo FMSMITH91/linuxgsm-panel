@@ -390,5 +390,7 @@
   "Takes the panel down too, for a few minutes. Running game servers are stopped cleanly first; the reboot dialog lists which come back after it.": "Arrête aussi le panneau pendant quelques minutes. Les serveurs de jeu en marche sont d'abord arrêtés proprement ; la fenêtre de redémarrage indique lesquels reviennent ensuite.",
   "Waiting reboots it once nobody is on any of its game servers. A server whose count can’t be read holds the wait until it is stopped.": "Attendre le redémarre quand plus personne n'est sur aucun de ses serveurs de jeu. Un serveur dont le nombre de joueurs est illisible maintient l'attente jusqu'à son arrêt.",
   "The wait gives up after": "L'attente est abandonnée après",
-  "The wait has no time limit.": "L'attente n'a pas de limite de temps."
+  "The wait has no time limit.": "L'attente n'a pas de limite de temps.",
+  "A superadmin can switch the panel to reach this server over the tailnet (Tailscale SSH).": "Un super-administrateur peut faire passer le panneau par le tailnet (Tailscale SSH) pour joindre ce serveur.",
+  "A superadmin can now switch the panel to reach this host over Tailscale SSH.": "Un super-administrateur peut maintenant faire passer le panneau par Tailscale SSH pour joindre cet hôte."
 }

@@ -12,7 +12,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # priority drop-in, the panel files + its data (DB / config / encryption keys), and — for a
 # root install — the sudoers entry, the root-owned helper directory
 # (/usr/local/lib/linuxgsm-panel: panel-helper, db_maintenance.py, panel.conf, install.sh,
-# recover.sh, .source.git, root's own clone of the repository, .source-floor, and gamedig/,
+# recover.sh, uninstall.sh, .source.git, root's own clone of the repository, .source-floor, and gamedig/,
 # the player-query tool's installed tree), the `gamedig` links into that tree in /usr/local/bin
 # and /usr/bin, the weekly gamedig cron, the panel's sysctl tuning, and the dedicated 'lgsmpanel' user.
 #
@@ -24,7 +24,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # LinuxGSM installs, and @reboot autostart crontabs are never touched, so every game
 # server keeps running exactly as before once the panel is gone.
 #
-#   Root / system install:   sudo bash uninstall.sh
+#   Root / system install:   sudo bash /usr/local/lib/linuxgsm-panel/uninstall.sh   (the root-owned copy)
 #   Per-user install:              bash uninstall.sh
 #   Skip the confirmation:    ... uninstall.sh --yes
 set -euo pipefail
@@ -37,6 +37,11 @@ die()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 SERVICE_USER="lgsmpanel"                              # the dedicated user a root install creates
 SYSTEM_UNIT="/etc/systemd/system/linuxgsm-panel.service"
+# The root-owned copy of this script that install.sh keeps beside the helper (a variable so a test
+# can point it at a fixture). Running from it is safe even though the `rm -rf` of that directory
+# below deletes it: bash reads a script through the descriptor it opened, and an unlinked file
+# stays readable through it until the script ends.
+UNINSTALL_ROOT_COPY="${PANEL_UNINSTALL_ROOT_COPY:-/usr/local/lib/linuxgsm-panel/uninstall.sh}"
 
 echo -e "${CYAN}╔═══════════════════════════════════════════╗"
 echo    "║        LinuxGSM Panel — uninstaller       ║"
@@ -58,6 +63,14 @@ if [[ "$(id -u)" -eq 0 ]]; then
     svc() { systemctl "$@"; }
 else
     if [[ -f "${SYSTEM_UNIT}" ]] || id "${SERVICE_USER}" >/dev/null 2>&1; then
+        # Pointed at the ROOT-OWNED copy the installer keeps, not at "$0": run from the panel's
+        # checkout, this file is the panel user's to rewrite, and root running it is the hole the
+        # helper boundary exists to close (install_recovery_command, install.sh).
+        if [[ -f "${UNINSTALL_ROOT_COPY}" ]]; then
+            die "This looks like a root/system install (service user '${SERVICE_USER}'). Re-run as root,
+     with the root-owned copy of this uninstaller:
+     sudo bash ${UNINSTALL_ROOT_COPY}"
+        fi
         die "This looks like a root/system install (service user '${SERVICE_USER}'). Re-run with sudo:
      sudo bash $0"
     fi
@@ -253,19 +266,26 @@ if [[ -n "${PANEL_PORT}" ]] && command -v ufw >/dev/null 2>&1; then
     # exits 0 for a rule that does not exist ("Could not delete non-existent rule"), so
     # "Removed the panel's UFW rule" printed for hosts that never had one. Count the rule in
     # `ufw show added` before and after instead.
+    #
+    # An ALLOW or a LIMIT. The panel's firewall page can rate-limit the panel's own port, and
+    # `ufw limit PORT/tcp` rewrites the installer's allow in place, so the rule left on such a host
+    # is a LIMIT: counted only as an allow and deleted only as one, it stayed open on a host with
+    # no panel behind it, under "No UFW rule for port … was found".
     _ufw_count() {
-        ${U_SUDO} ufw show added 2>/dev/null | grep -cE "^ufw allow ${PANEL_PORT}(/tcp)?( |\$)" || true
+        ${U_SUDO} ufw show added 2>/dev/null | grep -cE "^ufw (allow|limit) ${PANEL_PORT}(/tcp)?( |\$)" || true
     }
     sudo_note
     _ufw_before="$(_ufw_count)"
-    ${U_SUDO} ufw delete allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 || true
-    ${U_SUDO} ufw delete allow "${PANEL_PORT}" >/dev/null 2>&1 || true
+    for _ufw_kind in allow limit; do
+        ${U_SUDO} ufw delete "${_ufw_kind}" "${PANEL_PORT}/tcp" >/dev/null 2>&1 || true
+        ${U_SUDO} ufw delete "${_ufw_kind}" "${PANEL_PORT}" >/dev/null 2>&1 || true
+    done
     _ufw_after="$(_ufw_count)"
     if [[ "${_ufw_before:-0}" -gt 0 ]] && [[ "${_ufw_after:-0}" -lt "${_ufw_before}" ]]; then
         ok "Removed the panel's UFW rule for port ${PANEL_PORT} (game-server ports left intact)"
     elif [[ "${_ufw_before:-0}" -gt 0 ]]; then
         warn "The panel's UFW rule for port ${PANEL_PORT} could not be removed."
-        warn "  Remove it with: sudo ufw delete allow ${PANEL_PORT}/tcp"
+        warn "  Remove it with: sudo ufw delete allow ${PANEL_PORT}/tcp   (or: delete limit, if it is a LIMIT)"
     else
         warn "No UFW rule for port ${PANEL_PORT} was found to remove (none present, or ufw could"
         warn "  not be read). Check with: sudo ufw status"
@@ -618,6 +638,32 @@ if [[ "${MODE}" = "system" ]]; then
         fi
     fi
 fi
+
+# ── What stays: host configuration the installer may have added, said out loud ──
+# NodeSource's apt repository, its key and the nodejs pin (install.sh's nodesource_setup, on a host
+# that had no Node 18 or newer) and automatic security updates. They are ordinary host
+# configuration that other software may now rely on — Node.js itself stays installed, and without
+# the repository it would get no more updates — so they are not removed. But this script's header
+# says it removes "everything its installer created", and the host went on trusting a third-party
+# apt source, preferring it for nodejs on every upgrade, with nothing here saying so.
+# Each path is an argument so a test can point it at a fixture.
+_note_left_in_place() {   # <nodesource.sources> <nodesource.gpg> <nodejs pin> <20auto-upgrades>
+    local _f _any=0
+    for _f in "$1" "$2" "$3"; do [[ -e "${_f}" ]] && _any=1; done
+    if [[ "${_any}" -eq 1 ]]; then
+        warn "Left in place: NodeSource's apt repository for Node.js, which this host still trusts"
+        warn "  and prefers for nodejs. Other software may use it; if nothing does, remove it with:"
+        for _f in "$1" "$2" "$3"; do
+            if [[ -e "${_f}" ]]; then warn "    sudo rm -f ${_f}"; fi
+        done
+    fi
+    if [[ -e "$4" ]]; then
+        warn "Left in place: automatic security updates (${4}) — ordinary host configuration."
+    fi
+    return 0
+}
+_note_left_in_place /etc/apt/sources.list.d/nodesource.sources /usr/share/keyrings/nodesource.gpg \
+    /etc/apt/preferences.d/nodejs /etc/apt/apt.conf.d/20auto-upgrades
 
 echo ""
 ok "LinuxGSM Panel has been uninstalled."

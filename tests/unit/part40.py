@@ -501,11 +501,14 @@ def _symlinks40(a_client, sid):
           (body.get("success"), body.get("message"), os.listdir(_OUTSIDE40))
           == (False, _files40.RENAME_REFUSED, ["x.txt"]), repr((code, body)))
     code, body = _post40(a_client, sid, "esc", "esc2")
-    check("rename route: a symlink that leads out of the home is refused, as delete-path refuses "
-          "it — the link stays as it was",
-          (code, body, _link40("esc"), _there40("esc2"))
-          == (200, {"success": False, "message": _files40.RENAME_REFUSED}, _OUTSIDE40, False),
-          repr((code, body)))
+    # This was refused, through _guarded's `realpath -m`, which follows the final link. But `mv`
+    # renames the LINK — it lives in the home and the account owns it — so a stale or outward link a
+    # mod left could be neither renamed nor deleted from the panel. The containment that matters is
+    # _protected_resolved's: the real parent plus the name, which is in the home here.
+    check("rename route: a symlink that leads out of the home is renamed as a link — what it "
+          "points at untouched",
+          (code, body.get("success"), _link40("esc2"), _there40("esc"), os.listdir(_OUTSIDE40))
+          == (200, True, _OUTSIDE40, False, ["x.txt"]), repr((code, body)))
     code, body = _post40(a_client, sid, "lnk", "lnk2")
     check("rename route: a symlink itself is renamed as a link (control) — its target untouched",
           (body.get("success"), _link40("lnk2"), _read40("cfg/a.cfg")) == (True, "cfg", "A"),

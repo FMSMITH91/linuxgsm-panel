@@ -107,7 +107,7 @@ from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, authori
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     encrypt_secret, is_encrypted, harden_data_permissions, read_setup_token, remove_setup_token,
-)
+    autoblock_host_ids)
 from panel.services import notifications
 # The two chat bots. They import nothing from app.py — every dependency they have comes from
 # the module that owns it — so unlike panel.routes.* this needs no lazy import to break a cycle.
@@ -737,12 +737,12 @@ def _monitor_watch(app):
 
 
 def _autoblock_hosts():
-    return set(load_config().get("autoblock_hosts", []) or [])
+    return autoblock_host_ids(load_config().get("autoblock_hosts", []))
 
 
 def _set_autoblock_host(remote_id, enabled):
     def _mut(cfg):   # read-modify-write under the config lock (toggled alongside threshold/whitelist)
-        hosts = set(cfg.get("autoblock_hosts", []) or [])
+        hosts = autoblock_host_ids(cfg.get("autoblock_hosts", []))
         hosts.add(remote_id) if enabled else hosts.discard(remote_id)
         cfg["autoblock_hosts"] = sorted(hosts)
     update_config(_mut)
@@ -995,14 +995,24 @@ def _autoblock_watch(app):
     runtime_stats.loop_started("autoblock", 3600)
     while True:
         time.sleep(3600)
-        host_ids = _autoblock_hosts()
-        if not host_ids:
+        # Every pass in a try, as _monitor_watch's is: this thread is started bare (no _supervise),
+        # so one exception out of a pass ended it for good, silently — no host's block list rolled
+        # again until a restart, while Settings still showed auto-block on.
+        try:
+            _autoblock_pass(app)
             runtime_stats.beat("autoblock", 3600)
-            continue
+        except Exception:
+            runtime_stats.bump("loopfail", "autoblock")
+            _log.debug("autoblock pass failed", exc_info=True)
+
+
+def _autoblock_pass(app):
+    """One hourly pass of _autoblock_watch: reconcile every opted-in host."""
+    host_ids = _autoblock_hosts()
+    if host_ids:
         with app.test_request_context():
             for rid, born in _autoblock_births(host_ids).items():
                 _autoblock_tick_host(rid, born)
-        runtime_stats.beat("autoblock", 3600)
 
 
 def _autoblock_births(host_ids):
@@ -2438,12 +2448,10 @@ def _custom_cmd_form(cmd=None):
 
 def _assign_command_groups(cmd):
     """Set which groups may run this command from the submitted checkboxes."""
-    ids = set()
-    for gid in request.form.getlist("groups"):
-        try:
-            ids.add(int(gid))
-        except (TypeError, ValueError):
-            continue
+    # groups._posted_ids, the one id parse: int() alone took "-5", " 7" and 2**64, and the last
+    # raised OverflowError out of the SQLite driver at the IN (...) below — a 500.
+    from panel.routes.groups import _posted_ids
+    ids = _posted_ids("groups")
     cmd.groups = Group.query.filter(Group.id.in_(list(ids))).all() if ids else []
 
 # ── Security tab (panel host): fail2ban bans, recent security events, raw logs ──
@@ -3264,6 +3272,15 @@ def _serve_scheme_now(stored, conf=None):
 
 
 if __name__ == "__main__":
+    # ONE copy of this module. systemd runs app.py directly, so it is __main__ here, and the route
+    # modules' `from app import ...` (imported lazily, by create_app below) loaded a SECOND copy
+    # under the name "app", with its own globals. State meant to be shared then was not: the
+    # install-reconcile ticker claimed its one host check in __main__'s set while
+    # /api/server/<id>/install-status claimed in app's, so both ran `details` (a full `du`) at once,
+    # and the bind boot resolved was resolved again by the Tailscale routes. Registered before
+    # create_app imports any route module, so every one of them gets this copy.
+    import sys as _sys
+    _sys.modules.setdefault("app", _sys.modules["__main__"])
     app = create_app()
     cfg = load_config()
     port = cfg.get("port", 5000)

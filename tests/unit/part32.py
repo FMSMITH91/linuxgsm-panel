@@ -956,7 +956,10 @@ def _p32_install_ufw():
               for out in ("Status: active\\n\\nTo   Action  From\\n5000/tcp   ALLOW   Anywhere\\n",
                           "Status: active\\n\\n22/tcp   ALLOW   Anywhere\\n"
                           "5000/tcp on tailscale0   ALLOW   Anywhere\\n",
-                          "Status: inactive\\n", "")]
+                          "Status: inactive\\n", "",
+                          "Status: active\\n\\n5000/tcp   ALLOW   100.64.0.0/10\\n",
+                          "Status: active\\n\\n5000/tcp   DENY    Anywhere\\n",
+                          "Status: active\\n\\n5000/tcp   LIMIT   Anywhere\\n5000/tcp (v6)   LIMIT   Anywhere (v6)\\n")]
     sudo_calls = ""
     if os.path.exists(sudo_log):
         with open(sudo_log, encoding="utf-8") as fh:
@@ -964,9 +967,11 @@ def _p32_install_ufw():
     for name in ("ufw", "sudo"):
         os.unlink(os.path.join(_BIN32, name))
     check("install hint: UFW reads open / closed (a tailscale0-only rule is not public) / inactive / "
-          "unknown, and a non-root run asks `sudo -n`, never a prompt",
-          (states, os.geteuid() == 0 or sudo_calls.count("-n ufw status") == 4)
-          == (["open", "closed", "inactive", "unknown"], True), repr((states, sudo_calls)))
+          "unknown — and closed for a rule from one range only (Tailscale's) or a DENY, open for a LIMIT "
+          "from Anywhere — and a non-root run asks `sudo -n`, never a prompt",
+          (states, os.geteuid() == 0 or sudo_calls.count("-n ufw status") == 7)
+          == (["open", "closed", "inactive", "unknown", "closed", "closed", "open"], True),
+          repr((states, sudo_calls)))
 
 
 # ═══ 8. the docs: no hand-written Serve line with an upstream ════════════════════════════════════

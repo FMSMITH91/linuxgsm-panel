@@ -5,7 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core import (clock, terminal)
-from panel.core.panel_state import (_cron_restart_pending)
+from panel.core.panel_state import (_cron_restart_pending, _install_jobs, _install_lock)
 from panel.db.models import (_NO_BIRTH, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER,
     CustomCommand, GameServer, GlobalBan, RemoteServer, User, claim_row, db, row_birth, still_held)
 from panel.ops.ssh_manager import (GAMEDIG_TYPE as GAMEDIG_TYPE_MAP, _resolve_from_console,
@@ -173,6 +173,25 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
     return False, f"'{action}' failed for '{name}': {reason[:280] or 'unknown — check the console'}"
 
 
+def _install_busy_reason(gs):
+    """Why no LinuxGSM action may run on `gs` yet ("still installing" / "not installed"), or None.
+
+    Nothing on the server side repeated the dashboard's rule (dashboard.js: a row is busy while it
+    is not installed, or installing/configuring) — only the per-row buttons are disabled, and the
+    row's bulk checkbox is not. So "Select all on this host" + Update queued a second SteamCMD
+    into the serverfiles the install job was still downloading into, and Restart started a server
+    whose config and ports were not settled. A failed install is not a server to act on either.
+    """
+    with _install_lock:
+        job = _install_jobs.get(gs.id)
+        running = job is not None and job.get("status") == "running"
+    if running or gs.status in ("installing", "configuring"):
+        return "still installing"
+    if not gs.installed:
+        return "not installed"
+    return None
+
+
 def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
     """Execute a whitelisted action (permission already checked).
 
@@ -194,6 +213,10 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
     # start, stop or update in the middle of the stop phase would be a second hand on the same
     # server (panel/services/host_reboot.py). After the reboot is sent, an operator's own Start or
     # Stop wins instead: the server leaves the plan, so the restore never acts behind their back.
+    busy = _install_busy_reason(gs)
+    if busy:
+        # The single routes, the bulk worker and the chat bots all come through here.
+        return False, f"'{gs.name}' is {busy} — '{action}' was not run."
     from panel.services import host_reboot as _hr
     if _hr.reboot_busy(remote.id):
         return False, _hr.BUSY_MESSAGE % remote.display_name
@@ -266,6 +289,9 @@ def _bulk_skip(gs, sid, action):
         return {"server_id": sid, "name": "#%d" % sid, "reason": "not found"}
     if not can_access_server(current_user, sid):
         return {"server_id": sid, "name": gs.name, "reason": "no access"}
+    busy = _install_busy_reason(gs)
+    if busy:
+        return {"server_id": sid, "name": gs.name, "reason": busy}
     # Never run 'update' on a game that has no LinuxGSM update command (e.g. the Call of
     # Duty family) — in a mixed selection those are skipped, not failed.
     if action == "update" and not gs.supports_update:

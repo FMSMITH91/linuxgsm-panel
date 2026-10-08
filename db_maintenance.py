@@ -564,7 +564,15 @@ def repair(path=None, backup=None):
         return False, refusal
 
     aside = _aside(path)
-    kept = (" (original kept at %s)" % os.path.basename(aside)) if aside else ""
+    if not aside:
+        # No copy of the original exists, and both branches below destroy it: the rebuild is
+        # renamed over it and its -wal/-shm deleted, the backup restored over it. The usual reasons
+        # the copy fails are the ones where the original matters most — a bad sector (EIO reading
+        # it: a partial salvage would replace pages ddrescue or .recover could still read) and a
+        # full disk (a small salvage still fits where the full-size copy did not). So stop here;
+        # run_update_maintenance turns this into "leave your data untouched".
+        return False, "could not copy the damaged database aside — not repairing"
+    kept = " (original kept at %s)" % os.path.basename(aside)
     tmp = path + ".rebuilt"
     _silent_rm(tmp)
     # `restored_note` is set when the rebuild was measurably worse than the backup.

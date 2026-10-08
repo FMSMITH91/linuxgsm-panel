@@ -8,9 +8,11 @@ from panel.db.models import (db)
 from panel.ops.ssh_manager import (close_connection, remote_bootstrap_tailscale,
     remote_check_tailscale, remote_install_tailscale, remote_migrate_to_tailscale,
     remote_tailscale_finalize, remote_tailscale_up_url)
-from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required)
+from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action,
+    permission_required)
 from panel.security import privileged as _priv
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
+from panel.core.validation import HOST_RE
 from app import (_refuse_on_panel_host)
 
 # Why migrate and finalize refuse the panel host. Not the generic "it would reboot the panel": they
@@ -33,7 +35,9 @@ def _register_status_and_link_join(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_tailscale_check(remote_id):
         """Check if Tailscale is installed/running on the remote VPS."""
-        remote = get_remote(remote_id)
+        # get_host_remote: on the panel's own host this is superadmin-only — it hands back the host's
+        # tailnet IP and MagicDNS name, which tailscale.py's _sees_panel_host_tailnet hides from others.
+        remote = get_host_remote(remote_id)
         try:
             status = remote_check_tailscale(remote)
             return jsonify({"success": True, **status})
@@ -145,6 +149,51 @@ def _register_finalize_and_install(app):
             return jsonify({"success": False, "message": _log_and_generic("request failed"), "log": ""}), 500
 
 
+def _tsmigrate_refusal(remote):
+    """api_remote_tailscale_migrate's refusals before it touches the host; None when it may run."""
+    # Moves the host record onto Tailscale SSH and then deletes the host's public 22/tcp rule.
+    # For the panel host that is its own firewall, and the record does not decide where its
+    # commands run (is_local does) — nothing about it is a remote's migration.
+    refused = _refuse_on_panel_host(remote, "Tailscale migration", _NOT_A_REMOTE_JOIN)
+    if refused:
+        return refused
+    # Superadmin only, for the reason remotes._delegated_retarget_refusal gives on the edit
+    # form: this REPOINTS the row (its new address is whatever the host's own `tailscale
+    # status` names) and moves it onto the panel's own tailnet identity. A delegated admin who
+    # is root on a host they added with a password could make it report any node of the
+    # panel's tailnet, and the login test would pass — it proves the PANEL can reach that
+    # node, not that the requester may — after which every MANAGE_REMOTES action on "their"
+    # row ran as root on a machine they were never granted.
+    if current_user.is_superadmin:
+        return None
+    log_action(current_user, "remote_tailscale_migrate", target=remote.name,
+               detail="refused: only a superadmin can migrate a host", success=False,
+               remote=remote)
+    return jsonify({"success": False, "message": (
+        "Only a superadmin can move a host onto the panel's Tailscale identity — a "
+        "successful Tailscale login proves the panel can reach the host, not that you "
+        "can. Ask a superadmin to migrate it.")}), 403
+
+
+def _tsmigrate_unusable(new_host, status):
+    """The 400 for a migration that named no usable address; None when `new_host` may be stored."""
+    if not new_host:
+        # `status` is the REASON when the migration refused, and it was being thrown away
+        # for one hardcoded sentence. The reasons are actionable and different from each
+        # other — tailscaled down, SSH server not enabled, ACL refusing this node/user —
+        # and the operator can only act on the one they actually hit.
+        return jsonify({"success": False, "message": (
+            status if isinstance(status, str) and status
+            else "Tailscale is not running on the remote")}), 400
+    if not (isinstance(new_host, str) and HOST_RE.match(new_host)):
+        # The name came from the host's own stdout; it becomes the stored address, which
+        # every later command is built from. Store only what the add form would accept.
+        return jsonify({"success": False, "message": (
+            "The host reported a Tailscale address the panel can't use, so nothing was "
+            "changed.")}), 400
+    return None
+
+
 def _register_key_join_and_migrate(app):
     """Tailscale on a remote: pre-auth-key join, and moving the host record to Tailscale SSH."""
     @app.route("/api/remote/<int:remote_id>/tailscale-bootstrap", methods=["POST"])
@@ -199,23 +248,14 @@ def _register_key_join_and_migrate(app):
     def api_remote_tailscale_migrate(remote_id):
         """After bootstrapping, migrate the RemoteServer record to use Tailscale SSH."""
         remote = get_remote(remote_id)
-        # Moves the host record onto Tailscale SSH and then deletes the host's public 22/tcp rule.
-        # For the panel host that is its own firewall, and the record does not decide where its
-        # commands run (is_local does) — nothing about it is a remote's migration.
-        refused = _refuse_on_panel_host(remote, "Tailscale migration", _NOT_A_REMOTE_JOIN)
+        refused = _tsmigrate_refusal(remote)
         if refused:
             return refused
         try:
             new_host, status = remote_migrate_to_tailscale(remote)
-            if not new_host:
-                # `status` is the REASON when the migration refused, and it was being thrown away
-                # for one hardcoded sentence. The reasons are actionable and different from each
-                # other — tailscaled down, SSH server not enabled, ACL refusing this node/user —
-                # and the operator can only act on the one they actually hit.
-                return jsonify({"success": False, "message": (
-                    status if isinstance(status, str) and status
-                    else "Tailscale is not running on the remote")}), 400
-
+            unusable = _tsmigrate_unusable(new_host, status)
+            if unusable:
+                return unusable
             old_host = remote.host
             remote.host = new_host
             remote.auth_method = "tailscale"

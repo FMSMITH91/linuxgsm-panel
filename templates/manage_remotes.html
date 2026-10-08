@@ -223,7 +223,10 @@
               {% endif %}
             </select>
           </div>
-          <div class="col-md-2" id="edit-cred-group-{{ remote.id }}">
+          {# Hidden from the start for a host already on Tailscale SSH, which uses no credential:
+             toggleEditCreds runs only on a CHANGE of the select, so the preselected option never
+             hid it, and anything typed there was stored for a transport that never reads it. #}
+          <div class="col-md-2" id="edit-cred-group-{{ remote.id }}"{% if remote.auth_method == 'tailscale' %} style="display:none"{% endif %}>
             <label class="form-label" for="manage-remotes-credential-{{ remote.id }}">Credential</label>
             <input id="manage-remotes-credential-{{ remote.id }}" type="password" name="credential" class="form-control" value=""
                    autocomplete="off" placeholder="Leave blank to keep current">
@@ -257,6 +260,10 @@
 </div>
 {% endfor %}
 </div><!-- /#remotes-list -->
+{# Tells manage_remotes.js whether to offer "Migrate to Tailscale SSH" after a join: the migrate
+   route is superadmin-only (it moves the host onto the panel's own tailnet identity). Outside the
+   refreshed list, so an AJAX refresh never drops it. #}
+{% if current_user.is_superadmin %}<span id="ts-migrate-allowed" hidden></span>{% endif %}
 
 {% endblock %}
 

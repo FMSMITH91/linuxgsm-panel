@@ -75,7 +75,7 @@ def _run_ts(args, timeout=5):
         return r.stdout.strip(), r.stderr.strip(), r.returncode
     except FileNotFoundError:
         return "", "tailscale binary not found", -1
-    except subprocess.TimeoutExpired:
+    except _so._SOPS_TIMEOUTS:   # both classes: eventlet's run() raises the original module's
         return "", "tailscale command timed out", -1
     except Exception:
         # Never return str(e): this stderr channel can surface in the /api/tailscale

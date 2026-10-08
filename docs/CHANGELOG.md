@@ -562,6 +562,55 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Findings from a full code review (2026-10-08): fixes.** Every item below has a check that fails
+  without its fix.
+  - **Game servers and alerts.** A batched player poll counted bots and reserved slots instead of
+    people, so a Bedrock server with players on read 0 and sent a false "server emptied" alert. A
+    failed backup no longer runs the cleanup, which deleted one more good backup each time. Server
+    actions, single or bulk, now skip a server that is still installing. During a remote reboot, a
+    server whose state could not be read no longer pages "went offline unexpectedly" before the
+    host is back. In "reboot when everyone has left", an unreadable player count is not "a player
+    joined", and an earlier plan still restoring is not taken for a rollback. The Power card's
+    colour comes from the outcome, not from the words in it.
+  - **The live console.** After a dropped connection, the console catches up from its own place in
+    the log, as a tab returning from the background does. It used to add the last 250 lines a second
+    time. A line that arrived while the first window was loading is no longer lost, and "Load older"
+    is not reverted by the next poll. A game line that happens to be exactly "Done" or "Saved" is no
+    longer translated.
+  - **Files and settings.** A folder that is a symbolic link (LinuxGSM's own `log/server`, or a
+    `serverfiles` moved to another disk) is listed and opened as a folder. Saving or uploading onto a
+    folder's name fails instead of moving the file inside it. Deleting or renaming a link that leads
+    outside the home acts on the link. Deleting a folder closes an open editor inside it. The Config
+    form no longer offers `logtimestamp`, which freezes the console, and the config writer refuses
+    turning it on. A config save sets every line of a key written twice, so the copy LinuxGSM reads changes too.
+    "Run now" on a remote records its result when the command ends in a `#` comment.
+  - **Hosts.** The firewall lockout guard protects the port sshd really listens on, not a leftover
+    22 rule. A mistyped timezone or an over-long account name is refused before host setup starts,
+    instead of stopping it halfway with the firewall and SSH hardening unapplied. Host setup no longer
+    locks an account it could not confirm it created, and no longer reports a reboot that never
+    happened as "back online". A reboot that was never sent is not waited on. One server with a
+    non-numeric port no longer breaks metrics for every host. The GMod content mount fails when the
+    read grant fails, instead of saying "Mounted".
+  - **Panel.** Renaming the default "Everyone" group no longer creates a second default group with
+    console access on the next restart. The database repair stops if it cannot first keep a copy of
+    the original. A fail2ban reconfigure that could not write its files says so, instead of reporting
+    the old jail as updated. A git, sudo or `systemctl` timeout is reported as a timeout instead of an
+    error page. The auto-block watcher survives a bad setting and logs it. The Ubuntu Pro cache no
+    longer expires early or late on a host not set to UTC. The first-run wizard applies the same
+    username rules as everywhere else. Group ids in the user and invite forms are parsed safely. A host that cannot reach GitHub no longer
+    waits up to 10 seconds for the game list on every page that needs it.
+  - **Debug report.** A service read that times out no longer fails the whole Diagnostics section,
+    and is not reported as "no unit file". A group or tag named with one of the report's own words
+    no longer rewrites its text. The journal read without the helper no longer scans the whole
+    journal, and the SSH failure count includes the rotated log.
+  - **Pages.** The GMod Apply button, the Power card's reboot polling, the Install Tailscale button
+    and the setup wizard's Tailscale step recover from a failed request. A Tailscale host's edit form
+    hides the credential field from the start. An invite link is no longer presented as a one-time
+    password. Enter in the Tailscale mount-point field no longer reloads the page.
+  - **Install and uninstall.** The install banner no longer calls a blocked port open. The
+    uninstaller removes a rate-limited (`LIMIT`) panel port rule and names the NodeSource repository
+    it leaves in place.
+
 - **The file browser fits a phone inside a folder with a long name, and its path shows a name's
   spaces.** The path and the Upload / Upload folder buttons shared one row that could not wrap or
   shrink. On a 375px phone, inside a folder named `hang44-wwwwwwwwwwwwww`, Upload folder ended 8px
@@ -1765,6 +1814,43 @@ CI-verified commit regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+
+- **Findings from a full code review (2026-10-08): security.** Every item below has a check that
+  fails without its fix.
+  - **"Disable public SSH" on a remote host could lock you out.** The panel decided that the host
+    let SSH in over Tailscale if the word "tailscale" appeared anywhere in its firewall rules, so an
+    `ALLOW OUT` rule, a `DENY IN`, or a comment was enough. It now reads the rules in the order the
+    firewall applies them, on the host's real Tailscale interface, and answers "not safe" on any
+    doubt, as the panel's own host already did. On the panel's own host, the rule list no longer
+    drops rows whose comment has parentheses, or IPv6-only rows, so a `DENY` on the tailnet
+    interface is seen.
+  - **A delegated admin could point a host at another tailnet machine with "Migrate to Tailscale
+    SSH".** The new address came from the host's own answer and was never checked. Migration now
+    needs a superadmin, as adding a host on the panel's Tailscale identity already did, and the
+    button is shown only to superadmins.
+  - **The sign-in code step has a per-account limit.** Wrong codes at sign-in now count
+    against the same per-account budget every other code check uses, not only the per-address one.
+  - **File-browser reads as a root-capable account are refused**, as writes already were. A legacy
+    server bound to the host's sudo login no longer hands its `~/.ssh` keys or shell history to
+    someone who may only manage that server's files.
+  - **Panel-host details stay superadmin-only on the remote-host pages.** The tailnet check, bans,
+    top addresses, firewall view, SSH status, update check and Ubuntu Pro status of the panel's own
+    host now refuse a delegated admin, as the rest of that host does, and the page no longer shows
+    them those cards.
+  - **The privileged helper deletes a home folder only for an account it removed**, and only through
+    paths it has resolved without following a link the panel user could plant. When it cannot read
+    the sudo policy, it no longer assumes the caller is already root.
+  - **The uninstaller runs from a root-owned copy.** A root install now keeps `uninstall.sh` beside
+    the recovery command in `/usr/local/lib/linuxgsm-panel/`, and the README and the script point
+    root there, not at the panel's own checkout, which the panel user can edit. The end-of-install
+    lockout hint no longer has root run scripts from the checkout either.
+  - **The `curl … | bash` installer only uses the current folder when it is that installer's own
+    tree.** Run from an old clone or any other Flask project, it used that folder as the panel's
+    source, which could downgrade the panel or install another project as the service.
+  - **The Add Remote form hides the SSH password as you type it**, and the browser no longer saves
+    it as an ordinary form entry.
+  - **The debug report's secret protection now covers the configured secrets themselves**, not
+    their encrypted form.
 
 - **A stored server name is never put into the account check's shell text (GHSA-hh39-76g3-wxcx,
   reopened).** The check the panel runs before deleting a server's account, writing its files or

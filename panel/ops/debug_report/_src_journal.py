@@ -16,7 +16,8 @@ read(max_lines=5000, timeout=10) -> dict
        counts toward pam_faillock.
     3. Otherwise: `journalctl _SYSTEMD_USER_UNIT=linuxgsm-panel.service _UID=<uid> -q`, filtered
        the same way, which an adm or systemd-journal member can read unprivileged. _UID keeps out
-       another account's same-named user unit (a second install on the same machine).
+       another account's same-named user unit (a second install on the same machine). Its plain
+       read is a forward window too (_PLAIN_FIELD_SINCE), never `-n`: see WHY A WINDOW.
 
     WHY FILTERED. Every privileged call the panel makes writes three lines into its own unit's
     journal (sudo's COMMAND line, pam_unix's session opened and closed). On the live host that was
@@ -78,6 +79,12 @@ _CONTINUED_RE = re.compile(r"^[ \t]")
 # The share of the time left that a FILTERED read may spend, so the plain read after it always has
 # the rest (see WHY A WINDOW).
 _FILTERED_SHARE = 0.5
+# The window of step 3's PLAIN read (field matches on the SYSTEM journal, unprivileged). It was
+# `-n N`, which walks back from the end until N entries match: on a quiet panel, whose 24 h
+# filtered read found nothing, that is the whole multi-GB system journal (315 s+ on the test VPS),
+# so the budget ran out and the report said "no journal readable". A forward window is bounded
+# whatever the journal's size; full, it is cut (the window's oldest N), as a filtered read is.
+_PLAIN_FIELD_SINCE = "-7d"
 
 
 def user_unit_matches(uid):
@@ -133,24 +140,28 @@ def _privileged_allowed(so):
 
 
 def _first_lines(reads, n):
-    """Run the (filtered, read) pairs in order until one has content: (lines, filtered, state, cut).
+    """Run the (filtered, read[, windowed]) reads in order until one has content.
+
+    Returns (lines, filtered, state, cut).
 
     A filtered read that came back FULL -- `n` entries, the oldest n of its window, so its newest
     are past them -- gives way to the plain read after it, which reads the newest n. The full read
     is the answer only when that one has nothing, and then it is `cut`: the window's oldest n.
+    `windowed` marks a plain read that is a forward window too (see read()): full, it is cut the
+    same way.
     """
     state, full = "not read", None
-    for filtered, run in reads:
+    for filtered, run, *windowed in reads:
         out, err, rc = run()
         lines = content_lines(out)
-        if filtered and entry_count(lines) >= n:
-            full = full or lines
+        if (filtered or any(windowed)) and entry_count(lines) >= n:
+            full = full or (lines, filtered)
             continue
         if lines:
             return lines, filtered, None, False
         state = _state(out, err, rc)
     if full:
-        return full, True, None, True
+        return full[0], full[1], None, True
     return [], False, state, False
 
 
@@ -185,12 +196,13 @@ def read(max_lines=5000, timeout=10):
     def share():
         return max(0.5, left() * _FILTERED_SHARE)
 
-    def jctl(pre, matches=(), window=None):
+    def jctl(pre, matches=(), window=None, since=None):
         # The options BEFORE the matches: journalctl reads a stray option after them as a match
         # when POSIXLY_CORRECT is set. The unit reads keep the argv they always had. A filtered
-        # read (`window`, a privileged.JOURNAL_SINCE name) is bounded by its window and its share.
-        limit = (["--since=" + _priv.JOURNAL_SINCE[window], "--lines=+" + n] if window
-                 else ["-n", n])
+        # read (`window`, a privileged.JOURNAL_SINCE name) is bounded by its window and its share;
+        # `since`, a plain read bounded the same forward way (_PLAIN_FIELD_SINCE).
+        since = _priv.JOURNAL_SINCE[window] if window else since
+        limit = ["--since=" + since, "--lines=+" + n] if since else ["-n", n]
         return lambda: so._debug_run(["journalctl"] + list(pre) + ["-q"] + limit + ["--no-pager"]
                                      + list(matches),
                                      timeout=share() if window == "panel-own" else left())
@@ -213,7 +225,8 @@ def read(max_lines=5000, timeout=10):
     else:
         got = _first_lines(
             [(True, jctl([], user_unit_matches(uid), "panel-own")),
-             (False, jctl(["_SYSTEMD_USER_UNIT=%s" % _SERVICE, "_UID=%d" % uid]))], int(n))
+             (False, jctl(["_SYSTEMD_USER_UNIT=%s" % _SERVICE, "_UID=%d" % uid],
+                          since=_PLAIN_FIELD_SINCE), True)], int(n))
         if got[0]:
             return _found("user-unit", got, jctl([], user_unit_sudo_matches(uid), "panel-sudo"))
         tried.append("system journal for this account's unit: " + got[2])
