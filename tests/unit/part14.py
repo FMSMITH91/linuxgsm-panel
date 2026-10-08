@@ -108,7 +108,6 @@ check("js coverage: missed runs are consecutive executable lines with no hits, l
 # every static/js/*.js in its report. A file there whose name the upload would refuse would stop
 # the whole JavaScript upload; one the harness's URL pattern would not match would read as never
 # loaded. Both patterns, against every file actually there.
-_run_src = open(os.path.join(_JC_DIR, "run.py"), encoding="utf-8").read()
 _drv_src = open(os.path.join(_JC_DIR, "driver.py"), encoding="utf-8").read()
 _cc_src14 = open(os.path.join(_root, ".github", "workflows", "codacy-coverage.yml"),
                 encoding="utf-8").read()

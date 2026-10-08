@@ -130,7 +130,7 @@ def cleanup():
         try:
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
         except OSError:
-            pass
+            pass  # cleanup only: a config it cannot restore must not hide the result
 
 
 def _run_setup_token(raw=True):
@@ -162,7 +162,7 @@ def _check_tty_safe():
             with contextlib.redirect_stdout(_o):
                 fn(*a)
         except SystemExit:
-            pass
+            pass  # the command exits; its output is what is checked
         return _o.getvalue()
 
     _esc_name = "\x1b[1A\x1b[2K\x1b]52;c;ZWNobyBoaQ==\x07zz"
@@ -347,7 +347,6 @@ try:
           exited and "already exists" in msg, msg[:60])
 
     # ── 6. The interactive menu accepts a number or a name ────────────────────────────────────
-    _real_input = manage.input if hasattr(manage, "input") else None
     import builtins
     import contextlib
     import io

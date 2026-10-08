@@ -2163,7 +2163,7 @@ try:
         _down_once10 = _sweep10({"reachable": False}, dict(_UP10, ports=set()))
         check("monitor pass: one sweep with the port shut is not yet an outage",
               "server_down" not in _down_once10, repr(_down_once10))
-        _down10 = _sweep10({"reachable": False}, dict(_UP10, ports=set()))
+        _sweep10({"reachable": False}, dict(_UP10, ports=set()))
         check("monitor pass: a server that stops listening alerts 'offline' — unless muted",
               [a for a in _alerts10 if a[0] == "server_down"]
               == [("server_down", "Server offline", "gmod1 on beta went offline unexpectedly.")],
@@ -2171,7 +2171,7 @@ try:
         check("monitor pass: the status COLUMN follows what the sweep measured",
               _db10.session.get(_GS10, _ids10["g1"]).status == "offline"
               and _db10.session.get(_GS10, _ids10["g2"]).status == "installing", "")
-        _up10 = _sweep10({"reachable": False}, dict(_UP10))
+        _sweep10({"reachable": False}, dict(_UP10))
         check("monitor pass: it coming back alerts 'back online' (the muted one stays quiet)",
               [a[2] for a in _alerts10 if a[0] == "server_up"] == ["gmod1 on beta is back online."],
               repr(_alerts10))
@@ -3925,7 +3925,7 @@ try:
     _wl_net10 = _app10mod._security_whitelist_add("198.51.100.0/24")
     check("app whitelist: an address is stored canonical; a zone id (a line break in a jail file) "
           "is refused", _wl_ok10 == "203.0.113.7" and _wl_zone10 is None
-          and _wl_zone_only10 is None
+          and _wl_zone_only10 is None and _wl_net10 == "198.51.100.0/24"
           and _acfg10["security_whitelist"] == ["198.51.100.0/24", "203.0.113.7"],
           repr(_acfg10.get("security_whitelist")))
     _wl_rm10 = _app10mod._security_whitelist_remove("203.0.113.7")
@@ -4030,8 +4030,7 @@ try:
         _css2_10 = _mk_gs10(_ea10, "css2", game_type="css", port=27016)
         _css3_10 = _mk_gs10(_we10, "css3", game_type="css", port=27015)
         _gm10 = _mk_gs10(_we10, "gmodx", game_type="rust", port=28015)
-        _css_off10 = _mk_gs10(_we10, "css4", game_type="css", port=27030, installed=False,
-                              status="failed")
+        _mk_gs10(_we10, "css4", game_type="css", port=27030, installed=False, status="failed")
         _E10 = {"ea": _ea10.id, "we": _we10.id, "lo": _lo_row10.id, "css1": _css1_10.id,
                 "css2": _css2_10.id, "css3": _css3_10.id, "gm": _gm10.id}
 
@@ -4204,10 +4203,10 @@ try:
         _db10.session.add_all([_User10(username="boss", password_hash="x", is_superadmin=True),
                                _User10(username="pleb", password_hash="x"),
                                _User10(username="boss2", password_hash="x", is_superadmin=True)])
-        for _i10 in range(5):
+        for _ in range(5):
             _db10.session.add(_Audit10(username="boss", action="login_failed"))
             _db10.session.add(_Audit10(username="pleb", action="login_failed"))
-        for _i10 in range(4):
+        for _ in range(4):
             _db10.session.add(_Audit10(username="boss2", action="login_failed"))
         _db10.session.commit()
         _bf10 = []
@@ -4719,7 +4718,7 @@ def _ca13_add_probes(app):
     """Routes for the response hooks and error handler; added before the app's first request."""
     app.add_url_rule("/_p13/big", "p13_big", _ca13_probe_big)
     app.add_url_rule("/_p13/small", "p13_small", lambda: {"ok": True})
-    app.add_url_rule("/_p13/ip", "p13_ip", lambda: _req13.remote_addr or "")
+    app.add_url_rule("/_p13/ip", "p13_ip", lambda: {"ip": _req13.remote_addr or ""})   # JSON, not HTML
     app.add_url_rule("/_p13/boom", "p13_boom", _raiser10(RuntimeError("page view bug")))
     app.add_url_rule("/api/_p13/boom", "p13_api_boom", _raiser10(RuntimeError("api view bug")))
     app.add_url_rule("/api/_p13/unauth", "p13_unauth", lambda: _abort13(401))
@@ -4824,8 +4823,8 @@ def _ca13_check_proxy(app, client):
     """trust_proxy puts ProxyFix in front, inside the ban gate, and the client IP is the hop's."""
     names = [type(w).__name__ for w in _ca13_wsgi_chain(app)]
     fix = [w for w in _ca13_wsgi_chain(app) if type(w).__name__ == "ProxyFix"]
-    got = client.get("/_p13/ip", environ_base={"REMOTE_ADDR": "127.0.0.1"},
-                     headers={"X-Forwarded-For": "198.51.100.7"}).get_data(as_text=True)
+    got = (client.get("/_p13/ip", environ_base={"REMOTE_ADDR": "127.0.0.1"},
+                      headers={"X-Forwarded-For": "198.51.100.7"}).get_json(silent=True) or {}).get("ip")
     check("create_app: trust_proxy wraps the app in ProxyFix (one hop), inside the ban gate",
           all((app.config.get("_TRUST_PROXY") is True, names[:2] == ["ProxiedBanGate", "ProxyFix"],
                bool(fix) and fix[0].x_for == 1, got == "198.51.100.7")), repr((names, got)))

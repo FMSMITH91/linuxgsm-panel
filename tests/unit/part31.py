@@ -977,10 +977,10 @@ def _check_report31():
 
 
 def _check_journal31():
-    lines = ["Oct 02 08:40:11 host systemd[1203]: linuxgsm-panel.service: Failed to kill control "
-             "group /user.slice/x/linuxgsm-panel.service, ignoring: Operation not permitted",
-             "Oct 02 08:40:11 host systemd[1203]: linuxgsm-panel.service: Unit process 4242 (java) "
-             "remains running after unit stopped.",
+    lines = [("Oct 02 08:40:11 host systemd[1203]: linuxgsm-panel.service: Failed to kill control "
+              "group /user.slice/x/linuxgsm-panel.service, ignoring: Operation not permitted"),
+             ("Oct 02 08:40:11 host systemd[1203]: linuxgsm-panel.service: Unit process 4242 (java) "
+              "remains running after unit stopped."),
              "Oct 02 08:40:16 host python3[77]: LinuxGSM Panel starting on 127.0.0.1:5000"]
     ctx = _Ctx31()
     with _swap31(_sj31, read=lambda max_lines=5000, timeout=10: {"source": "helper",

@@ -576,7 +576,7 @@ if _osu:
             if _ho_done_marker in _olog:
                 break
         except OSError:
-            pass
+            pass  # not written yet: poll again
         _time.sleep(0.2)
     check("os update: the log opens with a dated header", _olog.startswith("=== OS update started"),
           _olog[:60])
@@ -614,7 +614,7 @@ if _osu:
             if _ho_done_marker in _osftxt:
                 break
         except OSError:
-            pass
+            pass  # not written yet: poll again
         _time.sleep(0.2)
     check("os update: and it writes a FAILURE sentinel, so the popup stops waiting",
           (_ho_done_marker + "-1") in _osftxt, repr(_osftxt))
@@ -1198,7 +1198,7 @@ try:
         try:
             _dbo._db_repair_detached(_dbo_db)
         except _DboExit:
-            pass
+            pass  # the stubbed exit ends the repair here
         return [c for c in _dbo_calls if "repair" in c[0]]
 
     _dbo_rep = _dbo_drive()
@@ -1275,15 +1275,15 @@ try:
           _dbo_notmine == [], repr(_dbo_notmine))
     # A drop that does not take must stop the repair, not let it carry on as root.
     _dbo._drop_to = lambda pw, own_groups=False: False
-    _dbo_raised = False
+    _dbo_raised, _dbo_other = False, None
     try:
         _dbo_pre()
     except OSError:
         _dbo_raised = True
-    except Exception:
-        pass
+    except Exception as _e:
+        _dbo_other = _e
     check("db-repair: a drop that does not take raises in the child instead of running as root",
-          _dbo_raised)
+          _dbo_raised, "raised %r, not OSError" % (_dbo_other,))
     # And with no account at all, nothing is stopped and nothing is repaired.
     _dbo._db_repair_account = lambda p: None
     _dbo_drive()
@@ -1595,7 +1595,7 @@ def _rm_nowrite_tmp():
     try:
         os.rmdir(_NOWRITE_TMP)
     except OSError:
-        pass
+        pass  # cleanup only
 
 
 atexit.register(_rm_nowrite_tmp)
@@ -1605,10 +1605,10 @@ def _needs_tmpfile(repo, ref, env=None):
     """(premise) `repo`'s first-parent line from `ref` is over 128 KiB, and under _NOWRITE_TMP bash
     cannot write a here-string of it — so the checks run under it can tell a stream from either
     shape that fails."""
-    _r = _rs_sub.run(["bash", "-c", 'l="$(git -C "$1" rev-list --first-parent "$2")"\n'
-                      '[ "${#l}" -gt 131072 ] || { echo "only ${#l} bytes"; exit 2; }\n'
-                      'cat <<< "$l" > /dev/null 2>&1 && { echo "here-string written"; exit 3; }\n'
-                      'exit 0\n', "_", repo, ref],
+    _r = _rs_sub.run(["bash", "-c", ('l="$(git -C "$1" rev-list --first-parent "$2")"\n'
+                                     '[ "${#l}" -gt 131072 ] || { echo "only ${#l} bytes"; exit 2; }\n'
+                                     'cat <<< "$l" > /dev/null 2>&1 && { echo "here-string written"; exit 3; }\n'
+                                     'exit 0\n'), "_", repo, ref],
                      capture_output=True, text=True, env=dict(env or os.environ, TMPDIR=_NOWRITE_TMP))
     return _r.returncode == 0, "rc=%s %s (euid %d, TMPDIR=%s)" % (
         _r.returncode, _r.stdout.strip(), os.geteuid(), _NOWRITE_TMP)
@@ -1645,7 +1645,6 @@ try:
         _f.write("#!/bin/bash\n%s\n" % _RS_FLOOR_LINE)
     _rs_git("add", "-A", cwd=_rs_up)
     _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
-    _rs_first = _rs_git("rev-parse", "HEAD", cwd=_rs_up)
 
     def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None, seed=None,
                  env=None, up=None, branch="main", floor=None, floor_seed=None, run_env=None,
@@ -2167,7 +2166,6 @@ _g_i = _inst.find('if { [[ "${HELPER_OK}"')
 _g_j = _inst.find("chmod 440 /etc/sudoers.d")
 check("install.sh: the sudoers grant block is where this gate expects it",
       _g_i != -1 and _g_j > _g_i, "start=%d end=%d" % (_g_i, _g_j))
-_narrow = _inst[_g_i:_g_j] if (_g_i != -1 and _g_j > _g_i) else ""
 # Scanned as the LINES THAT ARE WRITTEN, not as the whole block. The block's comments explain what
 # the grant deliberately excludes, and naming `sudo -u` or `/bin/bash` in prose must not read as
 # granting them — but the substring scan said it did. Extracting the echoed lines is also the
@@ -3253,10 +3251,10 @@ try:
                                           '      -r "${PANEL_DIR}/requirements.txt"\n'
                                           "  pip install --require-hashes --only-binary :all: "
                                           "-r x.txt\n") == ([], [
-                                              'pip" install --quiet -r '
-                                              '"${PANEL_DIR}/requirements.txt"',
-                                              "pip install --require-hashes --only-binary :all: "
-                                              "-r x.txt"]))
+                                              ('pip" install --quiet -r '
+                                               '"${PANEL_DIR}/requirements.txt"'),
+                                              ("pip install --require-hashes --only-binary :all: "
+                                               "-r x.txt")]))
 
     # origin: the URL the root-owned installs are taken from, compared against this file's own
     # REPO_URL — which the panel cannot edit, because install.sh runs from outside the checkout.
@@ -4484,8 +4482,8 @@ check("helper: lgsm-discover reports only real instances — no record forged by
       sorted(tuple(_l.split("|")[1:3]) + (len(_l.split("|")),) for _l in _disc_lines)
       == [("csgoserver", "csgoserver", 8), ("gmodserver", "gmodserver-2", 8)],
       repr(_disc_lines))
-check("helper: lgsm-discover emits a FOUND line for an installed instance",
-      _disc_line.startswith("FOUND|"), repr(_disc_line[:120]))
+check("helper: lgsm-discover emits a FOUND line for an installed instance, and exits 0",
+      _rc_disc == 0 and _disc_line.startswith("FOUND|"), "rc=%r %r" % (_rc_disc, _disc_line[:120]))
 _disc_parts = _disc_line.split("|")
 check("helper: lgsm-discover emits the 8 fields ssh_manager splits on",
       len(_disc_parts) >= 8, "%d fields: %r" % (len(_disc_parts), _disc_line[:120]))
@@ -4579,6 +4577,18 @@ check("coverage: CodeQL's Python job fails when panel-helper or the tests are mi
       "steps.analyze.outputs.db-locations" in _cq_gate and "src.zip" in _cq_gate
       and '"tools/panel-helper"' in _cq_gate and '"tests/unit_test.py"' in _cq_gate
       and "sys.exit(1)" in _cq_gate and "id: analyze" in _cq_wf, _cq_gate[:120])
+# CodeQL cannot read a suppression comment, so two rules whose every finding in tests/ was read and
+# found deliberate are dropped from its SARIF between the analysis and the upload — for tests/ only.
+_cq_code = "\n".join(_l for _l in _cq_wf.splitlines() if not _l.lstrip().startswith("#"))
+_cq_at = [_cq_code.find(_k) for _k in ("upload: never", "Leave out two deliberate test patterns",
+                                       "uses: github/codeql-action/upload-sarif@")]
+_cq_filter = re.findall(r'\.ruleId \| IN\(([^)]*)\)', _cq_code)
+check("coverage: CodeQL's own upload follows a filter that drops two named rules, under tests/ only",
+      -1 not in _cq_at and _cq_at == sorted(_cq_at) and _cq_code.count("upload: never") == 1
+      and _cq_filter == ['"py/file-not-closed", "py/overly-permissive-file"']
+      and 'artifactLocation.uri | startswith("tests/")' in _cq_code
+      and 'category: "/language:${{ matrix.language }}"' in _cq_code[_cq_at[2]:],
+      repr((_cq_at, _cq_filter)))
 
 # ── No source file carries a literal bidi control, zero-width or line-separator character ──────
 # They make a line read differently from how it runs ("Trojan Source", CVE-2021-42574), and a test
@@ -6857,7 +6867,6 @@ _unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
 # summary), and splitting on the first occurrence puts the whole cleanup block on the wrong side
 # — which is how this check first reported a fix that was already in place.
 _uninst_cut = _uninst.rindex('if [[ "${MODE}" = "system" ]]; then')
-_uninst_sys = _uninst[_uninst_cut:]
 _uninst_common = _uninst[:_uninst_cut]
 _user_created = ["/usr/local/lib/linuxgsm-panel", "/etc/cron.d/lgsm-node-tools",
                  "/usr/local/bin/linuxgsm-panel-recover"]
@@ -8644,7 +8653,7 @@ try:
     # was reverted (F) before the merge, and G, its final state. E, F and G are ancestors of main
     # only through the merge's SECOND parent — main was never at any of them — while the merge
     # commit M is on main's own (first-parent) line.
-    _dp_before = _dp_commit(_dp_inst("BEFORE-MERGE-INSTALLER"), "main before the merge")
+    _dp_commit(_dp_inst("BEFORE-MERGE-INSTALLER"), "main before the merge")
     _dp_git("checkout", "-q", "-b", "side")
     _dp_side = [_dp_commit(_dp_inst("INTERMEDIATE-INSTALLER"), "E: intermediate"),
                 _dp_commit(_dp_inst("BEFORE-MERGE-INSTALLER"), "F: E reverted"),
@@ -9737,7 +9746,7 @@ try:
     # Now the foxtrot (as in the fixture above): O1 on another branch from B2, X merges main (S1)
     # into it, and main fast-forwards to X. B2 is on X's first-parent line.
     _fp_git("-C", _sw_up, "checkout", "-q", "-b", "other", _sw_b2)
-    _sw_o1 = _sw_commit("O1")
+    _sw_commit("O1")
     _fp_git("-C", _sw_up, "merge", "-q", "--no-ff", "-m", "X", "main")
     _fp_git("-C", _sw_up, "checkout", "-q", "main")
     _fp_git("-C", _sw_up, "merge", "-q", "--ff-only", "other")
@@ -9808,7 +9817,7 @@ try:
                     if "=== installer exit" in _uc_fh.read():
                         break
             except OSError:
-                pass
+                pass  # not written yet: poll again
             _time.sleep(0.1)
         return _uc_read(pd)
 
@@ -10468,7 +10477,7 @@ try:
         try:
             _bad6.append((_h6, _tsm6._ssh_argv(_HostileRemote6(_h6))))
         except _core6.UnsafeSshDestination:
-            pass
+            pass  # refused: the outcome wanted
         except Exception as _e6:            # refused, but not by the check this is about
             _bad6.append((_h6, repr(_e6)))
     check("terminal: a hostile remote host is refused — never handed to ssh", not _bad6,
@@ -10848,7 +10857,7 @@ try:
             return (_loglines6, "", 0)
         return _ab_run6(verb, args, **k)
     SO._run_verb = _ab_run6b
-    _res6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    _mon6._autoblock_reconcile(_FakeRemote6())
     _blocked6 = {a[0] for v, a in _ab_verbs6 if v == "ufw-deny-ip"}
     check("autoblock: every address over the threshold is blocked, not just the top 100",
           _blocked6 == set(_wave6), "blocked %d of %d" % (len(_blocked6 & set(_wave6)), len(_wave6)))
@@ -11265,7 +11274,7 @@ for _fd, _owner in ((_lk_w, None), (_lk2_w, None), (_lk_r, _lk_sess), (_lk2_r, _
         try:
             os.close(_fd)
         except OSError:
-            pass
+            pass  # already closed
 _tsmod._PUMP_JOIN = _lk_saved_join
 
 # ...and a pump that DOES retire ends the wait as soon as it returns, which is what the join gave:
@@ -11377,7 +11386,7 @@ try:
             _tsmod7.open_session("leak-%d" % _i7, _FailRemote7(), True, user_key=1,
                                  on_output=lambda s, d: None, on_exit=lambda s, r: None)
         except Exception:
-            pass
+            pass  # a failed start raises; the descriptors are what is measured
     _after7 = _open_fds7()
 finally:
     _tsmod7.subprocess.Popen = _saved_popen7
@@ -11544,7 +11553,7 @@ _sess7.close("done")
 try:
     os.close(_ds7)
 except OSError:
-    pass
+    pass  # already closed
 check("terminal: a character split across two reads survives intact",
       "\ufffd" not in _seen7 and _seen7.count("─") == 3,
       "the pump emitted %r — a box-drawing run, an accented name or an emoji in a MOTD arrives "
@@ -11721,7 +11730,7 @@ finally:
     try:
         _tsmod7.close_for_sid("ctty-sid", "test over")
     except Exception:
-        pass
+        pass  # cleanup only
 
 # ── the update card's count and its list must be the same set ─────────────────────────────────
 # Reported from a live panel: "Update available: v0.10.0-alpha (1 commit behind)" with no commits

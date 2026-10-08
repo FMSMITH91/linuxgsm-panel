@@ -3337,10 +3337,10 @@ finally:
     os.environ.update(_pb_env_saved)
 # _scrub_environ, as the __main__ block runs it: in a child, so this process keeps its own.
 _r = _pb_sp.run([_pb_sys.executable, "-I", "-c",
-                 "import importlib.machinery as m, importlib.util as u, os, sys\n"
-                 "l = m.SourceFileLoader('h', sys.argv[1])\n"
-                 "h = u.module_from_spec(u.spec_from_loader('h', l)); l.exec_module(h)\n"
-                 "h._scrub_environ(); print(sorted(os.environ.items()))",
+                 ("import importlib.machinery as m, importlib.util as u, os, sys\n"
+                  "l = m.SourceFileLoader('h', sys.argv[1])\n"
+                  "h = u.module_from_spec(u.spec_from_loader('h', l)); l.exec_module(h)\n"
+                  "h._scrub_environ(); print(sorted(os.environ.items()))"),
                  os.path.join(_pb_root, "tools", "panel-helper")],
                 capture_output=True, text=True, check=False, timeout=30,
                 env={"BASH_ENV": "/x", "FOO": "1", "SUDO_UID": "5", "PATH": "/tmp:/usr/bin"})  # nosec B108 - hostile env the scrub must drop

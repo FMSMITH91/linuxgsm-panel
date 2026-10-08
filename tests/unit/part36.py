@@ -599,7 +599,7 @@ def _f4_port_read36(rid):
           and _p9_row(sid).status == "online", repr((_fin36, _p9_row(sid).status)))
     check("F4 install: ...and the post-start re-open opens that port, under this server's name",
           _opened36("post") == [[25565]], repr(_ufw36))
-    sid = _install36(rid, "p36pr2", 27710, listen=[set()])
+    _install36(rid, "p36pr2", 27710, listen=[set()])
     msg, warn = _fin36[-1] if _fin36 else ("", None)
     check("F4 install: with no port from LinuxGSM before or after the first start, the install "
           "says the port is unconfirmed — not that the server will show online once it opens "

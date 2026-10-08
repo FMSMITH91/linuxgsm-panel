@@ -13,11 +13,10 @@
 # database it analysed.
 #
 # One test file is left out, tests/smoke_test.py, for time alone. It is a single 1 MB module of
-# top-level code, and the Python extractor did not finish it: the first run with tests/ in scope
-# hit the job's 20-minute limit with every other file extracted (the largest after it, the 750 KB
-# tests/unit/part06.py, took 133 s; the whole Python analysis of main takes about 80 s), and a
-# probe with no time limit was still extracting it after 30 minutes. Bandit, Semgrep (which reads
-# it whole: see security-code.yml) and SonarCloud still analyse it.
+# top-level code, and the Python extractor took 1,446 s (24 minutes) on it alone, measured by a
+# probe run with no time limit: the whole Python analysis took 50 minutes with it and 9.5 without.
+# The next largest file, the 750 KB tests/unit/part06.py, takes about 2 minutes. Bandit, Semgrep
+# (which reads it whole: see security-code.yml) and SonarCloud still analyse it.
 name: "linuxgsm-panel CodeQL config"
 
 paths-ignore:

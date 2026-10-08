@@ -77,7 +77,7 @@ check(_n_js >= 20, "sweep: the static/js/ scan found files to read",
 # so Jinja inside it cannot produce the syntax error this check exists to prevent.
 _INLINE_SCRIPT = re.compile(
     r"<script\b(?![^>]*\bsrc=)(?![^>]*\btype=\"(?:application|text)/(?!javascript)[\w.+-]+\")"
-    r"[^>]*>(.*?)</script>", re.S)
+    r"[^>]*>(.*?)</script>", re.S | re.I)      # re.I: <SCRIPT> is a script too, and was not checked
 _jinja_in_js = []
 for _name, _src in srcs.items():
     if not _name.endswith(".html"):
@@ -1687,7 +1687,7 @@ def _branch_paths(src):
 # emits id="ts-out" in three branches of one function, each of which returns. Blank the script
 # bodies out (keeping the byte count, so offsets and the Jinja scan stay aligned) and judge only
 # the markup the template actually renders.
-_SCRIPT_BODY = re.compile(r"(<script\b[^>]*>)(.*?)(</script>)", re.S)
+_SCRIPT_BODY = re.compile(r"(<script\b[^>]*>)(.*?)(</script>)", re.S | re.I)
 
 
 def _without_scripts(src):
@@ -1788,7 +1788,7 @@ check(not _csp_dead,
       "CSP: no inline on*= handler anywhere (the policy blocks them; the click does nothing)",
       "; ".join(_csp_dead[:5]))
 
-_SCRIPT_TAG = re.compile(r"<script\b[^>]*>")
+_SCRIPT_TAG = re.compile(r"<script\b[^>]*>", re.I)
 _unnonced = []
 for _tpl in sorted((ROOT / "templates").glob("*.html")):
     _src = _tpl.read_text(encoding="utf-8")
@@ -2486,7 +2486,7 @@ _SCRIPT_EXPR_OK = re.compile(
 _script_exprs, _script_bad = 0, []
 for _p in sorted(TEMPLATES.rglob("*.html")):
     _t = _p.read_text(encoding="utf-8")
-    for _m in re.finditer(r"<script\b[^>]*>(.*?)</script>", _t, re.S):
+    for _m in re.finditer(r"<script\b[^>]*>(.*?)</script>", _t, re.S | re.I):
         for _e in re.finditer(r"\{\{(.*?)\}\}", _m.group(1), re.S):
             _script_exprs += 1
             if not _SCRIPT_EXPR_OK.match(_e.group(1).strip()):
@@ -5457,29 +5457,29 @@ if _node:
     # The notes with lines of their own (the "Skipped" span has none).
     _in_es = [b for b in (_inres.get("es") or {}).get("boxes") or [] if b]
     check(_in_es[-1:] == [[["Servidores que comparten un puerto:", False, ""]] + _SHARED_ROWS
-                          + [["Dos servidores en el mismo puerto no pueden ejecutarse a la vez, "
-                              "salvo que uno use solo TCP en él y el otro solo UDP, o que cada uno "
-                              "esté vinculado a su propia dirección IP. Mientras uno se ejecuta, el "
-                              "panel no puede distinguirlos por el puerto, así que uno detenido "
-                              "puede aparecer en línea.", False, ""]]],
+                          + [[("Dos servidores en el mismo puerto no pueden ejecutarse a la vez, "
+                               "salvo que uno use solo TCP en él y el otro solo UDP, o que cada uno "
+                               "esté vinculado a su propia dirección IP. Mientras uno se ejecuta, el "
+                               "panel no puede distinguirlos por el puerto, así que uno detenido "
+                               "puede aparecer en línea."), False, ""]]],
           "js (node, es, real i18n.js and catalog, inside the template's untranslated "
           "#disc-result): the note's two sentences are in Spanish, and each port's line (the "
           "port, the server names) is left as it is", repr(_in_es))
     check([b[0][0] for b in _in_es[:-1]] == [
-              "No importado:", "Importado, pero no se añadió al grupo de cuentas de juego del "
-              "panel. Donde el sudo del panel se limita a su asistente, no puede controlar estos "
-              "servidores."]
+              "No importado:", ("Importado, pero no se añadió al grupo de cuentas de juego del "
+                                "panel. Donde el sudo del panel se limita a su asistente, no puede controlar estos "
+                                "servidores.")]
           and [b[1][:2] for b in _in_es[:-1]] == [["shz43: R1", True], ["sha43: R2", True]],
           "js (node, es): ...as are the heads of the import's other notes there (not imported, "
           "not enrolled) — each had a catalog entry and read English — and their lines are not",
           repr(_in_es[:-1]))
     _in_fr = (_inres.get("fr") or {}).get("boxes") or [[]]
     check(_in_fr == [[["Serveurs qui partagent un port :", False, ""]] + _SHARED_ROWS
-                     + [["Deux serveurs sur le même port ne peuvent pas fonctionner en même temps, "
-                         "sauf si l'un n'y utilise que TCP et l'autre que UDP, ou si chacun est lié "
-                         "à sa propre adresse IP. Tant que l'un fonctionne, le panneau ne peut pas "
-                         "les distinguer par le port : un serveur arrêté peut donc apparaître en "
-                         "ligne.", False, ""]]],
+                     + [[("Deux serveurs sur le même port ne peuvent pas fonctionner en même temps, "
+                          "sauf si l'un n'y utilise que TCP et l'autre que UDP, ou si chacun est lié "
+                          "à sa propre adresse IP. Tant que l'un fonctionne, le panneau ne peut pas "
+                          "les distinguer par le port : un serveur arrêté peut donc apparaître en "
+                          "ligne."), False, ""]]],
           "js (node, fr, real i18n.js and catalog): ...and in French", repr(_in_fr))
     check([(_inres.get(k) or {}).get("boxes") for k in ("none", "absent")] == [[], []]
           and "Imported 2" in ((_inres.get("absent") or {}).get("text") or ""),

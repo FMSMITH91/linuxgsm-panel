@@ -1102,8 +1102,8 @@ def _f_run_outcome_no_exit_line():
 _WRAPPER_LOG21 = ["=== panel self-update Fri Oct  3 12:00:00 UTC 2026 ===",
                   "[5/6] Starting the service…", "[6/6] Verifying the panel came back up…",
                   "✓ Update complete: a → b",
-                  "This panel now serves HTTPS on port 5000 (it served plain HTTP before this "
-                  "update).",
+                  ("This panel now serves HTTPS on port 5000 (it served plain HTTP before this "
+                   "update)."),
                   "Set up Tailscale Serve or a domain for a trusted cert."]
 
 
@@ -1183,8 +1183,8 @@ def _f_history():
 
 
 def _f_installer_said():
-    lines = ["[!] This checkout's git origin is 'https://alice:tok3n@github.com/alice/fork', not "
-             "https://github.com/FMSMITH91/linuxgsm-panel.git.",
+    lines = [("[!] This checkout's git origin is 'https://alice:tok3n@github.com/alice/fork', not "
+              "https://github.com/FMSMITH91/linuxgsm-panel.git."),
              "  noise line", "[ERROR] Couldn't fetch https://bob:pw@example.org/x",
              "     from 203.0.113.9 after 3 tries", "next ordinary line",
              "✓ sudo grant: narrow (panel-helper for root)", "  Keeping abc1234: on main"]

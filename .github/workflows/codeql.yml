@@ -88,11 +88,14 @@ jobs:
           queries: security-and-quality
           config-file: ./.github/codeql/codeql-config.yml   # tests included; see the file for its scope
 
+      # Analysed here, uploaded below: two rules are dropped for tests/ in between (see that step).
       - name: Perform CodeQL Analysis
         id: analyze
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: "/language:${{ matrix.language }}"
+          upload: never
+          output: sarif-results
 
       # The extractor decides which files are Python, and an analysis that silently left a file out
       # reports it as clean. tools/panel-helper, the root-run privileged helper, has no .py extension
@@ -105,7 +108,8 @@ jobs:
           DB_LOCATIONS: ${{ steps.analyze.outputs.db-locations }}
         run: |
           set -euo pipefail
-          db="$(jq -r '.python[0] // empty' <<<"${DB_LOCATIONS}")"
+          # {"python": "<path>"} (one path per language, as codeql-action 4 writes it).
+          db="$(jq -r '.python | if type == "array" then .[0] else . end // empty' <<<"${DB_LOCATIONS}")"
           if [ -z "${db}" ] || [ ! -f "${db}/src.zip" ]; then
             echo "::error::no Python database source archive (db-locations: ${DB_LOCATIONS})"
             exit 1
@@ -124,6 +128,32 @@ jobs:
           print("analysed: tools/panel-helper, and %d files under tests/"
                 % sum("/tests/" in n for n in names))
           PY
+
+      # Two rules are dropped for tests/ ONLY, every instance of each having been read first:
+      #   py/file-not-closed (311 in tests/): each one a one-shot open(...).read() or .write(...)
+      #     whose file object CPython closes as the expression ends; none holds a file open.
+      #   py/overly-permissive-file (39): each a chmod inside the test's own temp dir, of a stand-in
+      #     program, a deliberately loose directory the code under test must refuse, or a setuid bit
+      #     a restore must strip. Bandit's B103 and Semgrep's insecure-file-permissions still gate
+      #     every one of those lines, each marked with its reason, so a new chmod is still read.
+      # Both stay on for every other path, and every other rule stays on for tests/.
+      - name: Leave out two deliberate test patterns (tests/ only)
+        run: |
+          set -euo pipefail
+          for f in sarif-results/*.sarif; do
+            jq '.runs |= map(.results |= map(select(
+                  ((.ruleId | IN("py/file-not-closed", "py/overly-permissive-file"))
+                   and (.locations[0].physicalLocation.artifactLocation.uri | startswith("tests/")))
+                  | not)))' "$f" > "$f.kept"
+            echo "$f: kept $(jq '[.runs[].results[]] | length' "$f.kept") of $(jq '[.runs[].results[]] | length' "$f") results"
+            mv "$f.kept" "$f"
+          done
+
+      - name: Upload the results to code scanning
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: sarif-results
+          category: "/language:${{ matrix.language }}"
 
   # ── The PR half of the alert gate ────────────────────────────────────────────────────────────
   # codeql-alerts.yml already asks "does this ref carry an open alert?", and its `if:` reads as

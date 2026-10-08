@@ -265,7 +265,7 @@ def _run_watch(scripted, cfg=None):
         try:
             _TG._telegram_command_watch(None)
         except _StopWatch:
-            pass
+            pass  # the stub ends the watch loop by raising this
     finally:
         (_TG.notifications._cfg, _TG.notifications.telegram_get_updates,
          _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
@@ -1893,29 +1893,39 @@ _uid0_verbs = [("game-file-read", ["root", ".ssh/id_rsa"]), ("game-dir-tar", ["r
                ("content-grant-read", ["root", "root", "somegmod", "cstrike"]),
                ("content-cron-write", ["root"]), ("gmod-mount-read", ["root"]),
                ("tailscale-set-operator", ["root"])]
-_uid0_through = []
+# A refusal counts only when it is refused for the reason under test. These loops caught Exception,
+# so an unknown verb (a rename), a wrong argument count or a crash read as "refused", and the check
+# passed without testing the name at all.
+_uid0_through, _uid0_why = [], []
 for _v, _a in _uid0_verbs:
     try:
         _helper.validate(_v, _a)
         _uid0_through.append(_v)
-    except Exception:
-        pass
+    except ValueError as _e:
+        if "rejected (refusing a uid-0 account)" not in str(_e):
+            _uid0_why.append("%s: %s" % (_v, _e))
 check("helper: no verb accepts a uid-0 account", not _uid0_through,
       "still accepted: %s" % _uid0_through)
+check("helper: ...each refused as a uid-0 account, not for a wrong verb or argument count",
+      not _uid0_why, "; ".join(_uid0_why[:3]))
+
 # ...and the PANEL's copy of the table must refuse the same names. It did not: twenty slots still
 # held _username, so `remote_command("user-delete", ["root"])` rendered `userdel -r root` and sent
 # it. Locally the helper is the second check; a REMOTE host has no helper, so this copy is the
 # only one there is. The argv-comparison gate above cannot see this — every content verb builds []
 # on both sides, so identical argv says nothing about which names were let through.
-_uid0_panel = []
+_uid0_panel, _uid0_pwhy = [], []
 for _v, _a in _uid0_verbs:
     try:
         _priv.check_args(_v, _a)
         _uid0_panel.append(_v)
-    except Exception:
-        pass
+    except _priv.VerbError as _e:
+        if str(_e) != "refusing a uid-0 account":
+            _uid0_pwhy.append("%s: %s" % (_v, _e))
 check("privileged: the panel's table refuses a uid-0 account everywhere the helper does",
       not _uid0_panel, "still accepted: %s" % _uid0_panel)
+check("privileged: ...each refused as a uid-0 account, not for a wrong verb or argument count",
+      not _uid0_pwhy, "; ".join(_uid0_pwhy[:3]))
 # The general form, so a verb added later cannot drift the same way: for EVERY verb and every
 # argument slot, if the helper refuses "root" there, the panel must too.
 _slot_drift = []
@@ -1940,15 +1950,18 @@ check("privileged: no argument slot is stricter in the helper than in the panel"
 # helper checks it against the content user's real primary group; the remote form cannot, so the
 # groups that hand out privilege are refused by name.
 _grp_ok = _priv.remote_command("content-grant-read", ["cu", "cu", "gm", "cstrike"])
-_grp_bad = []
+_grp_bad, _grp_why = [], []
 for _g in ("root", "sudo", "wheel", "docker", "shadow"):
     try:
         _priv.remote_command("content-grant-read", ["cu", _g, "gm", "cstrike"])
         _grp_bad.append(_g)
-    except Exception:
-        pass
+    except _priv.VerbError as _e:
+        if str(_e) != "refusing to grant membership of that group":
+            _grp_why.append("%s: %s" % (_g, _e))
 check("privileged: the remote content grant refuses a privileged group", not _grp_bad,
       "rendered usermod -aG for: %s" % _grp_bad)
+check("privileged: ...refused for the group, not for a wrong verb or argument count",
+      not _grp_why, "; ".join(_grp_why[:3]))
 check("privileged: ...and still renders the real one", "usermod -aG cu gm" in _grp_ok, _grp_ok[:60])
 check("helper: _game_home_path refuses uid 0 even if a name got past the validator",
       _helper._game_home_path("root", ".ssh/id_rsa") == (None, None),
@@ -3254,7 +3267,7 @@ def _gds_rm(p):
     try:
         os.unlink(p)
     except FileNotFoundError:
-        pass
+        pass  # already gone
 
 
 def _gds_read(p):
@@ -3911,7 +3924,7 @@ for _v, _bads in _BAD.items():
             _priv.check_args(_v, _args[:_nargs] if _nargs else [])
             _leaked.append("%s <- %r" % (_v, _b))
         except _priv.VerbError:
-            pass
+            pass  # refused: the outcome wanted
 check("privileged: injection and out-of-range arguments are refused, not quoted",
       not _leaked, "; ".join(_leaked[:3]))
 
@@ -6665,7 +6678,7 @@ try:
           _fw2._config_unreadable() is False)
     # ...and the CALLER has to consult it. Covering _config_unreadable is not covering the guard:
     # a mutation that deleted the `if _config_unreadable(): return True` line survived a green run.
-    _o_local6 = _core_mod_is_local = _sm_core.is_local_server
+    _o_local6 = _sm_core.is_local_server
     try:
         _sm_core.is_local_server = lambda s: True
         _bad = _pl2.Path(_cfg_dir, "broken.json"); _bad.write_text("{ nope")

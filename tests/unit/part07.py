@@ -722,7 +722,7 @@ def _bf_dc_messages(msgs, allowed):
         try:
             _bf_dc._discord_command_watch(None)
         except _BfStop:
-            pass
+            pass  # the stub ends the watch loop by raising this
     return ran, said
 
 
@@ -809,7 +809,7 @@ def _bf_watch(codes, hours=24.0, lasted=0.0, on_sleep=None):
             try:
                 _bf_dc._discord_command_watch(None)
             except _BfStop:
-                pass
+                pass  # the stub ends the watch loop by raising this
     finally:
         _bf_dc._log.removeHandler(cap)
         _bf_dc._log.setLevel(_lvl)
@@ -993,7 +993,7 @@ with _bf_patched(_bf_n, _cfg=lambda: _bf_cfg, _alert_queue=_bf_small_q):
     _bf_n._alert_sender[0] = True           # a sender "is running", so nothing drains meanwhile
     try:
         _bf_t0 = _bf_time.monotonic()
-        for _bf_i in range(5):
+        for _ in range(5):
             _bf_n.notify("server_up", "x", "y")
         _bf_took = _bf_time.monotonic() - _bf_t0
     finally:

@@ -218,7 +218,7 @@ def cleanup():
         try:
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
         except OSError:
-            pass
+            pass  # cleanup only: a config it cannot restore must not hide the result
 
 
 def seed_servers(first, count):

@@ -671,7 +671,8 @@ try:
     _r = _A16.post("/api/panel/change-port", json={"port": 5070, "bind_host": _ANY16})
     _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
     check("change-port: a move that left the OLD port's rule open is audited as a failure",
-          _cpb.success is False and "still there" in _cpb.detail, repr((_cpb.success, _cpb.detail)))
+          _cpb.success is False and "still there" in _cpb.detail,
+          repr((_cpb.success, _cpb.detail, _p9_json(_r))))
     _p9_patch(_rs16, "remote_ufw_close_port", lambda *a, **k: _cp16["fw"])
     # A host with no fail2ban at all: ensure_panel_fail2ban no-ops and says ok=False, and there
     # is no jail to follow the move — not a failed move.
@@ -1395,8 +1396,8 @@ def _rv16_cases(mode):
     exited, exited_pid = _rv16_held(mode + "-exited", "hold", "printf kept")
     return [["quick", ["helper", ["/bin/sh", "-c", "printf 'hello\\n'; printf 'warn\\n' >&2"],
                        10, None, None]],
-            ["big", ["helper", [sys.executable, "-c", "import sys; sys.stdout.write('A' * 3000000);"
-                                " sys.stderr.write('B' * 1000000)"], 30, None, None]],
+            ["big", ["helper", [sys.executable, "-c", ("import sys; sys.stdout.write('A' * 3000000);"
+                                                       " sys.stderr.write('B' * 1000000)")], 30, None, None]],
             ["hold", ["helper", hold, 1, hold_pid, None]],
             ["shell", ["shell", shell, 1, shell_pid, None]],
             ["writer", ["helper", writer, 1, writer_pid, None]],
@@ -1875,7 +1876,7 @@ def _h16_remaining():
 _h16_sa, _h16_sb = _S16h(_h16_eng), _S16h(_h16_eng)
 try:
     _ua16h, _ub16h = _h16_sa.get(User, _h16_uid), _h16_sb.get(User, _h16_uid)
-    _h16_stale = _ub16h.backup_codes                  # loaded, stale from here on
+    _ = _ub16h.backup_codes                           # loaded, stale from here on
     _h16_a1 = _ua16h.use_backup_code(_h16_codes[0])
     _h16_sa.commit()
     _h16_b1 = _ub16h.use_backup_code(_h16_codes[0])
@@ -1885,7 +1886,7 @@ try:
     check("backup codes: ...and the refused one did not resurrect it (2 left)",
           _h16_remaining() == 2, repr(_h16_remaining()))
     _ua16h, _ub16h = _h16_sa.get(User, _h16_uid), _h16_sb.get(User, _h16_uid)
-    _h16_stale = _ub16h.backup_codes
+    _ = _ub16h.backup_codes
     _h16_a2 = _ua16h.use_backup_code(_h16_codes[1])
     _h16_sa.commit()
     _h16_b2 = _ub16h.use_backup_code(_h16_codes[2])

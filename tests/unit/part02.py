@@ -3198,7 +3198,7 @@ finally:
         try:
             os.close(_fd)
         except OSError:
-            pass
+            pass  # already closed
 
 check("local exec: _exec_local_argv gives the child DEVNULL, not the panel's stdin",
       _argv_rc == 0 and _argv_out == "READ:''", "rc=%r out=%r err=%r" % (_argv_rc, _argv_out[:60], _argv_err[:60]))

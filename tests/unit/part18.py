@@ -1244,7 +1244,7 @@ try:
     # mid-pass is skipped (app._valve_ban_target), never acted on as its successor. A first
     # contact's commit mid-pass is its own block at the end of this part.
     _gbh18 = _host18("p18-gban-host", "192.0.2.177")
-    _gb118 = _server18(_gbh18, "gbone", 27595, game_type="csgo")
+    _server18(_gbh18, "gbone", 27595, game_type="csgo")
     _gb218 = _server18(_gbh18, "gbtwo", 27596, game_type="csgo")
     _gbans18 = []
 

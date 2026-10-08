@@ -1390,11 +1390,11 @@ try:
                               ("its commands switched off", dict(_TG_ON, accept_commands=False)),
                               ("the bot moved to another chat", dict(_TG_ON, chat_id="999"))):
         _tg_cleared.clear()
-        _tg_msg = _tg_report("abc1234", "def5678", tg=_tg_now)
+        _tg_report("abc1234", "def5678", tg=_tg_now)
         check("telegram: the post-restart report is not sent after %s (745379202)" % _tg_what,
               _tg_said == [] and _tg_cleared == [True], repr((_tg_said, _tg_cleared)))
     _tg_cleared.clear()
-    _tg_msg = _tg_report("abc1234", "def5678", tg=dict(_TG_ON, chat_id=" 42 "))
+    _tg_report("abc1234", "def5678", tg=dict(_TG_ON, chat_id=" 42 "))
     check("telegram: ...while the chat that is still authorised gets it once (control)",
           len(_tg_said) == 1 and "Update complete" in _tg_said[0] and _tg_cleared == [True],
           repr((_tg_said, _tg_cleared)))
@@ -1446,11 +1446,11 @@ try:
                               ("its commands switched off", dict(_DC_ON, accept_commands=False)),
                               ("the bot moved to another channel", dict(_DC_ON, channel_id="222"))):
         _dc_cleared.clear()
-        _dc_msg = _dc_report("abc1234", "def5678", dc=_dc_now)
+        _dc_report("abc1234", "def5678", dc=_dc_now)
         check("discord: the post-restart report is not sent after %s (745379202)" % _dc_what,
               _dc_said == [] and _dc_cleared == [True], repr((_dc_said, _dc_cleared)))
     _dc_cleared.clear()
-    _dc_msg = _dc_report("abc1234", "def5678", dc=dict(_DC_ON, channel_id="42 "))
+    _dc_report("abc1234", "def5678", dc=dict(_DC_ON, channel_id="42 "))
     check("discord: ...while the channel that is still authorised gets it once (control)",
           len(_dc_said) == 1 and "Update complete" in _dc_said[0] and _dc_cleared == [True],
           repr((_dc_said, _dc_cleared)))
@@ -1607,7 +1607,7 @@ try:
         if len(_ub_hold.held) > 2:
             _ub_hold.held[2]()
     except RuntimeError:
-        pass
+        pass  # the worker catches what a command raises; so does this
     _ub_said.clear()
     _dcm._dc_dispatch(_app, "tok", "42", "!update")
     check("bots: ...and a check that raised releases it too",
@@ -1754,8 +1754,8 @@ class _QuietWS(_FakeWS):
 
 _dcq_seen = []
 _dcq_ws = _QuietWS(['{"op":10,"d":{"heartbeat_interval":600000}}',
-                    '{"op":0,"s":1,"t":"MESSAGE_CREATE","d":{"channel_id":"7","author":{"bot":false},'
-                    '"content":"!status"}}'], gap=600 + 5)     # the first ACK: one interval later
+                    ('{"op":0,"s":1,"t":"MESSAGE_CREATE","d":{"channel_id":"7","author":{"bot":false},'
+                     '"content":"!status"}}')], gap=600 + 5)     # the first ACK: one interval later
 N.discord_gateway_run("A" * 50, lambda ch, is_bot, content, author=None: _dcq_seen.append(content),
                       _connect=lambda: _dcq_ws)
 check("discord: a quiet session is not torn down before its first heartbeat ACK can arrive",
@@ -2152,7 +2152,7 @@ try:
     check("gmod content install: an unreadable probe skips rather than re-downloading the content",
           _inst == [] and not any(v == "run_command" for v, _a in _gc_calls), str(_gc_calls))
     _gc_state["present"], _gc_calls[:] = ("", "", 1), []
-    _iok, _inst, _imsg = _sm_gmod.install_gmod_content(object(), "gmodcontent", ["cstrike"])
+    _sm_gmod.install_gmod_content(object(), "gmodcontent", ["cstrike"])
     check("gmod content install: a confirmed-absent game is still installed (positive control)",
           any(v == "run_command" and "cssserver auto-install" in a for v, a in _gc_calls),
           str(_gc_calls))

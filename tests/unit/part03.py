@@ -3902,10 +3902,12 @@ try:
     # The pre-existing reasons to rewrite must still work.
     _jail["rewrote"], _jail["backend"], _jail["port"] = [], "auto", 5001
     _ok, _msg = _so.ensure_panel_fail2ban("/home/panel/data/auth.log", 5000, [])
-    check("f2b jail: a changed PORT still forces a rewrite", len(_jail["rewrote"]) == 1)
+    check("f2b jail: a changed PORT still forces a rewrite", _ok is True and len(_jail["rewrote"]) == 1,
+          _msg)
     _jail["rewrote"], _jail["port"], _jail["ignoreip"] = [], 5000, ["127.0.0.1/8"]
     _ok, _msg = _so.ensure_panel_fail2ban("/home/panel/data/auth.log", 5000, [])
-    check("f2b jail: a changed WHITELIST still forces a rewrite", len(_jail["rewrote"]) == 1)
+    check("f2b jail: a changed WHITELIST still forces a rewrite",
+          _ok is True and len(_jail["rewrote"]) == 1, _msg)
     # A filter written before API-token lines were added matches none of them, and everything else
     # about that jail reads as healthy — so the filter is part of "already active" too.
     _jail["rewrote"], _jail["ignoreip"] = [], ["127.0.0.1/8", "::1", "100.64.0.0/10",
@@ -4807,7 +4809,6 @@ finally:
 # "nobody is on, it is safe to act", so a stopped, firewalled or GSLT-less server authorised the
 # same actions an empty one does. player_slots has guarded this from the start with the same
 # `ok:(.players|type=="array")` test; player_count never got it.
-_pcs = _sm_cron.player_count
 _pc_saved = _sm_core.run_command
 try:
     _sm_core.run_command = lambda *a, **k: ('{"c":0,"ok":false}', "", 0)

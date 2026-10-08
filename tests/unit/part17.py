@@ -693,7 +693,7 @@ try:
         _rv2st = {"update_available": True, "target_sha": "abc1234def"}
         _rv2last = _rv2osu._announced_update()          # a first boot: nothing announced yet
         _rv2last = _rv2osu._update_tick(None, _rv2st, _rv2last)
-        _rv2last = _rv2osu._update_tick(None, _rv2st, _rv2last)
+        _rv2osu._update_tick(None, _rv2st, _rv2last)
         eq("update check: a newly available commit is announced once within a process",
            _rv2_sent, ["abc1234def"])
         # A restart: the loop's own copy starts again from what config.json holds.

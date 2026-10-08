@@ -234,7 +234,6 @@ check("harden-runner: the deploy job's note (why it has none), the CHANGELOG and
 
 # ── zizmor: what it runs on ─────────────────────────────────────────────────────────────────────
 _zz42 = _wf29("zizmor.yml")
-_zz_code42 = _code29(_zz42)
 _zz_on42 = _code29(_zz42[_zz42.find("\non:\n"):_zz42.find("\nconcurrency:")])
 _zz_pr42 = _re42.search(r"^  pull_request:\n((?:    .*\n)*)", _zz_on42 + "\n", _re42.M)
 _sec_on42 = _code29(_wf29("security-code.yml"))
