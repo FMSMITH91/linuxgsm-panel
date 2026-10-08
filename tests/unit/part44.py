@@ -16,6 +16,8 @@ import tempfile as _tf44
 import time as _time44
 
 from unit.part01 import SO, check, config
+from unit.part02 import _orig_so_run as _so_run_before_leaks44
+from unit.part10 import _p7_defined
 from unit.part20 import _patch, _patched
 from panel.ops import tailscale_integration as _ts44
 from panel.ops.debug_report import _src_journal as _sj44
@@ -44,7 +46,16 @@ def _raise_te44(*a, **_k):
     raise _ORIG_TE44(a[0] if a else "cmd", 1)
 
 
+def _so_defined44(name, *roots):
+    """system_ops.<name> as the module defines it: by this part, _run is an earlier part's stub
+    (part03 assigns one and never puts it back; see part10's _p7_defined)."""
+    fn = _p7_defined(SO, name, *(roots or (getattr(SO, name),)))
+    return fn if fn is not None else (lambda *a, **k: "definition not found")
+
+
 def _timeout_answers44():
+    run_def = _so_defined44("_run", _so_run_before_leaks44, SO._run)
+    git_def, probe_def = _so_defined44("_git"), _so_defined44("_helper_probe_run")
     with _patched():
         _patch(_sp44, "run", _raise_te44)
         # Not a sudo argv: the suite's sudo shim (tools/nosudo_runner.py) answers one itself.
@@ -53,9 +64,9 @@ def _timeout_answers44():
         _patch(_sd44, "run", _raise_te44)
         _patch(_inst44, "run_version", _raise_te44)
         out = {}
-        for name, fn in (("_git", lambda: SO._git(["status"], timeout=1)),
-                         ("_run", lambda: SO._run("true", timeout=1)),
-                         ("_helper_probe_run", lambda: SO._helper_probe_run().get("outcome")),
+        for name, fn in (("_git", lambda: git_def(["status"], timeout=1)),
+                         ("_run", lambda: run_def("true", timeout=1)),
+                         ("_helper_probe_run", lambda: probe_def().get("outcome")),
                          ("_run_ts", lambda: _ts44._run_ts(["status"])),
                          ("unit_show", lambda: _sd44.unit_show().get("why")),
                          ("_sudo_version", lambda: _inst44._sudo_version("/usr/bin/sudo"))):
