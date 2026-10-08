@@ -613,6 +613,17 @@ function _rebuildRestore(mark) {
   });
 }
 
+// A line of output, marked do-not-translate: i18n.js swaps any text node whose whole text is a
+// catalog key, so a game line that was exactly "Done", "Saved" or "Stopped" read "Listo", "Guardado"
+// or "Detenido" to a Spanish viewer — not what the server printed. Per line rather than on
+// #console-output: that also holds the panel's own "Waiting for console output..." copy, which is.
+function _consoleLineEl() {
+  var div = document.createElement('div');
+  div.className = 'console-line';
+  div.setAttribute('data-no-i18n', '');
+  return div;
+}
+
 // Each row may carry its own time (LinuxGSM stamped the log). `fallbackTs` is the panel's clock
 // for rows that do not — used only where the caller knows the panel WATCHED them arrive. `at` is
 // where in the log the rows end, when the caller knows it (a push, a catch-up): _logAt.
@@ -620,8 +631,7 @@ function _appendConsoleRows(rows, fallbackTs, at) {
   if (!rows.length) return;
   var frag = document.createDocumentFragment();
   rows.forEach(function (row) {
-    var div = document.createElement('div');
-    div.className = 'console-line';
+    var div = _consoleLineEl();
     var ts = row.t || fallbackTs;
     if (ts) { div.dataset.ts = ts; stampLine(div, ts); }
     renderAnsi(div, row.line);
@@ -639,8 +649,7 @@ function _appendConsole(lines, ts, track) {
   if (!lines.length) return;
   var frag = document.createDocumentFragment();
   lines.forEach(function(line) {
-    var div = document.createElement('div');
-    div.className = 'console-line';
+    var div = _consoleLineEl();
     if (ts) { div.dataset.ts = ts; stampLine(div, ts); }
     renderAnsi(div, line);
     frag.appendChild(div);
@@ -770,8 +779,7 @@ function _renderPanelLines(panelLines) {
   // are not in the file would only ever confuse the match.
   var frag = document.createDocumentFragment();
   panelLines.forEach(function (row) {
-    var div = document.createElement('div');
-    div.className = 'console-line';
+    var div = _consoleLineEl();
     // The backlog is the ONE source that carries a real time for lines you did not watch arrive:
     // the panel wrote them, so it knows exactly when. That is why an update's output still reads
     // with its timestamps after a reload, where the game log's own window cannot.
@@ -1892,7 +1900,12 @@ function _gmcPost(bodyObj, okMsg){
   }).then(function(r){ return r.json(); }).then(function(d){
     if(window.toast) toast(d.message || (d.success?okMsg:'Failed'), d.success?'success':'danger');
     setTimeout(loadGmodContent, 1500);
-  }).catch(function(){ if(window.toast) toast('Request failed','danger'); });
+  }).catch(function(){
+    if(window.toast) toast('Request failed','danger');
+    // The card is drawn again, as after an answer: Apply had been disabled under a spinner, and a
+    // request that never answered (the panel restarting, a proxy's 502) left it dead until a reload.
+    loadGmodContent();
+  });
 }
 
 function applyGmodContent(btn){

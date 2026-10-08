@@ -83,9 +83,9 @@
           {% for entry in logs.items %}
           <tr>
             <td class="text-nowrap text-secondary small">{{ entry.timestamp|datetime }}</td>
-            <td>{{ entry.username }}</td>
+            <td data-no-i18n>{{ entry.username }}</td>
             <td><code>{{ entry.action }}</code></td>
-            <td>{{ entry.target }}</td>
+            <td data-no-i18n>{{ entry.target }}</td>
             {# The full detail, behind an expander once it is long. It used to be cut at 100 characters with
                no way to see the rest, and several writers store the TAIL of the output on purpose (start/stop
                keep the last 400 characters, because the [ OK ]/[FAIL] line and its reason are at the end;

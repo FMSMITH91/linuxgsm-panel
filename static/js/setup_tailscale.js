@@ -60,7 +60,14 @@ function tsDoInstall(){
 function tsDoUp(){
   tsOut().innerHTML='<i class="bi bi-arrow-repeat"></i> Starting Tailscale…';
   tsApi('up',{method:'POST'}).then(function(d){
-    if(!d.success){ tsOut().innerHTML='<span class="text-danger">'+tsEsc(d.message||'Failed')+'</span>'; return; }  // nosemgrep - tsEsc is window.escapeHtml
+    // A failed `up` after a successful install left the step with no way on: the Install button stays
+    // disabled once the install worked, and nothing else was offered but a reload. "Check again"
+    // redraws the step from Tailscale's state — "installed, not connected", with its Connect button.
+    if(!d.success){
+      tsOut().innerHTML='<span class="text-danger">'+tsEsc(d.message||'Failed')+'</span>'  // nosemgrep - tsEsc is window.escapeHtml; the button is literals plus _da('tsRefresh')
+        + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0"' + _da('tsRefresh') + '><i class="bi bi-arrow-repeat"></i> Check again</button>';
+      return;
+    }
     if(d.connected){ tsOut().innerHTML='<span class="text-success">Connected!</span>'; setTimeout(tsRefresh,800); return; }
     tsOut().innerHTML='<div class="alert alert-info py-2 small mb-0">'  // nosemgrep - literals plus auth_url, tsEsc-wrapped in both text places and _da()-encoded in the button
       + '<strong>1.</strong> Open this link and approve this machine in your Tailscale account:<br>'
@@ -88,7 +95,10 @@ function tsDoUp(){
       }).catch(function(){});
     }, 4000);
     _tsPoll = t;
-  }).catch(function(){ tsOut().innerHTML='<span class="text-danger">Request failed.</span>'; });
+  }).catch(function(){
+    tsOut().innerHTML='<span class="text-danger">Request failed.</span>'  // nosemgrep - literals plus _da('tsRefresh')
+      + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0"' + _da('tsRefresh') + '><i class="bi bi-arrow-repeat"></i> Check again</button>';
+  });
 }
 
 function tsDoServe(){

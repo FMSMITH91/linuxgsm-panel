@@ -376,6 +376,13 @@ async function dialog(state, opts, postAnswer, planBody){
   out.card_sent = await card({wait: null, job: {phase: 'rebooting', done: null, total: null, left: null, sent: now}, rows: []});
   out.card_rows = await card({wait: null, job: null, rows: [{restore: 'done'}, {restore: 'pending'}]});
   out.card_idle = await card({wait: null, job: null, rows: [], last: {text: 'vps is back', ok: true}});
+  // A remote's card whose read of /reboot-plan fails (no answer: the fetch rejects): it polls again.
+  const longTimers = [], realST = global.setTimeout;
+  global.setTimeout = (f, ms) => { if (ms >= 1000) { longTimers.push(ms); return 0; } return realST(f, ms); };
+  calls.length = 0; answers = {};
+  window.rebootStateWatch(7, 'vps', false); await settle();
+  global.setTimeout = realST;
+  out.card_fail_remote = {timers: longTimers, reads: calls.filter(c => c.url === P + '/reboot-plan').length};
 
   // The banner.
   const nag = doc.body.appendChild(new E('div'));
@@ -501,6 +508,9 @@ def _card_checks41(out):
     check("Power card: ...in the page's language, not the browser's (English day names were on a "
           "Spanish page)", _all41(bool(clock.get("far_fr")), clock.get("far_fr") != clock.get("far_en")),
           repr(clock))
+    fail = out.get("card_fail_remote") or {}
+    check("Power card: a remote host's card whose reboot-plan read fails polls again in 10 s (one blip stopped "
+          "it for good)", _all41(fail.get("reads") == 1, fail.get("timers") == [10000]), repr(fail))
     check("Power card: a restore shows how many are back, and the last outcome once it is over",
           _all41((out.get("card_rows") or {}).get("text", "").startswith("Coming back: 1/2"),
                  (out.get("card_idle") or {}).get("text") == "vps is back"), repr(out.get("card_rows")))

@@ -41,12 +41,12 @@
            is decided once per account by the route: asking per row, twice, was an N+1. #}
         {% set may_admin = user.id in administrable %}
         <tr>
-          <td><strong>{{ user.username }}</strong></td>
-          <td>{{ user.display_name }}</td>
+          <td data-no-i18n><strong>{{ user.username }}</strong></td>
+          <td data-no-i18n>{{ user.display_name }}</td>
           <td>{% if may_admin %}{{ user.email_display or '—' }}{% else %}<span class="text-secondary small" title="Shown only for accounts you can administer">Hidden</span>{% endif %}</td>
           <td>
             {% for g in user.groups %}
-              <span class="badge bg-secondary">{{ g.name }}</span>
+              <span class="badge bg-secondary" data-no-i18n>{{ g.name }}</span>
             {% else %}
               <span class="text-secondary small">None</span>
             {% endfor %}
@@ -191,7 +191,7 @@
             <div class="form-check">
               <input type="checkbox" name="groups" value="{{ g.id }}" class="form-check-input"
                      id="inv-group-{{ g.id }}" {% if g.is_default %}checked{% endif %}>
-              <label class="form-check-label" for="inv-group-{{ g.id }}">{{ g.name }}</label>
+              <label class="form-check-label" for="inv-group-{{ g.id }}" data-no-i18n>{{ g.name }}</label>
             </div>
             {% endfor %}
           </div>
@@ -253,7 +253,7 @@
               <input type="checkbox" name="groups" value="{{ g.id }}" class="form-check-input"
                      id="new-group-{{ g.id }}"
                      {% if g.is_default %}checked{% endif %}>
-              <label class="form-check-label" for="new-group-{{ g.id }}">{{ g.name }}</label>
+              <label class="form-check-label" for="new-group-{{ g.id }}" data-no-i18n>{{ g.name }}</label>
             </div>
             {% endfor %}
           </div>
@@ -346,7 +346,7 @@
             <div class="form-check">
               <input type="checkbox" name="groups" value="{{ g.id }}" class="form-check-input eu-group"
                      id="eu-group-{{ g.id }}">
-              <label class="form-check-label" for="eu-group-{{ g.id }}">{{ g.name }}</label>
+              <label class="form-check-label" for="eu-group-{{ g.id }}" data-no-i18n>{{ g.name }}</label>
             </div>
             {% endfor %}
           </div>
@@ -403,22 +403,29 @@
 </div>
 
 
-{# Shown once, after the server mints a one-time password. There is no second chance to read it:
-   the panel stores only the bcrypt hash, so nothing anywhere can print it again. #}
+{# Shown once, after the server mints a one-time password — or an invite link (credential.kind
+   "invite"), which is shown the same way for the same reason: only its hash is stored. There is no
+   second chance to read either, so nothing anywhere can print it again. The copy that differs comes
+   in two versions, [data-cred-kind], and showCredential shows the one that fits: an invite used to
+   be shown under "One-time password", told to "reset the password" if it was lost. #}
 <div class="modal fade" id="credentialModal" tabindex="-1" data-bs-backdrop="static">
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-key"></i> One-time password</h5>
+        <h5 class="modal-title"><i class="bi bi-key"></i> <span data-cred-kind="password">One-time password</span><span data-cred-kind="invite" hidden>Invite Link</span></h5>
       </div>
       <div class="modal-body">
         {# The username stands alone rather than sitting inside the sentence: the i18n walker
            translates whole text nodes, and a name in the middle of one splits it into fragments
            ("Give this to" … ". They'll be asked to") that no translator can word properly. #}
-        <div class="mb-2"><span class="font-monospace fw-semibold" id="cred-user" data-no-i18n></span></div>
-        <p class="text-secondary small">
+        <div class="mb-2" data-cred-kind="password"><span class="font-monospace fw-semibold" id="cred-user" data-no-i18n></span></div>
+        <p class="text-secondary small" data-cred-kind="password">
           They'll be asked to set their own password the first time they sign in, and this one
           stops working then.
+        </p>
+        <p class="text-secondary small" data-cred-kind="invite" hidden>
+          Send this link to the person you are inviting. It works once, and stops working when it
+          expires.
         </p>
         <div class="input-group mb-2">
           <input type="text" class="form-control font-monospace" id="cred-pw" readonly
@@ -427,9 +434,13 @@
             <i class="bi bi-clipboard"></i> Copy
           </button>
         </div>
-        <div class="alert alert-warning py-2 px-3 small mb-0" role="alert">
+        <div class="alert alert-warning py-2 px-3 small mb-0" role="alert" data-cred-kind="password">
           <i class="bi bi-exclamation-triangle"></i> Copy it now — it is not shown again, and the
           panel cannot recover it. If you lose it, reset the password to issue a new one.
+        </div>
+        <div class="alert alert-warning py-2 px-3 small mb-0" role="alert" data-cred-kind="invite" hidden>
+          <i class="bi bi-exclamation-triangle"></i> Copy it now — it is not shown again, and the
+          panel cannot recover it. If you lose it, revoke this invite and create a new one.
         </div>
       </div>
       <div class="modal-footer">

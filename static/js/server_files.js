@@ -368,7 +368,9 @@ function deletePath(path, isDir){
       fetch(MOUNT+'/api/server/'+serverId+'/delete-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
         .then(r=>r.json()).then(d=>{
           if(!d.success){ if(window.toast) toast(d.message||'Delete failed','danger'); return; }
-          if(curFile===path) closeEditor();
+          // The open file, or one inside the deleted folder (as _followRename follows a renamed one):
+          // left open, Save wrote it back and mkdir -p brought the deleted folder back with it.
+          if(curFile && (curFile===path || curFile.indexOf(path+'/')===0)) closeEditor();
           browse(curDir);
         }).catch(()=>{ if(window.toast) toast('Delete failed','danger'); });
     }});

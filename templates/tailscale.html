@@ -218,7 +218,7 @@
         </div>
 
         {% if not config.tailscale_setup_done and info.running %}
-        <form id="serve-form" class="mt-2">
+        <form id="serve-form" class="mt-2" data-action="_tsServeEnter" data-args='["@self"]' data-on="submit" data-prevent>
           <p class="text-secondary small mb-2">
             Tailscale Serve exposes the panel privately on your tailnet — free on the Personal plan, and
             the recommended setup. Only devices signed in to your tailnet can reach it; no public ports

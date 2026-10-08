@@ -504,6 +504,19 @@ async function checkLoad(cfg) {
         !w.page.loadError && w.emits('join_console') === 1 && w.exact(), w.page.loadError || JSON.stringify(w.pageLog()));
 }
 
+// Every line the page puts in the console is marked do-not-translate: i18n.js swaps a text node whose
+// whole text is a catalog key, so a game line that was exactly "Done" read "Listo" in Spanish.
+async function checkLinesUntranslated(cfg) {
+  const w = await manualWorld(cfg);
+  w.pass(); w.say('Done'); await w.pass();
+  w.panelPush('[panel] update started — its output follows.');
+  w.page.ctx.appendConsole('Saved', null, false);
+  const lines = w.page.consoleEl.children.filter(c => c.className === 'console-line');
+  check('every line the page adds to the console — from the window, a push, the panel, appendConsole — is marked '
+        + 'do-not-translate', lines.length === 23 && lines.every(c => 'data-no-i18n' in c.attrs),
+        JSON.stringify({n: lines.length, bare: lines.filter(c => !('data-no-i18n' in c.attrs)).length}));
+}
+
 async function checkGrace(cfg) {
   const w = await manualWorld(cfg);
   const fetched = w.page.fetches.length;
@@ -1880,7 +1893,7 @@ async function replay(cfg) {
   const cfg = JSON.parse(fs.readFileSync(0, 'utf8'));
   if (cfg.mode === 'replay') { process.stdout.write(JSON.stringify(await replay(cfg))); return; }
   const only = cfg.only ? new RegExp(cfg.only) : null;
-  for (const fn of [checkLoad, checkGrace, checkAltTab, checkReturn, checkStreamFromCut, checkOtherTab,
+  for (const fn of [checkLoad, checkLinesUntranslated, checkGrace, checkAltTab, checkReturn, checkStreamFromCut, checkOtherTab,
                     checkFirstLookFirst, checkDropWhileCatchingUp, checkGiveUp, checkHiddenAgain, checkReconnectWhilePaused,
                     checkDropBeforeGrace, checkAction, checkFinishedAway, checkBackground, checkLateTimer,
                     checkFocusFallback, checkSilentReturn, checkNoConsole, checkNoView, checkIndicator, checkBacklogOnce,

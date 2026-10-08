@@ -120,6 +120,15 @@ function _tsAfterServeChange(go) {
   window.refreshSection('#ts-page', 'wireTsButtons');
 }
 
+// Enter in the Mount Point field submits #serve-form (the form's only text field, so the browser's
+// implicit submission applies): a GET reload of this page that dropped the typed mount and the Funnel
+// choice and enabled nothing, without a word. The form is never submitted (data-prevent); Enter does
+// what its Enable button does, for whoever is shown that button.
+function _tsServeEnter(form) {
+  var b = form && form.querySelector('[data-action="enableServe"]');
+  if (b && !b.disabled) enableServe(b);
+}
+
 function enableServe(btn) {
   var mount = document.querySelector('[name="mount"]').value || '/';
   var funnel = document.getElementById('funnel-check').checked;
