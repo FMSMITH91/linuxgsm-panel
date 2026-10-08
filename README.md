@@ -74,10 +74,12 @@ On a root / system install, the updater also refreshes the root-owned pieces in 
 ## Uninstall
 
 ```bash
-sudo bash ~lgsmpanel/linuxgsm-panel/uninstall.sh   # root / system install
-bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
+sudo bash /usr/local/lib/linuxgsm-panel/uninstall.sh   # root / system install
+bash ~/linuxgsm-panel/uninstall.sh                     # per-user install
 #   add --yes to skip the "type yes to confirm" prompt
 ```
+
+On a root install, run the root-owned copy the installer keeps in `/usr/local/lib/linuxgsm-panel`, not the one in the panel's checkout: that one belongs to the panel's own account, and root should never run a file the panel can rewrite. (An install from before that copy existed gets it with its next update.)
 
 **What the uninstaller does:**
 
@@ -87,6 +89,8 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 4. Removes the panel's **own** UFW port rule — never a game-server port — and every Tailscale Serve route that pointed at the panel's port, one at a time with `tailscale serve --https=<port> --set-path=<mount> off`. Other apps' Serve routes are left alone, and if Serve's config can't be read nothing is removed and it says so. (Both install kinds.)
 5. **Deletes the panel files and its `data/`** — accounts, config, and encryption keys.
 6. **(Root install)** Removes everything the installer put outside the panel directory: the sudoers entry, the root-owned helper directory (`/usr/local/lib/linuxgsm-panel`, which holds the panel's gamedig install too), the `/usr/local/bin/gamedig` and `/usr/bin/gamedig` links into it (only when they point there), the `linuxgsm-panel-recover` command, the weekly gamedig cron, the panel's sysctl tuning, and the dedicated `lgsmpanel` user.
+
+It **leaves in place, and names,** host configuration the installer may have added that other software can rely on: NodeSource's apt repository for Node.js (`/etc/apt/sources.list.d/nodesource.sources`, its key `/usr/share/keyrings/nodesource.gpg` and the nodejs pin `/etc/apt/preferences.d/nodejs`) and automatic security updates (`/etc/apt/apt.conf.d/20auto-upgrades`).
 
 **Your game servers are left completely alone** — their Linux users, home directories, LinuxGSM installs, `@reboot` autostart crontabs, and game-port firewall rules are never touched, so every server keeps running exactly as before once the panel is gone.
 

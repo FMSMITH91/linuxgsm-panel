@@ -3447,14 +3447,28 @@ _pb_ck = os.path.join(_PB, "checkout")
 os.makedirs(_pb_ck)
 for _n in ("app.py", "requirements.txt"):
     open(os.path.join(_pb_ck, _n), "w").close()
-_pb_src = "ok() { :; }\nPANEL_SELF_UPDATE=\"${PSU:-}\"\n" + _pb_src_blk + 'echo "SRC=[${SRC}]"'
-_r1 = _pb_run(_pb_src, cwd=_pb_ck)
-_r2 = _pb_run(_pb_src, cwd=_pb_ck, env={"PSU": "1"})
-check("install.sh: an operator run from a checkout uses it as the source (control)",
+open(os.path.join(_pb_ck, "install.sh"), "w").close()
+_pb_other = os.path.join(_PB, "other-tree")
+os.makedirs(_pb_other)
+open(os.path.join(_pb_other, "install.sh"), "w").close()
+_pb_src = ("ok() { :; }\nwarn() { echo \"WARN $*\"; }\nPANEL_SELF_UPDATE=\"${PSU:-}\"\nSCRIPT_PATH=\"${SP}\"\n"
+           + _pb_src_blk + 'echo "SRC=[${SRC}]"')
+_r1 = _pb_run(_pb_src, cwd=_pb_ck, env={"SP": os.path.join(_pb_ck, "install.sh")})
+_r2 = _pb_run(_pb_src, cwd=_pb_ck, env={"PSU": "1", "SP": os.path.join(_pb_ck, "install.sh")})
+check("install.sh: an operator run of a checkout's own install.sh, from it, uses it as the source (control)",
       "SRC=[%s]" % os.path.realpath(_pb_ck) in _r1.stdout or "SRC=[%s]" % _pb_ck in _r1.stdout,
       _r1.stdout + _r1.stderr)
 check("install.sh: ...but a panel self-update never takes its working directory as the source",
       "SRC=[]" in _r2.stdout, _r2.stdout + _r2.stderr)
+# `curl … | bash` from a directory that merely holds an app.py and a requirements.txt (an old clone,
+# another Flask project): $0 is "bash", so SCRIPT_PATH is "<cwd>/bash". And an installer from another
+# tree run with this one as its working directory. Neither may take the directory for the panel.
+_r3 = _pb_run(_pb_src, cwd=_pb_ck, env={"SP": os.path.join(_pb_ck, "bash")})
+_r4 = _pb_run(_pb_src, cwd=_pb_ck, env={"SP": os.path.join(_pb_other, "install.sh")})
+check("install.sh: `curl … | bash` run in a directory with an app.py and a requirements.txt does not take it "
+      "for the panel's source, and says why; nor does another tree's installer",
+      "SRC=[]" in _r3.stdout and "WARN Not using" in _r3.stdout and "SRC=[]" in _r4.stdout,
+      _r3.stdout + _r3.stderr + _r4.stdout)
 _pb_fc = _pb_shfn("fetch_code")
 check("install.sh fetch_code: the extracting tar runs as PANEL_DIR's owner when that is not root",
       'x_as="sudo -u ${x_owner}"' in _pb_fc and '${x_as} tar -C "${PANEL_DIR}" --no-same-owner -xf -'

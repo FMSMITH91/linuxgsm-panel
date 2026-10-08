@@ -15,12 +15,24 @@ elements it reads, a fetch the check answers), and judges what a user would see:
   reload that lost what was typed);
 * the one-time credential dialog: an invite link is shown as an invite link — its own title and
   copy — and the invite route says it is one.
+
+And the installer's and uninstaller's, run in bash on their own lines with the host stood in for:
+
+* the uninstaller has a ROOT-OWNED copy (install_recovery_command places it beside recover.sh), and
+  a root install is pointed at it, never at the panel-writable one in the checkout;
+* the lockout remedy printed after a root install, and recover.sh's own "re-run" line, never have
+  root run a file out of the checkout;
+* "open" in UFW means open to the public: a Tailscale-only rule or a DENY on the panel's port is not;
+* the uninstaller names the NodeSource repository and automatic updates it leaves in place;
+* tools/lhci_serve.py turns the SIGTERM it is stopped with into an exit that runs its cleanup.
 """
+import ast as _ast47
 import json as _json47
 import os
 import re as _re47
 import shutil as _shutil47
-import subprocess as _sp47  # nosec B404 - runs node on this part's own snippets
+import subprocess as _sp47  # nosec B404 - runs node and bash on this part's own snippets
+import tempfile as _tf47
 
 from unit.part01 import check, skip
 from unit.part05 import _root
@@ -305,6 +317,135 @@ def _invite_route47():
             db.session.commit()
 
 
+def _shfn47(text, name):
+    """A shell function's definition, whole, from `name() {` to its closing brace at column 0."""
+    i = text.index("\n%s() {" % name) + 1
+    return text[i:text.index("\n}\n", i) + 3]
+
+
+def _bash47(script, env=None, cwd=None):
+    return _sp47.run(["bash", "-c", script], capture_output=True, text=True,  # nosec B603 B607 - fixture script
+                     timeout=60, cwd=cwd, env=dict(os.environ, **(env or {})), check=False)
+
+
+_INS47 = _read47(_root, "install.sh")
+_UNI47 = os.path.join(_root, "uninstall.sh")
+_SHIMS47 = ('ok() { echo "OK $*"; }\nwarn() { echo "WARN $*"; }\ninfo() { echo "INFO $*"; }\n'
+            'id() { echo 0; }\ninstall() { echo "INSTALL $*"; }\nln() { echo "LN $*"; }\nrm() { :; }\n'
+            '_prepare_root_source() { :; }\n')
+
+
+def _uninstall_copy47(tmp):
+    fn = _shfn47(_INS47, "install_recovery_command") + "install_recovery_command\n"
+    env = "HELPER_DIR=/usr/local/lib/lgsmp\nPANEL_DIR=/home/p/linuxgsm-panel\nREPO_URL=x\nDEFAULT_BRANCH=main\n"
+
+    def run(trusted, staged):
+        stage = ('stage_root_source() { echo "/stage/$2"; }\n' if staged else 'stage_root_source() { return 1; }\n')
+        return _bash47(_SHIMS47 + stage + env + "ORIGIN_TRUSTED=%d\n" % trusted + fn).stdout
+
+    ok, untrusted, failed = run(1, True), run(0, True), run(1, False)
+    want = "INSTALL -o root -g root -m 0755 /stage/uninstall.sh /usr/local/lib/lgsmp/uninstall.sh"
+    check("install.sh: the uninstaller is placed ROOT-OWNED beside the recovery command (README's root "
+          "uninstall ran the panel-writable copy in the checkout as root)", want in ok, ok[-600:])
+    check("install.sh: ...not from an untrusted origin, and nothing from the checkout when it cannot be staged",
+          "uninstall.sh" not in untrusted and "uninstall.sh" not in failed, repr((untrusted[-300:], failed[-300:])))
+    # The refusal a non-root run of a root install gets names that copy. `id` stands in for a host
+    # with the service user (uid 1000 running it), so the script stops at its refusal, as it would.
+    fake = os.path.join(tmp, "bin")
+    os.makedirs(fake, exist_ok=True)
+    with open(os.path.join(fake, "id"), "w", encoding="utf-8") as fh:
+        fh.write('#!/bin/sh\ncase "$1" in -u) echo 1000 ;; -un) echo bob ;; *) exit 0 ;; esac\n')
+    os.chmod(os.path.join(fake, "id"), 0o700)  # nosec B103 - an owner-only stand-in this part runs
+    copy = os.path.join(tmp, "uninstall.sh")
+    with open(copy, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/bash\n")
+    env2 = {"PATH": fake + os.pathsep + os.environ.get("PATH", ""), "PANEL_UNINSTALL_ROOT_COPY": copy}
+    r = _sp47.run(["bash", _UNI47], capture_output=True, text=True, timeout=60,  # nosec B603 B607 - the repo's own script
+                  env=dict(os.environ, **env2), stdin=_sp47.DEVNULL, check=False)
+    check("uninstall.sh: a root install run without root is pointed at the root-owned copy, not at the "
+          "checkout's", r.returncode == 1 and ("sudo bash %s" % copy) in r.stderr, r.stderr[-400:])
+    readme = _read47(_root, "README.md")
+    check("README: the root uninstall runs the root-owned copy",
+          "sudo bash /usr/local/lib/linuxgsm-panel/uninstall.sh" in readme
+          and "sudo bash ~lgsmpanel/linuxgsm-panel/uninstall.sh" not in readme, "")
+
+
+def _lockout_remedy47(tmp):
+    blk = _INS47[_INS47.index('echo -e "${CYAN}Forgot the admin password?'):]
+    blk = blk[:blk.index("\nfi\n") + 4]
+    out = {k: _bash47("CYAN= NC= YELLOW= PANEL_DIR=/home/lgsmpanel/linuxgsm-panel RUN_AS_ROOT=%d\n" % k + blk).stdout
+           for k in (1, 0)}
+    check("install.sh: after a ROOT install the lockout remedy is only `sudo linuxgsm-panel-recover` — not the "
+          "checkout's reset-password.sh, which root would run out of a panel-writable tree; a per-user install "
+          "keeps the alternative", "linuxgsm-panel-recover" in out[1] and "reset-password.sh" not in out[1]
+          and "reset-password.sh" in out[0], repr(out))
+    # recover.sh's own "re-run" line, reached by an account that is neither root nor the service user.
+    panel = os.path.join(tmp, "rc-panel")
+    os.makedirs(panel, exist_ok=True)
+    open(os.path.join(panel, "manage.py"), "w").close()
+    unit = os.path.join(tmp, "rc.service")
+    with open(unit, "w", encoding="utf-8") as fh:
+        fh.write("[Service]\nUser=lgsmpanel\nWorkingDirectory=%s\n" % panel)
+    r = _sp47.run(["bash", os.path.join(_root, "recover.sh"), "list-users"], capture_output=True, text=True,  # nosec B603 B607 - the repo's own script
+                  timeout=60, stdin=_sp47.DEVNULL, check=False,
+                  env=dict(os.environ, PATH=os.path.join(tmp, "bin") + os.pathsep + "/usr/bin:/bin",
+                           PANEL_RECOVER_SYSTEM_UNIT=unit, PANEL_RECOVER_HOMES=os.path.join(tmp, "nohomes"),
+                           PANEL_RECOVER_PANEL_CONF=os.path.join(tmp, "no.conf"), PANEL_DIR=""))
+    check("recover.sh: told to re-run as root, it names `sudo linuxgsm-panel-recover`, not `sudo <this file>`",
+          r.returncode == 1 and "sudo linuxgsm-panel-recover list-users" in r.stderr
+          and "sudo recover.sh" not in r.stderr, r.stderr[-400:])
+
+
+def _ufw_open47():
+    blk = _INS47[_INS47.index("UFW_ACTIVE=0; TS_UFW=0; PORT_OPEN=0; UFW_READ=0"):]
+    blk = blk[:blk.index("\n# Auto-open")]
+    got = []
+    for status in ("Status: active\n\nTo   Action  From\n5000/tcp   ALLOW   100.64.0.0/10\n",
+                   "Status: active\n\n5000/tcp   DENY   Anywhere\n",
+                   "Status: active\n\n15000/tcp   ALLOW   Anywhere\n5000/udp   ALLOW   Anywhere\n",
+                   "Status: active\n\n5000/tcp   ALLOW   Anywhere\n",
+                   "Status: active\n\n5000   LIMIT   Anywhere\n"):
+        script = ("set -euo pipefail\nPORT=5000 SUDO=\nufw() { printf '%%b' %s; }\n%s\necho \"OPEN=${PORT_OPEN}\"\n"
+                  % (_json47.dumps(status.replace("\n", "\\n")), blk))
+        got.append(_bash47(script).stdout.strip()[-6:])
+    check("install.sh: the panel's port reads as publicly open only for an ALLOW or LIMIT from Anywhere — not "
+          "for a Tailscale-only rule, a DENY, or another port that contains its number (the auto-open was skipped "
+          "and a dropped public address printed)", got == ["OPEN=0", "OPEN=0", "OPEN=0", "OPEN=1", "OPEN=1"],
+          repr(got))
+
+
+def _left_in_place47(tmp):
+    fn = _shfn47(_read47(_UNI47), "_note_left_in_place")
+    paths = [os.path.join(tmp, n) for n in ("ns.sources", "ns.gpg", "nodejs.pin", "20auto")]
+    for p in paths[:2] + paths[3:]:
+        open(p, "w").close()
+    shim = 'warn() { echo "WARN $*"; }\n'
+    some = _bash47(shim + fn + "_note_left_in_place %s\n" % " ".join(paths)).stdout
+    none = _bash47(shim + fn + "_note_left_in_place /nonexistent/a /nonexistent/b /nonexistent/c /nonexistent/d\n")
+    check("uninstall.sh: NodeSource's apt repository and automatic updates, left in place, are named with "
+          "what removes them (the host went on trusting a third-party apt source, unmentioned) — only what exists",
+          "NodeSource" in some and ("sudo rm -f %s" % paths[0]) in some and ("sudo rm -f %s" % paths[1]) in some
+          and paths[2] not in some and "automatic security updates" in some
+          and none.stdout == "" and none.returncode == 0, repr((some, none.stdout)))
+
+
+def _lhci47():
+    tree = _ast47.parse(_read47(_root, "tools", "lhci_serve.py"))
+    term = run = None
+    for n in tree.body:
+        for c in _ast47.walk(n):
+            if not isinstance(c, _ast47.Call):
+                continue
+            f = _ast47.unparse(c.func)
+            if f == "signal.signal" and c.args and _ast47.unparse(c.args[0]) == "signal.SIGTERM" and term is None:
+                term = n.lineno
+            if f.endswith("socketio.run") and run is None:
+                run = n.lineno
+    check("tools/lhci_serve.py: SIGTERM — how the Lighthouse workflow stops it — becomes an exit that runs its "
+          "cleanup, set at the top level before the server runs (atexit alone never ran on SIGTERM)",
+          term is not None and run is not None and term < run, repr((term, run)))
+
+
 _files47()
 _gmod47()
 _creds47()
@@ -313,3 +454,12 @@ _ts_setup47()
 _ts_serve47()
 _cred_dialog47()
 _invite_route47()
+_TMP47 = _tf47.mkdtemp(prefix="lgsm-unit-p47-")
+try:
+    _uninstall_copy47(_TMP47)
+    _lockout_remedy47(_TMP47)
+    _ufw_open47()
+    _left_in_place47(_TMP47)
+    _lhci47()
+finally:
+    _shutil47.rmtree(_TMP47, ignore_errors=True)

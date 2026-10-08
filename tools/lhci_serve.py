@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import atexit
+import signal
 
 from panel.core.config import (CONFIG_FILE, CRED_KEY_FILE, DB_PATH, SECRET_FILE,
                                load_config, save_config)
@@ -59,6 +60,14 @@ def _cleanup():
             # every path here was created by THIS process (anything pre-existing is skipped above).
             print("lhci_serve: could NOT remove %s (%s)" % (_p, exc.__class__.__name__),
                   file=sys.stderr)
+
+
+# SIGTERM is how this is stopped — the Lighthouse workflow runs it in the background and ends it with
+# `kill "$(cat panel.pid)"` — and Python's default SIGTERM ends the process WITHOUT running atexit.
+# So the cleanup above never ran: the developer's config.json kept setup_complete and "basic"
+# session protection, and panel.db kept the superadmin whose password is published in this file.
+# Made an ordinary exit here, which does run it (as tools/js_coverage/run.py does for its teardown).
+signal.signal(signal.SIGTERM, lambda *_a: sys.exit(143))
 
 
 # is_setup_complete() needs a completed SetupState row (added below), or every page — including
