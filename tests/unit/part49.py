@@ -53,7 +53,8 @@ _ON49 = '#### Logging ####\nconsolelogging="on"\nlogtimestamp="on"\n'
 def _bash49(server, user, sh, timeout=30, selfname=None, scope=False):
     """shell_as_game_user, in a real bash, with /home/<account> pointing at the throwaway home."""
     _SHELLS49.append(sh)
-    if _FAIL49["when"] is not None and _FAIL49["when"](sh):
+    when = _FAIL49["when"]
+    if callable(when) and when(sh):
         return "", "SSH command timed out", -1
     script = _PRELUDE49["text"] + sh.replace("/home/" + _USER49, _HOME49)
     p = _sp49.run(["bash", "-c", script], capture_output=True, text=True,  # nosec B603 B607 - bash on this part's own command

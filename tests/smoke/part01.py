@@ -18,8 +18,8 @@ from panel.ops.ssh_manager import game as _sm_game  # noqa: F401 - a later part 
 from panel.ops.ssh_manager import hosts as _sm_hosts   # the stub seam: stubbed by MODULE,  # noqa: F401
 # because every caller now reaches these through the module rather than binding them.
 
-from panel.core.config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE  # noqa: F401 - a later part imports it
-from panel.core.validation import password_problem as auth_password_problem  # noqa: F401 - a later part imports it
+from panel.core.config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE  # noqa: F401  # pylint: disable=unused-import
+from panel.core.validation import password_problem as auth_password_problem  # noqa: F401  # pylint: disable=unused-import
 
 # Never clobber a real install: only run against a fresh, throwaway data dir.
 if DB_PATH.exists():
@@ -84,9 +84,9 @@ _lgsm_data._CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _lgsm_data._mem.clear()
 
 from app import create_app
-from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState, CustomCommand  # noqa: F401 - a later part imports it
-from panel.security import auth  # noqa: F401 - a later part imports it
-from panel.ops import backup as bk  # noqa: F401 - a later part imports it
+from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState, CustomCommand  # noqa: F401  # pylint: disable=unused-import
+from panel.security import auth  # noqa: F401  # pylint: disable=unused-import
+from panel.ops import backup as bk  # noqa: F401  # pylint: disable=unused-import
 
 app = create_app()
 # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token

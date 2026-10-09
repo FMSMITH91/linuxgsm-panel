@@ -1396,6 +1396,8 @@ with app.app_context():
     for _col in ("content_games", "install_error", "install_retryable"):
         _gdropped = False
         try:
+            # A table/column name from this check's own fixed list, not input: DDL takes no bind parameters.
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
             db.session.execute(_t("ALTER TABLE game_server DROP COLUMN %s" % _col))
             db.session.commit()
             _gdropped = True
@@ -1438,6 +1440,8 @@ with app.app_context():
     _want = {"metric_sample": "ix_metric_sample_server_ts",
              "host_sample": "ix_host_sample_remote_ts"}
     for _tbl, _name in _want.items():
+        # A table/column name from this check's own fixed list, not input: DDL takes no bind parameters.
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
         db.session.execute(_t("DROP INDEX IF EXISTS %s" % _name))
     db.session.commit()
     check("migrate: a pre-feature DB really is missing the history composite indexes",
