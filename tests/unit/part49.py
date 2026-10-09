@@ -259,7 +259,6 @@ def _fresh_backups49(prelude=""):
 
 def _partials49():
     """A clean failure's own partial archive is removed; every other exit code keeps it."""
-
     _fresh_backups49()
     res, name, ls = _backup49(1, out="tar: write error: No space left on device")
     check("backup: after a clean FAILURE (LinuxGSM exit 1) its partial archive is removed, the "
