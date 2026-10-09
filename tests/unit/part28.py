@@ -154,10 +154,15 @@ check("codacy gate: ...and an accepted entry Codacy still reports passes, as bef
 _cd2_escape = _drive28([], [_acc28("../" + os.path.basename(_TMP28) + "/x.py")], _co28)
 check("codacy gate: ...an accepted path outside the checkout is never read as the checkout's",
       _cd2_escape[0] == 0 and _cg28._checkout_file("/etc/passwd") is None, _cd2_escape[1][-300:])
-# The live case: the real accepted list against the real checkout, with Codacy reporting nothing.
-# system_ops.py is over 150 KB and holds every accepted line, so this is what the daily run sees.
-_cd2_real_rc, _cd2_real_out, _ = _drive28(
-    [], _json28.loads(_read28(".github/codacy-accepted-errors.json"))["accepted"], _cg28.CHECKOUT)
+# The live case: the real accepted list against the real checkout. Codacy reports each accepted
+# finding in a file it analyses (CODACY_MAX_BYTES or less: the gamedig lockfile's Trivy entry) and nothing for
+# system_ops.py, which is over 150 KB, so this is what the daily run sees.
+_cd2_real_acc = _json28.loads(_read28(".github/codacy-accepted-errors.json"))["accepted"]
+_cd2_real_seen = [{"filePath": a["filePath"], "patternInfo": {"id": a["patternId"]},
+                   "lineText": a["lineText"], "lineNumber": 1, "level": "High"}
+                  for a in _cd2_real_acc
+                  if os.path.getsize(os.path.join(_cg28.CHECKOUT, a["filePath"])) <= _cg28.CODACY_MAX_BYTES]
+_cd2_real_rc, _cd2_real_out, _ = _drive28(_cd2_real_seen, _cd2_real_acc, _cg28.CHECKOUT)
 check("codacy gate: ...on this checkout (what the daily run on main sees), the three accepted "
       "system_ops.py findings are warnings and the run passes: main is never red by construction",
       _cd2_real_rc == 0 and "::error::" not in _cd2_real_out

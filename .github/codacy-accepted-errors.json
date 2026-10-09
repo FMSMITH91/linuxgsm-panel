@@ -32,6 +32,13 @@
       "reason": "The third rule on the _run() pre-helper fallback, and the most on-the-nose of them: shell=True on a composed string is exactly what SECURITY.md documents as the known trust-model limitation. Accepted rather than suppressed in source for the reason given on the -tainted-env-args entry: hiding it at the call site would hide the one thing the docs say is still open.",
       "acceptedOn": "2026-09-13",
       "lineText": "cmd, shell=True, capture_output=True, text=text, timeout=timeout,"
+    },
+    {
+      "filePath": "tools/gamedig/package-lock.json",
+      "patternId": "Trivy_vulnerability_high",
+      "reason": "http-cache-semantics 4.2.0, CVE-2026-93748 / GHSA-ch52-4w7c-c8xp (max-stale on a SHARED cache), no fixed release: 4.3.0 (2026-10-04) leaves the max-stale logic unchanged and the upstream fix PR #58 was closed unmerged. Unreachable here: got builds CacheableRequest only under options.cache, and gamedig's one got() call never passes it. The owner accepted it on 2026-10-03 (Dependabot #26 dismissed not_used); this is the same decision for Codacy's Trivy, which only learned the CVE id now. Kept in step with tools/gamedig/osv-scanner.toml's ignoreUntil 2027-01-04 and dependency-review.yml's allow-ghsas: re-check upstream by then, and drop all three together when a fixed version lands.",
+      "acceptedOn": "2026-10-09",
+      "lineText": "\"node_modules/http-cache-semantics\": {"
     }
   ]
 }
