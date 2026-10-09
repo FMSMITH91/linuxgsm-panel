@@ -1274,7 +1274,7 @@ if _sio_ok:
         try:
             _sio_c.disconnect()
         except Exception:
-            pass
+            pass  # a client the server already dropped has nothing left to close
 
 # ── ...and so is the CREDENTIAL the socket joined with ───────────────────────────────────
 # The per-tick re-check asked only about the user ROW. None of the panel's revocation controls
@@ -1469,7 +1469,7 @@ finally:
         try:
             _c.disconnect()
         except Exception:
-            pass
+            pass  # a client the server already dropped has nothing left to close
     with _r_sf._viewers_lock:
         _r_sf._console_viewers.pop(gs_id, None)
     with app.app_context():
@@ -1542,7 +1542,7 @@ finally:
             if _pw_cl is not None:
                 _pw_cl.disconnect()
         except Exception:
-            pass
+            pass  # a client the server already dropped has nothing left to close
     with _r_sf._viewers_lock:
         _r_sf._console_viewers.pop(gs_id, None)
 
@@ -1955,7 +1955,7 @@ try:
     # Turning it on is a LinuxGSM CONFIG edit, so it needs the config permission and it only
     # takes effect on the next start — both reported rather than assumed away.
     _lt_writes = []
-    import panel.routes.server_files as _lt_sf  # pylint: disable=reimported
+    from panel.routes import server_files as _lt_sf  # pylint: disable=reimported
     _lt_wr = _lt_sf.lgsm_write_config
     try:
         _lt_sf.lgsm_write_config = lambda s, u, n, upd: (_lt_writes.append(upd), (True, "ok"))[1]
@@ -2119,7 +2119,7 @@ check("console poller: ...and the poller refuses the advance on that answer",
 # 'l:joml:1.10.9) to libraries/…'. _console_tick is the extracted body; this drives it.
 import re as _ct_re  # pylint: disable=reimported
 import types as _ct_types
-import panel.routes.server_files as _ct_sf  # pylint: disable=reimported
+from panel.routes import server_files as _ct_sf  # pylint: disable=reimported
 from panel.core.panel_state import _console_offsets as _ct_offsets
 
 
@@ -2414,11 +2414,10 @@ _gv_saved = _sm_core.run_command
 _gv_rag_saved = _sm_core.run_as_game_user
 _gv_mod.invalidate_game_version()
 try:
-    # The manifest as steam really writes it — tab-separated quoted pairs — plus a DECOY that
-    # sorts first. serverfiles/steamapps/ can hold a game's manifest and a dependency's, and
-    # picking whichever globs first reports a build number that never moves on an update.
-    _gv_acf = ('"AppState"\n{\n\t"appid"\t\t"4020"\n\t"name"\t\t"Garrys Mod DS"\n'
-               '\t"LastUpdated"\t\t"1757900000"\n\t"buildid"\t\t"19765832"\n}\n')
+    # The on-disk read parses the manifest ON THE HOST and prints key=value lines, so that is
+    # what this stub answers. serverfiles/steamapps/ can hold a game's manifest and a
+    # dependency's, and picking whichever globs first reports a build number that never moves
+    # on an update: the third check below holds the read to the appid in LinuxGSM's own config.
     _gv_calls = []
 
     def _gv_disk(with_manifest=True, appid_in_cfg=True):
@@ -2651,7 +2650,7 @@ finally:
 # Scanned across the whole source tree, not one file. This used to read app.py, and the code
 # it guards against has not lived there for a long time — an absence assertion pointed at the
 # wrong file passes no matter what the panel actually does.
-_all_src = []
+_all_src, _all_unread = [], []
 for _d, _, _fs in os.walk(_repo_root):
     # tests/smoke is this suite's own source (its parts are not named *_test.py), and this very
     # check spells the string it looks for.
@@ -2662,10 +2661,12 @@ for _d, _, _fs in os.walk(_repo_root):
         if _f.endswith(".py") and not _f.endswith("_test.py"):
             try:
                 _all_src.append(open(os.path.join(_d, _f), encoding="utf-8").read())
-            except OSError:
-                pass
+            except OSError as _e:
+                _all_unread.append("%s (%s)" % (os.path.join(_d, _f), _e))
+# An absence check passes for any file it could not read, so an unread file fails it.
 check("server status api: no longer cats the console log to count players",
-      not any("grep -c 'ClientConnect" in _x for _x in _all_src))
+      not any("grep -c 'ClientConnect" in _x for _x in _all_src) and not _all_unread,
+      "not read, so not scanned: %s" % _all_unread[:3])
 
 # ── Editing a game server validates, and refuses a port change it cannot honour ────────
 # /servers/<id>/edit wrote name, game_display and PORT straight from the form. The port write
@@ -2817,10 +2818,10 @@ with app.app_context():
     check("password change: ...and the step it used is recorded",
           (_t.last_totp_step or 0) > 0, "last_totp_step=%s" % _t.last_totp_step)
 _tc2 = client_as(admin2_id)   # the change revoked the old session
-_r2 = _tc2.post("/account/password", data={"current_password": "Str0ng!passw0rd-2",
-                                           "new_password": "Str0ng!passw0rd-3",
-                                           "confirm_password": "Str0ng!passw0rd-3",
-                                           "totp_code": _code})
+_tc2.post("/account/password", data={"current_password": "Str0ng!passw0rd-2",
+                                     "new_password": "Str0ng!passw0rd-3",
+                                     "confirm_password": "Str0ng!passw0rd-3",
+                                     "totp_code": _code})
 with app.app_context():
     _t = db.session.get(User, admin2_id)
     check("password change: REPLAYING that same code is refused",
@@ -3018,8 +3019,8 @@ check("account page (2FA): ...and the code box has a name a screen reader can re
       'aria-label="Code or backup code"' in _at2_form,
       "its only accessible name is the placeholder, which disappears as soon as you type")
 # The password alone, with 2FA on — the proof account_2fa_disable refuses on the same page.
-_r = _at2_c.post("/account/api-token/generate", data={"password": "Str0ng!passw0rd"},
-                 follow_redirects=True)
+_at2_c.post("/account/api-token/generate", data={"password": "Str0ng!passw0rd"},
+            follow_redirects=True)
 _at2_tok, _at2_step, _at2_left = _at2_row()
 check("api token (2FA): the password alone mints nothing", _at2_tok is None,
       "a token was stored anyway: %r" % (_at2_tok,))
@@ -3028,9 +3029,9 @@ check("api token (2FA): ...and nothing was written to the account either",
       "last_totp_step=%r, %d of %d backup codes left" % (_at2_step, _at2_left, len(_at2_codes)))
 # A REAL backup code with the wrong password. Counted, not re-checked: use_backup_code
 # CONSUMES, so asking "is it still valid" would spend the thing being asked about.
-_r = _at2_c.post("/account/api-token/generate",
-                 data={"password": "wrong-password", "totp_code": _at2_codes[1]},
-                 follow_redirects=True)
+_at2_c.post("/account/api-token/generate",
+            data={"password": "wrong-password", "totp_code": _at2_codes[1]},
+            follow_redirects=True)
 _at2_tok, _, _at2_left = _at2_row()
 check("api token (2FA): a valid code with the wrong password mints nothing",
       _at2_tok is None, "stored=%r" % (_at2_tok,))
@@ -3096,3 +3097,11 @@ with app.app_context():
 check("api token (2FA): every refusal above is in the audit log", _at2_refusals == 4,
       "%d recorded, expected 4 (no code, wrong password, replayed code, spent backup code)"
       % _at2_refusals)
+
+
+# What later parts import from this one (`from smoke.part05 import ...`). The parts are
+# one suite, run in order by tests/smoke_test.py; listing these here says so to a reader,
+# and to CodeQL, which does not follow those imports and reads the names as unused.
+__all__ = [
+    'c',
+]

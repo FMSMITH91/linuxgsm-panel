@@ -324,7 +324,7 @@ finally:
             if _s.is_connected():
                 _s.disconnect()
         except Exception:
-            pass
+            pass  # a client the server already dropped has nothing left to close
     (_gb._f2b, _gb._ufw, _gb._allow, _gb._by_len, _bs_t0) = _bs_saved
     _gb._taken.clear()
     _gb._taken.update(_bs_t0)
@@ -701,7 +701,6 @@ check("uninstall: a host that cannot answer the check keeps the row and touches 
 # Driven through the real endpoint with run_privileged stubbed per exit code, because the bug
 # was in the branch AFTER the call, not in the call.
 from panel.db.models import GameServer as _UGS  # pylint: disable=reimported
-_uapp = sys.modules["app"]      # _appmod is not bound until later in this file
 _u_orig = _sm_core.run_privileged
 try:
     for _rc, _expect_gone, _label in ((1, False, "generic failure"),
@@ -1227,7 +1226,8 @@ check("early install failure: the row is marked failed, not left saying 'install
 check("early install failure: ...and no longer claims to be installed",
       _fr.installed is False, "installed=%r" % _fr.installed)
 check("early install failure: ...and carries the reason and the retry verdict",
-      "timed out" in _fr.install_error and _fr.install_retryable is True,
+      "timed out" in _fr.install_error and _fr.install_retryable is True
+      and _fr_reason == _fr.install_error,   # what it returns is what it wrote (callers log it)
       "%r / %r" % (_fr.install_error, _fr.install_retryable))
 _fr2 = _FakeRow(); _fr2.installed, _fr2.status = True, "installing"
 _rif(_fr2, "The whole explanation.", "a noisy tool tail", retryable=False, explained=True)
@@ -2806,7 +2806,7 @@ try:
     _appmod_cg._remote_listening_ports = lambda r: {22}
     # ...and the route now also asks the host whether the account already exists (an existing
     # one is someone else's, not a leftover), which the same dead host cannot answer either.
-    import panel.routes.manage_servers as _cg_msmod
+    from panel.routes import manage_servers as _cg_msmod
     _cg_has = _cg_msmod.host_account_state
     _cg_msmod.host_account_state = lambda r, n: "absent"
     # Under the seam, and drained before the row goes: this POST starts a real install thread,
@@ -2854,7 +2854,7 @@ finally:
 #
 # The host is stubbed to SUCCEED so the job walks the whole way: dependencies, download,
 # config, port adoption, firewall, autostart, start, and the post-start liveness poll.
-import panel.routes.manage_servers as _msmod
+from panel.routes import manage_servers as _msmod
 import time as _ijw_time
 # Stub at the DEFINITION SITE, never on the package. panel/ops/ssh_manager/__init__.py exposes
 # these through __getattr__ precisely so there is one stub target, and its docstring says not
@@ -3014,3 +3014,32 @@ try:
 finally:
     for (_m, _n), _v in _ij_saved.items():
         setattr(_m, _n, _v)
+
+
+# What later parts import from this one (`from smoke.part02 import ...`). The parts are
+# one suite, run in order by tests/smoke_test.py; listing these here says so to a reader,
+# and to CodeQL, which does not follow those imports and reads the names as unused.
+__all__ = [
+    '_appmod_ij',
+    '_cg_remote_id',
+    '_ij_game',
+    '_ij_ps',
+    '_ij_wait',
+    '_ijw_time',
+    '_install_jobs_sm',
+    '_install_lock_sm',
+    '_install_seam_closed',
+    '_msmod',
+    '_nre',
+    '_TSAudit',
+    'admin2_id',
+    'admin_id',
+    'bc_code',
+    'c',
+    'deleg_id',
+    'encrypt_secret',
+    'gs_id',
+    'mru_id',
+    'remote2_id',
+    'remote_id',
+]

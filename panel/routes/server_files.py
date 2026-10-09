@@ -2280,18 +2280,19 @@ def _register_console_routes(app):
         # `now` is the panel's clock at the moment it read this window, for the browser to stamp
         # the lines that are NEW since its last poll — those it did watch arrive. Sent from the
         # server rather than taken from Date.now() so every console time shares one clock.
-        return jsonify({"lines": lines, "now": time.time(),
-                        # False = the console was not read, so `lines` is not a measurement of
-                        # what the log holds. A caller must not redraw a scrollback from it.
-                        "readable": readable,
-                        # Where in the log the window ends, [0, inode, byte offset] — the kind of
-                        # place a catch-up answers from (chain 0: no poller read made it). The page
-                        # primed from this window asks to be caught up from here, so the poller's
-                        # pushes of lines the window already holds are dropped by their place, not
-                        # by their text. Absent when the reply carried none.
-                        **({"at": at} if at is not None else {}),
-                        "log_timestamps": any(r.get("t") for r in lines),
-                        "panel_lines": list(_console_backlog.get(server_id, []))})
+        body = {"lines": lines, "now": time.time(),
+                # False = the console was not read, so `lines` is not a measurement of what the
+                # log holds. A caller must not redraw a scrollback from it.
+                "readable": readable,
+                "log_timestamps": any(r.get("t") for r in lines),
+                "panel_lines": list(_console_backlog.get(server_id, []))}
+        # Where in the log the window ends, [0, inode, byte offset] — the kind of place a catch-up
+        # answers from (chain 0: no poller read made it). The page primed from this window asks to
+        # be caught up from here, so the poller's pushes of lines the window already holds are
+        # dropped by their place, not by their text. Absent when the reply carried none.
+        if at is not None:
+            body["at"] = at
+        return jsonify(body)
 
     @app.route("/api/server/<int:server_id>/log-timestamps", methods=["GET", "POST"])
     @login_required

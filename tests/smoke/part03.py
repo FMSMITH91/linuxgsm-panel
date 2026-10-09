@@ -596,7 +596,7 @@ check("REUSE BLOCKED: stolen remember_token rejected after logout (not 200)",
 # said "You have been logged out." with nothing logged for an operator to notice. A momentary
 # SQLite lock (a concurrent backup, a WAL checkpoint during a monitor sweep) is exactly this
 # shape, so it is driven that way: the commits raise, the rest of the request is real.
-import panel.routes.auth_routes as _lo_mod
+from panel.routes import auth_routes as _lo_mod
 
 
 class _FlakyDB:
@@ -852,7 +852,6 @@ finally:
 # Every one of these maps is keyed by a database row id, and SQLite hands a deleted row's id
 # to the next INSERT — so a new server inherits the old one's alert flags and, via
 # _max_players_cache, its CAPACITY. #81 pruned one such map; these are its siblings.
-_am2 = sys.modules["app"]
 _monmod = sys.modules["panel.services.monitoring"]   # functions moved here resolve their deps HERE
 _ps = sys.modules["panel.core.panel_state"]      # the shared caches now live here
 _dead_r, _dead_s = 987654, 876543
@@ -1228,7 +1227,7 @@ with app.app_context():
     # the database was too busy for VACUUM, i.e. the state in which the checkpoint is most
     # likely to have been refused too. An operator chasing a growing panel.db was told the
     # cheap half had been done while the wal_size beside it never moved.
-    import panel.db.models as _dbm
+    from panel.db import models as _dbm
     _rm_real = _dbm._run_maintenance(str(DB_PATH))
     check("optimize: _run_maintenance reports the checkpoint AND the vacuum",
           isinstance(_rm_real, tuple) and len(_rm_real) == 2
@@ -1260,7 +1259,7 @@ with app.app_context():
     # report's one journal read, must come out pseudonymised in the report, the summary and the
     # issue body, through the real app and database.
     from panel.ops.system_ops import generate_debug_report
-    import panel.ops.system_ops as _dr_so
+    from panel.ops import system_ops as _dr_so
     _dr_rem = RemoteServer(name="canary-host-7731", host="198.51.100.77", username="canarysshacct",
                            auth_method="key", auth_credential="")
     db.session.add(_dr_rem)
@@ -1741,9 +1740,9 @@ check("2fa disable: ...and the page says a code is needed",
       b"code didn&#39;t match" in _r.data or b"code didn't match" in _r.data,
       "no reason shown: %r" % _r.data[-200:])
 
-_r = _tdc.post("/account/2fa/disable",
-               data={"password": "wrong-password", "totp_code": _td_codes[1]},
-               follow_redirects=True)
+_tdc.post("/account/2fa/disable",
+          data={"password": "wrong-password", "totp_code": _td_codes[1]},
+          follow_redirects=True)
 check("2fa disable: ...nor does a code with the wrong password", _td_still_on())
 with app.app_context():
     # Counted, not re-checked: use_backup_code CONSUMES, so asking "is it still valid" would
@@ -1757,9 +1756,9 @@ with app.app_context():
 
 # The real thing: password + a backup code (what the card tells people to use when the
 # authenticator is gone).
-_r = _tdc.post("/account/2fa/disable",
-               data={"password": "Str0ng!passw0rd", "totp_code": _td_codes[0]},
-               follow_redirects=True)
+_tdc.post("/account/2fa/disable",
+          data={"password": "Str0ng!passw0rd", "totp_code": _td_codes[0]},
+          follow_redirects=True)
 check("2fa disable: password + a valid backup code DOES turn it off (positive control)",
       not _td_still_on(),
       "the route now refuses everything, which would make the checks above meaningless")
@@ -3106,8 +3105,6 @@ from panel.db.models import prune_expired_sessions as _prune
 from datetime import timedelta as _td  # pylint: disable=reimported
 from panel.core.clock import utcnow as _utcnow_s  # pylint: disable=reimported
 s4, _ = _real_login()
-with app.app_context():
-    _sids = {r.sid: r.id for r in UserSession.query.filter_by(user_id=admin_id).all()}
 _live = ((s1.get("/api/account/sessions").get_json() or {}).get("sessions", []))
 _stale = next((x for x in _live if not x.get("current")), None)
 with app.app_context():
@@ -3301,3 +3298,15 @@ check("history: player peak survives down-sampling (max==5, not decimated to 0)"
 with app.app_context():
     MetricSample.query.filter_by(server_id=gs_id).delete()
     db.session.commit()
+
+
+# What later parts import from this one (`from smoke.part03 import ...`). The parts are
+# one suite, run in order by tests/smoke_test.py; listing these here says so to a reader,
+# and to CodeQL, which does not follow those imports and reads the names as unused.
+__all__ = [
+    '_AL',
+    '_real_login',
+    '_TU',
+    'c',
+    'MetricSample',
+]
