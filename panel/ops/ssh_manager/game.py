@@ -946,7 +946,7 @@ def _backup_failure_reason(out, err):
 
 
 def _run_linuxgsm_backup(server, user, selfname):
-    """Run LinuxGSM's `backup` as the game user: (ok, lock_refused, out, err)."""
+    """Run LinuxGSM's `backup` as the game user: (ok, lock_refused, out, err, rc)."""
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
     # which every backup refuses with "Lockfile found: Backup is currently running". See
     # _stale_backup_lock_sweep for when a lock counts as orphaned.
@@ -971,7 +971,7 @@ def _run_linuxgsm_backup(server, user, selfname):
     lock_refused = "lockfile found" in _blob or "backup is currently running" in _blob
     if lock_refused:
         ok = False
-    return ok, lock_refused, out, err
+    return ok, lock_refused, out, err, rc
 
 
 def _bkprune_after_success(server, user, keep):
@@ -986,6 +986,100 @@ def _bkprune_after_success(server, user, keep):
         cron.prune_game_backups(server, user, keep)
     except Exception:
         _core._log.debug("game backup prune failed", exc_info=True)
+
+
+# ── the partial archive a FAILED backup leaves ─────────────────────────────────────────────────
+# LinuxGSM's command_backup.sh writes `tar … -f ~/lgsm/backup/<selfname>-<YYYY-MM-DD-HHMMSS>.tar.<ext>`
+# under its final name, and when tar fails it says FAIL and leaves the file. Since the prune runs
+# only after a success, that partial then holds one of the `keep` slots until newer backups push it
+# out. Removing it is only safe when it is PROVABLY this run's and the run is PROVABLY over:
+#   * this run's — its name was not in a listing taken just before the run, it has LinuxGSM's
+#     name for this instance, and the host says it was last written after that listing;
+#   * over — LinuxGSM itself exited with one of its own codes, 1 to 4 (core_exit.sh). A timeout,
+#     a transport failure (-1; ssh's 255), a signal (128+) or a lock refusal proves nothing: the
+#     tar may still be writing, or the archive may be another run's;
+#   * and still over at the moment of the rm: no backup.lock anywhere in the home and no tar
+#     running as the account, checked in the same command (a cron backup may have started since).
+# Any doubt — a listing that did not finish, two candidates, an unreadable mtime — removes nothing.
+_BKPART_DONE = "__LGSMP_BKPART_DONE__"
+_BKPART_GONE = "__LGSMP_BKPART_REMOVED__"
+_BKPART_LGSM_FAIL_RCS = frozenset({1, 2, 3, 4})
+
+
+def _bkpart_listing(server, user):
+    """(host_now, {name: mtime}) of ~/lgsm/backup/*.tar.*, or None when it did not provably run.
+
+    An mtime that could not be read is None: the name still counts as present. Never raises: it
+    runs before every backup, and a listing that failed must not stop one.
+    """
+    bdir = "/home/%s/lgsm/backup" % user
+    cmd = ('printf "T\\t%%s\\n" "$(date +%%s)"; '
+           'for f in %s/*.tar.*; do [ -e "$f" ] || continue; '
+           'printf "F\\t%%s\\t%%s\\n" "$(basename "$f")" "$(stat -c%%Y "$f" 2>/dev/null)"; '
+           'done; printf "%%s\\n" %s') % (_core._quote(bdir), _BKPART_DONE)
+    try:
+        out, _, rc = _core.shell_as_game_user(server, user, cmd, timeout=20)
+    except Exception:       # paramiko raises: no listing, and never a reason not to back up
+        _core._log.debug("backup listing for the partial-archive check failed", exc_info=True)
+        return None
+    out = out or ""
+    if rc != 0 or not out.rstrip().endswith(_BKPART_DONE):
+        return None
+    now, names = None, {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if parts[0] == "T" and len(parts) == 2 and parts[1].isdecimal():
+            now = int(parts[1])
+        elif parts[0] == "F" and len(parts) >= 2:
+            mt = parts[2] if len(parts) == 3 else ""
+            names[parts[1]] = int(mt) if mt.isdecimal() else None
+    return (now, names) if now is not None else None
+
+
+def _bkpart_candidate(before, after, selfname):
+    """The one archive `after` has that `before` did not, written since; None on any doubt."""
+    started, had = before
+    _now, has = after
+    new = [n for n, mt in has.items()
+           if n not in had and n.startswith(selfname + "-") and cron._game_backup_name_ok(n)
+           and mt is not None and mt >= started]
+    # A name the listing could not read the mtime of is not "old": with one in the new set, the
+    # set is not known, so nothing is chosen.
+    if len(new) != 1 or any(n not in had and mt is None for n, mt in has.items()):
+        return None
+    return new[0]
+
+
+def _bkpart_remove(server, user, name, started):
+    """Remove ~/lgsm/backup/<name> if nothing is backing up now and it was written since `started`.
+
+    True only when the host says it removed it.
+    """
+    path = _core._quote("/home/%s/lgsm/backup/%s" % (user, name))
+    home = _core._quote("/home/%s" % user)
+    cmd = ("command -v pgrep >/dev/null 2>&1 || exit 3; "
+           f"pgrep -u {_core._quote(user)} -x tar >/dev/null 2>&1 && exit 3; "
+           f'[ -z "$(find {home} -maxdepth 4 -name "*backup.lock" -print -quit 2>/dev/null)" ] '
+           "|| exit 3; "
+           f"[ -f {path} ] && [ ! -L {path} ] || exit 3; "
+           f"m=$(stat -c %Y -- {path} 2>/dev/null) && [ \"$m\" -ge {int(started)} ] || exit 3; "
+           f"rm -f -- {path} && printf %s {_BKPART_GONE}")
+    out, _, rc = _core.shell_as_game_user(server, user, cmd, timeout=30)
+    return rc == 0 and _BKPART_GONE in (out or "")
+
+
+def _bkpart_cleanup(server, user, selfname, before, rc, lock_refused):
+    """Remove the partial archive of a backup that provably failed: a note for the message, or ""."""
+    if before is None or lock_refused or rc not in _BKPART_LGSM_FAIL_RCS:
+        return ""
+    try:
+        after = _bkpart_listing(server, user)
+        name = _bkpart_candidate(before, after, selfname) if after else None
+        if name and _bkpart_remove(server, user, name, before[0]):
+            return " Removed the partial archive it left (%s)." % name
+    except Exception:
+        _core._log.debug("partial backup cleanup failed", exc_info=True)
+    return ""
 
 
 def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
@@ -1021,7 +1115,9 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     refusal = _backup_space_refusal(server, user, headroom_note)
     if refusal:
         return False, refusal, False
-    ok, lock_refused, out, err = _run_linuxgsm_backup(server, user, selfname)
+    # Taken last, just before the run: the headroom prune above may have removed archives.
+    before = _bkpart_listing(server, user)
+    ok, lock_refused, out, err, rc = _run_linuxgsm_backup(server, user, selfname)
     if ok:
         _bkprune_after_success(server, user, keep)
         return True, ("Backed up — " + headroom_note if headroom_note else "Backed up"), False
@@ -1029,7 +1125,8 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         return False, ("A backup lock was in the way — a previous backup may still be running, or it "
                        "left a stale lock. Try again in a minute."), False
     # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
-    return False, _backup_failure_reason(out, err), False
+    return False, (_backup_failure_reason(out, err)
+                   + _bkpart_cleanup(server, user, selfname, before, rc, lock_refused)), False
 
 
 # One row of the command table the instance script prints with no arguments:

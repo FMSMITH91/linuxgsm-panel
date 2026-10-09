@@ -978,11 +978,105 @@ def _read_file_reply(out, ap, _rc):
     return None, "Could not read that file — the host did not answer. Nothing has been changed."
 
 
+# ── logtimestamp through the file browser ──────────────────────────────────────────────────────
+# lgsm_write_config refuses turning LinuxGSM's `logtimestamp` on (it freezes the live console —
+# see _CFGFORM_HIDDEN_KEYS), but the raw editor, the Config card's Raw tab and an upload write a
+# whole file and never came through it. These refuse the same thing on those paths.
+#
+# WHICH FILES. linuxgsm.sh sources lgsm/config-lgsm/<gameservername>/ _default.cfg, common.cfg,
+# secrets-common.cfg, <instance>.cfg and secrets-<instance>.cfg (_core.LGSM_CFG_ORDER), and on
+# every run copies lgsm/config-default/config-lgsm/<gameservername>/_default.cfg over the first
+# when the two differ — so that template is a way in too. Any `.cfg` under either tree is refused:
+# a name that is not sourced today becomes the instance cfg of the next instance installed.
+#
+# WHAT COUNTS AS ON. LinuxGSM tests `[ "${logtimestamp}" == "on" ]`. A value that reads "on" once
+# bash's quotes and backslashes are gone is refused, in any case (`On` does not turn it on, but it
+# is one keystroke from doing so and nobody means it), and so is a value with `$` or a backtick,
+# which this cannot evaluate. "off", "" and a commented-out line are allowed; spaces around `=`
+# (which bash would run as a command, not an assignment) are judged like an assignment.
+_RAWLTS_REFUSED = ("This file sets LinuxGSM's logtimestamp on, which freezes the panel's live "
+                   "console, so it can't be saved into a LinuxGSM config. Set it to \"off\" or "
+                   "comment the line out — nothing has been changed.")
+_RAWLTS_UNCHECKED = ("This file sets LinuxGSM's logtimestamp on, which freezes the panel's live "
+                     "console, and the host could not be asked whether the file is a LinuxGSM "
+                     "config — nothing has been changed.")
+_RAWLTS_ASSIGN_RE = re.compile(
+    r"(?<![\w$])logtimestamp\s*=\s*((?:\"[^\"]*(?:\"|$)|'[^']*(?:'|$)|[^\s;&|\"'])*)", re.IGNORECASE)
+_RAWLTS_CFG_RE = re.compile(r"/lgsm/config-(?:lgsm|default/config-lgsm)/.*\.cfg\Z")
+_RAWLTS_HOST_PATTERNS = "*/lgsm/config-lgsm/*.cfg|*/lgsm/config-default/config-lgsm/*.cfg"
+_RAWLTS_HIT, _RAWLTS_CLEAR = "__RAWLTS_CFG__", "__RAWLTS_NOTCFG__"
+
+
+def _rawlts_code(line):
+    """`line` without its comment: from the first `#` that starts a word outside quotes, as bash."""
+    quote, prev = None, " "
+    for i, c in enumerate(line):
+        if quote:
+            if c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c == "#" and (prev.isspace() or prev in ";&|("):
+            return line[:i]
+        prev = c
+    return line
+
+
+def _rawlts_turns_on(data):
+    """True when the text (str or bytes) has an uncommented line that sets logtimestamp on."""
+    if isinstance(data, bytes):
+        # An upload can be 50 MB of anything: only decode one that names the key at all.
+        if not re.search(rb"(?i)logtimestamp", data):
+            return False
+        data = data.decode("utf-8", "replace")
+    for line in (data or "").splitlines():
+        for m in _RAWLTS_ASSIGN_RE.finditer(_rawlts_code(line)):
+            val = re.sub(r"[\"'\\]", "", m.group(1)).strip().lower()
+            if val == "on" or "$" in val or "`" in val:
+                return True
+    return False
+
+
+def _rawlts_host_says_cfg(server, user, ap):
+    """Whether `ap`, resolved ON THE HOST, is a LinuxGSM config: True / False, None when unknown.
+
+    A path that does not read as one can still land in one through a symlinked folder (the write
+    replaces the last name, so its real parent counts) or a link at the name itself (counted too:
+    refusing that is the safe side). One round trip, made only for a file that turns the key on.
+    """
+    q = _core._quote
+    inner = (f"a=$(realpath -m {q(ap)} 2>/dev/null) || a={q(ap)}; "
+             f"b=$(realpath -m {q(_pp.dirname(ap))} 2>/dev/null)/{q(_pp.basename(ap))} "
+             f"|| b={q(ap)}; "
+             f'for p in "$a" "$b"; do case "$p" in {_RAWLTS_HOST_PATTERNS}) '
+             f"echo {_RAWLTS_HIT}; exit 0 ;; esac; done; echo {_RAWLTS_CLEAR}")
+    out, _, rc = _core.shell_as_game_user(server, user, inner, timeout=15)
+    out = out or ""
+    if rc != 0 or (_RAWLTS_HIT in out) == (_RAWLTS_CLEAR in out):
+        return None                 # it did not run, or said both or neither: not an answer
+    return _RAWLTS_HIT in out
+
+
+def _rawlts_refusal(server, user, ap, data):
+    """Why writing `data` at `ap` is refused for turning logtimestamp on, else None."""
+    if not _rawlts_turns_on(data):
+        return None
+    if _RAWLTS_CFG_RE.search(ap):
+        return _RAWLTS_REFUSED
+    is_cfg = _rawlts_host_says_cfg(server, user, ap)
+    if is_cfg is None:
+        return _RAWLTS_UNCHECKED
+    return _RAWLTS_REFUSED if is_cfg else None
+
+
 def write_file(server, user, relpath, content):
     """Write text content to a file in the game user's home."""
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return False, "Invalid path"
+    refusal = _rawlts_refusal(server, user, ap, content or "")
+    if refusal:
+        return False, refusal
     return _write_file_as_user(server, user, ap, (content or "").encode())
 
 
@@ -1072,6 +1166,9 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True):
     target = _pp.join(apdir, fn)
     if not (target.startswith(f"/home/{user}/")):
         return False, "Invalid path"
+    refusal = _rawlts_refusal(server, user, target, data_bytes or b"")
+    if refusal:
+        return False, refusal
     if not overwrite:
         refusal = _existing_target_refusal(server, user, target)
         if refusal:

@@ -98,11 +98,12 @@ for _attr, _fns in _WATCHED.items():
 # part43 (the port an import stores) drives the import route on part12's app, importing part01, 05, 12.
 # part44 (system_ops and debug-report fixes from the 2026-10-08 review) imports part01, 02, 10 and 20.
 # part47 (small page behaviours from the 2026-10-08 review, run in node) imports part01, 05 and 12.
+# part49 (raw-cfg logtimestamp and failed-backup partial archives) drives part12's app; imports part01, 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
           "part28", "part29", "part30", "part31", "part32", "part33", "part34", "part35", "part36", "part37",
-          "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part15")
+          "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
