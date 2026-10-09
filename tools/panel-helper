@@ -3946,6 +3946,53 @@ def _game_env(pw, home):
     }
 
 
+# The umask a game account's LinuxGSM runs with everywhere else. Its cron jobs, a login, and the
+# `sudo -u <account>` a remote host still uses all open a PAM session, and Ubuntu's
+# common-session(-noninteractive) runs pam_umask: login.defs' UMASK (022), then, with
+# USERGROUPS_ENAB yes and an account whose primary group has its own name, the group bits made the
+# owner's — 0002. The helper opens no PAM session, so a server it started inherited the panel's
+# unit's 0022 through sudo, and its new console logs and lock files were 644 where every other
+# start made them 664 (measured on the test box: the helper-started java at Umask 0022 beside cron-
+# and sudo-started games at 0002). This computes what pam_umask would have set, from the same
+# files, so the drop below lands on it. pam_umask's GECOS `umask=` field is not read: the panel
+# creates its accounts without one.
+SESSION_UMASK_DEFS = ("/etc/login.defs", "/etc/default/login")   # pam_umask's own search order
+SESSION_UMASK_FALLBACK = 0o022     # no UMASK anywhere: pam_umask leaves sudo's floor, 022
+
+
+def _q_login_defs_value(key):
+    """Return `key`'s value from the first of SESSION_UMASK_DEFS that sets it, or None.
+
+    Read the way pam_modutil_search_key reads them: `KEY value` per line, `#` starts a comment.
+    """
+    for path in SESSION_UMASK_DEFS:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    parts = line.split("#", 1)[0].split(None, 1)
+                    if len(parts) == 2 and parts[0] == key:
+                        return parts[1].strip()
+        except OSError:
+            continue
+    return None
+
+
+def _q_session_umask(pw):
+    """Return the umask pam_umask gives `pw`'s session (see SESSION_UMASK_DEFS above)."""
+    try:
+        mask = int(_q_login_defs_value("UMASK") or "", 8) & 0o777
+    except ValueError:
+        mask = SESSION_UMASK_FALLBACK
+    if (pw.pw_uid != 0 and (_q_login_defs_value("USERGROUPS_ENAB") or "").lower() == "yes"):
+        try:
+            own_group = grp.getgrgid(pw.pw_gid).gr_name == pw.pw_name
+        except KeyError:
+            own_group = False
+        if own_group:
+            mask = (mask & ~0o070) | ((mask >> 3) & 0o070)    # pam_umask's usergroups: 022 -> 002
+    return mask
+
+
 # ── Moving what is already in the panel's cgroup out of it ────────────────────────────────────
 def _panel_cgroup():
     """Return this process's cgroup when it is the panel's unit, else None.
@@ -4188,6 +4235,7 @@ def _cron_job_exec(pw, home, job_id, b64):
     """
     if not _drop_to(pw, own_groups=True):
         return 1
+    os.umask(_q_session_umask(pw))        # what its real cron run gets: see _q_session_umask
     runner = os.path.realpath(os.path.join(home, CRON_RUNNER))
     if not runner.startswith(home + "/") or not (os.path.isfile(runner)
                                                  and os.access(runner, os.X_OK)):
@@ -4269,6 +4317,9 @@ def _lgsm_child(pw, home, selfname, action, stdin_text, tee):
     try:
         if not _drop_to(pw, own_groups=True):
             return 1
+        # The umask cron, a login and `sudo -u` give this account — not the panel unit's 0022,
+        # which made a helper-started server's new logs 644 (see _q_session_umask).
+        os.umask(_q_session_umask(pw))
         script = os.path.realpath(os.path.join(home, selfname))
         if script != home and not script.startswith(home + "/"):
             return 1                      # a symlink pointing out of the home directory

@@ -1,10 +1,10 @@
-"""Part 41's section AI (clean host reboots): review 1008's reboot findings; part41 runs them.
+"""Part 41's sections AI-AJ (clean host reboots): review 1008's reboot findings; part41 runs them.
 
 Each runs the real job, restore worker and monitor sweep against the stand-in hosts, as AE-AH do.
 """
 from unit.reboot41_fixtures import (
-    HR, _CLOCK41, _NOTES41, _all41, _audit41, _core41, _fresh41, _mon41, _patch, _std_host41,
-    check)
+    HR, _CLOCK41, _NOTES41, _all41, _audit41, _core41, _events41, _fresh41, _mon41, _patch, _ps41,
+    _std_host41, check)
 from unit.reboot41_a import _WAITER41, _bodies41, _pass41, _trace41, _wait_entry41, _wpass41
 from unit.reboot41_b import _server_pages41, _sweep41
 from unit.reboot41_c import _unread_host41
@@ -122,3 +122,44 @@ def _rbhold_wait_over_rows_checks41():
     check("wait over an earlier plan's rows: it does not fire while they are pending (request_reboot's "
           "conflict check), and fires once they are gone",
           _all41(held == (None, False, True), "reboot" in _trace41()), repr(held))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# AJ. The census reads every long action on a server, not only the newest registration
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _q_chain41(*runs):
+    """An _action_output chain, newest first: each run (action, ended) displaces the next."""
+    entry = None
+    for action, ended in reversed(runs):
+        entry = {"action": action, "path": "/x/.panel-%s.log" % action, "user": "gmodserver",
+                 "pos": 0, "prev": entry, "ended": ended}
+    return entry
+
+
+def _q_census_chain_checks41():
+    """An update displaced by a validate whose end read is out is still running: not 'nothing'."""
+    _fresh41()
+    r, h, rows = _std_host41()
+    gid = rows["gmod"].id
+    seen = {}
+    try:
+        for label, chain in (("displaced", _q_chain41(("validate", True), ("update", False))),
+                             ("both", _q_chain41(("validate", False), ("update", False))),
+                             ("ended", _q_chain41(("validate", True), ("update", True)))):
+            _ps41._action_output[gid] = chain
+            seen[label] = [(b["name"], b["detail"]) for b in HR.host_player_state(r)["blockers"]
+                           if b["kind"] == "action"]
+        _ps41._action_output[gid] = _q_chain41(("validate", True), ("update", False))
+        code, body = HR.request_reboot(r, "now", None, "web")
+    finally:
+        _ps41._action_output.pop(gid, None)
+    check("census: an action displaced under one whose final read is out (head ended, the update "
+          "beneath still running) blocks the reboot -- the whole chain is read, not its head",
+          seen.get("displaced") == [("gmodserver", "update")], repr(seen))
+    check("census: two live actions on one server are one blocker naming both; a chain that has "
+          "all ended blocks nothing", _all41(seen.get("both") == [("gmodserver", "validate, update")],
+                                             seen.get("ended") == []), repr(seen))
+    check("census: Reboot now over that displaced update is refused as blocked, and nothing was "
+          "stopped or rebooted",
+          _all41(code == 409, body.get("error") == "blocked",
+                 not _events41(h, ("stop", "disarm", "reboot"))), repr((code, body)))

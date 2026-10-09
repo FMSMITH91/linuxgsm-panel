@@ -150,6 +150,11 @@ home = os.path.join(work, "home")
 pw = types.SimpleNamespace(pw_name="gm31", pw_dir=home, pw_uid=os.getuid(), pw_gid=os.getgid())
 mod.pwd = types.SimpleNamespace(getpwnam=lambda n: pw, getpwuid=lambda u: pw)
 mod.SYSTEMD_BOOTED_DIR, mod.SCOPE_WAIT_SECONDS = work, wait
+# The umask sudo hands the helper (the panel unit's 0022), and an Ubuntu login.defs whose
+# USERGROUPS_ENAB gives an account with its own group 0002 — that group stubbed as gm31's.
+os.umask(0o022)
+mod.SESSION_UMASK_DEFS = (os.path.join(work, "login.defs"), os.path.join(work, "no-default-login"))
+mod.grp = types.SimpleNamespace(getgrgid=lambda g: types.SimpleNamespace(gr_name="gm31"))
 mod.resolve = lambda name: "/usr/bin/" + name
 PANEL, ME, moves, seen = "/system.slice/linuxgsm-panel.service", os.getpid(), {}, []
 def run(argv, **kw):
@@ -189,9 +194,15 @@ def _probe31(mode, runner=True, landing="land"):
     home = os.path.join(work, "home")
     os.makedirs(os.path.join(home, ".lgsm-cron"))
     log = os.path.join(work, "events.log")
-    for rel, body in (("gmodserver", '#!/bin/sh\necho \'["script", "%s"]\' >> %s\n' % ("$1", log)),
+    with open(os.path.join(work, "login.defs"), "w", encoding="utf-8") as fh:
+        fh.write("# as Ubuntu ships it\nUMASK\t\t022\nUSERGROUPS_ENAB yes\n")
+    # Each script also records the umask it ran under and creates a file at it (umask.<kind>,
+    # made.<kind>), outside events.log so the order checks above read what they always did.
+    made = '(umask > %s/umask.%%s; : > %s/made.%%s)\n' % (work, work)
+    for rel, body in (("gmodserver", '#!/bin/sh\necho \'["script", "%s"]\' >> %s\n' % ("$1", log)
+                       + made % ("script", "script")),
                       (".lgsm-cron/run", '#!/bin/sh\necho "[\\"runner\\", \\"$1\\", \\"$2\\"]" >> %s\n'
-                       % log)):
+                       % log + made % ("runner", "runner"))):
         if rel.startswith(".lgsm") and not runner:
             continue
         with open(os.path.join(home, rel), "w", encoding="utf-8") as fh:
@@ -202,7 +213,23 @@ def _probe31(mode, runner=True, landing="land"):
         fh.write(_PROBE31)
     r = _sp31.run([_sys31.executable, script, _helper_path, work, mode, landing,  # nosec B603 - own probe
                    str(_LAND31), str(_WAIT31)], capture_output=True, text=True, timeout=60, check=False)
+    _UMASKS31[mode] = _umask_seen31(work)
     return (_jsonl31(log), r.stdout, r.stderr, _jsonl31(os.path.join(work, "times.log")))
+
+
+_UMASKS31 = {}
+
+
+def _umask_seen31(work):
+    """{kind: (the umask it printed, the mode of the file it made)} for the scripts that ran."""
+    seen = {}
+    for kind in ("script", "runner"):
+        try:
+            with open(os.path.join(work, "umask." + kind), encoding="utf-8") as fh:
+                seen[kind] = (fh.read().strip(), oct(os.stat(os.path.join(work, "made." + kind)).st_mode & 0o777))
+        except OSError:
+            continue
+    return seen
 
 
 def _jsonl31(path):
@@ -302,6 +329,47 @@ def _check_cron_now31():
           "never a 'started' for a task that cannot run",
           ["rc", 1] in events and "CRON_RUN_STARTED" not in out and "could not be started" in err,
           repr((events, out, err[-200:])))
+
+
+def _check_session_umask31():
+    """A server the helper starts gets the umask cron, a login and `sudo -u` give the account.
+
+    Since the scope work the helper ran LinuxGSM at the 0022 it inherits through sudo, so a
+    helper-started server's new console logs and locks were 644 where every other start made them
+    664 (the test box: java at Umask 0022 beside cron- and sudo-started games at 0002).
+    """
+    for mode, kind in (("lgsm-start", "script"), ("lgsm-details", "script"), ("cron", "runner")):
+        _probe31(mode)
+        seen = _UMASKS31.get(mode, {}).get(kind)
+        check("helper %s: LinuxGSM runs at the account's session umask, 0002 for an account with "
+              "its own group under Ubuntu's login.defs, so the files it makes are 664, as when "
+              "cron or `sudo -u` starts it — not the 0022 sudo hands the helper" % mode,
+              seen == ("0002", "0o664"), repr(seen))
+    mod = _fresh_helper31()
+    defs = os.path.join(_TMP31, "umask-login.defs")
+    fallback = os.path.join(_TMP31, "umask-default-login")
+    own = _types31.SimpleNamespace(gr_name="gm31")
+    mod.grp = _types31.SimpleNamespace(getgrgid=lambda g: own)
+    mod.SESSION_UMASK_DEFS = (defs, fallback)
+
+    def mask(defs_text, name="gm31", uid=1500, default_login=None):
+        for path, text in ((defs, defs_text), (fallback, default_login)):
+            if text is None:
+                if os.path.exists(path):
+                    os.remove(path)
+            else:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+        return oct(mod._q_session_umask(_types31.SimpleNamespace(pw_name=name, pw_uid=uid, pw_gid=1500)))
+
+    got = (mask("UMASK 077\nUSERGROUPS_ENAB yes\n"), mask("UMASK 022\nUSERGROUPS_ENAB yes\n", name="other"),
+           mask("UMASK 022\nUSERGROUPS_ENAB yes\n", uid=0), mask("UMASK 022\nUSERGROUPS_ENAB no\n"),
+           mask("# UMASK 002\nUMASK 027 # site policy\n"), mask(None), mask("UMASK nonsense\n"),
+           mask(None, default_login="UMASK 007\n"))
+    check("helper _q_session_umask: pam_umask's rule — login.defs' UMASK, its group bits made the "
+          "owner's only for a non-root account whose primary group has its own name and only with "
+          "USERGROUPS_ENAB yes; comments skipped; /etc/default/login next; 022 when neither says",
+          got == ("0o7", "0o22", "0o22", "0o22", "0o27", "0o22", "0o22", "0o7"), repr(got))
 
 
 # _start_scope itself, in-process: busctl answers 0, and _cgroup_of is a script of answers.
@@ -1132,7 +1200,7 @@ def _check_uninstall_scopes31():
 
 
 for _fn31 in (_check_lgsm_start31, _check_scope_wait31, _check_scope_never31, _check_start_scope31, _check_lgsm_other31,
-              _check_cron_now31, _check_adopt31, _check_cgroup_pids31,
+              _check_cron_now31, _check_session_umask31, _check_adopt31, _check_cgroup_pids31,
               _check_terminal_scope31, _check_jobs31, _check_job_entry31, _check_os_update_job31,
               _check_no_systemd31, _check_reboot31, _check_constants31, _check_backup31,
               _check_run_now31, _check_run_now_refused31, _check_user_scope31,
