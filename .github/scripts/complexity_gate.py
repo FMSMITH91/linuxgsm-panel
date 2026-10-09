@@ -25,7 +25,12 @@ Python without the extension) with the limits the repository's Codacy coding sta
   has no `languages:` entry naming it.
 
 A violation the base already had is not new; only what the change adds fails the check, named
-with its file and line. Usage:
+with its file and line. That holds when code MOVES between files too. A renamed file is judged
+against its old self. A file split out of another (a new file whose lines, compared without their
+indentation, are at least 90% lines the same change removed from one existing file) is judged with
+that file, against what it was at the base: their violations are counted together, so one that
+moved into the new file is not new, and one the move added is. A split file over the file-length
+limit is new only when it is longer than the whole file it came from was. Usage:
 
     complexity_gate.py [BASE]     # BASE: a commit; default the first parent of a merge HEAD,
                                   # else main's merge base with HEAD
@@ -140,17 +145,38 @@ def pylint_violations(path, code):
     return out
 
 
-def new_violations(path, base_code, head_code):
-    """What the head has that the base does not, counted per key."""
+def _file_nloc(path, code):
+    """Lizard's count of a file's lines of code."""
+    return lizard.analyze_file.analyze_source_code(_lang_name(path), code).nloc if code else 0
+
+
+def new_violations(path, base_code, head_code, splits=()):
+    """What the head has that the base does not, counted per key: [(path, line, message)].
+
+    `splits` are the files this change split out of `path`, as [(their path, their text)]. They are
+    counted with `path`'s head against `path`'s base, so a violation that moved is matched wherever
+    it went. Their file length is the exception: each is judged alone, and is new only when that
+    file is longer than `path` was at the base (splitting a long file in two is not two new ones).
+    """
     found = []
+    base_nloc = _file_nloc(path, base_code) if splits else 0
     for check in (lizard_violations, pylint_violations):
         before = collections.Counter(k for k, _l, _m in check(path, base_code)) if base_code else {}
         seen = collections.Counter()
-        for key, line, msg in check(path, head_code):
+        for p, key, line, msg in _group_violations(check, [(path, head_code)] + list(splits)):
+            if p != path and key == ("file-nloc", ""):
+                if _file_nloc(p, dict(splits)[p]) > base_nloc:
+                    found.append((p, line, msg))
+                continue
             seen[key] += 1
             if seen[key] > before.get(key, 0):
-                found.append((line, msg))
+                found.append((p, line, msg))
     return found
+
+
+def _group_violations(check, members):
+    """`check`'s violations in each of `members` ([(path, text)]), as [(path, key, line, message)]."""
+    return [(p, key, line, msg) for p, code in members if code for key, line, msg in check(p, code)]
 
 
 def _blob_size(rev, path, cwd=None):
@@ -163,6 +189,54 @@ def _renamed_from(base, cwd=None):
     """Map each file the change renamed, head path to base path."""
     out = _git("diff", "--name-status", "-M", "--diff-filter=R", base, "HEAD", cwd=cwd).stdout
     return {f[2]: f[1] for f in (ln.split("\t") for ln in out.splitlines()) if len(f) == 3}
+
+
+# A new file is a split out of an existing one when at least this share of its non-blank lines,
+# stripped of their indentation, are lines the same change removed from that one file.
+SPLIT_SHARE = 0.9
+
+
+def _line_bag(text):
+    """The non-blank lines of `text`, stripped of their indentation, counted."""
+    return collections.Counter(ln.strip() for ln in text.splitlines() if ln.strip())
+
+
+def _is_python(path):
+    return path.endswith(".py") or path in PYTHON_NAMED
+
+
+def _shrunk_files(base, cwd=None):
+    """{path: the lines the change removed from it}, for each Python file it changed or deleted."""
+    out = {}
+    for p in _git("diff", "--name-only", "--diff-filter=MD", base, "HEAD", cwd=cwd).stdout.split():
+        gone = (_line_bag(_committed(base, p, cwd)) - _line_bag(_committed("HEAD", p, cwd))
+                if _is_python(p) else None)
+        if gone:
+            out[p] = gone
+    return out
+
+
+def _origin_of(text, shrunk):
+    """The file in `shrunk` whose removed lines hold SPLIT_SHARE of `text`'s lines, or None."""
+    bag = _line_bag(text)
+    cover = {o: sum((bag & gone).values()) for o, gone in shrunk.items()}
+    best = max(sorted(cover), key=cover.get, default=None)
+    return best if best is not None and cover[best] >= SPLIT_SHARE * sum(bag.values()) > 0 else None
+
+
+def split_origins(base, files, cwd=None):
+    """Map each Python file the change ADDED to the existing file it was split out of: {new: origin}.
+
+    The origin is the file whose removed lines (base minus head, as a multiset) cover the most of
+    the new file's lines; the new file is a split only when they cover SPLIT_SHARE of it. A rename
+    is not a split (it is judged against its old self), and a new file that is mostly new code is
+    judged on its own, as before.
+    """
+    renamed = _renamed_from(base, cwd)
+    added = [p for p in files if _is_python(p) and p not in renamed and not _committed(base, p, cwd)]
+    shrunk = _shrunk_files(base, cwd) if added else {}
+    origins = {p: _origin_of(_committed("HEAD", p, cwd), shrunk) for p in added}
+    return {p: o for p, o in origins.items() if o}
 
 
 def oversized(base, files, cwd=None):
@@ -264,7 +338,7 @@ def _prospector_side(rev, pairs, profile, cwd=None):
         line = loc.get("line") or 1
         src = lines[line - 1].strip() if 0 < line <= len(lines) else ""
         found[(head_path, m.get("source"), m.get("code"))].append(
-            (line, (m.get("message"), src), m.get("message")))
+            (line, (m.get("message"), src), m.get("message"), head_path))
     return found, None
 
 
@@ -276,39 +350,64 @@ def _risen(after, before):
     only when the count rose by more than the unmatched ones explain.
     """
     out = []
-    for (path, source, code), found in sorted(after.items()):
-        old = before.get((path, source, code), [])
+    for (_path, source, code), found in sorted(after.items()):
+        old = before.get((_path, source, code), [])
         rose = len(found) - len(old)
         if rose <= 0:
             continue
-        spare = collections.Counter(ident for _l, ident, _t in old)
+        spare = collections.Counter(item[1] for item in old)
         fresh, matched = [], []
         for item in found:
             (matched if spare[item[1]] > 0 else fresh).append(item)
             spare[item[1]] -= 1
-        out += [(path, line, "Prospector %s %s: %s (%d on the base, %d now; Codacy Cloud skips this "
+        out += [(where, line, "Prospector %s %s: %s (%d on the base, %d now; Codacy Cloud skips this "
                  "file, which is over 150 KB, so no Codacy check reports it)"
                  % (source, code, text, len(old), len(found)))
-                for line, _ident, text in (fresh + matched)[:rose]]
+                for line, _ident, text, where in (fresh + matched)[:rose]]
     return out
 
 
-def prospector_violations(base, pairs, cwd=None):
+def _split_sides(pairs, origins):
+    """Return (base pairs, head paths) for Prospector, a split file's origin standing in at the base.
+
+    The origin's base is read once, and its head beside the files split out of it.
+    """
+    base_pairs, head_paths = [], []
+    for h, b in pairs:
+        o = origins.get(h)
+        if o and o not in head_paths:
+            base_pairs.append((o, o))
+            head_paths.append(o)
+        if not o:
+            base_pairs.append((h, b))
+        if h not in head_paths:
+            head_paths.append(h)
+    return base_pairs, head_paths
+
+
+def prospector_violations(base, pairs, cwd=None, origins=None):
     """Return what Prospector finds in the head of `pairs` that it did not find in the base.
 
     Both sides run under the BASE's .prospector.yaml, so a change cannot quiet its own findings by
     editing the profile. A side that could not be read fails the check, named on the first file.
+    A file split out of another (`origins`, {new: origin}) is judged with its origin: the origin's
+    base on one side, the origin's head and every file split from it on the other, counted together.
     """
     if not pairs:
         return []
+    origins = origins or {}
+    base_pairs, head_paths = _split_sides(pairs, origins)
     profile = _committed(base, ".prospector.yaml", cwd) or _committed("HEAD", ".prospector.yaml", cwd)
-    before, why = _prospector_side(base, pairs, profile, cwd)
+    before, why = _prospector_side(base, base_pairs, profile, cwd)
     after = None
     if not why:
-        after, why = _prospector_side("HEAD", [(h, h) for h, _b in pairs], profile, cwd)
+        after, why = _prospector_side("HEAD", [(h, h) for h in head_paths], profile, cwd)
     if why:
         return [(pairs[0][0], 1, why)]
-    return _risen(after, before)
+    folded = collections.defaultdict(list)
+    for (p, source, code), found in after.items():
+        folded[(origins.get(p, p), source, code)] += found
+    return _risen(folded, before)
 
 
 def _default_base():
@@ -336,14 +435,19 @@ def _committed(rev, path, cwd=None):
 def run(base, cwd=None):
     """Return (problems, files checked, files over 150 KB): each problem is (path, line, message)."""
     problems, files = [], changed_files(base, cwd)
-    for path in files:
+    origins = split_origins(base, files, cwd)
+    splits = collections.defaultdict(list)
+    for new, origin in sorted(origins.items()):
+        splits[origin].append((new, _committed("HEAD", new, cwd)))
+    # Each file once: a split is judged with its origin, which is judged even when it was deleted.
+    for path in [f for f in files if f not in origins] + sorted(set(splits) - set(files)):
         head = _committed("HEAD", path, cwd)
-        if not head:
+        if not head and not splits.get(path):
             continue
-        problems += [(path, line, msg + _ON_MAIN)
-                     for line, msg in new_violations(path, _committed(base, path, cwd), head)]
+        problems += [(where, line, msg + _ON_MAIN) for where, line, msg in
+                     new_violations(path, _committed(base, path, cwd), head, splits.get(path, ()))]
     big = oversized(base, files, cwd)
-    return problems + prospector_violations(base, big, cwd), files, big
+    return problems + prospector_violations(base, big, cwd, origins), files, big
 
 
 def _test_commit(d, env, files, msg):
@@ -387,6 +491,19 @@ def _size_cases():
         "long file fails": ({"m.py": "X0 = 0\n"},
                             {"m.py": "".join("X%d = %d\n" % (i, i) for i in range(1702))}, True),
         "unchanged complexity passes": ({"m.py": simple}, {"m.py": simple + "\nZ = 3\n"}, False),
+        # a file split in two: the violation moved into the new file with the code around it
+        "split violation passes": ({"m.py": simple + "\n\n" + old_bad},
+                                   {"m.py": simple, "n.py": "\n" + old_bad}, False),
+        # ...but one the split adds is new, wherever it lands
+        "split that adds a violation fails": ({"m.py": simple + "\n\n" + old_bad},
+                                              {"m.py": simple, "n.py": old_bad + "\n\n" + grown}, True),
+        # a new file is a split only when its lines LEFT another file: a copy is judged on its own
+        "copied violation fails": ({"m.py": old_bad}, {"m.py": old_bad, "n.py": old_bad}, True),
+        # a long file split into two that are each still over the limit, each shorter than it was
+        "long file split in two passes": (
+            {"m.py": "".join("X%d = %d\n" % (i, i) for i in range(3600))},
+            {"m.py": "X0 = 0\n", "a.py": "".join("X%d = %d\n" % (i, i) for i in range(1, 1800)),
+             "b.py": "".join("X%d = %d\n" % (i, i) for i in range(1800, 3600))}, False),
         "JavaScript grown function fails": (
             {"a.js": "function f(a) { return a; }\n"},
             {"a.js": "function f(a) {\n" + "".join("  if (a === %d) { return %d; }\n" % (i, i)
@@ -415,6 +532,12 @@ def _prospector_cases():
             "Prospector pyflakes F401"),
         "Prospector: a renamed file is judged against its old self": (
             dict(prof, **{"old.py": big + unused}), {"old.py": None, "new.py": big + unused}, False),
+        "Prospector: a file over 150 KB split out of another carries its findings with it": (
+            dict(prof, **{"old.py": big + unused + "X = 1\n"}),
+            {"old.py": "X = 1\n", "new.py": big + unused}, False),
+        "Prospector: ...and a finding the split adds fails": (
+            dict(prof, **{"old.py": big + unused + "X = 1\n"}),
+            {"old.py": "X = 1\n", "new.py": big + unused + "import sys\n"}, "Prospector pyflakes F401"),
         "Prospector: a profile that drops one of Codacy's tools fails": (
             dict(no_pyflakes, **{"big.py": big}), {"big.py": big + "# more\n"},
             "Prospector ran without pyflakes"),
