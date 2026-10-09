@@ -226,8 +226,10 @@ def cleanup():
     if _CONFIG_SNAPSHOT is not None:
         try:
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
-        except OSError:
-            pass
+        except OSError as e:
+            # Said, not swallowed, like a failed remove above: the developer's own config would
+            # be left holding this suite's edits.
+            print("cleanup: could not restore %s (%s)" % (CONFIG_FILE, e), file=sys.stderr)
 
 
 # ── audit IPs: an older version's IPv6 zone text goes at startup, whatever the row's age ────────
@@ -371,3 +373,47 @@ def _check_audit_zone_failure_is_logged():
           err is None and stuck == "fe80::99%eth0" and any("zone text" in s for s in seen),
           repr((err, stuck, seen)))
     check("audit-ip zone: ...and the next start cleans that row", fixed == "fe80::99", repr(fixed))
+
+
+# What later parts import from this one (`from smoke.part01 import ...`). The parts are
+# one suite, run in order by tests/smoke_test.py; listing these here says so to a reader,
+# and to CodeQL, which does not follow those imports and reads the names as unused.
+__all__ = [
+    '_check_audit_zone_cleanup_on_upgrade',
+    '_check_audit_zone_failure_is_logged',
+    '_console_window_stub',
+    '_lgsm_pathlib',
+    '_lgsm_tempfile',
+    '_sm_core',
+    '_sm_cron',
+    '_sm_game',
+    '_sm_hosts',
+    '_smoke_banlist',
+    '_smoke_ms',
+    '_smoke_priv_real',
+    '_SUITE_FILE',
+    'app',
+    'auth',
+    'auth_password_problem',
+    'bk',
+    'check',
+    'client_as',
+    'CONFIG_FILE',
+    'CRED_KEY_FILE',
+    'CustomCommand',
+    'DATA_DIR',
+    'db',
+    'DB_PATH',
+    'GameServer',
+    'Group',
+    'join_for',
+    'load_config',
+    'os',
+    'page_with_assets',
+    'RemoteServer',
+    'save_config',
+    'SECRET_FILE',
+    'SetupState',
+    'sys',
+    'User',
+]

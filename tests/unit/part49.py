@@ -44,7 +44,14 @@ _SELF49 = "csgoserver"
 _HOME49 = os.path.realpath(_tf49.mkdtemp(prefix="lgsm-unit-p49-home-"))
 _SHELLS49 = []                         # every script sent to the "host"
 _PRELUDE49 = {"text": ""}              # bash run before each command: a stand-in pgrep, say
-_FAIL49 = {"when": None}               # a predicate on the script: answer it as a dead transport
+
+
+def _never49(_sh):
+    """The default _FAIL49 predicate: no script is answered as a dead transport."""
+    return False
+
+
+_FAIL49 = {"when": _never49}           # a predicate on the script: answer it as a dead transport
 _mine49 = {"hosts": [], "servers": [], "users": []}
 _CFG49 = "lgsm/config-lgsm/%s/%s.cfg" % (_SELF49, _SELF49)
 _ON49 = '#### Logging ####\nconsolelogging="on"\nlogtimestamp="on"\n'
@@ -53,8 +60,7 @@ _ON49 = '#### Logging ####\nconsolelogging="on"\nlogtimestamp="on"\n'
 def _bash49(server, user, sh, timeout=30, selfname=None, scope=False):
     """shell_as_game_user, in a real bash, with /home/<account> pointing at the throwaway home."""
     _SHELLS49.append(sh)
-    when = _FAIL49["when"]
-    if callable(when) and when(sh):
+    if _FAIL49["when"](sh):
         return "", "SSH command timed out", -1
     script = _PRELUDE49["text"] + sh.replace("/home/" + _USER49, _HOME49)
     p = _sp49.run(["bash", "-c", script], capture_output=True, text=True,  # nosec B603 B607 - bash on this part's own command
@@ -93,7 +99,7 @@ def _reset49(prelude=""):
     os.symlink("lgsm/config-lgsm/" + _SELF49, os.path.join(_HOME49, "cfglink"))
     del _SHELLS49[:]
     _PRELUDE49["text"] = prelude
-    _FAIL49["when"] = None
+    _FAIL49["when"] = _never49
     with _sh49._ACCOUNT_VERDICTS_LOCK:
         _sh49._ACCOUNT_VERDICTS.clear()
 
