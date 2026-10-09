@@ -129,7 +129,8 @@ def _detector49():
 
 
 # ── logtimestamp: the three write routes ────────────────────────────────────────────────────────
-def _routes49(a_client, sid):
+def _route_editor49(a_client, sid):
+    """The raw editor refuses a LinuxGSM cfg that sets logtimestamp on, wherever it sits."""
     url = "/api/server/%d" % sid
     _reset49()
     code, body = _post49(a_client, url + "/file", json={"path": _CFG49, "content": _ON49})
@@ -151,6 +152,11 @@ def _routes49(a_client, sid):
           "resolves it)",
           _refused49(body) and _read49("lgsm/config-lgsm/%s/common.cfg" % _SELF49) == "",
           repr((code, body)))
+
+
+def _route_uploads49(a_client, sid):
+    """The Config card's Raw tab and an upload refuse it too."""
+    url = "/api/server/%d" % sid
     _reset49()
     code, body = _post49(a_client, url + "/config", json={"raw": _ON49})
     check("Config card Raw tab: logtimestamp on is refused, the cfg unchanged",
@@ -171,7 +177,10 @@ def _routes49(a_client, sid):
     check("upload: replacing the instance cfg with one that sets logtimestamp on is refused",
           _refused49(body) and _read49(_CFG49) == 'maxplayers="16"\n', repr((code, body)))
 
-    # The controls: what must still save.
+
+def _route_controls49(a_client, sid):
+    """What must still save, and what is refused when the host cannot say."""
+    url = "/api/server/%d" % sid
     for what, content in (("logtimestamp=\"off\"", 'logtimestamp="off"\n'),
                           ("a commented-out logtimestamp=\"on\"", '# logtimestamp="on"\nport="1"\n')):
         _reset49()
@@ -190,6 +199,10 @@ def _routes49(a_client, sid):
           "sets logtimestamp on is NOT saved",
           body.get("success") is False and "could not be asked" in (body.get("message") or "")
           and _read49("serverfiles/notes.txt") == "notes\n", repr((code, body)))
+
+
+def _route_rename49(a_client, sid):
+    url = "/api/server/%d" % sid
     _reset49()
     code2, body2 = _post49(a_client, url + "/rename-path",
                            json={"path": "cfglink/common.cfg", "new_name": "secrets-common.cfg"})
@@ -245,8 +258,7 @@ def _fresh_backups49(prelude=""):
 
 
 def _partials49():
-    _p9_patch(_cron49, "_ensure_backup_headroom", lambda *a, **k: "")
-    _p9_patch(_cron49, "backup_disk_info", lambda *a, **k: {"free": 0, "total": 0})
+    """A clean failure's own partial archive is removed; every other exit code keeps it."""
 
     _fresh_backups49()
     res, name, ls = _backup49(1, out="tar: write error: No space left on device")
@@ -263,6 +275,8 @@ def _partials49():
         check("backup: the archive is KEPT after %s" % why,
               name in ls and _OLD49 in ls and "Removed the partial" not in res[1], repr((res, ls)))
 
+
+def _partials_lock49():
     _fresh_backups49()
     res, name, ls = _backup49(1, out="Lockfile found: Backup is currently running")
     check("backup: an archive that appears during a LOCK-REFUSED run is kept (it is another run's)",
@@ -272,6 +286,8 @@ def _partials49():
           _game49._bkpart_cleanup(None, _USER49, _SELF49, (0, {}), 1, True) == ""
           and len(_SHELLS49) == n_sent, repr(_SHELLS49[n_sent:]))
 
+
+def _partials_listing49():
     _fresh_backups49()
     _FAIL49["when"] = _nth_listing49(1)
     res, name, ls = _backup49(1, out="tar: error")
@@ -292,6 +308,8 @@ def _partials49():
     check("backup: when the listing AFTER the run failed, nothing is removed",
           name in ls and "Removed" not in res[1], repr((res, ls)))
 
+
+def _partials_busy49():
     _fresh_backups49()
     res, name, ls = _backup49(1, out="tar: error", lock=True)
     check("backup: with a backup.lock still present at removal time, the archive is kept",
@@ -302,6 +320,8 @@ def _partials49():
     check("backup: with a tar still running as the account at removal time, the archive is kept",
           name in ls, repr((res, ls)))
 
+
+def _partials_not_ours49():
     _fresh_backups49()
     path = os.path.join(_HOME49, _BK49, _OLD49)
 
@@ -324,6 +344,8 @@ def _partials49():
     check("backup: a new archive not named for this instance is not this run's, and is kept",
           os.path.exists(os.path.join(_HOME49, _BK49, "otherserver-2099-01-01-000000.tar.zst")), "")
 
+
+def _partials_doubt49():
     _fresh_backups49()
 
     def _two(server, user, action, **_k):
@@ -395,8 +417,14 @@ try:
     _arm49()
     _detector49()
     _S49, _ADMIN49 = _setup49()
-    _routes49(_p9_client(_ADMIN49), _S49)
-    _partials49()
+    _A49 = _p9_client(_ADMIN49)
+    for _step49 in (_route_editor49, _route_uploads49, _route_controls49, _route_rename49):
+        _step49(_A49, _S49)
+    _p9_patch(_cron49, "_ensure_backup_headroom", lambda *a, **k: "")
+    _p9_patch(_cron49, "backup_disk_info", lambda *a, **k: {"free": 0, "total": 0})
+    for _step49 in (_partials49, _partials_lock49, _partials_listing49, _partials_busy49,
+                    _partials_not_ours49, _partials_doubt49):
+        _step49()
 finally:
     _p9_restore_all()
     _cleanup49()

@@ -1025,6 +1025,11 @@ def _bkpart_listing(server, user):
     out = out or ""
     if rc != 0 or not out.rstrip().endswith(_BKPART_DONE):
         return None
+    return _bkpart_parse(out)
+
+
+def _bkpart_parse(out):
+    """_bkpart_listing's (host_now, {name: mtime}) from its T and F lines; None without a T."""
     now, names = None, {}
     for line in out.splitlines():
         parts = line.split("\t")
@@ -1040,14 +1045,18 @@ def _bkpart_candidate(before, after, selfname):
     """The one archive `after` has that `before` did not, written since; None on any doubt."""
     started, had = before
     _now, has = after
-    new = [n for n, mt in has.items()
-           if n not in had and n.startswith(selfname + "-") and cron._game_backup_name_ok(n)
-           and mt is not None and mt >= started]
+    new = [n for n, mt in has.items() if n not in had and _bkpart_ours(n, mt, selfname, started)]
     # A name the listing could not read the mtime of is not "old": with one in the new set, the
     # set is not known, so nothing is chosen.
     if len(new) != 1 or any(n not in had and mt is None for n, mt in has.items()):
         return None
     return new[0]
+
+
+def _bkpart_ours(name, mtime, selfname, started):
+    """True when a name new since the listing has LinuxGSM's shape for `selfname`, written since."""
+    return (name.startswith(selfname + "-") and cron._game_backup_name_ok(name)
+            and mtime is not None and mtime >= started)
 
 
 def _bkpart_remove(server, user, name, started):
