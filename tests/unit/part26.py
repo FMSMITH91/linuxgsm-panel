@@ -135,6 +135,42 @@ check("code-scanning gates: a category is MISSING until this commit's analysis i
       "MOVED ON when a later commit's is newer",
       all(got == want for got, want in _cases26.values()),
       repr({k: v for k, v in _cases26.items() if v[0] != v[1]}))
+# An analysis from a run that did not complete: what the init action's post step uploaded for a
+# cancelled or failed CodeQL job, as code scanning lists it (refs/pull/406/merge has four: no
+# results, no rules, `error` set). It is never a category's usable analysis, so the gates cannot
+# read "0 alerts" from it.
+_ERR26 = "unsuccessful execution, exit code: 0, description:  "
+
+
+def _failed26(rows, cat, sha):
+    """`rows` with the first (newest) row of `cat` for `sha` turned into a failed run's."""
+    out, done = [], False
+    for r in rows:
+        if not done and r["category"] == cat and r["commit_sha"] == sha:
+            r = dict(r, error=_ERR26, results_count=0, rules_count=0)
+            done = True
+        out.append(r)
+    return out
+
+
+_fr_py26 = _failed26(_whole26, "/language:python", _S26)
+_fr_rerun26 = _rows26(*_set26(_S26, "2026-10-03T10:30:00Z", ["/language:python"])) + _fr_py26
+_fr_sched26 = _failed26(_sched26, "bandit", _P26)
+_fr_cases26 = {
+    "this commit's Python is a failed run": (CSA.assess(_fr_py26, _S26, _ALL26),
+                                             (["/language:python"], [])),
+    "...re-run, and the re-run completed": (CSA.assess(_fr_rerun26, _S26, _ALL26), ([], [])),
+    "scheduled: the older Bandit it stands on is a failed run": (
+        CSA.assess(_fr_sched26, _S26, _CQ26), (["bandit"], [])),
+    "a complete analysis is not a failed run (control)": (
+        [CSA.failed_run(r) for r in _whole26[:2]] + [CSA.failed_run(None), CSA.failed_run({"error": ""})],
+        [False, False, False, False]),
+}
+check("code-scanning gates: an analysis from a run that did not complete (a cancelled or failed "
+      "CodeQL job's upload, `error` set) is never this commit's analysis: the category is MISSING",
+      all(got == want for got, want in _fr_cases26.values()),
+      repr({k: v for k, v in _fr_cases26.items() if v[0] != v[1]}))
+
 _own26 = {
     "pull_request": CSA.own_categories("pull_request", ""),
     "push": CSA.own_categories("push", ".github/workflows/codeql.yml"),
@@ -317,6 +353,15 @@ try:
           _mj["sched docs-only"][:2] == (0, {"verdict": "success"}) and _mj["push docs-only"][0] == 1,
           repr((_mj["sched docs-only"][:2], _mj["sched docs-only"][3][-400:],
                 _mj["push docs-only"][:2])))
+    _mj_fr = _main26(_fr_py26)
+    check("code-scanning gates (main): this commit's Python analysis being a failed run fails the "
+          "gate, says so, and no alert is read",
+          _mj_fr[0] == 1 and "verdict" not in _mj_fr[1] and "code-scanning/alerts" not in _mj_fr[2]
+          and re.search(r"/language:python +FAILED RUN", _mj_fr[3]) is not None
+          and ": /language:python." in _mj_fr[3], repr((_mj_fr[:3], _mj_fr[3][-500:])))
+    _pw_fr = _run26(_pr_poll26[2], _fr_py26, **_penv26)
+    check("code-scanning gates (PR): ...and the PR's wait fails on it too, naming Python",
+          _pw_fr[0] != 0 and ": /language:python." in _pw_fr[3], _pw_fr[3][-500:])
     check("code-scanning gates (main): the job summary shows what each category held",
           all(c in _mj["clean"][4] for c in CSA.CATEGORIES) and "None. :white_check_mark:"
           in _mj["clean"][4], _mj["clean"][4][-600:])

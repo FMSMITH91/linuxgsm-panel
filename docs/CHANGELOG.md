@@ -202,6 +202,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **CodeQL now reads the whole smoke test suite.** The 1 MB suite is split into a runner and six parts
+  (`tests/smoke/`), running the same 1,636 checks in the same order; CodeQL had skipped it for time.
+  The complexity gate judges a file split out of another together with that file, so moved code is not
+  counted as new. CodeQL uploads an analysis only when it completed, and the alert gates never count a
+  failed or cancelled run's empty upload as a commit's analysis.
 - **The security scanners now read the tests too.** CI only; nothing on a panel changes. Bandit,
   Semgrep and CodeQL used to skip `tests/`, so a mistake in a test, such as a check that can never
   fail, went unnoticed. They read it now, and the first scan found a few. One check read a value
@@ -572,6 +577,19 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The live console no longer shows a few lines twice when a server's page opens**, and no longer
+  drops the lines written while it loaded. The page now learns where in the log its first window ends
+  and is caught up from there, as a return from a background tab already was, so new lines are placed
+  by their position in the log, not by their text. A line the game repeats word for word still shows.
+- **A backup that LinuxGSM reports as finished is "Backed up" only when its archive reads whole.**
+  LinuxGSM exits with success even when the archive failed, if it restarted the server afterwards; the
+  panel then removed a good old backup to make room for the broken one. Now it says the backup is not
+  confirmed and keeps every old backup. After a backup that failed, the partial archive it left is
+  removed, but only when it is certainly that run's and the run has certainly ended; after a timeout, a
+  lost connection or a lock refusal nothing is removed. The message says when an archive was removed.
+- **The file browser's editor, the Config card's Raw tab and uploads refuse a LinuxGSM config that
+  turns `logtimestamp` on**, which freezes the live console. Turning it off, and commented-out lines,
+  still save.
 - **Findings from a full code review (2026-10-08): fixes.** Every item below has a check that fails
   without its fix.
   - **Game servers and alerts.** A batched player poll counted bots and reserved slots instead of

@@ -171,7 +171,7 @@ try:
     _SHELL16 = []
     _p9_patch(_p9_sm, "shell_as_game_user",
               lambda server, user, sh, **k: (_SHELL16.append((server.host, user)), ("", "", 1))[1])
-    _p9_patch(_sf16, "_read_console_window", lambda remote, gs, want, tz: (True, []))
+    _p9_patch(_sf16, "_read_console_window", lambda remote, gs, want, tz: (True, [], None))
     _p9_patch(_sf16, "_host_timezone_cached", lambda remote, app=None: "UTC")
 
     # A delegated admin: MANAGE_REMOTES and the server permissions, on part12's host 1 ONLY.

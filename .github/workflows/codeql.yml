@@ -88,7 +88,15 @@ jobs:
           queries: security-and-quality
           config-file: ./.github/codeql/codeql-config.yml   # tests included; see the file for its scope
 
-      # Analysed here, uploaded below: two rules are dropped for tests/ in between (see that step).
+      # Analysed here, uploaded below, and ONLY when the analysis is complete: the analyze step
+      # succeeded, its database holds the files it must (next step), and its SARIF says every query
+      # ran (the step after). `upload: never` also stops the init action's post step uploading a
+      # "failed run" SARIF when this job fails or is cancelled: it reads this input and skips (its
+      # source: init-action-post-helper.ts, prepareFailedSarif). Before #406 that upload ran, and
+      # refs/pull/406/merge holds four Python analyses with no results and no rules from runs that
+      # never finished; code scanning lists one as the commit's analysis like any other, so an
+      # alert gate could have read "0 alerts" from it. The gates refuse such rows as well
+      # (.github/scripts/code_scanning_analyses.py, failed_run).
       - name: Perform CodeQL Analysis
         id: analyze
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
@@ -97,36 +105,46 @@ jobs:
           upload: never
           output: sarif-results
 
-      # The extractor decides which files are Python, and an analysis that silently left a file out
+      # The extractor decides which files it reads, and an analysis that silently left a file out
       # reports it as clean. tools/panel-helper, the root-run privileged helper, has no .py extension
-      # (it is taken for its shebang), and tests/ was out of scope until it was added. Both are read
-      # back from the source archive of the database that was analysed: a file missing from it fails
-      # the job, by name, instead of reading as "no alerts".
-      - name: The helper and the tests are in the analysed Python database
-        if: matrix.language == 'python'
+      # (it is taken for its shebang); tests/ was out of scope until it was added; and the smoke
+      # suite was left out whole until it was split into parts small enough to extract. Each
+      # language's must-have files are read back from the source archive of the database that was
+      # analysed: a file missing from it fails the job, by name, and nothing is uploaded. The smoke
+      # parts are globbed from the checkout, so a part added later is required too.
+      - name: The analysed database holds the files it must
+        id: extracted
         env:
           DB_LOCATIONS: ${{ steps.analyze.outputs.db-locations }}
+          LANGUAGE: ${{ matrix.language }}
         run: |
           set -euo pipefail
-          # {"python": "<path>"} (one path per language, as codeql-action 4 writes it).
-          db="$(jq -r '.python | if type == "array" then .[0] else . end // empty' <<<"${DB_LOCATIONS}")"
+          # {"<language>": "<path>"}: one language per job here, so the one entry is this job's.
+          db="$(jq -r 'to_entries[0].value | if type == "array" then .[0] else . end // empty' <<<"${DB_LOCATIONS}")"
           if [ -z "${db}" ] || [ ! -f "${db}/src.zip" ]; then
-            echo "::error::no Python database source archive (db-locations: ${DB_LOCATIONS})"
+            echo "::error::no ${LANGUAGE} database source archive (db-locations: ${DB_LOCATIONS})"
             exit 1
           fi
-          python3 - "${db}/src.zip" <<'PY'
+          python3 - "${db}/src.zip" "${LANGUAGE}" <<'PY'
+          import glob
           import sys
           import zipfile
 
           names = {n.rstrip("/") for n in zipfile.ZipFile(sys.argv[1]).namelist()}
-          missing = [p for p in ("tools/panel-helper", "tests/unit_test.py", "tests/unit/part01.py")
-                     if not any(n.endswith("/" + p) for n in names)]
+          must = {
+              "python": ["tools/panel-helper", "app.py", "tests/unit_test.py", "tests/unit/part01.py",
+                         "tests/smoke_test.py"] + sorted(glob.glob("tests/smoke/part*.py")),
+              "javascript-typescript": ["static/js/panel.js", "static/js/dashboard.js"],
+              "actions": [".github/workflows/codeql.yml"],
+          }[sys.argv[2]]
+          missing = [p for p in must if not any(n.endswith("/" + p) for n in names)]
           print("source archive: %d files" % len(names))
           if missing:
-              print("::error::not in the analysed Python database: %s" % ", ".join(missing))
+              print("::error::not in the analysed %s database: %s" % (sys.argv[2], ", ".join(missing)))
               sys.exit(1)
-          print("analysed: tools/panel-helper, and %d files under tests/"
-                % sum("/tests/" in n for n in names))
+          print("analysed: %s" % ", ".join(must))
+          if sys.argv[2] == "python":
+              print("...and %d files under tests/" % sum("/tests/" in n for n in names))
           PY
 
       # Two rules are dropped for tests/ ONLY, every instance of each having been read first:
@@ -137,19 +155,40 @@ jobs:
       #     a restore must strip. Bandit's B103 and Semgrep's insecure-file-permissions still gate
       #     every one of those lines, each marked with its reason, so a new chmod is still read.
       # Both stay on for every other path, and every other rule stays on for tests/.
+      #
+      # Each SARIF must also be a COMPLETE analysis before it goes anywhere: at least one run, the
+      # queries it ran listed (CodeQL lists them as rules, under tool.extensions: 170 for Python),
+      # and no invocation that reports itself unsuccessful. A "failed run" SARIF has no rules.
       - name: Leave out two deliberate test patterns (tests/ only)
+        id: sarif
         run: |
           set -euo pipefail
-          for f in sarif-results/*.sarif; do
+          shopt -s nullglob
+          files=(sarif-results/*.sarif)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::the analysis wrote no SARIF; nothing to upload"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            runs="$(jq '.runs | length' "$f")"
+            rules="$(jq '[.runs[].tool | (.driver.rules // [])[], (.extensions // [])[].rules[]?] | length' "$f")"
+            failed="$(jq '[.runs[].invocations[]? | select(.executionSuccessful == false)] | length' "$f")"
+            if [ "${runs}" = "0" ] || [ "${rules}" = "0" ] || [ "${failed}" != "0" ]; then
+              echo "::error::$f is not a complete analysis (runs=${runs}, rules=${rules}, unsuccessful invocations=${failed}); not uploading it"
+              exit 1
+            fi
             jq '.runs |= map(.results |= map(select(
                   ((.ruleId | IN("py/file-not-closed", "py/overly-permissive-file"))
                    and (.locations[0].physicalLocation.artifactLocation.uri | startswith("tests/")))
                   | not)))' "$f" > "$f.kept"
-            echo "$f: kept $(jq '[.runs[].results[]] | length' "$f.kept") of $(jq '[.runs[].results[]] | length' "$f") results"
+            echo "$f: ${rules} rules; kept $(jq '[.runs[].results[]] | length' "$f.kept") of $(jq '[.runs[].results[]] | length' "$f") results"
             mv "$f.kept" "$f"
           done
 
+      # Spelled out, though a step runs only after the ones before it succeeded: this is the line
+      # that decides whether an incomplete analysis reaches code scanning, so it says so itself.
       - name: Upload the results to code scanning
+        if: ${{ success() && steps.analyze.outcome == 'success' && steps.extracted.outcome == 'success' && steps.sarif.outcome == 'success' }}
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: sarif-results

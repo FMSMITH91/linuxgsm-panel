@@ -78,7 +78,9 @@ def _console(command):
     m = re.search(r"tail -(\d+) ", command)
     if m:
         want = int(m.group(1))
-        return "B" + "\n".join(text.splitlines()[-want:]) + "\nE"
+        # /api/console's window says first where in the log it ends (_console_window_cmd).
+        place = "@4242 %d\n" % len(text.encode()) if 'echo "@$1 $2"' in command else ""
+        return place + "B" + "\n".join(text.splitlines()[-want:]) + "\nE"
     return None
 
 
@@ -426,7 +428,7 @@ def _rename(command):
 _TABLE = [
     (r'-n -T -- "\$t" "\$n"', _rename),
     (r"LGSM_ACCT_PROBE_DONE", _account_probe),
-    (r"tail -c \+\d+|printf B; tail -\d+", _console),
+    (r"tail -c \+\d+|printf B; tail -\d+|echo \"@\$1 \$2\"", _console),
     (r"stat -c '?%i %s'?", lambda c: "4242 %d" % len(_log_text().encode())),
     (r"-maxdepth 1 -mindepth 1 -printf", _browse),
     (r"__LGSMP_FILE_BEGIN__", _read_file),

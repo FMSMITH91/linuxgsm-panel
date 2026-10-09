@@ -1397,8 +1397,37 @@ def _console_lines_wanted():
     return max(50, min(want, _CONSOLE_LINES_MAX))
 
 
+def _console_window_cmd(log_path, want):
+    """/api/console's read: `@<inode> <size>` on the first line, then the log's last `want` lines, framed.
+
+    The lines are the last of the file's first <size> bytes, the log opened ONCE (fd 3) as the
+    catch-up's read opens it (_catchup_cmd), so the place printed is exactly where they end: a page
+    primes itself from this window and is then caught up from that place (_primeAt in
+    server_detail.js). A plain `tail` read the file at its own moment, after or before a stat, and
+    the two could disagree by whatever the game wrote in between. Read back no further than
+    _CATCHUP_REACH, from the first newline in it on, so the first line is whole.
+    """
+    reach = _CATCHUP_REACH
+    return (f"L={log_path}; exec 3<\"$L\" 2>/dev/null || exit 1; "
+            f"set -- $(stat -L -c '%i %s' /dev/fd/3 2>/dev/null); [ \"$#\" = 2 ] || exit 1; "
+            f"Y=$(($2 > {reach} ? $2 - {reach} : 0)); echo \"@$1 $2\"; printf B; "
+            f"{{ if [ \"$Y\" -gt 0 ]; then tail -c +$Y /dev/fd/3 | head -c $(($2 - Y + 1)) | tail -n +2; "
+            f"else head -c \"$2\" /dev/fd/3; fi; }} 2>/dev/null | tail -{want} 2>/dev/null; printf E")
+
+
+def _console_window_place(out):
+    """(the place `@<inode> <size>` names as [0, inode, size] or None, the rest of the reply)."""
+    if not (out or "").startswith("@"):
+        return None, out or ""
+    head, _nl, rest = out.partition("\n")
+    parts = head[1:].split()
+    if len(parts) != 2 or not all(p.isdecimal() for p in parts):
+        return None, ""
+    return [0, int(parts[0]), int(parts[1])], rest
+
+
 def _read_console_window(remote, gs, want, host_tz):
-    """The last `want` lines of the console log: (readable, rows)."""
+    """The last `want` lines of the console log: (readable, rows, where in the log they end or None)."""
     # Whether the log was actually READ, kept separate from what it held. The route knew this
     # and threw it away: a host that did not answer, a `tail -2000` that timed out on a slow
     # link, a log that does not exist and a genuinely empty log all left here as 200 with the
@@ -1406,7 +1435,9 @@ def _read_console_window(remote, gs, want, host_tz):
     # believed it, emptied its own scrollback — the only copy, since the poller emits a sliding
     # window and keeps nothing — and toasted "Loaded 0 lines from the log" about a log it never
     # opened. Same answer api_server_upload_check gives with `checked`, for the same reason.
-    readable = False
+    # `at` is bound before the try as well: the return reads it only when the read succeeded, but
+    # CodeQL could not see that and reported the caller's three unpacked names as uninitialized.
+    readable, at = False, None
     try:
         log_path = gs.console_log
         # AS THE GAME USER, not as root: the log sits inside a 0750 home. See
@@ -1418,14 +1449,15 @@ def _read_console_window(remote, gs, want, host_tz):
         # of a max of 20 players online: " ends in a space, so after every `list` the page
         # found no overlap and appended the whole window again beneath the reply: the
         # "console stops responding until I press Load older" report.
+        # A log that does not exist (LinuxGSM's start is `mv` then `touch`) is a read that did not
+        # run, rc 1, not "readable, and nothing in it": Load older wiped the console on that.
         out, _, rc = _sm.read_as_game_user(
-            remote, gs.short_name,
-            # tail's OWN status is the answer, not printf's: without `exit $r` a log that does
-            # not exist (LinuxGSM's start is `mv` then `touch`) came back framed, rc 0, empty —
-            # "readable, and nothing in it" — and Load older wiped the console on that.
-            f"printf B; tail -{want} {log_path} 2>/dev/null; r=$?; printf E; exit $r",
+            remote, gs.short_name, _console_window_cmd(log_path, want),
             timeout=15, selfname=gs.lgsm_name)
-        framed = rc == 0 and (out or "").startswith("B") and (out or "").endswith("E")
+        # Where the window ends in the log: the place the page is caught up from. A reply without
+        # one (no `@` line) is still a window, with no place: the page stitches it by its text.
+        at, out = _console_window_place(out)
+        framed = rc == 0 and out.startswith("B") and out.endswith("E")
         readable = framed
         body = out[1:-1] if framed else ""
         if body.endswith("\n"):
@@ -1433,7 +1465,7 @@ def _read_console_window(remote, gs, want, host_tz):
         lines = _console_rows(_clean_console_text(body).split("\n"), host_tz) if framed else []
     except Exception:
         lines = []
-    return readable, lines
+    return readable, lines, (at if readable else None)
 
 
 def _since_arg(raw):
@@ -2234,7 +2266,7 @@ def _register_console_routes(app):
         remote = gs.remote
         want = _console_lines_wanted()
         host_tz = _host_timezone_cached(remote, app)
-        readable, lines = _read_console_window(remote, gs, want, host_tz)
+        readable, lines, at = _read_console_window(remote, gs, want, host_tz)
         # What the PANEL pushed into this console (a long action's markers and output) — its own
         # field, not spliced into `lines`. Two reasons: the browser de-duplicates `lines` by
         # matching the overlap between successive windows, and a block that is stable at the end
@@ -2250,12 +2282,19 @@ def _register_console_routes(app):
         # `now` is the panel's clock at the moment it read this window, for the browser to stamp
         # the lines that are NEW since its last poll — those it did watch arrive. Sent from the
         # server rather than taken from Date.now() so every console time shares one clock.
-        return jsonify({"lines": lines, "now": time.time(),
-                        # False = the console was not read, so `lines` is not a measurement of
-                        # what the log holds. A caller must not redraw a scrollback from it.
-                        "readable": readable,
-                        "log_timestamps": any(r.get("t") for r in lines),
-                        "panel_lines": list(_console_backlog.get(server_id, []))})
+        body = {"lines": lines, "now": time.time(),
+                # False = the console was not read, so `lines` is not a measurement of what the
+                # log holds. A caller must not redraw a scrollback from it.
+                "readable": readable,
+                "log_timestamps": any(r.get("t") for r in lines),
+                "panel_lines": list(_console_backlog.get(server_id, []))}
+        # Where in the log the window ends, [0, inode, byte offset] — the kind of place a catch-up
+        # answers from (chain 0: no poller read made it). The page primed from this window asks to
+        # be caught up from here, so the poller's pushes of lines the window already holds are
+        # dropped by their place, not by their text. Absent when the reply carried none.
+        if at is not None:
+            body["at"] = at
+        return jsonify(body)
 
     @app.route("/api/server/<int:server_id>/log-timestamps", methods=["GET", "POST"])
     @login_required
