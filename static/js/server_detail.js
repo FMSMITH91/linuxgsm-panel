@@ -330,6 +330,7 @@ socket.on('connect', function() {
   // after the time away, nothing matched, and all 250 lines were appended a second time. Not primed,
   // nothing on screen is the log yet and the window that primes it replaces it whole.
   if (_returnOwed) _catchUpReturn();
+  else if (_primeOwed) _primeCatchUp();
   else if (_socketEverConnected && _consolePrimed && consoleEl) {
     _returnOwed = true;
     _gapFromDrop = true;
@@ -833,7 +834,10 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         // LinuxGSM's own stamp keeps it, which is the whole point: that one is a real time for a
         // line written long before the panel looked.
         _appendConsoleRows(rows);
-        _rebuildRestore(mark);
+        // A window that says where in the log it ends is caught up from there (_primeAt): what was
+        // pushed before this answer lies in it or in the catch-up's answer. One that does not (a panel
+        // older than this) has the pushes since its read put back by their text, as before.
+        if (!_primeAt(data.at)) _rebuildRestore(mark);
       } else if (!socket.connected || catchUp) {
         // A poll DELTA is new output the panel just watched arrive — accurate to the poll
         // interval — so it is stamped, exactly like a socket push. Only the priming window above
@@ -862,6 +866,39 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
       if (stick) stickConsole();
     })
     .catch(() => {});
+}
+
+// ── Priming: the first window, then caught up from where it ends ───────────────────────────────
+// The poller's first push after a page loads can hold lines its first window already shows: the
+// poller took its first look at the log (or another tab's stream stood) BEFORE the window was read,
+// so its next push runs from there, across the window's end. Shown as it came, a few lines showed
+// twice on every load of a busy console. Placed by their text instead, a line the game repeats word
+// for word (a heartbeat) would be taken for one shown and lost. And a push cannot be cut at the
+// window's end: it says where in the log its lines END (`at`), not where each one does.
+//
+// So the window says where it ends (`at`, read with it in one look at the file: _console_window_cmd
+// in panel/routes/server_files.py), and the page asks the poller to be caught up from there exactly
+// as a return is (_startResync): the lines written since, cut where the poller's own pushes go on
+// from. Pushes are HELD meanwhile, and each is then dropped if it ends at or before that cut and
+// shown if after it (_pushAfter) — by place, never by text. A push that came before the window's
+// answer was wiped with the seed, and lies in the window or in the catch-up's answer.
+//
+// With the socket not connected yet the first join asks it (_primeOwed, the connect handler); with a
+// return's catch-up owed (the tab went away first) that one reads on from this place. A window with no
+// `at` (a panel older than this) is stitched by text, as it always was.
+var _primeOwed = false;
+
+function _primeAt(at) {
+  if (!Array.isArray(at) || at.length !== 3) return false;
+  _logAt = at;
+  if (_returnOwed) return true;
+  if (socket.connected) _primeCatchUp();
+  else _primeOwed = true;
+  return true;
+}
+
+function _primeCatchUp() {
+  _startResync(true);
 }
 
 // The note beside the console that LinuxGSM is stamping this log (and how to turn that off).
@@ -1059,10 +1096,14 @@ var _resyncSeq = 0;
 // socket, and is then not shown again (_notePanelPush).
 var _shownOnReturn = {};
 
-function _startResync() {
+// `prime`: the catch-up a page asks for right after its first window (_primeAt) rather than on a
+// return. Nothing was missed while away, so it says nothing is missing; and an answer the host could
+// not give is not waited for — the pushes held are shown, as they were before priming caught up.
+function _startResync(prime) {
   _endResync();
   _shownOnReturn = {};
-  var r = _resync = {id: 0, held: [], since: _logAt, retry: null, panelUntil: Infinity};
+  _primeOwed = false;
+  var r = _resync = {id: 0, held: [], since: _logAt, retry: null, panelUntil: Infinity, prime: !!prime};
   r.giveUp = setTimeout(function () { if (_resync === r) _resyncGiveUp(r); }, _RESYNC_MAX_MS);
   _resyncAsk(r);
 }
@@ -1102,7 +1143,7 @@ function _resyncDone() {
 function _resyncGiveUp(r) {
   var stick = consoleAtBottom();
   if (!socket.connected) { _endResync(); return; }
-  if (_consoleLines.length) _showReturnGap();
+  if (_consoleLines.length && !r.prime) _showReturnGap();
   _resyncRelease(r, null);
   _resyncDone();
   updateTsNotice();
@@ -1147,9 +1188,10 @@ function _resyncAnswer(r, data) {
   if (data.readable === false || !Array.isArray(data.lines) || !Array.isArray(data.at)) {
     // The panel's own lines come from the panel, not the host, so they are good all the same.
     _resyncPanelLines(r, data.panel_lines);
+    if (r.prime) { _resyncGiveUp(r); return; }
     r.retry = setTimeout(function () { if (_resync === r) _resyncAsk(r); }, _RESYNC_RETRY_MS);
   } else {
-    _resyncShowAway(_resyncRows(data.lines), data);
+    _resyncShowAway(_resyncRows(data.lines), data, r.prime);
     _resyncPanelLines(r, data.panel_lines);
     _resyncRelease(r, data.at);
     _resyncDone();
@@ -1161,11 +1203,14 @@ function _resyncAnswer(r, data) {
 // The time away, as the answer has it: from the page's own place in the log (`since`) — every line,
 // nothing to match — under a notice when that place was out of reach (`gap`: a new log, the server
 // restarted; or more than the answer brings); or, for a page with no place, placed by their text.
-function _resyncShowAway(rows, data) {
+// A prime's lines were written since its window was read, moments ago, while the panel watched: stamped
+// with the answer's time, as a push is. One that is out of reach (the log rotated meanwhile) gets no
+// notice: nothing was missed while away, and the new log follows.
+function _resyncShowAway(rows, data, prime) {
   if (data.since || data.gap) {
-    if (data.gap) _showReturnGap();
-    _appendConsoleRows(rows, _awayRead ? data.now : null, data.at);
-    _awayRead = true;
+    if (data.gap && !prime) _showReturnGap();
+    _appendConsoleRows(rows, _awayRead || prime ? data.now : null, data.at);
+    if (!prime) _awayRead = true;
   } else {
     _appendReturnRows(rows, data.now);
   }

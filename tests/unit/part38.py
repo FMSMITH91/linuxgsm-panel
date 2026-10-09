@@ -19,7 +19,10 @@ unduplicated — and what holds it up is, one section each:
      orderings first — the console repeating lines word for word among them, and the ways a page
      still has to place a read by its text — then random schedules, with a control proving they catch
      what a plain rejoin gets wrong, and schedules of a console that repeats itself held to what the
-     page that never leaves shows.
+     page that never leaves shows. And the page LOAD: its first window says where in the log it ends,
+     and the page is caught up from there as a return is, so the poller's first pushes — which can run
+     from before the window's end — show nothing twice and lose nothing, in fixed orderings and random
+     loads, with a control proving the page that stitched its first window by text got them wrong.
 * B. THE SERVER. Through flask-socketio's test client and the real console poller loop, reading a
      real file with bash: a room left empty is not read at all and its offset is forgotten; a rejoin
      is a first look, with no replay; a second tab keeps the reads going; a socket that never joined
@@ -27,7 +30,8 @@ unduplicated — and what holds it up is, one section each:
      update that runs while nobody watches is read to its end, in one read, when it ends; a tick
      or an action that overlaps that end neither repeats its output nor loses its own; and a catch-up
      is answered exactly from the page's place to where the poller stands, whole lines only, with a
-     line the log ends inside of carried whole by the next push.
+     line the log ends inside of carried whole by the next push; /api/console's window ends where the
+     poller's push of its last lines ends.
 * C. BOTH. Payloads the real server produced — the poller's pushes, its catch-up answers and leave
      answers, /api/console's windows — fed to the real page in the order the server produced them.
 
@@ -369,8 +373,10 @@ function makeWorld(o) {
       return {lines: lines.map(l => ({t: null, line: l})), at: [0, ino, C], since, gap, now: nowS(), readable: true,
               log_timestamps: false, panel_lines: backlogRows()};
     }
-    return {lines: log.slice(-n).map(l => ({t: null, line: l})), now: nowS(), readable: true,
-            log_timestamps: false, panel_lines: backlogRows()};
+    // `windowAt`: the window says where in the log it ends, as /api/console does now (_console_window_cmd);
+    // without it, a panel from before that, which the checks written then were written against.
+    return Object.assign({lines: log.slice(-n).map(l => ({t: null, line: l})), now: nowS(), readable: true,
+                          log_timestamps: false, panel_lines: backlogRows()}, o.windowAt ? {at: [0, ino, log.length]} : {});
   };
   function onEmit(ev, d, cb) {
     if (!connected) return;
@@ -408,7 +414,10 @@ function makeWorld(o) {
       });
     }
   }
-  function schedulePass() { at(page.now + 2000 + between(...lat.pass), () => { W.pass(); schedulePass(); }); }
+  // `first`: when the first pass runs, in ms from now (a page loading in the middle of the poller's cycle).
+  function schedulePass(first) {
+    at(page.now + (first !== undefined ? first : 2000 + between(...lat.pass)), () => { W.pass(); schedulePass(); });
+  }
   W.step = async function (ms) {
     const end = page.now + ms;
     for (;;) {
@@ -441,6 +450,9 @@ function makeWorld(o) {
     scan();
     if (o.manual) { const f = W.pending()[0]; if (f) await W.answer(f); } else await W.step(3000);
   };
+  // A page loading: the poller's passes begin `first` ms from now, and the socket is not connected yet —
+  // the page's first window is already asked for (it is, as the script runs), and W.reconnect connects.
+  W.load = function (first) { if (!o.manual) schedulePass(first); scan(); };
   W.disconnect = async () => { connected = false; room.delete('page'); catchup = null; await page.disconnect(); scan(); };
   W.reconnect = async () => { connected = true; await page.connect(); scan(); };
   // The server dropped the page's socket while the page was frozen (a phone asleep past the ping
@@ -1811,6 +1823,257 @@ async function schedule(cfg, seed, code, repeats) {
           shown: w.pageLog().length, want: w.log().length};
 }
 
+// ── the page load: its first window, then caught up from where that window ends ─────────────────────
+// /api/console says where in the log its window ends (`at`), and the page primes from the window and
+// asks the poller to be caught up from there (_primeAt): the pushes it makes meanwhile are held and
+// placed by where their lines end, never by their text. Without that, the first push after a load ran
+// from the poller's first look — or another tab's place — across the window's end, and the lines the
+// window already held showed twice.
+async function loadWorld(cfg, extra) {
+  return makeWorld(Object.assign({manual: true, src: cfg.src, panel: cfg.panel, code: cfg.code, windowAt: true}, extra || {}));
+}
+
+async function checkLoadOverlap(cfg) {
+  // [the poller's place before the window is read: its first look, or another tab's stream; whether the
+  //  straddling push reaches the page before or after the window's answer]
+  for (const [other, early] of [[false, false], [false, true], [true, false], [true, true]]) {
+    const w = await loadWorld(cfg);
+    w.write(20);
+    if (other) { w.other(true); w.pass(); }                 // another tab: the poller already stands at the end
+    await w.reconnect();                                    // the page's first connect: it joins
+    if (!other) w.pass();                                   // the poller's first look at the page's console
+    w.write(3);                                             // written after that look...
+    const rd = w.read(w.pending()[0]);                      // ...and in the window, read now
+    w.write(2);
+    if (early) await w.pass();                              // the push of all five, before the window's answer
+    await w.reply(rd);
+    if (!early) await w.pass();                             // ...or after it
+    await w.passAll();                                      // the catch-up answered
+    w.write(1); await w.passAll();
+    const got = w.pageLog();
+    check('a page load, the poller\'s place before its window (' + (other ? 'another tab\'s stream' : 'its first look')
+          + '), a push of lines the window holds and lines after it reaching the page ' + (early ? 'before' : 'after')
+          + ' the window\'s answer: every line once, in order, and nothing said to be missing',
+          w.exact() && new Set(got).size === got.length && w.page.gaps().length === 0 && !w.page.ctx._resync,
+          JSON.stringify({got: got.slice(-9), want: w.log().slice(-9), asks: w.asks()}));
+    w.other(false);
+  }
+}
+
+// A line the game repeats word for word, written after the window was read: it is new, and shows; the
+// copy the window holds shows once. Placed by its text, the new copy was taken for the shown one and lost
+// (or, appended as it came, the shown one showed twice).
+async function checkLoadRepeat(cfg) {
+  const HB = 'heartbeat: 0 players online';
+  for (const early of [false, true]) {
+    const w = await loadWorld(cfg);
+    w.write(20);
+    await w.reconnect();
+    w.pass();
+    w.say(HB);                                              // in the window, its last line
+    const rd = w.read(w.pending()[0]);
+    w.say(HB);                                              // the same line again, written after the read
+    if (early) await w.pass();
+    await w.reply(rd);
+    if (!early) await w.pass();
+    await w.passAll();
+    w.say(HB); await w.passAll();                           // and once more, pushed as usual
+    check('a page load, a heartbeat the window ends on and the same heartbeat written after it, pushed '
+          + (early ? 'before' : 'after') + ' the window\'s answer: each copy shows once — three in all',
+          w.exact() && w.pageLog().filter(l => l === 'L00000 ' + HB).length === 3,
+          JSON.stringify({got: w.pageLog().slice(-5), want: w.log().slice(-5)}));
+  }
+}
+
+// No one watching yet: the window answers before the poller has looked at the log. The catch-up it asks
+// for is what makes that first look, from the window's end — so the lines written between the window's
+// read and the first pass are shown too (the first look used to record the log's end and skip them).
+async function checkLoadBeforeLook(cfg) {
+  const w = await loadWorld(cfg);
+  w.write(20);
+  await w.reconnect();
+  await w.reply(w.read(w.pending()[0]));
+  w.write(3);                                               // written before the poller's first pass
+  await w.pass();
+  w.write(1); await w.pass();
+  const asks = w.asks(), stamped = w.page.stamped().filter(x => /^L000(2[1-4])/.test(x[0]));
+  check('a page load answered before the poller\'s first look: caught up from the window\'s end, the lines written '
+        + 'before that look show too — every line once, in order, each with the time the panel saw it — and a later '
+        + 'return still leaves the first lines it reads unstamped (they were written while away)',
+        w.exact() && asks.length === 1 && JSON.stringify(asks[0].since) === JSON.stringify([0, 1, 20])
+        && stamped.length === 4 && stamped.every(x => x[1]) && w.page.ctx._awayRead === false,
+        JSON.stringify({got: w.pageLog().slice(-6), want: w.log().slice(-6), asks, stamped, away: w.page.ctx._awayRead}));
+}
+
+// Opened in a background tab that left its console before the first window answered: the window's place is
+// kept, nothing rejoins while the tab stays hidden, and back in view it is caught up from that place.
+async function checkLoadHidden(cfg) {
+  const w = await loadWorld(cfg, {hidden: true});
+  w.write(20);
+  await w.reconnect();
+  w.pass();
+  await w.advance(GRACE);                                    // the grace runs out: it leaves
+  const rd = w.read(w.pending()[0]);
+  await w.reply(rd);                                         // the window answers after the leave
+  const joinsHidden = w.emits('join_console');
+  w.pass(); w.write(3);
+  await w.hide(false);
+  await w.passAll(); await w.passAll();
+  w.write(1); await w.passAll();
+  const asks = w.asks();
+  check('a page opened in a background tab, its first window answering after it left: no join while hidden, and back '
+        + 'in view caught up from where that window ends — every line once, in order',
+        joinsHidden === 1 && w.exact() && asks.length === 1 && JSON.stringify(asks[0].since) === JSON.stringify([0, 1, 20]),
+        JSON.stringify({joinsHidden, asks, got: w.pageLog().slice(-6), want: w.log().slice(-6)}));
+}
+
+// A load's catch-up owed to the socket's first connect, then covered by a return's: it is not owed any more. A
+// later dropped connection is caught up as one — under the notice that names it, when no answer comes.
+async function checkLoadOwedCleared(cfg) {
+  const w = await loadWorld(cfg);
+  w.write(20);
+  await w.reply(w.read(w.pending()[0]));                    // answered before the socket connects: owed
+  await w.hide(true); await w.advance(GRACE);               // away before it connects
+  await w.reconnect();
+  await w.hide(false);
+  w.pass(); await w.passAll();
+  w.write(2); await w.pass();
+  await w.disconnect();
+  w.write(3);
+  w.serveOff = true;
+  await w.reconnect();
+  await w.advance(46000);
+  const notice = w.page.lines().filter((l, i) => w.page.gaps().indexOf(i) >= 0);
+  check('a load\'s catch-up owed to the first connect and covered by a return\'s: a later dropped connection whose '
+        + 'catch-up never answers is given up under the notice that names the connection',
+        notice.length === 1 && /connection/.test(notice[0]) && !w.page.ctx._primeOwed,
+        JSON.stringify({notice, owed: w.page.ctx._primeOwed}));
+}
+
+// The window answers before the socket has connected: there is nothing to catch up with yet, and the
+// connect asks to be caught up from the window's end — its join, then the catch-up's, as a reconnect does.
+async function checkLoadBeforeConnect(cfg) {
+  const w = await loadWorld(cfg);
+  w.write(20);
+  w.other(true); w.pass();                                  // another tab keeps the poller's place
+  w.write(2);
+  await w.reply(w.read(w.pending()[0]));                    // answered with the socket still connecting
+  const asked = w.asks().length;
+  w.write(2); w.pass();                                     // read by the poller before the page is in the room
+  await w.reconnect();
+  w.write(1); await w.pass();                               // pushed after the join, before its answer is read
+  await w.passAll();
+  w.write(1); await w.passAll();
+  const joins = w.page.emitted.filter(e => e[0] === 'join_console').map(e => e[1]);
+  check('a page load whose window answers before its socket connects: on connecting it asks to be caught up from the '
+        + 'window\'s end, and every line shows once, in order',
+        asked === 0 && joins.length === 2 && !joins[0].catchup
+        && JSON.stringify(joins[1].catchup) === JSON.stringify({id: 1, since: [0, 1, 22]}) && w.exact(),
+        JSON.stringify({asked, joins, got: w.pageLog().slice(-6), want: w.log().slice(-6)}));
+  w.other(false);
+}
+
+// The log rotated (the server restarted) between the window's read and the catch-up: the new log follows the
+// window's lines, every line of it once, with no notice — nothing was missed while away, there was no away.
+async function checkLoadRotated(cfg) {
+  const w = await loadWorld(cfg);
+  w.write(20);
+  await w.reconnect();
+  w.pass();
+  await w.reply(w.read(w.pending()[0]));
+  w.rotate(4);
+  await w.passAll();
+  w.write(1); await w.passAll();
+  const got = w.pageLog(), fresh = w.log();
+  check('a page load, the log rotated before its catch-up was answered: the new log follows the window\'s lines, every '
+        + 'line once and in order, and no notice',
+        JSON.stringify(got.slice(-fresh.length)) === JSON.stringify(fresh) && got.length === 20 + fresh.length
+        && w.page.gaps().length === 0 && !w.page.ctx._resync, JSON.stringify({got: got.slice(-8), fresh}));
+}
+
+// The host cannot answer the catch-up (three passes' reads fail): the page does not sit on what it holds for the
+// 45 s a return would wait — it shows the pushes it held, as a page did before it was caught up, losing none.
+async function checkLoadUnanswered(cfg) {
+  const w = await loadWorld(cfg);
+  w.write(20);
+  await w.reconnect();
+  w.pass();
+  w.write(2);
+  await w.reply(w.read(w.pending()[0]));
+  w.failReads = 3;
+  w.write(1); await w.pass();                                 // the page's place is past the poller's: it waits
+  await w.pass(); await w.pass(); await w.pass();             // the reads fail; the third answers unreadable
+  const after = w.page.ctx._resync, got = w.pageLog(), log = w.log();
+  check('a page load whose catch-up the host cannot answer: given up at once, no notice, and every line pushed '
+        + 'meanwhile shown — none lost', !after && w.page.gaps().length === 0
+        && log.every(l => got.indexOf(l) >= 0), JSON.stringify({held: !!after, got: got.slice(-6), want: log.slice(-6)}));
+}
+
+// A panel line pushed while the load's catch-up is under way is held with the log's pushes and shown once, in
+// its order; the update it belongs to still re-reads the game version when it ends.
+async function checkLoadPanel(cfg) {
+  const w = await loadWorld(cfg);
+  w.write(20);
+  await w.reconnect();
+  w.pass();
+  w.write(2);
+  const rd = w.read(w.pending()[0]);
+  await w.reply(rd);
+  await w.panelPush('[panel] update started — its output follows.');
+  w.write(1); await w.pass();
+  await w.panelPush('[panel] update finished successfully.');
+  await w.passAll();
+  check('a page load with an update\'s markers pushed while its catch-up is under way: each shows once, in order, '
+        + 'and the log\'s lines once each', w.exact()
+        && JSON.stringify(w.pagePanel()) === JSON.stringify(w.backlog.map(b => b.line)),
+        JSON.stringify({panel: w.pagePanel(), backlog: w.backlog.map(b => b.line), got: w.pageLog().slice(-5)}));
+}
+
+// Random page loads: the poller's first pass anywhere in its cycle, the socket connecting before or after the
+// window answers, another tab already watching or not, lines (and, with `repeats`, lines the game repeats word
+// for word) and panel lines written throughout. Every console ends showing the log exactly.
+async function loadSchedule(cfg, seed, code, repeats) {
+  const w = makeWorld({src: cfg.src, panel: cfg.panel, code, seed, windowAt: true});
+  w.write(30);
+  const other = w.rand() < 0.4;
+  if (other) { w.other(true); w.pass(); writeSome(w, repeats); w.pass(); }
+  w.load(w.between(0, 2900));
+  await w.step(w.between(0, 900));
+  await w.reconnect();
+  for (let i = 0; i < 12; i++) {
+    const r = w.rand();
+    if (r < 0.6) writeSome(w, repeats);
+    else if (r < 0.7) w.panelPush('[panel] backup started — its output follows.\nACT ' + i);
+    await w.step(w.between(0, 700));
+  }
+  await w.step(15000);
+  return {seed, log: w.exact(), panel: JSON.stringify(w.pagePanel()) === JSON.stringify(w.backlog.map(b => b.line)),
+          track: JSON.stringify(w.page.ctx._consoleLines) === JSON.stringify(w.pageLog()), held: !!w.page.ctx._resync,
+          shown: w.pageLog().length, want: w.log().length, got: w.pageLog().slice(-6), tail: w.log().slice(-6)};
+}
+
+async function checkLoadSchedules(cfg) {
+  const runs = cfg.runs || 150, src = fs.readFileSync(cfg.src, 'utf8');
+  // The page as it was: the window's `at` ignored, the pushes since its read put back by their text.
+  const old = src.replace('if (!_primeAt(data.at)) _rebuildRestore(mark);', '_rebuildRestore(mark);');
+  for (const repeats of [false, true]) {
+    const bad = [];
+    let wrong = 0;
+    for (let s = 1; s <= runs; s++) {
+      const r = await loadSchedule(cfg, 3000 + s, null, repeats);
+      if (!r.log || !r.panel || !r.track || r.held) bad.push(r);
+      if (old !== src && !(await loadSchedule(cfg, 3000 + s, old, repeats)).log) wrong++;
+    }
+    check(runs + ' random page loads' + (repeats ? ' of a console that repeats itself (a heartbeat in a third of its '
+          + 'lines, an autosave block in a tenth)' : '') + ' — the poller\'s first pass anywhere in its cycle, the socket '
+          + 'connecting before or after the first window answers, another tab already watching or not, lines and panel '
+          + 'lines written throughout: every console ends showing the log and the panel\'s lines complete, in order, '
+          + 'each once — where the page that stitched its first window by text got the log wrong in at least a tenth',
+          bad.length === 0 && old !== src && wrong * 10 >= runs,
+          JSON.stringify({substituted: old !== src, wrong, runs, bad: bad.slice(0, 2)}));
+  }
+}
+
 async function checkSchedules(cfg) {
   const runs = cfg.runs || 150, bad = [];
   let leaves = 0, expires = 0, keptJoins = 0;
@@ -1903,7 +2166,10 @@ async function replay(cfg) {
                     checkLeaveAnswer, checkRepeatAfterBreak, checkBreakBeforeLast, checkPageOnlyLines, checkUnbrokenLatest,
                     checkHoleByText, checkUnreadable, checkGiveUpRepeat, checkClearThenReturn, checkAwayStamps,
                     checkRotatedBeforeAnswer, checkPlaceKept, checkKeptJoinAnswered, checkNeverPrimed,
-                    checkShortLogByText, checkMarkerOrder, checkDownPlaced, checkAheadOfPoller, checkSchedules,
+                    checkShortLogByText, checkMarkerOrder, checkDownPlaced, checkAheadOfPoller, checkLoadOverlap,
+                    checkLoadRepeat, checkLoadBeforeLook, checkLoadBeforeConnect, checkLoadRotated, checkLoadHidden,
+                    checkLoadOwedCleared,
+                    checkLoadUnanswered, checkLoadPanel, checkLoadSchedules, checkSchedules,
                     checkRepeatSchedules]) {
     if (only && !only.test(fn.name)) continue;
     try { await fn(cfg); } catch (e) { check(fn.name + ' ran to its end', false, e && e.stack || e); }
@@ -2733,6 +2999,69 @@ def _server_ahead38(loop, rig, gs_id, a, b):
     _recv38(b)
 
 
+def _server_window_at38(loop, rig, gs_id, admin, sio):
+    """/api/console's window says where in the log it ends, the same place the poller's push of those lines ends."""
+    http = _p9_client(admin)
+    url = "/api/console/%d" % gs_id
+    sio.emit("join_console", {"server_id": gs_id})
+    _pass38(loop)
+    pushed = rig.write(2)
+    _pass38(loop)
+    at = ((_recv38(sio)[0] or [{}])[-1].get("at")) or [0, 0, 0]
+    body = http.get(url).get_json() or {}
+    ino, size = os.stat(rig.path).st_ino, os.path.getsize(rig.path)
+    check("B window: /api/console's window says where in the log it ends — [0, inode, byte offset], the file's size — "
+          "the very place the poller's push of its last lines ends",
+          (body.get("at"), at[1:], [r["line"] for r in body.get("lines") or []][-2:])
+          == ([0, ino, size], [ino, size], pushed), repr((body.get("at"), at, size)))
+    ahead = rig.write(3)                                    # not read by the poller yet
+    win = http.get(url).get_json() or {}
+    size = os.path.getsize(rig.path)
+    sio.emit("join_console", {"server_id": gs_id, "catchup": {"id": 21, "since": win.get("at")}})
+    _pass38(loop)                                           # the page's place is past the poller's: it waits
+    early, waited = _recv38(sio)
+    _pass38(loop)
+    _, answers = _recv38(sio)
+    ans = answers[0] if answers else {}
+    check("B window: a window read past where the poller stands ends where the poller's next push of those lines ends, "
+          "and caught up from it the page is given nothing more — those lines are the window's, once",
+          ([r["line"] for r in win.get("lines") or []][-3:], win.get("at"), _rows_of38(early),
+           (early[-1].get("at") if early else [None])[1:], waited, _lines_of38(ans), ans.get("since"),
+           (ans.get("at") or [None])[1:])
+          == (ahead, [0, ino, size], ahead, [ino, size], [], [], True, [ino, size]), repr((win.get("at"), early, ans)))
+    sio.emit("leave_console", {"server_id": gs_id})
+    _pass38(loop)
+    _server_window_far38(rig, http, url)
+
+
+def _server_window_far38(rig, http, url):
+    """A log longer than the window's reach (_CATCHUP_REACH) and one that is not there."""
+    with open(rig.path, "a", encoding="utf-8") as fh:
+        fh.write("".join("[p38] far %06d %s\n" % (i, "x" * 100) for i in range(11000)))   # about 1.2 MB
+    with open(rig.path, encoding="utf-8") as fh:
+        tail = fh.read().split("\n")[:-1][-250:]
+    body = http.get(url).get_json() or {}
+    size = os.path.getsize(rig.path)
+    check("B window: a log longer than the read reaches back still gives its last 250 lines, whole, and the log's end "
+          "as the place", size > _sf38._CATCHUP_REACH and [r["line"] for r in body.get("lines") or []] == tail
+          and body.get("at") == [0, os.stat(rig.path).st_ino, size], repr((size, body.get("at"))))
+    os.replace(rig.path, rig.path + ".gone")
+    try:
+        gone = http.get(url).get_json() or {}
+    finally:
+        os.replace(rig.path + ".gone", rig.path)
+    check("B window: a log that is not there is a read that did not run — no lines, and no place",
+          (gone.get("readable"), gone.get("lines"), "at" in gone) == (False, [], False), repr(gone))
+    # A reply cut short after its place (the read timed out on a transport that does not raise): not a window.
+    _set38(_core38, "read_as_game_user", lambda *a, **k: ("@%d 9\nB[p38] half" % os.stat(rig.path).st_ino, "", 0))
+    try:
+        cut = http.get(url).get_json() or {}
+    finally:
+        _set38(_core38, "read_as_game_user", rig)
+    check("B window: a reply cut short after the place it names is a read that did not run — no lines, and no place",
+          (cut.get("readable"), cut.get("lines"), "at" in cut) == (False, [], False), repr(cut))
+
+
 def _report_label38():
     """The debug report names the catch-up's read as such among a game account's sudo calls."""
     from panel.ops.debug_report import logs as _lg38
@@ -2784,6 +3113,7 @@ def _section_server38(rig, gs_id, admin):
             _server_long_line38(loop, cu, gs_id, a, b)
             _server_place_read38(loop, cu, gs_id, admin, a)
             _server_ahead38(loop, cu, gs_id, a, b)
+            _server_window_at38(loop, cu, gs_id, admin, a)
             _report_label38()
         finally:
             _set38(_core38, "read_as_game_user", rig)
@@ -2853,17 +3183,34 @@ def _tape38(rig, gs_id, admin):
     t = _Tape38(rig, gs_id, admin)
     other = _sio38(admin)
     try:
+        # 0. The page loads with another tab keeping the stream: lines written after the poller's place are in
+        # its first window, and the poller's push of them (and of one more) reaches the page before the window's
+        # answer. Primed, the page asks to be caught up from where the window ends; a push before that answer
+        # lies before its cut.
+        other.emit("join_console", {"server_id": gs_id})
+        t.tick()
+        rig.write(3)
         t.page({"op": "connect"})
-        t.answer(t.window())
         t.sio.emit("join_console", {"server_id": gs_id})
+        win = t.window()
+        rig.write(1)
         t.tick()
+        t.record()
+        t.answer(win)
+        join = {"server_id": gs_id, "catchup": {"id": 1, "since": win.get("at")}}
+        t.page({"op": "emits", "from": 1, "want": ["join_console"], "data": join})
+        t.sio.emit("join_console", join)
         rig.write(2)
-        t.tick()
+        t.tick_only()               # pushed after the window's answer, before the catch-up's: before its cut
+        rig.write(1)
+        t.tick()                    # the catch-up's answer, then its push
         at = t.record()
+        other.emit("leave_console", {"server_id": gs_id})
+        t.tick()
         # 1. Nobody else watching: back in view, caught up from its place; lines before and after the pass.
-        t.away(1)
+        t.away(2)
         rig.write(5)
-        t.back(2, {"id": 1, "since": at})
+        t.back(3, {"id": 2, "since": at})
         rig.write(3)
         t.tick()                    # the answer (cut at the log's end: the poller's first look), then its tick
         rig.write(2)
@@ -2872,10 +3219,10 @@ def _tape38(rig, gs_id, admin):
         # 2. Another tab keeps the stream: a push reaches the page after its join and BEFORE the answer.
         other.emit("join_console", {"server_id": gs_id})
         t.tick()
-        t.away(3)
+        t.away(4)
         rig.write(4)
         t.tick()                    # to the other tab only
-        t.back(4, {"id": 2, "since": at})
+        t.back(5, {"id": 3, "since": at})
         rig.write(2)
         t.tick_only()               # this push lies before the answer's cut
         rig.write(1)
@@ -2900,15 +3247,17 @@ def _section_replay38(rig, gs_id, admin):
         return
     shown = [ln for ln in out.get("lines") or [] if ln.startswith("[p38] line")]
     check("C replay: the real server's pushes, answers and windows, in the order it produced them, reach the real page "
-          "as the file: each line once, in order, none missing — across a return caught up with nobody else "
-          "watching, and one with another tab keeping the stream and a push arriving before the answer",
+          "as the file: each line once, in order, none missing — across a page load whose first window holds lines "
+          "the poller pushed across its end, a return caught up with nobody else watching, and one with another tab "
+          "keeping the stream and a push arriving before the answer",
           not out.get("loadError") and not out.get("errors") and shown == rig.lines and not out.get("pending")
           and out.get("gaps") == 0,
           repr({k: out.get(k) for k in ("loadError", "errors", "pending", "gaps")})
           + " shown %d of %d; tail %r" % (len(shown), len(rig.lines), shown[-6:]))
-    check("C replay: ...and the page left and rejoined exactly twice, asking each time to be caught up from its own "
-          "place", out.get("emitted") == ["join_console", "leave_console", "join_console", "leave_console",
-                                          "join_console"], repr(out.get("emitted")))
+    check("C replay: ...and the page, once primed, asked to be caught up from where its window ends, then left and "
+          "rejoined exactly twice, asking each time to be caught up from its own place",
+          out.get("emitted") == ["join_console", "join_console", "leave_console", "join_console", "leave_console",
+                                 "join_console"], repr(out.get("emitted")))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
