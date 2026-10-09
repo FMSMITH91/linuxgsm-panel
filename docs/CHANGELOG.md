@@ -577,6 +577,16 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A game server the panel starts on its own host now writes its files group-writable again (664),
+  as it does when LinuxGSM's cron or a login starts it.** Since game servers were given a scope of
+  their own, the privileged helper ran LinuxGSM (and a scheduled task's "Run now") with the panel
+  service's umask, 0022, so new console logs and lock files were 644. It now uses the umask the
+  account's own session gets — login.defs' `UMASK` with Ubuntu's user-private-group rule, 0002 for a
+  game account — computed the way pam_umask does. Remote hosts already got it through `sudo -u`.
+- **"Reboot now" no longer misses a LinuxGSM action that a newer one on the same server displaced.**
+  The reboot check read only the newest registered action, so in the moment that action was ending
+  (its last output still being read), an older update or validate still running beneath it was not
+  seen, and the reboot could stop the server under it. Every action still running is now counted.
 - **The live console no longer shows a few lines twice when a server's page opens**, and no longer
   drops the lines written while it loaded. The page now learns where in the log its first window ends
   and is caught up from there, as a return from a background tab already was, so new lines are placed

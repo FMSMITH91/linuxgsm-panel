@@ -467,12 +467,32 @@ def _row_blockers(rows):
             out.append(_blocker("install", gs.name))
         if _backup_in_progress(gs.id):
             out.append(_blocker("backup", gs.name))
-        act = _action_output.get(gs.id)
-        if act and not act.get("ended"):
-            out.append(_blocker("action", gs.name, act.get("action") or ""))
+        live = _q_live_actions(gs.id)
+        if live:
+            # One blocker for the server (the sentence names it once), every live action in it.
+            out.append(_blocker("action", gs.name, ", ".join(a.get("action") or "" for a in live)))
         if _content_running(gs.id):
             out.append(_blocker("content", gs.name))
     return out
+
+
+def _q_live_actions(gid):
+    """Every long LinuxGSM action still running on server `gid`, newest first.
+
+    The WHOLE registration chain, not its head. A later action displaces the running one into
+    `prev` (_shared._begin_action_tail), and the head is marked ended at the START of its final
+    read (_end_action_tail), before the displaced run is tailed again. Reading the head alone, an
+    update still downloading under a validate whose end read was out was no action at all, and a
+    reboot could stop the server under it. _button_backup_running walks the chain the same way
+    (which is why a displaced Backup-button backup was already seen, as a "backup").
+    """
+    live, seen, e = [], set(), _action_output.get(gid)
+    while isinstance(e, dict) and id(e) not in seen:
+        seen.add(id(e))
+        if not e.get("ended") and not e.get("forgotten"):
+            live.append(e)
+        e = e.get("prev")
+    return live
 
 
 def _content_running(gid):
