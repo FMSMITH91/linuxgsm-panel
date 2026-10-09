@@ -2055,7 +2055,7 @@ async function loadSchedule(cfg, seed, code, repeats) {
 async function checkLoadSchedules(cfg) {
   const runs = cfg.runs || 150, src = fs.readFileSync(cfg.src, 'utf8');
   // The page as it was: the window's `at` ignored, the pushes since its read put back by their text.
-  const old = src.replace('if (!_primeAt(data.at)) _rebuildRestore(mark);', '_rebuildRestore(mark);');
+  const old = src.replace('_primeAt(data.at, mark);', '_rebuildRestore(mark);');
   for (const repeats of [false, true]) {
     const bad = [];
     let wrong = 0;
@@ -2999,6 +2999,11 @@ def _server_ahead38(loop, rig, gs_id, a, b):
     _recv38(b)
 
 
+def _last_at38(pushes):
+    """The `at` of the last of these pushes, or [None, None, None] when there are none."""
+    return (pushes[-1].get("at") if pushes else None) or [None, None, None]
+
+
 def _server_window_at38(loop, rig, gs_id, admin, sio):
     """/api/console's window says where in the log it ends, the same place the poller's push of those lines ends."""
     http = _p9_client(admin)
@@ -3007,13 +3012,13 @@ def _server_window_at38(loop, rig, gs_id, admin, sio):
     _pass38(loop)
     pushed = rig.write(2)
     _pass38(loop)
-    at = ((_recv38(sio)[0] or [{}])[-1].get("at")) or [0, 0, 0]
+    at = _last_at38(_recv38(sio)[0])
     body = http.get(url).get_json() or {}
     ino, size = os.stat(rig.path).st_ino, os.path.getsize(rig.path)
     check("B window: /api/console's window says where in the log it ends — [0, inode, byte offset], the file's size — "
           "the very place the poller's push of its last lines ends",
-          (body.get("at"), at[1:], [r["line"] for r in body.get("lines") or []][-2:])
-          == ([0, ino, size], [ino, size], pushed), repr((body.get("at"), at, size)))
+          (body.get("at"), at[1:], _lines_of38(body)[-2:]) == ([0, ino, size], [ino, size], pushed),
+          repr((body.get("at"), at, size)))
     ahead = rig.write(3)                                    # not read by the poller yet
     win = http.get(url).get_json() or {}
     size = os.path.getsize(rig.path)
@@ -3021,21 +3026,20 @@ def _server_window_at38(loop, rig, gs_id, admin, sio):
     _pass38(loop)                                           # the page's place is past the poller's: it waits
     early, waited = _recv38(sio)
     _pass38(loop)
-    _, answers = _recv38(sio)
-    ans = answers[0] if answers else {}
+    ans = (_recv38(sio)[1] or [{}])[0]
     check("B window: a window read past where the poller stands ends where the poller's next push of those lines ends, "
           "and caught up from it the page is given nothing more — those lines are the window's, once",
-          ([r["line"] for r in win.get("lines") or []][-3:], win.get("at"), _rows_of38(early),
-           (early[-1].get("at") if early else [None])[1:], waited, _lines_of38(ans), ans.get("since"),
-           (ans.get("at") or [None])[1:])
+          (_lines_of38(win)[-3:], win.get("at"), _rows_of38(early), _last_at38(early)[1:], waited, _lines_of38(ans),
+           ans.get("since"), _last_at38([ans])[1:])
           == (ahead, [0, ino, size], ahead, [ino, size], [], [], True, [ino, size]), repr((win.get("at"), early, ans)))
     sio.emit("leave_console", {"server_id": gs_id})
     _pass38(loop)
     _server_window_far38(rig, http, url)
+    _server_window_unread38(rig, http, url)
 
 
 def _server_window_far38(rig, http, url):
-    """A log longer than the window's reach (_CATCHUP_REACH) and one that is not there."""
+    """A log longer than the window's reach (_CATCHUP_REACH): its last lines, whole, and its end."""
     with open(rig.path, "a", encoding="utf-8") as fh:
         fh.write("".join("[p38] far %06d %s\n" % (i, "x" * 100) for i in range(11000)))   # about 1.2 MB
     with open(rig.path, encoding="utf-8") as fh:
@@ -3043,8 +3047,12 @@ def _server_window_far38(rig, http, url):
     body = http.get(url).get_json() or {}
     size = os.path.getsize(rig.path)
     check("B window: a log longer than the read reaches back still gives its last 250 lines, whole, and the log's end "
-          "as the place", size > _sf38._CATCHUP_REACH and [r["line"] for r in body.get("lines") or []] == tail
+          "as the place", size > _sf38._CATCHUP_REACH and _lines_of38(body) == tail
           and body.get("at") == [0, os.stat(rig.path).st_ino, size], repr((size, body.get("at"))))
+
+
+def _server_window_unread38(rig, http, url):
+    """A log that is not there, and a reply cut short after its place: reads that did not run."""
     os.replace(rig.path, rig.path + ".gone")
     try:
         gone = http.get(url).get_json() or {}
@@ -3179,34 +3187,41 @@ class _Tape38:
         self.answer(self.window())
 
 
+def _tape_load38(t, rig, gs_id, other):
+    """0. The page loads with another tab keeping the stream: the `at` of the last push it is sent.
+
+    Lines written after the poller's place are in its first window, and the poller's push of them (and
+    of one more) reaches the page before the window's answer. Primed, the page asks to be caught up from
+    where the window ends; a push before that answer lies before its cut.
+    """
+    other.emit("join_console", {"server_id": gs_id})
+    t.tick()
+    rig.write(3)
+    t.page({"op": "connect"})
+    t.sio.emit("join_console", {"server_id": gs_id})
+    win = t.window()
+    rig.write(1)
+    t.tick()
+    t.record()
+    t.answer(win)
+    join = {"server_id": gs_id, "catchup": {"id": 1, "since": win.get("at")}}
+    t.page({"op": "emits", "from": 1, "want": ["join_console"], "data": join})
+    t.sio.emit("join_console", join)
+    rig.write(2)
+    t.tick_only()               # pushed after the window's answer, before the catch-up's: before its cut
+    rig.write(1)
+    t.tick()                    # the catch-up's answer, then its push
+    at = t.record()
+    other.emit("leave_console", {"server_id": gs_id})
+    t.tick()
+    return at
+
+
 def _tape38(rig, gs_id, admin):
     t = _Tape38(rig, gs_id, admin)
     other = _sio38(admin)
     try:
-        # 0. The page loads with another tab keeping the stream: lines written after the poller's place are in
-        # its first window, and the poller's push of them (and of one more) reaches the page before the window's
-        # answer. Primed, the page asks to be caught up from where the window ends; a push before that answer
-        # lies before its cut.
-        other.emit("join_console", {"server_id": gs_id})
-        t.tick()
-        rig.write(3)
-        t.page({"op": "connect"})
-        t.sio.emit("join_console", {"server_id": gs_id})
-        win = t.window()
-        rig.write(1)
-        t.tick()
-        t.record()
-        t.answer(win)
-        join = {"server_id": gs_id, "catchup": {"id": 1, "since": win.get("at")}}
-        t.page({"op": "emits", "from": 1, "want": ["join_console"], "data": join})
-        t.sio.emit("join_console", join)
-        rig.write(2)
-        t.tick_only()               # pushed after the window's answer, before the catch-up's: before its cut
-        rig.write(1)
-        t.tick()                    # the catch-up's answer, then its push
-        at = t.record()
-        other.emit("leave_console", {"server_id": gs_id})
-        t.tick()
+        at = _tape_load38(t, rig, gs_id, other)
         # 1. Nobody else watching: back in view, caught up from its place; lines before and after the pass.
         t.away(2)
         rig.write(5)

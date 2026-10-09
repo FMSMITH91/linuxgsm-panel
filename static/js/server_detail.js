@@ -837,7 +837,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         // A window that says where in the log it ends is caught up from there (_primeAt): what was
         // pushed before this answer lies in it or in the catch-up's answer. One that does not (a panel
         // older than this) has the pushes since its read put back by their text, as before.
-        if (!_primeAt(data.at)) _rebuildRestore(mark);
+        _primeAt(data.at, mark);
       } else if (!socket.connected || catchUp) {
         // A poll DELTA is new output the panel just watched arrive — accurate to the poll
         // interval — so it is stamped, exactly like a socket push. Only the priming window above
@@ -888,13 +888,12 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
 // `at` (a panel older than this) is stitched by text, as it always was.
 var _primeOwed = false;
 
-function _primeAt(at) {
-  if (!Array.isArray(at) || at.length !== 3) return false;
+function _primeAt(at, mark) {
+  if (!Array.isArray(at) || at.length !== 3) { _rebuildRestore(mark); return; }
   _logAt = at;
-  if (_returnOwed) return true;
+  if (_returnOwed) return;
   if (socket.connected) _primeCatchUp();
   else _primeOwed = true;
-  return true;
 }
 
 function _primeCatchUp() {
