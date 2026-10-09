@@ -1435,7 +1435,9 @@ def _read_console_window(remote, gs, want, host_tz):
     # believed it, emptied its own scrollback — the only copy, since the poller emits a sliding
     # window and keeps nothing — and toasted "Loaded 0 lines from the log" about a log it never
     # opened. Same answer api_server_upload_check gives with `checked`, for the same reason.
-    readable = False
+    # `at` is bound before the try as well: the return reads it only when the read succeeded, but
+    # CodeQL could not see that and reported the caller's three unpacked names as uninitialized.
+    readable, at = False, None
     try:
         log_path = gs.console_log
         # AS THE GAME USER, not as root: the log sits inside a 0750 home. See

@@ -662,7 +662,7 @@ finally:
 # way it actually fails on this codebase: run_command does not raise, it returns
 # ("", "...timed out", -1).
 import panel.routes.remote_vps as _rvmod
-from panel.ops import ssh_manager as _fr_pkg   # noqa: F401  (documented: stub the DEFINITION site)
+import panel.ops.ssh_manager as _fr_pkg   # noqa: F401  (documented: stub the DEFINITION site)
 from panel.ops.ssh_manager import game as _fr_game
 
 # 1. close-panel-port answered "already closed" from a firewall it never managed to read.
@@ -1018,7 +1018,7 @@ try:
     # A change that FAILED must not move the panel's own idea of the port: it would then
     # connect to a port sshd is not on, and the operator's next visit says the host is down.
     _shmod.change_ssh_port = lambda r, p, b="": (False, "sshd rejected the new config")
-    _sh_port(remote_id, 2222)
+    _r = _sh_port(remote_id, 2222)
     check("ssh port: a change that FAILED does not repoint the panel at the new port",
           _sh_stored() == _sh_before,
           "stored port is now %r though the change failed — the panel will dial a port "
@@ -1029,7 +1029,7 @@ try:
 
     # ...and the control: one that worked DOES move it, and is audited as a success.
     _shmod.change_ssh_port = lambda r, p, b="": (True, "moved")
-    _sh_port(remote_id, 2223)
+    _r = _sh_port(remote_id, 2223)
     check("ssh port: a change that WORKED repoints the panel (positive control)",
           _sh_stored() == 2223,
           "stored port is %r — the panel keeps dialling the old one" % _sh_stored())
@@ -1332,6 +1332,7 @@ def _bk_wait(sid, before, secs=5.0):
 
 _bk_saved_pb = _bkmod.run_game_backup
 _bk_saved_sh = _bksh.run_game_backup
+_bk_saved_trig = None
 with app.app_context():
     _bk_gs = db.session.get(GameServer, gs_id)
     _bk_gs.installed = True
@@ -1371,7 +1372,7 @@ try:  # noqa: MC0001
     _bkops.record_game_backup(gs_id)        # a known starting point, not whatever ran before
     time.sleep(1.05)                        # the clock is whole seconds
     _bk_before = _bk_clock(gs_id)
-    c.post("/api/panel/backup/game/%d" % gs_id, json={})
+    _r = c.post("/api/panel/backup/game/%d" % gs_id, json={})
     _moved = _bk_wait(gs_id, _bk_before)
     check("game backup: 'back up now' moves the server's schedule clock",
           _moved,
@@ -2228,7 +2229,7 @@ check("commands: the test's own pattern really does widen when cut (not a vacuou
       % (_wide[-20:], _cut[-20:]))
 _cf = {"name": "smoke-trunc-cmd", "command_template": "say {}", "argument_label": "Map",
        "scope": "all|", "enabled": "on", "argument_pattern": _wide}
-_lc.post("/commands/add", data=_cf, follow_redirects=False)
+_cr = _lc.post("/commands/add", data=_cf, follow_redirects=False)
 with app.app_context():
     _stored = CustomCommand.query.filter_by(name="smoke-trunc-cmd").first()
     _stored_pat = _stored.argument_pattern if _stored else None
@@ -2624,7 +2625,7 @@ finally:
         if _ta_c is not None and _ta_c.is_connected():
             _ta_c.disconnect()
     except Exception:
-        pass  # a client the server already dropped has nothing left to close
+        pass
     with app.app_context():
         _row = db.session.get(RemoteServer, _ta_id)
         if _row is not None:
@@ -2843,7 +2844,7 @@ try:
             if _cl.is_connected():
                 _cl.disconnect()
         except Exception:
-            pass  # a client the server already dropped has nothing left to close
+            pass
 finally:
     (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
     for _cl in (_lt_c, _lt_c2):
@@ -2851,7 +2852,7 @@ finally:
             if _cl is not None and _cl.is_connected():
                 _cl.disconnect()
         except Exception:
-            pass  # a client the server already dropped has nothing left to close
+            pass
     with app.app_context():
         _u = db.session.get(User, _lt_uid)
         if _u is not None:

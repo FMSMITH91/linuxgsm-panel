@@ -2608,7 +2608,6 @@ try:
           "got %d %s" % (dsc_ok.status_code, str(dsc_ok.get_json())[:120]))
 finally:
     _dscmod.run_command = _dsc_saved
-dsc = dsc_ok
 imp_empty = c.post("/api/remote/%d/import" % remote_id, json={"servers": []})
 check("import: empty selection -> 400", imp_empty.status_code == 400)
 # Import validates each entry like a fresh install: a bad username or unknown game is
