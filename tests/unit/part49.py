@@ -429,6 +429,10 @@ def _verify49():
               % (what, why),
               res[0] is False and "not confirmed: " in res[1] and why in res[1]
               and all(o in ls for o in _OLDS49), repr((res, ls)))
+
+
+def _verify_good49():
+    """Controls: a whole archive is still a success and still prunes; the read is bounded."""
     res, name, ls = _verify_run49(0, _DONE49, _tgz49)
     check("backup verify: exit 0 with a whole archive is 'Backed up' and still prunes to keep=3 "
           "(control)", res[0] is True and ls == sorted(_OLDS49[2:] + [name]), repr((res, ls)))
@@ -502,7 +506,7 @@ try:
     _p9_patch(_cron49, "_ensure_backup_headroom", lambda *a, **k: "")
     _p9_patch(_cron49, "backup_disk_info", lambda *a, **k: {"free": 0, "total": 0})
     for _step49 in (_partials49, _partials_lock49, _partials_listing49, _partials_busy49,
-                    _partials_not_ours49, _partials_doubt49, _verify49):
+                    _partials_not_ours49, _partials_doubt49, _verify49, _verify_good49):
         _step49()
 finally:
     _p9_restore_all()

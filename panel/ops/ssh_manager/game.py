@@ -1130,7 +1130,7 @@ def _bkverify_text_failed(out, err):
 
 
 def _bkverify_name(server, user, selfname, before, out):
-    """This run's archive: LinuxGSM's "Completed:" name, else the one new one; None if unknown."""
+    """Name this run's archive: its "Completed:" line, else the one new one; None if unknown."""
     m = _BKVERIFY_NAME_RE.search(terminal.strip_escapes(out or ""))
     if m and m.group(1).startswith(selfname + "-") and cron._game_backup_name_ok(m.group(1)):
         return m.group(1)
@@ -1164,6 +1164,16 @@ def _bkverify_unconfirmed(server, user, selfname, before, out):
     if not name:
         return "which archive it wrote could not be found"
     return _bkverify_archive(server, user, name, before[0] if before else None)
+
+
+def _bkverify_success(server, user, selfname, before, out, keep, headroom_note):
+    """run_game_backup's answer to an exit-0 run: pruned and "Backed up" only once it is proven."""
+    why = _bkverify_unconfirmed(server, user, selfname, before, out)
+    if why:
+        return False, ("LinuxGSM said the backup finished, but it is not confirmed: %s. "
+                       "No old backups were removed." % why), False
+    _bkprune_after_success(server, user, keep)
+    return True, ("Backed up — " + headroom_note if headroom_note else "Backed up"), False
 
 
 def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
@@ -1204,12 +1214,7 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     ok, lock_refused, out, err, rc = _run_linuxgsm_backup(server, user, selfname)
     text_failed = _bkverify_text_failed(out, err)
     if ok and not text_failed:
-        why = _bkverify_unconfirmed(server, user, selfname, before, out)
-        if why:
-            return False, ("LinuxGSM said the backup finished, but it is not confirmed: %s. "
-                           "No old backups were removed." % why), False
-        _bkprune_after_success(server, user, keep)
-        return True, ("Backed up — " + headroom_note if headroom_note else "Backed up"), False
+        return _bkverify_success(server, user, selfname, before, out, keep, headroom_note)
     if lock_refused:
         return False, ("A backup lock was in the way — a previous backup may still be running, or it "
                        "left a stale lock. Try again in a minute."), False
