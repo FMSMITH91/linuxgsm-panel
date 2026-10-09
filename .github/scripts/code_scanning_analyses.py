@@ -25,9 +25,12 @@ Usage:
     code_scanning_analyses.py --ref REF --sha SHA [--event EVENT] [--workflow PATH]
                               [--tries N] [--interval SECONDS]
 
-Exit status: 0 every category's newest analysis is SHA's; 1 a category has no analysis of SHA (or
-the list could not be read); 3 the ref has moved on, a later commit's analysis is the newest in some
-category, so its alerts say nothing about SHA.
+An analysis from a run that did not complete (failed, or cancelled by a newer push) is listed like
+any other, with its `error` set and nothing in it. It never counts: see failed_run().
+
+Exit status: 0 every category's newest analysis is SHA's, from a complete run; 1 a category has no
+complete analysis of SHA (or the list could not be read); 3 the ref has moved on, a later commit's
+analysis is the newest in some category, so its alerts say nothing about SHA.
 """
 import argparse
 import json
@@ -91,13 +94,34 @@ def assess(rows, sha, own):
             [c for c in CATEGORIES if states[c] == "moved"])
 
 
+def failed_run(row):
+    """Whether an analysis row is a run that did not complete: never a result to judge alerts on.
+
+    When a CodeQL job fails or is cancelled (a newer push cancels it), the init action's post step
+    can upload a SARIF that says so, with no results and no rules. Code scanning lists it as an
+    analysis of the commit like any other, its `error` set ("unsuccessful execution, ...").
+    Counted as the commit's analysis, it read as "this category: 0 alerts": refs/pull/406/merge
+    carries four such Python rows, from runs that never finished. codeql.yml no longer lets the
+    action upload one (`upload: never`, and its own upload follows only a complete analysis), but
+    the gates do not rest on that: such a row is a category with no usable analysis.
+    """
+    return bool((row or {}).get("error"))
+
+
 def _state(top, has_own_row, must_be_own, sha, floor):
-    """Return "ok", "missing" or "moved" for one category; `top` is its newest row (or None)."""
+    """Return "ok", "missing" or "moved" for one category; `top` is its newest row (or None).
+
+    "ok" needs `top` to be a COMPLETE run: a newest row from a failed or cancelled run is missing.
+    """
     if has_own_row:
-        return "ok" if top.get("commit_sha") == sha else "moved"
+        if top.get("commit_sha") != sha:
+            return "moved"
+        return "missing" if failed_run(top) else "ok"
     if must_be_own or top is None or not floor:
         return "missing"
-    return "moved" if (top.get("created_at") or "") > floor else "ok"
+    if (top.get("created_at") or "") > floor:
+        return "moved"
+    return "missing" if failed_run(top) else "ok"
 
 
 # What the two gates ever pass: an owner/name slug, and a PR merge ref or main. The ref given to gh
@@ -154,8 +178,9 @@ def describe(rows, sha, missing, moved):
     out = []
     for cat in CATEGORIES:
         top = newest.get(cat) or {}
-        state = "MISSING" if cat in missing else "MOVED ON" if cat in moved else "ok"
-        out.append("  %-34s %-8s newest: %s %s" % (cat, state, (top.get("commit_sha") or "none")[:10],
+        state = ("FAILED RUN" if cat in missing and failed_run(top) else "MISSING" if cat in missing
+                 else "MOVED ON" if cat in moved else "ok")
+        out.append("  %-34s %-10s newest: %s %s" % (cat, state, (top.get("commit_sha") or "none")[:10],
                                                    top.get("created_at") or ""))
     return out
 

@@ -1,7 +1,7 @@
 """Part 6 of the unit suite. Imported for its side effects."""
 from unit.part01 import (N, NS, SO, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
 
-from unit.part05 import (_ast_scan, _helper, _helper_path, _ilu, _machinery, _priv, _re, _root, _shutil, _sp, _t, _tempfile, _time)  # noqa: F401,E402
+from unit.part05 import (_SMOKE_SUITE_FILES, _ast_scan, _helper, _helper_path, _ilu, _machinery, _priv, _re, _root, _shutil, _sp, _t, _tempfile, _time)  # noqa: F401,E402
 check("ufw: _ufw_is_active is false for empty output", _sm_firewall._ufw_is_active("") is False)
 check("ufw: _ufw_is_active is not fooled by the word active elsewhere",
       _sm_firewall._ufw_is_active("To    Action\n22    ALLOW  # keep this rule active") is False)
@@ -1371,14 +1371,19 @@ for _f in sorted(os.listdir(_root)):
     if _f.endswith(".py"):
         _stub_mods[_f[:-3]] = _module_toplevel_names(os.path.join(_root, _f))
 _stub_bad = []
+# The smoke suite's parts run as one narrative: a module alias bound in one part (`import app as
+# _appmod`) is imported by the parts after it, so its aliases carry forward, in run order.
+_stub_smoke_alias = {}
 for _f in sorted(glob.glob(os.path.join(_root, "tests", "*.py"))
+                 + glob.glob(os.path.join(_root, "tests", "smoke", "*.py"))   # the smoke suite's checks
                  + glob.glob(os.path.join(_root, "tools", "*.py"))):
     _src = open(_f, encoding="utf-8").read()
     try:
         _tree = _ast_scan.parse(_src)
     except SyntaxError:
         continue
-    _alias = {}
+    _stub_in_smoke = os.sep + os.path.join("tests", "smoke", "part") in _f
+    _alias = dict(_stub_smoke_alias) if _stub_in_smoke else {}
     for _n in _ast_scan.walk(_tree):
         if isinstance(_n, _ast_scan.Import):
             for _a in _n.names:
@@ -1392,6 +1397,8 @@ for _f in sorted(glob.glob(os.path.join(_root, "tests", "*.py"))
                 for _t in _n.targets:
                     if isinstance(_t, _ast_scan.Name):
                         _alias[_t.id] = _n.value.slice.value
+    if _stub_in_smoke:
+        _stub_smoke_alias.update(_alias)
     for _n in _ast_scan.walk(_tree):
         if not (isinstance(_n, _ast_scan.Attribute) and isinstance(_n.ctx, _ast_scan.Store)):
             continue
@@ -4565,21 +4572,36 @@ check("coverage: Semgrep reads every file whole (no per-rule timeout, no size cu
       in _sg_after and _sg_after.count("exit 1") >= 2, "")
 _cq_cfg = open(os.path.join(_root, ".github", "codeql", "codeql-config.yml"), encoding="utf-8").read()
 _cq_ign = re.search(r"^paths-ignore:\n((?:  - .*\n)+)", _cq_cfg, re.M)
-check("coverage: CodeQL analyses tests/ (paths-ignore is docs/, and the one suite its extractor "
-      "cannot finish in time)",
-      _cq_ign is not None and _cq_ign.group(1).split() == ["-", "docs", "-", "tests/smoke_test.py"]
+# The smoke suite was left out for time (its extractor took 24 minutes on the one 1 MB file) until
+# it was split into tests/smoke/part*.py; with that, nothing in tests/ is out of scope.
+check("coverage: CodeQL analyses tests/, the smoke suite included (paths-ignore is docs/ alone)",
+      _cq_ign is not None and _cq_ign.group(1).split() == ["-", "docs"]
       and not re.search(r"^paths:", _cq_cfg, re.M), _cq_ign and _cq_ign.group(1))
 _cq_wf = open(os.path.join(_root, ".github", "workflows", "codeql.yml"), encoding="utf-8").read()
-_cq_gate = _cq_wf[_cq_wf.index("      - name: The helper and the tests are in the analysed Python database"):
-                  _cq_wf.index("\n  pr-alerts:")] if "analysed Python database" in _cq_wf else ""
-check("coverage: CodeQL's Python job fails when panel-helper or the tests are missing from the "
-      "database it analysed (an extensionless file is the extractor's call, not ours)",
+_cq_code = "\n".join(_l for _l in _cq_wf.splitlines() if not _l.lstrip().startswith("#"))
+
+
+def _cq_step(name):
+    """One step of codeql.yml's analyze job, comment lines dropped ("" when there is none)."""
+    _a = _cq_code.find("      - name: %s\n" % name)
+    if _a < 0:
+        return ""
+    _b = _cq_code.find("\n      - ", _a + 1)
+    _c = _cq_code.find("\n  pr-alerts:", _a)
+    return _cq_code[_a:min(_x for _x in (_b, _c, len(_cq_code)) if _x >= 0)]
+
+
+_cq_gate = _cq_step("The analysed database holds the files it must")
+check("coverage: every CodeQL job fails when a file it must analyse is missing from its database "
+      "(panel-helper, an extensionless file, is the extractor's call; so is every smoke part)",
       "steps.analyze.outputs.db-locations" in _cq_gate and "src.zip" in _cq_gate
+      and "id: extracted" in _cq_gate and "if:" not in _cq_gate.split("run: |")[0]
       and '"tools/panel-helper"' in _cq_gate and '"tests/unit_test.py"' in _cq_gate
+      and '"tests/smoke_test.py"' in _cq_gate and 'glob.glob("tests/smoke/part*.py")' in _cq_gate
+      and '"javascript-typescript": [' in _cq_gate and '"actions": [' in _cq_gate
       and "sys.exit(1)" in _cq_gate and "id: analyze" in _cq_wf, _cq_gate[:120])
 # CodeQL cannot read a suppression comment, so two rules whose every finding in tests/ was read and
 # found deliberate are dropped from its SARIF between the analysis and the upload — for tests/ only.
-_cq_code = "\n".join(_l for _l in _cq_wf.splitlines() if not _l.lstrip().startswith("#"))
 _cq_at = [_cq_code.find(_k) for _k in ("upload: never", "Leave out two deliberate test patterns",
                                        "uses: github/codeql-action/upload-sarif@")]
 _cq_filter = re.findall(r'\.ruleId \| IN\(([^)]*)\)', _cq_code)
@@ -4589,6 +4611,32 @@ check("coverage: CodeQL's own upload follows a filter that drops two named rules
       and 'artifactLocation.uri | startswith("tests/")' in _cq_code
       and 'category: "/language:${{ matrix.language }}"' in _cq_code[_cq_at[2]:],
       repr((_cq_at, _cq_filter)))
+# ...and an analysis that did not complete is never uploaded as a valid, empty one. A cancelled or
+# failed run used to leave Python analyses with no results and no rules on refs/pull/406/merge (the
+# init action's post step uploads one unless the analyze step says `upload: never`), and an alert
+# gate counting it read "0 alerts". The upload now runs only after a successful analysis whose
+# database holds its files and whose SARIF lists the queries it ran, with no unsuccessful invocation.
+_cq_sarif = _cq_step("Leave out two deliberate test patterns (tests/ only)")
+_cq_up = _cq_step("Upload the results to code scanning")
+_cq_up_if = re.search(r"^\s+if: \$\{\{ (.*) \}\}$", _cq_up, re.M)
+_cq_order = [_cq_code.find(_k) for _k in ("id: analyze", "id: extracted", "id: sarif",
+                                          "      - name: Upload the results to code scanning")]
+check("codeql: the SARIF is uploaded only when the analyze step, the database check and the SARIF "
+      "check all succeeded, in that order (never on a cancelled or failed run)",
+      _cq_up_if is not None and -1 not in _cq_order and _cq_order == sorted(_cq_order)
+      and [_x.strip() for _x in _cq_up_if.group(1).split("&&")]
+      == ["success()", "steps.analyze.outcome == 'success'", "steps.extracted.outcome == 'success'",
+          "steps.sarif.outcome == 'success'"]
+      and "always()" not in _cq_code and "cancelled()" not in _cq_code
+      and "continue-on-error" not in _cq_code, _cq_up[:200])
+check("codeql: ...and a SARIF that lists no rules, or reports an unsuccessful invocation, fails the "
+      "job before the upload",
+      "id: sarif" in _cq_sarif
+      and "(.extensions // [])[].rules[]?" in _cq_sarif and '[ "${rules}" = "0" ]' in _cq_sarif
+      and "select(.executionSuccessful == false)" in _cq_sarif and '[ "${failed}" != "0" ]' in _cq_sarif
+      and '[ "${runs}" = "0" ]' in _cq_sarif
+      and _cq_sarif.find("exit 1", _cq_sarif.find('[ "${rules}" = "0" ]')) < _cq_sarif.find("jq '.runs |= map"),
+      _cq_sarif[:200])
 
 # ── No source file carries a literal bidi control, zero-width or line-separator character ──────
 # They make a line read differently from how it runs ("Trojan Source", CVE-2021-42574), and a test
@@ -7197,7 +7245,8 @@ _det_parts = sorted("tests/unit/" + os.path.basename(_p)
 # The glob found this very file: a wrong path would find nothing and read as a clean pass.
 check("suites: the tuple-detail gate's glob finds the part files (this one included)",
       "tests/unit/part06.py" in _det_parts, _det_parts)
-for _f in _REPORTER_SUITES + _det_parts:
+# The smoke suite's check() calls are in its parts too, since it was split for CodeQL.
+for _f in _REPORTER_SUITES + _det_parts + _SMOKE_SUITE_FILES[1:]:
     _tree = _rep_ast.parse(open(os.path.join(_root, _f), encoding="utf-8").read())
     for _n in _rep_ast.walk(_tree):
         if not (isinstance(_n, _rep_ast.Call) and getattr(_n.func, "id", "") == "check"):
