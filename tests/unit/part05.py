@@ -434,7 +434,35 @@ _UNIT_SUITE_FILES = ["tests/unit_test.py"] + sorted(
     for _p in _smg_glob.glob(os.path.join(_root, "tests", "unit", "part*.py")))
 check("suites: the file-list gates see the unit suite's parts, not only its runner",
       "tests/unit/part05.py" in _UNIT_SUITE_FILES, _UNIT_SUITE_FILES)
-_SMG_STUB_FILES = _UNIT_SUITE_FILES + ["tests/smoke_test.py", "tests/rbac_test.py",
+# The smoke suite has the same shape now (tests/smoke_test.py runs tests/smoke/part*.py, split so
+# CodeQL can read it), and its checks are in ITS parts: naming the runner alone would read none.
+_SMOKE_SUITE_FILES = ["tests/smoke_test.py"] + sorted(
+    "tests/smoke/" + os.path.basename(_p)
+    for _p in _smg_glob.glob(os.path.join(_root, "tests", "smoke", "part*.py")))
+check("suites: the file-list gates see the smoke suite's parts, not only its runner",
+      {"tests/smoke/part01.py", "tests/smoke/part02.py"} <= set(_SMOKE_SUITE_FILES), _SMOKE_SUITE_FILES)
+
+
+def _smk_runner_parts():
+    """The smoke runner's _PARTS tuple, read from its syntax tree (None when there is none)."""
+    _tree = _smg_ast.parse(open(os.path.join(_root, "tests", "smoke_test.py"), encoding="utf-8").read())
+    for _n in _tree.body:
+        if (isinstance(_n, _smg_ast.Assign) and [_smg_ast.unparse(_t) for _t in _n.targets] == ["_PARTS"]
+                and isinstance(_n.value, _smg_ast.Tuple)):
+            return [getattr(_e, "value", None) for _e in _n.value.elts]
+    return None
+
+
+# Every smoke part runs. The runner imports part01 itself and the rest from its named _PARTS list; a
+# part on disk that is not on it never runs, and the smoke tally still reads N / N over the checks
+# that did. That cannot be seen from inside the smoke suite without adding a check to it, so it is
+# checked here, against the files on disk, in the order they must run.
+_smk_parts = _smk_runner_parts()
+_smk_disk = [os.path.basename(_f)[:-3] for _f in _SMOKE_SUITE_FILES[1:]]
+check("smoke suite: the runner runs every tests/smoke/part*.py, in order (part01 first, then _PARTS)",
+      _smk_parts is not None and len(_smk_disk) >= 3 and ["part01"] + _smk_parts == _smk_disk,
+      "runner %r, on disk %r" % (_smk_parts, _smk_disk))
+_SMG_STUB_FILES = _UNIT_SUITE_FILES + _SMOKE_SUITE_FILES + ["tests/rbac_test.py",
                                        "tests/setup_wizard_test.py", "tools/perf_bench.py",
                                        "tools/nosudo_runner.py"]
 for _f in _SMG_STUB_FILES:
@@ -4348,8 +4376,8 @@ assert "app.py" in _SCAN_MODULES and os.path.join("panel", "ops", "ssh_manager",
 # no longer vouch for a name's aliveness.
 _SCAN_PROD_USERS = _SCAN_MODULES + ["tools/panel-helper", "tools/perf_bench.py",
                                     "tools/lhci_serve.py"]
-_SCAN_TEST_USERS = _UNIT_SUITE_FILES + ["tests/smoke_test.py", "tests/rbac_test.py",
-                                        "tests/manage_test.py", "tests/template_actions_test.py"]
+_SCAN_TEST_USERS = _UNIT_SUITE_FILES + _SMOKE_SUITE_FILES + ["tests/rbac_test.py", "tests/manage_test.py",
+                                                             "tests/template_actions_test.py"]
 _SCAN_USERS = _SCAN_PROD_USERS + _SCAN_TEST_USERS
 _referenced = set()
 _referenced_prod = set()
