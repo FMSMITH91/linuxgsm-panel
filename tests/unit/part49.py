@@ -277,6 +277,14 @@ def _partials49():
     res, name, ls = _backup49(1, out="tar: error")
     check("backup: when the listing BEFORE the run failed, nothing is removed",
           name in ls and "Removed" not in res[1], repr((res, ls)))
+    # The dangerous shape: a run that failed before writing anything, so the only archive "new"
+    # against an empty before-listing is the good backup already there.
+    _fresh_backups49()
+    _FAIL49["when"] = _nth_listing49(1)
+    res, name, ls = _backup49(1, out="tar: error", archive=False)
+    check("backup: ...and an unreadable before-listing is never read as 'there was nothing', which "
+          "would make the existing good backup this run's",
+          ls == [_OLD49] and "Removed" not in res[1], repr((res, ls)))
 
     _fresh_backups49()
     _FAIL49["when"] = _nth_listing49(2)
