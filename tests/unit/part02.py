@@ -1107,6 +1107,12 @@ try:
 finally:
     _sm_core.run_command = _orig_run7
 _cap7 = {"cmds": []}
+# These checks are about the player guard, the lock sweep and the prune command. A backup that
+# exits 0 is a success only once its archive is proven whole (game._bkverify_unconfirmed, run over
+# a real archive in part49); their transport stub answers "" to everything, so that proof stands
+# in as given here, and is put back after the last of them.
+_orig_bkverify = _sm_game._bkverify_unconfirmed
+_sm_game._bkverify_unconfirmed = lambda *a, **k: None
 _orig_run8 = _sm_core.run_command
 try:
     _sm_core.run_command = lambda s, c, **k: (_cap7["cmds"].append(c), ("", "", 0))[1]
@@ -1258,6 +1264,8 @@ try:
     check("run_game_backup: empty server backs up normally", _eok is True and _eskip is False)
 finally:
     _sm_core.run_command = _orig_run8c
+# The archive check after an exit-0 backup put back (stood in for above: see there).
+_sm_game._bkverify_unconfirmed = _orig_bkverify
 
 # ── player_count_via_lgsm_query: the THIRD reader in this file to need the `ok` guard ──────────
 # It covers games absent from the 26-entry GAMEDIG_TYPE map by using LinuxGSM's own querytype, and

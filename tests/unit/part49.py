@@ -22,6 +22,7 @@ stand-in that writes an archive into that home and answers with the exit code ea
 import io
 import os
 import shutil as _shutil49
+import tarfile as _tar49
 import subprocess as _sp49  # nosec B404 - runs bash on the commands this part's code builds
 import tempfile as _tf49
 import time as _time49
@@ -366,6 +367,83 @@ def _partials_doubt49():
           and os.path.exists(os.path.join(_HOME49, _BK49, "%s-2026-10-08-000003.tar.zst" % _SELF49)), "")
 
 
+# ── exit 0 is not proof: the archive must be whole ──────────────────────────────────────────────
+# LinuxGSM exits 0 after a failed tar when it restarts the server it stopped (game.py's note above
+# _BKVERIFY_FAIL_RE cites the lines). Four good old backups and keep=3: a success prunes the oldest,
+# so "olds all still there" is what a refused success looks like.
+_OLDS49 = ["%s-2026-01-0%d-000000.tar.gz" % (_SELF49, d) for d in (1, 2, 3, 4)]
+
+
+def _tgz49(rel, truncate=False):
+    """A real .tar.gz at `rel` in the home (a few files, so it compresses to some KB); cut short."""
+    src = os.path.join(_HOME49, "serverfiles")
+    os.makedirs(src, exist_ok=True)
+    for i in range(4):
+        with open(os.path.join(src, "f%d.bin" % i), "wb") as fh:
+            fh.write(os.urandom(8192))
+    path = os.path.join(_HOME49, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with _tar49.open(path, "w:gz") as tf:
+        tf.add(src, arcname="serverfiles")
+    if truncate:
+        with open(path, "r+b") as fh:
+            fh.truncate(os.path.getsize(path) // 2)
+
+
+def _verify_run49(rc, out, write):
+    """Run run_game_backup with a stand-in LinuxGSM that calls `write(name)` and answers rc/out."""
+    _reset49()
+    for i, n in enumerate(_OLDS49):
+        _tgz49(os.path.join(_BK49, n))
+        os.utime(os.path.join(_HOME49, _BK49, n), (_time49.time() - 86400 * (10 - i),) * 2)
+    name = "%s-%s.tar.gz" % (_SELF49, _time49.strftime("%Y-%m-%d-%H%M%S"))
+
+    def _run(server, user, action, **_k):
+        if write:
+            write(os.path.join(_BK49, name))
+        return out.replace("NAME", name), "", rc
+    _p9_patch(_p9_core, "run_as_game_user", _run)
+    res = _game49.run_game_backup(NS(id=49), _USER49, _SELF49, keep=3, force=True)
+    return res, name, sorted(os.listdir(os.path.join(_HOME49, _BK49)))
+
+
+_DONE49 = "[  OK  ] Backup %s: Completed: \x1b[3mNAME\x1b[0m, total size 40K\n" % _SELF49
+_TARFAIL49 = ("[ .... ] Backup %s: Backup (1G) NAME, in progress ...\r ... \x1b[31mFAIL\x1b[0m\n"
+              "[ FAIL ] Backup %s: Starting backup\n[  OK  ] Starting %s: server\n"
+              % (_SELF49, _SELF49, _SELF49))
+
+
+def _verify49():
+    res, name, ls = _verify_run49(0, _TARFAIL49, lambda rel: _tgz49(rel, truncate=True))
+    check("backup verify: exit 0 WITH LinuxGSM's own tar FAIL lines is a failure, and nothing old is "
+          "pruned", res[0] is False and all(o in ls for o in _OLDS49), repr((res, ls)))
+    check("backup verify: ...and its partial archive is removed (the run did end), saying so",
+          name not in ls and "Removed the partial archive" in res[1], repr((res, ls)))
+    for what, write in (("an EMPTY archive", lambda rel: _write49(rel, "")),
+                        ("a truncated (corrupt) archive", lambda rel: _tgz49(rel, truncate=True)),
+                        ("no archive at all", None)):
+        res, name, ls = _verify_run49(0, _DONE49 if write else "", write)
+        check("backup verify: exit 0 with %s is NOT confirmed: reported as such, nothing pruned"
+              % what,
+              res[0] is False and "not confirmed" in res[1] and all(o in ls for o in _OLDS49),
+              repr((res, ls)))
+    res, name, ls = _verify_run49(0, _DONE49, _tgz49)
+    check("backup verify: exit 0 with a whole archive is 'Backed up' and still prunes to keep=3 "
+          "(control)", res[0] is True and ls == sorted(_OLDS49[2:] + [name]), repr((res, ls)))
+    res, name, ls = _verify_run49(0, "", _tgz49)
+    check("backup verify: ...also when LinuxGSM's output does not name it (found by the listings)",
+          res[0] is True and ls == sorted(_OLDS49[2:] + [name]), repr((res, ls)))
+    sent = []
+    _p9_patch(_p9_core, "shell_as_game_user",
+              lambda server, user, sh, timeout=30, **k: (sent.append((sh, timeout)), ("", "", -1))[1])
+    why = _game49._bkverify_archive(None, _USER49, _OLDS49[0], None)
+    _p9_patch(_p9_core, "shell_as_game_user", _bash49)
+    check("backup verify: the archive read is bounded — `timeout 1700` on the host inside an 1800 s "
+          "transport timeout — and an unanswered host is not a confirmation",
+          len(sent) == 1 and "timeout 1700 " in sent[0][0] and sent[0][1] == 1800
+          and why == "the host could not be asked", repr((sent, why)))
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _arm49():
     """part12's tripwire: nothing below may reach a host or run a command on this machine."""
@@ -422,7 +500,7 @@ try:
     _p9_patch(_cron49, "_ensure_backup_headroom", lambda *a, **k: "")
     _p9_patch(_cron49, "backup_disk_info", lambda *a, **k: {"free": 0, "total": 0})
     for _step49 in (_partials49, _partials_lock49, _partials_listing49, _partials_busy49,
-                    _partials_not_ours49, _partials_doubt49):
+                    _partials_not_ours49, _partials_doubt49, _verify49):
         _step49()
 finally:
     _p9_restore_all()
