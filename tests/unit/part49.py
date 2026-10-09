@@ -419,14 +419,16 @@ def _verify49():
           "pruned", res[0] is False and all(o in ls for o in _OLDS49), repr((res, ls)))
     check("backup verify: ...and its partial archive is removed (the run did end), saying so",
           name not in ls and "Removed the partial archive" in res[1], repr((res, ls)))
-    for what, write in (("an EMPTY archive", lambda rel: _write49(rel, "")),
-                        ("a truncated (corrupt) archive", lambda rel: _tgz49(rel, truncate=True)),
-                        ("no archive at all", None)):
+    for what, write, why in (
+            ("an EMPTY archive", lambda rel: _write49(rel, ""), "the archive is empty"),
+            ("a truncated (corrupt) archive", lambda rel: _tgz49(rel, truncate=True),
+             "does not read to the end"),
+            ("no archive at all", None, "could not be found")):
         res, name, ls = _verify_run49(0, _DONE49 if write else "", write)
-        check("backup verify: exit 0 with %s is NOT confirmed: reported as such, nothing pruned"
-              % what,
-              res[0] is False and "not confirmed" in res[1] and all(o in ls for o in _OLDS49),
-              repr((res, ls)))
+        check("backup verify: exit 0 with %s is NOT confirmed: reported as such (%s), nothing pruned"
+              % (what, why),
+              res[0] is False and "not confirmed: " in res[1] and why in res[1]
+              and all(o in ls for o in _OLDS49), repr((res, ls)))
     res, name, ls = _verify_run49(0, _DONE49, _tgz49)
     check("backup verify: exit 0 with a whole archive is 'Backed up' and still prunes to keep=3 "
           "(control)", res[0] is True and ls == sorted(_OLDS49[2:] + [name]), repr((res, ls)))
