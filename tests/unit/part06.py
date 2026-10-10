@@ -5354,9 +5354,10 @@ try:
                '"file:///etc/hostname">]>\n<coverage line-rate="1"><sources><source>&x;</source>'
                '</sources></coverage>\n')
     _cc_n = [0]
+    _cc_marker = [False]   # set: the artifact also holds docs-only.txt (see the docs-only cases)
 
     def _cc_case(report, event="push", branch="main", sha=_cc_sha, token="t0ken", link=False,
-                 lcov=None, lcov_link=False, fail_lang="", docs_only=False):
+                 lcov=None, lcov_link=False, fail_lang=""):
         """Run the send step against a Python report and, when `lcov` is given, a JavaScript one.
         Returns (rc, reporter calls, Python report sent, output, RUNNER_TEMP, LCOV report sent)."""
         _cc_n[0] += 1
@@ -5365,7 +5366,7 @@ try:
         _jsart = os.path.join(_d, "jsart")
         os.makedirs(_art)
         os.makedirs(_rt)
-        if docs_only:
+        if _cc_marker[0]:
             # What ci.yml's coverage job leaves on a documentation-only pull request.
             with open(os.path.join(_art, "docs-only.txt"), "w") as _fh:
                 _fh.write("documentation-only pull request, so nothing was measured\n")
@@ -5463,10 +5464,14 @@ try:
     # artifact carries docs-only.txt instead of a report. That passes, uploading nothing, for a pull
     # request only: a push always measures, so a push with no report is still refused, and a report
     # beside the file is uploaded as any other.
-    _cc_docs = {"pr, marker": _cc_case(None, event="pull_request", docs_only=True),
-                "push, marker": _cc_case(None, docs_only=True),
-                "pr, no marker": _cc_case(None, event="pull_request"),
-                "pr, report and marker": _cc_case(_cc_good, event="pull_request", docs_only=True)}
+    _cc_docs = {"pr, no marker": _cc_case(None, event="pull_request")}
+    _cc_marker[0] = True
+    try:
+        _cc_docs.update({"pr, marker": _cc_case(None, event="pull_request"),
+                         "push, marker": _cc_case(None),
+                         "pr, report and marker": _cc_case(_cc_good, event="pull_request")})
+    finally:
+        _cc_marker[0] = False
     check("codacy-coverage: a documentation-only pull request's marker passes with nothing uploaded; "
           "a push with it, or a pull request without it, and no report, is refused; a report beside "
           "it is uploaded",
