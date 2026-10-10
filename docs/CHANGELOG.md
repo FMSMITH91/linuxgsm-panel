@@ -582,6 +582,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The Tailscale page no longer shows "12/31/1" as the last-seen time of every connected
+  device.** Tailscale reports a placeholder for "no time" for a device that is online now, and the
+  page printed it as a date in year 1. Connected devices now show a dash; offline ones keep their
+  real last-seen time.
 - **A game server the panel starts on its own host now writes its files group-writable again (664),
   as it does when LinuxGSM's cron or a login starts it.** Since game servers were given a scope of
   their own, the privileged helper ran LinuxGSM (and a scheduled task's "Run now") with the panel
