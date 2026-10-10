@@ -1,4 +1,5 @@
 """Time, with one definition of "now".
+# probe: a code change on a docs-only PR must run every check (not to be merged)
 
 Everything the panel stores is **naive UTC**: fourteen `db.Column(db.DateTime)` defaults in
 `models.py` insert it, and every comparison and retention cutoff reads it back. SQLite keeps no
