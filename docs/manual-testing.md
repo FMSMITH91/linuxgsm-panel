@@ -123,3 +123,5 @@ The unit suite covers the path checks and the argv; what it cannot cover is a re
 - Locked out of SSH: use your second session / provider console; the panel never removes your current port/binding, so the previous way in still works.
 - Locked out of the panel: `sudo linuxgsm-panel-recover` from a shell on the host (reset password, disable 2FA, create admin).
 - fail2ban issues: `sudo fail2ban-client status`, and jail files live in `/etc/fail2ban/jail.d/` and `filter.d/`.
+
+<!-- probe: docs-only CI skip check, will be closed -->
