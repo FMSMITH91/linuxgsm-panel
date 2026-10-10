@@ -90,6 +90,33 @@ def _gh(args):
     return res.stdout
 
 
+def _head_and_count(slug, number):
+    """The pull request's head commit and its changed_files count, or None when unreadable."""
+    meta = _gh(["--", "repos/%s/pulls/%d" % (slug, number)])
+    try:
+        meta = json.loads(meta) if meta is not None else None
+        return meta["head"]["sha"], int(meta["changed_files"])
+    except (ValueError, TypeError, KeyError):
+        print("the pull request could not be read")
+        return None
+
+
+def _parse_rows(out):
+    """(how many files, their paths and each renamed file's old path) from gh's rows, or None."""
+    files, paths = 0, []
+    try:
+        for line in out.splitlines():
+            if not line.strip():
+                continue
+            name, old = json.loads(line)
+            files += 1
+            paths.extend([name] if old is None else [name, old])
+    except (ValueError, TypeError):
+        print("the file list is not what gh api returns")
+        return None
+    return files, paths
+
+
 def read_paths(repo, pr, head_sha):
     """Return every path the pull request changes (and each renamed file's old path), or None.
 
@@ -100,37 +127,21 @@ def read_paths(repo, pr, head_sha):
     if slug is None or number < 1:
         print("not an owner/name slug and a pull request number")
         return None
-    meta = _gh(["--", "repos/%s/pulls/%d" % (slug, number)])
-    try:
-        meta = json.loads(meta) if meta is not None else None
-        head, count = meta["head"]["sha"], int(meta["changed_files"])
-    except (ValueError, TypeError, KeyError):
-        print("the pull request could not be read")
+    meta = _head_and_count(slug, number)
+    if meta is None:
         return None
-    if head != head_sha:
-        print("the pull request's head is %s, not this run's %s" % (str(head)[:10], head_sha[:10]))
+    if meta[0] != head_sha:
+        print("the pull request's head is %s, not this run's %s" % (str(meta[0])[:10], head_sha[:10]))
         return None
     out = _gh(["--paginate", "--jq", ".[] | [.filename, .previous_filename]", "--",
                "repos/%s/pulls/%d/files?per_page=100" % (slug, number)])
-    if out is None:
+    rows = _parse_rows(out) if out is not None else None
+    if rows is None:
         return None
-    files, paths = 0, []
-    try:
-        for line in out.splitlines():
-            if not line.strip():
-                continue
-            name, old = json.loads(line)
-            files += 1
-            paths.append(name)
-            if old is not None:
-                paths.append(old)
-    except (ValueError, TypeError):
-        print("the file list is not what gh api returns")
+    if rows[0] != meta[1]:
+        print("read %d files of the %d the pull request changes" % (rows[0], meta[1]))
         return None
-    if files != count:
-        print("read %d files of the %d the pull request changes" % (files, count))
-        return None
-    return paths
+    return rows[1]
 
 
 def valid(repo, pr, head_sha):
