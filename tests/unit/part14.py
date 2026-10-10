@@ -217,7 +217,8 @@ check("js coverage (CI): the job pins every action to a commit, reads the reposi
       "keeps no token in .git",
       len(_jcj_uses) == 4 and _jcj_uses[0].startswith("step-security/harden-runner@")
       and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", _u) for _u in _jcj_uses)
-      and re.search(r"\n    permissions:\n      contents: read\n    steps:", _jcj) is not None
+      and re.search(r"\n    permissions:\n      contents: read\n      pull-requests: read[ \t]*(?:#[^\n]*)?\n    steps:",
+                    _jcj) is not None
       and "secrets." not in _jcj and "persist-credentials: false" in _jcj,
       repr((_jcj_uses, _jcj[:200])))
 check("js coverage (CI): ...installs only requirements.txt, hash-checked, and runs the harness "
@@ -232,7 +233,7 @@ check("js coverage (CI): ...installs only requirements.txt, hash-checked, and ru
 # told: the step must leave with run.py's status (and so stop the upload after it), put the summary
 # on the run page either way, and fail — saying so — on a runner with no Chrome. PATH holds nothing
 # but the stand-ins, so a runner that does have Chrome cannot make the last case pass by accident.
-_jcm = re.search(r"- name: Measure\n\s+run: \|\n((?:\s{10}.*\n|\s*\n)+)", _ci14)
+_jcm = re.search(r"- name: Measure\n(?:\s+if: .*\n)?\s+run: \|\n((?:\s{10}.*\n|\s*\n)+)", _ci14)
 _jcm_code = "\n".join(_l[10:] for _l in _jcm.group(1).splitlines()) if _jcm else ""
 _jcm_sb = _tf14.mkdtemp(prefix="jscov-ci-")
 try:

@@ -25,6 +25,9 @@ jobs:
     name: SonarCloud new issues
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read   # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -33,9 +36,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      # A pull request that changes only documentation passes here without the steps below, and
+      # still reports this job by its name, as a required check must: .github/scripts/pr_scope.py
+      # says what counts and why. Anything else, and anything it cannot establish, runs them all.
+      - name: Does this pull request change anything but documentation?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
+          --pr "$PR" --head-sha "$HEAD_SHA"
       - name: Self-test
+        if: steps.scope.outputs.docs_only != 'true'
         run: python3 .github/scripts/sonar_new_issues.py --self-test
       - name: Wait for SonarCloud's analysis of this commit, then count what it found
+        if: steps.scope.outputs.docs_only != 'true'
         env:
           PR: ${{ github.event.pull_request.number }}
           SHA: ${{ github.event.pull_request.head.sha }}

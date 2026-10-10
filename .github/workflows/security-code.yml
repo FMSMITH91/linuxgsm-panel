@@ -5,7 +5,8 @@ name: Security scan (code)
 # path-filtered, which that workflow deliberately is not — see the note at the top of it.
 #
 # A docs-only or workflow-only change cannot alter what any of these three report, and together
-# they are ~105s of runner time per pull request. The exclusion list is a paths-IGNORE rather than
+# they are ~105s of runner time per pull request. A docs-only PULL REQUEST still runs the workflow
+# (its jobs are required checks), and each job's scope step skips the scan (.github/scripts/pr_scope.py). The exclusion list is a paths-IGNORE rather than
 # an allowlist on purpose: an unrecognised new path should fail OPEN and be scanned, never skipped.
 #
 # The weekly cron is the reason the dependency audit still catches things on a quiet week — a
@@ -52,6 +53,9 @@ jobs:
     name: Dependency vulnerabilities (pip-audit)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read   # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -61,10 +65,25 @@ jobs:
         with:
           # The audits read the lockfiles; no step here needs the job token.
           persist-credentials: false
+      # A pull request that changes only documentation passes here without the steps below, and
+      # still reports this job by its name, as a required check must: .github/scripts/pr_scope.py
+      # says what counts and why. Anything else, and anything it cannot establish, runs them all.
+      - name: Does this pull request change anything but documentation?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
+          --pr "$PR" --head-sha "$HEAD_SHA"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.scope.outputs.docs_only != 'true'
         with:
           python-version: "3.11"
-      - run: >-
+      - if: steps.scope.outputs.docs_only != 'true'
+        run: >-
           python -m pip install --quiet --require-hashes --only-binary :all:
           -r .github/ci-requirements/pip-audit.txt
       # FAILS the run if any pinned dependency has a known vulnerability: that is actionable (bump
@@ -83,6 +102,7 @@ jobs:
       #   The count: the audit must have read exactly the file's pins. A pin dropped silently (a
       #     marker false on this runner's Python, a parser change in a pip-audit bump) fails here.
       - name: Audit the panel's pins (pip-audit)
+        if: steps.scope.outputs.docs_only != 'true'
         run: |
           set -uo pipefail
           for f in requirements.txt requirements-bootstrap.txt; do
@@ -113,7 +133,7 @@ jobs:
       # the release TAG. Runs even when pip-audit failed, so an npm finding is never hidden by a
       # Python one.
       - name: Install osv-scanner
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.scope.outputs.docs_only != 'true' }}
         env:
           # renovate: datasource=github-release-attachments depName=google/osv-scanner
           OSV_SCANNER_VERSION: 'v2.6.0'
@@ -135,7 +155,7 @@ jobs:
       #     Each must have been read and have yielded packages, or the run fails: a lockfile it
       #     parsed as empty is otherwise reported clean.
       - name: Audit every lockfile (osv-scanner)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.scope.outputs.docs_only != 'true' }}
         run: |
           set -uo pipefail
           lockfiles=(tools/gamedig/package-lock.json static/vendor/package-lock.json
@@ -173,6 +193,7 @@ jobs:
     permissions:
       contents: read
       security-events: write   # upload SARIF to the Security tab (code scanning)
+      pull-requests: read      # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -184,11 +205,26 @@ jobs:
           # as the truth. Only upload-sarif needs it, and it is handed that directly; leaving it
           # in .git/config put it in reach of every tool this job installs and runs.
           persist-credentials: false
+      # A pull request that changes only documentation passes here without the steps below, and
+      # still reports this job by its name, as a required check must: .github/scripts/pr_scope.py
+      # says what counts and why. Anything else, and anything it cannot establish, runs them all.
+      - name: Does this pull request change anything but documentation?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
+          --pr "$PR" --head-sha "$HEAD_SHA"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.scope.outputs.docs_only != 'true'
         with:
           python-version: "3.11"
       # Exact versions and hashes, wheels only — see the header of that file for why.
-      - run: >-
+      - if: steps.scope.outputs.docs_only != 'true'
+        run: >-
           python -m pip install --quiet --require-hashes --only-binary :all:
           -r .github/ci-requirements/bandit.txt
       # Emit SARIF and publish it to GitHub code scanning (the Security tab), alongside
@@ -206,6 +242,7 @@ jobs:
       # on any): they become code-scanning alerts, and an open alert fails "Open code-scanning
       # alerts" (codeql-alerts.yml, which waits for this workflow) — that is where Bandit gates.
       - name: Bandit (SARIF)
+        if: steps.scope.outputs.docs_only != 'true'
         # `-r .` walks *.py ONLY, so tools/panel-helper — Python with a shebang and no extension —
         # was invisible to it. That file is the ROOT-OWNED end of the sudo boundary: the one place
         # in the repo where a finding matters most was the one place bandit never looked. It is
@@ -237,6 +274,7 @@ jobs:
             exit 1
           fi
       - name: Upload Bandit results to code scanning
+        if: steps.scope.outputs.docs_only != 'true'
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: bandit.sarif
@@ -249,6 +287,7 @@ jobs:
     permissions:
       contents: read
       security-events: write   # upload SARIF to the Security tab (code scanning), as Bandit does
+      pull-requests: read      # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -259,14 +298,29 @@ jobs:
           # Semgrep scans the working tree. The job token can write code-scanning alert state;
           # only upload-sarif needs it, and it is handed that directly (see the Bandit job).
           persist-credentials: false
+      # A pull request that changes only documentation passes here without the steps below, and
+      # still reports this job by its name, as a required check must: .github/scripts/pr_scope.py
+      # says what counts and why. Anything else, and anything it cannot establish, runs them all.
+      - name: Does this pull request change anything but documentation?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
+          --pr "$PR" --head-sha "$HEAD_SHA"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.scope.outputs.docs_only != 'true'
         with:
           python-version: "3.11"
       # semgrep.txt is semgrep's whole closure, PyJWT included, each package hash-checked, and pip
       # checks it is complete: no --no-deps, so a dependency a semgrep bump adds and the lockfile
       # lacks fails here, by name, instead of as "wrote no SARIF" below. (semgrep 1.178 pinned a
       # vulnerable PyJWT, which is why there was a second file; see .github/ci-requirements/semgrep.in.)
-      - run: >-
+      - if: steps.scope.outputs.docs_only != 'true'
+        run: >-
           python -m pip install --quiet --require-hashes --only-binary :all:
           -r .github/ci-requirements/semgrep.txt
       # Registry rulesets, fetched anonymously (no Semgrep account/token needed):
@@ -300,6 +354,7 @@ jobs:
       # warnings. The step now fails on any notification Semgrep records (a timeout, a file it could
       # not parse), so a file left unread can no longer read as a clean one.
       - name: Semgrep scan
+        if: steps.scope.outputs.docs_only != 'true'
         run: |
           semgrep scan \
             --config p/security-audit --config p/python --config p/flask \
@@ -337,6 +392,7 @@ jobs:
             semgrep.sarif > semgrep.open.sarif
           mv semgrep.open.sarif semgrep.sarif
       - name: Upload Semgrep results to code scanning
+        if: steps.scope.outputs.docs_only != 'true'
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: semgrep.sarif

@@ -4595,7 +4595,9 @@ _cq_gate = _cq_step("The analysed database holds the files it must")
 check("coverage: every CodeQL job fails when a file it must analyse is missing from its database "
       "(panel-helper, an extensionless file, is the extractor's call; so is every smoke part)",
       "steps.analyze.outputs.db-locations" in _cq_gate and "src.zip" in _cq_gate
-      and "id: extracted" in _cq_gate and "if:" not in _cq_gate.split("run: |")[0]
+      and "id: extracted" in _cq_gate
+      and re.findall(r"^\s+if: (.*)$", _cq_gate.split("run: |")[0], re.M)
+      == ["steps.scope.outputs.docs_only != 'true'"]
       and '"tools/panel-helper"' in _cq_gate and '"tests/unit_test.py"' in _cq_gate
       and '"tests/smoke_test.py"' in _cq_gate and 'glob.glob("tests/smoke/part*.py")' in _cq_gate
       and '"javascript-typescript": [' in _cq_gate and '"actions": [' in _cq_gate
@@ -5354,7 +5356,7 @@ try:
     _cc_n = [0]
 
     def _cc_case(report, event="push", branch="main", sha=_cc_sha, token="t0ken", link=False,
-                 lcov=None, lcov_link=False, fail_lang=""):
+                 lcov=None, lcov_link=False, fail_lang="", docs_only=False):
         """Run the send step against a Python report and, when `lcov` is given, a JavaScript one.
         Returns (rc, reporter calls, Python report sent, output, RUNNER_TEMP, LCOV report sent)."""
         _cc_n[0] += 1
@@ -5363,6 +5365,10 @@ try:
         _jsart = os.path.join(_d, "jsart")
         os.makedirs(_art)
         os.makedirs(_rt)
+        if docs_only:
+            # What ci.yml's coverage job leaves on a documentation-only pull request.
+            with open(os.path.join(_art, "docs-only.txt"), "w") as _fh:
+                _fh.write("documentation-only pull request, so nothing was measured\n")
         if lcov is not None:
             os.makedirs(_jsart)
             _jdst = os.path.join(_d if lcov_link else _jsart, "lcov.info")
@@ -5453,6 +5459,24 @@ try:
           and "holds no coverage.xml" in _cc_only["symlink"][3]
           and "not a Cobertura report" in _cc_only["no line-rate"][3],
           repr({_k: _v[:4] for _k, _v in _cc_only.items()}))
+    # A documentation-only pull request measures nothing (ci.yml's scope step), and its coverage
+    # artifact carries docs-only.txt instead of a report. That passes, uploading nothing, for a pull
+    # request only: a push always measures, so a push with no report is still refused, and a report
+    # beside the file is uploaded as any other.
+    _cc_docs = {"pr, marker": _cc_case(None, event="pull_request", docs_only=True),
+                "push, marker": _cc_case(None, docs_only=True),
+                "pr, no marker": _cc_case(None, event="pull_request"),
+                "pr, report and marker": _cc_case(_cc_good, event="pull_request", docs_only=True)}
+    check("codacy-coverage: a documentation-only pull request's marker passes with nothing uploaded; "
+          "a push with it, or a pull request without it, and no report, is refused; a report beside "
+          "it is uploaded",
+          _cc_docs["pr, marker"][0] == 0 and not _cc_docs["pr, marker"][1]
+          and "documentation-only pull request" in _cc_docs["pr, marker"][3]
+          and all(_cc_docs[_k][0] != 0 and not _cc_docs[_k][1] and "holds no coverage.xml"
+                  in _cc_docs[_k][3] for _k in ("push, marker", "pr, no marker"))
+          and _cc_docs["pr, report and marker"][0] == 0
+          and _cc_docs["pr, report and marker"][1].startswith("REPORTER report --partial -l Python"),
+          repr({_k: _v[:4] for _k, _v in _cc_docs.items()}))
 
     # ── the JavaScript report: the js-coverage job's lcov.info ──────────────────────────────────
     # Sent beside the Python report with the reporter's partial/final flow. It is DATA from the

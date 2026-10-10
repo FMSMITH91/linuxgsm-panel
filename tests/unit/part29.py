@@ -364,7 +364,12 @@ def _ci1_root_step_bad(steps):
     if not all(w in rs for w in wants):
         bad.append("the root step does not run the suite as root, SUDO_* unset, and compare it "
                    "with UNIT_LOG")
-    if _re29.search(r"^ {8}(if|continue-on-error):", rs, _re29.M):
+    # One `if:` is allowed, and only this one, on both steps: a documentation-only pull request
+    # skips them together (.github/scripts/pr_scope.py fails open, so anything else runs them).
+    _docs_if = ["steps.scope.outputs.docs_only != 'true'"]
+    if (_re29.search(r"^ {8}continue-on-error:", rs, _re29.M)
+            or _re29.findall(r"^ {8}if: (.*)$", rs, _re29.M) != _docs_if
+            or _re29.findall(r"^ {8}if: (.*)$", steps[rt], _re29.M) != _docs_if):
         bad.append("the root step can be skipped or fail without failing the job")
     return bad
 
