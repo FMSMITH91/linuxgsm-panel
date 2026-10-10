@@ -140,6 +140,21 @@ try:
 finally:
     _shutil50.rmtree(_sb50, ignore_errors=True)
 
+# SonarCloud's pythonsecurity:S8705 (command argument injection) does not take a regex match as a
+# sanitiser: the slug gh is handed is rebuilt character by character from a constant table, and the
+# number through int(), so no text from the command line reaches gh's argv. gh's flags come before
+# `--`, the path after it.
+_slug_in50 = "".join(["Own", "er/re", "po.x"])
+_rp50 = open(_PS50_PATH, encoding="utf-8").read()
+_rp50 = _rp50[_rp50.index("def read_paths("):_rp50.index("\ndef ", _rp50.index("def read_paths(") + 1)]
+check("pr_scope: the slug gh is given is REBUILT, not the argument's own text, and anything that is not "
+      "an owner/name slug is refused",
+      PS.safe_slug(_slug_in50) == _slug_in50 and PS.safe_slug(_slug_in50) is not _slug_in50
+      and all(PS.safe_slug(_b) is None for _b in ("o/r;x", "a b/c", "", None, "o/r\n", "-o/r", "o/r/x"))
+      and '% (slug, number)' in _rp50 and "% (repo" not in _rp50
+      and _rp50.find('"--jq"') < _rp50.find('"--", "repos/%s/pulls/%d/files'),
+      repr(PS.safe_slug(_slug_in50)))
+
 # ── 3. the wiring: every scoped job ─────────────────────────────────────────────────────────────
 _SCOPED50 = {
     "ci.yml": ("checks", "coverage", "js-coverage", "gamedig-lockfile"),

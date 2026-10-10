@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import re
+import string
 import subprocess  # nosec B404 - gh with a fixed argv, no shell
 import sys
 
@@ -46,6 +47,21 @@ DOCS_ONLY_FILES = frozenset(p for p in DOCS_ONLY_PATTERNS if "*" not in p)
 _REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}\Z")
 _PR_RE = re.compile(r"[1-9][0-9]{0,8}\Z")
 _SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+# The characters an owner/name slug may hold, each mapped to itself: the slug handed to gh is
+# REBUILT from this table, character by character, so no text from the command line reaches gh's
+# argv (a regex match alone validates the text but still passes it on), and the pull request
+# number goes through int(). Anything the table lacks makes the slug None, and everything runs.
+_SLUG_CHARS = {c: c for c in string.ascii_letters + string.digits + "-._/"}
+
+
+def safe_slug(repo):
+    """`repo` rebuilt from _SLUG_CHARS when it is an owner/name slug, else None."""
+    if not _REPO_RE.match(repo or ""):
+        return None
+    try:
+        return "".join(_SLUG_CHARS[c] for c in repo)
+    except KeyError:
+        return None
 
 
 def is_doc(path):
@@ -80,7 +96,11 @@ def read_paths(repo, pr, head_sha):
     None whenever the answer is not certain: the list could not be read, it is not the pull
     request's whole list, or the pull request's head is not `head_sha`.
     """
-    meta = _gh(["--", "repos/%s/pulls/%d" % (repo, pr)])
+    slug, number = safe_slug(repo), int(pr)
+    if slug is None or number < 1:
+        print("not an owner/name slug and a pull request number")
+        return None
+    meta = _gh(["--", "repos/%s/pulls/%d" % (slug, number)])
     try:
         meta = json.loads(meta) if meta is not None else None
         head, count = meta["head"]["sha"], int(meta["changed_files"])
@@ -91,7 +111,7 @@ def read_paths(repo, pr, head_sha):
         print("the pull request's head is %s, not this run's %s" % (str(head)[:10], head_sha[:10]))
         return None
     out = _gh(["--paginate", "--jq", ".[] | [.filename, .previous_filename]", "--",
-               "repos/%s/pulls/%d/files?per_page=100" % (repo, pr)])
+               "repos/%s/pulls/%d/files?per_page=100" % (slug, number)])
     if out is None:
         return None
     files, paths = 0, []
