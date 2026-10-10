@@ -219,7 +219,12 @@ def _read_status_json(info, status):
 def _peer_entry(peer_id, peer):
     """One peer of `tailscale status --json`'s "Peer" map, as the dict the page lists."""
     ts_online = bool(peer.get("Online", False))
-    last_seen_str = peer.get("LastSeen", "")
+    last_seen_str = peer.get("LastSeen", "") or ""
+    # tailscaled reports Go's zero time ("0001-01-01T00:00:00Z") for a peer it has never seen go
+    # away, which is every peer connected right now. That is "no time", not a date: shown as one it
+    # read "12/31/1, 6:09 PM" (year 1, in the viewer's zone) beside "Online".
+    if last_seen_str.startswith("0001-01-01"):
+        last_seen_str = ""
 
     return {
         "id": peer_id,

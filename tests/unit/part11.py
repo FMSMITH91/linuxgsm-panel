@@ -197,6 +197,9 @@ try:
                           "LastSeen": "2026-09-26T10:00:00Z", "Relay": "fra"},
             "nodekey:b": {"HostName": "phone", "DNSName": "", "TailscaleIPs": ["100.64.0.10"],
                           "OS": "iOS", "Online": False},
+            "nodekey:c": {"HostName": "livebox", "DNSName": "livebox.tail1234.ts.net.",
+                          "TailscaleIPs": ["100.64.0.11"], "OS": "linux", "Online": True,
+                          "LastSeen": "0001-01-01T00:00:00Z"},
         }}
     _tsi._run_ts = _ts_cli([(["version"], ("1.80.2\ncommit", "", 0)),
                             (["status", "--json"], (_p8_json.dumps(_ts_status), "", 0)),
@@ -211,6 +214,11 @@ try:
           and _ts_ri.hostname == "panelbox" and _ts_ri.magic_dns_enabled
           and _ts_ri.tailscale_ips == ["100.64.0.7", "fd7a:115c:a1e0::7"], repr(_ts_ri))
     _ts_peers = {p["hostname"]: p for p in _ts_ri.peers}
+    check("tailscale info: a connected peer's Go zero-time LastSeen is no time (it showed as "
+          "'12/31/1' beside Online); a real LastSeen is kept",
+          _ts_peers.get("livebox", {}).get("last_seen") == ""
+          and _ts_peers.get("gamebox", {}).get("last_seen") == "2026-09-26T10:00:00Z",
+          repr({k: v.get("last_seen") for k, v in _ts_peers.items()}))
     check("tailscale info: peers carry Tailscale's own Online flag and a dot-stripped DNS name",
           _ts_peers.get("gamebox", {}).get("online") is True
           and _ts_peers["gamebox"]["dns_name"] == "gamebox.tail1234.ts.net"
