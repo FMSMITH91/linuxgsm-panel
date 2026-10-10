@@ -252,5 +252,8 @@
   "● Live": "● En vivo",
   "The panel could not read this host": "El panel no pudo leer este host.",
   "This marks files protected from deletion and renaming.": "Esto marca los archivos protegidos contra borrado y cambio de nombre.",
-  "This renames a file or folder.": "Esto cambia el nombre de un archivo o una carpeta."
+  "This renames a file or folder.": "Esto cambia el nombre de un archivo o una carpeta.",
+  "Refresh list": "Actualizar lista",
+  "Refreshing…": "Actualizando…",
+  "Fetch LinuxGSM's latest game list now (it refreshes on its own once a week)": "Obtener ahora la lista de juegos más reciente de LinuxGSM (se actualiza sola una vez por semana)"
 }
