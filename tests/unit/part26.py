@@ -51,7 +51,8 @@ def _job26(text, job):
 def _upload_categories26(text):
     """Every `category:` given to github/codeql-action/upload-sarif in a workflow's text."""
     out = []
-    for m in re.finditer(r"^(\s*)- (?:name: .*\n\s+)?uses: github/codeql-action/upload-sarif@.*$",
+    for m in re.finditer(r"^(\s*)- (?:name: .*\n(?:\s+if: .*\n)?\s+)?uses: "
+                         r"github/codeql-action/upload-sarif@.*$",
                          text, re.M):
         step = text[m.end():]
         nxt = re.search(r"^%s- |^  \S" % re.escape(m.group(1)), step, re.M)
@@ -222,12 +223,17 @@ _m_poll26 = _poll26(_m_judge26)
 _m_job26 = _job26(_cqa26, "open-alerts")
 _m_steps26 = [s[0] or s[1].split("@")[0] for s in re.findall(_STEP26, _m_job26, re.M)]
 _sparse26 = "sparse-checkout: .github/scripts/code_scanning_analyses.py"
-check("code-scanning gates: pr-alerts checks out the script, then waits for this merge commit "
-      "(github.sha) in every category, and only then judges the alerts",
+_pr_sparse26 = ("sparse-checkout: |\n            .github/scripts/code_scanning_analyses.py\n"
+                "            .github/scripts/pr_scope.py\n")
+check("code-scanning gates: pr-alerts checks out the scripts, asks whether the pull request is "
+      "documentation only, then waits for this merge commit (github.sha) in every category, and only "
+      "then judges the alerts",
       [s[0] or s[1].split("@")[0] for s in _pr_steps26]
       == ["Harden Runner", "actions/checkout",
+          "Does this pull request change anything but documentation?",
+          "Documentation-only pull request, so nothing was analysed and there is nothing to judge",
           "Wait for this merge commit's analysis in every category", "Judge refs/pull/<n>/merge"]
-      and _sparse26 in _pr26 and "code_scanning_analyses.py" in _pr_wait26
+      and _pr_sparse26 in _pr26 and "code_scanning_analyses.py" in _pr_wait26
       and "--event pull_request" in _pr_wait26 and "SHA: ${{ github.sha }}" in _pr26
       and "code_scanning_analyses.py" not in _pr_judge26, repr(_pr_steps26))
 check("code-scanning gates: ...the main gate checks it out and runs it before reading any alert, "

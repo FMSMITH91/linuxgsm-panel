@@ -252,9 +252,10 @@ _zz_scan42 = _job29(_zz42, "zizmor")
 _zz_up42 = _job29(_zz42, "upload")
 _zz_up_uses42 = sorted({_re42.sub(r"@.*", "", u) for u in
                         _re42.findall(r"^\s+(?:- )?uses: (\S+)", _code29(_zz_up42), _re42.M)})
-check("zizmor: the scan job holds only contents: read and hands zizmor that token; the upload job "
-      "alone writes security events, after the scan, with GitHub's own actions and no run: step",
-      _block30(_zz_scan42, "permissions", 4) == {"contents": "read"}
+check("zizmor: the scan job holds only contents: read (and pull-requests: read, for its scope step) and "
+      "hands zizmor that token; the upload job alone writes security events, after the scan, with "
+      "GitHub's own actions and no run: step",
+      _block30(_zz_scan42, "permissions", 4) == {"contents": "read", "pull-requests": "read"}
       and "GH_TOKEN: ${{ github.token }}" in _zz_scan42 and "security-events" not in _code29(_zz_scan42)
       and _block30(_zz_up42, "permissions", 4) == {"contents": "read", "security-events": "write"}
       and _re42.search(r"^    needs: zizmor$", _zz_up42, _re42.M) is not None

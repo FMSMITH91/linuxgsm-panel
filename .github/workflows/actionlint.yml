@@ -37,6 +37,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read   # no checks: write — nothing posts annotations now; the job's own exit says it
+      pull-requests: read   # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -46,6 +47,19 @@ jobs:
         with:
           # actionlint reads local files only; no step here needs the job token.
           persist-credentials: false
+      # A pull request that changes only documentation passes here without the steps below, and
+      # still reports this job by its name, as a required check must: .github/scripts/pr_scope.py
+      # says what counts and why. Anything else, and anything it cannot establish, runs them all.
+      - name: Does this pull request change anything but documentation?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
+          --pr "$PR" --head-sha "$HEAD_SHA"
 
       # The BINARY, pinned and checksummed, rather than a wrapper action. Two reasons, both found
       # by auditing what this gate actually proves:
@@ -66,6 +80,7 @@ jobs:
       # Renovate proposes each bump (.github/renovate.json): VERSION (the release tag) and SHA256
       # together, the checksum taken from the release's own actionlint_<v>_checksums.txt.
       - name: actionlint
+        if: steps.scope.outputs.docs_only != 'true'
         env:
           # renovate: datasource=github-release-attachments depName=rhysd/actionlint
           VERSION: 'v1.7.12'

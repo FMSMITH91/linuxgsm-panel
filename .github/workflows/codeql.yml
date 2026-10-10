@@ -5,8 +5,10 @@ name: CodeQL
 # reports them in the repo's Security tab.
 
 on:
-  # Docs-only pushes/PRs skip CodeQL — it analyses code (python/js) and the workflows
-  # (actions), none of which a markdown/LICENSE edit changes. Anything else still runs it.
+  # Docs-only pushes skip CodeQL — it analyses code (python/js) and the workflows (actions),
+  # none of which a markdown/LICENSE edit changes. Anything else still runs it. A docs-only pull
+  # request runs the workflow, and the analyze job's scope step skips the analysis
+  # (.github/scripts/pr_scope.py); pr-alerts then passes it for that reason.
   push:
     branches: [ main ]
     paths-ignore:
@@ -50,6 +52,7 @@ jobs:
       security-events: write   # init and analyze upload the results to code scanning
       actions: read            # the upload's look-up of this run, as GitHub's CodeQL template grants
       contents: read
+      pull-requests: read      # the scope step lists the pull request's files
     # FULL analysis on pull requests, not diff-informed. By default the action analyses a PR only
     # on the lines it changes ("Computing PR diff ranges..."), so an alert a PR causes on a line
     # it did NOT touch reaches main unseen: #387 removed the last use of a global it left alone,
@@ -81,7 +84,22 @@ jobs:
           # init and analyze take the token as an input; nothing uses it through git.
           persist-credentials: false
 
+      # A pull request that changes only documentation passes here without the steps below, and
+      # still reports this job by its name, as a required check must: .github/scripts/pr_scope.py
+      # says what counts and why. Anything else, and anything it cannot establish, runs them all.
+      - name: Does this pull request change anything but documentation?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
+          --pr "$PR" --head-sha "$HEAD_SHA"
+
       - name: Initialize CodeQL
+        if: steps.scope.outputs.docs_only != 'true'
         uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: ${{ matrix.language }}
@@ -99,6 +117,7 @@ jobs:
       # (.github/scripts/code_scanning_analyses.py, failed_run).
       - name: Perform CodeQL Analysis
         id: analyze
+        if: steps.scope.outputs.docs_only != 'true'
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: "/language:${{ matrix.language }}"
@@ -114,6 +133,7 @@ jobs:
       # parts are globbed from the checkout, so a part added later is required too.
       - name: The analysed database holds the files it must
         id: extracted
+        if: steps.scope.outputs.docs_only != 'true'
         env:
           DB_LOCATIONS: ${{ steps.analyze.outputs.db-locations }}
           LANGUAGE: ${{ matrix.language }}
@@ -161,6 +181,7 @@ jobs:
       # and no invocation that reports itself unsuccessful. A "failed run" SARIF has no rules.
       - name: Leave out two deliberate test patterns (tests/ only)
         id: sarif
+        if: steps.scope.outputs.docs_only != 'true'
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -225,6 +246,7 @@ jobs:
     permissions:
       contents: read
       security-events: read   # the merge ref's code-scanning analyses and open alerts
+      pull-requests: read     # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -234,14 +256,44 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false   # nothing here pushes; gh takes the token from GH_TOKEN
-          sparse-checkout: .github/scripts/code_scanning_analyses.py
+          sparse-checkout: |
+            .github/scripts/code_scanning_analyses.py
+            .github/scripts/pr_scope.py
           sparse-checkout-cone-mode: false
+
+      # The same decision, by the same script, as every uploader's scope step: on a pull request
+      # that changes only documentation, CodeQL, Bandit, Semgrep and zizmor analyse nothing and
+      # upload nothing, so there is no analysis of this merge commit to wait for. This job then
+      # passes FOR THAT REASON, said in its summary, and reads no alert; it never passes because an
+      # analysis is missing. Anything the script cannot establish waits and judges as before.
+      - name: Does this pull request change anything but documentation?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
+          --pr "$PR" --head-sha "$HEAD_SHA"
+
+      - name: Documentation-only pull request, so nothing was analysed and there is nothing to judge
+        if: steps.scope.outputs.docs_only == 'true'
+        run: |
+          {
+            echo "### Code-scanning alerts"
+            echo ""
+            echo "Documentation-only pull request (.github/scripts/pr_scope.py): CodeQL, Bandit,"
+            echo "Semgrep and zizmor analysed nothing, so no alert was read. Gitleaks still scanned it."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::documentation-only pull request: no code-scanning analysis to wait for, no alert read."
 
       # On pull_request, github.sha is the merge commit, the commit every upload for this run is
       # filed under. A category with no analysis of it after ten minutes fails the job, naming it:
       # "No analysis" is never treated as "no alerts", which is the failure this gate exists to
       # avoid. So does a later push's analysis being the newest: the alerts are then that push's.
       - name: Wait for this merge commit's analysis in every category
+        if: steps.scope.outputs.docs_only != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REF: refs/pull/${{ github.event.pull_request.number }}/merge
@@ -252,6 +304,7 @@ jobs:
             --event pull_request --tries 60 --interval 10
 
       - name: Judge refs/pull/<n>/merge
+        if: steps.scope.outputs.docs_only != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REF: refs/pull/${{ github.event.pull_request.number }}/merge

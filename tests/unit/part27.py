@@ -246,9 +246,11 @@ check("osv-scanner: installed from the release tag and checked against its sha25
       and _osv_inst27.find("sha256sum -c -") < _osv_inst27.find('chmod +x "${RUNNER_TEMP}/osv-scanner"'),
       _osv_inst27[-500:])
 _osv_steps27 = [_b for _b in _DA27.split("\n      - ") if "osv-scanner" in _b.split("\n")[0]]
-check("osv-scanner: both its steps run even when pip-audit failed (if: !cancelled())",
+check("osv-scanner: both its steps run even when pip-audit failed (if: !cancelled()), skipped only on "
+      "a documentation-only pull request",
       len(_osv_steps27) == 2
-      and all("\n        if: ${{ !cancelled() }}\n" in "\n" + _b for _b in _osv_steps27),
+      and all("\n        if: ${{ !cancelled() && steps.scope.outputs.docs_only != 'true' }}\n"
+              in "\n" + _b for _b in _osv_steps27),
       repr([_b[:80] for _b in _osv_steps27]))
 check("dependency audit: the workflow runs it on every pull request, on main and weekly",
       _re27.search(r"^  pull_request:\n    branches: \[ main \]\n(?!    paths)", _SC27, _re27.M)

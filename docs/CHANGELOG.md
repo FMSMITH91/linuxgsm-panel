@@ -202,6 +202,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **A documentation-only pull request no longer runs the whole CI.** CI only. When every file it
+  changes is `*.md`, `docs/`, `LICENSE` or a git/editor dotfile, the heavy checks pass at once under
+  their required names; secret scanning, Dependency Review and the unit suite (it reads the docs)
+  still run. Anything else, or a file list that cannot be read, runs everything. Pushes are unchanged.
+
 - **CodeQL now reads the whole smoke test suite.** The 1 MB suite is split into a runner and six parts
   (`tests/smoke/`), running the same 1,636 checks in the same order; CodeQL had skipped it for time.
   The complexity gate judges a file split out of another together with that file, so moved code is not

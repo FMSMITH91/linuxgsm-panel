@@ -11,6 +11,10 @@
 #   gh api repos/FMSMITH91/linuxgsm-panel/rulesets/18871997 > rs.json, edit the
 #   required_status_checks rule's "required_status_checks" list, then PUT it back.
 #
+# A pull request that changes only documentation (.github/scripts/pr_scope.py) passes most of these
+# at once: each job's scope step, right after its checkout, skips the steps that read code, and the
+# job still reports under its name. Gitleaks and Dependency Review run in full regardless.
+#
 # Fuzz and ClusterFuzzLite run on every pull request too, and pass at once when it changes nothing
 # they fuzz (each job's scope step, the first after Harden-Runner, reads the pull request's file
 # list). Not here, on purpose: Aikido's
