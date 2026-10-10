@@ -252,5 +252,8 @@
   "● Live": "● En direct",
   "The panel could not read this host": "Le panneau n’a pas pu lire cet hôte.",
   "This marks files protected from deletion and renaming.": "Ceci signale les fichiers protégés contre la suppression et le renommage.",
-  "This renames a file or folder.": "Ceci renomme un fichier ou un dossier."
+  "This renames a file or folder.": "Ceci renomme un fichier ou un dossier.",
+  "Refresh list": "Actualiser la liste",
+  "Refreshing…": "Actualisation…",
+  "Fetch LinuxGSM's latest game list now (it refreshes on its own once a week)": "Récupérer maintenant la dernière liste de jeux de LinuxGSM (elle se met à jour seule une fois par semaine)"
 }

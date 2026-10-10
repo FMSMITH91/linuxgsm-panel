@@ -2505,6 +2505,13 @@ check("install page: carries the install form's controls",
       all(x in _ih for x in ("remote-select", "game-type-select", "port-input")))
 check("install page: ...and still posts to the install endpoint",
       "/servers/add" in _ih, "no form action pointing at the install route")
+# The game list refreshes itself weekly; a superadmin can fetch it now, for a game LinuxGSM added
+# since. Shown with the list (the empty-list Retry is a different button), to superadmins only,
+# because the refresh route is superadmin-only and anyone else would get a 403.
+_inst_refresh = 'data-action="refreshGameList"' in _ih and ">Refresh list</button>" in _ih
+check("install page: a superadmin has a Refresh list button beside the loaded game list",
+      _inst_refresh and "All LinuxGSM games are supported" in _ih,
+      _ih[_ih.find("All LinuxGSM games"):][:600])
 # The page it came from must no longer carry it, or the split achieved nothing.
 # The list lives on the DASHBOARD now, so that is where "the form is not embedded, but is
 # reachable" has to hold. Reading /servers/manage here would read a redirect body and assert
@@ -2579,6 +2586,9 @@ check("install page: ...and sees exactly one host option",
       _sel_block.count("<option") == 1, "%d options: %.120s" % (_sel_block.count("<option"), _sel_block))
 check("install page: ...pre-selected, with no 'Select a server...' to click past",
       "selected" in _sel_block and "Select a server" not in _sel_block, _sel_block[:160])
+check("install page: ...and a non-superadmin is not offered Refresh list (its route would refuse them)",
+      "All LinuxGSM games are supported" in _oh and ">Refresh list</button>" not in _oh,
+      _oh[_oh.find("All LinuxGSM games"):][:400])
 
 _denied = client_as(_noinst_id).get("/servers/install", follow_redirects=False)
 check("install page: a user without install/manage permission is refused",

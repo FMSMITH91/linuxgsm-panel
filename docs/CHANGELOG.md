@@ -14,6 +14,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Added
 
+- **A Refresh list button for LinuxGSM's game list.** The install page's game list refreshes itself
+  once a week. A superadmin can now press **Refresh list**, beside "All LinuxGSM games are
+  supported", to fetch it straight away, for a game LinuxGSM has just added.
 - **Rename a file or folder in the file browser.** Every row that can be deleted now has a Rename
   (pencil) control, at every width. It turns the row's name into a field holding the current name,
   with the part before the extension selected, so typing replaces `notes` and keeps `.txt`. Enter or

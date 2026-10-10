@@ -468,7 +468,8 @@ window.afterServerRefresh = function(){
 // and nothing was cached — usually no outbound access to GitHub from this host.
 function refreshGameList(btn){
   var orig = btn.innerHTML;
-  btn.disabled = true; btn.innerHTML = 'Retrying\u2026';
+  // The empty-list Retry and the full list's Refresh share this; each names its own busy state.
+  btn.disabled = true; btn.textContent = btn.getAttribute('data-busy-label') || 'Retrying\u2026';
   fetch(MOUNT + '/api/lgsm-data/refresh', {method: 'POST', headers: {'Content-Type': 'application/json'}})
     .then(function(r){ return r.json(); })
     .then(function(d){

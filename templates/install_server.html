@@ -58,7 +58,15 @@
           {% endfor %}
         </select>
         {% if games %}
-        <div class="form-text"><span>All LinuxGSM games are supported</span> ({{ games|length }}) <span>— everything is downloaded automatically.</span></div>
+        <div class="form-text"><span>All LinuxGSM games are supported</span> ({{ games|length }}) <span>— everything is downloaded automatically.</span>
+          {# The list refreshes itself once a week (lgsm_data.MAX_AGE_SECONDS). This fetches it now,
+             for a game LinuxGSM added since. Superadmin, as the refresh route is. #}
+          {% if current_user.is_superadmin %}
+          <button type="button" class="btn btn-link btn-sm p-0 align-baseline" data-action="refreshGameList"
+                  data-args='["@self"]' data-busy-label="Refreshing…"
+                  title="Fetch LinuxGSM's latest game list now (it refreshes on its own once a week)">Refresh list</button>
+          {% endif %}
+        </div>
         <div class="form-text text-warning" id="game-os-note" data-no-i18n></div>
         {% else %}
         {# The list comes from LinuxGSM at runtime (see lgsm_data). If it could not be fetched and
