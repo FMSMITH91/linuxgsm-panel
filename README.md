@@ -325,6 +325,8 @@ that fails if any of them drifts back to being module-relative.
 
 Issues and pull requests are welcome — this is a solo, AI-assisted project, so extra eyes genuinely help. Report security issues privately via [SECURITY.md](.github/SECURITY.md), not a public issue. For code, fork and open a PR against `main`, run `bash tools/run-tests.sh` first, and keep CI green.
 
+**Tests come with the change.** New functionality comes with tests of it, and a bug fix comes with a check that fails without the fix, in the suite that owns that area (`tests/unit/`, `tests/smoke/`, `tests/rbac_test.py`, …). A PR that changes behaviour without a test is not merged.
+
 ## License
 
 MIT
