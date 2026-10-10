@@ -351,6 +351,18 @@ def _cf2_guard_driven(cfl, tmp):
 # They skipped in every CI leg, and a skip does not fail the unit suite. The step runs the suite
 # again as root after run-tests.sh has kept the runner's run in UNIT_LOG, and judges the checks
 # that ran only as root.
+def _ci1_only_docs_gated(root_step, run_step):
+    """Whether neither step can fail quietly, and the one `if:` either has is the docs-only one.
+
+    A documentation-only pull request skips both together (.github/scripts/pr_scope.py fails open,
+    so anything else runs them); nothing else may skip the root step or let it fail.
+    """
+    docs_if = ["steps.scope.outputs.docs_only != 'true'"]
+    return (not _re29.search(r"^ {8}continue-on-error:", root_step, _re29.M)
+            and _re29.findall(r"^ {8}if: (.*)$", root_step, _re29.M) == docs_if
+            and _re29.findall(r"^ {8}if: (.*)$", run_step, _re29.M) == docs_if)
+
+
 def _ci1_root_step_bad(steps):
     names = [_name29(s) for s in steps]
     rt = next((i for i, n in enumerate(names) if n.startswith("Run all checks")), None)
@@ -364,12 +376,7 @@ def _ci1_root_step_bad(steps):
     if not all(w in rs for w in wants):
         bad.append("the root step does not run the suite as root, SUDO_* unset, and compare it "
                    "with UNIT_LOG")
-    # One `if:` is allowed, and only this one, on both steps: a documentation-only pull request
-    # skips them together (.github/scripts/pr_scope.py fails open, so anything else runs them).
-    _docs_if = ["steps.scope.outputs.docs_only != 'true'"]
-    if (_re29.search(r"^ {8}continue-on-error:", rs, _re29.M)
-            or _re29.findall(r"^ {8}if: (.*)$", rs, _re29.M) != _docs_if
-            or _re29.findall(r"^ {8}if: (.*)$", steps[rt], _re29.M) != _docs_if):
+    if not _ci1_only_docs_gated(rs, steps[rt]):
         bad.append("the root step can be skipped or fail without failing the job")
     return bad
 

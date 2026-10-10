@@ -189,44 +189,60 @@ def _if50(step):
     return e[3:-2].strip() if e.startswith("${{") and e.endswith("}}") else e
 
 
+def _head_bad50(text):
+    """What is wrong with a job's own keys: gated at job level, or unable to list the files."""
+    head = text[:text.find("\n    steps:\n")]
+    bad = []
+    if "docs_only" in head.replace("docs_only: ${{ steps.scope.outputs.docs_only }}", ""):
+        bad.append("gated at job level (a skipped job reports under the wrong name)")
+    if not _re50.search(r"^    permissions:\n(?:      .*\n)*?      pull-requests: read", head + "\n",
+                        _re50.M):
+        bad.append("cannot read the pull request's files")
+    if "docs_only == 'false'" in text or "docs_only != 'false'" in text:
+        bad.append("compares with 'false': a missing answer would skip the checks")
+    return bad
+
+
+def _scope_at50(steps, names):
+    """The scope step's index when it directly follows the checkout (Harden Runner first), else None."""
+    sc = next((i for i, s in enumerate(steps) if _re50.search(r"^ {8}id: scope$", s, _re50.M)), None)
+    co = next((i for i, s in enumerate(steps) if "uses: actions/checkout@" in s), None)
+    ok = sc is not None and co is not None and sc == co + 1 and names[:1] == ["Harden Runner"]
+    return sc if ok else None
+
+
+def _step_bad50(key, cond):
+    """What is wrong with one step after the scope step, given its `if:`; "" when nothing is."""
+    if key in _DOCS_STEPS50:
+        return "" if _DOCS50 in cond else "not gated to docs-only pull requests"
+    if key in _UNGATED50:
+        want = _UNGATED50[key]
+        ok = not cond if want is None else want in cond
+        return "" if ok else "its exemption's reason no longer holds (%r)" % cond
+    gated = _RUN50 in [c.strip() for c in _re50.split(r"&&|\|\|", cond)]
+    if not gated or ("||" in cond and cond != _RUN50 + " || matrix.docs"):
+        return "not skipped on a docs-only pull request (if: %r)" % cond
+    return ""
+
+
 def _wiring50(wf, job):
     """What is wrong with one scoped job's wiring, as a list of reasons."""
     text = _code29(_job29(_wf29(wf), job))
     if not text:
         return ["no such job"]
-    bad = []
-    head = text[:text.find("\n    steps:\n")]
-    if "docs_only" in head.replace("docs_only: ${{ steps.scope.outputs.docs_only }}", ""):
-        bad.append("gated at job level (a skipped job reports under the wrong name)")
-    if not _re50.search(r"^    permissions:\n(?:      .*\n)*?      pull-requests: read", head + "\n", _re50.M):
-        bad.append("cannot read the pull request's files")
+    bad = _head_bad50(text)
     steps = _steps29(text)
     names = [_name50(s) for s in steps]
-    sc = next((i for i, s in enumerate(steps) if _re50.search(r"^ {8}id: scope$", s, _re50.M)), None)
-    co = next((i for i, s in enumerate(steps) if "uses: actions/checkout@" in s), None)
-    if sc is None or co is None or sc != co + 1 or not names[0] == "Harden Runner":
+    sc = _scope_at50(steps, names)
+    if sc is None:
         return bad + ["the scope step does not directly follow the checkout: %r" % names]
     one = " ".join(steps[sc].split())
     if _SCOPE_CMD50 not in one or not all(e in steps[sc] for e in _SCOPE_ENV50) or _if50(steps[sc]):
         bad.append("the scope step is not the script, run with this run's pull request and head")
-    for i, (step, name) in enumerate(zip(steps, names)):
-        cond = _if50(step)
-        if i <= sc:
-            continue
-        if (wf, job, name) in _DOCS_STEPS50:
-            if _DOCS50 not in cond:
-                bad.append("%s: not gated to docs-only pull requests" % name)
-            continue
-        if (wf, job, name) in _UNGATED50:
-            want = _UNGATED50[(wf, job, name)]
-            if (want is None and cond) or (want is not None and want not in cond):
-                bad.append("%s: its exemption's reason no longer holds (%r)" % (name, cond))
-            continue
-        if (_RUN50 not in [c.strip() for c in _re50.split(r"&&|\|\|", cond)]
-                or ("||" in cond and cond != _RUN50 + " || matrix.docs")):
-            bad.append("%s: not skipped on a docs-only pull request (if: %r)" % (name, cond))
-    if "docs_only == 'false'" in text or "docs_only != 'false'" in text:
-        bad.append("compares with 'false': a missing answer would skip the checks")
+    for step, name in zip(steps[sc + 1:], names[sc + 1:]):
+        why = _step_bad50((wf, job, name), _if50(step))
+        if why:
+            bad.append("%s: %s" % (name, why))
     return bad
 
 

@@ -113,11 +113,24 @@ def read_paths(repo, pr, head_sha):
     return paths
 
 
+def valid(repo, pr, head_sha):
+    """Whether `repo`, `pr` and `head_sha` are an owner/name slug, a PR number and a commit id."""
+    return bool(_REPO_RE.match(repo or "") and _PR_RE.match(str(pr or ""))
+                and _SHA_RE.match(head_sha or ""))
+
+
+def _not_docs(paths):
+    """The paths that are not documentation, as text: the first five, and how many more."""
+    code = sorted({p for p in paths if not is_doc(p)})
+    more = " and %d more" % (len(code) - 5) if len(code) > 5 else ""
+    return ", ".join(code[:5]) + more
+
+
 def decide(event, repo, pr, head_sha):
     """Return (docs_only, why)."""
     if event != "pull_request":
         return False, "not a pull request (%s): everything runs" % (event or "no event")
-    if not (_REPO_RE.match(repo or "") and _PR_RE.match(str(pr or "")) and _SHA_RE.match(head_sha or "")):
+    if not valid(repo, pr, head_sha):
         return False, "no valid repository, pull request number and head commit: everything runs"
     paths = read_paths(repo, int(pr), head_sha)
     if paths is None:
@@ -125,9 +138,7 @@ def decide(event, repo, pr, head_sha):
     if not paths:
         return False, "the pull request changes no file: everything runs"
     if not docs_only(paths):
-        code = sorted({p for p in paths if not is_doc(p)})
-        shown = ", ".join(code[:5]) + (" and %d more" % (len(code) - 5) if len(code) > 5 else "")
-        return False, "the pull request changes %s: everything runs" % shown
+        return False, "the pull request changes %s: everything runs" % _not_docs(paths)
     return True, ("DOCS-ONLY: all %d paths the pull request changes are documentation (%s), so this "
                   "job skips its steps that only read code" % (len(paths), ", ".join(DOCS_ONLY_PATTERNS)))
 
