@@ -152,7 +152,8 @@ check("pr_scope: the slug gh is given is REBUILT, not the argument's own text, a
       PS.safe_slug(_slug_in50) == _slug_in50 and PS.safe_slug(_slug_in50) is not _slug_in50
       and all(PS.safe_slug(_b) is None for _b in ("o/r;x", "a b/c", "", None, "o/r\n", "-o/r", "o/r/x"))
       and '% (slug, number)' in _rp50 and "% (repo" not in _rp50
-      and _rp50.find('"--jq"') < _rp50.find('"--", "repos/%s/pulls/%d/files'),
+      and 0 <= _rp50.find('"--jq"') < _rp50.find('"--",', _rp50.find('"--jq"'))
+      < _rp50.find('"repos/%s/pulls/%d/files'),
       repr(PS.safe_slug(_slug_in50)))
 
 # ── 3. the wiring: every scoped job ─────────────────────────────────────────────────────────────
