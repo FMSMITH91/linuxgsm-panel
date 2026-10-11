@@ -432,7 +432,9 @@ def _rename_phone(d):
         _press(d, "Escape", "Escape", 27)
     finally:
         d.cdp.call("Emulation.clearDeviceMetricsOverride")
-        d.goto("/server/1/files")
+    # Not in the finally: goto can log in again and raise LoginFailed, which there REPLACED a
+    # FlowAssertion on its way out, and run.py fails the run only on that name (the rest warn).
+    d.goto("/server/1/files")
 
 
 def files_rename(d):

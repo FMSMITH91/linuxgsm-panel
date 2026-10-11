@@ -11,7 +11,15 @@ Held here, each against the code path the finding named:
 HOW IT RUNS. Routes on part12's Flask app and client (part12 has run), every stub through
 _p9_patch and undone in the finally. Scripts in node on this part's own fixtures.
 """
+import contextlib as _ctx56
+import importlib.util as _ilu56
+import io as _io56
+import json as _json56
 import os
+import re as _re56
+import subprocess as _sp56  # nosec B404 - runs bash on install.sh's own block
+import sys as _sys56
+from types import SimpleNamespace as _NS56
 
 from unit.part01 import check, skip
 from unit.part05 import _root
@@ -163,3 +171,99 @@ if _out56 is not None:
           _out56.get("bad", [None])[0] == [] and len(_out56.get("bad", [[], []])[1]) == 1, repr(_out56))
     check("backup schedule: ...a box the user emptied still clears it (control)",
           _out56.get("empty") == ['{"keep":""}'], repr(_out56))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 3. tools
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _bash56(script, env=None):
+    return _sp56.run(["bash", "-c", script], capture_output=True, text=True,  # nosec B603 B607 - fixture script
+                     timeout=60, env=dict(os.environ, **(env or {})), check=False)
+
+
+# ── install.sh: a port range and an outbound rule, read for what they are ───────────────────────
+_INS56 = _read56(_root, "install.sh")
+_blk56 = _INS56[_INS56.index("UFW_ACTIVE=0; TS_UFW=0; PORT_OPEN=0; UFW_READ=0"):
+                _INS56.index("\n# While the wizard has no administrator")]
+_fw56 = {}
+for _k56, _st56 in (("range deny", "5000:5010/tcp   DENY   Anywhere\n"),
+                    ("list deny", "80,5000/tcp   DENY   Anywhere\n"),
+                    ("range allow", "4990:5005/tcp   ALLOW   Anywhere\n"),
+                    ("udp range", "5000:5010/udp   DENY   Anywhere\n"),
+                    ("range elsewhere", "6000:6010/tcp   DENY   Anywhere\n"),
+                    ("allow out", "5000/tcp   ALLOW OUT   Anywhere\n")):
+    _r56 = _bash56("set -euo pipefail\nPORT=5000 SUDO= TS_ADDR=\nok() { echo \"OK $*\"; }\n"
+                   "command() { [ \"$1\" = -v ] && [ \"$2\" = ufw ] && return 0; builtin command \"$@\"; }\n"
+                   "ufw() { case \"$1\" in status) printf 'Status: active\\n\\nTo   Action  From\\n%%s' \"$ST\";;\n"
+                   "  allow) echo \"ALLOWED $2\";; esac; }\n%s\necho \"OPEN=${PORT_OPEN} RULED=${PORT_RULED}\"\n"
+                   % _blk56, env={"ST": _st56})
+    _fw56[_k56] = ("OK Opened 5000/tcp" in _r56.stdout, (_r56.stdout.strip().splitlines() or [""])[-1])
+check("install.sh: a port RANGE or list covering the panel port is the operator's rule — no `ufw allow` "
+      "behind `5000:5010/tcp DENY` (it appended one and printed \"Opened\"), and a range ALLOW is open",
+      _fw56["range deny"] == (False, "OPEN=0 RULED=1") and _fw56["list deny"] == (False, "OPEN=0 RULED=1")
+      and _fw56["range allow"] == (False, "OPEN=1 RULED=1"), repr(_fw56))
+check("install.sh: an OUTBOUND rule on the port is not a rule for reaching the panel — the port is still "
+      "opened (it was left closed, the banner saying a rule \"limits\" it)",
+      _fw56["allow out"] == (True, "OPEN=1 RULED=0"), repr(_fw56))
+check("install.sh: ...a udp range, or a range that misses the port, is still no rule for it (control)",
+      _fw56["udp range"] == (True, "OPEN=1 RULED=0") and _fw56["range elsewhere"] == (True, "OPEN=1 RULED=0"),
+      repr(_fw56))
+_pub56 = _INS56[_INS56.index('PUBLIC_IP="$('):_INS56.index("hostname -I", _INS56.index('PUBLIC_IP="$('))]
+check("install.sh: the public address printed beside the IPv4 firewall verdict is fetched over IPv4 "
+      "(ifconfig.me answers IPv6 to an IPv6 connection)",
+      _pub56.count("curl ") == 2 and _pub56.count("curl -4 ") == 2, _pub56)
+
+# ── gamedig's osv-scanner ignores describe the tree they ignore ──────────────────────────────────
+# Each reason names the dependency path it reviewed ("got 13.0.0 -> ... -> http-cache-semantics
+# 4.2.0"). #417 moved the lockfile to 4.3.0 and left the reason naming 4.2.0, so the reviewed text
+# no longer described what is installed. Every "-> name version" in a reason must be the locked one.
+# Read as text: the 3.10 CI leg has no tomllib. A reason is a """...""" string with "\" line joins.
+_osv56 = [_r.replace("\\\n", "") for _r in
+          _re56.findall(r'^reason\s*=\s*"""(.*?)"""', _read56(_root, "tools", "gamedig", "osv-scanner.toml"),
+                        _re56.S | _re56.M)]
+_lock56 = _json56.loads(_read56(_root, "tools", "gamedig", "package-lock.json"))["packages"]
+_stale56 = []
+for _e56 in _osv56:
+    for _pkg56, _ver56 in _re56.findall(r"->\s+([@a-z0-9._/-]+)\s+(\d+\.\d+\.\d+)", _e56):
+        _have56 = (_lock56.get("node_modules/" + _pkg56) or {}).get("version")
+        if _have56 != _ver56:
+            _stale56.append((_pkg56, _ver56, _have56))
+_named56 = sum(len(_re56.findall(r"->\s+[@a-z0-9._/-]+\s+\d", _e)) for _e in _osv56)
+check("gamedig osv-scanner: every package version an ignore's reason names is the one the lockfile "
+      "installs (the reason still named http-cache-semantics 4.2.0 after the lock moved to 4.3.0)",
+      _named56 >= 2 and not _stale56, repr((_named56, _stale56)))
+
+
+# ── js_coverage: the 375px rename flow's cleanup cannot swallow its own failed check ─────────────
+_spec56 = _ilu56.spec_from_file_location("jscov56_run", os.path.join(_root, "tools", "js_coverage", "run.py"))
+_run56 = _ilu56.module_from_spec(_spec56)
+with _ctx56.redirect_stdout(_io56.StringIO()):
+    _spec56.loader.exec_module(_run56)
+_flows56, _drv56 = _sys56.modules["flows"], _sys56.modules["driver"]
+
+
+class _PhoneDrv56:
+    """Every step answers nothing (so the fit check fails); a second goto has lost its session."""
+    def __init__(self):
+        self.gotos, self.cdp = [], _NS56(call=lambda *a, **k: None)
+
+    def goto(self, path):
+        self.gotos.append(path)
+        if len(self.gotos) > 1:
+            raise _drv56.LoginFailed("the session was lost")
+
+    def run(self, js):
+        return {}
+
+    def keys(self, text):
+        return None
+
+
+try:
+    _flows56._rename_phone(_PhoneDrv56())
+    _ph56 = "no exception"
+except Exception as _e56:  # noqa: BLE001 - which class arrives IS the check
+    _ph56 = type(_e56).__name__
+check("js coverage: the 375px rename flow's failed fit check reaches the run as a FlowAssertion even when "
+      "its cleanup's page load cannot log in (the cleanup's LoginFailed replaced it, and only warned)",
+      _ph56 == "FlowAssertion", _ph56)

@@ -5,14 +5,19 @@
 # ignoreUntil date the audit fails again and it is looked at afresh. A unit check (part27) holds each
 # entry to a reason and a date, and Dependency Review's allow-ghsas to this list.
 
-# http-cache-semantics <= 4.2.0: a shared cache can serve another user's zeroed entry to a client
-# that sends a large max-stale (CVE-2026-93748, HIGH). No fixed release exists; Dependabot alert
-# #26 tracks it.
+# http-cache-semantics: a shared cache can serve another user's zeroed entry to a client that sends
+# a large max-stale (CVE-2026-93748, HIGH). No fixed release exists. The advisory's range says
+# <= 4.2.0 only because it was written before 4.3.0 (2026-10-04) shipped: 4.3.0's three commits
+# change Vary handling and expose the status, and leave max-stale as it was; the fix PR (#58) was
+# closed unmerged. So the lockfile's 4.3.0 is still affected, this entry still applies, and it stays
+# until a release that really fixes it (its twins: dependency-review.yml's allow-ghsas and
+# .github/codacy-accepted-errors.json — drop all three together). Dependabot alert #26 tracks it.
 [[IgnoredVulns]]
 id = "GHSA-ch52-4w7c-c8xp"
 ignoreUntil = 2027-01-04
 reason = """Not reachable: nothing in gamedig 5.3.3 gives got a cache store. The package is \
-here only as got 13.0.0 -> cacheable-request 10.2.14 -> http-cache-semantics 4.2.0. got runs that \
+here only as got 13.0.0 -> cacheable-request 10.2.14 -> http-cache-semantics 4.3.0 (still affected: \
+4.3.0 did not touch max-stale, whatever the advisory's <= 4.2.0 range says). got runs that \
 path only when its `cache` option is set (source/core/index.js: `if (options.cache)`, and \
 `options.cache ? this._createCacheableRequest : request`); the option defaults to undefined \
 (options.js). gamedig calls got in exactly one place, Core.request in protocols/core.js, with \
