@@ -1568,7 +1568,8 @@ _so7_names = ("_run", "_run_verb", "_helper_present", "subprocess", "os", "time"
               "unattended_upgrades_status", "panel_fail2ban_status", "_F2B_PANEL_FILTER",
               "_F2B_PANEL_JAIL", "fail2ban_overview", "_fail2ban_jails", "ufw_blocked_ips",
               "detect_tailscale_interface", "panel_integrity", "panel_diagnostics", "panel_version",
-              "panel_update_log", "_repo_slug", "fail2ban_unban", "_panel_login_proxied")
+              "panel_update_log", "_repo_slug", "fail2ban_unban", "_panel_login_proxied",
+              "_update_in_progress")
 _so7_saved = {k: getattr(SO, k) for k in _so7_names}
 _so7_state = {k: dict(getattr(SO, k)) for k in ("_last_cpu_stat", "_CPU_SAMPLE", "_HELPER_STATE",
                                                  "_update_cache", "_integrity_cache")}
@@ -2010,6 +2011,9 @@ def _so7_branches():
     SO._is_git_checkout = lambda: True
     SO._tracked_branch = lambda: "feature/x"
     SO._fetch_all_branches = lambda: None
+    # No update running: _launch_installer checks above leave this process's launch mark inside its
+    # grace, and a switch to ANY branch now refuses over a running update (part51).
+    SO._update_in_progress = lambda: False
     SO._git = lambda args, timeout=45: ("refs/remotes/origin/main\nrefs/remotes/origin/HEAD\nrefs/heads/local\n"
                                         "refs/remotes/origin/dev\nrefs/remotes/origin/-bad\n", "", 0)
     eq("so/list_panel_branches: only valid origin branches, and the tracked one is always offered first",
@@ -2044,7 +2048,8 @@ def _so7_branches():
     check("so/panel_switch_branch: a failed launch whose roll-back ALSO fails still reports the failure",
           _sw_noroll == (False, "install.sh is missing, so the panel can't self-update safely.")
           and len(_sw_writes) == 2, "%r writes=%d" % (_sw_noroll, len(_sw_writes)))
-    for _k in ("_git", "_is_git_checkout", "_tracked_branch", "_fetch_all_branches", "_launch_installer"):
+    for _k in ("_git", "_is_git_checkout", "_tracked_branch", "_fetch_all_branches", "_launch_installer",
+               "_update_in_progress"):
         setattr(SO, _k, _so7_saved[_k])
 
 
