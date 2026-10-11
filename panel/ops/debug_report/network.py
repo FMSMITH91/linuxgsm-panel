@@ -348,16 +348,9 @@ def _expected_scheme(conf, cfg):
         return None
 
 
-def _ts_findings(res, v, cfg, routes):
+def _funnel_findings(res, v, cfg):
+    """Funnel on in Serve while the panel's config says off: for another app, or switched on."""
     from panel.ops import tailscale_integration as ts
-    if v.get("backend_state") == "NeedsLogin":
-        res.find("fail", AREA, "Tailscale needs login (node key expired or logged out)")
-    elif v.get("backend_state") != "Running" and cfg.get("tailscale_setup_done"):
-        res.find("fail", AREA, "Tailscale is not running, and the panel is set up behind it")
-    if v.get("serve_unreadable"):
-        res.find("warn", AREA, "Tailscale Serve status is unreadable (not the same as no routes)")
-    elif cfg.get("tailscale_setup_done") and not routes:
-        res.find("warn", AREA, "no Tailscale Serve route reaches the panel")
     shared = ts.shared_funnel_apps({"services": v.get("serve_services") or []},
                                    cfg.get("port", 5000), cfg.get("tailscale_use_funnel"))
     if shared:
@@ -369,6 +362,18 @@ def _ts_findings(res, v, cfg, routes):
     elif v.get("funnel_enabled") and not cfg.get("tailscale_use_funnel"):
         res.find("fail", AREA, "Funnel is ON in Serve but off in the panel's config (switched on "
                                "outside the panel)")
+
+
+def _ts_findings(res, v, cfg, routes):
+    if v.get("backend_state") == "NeedsLogin":
+        res.find("fail", AREA, "Tailscale needs login (node key expired or logged out)")
+    elif v.get("backend_state") != "Running" and cfg.get("tailscale_setup_done"):
+        res.find("fail", AREA, "Tailscale is not running, and the panel is set up behind it")
+    if v.get("serve_unreadable"):
+        res.find("warn", AREA, "Tailscale Serve status is unreadable (not the same as no routes)")
+    elif cfg.get("tailscale_setup_done") and not routes:
+        res.find("warn", AREA, "no Tailscale Serve route reaches the panel")
+    _funnel_findings(res, v, cfg)
     if "EXPIRED" in _key_text(v.get("key_expiry")):
         res.find("fail", AREA, "the Tailscale node key has expired")
 

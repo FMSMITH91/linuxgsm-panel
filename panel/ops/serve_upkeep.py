@@ -43,6 +43,30 @@ def _boot_audit(flask_app, detail, ok, action="tailscale_serve_leftover_removed"
         _log.debug("boot audit row not written", exc_info=True)
 
 
+def _boot_shared_funnel(app, cfg, port, audit=None):
+    """Put on record a panel the boot left on Funnel, against its own setting, for another app.
+
+    `audit` is app.py's _boot_audit (this module's when None), passed so app's own name is the one
+    called.
+
+    Funnel is per listener, and the re-point keeps the shared :443 listener's Funnel as it is
+    (setup_tailscale_serve's keep_shared_funnel) rather than take the other app off the internet.
+    With it on and tailscale_use_funnel off, the panel is reachable from the internet; read back
+    from the host, and said in the audit log, not only in a log line.
+    """
+    try:
+        others = ts.shared_funnel_apps(ts.get_tailscale_info().serve_config, port,
+                                       cfg.get("tailscale_use_funnel", False))
+    except Exception:
+        _log.debug("shared-Funnel read at boot failed", exc_info=True)
+        return
+    if others:
+        (audit or _boot_audit)(
+            app, "at boot: Funnel is on for the whole :443 listener because %s uses it, so the "
+                 "panel is reachable from the internet too, although its own Funnel setting is off"
+                 % ts._r12a_apps_at(others), True, action="tailscale_serve_funnel_shared")
+
+
 def _remove_serve_leftovers(panel_port, mount, where, audit):
     """Remove the panel's own :443 Serve routes at mounts other than `mount`; return the outcome.
 
