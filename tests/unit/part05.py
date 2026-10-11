@@ -3113,6 +3113,21 @@ for _f in _gd_npm_files:
                 continue
             for _m in _GD_NPM_RE.finditer(_l):
                 _gd_npm_seen.append((os.path.relpath(_f, _UNIT_ROOT), _m.group(1)))
+def _r13d_run_redirected(cmd, real_dir, timeout=30):
+    """bash -c `cmd`, ONLY when no path under `real_dir` is left in it; else a refusal (rc -1).
+
+    These drives point a root-capable rendering at a temp dir by replacing its destination's text.
+    A replace that matched nothing (the rendering spelled the path another way) ran it against the
+    REAL path: as root on CI's root leg, and on any box the suite is run on as root, that wrote
+    fixture bytes over the installed gamedig and ran a stand-in script there, or `sed -i`'d the
+    host's sshd_config. The checks that follow then fail by name on the refusal's output.
+    """
+    if real_dir in cmd:
+        return _sp.CompletedProcess(["bash", "-c"], -1, "",
+                                    "not run: %s is still in the rendering" % real_dir)
+    return _sp.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=timeout)
+
+
 def _gd_render(verb, args):
     """remote_command, or "" when the verb refuses these arguments — an arity drift is reported by
     name by the checks that own it, and must not end this part with a traceback."""
@@ -3175,7 +3190,7 @@ try:
     _gdr_anchor = "d=%s" % _gd_q(_priv.GAMEDIG_DIR)
     _gdr_fx_n = _gdr_fx.count(_gdr_anchor)
     _gdr_fx = _gdr_fx.replace(_gdr_anchor, "d=%s" % _gd_q(_gdr_dest))
-    _r = _sp.run(["bash", "-c", _gdr_fx], capture_output=True, text=True, timeout=60)
+    _r = _r13d_run_redirected(_gdr_fx, _priv.GAMEDIG_DIR, timeout=60)
     _gdr_got = {}
     for _n in _gdr_bytes:
         try:
@@ -3202,8 +3217,8 @@ try:
     os.unlink(os.path.join(_gdr_src, "package-lock.json"))
     try:
         _gdr_fx2 = _priv.remote_command("gamedig-install", [])
-        _r2 = _sp.run(["bash", "-c", _gdr_fx2.replace(_gdr_anchor, "d=%s" % _gd_q(_gdr_dest))],
-                      capture_output=True, text=True, timeout=60)
+        _r2 = _r13d_run_redirected(_gdr_fx2.replace(_gdr_anchor, "d=%s" % _gd_q(_gdr_dest)),
+                                   _priv.GAMEDIG_DIR, timeout=60)
         _gdr_why = "rc=%d %r" % (_r2.returncode, _r2.stdout[-200:])
     except Exception as _e:        # reported by name below, not left to end the part
         _r2, _gdr_why = None, "remote_command raised %r" % _e
@@ -4204,8 +4219,8 @@ try:
         _f = os.path.join(_sd_dir, _name.replace(" ", "-"))
         with open(_f, "w", encoding="utf-8") as _fh:
             _fh.write(_body)
-        _r = _sub.run(["bash", "-c", _sd_cmd.replace(_priv.SSHD_CONFIG, _f)],
-                      capture_output=True, text=True, timeout=30)
+        _r = _r13d_run_redirected(_sd_cmd.replace(_priv.SSHD_CONFIG, _f),
+                                  os.path.dirname(_priv.SSHD_CONFIG))
         _after = open(_f, encoding="utf-8").read()
         if _r.returncode != 0 or _want not in _after or (_unwanted and _unwanted in _after):
             _sd_bad.append("%s: rc=%d -> %r" % (_name, _r.returncode, _after))
@@ -4245,7 +4260,7 @@ try:
         _fh.write("Include /etc/ssh/sshd_config.d/*.conf\n#PasswordAuthentication yes\nPort 22\n")
     with open(_dr_f, "w", encoding="utf-8") as _fh:
         _fh.write(_dr_prior)
-    _dr_r = _sub.run(["bash", "-c", _dr_cmd], capture_output=True, text=True, timeout=30)
+    _dr_r = _r13d_run_redirected(_dr_cmd, os.path.dirname(_priv.SSHD_CONFIG))
     _dr_remote = open(_dr_f, encoding="utf-8").read()
     # The helper, on a module copy whose drop-in path is a second temp file with the same content.
     _spec_dr = _ilu.spec_from_loader("ph_dropin", _machinery.SourceFileLoader("ph_dropin", _helper_path))
@@ -4279,7 +4294,7 @@ try:
                 .replace(_priv.SSHD_HARDENING_DROPIN, os.path.join(_dr_d2, "00-x.conf"))
                 .replace(os.path.dirname(_priv.SSHD_HARDENING_DROPIN), _dr_d2)
                 .replace(_priv.SSHD_CONFIG, _dr_cfg2))
-    _dr_r2 = _sub.run(["bash", "-c", _dr_cmd2], capture_output=True, text=True, timeout=30)
+    _dr_r2 = _r13d_run_redirected(_dr_cmd2, os.path.dirname(_priv.SSHD_CONFIG))
     check("privileged: ...and a host with no Include gets no drop-in, only the sshd_config edit",
           _dr_r2.returncode == 0 and not os.path.exists(_dr_d2)
           and "PasswordAuthentication no" in open(_dr_cfg2, encoding="utf-8").read(),
@@ -4542,7 +4557,10 @@ import panel.routes.server_files as _sf_reg   # noqa: F401 - imported so its map
 _reg_maps = _ps_reg.server_keyed_state() + _ps_reg.remote_keyed_state()
 check("panel_state: every row-keyed map is registered for pruning (>= 15)", len(_reg_maps) >= 15,
       "only %d registered" % len(_reg_maps))
-_saved = [dict(_m) for _m in _reg_maps]
+# Each dict VALUE copied too: forget_rows marks a dropped action-output entry `forgotten` IN
+# PLACE, so a shallow snapshot put the same, now-flagged entries back after the sweep below.
+_saved = [{_k: (dict(_v) if isinstance(_v, dict) else _v) for _k, _v in _m.items()}
+          for _m in _reg_maps]
 for _m in _reg_maps:
     _m[1] = "live"
     _m[99] = "left behind by a deleted row"
@@ -6407,8 +6425,8 @@ try:
     # /etc/fail2ban/jail.d/zz-panel-whitelist.local and reloads fail2ban.
     _cu_so.ensure_panel_host_whitelist = lambda wl: (_cu_hostwl.append(list(wl)) or (True, "ok"))
     _cu_app.RemoteServer = NS(query=_CuQuery())
-    _cu_app.remote_set_fail2ban_ignoreip = (
-        lambda r, wl, unban_ip=None: _cu_remote.append(list(wl)))
+    _cu_app.remote_set_fail2ban_ignoreip = (     # the real one's (ok, message), as hosts.py returns
+        lambda r, wl, unban_ip=None: (_cu_remote.append(list(wl)), (True, "ok"))[1])
     _cu_file.write_text('{"backup_passphrase": "gAAAA-x", "security_whitelist": ["198.51.100.7"],'
                         ' "port": 8443,}', encoding="utf-8")
     _cu_cfg._cfg_cache["key"] = None
