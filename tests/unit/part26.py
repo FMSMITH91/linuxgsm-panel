@@ -600,6 +600,23 @@ for _shw26 in ("codeql.yml", "security-code.yml", "zizmor.yml"):
                                   r"still-head --sha \"\$\{GITHUB_SHA\}\"\n", _sh_job26) is not None)
         if not _sh_ok26:
             _sh_bad26.append("%s: %s" % (_shw26, _shm26.group(0).splitlines()[0].strip()))
+
+
+def _triggers26(code):
+    """The event names a workflow's `on:` block lists (its two-space keys)."""
+    _m = re.search(r"^on:\n((?:  .*\n|\s*\n)*)", code + "\n", re.M)
+    return sorted(re.findall(r"^  ([\w-]+):", _m.group(1), re.M)) if _m else None
+
+
+# ...and the schedule-only guards stay right only while those two workflows have no other way to
+# run on main: a workflow_dispatch added to either brought back the stale-SARIF upload codeql.yml's
+# manual-run arm closes, with every check above still green.
+_trig26 = {w: _triggers26(_wf14_code(w)) for w in ("security-code.yml", "zizmor.yml")}
+check("code-scanning gates: security-code.yml and zizmor.yml run only on push, pull_request and "
+      "schedule (their head checks are schedule-only)",
+      all(t == ["pull_request", "push", "schedule"] for t in _trig26.values())
+      and _triggers26("on:\n  push:\n  workflow_dispatch:\n") == ["push", "workflow_dispatch"],
+      repr(_trig26))
 _sh_count26 = sum(len(re.findall(r"uses: github/codeql-action/upload-sarif@", _wf14_code(w)))
                   for w in ("codeql.yml", "security-code.yml", "zizmor.yml"))
 # Every upload counted was also LOOKED AT: the loop above finds only steps written `- name:` first,

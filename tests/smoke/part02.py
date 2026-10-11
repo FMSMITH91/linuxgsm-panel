@@ -3062,10 +3062,29 @@ def _r12d_fits(kinds, v):
     return any(_R12D_FITS[kind](detail, v) for kind, detail in kinds)
 
 
+# Seams the gate cannot judge, by name. A stand-in for one of these passes unread, so the set is
+# checked against _R12D_UNJUDGED_OK below (and in part03): a judged seam that drops out — a refactor
+# making set_autostart return a variable, a call more than 3 deep — is NAMED instead of silently
+# leaving the gate while its check still says "every stand-in it called".
+_r12d_unjudged = set()
+# The transports (several return shapes, read off a variable), the two readers whose answer is a
+# computed set/list, and a module swapped whole.
+_R12D_UNJUDGED_OK = frozenset({"get_connection", "read_as_game_user", "run_command",
+                               "run_as_game_user", "run_privileged", "parse_missing_deps",
+                               "_remote_listening_ports", "time"})
+
+# Seams every install walk stubs to SUCCEED (steps 2, 3, 5 and 7): an (ok, why) with ok False is
+# the failure branch, whatever its width says.
+_R12D_MUST_SUCCEED = frozenset({"install_game_dependencies", "install_game_cron", "set_autostart",
+                                "lgsm_write_config"})
+
+
 def _r12d_shaped(real, fn, name, bad=None):
     """`fn`, recording into `bad` (default _r12d_shape_bad) any answer `real` could not give."""
     kinds = _r12d_shape_of(real)
     if kinds is None:
+        if bad is None:
+            _r12d_unjudged.add(name)
         return fn
     sink = _r12d_shape_bad if bad is None else bad
 
@@ -3074,6 +3093,11 @@ def _r12d_shaped(real, fn, name, bad=None):
         if not _r12d_fits(kinds, v):
             sink.append("%s answered %r; the real one returns %s"
                         % (name, v, sorted(kinds, key=repr)))
+        elif name in _R12D_MUST_SUCCEED and isinstance(v, tuple) and v and v[0] is False:
+            # A 2-tuple is judged by width, so (False, "") fit — and walked the failure branch
+            # these blocks' comments say was stubbed to succeed (the 1011b defect class).
+            sink.append("%s answered %r: a failure, where every walk stubs it to succeed"
+                        % (name, v))
         return v
     _shaped.r12d_kinds = kinds
     return _shaped
@@ -3151,7 +3175,11 @@ for _r12d_n, _r12d_mod, _r12d_old, _r12d_new in (
         ("detect_game_ports", _msmod, {"game_port": 1, "open_ports": [1]},
          _r12d_ports(1, [1])),
         ("ensure_persistent_bans", _msmod, None, True),
-        ("remote_ufw_allow_game_ports", _msmod, None, ([], "opened 0 port(s): none"))):
+        ("remote_ufw_allow_game_ports", _msmod, None, ([], "opened 0 port(s): none")),
+        # Step 7's success branch reads set_autostart's (ok, why); step 3's reads the write's.
+        ("set_autostart", _msmod, None, (True, "")),
+        ("install_game_cron", _msmod, (False, "cron write failed"), (True, "")),
+        ("lgsm_write_config", _msmod, None, (True, ""))):
     _r12d_old_bad, _r12d_new_bad = [], []
     _r12d_real = getattr(_r12d_mod, _r12d_n)
     _r12d_shaped(_r12d_real, (lambda v: lambda *a, **k: v)(_r12d_old), _r12d_n, _r12d_old_bad)()
@@ -3281,6 +3309,10 @@ try:
         # Steps 2, 5 and 7 on their SUCCESS branches, which is what "stubbed to succeed" claims.
         check("install job: ...every stand-in it called answered in the real function's shape",
               not _r12d_shape_bad, "; ".join(_r12d_shape_bad[:5]))
+        check("install job: ...and every stand-in the gate could not read is one of the seams "
+              "it is known not to judge (a judged seam that drops out is named)",
+              _r12d_unjudged <= _R12D_UNJUDGED_OK,
+              "newly unjudged: %r" % sorted(_r12d_unjudged - _R12D_UNJUDGED_OK))
         _ij_failed_steps = [w for w in _ij_warned if any(s in w for s in (
             "dependency step failed", "maintenance cron", "could not enable autostart",
             "enabling autostart failed", "unconfirmed"))]

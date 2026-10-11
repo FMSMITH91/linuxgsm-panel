@@ -2966,26 +2966,65 @@ _totp_files = ["app.py"] + sorted(
 check("2FA: the verify_totp gate reads app.py and every panel module (a floor, so an empty walk "
       "fails)", len(_totp_files) > 50 and "panel/routes/auth_routes.py" in _totp_files,
       "%d files" % len(_totp_files))
+_TOTP_HOME = os.path.join("panel", "security", "auth.py")
+
+
+def _totp_name(n):
+    """The name a Name, Attribute or Call node refers to (a Call by its callee), else None."""
+    f = n.func if isinstance(n, _totp_ast.Call) else n
+    return getattr(f, "id", getattr(f, "attr", None))
+
+
+def _totp_renamed(n):
+    """Is `n` an import of verify_totp under another name?"""
+    return isinstance(n, _totp_ast.ImportFrom) and any(
+        _a.name == "verify_totp" and _a.asname not in (None, "verify_totp") for _a in n.names)
+
+
+def _totp_why(n, rel):
+    """How AST node `n` (in file `rel`) can reach verify_totp: a label, "" for a plain use, or None."""
+    # A rename on import (`from ...auth import verify_totp as _vt`) or a lookup by string
+    # (`getattr(auth, "verify_totp")`) reaches it under a name the call test cannot see.
+    if _totp_renamed(n):
+        return " (imported under another name)"
+    outside = rel != _TOTP_HOME
+    if isinstance(n, _totp_ast.Constant):
+        return " (named as a string)" if outside and n.value == "verify_totp" else None
+    # ANY reference outside auth.py, not only a call: `partial(verify_totp, s)(c)`,
+    # `_v = auth.verify_totp` or `map(verify_totp, ...)` consume a live code just the same, and
+    # none is a Call whose func is named verify_totp. Outside auth.py nothing has a reason to name
+    # it; inside, its own definition may exist, and callers may not.
+    kinds = (_totp_ast.Name, _totp_ast.Attribute, _totp_ast.Call) if outside else (_totp_ast.Call,)
+    return "" if isinstance(n, kinds) and _totp_name(n) == "verify_totp" else None
+
+
+def _totp_refs(tree, rel):
+    """Every place in `tree` (the file `rel`) that can reach verify_totp: '<line><how>'."""
+    found = []
+    for _n in _totp_ast.walk(tree):
+        _w = _totp_why(_n, rel)
+        if _w is not None:
+            found.append("%d%s" % (_n.lineno, _w))
+    return found
+
+
 for _rel in _totp_files:
     _path = os.path.join(_totp_root, _rel)
     _tree = _totp_ast.parse(open(_path, encoding="utf-8").read())
-    for _n in _totp_ast.walk(_tree):
-        # A rename on import (`from ...auth import verify_totp as _vt`) or a lookup by string
-        # (`getattr(auth, "verify_totp")`) reaches it under a name the call test cannot see.
-        if isinstance(_n, _totp_ast.ImportFrom) and any(
-                _a.name == "verify_totp" and _a.asname not in (None, "verify_totp")
-                for _a in _n.names):
-            _totp_bad.append("%s:%d (imported under another name)" % (_rel, _n.lineno))
-            continue
-        if (isinstance(_n, _totp_ast.Constant) and _n.value == "verify_totp"
-                and _rel != os.path.join("panel", "security", "auth.py")):
-            _totp_bad.append("%s:%d (named as a string)" % (_rel, _n.lineno))
-            continue
-        if not (isinstance(_n, _totp_ast.Call)
-                and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "verify_totp"):
-            continue
-        # its own definition site is allowed to exist; callers are not
-        _totp_bad.append("%s:%d" % (_rel, _n.lineno))
+    _totp_bad.extend("%s:%s" % (_rel, _w) for _w in _totp_refs(_tree, _rel))
+# The gate's own controls: each indirect use is named, and the step form is not.
+_totp_ctl = {_src: _totp_refs(_totp_ast.parse(_src), os.path.join("panel", "routes", "x.py"))
+             for _src in ("import functools\nfunctools.partial(verify_totp, s)(c)\n",
+                          "_v = auth.verify_totp\n_v(s, c)\n",
+                          "list(map(verify_totp, ss, cs))\n",
+                          "auth.verify_totp(s, c)\n",
+                          "from panel.security.auth import verify_totp as _vt\n",
+                          "getattr(auth, 'verify_totp')(s, c)\n")}
+_totp_ok = _totp_refs(_totp_ast.parse("auth.verify_totp_step(s, c)\n"),
+                      os.path.join("panel", "routes", "x.py"))
+check("2FA: the verify_totp gate names a partial, an alias, a map, a call, a renamed import and a "
+      "string lookup — and not verify_totp_step (controls)",
+      all(_totp_ctl.values()) and not _totp_ok, repr((_totp_ctl, _totp_ok)))
 check("2FA: no route consumes a live code with the yes/no verify_totp",
       not _totp_bad,
       "verify_totp is called at %s — use verify_totp_step and record the step, or an observed "

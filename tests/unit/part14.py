@@ -15,6 +15,8 @@ import subprocess as _sp14  # nosec B404 - runs this interpreter and bash on the
 import tempfile as _tf14
 import time as _time14
 
+from eventlet.timeout import Timeout as _EvTimeout14  # noqa: E402 - a timed-out green join raises it
+
 from unit.part01 import check, os, re, sys  # noqa: F401,E402
 from unit.part05 import _root  # noqa: E402
 
@@ -1084,7 +1086,12 @@ try:
     _time14.sleep(0.3)
     _ss14_gate.set()
     for _t in _ts14:
-        _t.join(10)
+        # Under eventlet a join that times out RAISES its Timeout (a BaseException): a waiter that
+        # never woke — the regression this checks for — ended the unit run with no tally.
+        try:
+            _t.join(10)
+        except _EvTimeout14:   # a timed-out green join raises it; the check below reports a thread still running
+            pass
     check("update status: five concurrent requests (forced or not) run ONE computation and all get "
           "its answer", len(_ss14_calls) == 1 and len(_ss14_out) == 5
           and all(o.get("n") == 1 for o in _ss14_out), repr((len(_ss14_calls), _ss14_out)))

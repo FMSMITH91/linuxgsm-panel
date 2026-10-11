@@ -25,8 +25,8 @@ from types import SimpleNamespace as _NS56
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_CFG_PATH, _p9_cfg, _p9_client, _p9_json, _p9_patch,
-                         _p9_restore_all, _p9_so)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_CFG_PATH, _P9_TRIPPED, _p9_cfg, _p9_client,
+                         _p9_core, _p9_json, _p9_patch, _p9_restore_all, _p9_so, _p9_trip)
 from unit.part47 import _cut47, _node47
 from panel.ops import backup as _bk56
 from panel.routes import remote_bootstrap as _rb56
@@ -52,7 +52,20 @@ def _node56(name, prog):
 
 
 _A56 = _p9_client(P9_ADMIN)
+# part12 disarmed its transport tripwire when it ended, and every check below stubs only the leaf
+# it names: a route that reached one more host call ran it for real (paramiko to the fixture host,
+# or a local shell — as root on CI's root leg) and this part still passed. Re-armed, as part53
+# does, and closed with a check below.
+_TRIP56_START = len(_P9_TRIPPED)
 try:
+    _p9_patch(_p9_core, "get_connection",
+              _p9_trip("paramiko", exc=ConnectionError("refused by part56's tripwire")))
+    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
+    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
+    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
+    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+    _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # 1. routes
     # ════════════════════════════════════════════════════════════════════════════════════════════
@@ -146,6 +159,8 @@ finally:
             _P9_CFG_PATH.unlink()
     else:
         _P9_CFG_PATH.write_bytes(_CFG56_SNAPSHOT)
+check("part56: nothing its routes drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP56_START, repr(_P9_TRIPPED[_TRIP56_START:][:6]))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -220,9 +235,15 @@ check("install.sh: the public address printed beside the IPv4 firewall verdict i
 # 4.2.0"). #417 moved the lockfile to 4.3.0 and left the reason naming 4.2.0, so the reviewed text
 # no longer described what is installed. Every "-> name version" in a reason must be the locked one.
 # Read as text: the 3.10 CI leg has no tomllib. A reason is a """...""" string with "\" line joins.
-_osv56 = [_r.replace("\\\n", "") for _r in
-          _re56.findall(r'^reason\s*=\s*"""(.*?)"""', _read56(_root, "tools", "gamedig", "osv-scanner.toml"),
-                        _re56.S | _re56.M)]
+# A one-line "..." reason too: only the triple-quoted form was read, so a reason written the short
+# way read as no reason at all. And as many reasons as the file declares (comments aside).
+_osv56_txt = _read56(_root, "tools", "gamedig", "osv-scanner.toml")
+_osv56 = [(_a or _b).replace("\\\n", "") for _a, _b in
+          _re56.findall(r'^\s*reason\s*=\s*(?:"""(.*?)"""|"([^"\n]*)")', _osv56_txt, _re56.S | _re56.M)]
+_osv56_declared = sum(1 for _l in _osv56_txt.splitlines()
+                      if _re56.match(r"\s*reason\s*=", _l.split("#", 1)[0]))
+check("gamedig osv-scanner: every reason the file declares is read (either string form)",
+      _osv56_declared == len(_osv56), "%d declared, %d read" % (_osv56_declared, len(_osv56)))
 _lock56 = _json56.loads(_read56(_root, "tools", "gamedig", "package-lock.json"))["packages"]
 
 
@@ -251,11 +272,25 @@ check("gamedig osv-scanner: ...a reason naming a version the lock does not insta
 
 
 # ── js_coverage: the 375px rename flow's cleanup cannot swallow its own failed check ─────────────
-_spec56 = _ilu56.spec_from_file_location("jscov56_run", os.path.join(_root, "tools", "js_coverage", "run.py"))
-_run56 = _ilu56.module_from_spec(_spec56)
-with _ctx56.redirect_stdout(_io56.StringIO()):
-    _spec56.loader.exec_module(_run56)
-_flows56, _drv56 = _sys56.modules["flows"], _sys56.modules["driver"]
+# run.py puts tools/js_coverage at sys.path[0] and imports its siblings as TOP-LEVEL modules; left
+# there, any later `import flows`/`walk`/`driver`/`cdp`/`run` got the harness's file (part14 and
+# part53 put both back, and check it). Taken by name here, then sys.path and the table are restored.
+_jc56_path0, _jc56_mods0 = list(_sys56.path), set(_sys56.modules)
+try:
+    _spec56 = _ilu56.spec_from_file_location("jscov56_run",
+                                             os.path.join(_root, "tools", "js_coverage", "run.py"))
+    _run56 = _ilu56.module_from_spec(_spec56)
+    with _ctx56.redirect_stdout(_io56.StringIO()):
+        _spec56.loader.exec_module(_run56)
+    _flows56, _drv56 = _sys56.modules.get("flows"), _sys56.modules.get("driver")
+finally:
+    _sys56.path[:] = _jc56_path0
+    for _jc56_m in set(_sys56.modules) - _jc56_mods0:
+        del _sys56.modules[_jc56_m]
+check("part56: loading run.py leaves sys.path and the top-level module names as they were",
+      _sys56.path == _jc56_path0 and not ({"walk", "driver", "flows", "cdp", "v8_lcov"}
+                                          & set(_sys56.modules))
+      and None not in (_flows56, _drv56), repr(_sys56.path[:2]))
 
 
 class _PhoneDrv56:
@@ -432,8 +467,17 @@ if _out56 is not None:
           _out56.get("names") == [], repr(_out56))
 
 # ── the i18n gate reads text built inside markup, and what is handed to t() ─────────────────────
+# tools/ on sys.path only for this import (part53 does the same, and says why).
+_i18n56_path0, _i18n56_mods0 = list(_sys56.path), set(_sys56.modules)
 _sys56.path.insert(0, os.path.join(_root, "tools"))
-import i18n_scan as _i18n56  # noqa: E402
+try:
+    import i18n_scan as _i18n56  # noqa: E402
+finally:
+    _sys56.path[:] = _i18n56_path0
+    for _i18n56_m in set(_sys56.modules) - _i18n56_mods0:
+        del _sys56.modules[_i18n56_m]
+check("part56: importing tools/i18n_scan leaves sys.path and the module table as they were",
+      _sys56.path == _i18n56_path0 and "i18n_scan" not in _sys56.modules, repr(_sys56.path[:2]))
 _tdir56 = os.path.realpath(_tf56.mkdtemp(prefix="lgsm-unit-p56-i18n-"))
 try:
     with open(os.path.join(_tdir56, "a.js"), "w", encoding="utf-8") as _fh56:
@@ -481,8 +525,11 @@ if _out56 is not None:
 
 
 # ── names are guarded one by one; the containers around them are not ───────────────────────────
-_NAME56 = _re56.compile(r"\{\{\s*[a-z_]+(?:\.[a-z_]+)*\.(?:name|username|display_name|hostname|comment|"
-                        r"created_by|player_name|reason)(?:\s+or\s+'[^']*')?\s*\}\}")
+# Any variable spelling, and any filters after it (`{{ u.username|e }}`): lower-case names with no
+# filter only was the narrowing part53's _bare_names53 was widened from (review 1011b).
+_NAME56 = _re56.compile(r"\{\{\s*[A-Za-z_]\w*(?:\.\w+)*\.(?:name|username|display_name|hostname|comment|"
+                        r"created_by|player_name|reason)(?:\s+or\s+'[^']*')?"
+                        r"(?:\s*\|\s*\w+(?:\([^)]*\))?)*\s*\}\}")
 _VOID56 = {"input", "br", "img", "hr", "meta", "link", "source", "wbr", "col", "area", "base", "embed"}
 
 
@@ -526,8 +573,12 @@ check("templates: no user-authored text (a username, a group, command or tag nam
 _dash56, _rmh56 = _read56(_TPL56, "dashboard.html"), _read56(_TPL56, "remote_manage.html")
 check("templates: the tag list and the Panel Server's game-backup list are not data-no-i18n as a whole "
       "(\"Delete\", \"Back up now\" and the empty states stayed English)",
-      _re56.search(r'id="tag-list"[^>]*data-no-i18n', _dash56) is None
-      and _re56.search(r'id="fb-games"[^>]*data-no-i18n', _rmh56) is None, "a container is still guarded")
+      # The whole opening tag, wherever the attribute sits in it — and the tag must be THERE: a
+      # renamed id read as "not guarded" too.
+      all(_tags and not any("data-no-i18n" in _t for _t in _tags)
+          for _tags in (_re56.findall(r'<[^>]*\bid="tag-list"[^>]*>', _dash56),
+                        _re56.findall(r'<[^>]*\bid="fb-games"[^>]*>', _rmh56))),
+      "a container is still guarded, or is gone")
 _logs56 = _read56(_TPL56, "logs.html")
 check("templates: the audit log's User filter lists each user under data-no-i18n",
       _re56.search(r"<option [^>]*data-no-i18n>\{\{ u \}\}</option>", _logs56) is not None, "unguarded")

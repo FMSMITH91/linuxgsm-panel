@@ -4,7 +4,7 @@ name: ClusterFuzzLite
 # build contract (.clusterfuzzlite/{Dockerfile,build.sh,project.yaml}), no enrolment needed.
 #
 # It overlaps with fuzz.yml, deliberately and differently: fuzz.yml runs every target for a fixed
-# 60s on each pull request (and weekly), while this runs in 'code-change' mode, fuzzing only what the diff actually
+# 60s on each pull request (and 600s nightly), while this runs in 'code-change' mode, fuzzing only what the diff actually
 # touched and reporting a crash as a SARIF finding in the Security tab next to the CodeQL and
 # Bandit alerts. Keeping both is a choice — fuzz.yml is the broad sweep, this is the targeted one.
 on:

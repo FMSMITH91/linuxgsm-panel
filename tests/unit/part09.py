@@ -756,7 +756,9 @@ try:
           _gh_bk._restore_lock.acquire(blocking=False) and (_gh_bk._restore_lock.release() or True))
     _rv_rr2 = _gh_bk.restore_backup("panel-backup-20260101-000000-nosuch.tar.gz")
     check("restore: ...a restore that fails releases it too (positive control: it ran, and said so)",
-          _rv_rr2[0] is False and "already in progress" not in _rv_rr2[1]
+          # "No such backup." names the body that holds the lock; any EARLIER refusal (an update
+          # in progress, a new gate before the lock) said "not already in progress" just as well.
+          _rv_rr2[0] is False and _rv_rr2[1] == "No such backup."
           and _gh_bk._restore_lock.acquire(blocking=False)
           and (_gh_bk._restore_lock.release() or True), repr(_rv_rr2))
 finally:

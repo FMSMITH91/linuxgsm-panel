@@ -470,8 +470,11 @@ try:
     # chat bots' completion message are both built from it, so a tee that swallowed it would
     # trade one silence for another. The stub above returns output, and the completion marker
     # checked below is built from it.
-    check("long action: fastdl is the one that also needs its prompts answered",
-          _lat_kw and "answers" in _lat_kw[0],
+    # The VALUE, not the key: _run_teed passes answers= on every action (None for all but fastdl),
+    # so `"answers" in kwargs` held whether fastdl got its Y's or not — and fastdl without them
+    # loops on EOF for the whole 30-minute timeout. fastdl itself is driven below.
+    check("long action: update is not fed prompt answers (only fastdl is)",
+          _lat_kw and "answers" in _lat_kw[0] and _lat_kw[0]["answers"] is None,
           "kwargs %r" % (_lat_kw[0] if _lat_kw else None))
     check("long action: the output file is registered for tailing WHILE it runs",
           _lat_during and _lat_during[0].get("path") == _lat_logf
@@ -496,6 +499,21 @@ try:
     check("long action: the markers go to THIS server's console room only",
           _lat_rooms and all(r == "console_%d" % gs_id for r in _lat_rooms),
           "rooms=%s" % _lat_rooms)
+
+    # fastdl asks yes/no questions and loops forever on EOF: it is the one action fed Y's.
+    _lat_kw.clear()
+    _lat_cmds.clear()
+    with app.app_context():
+        _lat_gs = db.session.get(GameServer, gs_id)
+        app._run_action(_lat_gs, _lat_gs.remote, "fastdl", None)
+    check("long action: fastdl really ran", _pa_wait(_lat_cmds) and _lat_cmds[0] == "fastdl",
+          "cmds=%s" % _lat_cmds)
+    check("long action: fastdl is the one that also needs its prompts answered (eight Y's)",
+          _lat_kw and _lat_kw[0].get("answers") == ["Y"] * 8,
+          "kwargs %r" % (_lat_kw[0] if _lat_kw else None))
+    _lat_dl = _pt.time() + 3.0
+    while _pt.time() < _lat_dl and gs_id in _ao:
+        _pt.sleep(0.02)
 
     # 2. The drain itself: new bytes only. A tail that re-sent its window every tick would
     # fill the console with the same SteamCMD spool over and over.

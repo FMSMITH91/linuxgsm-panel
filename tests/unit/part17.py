@@ -659,18 +659,24 @@ finally:
 # ── a JSON number is not always finite ───────────────────────────────────────────────────────────
 # json reads `Infinity` and `1e400` as float('inf'); int() of that raises OverflowError, which the
 # reboot delay and the auto-block threshold did not catch — a 500 for a malformed body.
-_rv2_esc = SO._can_escalate
+_rv2_esc, _rv2_thr = SO._can_escalate, SO.threading
+# threading RECORDED, not real: should the clamp regress and let inf through, server_reboot starts
+# a worker that sleeps the clamped delay and then calls the REAL _run_verb("reboot") — the
+# runner's own reboot on CI's root leg — long after this check failed by name.
+_rv2_started = []
 try:
     SO._can_escalate = lambda: True
+    SO.threading = NS(Thread=lambda target=None, daemon=None, **_k: NS(
+        start=lambda: _rv2_started.append(getattr(target, "__name__", target))))
     try:
         _rv2rb = SO.server_reboot(float("inf"))
     except Exception as _rv2e:
         _rv2rb = _rv2e
-    eq("server_reboot: an infinite delay is refused with the delay message, not raised (and no "
-       "reboot is scheduled)", _rv2rb,
-       (False, "The reboot delay must be a number of seconds (0-300)."))
 finally:
-    SO._can_escalate = _rv2_esc
+    SO._can_escalate, SO.threading = _rv2_esc, _rv2_thr
+eq("server_reboot: an infinite delay is refused with the delay message, not raised (and no "
+   "reboot is scheduled)", (_rv2rb, _rv2_started),
+   ((False, "The reboot delay must be a number of seconds (0-300)."), []))
 
 _rv2_cfg_path = _zcfgmod.CONFIG_FILE
 _rv2_cfg_snap = _rv2_cfg_path.read_bytes() if _rv2_cfg_path.exists() else None

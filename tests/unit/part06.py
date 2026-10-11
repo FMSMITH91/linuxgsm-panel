@@ -1,5 +1,5 @@
 """Part 6 of the unit suite. Imported for its side effects."""
-from unit.part01 import (N, NS, SO, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
+from unit.part01 import (N, NS, SO, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, _r13d_window, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
 
 from unit.part05 import (_SMOKE_SUITE_FILES, _ast_scan, _helper, _helper_path, _ilu, _machinery, _priv, _re, _root, _shutil, _sp, _t, _tempfile, _time)  # noqa: F401,E402
 check("ufw: _ufw_is_active is false for empty output", _sm_firewall._ufw_is_active("") is False)
@@ -5309,7 +5309,7 @@ _cc_code = "\n".join(_l for _l in _cc_raw.splitlines() if not _l.lstrip().starts
 _cc_job = _cc_code[_cc_code.index("\n  upload:\n"):]
 # From `if:` to `runs-on:`, which every job has: a key between them going missing must fail the
 # checks below by name, not end the suite with a ValueError.
-_cc_if = " ".join(_cc_job[_cc_job.find("    if: >-"):_cc_job.find("\n    runs-on:")].split())
+_cc_if = " ".join(_r13d_window(_cc_job, "    if: >-", "\n    runs-on:").split())
 _cc_env = _wf_step_env(_cc_raw, "Send coverage to Codacy")
 check("codacy-coverage: runs on CI's completion, in the `codacy` environment (no deployment "
       "record), for this repository's push and pull-request runs only",
