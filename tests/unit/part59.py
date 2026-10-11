@@ -610,6 +610,16 @@ else:
     check("js coverage: ...while that reset failing on a passing flow is still reported (control)",
           _ph59[1:] == ["CDPError"], repr(_ph59))
 
+# ── the closed public port's tooltip on the Panel Server card ───────────────────────────────────
+_name59 = "host page: the closed-port tooltip"
+_out59 = _node59(_name59, _cut47(_read59(_JS59, "remote_manage_host.js"), "function _r13c_closedPortTitle(") + "\n"
+                 "console.log(JSON.stringify(['unknown', '1', null].map(_r13c_closedPortTitle)));\n")
+if _out59 is not None:
+    check("host page: with Serve unread, the closed-port tooltip says Funnel is not known — not \"the panel "
+          "is tailnet-only\" (control: Funnel on, and a read with no Funnel, keep their own)",
+          isinstance(_out59, list) and "not known" in _out59[0] and "tailnet-only" not in _out59[0]
+          and "Funnel is on" in _out59[1] and "tailnet-only" in _out59[2], repr(_out59))
+
 # ── /users at 375px: the header's buttons wrap instead of widening the page ─────────────────────
 _MU59 = _read59(_TPL59, "manage_users.html")
 check("users page: the header row wraps (measured at 375px it pushed Add User to 417px, so the whole "
