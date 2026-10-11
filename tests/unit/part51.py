@@ -532,7 +532,7 @@ with _patched():
     _patch(_notif51, "notify", lambda key, title, body, **k: _sent51.append((key, title, body)))
     _j51 = _JobLike51(_RID51)
     try:
-        for _i51 in range(_hr51.BOUNCE_NOTIFY_AT + 1):
+        for _ in range(_hr51.BOUNCE_NOTIFY_AT + 1):
             _j51._back_to_waiting(None, bounce=False, reason="a player count could not be read",
                                   backoff=True, unread="fctr")
             with _hr51._rwe_lock:
