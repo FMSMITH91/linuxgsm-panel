@@ -1033,7 +1033,8 @@ def _r11b_rules_reach_root(rules, caller, names, uid):
     certain — `ALL`, the name, a group it is in, its uid; never through a negation, an alias, a
     netgroup — and its host list covers this host. And sudo's LAST matching rule wins: a later
     rule for every command that is not such a grant, or one with a `!` in it, takes the answer
-    back."""
+    back.
+    """
     reach = False
     for items, rest in rules:
         if _rule_is_nopasswd_root_all(rest):
@@ -1048,14 +1049,16 @@ def _r11b_names_caller_for_certain(items, caller, names, uid):
     """True when a rule's user list certainly includes `caller`, and nothing in it is negated."""
     if any(i.startswith("!") for i in items):
         return False
-    for item in items:
-        if item == "ALL" or item == caller:
-            return True
-        if item.startswith("%") and not item.startswith(("%:", "%#")) and item[1:] in names:
-            return True
-        if item.startswith("#") and item[1:].isdigit() and int(item[1:]) == uid:
-            return True
-    return False
+    return any(_r11b_item_names_caller(item, caller, names, uid) for item in items)
+
+
+def _r11b_item_names_caller(item, caller, names, uid):
+    """True when one user-list item is `ALL`, the caller's name, a group it is in, or its uid."""
+    if item == "ALL" or item == caller:
+        return True
+    if item.startswith("%") and not item.startswith(("%:", "%#")) and item[1:] in names:
+        return True
+    return item.startswith("#") and item[1:].isdigit() and int(item[1:]) == uid
 
 
 def _rule_is_nopasswd_root_all(rest):

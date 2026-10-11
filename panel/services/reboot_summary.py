@@ -75,6 +75,22 @@ def _boot_clause(boot, sent):
     return ": its new boot started within %s of the reboot being sent" % _within(boot - sent)
 
 
+def _bare_rebooted_text(remote, job, boot):
+    """What a reboot with no plan rows says once the host is on its new boot."""
+    # A job reaches here with no plan rows for two reasons. Its plan was empty — nothing was
+    # running — or the operator acted on every planned server while the host rebooted, and
+    # exclude_row took each out of the plan. The job's own server list tells them apart: the
+    # second used to be announced as "no running game server was found", about a reboot that
+    # had stopped servers (its own audit row lists them).
+    n = len(job.get("servers") or ())
+    what = (" (no running game server was found before it)" if not n else
+            "; the operator took over the %d game server%s it stopped, so the panel started "
+            "none of them" % (n, "" if n == 1 else "s"))
+    return "%s rebooted%s%s.%s" % (
+        _host_label(remote), _boot_clause(boot, job.get("sent")), what,
+        _unread_note(job.get("unread"), "stop or start"))
+
+
 def _reboot_head(remote, recs, now, n, failed):
     """The summary's first sentences after a reboot: when the host booted, and how many are back within what.
 

@@ -1675,8 +1675,9 @@ def _check_unauthenticated():
     pwn = "pwned_" + tag
     # A password the policy ACCEPTS: "hackme123" (no capital, no symbol) was refused by
     # password_problem() itself, so no account could be created with every setup guard removed.
+    accepted = "Sufficient1!pass"
     r = cu.post("/setup", data={"step": "admin_user", "username": pwn,
-                                "password": "Sufficient1!pass", "confirm_password": "Sufficient1!pass"})  # nosec B105 - posted by an anonymous probe that must be refused
+                                "password": accepted, "confirm_password": accepted})
     with app.app_context():
         created = User.query.filter_by(username=pwn).first()
         was_created = created is not None
@@ -2914,6 +2915,43 @@ def _check_bulk_actions_per_id():
             _sm_core.run_as_game_user = _sv_rag
 
 
+def _check_setup_endpoints_shut_to_superadmin():
+    """The setup-only endpoints stay shut, with config.json gone, to a signed-in superadmin too."""
+    global _label, _m, _p, _r
+    # A SIGNED-IN SUPERADMIN is one the owner gate lets through: an anonymous caller is refused by
+    # that gate whatever the lock says, so _check_setup_endpoints_stay_shut's anonymous loop passes
+    # with _setup_open() deleted. Here the lock is the only refusal left. Tailscale is stubbed,
+    # recording, for these requests, so a broken lock cannot run anything on this machine (see the
+    # WARNING in _check_setup_endpoints_stay_shut). Called with config.json pointed away.
+    from panel.ops import tailscale_integration as _ts_sa
+    _ts_sa_saved = (_ts_sa.install_tailscale_local, _ts_sa.tailscale_up_local,
+                    _ts_sa.setup_tailscale_serve, _ts_sa.get_tailscale_info)
+    _ts_sa_calls = []
+    try:
+        _ts_sa.install_tailscale_local = lambda *a, **k: (_ts_sa_calls.append("install"), (True, ""))[1]
+        _ts_sa.tailscale_up_local = lambda *a, **k: (_ts_sa_calls.append("up"), (True, "https://x"))[1]
+        _ts_sa.setup_tailscale_serve = lambda *a, **k: (_ts_sa_calls.append("serve"), (True, ""))[1]
+        _ts_sa.get_tailscale_info = lambda *a, **k: (_ts_sa_calls.append("status"),
+                                                     _ts_sa.TailscaleInfo())[1]
+        _sa = client_as(admin_id)
+        for _p, _m, _label in (("/api/setup/tailscale/status", "get", "status"),
+                               ("/api/setup/tailscale/install", "post", "install"),
+                               ("/api/setup/tailscale/up", "post", "up"),
+                               ("/api/setup/tailscale/serve", "post", "serve")):
+            _r = getattr(_sa, _m)(_p)
+            check("setup endpoint stays SHUT with config.json gone, to a signed-in superadmin "
+                  "too: %s" % _label, _r.status_code == 403,
+                  "%s -> %d %s" % (_p, _r.status_code, _r.data[:80]))
+        check("setup endpoints with config.json gone: nothing reached Tailscale",
+              _ts_sa_calls == [], repr(_ts_sa_calls))
+        _rw_sa = _sa.get("/setup")
+        check("the setup wizard stays locked with config.json gone, to a signed-in superadmin too",
+              _rw_sa.status_code in (301, 302), "/setup -> %d" % _rw_sa.status_code)
+    finally:
+        (_ts_sa.install_tailscale_local, _ts_sa.tailscale_up_local,
+         _ts_sa.setup_tailscale_serve, _ts_sa.get_tailscale_info) = _ts_sa_saved
+
+
 def _check_setup_endpoints_stay_shut():
     """The setup-only endpoints stay shut when config.json is lost."""
     global _label, _m, _p, _r
@@ -2965,37 +3003,7 @@ def _check_setup_endpoints_stay_shut():
             _r = getattr(_anon, _m)(_p)
             check("setup endpoint stays SHUT with config.json gone: %s" % _label,
                   _r.status_code == 403, "%s -> %d %s" % (_p, _r.status_code, _r.data[:80]))
-        # ...and to a SIGNED-IN SUPERADMIN, whom the owner gate lets through: an anonymous caller is
-        # refused by that gate whatever the lock says, so the loop above passes with _setup_open()
-        # deleted. Here the lock is the only refusal left. Tailscale is stubbed, recording, for
-        # these requests, so a broken lock cannot run anything on this machine (see the WARNING).
-        from panel.ops import tailscale_integration as _ts_sa
-        _ts_sa_saved = (_ts_sa.install_tailscale_local, _ts_sa.tailscale_up_local,
-                        _ts_sa.setup_tailscale_serve, _ts_sa.get_tailscale_info)
-        _ts_sa_calls = []
-        try:
-            _ts_sa.install_tailscale_local = lambda *a, **k: (_ts_sa_calls.append("install"), (True, ""))[1]
-            _ts_sa.tailscale_up_local = lambda *a, **k: (_ts_sa_calls.append("up"), (True, "https://x"))[1]
-            _ts_sa.setup_tailscale_serve = lambda *a, **k: (_ts_sa_calls.append("serve"), (True, ""))[1]
-            _ts_sa.get_tailscale_info = lambda *a, **k: (_ts_sa_calls.append("status"),
-                                                         _ts_sa.TailscaleInfo())[1]
-            _sa = client_as(admin_id)
-            for _p, _m, _label in (("/api/setup/tailscale/status", "get", "status"),
-                                   ("/api/setup/tailscale/install", "post", "install"),
-                                   ("/api/setup/tailscale/up", "post", "up"),
-                                   ("/api/setup/tailscale/serve", "post", "serve")):
-                _r = getattr(_sa, _m)(_p)
-                check("setup endpoint stays SHUT with config.json gone, to a signed-in superadmin "
-                      "too: %s" % _label, _r.status_code == 403,
-                      "%s -> %d %s" % (_p, _r.status_code, _r.data[:80]))
-            check("setup endpoints with config.json gone: nothing reached Tailscale",
-                  _ts_sa_calls == [], repr(_ts_sa_calls))
-            _rw_sa = _sa.get("/setup")
-            check("the setup wizard stays locked with config.json gone, to a signed-in superadmin too",
-                  _rw_sa.status_code in (301, 302), "/setup -> %d" % _rw_sa.status_code)
-        finally:
-            (_ts_sa.install_tailscale_local, _ts_sa.tailscale_up_local,
-             _ts_sa.setup_tailscale_serve, _ts_sa.get_tailscale_info) = _ts_sa_saved
+        _check_setup_endpoints_shut_to_superadmin()
         # ...and the wizard it shares a lock with stays shut too, so the two agree.
         _rw = _anon.get("/setup")
         check("the setup wizard stays locked with config.json gone",
