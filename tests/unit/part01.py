@@ -189,6 +189,18 @@ def skip(name, reason):
     results.append((None, name, "skipped: %s" % reason))
 
 
+def _r13d_window(text, first, last, start=0):
+    """`text` from `first` up to `last` (both searched from `start`); "" when either is missing.
+
+    The bare `text[text.find(a):text.find(b)]` cut ran to the end of the text when `b` was renamed
+    (find answers -1), and began one character from the end when `a` was: a check reading that
+    window then passed on text past the block it meant, or on nothing it named.
+    """
+    i = text.find(first, start)
+    j = text.find(last, max(i, start)) if i >= 0 else -1
+    return text[i:j] if 0 <= i < j else ""
+
+
 def eq(name, got, want):
     check(name, got == want, "got %r want %r" % (got, want))
 
@@ -1438,7 +1450,22 @@ finally:
 
 
 _CR_REACHED = "REAL crontab reached:"
-_CR_SHADOW = 'crontab() { echo "%s $*" >&2; return 97; }; ' % _CR_REACHED
+# A leftover crontab call is caught three ways, because one way is not enough:
+#  * the shadow FUNCTION records into a marker FILE, not stderr — a call written in the pipeline's
+#    own idiom (`E2=$(crontab -r 2>&1)`, `crontab -l 2>/dev/null`) swallowed the stderr line, and
+#    the drive reported success while production would run the real `crontab -r`;
+#  * a stand-in EXECUTABLE named crontab heads PATH, for `command crontab`, `exec crontab` and
+#    `env crontab`, which skip a shell function and look the name up on PATH;
+#  * a crontab named by PATH (`/usr/bin/crontab`) is neither, so a pipeline holding one is refused
+#    before it runs.
+_CR_MARK = os.path.join(_cr_sb, "crontab-reached")
+_CR_SHADOW = 'crontab() { echo "$*" >> "$CR_MARK"; return 97; }; '
+_CR_BIN = os.path.join(_cr_sb, "bin")
+os.makedirs(_CR_BIN, exist_ok=True)
+with open(os.path.join(_CR_BIN, "crontab"), "w", encoding="utf-8") as _cr_fh:
+    _cr_fh.write('#!/bin/sh\necho "$*" >> "$CR_MARK"\nexit 97\n')
+os.chmod(os.path.join(_CR_BIN, "crontab"), 0o755)  # nosec B103 - a test stand-in in a private temp dir
+_CR_BY_PATH = re.compile(r"/crontab(?![\w.-])")
 
 
 def _cr_drive(fn, *a, **kw):
@@ -1487,10 +1514,45 @@ def _cr_drive(fn, *a, **kw):
     # or `||` alike. This was a regex listing the positions (`^ ; & | ( \` $(`), which a
     # `|| { crontab -r; }` or `*) crontab "$L" ;;` — the constructs this pipeline is built from —
     # walked straight past, to run the real crontab against the runner's account.
-    _r = _cr_sub.run(["bash", "-c", _CR_SHADOW + pipeline], capture_output=True, text=True)
-    if _CR_REACHED in _r.stderr:
-        return None, "a crontab call is left in the pipeline (shadowed, not run): %r" % _r.stderr[:200]
+    _r = _cr_guarded_run(pipeline)
+    if _r is None or isinstance(_r, str):
+        return None, _r
     return (open(_dst, encoding="utf-8").read() if os.path.exists(_dst) else None), _r.stderr
+
+
+def _cr_guarded_run(pipeline):
+    """Run `pipeline` with every crontab stood in for: the CompletedProcess, or why it was refused."""
+    if _CR_BY_PATH.search(pipeline):
+        return "a crontab named by path is left in the pipeline, not run: %r" % pipeline[:160]
+    if os.path.exists(_CR_MARK):
+        os.remove(_CR_MARK)
+    _env = dict(os.environ, CR_MARK=_CR_MARK, PATH=_CR_BIN + os.pathsep + os.environ.get("PATH", ""))
+    _r = _cr_sub.run(["bash", "-c", _CR_SHADOW + pipeline], capture_output=True, text=True, env=_env)
+    if os.path.exists(_CR_MARK):
+        with open(_CR_MARK, encoding="utf-8") as _fh:
+            _left = _fh.read()
+        return "%s a crontab call is left in the pipeline (stood in for, not run): %r" % (
+            _CR_REACHED, _left[:200])
+    return _r
+
+
+# The guard's own controls: each way a leftover crontab call can be written is refused, and a
+# pipeline with none in it runs. The first two were missed when the shadow reported on stderr;
+# the next three skip a shell function; the last bypasses PATH.
+_cr_ctl = {}
+# All READS (-l): if the guard ever regressed, a control must not be what deletes a crontab.
+for _cr_form in ('E2=$(crontab -l 2>&1) || true', 'crontab -l 2>/dev/null; true',
+                 'command crontab -l >/dev/null; true', '(exec crontab -l >/dev/null); true',
+                 'env crontab -l >/dev/null; true', '/usr/bin/crontab -l >/dev/null; true'):
+    _cr_ctl[_cr_form] = _cr_guarded_run(_cr_form)
+check("cron drive: a leftover crontab call is refused however it is written (captured, discarded, "
+      "command/exec/env, by path)",
+      all(isinstance(v, str) for v in _cr_ctl.values()),
+      repr({k: v for k, v in _cr_ctl.items() if not isinstance(v, str)}))
+_cr_ok = _cr_guarded_run('echo fine')
+check("cron drive: ...while a pipeline with no crontab in it runs (control)",
+      not isinstance(_cr_ok, str) and _cr_ok.returncode == 0 and _cr_ok.stdout == "fine\n",
+      repr(_cr_ok))
 
 
 try:

@@ -2960,26 +2960,50 @@ _totp_files = ["app.py"] + sorted(
 check("2FA: the verify_totp gate reads app.py and every panel module (a floor, so an empty walk "
       "fails)", len(_totp_files) > 50 and "panel/routes/auth_routes.py" in _totp_files,
       "%d files" % len(_totp_files))
-for _rel in _totp_files:
-    _path = os.path.join(_totp_root, _rel)
-    _tree = _totp_ast.parse(open(_path, encoding="utf-8").read())
-    for _n in _totp_ast.walk(_tree):
+_TOTP_HOME = os.path.join("panel", "security", "auth.py")
+
+
+def _totp_refs(tree, rel):
+    """Every place in `tree` (the file `rel`) that can reach verify_totp: '<line> (<how>)'."""
+    found = []
+    for _n in _totp_ast.walk(tree):
         # A rename on import (`from ...auth import verify_totp as _vt`) or a lookup by string
         # (`getattr(auth, "verify_totp")`) reaches it under a name the call test cannot see.
         if isinstance(_n, _totp_ast.ImportFrom) and any(
                 _a.name == "verify_totp" and _a.asname not in (None, "verify_totp")
                 for _a in _n.names):
-            _totp_bad.append("%s:%d (imported under another name)" % (_rel, _n.lineno))
-            continue
-        if (isinstance(_n, _totp_ast.Constant) and _n.value == "verify_totp"
-                and _rel != os.path.join("panel", "security", "auth.py")):
-            _totp_bad.append("%s:%d (named as a string)" % (_rel, _n.lineno))
-            continue
-        if not (isinstance(_n, _totp_ast.Call)
-                and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "verify_totp"):
-            continue
-        # its own definition site is allowed to exist; callers are not
-        _totp_bad.append("%s:%d" % (_rel, _n.lineno))
+            found.append("%d (imported under another name)" % _n.lineno)
+        elif isinstance(_n, _totp_ast.Constant) and _n.value == "verify_totp" and rel != _TOTP_HOME:
+            found.append("%d (named as a string)" % _n.lineno)
+        elif (isinstance(_n, (_totp_ast.Name, _totp_ast.Attribute)) and rel != _TOTP_HOME
+              and getattr(_n, "id", getattr(_n, "attr", None)) == "verify_totp"):
+            # ANY reference, not only a call: `partial(verify_totp, s)(c)`, `_v = auth.verify_totp`
+            # or `map(verify_totp, ...)` consume a live code just the same, and none is a Call
+            # whose func is named verify_totp. Outside auth.py nothing has a reason to name it.
+            found.append("%d" % _n.lineno)
+        elif (isinstance(_n, _totp_ast.Call)
+              and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "verify_totp"):
+            found.append("%d" % _n.lineno)      # its own definition may exist; callers may not
+    return found
+
+
+for _rel in _totp_files:
+    _path = os.path.join(_totp_root, _rel)
+    _tree = _totp_ast.parse(open(_path, encoding="utf-8").read())
+    _totp_bad.extend("%s:%s" % (_rel, _w) for _w in _totp_refs(_tree, _rel))
+# The gate's own controls: each indirect use is named, and the step form is not.
+_totp_ctl = {_src: _totp_refs(_totp_ast.parse(_src), os.path.join("panel", "routes", "x.py"))
+             for _src in ("import functools\nfunctools.partial(verify_totp, s)(c)\n",
+                          "_v = auth.verify_totp\n_v(s, c)\n",
+                          "list(map(verify_totp, ss, cs))\n",
+                          "auth.verify_totp(s, c)\n",
+                          "from panel.security.auth import verify_totp as _vt\n",
+                          "getattr(auth, 'verify_totp')(s, c)\n")}
+_totp_ok = _totp_refs(_totp_ast.parse("auth.verify_totp_step(s, c)\n"),
+                      os.path.join("panel", "routes", "x.py"))
+check("2FA: the verify_totp gate names a partial, an alias, a map, a call, a renamed import and a "
+      "string lookup — and not verify_totp_step (controls)",
+      all(_totp_ctl.values()) and not _totp_ok, repr((_totp_ctl, _totp_ok)))
 check("2FA: no route consumes a live code with the yes/no verify_totp",
       not _totp_bad,
       "verify_totp is called at %s — use verify_totp_step and record the step, or an observed "
