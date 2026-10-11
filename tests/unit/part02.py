@@ -2963,27 +2963,42 @@ check("2FA: the verify_totp gate reads app.py and every panel module (a floor, s
 _TOTP_HOME = os.path.join("panel", "security", "auth.py")
 
 
+def _totp_name(n):
+    """The name a Name, Attribute or Call node refers to (a Call by its callee), else None."""
+    f = n.func if isinstance(n, _totp_ast.Call) else n
+    return getattr(f, "id", getattr(f, "attr", None))
+
+
+def _totp_renamed(n):
+    """Is `n` an import of verify_totp under another name?"""
+    return isinstance(n, _totp_ast.ImportFrom) and any(
+        _a.name == "verify_totp" and _a.asname not in (None, "verify_totp") for _a in n.names)
+
+
+def _totp_why(n, rel):
+    """How AST node `n` (in file `rel`) can reach verify_totp: a label, "" for a plain use, or None."""
+    # A rename on import (`from ...auth import verify_totp as _vt`) or a lookup by string
+    # (`getattr(auth, "verify_totp")`) reaches it under a name the call test cannot see.
+    if _totp_renamed(n):
+        return " (imported under another name)"
+    outside = rel != _TOTP_HOME
+    if isinstance(n, _totp_ast.Constant):
+        return " (named as a string)" if outside and n.value == "verify_totp" else None
+    # ANY reference outside auth.py, not only a call: `partial(verify_totp, s)(c)`,
+    # `_v = auth.verify_totp` or `map(verify_totp, ...)` consume a live code just the same, and
+    # none is a Call whose func is named verify_totp. Outside auth.py nothing has a reason to name
+    # it; inside, its own definition may exist, and callers may not.
+    kinds = (_totp_ast.Name, _totp_ast.Attribute, _totp_ast.Call) if outside else (_totp_ast.Call,)
+    return "" if isinstance(n, kinds) and _totp_name(n) == "verify_totp" else None
+
+
 def _totp_refs(tree, rel):
-    """Every place in `tree` (the file `rel`) that can reach verify_totp: '<line> (<how>)'."""
+    """Every place in `tree` (the file `rel`) that can reach verify_totp: '<line><how>'."""
     found = []
     for _n in _totp_ast.walk(tree):
-        # A rename on import (`from ...auth import verify_totp as _vt`) or a lookup by string
-        # (`getattr(auth, "verify_totp")`) reaches it under a name the call test cannot see.
-        if isinstance(_n, _totp_ast.ImportFrom) and any(
-                _a.name == "verify_totp" and _a.asname not in (None, "verify_totp")
-                for _a in _n.names):
-            found.append("%d (imported under another name)" % _n.lineno)
-        elif isinstance(_n, _totp_ast.Constant) and _n.value == "verify_totp" and rel != _TOTP_HOME:
-            found.append("%d (named as a string)" % _n.lineno)
-        elif (isinstance(_n, (_totp_ast.Name, _totp_ast.Attribute)) and rel != _TOTP_HOME
-              and getattr(_n, "id", getattr(_n, "attr", None)) == "verify_totp"):
-            # ANY reference, not only a call: `partial(verify_totp, s)(c)`, `_v = auth.verify_totp`
-            # or `map(verify_totp, ...)` consume a live code just the same, and none is a Call
-            # whose func is named verify_totp. Outside auth.py nothing has a reason to name it.
-            found.append("%d" % _n.lineno)
-        elif (isinstance(_n, _totp_ast.Call)
-              and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "verify_totp"):
-            found.append("%d" % _n.lineno)      # its own definition may exist; callers may not
+        _w = _totp_why(_n, rel)
+        if _w is not None:
+            found.append("%d%s" % (_n.lineno, _w))
     return found
 
 

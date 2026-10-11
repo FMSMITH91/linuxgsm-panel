@@ -3114,7 +3114,7 @@ for _f in _gd_npm_files:
             for _m in _GD_NPM_RE.finditer(_l):
                 _gd_npm_seen.append((os.path.relpath(_f, _UNIT_ROOT), _m.group(1)))
 def _r13d_run_redirected(cmd, real_dir, timeout=30):
-    """bash -c `cmd`, ONLY when no path under `real_dir` is left in it; else a refusal (rc -1).
+    """Run `cmd` in bash ONLY when no path under `real_dir` is left in it; else refuse (rc -1).
 
     These drives point a root-capable rendering at a temp dir by replacing its destination's text.
     A replace that matched nothing (the rendering spelled the path another way) ran it against the

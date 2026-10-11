@@ -196,10 +196,14 @@ def _gh_argv_sites(n):
         elif (seen_sudo and _gh_is_user_flag(e)
               and j + 1 < len(elts) and not isinstance(elts[j + 1], _gh_ast.Constant)):
             out.append((n.lineno, elts[j + 1], "argv"))
-        elif (seen_sudo and not isinstance(e, _gh_ast.Constant)
-              and _GH_ARGV_JOINED.match(_gh_text(e))):
+        elif seen_sudo and _gh_is_joined_user(e):
             out.append((n.lineno, e, "argv"))
     return out
+
+
+def _gh_is_joined_user(e):
+    """Is argv element `e` the user flag and an interpolated account in one (`"--user=" + user`)?"""
+    return not isinstance(e, _gh_ast.Constant) and _GH_ARGV_JOINED.match(_gh_text(e)) is not None
 
 
 def _gh_node_sites(n):
