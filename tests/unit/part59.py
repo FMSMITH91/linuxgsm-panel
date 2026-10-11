@@ -494,9 +494,12 @@ if _out59 is not None:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 
 # ── the i18n gate reads a confirm body however it is written ────────────────────────────────────
-if os.path.join(_root, "tools") not in _sys59.path:
-    _sys59.path.insert(0, os.path.join(_root, "tools"))
-import i18n_scan as _i18n59  # noqa: E402
+# Loaded from its file, not by putting tools/ on sys.path: the runner fails any part that leaves
+# sys.path changed for the parts after it.
+import importlib.util as _ilu59  # noqa: E402
+_i18n_spec59 = _ilu59.spec_from_file_location("i18n_scan_p59", os.path.join(_root, "tools", "i18n_scan.py"))
+_i18n59 = _ilu59.module_from_spec(_i18n_spec59)
+_i18n_spec59.loader.exec_module(_i18n59)
 _tdir59 = os.path.realpath(_tf59.mkdtemp(prefix="lgsm-unit-p59-i18n-"))
 try:
     with open(os.path.join(_tdir59, "a.js"), "w", encoding="utf-8") as _fh59:
