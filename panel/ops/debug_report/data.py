@@ -390,8 +390,23 @@ def _passphrase_state():
                     "every backup is being refused")
 
 
+def _r12b_config_unreadable():
+    """Whether config.json is unreadable, as the backup module reads it (it then answers defaults)."""
+    from panel.ops import backup as bk
+    return bk.is_unreadable(bk.load_config())
+
+
 def _settings_line(res):
     from panel.ops import backup as bk
+    if _r12b_config_unreadable():
+        # The defaults it answers would print "enabled · keep <default> d · encryption off" with no
+        # finding, while every backup is refused: create_backup asks get_passphrase, which raises
+        # PassphraseUnreadable on an unreadable config.json rather than write an archive that may
+        # have been meant to be encrypted.
+        res.add("- **Daily**: config.json could not be read, so its settings are unknown and "
+                "every panel backup is refused until it can")
+        res.find("fail", "Backups", "config.json is unreadable: panel backups are refused")
+        return
     s = bk.get_settings()
     level, words = _passphrase_state()
     res.add("- **Daily**: %s · keep %s d · %s" % ("enabled" if s.get("enabled") else "OFF",
@@ -473,8 +488,11 @@ def _manual_line(res):
     carries their error text, so it is never printed.
     """
     from panel.ops import backup as bk
-    s = bk.get_full_settings()
     head = "- **Manual 'Back up game servers now'**:"
+    if _r12b_config_unreadable():
+        res.add(head + " not known (config.json could not be read)")   # its defaults say "never run"
+        return
+    s = bk.get_full_settings()
     if not s.get("last"):
         res.add(head + " never run")
         return

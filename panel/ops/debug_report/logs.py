@@ -46,8 +46,10 @@ _PAM_SESSION_RE = re.compile(r"^pam_unix\((?:sudo|sudo-i|runuser|runuser-l|su|su
 # COMMAND, each only when it applies. Only TTY was allowed for, so `sudo -g docker …` or
 # `sudo VAR=val …` (GROUP=, ENV=) did not parse, was not counted, and was printed WHOLE — argv,
 # ENV= values and all — in a report meant to be posted publicly.
-_SUDO_CMD_RE = re.compile(r" :[ \t]{1,4}(?:(?:TTY|CHROOT)=[^;\n]{1,512};[ \t]{1,4}){0,2}"
-                          r"PWD=[^;\n]{0,512};[ \t]{1,4}USER=([^;\n]{1,64});[ \t]{1,4}"
+# HOST= leads when sudoers sets log_host, and CWD= is the --chdir directory; both used to leave
+# the line unparsed.
+_SUDO_CMD_RE = re.compile(r" :[ \t]{1,4}(?:(?:HOST|TTY|CHROOT|PWD|CWD)=[^;\n]{0,512};[ \t]{1,4}){1,5}"
+                          r"USER=([^;\n]{1,64});[ \t]{1,4}"
                           r"(?:(?:GROUP|TSID|ENV)=[^;\n]{0,2048};[ \t]{1,4}){0,3}"
                           r"COMMAND=(\S{1,512})(?: ([^\n]{0,2048}))?")
 # A REFUSED line keeps its place in the log, but not its command: sudo writes the full argv there
@@ -57,6 +59,15 @@ _SUDO_CMD_RE = re.compile(r" :[ \t]{1,4}(?:(?:TTY|CHROOT)=[^;\n]{1,512};[ \t]{1,
 _SUDO_REFUSED_TAIL_RE = re.compile(r"COMMAND=(\S{1,512})(?: ([^\n]{0,4096}))?")
 _SUDO_USER_RE = re.compile(r"USER=([^;\n]{1,64});")
 _SUDO_CONTINUED_RE = re.compile(r"^[ \t]*\S{1,64} :[ \t]{1,4}\(command continued\) ")
+# sudo's own shape: a USER= field followed by ENV= or COMMAND=, or its JSON event (log_format=json).
+# A line of that shape that neither the refusal phrases nor _SUDO_CMD_RE account for is cut as a
+# refused one is (fail closed): an unknown refusal reason ("user NOT authorized on host", a custom
+# authfail_message), an ENV= or PWD= value holding `;`, or a line sudo split before COMMAND= was
+# printed whole, argv and ENV= values included.
+_R12B_SUDO_SHAPE_RE = re.compile(r";[ \t]{1,4}USER=[^\n]{0,4096}?(?:ENV|COMMAND)=|@cee:|"
+                                 r"\"(?:runargv|runenv|command)\"[ \t]{0,4}:")
+# Where the part of a sudo line that is not printed starts when it has no COMMAND= to cut at.
+_R12B_SUDO_CUT_TOKENS = ("ENV=", "@cee:", '"runargv"', '"runenv"', '"command"')
 # Programs the panel itself runs through sudo as root, named by their basename. Anything else —
 # a script an operator ran with sudo in the panel's terminal, which lives in the same unit — is
 # 'other program': its name is the operator's, not something to print.
@@ -99,7 +110,8 @@ _GAME_READS = (
     ("LinuxGSM action", ("cd ", "&& ")),
 )
 _SUDO_REFUSED_RE = re.compile(r"a password is required|NOT in sudoers|not allowed to (?:run|execute)"
-                              r"|incorrect password|authentication failure|command not allowed",
+                              r"|incorrect password|authentication failure|command not allowed"
+                              r"|NOT authorized on host|rejected in intercept mode",
                               re.IGNORECASE)
 # What systemd logs when it stops the panel's unit and processes inside it do not stop with it:
 # another account's processes a user manager may not signal (EPERM), then left behind and found
@@ -349,7 +361,8 @@ def _split_priv(lines):
         else:
             m = _SUDO_CMD_RE.search(body)
             if m is None:
-                kept.append(ln)
+                kept.append(_r11b_refused_without_argv(ln, own) if _R12B_SUDO_SHAPE_RE.search(body)
+                            else ln)
                 continue
             _count_priv(verbs, *_priv_verb(m.group(2), m.group(3), m.group(1), own))
     return kept, verbs, sessions
@@ -362,12 +375,20 @@ def _r11b_refused_without_argv(line, own):
     """
     m = _SUDO_REFUSED_TAIL_RE.search(line)
     if m is None:
-        return line
+        return _r12b_cut_without_command(line)
     u = _SUDO_USER_RE.search(line)
     label, sub = _priv_verb(m.group(1), m.group(2), u.group(1) if u else "root", own)
     env = line.find("ENV=", 0, m.start())
     cut = env if env != -1 else m.start()
     return line[:cut] + "COMMAND=(%s)" % (label if sub is None else "%s: %s" % (label, sub))
+
+
+def _r12b_cut_without_command(line):
+    """A sudo line with no COMMAND= (sudo split it, or it is JSON), cut at its ENV= or argv."""
+    at = [i for i in (line.find(t) for t in _R12B_SUDO_CUT_TOKENS) if i != -1]
+    if not at:
+        return line
+    return line[:min(at)] + "(environment and command not shown)"
 
 
 def _count_priv(verbs, label, sub):
