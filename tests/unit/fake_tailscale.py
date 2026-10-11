@@ -37,6 +37,9 @@ VPS by the investigation that found these bugs, and against serve_v2.go of that 
   * `serve --https=N --set-path=M off` removes ONLY M; a missing M is rc 1 "handler does not exist".
   * `off` WITHOUT --set-path removes EVERY mount on that listener (no TTY, so no prompt).
   * Removing a listener's last mount clears it, and its Funnel flag with it.
+  * A plain `serve` write (not `funnel`) turns Funnel OFF for its whole listener: setServe ends with
+    applyFunnel(..., allowFunnel=false), printing "Removing Funnel for <host>:<port>" — another app's
+    route on that listener drops off the internet with it.
   * A flag the CLI does not define is rc 2 "flag provided but not defined: -<name>" — `--remove`
     among them: the serve CLI that has --bg never had it.
   * `serve status` prints one block per listener, shortest mount first, "(Funnel on)" or
@@ -187,6 +190,11 @@ def _serve(verb, rest):
     _set_web_handler(st["web"].setdefault(port, {}), path or "/", pos[0])
     if verb == "funnel" and port not in st["funnel"]:
         st["funnel"].append(port)
+    elif verb == "serve" and port in st["funnel"]:
+        # setServe ends with applyFunnel(..., allowFunnel=false): a plain `serve` write turns
+        # Funnel OFF for the whole listener ("Removing Funnel for ..."), other apps' mounts included.
+        st["funnel"].remove(port)
+        sys.stderr.write("Removing Funnel for %s:%s\n" % (HOST, port))
     _save(st)
     _out("Available within your tailnet:\n\n%s%s\n" % (_url(st, port), path or "/"))
 

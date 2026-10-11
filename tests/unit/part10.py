@@ -1760,13 +1760,19 @@ def _so7_run_shell_runner_itself():
               and _rr[0][1].get("shell") is True and _rr[0][1].get("stdin") == _p7_sp.DEVNULL,
               repr(_rr))
         _rr_fail = []
-        for _exc in (_p7_sp.TimeoutExpired("x", 1), FileNotFoundError("x"), ValueError("bad")):
+        # Both timeout classes: under eventlet, subprocess.run(timeout=) raises the ORIGINAL
+        # module's TimeoutExpired, not the green one (system_ops._SOPS_TIMEOUTS). With only the
+        # green class here, dropping the second entry of _SOPS_TIMEOUTS left this green.
+        for _exc in (_p7_sp.TimeoutExpired("x", 1),
+                     _p7_patcher.original("subprocess").TimeoutExpired("x", 1),
+                     FileNotFoundError("x"), ValueError("bad")):
             SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run([], exc=_exc))
             _rr_fail.append(_p7_call(_real_run, "true"))
         SO.subprocess = _so7_saved["subprocess"]
-        eq("so/_run: timeout, missing binary and other errors are values, with no exception text",
-           _rr_fail, [("", "Command timed out", -1), ("", "Command not found", -1),
-                      ("", "command execution error", -1)])
+        eq("so/_run: timeout (either class), missing binary and other errors are values, with no "
+           "exception text",
+           _rr_fail, [("", "Command timed out", -1), ("", "Command timed out", -1),
+                      ("", "Command not found", -1), ("", "command execution error", -1)])
 
 
 def _so7_tracked_branch_helper_present():
@@ -1902,6 +1908,13 @@ def _so7_git_update_machinery_failure():
     _gl = []
     SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run(_gl, exc=_p7_sp.TimeoutExpired("git", 45)))
     _g_to = _p7_call(SO._git, ["fetch"])
+    # ...and the class a monkey-patched run() really raises (the original module's): a git fetch
+    # stall escaping as that exception was the switch-branch 500 _SOPS_TIMEOUTS exists for.
+    SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run(
+        [], exc=_p7_patcher.original("subprocess").TimeoutExpired("git", 45)))
+    _g_to_orig = _p7_call(SO._git, ["fetch"])
+    check("so/_git: a hang raising the ORIGINAL subprocess module's TimeoutExpired is a value too",
+          _g_to_orig == ("", "git timed out", -1), repr(_g_to_orig))
     SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run([], exc=FileNotFoundError("git")))
     _g_nf = _p7_call(SO._git, ["fetch"])
     SO.subprocess = _so7_saved["subprocess"]
@@ -2677,7 +2690,8 @@ _dr_log = "\n".join("line %04d %s password=hunter2 ok" % (i, ("alpha", "beta", "
                     for i in range(600))
 _dr_calls = {"run": [], "verb": []}
 _dr_names = ("panel_diagnostics", "panel_version", "panel_integrity", "_run", "_run_verb", "_git",
-             "panel_update_log", "_debug_run", "_helper_present", "_is_git_checkout", "os")
+             "panel_update_log", "_debug_run", "_helper_present", "_is_git_checkout", "os",
+             "_helper_probe_run")
 _dr_saved = {_n: getattr(SO, _n) for _n in _dr_names}
 _dr_md_dists = _p7_md.distributions
 _dr_sec_saved = (_p7_drdata.section_database, _p7_drupd.section_updates)
@@ -2728,6 +2742,12 @@ def _p7_dr_stub(journal_user, journal_sys, journal_unit, helper, euid):
                                    ("timedatectl", ("yes\n", "", 0))])
     SO._run_verb = _p7_verb_by({"journal": (journal_sys, "", 0)}, log=_dr_calls["verb"])
     SO._helper_present = lambda: helper
+    # The diagnostics section's two host reads, which this harness left real: the helper probe ran
+    # a real `sudo -n <helper> --list-verbs` (part05's no-sudo shim refused it), and the automatic
+    # updates check `dpkg-query`/`apt-config` through _run. Answered as a host with no sudo would.
+    SO._helper_probe_run = lambda: {"outcome": "refused", "verbs": set(),
+                                    "refusal": "a password is required"}
+    SO._run = lambda cmd, **_k: ("", "", 1)
     SO.os = _Over(os, geteuid=lambda: euid, getuid=lambda: 4242)
     SO.open = _p7_open_with({"/etc/os-release": OSError("ENOENT")})
     _p7_cfgmod.load_config = _p7_raise(OSError("EIO"))

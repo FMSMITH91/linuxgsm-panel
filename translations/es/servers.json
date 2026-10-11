@@ -255,5 +255,6 @@
   "This renames a file or folder.": "Esto cambia el nombre de un archivo o una carpeta.",
   "Refresh list": "Actualizar lista",
   "Refreshing…": "Actualizando…",
-  "Fetch LinuxGSM's latest game list now (it refreshes on its own once a week)": "Obtener ahora la lista de juegos más reciente de LinuxGSM (se actualiza sola una vez por semana)"
+  "Fetch LinuxGSM's latest game list now (it refreshes on its own once a week)": "Obtener ahora la lista de juegos más reciente de LinuxGSM (se actualiza sola una vez por semana)",
+  "Couldn't read this server's mods — the host didn't answer.": "No se pudieron leer los mods de este servidor: el host no respondió."
 }

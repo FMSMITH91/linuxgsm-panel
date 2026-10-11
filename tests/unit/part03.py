@@ -106,10 +106,13 @@ try:
           _p_noaux == 27020, "picked %s" % _p_noaux)
     # A non-valve host is not made to pay for it, and still allocates exactly as before.
     _app_mod.sm_game_engine = lambda gt: "goldsrc"
-    _app_mod.lgsm_get_values = lambda *a, **k: (_ for _ in ()).throw(AssertionError("read anyway"))
+    # Recorded, not raised: _add_sibling_ports catches Exception around the read, so a raising
+    # sentinel was swallowed and "not read at all" could never fail.
+    _nv_reads = []
+    _app_mod.lgsm_get_values = lambda *a, **k: _nv_reads.append(a[1:3])
     _p_nv, _ = _app_mod.resolve_free_port(None, 1, 27015, "csgo")
     check("free-port: a non-valve sibling is not read at all, and packs as before",
-          _p_nv == 27020, "picked %s" % _p_nv)
+          _p_nv == 27020 and _nv_reads == [], "picked %s, read %r" % (_p_nv, _nv_reads[:3]))
     # Positive control: a genuinely free desired port still comes back unchanged.
     _p_free, _ch_free = _app_mod.resolve_free_port(None, 1, 30000, "csgo")
     check("free-port: a free desired port is still returned unchanged",
@@ -803,6 +806,12 @@ check("repair: refuses when not a git checkout", _ok3 is False)
 _so._git, _so._is_git_checkout = _orig_git, _orig_isgit_real
 
 # ── automatic security updates detection ──────────────────────
+# Put back in the finally below, as every neighbouring block does: left as _mk_run(1, ""), every
+# later part that saved `_so._run` as "the original" saved this stub, and one meaning to exercise
+# the real _run got ("", "", 0) with nothing saying so.
+_orig_au_run = _so._run
+
+
 def _mk_run(installed_rc, apt_out):
     def _r(cmd, timeout=30, sudo=False, text=True):
         if "dpkg-query" in cmd:
@@ -811,27 +820,31 @@ def _mk_run(installed_rc, apt_out):
             return (apt_out, "", 0)
         return ("", "", 0)
     return _r
-_so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "1";')
-_au = _so.unattended_upgrades_status()
-check("auto-updates: installed + enabled detected", _au["installed"] and _au["enabled"])
-_so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "0";')
-_au = _so.unattended_upgrades_status()
-check("auto-updates: installed but disabled detected", _au["installed"] and not _au["enabled"])
-_so._run = _mk_run(1, "")
-_au = _so.unattended_upgrades_status()
-check("auto-updates: not installed detected", not _au["installed"] and not _au["enabled"])
-# The value is an INTERVAL in days — any non-zero one runs it. Only the exact text "1" counted,
-# so a weekly "7" (set in a later apt.conf.d file, which wins) read "not enabled" and Enable
-# answered "Could not confirm" on a host that was applying updates.
-for _au_val, _au_want in (("7", True), ("2", True), ("always", True), ("12h", True),
-                          ("0", False), ("", False), ("off", False)):
-    _so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "%s";' % _au_val)
-    check("auto-updates: an interval of %r reads as %s" % (_au_val, "on" if _au_want else "off"),
-          _so.unattended_upgrades_status()["enabled"] is _au_want)
-_so._run = _mk_run(0, 'APT::Periodic::Update-Package-Lists "1";')
-check("auto-updates: a '1' on a DIFFERENT periodic key is not this one being on",
-      _so.unattended_upgrades_status()["enabled"] is False)
-_so._run = _mk_run(1, "")
+
+
+try:
+    _so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "1";')
+    _au = _so.unattended_upgrades_status()
+    check("auto-updates: installed + enabled detected", _au["installed"] and _au["enabled"])
+    _so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "0";')
+    _au = _so.unattended_upgrades_status()
+    check("auto-updates: installed but disabled detected", _au["installed"] and not _au["enabled"])
+    _so._run = _mk_run(1, "")
+    _au = _so.unattended_upgrades_status()
+    check("auto-updates: not installed detected", not _au["installed"] and not _au["enabled"])
+    # The value is an INTERVAL in days — any non-zero one runs it. Only the exact text "1" counted,
+    # so a weekly "7" (set in a later apt.conf.d file, which wins) read "not enabled" and Enable
+    # answered "Could not confirm" on a host that was applying updates.
+    for _au_val, _au_want in (("7", True), ("2", True), ("always", True), ("12h", True),
+                              ("0", False), ("", False), ("off", False)):
+        _so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "%s";' % _au_val)
+        check("auto-updates: an interval of %r reads as %s" % (_au_val, "on" if _au_want else "off"),
+              _so.unattended_upgrades_status()["enabled"] is _au_want)
+    _so._run = _mk_run(0, 'APT::Periodic::Update-Package-Lists "1";')
+    check("auto-updates: a '1' on a DIFFERENT periodic key is not this one being on",
+          _so.unattended_upgrades_status()["enabled"] is False)
+finally:
+    _so._run = _orig_au_run
 
 # ── shell-identifier validation (the core injection defense) ──
 from panel.db.models import _validate_shell_ident as _vsi

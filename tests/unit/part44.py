@@ -29,6 +29,7 @@ from panel.ops.debug_report import process as _proc44
 from panel.ops.debug_report._base import Ctx as _Ctx44
 
 _TMP44 = _tf44.mkdtemp(prefix="lgsm-p44-")
+__import__("atexit").register(__import__("shutil").rmtree, _TMP44, True)   # not one left per run
 
 # ── timeouts: both TimeoutExpired classes ───────────────────────────────────────────────────────
 try:

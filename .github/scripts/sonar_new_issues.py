@@ -47,6 +47,29 @@ def _get(path, **params):
         return json.load(resp)
 
 
+def _retrying(fn, deadline, sleep=None):
+    """fn()'s answer, retried every 20 s through SonarCloud's weather; None once `deadline` passes.
+
+    The waits for an analysis already retried; the issue reads after them did not, so one 502, 429
+    or timeout there crashed the script — a red "SonarCloud open issues (main)" on main's head that
+    holds every panel's update until the next run, or a red required check on a pull request.
+    """
+    sleep = sleep or time.sleep
+    while True:
+        try:
+            return fn()
+        except (OSError, ValueError) as e:      # HTTPError and URLError are OSErrors; bad JSON
+            print("SonarCloud did not answer (%s); retrying" % e)
+        if time.time() > deadline:
+            return None
+        sleep(20)
+
+
+def _get_never():
+    """The self-test's SonarCloud that never answers."""
+    raise OSError("timed out")
+
+
 def analysis_of(pr_list, pr, sha):
     """The pull request's entry in project_pull_requests/list when it is the analysis of `sha`."""
     for entry in pr_list.get("pullRequests", []):
@@ -86,9 +109,12 @@ def run(pr, sha, timeout):
                 return (["SonarCloud had not analysed %s after %ds" % (sha[:12], timeout)],
                         int(time.time() - start))
             time.sleep(20)
-    issues = _get("issues/search", componentKeys=PROJECT, pullRequest=pr, resolved="false",
-                  ps=100).get("issues", [])
-    return verdict(entry, issues), int(time.time() - start)
+    got = _retrying(lambda: _get("issues/search", componentKeys=PROJECT, pullRequest=pr,
+                                 resolved="false", ps=100), start + timeout)
+    if got is None:
+        return (["SonarCloud did not answer the issue read for %s within %ds" % (sha[:12], timeout)],
+                int(time.time() - start))
+    return verdict(entry, got.get("issues", [])), int(time.time() - start)
 
 
 def branch_entry(branch_list, branch):
@@ -133,15 +159,19 @@ def _missing_known(issues, known):
             for k, why in sorted(known.items()) if k not in keys]
 
 
-def _open_issues(branch):
+def _open_issues(branch, deadline=None):
     """Every open issue on `branch` and SonarCloud's total, paging until the total is read.
 
     Kept once per key: a list that shifted between pages must not make up the count with repeats.
+    None when SonarCloud did not answer a page before `deadline`.
     """
     issues, total = {}, 0
+    deadline = time.time() + 900 if deadline is None else deadline
     for page in range(1, 21):                 # bounded: 20 pages of 500 is far past plausible
-        got = _get("issues/search", componentKeys=PROJECT, branch=branch, resolved="false",
-                   ps=500, p=page)
+        got = _retrying(lambda p=page: _get("issues/search", componentKeys=PROJECT, branch=branch,
+                                            resolved="false", ps=500, p=p), deadline)
+        if got is None:
+            return None
         total = int((got.get("paging") or {}).get("total", got.get("total", 0)) or 0)
         for i in got.get("issues", []):
             issues.setdefault(i.get("key"), i)
@@ -169,11 +199,15 @@ def _wait_for_branch(branch, sha, timeout):
 
 def run_branch(branch, sha, timeout, known=None):
     """Wait for SonarCloud's analysis of `sha` on `branch`, then return (problems, judged sha)."""
+    start = time.time()
     entry, why = _wait_for_branch(branch, sha, timeout)
     if why:
         return [why], ""
     judged = (entry.get("commit") or {}).get("sha") or "?"
-    issues, total = _open_issues(branch)
+    read = _open_issues(branch, start + timeout)
+    if read is None:
+        return ["SonarCloud did not answer the issue read on %s within %ds" % (branch, timeout)], judged
+    issues, total = read
     return branch_verdict(entry, issues, total, KNOWN_OPEN if known is None else known), judged
 
 
@@ -223,6 +257,17 @@ def self_test():
         "a failed gate fails": (verdict({"status": {"qualityGateStatus": "ERROR"}}, []) != []),
     }
     cases.update(_branch_cases())
+    _answers = [OSError("HTTP Error 502"), ValueError("not JSON"), {"issues": []}]
+
+    def _flaky():
+        a = _answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+    cases["a 502 and a bad body on the issue read are retried, then read"] = (
+        _retrying(_flaky, time.time() + 60, sleep=lambda s: None) == {"issues": []})
+    cases["an issue read that never answers gives up at the deadline, not with a crash"] = (
+        _retrying(lambda: _get_never(), time.time() - 1, sleep=lambda s: None) is None)
     bad = [name for name, ok in cases.items() if not ok]
     for name in bad:
         print("SELF-TEST FAIL " + name)

@@ -16,7 +16,6 @@ on:
       - 'docs/**'
       - 'LICENSE'
       - '.gitignore'
-      - '.gitattributes'
       - '.editorconfig'
   pull_request:
     branches: [ main ]
@@ -206,10 +205,32 @@ jobs:
             mv "$f.kept" "$f"
           done
 
+      # A SCHEDULED run analyses main's head as it was when the run started. When a push lands
+      # meanwhile, its own run (a different concurrency group) can upload first, and this older
+      # analysis uploaded after it became the newest in its category: the newer commit was then
+      # "moved on" for the alert gates, and nothing judged it again until the next push. So a
+      # scheduled run uploads only while its commit is still main's head; a head that cannot be read
+      # uploads as before. code_scanning_analyses.py answers "moved on" for the run that skipped.
+      - name: Is the analysed commit still main's head? (scheduled runs only)
+        id: still_head
+        if: steps.scope.outputs.docs_only != 'true' && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! head="$(gh api --jq .sha -- "repos/${GITHUB_REPOSITORY}/commits/main" 2>/dev/null)"; then
+            head=""
+          fi
+          if [ -n "${head}" ] && [ "${head}" != "${GITHUB_SHA}" ]; then
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main moved on to ${head} while ${GITHUB_SHA} was analysed; not uploading over the newer commit's analysis"
+          else
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # Spelled out, though a step runs only after the ones before it succeeded: this is the line
       # that decides whether an incomplete analysis reaches code scanning, so it says so itself.
       - name: Upload the results to code scanning
-        if: ${{ success() && steps.analyze.outcome == 'success' && steps.extracted.outcome == 'success' && steps.sarif.outcome == 'success' }}
+        if: ${{ success() && steps.analyze.outcome == 'success' && steps.extracted.outcome == 'success' && steps.sarif.outcome == 'success' && steps.still_head.outputs.current != 'false' }}
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: sarif-results

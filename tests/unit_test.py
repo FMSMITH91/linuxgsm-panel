@@ -178,6 +178,17 @@ check("suites: no unit check reads or writes the machine's own config.json or ke
       not _config_touches,
       "%d call(s): %s" % (len(_config_touches), "; ".join(sorted(set(_config_touches)))))
 
+# part05 installs tools/nosudo_runner's shim for the rest of the run (it answers any sudo with "a
+# password is required", as an unprivileged host would), and nothing read what it refused: a check
+# that reached an escalation got a canned rc=1, tested the "could not escalate" branch under
+# another name, and the run said nothing. What the shim refused is named here.
+_nsr_blocked = getattr(sys.modules.get("unit.part05"), "_nsr_ns", {}).get("BLOCKED")
+check("unit suite: no check reached sudo or the network through part05's no-sudo shim",
+      _nsr_blocked == [],
+      "the shim is not installed" if _nsr_blocked is None
+      else "%d refused, first: %s" % (len(_nsr_blocked), "; ".join(
+          "%s: %s" % _b for _b in _nsr_blocked[:4])))
+
 # Every part file ran. Checked HERE, after the imports, because a gate inside a part cannot see
 # that part being dropped: the old one lived in part06 and matched part names as substrings of this
 # file's text (the docstring says "part01..part06"), so removing `part06` from the import line took

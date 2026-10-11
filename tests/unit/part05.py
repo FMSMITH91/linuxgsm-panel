@@ -83,14 +83,20 @@ for _junk in (None, 0, 12, [], {}):
 # models.py states the rule ("returning str(exc) to a client is how raw internals leak into API
 # responses (CodeQL py/stack-trace-exposure), and this codebase's rule is never to do it"), and
 # three flash() calls were doing exactly that. The audit log is where the detail belongs.
+# app.py AND every panel module: the routes moved into panel/routes, and a gate reading app.py
+# alone read zero flash() calls. The count of flash( calls read is the floor that says it read any.
 import re as _re_fl
-_app_src = open(os.path.join(_UNIT_ROOT, "app.py"),
-                encoding="utf-8").read()
-_leaky = []
-for _m in _re_fl.finditer(r"flash\(\s*f?[\"'][^\"']*\{\s*(e|exc|err|ex)\b[^}]*\}", _app_src):
-    _leaky.append("app.py:%d" % (_app_src[:_m.start()].count("\n") + 1))
+import glob as _glob_fl
+_leaky, _fl_calls = [], 0
+for _fl_rel in ["app.py"] + sorted(os.path.relpath(_p, _UNIT_ROOT) for _p in _glob_fl.glob(
+        os.path.join(_UNIT_ROOT, "panel", "**", "*.py"), recursive=True)):
+    _app_src = open(os.path.join(_UNIT_ROOT, _fl_rel), encoding="utf-8").read()
+    _fl_calls += len(_re_fl.findall(r"\bflash\(", _app_src))
+    for _m in _re_fl.finditer(r"flash\(\s*f?[\"'][^\"']*\{\s*(e|exc|err|ex)\b[^}]*\}", _app_src):
+        _leaky.append("%s:%d" % (_fl_rel, _app_src[:_m.start()].count("\n") + 1))
 check("no route flashes an exception's text to the browser (py/stack-trace-exposure)",
-      not _leaky, ", ".join(_leaky))
+      _fl_calls > 0 and not _leaky,
+      ", ".join(_leaky) or "read %d flash( calls — the walk found nothing to judge" % _fl_calls)
 
 # ── Alert delivery: Discord ────────────────────────────────────────────────────────────────────
 # send_discord had never been executed by a test. It is the path a "server went offline" alert
@@ -3947,7 +3953,10 @@ _leaked = []
 for _v, _bads in _BAD.items():
     _nargs = len(_VERB_SAMPLES[_v])
     for _b in _bads:
-        _args = [_b] + ["x"] * (_nargs - 1) if _nargs else [_b]
+        # Padded with the verb's own VALID sample, never "x": for log-tail, journal and
+        # ufw-default the second argument refuses "x" itself, so every bad first value was
+        # refused by the padding and their source-name and action validators went untested.
+        _args = [_b] + list(_VERB_SAMPLES[_v][1:]) if _nargs else [_b]
         try:
             _priv.check_args(_v, _args[:_nargs] if _nargs else [])
             _leaked.append("%s <- %r" % (_v, _b))
@@ -4481,10 +4490,19 @@ _PS_NAMES = {_t.id for _n in _ast_scan.parse(_ps_src).body if isinstance(_n, _as
              for _t in _n.targets
              if isinstance(_t, _ast_scan.Name) and not _t.id.startswith("__")}
 _rebinds = []
-for _f in ["app.py", "monitoring.py"] + [f for f in _SCAN_TEST_USERS]:
-    # _modpath for the panel modules (they live under panel/ now), plain join for the
-    # tests/ paths. No exists() skip: a name that resolves to nothing must raise, not pass.
-    _fps = [os.path.join(_root, _f)] if _f.startswith("tests/") else _modfiles(_f)
+# Every module that names panel_state, not app.py and monitoring.py alone: 21 modules import it
+# (the routes, host_reboot, the debug report, ssh_manager), and a rebind in any of them strands
+# the rest. The floor fails a walk that found too few importers to mean anything.
+_PS_IMPORTERS = [f for f in _SCAN_MODULES if not f.endswith("panel_state.py")
+                 and "panel_state" in open(os.path.join(_root, f), encoding="utf-8").read()]
+check("panel_state rebind gate: it reads every module that names panel_state",
+      len(_PS_IMPORTERS) >= 10 and "app.py" in _PS_IMPORTERS
+      and os.path.join("panel", "services", "monitoring.py") in _PS_IMPORTERS,
+      repr(_PS_IMPORTERS))
+for _f in _PS_IMPORTERS + [f for f in _SCAN_TEST_USERS]:
+    # A plain join for both: _SCAN_MODULES and the tests/ paths are root-relative. No exists()
+    # skip: a name that resolves to nothing must raise, not pass.
+    _fps = [os.path.join(_root, _f)]
     for _node in _ast_scan.walk(_ast_scan.parse(
             "\n".join(open(_p, encoding="utf-8").read() for _p in _fps))):
         # `x = ...` and `x, y = ...` rebind; `x.attr = ...` and `x[k] = ...` do not.
@@ -6357,10 +6375,16 @@ class _CuQuery:
 def _cu_diag_level():
     _cu_cfg._cfg_cache["key"] = None
     # unit= given: the Service check would otherwise run a real `systemctl --user show` on a
-    # machine that has the unit file.
-    return next((c["level"] for c in _cu_so.panel_diagnostics(
-        unit={"scope": None, "props": {}, "error": "unreadable", "why": "no-unit-file"})["checks"]
-                 if c["name"] == "Configuration"), "missing")
+    # machine that has the unit file. _run too: the automatic-updates check runs `dpkg-query` and
+    # `apt-config` through it, which reached this machine once part03 stopped leaving a stub there.
+    _cu_run_saved = _cu_so._run
+    _cu_so._run = lambda cmd, **k: ("", "", 1)
+    try:
+        return next((c["level"] for c in _cu_so.panel_diagnostics(
+            unit={"scope": None, "props": {}, "error": "unreadable", "why": "no-unit-file"})["checks"]
+                     if c["name"] == "Configuration"), "missing")
+    finally:
+        _cu_so._run = _cu_run_saved
 
 
 try:

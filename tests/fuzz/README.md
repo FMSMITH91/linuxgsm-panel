@@ -32,8 +32,9 @@ sole argument to reproduce.
 
 ## CI
 
-`.github/workflows/fuzz.yml` runs every harness in parallel on pushes/PRs that touch a parser or a
-harness (60s each) and nightly (600s each). A crash fails the job and uploads the reproducer as an
+`.github/workflows/fuzz.yml` runs every harness in parallel on pull requests (60s each; the fuzz
+step runs only when the pull request touches a parser or a harness), nightly (600s each), and on
+manual dispatch. It has no push trigger. A crash fails the job and uploads the reproducer as an
 artifact.
 
 ## Adding a target
