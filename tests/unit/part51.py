@@ -609,3 +609,29 @@ check("reboot: a job whose two stopped servers the operator took over during the
       and "no running game server" not in _bare51_taken[0]
       and "no running game server was found before it" in _bare51_plain[0],
       repr((_bare51_taken, _bare51_plain)))
+
+# ── A05 lead: the maintenance probe's pattern is anchored to the script name ────────────────────
+import re as _re51  # noqa: E402
+import shlex as _shlex51  # noqa: E402
+
+from panel.services import monitoring as _mon51  # noqa: E402
+
+_mp51 = []
+with _patched():
+    _patch(_mon51, "run_command", lambda remote, cmd, timeout=30: (_mp51.append(cmd), ("IDLE\n", "", 0))[1])
+    _mon51._lgsm_maintenance_running(NS(id=95153, host="192.0.2.53"),
+                                     NS(short_name="rust1", lgsm_name="rustserver", game_type="rust",
+                                        name="Rust"))
+_mp51_argv = _shlex51.split(_mp51[0]) if _mp51 else []
+_mp51_pat = _mp51_argv[_mp51_argv.index("-f") + 1] if "-f" in _mp51_argv[:-1] else ""
+_mp51_hits = {c: bool(_re51.search(_mp51_pat, c)) for c in (
+    "/bin/bash ./rustserver update", "/home/rust1/rustserver force-update", "bash ./rustserver backup",
+    "/bin/bash ./myrustserver update", "/bin/bash ./rustserver updater-notes",
+    "/bin/bash ./rustserver monitor")} if _mp51_pat else {}
+check("maintenance probe: the pgrep pattern matches only this script's own maintenance commands "
+      "(not another script whose name ends in it, nor a longer command word)",
+      _mp51_hits == {"/bin/bash ./rustserver update": True, "/home/rust1/rustserver force-update": True,
+                     "bash ./rustserver backup": True, "/bin/bash ./myrustserver update": False,
+                     "/bin/bash ./rustserver updater-notes": False,
+                     "/bin/bash ./rustserver monitor": False},
+      repr((_mp51, _mp51_pat, _mp51_hits)))
