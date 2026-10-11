@@ -1908,10 +1908,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
-- **gamedig's dependency `http-cache-semantics` is 4.3.0, not 4.2.0.** 4.2.0 carries
-  CVE-2026-93748 (reported by Codacy's Trivy scan). gamedig, the player-query tool every game host
-  installs from `tools/gamedig/package-lock.json`, already allows 4.3.0; only the lockfile moved,
-  and `npm ci` from it installs and loads gamedig as before.
+- **gamedig's dependency `http-cache-semantics` is 4.3.0, not 4.2.0.** Only the lockfile moved;
+  `npm ci` from it installs and loads gamedig as before. This does **not** fix CVE-2026-93748:
+  scanners list only 4.2.0 because the advisory predates 4.3.0, but 4.3.0's max-stale handling is
+  unchanged and the upstream fix was never merged. It remains unreachable here (gamedig never gives
+  its HTTP client a cache), and the documented exception for it stays until a release fixes it.
 - **Findings from a full code review including the tests and CI (2026-10-11): security.** Every
   item below has a check that fails without its fix.
   - **The debug report could print a password.** A sudo command that sudo refused (a mistyped sudo
