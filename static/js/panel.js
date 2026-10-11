@@ -445,10 +445,14 @@ function _submitAjaxForm(form){
 }
 // A form the server accepted: toast, reset, then refresh the section and run the after-hook -
 // once its modal has fully closed, when it sits in one.
+// `go`: the server's next page for a success (Add Remote's "existing server" goes on to its scan).
+// A path on this panel only — never another origin, nor a protocol-relative "//host".
+function _r11c_goPath(go){
+  return (typeof go === 'string' && /^\/(?![\/\\])/.test(go)) ? go : null;
+}
 function _ajaxFormSucceeded(form, res){
-  // `go`: the server's next page for this success (Add Remote's "existing server" goes on to its
-  // scan). A path on this panel only — never another origin, nor a protocol-relative "//host".
-  if (typeof res.d.go === 'string' && /^\/(?![\/\\])/.test(res.d.go)) { location.assign(res.d.go); return; }
+  var go = _r11c_goPath(res.d.go);
+  if (go) { location.assign(go); return; }
   if (window.toast && res.d.message) toast(res.d.message, 'success');
   if (form.getAttribute('data-ajax-reset') !== 'off' && form.reset) form.reset();
   var sel = form.getAttribute('data-ajax-refresh');

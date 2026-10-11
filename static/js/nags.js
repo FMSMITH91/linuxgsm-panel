@@ -321,6 +321,15 @@ window.rebootCancel = function(hostId){
 // way, whether or not a reboot is required: a "reboot when empty" armed on a host that needed none
 // was otherwise invisible after its toast, and its Cancel unreachable.
 // Generic over a host id — base.html uses it for the panel host; remote_manage for a remote.
+// The banner's line with no controls: what state the panel host is in, for someone who may not act on it.
+function _r11c_rbStateOnly(text, label, d){
+  if (d.job) text.appendChild(_rbEl('span', null, _RB_PHASE[d.job.phase] || 'Rebooting…'));
+  else if (d.pending_empty) text.appendChild(_rbEl('span', null, 'Auto-reboot scheduled once empty'));
+  else text.appendChild(_rbEl('strong', null, 'Reboot needed'));
+  text.appendChild(document.createTextNode(' — ')); text.appendChild(_rbHost(label));
+  text.appendChild(document.createTextNode(' '));
+  text.appendChild(_rbEl('span', 'text-secondary', 'Only a superadmin can reboot the panel host.'));
+}
 window.rebootNagRender = function(el, hostId, label, d){
   var isLocal = hostId === window.LOCAL_HOST_ID;
   el.className = 'alert alert-warning d-flex flex-wrap align-items-center gap-2';
@@ -332,12 +341,7 @@ window.rebootNagRender = function(el, hostId, label, d){
   // The panel host's reboot, wait and cancel are a super admin's (get_host_remote): a delegated host
   // admin is shown the state, without buttons that could only fail.
   if (isLocal && !window.LOCAL_HOST_CTL) {
-    if (d.job) text.appendChild(_rbEl('span', null, _RB_PHASE[d.job.phase] || 'Rebooting…'));
-    else if (d.pending_empty) text.appendChild(_rbEl('span', null, 'Auto-reboot scheduled once empty'));
-    else text.appendChild(_rbEl('strong', null, 'Reboot needed'));
-    text.appendChild(document.createTextNode(' — ')); text.appendChild(_rbHost(label));
-    text.appendChild(document.createTextNode(' '));
-    text.appendChild(_rbEl('span', 'text-secondary', 'Only a superadmin can reboot the panel host.'));
+    _r11c_rbStateOnly(text, label, d);
   } else if (d.job) {
     text.appendChild(_rbEl('span', null, _RB_PHASE[d.job.phase] || 'Rebooting…'));
     text.appendChild(document.createTextNode(' ')); text.appendChild(_rbHost(label));

@@ -244,11 +244,7 @@ def _register_panel_binding(app):
         # before bind_host existed. The operator chooses it; this only reads it back.
         cur_bind = (cfg.get("bind_host") or "0.0.0.0").strip()  # nosec B104
         new_port = _port_or(data.get("port"), None, lo=MIN_UNPRIVILEGED_PORT)
-        new_bind = str(data.get("bind_host") or cur_bind).strip()
-        # Stored and judged in canonical form: "0:0:0:0:0:0:0:1" and "0::1" are ::1, and the
-        # loopback guard below once compared the TEXT, so those spellings bound the panel to
-        # loopback with no Serve in front of it. Text that is not an IP stays as typed (refused).
-        new_bind = canonical_ip(new_bind) or new_bind
+        new_bind = _r11c_canonical_bind(str(data.get("bind_host") or cur_bind).strip())
 
         local = RemoteServer.query.filter_by(is_local=True).first()
         refusal = (_port_refusal(local, cur_port, new_port)
@@ -309,6 +305,16 @@ def _port_refusal(local, cur_port, new_port):
         if so.port_in_use(new_port):
             return f"Port {new_port} is already in use on this host."
     return None
+
+
+def _r11c_canonical_bind(bind):
+    """`bind` in canonical form: "0:0:0:0:0:0:0:1" and "0::1" are ::1.
+
+    Stored and judged that way because the loopback guard in _bind_refusal once compared the TEXT,
+    so those spellings bound the panel to loopback with no Serve in front of it. Text that is not
+    an IP is returned as typed (and refused there).
+    """
+    return canonical_ip(bind) or bind
 
 
 def _bind_refusal(served, new_bind):

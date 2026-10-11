@@ -122,7 +122,7 @@ try:
 
     # ── the backup passphrase is text ────────────────────────────────────────────────────────────
     _pp53 = []
-    _p9_patch(_bk53, "set_passphrase", lambda p: _pp53.append(p))
+    _p9_patch(_bk53, "set_passphrase", _pp53.append)
     _bad53 = [_A53.post("/api/panel/backup/settings", json={"passphrase": _p}).status_code
               for _p in (1234567890123, ["a"] * 12, {"k": "v" * 12})]
     check("backup settings: a passphrase that is not text is a 400, never a 500, and nothing is set",
@@ -398,6 +398,7 @@ _out53 = _node53(_name53, _SETTLE53 + (
     "global.sessionExpired = function(){ calls.push('sessionExpired'); };\n"
     "global.refreshSection = () => calls.push('refresh');\n"
     + _PANEL53[_PANEL53.index("var _ACTION_DENY"):_PANEL53.index("// ── Live cross-user updates")] + "\n"
+    + (_cut47(_PANEL53, "function _r11c_goPath(") if "function _r11c_goPath(" in _PANEL53 else "") + "\n"
     + _cut47(_PANEL53, "function _ajaxFormSucceeded(") + "\n"
     "const form = after => ({getAttribute: n => n === 'data-ajax-after' ? after : null,\n"
     "  reset(){}, closest: () => null});\n"
@@ -424,6 +425,7 @@ _out53 = _node53(_name53, _SETTLE53 + (
     "function _appendConsoleRows(rows, ts, at){ _logAt = Array.isArray(at) ? at : null; }\n"
     "function _startResync(prime){ restarted.push([prime, _logAt]); }\n"
     "function _primeCatchUp(){ primed++; }\n"
+    + (_cut47(_SD53, "function _r11c_resyncFrom(") if "function _r11c_resyncFrom(" in _SD53 else "") + "\n"
     + _cut47(_SD53, "function loadMoreConsole(") + "\n" + _cut47(_SD53, "function _primeAt(") + "\n"
     "global.fetch = () => Promise.resolve({ok: true, json: () => Promise.resolve(\n"
     "  {lines: [{t: null, line: 'a'}], at: [0, 1, 500]})});\n"
@@ -457,6 +459,7 @@ _out53 = _node53(_name53, (
     "function _rbHost(l){ return {text: l}; }\n"
     "function _rbButton(text){ return {button: text}; }\n"
     + _NAGS53[_NAGS53.index("var _RB_PHASE"):_NAGS53.index("};", _NAGS53.index("var _RB_PHASE")) + 2] + "\n"
+    + (_cut47(_NAGS53, "function _r11c_rbStateOnly(") if "function _r11c_rbStateOnly(" in _NAGS53 else "") + "\n"
     + _cut47(_NAGS53, "window.rebootNagRender = function(") + "\n"
     "const btns = n => !n || typeof n !== 'object' ? 0\n"
     "  : (n.button ? 1 : 0) + (n.children || []).reduce((a, c) => a + btns(c), 0);\n"
@@ -735,17 +738,21 @@ def _subprocess_importers53():
     return out | {"db_maintenance"}
 
 
-def _serve_shimmed53():
-    tree = _ast53.parse(_read53(_root, "tools", "js_coverage", "serve.py"))
-    fn = next(n for n in tree.body if isinstance(n, _ast53.FunctionDef) and n.name == "_stub_subprocess")
+def _import_names53(fn):
+    """{local name: dotted module} for the imports inside function node `fn`."""
     names = {}
     for n in _ast53.walk(fn):
         if isinstance(n, _ast53.Import):
-            for a in n.names:
-                names[a.asname or a.name] = a.name
+            names.update((a.asname or a.name, a.name) for a in n.names)
         elif isinstance(n, _ast53.ImportFrom):
-            for a in n.names:
-                names[a.asname or a.name] = "%s.%s" % (n.module, a.name)
+            names.update((a.asname or a.name, "%s.%s" % (n.module, a.name)) for a in n.names)
+    return names
+
+
+def _serve_shimmed53():
+    tree = _ast53.parse(_read53(_root, "tools", "js_coverage", "serve.py"))
+    fn = next(n for n in tree.body if isinstance(n, _ast53.FunctionDef) and n.name == "_stub_subprocess")
+    names = _import_names53(fn)
     loop = next(n for n in _ast53.walk(fn) if isinstance(n, _ast53.For))
     return {names.get(e.id, e.id) for e in loop.iter.elts if isinstance(e, _ast53.Name)}
 
