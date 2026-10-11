@@ -1967,8 +1967,14 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
     # and systemd-run's unit both start a moment later — so a card polling in that gap read the
     # last run's ending as this one's. Remove it first: until the new log exists, the card reads
     # "not started yet". Unlinking a name in the panel's own data dir never touches another file.
+    #
+    # Not while a run is in progress, though: that log is the RUNNING update's, and this launch is
+    # about to be refused (its unit name is still held) — unlinking it hid the run's outcome from
+    # the card, and once the launch grace passed the status checks resumed fetching the ref the
+    # installer was still fetching.
     try:
-        os.unlink(_log_path)
+        if not _update_in_progress():
+            os.unlink(_log_path)
     except FileNotFoundError:
         pass   # first update on this install, or already cleared
     except OSError:
@@ -2080,7 +2086,16 @@ def list_panel_branches():
     branch = _tracked_branch()
     if not _is_git_checkout():
         return [branch], branch
-    _fetch_all_branches()   # widen a single-branch/shallow clone so ALL branches show up + refresh
+    # The fetch moves refs/remotes/origin/<tracked branch>, the ref a status check and the
+    # installer fetch too, and the page fires this beside its status check. Unserialised, two
+    # fetches of one ref collide on its lock and one fails: lose the status fetch and the card
+    # caches "Couldn't reach the update source" for five minutes; lose the installer's and the
+    # update aborts. So: never while an update runs (list the refs already here), otherwise under
+    # _update_lock, and a status cached from before the ref moved is recomputed next time.
+    if not _update_in_progress():
+        with _update_lock:
+            _fetch_all_branches()   # widen a single-branch/shallow clone so ALL branches show + refresh
+        _update_cache["ts"] = 0.0
     # The FULL refname, stripped here. `%(refname:short)` is the shortest UNAMBIGUOUS name, so the
     # moment a tag `origin/main` existed, main came back as `remotes/origin/main`, failed the prefix
     # test and vanished from the switcher.
@@ -2156,9 +2171,11 @@ def panel_switch_branch(branch):
     # newest verified commit, or a refusal saying why); any other branch is the explicit testing
     # escape hatch it always was, and the messages say it installs an unverified tip.
     target = ""
+    # Whatever the branch: a switch IS an update, and one launched over a running one writes the
+    # config and reaches the launcher before the launch is refused.
+    if _update_in_progress():
+        return False, "An update is being installed right now — switch once it has finished."
     if branch == _DEFAULT_BRANCH:
-        if _update_in_progress():
-            return False, "An update is being installed right now — switch once it has finished."
         with _update_lock:
             target, why = _verified_branch_target(branch)
         if not target:
