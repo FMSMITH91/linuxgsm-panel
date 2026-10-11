@@ -317,3 +317,18 @@ check("repair: with a staged add and a rename present, 'restore all' checks out 
       and _rp51[:1] == [["checkout", "HEAD", "--", "app.py", "old.py"]], repr((_rp51_all, _rp51)))
 check("repair: ...and a selection of only a NEW file says there is nothing to restore it to",
       _rp51_new[0] is False and "new" in _rp51_new[1] and len(_rp51) == 1, repr((_rp51_new, _rp51)))
+
+# ── A02 lead: a terminal keystroke payload that is not a string is ignored ──────────────────────
+from panel.ops import terminal_session as _tsess51  # noqa: E402
+
+_tw51 = []
+for _d51 in (123, ["x"], {"a": 1}, "ls\r"):
+    _s51 = NS(_closed=False, last_input=0.0, _chan=None, _fd=None, label="p51")
+    try:
+        _tsess51.Session.write(_s51, _d51)
+        _tw51.append(_s51.last_input > 0)
+    except Exception as _e51:  # noqa: BLE001 - the answer under test
+        _tw51.append(type(_e51).__name__)
+check("terminal: term_input data that is not a string is dropped, not an AttributeError in the "
+      "socket handler (a string still counts as input)",
+      _tw51 == [False, False, False, True], repr(_tw51))

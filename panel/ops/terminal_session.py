@@ -277,7 +277,9 @@ class Session:
     # ── input ─────────────────────────────────────────────────────────────────────────────────
     def write(self, data):
         """Send keystrokes. Never logged: people type passwords into terminals."""
-        if self._closed or not data:
+        # A str only: the socket payload is the client's, and `{"data": 123}` raised AttributeError
+        # on .encode inside the handler.
+        if self._closed or not data or not isinstance(data, str):
             return
         self.last_input = time.time()
         payload = data.encode("utf-8", errors="replace")
