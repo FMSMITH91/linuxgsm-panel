@@ -83,11 +83,23 @@ check("cflite: the continuous build on main has no concurrency group (a cancelle
 
 # ── E5: a scheduled CodeQL or security-code run never cancels the push run of the same ref ───────
 _conc30 = {f: (_block30(_wf29(f), "concurrency", 0) or {}).get("group", "")
-           for f in ("codeql.yml", "security-code.yml", "zizmor.yml")}
-check("CodeQL, security-code and zizmor: the concurrency group includes the event, so the Monday "
-      "schedule does not cancel an in-progress push run on main",
+           for f in ("codeql.yml", "security-code.yml", "zizmor.yml", "security.yml", "ci.yml")}
+check("CodeQL, security-code, zizmor, security (Gitleaks) and CI: the concurrency group includes "
+      "the event, so the Monday schedule or a manual run does not cancel an in-progress push run "
+      "on main",
       all("${{ github.event_name }}" in g and "${{ github.ref }}" in g for g in _conc30.values()),
       repr(_conc30))
+
+# ── review 1011b: Bandit and Semgrep read .github/scripts, and Semgrep's exit status is judged ──
+_sc30 = _wf29("security-code.yml")
+_bandit_flags30 = _re30.findall(r'^ +FLAGS="([^"]*)"', _sc30, _re30.M)
+_semgrep_ex30 = _re30.findall(r"--exclude (\S+)", _sc30)
+check("security-code: Bandit and Semgrep scan .github/scripts (those run in CI with tokens); Semgrep "
+      "leaves out only the workflows, and a non-zero Semgrep exit fails its step",
+      len(_bandit_flags30) == 1 and ".github" not in _bandit_flags30[0]
+      and ".github/workflows" in _semgrep_ex30 and ".github" not in _semgrep_ex30
+      and 'if [ "${rc:-0}" != "0" ]; then' in _sc30,
+      repr((_bandit_flags30, _semgrep_ex30)))
 
 # ── SEC1: the guard runs before the build, directly before fuzzing, and after it ────────────────
 _pr30 = _steps30(_job29(_wf29("cflite_pr.yml"), "code-change"))

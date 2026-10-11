@@ -216,10 +216,12 @@ jobs:
       # nothing to replace it. The script asks GitHub's compare API (moved_past).
       # A MANUAL run on main is the same case: its concurrency group is not the push run's either,
       # and it uploaded an older analysis over a push that landed while it ran, leaving that push
-      # "moved on" (skipped) for the alert gates, and so never offered as an update.
+      # "moved on" (skipped) for the alert gates, and so never offered as an update. So: every
+      # event but push and pull_request (the schedule, a manual run), on main. Written with `&&`
+      # only, as part50 requires of every step after the scope step.
       - name: Is the analysed commit still main's head? (scheduled and manual runs only)
         id: still_head
-        if: steps.scope.outputs.docs_only != 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+        if: steps.scope.outputs.docs_only != 'true' && github.event_name != 'push' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/code_scanning_analyses.py still-head --sha "${GITHUB_SHA}"

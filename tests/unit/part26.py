@@ -570,8 +570,8 @@ check("code-scanning gates: zizmor's scan job hands the head check to its upload
       and "id: still_head" in _wf14_code("zizmor.yml").split("\n  upload:\n")[0], "")
 # The guard's own `if:`: scheduled runs everywhere; in codeql.yml, which alone can be run by hand,
 # a manual run on main as well (it uploads over a newer push exactly as a schedule did).
-_sh_when26 = {"codeql.yml": r"\(github\.event_name == 'schedule' \|\| \(github\.event_name == "
-                            r"'workflow_dispatch' && github\.ref == 'refs/heads/main'\)\)",
+_sh_when26 = {"codeql.yml": r"github\.event_name != 'push' && github\.event_name != 'pull_request' "
+                            r"&& github\.ref == 'refs/heads/main'",
               "security-code.yml": r"github\.event_name == 'schedule'",
               "zizmor.yml": r"github\.event_name == 'schedule'"}
 _sh_seen26 = 0

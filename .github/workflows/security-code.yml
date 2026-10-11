@@ -396,6 +396,13 @@ jobs:
             echo "::error::Semgrep wrote no SARIF (exit ${rc:-0}) — the code was not scanned; see the summary."
             exit 1
           fi
+          # ...and its exit status is judged too: without --error, findings exit 0, so anything else
+          # is Semgrep reporting a failure (a rule pack it could not fetch, a fatal error) beside a
+          # SARIF that may hold only part of the scan.
+          if [ "${rc:-0}" != "0" ]; then
+            echo "::error::Semgrep exited ${rc} — the scan did not complete; see the summary."
+            exit 1
+          fi
           if [ "$(jq '[.runs[].invocations[]?.toolExecutionNotifications[]?] | length' semgrep.sarif)" != "0" ]; then
             echo "::error::Semgrep did not read everything — these were NOT fully scanned:"
             jq -r '.runs[].invocations[]?.toolExecutionNotifications[]? | "  \(.descriptor.id // "?"): \(.message.text | split("\n")[0])"' semgrep.sarif

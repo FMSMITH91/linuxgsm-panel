@@ -208,8 +208,22 @@ def _harness_instrumented29(path):
     return preload, "\n".join(body)
 
 
+def _module_file29(name):
+    """A loaded panel module's file, repo-relative: panel/x/y.py or panel/x/y/__init__.py."""
+    base = os.path.join(*name.split("."))
+    return base + ".py" if os.path.isfile(os.path.join(_ROOT29, base + ".py")) \
+        else os.path.join(base, "__init__.py")
+
+
+def _scope_globs29(wf):
+    """The single-quoted globs of a fuzz workflow's `scope=(` list."""
+    txt = open(os.path.join(_WF29, wf), encoding="utf-8").read()
+    at = txt.find("scope=(")
+    return _re29.findall(r"^\s+'([^']+)'\s*$", txt[at:txt.find("\n            )", at)], _re29.M)
+
+
 def _cf1_every_harness(tmp):
-    bad, read = {}, []
+    bad, read, fuzzed = {}, [], set()
     for p in sorted(_glob29.glob(os.path.join(_ROOT29, "tests", "fuzz", "fuzz_*.py"))):
         preload, code = _harness_instrumented29(p)
         name = os.path.basename(p)
@@ -224,6 +238,7 @@ def _cf1_every_harness(tmp):
             bad[name] = "probe failed: " + (r.stdout[-200:] + r.stderr[-400:])
             continue
         read.append(name)
+        fuzzed |= {_module_file29(m) for m in new if m.split(".")[0] == "panel"}
         foreign = sorted({m.split(".")[0] for m in new if _foreign_module29(m)})
         if foreign:
             bad[name] = "instruments %d modules outside panel/ and the stdlib, from %s" % (
@@ -232,6 +247,16 @@ def _cf1_every_harness(tmp):
           "standard library after its own pre-load (no target spends its fuzz time instrumenting "
           "eventlet and timing out)",
           not bad and len(read) >= 6, repr(bad or read))
+    # What they load is what they fuzz, so a pull request changing any of it must run the fuzzers:
+    # each scope list is checked against the files, not a list kept by hand. They listed the three
+    # target modules only, so a change to panel/core/validation.py — canonical_ip, which the
+    # fail2ban parser calls on every row — skipped both fuzz jobs.
+    _fn29 = __import__("fnmatch").fnmatchcase
+    unscoped = {wf: sorted(f for f in fuzzed if not any(_fn29(f, g) for g in _scope_globs29(wf)))
+                for wf in ("fuzz.yml", "cflite_pr.yml")}
+    check("fuzz workflows: a pull request changing any panel module the harnesses load (and so "
+          "fuzz) runs both fuzz jobs: every one is in fuzz.yml's and cflite_pr.yml's scope",
+          len(fuzzed) >= 10 and not any(unscoped.values()), repr(unscoped))
 
 
 # ── ClusterFuzzLite keeps everything as Actions artifacts, and nothing waits on a secret ──────────

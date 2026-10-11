@@ -6810,8 +6810,17 @@ check("i18n: es and fr translate the same set of keys",
 #
 # To satisfy this gate, either translate the string in BOTH languages, or — for a technical literal
 # that must stay verbatim (a hostname, a hex colour, a brand name) — mark it data-no-i18n.
+# tools/ on sys.path for this import ONLY, and the top-level name taken back out: left in place, it
+# sat at sys.path[0] for every later part, and any import of a top-level name matching a file in
+# tools/ got that file (part53 found it there, still, from here).
+_i18n_path6, _i18n_mods6 = list(sys.path), set(sys.modules)
 sys.path.insert(0, os.path.join(_root, "tools"))
-import i18n_scan as _i18n_scan  # noqa: E402
+try:
+    import i18n_scan as _i18n_scan  # noqa: E402
+finally:
+    sys.path[:] = _i18n_path6
+    for _i18n_m6 in set(sys.modules) - _i18n_mods6:
+        del sys.modules[_i18n_m6]
 # The scanner has its own globs, and proof B above was exactly those drifting while templates/
 # and static/js/ were untouched. Assert it actually read something before trusting its answer.
 _i18n_found, _ = _i18n_scan.scan_templates(os.path.join(_root, "templates"))
