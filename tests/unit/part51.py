@@ -436,3 +436,52 @@ check("bootstrap: a failed timezone, swap file or fail2ban step is named in a 'f
       and _bs51_jw[0] is False and "jail could not be written" in _bs51_jw[1]
       and not any(c[0] == "service-enable-now" and c[1] == ("fail2ban",) for c in _bs51_jw[3]),
       repr([r[1] for r in (_bs51_tz, _bs51_sw, _bs51_f2, _bs51_jw)]))
+
+# ── A03 lead: "tailscale0 is allowed" is not a way in when sshd listens only on the public address ──
+_TS51_HDR = "Status: active\n\nTo                         Action      From\n--                         ------      ----\n"
+
+
+def _tailnet51(listing, ports="port 22\n"):
+    """_tailnet_ssh_state on a host with Tailscale up, SSH off, tailscale0 allowed in UFW."""
+    def _rc(server, cmd, **_k):
+        if "status --json" in cmd:
+            return ('{"BackendState":"Running"}', "", 0)
+        if "debug prefs" in cmd:
+            return ('{"RunSSH": false}', "", 0)
+        if "/sys/class/net" in cmd:
+            return ("eth0\nlo\ntailscale0\n", "", 0)
+        return ("", "", 0)
+
+    def _rp(server, verb, args=(), **_k):
+        if verb == "ufw-status":
+            return (_TS51_HDR + "Anywhere on tailscale0     ALLOW IN    Anywhere\n", "", 0)
+        if verb == "sshd-effective-config":
+            return (ports, "", 0)
+        if verb == "listening-sockets":
+            return listing
+        return ("", "", 0)
+
+    with _patched():
+        _patch(_smc51, "run_command", _rc)
+        _patch(_smc51, "run_privileged", _rp)
+        return _smh51._tailnet_ssh_state(NS(id=9152, host="203.0.113.52", auth_method="key"))
+
+
+def _ss51(*addrs):
+    return ("State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n"
+            + "".join("LISTEN 0      128    %s 0.0.0.0:*\n" % a for a in addrs), "", 0)
+
+
+_tn51_public = _tailnet51(_ss51("203.0.113.52:22", "127.0.0.1:631"))
+_tn51_both = _tailnet51(_ss51("203.0.113.52:22", "127.0.0.1:22"))
+check("tailnet ssh state: sshd seen listening only on the public address is NOT a tailnet way in, "
+      "though tailscale0 is allowed",
+      _tn51_public == (True, False, False) and _tn51_both == (True, False, False),
+      repr((_tn51_public, _tn51_both)))
+_tn51_ok = [_tailnet51(_ss51(a)) for a in ("0.0.0.0:22", "[::]:22", "*:22", "100.101.102.103:22",
+                                           "[fd7a:115c:a1e0::5]:22")]
+_tn51_unread = [_tailnet51(("", "timed out", -1)), _tailnet51(_ss51("203.0.113.52:22"), ports=""),
+                _tailnet51(_ss51("203.0.113.52:2222"))]
+check("tailnet ssh state: ...while a wildcard or a Tailscale address still is, and an unread or "
+      "empty listing changes nothing (the firewall test decides, as before)",
+      all(t == (True, False, True) for t in _tn51_ok + _tn51_unread), repr((_tn51_ok, _tn51_unread)))

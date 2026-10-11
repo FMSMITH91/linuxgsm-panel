@@ -3655,9 +3655,50 @@ def _tailnet_ssh_state(server):
                 from panel.ops import system_ops as _so
                 rules = _tsiface_ufw_rules(out)
                 iface_allowed = any(_so.ufw_allows_iface_in(rules, i) for i in _tsiface_names(server))
+                # The firewall letting tailscale0 in is not sshd answering there: after the panel's
+                # own bind-address change (change_ssh_port's ListenAddress is all-or-nothing) sshd
+                # listens on the public address alone, and removing public SSH then left no way in.
+                if iface_allowed and _r11a_sshd_off_tailnet(server):
+                    iface_allowed = False
         except Exception:
             iface_allowed = False   # fail safe
     return running, ssh_enabled, iface_allowed
+
+
+# Tailscale's address ranges: IPv4 CGNAT, and its IPv6 ULA prefix.
+_r11a_tailnet_nets = (_ipaddress.ip_network("100.64.0.0/10"),
+                      _ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+
+
+def _r11a_sshd_off_tailnet(server):
+    """True when sshd is SEEN listening only on addresses tailnet traffic cannot reach.
+
+    Every listener on an sshd port (sshd -T's, as `ss -lnt` lists them) is a specific address that
+    is neither a wildcard nor a Tailscale address. Only positive evidence answers True: an unread
+    port list or listing, no listener seen, or an address it cannot parse is False, which leaves
+    the firewall test above as the whole answer — what it was before this check existed — rather
+    than refusing on a helper too old to answer.
+    """
+    try:
+        ports = {int(p) for p in _sshd_current_ports(server)}
+        if not ports:
+            return False
+        out, _err, rc = _core.run_privileged(server, "listening-sockets", [], timeout=15,
+                                             merge_stderr=False)
+    except Exception:
+        _core._log.debug("sshd listener read failed", exc_info=True)
+        return False
+    addrs = [a for a, p, _f in _ss_listeners(out) if p in ports] if rc == 0 else []
+    if not addrs:
+        return False
+    for a in addrs:
+        a = a.strip("[]").split("%", 1)[0]
+        if a in ("*", "0.0.0.0", "::"):
+            return False
+        ip = ip_address_or_none(a)
+        if ip is None or any(ip.version == n.version and ip in n for n in _r11a_tailnet_nets):
+            return False
+    return True
 
 
 def remote_set_public_ssh(server, mode):
