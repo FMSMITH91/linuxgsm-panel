@@ -2684,6 +2684,11 @@ def _explicit_socket_origins(explicit):
     """
     if not explicit:
         return []
+    # A hand-edited config can hold anything; list() of a number raised TypeError inside engineio's
+    # CORS callback, on every handshake — no console and no terminal. Not a list: none listed, so
+    # the per-request check below decides (which is not "*" either).
+    if not isinstance(explicit, (str, list, tuple)):
+        return []
     listed = [explicit] if isinstance(explicit, str) else list(explicit)
     exact = [o for o in listed if str(o).strip() != "*"]
     if len(exact) != len(listed) and not _socket_wildcard_warned:

@@ -7,9 +7,10 @@ HOW IT RUNS. Every outside call is a stand-in (patched with part20's _patch / _p
 the end of each block); nothing touches the network, sudo, a real host or the checkout's data/.
 """
 import os
+import tempfile as _tf51
 import types as _types51
 
-from unit.part01 import check
+from unit.part01 import SO, check
 from unit.part05 import _root
 from unit.part20 import _patch, _patched
 
@@ -130,3 +131,92 @@ with _patched():
         _aux51 = _e51
 check("aux ports: the post-install move stays best-effort -- an unreadable sibling is skipped, "
       "not raised", _aux51 == {}, repr(_aux51))
+
+# ── A01 lead: a hand-edited socketio_cors_origins that is not a list or a string ────────────────
+_so51 = []
+for _v51 in (5, 2.5, True, {"a": 1}):
+    try:
+        _so51.append(_app51._explicit_socket_origins(_v51))
+    except Exception as _e51:  # noqa: BLE001 - the answer under test
+        _so51.append(_e51)
+check("socket origins: a number (or any non-list) in socketio_cors_origins lists no origin instead "
+      "of raising inside every handshake; a list and a string still work",
+      _so51 == [[], [], [], []]
+      and _app51._explicit_socket_origins(["https://a.example", "*"]) == ["https://a.example"]
+      and _app51._explicit_socket_origins("https://a.example") == ["https://a.example"],
+      repr(_so51))
+
+# ── A02: the branch list's fetch is serialised with the status fetch and the installer ──────────
+_bl51 = {"fetched": [], "updating": False}
+
+
+def _fetch_rec51():
+    _bl51["fetched"].append(SO._update_lock.locked())
+
+
+with _patched():
+    _patch(SO, "_is_git_checkout", lambda: True)
+    _patch(SO, "_tracked_branch", lambda: "main")
+    _patch(SO, "_fetch_all_branches", _fetch_rec51)
+    _patch(SO, "_update_in_progress", lambda: _bl51["updating"])
+    _patch(SO, "_git", lambda args, timeout=45: ("refs/remotes/origin/main\nrefs/remotes/origin/dev\n",
+                                                 "", 0))
+    _bl51_ts0 = SO._update_cache["ts"]
+    SO._update_cache["ts"] = 12345.0
+    try:
+        _bl51_idle = SO.list_panel_branches()
+        _bl51_ts = SO._update_cache["ts"]
+        _bl51["updating"] = True
+        _bl51_busy = SO.list_panel_branches()
+    finally:
+        SO._update_cache["ts"] = _bl51_ts0
+check("branch list: its fetch runs under _update_lock (the status check's single-flight lock), and "
+      "a status cached before the ref moved is recomputed next time",
+      _bl51["fetched"][:1] == [True] and _bl51_ts == 0.0 and _bl51_idle == (["main", "dev"], "main"),
+      repr((_bl51, _bl51_ts, _bl51_idle)))
+check("branch list: ...and while an update runs it fetches nothing, listing the refs already here",
+      len(_bl51["fetched"]) == 1 and _bl51_busy == (["main", "dev"], "main"),
+      repr((_bl51, _bl51_busy)))
+
+# ── A02: no branch switch is launched over a running update, and its log is never removed ───────
+_sw51 = {"writes": [], "launch": []}
+with _patched():
+    from panel.core import config as _cfg51
+    _patch(SO, "_is_git_checkout", lambda: True)
+    _patch(SO, "_update_in_progress", lambda: True)
+    _patch(SO, "_git", lambda args, timeout=45: ("0123abc\trefs/heads/dev\n", "", 0))
+    _patch(SO, "_launch_installer", lambda **k: (_sw51["launch"].append(k), (False, "refused"))[1])
+    _patch(_cfg51, "load_config", lambda: {})
+    _patch(_cfg51, "update_config", lambda fn: _sw51["writes"].append(fn))
+    _sw51_dev = SO.panel_switch_branch("dev")
+check("branch switch: to a branch other than main is refused too while an update runs, before the "
+      "config is written or the launcher reached",
+      _sw51_dev[0] is False and "being installed right now" in _sw51_dev[1]
+      and _sw51["writes"] == [] and _sw51["launch"] == [], repr((_sw51_dev, _sw51)))
+
+_li51_dir = _tf51.mkdtemp(prefix="lgsm-p51-launch-")
+os.makedirs(os.path.join(_li51_dir, "data"))
+with open(os.path.join(_li51_dir, "install.sh"), "w", encoding="utf-8") as _fh51:
+    _fh51.write("#!/bin/bash\n")
+_li51_log = os.path.join(_li51_dir, "data", "self-update.log")
+_li51_seen = []
+
+
+def _li51_run(*_a, **_k):
+    _li51_seen.append(os.path.exists(_li51_log))
+    return NS(returncode=1, stderr="Unit panel-selfupdate.service already exists.", stdout="")
+
+
+with _patched():
+    _patch(SO, "PANEL_DIR", _li51_dir)
+    _patch(SO, "_is_system_service", lambda: False)
+    _patch(SO, "_helper_present", lambda: False)
+    _patch(SO, "_update_in_progress", lambda: True)
+    _patch(SO, "subprocess", NS(run=_li51_run, DEVNULL=-3, PIPE=-1))
+    with open(_li51_log, "w", encoding="utf-8") as _fh51:
+        _fh51.write("=== panel self-update ===\n[ OK ] step 3\n")
+    _li51 = SO._launch_installer(target_ref="", branch="dev")
+check("self-update launcher: while a run is in progress it leaves that run's log in place (the "
+      "launch it then makes is refused)",
+      _li51[0] is False and _li51_seen == [True] and os.path.exists(_li51_log),
+      repr((_li51, _li51_seen)))
