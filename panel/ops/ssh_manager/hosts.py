@@ -3692,6 +3692,11 @@ def _r11a_sshd_off_tailnet(server):
         ports = {int(p) for p in _sshd_current_ports(server)}
         if not ports:
             return False
+        # With the port the panel connects on, as _bootstrap_ssh_ports does: under socket
+        # activation `sshd -T` prints sshd_config's Port while ssh.socket listens where it was
+        # edited to, so a socket moved to <public-ip>:2222 showed no listener on 22 and answered
+        # False. Only once sshd -T was read: an unread one still leaves the firewall test to decide.
+        ports.add(int(getattr(server, "port", 22) or 22))
         out, _err, rc = _core.run_privileged(server, "listening-sockets", [], timeout=15,
                                              merge_stderr=False)
     except Exception:

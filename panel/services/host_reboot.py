@@ -1595,6 +1595,10 @@ class _Job:
         else:
             self._stop_one(e)
         self._update_row(e, stop=e["stop"])
+        # As _stop_phase does for the plan's first entries: a server joined by _rescan is stopped
+        # here, and its deferred stop is then done.
+        if e["stop"] == "stopped" and e.get("stop_pending"):
+            self._clear_stop_pending(e)
 
     def _join_plan(self, gs, probe):
         """A server found running that the plan does not hold: in the plan now, or None (not ours)."""

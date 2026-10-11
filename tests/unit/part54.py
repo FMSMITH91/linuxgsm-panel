@@ -315,3 +315,130 @@ check("restore vs update: a self-update asked for after a restore was DISPATCHED
       and _rx54["run"] == [], repr((_rx54_restore, _rx54_swap, _rx54["run"])))
 check("restore vs update: ...but once the swap has removed its staging directory the update goes "
       "ahead (no fixed wait after every restore)", _rx54_gone[0] is True, repr(_rx54_gone))
+
+# ── A01: legacy_os is measured against the catalogue's most common release, not its newest ─────
+def _games54(rows):
+    """{shortname: legacy_os} of load_game_list() over serverlist `rows`."""
+    saved = dict(_app54._GAME_LIST_CACHE)
+    try:
+        _app54._GAME_LIST_CACHE.clear()
+        _app54._GAME_LIST_CACHE["games"] = None
+        with _patched():
+            _patch(_app54, "lgsm_data", NS(serverlist=lambda: rows))
+            return {g["shortname"]: g["legacy_os"] for g in _app54.load_game_list()}
+    finally:
+        _app54._GAME_LIST_CACHE.clear()
+        _app54._GAME_LIST_CACHE.update(saved)
+
+
+_rows54 = ([{"shortname": "g%d" % i, "gamename": "Game %d" % i, "os": "ubuntu-24.04"} for i in range(130)]
+           + [{"shortname": "n%d" % i, "gamename": "New %d" % i, "os": "ubuntu-26.04"} for i in range(5)]
+           + [{"shortname": "bf1942", "gamename": "Battlefield 1942", "os": "ubuntu-22.04"}])
+_lg54 = _games54(_rows54)
+_capped54 = sorted(sn for sn, cap in _lg54.items()
+                   if cap and _app54.game_os_unsupported(cap, "ubuntu-26.04"))
+check("game list: five games upstream moves to 26.04 first do not mark the other 130 as capped at "
+      "24.04 -- on a 26.04 host only bf1942 (22.04) is refused",
+      _capped54 == ["bf1942"] and _lg54["g0"] == "" and _lg54["n0"] == "" and _lg54["bf1942"] == "ubuntu-22.04",
+      repr((_capped54[:5], len(_capped54))))
+
+# ── A01 lead: a blank socketio_cors_origins entry is no origin, not a refusal of every handshake ─
+_sock54 = [_app54._explicit_socket_origins(v) for v in ([""], ["", "  "], ["https://p.example", ""])]
+check("socket origins: a hand-edited blank entry is dropped, so a list of blanks falls through to the "
+      "per-request check instead of refusing every console and terminal handshake",
+      _sock54 == [[], [], ["https://p.example"]], repr(_sock54))
+
+# ── A03 lead: an sshd moved by ssh.socket to the panel's port is read on that port ─────────────
+from panel.ops.ssh_manager import _core as _smc54  # noqa: E402
+from panel.ops.ssh_manager import hosts as _smh54  # noqa: E402
+
+
+def _off54(port, listen):
+    """_r11a_sshd_off_tailnet on a host whose `sshd -T` says 22 and which listens on `listen`."""
+    def _rp(server, verb, args=(), **_k):
+        if verb == "sshd-effective-config":
+            return ("port 22\n", "", 0)
+        if verb == "listening-sockets":
+            return ("State Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n"
+                    "LISTEN 0 128 %s 0.0.0.0:*\n" % listen, "", 0)
+        return ("", "", 0)
+    with _patched():
+        _patch(_smc54, "run_privileged", _rp)
+        return _smh54._r11a_sshd_off_tailnet(NS(id=9154, host=_DEST54, port=port))
+
+
+_off54_r = (_off54(2222, _DEST54 + ":2222"), _off54(2222, "0.0.0.0:2222"), _off54(22, _DEST54 + ":2222"))
+check("tailnet ssh state: ssh.socket listening on <public-ip>:2222 (the port the panel connects on) "
+      "while sshd -T still says 22 is seen as off the tailnet; a wildcard there is not, and a port "
+      "nobody connects on still says nothing",
+      _off54_r == (True, False, False), repr(_off54_r))
+
+# ── A03 lead: only fuser's "nothing holds it" is a free dpkg lock ──────────────────────────────
+_dp54 = {"rcs": [], "calls": 0}
+
+
+def _dp54_rp(server, verb, args=(), **_k):
+    _dp54["calls"] += 1
+    return ("", "", _dp54["rcs"].pop(0) if _dp54["rcs"] else -1)
+
+
+_dp54_r = []
+for _rcs54 in ([-1, 0, 1], [-1, -1, -1, 1], [127, 127, 127, 1]):
+    _dp54.update(rcs=list(_rcs54), calls=0)
+    with _patched():
+        _patch(_smc54, "run_privileged", _dp54_rp)
+        _patch(_smc54, "time", NS(time=lambda: 0.0, sleep=lambda s: None))
+        _dp54_r.append((_smc54._wait_for_dpkg_lock(NS(id=9154), timeout=60), _dp54["calls"]))
+check("dpkg lock: a probe that did not answer (-1) is not read as 'free' -- the wait goes on to "
+      "fuser's own exit 1 -- and three unanswered probes in a row give up rather than wait it out",
+      _dp54_r == [(True, 3), (False, 3), (False, 3)], repr(_dp54_r))
+
+# ── A05 lead: "the servers it stopped" counts only the ones it stopped ─────────────────────────
+from panel.services import reboot_summary as _rs54  # noqa: E402
+
+_bt54_txt = [_rs54._bare_rebooted_text(NS(id=9154, display_name="p54-host"),
+                                       {"servers": s, "sent": None}, None)
+             for s in ([{"name": "a", "stop": "stopped"}, {"name": "b", "stop": "still_running"}],
+                       [{"name": "a", "stop": "stopped"}, {"name": "b", "stop": "stopped"}])]
+check("reboot: a bare job one of whose two servers LinuxGSM refused to stop does not call both "
+      "'the 2 game servers it stopped' (all-stopped still does)",
+      "it stopped 1 of them" in _bt54_txt[0] and "2 game servers it stopped" not in _bt54_txt[0]
+      and "took over the 2 game servers it stopped" in _bt54_txt[1], repr(_bt54_txt))
+
+# ── A05 lead: a server joined by the rescan has its deferred stop cleared once stopped ─────────
+from panel.services import host_reboot as _hr54  # noqa: E402
+
+_rs54_cleared = []
+_rs54_self = NS(_check_cancel=lambda: None, _past_deadline=lambda: False,
+                _stop_one=lambda e: e.update(stop="stopped"), _update_row=lambda e, **k: None,
+                _clear_stop_pending=lambda e: _rs54_cleared.append(e["id"]))
+_hr54._Job._restop(_rs54_self, {"id": 54, "stop": None, "stop_pending": True})
+_hr54._Job._restop(_rs54_self, {"id": 55, "stop": None, "stop_pending": False})
+check("reboot: a stop_pending server the rescan joined and stopped has the flag cleared, as the "
+      "stop phase does for the plan's own (one without the flag is left alone)",
+      _rs54_cleared == [54], repr(_rs54_cleared))
+
+# ── A02 lead: a COPIED file is a new file to repair, not a reason to check out its source ──────
+_rp54 = []
+
+
+def _rp54_git(args, timeout=45):
+    _rp54.append(list(args))
+    if args[:2] == ["diff", "--name-status"]:
+        return ("C100\tpanel/a.py\tpanel/a_copy.py\n", "", 0)
+    return ("abc1234\n", "", 0)
+
+
+with _patched():
+    _patch(SO, "_is_git_checkout", lambda: True)
+    _patch(SO, "_update_in_progress", lambda: False)
+    _patch(SO, "_git", _rp54_git)
+    SO._integrity_cache["data"] = None
+    try:
+        _rp54_r = SO.panel_repair()
+    finally:
+        SO._integrity_cache["data"] = None
+check("repair: 'restore all' with only a copied file present says it is new (nothing to restore it "
+      "to) and checks nothing out -- not 'Restored 1 file(s)' for the untouched source",
+      _rp54_r[0] is False and "new" in _rp54_r[1] and not any(c[:1] == ["checkout"] for c in _rp54),
+      repr((_rp54_r, _rp54)))

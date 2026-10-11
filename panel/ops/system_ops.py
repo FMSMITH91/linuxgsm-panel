@@ -1965,6 +1965,12 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
     # update and went ahead beside it. Announce-then-check on both sides means one always sees the
     # other. A launch that does not happen takes its record back (_r12a_unmark).
     was_running = _update_in_progress()
+    # Write the wrapper + its log inside the panel's own data dir (owned by the service user,
+    # not world-writable) rather than /tmp. This script is later executed as root via
+    # `sudo systemd-run`, so a predictable /tmp path would let a local user pre-plant a
+    # symlink/file and get root code execution.
+    _upd_dir = os.path.join(PANEL_DIR, "data")
+    os.makedirs(_upd_dir, exist_ok=True)   # before the record: the one step below that can raise
     saved = dict(_update_launched)
     _mark_update_launched()
     from panel.ops import backup as _bk
@@ -1972,12 +1978,6 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         _r12a_unmark(saved)
         return False, ("A backup restore is in progress — update once it has finished and the "
                        "panel has restarted.")
-    # Write the wrapper + its log inside the panel's own data dir (owned by the service user,
-    # not world-writable) rather than /tmp. This script is later executed as root via
-    # `sudo systemd-run`, so a predictable /tmp path would let a local user pre-plant a
-    # symlink/file and get root code execution.
-    _upd_dir = os.path.join(PANEL_DIR, "data")
-    os.makedirs(_upd_dir, exist_ok=True)
     _log_path = _update_log_path()
     # The update card finishes on the first "=== installer exit N ===" it reads while the panel has
     # not restarted (see _update_log_outcome). The PREVIOUS run's log ends in one, and it is still
@@ -2651,9 +2651,12 @@ def _compute_panel_integrity():
         # entry. A rename or copy lists its source first (in HEAD) and its new name last (not in
         # HEAD); an added file has no HEAD copy at all. Naming either new path to checkout fails
         # the WHOLE command with "pathspec did not match", so "restore all" restored nothing.
-        if status in ("renamed", "copied") and len(parts) > 2:
+        # A COPY's source is not what it replaced: the source is still there (usually untouched),
+        # and the copy is a new file HEAD has no version of, as an added one is. Checking out the
+        # source answered "Restored 1 file(s)" while integrity went on listing the copy.
+        if status == "renamed" and len(parts) > 2:
             entry["head_path"] = parts[1]
-        elif status == "added":
+        elif status in ("added", "copied"):
             entry["head_path"] = None
         modified.append(entry)
     modified.sort(key=lambda x: x["path"])

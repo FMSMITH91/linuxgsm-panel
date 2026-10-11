@@ -820,12 +820,23 @@ def _wait_for_dpkg_lock(server, timeout=180):
     Was `while fuser /var/lib/dpkg/lock-frontend; do sleep 1; done` — a loop running as root, whose
     only exit was the outer command timeout. The Python version has an explicit deadline, so a host
     whose lock never clears stops waiting instead of holding the connection open to the last second.
+
+    Only fuser's own "nothing holds it" (exit 1) is a free lock. Any other non-zero (-1 for a probe
+    that timed out or a host that did not answer, 2 or 127 for a helper or host that cannot run it)
+    is no answer, and read as "free" step 1 went on while cloud-init still held apt. Three of
+    those in a row and the wait gives up (False) rather than spending the whole timeout on a host
+    that can never answer; apt itself then reports a lock it meets.
     """
     deadline = time.time() + timeout
+    unread = 0
     while time.time() < deadline:
         _, _, rc = run_privileged(server, "dpkg-lock-held", [], timeout=10, merge_stderr=False)
-        if rc != 0:          # fuser exits non-zero when nothing holds the file
+        if rc == 1:          # fuser: no process holds the file
             return True
+        unread = 0 if rc == 0 else unread + 1
+        if unread >= 3:
+            _log.warning("dpkg lock: could not be checked (rc=%s); going on without it", rc)
+            return False
         time.sleep(1)
     return False
 
