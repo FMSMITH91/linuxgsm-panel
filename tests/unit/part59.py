@@ -609,3 +609,10 @@ else:
           _ph59[:1] == ["FlowAssertion"], repr(_ph59))
     check("js coverage: ...while that reset failing on a passing flow is still reported (control)",
           _ph59[1:] == ["CDPError"], repr(_ph59))
+
+# ── /users at 375px: the header's buttons wrap instead of widening the page ─────────────────────
+_MU59 = _read59(_TPL59, "manage_users.html")
+check("users page: the header row wraps (measured at 375px it pushed Add User to 417px, so the whole "
+      "page laid out 423px wide and scrolled sideways)",
+      '<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">' in
+      _MU59[:_MU59.index("User Management</h1>")], _MU59[:300])
