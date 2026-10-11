@@ -54,6 +54,8 @@ _JS53 = os.path.join(_root, "static", "js")
 _TPL53 = os.path.join(_root, "templates")
 _CFG53_SNAPSHOT = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
 _mine53 = {"remotes": [], "users": [], "groups": [], "commands": []}
+# The stored hash of the users this part makes: no password hashes to it, so none can log in.
+_NO_LOGIN53 = "x"
 
 
 def _read53(*parts):
@@ -128,9 +130,10 @@ try:
               for _p in (1234567890123, ["a"] * 12, {"k": "v" * 12})]
     check("backup settings: a passphrase that is not text is a 400, never a 500, and nothing is set",
           _bad53 == [400] * 3 and _pp53 == [], repr((_bad53, _pp53)))
-    _r53 = _A53.post("/api/panel/backup/settings", json={"passphrase": "  twelve chars ok  "})
+    _typed53 = "  twelve chars ok  "
+    _r53 = _A53.post("/api/panel/backup/settings", json={"passphrase": _typed53})
     check("backup settings: ...and a text passphrase is set exactly as typed, spaces kept (control)",
-          _r53.status_code == 200 and _pp53 == ["  twelve chars ok  "], repr((_r53.status_code, _pp53)))
+          _r53.status_code == 200 and _pp53 == [_typed53], repr((_r53.status_code, _pp53)))
 
     # ── repair: a malformed `paths` is not "restore everything" ──────────────────────────────────
     _rep53 = []
@@ -260,7 +263,7 @@ try:
         _g53.servers.append(db.session.get(RemoteServer, P9_LOCAL))
         db.session.add(_g53)
         db.session.flush()
-        _u53 = User(username="p53_hostadmin", password_hash="x", display_name="Host admin",
+        _u53 = User(username="p53_hostadmin", password_hash=_NO_LOGIN53, display_name="Host admin",
                     is_superadmin=False, is_active=True)
         _u53.groups.append(_g53)
         db.session.add(_u53)
@@ -297,7 +300,7 @@ try:
         _g53i.servers.append(db.session.get(RemoteServer, P9_HOST))
         db.session.add(_g53i)
         db.session.flush()
-        _u53i = User(username="p53_installer", password_hash="x", display_name="Installer",
+        _u53i = User(username="p53_installer", password_hash=_NO_LOGIN53, display_name="Installer",
                      is_superadmin=False, is_active=True)
         _u53i.groups.append(_g53i)
         db.session.add(_u53i)

@@ -223,27 +223,38 @@ def _sample_line(name, rows, keep_days, res):
         res.find("warn", "Database", "%s is older than its retention: the prune has not run" % name)
 
 
-def _audit_line(rows, ip_rows, conf, res):
-    if isinstance(rows, str):
-        res.add("- **audit_log**: could not count (%s)" % rows.split(":", 1)[-1])
-        return
+def _audit_retention_text(conf, age):
+    """The audit line's "retention:" part: the setting, and whether the oldest row honours it."""
     from panel.core import runtime_stats as rs
-    count, age = _count_age(rows)
-    keep, ip_days = conf
+    keep = conf[0]
     if isinstance(conf, _R11bConfUnreadable):
-        ret = "not known (config.json unreadable)"
-    elif keep is None:
-        ret = "audit_log_retention_days is not a number, so nothing is pruned"
-    elif keep <= 0:
-        ret = "keep forever (audit_log_retention_days unset)"
-    else:
-        # Applied once at start: allowed to be as old as the retention plus this process's uptime.
-        allowed = keep + (time.time() - rs.started()) / _DAY + 1
-        ret = "%d d %s" % (keep, "✓" if age is None or age <= allowed else "✗ (not pruned)")
+        return "not known (config.json unreadable)"
+    if keep is None:
+        return "audit_log_retention_days is not a number, so nothing is pruned"
+    if keep <= 0:
+        return "keep forever (audit_log_retention_days unset)"
+    # Applied once at start: allowed to be as old as the retention plus this process's uptime.
+    allowed = keep + (time.time() - rs.started()) / _DAY + 1
+    return "%d d %s" % (keep, "✓" if age is None or age <= allowed else "✗ (not pruned)")
+
+
+def _audit_ips_text(conf, ip_rows):
+    """The audit line's IP-reduction part, with the count of older rows still holding an IP."""
+    ip_days = conf[1]
     ips = ("IP reduction not known" if isinstance(conf, _R11bConfUnreadable)
            else "IP reduction off" if not ip_days else "IPs reduced after %d d" % ip_days)
     if isinstance(ip_rows, list):
         ips += " (%d older rows not reduced)" % int(ip_rows[0][0] or 0)
+    return ips
+
+
+def _audit_line(rows, ip_rows, conf, res):
+    if isinstance(rows, str):
+        res.add("- **audit_log**: could not count (%s)" % rows.split(":", 1)[-1])
+        return
+    count, age = _count_age(rows)
+    ret = _audit_retention_text(conf, age)
+    ips = _audit_ips_text(conf, ip_rows)
     res.add("- **audit_log** %s rows · oldest %s · retention: %s · %s" % (
         format(count, ","), "n/a" if age is None else "%.0f d" % age, ret, ips))
 

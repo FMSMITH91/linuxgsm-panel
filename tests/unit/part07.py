@@ -135,14 +135,19 @@ def _gh_is_str_format(n):
             and n.func.attr == "format" and isinstance(n.func.value, _gh_ast.Constant))
 
 
+def _gh_is_user_flag(e):
+    """Is `e` sudo's user option as a literal: `--user`, `-u`, or a short-flag cluster ending in u?"""
+    return (isinstance(e, _gh_ast.Constant) and isinstance(e.value, str)
+            and (e.value == "--user" or re.fullmatch(r"-[A-Za-z]*u", e.value)) is not None)
+
+
 def _gh_argv_sites(n):
     """(line, value, "argv") for each value list/tuple literal `n` puts after "sudo" ... "-u"."""
     out, elts, seen_sudo = [], n.elts, False
     for j, e in enumerate(elts):
         if isinstance(e, _gh_ast.Constant) and e.value == "sudo":
             seen_sudo = True
-        elif (seen_sudo and isinstance(e, _gh_ast.Constant) and isinstance(e.value, str)
-              and (e.value == "--user" or re.fullmatch(r"-[A-Za-z]*u", e.value))
+        elif (seen_sudo and _gh_is_user_flag(e)
               and j + 1 < len(elts) and not isinstance(elts[j + 1], _gh_ast.Constant)):
             out.append((n.lineno, elts[j + 1], "argv"))
     return out

@@ -1491,17 +1491,21 @@ class _Job:
             empty = (self._still_empty(loaded.get(e["id"]), loaded)
                      if self.job["mode"] == "when_empty" else True)
             if empty is not True:
-                # Unread (None) still stops the reboot -- the server may hold a player -- but it is
-                # not a player joining: _bounced does not count it as one (see _waiting_again).
-                self.bounce = True
-                self.bounce_joined = self.bounce_joined or empty is False
-                if empty is None:
-                    self.bounce_unread = self.bounce_unread or e.get("name") or ""
+                self._bounce_for(e, empty)
                 return
             self._stop_one(e)
             done = sum(1 for x in self.entries if x.get("stop"))
             with _hr_lock:
                 self.job["done"], self.job["total"] = done, len(self.entries)
+
+    def _bounce_for(self, e, empty):
+        """Stop the stops: server `e` read players (`empty` False) or could not be read (None)."""
+        # Unread (None) still stops the reboot -- the server may hold a player -- but it is
+        # not a player joining: _bounced does not count it as one (see _waiting_again).
+        self.bounce = True
+        self.bounce_joined = self.bounce_joined or empty is False
+        if empty is None:
+            self.bounce_unread = self.bounce_unread or e.get("name") or ""
 
     def _still_empty(self, gs, loaded=None):
         """True when the server reads 0 players, False when it reads more, None when unread.

@@ -166,6 +166,11 @@ def _secrets52():
           merged.get("discordwebhook") == "https://real" and merged.get("maxplayers") == "12"
           and rc.get("raw") == 'discordwebhook="https://old"\nport="27015"\n' and not rc.get("error"),
           repr((merged, rc.get("raw"), rc.get("error"))))
+    _secrets52_writes()
+
+
+def _secrets52_writes():
+    """lgsm_write_config against the secrets files _secrets52 wrote, then with none at all."""
     written = []
     _p9_patch(_files52, "_write_file_as_user",
               lambda s, u, p, b: (written.append((p, b.decode())), (True, ""))[1])

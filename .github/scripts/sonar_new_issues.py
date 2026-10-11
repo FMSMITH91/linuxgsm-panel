@@ -267,7 +267,7 @@ def self_test():
     cases["a 502 and a bad body on the issue read are retried, then read"] = (
         _retrying(_flaky, time.time() + 60, sleep=lambda s: None) == {"issues": []})
     cases["an issue read that never answers gives up at the deadline, not with a crash"] = (
-        _retrying(lambda: _get_never(), time.time() - 1, sleep=lambda s: None) is None)
+        _retrying(_get_never, time.time() - 1, sleep=lambda s: None) is None)
     bad = [name for name, ok in cases.items() if not ok]
     for name in bad:
         print("SELF-TEST FAIL " + name)

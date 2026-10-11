@@ -354,7 +354,7 @@ def _publish_backup_status(app, server_id, born, status):
 
 
 # What the per-server schedule's field parser answers for a value it cannot read (see _field).
-_r11c_BAD_FIELD = object()
+_BAD_FIELD = object()
 
 
 def register(app):
@@ -640,13 +640,13 @@ def _register_game_backup_settings(app):
                 # Refused, not None: None CLEARS the override, so "7 days" mistyped as "7d" (or a
                 # number the client sent as anything else) silently reset the server to the
                 # global schedule.
-                return _r11c_BAD_FIELD
+                return _BAD_FIELD
         # Absent means "not this one", which is a different request from "clear it". Both pages
         # posted both fields on a change to either, and a select that had no option for the stored
         # value turned an interval change into a silent reset of retention.
         interval = _field(data["interval"]) if "interval" in data else bk.UNCHANGED
         keep = _field(data["keep"]) if "keep" in data else bk.UNCHANGED
-        if interval is _r11c_BAD_FIELD or keep is _r11c_BAD_FIELD:
+        if interval is _BAD_FIELD or keep is _BAD_FIELD:
             return jsonify({"success": False,
                             "message": "Use a whole number, or leave it empty for the default."}), 400
         sched = bk.set_game_schedule(server_id, interval, keep)
