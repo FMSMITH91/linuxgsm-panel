@@ -1831,6 +1831,17 @@
       "POST"
     ]
   },
+  "POST /api/server/<int:server_id>/create-path": {
+    "endpoint": "api_server_create_path",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_create_path"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/server/<int:server_id>/cron/delete": {
     "endpoint": "api_server_cron_delete",
     "guards": [

@@ -1362,22 +1362,31 @@ _RENAME_GONE_MSG = "That file or folder is no longer there. Reload the file brow
 
 
 def rename_name_problem(name):
-    """Why `name` cannot be the new name of a file or folder, or None when it can.
+    """Why `name` cannot be the new name of a file or folder, or None when it can: name_problem's
+    rules, with an empty name asked for as a NEW one."""
+    if not isinstance(name, str) or not name:
+        return "Enter a new name."
+    return name_problem(name)
+
+
+def name_problem(name):
+    """Why `name` cannot be the name of a file or folder, or None when it can.
 
     One path component of a Linux filename: not empty, not '.' or '..', no '/', valid UTF-8, at
     most RENAME_NAME_MAX bytes, and nothing that makes the name read as something else: no control
     character (Cc: NUL, newline, DEL, U+0085...), no line or paragraph separator (U+2028, U+2029),
     no text-direction control, and no whitespace at either end. upload_file's rules ('', '.', '..',
     the '/' basename() removes and the NUL it strips) are the subset of these an upload could meet;
-    a rename is TYPED, so it gets a reason for each instead of having its name quietly changed into
-    one that passes.
+    a rename's new name and a created file's or folder's name are TYPED, so they get a reason for
+    each instead of having the name quietly changed into one that passes. Shared by rename_path and
+    create_path, so its wording names neither.
     """
     if not isinstance(name, str) or not name:
-        return "Enter a new name."
+        return "Enter a name."
     if name in (".", ".."):
         return "'.' and '..' are not names a file or folder can have."
     if "/" in name:
-        return "A name can't contain a slash (/) — renaming never moves anything to another folder."
+        return "A name can't contain a slash (/) — it names one thing in this folder, never a path."
     return _rename_char_problem(name) or _rename_edge_problem(name)
 
 
@@ -1395,7 +1404,7 @@ def _rename_edge_problem(name):
 
 
 def _rename_char_problem(name):
-    """rename_name_problem's character and length rules, for a name that is one component."""
+    """name_problem's character and length rules, for a name that is one component."""
     kinds = {_ud.category(c) for c in name}
     if "Cc" in kinds:
         return "A name can't contain control characters."
@@ -1566,6 +1575,132 @@ def _rename_outcome(out, e, rc):
     _core._log.warning("rename_path: the host did not confirm the rename (rc=%s): %s",
                        rc, (e or "")[:200])
     return False, RENAME_UNCONFIRMED
+
+
+# ── Creating an empty file or folder ───────────────────────────────────────────────────────────
+# create_path's message when the name is already taken, before the create or by something that
+# appeared between the check and it. A sentinel, as RENAME_EXISTS is, so the route answers a
+# machine-readable conflict.
+CREATE_EXISTS = "__CREATE_EXISTS__"
+CREATE_KINDS = ("file", "folder")
+# The fixed text for a create the host never confirmed — said the same way whichever transport
+# failed, and without claiming that nothing was made (see RENAME_UNCONFIRMED).
+CREATE_UNCONFIRMED = ("The host didn't confirm it was created. Reload the file browser to see "
+                      "whether it was before trying again.")
+CREATE_REFUSED = "Refusing to create anything in this folder."
+CREATE_RESERVED = "That name is reserved for LinuxGSM or the game's account — choose another."
+CREATE_CONSOLE = ("The live console uses this path — creating something there could stop the "
+                  "console until the server restarts. Choose another name.")
+CREATE_NO_DIR = "That folder is no longer there. Reload the file browser."
+_CREATE_LINKED = "__CREATE_LINKED__"
+_CREATE_TAKEN = "__CREATE_TAKEN__"
+_CREATE_FAIL = "__CREATE_FAIL__"
+_CREATE_DONE = "__CREATE_DONE__"
+
+
+def create_refusal(user, reldir, name, kind, selfname=None):
+    """Why creating `name` (a "file" or "folder") in the folder `reldir` is refused before the host
+    is asked, else None.
+
+    A kind that is neither, a folder outside the home or one that is not valid text, a name
+    name_problem refuses, and a destination that is a protected path (by delete_path's rules:
+    anything in lgsm/, or a reserved top-level name such as serverfiles or .ssh) or one the live
+    console reads (_console_paths). The folder may be the home itself: that is where a game's own
+    top-level files live.
+    """
+    if kind not in CREATE_KINDS:
+        return CREATE_REFUSED
+    ap = _safe_abspath(user, reldir) if isinstance(reldir, str) else None
+    if ap is None or not _is_text(reldir):
+        return CREATE_REFUSED
+    problem = name_problem(name)
+    if problem:
+        return problem
+    rel = _pp.relpath(_pp.join(ap, name), f"/home/{user}")
+    if _is_protected_path(rel, selfname):
+        return CREATE_RESERVED
+    if rel in _console_paths(selfname):
+        return CREATE_CONSOLE
+    return None
+
+
+def _create_inner(dest, kind, user, selfname=None):
+    """The host-side create, run after _protected_resolved has set "$d" (real folder) and "$t".
+
+    * "$d" is the folder resolved with `cd -P`. Anything but the folder the browser named means a
+      symlink on the way, and the create is refused rather than followed — as _rename_inner does.
+    * The live console's log, or a folder it is in, reached by its resolved path (_console_guard).
+    * A name already there, even as a dangling symlink, is taken.
+    * Nothing is ever replaced: `mkdir` fails on an existing name, and bash's noclobber makes `>`
+      open the file O_EXCL — a name that appeared after the check is refused by the kernel.
+    * Whether it was made is read from the filesystem, never from the exit status alone: the new
+      name must then be a folder (or a regular file), and not a symlink.
+    """
+    q = _core._quote
+    taken = '[ -e "$t" ] || [ -L "$t" ]'
+    if kind == "folder":
+        make, is_kind = 'mkdir -- "$t" 2>/dev/null', '[ -d "$t" ] && [ ! -L "$t" ]'
+    else:
+        make, is_kind = '( set -o noclobber; : > "$t" ) 2>/dev/null', '[ -f "$t" ] && [ ! -L "$t" ]'
+    return (f'[ "$d" = {q(_pp.dirname(dest))} ] || {{ echo {_CREATE_LINKED}; exit 10; }}; '
+            + _console_guard(user, selfname) +
+            f'if {taken}; then echo {_CREATE_TAKEN}; exit 6; fi; '
+            f'if {make} && {is_kind}; then echo {_CREATE_DONE}; exit 0; fi; '
+            f'if {taken}; then echo {_CREATE_TAKEN}; exit 6; fi; '
+            f'echo {_CREATE_FAIL}; exit 1')
+
+
+def create_path(server, user, reldir, name, kind, selfname=None):
+    """Create an empty file or folder called `name` in the folder `reldir` of the game user's home.
+
+    -> (ok, message); message is CREATE_EXISTS when the name is taken. Never replaces anything.
+
+    Guarded as rename_path is — create_refusal first, then _protected_resolved on the host, in the
+    same command as the create, plus _create_inner's own refusals: a folder reached through a
+    symlink, and a name that exists. Runs as the game account, so what it makes is the account's.
+    """
+    refusal = create_refusal(user, reldir, name, kind, selfname)
+    if refusal:
+        return False, refusal
+    dest = _pp.join(_safe_abspath(user, reldir), name)
+    inner = _create_inner(dest, kind, user, selfname)
+    out, e, rc = _core.shell_as_game_user(
+        server, user, _protected_resolved(user, dest, selfname, inner), timeout=30)
+    return _create_outcome(out, e, rc)
+
+
+# Sentinel -> (ok, message), first match wins; the first three are the guards create_path shares
+# with delete_path and rename_path.
+_CREATE_OUTCOMES = (
+    (_OUTSIDE_HOME, CREATE_REFUSED),
+    (_PROTECTED_MARK, CREATE_RESERVED),
+    (_RENAME_CONSOLE_MARK, CREATE_CONSOLE),
+    (_CREATE_LINKED, "Refusing to create through a symbolic link: open the folder it points to "
+                     "and create it there."),
+    (_CREATE_TAKEN, CREATE_EXISTS),
+    (_CREATE_FAIL, "The host refused to create it — the folder may belong to another account. "
+                   "Nothing was created."),
+)
+
+
+def _create_outcome(out, e, rc):
+    """create_path's (ok, message) from what its guarded host-side command printed.
+
+    Fixed text only, as _rename_outcome: the host's stderr is logged, never returned, and an answer
+    with no sentinel in it is CREATE_UNCONFIRMED. A folder that is not there (the `cd -P` of
+    _protected_resolved failed) says so.
+    """
+    out = out or ""
+    if rc == 0 and _CREATE_DONE in out:
+        return True, "Created"
+    for mark, message in _CREATE_OUTCOMES:
+        if mark in out:
+            return False, message
+    if _NO_SUCH_DIR in (e or ""):
+        return False, CREATE_NO_DIR
+    _core._log.warning("create_path: the host did not confirm the create (rc=%s): %s",
+                       rc, (e or "")[:200])
+    return False, CREATE_UNCONFIRMED
 
 
 # ── Downloads: the read side of the file browser ───────────────────────────────────────────────
