@@ -1483,6 +1483,14 @@ check(not _new,
       "static/js: no NEW unescaped value reaches innerHTML (wrap it in escapeHtml, or explain it "
       "in tests/html_sink_baseline.json)",
       "; ".join(_new[:3]))
+# ...and no allowance outlives the sink it was for: an entry left behind after its code was fixed
+# kept pre-approving the same names going raw into innerHTML in that file later, unseen.
+_stale = sorted("%s: %s" % (f, sig) for f, sigs in _baseline.items()
+                for sig in sigs if sig not in _found.get(f, set()))
+check(bool(_found) and not _stale,
+      "tests/html_sink_baseline.json: every allowance still matches an unescaped sink (drop the "
+      "ones that do not)",
+      "; ".join(_stale[:4]) or "the scanner found no sinks at all")
 
 # ── 0d-bis. the console line renderer builds NODES, never markup ──────────────────────────────
 # The scanner above only claims a sink whose expression contains markup (a `'…<tag` literal) or an
@@ -2992,7 +3000,8 @@ check(bool(_prefix_m) and bool(_suffix_m),
       "prefix=%s suffix=%s — the check below proves nothing without both"
       % (bool(_prefix_m), bool(_suffix_m)))
 if _prefix_m and _suffix_m:
-    _rule = next((r for r, v in json.loads(
+    # The baseline's keys are "METHODS /path" (tests/url_map_test.py); the rule is the path.
+    _rule = next((r.split(" ", 1)[-1] for r, v in json.loads(
         (ROOT / "tests" / "url_map_baseline.json").read_text(encoding="utf-8")).items()
         if v.get("endpoint") == "remote_manage"), None)
     check(_rule is not None, "palette: the remote_manage route is in the url-map baseline",
@@ -3749,7 +3758,9 @@ check('data-ajax-after="watchInstallsNow"' in _inst_tpl,
 _pj = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
 _dr = _pj[_pj.index("var doRefresh = function()"):]
 _dr = _dr[:_dr.index("};")]
-check("else if (after &&" in _dr and "window[after]()" in _dr,
+# ...through _actionFn, as refreshSection's hook is, so the deny list holds on this path too (part53).
+check("else if (after)" in _dr and "_actionFn(after)" in _dr and "afterFn()" in _dr
+      and "window[after]()" not in _dr,
       "js: an ajax-form's after-hook runs even with no section to refresh",
       "data-ajax-after is dropped unless data-ajax-refresh is also set")
 

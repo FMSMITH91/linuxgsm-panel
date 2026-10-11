@@ -368,7 +368,7 @@
               {% for peer in info.peers[:20] %}
               <tr>
                 <td>
-                  <strong>{{ peer.hostname }}</strong>
+                  <strong data-no-i18n>{{ peer.hostname }}</strong>
                   <span class="d-block text-secondary" style="font-size:.7rem;">{{ peer.dns_name }}</span>
                 </td>
                 <td><code class="small">{{ peer.ips[0] if peer.ips else '—' }}</code></td>

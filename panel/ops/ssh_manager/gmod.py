@@ -612,8 +612,9 @@ def _grant_content_read(server, gmod_user, content_user, games):
         return ("Couldn't read %s's group, so the content mount was not granted. "
                 "Check the account exists on this host." % content_user)
     # Read access: add the GMod user to the content group, and make the content group-traversable
-    # (home) + group-readable (each game tree). Every step is attempted, and any that
-    # fails fails the verb (its exit status says so on both transports).
+    # (home) + group-readable (each game tree). Every step is attempted; a failed usermod fails
+    # the verb on both transports, and the chmods are best-effort on both (a missing game tree
+    # must not cost the games beside it their mount).
     #
     # Its rc used to be discarded, so a helper that refused it (rc 2,
     # one older than the panel) or a transport that timed out (("", "…", -1), no raise) went on to

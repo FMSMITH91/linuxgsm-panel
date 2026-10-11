@@ -241,12 +241,18 @@ def _lgsm_frame(path, tag):
             f"printf %s {_core._quote(e)}; ")
 
 
-def _unframe_lgsm_sections(body, inst):
-    """Decode the DEFAULT/COMMON/INSTANCE frames into {tag: text}, or None if any is missing/bad."""
+def _unframe_lgsm_sections(body, inst, optional=()):
+    """Decode the DEFAULT/COMMON/INSTANCE frames into {tag: text}, or None if any is missing/bad.
+
+    A tag in `optional` that has no frame decodes to "" instead (see lgsm_read_config's secrets).
+    """
     sect = {}
-    for tag in ("DEFAULT", "COMMON", "INSTANCE"):
+    for tag in ("DEFAULT", "COMMON", "INSTANCE") + tuple(optional):
         b, e = "__LGSMP_%s_B__" % tag, "__LGSMP_%s_E__" % tag
         i, j = body.find(b), body.find(e)
+        if (i == -1 or j < i) and tag in optional:
+            sect[tag] = ""
+            continue
         if i == -1 or j < i:
             _core._log.warning("lgsm_read_config: no %s frame for %s — reporting a failed read", tag, inst)
             return None
@@ -325,8 +331,9 @@ def _grouped_cfg_settings(default_text, merged, defaults, instance, common):
 def lgsm_read_config(server, user, selfname):
     """Read a game's LinuxGSM config: the curated common settings plus the raw instance cfg.
 
-    The settings are merged from _default.cfg < common.cfg < instance <selfname>.cfg; the raw
-    instance cfg text is for the advanced editor.
+    The settings are merged in linuxgsm.sh's sourcing order (_core.LGSM_CFG_ORDER): _default.cfg <
+    common.cfg < secrets-common.cfg < <selfname>.cfg < secrets-<selfname>.cfg; the raw instance cfg
+    text is for the advanced editor.
     """
     if not _idents_ok(user, selfname):
         return {"settings": {}, "raw": "", "error": "Invalid account or script name"}
@@ -349,20 +356,30 @@ def lgsm_read_config(server, user, selfname):
     # the destructive case read_file already names: rc was discarded here (`out, _, _ =`), so a
     # timed-out or sudo-refused read returned {"raw": "", "error": None} and the editor offered to
     # save it back.
+    #
+    # The two secrets files are read too: linuxgsm.sh sources secrets-common.cfg after common.cfg
+    # and secrets-<selfname>.cfg LAST, so a webhook or password kept there (the file LinuxGSM gives
+    # for exactly that) is the value the server runs with. Their frames are printed BEFORE the
+    # INSTANCE one, so a read that reached INSTANCE printed them as well; a missing one is "".
     inner = (_lgsm_frame(d + "/_default.cfg", "DEFAULT") + _lgsm_frame(d + "/common.cfg", "COMMON")
+             + _lgsm_frame(d + "/secrets-common.cfg", "SECRETS_COMMON")
+             + _lgsm_frame(f"{d}/secrets-{selfname}.cfg", "SECRETS_INSTANCE")
              + _lgsm_frame(inst, "INSTANCE"))
     out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
-    sect = _unframe_lgsm_sections(out or "", inst)
+    sect = _unframe_lgsm_sections(out or "", inst, optional=("SECRETS_COMMON", "SECRETS_INSTANCE"))
     if sect is None:
         return {"settings": {}, "raw": "", "merged": {}, "instance": {},
                 "error": "Could not read the config — the host did not answer."}
     defaults = _parse_cfg(sect["DEFAULT"])
-    common = _parse_cfg(sect["COMMON"])
+    # "overridden" means set anywhere above _default.cfg; the secrets files count with their pair.
+    common = {**_parse_cfg(sect["COMMON"]), **_parse_cfg(sect["SECRETS_COMMON"])}
     instance_text = sect["INSTANCE"]
-    instance = _parse_cfg(instance_text)
+    instance = {**_parse_cfg(instance_text), **_parse_cfg(sect["SECRETS_INSTANCE"])}
     merged = dict(defaults)
-    merged.update(common)
-    merged.update(instance)
+    merged.update(_parse_cfg(sect["COMMON"]))
+    merged.update(_parse_cfg(sect["SECRETS_COMMON"]))
+    merged.update(_parse_cfg(instance_text))
+    merged.update(_parse_cfg(sect["SECRETS_INSTANCE"]))
     settings = _curated_cfg_settings(merged, defaults, instance, common)
     groups = _grouped_cfg_settings(sect["DEFAULT"], merged, defaults, instance, common)
     return {"path": inst, "raw": instance_text, "settings": settings, "groups": groups}
@@ -420,8 +437,10 @@ def lgsm_game_config(server, user, selfname):
 def lgsm_get_values(server, user, selfname, keys):
     """Return {key: value} for `keys` from the merged LinuxGSM config.
 
-    Merged as _default < common < instance — instance wins. Missing keys come back as "". Used by
-    focused editors (alerts).
+    Merged in linuxgsm.sh's sourcing order (_core.LGSM_CFG_ORDER): _default < common <
+    secrets-common < instance < secrets-instance, the last one read wins. Missing keys come back as
+    "". Used by focused editors (alerts). The secrets files were left out, so a webhook kept in
+    secrets-<selfname>.cfg (where LinuxGSM says to keep it) read back stale or blank.
 
     Returns **None when the config could not be read at all**, which is a different answer from
     "every one of these settings is unset" and has to stay tellable apart.
@@ -449,10 +468,8 @@ def lgsm_get_values(server, user, selfname, keys):
     if not _idents_ok(user, selfname):
         return None
     d = _lgsm_cfg_dir(user, selfname)
-    inner = (f"cat {_core._quote(d + '/_default.cfg')} 2>/dev/null; echo; "
-             f"cat {_core._quote(d + '/common.cfg')} 2>/dev/null; echo; "
-             f"cat {_core._quote(d + '/' + selfname + '.cfg')} 2>/dev/null; echo; "
-             f"printf %s {_core._quote(_READ_END)}")
+    inner = "".join(f"cat {_core._quote(d + '/' + f.format(inst=selfname))} 2>/dev/null; echo; "
+                    for f in _core.LGSM_CFG_ORDER) + f"printf %s {_core._quote(_READ_END)}"
     out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
     body = out or ""
     if _READ_END not in body:
@@ -465,30 +482,53 @@ def lgsm_write_config(server, user, selfname, updates):
     """Apply key→value updates to the instance <selfname>.cfg.
 
     Replaces an existing uncommented line, else appends. Other files (_default/common) are left
-    alone.
+    alone. A change to a key that secrets-<selfname>.cfg also sets is refused: linuxgsm.sh sources
+    that file after the instance cfg, so the write would say "Saved" and change nothing.
     """
     if not _idents_ok(user, selfname):
         return False, "Invalid account or script name"
-    # Every writer of the instance cfg comes through here, so this is where "logtimestamp is only
-    # ever turned off" holds whichever form or request asked.
-    if "logtimestamp" in (updates or {}) and \
-            str(updates["logtimestamp"]).strip().strip('"').lower() != "off":
+    if _turns_logtimestamp_on(updates):
         return False, ("Turning LinuxGSM's log timestamps on freezes the live console, so the "
                        "panel only turns them off — nothing has been changed.")
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
-    lines = _read_instance_cfg_lines(server, user, selfname, inst)
+    secrets = {}
+    lines = _read_instance_cfg_lines(server, user, selfname, inst, secrets)
     if lines is None:
         return False, "Could not read the current config — nothing has been changed."
+    _shadowed = _shadowed_by_secrets(updates, secrets)
+    if _shadowed:
+        return False, ("%s is set in secrets-%s.cfg, which LinuxGSM reads after %s.cfg, so a change "
+                       "here would not take effect. Edit it in that file — nothing has been changed."
+                       % (", ".join(_shadowed), selfname, selfname))
     _apply_cfg_updates(lines, updates)
     content = "\n".join(lines).rstrip("\n") + "\n"
     return _write_file_as_user(server, user, inst, content.encode())
 
 
-def _read_instance_cfg_lines(server, user, selfname, inst):
+def _turns_logtimestamp_on(updates):
+    """Whether `updates` sets logtimestamp to anything but off.
+
+    Every writer of the instance cfg comes through lgsm_write_config, so this is where
+    "logtimestamp is only ever turned off" holds whichever form or request asked.
+    """
+    return ("logtimestamp" in (updates or {})
+            and str(updates["logtimestamp"]).strip().strip('"').lower() != "off")
+
+
+def _shadowed_by_secrets(updates, secrets):
+    """The keys `updates` changes that secrets-<selfname>.cfg also sets, sorted."""
+    return sorted(k for k, v in (updates or {}).items()
+                  if k in secrets and str(v).replace("\r", " ").replace("\n", " ") != secrets[k])
+
+
+def _read_instance_cfg_lines(server, user, selfname, inst, secrets=None):
     """The instance cfg's lines ([] when it does not exist yet), or None when the read failed.
 
     None means the caller must not write: see the comment below for the data loss that caused.
+    `secrets`, a dict, is filled with what secrets-<selfname>.cfg sets (LinuxGSM sources it after
+    the instance cfg). Its frame is printed BEFORE the instance read, so a read that answered for
+    the instance cfg reached it too; a missing or bad frame leaves the dict empty.
     """
     # The read is FRAMED, and a read that did not happen ABORTS the write.
     #
@@ -503,14 +543,36 @@ def _read_instance_cfg_lines(server, user, selfname, inst):
     # fresh instance has none, and appending the updates is the right thing), while a failed read
     # is not. The sentinels tell those apart — the same fix, for the same reason, as read_file.
     _probe = (
-        f"if [ ! -f {_core._quote(inst)} ]; then echo __NOFILE__; else "
+        _lgsm_frame(f"{_pp.dirname(inst)}/secrets-{selfname}.cfg", "SECRETS_INSTANCE")
+        + f"if [ ! -f {_core._quote(inst)} ]; then echo __NOFILE__; else "
         f"printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(inst)} | tr -d '\n'; "
         f"printf %s {_core._quote(_READ_END)}; fi"
     )
     out, _, _ = _core.shell_as_game_user(server, user, _probe, timeout=15, selfname=selfname)
-    body = out or ""
+    body = _take_secrets_frame(out or "", inst, secrets)
     if body.strip() == "__NOFILE__":
         return []                       # no instance cfg yet — the updates become the file
+    return _framed_cfg_lines(body, inst)
+
+
+def _take_secrets_frame(body, inst, secrets):
+    """`body` without its secrets-<selfname>.cfg frame, whose settings fill `secrets` (a dict)."""
+    _sb, _se = "__LGSMP_SECRETS_INSTANCE_B__", "__LGSMP_SECRETS_INSTANCE_E__"
+    _si, _sj = body.find(_sb), body.find(_se)
+    if _si == -1 or _sj <= _si:
+        return body
+    try:
+        import base64 as _b64
+        _enc = body[_si + len(_sb):_sj].strip()
+        if secrets is not None and _enc:
+            secrets.update(_parse_cfg(_b64.b64decode(_enc, validate=True).decode("utf-8", "replace")))
+    except Exception:
+        _core._log.warning("lgsm_write_config: secrets frame for %s was not valid base64", inst)
+    return body[:_si] + body[_sj + len(_se):]
+
+
+def _framed_cfg_lines(body, inst):
+    """The instance cfg's lines from its framed read, or None when the frame is missing or bad."""
     i, j = body.find(_READ_BEGIN), body.rfind(_READ_END)
     if i == -1 or j <= i:
         _core._log.warning("lgsm_write_config: could not read %s — refusing to write", inst)
@@ -816,21 +878,24 @@ def browse_dir(server, user, relpath="", selfname=None):
     """List a directory in the game user's home (dirs first).
 
     Each entry is flagged `protected` when deleting it would break LinuxGSM/the game. Returns None
-    on a path-traversal attempt.
+    on a path-traversal attempt, and {"outside_home": True, ...} for a path that is fine as text but
+    resolves outside the home ON THE HOST (a symlinked folder pointing elsewhere).
     """
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return None
     # `-H` and `%Y`: a symlinked folder is a folder. Plain find does not descend a symlinked
-    # starting point — it printed nothing and exited 0, so `log/server` (LinuxGSM's own link) or a
-    # serverfiles moved to a bigger disk read as "this folder is empty" — and `%y` types a link
+    # starting point — it printed nothing and exited 0, so `log/server` (LinuxGSM's own link, which
+    # stays inside the home) read as "this folder is empty" — and `%y` types a link
     # `l`, so the parent listed it as a file whose editor said "File not found". `%Y` is the
     # target's type (`N` for a dangling link, which stays a file). prune_game_backups fixed the
-    # same find trap with the same `-H`.
+    # same find trap with the same `-H`. A link whose target is OUTSIDE the home (a serverfiles
+    # moved to a bigger disk) still lists as a folder, but _guarded refuses to open it: containment
+    # in the home is the boundary, so that is reported as such rather than as "Invalid path".
     inner = f"find -H {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%Y\\t%s\\t%f\\0' 2>/dev/null"
     out, _, rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):
-        return None
+        return {"path": (relpath or "").strip("/"), "entries": [], "outside_home": True}
     # A read that FAILED prints nothing, and so does a genuinely empty directory — rc is the only
     # thing that tells them apart, and without it the browser rendered "this folder is empty"
     # about a folder it never reached. That is the most alarming possible way to be wrong about
@@ -1096,7 +1161,10 @@ def stat_upload_targets(server, user, reldir, names):
     apdir = _safe_abspath(user, reldir)
     if apdir is None:
         return None
-    inner = (f"find {_core._quote(apdir)} -maxdepth 1 -mindepth 1 "
+    # `-H`, as browse_dir: plain find does not descend a symlinked starting point, so in a folder
+    # the browser opens through a link (LinuxGSM's own log/server) it listed nothing, no conflict
+    # was found, and an upload onto an existing file looped on "already existed — re-drop".
+    inner = (f"find -H {_core._quote(apdir)} -maxdepth 1 -mindepth 1 "
              f"-printf '%y\\t%s\\t%T@\\t%f\\0' 2>/dev/null")
     out, err, rc = _core.shell_as_game_user(server, user, _guarded(user, apdir, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):

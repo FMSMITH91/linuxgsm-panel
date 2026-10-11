@@ -353,6 +353,10 @@ def _publish_backup_status(app, server_id, born, status):
     _game_backup_status[server_id] = status
 
 
+# What the per-server schedule's field parser answers for a value it cannot read (see _field).
+_BAD_FIELD = object()
+
+
 def register(app):
     """Register the game-server and panel backup routes, and the panel host's OS maintenance."""
     _register_full_backup(app)
@@ -633,14 +637,19 @@ def _register_game_backup_settings(app):
             try:
                 return int(v)   # OverflowError guards against JSON infinity (e.g. 1e400)
             except (TypeError, ValueError, OverflowError):
-                return None
+                # Refused, not None: None CLEARS the override, so "7 days" mistyped as "7d" (or a
+                # number the client sent as anything else) silently reset the server to the
+                # global schedule.
+                return _BAD_FIELD
         # Absent means "not this one", which is a different request from "clear it". Both pages
         # posted both fields on a change to either, and a select that had no option for the stored
         # value turned an interval change into a silent reset of retention.
-        sched = bk.set_game_schedule(
-            server_id,
-            _field(data["interval"]) if "interval" in data else bk.UNCHANGED,
-            _field(data["keep"]) if "keep" in data else bk.UNCHANGED)
+        interval = _field(data["interval"]) if "interval" in data else bk.UNCHANGED
+        keep = _field(data["keep"]) if "keep" in data else bk.UNCHANGED
+        if interval is _BAD_FIELD or keep is _BAD_FIELD:
+            return jsonify({"success": False,
+                            "message": "Use a whole number, or leave it empty for the default."}), 400
+        sched = bk.set_game_schedule(server_id, interval, keep)
         log_action(current_user, "game_backup_schedule", target=gs.name,
                    detail="interval=%s keep=%s" % (sched["interval_days"], sched["keep"]),
                    server=gs)
@@ -799,6 +808,10 @@ def _register_panel_backups(app):
         # encryption off. "" is the explicit "stop encrypting". Never logged or echoed back.
         if "passphrase" in data:
             _pp = data.get("passphrase") or ""
+            # Text only, and not stripped (a passphrase's spaces are part of it): a number raised
+            # TypeError out of len() and a list reached encrypt_secret, both as a 500.
+            if not isinstance(_pp, str):
+                return jsonify({"success": False, "message": "The passphrase must be text."}), 400
             # bk.MIN_PASSPHRASE_LEN, not a literal 12: set_passphrase() enforces the same rule and
             # raises below it, so two independent numbers here would mean a drift turns a friendly
             # 400 into a 500.

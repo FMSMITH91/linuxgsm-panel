@@ -40,6 +40,20 @@ def _p8_tripwire(name):
 for _n in _p8_real:
     setattr(_sm_core, _n, _p8_tripwire(_n))
 
+# ...and the exec paths that do not go through those four: ssh_test_connection builds its own
+# paramiko.SSHClient, files.stream_path and the cron reader start `ssh` with their own Popen, and
+# tailscale_integration runs `tailscale`/`ping` with subprocess.run. Installed BEFORE the sections
+# below save their originals, so a section's restore puts the tripwire back, not the real module.
+from unit.part10 import _Over as _p8_Over  # noqa: E402
+from panel.ops.ssh_manager import cron as _p8_cron  # noqa: E402
+_p8_mods = {(_sm_hosts, "paramiko"): _sm_hosts.paramiko, (_sm_files, "subprocess"): _sm_files.subprocess,
+            (_p8_cron, "subprocess"): _p8_cron.subprocess, (_tsi, "subprocess"): _tsi.subprocess}
+_sm_hosts.paramiko = _p8_Over(_sm_hosts.paramiko, SSHClient=_p8_tripwire("hosts.paramiko.SSHClient"))
+for (_p8_m, _p8_a), _p8_real_mod in list(_p8_mods.items())[1:]:
+    setattr(_p8_m, _p8_a, _p8_Over(_p8_real_mod,
+                                   Popen=_p8_tripwire("%s.subprocess.Popen" % _p8_m.__name__),
+                                   run=_p8_tripwire("%s.subprocess.run" % _p8_m.__name__)))
+
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # tailscale_integration — the panel host's own Tailscale
@@ -80,10 +94,16 @@ try:
     _tsi.subprocess = _ts_fake_subprocess(lambda a: FileNotFoundError("tailscale"), [])
     eq("tailscale _run_ts: a missing binary is ('', 'tailscale binary not found', -1)",
        _ts_real_run_ts(["status"]), ("", "tailscale binary not found", -1))
-    _tsi.subprocess = _ts_fake_subprocess(
-        lambda a: _p8_subprocess.TimeoutExpired(a, 5), [])
-    eq("tailscale _run_ts: a hung CLI is ('', 'tailscale command timed out', -1), not a raise",
-       _ts_real_run_ts(["status"]), ("", "tailscale command timed out", -1))
+    # Both classes: under eventlet the panel's run() raises the ORIGINAL module's TimeoutExpired,
+    # which only the second entry of system_ops._SOPS_TIMEOUTS catches.
+    for _ts_tl, _ts_te in (("green", _p8_subprocess.TimeoutExpired),
+                           ("original module's", __import__(
+                               "eventlet.patcher", fromlist=["original"]).original(
+                                   "subprocess").TimeoutExpired)):
+        _tsi.subprocess = _ts_fake_subprocess(lambda a, _te=_ts_te: _te(a, 5), [])
+        eq("tailscale _run_ts: a hung CLI is ('', 'tailscale command timed out', -1), not a raise "
+           "(the %s TimeoutExpired)" % _ts_tl,
+           _ts_real_run_ts(["status"]), ("", "tailscale command timed out", -1))
     _tsi.subprocess = _ts_fake_subprocess(
         lambda a: PermissionError("/root/.secret-socket-path denied"), [])
     _ts_generic = _ts_real_run_ts(["status"])
@@ -3699,5 +3719,7 @@ check("panel update: ...and with no runtime_sha (an older status), it keys on th
 # ── the tripwire, checked last ──────────────────────────────────────────────────────────────────
 for _n, _fn in _p8_real.items():
     setattr(_sm_core, _n, _fn)
+for (_p8_m, _p8_a), _p8_real_mod in _p8_mods.items():
+    setattr(_p8_m, _p8_a, _p8_real_mod)
 check("part11: no check reached a real transport (paramiko, the ssh CLI, a local subprocess)",
       not _p8_trips, "reached: %r" % (_p8_trips,))

@@ -126,6 +126,7 @@ from panel.security import banlist as _banlist
 # and panel/core/http.py.
 from panel.core.validation import (MAX_PORT, MIN_PORT, _valid_hex_color, canonical_ip,
                                    canonical_ip_or_network, ip_address_or_none)
+from panel.core.origins import _host_port, _origin_candidates, _origin_key
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _record_metric_samples, _refresh_player_counts)
@@ -414,19 +415,31 @@ def _add_sibling_ports(occupied, remote, remote_id, skip_short_name=None):
     cannot drift apart again.
 
     `skip_short_name` is the instance being resolved: its own aux ports are the values being
-    moved, not a constraint on them."""
+    moved, not a constraint on them.
+
+    A sibling whose config could not be read (lgsm_get_values' None — a tailscale/local read
+    that timed out does not raise) reserves nothing, but is SAID: `or {}` read it silently as "no
+    aux ports configured", and a new install could then take that stopped sibling's sourcetvport
+    with nothing anywhere explaining the later "Port N was unavailable". Not a refusal: a sibling
+    whose account is gone (an orphaned row) would then block every install on the host for good."""
     for e in GameServer.query.filter_by(remote_id=remote_id).all():
         for k in range(_port_span(e.game_type)):
             occupied.add(e.port + k)
         if e.short_name == skip_short_name or sm_game_engine(e.game_type) != "valve":
             continue
         try:
-            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS) or {}
-            for v in sib.values():
-                if str(v).strip().isdecimal():
-                    occupied.add(int(str(v).strip()))
+            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS)
         except Exception:
             _log.debug("aux-port: sibling servercfg read failed", exc_info=True)
+            sib = None
+        if sib is None:
+            _log.warning("aux-port: the LinuxGSM config of %s on %s could not be read, so its "
+                         "SourceTV/client ports were not reserved", e.short_name,
+                         getattr(remote, "name", "the host"))
+            continue
+        for v in sib.values():
+            if str(v).strip().isdecimal():
+                occupied.add(int(str(v).strip()))
     return occupied
 
 
@@ -1447,7 +1460,12 @@ def _spawn_daemon(fn, *args):
 
 
 def _start_hub_lag_watch():
-    """The hub-lag greenlet (R17): once per process, only under eventlet's thread patching."""
+    """The hub-lag greenlet (R17): once per process, only under eventlet's thread patching.
+
+    Not in the recovery CLI (NO_WORKERS_ENV): it is background work of the service's.
+    """
+    if os.environ.get(NO_WORKERS_ENV):
+        return
     try:
         _dr_process.start_hub_lag_watch(spawn=_spawn_daemon)
     except Exception:
@@ -2409,7 +2427,10 @@ def _custom_cmd_form(cmd=None):
         return None, "The command template can't contain control characters or newlines."
     if scope_type not in ("all", "engine", "game"):
         scope_type = "all"
-    if scope_type == "engine" and scope_value not in _CUSTOM_CMD_ENGINES:
+    # An engine scope the list no longer names is kept the same way as a game below: the form offers
+    # the stored one, selected, so a save on an unrelated edit neither widens nor refuses it.
+    _kept_engine = (cmd is not None and cmd.scope_type == "engine" and scope_value == cmd.scope_value)
+    if scope_type == "engine" and not _kept_engine and scope_value not in _CUSTOM_CMD_ENGINES:
         return None, "Pick a valid engine for the engine scope."
     # A command already scoped to a game keeps it even when the current list lacks that game
     # (dropped or renamed upstream, or no list could be fetched): refusing it would make the
@@ -2581,31 +2602,6 @@ def _sync_toggles_from_cron(gs, jobs):
     return changed
 
 # ── WebSocket Console ───────────────────────────────────
-def _origin_candidates(environ, cfg):
-    """The hosts a page allowed to open the socket may be served from, as Host-header strings:
-    the Host this request arrived with, the X-Forwarded-Host a reverse proxy passes on, and
-    site_domain. Each may carry an explicit port or none."""
-    out = [environ.get("HTTP_HOST") or ""]
-    fwd = environ.get("HTTP_X_FORWARDED_HOST")
-    if fwd:
-        out.append(fwd.split(",")[0].strip())
-    out.append((cfg.get("site_domain") or "").strip())
-    return [h for h in out if h]
-
-
-def _host_port(value):
-    """(host, port) of a Host-header-like value, port None when none is given; None when it names
-    no host. A value written with a scheme (a site_domain typed as a URL) is read the same way."""
-    from urllib.parse import urlsplit
-    value = str(value or "").strip()
-    try:
-        u = urlsplit(value if "://" in value else "//" + value)
-        host, port = (u.hostname or "").lower(), u.port
-    except ValueError:
-        return None
-    return (host, port) if host else None
-
-
 def _socket_origin_allowed(origin, environ=None):
     """Whether a browser page at `origin` may open the console/terminal socket.
 
@@ -2665,6 +2661,11 @@ def _explicit_socket_origins(explicit):
     """
     if not explicit:
         return []
+    # A hand-edited config can hold anything; list() of a number raised TypeError inside engineio's
+    # CORS callback, on every handshake — no console and no terminal. Not a list: none listed, so
+    # the per-request check below decides (which is not "*" either).
+    if not isinstance(explicit, (str, list, tuple)):
+        return []
     listed = [explicit] if isinstance(explicit, str) else list(explicit)
     exact = [o for o in listed if str(o).strip() != "*"]
     if len(exact) != len(listed) and not _socket_wildcard_warned:
@@ -2672,20 +2673,6 @@ def _explicit_socket_origins(explicit):
         _log.warning('socketio_cors_origins "*" is ignored; set site_domain or list the exact '
                      'origin (e.g. https://panel.example.com)')
     return exact
-
-
-def _origin_key(origin):
-    """(scheme, host, port) of an origin, the default port filled in; None for anything that is not
-    an http(s) origin with a host."""
-    from urllib.parse import urlsplit
-    try:
-        u = urlsplit(str(origin or ""))
-        host, port = (u.hostname or "").lower(), u.port
-    except ValueError:
-        return None
-    if u.scheme not in ("http", "https") or not host:
-        return None
-    return (u.scheme, host, port or (443 if u.scheme == "https" else 80))
 
 
 def _socketio_cors():
@@ -2722,6 +2709,14 @@ def _os_updates_for(remote):
 # caller of both is a route view, so the request context they need is guaranteed.
 
 
+# Set by manage.py, the offline recovery CLI, before it calls create_app(). That CLI runs BESIDE
+# the live service, and importing this module monkey-patches threading, so every ticker
+# register_routes starts would be a green thread in it: a prompt held past a ticker's first delay,
+# then the first yield (hash_password's tpool hop), ran due restarts, install reconciles and update
+# checks inside the CLI — blind to the service's in-memory state (a backup in progress) — and
+# os._exit then cut them off part-way. Background work belongs to the service alone.
+NO_WORKERS_ENV = "LGSM_PANEL_NO_WORKERS"
+
 
 def _make_supervisor(app):
     """The supervisor register_routes hands every ticker: supervise(name, target).
@@ -2733,6 +2728,9 @@ def _make_supervisor(app):
     Module level so a check can drive one runner without building the whole app.
     """
     def _supervise(name, target):
+        if os.environ.get(NO_WORKERS_ENV):
+            return   # the recovery CLI: no background workers (see NO_WORKERS_ENV)
+
         def _runner():
             while True:
                 t = threading.Thread(target=target, name=name, daemon=True)

@@ -26,9 +26,12 @@ for _dep in ("paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
 
 with atheris.instrument_imports():
     from panel.ops import ssh_manager
+    from panel.ops.ssh_manager import firewall as _fw
 
-# The exact line regex remote_ufw_status uses to pull "[ N] <detail>" numbered rules.
-_RULE_RE = re.compile(r"^\s*\[\s*(\d+)\]\s*(.*)$")
+# The line regex remote_ufw_status itself uses to pull "[ N] <detail>" numbered rules — taken from
+# the module, not copied: the copy that sat here was the old `\s*(.*)` shape production replaced
+# for its quadratic backtracking, so the production regex was never the one fuzzed.
+_RULE_RE = _fw._UFW_NUMBERED_RE
 
 
 def TestOneInput(data):

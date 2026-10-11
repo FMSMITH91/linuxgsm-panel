@@ -1381,15 +1381,28 @@ try:  # noqa: MC0001
     # ...but only when a backup actually HAPPENED. Skipped = players online, and the ticker
     # deliberately leaves the clock alone there so the server stays due and is retried once it
     # empties. Recording a skip would silently drop that backup for a whole interval.
-    _bkmod.run_game_backup = lambda *a, **k: (True, "players online", True)
+    # The skip path is WAITED FOR, not slept past: a fixed 1.2 s passed whenever the worker had
+    # not reached the stub yet (a loaded runner) or the request was refused, with the clock
+    # unmoved either way. Now the stub must have been called, and the worker must have let go of
+    # the backup lock (it records the clock after run_game_backup returns), before it is read.
+    _bk_skip_calls = []
+    _bkmod.run_game_backup = lambda *a, **k: (_bk_skip_calls.append(a),
+                                              (True, "players online", True))[1]
     _bkops.record_game_backup(gs_id)
     time.sleep(1.05)
     _bk_before = _bk_clock(gs_id)
     c.post("/api/panel/backup/game/%d" % gs_id, json={})
-    time.sleep(1.2)
+    _bk_skip_end = time.time() + 5.0
+    while not _bk_skip_calls and time.time() < _bk_skip_end:
+        time.sleep(0.05)
+    _bk_skip_settled = _bk_lock.acquire(timeout=8)
+    if _bk_skip_settled:
+        _bk_lock.release()
     check("game backup: ...but a SKIPPED one does not (it stays due, and is retried)",
-          _bk_clock(gs_id) == _bk_before,
-          "a backup that never ran moved the clock, so the server waits a full interval")
+          bool(_bk_skip_calls) and _bk_skip_settled and _bk_clock(gs_id) == _bk_before,
+          "skip path ran %d time(s), worker settled=%s, clock %r -> %r (a backup that never ran "
+          "moved the clock, so the server waits a full interval)"
+          % (len(_bk_skip_calls), _bk_skip_settled, _bk_before, _bk_clock(gs_id)))
 
     # The 'wait until empty' queue is a third path to the same archive, and it recorded
     # nothing either: a server backed up by THIS sweep still looked overdue to the ticker in
@@ -1710,15 +1723,24 @@ try:  # noqa: MC0001
     _bkc_direct = []
     for _bkc_py in sorted((_lgsm_pathlib.Path(_repo_root) / "panel").rglob("*.py")) + [
             _lgsm_pathlib.Path(_repo_root) / "app.py"]:
-        for _bkc_fn in _bkc_ast.walk(_bkc_ast.parse(_bkc_py.read_text(encoding="utf-8"))):
-            if not isinstance(_bkc_fn, _bkc_ast.FunctionDef) or _bkc_fn.name in (
-                    "_record_game_clock", "_record_full_clock"):
+        # Every REFERENCE to a writer, not only `<obj>.writer(...)` calls: a writer imported by
+        # name (`from panel.ops.backup import record_game_backup`), a conditional callee
+        # (`(a if x else b)(sid)`, as the safe helper itself uses) or a module-level call went
+        # unseen. Only the two helpers' own bodies are left out of the walk.
+        _bkc_todo = [_bkc_ast.parse(_bkc_py.read_text(encoding="utf-8"))]
+        while _bkc_todo:
+            _bkc_n = _bkc_todo.pop()
+            if (isinstance(_bkc_n, (_bkc_ast.FunctionDef, _bkc_ast.AsyncFunctionDef))
+                    and _bkc_n.name in ("_record_game_clock", "_record_full_clock")):
                 continue
-            for _bkc_c in _bkc_ast.walk(_bkc_fn):
-                if (isinstance(_bkc_c, _bkc_ast.Call) and isinstance(_bkc_c.func, _bkc_ast.Attribute)
-                        and _bkc_c.func.attr in ("record_game_backup", "record_full_backup",
-                                                 "start_game_clock")):
-                    _bkc_direct.append("%s:%d in %s()" % (_bkc_py.name, _bkc_c.lineno, _bkc_fn.name))
+            _bkc_ref = (_bkc_n.attr if isinstance(_bkc_n, _bkc_ast.Attribute)
+                        else _bkc_n.id if isinstance(_bkc_n, _bkc_ast.Name)
+                        else " ".join(a.name for a in _bkc_n.names)
+                        if isinstance(_bkc_n, _bkc_ast.ImportFrom) else "")
+            if set(_bkc_ref.split()) & {"record_game_backup", "record_full_backup",
+                                        "start_game_clock"}:
+                _bkc_direct.append("%s:%d" % (_bkc_py.name, _bkc_n.lineno))
+            _bkc_todo.extend(_bkc_ast.iter_child_nodes(_bkc_n))
     check("backup clock: nothing but the two safe helpers calls the writers that raise on a bad "
           "config.json", not _bkc_direct,
           "direct calls: %s — each one turns a readable-later config into a 500 or a false "
@@ -3095,6 +3117,13 @@ from panel.core.panel_state import _install_jobs as _gh_jobs, _install_lock as _
 _gh_mon = sys.modules["panel.services.monitoring"]
 _gh_appmod = sys.modules["app"]
 _GH_MARK = "ghsapwn"
+import os as _gh_os  # pylint: disable=reimported
+# Where the payload would land if it ran. The verdict below sees only commands that reach the two
+# stubbed seams; a path through another transport would RUN the payload and still read as clean,
+# so the file itself is looked for too (a leftover from an earlier run is cleared first).
+_GH_PWN = _gh_os.path.join(_gh_os.sep + "tmp", _GH_MARK)
+if _gh_os.path.lexists(_GH_PWN):
+    _gh_os.remove(_GH_PWN)
 _gh_ids = {}
 with app.app_context():
     # The review of the first fix added two more rows: the SCRIPT name injected through
@@ -3213,6 +3242,8 @@ _gh_leaked = [t for t in _gh_texts if _GH_MARK in t]
 check("GHSA-hh39 smoke: no command built for the injected row carries its payload — not from a "
       "page, a poll, a toggle, the monitor passes or Retry install",
       not _gh_leaked, "%d leaked, e.g. %r" % (len(_gh_leaked), _gh_leaked[:1]))
+check("GHSA-hh39 smoke: ...and the payload did not run through any transport (its file is absent)",
+      not _gh_os.path.lexists(_GH_PWN), "%s exists after the sweep" % _GH_PWN)
 check("GHSA-hh39 smoke F1: the console poller's tick on a row whose game_type is a payload sends "
       "nothing, while the control row's tick sends its stat read",
       not _gh_tick_sent.get("type") and any("stat -c" in t and "ghsactl" in t

@@ -53,6 +53,15 @@ class LoginFailed(RuntimeError):
     """Signing in did not leave the login page."""
 
 
+class FlowAssertion(AssertionError):
+    """A flow measured the panel doing the wrong thing — a product failure, not the harness's.
+
+    walk._run_flow records it with the flows that broke, and run.measure_and_report fails the run
+    on it: the 375px rename-fit check raised RuntimeError like any broken step, which the run only
+    warns about, so it could never fail CI.
+    """
+
+
 class Driver:
     """The page run.py drives: navigation, waiting, in-page steps and the coverage kept."""
 

@@ -10,6 +10,7 @@ from panel.core.http import (_json_body)
 from app import (_refuse_on_panel_host)
 from panel.routes._shared import (_bootstrap_jobs, _bootstrap_lock)
 from panel.routes._shared import (_begin_bootstrap)
+from panel.ops import ssh_manager as _sm
 
 
 def register(app):
@@ -38,6 +39,11 @@ def register(app):
             "install_fail2ban": data.get("install_fail2ban", True),
             "do_reboot": data.get("reboot", True),
         }
+        # Refused HERE as well as in the worker: the worker's refusal came after the kick-off
+        # audit row below, which then recorded whatever timezone and account text was posted.
+        bad = _sm._bsval_refusal(opts["set_timezone"], opts["username"])
+        if bad:
+            return jsonify({"success": False, "message": bad}), 400
         started, msg = _begin_bootstrap(app, remote_id, opts, current_user.id)
         if not started:
             return jsonify({"success": False, "message": msg}), 409

@@ -532,6 +532,14 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
         return False, ("Another restore is already in progress. Wait for it to finish — the panel "
                        "restarts when it does.")
     try:
+        # Nor over a running self-update. install.sh snapshots the database and rolls back to that
+        # snapshot when the new version fails its health check, so a restore swapped in under it
+        # could be overwritten by the pre-update copy. The lock is taken FIRST, so a self-update
+        # launched from here on sees it (_launch_installer refuses while it is held).
+        from panel.ops import system_ops as _so
+        if _so._update_in_progress():
+            return False, ("A panel update is being installed right now — restore once it has "
+                           "finished.")
         return _restore_backup_locked(name, passphrase, skip_safety_backup)
     finally:
         _restore_lock.release()

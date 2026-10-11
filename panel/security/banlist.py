@@ -86,14 +86,17 @@ def _fresher(kind, taken):
 # Called after every new ban set: an OPEN connection was accepted before its client was banned,
 # and nothing re-asks — a Socket.IO socket (the live console, the host terminal) stays up until it
 # closes, on Funnel and, under a UFW deny, directly too (ufw accepts ESTABLISHED traffic before
-# its own rules). server_files registers the sweep that drops those sockets. Keyed by qualified
-# name, as socket_hooks is, so a second app in one process replaces its hook instead of stacking.
+# its own rules). server_files registers the sweep that drops those sockets. Keyed by definition
+# site (module and qualified name), as socket_hooks is, so a second app in one process replaces
+# its hook instead of stacking — and a second module's `register.<locals>.<lambda>` does not
+# replace the first's.
 _listeners = {}
 
 
 def on_change(fn):
     """Register fn() to run after the ban set is replaced."""
-    _listeners[getattr(fn, "__qualname__", None) or repr(fn)] = fn
+    _listeners[(getattr(fn, "__module__", None) or "",
+                getattr(fn, "__qualname__", None) or repr(fn))] = fn
     return fn
 
 

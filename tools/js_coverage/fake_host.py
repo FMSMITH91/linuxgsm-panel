@@ -116,8 +116,10 @@ _INSTANCE_CFG = "maxplayers=\"24\"\ndiscordalert=\"on\"\ndiscordwebhook=\"https:
 
 # The file browser's `find` of a directory in the game user's home: the run of name characters
 # after /home/, then the rest of the path up to the closing quote or the space. Each part can match
-# only one way, so a long path is read once rather than backtracked over.
-_BROWSE_FIND = re.compile(r"find '?/home/([a-z0-9_]+)([^a-z0-9_' ][^' ]*)?'? -maxdepth 1")
+# only one way, so a long path is read once rather than backtracked over. `-H` is optional because
+# browse_dir has passed it since #403 (a symlinked folder is a folder): without it nothing matched,
+# every folder listed empty, and the walk's rename flow found no row to rename.
+_BROWSE_FIND = re.compile(r"find (?:-H )?'?/home/([a-z0-9_]+)([^a-z0-9_' ][^' ]*)?'? -maxdepth 1")
 
 
 def _browse_rel(command):

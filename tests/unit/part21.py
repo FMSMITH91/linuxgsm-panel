@@ -881,6 +881,11 @@ def _f_cache():
           and any("35 minutes" in f["text"] for f in res.findings), text)
     check("updates: repo_url (a fork owner's name) is left out", "someowner" not in text, text)
     done = []
+    # A GREEN lock, as the panel's is (it is created after monkey_patch there): this suite imports
+    # system_ops before app patches, so its lock is a real _thread.lock, and a green thread blocking
+    # on that blocks the one OS thread — the regression this guards would hang the whole run with
+    # no check named instead of failing this one (part14 swaps it for the same reason).
+    _p21(_so21, "_update_lock", _th21.Lock())
     with _so21._update_lock:
         t = _th21.Thread(target=lambda: done.append(_upd21._cache_lines(_upd21.Result())))
         t.start()
@@ -965,6 +970,7 @@ def _f_ci_no_deadlock():
     _p21(_so21, "_ci_suite_expected", lambda sha, runs: True)
     _p21(_ur21, "urlopen", lambda req, timeout=8: _Resp21(list(_REQ21), {}))
     out = []
+    _p21(_so21, "_update_lock", _th21.Lock())   # green, as in the panel: see _f_cache's note
     with _so21._update_lock:      # the status computation holds it across the whole walk
         t = _th21.Thread(target=lambda: out.append(_so21._remote_ci_state("6" * 40)))
         t.start()

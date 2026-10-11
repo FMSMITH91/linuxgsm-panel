@@ -261,7 +261,10 @@ def _lgd_settle(key, hit, value, age, gen, allow_fetch):
 def _memo_store(key, hit, value, age, allow_fetch):
     """_memoised's store, under _lock: keep `value` (or `hit`'s copy when it is empty) and return it."""
     if not value:
-        if hit is None:
+        # An EMPTY hit has no copy to fall back to either: it is the one-minute "nothing yet" this
+        # stored itself. Kept as a copy, it fell through to the _RETRY_SECONDS store below, so a
+        # second failed fetch turned the minute into an hour of empty install menu.
+        if hit is None or not hit[1]:
             if allow_fetch:
                 _mem[key] = (time.time() + _LGD_EMPTY_RETRY_SECONDS, value)
             return value

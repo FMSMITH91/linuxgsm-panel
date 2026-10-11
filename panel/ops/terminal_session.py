@@ -277,22 +277,30 @@ class Session:
     # ── input ─────────────────────────────────────────────────────────────────────────────────
     def write(self, data):
         """Send keystrokes. Never logged: people type passwords into terminals."""
-        if self._closed or not data:
+        # A str only: the socket payload is the client's, and `{"data": 123}` raised AttributeError
+        # on .encode inside the handler.
+        if self._closed or not data or not isinstance(data, str):
             return
         self.last_input = time.time()
         payload = data.encode("utf-8", errors="replace")
         if self._chan is not None:
-            try:
-                sent = _send_chan(self._chan, payload)
-            except Exception:
-                _log.debug("terminal write failed for %s", self.label, exc_info=True)
-                self.close("the session ended")
-                return
-            if sent < len(payload):
-                self._report_dropped(len(payload) - sent)
+            self._write_chan(payload)
+        elif self._fd is not None:
+            self._queue_pty_input(payload)
+
+    def _write_chan(self, payload):
+        """Send `payload` down the SSH channel; a failed send ends the session."""
+        try:
+            sent = _send_chan(self._chan, payload)
+        except Exception:
+            _log.debug("terminal write failed for %s", self.label, exc_info=True)
+            self.close("the session ended")
             return
-        if self._fd is None:
-            return
+        if sent < len(payload):
+            self._report_dropped(len(payload) - sent)
+
+    def _queue_pty_input(self, payload):
+        """Queue `payload` for the pty, or report it dropped when the queue is full."""
         # QUEUED, not written here. The pump owns the descriptor (see _drain_input), and the queue
         # is bounded so a program that never reads its input cannot grow it without limit — the
         # pty's own buffer holds about 8 KB, so this is the paste that did not fit plus room.

@@ -42,8 +42,20 @@ _PAM_SESSION_RE = re.compile(r"^pam_unix\((?:sudo|sudo-i|runuser|runuser-l|su|su
 # colon, and a trailing blank); sudo.ws ' user : PWD=...'. sudo-rs logs no line for a refusal.
 # Groups: the target account (USER=), the program, and the rest of the command line (first line
 # only: classic sudo continues a long one on '(command continued)' lines of its own).
-_SUDO_CMD_RE = re.compile(r" :[ \t]{1,4}(?:TTY=[^;\n]{1,64};[ \t]{1,4})?PWD=[^;\n]{0,512};[ \t]{1,4}"
-                          r"USER=([^;\n]{1,64});[ \t]{1,4}COMMAND=(\S{1,512})(?: ([^\n]{0,2048}))?")
+# sudo writes its fields in a fixed order (eventlog.c): TTY, CHROOT, PWD, USER, GROUP, TSID, ENV,
+# COMMAND, each only when it applies. Only TTY was allowed for, so `sudo -g docker …` or
+# `sudo VAR=val …` (GROUP=, ENV=) did not parse, was not counted, and was printed WHOLE — argv,
+# ENV= values and all — in a report meant to be posted publicly.
+_SUDO_CMD_RE = re.compile(r" :[ \t]{1,4}(?:(?:TTY|CHROOT)=[^;\n]{1,512};[ \t]{1,4}){0,2}"
+                          r"PWD=[^;\n]{0,512};[ \t]{1,4}USER=([^;\n]{1,64});[ \t]{1,4}"
+                          r"(?:(?:GROUP|TSID|ENV)=[^;\n]{0,2048};[ \t]{1,4}){0,3}"
+                          r"COMMAND=(\S{1,512})(?: ([^\n]{0,2048}))?")
+# A REFUSED line keeps its place in the log, but not its command: sudo writes the full argv there
+# too, and a mistyped password in the panel's terminal is exactly when that argv is
+# `mysql -u root -p<password>`. Everything from ENV= or COMMAND= on is replaced by the fixed label
+# a counted call gets (_priv_verb); USER= stays, as the refusal's own subject.
+_SUDO_REFUSED_TAIL_RE = re.compile(r"COMMAND=(\S{1,512})(?: ([^\n]{0,4096}))?")
+_SUDO_USER_RE = re.compile(r"USER=([^;\n]{1,64});")
 _SUDO_CONTINUED_RE = re.compile(r"^[ \t]*\S{1,64} :[ \t]{1,4}\(command continued\) ")
 # Programs the panel itself runs through sudo as root, named by their basename. Anything else —
 # a script an operator ran with sudo in the panel's terminal, which lives in the same unit — is
@@ -329,7 +341,7 @@ def _split_priv(lines):
     for ln in lines:
         body = _body(ln)
         if _SUDO_REFUSED_RE.search(body):
-            kept.append(ln)
+            kept.append(_r11b_refused_without_argv(ln, own))
         elif _PAM_SESSION_RE.match(body):
             sessions += 1
         elif _SUDO_CONTINUED_RE.match(body):
@@ -341,6 +353,21 @@ def _split_priv(lines):
                 continue
             _count_priv(verbs, *_priv_verb(m.group(2), m.group(3), m.group(1), own))
     return kept, verbs, sessions
+
+
+def _r11b_refused_without_argv(line, own):
+    """A refused sudo line with its ENV= and COMMAND= replaced by the label it is counted under.
+
+    Never an argument, never a path, as for the lines that are counted.
+    """
+    m = _SUDO_REFUSED_TAIL_RE.search(line)
+    if m is None:
+        return line
+    u = _SUDO_USER_RE.search(line)
+    label, sub = _priv_verb(m.group(1), m.group(2), u.group(1) if u else "root", own)
+    env = line.find("ENV=", 0, m.start())
+    cut = env if env != -1 else m.start()
+    return line[:cut] + "COMMAND=(%s)" % (label if sub is None else "%s: %s" % (label, sub))
 
 
 def _count_priv(verbs, label, sub):

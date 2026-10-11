@@ -231,7 +231,9 @@ def _in_app(ctx, fn):
 
 def _names_db(ctx, st):
     from panel.core import config as cfgmod
-    st.cred_key_missing = not cfgmod.CRED_KEY_FILE.exists()
+    # _key_missing, not .exists(): an EMPTY cred_key is missing to _cred_fernet too, and a decrypt
+    # past this gate would write a new key on the install being diagnosed.
+    st.cred_key_missing = cfgmod._key_missing(cfgmod.CRED_KEY_FILE)
     _in_app(ctx, lambda: _read_db_names(st))
     if st.cred_key_missing:
         st.source_errors.append(("host addresses and accounts", "cred_key missing"))
@@ -464,13 +466,25 @@ def _names_tailscale(info, st, key="", depth=0):
         for v in list(info)[:2000]:
             _names_tailscale(v, st, key, depth + 1)
     elif isinstance(info, str) and _TS_KEYS.search(key):
-        value = info.strip().rstrip(".")
-        st.add(value, "tailnet-name")
-        if key in _TS_WHOLE_KEYS:
-            return
-        st.add(value.split(".")[0], "tailnet-name")
-        if "@" in value:                    # a login's handle prints on its own too
-            st.add(value.split("@", 1)[0], "tailnet-name")
+        _names_tailscale_value(info, st, key)
+
+
+def _names_tailscale_value(info, st, key):
+    """Map one identity-looking string of the tailscale data, and the parts of it that print alone."""
+    value = info.strip().rstrip(".")
+    st.add(value, "tailnet-name")
+    if key in _TS_WHOLE_KEYS:
+        return
+    # A name of several words ("Jane Q Doe", a DisplayName) is mapped by its leading words too:
+    # errors._cell and logs._quote cut free text at a word boundary BEFORE this map exists, and
+    # a cut between two of its words left "Jane …", which the whole phrase cannot match.
+    # Longest-first matching still maps the whole name as itself wherever it is whole.
+    words = value.split()
+    for i in range(1, min(len(words), 8)):
+        st.add(" ".join(words[:i]), "tailnet-name")
+    st.add(value.split(".")[0], "tailnet-name")
+    if "@" in value:                    # a login's handle prints on its own too
+        st.add(value.split("@", 1)[0], "tailnet-name")
 
 
 def _tailscale_names(ctx, st, wait):

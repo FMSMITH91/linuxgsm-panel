@@ -33,10 +33,10 @@ import warnings
 # hard-exit at the end (below) to skip the noisy teardown, so a locked-out admin sees a clean tool.
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
-    from app import create_app   # noqa: E402  (inside the warnings guard)
+    from app import NO_WORKERS_ENV, create_app   # noqa: E402  (inside the warnings guard)
     # password_problem moved to panel.core.validation with the rest of the pure layer —
     # the CLI enforces the SAME rule as the web forms, which is the point of sharing it.
-    from panel.core.validation import password_problem   # noqa: E402
+    from panel.core.validation import password_problem, username_problem   # noqa: E402
     from panel.db.models import db, User                     # noqa: E402
     from panel.security import auth                                      # noqa: E402
     from panel.db.models import NO_SELF_HEAL_ENV                         # noqa: E402
@@ -47,6 +47,9 @@ with warnings.catch_warnings():
 # the rolling backup in its place. Healing belongs to the service's own startup, when nothing else
 # has the file; a corrupt database here just makes this command fail, with SQLite's error.
 os.environ[NO_SELF_HEAL_ENV] = "1"
+# Nor any of the service's background workers: create_app() would start every supervised ticker
+# (due restarts, install reconcile, update checks, backups) inside this process — see NO_WORKERS_ENV.
+os.environ[NO_WORKERS_ENV] = "1"
 app = create_app()
 
 
@@ -198,15 +201,22 @@ def cmd_reset_password(args):
 
 
 def cmd_create_admin(args):
+    # The web forms' username rule (validation.username_problem), and the stripped name: the login
+    # form strips what is typed and looks it up exactly, so "admin " made here (a stray space in the
+    # quotes, a pasted tab) could never sign in — and recovering a lockout is this command's job.
+    username = (args.username or "").strip()
+    err = username_problem(username)
+    if err:
+        sys.exit(err)
     with app.app_context():
-        if User.query.filter_by(username=args.username).first():
+        if User.query.filter_by(username=username).first():
             sys.exit("User '%s' already exists — use reset-password / promote instead."
-                     % _tty_safe(args.username))
-        u = User(username=args.username, password_hash=auth.hash_password(_read_password(args)),
-                 display_name=args.username, is_superadmin=True, is_active=True)
+                     % _tty_safe(username))
+        u = User(username=username, password_hash=auth.hash_password(_read_password(args)),
+                 display_name=username, is_superadmin=True, is_active=True)
         db.session.add(u)
         db.session.commit()
-        print("Superadmin '%s' created." % _tty_safe(args.username))
+        print("Superadmin '%s' created." % _tty_safe(username))
 
 
 def cmd_setup_token(args):

@@ -360,9 +360,12 @@ _sq28_new = {"key": "NEW1", "component": "P:panel/x.py", "line": 3, "severity": 
              "rule": "python:S1481", "message": "Remove the unused local variable"}
 
 
-def _sq28_drive(issues, analysed_after=0, total=None, sha=_SHA28):
-    """run_branch with SonarCloud stubbed: (problems, judged, the calls made, sleeps)."""
-    calls, sleeps, polls = [], [], []
+def _sq28_drive(issues, analysed_after=0, total=None, sha=_SHA28, fail_issues=0):
+    """run_branch with SonarCloud stubbed: (problems, judged, the calls made, sleeps).
+
+    `fail_issues`: how many issues/search reads answer a 502 first.
+    """
+    calls, sleeps, polls, fails = [], [], [], [fail_issues]
 
     def _get(path, **params):
         calls.append((path, params))
@@ -374,6 +377,9 @@ def _sq28_drive(issues, analysed_after=0, total=None, sha=_SHA28):
             revs = [{"revision": "b" * 40}] + ([{"revision": _SHA28}]
                                                if len(polls) > analysed_after else [])
             return {"analyses": revs}
+        if fails[0]:
+            fails[0] -= 1
+            raise OSError("HTTP Error 502: Bad Gateway")
         return {"issues": issues if params.get("p") == 1 else [],
                 "paging": {"total": len(issues) if total is None else total}}
     saved = (_sq28._get, _sq28.time.sleep)
@@ -392,6 +398,16 @@ check("sonar main gate: waits until SonarCloud lists an analysis of this commit,
       and ("issues/search", {"componentKeys": "FMSMITH91_linuxgsm-panel", "branch": "main",
                              "resolved": "false", "ps": 500, "p": 1}) in _sq1_ok[2],
       repr(_sq1_ok))
+# A transient error on the ISSUE read, after the analysis was found: retried like the waits are,
+# not a traceback (a red main check holding every panel's update until the next run).
+_sq28_out502 = _io28.StringIO()
+with _ctx28.redirect_stdout(_sq28_out502):
+    try:
+        _sq1_502 = _sq28_drive([_sq28_known], fail_issues=2)
+    except OSError as _e28:
+        _sq1_502 = ("raised", repr(_e28))
+check("sonar main gate: a 502 on the issue read is retried, then main is judged as usual",
+      _sq1_502[0] == [] and _sq1_502[1] == _SHA28 and len(_sq1_502[3]) == 2, repr(_sq1_502))
 _sq1_new = _sq28_drive([_sq28_known, _sq28_new])
 check("sonar main gate: ...an open issue that is not known fails, named with its file, line, rule "
       "and key",

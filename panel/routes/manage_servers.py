@@ -1820,9 +1820,17 @@ def _install_gmod_content(job, remote):
         try:
             cu = ensure_content_user(remote)
             if cu:
-                install_gmod_content(remote, cu["user"], content_games,
-                                     on_progress=lambda m: _p(8, m))
-                ok_m, msg_m = gmod_mount_setup(remote, short_name, cu["user"], content_games)
+                _ok_i, installed, _imsg = install_gmod_content(remote, cu["user"], content_games,
+                                                               on_progress=lambda m: _p(8, m))
+                # Mount only what is on disk, as the Content tab does (_split_on_disk): a game
+                # whose download failed (out of disk) would otherwise be written into mount.cfg
+                # pointing at a directory that is not there.
+                from panel.routes.server_files import _split_on_disk
+                _mountable, _missing = _split_on_disk(cu, installed, content_games)
+                if _missing:
+                    _log.warning("gmod content for %s: not installed, so not mounted: %s",
+                                 short_name, ", ".join(_missing))
+                ok_m, msg_m = gmod_mount_setup(remote, short_name, cu["user"], _mountable)
                 if not ok_m:
                     _log.warning("gmod content mount for %s: %s", short_name, msg_m)
             else:

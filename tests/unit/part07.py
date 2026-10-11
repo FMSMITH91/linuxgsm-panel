@@ -25,8 +25,11 @@ from unit import REPO_ROOT as _gh_root  # noqa: E402
 # 1. GATES
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 # Text that ends in `sudo [-flags] -u ` (or --user=): whatever is interpolated next is the account.
-_GH_TAIL = re.compile(r"\bsudo(?:\s+-{1,2}[A-Za-z][\w-]*)*\s+(?:-u\s*|--user[=\s]\s*)\Z")
-_GH_FORMAT_TAIL = re.compile(r"\bsudo(?:\s+-{1,2}[A-Za-z][\w-]*)*\s+(?:-u\s*|--user[=\s]\s*)\{")
+# The last flag may be a COMBINED one ending in u (`sudo -nu `, `sudo -Hu `): `-u` as its own token
+# only, the gate never saw `f"sudo -nu {user} ..."` outside the builder.
+_GH_TAIL = re.compile(r"\bsudo(?:\s+-{1,2}[A-Za-z][\w-]*)*\s+(?:-[A-Za-z]*u\s*|--user[=\s]\s*)\Z")
+_GH_FORMAT_TAIL = re.compile(
+    r"\bsudo(?:\s+-{1,2}[A-Za-z][\w-]*)*\s+(?:-[A-Za-z]*u\s*|--user[=\s]\s*)\{")
 _GH_PCT = re.compile(r"%(?:\(([^)]*)\))?[#0\- +]*(?:\*|\d+)?(?:\.(?:\*|\d+))?([diouxXeEfFgGcrsa%])")
 _GH_QUOTERS = {"_quote", "quote"}
 _GH_BUILDERS = {"game_user_cmd", "game_user_exec_cmd"}
@@ -132,13 +135,19 @@ def _gh_is_str_format(n):
             and n.func.attr == "format" and isinstance(n.func.value, _gh_ast.Constant))
 
 
+def _gh_is_user_flag(e):
+    """Is `e` sudo's user option as a literal: `--user`, `-u`, or a short-flag cluster ending in u?"""
+    return (isinstance(e, _gh_ast.Constant) and isinstance(e.value, str)
+            and (e.value == "--user" or re.fullmatch(r"-[A-Za-z]*u", e.value)) is not None)
+
+
 def _gh_argv_sites(n):
     """(line, value, "argv") for each value list/tuple literal `n` puts after "sudo" ... "-u"."""
     out, elts, seen_sudo = [], n.elts, False
     for j, e in enumerate(elts):
         if isinstance(e, _gh_ast.Constant) and e.value == "sudo":
             seen_sudo = True
-        elif (seen_sudo and isinstance(e, _gh_ast.Constant) and e.value in ("-u", "--user")
+        elif (seen_sudo and _gh_is_user_flag(e)
               and j + 1 < len(elts) and not isinstance(elts[j + 1], _gh_ast.Constant)):
             out.append((n.lineno, elts[j + 1], "argv"))
     return out
@@ -389,6 +398,8 @@ _gh_ctl = {
     "G1 f-string": _gh_plant('def f(user):\n    return f"sudo -u {user} bash -c x"\n'),
     "G1 percent": _gh_plant('def f(user, x):\n    return "sudo -u %s bash -c %s" % (user, _quote(x))\n'),
     "G1 concat": _gh_plant('def f(user):\n    return "sudo -n -u " + user\n'),
+    "G1 combined flag": _gh_plant('def f(user):\n    return f"sudo -nu {user} bash -c x"\n'),
+    "G1 combined flag, .format": _gh_plant('def f(user):\n    return "sudo -Hu {} bash".format(user)\n'),
     "G1 .format": _gh_plant('def f(user):\n    return "sudo -u {} bash".format(user)\n'),
     "G2 quoted but outside the builder": _gh_plant(
         'def f(user):\n    return f"sudo -u {_quote(user)} bash -c x"\n'),
@@ -396,6 +407,8 @@ _gh_ctl = {
         'def game_user_cmd(user, inner, selfname=None):\n'
         '    return f"sudo -u {_quote(user)} bash -c {_quote(inner)}"\n', _GH_BUILDER_REL),
     "G2 an argv with no check": _gh_plant('def f(user):\n    return ["sudo", "-u", user, "cat"]\n'),
+    "G2 an argv with a combined flag and no check": _gh_plant(
+        'def f(user):\n    return ["sudo", "-nu", user, "cat"]\n'),
     "G3 script name dropped": _gh_plant(
         'def f(server, user, selfname):\n'
         '    return _core.shell_as_game_user(server, user, f"./{selfname} details")\n'),

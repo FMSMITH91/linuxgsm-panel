@@ -13,7 +13,6 @@ on:
       - 'docs/**'
       - 'LICENSE'
       - '.gitignore'
-      - '.gitattributes'
       - '.editorconfig'
   pull_request:
     branches: [ main ]

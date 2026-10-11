@@ -160,6 +160,33 @@ class _Walker(HTMLParser):
                 self.strings.setdefault(collapsed, set()).add("text")
 
 
+# A quoted literal inside a {{ }} expression: `{{ 'Regenerate token' if t else 'Generate token' }}`,
+# a macro's label argument (`sort_th('target', 'Target')`). It renders as the whole text of its
+# node as often as not, and _resolve_jinja turned it into _DYNAMIC, so it was never asked for:
+# those labels showed in English on translated pages while the gate passed.
+_EXPR_LITERAL = re.compile(r"'([^'\\\n]*)'|\"([^\"\\\n]*)\"")
+# A URL builder's arguments are endpoint and parameter names, never text a person reads.
+_URL_CALL = re.compile(r"\b(?:url_for|asset_url)\([^()]*\)")
+
+
+def _is_expr_label(text):
+    """Does a literal from a {{ }} expression read as a label: capitalised, a word, not code?"""
+    return bool(re.match(r"^[A-Z][A-Za-z]", text) and not _JS_CODEY.search(text)
+                and "%" not in text and text == text.strip())
+
+
+def _expression_labels(source):
+    """Every label-like quoted literal inside the {{ }} expressions of template `source`."""
+    source = re.sub(r"\{#.*?#\}", "", source, flags=re.S)
+    out = set()
+    for expr in re.findall(r"\{\{(.*?)\}\}", source, flags=re.S):
+        for m in _EXPR_LITERAL.finditer(_URL_CALL.sub("", expr)):
+            text = m.group(1) if m.group(1) is not None else m.group(2)
+            if _is_expr_label(text):
+                out.add(text)
+    return out
+
+
 def scan_template(path):
     """(translatable strings, unreachable-because-dynamic strings) for one template file."""
     with open(path, encoding="utf-8") as fh:
@@ -167,6 +194,8 @@ def scan_template(path):
     walker = _Walker()
     walker.feed(_resolve_jinja(source))
     walker.close()
+    for text in _expression_labels(source):
+        walker.strings.setdefault(text, set()).add("expr")
     return walker.strings, walker.dynamic
 
 
@@ -198,7 +227,12 @@ _JS_CODEY = re.compile(r"[<>{}$=;#/\\]")
 
 
 def _js_strings(source):
-    """Every string literal in a JS file, as (text, line). Comments and their contents excluded.
+    """Every string literal in a JS file, as (text, line). Comments and their contents excluded."""
+    return [(text, line) for text, line, _at in _js_strings_at(source)]
+
+
+def _js_strings_at(source):
+    """Every string literal in a JS file, as (text, line, index of its opening quote).
 
     A hand-rolled scanner rather than a regex over the whole file: a regex cannot tell the `//` of
     a line comment from the one inside "https://ntfy.sh", and stripping comments first is exactly
@@ -214,9 +248,9 @@ def _js_strings(source):
             end = _comment_end(source, i)
             line += source.count("\n", i, end); i = end
         elif c in "'\"`":
-            start_line = line
+            start, start_line = i, line
             text, i, line = _read_js_string(source, i, line)
-            out.append((text, start_line))
+            out.append((text, start_line, start))
         else:
             i += 1
     return out
@@ -282,6 +316,22 @@ def is_js_ui_text(text):
     )
 
 
+# One capitalised word is too often a key name ('Escape'), a class or an identifier to claim on its
+# own, so is_js_ui_text leaves it out — and with it every one-word label: the UFW badge's
+# "Inactive", the confirm button "Unblock", the toasts "Deleted" and "Sent", the busy label
+# "Retrying…". Claimed here only where the code puts it in front of a person: a toast, a
+# textContent or innerHTML write, a confirm or busy label, or nags.js's element builders.
+_JS_UI_WORD = re.compile(r"^[A-Z][a-z]+(?:…|\.\.\.)?$")
+_JS_UI_SLOT = re.compile(r"(?:\btoast\([^;]*|\btextContent\s*=\s*[^;]*|\binnerHTML\s*=\s*[^;]*"
+                         r"|\bconfirmLabel\s*:\s*|\bbusy[A-Za-z]*\s*[:=]\s*[^;]*"
+                         r"|\b_rbButton\(\s*|\b_rbEl\([^;]*)$")
+
+
+def is_js_ui_word(text, before):
+    """Is this one-word literal a label, given the source just `before` it?"""
+    return bool(_JS_UI_WORD.match(text) and _JS_UI_SLOT.search(before))
+
+
 def scan_js(js_dir=JS_DIR):
     """{string: {filename}} for every JS literal that reads as user-visible text."""
     found = {}
@@ -290,8 +340,8 @@ def scan_js(js_dir=JS_DIR):
         with open(path, encoding="utf-8") as fh:
             source = fh.read()
         lines = source.splitlines()
-        for text, line in _js_strings(source):
-            if not is_js_ui_text(text):
+        for text, line, at in _js_strings_at(source):
+            if not (is_js_ui_text(text) or is_js_ui_word(text, source[max(0, at - 80):at])):
                 continue
             if 1 <= line <= len(lines) and JS_IGNORE in lines[line - 1]:
                 continue

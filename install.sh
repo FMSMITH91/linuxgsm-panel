@@ -643,8 +643,13 @@ ufw_port_state() {
     # Open to the PUBLIC: the From column is Anywhere. A rule for this port from one range only (a
     # Tailscale-only `5000/tcp ALLOW 100.64.0.0/10`) read as "open", and the address printed for it
     # was one the firewall drops.
+    # The IPv4 rule decides (the address printed for it is IPv4), and the FIRST matching rule
+    # wins in UFW: a DENY/REJECT from Anywhere listed before the ALLOW leaves the port closed.
     while IFS= read -r line; do
-        if [[ "${line}" =~ ^${port}(/tcp)?(\ \(v6\))?[[:space:]]+(ALLOW|LIMIT)([[:space:]]+IN)?[[:space:]]+Anywhere ]]; then
+        if [[ "${line}" =~ ^${port}(/tcp)?[[:space:]]+(DENY|REJECT)([[:space:]]+IN)?[[:space:]]+Anywhere ]]; then
+            echo closed; return 0
+        fi
+        if [[ "${line}" =~ ^${port}(/tcp)?[[:space:]]+(ALLOW|LIMIT)([[:space:]]+IN)?[[:space:]]+Anywhere ]]; then
             echo open; return 0
         fi
     done <<< "${out}"
@@ -3034,7 +3039,7 @@ fi
 #
 # Read ONCE into a variable, too: three separate invocations of a root-only command could disagree
 # with each other, and only one of them needs to be right to matter.
-UFW_ACTIVE=0; TS_UFW=0; PORT_OPEN=0; UFW_READ=0
+UFW_ACTIVE=0; TS_UFW=0; PORT_OPEN=0; UFW_READ=0; PORT_RULED=0
 if command -v ufw >/dev/null 2>&1; then
     UFW_STATUS="$(${SUDO} ufw status 2>/dev/null)" || true
     # `ufw status` always prints a "Status:" line when it really ran. Its absence means the command
@@ -3048,9 +3053,25 @@ if command -v ufw >/dev/null 2>&1; then
         # any rule naming the port for an open one: a Tailscale-only `5000/tcp ALLOW 100.64.0.0/10`,
         # even a DENY. The auto-open below was then skipped, and the banner printed the public
         # address with no "firewalled" caveat while the firewall dropped it.
+        # Any OTHER rule for the port (an ALLOW from one range, a DENY, a REJECT) is the operator's
+        # choice, and PORT_RULED keeps the auto-open below off it: reading "not public" as "no rule
+        # at all" appended `ufw allow` over a tailnet-only rule (opening the admin panel to the
+        # internet) or behind a DENY (opening nothing, while saying it had).
+        # The IPv4 rule decides, because the address printed is IPv4 (ipify): a `(v6)` ALLOW left
+        # alone read as open. And UFW takes the FIRST matching rule, so an ALLOW listed after a
+        # DENY/REJECT from Anywhere opens nothing.
+        _ufw_blocked=0
         while IFS= read -r _ufw_line; do
-            if [[ "${_ufw_line}" =~ ^${PORT}(/tcp)?(\ \(v6\))?[[:space:]]+(ALLOW|LIMIT)([[:space:]]+IN)?[[:space:]]+Anywhere ]]; then
+            if [[ "${PORT_OPEN}" -eq 0 ]] \
+                    && [[ "${_ufw_line}" =~ ^${PORT}(/tcp)?[[:space:]]+(DENY|REJECT)([[:space:]]+IN)?[[:space:]]+Anywhere ]]; then
+                _ufw_blocked=1
+            fi
+            if [[ "${_ufw_blocked}" -eq 0 ]] \
+                    && [[ "${_ufw_line}" =~ ^${PORT}(/tcp)?[[:space:]]+(ALLOW|LIMIT)([[:space:]]+IN)?[[:space:]]+Anywhere ]]; then
                 PORT_OPEN=1
+            fi
+            if [[ "${_ufw_line}" =~ ^${PORT}(/tcp)?(\ \(v6\))?[[:space:]] ]]; then
+                PORT_RULED=1
             fi
         done <<< "${UFW_STATUS}"
     fi
@@ -3058,8 +3079,9 @@ fi
 
 # Auto-open the port when Tailscale ISN'T already a way in (not logged in, or UFW
 # doesn't allow the tailscale0 interface) — so a plain-IP install just works. If
-# Tailscale access is set up we leave the public port closed (more private).
-if [[ "${UFW_ACTIVE}" -eq 1 ]] && [[ "${PORT_OPEN}" -eq 0 ]] \
+# Tailscale access is set up we leave the public port closed (more private). Nor when a rule
+# for the port is already there: that is the operator's, and it is left as it stands.
+if [[ "${UFW_ACTIVE}" -eq 1 ]] && [[ "${PORT_OPEN}" -eq 0 ]] && [[ "${PORT_RULED}" -eq 0 ]] \
         && { [[ -z "${TS_ADDR}" ]] || [[ "${TS_UFW}" -eq 0 ]]; }; then
     if ${SUDO} ufw allow "${PORT}/tcp" >/dev/null 2>&1; then
         PORT_OPEN=1
@@ -3079,7 +3101,9 @@ else
 fi
 [[ -n "${TS_ADDR}" ]] && echo -e "  • Tailscale:  ${CYAN}${PANEL_SCHEME}://${TS_ADDR}:${PORT}${SETUP_PATH}${NC}"
 if [[ -n "${PUBLIC_IP}" ]]; then
-    if [[ "${UFW_ACTIVE}" -eq 1 ]] && [[ "${PORT_OPEN}" -eq 0 ]]; then
+    if [[ "${UFW_ACTIVE}" -eq 1 ]] && [[ "${PORT_OPEN}" -eq 0 ]] && [[ "${PORT_RULED}" -eq 1 ]]; then
+        echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${SETUP_PATH}${NC}  ${YELLOW}(an existing UFW rule limits port ${PORT} — public access is not open)${NC}"
+    elif [[ "${UFW_ACTIVE}" -eq 1 ]] && [[ "${PORT_OPEN}" -eq 0 ]]; then
         echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${SETUP_PATH}${NC}  ${YELLOW}(firewalled — run 'ufw allow ${PORT}/tcp' to expose)${NC}"
     elif [[ "${UFW_READ}" -eq 0 ]] && command -v ufw >/dev/null 2>&1; then
         # ufw is installed but would not answer — as an ordinary user it needs root. Say the state

@@ -346,6 +346,16 @@ def _p32_fake_writes():
     check("fake tailscale: ...and `serve set-raw` stores a config as given, the one write that can "
           "leave both spellings", (rc, _table()) == (0, {"443": {"/lgsm": _PS, "/lgsm/": _P}}),
           repr((rc, _table())))
+    # A plain `serve` write turns Funnel OFF for its listener (1.102.4 setServe -> applyFunnel with
+    # allowFunnel=false, "Removing Funnel for ..."), another app's route on it included. The fake only
+    # ever ADDED to its Funnel list, so a check driving that case would have read the wrong state.
+    _seed({"443": {"/x": _OTHER}}, funnel=["443"])
+    rc = _ts_cli(["serve", "--bg", "--https=443", "--set-path=/lgsm", _P])
+    with open(_STATE32, encoding="utf-8") as fh:
+        _fun32 = json.load(fh).get("funnel")
+    check("fake tailscale: a plain `serve` write turns Funnel off for the whole listener, as "
+          "1.102.4's applyFunnel does", (rc, _fun32, sorted(_table().get("443", {})))
+          == (0, [], ["/lgsm", "/x"]), repr((rc, _fun32, _table())))
 
 
 def _p32_boot_twin():
@@ -392,6 +402,9 @@ def _p32_boot_failures():
     check("boot: an `off` the CLI refuses is recorded as failed, with its class, and audited — not "
           "swallowed", (b, row.success, _table()) == (("ok", "failed:permission"), False, _LIVE),
           repr((b, row)))
+    # Only the fallback THIS refused write sets off is let go below: clearing the whole list also
+    # erased every root-fallback call the steps before it made, so the closing check never saw one.
+    _n_verbs32 = len(_VERBS32)
     with _Env32(FAKE_TS_WRITE_FAIL="1"):
         b = _boot(_LIVE, {"BOOT_TLS": True})
     check("boot: when the configured mapping itself could not be written, no other route is touched",
@@ -399,7 +412,7 @@ def _p32_boot_failures():
           repr((b, _table())))
     # A refused write goes on to the root fallback (setup_tailscale_serve's own design); that one
     # is expected here, and the check at the end is about every OTHER path.
-    del _VERBS32[:]
+    del _VERBS32[_n_verbs32:]
     b = _boot({"443": {"/lgsm": _PS}}, {"BOOT_TLS": False, "BOOT_TLS_ERROR": "OSError"})
     check("boot: a TLS start that FAILED re-points Serve at http, the scheme really served (the "
           "stored config still says https)", (_table(), b[0]) == ({"443": {"/lgsm": _P}}, "ok"),

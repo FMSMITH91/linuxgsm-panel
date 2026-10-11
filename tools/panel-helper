@@ -1008,23 +1008,73 @@ def _caller_reaches_root(caller):
         pw = pwd.getpwnam(caller)
         gids = {pw.pw_gid} | {grp.getgrnam(n).gr_gid for n in names}
         lines, seen = [], set()
-        for path in [SUDOERS_FILE] + sorted(glob.glob(os.path.join(SUDOERS_DIR, "*"))):
+        # sudo's own includedir rule (as _sudoers_lines applies it): a name with a '.' or ending
+        # in '~' is not policy. The glob counted `lgsmpanel-full.disabled` or an editor's `…~`
+        # as a live NOPASSWD ALL grant — the permissive direction on this switch, which turns
+        # v_game_account off for every account.
+        for path in [SUDOERS_FILE] + sorted(
+                p for p in glob.glob(os.path.join(SUDOERS_DIR, "*"))
+                if not (os.path.basename(p).endswith("~") or "." in os.path.basename(p))):
             lines.extend(_sudoers_lines(path, seen))
-        rules = _sudoers_rules_for(lines, caller, names, pw.pw_uid, gids)
+        rules = _sudoers_matching_rules(lines, caller, names, pw.pw_uid, gids)
     except Exception as exc:
         sys.stderr.write("panel-helper: could not read the sudo policy for %s (%s); treating it as "
                          "not root-capable\n" % (caller, type(exc).__name__))
         return False
-    return any(_rule_is_nopasswd_root_all(rest) for rest in rules)
+    return _r11b_rules_reach_root(rules, caller, names, pw.pw_uid)
+
+
+def _r11b_rules_reach_root(rules, caller, names, uid):
+    """Whether the caller's matching rules, read in order, leave it every command as root, NOPASSWD.
+
+    _sudoers_matching_rules counts what it cannot evaluate as a match, which is the safe side for
+    _escalation_verdict (a false yes only refuses an account) and the unsafe one here (a false yes
+    turns v_game_account off). So a grant counts only when its user list names the caller for
+    certain — `ALL`, the name, a group it is in, its uid; never through a negation, an alias, a
+    netgroup — and its host list covers this host. And sudo's LAST matching rule wins: a later
+    rule for every command that is not such a grant, or one with a `!` in it, takes the answer
+    back.
+    """
+    reach = False
+    for items, rest in rules:
+        if _rule_is_nopasswd_root_all(rest):
+            if _r11b_names_caller_for_certain(items, caller, names, uid):
+                reach = True
+        elif reach and ("!" in rest or re.search(r"(?:^|[:,=)\s])ALL\s*(?:,|$)", rest.split("=", 1)[-1])):
+            reach = False
+    return reach
+
+
+def _r11b_names_caller_for_certain(items, caller, names, uid):
+    """True when a rule's user list certainly includes `caller`, and nothing in it is negated."""
+    if any(i.startswith("!") for i in items):
+        return False
+    return any(_r11b_item_names_caller(item, caller, names, uid) for item in items)
+
+
+def _r11b_item_names_caller(item, caller, names, uid):
+    """True when one user-list item is `ALL`, the caller's name, a group it is in, or its uid."""
+    if item == "ALL" or item == caller:
+        return True
+    if item.startswith("%") and not item.startswith(("%:", "%#")) and item[1:] in names:
+        return True
+    return item.startswith("#") and item[1:].isdigit() and int(item[1:]) == uid
 
 
 def _rule_is_nopasswd_root_all(rest):
     """True for the part of a sudoers rule after its user list when it reads
-    `<hosts> = [(ALL|root[:...])] NOPASSWD: ... ALL` — every command, as root, no password."""
-    m = re.fullmatch(r"\S+\s*=\s*(?:\(([^)]*)\))?\s*(.*)", rest.strip())
+    `<hosts> = [(ALL|root[:...])] NOPASSWD: ... ALL` — every command, as root, no password.
+
+    The host list must cover THIS host (`ALL`, or its name): a rule for another machine in a
+    shared sudoers grants nothing here. A Host_Alias is not followed, so it does not count."""
+    m = re.fullmatch(r"(\S+)\s*=\s*(?:\(([^)]*)\))?\s*(.*)", rest.strip())
     if not m:
         return False
-    runas, cmd = m.group(1), m.group(2)
+    hosts, runas, cmd = m.group(1), m.group(2), m.group(3)
+    here = {socket.gethostname()}
+    here.add(next(iter(here)).split(".")[0])
+    if not any(h.strip() in ({"ALL"} | here) for h in hosts.split(",")):
+        return False
     if runas is not None and runas.split(":")[0].strip() not in ("ALL", "root"):
         return False
     tags = []
@@ -3146,12 +3196,10 @@ def _restore_run(data_dir):
                        check=False, timeout=120)
         restore_copy_members(stage, data_dir)
         # The restored database is authoritative; a stale WAL/SHM pair beside it is not.
-        for side in ("-wal", "-shm"):
-            try:
-                os.unlink(os.path.join(data_dir, "panel.db" + side))
-            except FileNotFoundError:
-                # Nothing to drop — the panel was shut down cleanly. Not a problem.
-                pass
+        # Unlinked relative to data_dir opened O_NOFOLLOW, as the copy above is: by PATH, a data/
+        # swapped for a link after _restore_target's check (which covers its parent) had root
+        # unlink panel.db-wal/-shm in whatever directory the link named.
+        _r11b_drop_sidecars(data_dir)
     except Exception:
         # Swallowed so the finally below ALWAYS runs: after a half-finished restore the one thing
         # that matters is that the panel comes back up. A raise here would skip that.
@@ -3167,6 +3215,23 @@ def _restore_run(data_dir):
         # decrypts every stored SSH credential. Remove it whatever happened above.
         shutil.rmtree(stage, ignore_errors=True)
     return 0
+
+
+def _r11b_drop_sidecars(data_dir):
+    """Remove panel.db-wal and panel.db-shm from `data_dir`, never through a link at data_dir."""
+    try:
+        ddir = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return                  # not a real directory any more: nothing of the panel's to drop
+    try:
+        for side in ("-wal", "-shm"):
+            try:
+                os.unlink("panel.db" + side, dir_fd=ddir)
+            except FileNotFoundError:
+                # Nothing to drop — the panel was shut down cleanly. Not a problem.
+                pass
+    finally:
+        os.close(ddir)
 
 
 def _restore_target():

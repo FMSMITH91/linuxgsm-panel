@@ -174,7 +174,22 @@ finally:
 
 # run.py's copy leaves out the checkout's data/ (the real one, at the root only — lgsm/data is
 # code), VCS and virtualenvs, and marks the copy as the throwaway it is.
-_jc_run = _jc_load("run")
+# run.py puts tools/js_coverage at sys.path[0] and imports its siblings (v8_lcov, cdp, driver, walk,
+# flows) as TOP-LEVEL modules. Left there, every later part, and any panel module, importing a
+# top-level `run`, `walk`, `driver`, `flows` or `cdp` got the harness's file. Both are put back
+# once it is loaded, as the second load near the end of this part does; `walk` is kept by name.
+_jc_path0, _jc_mods0 = list(sys.path), set(sys.modules)
+try:
+    _jc_run = _jc_load("run")
+    _jc_walk = sys.modules.get("walk")
+finally:
+    sys.path[:] = _jc_path0
+    for _jc_m in set(sys.modules) - _jc_mods0:
+        if not _jc_m.startswith("jscov_"):
+            del sys.modules[_jc_m]
+check("js coverage: loading run.py leaves sys.path and the top-level module names as they were",
+      sys.path == _jc_path0 and "walk" not in sys.modules and "driver" not in sys.modules
+      and _jc_walk is not None, repr(sys.path[:2]))
 _jc_src_tree = _tf14.mkdtemp(prefix="jscov-src-")
 _jc_dst_tree = os.path.join(_tf14.mkdtemp(prefix="jscov-dst-"), "tree")
 try:
@@ -552,7 +567,7 @@ _jc_nav["scripts"] = []
 
 # walk._run_flow: a flow that raises is recorded against its page and the walk goes on; one that
 # does not leaves nothing behind. (Without the catch, the first broken flow ended the whole run.)
-_jc_walk = sys.modules.get("walk")
+# _jc_walk: the walk module run.py imported, kept when its load was undone (see _jc_run above).
 
 
 def _jc_flow_boom(_d):
@@ -642,7 +657,8 @@ def _runs14(*pairs, status="completed"):
     return {"check_runs": [{"name": n, "status": status, "conclusion": c} for n, c in pairs]}
 
 
-# Every check _CI_REQUIRED names, passing — the shape of a code commit whose suite has finished.
+# Every check _CI_REQUIRED names, plus Gitleaks (which it does not name), all passing — the shape
+# of a code commit whose suite has finished.
 _FULL14 = [("checks (ubuntu-24.04 · py3.12)", "success"), ("coverage", "success"),
            ("js coverage", "success"), ("gamedig lockfile (node 22)", "success"),
            ("Analyze (python)", "success"), ("Open code-scanning alerts", "success"),

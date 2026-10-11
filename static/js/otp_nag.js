@@ -2,7 +2,7 @@
 // Show unless suppressed for this browser session ("Not now"). Permanent dismissal is stored
 // server-side, so if we got here the account hasn't chosen "Don't remind me again".
 (function(){ var n=document.getElementById('otp-nag'); if(!n) return;
-  if(sessionStorage.getItem('otpNagHidden')==='1'){ n.remove(); } else { n.style.display=''; } })();
+  if(sessionStorage.getItem('otpNagHidden')==='1'){ n.remove(); } })();
 function hideOtpNag(session){ var n=document.getElementById('otp-nag'); if(n) n.remove();
   if(session){ try{ sessionStorage.setItem('otpNagHidden','1'); }catch(e){} } }
 function dismissOtpNagForever(){
