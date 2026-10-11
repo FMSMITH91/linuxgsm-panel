@@ -2176,8 +2176,17 @@ def _bare_answered(remote, job, ident, now, sent):
         _rbhold_remark_unplanned(remote.id)
         # From the uptime as read just now, not the tick's `now` (see _new_boot).
         boot = time.time() - float(ident.get("uptime") or 0)
-        return "%s rebooted%s (no running game server was found before it).%s" % (
-            _host_label(remote), _boot_clause(boot, job.get("sent")),
+        # A job reaches here with no plan rows for two reasons. Its plan was empty — nothing was
+        # running — or the operator acted on every planned server while the host rebooted, and
+        # exclude_row took each out of the plan. The job's own server list tells them apart: the
+        # second used to be announced as "no running game server was found", about a reboot that
+        # had stopped servers (its own audit row lists them).
+        n = len(job.get("servers") or ())
+        what = (" (no running game server was found before it)" if not n else
+                "; the operator took over the %d game server%s it stopped, so the panel started "
+                "none of them" % (n, "" if n == 1 else "s"))
+        return "%s rebooted%s%s.%s" % (
+            _host_label(remote), _boot_clause(boot, job.get("sent")), what,
             _unread_note(job.get("unread"), "stop or start")), True
     if now - sent >= DID_NOT_HAPPEN_AFTER and ident.get("state") != "stopping":
         _reboot_awaiting.pop(remote.id, None)

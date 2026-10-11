@@ -586,3 +586,26 @@ with _patched():
             _hr51._reboot_when_empty.pop(_RID51, None)
 check("reboot when empty: ...and the stop phase's own bounce (_bounced) is what counts it",
       _jb51_info.get("unread_bounces") == 1 and not _jb51_info.get("bounces"), repr(_jb51_info))
+
+# ── A05: a reboot whose every planned server the operator took over is not "no server running" ──
+def _bare51(servers):
+    with _patched():
+        _patch(_hr51, "_rbhold_remark_unplanned", lambda rid: None)
+        try:
+            now = _hr51.time.time()
+            return _hr51._bare_answered(NS(id=_RID51, display_name="p51-host"),
+                                        {"boot": "b-old", "sent": now - 90, "servers": servers},
+                                        {"boot": "b-new", "uptime": 30}, now, now - 90)
+        finally:
+            _hr51._reboot_awaiting.pop(_RID51, None)
+
+
+_bare51_taken = _bare51([{"name": "fctr", "owner": "p51", "stop": "stopped"},
+                         {"name": "gmod", "owner": "p51", "stop": "stopped"}])
+_bare51_plain = _bare51([])
+check("reboot: a job whose two stopped servers the operator took over during the reboot says so, "
+      "not 'no running game server was found' (a truly empty plan still does)",
+      _bare51_taken[1] is True and "took over the 2 game servers it stopped" in _bare51_taken[0]
+      and "no running game server" not in _bare51_taken[0]
+      and "no running game server was found before it" in _bare51_plain[0],
+      repr((_bare51_taken, _bare51_plain)))
