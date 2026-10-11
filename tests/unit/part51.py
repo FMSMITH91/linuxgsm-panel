@@ -7,6 +7,7 @@ HOW IT RUNS. Every outside call is a stand-in (patched with part20's _patch / _p
 the end of each block); nothing touches the network, sudo, a real host or the checkout's data/.
 """
 import os
+import shutil as _shutil51
 import tempfile as _tf51
 import types as _types51
 
@@ -232,6 +233,7 @@ check("self-update launcher: while a run is in progress it leaves that run's log
       "launch it then makes is refused)",
       _li51[0] is False and _li51_seen == [True] and os.path.exists(_li51_log),
       repr((_li51, _li51_seen)))
+_shutil51.rmtree(_li51_dir, ignore_errors=True)
 
 # ── A02: a disconnect hook (and a ban-change listener) is keyed by module AND qualified name ───
 from panel.ops import socket_hooks as _sh51  # noqa: E402
@@ -298,6 +300,7 @@ check("self-update: not launched while a backup restore holds the restore lock",
       _rx51_u[0] is False and "restore is in progress" in _rx51_u[1] and _rx51_run == []
       and not os.path.exists(os.path.join(_rx51_dir, "data", "self-update.sh")),
       repr((_rx51_u, _rx51_run)))
+_shutil51.rmtree(_rx51_dir, ignore_errors=True)
 
 # ── A02 lead: repair restores a renamed file's original and skips a new one ─────────────────────
 _rp51 = []

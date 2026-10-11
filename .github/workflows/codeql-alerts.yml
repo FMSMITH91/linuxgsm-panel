@@ -190,7 +190,9 @@ jobs:
         if: steps.ref.outputs.skip != 'true' && steps.settled.outputs.judge == 'true'
         with:
           persist-credentials: false   # nothing here pushes; gh takes the token from GH_TOKEN
-          sparse-checkout: .github/scripts/code_scanning_analyses.py
+          sparse-checkout: |
+            .github/scripts/code_scanning_analyses.py
+            .github/scripts/pr_scope.py
           sparse-checkout-cone-mode: false
 
       - name: Fail if that ref has open code-scanning alerts

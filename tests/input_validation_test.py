@@ -73,6 +73,7 @@ from panel.services import lgsm_data as _lgsm_data
 import pathlib as _pl
 import tempfile as _tf
 _lgsm_data._CACHE_DIR = _pl.Path(_tf.mkdtemp())
+__import__("atexit").register(__import__("shutil").rmtree, str(_lgsm_data._CACHE_DIR), True)   # not left in /tmp
 (_lgsm_data._CACHE_DIR / _lgsm_data.SERVERLIST).write_text(
     "shortname,gameservername,gamename,os\n"
     "cod,codserver,Call of Duty,ubuntu-24.04\n"

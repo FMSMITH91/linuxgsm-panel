@@ -29,6 +29,7 @@ rate limit at Codacy is not a reason to fail the build, and the next scheduled r
 this one missed. Any other answer it cannot read (another 4xx, a redirect, a body that is not JSON,
 JSON that is not the object it expects) exits 1.
 """
+import http.client
 import json
 import os
 import pathlib
@@ -95,6 +96,8 @@ def fetch_errors():
         url = API + ("&cursor=%s" % cursor if cursor else "")
         req = urllib.request.Request(
             url, data=json.dumps({"levels": list(LEVELS)}).encode(), headers=headers, method="POST")
+        # API is a constant https URL; only the cursor Codacy returned is appended to its query.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- see above
         with urllib.request.urlopen(req, timeout=30) as resp:   # nosec B310 - constant https host
             data, cursor = _read_page(json.loads(resp.read().decode("utf-8", "replace")))
         if data is not None:
@@ -155,8 +158,10 @@ def _fetch_or_exit_code():
         print("::error::the Codacy API answered with %s for %s/%s — refusing to report it clean."
               % (what, ORG, REPO))
         return None, 1
-    except (urllib.error.URLError, OSError) as exc:
-        # No answer at all — DNS, a refused connection, a timeout. An outage, not a verdict.
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+        # No answer at all — DNS, a refused connection, a timeout. An outage, not a verdict. So is a
+        # body cut short: http.client.IncompleteRead is an HTTPException, neither an OSError nor a
+        # ValueError, and escaped as a traceback (exit 1: a red check on main's head for a day).
         print("::warning::could not reach the Codacy API (%s) — not failing the build; the next "
               "scheduled run will re-check." % type(exc).__name__)
         return None, 0

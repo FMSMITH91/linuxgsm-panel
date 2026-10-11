@@ -8,6 +8,7 @@
 import io as _gh_io
 import shlex as _gh_shlex
 
+from eventlet.timeout import Timeout as _EvTimeout08  # noqa: E402 - a timed-out green join raises it
 from unit.part01 import NS, _sm_core, _sm_cron, _sm_files, _sm_game, _sm_gmod, check, os  # noqa: E402
 
 from panel.security import privileged as _gh_priv  # noqa: E402
@@ -754,11 +755,20 @@ try:
     _rv_del = _sm_hosts.remote_ufw_delete_rule(_rv_srv, 3, expect_key="k3")
 finally:
     for _t in _rv_thr:
-        _t.join(5)
+        # The same trap as the sleep above: a join that times out RAISES eventlet's Timeout (a
+        # BaseException) under the patched suite, so a lock left held — the very regression this
+        # checks — ended the whole run with a traceback instead of failing the check below.
+        try:
+            _t.join(5)
+        except _EvTimeout08:
+            pass
     _sm_core.run_privileged, _sm_hosts.firewall.remote_ufw_status = _rv_saved
 check("remote_ufw_delete_rule: an insert racing the guard lands AFTER the delete, never between",
       _rv_del[0] is True and _rv_order == ["read", "ufw-delete-num", "ufw-deny-ip"],
       repr((_rv_del, _rv_order)))
+check("remote_ufw_delete_rule: ...and the racing insert finished (ufw_lock was released)",
+      not any(_t.is_alive() for _t in _rv_thr), "%d still waiting" % sum(
+          1 for _t in _rv_thr if _t.is_alive()))
 
 
 # 3 + 4. The crontab rewrite, run for real in bash against a stand-in `crontab`.

@@ -23,6 +23,7 @@ Usage:
     sonar_new_issues.py --self-test
 """
 import argparse
+import http.client
 import json
 import re
 import sys
@@ -43,8 +44,18 @@ KNOWN_OPEN = {
 
 def _get(path, **params):
     url = API + path + "?" + urllib.parse.urlencode(params)
+    # API is a constant https URL; the path is this script's own, the params urlencoded.
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- see above
     with urllib.request.urlopen(url, timeout=30) as resp:  # nosec B310 - a fixed https host
         return json.load(resp)
+
+
+# SonarCloud's weather, in ONE place for every read: HTTPError and URLError are OSErrors; a 200 with
+# a body that is not JSON is a ValueError; a body cut short (http.client.IncompleteRead) is an
+# HTTPException, which is neither. The two waits for an analysis caught OSError alone, so the other
+# two crashed the script there — a red "SonarCloud open issues (main)" on main's head until the next
+# run — though _retrying, beside them, already counted bad JSON as weather.
+_WEATHER = (OSError, ValueError, http.client.HTTPException)
 
 
 def _retrying(fn, deadline, sleep=None):
@@ -58,7 +69,7 @@ def _retrying(fn, deadline, sleep=None):
     while True:
         try:
             return fn()
-        except (OSError, ValueError) as e:      # HTTPError and URLError are OSErrors; bad JSON
+        except _WEATHER as e:
             print("SonarCloud did not answer (%s); retrying" % e)
         if time.time() > deadline:
             return None
@@ -96,21 +107,22 @@ def verdict(entry, issues):
     return lines
 
 
-def run(pr, sha, timeout):
+def run(pr, sha, timeout, sleep=None):
     """Wait for SonarCloud's analysis of `sha`, then return (problems, waited seconds)."""
+    sleep = sleep or time.sleep
     start, entry = time.time(), None
     while entry is None:
         try:
             entry = analysis_of(_get("project_pull_requests/list", project=PROJECT), pr, sha)
-        except OSError as e:
+        except _WEATHER as e:
             print("SonarCloud did not answer (%s); retrying" % e)
         if entry is None:
             if time.time() - start > timeout:
                 return (["SonarCloud had not analysed %s after %ds" % (sha[:12], timeout)],
                         int(time.time() - start))
-            time.sleep(20)
+            sleep(20)
     got = _retrying(lambda: _get("issues/search", componentKeys=PROJECT, pullRequest=pr,
-                                 resolved="false", ps=100), start + timeout)
+                                 resolved="false", ps=100), start + timeout, sleep)
     if got is None:
         return (["SonarCloud did not answer the issue read for %s within %ds" % (sha[:12], timeout)],
                 int(time.time() - start))
@@ -180,8 +192,9 @@ def _open_issues(branch, deadline=None):
     return list(issues.values()), total
 
 
-def _wait_for_branch(branch, sha, timeout):
+def _wait_for_branch(branch, sha, timeout, sleep=None):
     """Wait until SonarCloud has analysed `sha` on `branch`: (entry, None) or (None, why)."""
+    sleep = sleep or time.sleep
     start = time.time()
     while True:
         try:
@@ -189,12 +202,12 @@ def _wait_for_branch(branch, sha, timeout):
             if entry and (sha is None or analysed(
                     _get("project_analyses/search", project=PROJECT, branch=branch, ps=50), sha)):
                 return entry, None
-        except OSError as e:
+        except _WEATHER as e:
             print("SonarCloud did not answer (%s); retrying" % e)
         if time.time() - start > timeout:
             return None, "SonarCloud had not analysed %s on %s after %ds" % (
                 (sha or "any commit")[:12], branch, timeout)
-        time.sleep(20)
+        sleep(20)
 
 
 def run_branch(branch, sha, timeout, known=None):
@@ -236,6 +249,41 @@ def _branch_cases():
     }
 
 
+def _scripted(answers):
+    """A stand-in read that raises or returns each of `answers` in turn."""
+    answers = list(answers)
+
+    def _read(*_a, **_k):
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+    return _read
+
+
+def _wait_cases(sha, pr_list):
+    """The two waits for an analysis, through a truncated body and a bad one, then an answer."""
+    global _get
+    real, out = _get, {}
+    weather = [http.client.IncompleteRead(b"{"), ValueError("not JSON")]
+    try:
+        out["a truncated body on the issue read is retried too"] = (
+            _retrying(_scripted([http.client.IncompleteRead(b"{"), {"issues": []}]),
+                      time.time() + 60, sleep=lambda s: None) == {"issues": []})
+        _get = _scripted(weather + [pr_list, {"issues": []}])
+        out["the pull-request wait retries a truncated body and a bad one, then judges"] = (
+            run("8", sha, 60, sleep=lambda s: None)[0] == [])
+        _get = _scripted(weather + [{"branches": [{"name": "main"}]}])
+        out["the branch wait retries a truncated body and a bad one, then finds the analysis"] = (
+            _wait_for_branch("main", None, 60, sleep=lambda s: None) == ({"name": "main"}, None))
+    except Exception as e:  # noqa: BLE001 - a crash IS the failure these cases look for
+        print("SELF-TEST crashed in a wait: %r" % (e,))
+        out["the waits survive SonarCloud's weather"] = False
+    finally:
+        _get = real
+    return out
+
+
 def self_test():
     """Check the matching and the verdict against canned API answers."""
     sha = "a" * 40
@@ -268,6 +316,7 @@ def self_test():
         _retrying(_flaky, time.time() + 60, sleep=lambda s: None) == {"issues": []})
     cases["an issue read that never answers gives up at the deadline, not with a crash"] = (
         _retrying(_get_never, time.time() - 1, sleep=lambda s: None) is None)
+    cases.update(_wait_cases(sha, pr_list))
     bad = [name for name, ok in cases.items() if not ok]
     for name in bad:
         print("SELF-TEST FAIL " + name)

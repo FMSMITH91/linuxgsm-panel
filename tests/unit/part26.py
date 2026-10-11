@@ -17,7 +17,9 @@ taken out of its workflow and run with `gh` stubbed, so the callers are tested, 
 
 Workflows are read as text: PyYAML is not installed where CI runs this suite.
 """
+import contextlib as _ctx26
 import importlib.util as _ilu26
+import io as _io26
 import json as _json26
 import os
 import re
@@ -233,7 +235,8 @@ _m_judge26 = _step26(_cqa26, _judge_name26)
 _m_poll26 = _poll26(_m_judge26)
 _m_job26 = _job26(_cqa26, "open-alerts")
 _m_steps26 = [s[0] or s[1].split("@")[0] for s in re.findall(_STEP26, _m_job26, re.M)]
-_sparse26 = "sparse-checkout: .github/scripts/code_scanning_analyses.py"
+_sparse26 = ("sparse-checkout: |\n            .github/scripts/code_scanning_analyses.py\n"
+             "            .github/scripts/pr_scope.py\n")
 _pr_sparse26 = ("sparse-checkout: |\n            .github/scripts/code_scanning_analyses.py\n"
                 "            .github/scripts/pr_scope.py\n")
 check("code-scanning gates: pr-alerts checks out the scripts, asks whether the pull request is "
@@ -462,32 +465,97 @@ class _MhAnswer26(object):
         self.stdout, self.returncode, self.stderr = out, rc, ""
 
 
+def _mh_gh26(head, compare=None):
+    """A `gh` that answers main's head with `head`, and the compare API with `compare` (a dict)."""
+    def _run(argv, **_k):
+        _mh_calls26.append(list(argv))
+        if "/compare/" in argv[-1]:
+            return _MhAnswer26(_json26.dumps(compare)) if compare is not None else _MhAnswer26("", 1)
+        return _MhAnswer26(head + "\n") if head is not None else _MhAnswer26("", 1)
+    return _run
+
+
+def _mh_main26(head, compare=None):
+    """main() for a scheduled run of X on main; -> (exit status, the refs it read analyses of)."""
+    del _mh_rows26[:]
+    CSA.subprocess.run = _mh_gh26(head, compare)
+    rc = CSA.main(["--ref", "refs/heads/main", "--sha", _X26, "--event", "schedule",
+                   "--workflow", ".github/workflows/codeql.yml", "--tries", "1"])
+    return rc, list(_mh_rows26)
+
+
+def _mh_files26(*names):
+    return {"status": "ahead", "files": [{"filename": n} for n in names]}
+
+
 try:
     os.environ["GITHUB_REPOSITORY"] = "o/r"
     CSA.read_rows = lambda repo, ref: (_mh_rows26.append(ref), [])[1]
-    CSA.subprocess.run = lambda argv, **_k: (_mh_calls26.append(list(argv)), _MhAnswer26(_Y26 + "\n"))[1]
-    _mh_moved26 = CSA.main(["--ref", "refs/heads/main", "--sha", _X26, "--event", "schedule",
-                            "--workflow", ".github/workflows/codeql.yml", "--tries", "1"])
-    _mh_read_moved26 = list(_mh_rows26)
-    CSA.subprocess.run = lambda argv, **_k: _MhAnswer26(_X26 + "\n")
-    _mh_head26 = CSA.main(["--ref", "refs/heads/main", "--sha", _X26, "--event", "schedule",
-                           "--workflow", ".github/workflows/codeql.yml", "--tries", "1"])
-    CSA.subprocess.run = lambda argv, **_k: _MhAnswer26("", 1)
-    _mh_unread26 = CSA.main(["--ref", "refs/heads/main", "--sha", _X26, "--event", "schedule",
-                             "--workflow", ".github/workflows/codeql.yml", "--tries", "1"])
+    _mh_moved26 = _mh_main26(_Y26, _mh_files26("app.py", "README.md"))
+    _mh_head26 = _mh_main26(_X26)
+    _mh_unread26 = _mh_main26(None)
+    # A head that added documentation only: that push runs no uploader (the shared paths-ignore),
+    # so X's scan is still main's. MOVED threw the week's scan away with nothing to replace it.
+    _mh_docs26 = _mh_main26(_Y26, _mh_files26("README.md", "docs/x.md"))
+    _mh_cmp_unread26 = _mh_main26(_Y26, None)
+    _mh_diverged26 = _mh_main26(_Y26, dict(_mh_files26("README.md"), status="diverged"))
+    _mh_renamed26 = _mh_main26(_Y26, {"status": "ahead", "files": [
+        {"filename": "docs/app.md", "previous_filename": "app.py"}]})
 finally:
     CSA.subprocess.run, CSA.read_rows = _saved_csa26
     if _saved_repo26 is None:
         os.environ.pop("GITHUB_REPOSITORY", None)
     else:
         os.environ["GITHUB_REPOSITORY"] = _saved_repo26
+# The reads are the point of the head and unread cases: with no rows, `wait` answers 1, and so does
+# a main() that returned early without reading anything. Only a read of main's analyses is
+# "judged as before".
+_MH_JUDGED26 = (1, ["refs/heads/main"])
 check("code-scanning gates: a scheduled run whose commit main has moved past answers MOVED (3) "
       "without reading the analyses; one still at the head, or a head that could not be read, is "
-      "judged as before (1: nothing analysed in these stand-in rows)",
-      (_mh_moved26, _mh_read_moved26, _mh_head26, _mh_unread26) == (3, [], 1, 1)
-      and _mh_calls26[:1] == [["gh", "api", "--jq", ".sha", "--", "repos/%s/commits/main"
+      "judged as before — it reads main's analyses (1: nothing analysed in these stand-in rows)",
+      (_mh_moved26, _mh_head26, _mh_unread26) == ((3, []), _MH_JUDGED26, _MH_JUDGED26)
+      and _mh_calls26[:1] == [["gh", "api", "--jq", ".sha", "--", "repos/%s/commits/heads/main"
                                % "o/r"]],
-      repr((_mh_moved26, _mh_read_moved26, _mh_head26, _mh_unread26, _mh_calls26[:1])))
+      repr((_mh_moved26, _mh_head26, _mh_unread26, _mh_calls26[:1])))
+check("code-scanning gates: ...a head that only added DOCUMENTATION on top of it is not 'moved' "
+      "(that push analysed nothing), while a comparison that cannot be read, a head that is not a "
+      "descendant, or a rename out of code still is",
+      _mh_docs26 == _MH_JUDGED26 and _mh_cmp_unread26 == (3, []) and _mh_diverged26 == (3, [])
+      and _mh_renamed26 == (3, [])
+      and ["gh", "api", "--", "repos/o/r/compare/%s...%s" % (_X26, _Y26)] in _mh_calls26,
+      repr((_mh_docs26, _mh_cmp_unread26, _mh_diverged26, _mh_renamed26)))
+
+# The upload guards ask the same function, through `still-head`: it writes current=false only when
+# main moved past the analysed commit with something other than documentation.
+_sh_out26 = os.path.join(_tf26.mkdtemp(prefix="lgsm-unit-p26-"), "out")
+
+
+def _still26(head, compare=None):
+    open(_sh_out26, "w").close()
+    _saved = (CSA.subprocess.run, os.environ.get("GITHUB_OUTPUT"), os.environ.get("GITHUB_REPOSITORY"))
+    try:
+        os.environ["GITHUB_OUTPUT"], os.environ["GITHUB_REPOSITORY"] = _sh_out26, "o/r"
+        CSA.subprocess.run = _mh_gh26(head, compare)
+        with _ctx26.redirect_stdout(_io26.StringIO()):
+            CSA.still_head_main(["--sha", _X26])
+    finally:
+        CSA.subprocess.run = _saved[0]
+        for _k, _v in (("GITHUB_OUTPUT", _saved[1]), ("GITHUB_REPOSITORY", _saved[2])):
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
+    return open(_sh_out26, encoding="utf-8").read()
+
+
+check("code-scanning gates: the upload guards' still-head says current=false only for a head moved "
+      "past by code, and current=true at the head, for an unreadable head, or over documentation",
+      [_still26(_Y26, _mh_files26("app.py")), _still26(_X26), _still26(None),
+       _still26(_Y26, _mh_files26("README.md"))]
+      == ["current=false\n", "current=true\n", "current=true\n", "current=true\n"],
+      repr([_still26(_Y26, _mh_files26("app.py")), _still26(_X26), _still26(None),
+            _still26(_Y26, _mh_files26("README.md"))]))
 
 # ...and every SARIF upload a schedule can make is held back the same way: in each workflow the
 # alert gates wait for, each upload-sarif step's `if:` reads the still_head step, which runs only on
@@ -500,10 +568,18 @@ _sh_want26 = {"codeql.yml": "steps.still_head.outputs.current != 'false'",
 check("code-scanning gates: zizmor's scan job hands the head check to its upload job",
       "current: ${{ steps.still_head.outputs.current }}" in _wf14_code("zizmor.yml")
       and "id: still_head" in _wf14_code("zizmor.yml").split("\n  upload:\n")[0], "")
+# The guard's own `if:`: scheduled runs everywhere; in codeql.yml, which alone can be run by hand,
+# a manual run on main as well (it uploads over a newer push exactly as a schedule did).
+_sh_when26 = {"codeql.yml": r"github\.event_name != 'push' && github\.event_name != 'pull_request' "
+                            r"&& github\.ref == 'refs/heads/main'",
+              "security-code.yml": r"github\.event_name == 'schedule'",
+              "zizmor.yml": r"github\.event_name == 'schedule'"}
+_sh_seen26 = 0
 for _shw26 in ("codeql.yml", "security-code.yml", "zizmor.yml"):
     _sht26 = _wf14_code(_shw26)
     for _shm26 in re.finditer(r"^( +)- name: [^\n]*\n((?:\1  [^\n]*\n)*?)\1  uses: "
                               r"github/codeql-action/upload-sarif@", _sht26, re.M):
+        _sh_seen26 += 1
         _sh_if26 = re.search(r"^\s+if: (.*)$", _shm26.group(2), re.M)
         # This job's steps: from its last `steps:` line before the upload.
         _sh_before26 = _sht26[:_shm26.start()]
@@ -513,12 +589,17 @@ for _shw26 in ("codeql.yml", "security-code.yml", "zizmor.yml"):
             _sh_job26 = _sht26.split("\n  upload:\n")[0]
         _sh_ok26 = (_sh_if26 is not None and _sh_want26[_shw26] in _sh_if26.group(1)
                     and re.search(r"- name: Is the analysed commit still main's head\? \(scheduled "
-                                  r"runs only\)\n\s+id: still_head\n\s+if: .*github\.event_name == "
-                                  r"'schedule'\n", _sh_job26) is not None)
+                                  r"(?:and manual )?runs only\)\n\s+id: still_head\n\s+if: .*"
+                                  + _sh_when26[_shw26] + r"\n\s+env:\n(?:\s+[A-Z_]+: .*\n)*"
+                                  r"\s+run: python3 \.github/scripts/code_scanning_analyses\.py "
+                                  r"still-head --sha \"\$\{GITHUB_SHA\}\"\n", _sh_job26) is not None)
         if not _sh_ok26:
             _sh_bad26.append("%s: %s" % (_shw26, _shm26.group(0).splitlines()[0].strip()))
 _sh_count26 = sum(len(re.findall(r"uses: github/codeql-action/upload-sarif@", _wf14_code(w)))
                   for w in ("codeql.yml", "security-code.yml", "zizmor.yml"))
+# Every upload counted was also LOOKED AT: the loop above finds only steps written `- name:` first,
+# so an upload step in any other key order was counted as guarded without being read.
 check("code-scanning gates: each of the four SARIF uploads the gates wait for is skipped by a "
       "scheduled run whose commit is no longer main's head",
-      _sh_count26 == 4 and not _sh_bad26, repr((_sh_count26, _sh_bad26)))
+      _sh_count26 == 4 and _sh_seen26 == _sh_count26 and not _sh_bad26,
+      repr((_sh_count26, _sh_seen26, _sh_bad26)))

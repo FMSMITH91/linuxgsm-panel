@@ -496,6 +496,16 @@ _nsr_ns = {"__name__": "nsr_probe", "__file__": os.path.join(_root, "tools", "no
 # nosemgrep: python.lang.security.audit.exec-detected.exec-detected -- this repo's own tools/nosudo_runner.py, minus its __main__ block
 exec(compile(_nsr_src.split("if __name__ ==")[0], "nosudo_runner.py", "exec"), _nsr_ns)   # nosec
 _nsr_ns["_install"]()
+# ...and its egress guard, which only the runner's main() installed. The end-of-run gate in
+# unit_test.py is named for sudo AND the network, and reads BLOCKED for both; with only _install()
+# here nothing ever wrote a connection into it, so its network half read nothing on CI, which runs
+# this suite directly. app.py's eventlet.monkey_patch() has run by now (part01 imports the app), so
+# the guard patches the socket class the suite actually uses.
+_nsr_ns["_install_egress_guard"]()
+_nsr_connect = sys.modules["socket"].socket.connect
+check("no-sudo runner: its egress guard is installed for the rest of the run",
+      _nsr_connect.__qualname__.startswith("_install_egress_guard"),
+      "socket.connect is %s" % _nsr_connect.__qualname__)
 from panel.ops.ssh_manager import _core as _nsr_core, cron as _nsr_cron, files as _nsr_files
 from panel.ops import system_ops as _nsr_so
 check("no-sudo runner: it stubs the DEFINITION site of _run_local, not just the package",
@@ -2478,7 +2488,8 @@ try:
     _cs_seen = []
     _cs_real_pwd, _cs_real_drop = _helper.pwd, _helper._as_game_user
     _helper.pwd = type("P", (), {"getpwnam": staticmethod(lambda n: _cs_fake)})()
-    _helper._as_game_user = lambda pw, p, emit: (_cs_seen.append(p), emit(os.path.realpath(p)))[0]
+    # -> 0, as the real one answers for a read it completed (its rc), not None.
+    _helper._as_game_user = lambda pw, p, emit: (_cs_seen.append(p), emit(os.path.realpath(p)), 0)[2]
     _cs_r, _cs_w = os.pipe()
     _cs_saved_fd = os.dup(1)
     os.dup2(_cs_w, 1)
@@ -4009,8 +4020,9 @@ _BAD_VECTORS = [
     ("ufw-delete-num-if", ["3", "a" * 201]),
     ("apt-install", ["curl", "--reinstall"]),
     ("write-file", ["/etc/shadow"]),
-    # The backup NAME is argument two, so _BAD above never reaches it — it pads position two
-    # with "x". These aim at the validator that actually guards the path segment.
+    # The backup NAME is argument two, so _BAD above never aims at it — it pads position two
+    # with the verb's valid sample. These aim at the validator that actually guards the path
+    # segment.
     ("game-backup-read", ["ubuntu", "../../etc/shadow"]),
     ("game-backup-read", ["ubuntu", "a/b.tar.gz"]),
     ("game-backup-read", ["ubuntu", "x.tar.gz; id"]),

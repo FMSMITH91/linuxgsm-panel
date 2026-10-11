@@ -2332,7 +2332,18 @@ check("_appendConsole" in _sd and _sd.count("function _appendConsole(") == 1,
 # of the server-rendered seed. What must not come back is wiping on EVERY poll, so the assertion is
 # that the steady-state path goes through the overlap check and that the wipe stays behind the
 # one-shot primed flag.
-_rc = _sd[_sd.find("function refreshConsole("):_sd.find("function loadMoreConsole(")]
+def _window_r12d(text, first, last):
+    """Return `text` from `first` up to `last`; "" when either marker is missing or out of order.
+
+    A plain slice between two find()s ran to the END of the file when `last` was renamed (-1), so
+    the `in` checks below could pass on text that lies past the function they mean.
+    """
+    i = text.find(first)
+    j = text.find(last, i + 1) if i >= 0 else -1
+    return text[i:j] if 0 <= i < j else ""
+
+
+_rc = _window_r12d(_sd, "function refreshConsole(", "function loadMoreConsole(")
 check("_newConsoleRows(_consoleLines, rows)" in _rc and "_consolePrimed" in _rc,
       "console: a poll appends what is new instead of rebuilding from its window",
       "refreshConsole no longer diffs against the scrollback — it is back to wiping every poll")
@@ -2383,7 +2394,7 @@ check(all(('id="%s"' % _i) in _sd_tpl for _i in ("rpb-do", "rpb-now", "rpb-auto"
 # the element has to be focusable for a keydown handler to reach it at all.
 # Scoped to the select-all block: "tabindex" appears elsewhere in this file, so a whole-file
 # substring test passed even with the console's own setAttribute deleted.
-_sa = _sd[_sd.find("// Ctrl/Cmd+A inside the console"):_sd.find("function clearConsole(")]
+_sa = _window_r12d(_sd, "// Ctrl/Cmd+A inside the console", "function clearConsole(")
 check(bool(_sa) and "setAttribute('tabindex'" in _sa and "selectNodeContents" in _sa,
       "console: Ctrl+A is scoped to the console (focusable element + its own handler)",
       "the console is no longer focusable or no longer scopes the selection — Ctrl+A will take "

@@ -4,7 +4,7 @@ name: ClusterFuzzLite
 # build contract (.clusterfuzzlite/{Dockerfile,build.sh,project.yaml}), no enrolment needed.
 #
 # It overlaps with fuzz.yml, deliberately and differently: fuzz.yml runs every target for a fixed
-# 60s on each push, while this runs in 'code-change' mode, fuzzing only what the diff actually
+# 60s on each pull request (and weekly), while this runs in 'code-change' mode, fuzzing only what the diff actually
 # touched and reporting a crash as a SARIF finding in the Security tab next to the CodeQL and
 # Bandit alerts. Keeping both is a choice — fuzz.yml is the broad sweep, this is the targeted one.
 on:
@@ -65,6 +65,17 @@ jobs:
               'panel/ops/ssh_manager/**'
               'panel/ops/system_ops.py'
               'panel/core/terminal.py'
+              # ...and the panel modules those targets import, which Atheris instruments and the
+              # harnesses run through (part29 holds this list to what they load).
+              'panel/core/validation.py'
+              'panel/core/clock.py'
+              'panel/security/privileged.py'
+              'panel/db/models.py'
+              'panel/ops/__init__.py'
+              'panel/security/__init__.py'
+              'panel/db/__init__.py'
+              'panel/__init__.py'
+              'panel/core/__init__.py'
               'tests/fuzz/**'
               '.github/workflows/cflite_pr.yml'
               '.clusterfuzzlite/**'

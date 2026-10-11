@@ -71,6 +71,17 @@ jobs:
               'panel/ops/ssh_manager/**'
               'panel/ops/system_ops.py'
               'panel/core/terminal.py'
+              # ...and the panel modules those targets import, which Atheris instruments and the
+              # harnesses run through (part29 holds this list to what they load).
+              'panel/core/validation.py'
+              'panel/core/clock.py'
+              'panel/security/privileged.py'
+              'panel/db/models.py'
+              'panel/ops/__init__.py'
+              'panel/security/__init__.py'
+              'panel/db/__init__.py'
+              'panel/__init__.py'
+              'panel/core/__init__.py'
               'tests/fuzz/**'
               '.github/workflows/fuzz.yml'
               'requirements.txt'

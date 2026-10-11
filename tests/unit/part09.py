@@ -47,6 +47,14 @@ def _gh_make_db(path, game_rows=(), remote_rows=()):
 _GH_BK_ATTRS = ("BACKUP_DIR", "DATA_DIR", "DB_PATH", "CONFIG_FILE", "SECRET_FILE", "CRED_KEY_FILE",
                 "_helper_present", "_run_verb", "create_backup", "get_passphrase", "_is_system_service")
 _gh_bk_saved = {a: getattr(_gh_bk, a) for a in _GH_BK_ATTRS}
+# restore_backup refuses while system_ops._update_in_progress() is true (#416), and that reads THIS
+# checkout's data/self-update.log and the process's launch mark. A checkout with a recent log and no
+# exit line (a self-update running or killed, a copied live tree) turned every restore check here
+# into the update refusal: answers decided by the machine, not the code. Stubbed for the restore
+# blocks, as part51 does for the same call.
+from panel.ops import system_ops as _gh_so  # noqa: E402
+_gh_upd_saved = _gh_so._update_in_progress
+_gh_so._update_in_progress = lambda: False
 _gh_archive_key = _GhFernet.generate_key()
 _gh_live_key = _GhFernet.generate_key()          # a DIFFERENT key: the archive's own must be used
 _gh_seq = [0]
@@ -443,6 +451,7 @@ try:
 finally:
     for _gh_a, _gh_v in _gh_bk_saved.items():
         setattr(_gh_bk, _gh_a, _gh_v)
+    _gh_so._update_in_progress = _gh_upd_saved
 
 # ── load: a row @validates never saw is FLAGGED, not fatal, and not rewritten ────────────────────
 _gh_logdb = os.path.join(_gh_dir, "load.db")
@@ -736,6 +745,7 @@ finally:
 _rv_staged = []
 _rv_stage_saved = _gh_bk._stage_archive
 _gh_bk._stage_archive = lambda src: (_rv_staged.append(src), None)[1]
+_gh_so._update_in_progress = lambda: False       # as above: not this machine's self-update log
 try:
     with _gh_bk._restore_lock:
         _rv_rr = _gh_bk.restore_backup("panel-backup-20260101-000000-manual.tar.gz")
@@ -751,6 +761,7 @@ try:
           and (_gh_bk._restore_lock.release() or True), repr(_rv_rr2))
 finally:
     _gh_bk._stage_archive = _rv_stage_saved
+    _gh_so._update_in_progress = _gh_upd_saved
 
 # ── a block/unban on the PANEL host through its row id refreshes the panel's own ban gate ────────
 import panel.routes.remote_security as _rv_rs  # noqa: E402

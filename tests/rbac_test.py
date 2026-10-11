@@ -100,8 +100,9 @@ with app.app_context():
                             game_type="gmod", port=_p, installed=True, status="offline")
             db.session.add(_g); db.session.flush(); seeded["servers"].append(_g.id)
         db.session.commit()
-        # is_setup_complete() = SetupState(complete) AND cfg["setup_complete"]; set the config flag too
-        # (like smoke_test does) or every request 302s to /setup.
+        # The config flag is written for parity with the other suites (smoke_test does the same); the
+        # setup gate does not read it. is_setup_complete() reads the SetupState row (seeded above)
+        # alone — app.py dropped the config half after a lost config.json sent every page to /setup.
         from panel.core.config import load_config, save_config
         _cfg = load_config()
         _cfg["setup_complete"] = True
@@ -1669,7 +1670,11 @@ def _check_unauthenticated():
     cu = client_as(None)
     check("unauth GET / -> redirect to login", cu.get("/").status_code == 302)
     check("unauth GET /users -> redirect", cu.get("/users").status_code == 302)
-    check("unauth GET /api/servers -> not 200", cu.get("/api/servers").status_code != 200)
+    # `< 500` as well, as the other denial checks have it: with @login_required dropped the view
+    # reads is_superadmin off the anonymous user and answers 500, which `!= 200` read as DENIED.
+    _ua_code = cu.get("/api/servers").status_code
+    check("unauth GET /api/servers -> not 200", _ua_code != 200 and _ua_code < 500,
+          "status %d" % _ua_code)
 
     # CRITICAL: /setup POST must NOT create a superadmin once setup is complete.
     pwn = "pwned_" + tag
@@ -3023,6 +3028,9 @@ def _check_setup_endpoints_stay_shut():
               _anon.get("/healthz").status_code == 200)
     finally:
         _cfg_mod.CONFIG_FILE = _real_config_file
+        # A broken lock lets the serve POST reach save_config, which writes this file: not left in
+        # data/ by a run that caught exactly that.
+        (_real_config_file.parent / "does-not-exist-rbac-probe.json").unlink(missing_ok=True)
         _cfg_mod._cfg_cache.clear()
         _cfg_mod._cfg_cache.update(_real_cache)
 

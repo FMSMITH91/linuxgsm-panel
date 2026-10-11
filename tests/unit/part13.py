@@ -38,7 +38,22 @@ import urllib.error
 import urllib.parse
 from types import SimpleNamespace as NS
 
+from eventlet.timeout import Timeout as _EvTimeout13  # noqa: E402 - a timed-out green join raises it
 from unit.part01 import (_sm_core, check, eq)  # noqa: F401,E402
+
+
+def _join13(t, secs=5):
+    """t.join(secs) that RETURNS when it times out, as the threading docs say a join does.
+
+    Under the monkey-patched suite a green join that times out raises eventlet.timeout.Timeout, a
+    BaseException: a pump that never retired — exactly what these checks look for — ended the
+    whole unit run with a traceback and no tally. The checks after each join name a pump that is
+    still running.
+    """
+    try:
+        t.join(timeout=secs)
+    except _EvTimeout13:
+        pass
 
 
 class _Stop10(Exception):
@@ -1340,7 +1355,7 @@ try:
     _pkx10 = []
     _pks10 = _sess10("pk1", exits=_pkx10)
     _ts10._open_paramiko(_pks10, NS(name="h"), "100", "30")
-    _pks10._pump.join(timeout=5)
+    _join13(_pks10._pump)
     check("terminal paramiko: an xterm shell at the browser's size, on a non-blocking channel",
           _pkc10.shell_kw == {"term": "xterm-256color", "width": 100, "height": 30}
           and _pkc10.chan.timeout == 0.0 and _pks10._client is _pkc10,
@@ -1381,7 +1396,7 @@ try:
     _tsx10 = []
     _tss10 = _sess10("ts1", exits=_tsx10)
     _ts10._open_tailscale(_tss10, _tsrv10, 100, 40)
-    _tss10._pump.join(timeout=5)
+    _join13(_tss10._pump)
     _targv10, _tkw10 = _pop_calls10[0] if _pop_calls10 else (None, {})
     # The destination follows `--`: a stored login or host is never read as an ssh option
     # (GHSA-hh39-76g3-wxcx, F4).
@@ -1432,7 +1447,7 @@ try:
     while "typed-line" not in "".join(_fo10) and time.monotonic() < _deadline10:
         time.sleep(0.02)
     os.close(_psl2_10)                               # the shell exits: the master reads EIO
-    _fpt10.join(timeout=5)
+    _join13(_fpt10)
     _ts10.os = os
     check("terminal pump: queued input is written to the shell by the pump",
           b"typed-line\n" in _got10, repr(_got10))
@@ -1452,7 +1467,7 @@ try:
     os.write(_psl5_10, b"x\n")                        # makes the master readable
     _et10 = threading.Thread(target=_ts10._pump_fd, args=(_eof10,), daemon=True)
     _et10.start()
-    _et10.join(timeout=5)
+    _join13(_et10)
     _ts10.os = os
     os.close(_psl5_10)
     check("terminal pump: a clean EOF on the pty ends the session and releases the fd",
@@ -1469,7 +1484,7 @@ try:
     os.write(_psl3_10, b"output\n")
     _bt10 = threading.Thread(target=_ts10._pump_fd, args=(_bs10,), daemon=True)
     _bt10.start()
-    _bt10.join(timeout=5)
+    _join13(_bt10)
     os.close(_psl3_10)
     check("terminal pump: an error delivering output ends the session instead of killing the "
           "thread silently", _bx10 == ["the shell exited"] and _bs10._fd is None, repr(_bx10))

@@ -122,8 +122,10 @@ def _cf1_preload():
     found = _harness_lists()
     lists = set(found.values())
     one = next(iter(lists)) if len(lists) == 1 else ()
-    check("fuzz harnesses: the four ssh_manager harnesses pre-load one list, SQLAlchemy and Flask in it",
-          set(found) == {"fuzz_config.py", "fuzz_cron.py", "fuzz_firewall.py", "fuzz_game_status.py"}
+    check("fuzz harnesses: the four ssh_manager harnesses and fuzz_fail2ban (system_ops) pre-load "
+          "one list, SQLAlchemy and Flask in it",
+          set(found) == {"fuzz_config.py", "fuzz_cron.py", "fuzz_firewall.py", "fuzz_game_status.py",
+                         "fuzz_fail2ban.py"}
           and len(lists) == 1
           and {"paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
                "sqlalchemy.dialects.sqlite"} <= set(one)
@@ -176,6 +178,104 @@ def _cf1_imports(preload, tmp):
           all([len(panel) >= 10, "panel.ops.ssh_manager.cron" in panel, not other, not out["opened"]]),
           repr({"outside panel and stdlib": other, "panel": len(panel),
                 "opened under data/": out["opened"], "error": out.get("error")}))
+
+
+# ...and that holds for EVERY harness, through what it actually instruments. The probe above
+# imports ssh_manager only, so a harness reaching eventlet another way was outside both checks:
+# fuzz_fail2ban instruments system_ops, which began importing eventlet.patcher (#403), and Atheris
+# instrumented 329 modules for it — ClusterFuzzLite then killed it as "process timed out" on every
+# run while its job reported green. Each harness's own pre-load is run, then the imports inside its
+# `with atheris.instrument_imports():`, and anything loaded outside panel/ and the standard library
+# is named. A timeout-only target is a harness that fails this.
+_HARNESS_PROBE29 = """import importlib, json, sys
+for d in %r:
+    importlib.import_module(d)
+before = set(sys.modules)
+exec(%r)
+print(json.dumps(sorted(set(sys.modules) - before)))
+"""
+
+
+def _harness_instrumented29(path):
+    """(its pre-load list, the import statements inside its instrument_imports() block, as code)."""
+    tree = _ast29.parse(open(path, encoding="utf-8").read())
+    preload = _harness_lists().get(os.path.basename(path), ())
+    body = []
+    for n in _ast29.walk(tree):
+        if isinstance(n, _ast29.With) and any(
+                "instrument_imports" in _ast29.unparse(i.context_expr) for i in n.items):
+            body += [_ast29.unparse(b) for b in n.body if isinstance(b, (_ast29.Import, _ast29.ImportFrom))]
+    return preload, "\n".join(body)
+
+
+def _module_file29(name):
+    """A loaded panel module's file, repo-relative: panel/x/y.py or panel/x/y/__init__.py."""
+    base = os.path.join(*name.split("."))
+    return base + ".py" if os.path.isfile(os.path.join(_ROOT29, base + ".py")) \
+        else os.path.join(base, "__init__.py")
+
+
+def _scope_globs29(wf):
+    """The single-quoted globs of a fuzz workflow's `scope=(` list."""
+    txt = open(os.path.join(_WF29, wf), encoding="utf-8").read()
+    at = txt.find("scope=(")
+    return _re29.findall(r"^\s+'([^']+)'\s*$", txt[at:txt.find("\n            )", at)], _re29.M)
+
+
+def _harness_loads29(path, tmp):
+    """(the modules a harness's instrumented imports load after its pre-load, or None; why not)."""
+    preload, code = _harness_instrumented29(path)
+    if not code:
+        return None, "no import inside instrument_imports() found"
+    r = _run29([_sys29.executable, "-W", "ignore", "-c", _HARNESS_PROBE29 % (preload, code)],
+               cwd=tmp, env=dict(os.environ, PYTHONPATH=_ROOT29))
+    try:
+        return _json29.loads(r.stdout.strip().splitlines()[-1]), ""
+    except (ValueError, IndexError):
+        return None, "probe failed: " + (r.stdout[-200:] + r.stderr[-400:])
+
+
+def _panel_files29(modules):
+    return {_module_file29(m) for m in modules if m.split(".")[0] == "panel"}
+
+
+def _foreign_note29(modules):
+    """Empty when every module is the panel's or the stdlib's; else how many are not, and whose."""
+    foreign = [m for m in modules if _foreign_module29(m)]
+    return ("instruments %d modules outside panel/ and the stdlib, from %s"
+            % (len(foreign), sorted({m.split(".")[0] for m in foreign})[:8])) if foreign else ""
+
+
+def _cf1_every_harness(tmp):
+    bad, read, fuzzed = {}, [], set()
+    for p in sorted(_glob29.glob(os.path.join(_ROOT29, "tests", "fuzz", "fuzz_*.py"))):
+        name = os.path.basename(p)
+        new, why = _harness_loads29(p, tmp)
+        if new is None:
+            bad[name] = why
+            continue
+        read.append(name)
+        fuzzed |= _panel_files29(new)
+        if _foreign_note29(new):
+            bad[name] = _foreign_note29(new)
+    check("fuzz harnesses: EVERY harness's instrumented imports load only panel modules and the "
+          "standard library after its own pre-load (no target spends its fuzz time instrumenting "
+          "eventlet and timing out)",
+          not bad and len(read) >= 6, repr(bad or read))
+    _cf1_scopes(fuzzed)
+
+
+def _cf1_scopes(fuzzed):
+    """What the harnesses load is what they fuzz: both fuzz jobs' scope lists must cover it."""
+    # Checked against the files, not a list kept by hand. The lists named the three target modules
+    # only, so a change to panel/core/validation.py — canonical_ip, which the fail2ban parser calls
+    # on every row — skipped both fuzz jobs.
+    _fn29 = __import__("fnmatch").fnmatchcase
+    unscoped = {wf: sorted(f for f in fuzzed if not any(_fn29(f, g) for g in _scope_globs29(wf)))
+                for wf in ("fuzz.yml", "cflite_pr.yml")}
+    check("fuzz workflows: a pull request changing any panel module the harnesses load (and so "
+          "fuzz) runs both fuzz jobs: every one is in fuzz.yml's and cflite_pr.yml's scope",
+          len(fuzzed) >= 10 and not any(unscoped.values()), repr(unscoped))
 
 
 # ── ClusterFuzzLite keeps everything as Actions artifacts, and nothing waits on a secret ──────────
@@ -576,6 +676,7 @@ _TMP29 = _tf29.mkdtemp(prefix="lgsm-unit-p29-")
 try:
     _cf1_seconds()
     _cf1_imports(_cf1_preload(), _TMP29)
+    _cf1_every_harness(_TMP29)
     _CFL29 = _cflite_files()
     _cf2_no_secret(_CFL29)
     _cf2_producers(_CFL29)
