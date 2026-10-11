@@ -134,7 +134,7 @@
   "Filter": "Filtrer",
   "For": "Pour",
   "Game:": "Jeu :",
-  "Get alerted on Telegram or Discord when something needs your attention — a server drops, a host goes unreachable, a backup fails, an admin signs in. These are the panel's own alerts to you; a game's in-game alerts are still set per server on its Alerts tab.": "Soyez alerté sur Telegram ou Discord quand quelque chose exige votre attention : un serveur tombe, un hôte devient injoignable, une sauvegarde échoue, un administrateur se connecte. Ce sont les alertes du panneau lui-même ; les alertes en jeu se règlent toujours serveur par serveur dans son onglet Alertes.",
+  "Get alerted on Telegram or Discord when something needs your attention — a server drops, a host goes unreachable, a backup fails, an admin signs in. These are the panel's own alerts to you; a game's in-game alerts are still set per server on its Files & Config page (Alerts & Notifications).": "Soyez alerté sur Telegram ou Discord quand quelque chose exige votre attention : un serveur tombe, un hôte devient injoignable, une sauvegarde échoue, un administrateur se connecte. Ce sont les alertes du panneau lui-même ; les alertes en jeu se règlent toujours serveur par serveur dans sa page Fichiers et configuration (Alertes et notifications).",
   "Get the Channel ID with User Settings → Advanced → Developer Mode, then right-click the channel → Copy Channel ID. Type !help in that channel for the command list (Discord reserves the slash prefix for its own menu, so the bot uses an exclamation mark).": "Récupérez l'identifiant du salon via User Settings → Advanced → Developer Mode, puis clic droit sur le salon → Copy Channel ID. Tapez !help dans ce salon pour la liste des commandes (Discord réserve le préfixe barre oblique à son propre menu, le bot utilise donc un point d'exclamation).",
   "Group Name": "Nom du groupe",
   "Groups allowed to run this": "Groupes autorisés à l'exécuter",
@@ -408,5 +408,16 @@
   "Uninstalled": "Désinstallé",
   "Working…": "En cours…",
   "Ask a superadmin to retry fetching it.": "Demandez à un superadministrateur de réessayer de la récupérer.",
-  "No invite links yet. Create one with the Invite Link button above.": "Aucun lien d'invitation pour l'instant. Créez-en un avec le bouton Lien d'invitation ci-dessus."
+  "No invite links yet. Create one with the Invite Link button above.": "Aucun lien d'invitation pour l'instant. Créez-en un avec le bouton Lien d'invitation ci-dessus.",
+  "update": "mise à jour",
+  "updates": "mises à jour",
+  "update available": "mise à jour disponible",
+  "updates available": "mises à jour disponibles",
+  "security": "de sécurité",
+  "ban": "bannissement",
+  "bans": "bannissements",
+  "banned": "bannis",
+  "total": "au total",
+  "cores": "cœurs",
+  "value": "valeur"
 }

@@ -2101,9 +2101,16 @@ install_gamedig() {
         return 0
     fi
     info "Installing gamedig from its pinned lockfile…"
-    if out="$(${H_SUDO} "${GAMEDIG_DIR}/install-gamedig.sh" 2>&1)"; then
+    local gd_rc=0
+    out="$(${H_SUDO} "${GAMEDIG_DIR}/install-gamedig.sh" 2>&1)" || gd_rc=$?
+    if [[ "${gd_rc}" -eq 0 ]]; then
         line="${out##*$'\n'}"
         ok "${line#install-gamedig: }"
+    elif [[ "${gd_rc}" -eq 2 ]]; then
+        # Installed and linked; a gamedig command someone else put there was left as it is.
+        printf '%s\n' "${out}" | grep -F 'left ' | while IFS= read -r line; do warn "  ${line}"; done
+        warn "gamedig was installed from its lockfile, but the command above is not the panel's and"
+        warn "was left in place. Remove it and re-run this to have the panel's gamedig there too."
     else
         printf '%s\n' "${out}" | tail -n 4 | while IFS= read -r line; do warn "  ${line}"; done
         warn "gamedig could not be installed from its lockfile — player counts and lists use the"

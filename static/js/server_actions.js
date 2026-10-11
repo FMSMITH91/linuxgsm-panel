@@ -73,9 +73,9 @@ function serverAction(action, btn, confirmFirst, showOutput) {
   // Restart AND stop get a player check first — warn, and offer "when empty".
   if (action === 'restart' || action === 'stop') { actionWithPlayerCheck(action, btn); return; }
   if (confirmFirst) {
-    var body = _esc(_cap(action)) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?';
+    var body = _esc(_cap(action)) + ' <strong data-no-i18n>' + _esc(SERVER_NAME) + '</strong>?';
     if (action === 'fastdl') {
-      body = 'Generate FastDL files for <strong>' + _esc(SERVER_NAME) + '</strong>? '
+      body = 'Generate FastDL files for <strong data-no-i18n>' + _esc(SERVER_NAME) + '</strong>? '
            + 'This overwrites the existing FastDL directory and can take a while.';
     }
     confirmDialog({ title: _cap(action), body: body, confirmLabel: _cap(action),
@@ -92,7 +92,8 @@ function confirmActionDialog(action, btn, note){
     // The whole title, translated: "Restart server" was a catalog key, "Stop server" was not.
     title: t(action === 'stop' ? 'Stop server' : 'Restart server'),
     icon: action === 'stop' ? 'stop-fill' : 'arrow-clockwise',
-    body: _esc(_cap(action)) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?'
+    // data-no-i18n: the name is the server's own; one called "Backup" read "Copia de seguridad".
+    body: _esc(_cap(action)) + ' <strong data-no-i18n>' + _esc(SERVER_NAME) + '</strong>?'
           + (note ? ' <span class="text-secondary">' + _esc(note) + '</span>' : ''),
     confirmLabel: _cap(action),
     confirmClass: action === 'stop' ? 'btn-danger' : 'btn-warning',

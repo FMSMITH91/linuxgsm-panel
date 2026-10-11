@@ -214,11 +214,12 @@ try:
     _fun53 = []
     _p9_patch(_ts53, "_serve_enable", lambda port, mount, funnel, page: (_fun53.append(funnel)
                                                                          or _ts53.jsonify({"success": True})))
-    for _f53 in ("false", "0", 1, True):
-        _A53.post("/api/tailscale/serve", json={"action": "enable", "mount": "/", "funnel": _f53})
+    _st53 = [_A53.post("/api/tailscale/serve", json={"action": "enable", "mount": "/", "funnel": _f53}).status_code
+             for _f53 in ("false", "0", 1, True)]
+    # Not-a-boolean is a 400 now (review 1011c), not a silent publish without Funnel.
     check("tailscale serve: Funnel (public exposure) is on only for a JSON true — the string \"false\" "
           "turned it on",
-          _fun53 == [False, False, False, True], repr(_fun53))
+          _fun53 == [True] and _st53[:3] == [400] * 3, repr((_fun53, _st53)))
 
     # ── Add Remote, existing server: a fetch is told where to go ─────────────────────────────────
     _p9_patch(_rm53, "ssh_test_connection", lambda *a, **k: (True, "ok"))
@@ -455,7 +456,7 @@ _out53 = _node53(_name53, _SETTLE53 + (
     "var _returnOwed = false, _primeOwed = false, restarted = [], primed = 0;\n"
     "var consoleEl = {innerHTML: ''}, socket = {connected: true};\n"
     "function _rebuildMark(){ return 'm'; } function _rebuildRestore(){} function _renderPanelLines(){}\n"
-    "function _loadOlderRows(x){ return x || []; }\n"
+    "function _loadOlderRows(x){ return x || []; } function _r13c_reshowPanelPushes(){}\n"
     "function _appendConsoleRows(rows, ts, at){ _logAt = Array.isArray(at) ? at : null; }\n"
     "function _startResync(prime){ restarted.push([prime, _logAt]); }\n"
     "function _primeCatchUp(){ primed++; }\n"

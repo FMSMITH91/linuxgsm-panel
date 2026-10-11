@@ -295,8 +295,10 @@
         {% if c.has_argument %}
         <div class="input-group input-group-sm" style="width:auto;">
           <span class="input-group-text" data-no-i18n>{{ c.name }}</span>
-          <input type="text" class="form-control cc-arg" style="max-width:180px;" maxlength="64"
-                 placeholder="{{ c.argument_label or 'value' }}" aria-label="{{ c.argument_label or c.name }}">
+          {# data-no-i18n: the label and name are the command author's text (one labelled "Map"
+             read "Mapa"); the panel's own fallback is translated here instead. #}
+          <input type="text" class="form-control cc-arg" style="max-width:180px;" maxlength="64" data-no-i18n
+                 placeholder="{{ c.argument_label or t('value') }}" aria-label="{{ c.argument_label or c.name }}">
           <button class="btn btn-outline-primary cc-run" type="button">Run</button>
         </div>
         {% else %}

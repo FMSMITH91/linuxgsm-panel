@@ -123,9 +123,13 @@ function filterGamesForHost() {
     if (contentOpt) contentOpt.style.display = (sel.value === 'gmod') ? '' : 'none';
     var note = document.getElementById('game-os-note');
     if (note) {
-      note.textContent = hidden
-        ? (hidden + ' game(s) are greyed out: LinuxGSM caps them at an older Ubuntu than this host runs.')
-        : '';
+      // The count, then the sentence as its own node, so the sentence is one catalog key.
+      note.textContent = hidden ? hidden + ' ' : '';
+      if (hidden) {
+        var why = document.createElement('span');
+        why.textContent = t('game(s) are greyed out: LinuxGSM caps them at an older Ubuntu than this host runs.');
+        note.appendChild(why);
+      }
     }
   };
   if (!remote) { apply(''); return; }
@@ -284,7 +288,7 @@ document.addEventListener('click', function(e){
   var short = b.getAttribute('data-server-short') || '';
   confirmDialog({
     title: 'Uninstall server', icon: 'trash', confirmLabel: 'Uninstall', confirmClass: 'btn-danger',
-    body: 'Uninstall <strong>' + escapeHtml(name) + '</strong>? This permanently deletes the server, '
+    body: 'Uninstall <strong data-no-i18n>' + escapeHtml(name) + '</strong>? This permanently deletes the server, '
         + 'all its files, AND every backup it has — this cannot be undone.',
     requireText: short,
     requireLabel: 'Type the server’s username (' + short + ') to confirm:',
