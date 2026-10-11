@@ -2156,6 +2156,7 @@ async function replay(cfg) {
   const cfg = JSON.parse(fs.readFileSync(0, 'utf8'));
   if (cfg.mode === 'replay') { process.stdout.write(JSON.stringify(await replay(cfg))); return; }
   const only = cfg.only ? new RegExp(cfg.only) : null;
+  const ran = [];
   for (const fn of [checkLoad, checkLinesUntranslated, checkGrace, checkAltTab, checkReturn, checkStreamFromCut, checkOtherTab,
                     checkFirstLookFirst, checkDropWhileCatchingUp, checkGiveUp, checkHiddenAgain, checkReconnectWhilePaused,
                     checkDropBeforeGrace, checkAction, checkFinishedAway, checkBackground, checkLateTimer,
@@ -2172,9 +2173,10 @@ async function replay(cfg) {
                     checkLoadUnanswered, checkLoadPanel, checkLoadSchedules, checkSchedules,
                     checkRepeatSchedules]) {
     if (only && !only.test(fn.name)) continue;
+    ran.push(fn.name);
     try { await fn(cfg); } catch (e) { check(fn.name + ' ran to its end', false, e && e.stack || e); }
   }
-  process.stdout.write(JSON.stringify({results}));
+  process.stdout.write(JSON.stringify({results, ran}));
 })();
 """
 
@@ -2202,8 +2204,18 @@ def _section_page38():
         skip("A page: server_detail.js run whole in node", "no node on this host")
         return
     results = out.get("results") or []
-    check("A page: the harness ran server_detail.js whole and reported every check",
-          len(results) >= 89 and not out.get("error"), repr(out)[:1500])
+    # Every check function the run list names ran, and the checks they record are all there: 112,
+    # the count today, as a literal. `>= 89` let 23 named checks vanish unseen (a function dropped
+    # from the list, or one returning before its check()) — the per-name checks below come from
+    # whatever the harness returned, so nothing else names a missing one.
+    _listed = _re38.findall(r"\b(check[A-Z]\w*)\b", _HARNESS38[_HARNESS38.index("for (const fn of ["):
+                                                            _HARNESS38.index("]) {", _HARNESS38.index("for (const fn of ["))])
+    check("A page: the harness ran every check function it lists, and reported all 112 checks",
+          not out.get("error") and out.get("ran") == _listed and len(_listed) > 60
+          and len(results) == 112,
+          "ran %d of %d listed (missing %r); %d results; %s" % (
+              len(out.get("ran") or ()), len(_listed),
+              sorted(set(_listed) - set(out.get("ran") or ())), len(results), repr(out)[:600]))
     for r in results:
         check("A page: " + r["name"], r["ok"], r.get("detail", ""))
 
@@ -2237,8 +2249,13 @@ class _Rig38:
         return new
 
 
-class _Stop38(Exception):
-    """Raised by the fake sleep at the end of one poller pass."""
+class _Stop38(BaseException):
+    """Raised by the fake sleep at the end of one poller pass.
+
+    A BaseException, as part43's _Rv43Stop is: were the loop's sleep ever moved inside its own
+    `try/except Exception`, an Exception here would be swallowed and the pass would spin forever,
+    hanging the whole unit run with no tally.
+    """
 
 
 def _poller38():
