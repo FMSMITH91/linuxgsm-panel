@@ -812,8 +812,8 @@ function importExisting(btn){
     body:JSON.stringify({servers:picks})})
     .then(function(r){return r.json();}).then(function(d){
       var n=(d.added||[]).length;
-      if(n){ window.toast(_discT('Imported:')+' '+n, 'success');
-             if(msg) msg.innerHTML='<span class="text-success">'+escapeHtml(_discT('Imported:'))+' '+n+' — '  // nosemgrep
+      if(n){ window.toast(_discT('Imported')+' '+n, 'success');
+             if(msg) msg.innerHTML='<span class="text-success">'+escapeHtml(_discT('Imported'))+' '+n+' — '  // nosemgrep
                                    +escapeHtml(_discT('see the Game Servers list.'))+'</span>';
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> '+escapeHtml(_discT('Import selected'));
              window.refreshSection('#host-servers-card'); }   // show the new rows in place, no reload

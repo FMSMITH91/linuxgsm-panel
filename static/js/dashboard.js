@@ -157,9 +157,10 @@ function _dashResyncFailedBanners(data) {
     .call(document.querySelectorAll('.install-failed[data-server-id]'),
           function(el){ return el.getAttribute('data-server-id'); }).sort().join(',');
   // In agreement again, the next disagreement is new (a reinstall that fails again).
-  if (failedNow === failedShown) { _r12c_failedAsked = null; return; }
-  if (failedNow !== _r12c_failedAsked) { _r12c_failedAsked = failedNow; _r12c_failedTries = 0; }
-  if (_r12c_failedTries < 3 && document.getElementById('server-cards') && window.refreshSection) {
+  if (failedNow === failedShown) _r12c_failedAsked = null;
+  else if (failedNow !== _r12c_failedAsked) { _r12c_failedAsked = failedNow; _r12c_failedTries = 0; }
+  if (failedNow !== failedShown && _r12c_failedTries < 3
+      && document.getElementById('server-cards') && window.refreshSection) {
     _r12c_failedTries++;
     // With the after-hook, same as the other #server-cards swap above. Without it the region
     // comes back re-rendered but un-re-armed: a filter the user has typed stops applying (every

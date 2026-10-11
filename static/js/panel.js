@@ -391,8 +391,7 @@ window.confirmDialog = function(opts){
 // Optional attributes: data-confirm (+ -title/-icon/-class/-label) shows the styled confirm first;
 // data-ajax-after names a window function to run after the section refreshes (e.g. re-arm pollers).
 window.refreshSection = function(sel, afterName){
-  // Returned, so a caller can act once the swap is over (manage_servers.js's Refresh list).
-  return fetch(location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
+  fetch(location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
     .then(function(r){ return r.text(); })
     .then(function(html){
       var doc = new DOMParser().parseFromString(html, 'text/html');

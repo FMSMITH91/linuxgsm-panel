@@ -72,7 +72,6 @@
   "Disk usage is shown per server below (they're on different hosts).": "El uso de disco se muestra por servidor abajo (están en hosts distintos).",
   "Import failed.": "La importación falló.",
   "Import selected": "Importar seleccionados",
-  "Imported:": "Importados:",
   "Importing…": "Importando…",
   "Installed mods": "Mods instalados",
   "LinuxGSM backups on disk": "Copias de LinuxGSM en disco",
@@ -93,5 +92,6 @@
   "servers:": "servidores:",
   "Back up anyway": "Copiar de todos modos",
   "players online — skipped": "jugadores conectados: omitido",
-  "backed up": "copiado"
+  "backed up": "copiado",
+  "Imported": "Importados"
 }

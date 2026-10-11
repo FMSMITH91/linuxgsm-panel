@@ -481,10 +481,11 @@ function refreshGameList(btn){
         if (window.toast) toast('Loaded ' + d.games + ' games from LinuxGSM', 'success');
         // The game column only, not the page: a reload discarded the host and name already chosen.
         // The new list is then greyed for the chosen host again, as choosing it did.
-        // The button is put back once the swap is over. A swap replaces it (it lives in #game-col),
-        // but one whose page fetch failed left it disabled on "Refreshing…" until a reload.
-        Promise.resolve(window.refreshSection('#game-col', 'filterGamesForHost'))
-          .then(function(){ btn.disabled = false; btn.innerHTML = orig; });   // nosemgrep
+        // The button is put back before the swap: a swap replaces it (it lives in #game-col), but
+        // one whose page fetch failed (refreshSection swallows that) left it disabled on
+        // "Refreshing…" until a reload.
+        btn.disabled = false; btn.innerHTML = orig;   // nosemgrep
+        window.refreshSection('#game-col', 'filterGamesForHost');
         return;
       }
       if (window.toast) toast((d && d.message) || 'Still could not reach LinuxGSM', 'danger');
