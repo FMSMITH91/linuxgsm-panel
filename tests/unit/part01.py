@@ -2024,8 +2024,11 @@ try:
     check("symlink guard: browse_dir resolves the path on the host before listing it",
           _cmds and "realpath -m" in _cmds[0] and "__OUTSIDE_HOME__" in _cmds[0], str(_cmds)[:150])
     _sm_core.run_command = lambda s, c, **k: ("__OUTSIDE_HOME__", "", 9)
-    check("symlink guard: a path that escapes home is refused by browse_dir",
-          _sm_files.browse_dir(_FakeSrv(), "csgoserver", "escape") is None)
+    _esc_b = _sm_files.browse_dir(_FakeSrv(), "csgoserver", "escape")
+    check("symlink guard: a path that escapes home is refused by browse_dir (no entries, and said "
+          "to lead outside the home)",
+          _esc_b is not None and _esc_b.get("outside_home") is True and _esc_b.get("entries") == [],
+          repr(_esc_b))
     check("symlink guard: ...and by read_file",
           _sm_files.read_file(_FakeSrv(), "csgoserver", "escape/x")[1] == "Invalid path")
     check("symlink guard: ...and by delete_path",

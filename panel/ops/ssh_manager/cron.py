@@ -1484,9 +1484,15 @@ def _batch_target_filter(key):
     Bedrock server (an EMPTY list and numplayers 7) read as a confident 0 whenever its host had two
     or more batchable servers: the dashboard, the bots and the backup "busy" prompt said nobody was
     on, and "server emptied" fired. Polled alone, the same server read 7.
+
+    The map was not cut, though the first paragraph says it is: a game-supplied map of a few KB made
+    one reply longer than a pipe writes atomically (PIPE_BUF), so it could interleave with another
+    reply and both be dropped as unparseable. It is cut only when it is text: _map_text treats
+    anything else as "no map" (null here is the same answer), and tostring would invent one.
     """
     return ('{k:%d, c:%s, m:.maxplayers, n:((.name // "")|tostring|.[:120]), '
-            'p:(.map // ""), ok:(.players|type=="array")}' % (int(key), _core.GAMEDIG_HUMANS_JQ))
+            'p:((.map // "") | if type == "string" then .[:120] else null end), '
+            'ok:(.players|type=="array")}' % (int(key), _core.GAMEDIG_HUMANS_JQ))
 
 
 def _batch_body(server, queries):

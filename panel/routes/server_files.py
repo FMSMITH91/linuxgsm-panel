@@ -1080,9 +1080,12 @@ def _cron_listing(app, gs):
     # success/error (idempotent + state-preserving; never blocks the listing).
     # Given the server's game type and port so a restart-when-empty line is healed
     # to what set_daily_restart writes for THIS server. Through the module (the seam).
+    # It REWRITES the crontab, so it asks what every cron write asks (_write_refused) — silently,
+    # this being a GET: the account a legacy row names may be the host's sudo login.
     try:
-        _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
-                                          game_type=gs.game_type, port=gs.port)
+        if game_account_write_refusal(gs.remote, gs.short_name) is None:
+            _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
+                                              game_type=gs.game_type, port=gs.port)
     except Exception:
         app.logger.debug("cron tracking upgrade skipped", exc_info=True)
     jobs = _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)
@@ -1462,6 +1465,12 @@ def _read_console_window(remote, gs, want, host_tz):
         body = out[1:-1] if framed else ""
         if body.endswith("\n"):
             body = body[:-1]     # the file's own final newline, not an empty last line
+        elif at is not None:
+            # The log ends mid-line (a game mid-write, a prompt). `at` is the file's END, and the
+            # catch-up from there sends the line that end lies inside of whole, from its start
+            # (_console_place_read keeps the same rule): kept here as well, the fragment showed
+            # once now and again as the start of the finished line — the page-load duplicate.
+            body = body.rpartition("\n")[0]
         lines = _console_rows(_clean_console_text(body).split("\n"), host_tz) if framed else []
     except Exception:
         lines = []
@@ -1742,6 +1751,8 @@ def _register_file_editor(app):
             result = browse_dir(gs.remote, gs.short_name, request.args.get("path", ""), gs.lgsm_name)
             if result is None:
                 return jsonify({"error": "Invalid path"}), 400
+            if result.get("outside_home"):
+                return jsonify({"error": _BROWSE_OUTSIDE_HOME}), 400
             return jsonify(result)
         except Exception:
             return jsonify({"error": _log_and_generic("request failed")}), 500
@@ -1773,6 +1784,12 @@ def _register_file_editor(app):
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+
+
+# A folder that lists fine but links OUTSIDE the account's home: the file browser stops at the home,
+# and "Invalid path" read as though the folder it had just offered did not exist.
+_BROWSE_OUTSIDE_HOME = ("This folder links outside the account's home, so the file browser "
+                        "cannot open it.")
 
 
 def _register_file_removal(app):
