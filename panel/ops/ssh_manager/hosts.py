@@ -3665,8 +3665,8 @@ def _tailnet_ssh_state(server):
     return running, ssh_enabled, iface_allowed
 
 
-# Tailscale's address ranges: IPv4 CGNAT, and its IPv6 ULA prefix.
-_r11a_tailnet_nets = (_ipaddress.ip_network("100.64.0.0/10"),
+# Tailscale's address ranges: IPv4 CGNAT (_TAILNET_CGNAT, above), and its IPv6 ULA prefix.
+_r11a_tailnet_nets = (_ipaddress.ip_network(_TAILNET_CGNAT),
                       _ipaddress.ip_network("fd7a:115c:a1e0::/48"))
 
 
