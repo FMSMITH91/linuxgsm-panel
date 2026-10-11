@@ -145,7 +145,7 @@ def _dc_gate_channel(_dc, msg_channel, content):
     """The authorised channel id when this message passes the channel gate, else ''."""
     if not (_dc.get("enabled") and _dc.get("accept_commands")):
         return ""
-    _chan = (_dc.get("channel_id") or "").strip()
+    _chan = str(_dc.get("channel_id") or "").strip()
     if not _chan or msg_channel != _chan:
         return ""
     if (content or "")[:1] not in ("!", "/"):
@@ -158,7 +158,7 @@ def _dc_watch_token():
     cfg = notifications._cfg()
     dc = cfg.get("discord") or {}
     bot_token = decrypt_secret(dc.get("bot_token") or "")
-    channel = (dc.get("channel_id") or "").strip()
+    channel = str(dc.get("channel_id") or "").strip()
     if not (dc.get("enabled") and dc.get("accept_commands") and bot_token and channel):
         return ""
     return bot_token
@@ -372,7 +372,7 @@ def _set_dc_pending_update(channel_id, from_commit):
 def _dc_channel_still_authorised(dc, channel):
     """Whether the Discord settings `dc` still take commands from `channel` — the watcher's gate."""
     return bool(dc.get("enabled") and dc.get("accept_commands")
-                and (dc.get("channel_id") or "").strip() == str(channel).strip())
+                and str(dc.get("channel_id") or "").strip() == str(channel).strip())
 
 
 def _report_dc_pending_update():

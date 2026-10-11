@@ -924,7 +924,7 @@ def _channel_senders(tg, dc, nt, text):
     """Return (name, enabled, send) for each channel; `send()` decrypts and sends only when called."""
     return (("telegram", tg.get("enabled"),
              lambda: send_telegram(decrypt_secret(tg.get("token") or ""),
-                                   (tg.get("chat_id") or "").strip(), text)),
+                                   str(tg.get("chat_id") or "").strip(), text)),
             ("discord", dc.get("enabled"),
              lambda: send_discord(decrypt_secret(dc.get("webhook") or ""), text)),
             ("ntfy", nt.get("enabled"),

@@ -306,3 +306,28 @@ check("telegram: a getUpdates reply that is a list or a number answers None (it 
       _tg57["list"] is None and _tg57["num"] is None and _tg57["dictres"] == [], repr(_tg57))
 check("telegram: ...and an ordinary reply still returns its updates (control)",
       _tg57["ok"] == [{"update_id": 3}], repr(_tg57["ok"]))
+
+# ── A01 class: a chat / channel id hand-edited in as a JSON number is read as its text ───────────
+from panel.services.bots import discord as _dc57  # noqa: E402
+from panel.services.bots import telegram as _tgb57  # noqa: E402
+
+_ids57 = {}
+with _patched():
+    _patch(_nt57, "_cfg", lambda: {"telegram": {"enabled": True, "accept_commands": True, "token": "",
+                                                "chat_id": 12345}})
+    _ids57["tg_settings"] = _try57(_tgb57._tg_settings)
+_ids57["tg_gate"] = _try57(_tgb57._tg_chat_still_authorised,
+                           {"enabled": True, "accept_commands": True, "chat_id": 12345}, 12345)
+_ids57["dc_gate"] = _try57(_dc57._dc_gate_channel, {"enabled": True, "accept_commands": True,
+                                                    "channel_id": 987}, "987", "!status")
+_ids57["dc_still"] = _try57(_dc57._dc_channel_still_authorised,
+                            {"enabled": True, "accept_commands": True, "channel_id": 987}, "987")
+_sent57 = []
+with _patched():
+    _patch(_nt57, "send_telegram", lambda token, chat, text: _sent57.append(chat) or (True, ""))
+    _tgs57 = _nt57._channel_senders({"enabled": True, "token": "", "chat_id": 12345}, {}, {}, "hi")[0]
+    _ids57["tg_send"] = _try57(_tgs57[2])
+check("bots: a numeric chat_id / channel_id (Telegram and Discord ids are numbers) is read as its "
+      "text, not an AttributeError that stopped the command watch and every alert to that chat",
+      _ids57 == {"tg_settings": ("", "12345", "unconfigured"), "tg_gate": True, "dc_gate": "987",
+                 "dc_still": True, "tg_send": (True, "")} and _sent57 == ["12345"], repr((_ids57, _sent57)))

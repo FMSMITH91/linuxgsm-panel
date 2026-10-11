@@ -85,7 +85,7 @@ def _tg_settings():
     token = decrypt_secret(tg.get("token") or "")
     if not (tg.get("enabled") and tg.get("accept_commands")):
         return token, "", "off"
-    authorized = (tg.get("chat_id") or "").strip()
+    authorized = str(tg.get("chat_id") or "").strip()
     if not token or not authorized:
         return token, authorized, "unconfigured"
     return token, authorized, "on"
@@ -396,7 +396,7 @@ def _set_tg_pending_update(chat_id, from_commit):
 def _tg_chat_still_authorised(tg, chat):
     """Whether the Telegram settings `tg` still take commands from `chat` — the poller's gate."""
     return bool(tg.get("enabled") and tg.get("accept_commands")
-                and (tg.get("chat_id") or "").strip() == str(chat).strip())
+                and str(tg.get("chat_id") or "").strip() == str(chat).strip())
 
 
 def _report_tg_pending_update():
