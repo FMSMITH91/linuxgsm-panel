@@ -1957,9 +1957,19 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         return False, "Invalid branch name."
     # Not while a backup restore is in flight: its detached swap and install.sh's snapshot and
     # rollback both replace panel.db, and the rollback could put the pre-update copy back over the
-    # restored one. (backup.restore_backup refuses the other way round.)
+    # restored one. (backup.restore_backup refuses the other way round.) In flight includes the
+    # detached swap after the restore's lock is released (backup.restore_pending).
+    #
+    # The launch is recorded FIRST, then the restore asked: it was recorded only once the launcher
+    # returned (up to 15-20 s of green yields), and a restore taking its lock in that window saw no
+    # update and went ahead beside it. Announce-then-check on both sides means one always sees the
+    # other. A launch that does not happen takes its record back (_r12a_unmark).
+    was_running = _update_in_progress()
+    saved = dict(_update_launched)
+    _mark_update_launched()
     from panel.ops import backup as _bk
-    if _bk._restore_lock.locked():
+    if _bk.restore_pending():
+        _r12a_unmark(saved)
         return False, ("A backup restore is in progress — update once it has finished and the "
                        "panel has restarted.")
     # Write the wrapper + its log inside the panel's own data dir (owned by the service user,
@@ -1981,7 +1991,7 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
     # the card, and once the launch grace passed the status checks resumed fetching the ref the
     # installer was still fetching.
     try:
-        if not _update_in_progress():
+        if not was_running:
             os.unlink(_log_path)
     except FileNotFoundError:
         pass   # first update on this install, or already cleared
@@ -2003,7 +2013,20 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         'echo "=== installer exit $? ===" >> "$LOG"\n'
     )
     path = os.path.join(_upd_dir, "self-update.sh")
+    ok, msg = _r12a_start_installer(path, script, target_ref, branch, started_msg)
+    if not ok:
+        _r12a_unmark(saved)
+    return ok, msg
 
+
+def _r12a_unmark(saved):
+    """Take back a launch record _launch_installer made for a launch that did not happen."""
+    _update_launched.clear()
+    _update_launched.update(saved)
+
+
+def _r12a_start_installer(path, script, target_ref, branch, started_msg):
+    """Start the installer (helper verb, or the wrapper `script` at `path` under systemd-run)."""
     if _is_system_service() and _helper_present():
         # The helper runs the ROOT-OWNED installer with the three variables in its environment,
         # detached. The wrapper script below — written by the panel, into a directory the panel
@@ -2017,7 +2040,6 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         out, err, rc = _run_verb("panel-self-update",
                                  [target_ref or "-", branch or "-"], timeout=20)
         if rc == 0:
-            _mark_update_launched()
             return True, (started_msg or
                           ("Update started — the panel is backing up, updating, and verifying it "
                            "restarts cleanly. If the new version fails to come up it rolls back "
@@ -2059,7 +2081,6 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
             _log.error("self-update launcher failed: rc=%s %s",
                        _r.returncode, (_r.stderr or "")[:200])
             return False, "Could not start the updater — check the panel logs."
-        _mark_update_launched()
         return True, (started_msg or
                       ("Update started — the panel is backing up, updating, and verifying it "
                        "restarts cleanly. If the new version fails to come up it rolls back "
@@ -2088,6 +2109,14 @@ def _fetch_all_branches():
         _git(["fetch", "--prune", "--no-tags", "origin"], timeout=90)
 
 
+def _r12a_tracked_tip(branch):
+    """The commit refs/remotes/origin/<branch> names now, or None when it cannot be read."""
+    out, _, rc = _git(["rev-parse", "--verify", "--quiet", _REMOTE_TRACKING + branch], timeout=20)
+    if rc != 0:
+        return None
+    return (out or "").strip() or None
+
+
 def list_panel_branches():
     """Remote branches available to switch to, most-recently-updated first, plus the currently
     tracked branch. Returns (branches, current). Best-effort: ([current], current) on failure."""
@@ -2100,10 +2129,15 @@ def list_panel_branches():
     # caches "Couldn't reach the update source" for five minutes; lose the installer's and the
     # update aborts. So: never while an update runs (list the refs already here), otherwise under
     # _update_lock, and a status cached from before the ref moved is recomputed next time.
+    # Only when it DID move (or could not be read): dropping the cache on every list re-spent the
+    # anonymous GitHub budget it exists to protect, since the host page lists on every load.
     if not _update_in_progress():
         with _update_lock:
+            before = _r12a_tracked_tip(branch)
             _fetch_all_branches()   # widen a single-branch/shallow clone so ALL branches show + refresh
-        _update_cache["ts"] = 0.0
+            after = _r12a_tracked_tip(branch)
+            if before is None or after != before:
+                _update_cache["ts"] = 0.0
     # The FULL refname, stripped here. `%(refname:short)` is the shortest UNAMBIGUOUS name, so the
     # moment a tag `origin/main` existed, main came back as `remotes/origin/main`, failed the prefix
     # test and vanished from the switcher.
@@ -3853,10 +3887,13 @@ def _diag_encryption_keys():
     # fault. The credential key is created ONLY when the first password-based credential is
     # saved, so a missing cred_key is normal (e.g. all remotes use SSH-key / Tailscale / local
     # auth) — not a fault. Whether the stored values DECRYPT is the Host credentials check.
+    # _key_missing, not .exists(): an EMPTY key file (an interrupted _create_key_once, a bad
+    # restore) is a missing key to every reader (get_secret_key mints a new one, logging everyone
+    # out), and read "present" here beside a Host credentials check that already said MISSING.
     from panel.core import config as _cfg
-    if not _cfg.SECRET_FILE.exists():
+    if _cfg._key_missing(_cfg.SECRET_FILE):
         return "fail", "Session secret key is missing."
-    if not _cfg.CRED_KEY_FILE.exists():
+    if _cfg._key_missing(_cfg.CRED_KEY_FILE):
         return "ok", ("Session key present; the credential key is created when the first "
                       "saved password/credential needs it.")
     return "ok", "Session + credential keys present."

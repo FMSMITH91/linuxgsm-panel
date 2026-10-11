@@ -160,13 +160,19 @@ def _fetch_rec51():
     _bl51["fetched"].append(SO._update_lock.locked())
 
 
+def _git51(args, timeout=45):
+    """for-each-ref's two branches; rev-parse names a tip that moves with every fetch."""
+    if args[:1] == ["rev-parse"]:
+        return ("tip%d\n" % len(_bl51["fetched"]), "", 0)
+    return ("refs/remotes/origin/main\nrefs/remotes/origin/dev\n", "", 0)
+
+
 with _patched():
     _patch(SO, "_is_git_checkout", lambda: True)
     _patch(SO, "_tracked_branch", lambda: "main")
     _patch(SO, "_fetch_all_branches", _fetch_rec51)
     _patch(SO, "_update_in_progress", lambda: _bl51["updating"])
-    _patch(SO, "_git", lambda args, timeout=45: ("refs/remotes/origin/main\nrefs/remotes/origin/dev\n",
-                                                 "", 0))
+    _patch(SO, "_git", _git51)
     _bl51_ts0 = SO._update_cache["ts"]
     SO._update_cache["ts"] = 12345.0
     try:

@@ -312,9 +312,26 @@ def _is_ssh_rule(g, pn, inbound, ts_iface, ssh_ports):
     is_tailscale already covers it and the messages below differ.
     """
     # Both profiles are port 22, so they are a way in only where sshd serves 22.
-    _named_ssh = pn.strip().lower() in _SSH_APP_PROFILES and 22 in ssh_ports
+    words = pn.split()
+    _named_ssh = bool(words) and words[-1].lower() in _SSH_APP_PROFILES and 22 in ssh_ports
     return (g.get("action") in ("ALLOW", "LIMIT") and inbound and not ts_iface
-            and ((pn.isdecimal() and int(pn) in ssh_ports) or _named_ssh))
+            and (_r12a_names_port(pn, ssh_ports) or _named_ssh))
+
+
+def _r12a_names_port(pn, ports):
+    """Whether a rule's To column names one of `ports`: alone, in a list or a range, after an address.
+
+    `pn.isdecimal()` saw only a bare port, so `ufw allow 22,80,443/tcp` (To "22,80,443"), a range
+    (`20:30/tcp`) and a destination-scoped rule (`ufw allow to 203.0.113.5 port 22`, To
+    "203.0.113.5 22") were not SSH rules at all: no protection, no warning, and an ordinary delete
+    took the host's only way in. hosts._rule_names_port_in's parse: the last word, split on ",".
+    """
+    words = str(pn).split()
+    for item in (words[-1] if words else "").split(","):
+        m = hosts._UFW_PORT_ITEM_RE.match(item)
+        if m and any(int(m.group(1)) <= p <= int(m.group(2) or m.group(1)) for p in ports):
+            return True
+    return False
 
 
 def _classify_access_rule(g, ssh_ports):
@@ -324,7 +341,10 @@ def _classify_access_rule(g, ssh_ports):
     # OUT rule) must not count. A rate-limited SSH rule (`ufw limit`, action LIMIT) is
     # just as much a way in as an ALLOW — miss it and the panel would let you delete
     # your only SSH access.
-    inbound = g.get("direction", "IN") != "OUT"
+    # IN only: a ROUTE rule (`ufw route allow 22/tcp`, printed ALLOW FWD) forwards to another
+    # machine and admits nothing to this host's sshd, yet `!= "OUT"` counted it, so the host's
+    # one real SSH rule read "another way in exists" and could be deleted.
+    inbound = (g.get("direction") or "IN") == "IN"
     _iface = str(g.get("iface", "") or "")
     _ts_iface = _iface.startswith("tailscale")
     g["is_ssh"] = _is_ssh_rule(g, pn, inbound, _ts_iface, ssh_ports)
@@ -338,7 +358,7 @@ def _classify_access_rule(g, ssh_ports):
 
 def _r11a_reaches_ssh(g, pn, ssh_ports):
     """Whether interface rule `g` covers sshd: every port on it, or one of `ssh_ports`."""
-    return g.get("port_label") == "All ports" or (pn.isdecimal() and int(pn) in ssh_ports)
+    return g.get("port_label") == "All ports" or _r12a_names_port(pn, ssh_ports)
 
 
 def _r11a_tailnet_ssh_iface(g, ssh_ports):
@@ -381,9 +401,12 @@ def _is_panel_rule(g, panel_port):
     only route to the panel UI deletable; an `ALLOW OUT` rule on that port was conversely
     treated AS the panel rule and made undeletable.
     """
+    # IN only: a forwarded (FWD) rule for the port is not the panel's way in. The port stays a
+    # bare one: each panel rule is protected outright (there is no "another way" count), so a
+    # game range that happens to span the panel port must not become undeletable.
     return (panel_port is not None and not g.get("is_iface")
             and g.get("action") in ("ALLOW", "LIMIT")
-            and g.get("direction", "IN") != "OUT"
+            and (g.get("direction") or "IN") == "IN"
             and str(g.get("port_num", "")).isdecimal()
             and int(g["port_num"]) == panel_port)
 

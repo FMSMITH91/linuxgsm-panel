@@ -445,11 +445,20 @@ def _ts_serve_args(verb, grammar, mount, scheme, port):
     return _priv.ts_serve_argv(verb, grammar, mount, scheme, str(port))[1:]
 
 
-def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="http"):
+def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="http",
+                          keep_shared_funnel=False):
     """Configure Tailscale Serve to proxy this panel; return (success, message).
 
     `port` is the local port the panel runs on (default 5000), `mount` the URL mount point
     (default '/'), and `funnel` whether to enable Funnel (public internet access).
+
+    Funnel is a property of the LISTENER (host:443), not of a mount: every `serve` write turns it
+    off and every `funnel` write turns it on for each app on :443 (serve_v2.go setServe ->
+    applyFunnel -> SetFunnel(dnsName, srvPort, ...)). So a write whose Funnel differs from the
+    listener's while another app shares it is refused (_r12a_serve_verb): it would take that app
+    off the internet, or put it on. `keep_shared_funnel` (the boot re-point) instead re-points the
+    panel's EXISTING route with the listener's Funnel as it is, so a restart never changes the
+    panel's exposure or the other app's.
 
     `backend_scheme` is how to reach the panel on loopback — "http" (default) or "https+insecure"
     when the panel is terminating its own self-signed TLS. Tailscale re-terminates TLS with the
@@ -482,12 +491,57 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     ensure_operator()
     allow_tailscale_ufw()
 
+    verb, note = _r12a_serve_verb(port, mount, funnel, keep_shared_funnel)
+    if verb is None:
+        return False, note
     ok, err = _apply_serve(verb, mount, backend_scheme, port)
     if ok:
         with _cache_lock:
             _cache["info"] = None
-        return True, "Tailscale Serve enabled" + (" (with Funnel)" if funnel else "")
+        return True, "Tailscale Serve enabled" + (" (with Funnel)" if verb == "funnel" else "") + note
     return False, f"Failed to configure Tailscale Serve: {err or 'Unknown error'}"
+
+
+def _r12a_listener_funnel(serve_config, port):
+    """(Funnel on?, [mounts of OTHER apps]) for the :443 listener the panel writes; (False, []) if none."""
+    for svc in (serve_config or {}).get("services") or []:
+        if _serve_port_flag(svc.get("url")) == "--https=443":
+            return (bool(svc.get("funnel")),
+                    [r.get("mount", "") for r in svc.get("routes") or []
+                     if not route_targets_port(r.get("target"), port)])
+    return False, []
+
+
+def _r12a_serve_verb(port, mount, funnel, keep_shared_funnel):
+    """("serve"|"funnel", note) for setup_tailscale_serve to write, or (None, why) to write nothing.
+
+    Read fresh, after ensure_operator, so the read is the operator's. An unreadable config is
+    written as asked, as it always was: it cannot show another app, and refusing would stop the
+    boot re-point keeping the panel's own route on the scheme it serves.
+    """
+    want = "funnel" if funnel else "serve"
+    info = get_tailscale_info(force_refresh=True)
+    if info.serve_unreadable:
+        return want, ""
+    shared, others = _r12a_listener_funnel(info.serve_config, port)
+    if not others or shared == bool(funnel):
+        return want, ""
+    names = ", ".join(others)
+    if keep_shared_funnel and any(
+            norm_mount(r["mount"]) == norm_mount(mount) and _serve_port_flag(r["url"]) == "--https=443"
+            for r in panel_serve_routes(info.serve_config, port)):
+        _log.warning("Tailscale Serve: Funnel left %s on the :443 listener it shares with %s",
+                     "on" if shared else "off", names)
+        return ("funnel" if shared else "serve"), (
+            " (Funnel left %s: it is set per listener, and %s shares it)"
+            % ("on" if shared else "off", names))
+    if funnel:
+        return None, ("Funnel is set per listener, not per app: publishing the panel with Funnel "
+                      "here would also put %s on the public internet. Nothing was changed." % names)
+    return None, ("Funnel is set per listener, not per app, and it is on for %s: publishing the "
+                  "panel here without Funnel would take it off the public internet. Nothing was "
+                  "changed; turn Funnel off for that app first, or publish the panel with Funnel."
+                  % names)
 
 
 def _apply_serve(verb, mount, backend_scheme, port):
@@ -901,8 +955,15 @@ def disable_tailscale_serve(mount, port):
         return False, msg
     with _cache_lock:
         _cache["info"] = None
-    return True, ("Tailscale Serve mapping removed" if len(ours) == 1
-                  else "Tailscale Serve mappings removed")
+    msg = ("Tailscale Serve mapping removed" if len(ours) == 1
+           else "Tailscale Serve mappings removed")
+    # Funnel is per listener: it stays on while another app still holds a mount on :443, and
+    # that is the other app's setting to change, not the panel's. Said, so "off" is not assumed.
+    shared, others = _r12a_listener_funnel(info.serve_config, port)
+    if shared and others:
+        msg += ("; Funnel stays on for the :443 listener, which still serves %s"
+                % ", ".join(others))
+    return True, msg
 
 
 def _remove_serve_mappings(routes, port):

@@ -79,6 +79,8 @@ def start_hub_lag_watch(spawn=None):
 
 # ── Serve's boot outcome as a fixed reason (R20) ─────────────────────────────────────────────────
 _SERVE_REASONS = (
+    # setup_tailscale_serve's refusal to change Funnel for another app on the shared :443 listener.
+    ("shared-funnel", ("funnel is set per listener",)),
     ("serve-not-enabled-on-tailnet", ("not enabled on your tailnet", "serve is not enabled",
                                       "funnel is not enabled", "enable serve", "enable funnel")),
     ("permission", ("access denied", "permission", "denied", "sudo:", "not permitted")),

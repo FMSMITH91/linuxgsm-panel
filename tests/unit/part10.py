@@ -2617,7 +2617,10 @@ def _so7_panel_diagnostics_2():
     _p7_garbage(os.path.join(_dg, "data", "panel.db"))
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(_p7_cert(-60, -4))
-    open(os.path.join(_dg, "data", "cred_key"), "w").close()
+    # A key with a byte in it: an EMPTY cred_key is a missing one (config._key_missing), and the
+    # "keys present" answer below is about a real key.
+    with open(os.path.join(_dg, "data", "cred_key"), "w", encoding="utf-8") as f:
+        f.write("p7-cred-key")
     _hv["res"] = _p7_sp.CompletedProcess([], 0, "\n".join(v + "\tdesc" for v in _all_verbs), "")
     _d3, _d3s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": "abc1234"}, helper=True)
 

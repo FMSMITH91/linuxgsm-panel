@@ -3235,6 +3235,9 @@ def _boot_serve(app, cfg, port):
             mount=mount,
             funnel=cfg.get("tailscale_use_funnel", False),
             backend_scheme=_serve_scheme_now(cfg, app.config),
+            # A restart re-points the panel's route and changes no one's Funnel: Funnel is per
+            # listener, and the default False here took another app on :443 off the internet.
+            keep_shared_funnel=True,
         )
         app.config["BOOT_SERVE"] = "ok" if _ok else "failed:" + _dr_process.serve_reason(_msg)
     except Exception as e:

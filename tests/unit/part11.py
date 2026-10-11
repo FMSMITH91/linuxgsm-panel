@@ -485,7 +485,7 @@ try:
     _tsi._cache["info"] = "stale"
     _ts_rm = _tsi.disable_tailscale_serve("/lgsm", 5000)
     check("tailscale disable: the panel's own mapping is removed with the listener's off-grammar",
-          _ts_rm == (True, "Tailscale Serve mapping removed")
+          _ts_rm[0] is True and _ts_rm[1].startswith("Tailscale Serve mapping removed")
           and _ts_off_calls == [["serve", "--https=443", "--set-path=/lgsm", "off"]]
           and _ts_steps == ["operator"] and _tsi._cache["info"] is None,
           "result=%r calls=%r steps=%r" % (_ts_rm, _ts_off_calls, _ts_steps))
