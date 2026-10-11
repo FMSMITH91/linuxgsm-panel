@@ -360,3 +360,19 @@ check("docs-only: the PR alert gate passes a docs-only pull request by a step th
       and _if50(_pa_steps50.get("Wait for this merge commit's analysis in every category", "")) == _RUN50
       and _if50(_pa_steps50.get("Judge refs/pull/<n>/merge", "")) == _RUN50,
       repr({k: _if50(v) for k, v in _pa_steps50.items()}))
+
+# ── No Claude session links in the repository ────────────────────────────────────────────────────
+# Cloud and Remote Control sessions append a claude.ai session link to every commit ("Claude-Session:"
+# trailer) and pull request unless attribution.sessionUrl is false. Cloud sessions read only the
+# committed .claude/settings.json, so the switch has to live there. A session link is the owner's
+# private conversation; this repository is public.
+
+_cs50 = _json50.load(open(os.path.join(_root, ".claude", "settings.json"), encoding="utf-8"))
+check("session links: the committed .claude/settings.json turns the session link off "
+      "(attribution.sessionUrl is false, which cloud sessions read from the repository)",
+      (_cs50.get("attribution") or {}).get("sessionUrl") is False, repr(_cs50))
+_needle50 = "claude.ai/code/" + "session_"
+_hits50 = _sp50.run(["git", "-C", _root, "grep", "-l", "-F", "--", _needle50],  # nosec B603 B607
+                    capture_output=True, text=True, check=False)
+check("session links: no tracked file carries a claude.ai session link",
+      _hits50.returncode == 1 and not _hits50.stdout.strip(), repr((_hits50.returncode, _hits50.stdout)))
