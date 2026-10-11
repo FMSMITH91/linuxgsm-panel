@@ -345,6 +345,19 @@ try:
                               Args(username="cli_new", password="Br@ndNew1pass"))  # nosec B106 - test fixture
     check("create-admin: refuses to clobber an existing user",
           exited and "already exists" in msg, msg[:60])
+    # The web forms' username rule applies here too. "cli_pad " (a stray space in the quotes) was
+    # stored verbatim, and the login form strips what is typed, so it could never sign in.
+    manage.cmd_create_admin(Args(username="cli_pad ", password="Br@ndNew1pass"))  # nosec B106 - test fixture
+    with manage.app.app_context():
+        _pad = [u.username for u in User.query.filter(User.username.like("cli_pad%")).all()]
+    check("create-admin: the name is stored stripped, as the login form looks it up", _pad == ["cli_pad"],
+          repr(_pad))
+    _bad = [raises_exit(manage.cmd_create_admin, Args(username=n, password="Br@ndNew1pass"))  # nosec B106
+            for n in ("ab", "cli two", "cli\x1bx")]
+    with manage.app.app_context():
+        _made = User.query.filter(User.username.in_(["ab", "cli two", "cli\x1bx"])).count()
+    check("create-admin: a name the web forms refuse (too short, a space, a control character) is "
+          "refused, and nothing is created", all(e for e, _ in _bad) and _made == 0, repr((_bad, _made)))
 
     # ── 6. The interactive menu accepts a number or a name ────────────────────────────────────
     import builtins
