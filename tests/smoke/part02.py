@@ -342,8 +342,9 @@ check("session: a signed-out page does not claim a session panel.js could 'expir
 # A STORED ntfy token, so the "not sent to the browser" check below has something to leak: with
 # none configured, `"TESTONLY" not in _nt_html` held whatever the template rendered. Both the
 # plaintext and the stored ciphertext are looked for; the config is put back byte for byte.
-import re as _nt_re
-from panel.core.config import CONFIG_FILE as _nt_cf, encrypt_secret as _nt_enc
+from re import search as _nt_search
+import panel.core.config as _nt_config
+_nt_cf, _nt_enc = _nt_config.CONFIG_FILE, _nt_config.encrypt_secret
 _nt_cfg_bytes = _nt_cf.read_bytes()
 _nt_cipher = _nt_enc("TESTONLYntfy123")
 try:
@@ -360,7 +361,7 @@ for _field in ("ntfy_enabled", "ntfy_topic", "ntfy_server", "ntfy_token"):
 check("notifications page: ntfy has a Send test button wired to the dispatcher",
       'data-args=\'["ntfy", "@self"]\'' in _nt_html)
 check("notifications page: (control) a stored ntfy token is shown as 'leave blank to keep'",
-      _nt_re.search(r'id="notifications-ntfy_token"[^>]*placeholder="[^"]*leave blank to keep',
+      _nt_search(r'id="notifications-ntfy_token"[^>]*placeholder="[^"]*leave blank to keep',
                     _nt_html) is not None)
 check("notifications page: the stored ntfy token is NOT sent to the browser",
       "TESTONLY" not in _nt_html and _nt_cipher not in _nt_html)

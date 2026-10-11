@@ -356,8 +356,10 @@ def _split_priv(lines):
 
 
 def _r11b_refused_without_argv(line, own):
-    """A refused sudo line with its ENV= and COMMAND= replaced by the label it would be counted
-    under: never an argument, never a path, as for the lines that are counted."""
+    """A refused sudo line with its ENV= and COMMAND= replaced by the label it is counted under.
+
+    Never an argument, never a path, as for the lines that are counted.
+    """
     m = _SUDO_REFUSED_TAIL_RE.search(line)
     if m is None:
         return line

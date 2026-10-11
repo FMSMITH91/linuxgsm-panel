@@ -51,7 +51,7 @@ from panel.ops import system_ops as so
 from panel.security.auth import log_action
 from panel.services import monitoring as _mon
 from panel.services import notifications
-from panel.services.reboot_summary import (_boot_clause, _host_label, _late_text, _summary,
+from panel.services.reboot_summary import (_bare_rebooted_text, _host_label, _late_text, _summary,
                                            _unread_note)
 
 _log = logging.getLogger("panel.host_reboot")
@@ -1491,17 +1491,21 @@ class _Job:
             empty = (self._still_empty(loaded.get(e["id"]), loaded)
                      if self.job["mode"] == "when_empty" else True)
             if empty is not True:
-                # Unread (None) still stops the reboot -- the server may hold a player -- but it is
-                # not a player joining: _bounced does not count it as one (see _waiting_again).
-                self.bounce = True
-                self.bounce_joined = self.bounce_joined or empty is False
-                if empty is None:
-                    self.bounce_unread = self.bounce_unread or e.get("name") or ""
+                self._bounce_for(e, empty)
                 return
             self._stop_one(e)
             done = sum(1 for x in self.entries if x.get("stop"))
             with _hr_lock:
                 self.job["done"], self.job["total"] = done, len(self.entries)
+
+    def _bounce_for(self, e, empty):
+        """Stop the stops: server `e` read players (`empty` False) or could not be read (None)."""
+        # Unread (None) still stops the reboot -- the server may hold a player -- but it is
+        # not a player joining: _bounced does not count it as one (see _waiting_again).
+        self.bounce = True
+        self.bounce_joined = self.bounce_joined or empty is False
+        if empty is None:
+            self.bounce_unread = self.bounce_unread or e.get("name") or ""
 
     def _still_empty(self, gs, loaded=None):
         """True when the server reads 0 players, False when it reads more, None when unread.
@@ -2176,18 +2180,7 @@ def _bare_answered(remote, job, ident, now, sent):
         _rbhold_remark_unplanned(remote.id)
         # From the uptime as read just now, not the tick's `now` (see _new_boot).
         boot = time.time() - float(ident.get("uptime") or 0)
-        # A job reaches here with no plan rows for two reasons. Its plan was empty — nothing was
-        # running — or the operator acted on every planned server while the host rebooted, and
-        # exclude_row took each out of the plan. The job's own server list tells them apart: the
-        # second used to be announced as "no running game server was found", about a reboot that
-        # had stopped servers (its own audit row lists them).
-        n = len(job.get("servers") or ())
-        what = (" (no running game server was found before it)" if not n else
-                "; the operator took over the %d game server%s it stopped, so the panel started "
-                "none of them" % (n, "" if n == 1 else "s"))
-        return "%s rebooted%s%s.%s" % (
-            _host_label(remote), _boot_clause(boot, job.get("sent")), what,
-            _unread_note(job.get("unread"), "stop or start")), True
+        return _bare_rebooted_text(remote, job, boot), True
     if now - sent >= DID_NOT_HAPPEN_AFTER and ident.get("state") != "stopping":
         _reboot_awaiting.pop(remote.id, None)
         return ("Reboot of %s did not happen: it is still on the same boot." % _host_label(remote),

@@ -341,6 +341,15 @@ def _r11a_reaches_ssh(g, pn, ssh_ports):
     return g.get("port_label") == "All ports" or (pn.isdecimal() and int(pn) in ssh_ports)
 
 
+def _r11a_tailnet_ssh_iface(g, ssh_ports):
+    """The tailscale interface of `g` when it is an inbound rule covering sshd there, else ""."""
+    iface = str(g.get("iface") or "")
+    if (not iface.startswith("tailscale") or (g.get("direction") or "IN") != "IN"
+            or not _r11a_reaches_ssh(g, str(g.get("port_num", "")), ssh_ports)):
+        return ""
+    return iface
+
+
 def _r11a_tailnet_ssh_open(groups, ssh_ports):
     """Whether UFW lets sshd in over a Tailscale interface, read the way UFW reads its rules.
 
@@ -354,10 +363,8 @@ def _r11a_tailnet_ssh_open(groups, ssh_ports):
     """
     decided = {}
     for g in sorted((g for g in groups if g.get("nums")), key=lambda g: min(g["nums"])):
-        iface = str(g.get("iface") or "")
-        if (not iface.startswith("tailscale") or iface in decided
-                or (g.get("direction") or "IN") != "IN"
-                or not _r11a_reaches_ssh(g, str(g.get("port_num", "")), ssh_ports)):
+        iface = _r11a_tailnet_ssh_iface(g, ssh_ports)
+        if not iface or iface in decided:
             continue
         if g.get("action") in ("DENY", "REJECT"):
             decided[iface] = False

@@ -174,7 +174,7 @@ def read_rows(repo, ref):
 
 
 def main_head(repo):
-    """main's head commit, or None when it could not be read."""
+    """The head commit of main, or None when it could not be read."""
     if not _REPO_RE.match(repo or ""):
         return None
     try:

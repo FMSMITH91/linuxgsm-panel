@@ -1755,9 +1755,8 @@ class _FakeWS:
 # Each session below starts a heartbeat thread that sleeps out the 600 s interval before it sees
 # that its session ended, so all three outlived the run (part15's thread gate names them). Their
 # sleep is made wakeable, unchanged while a session runs, and woken once the three have ended.
-import threading as _dc_thr  # noqa: E402
 import time as _dc_time  # noqa: E402
-_dc_wake = _dc_thr.Event()
+_dc_wake = _cwt.Event()
 
 
 class _DcTime(object):
@@ -1819,7 +1818,7 @@ check("discord: ...while a recv that really times out still ends the session (co
       _dcq_seen2 == [] and _dcq_ws2._frames == ['{"op":0}'], repr(_dcq_ws2._frames))
 _dc_wake.set()
 _dc_hb_left = []
-for _dc_th in _dc_thr.enumerate():
+for _dc_th in _cwt.enumerate():
     if "discord_gateway_run" in getattr(getattr(_dc_th, "_target", None), "__qualname__", ""):
         try:
             _dc_th.join(5)

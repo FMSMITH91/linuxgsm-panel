@@ -1884,8 +1884,10 @@ def _r11a_why(res):
 
 
 def _r11a_step_failed(note, not_done, res, what):
-    """Record a bootstrap step whose (out, err, rc) failed: a NOT DONE note, and `what` in
-    `not_done` for the final "finished, but" message. Returns whether it failed."""
+    """Record a bootstrap step whose (out, err, rc) failed, and return whether it failed.
+
+    A failure is a NOT DONE note, and `what` in `not_done` for the final "finished, but" message.
+    """
     if res[2] == 0:
         return False
     msg = "%s (%s)" % (what, _r11a_why(res))
@@ -3689,16 +3691,16 @@ def _r11a_sshd_off_tailnet(server):
         _core._log.debug("sshd listener read failed", exc_info=True)
         return False
     addrs = [a for a, p, _f in _ss_listeners(out) if p in ports] if rc == 0 else []
-    if not addrs:
+    return bool(addrs) and all(_r11a_off_tailnet_addr(a) for a in addrs)
+
+
+def _r11a_off_tailnet_addr(a):
+    """True when listener address `a` is a specific address that is not a Tailscale one."""
+    a = a.strip("[]").split("%", 1)[0]
+    if a in ("*", "0.0.0.0", "::"):
         return False
-    for a in addrs:
-        a = a.strip("[]").split("%", 1)[0]
-        if a in ("*", "0.0.0.0", "::"):
-            return False
-        ip = ip_address_or_none(a)
-        if ip is None or any(ip.version == n.version and ip in n for n in _r11a_tailnet_nets):
-            return False
-    return True
+    ip = ip_address_or_none(a)
+    return not (ip is None or any(ip.version == n.version and ip in n for n in _r11a_tailnet_nets))
 
 
 def remote_set_public_ssh(server, mode):

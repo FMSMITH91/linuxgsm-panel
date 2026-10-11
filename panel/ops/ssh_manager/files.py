@@ -487,10 +487,7 @@ def lgsm_write_config(server, user, selfname, updates):
     """
     if not _idents_ok(user, selfname):
         return False, "Invalid account or script name"
-    # Every writer of the instance cfg comes through here, so this is where "logtimestamp is only
-    # ever turned off" holds whichever form or request asked.
-    if "logtimestamp" in (updates or {}) and \
-            str(updates["logtimestamp"]).strip().strip('"').lower() != "off":
+    if _turns_logtimestamp_on(updates):
         return False, ("Turning LinuxGSM's log timestamps on freezes the live console, so the "
                        "panel only turns them off — nothing has been changed.")
     d = _lgsm_cfg_dir(user, selfname)
@@ -499,8 +496,7 @@ def lgsm_write_config(server, user, selfname, updates):
     lines = _read_instance_cfg_lines(server, user, selfname, inst, secrets)
     if lines is None:
         return False, "Could not read the current config — nothing has been changed."
-    _shadowed = sorted(k for k, v in (updates or {}).items()
-                       if k in secrets and str(v).replace("\r", " ").replace("\n", " ") != secrets[k])
+    _shadowed = _shadowed_by_secrets(updates, secrets)
     if _shadowed:
         return False, ("%s is set in secrets-%s.cfg, which LinuxGSM reads after %s.cfg, so a change "
                        "here would not take effect. Edit it in that file — nothing has been changed."
@@ -508,6 +504,22 @@ def lgsm_write_config(server, user, selfname, updates):
     _apply_cfg_updates(lines, updates)
     content = "\n".join(lines).rstrip("\n") + "\n"
     return _write_file_as_user(server, user, inst, content.encode())
+
+
+def _turns_logtimestamp_on(updates):
+    """Whether `updates` sets logtimestamp to anything but off.
+
+    Every writer of the instance cfg comes through lgsm_write_config, so this is where
+    "logtimestamp is only ever turned off" holds whichever form or request asked.
+    """
+    return ("logtimestamp" in (updates or {})
+            and str(updates["logtimestamp"]).strip().strip('"').lower() != "off")
+
+
+def _shadowed_by_secrets(updates, secrets):
+    """The keys `updates` changes that secrets-<selfname>.cfg also sets, sorted."""
+    return sorted(k for k, v in (updates or {}).items()
+                  if k in secrets and str(v).replace("\r", " ").replace("\n", " ") != secrets[k])
 
 
 def _read_instance_cfg_lines(server, user, selfname, inst, secrets=None):
@@ -537,20 +549,30 @@ def _read_instance_cfg_lines(server, user, selfname, inst, secrets=None):
         f"printf %s {_core._quote(_READ_END)}; fi"
     )
     out, _, _ = _core.shell_as_game_user(server, user, _probe, timeout=15, selfname=selfname)
-    body = out or ""
-    _sb, _se = "__LGSMP_SECRETS_INSTANCE_B__", "__LGSMP_SECRETS_INSTANCE_E__"
-    _si, _sj = body.find(_sb), body.find(_se)
-    if _si != -1 and _sj > _si:
-        try:
-            import base64 as _b64
-            _enc = body[_si + len(_sb):_sj].strip()
-            if secrets is not None and _enc:
-                secrets.update(_parse_cfg(_b64.b64decode(_enc, validate=True).decode("utf-8", "replace")))
-        except Exception:
-            _core._log.warning("lgsm_write_config: secrets frame for %s was not valid base64", inst)
-        body = body[:_si] + body[_sj + len(_se):]
+    body = _take_secrets_frame(out or "", inst, secrets)
     if body.strip() == "__NOFILE__":
         return []                       # no instance cfg yet — the updates become the file
+    return _framed_cfg_lines(body, inst)
+
+
+def _take_secrets_frame(body, inst, secrets):
+    """`body` without its secrets-<selfname>.cfg frame, whose settings fill `secrets` (a dict)."""
+    _sb, _se = "__LGSMP_SECRETS_INSTANCE_B__", "__LGSMP_SECRETS_INSTANCE_E__"
+    _si, _sj = body.find(_sb), body.find(_se)
+    if _si == -1 or _sj <= _si:
+        return body
+    try:
+        import base64 as _b64
+        _enc = body[_si + len(_sb):_sj].strip()
+        if secrets is not None and _enc:
+            secrets.update(_parse_cfg(_b64.b64decode(_enc, validate=True).decode("utf-8", "replace")))
+    except Exception:
+        _core._log.warning("lgsm_write_config: secrets frame for %s was not valid base64", inst)
+    return body[:_si] + body[_sj + len(_se):]
+
+
+def _framed_cfg_lines(body, inst):
+    """The instance cfg's lines from its framed read, or None when the frame is missing or bad."""
     i, j = body.find(_READ_BEGIN), body.rfind(_READ_END)
     if i == -1 or j <= i:
         _core._log.warning("lgsm_write_config: could not read %s — refusing to write", inst)

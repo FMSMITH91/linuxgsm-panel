@@ -23,6 +23,7 @@ NS = _types51.SimpleNamespace
 
 class _RecThread51:
     """A threading.Thread stand-in that records what was made and never runs it."""
+
     made = []
 
     def __init__(self, target=None, name=None, daemon=None, args=()):
@@ -192,7 +193,7 @@ with _patched():
     _patch(SO, "_git", lambda args, timeout=45: ("0123abc\trefs/heads/dev\n", "", 0))
     _patch(SO, "_launch_installer", lambda **k: (_sw51["launch"].append(k), (False, "refused"))[1])
     _patch(_cfg51, "load_config", lambda: {})
-    _patch(_cfg51, "update_config", lambda fn: _sw51["writes"].append(fn))
+    _patch(_cfg51, "update_config", _sw51["writes"].append)
     _sw51_dev = SO.panel_switch_branch("dev")
 check("branch switch: to a branch other than main is refused too while an update runs, before the "
       "config is written or the launcher reached",
@@ -498,10 +499,12 @@ from panel.services import notifications as _notif51  # noqa: E402
 
 class _JobLike51:
     """The _Job methods under test, on an object holding only what they read."""
+
     _back_to_waiting = _hr51._Job._back_to_waiting
     _wait_back = _hr51._Job._wait_back
     _waiting_again = _hr51._Job._waiting_again
     _stop_group = _hr51._Job._stop_group
+    _bounce_for = _hr51._Job._bounce_for
     _still_empty = _hr51._Job._still_empty
     _past_deadline = _hr51._Job._past_deadline
     _bounced = _hr51._Job._bounced

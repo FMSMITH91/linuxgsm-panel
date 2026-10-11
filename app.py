@@ -126,6 +126,7 @@ from panel.security import banlist as _banlist
 # and panel/core/http.py.
 from panel.core.validation import (MAX_PORT, MIN_PORT, _valid_hex_color, canonical_ip,
                                    canonical_ip_or_network, ip_address_or_none)
+from panel.core.origins import _host_port, _origin_candidates, _origin_key
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _record_metric_samples, _refresh_player_counts)
@@ -2601,31 +2602,6 @@ def _sync_toggles_from_cron(gs, jobs):
     return changed
 
 # ── WebSocket Console ───────────────────────────────────
-def _origin_candidates(environ, cfg):
-    """The hosts a page allowed to open the socket may be served from, as Host-header strings:
-    the Host this request arrived with, the X-Forwarded-Host a reverse proxy passes on, and
-    site_domain. Each may carry an explicit port or none."""
-    out = [environ.get("HTTP_HOST") or ""]
-    fwd = environ.get("HTTP_X_FORWARDED_HOST")
-    if fwd:
-        out.append(fwd.split(",")[0].strip())
-    out.append((cfg.get("site_domain") or "").strip())
-    return [h for h in out if h]
-
-
-def _host_port(value):
-    """(host, port) of a Host-header-like value, port None when none is given; None when it names
-    no host. A value written with a scheme (a site_domain typed as a URL) is read the same way."""
-    from urllib.parse import urlsplit
-    value = str(value or "").strip()
-    try:
-        u = urlsplit(value if "://" in value else "//" + value)
-        host, port = (u.hostname or "").lower(), u.port
-    except ValueError:
-        return None
-    return (host, port) if host else None
-
-
 def _socket_origin_allowed(origin, environ=None):
     """Whether a browser page at `origin` may open the console/terminal socket.
 
@@ -2699,20 +2675,6 @@ def _explicit_socket_origins(explicit):
     return exact
 
 
-def _origin_key(origin):
-    """(scheme, host, port) of an origin, the default port filled in; None for anything that is not
-    an http(s) origin with a host."""
-    from urllib.parse import urlsplit
-    try:
-        u = urlsplit(str(origin or ""))
-        host, port = (u.hostname or "").lower(), u.port
-    except ValueError:
-        return None
-    if u.scheme not in ("http", "https") or not host:
-        return None
-    return (u.scheme, host, port or (443 if u.scheme == "https" else 80))
-
-
 def _socketio_cors():
     """What SocketIO(cors_allowed_origins=...) is given: the per-request check above. engineio calls
     it as (origin, environ) for every request that carries an Origin header."""
@@ -2745,7 +2707,6 @@ def _os_updates_for(remote):
 # becomes `current_app.logger`, which inside a request is the SAME logger object on the SAME
 # channel — so no log line changes and not one of the 79 call sites needed touching. Every
 # caller of both is a route view, so the request context they need is guaranteed.
-
 
 
 # Set by manage.py, the offline recovery CLI, before it calls create_app(). That CLI runs BESIDE

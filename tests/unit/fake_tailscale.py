@@ -177,6 +177,17 @@ def _write_refused(st):
         _out(rc=1, err="Access denied: serve config denied\n")
 
 
+def _apply_funnel(st, verb, port):
+    """A `funnel` write turns Funnel on for the listener; a `serve` write turns it off."""
+    if verb == "funnel" and port not in st["funnel"]:
+        st["funnel"].append(port)
+    elif verb == "serve" and port in st["funnel"]:
+        # setServe ends with applyFunnel(..., allowFunnel=false): a plain `serve` write turns
+        # Funnel OFF for the whole listener ("Removing Funnel for ..."), other apps' mounts included.
+        st["funnel"].remove(port)
+        sys.stderr.write("Removing Funnel for %s:%s\n" % (HOST, port))
+
+
 def _serve(verb, rest):
     if rest == ["set-raw"]:
         _set_raw()
@@ -188,13 +199,7 @@ def _serve(verb, rest):
         _out(rc=1, err="invalid argument format\n")
     _write_refused(st)
     _set_web_handler(st["web"].setdefault(port, {}), path or "/", pos[0])
-    if verb == "funnel" and port not in st["funnel"]:
-        st["funnel"].append(port)
-    elif verb == "serve" and port in st["funnel"]:
-        # setServe ends with applyFunnel(..., allowFunnel=false): a plain `serve` write turns
-        # Funnel OFF for the whole listener ("Removing Funnel for ..."), other apps' mounts included.
-        st["funnel"].remove(port)
-        sys.stderr.write("Removing Funnel for %s:%s\n" % (HOST, port))
+    _apply_funnel(st, verb, port)
     _save(st)
     _out("Available within your tailnet:\n\n%s%s\n" % (_url(st, port), path or "/"))
 

@@ -121,6 +121,7 @@ def register(app):
     _register_firewall_view(app)
     _register_firewall_rules(app)
     _register_ssh_settings(app)
+    _register_ssh_port(app)
     _register_panel_port(app)
     _register_game_ports(app)
     _register_host_stats(app)
@@ -374,7 +375,7 @@ def _register_firewall_rules(app):
 
 
 def _register_ssh_settings(app):
-    """SSH: status, public exposure through UFW (allow / limit / off), and port."""
+    """SSH: status, and public exposure through UFW (allow / limit / off)."""
     @app.route("/api/remote/<int:remote_id>/ssh-status")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -409,6 +410,9 @@ def _register_ssh_settings(app):
                    remote=remote)
         return jsonify({"success": success, "message": msg})
 
+
+def _register_ssh_port(app):
+    """SSH: move a host's sshd to a new port."""
     @app.route("/api/remote/<int:remote_id>/ssh-port", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)

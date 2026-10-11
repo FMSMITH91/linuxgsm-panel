@@ -86,10 +86,10 @@ for _junk in (None, 0, 12, [], {}):
 # app.py AND every panel module: the routes moved into panel/routes, and a gate reading app.py
 # alone read zero flash() calls. The count of flash( calls read is the floor that says it read any.
 import re as _re_fl
-import glob as _glob_fl
 _leaky, _fl_calls = [], 0
-for _fl_rel in ["app.py"] + sorted(os.path.relpath(_p, _UNIT_ROOT) for _p in _glob_fl.glob(
-        os.path.join(_UNIT_ROOT, "panel", "**", "*.py"), recursive=True)):
+for _fl_rel in ["app.py"] + sorted(os.path.relpath(os.path.join(_d, _f), _UNIT_ROOT)
+                                   for _d, _s, _fs in os.walk(os.path.join(_UNIT_ROOT, "panel"))
+                                   for _f in _fs if _f.endswith(".py")):
     _app_src = open(os.path.join(_UNIT_ROOT, _fl_rel), encoding="utf-8").read()
     _fl_calls += len(_re_fl.findall(r"\bflash\(", _app_src))
     for _m in _re_fl.finditer(r"flash\(\s*f?[\"'][^\"']*\{\s*(e|exc|err|ex)\b[^}]*\}", _app_src):
