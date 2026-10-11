@@ -333,7 +333,12 @@ def install_gmod_content(server, content_user, games, on_progress=None):
     The same way a normal LinuxGSM content box does: fetch the game's script, then `auto-install`
     (non-interactive; runs SteamCMD + validate). Multiple games share ~/serverfiles, each in its own
     game dir. Skips games already present, then (re)writes the weekly update cron so content stays
-    current. Long-running. Returns (ok, installed_list, msg).
+    current. Long-running. Returns (ok, on_disk, msg).
+
+    `on_disk` is the games this run CONFIRMED are on the host: the ones it installed and the ones
+    it found already there. Both callers mount exactly that list (_split_on_disk), and it used to
+    be the installed ones only, so a CS:S already on a host whose content scan came back empty
+    (ensure_content_user's fallback has `present: {}`) was left out of the new server's mounts.
 
     `msg` says which of the five things happened to each game, because there is no single sentence
     that is true of all of them. It used to be `"installed: …" if installed else "already present"`,
@@ -363,7 +368,8 @@ def install_gmod_content(server, content_user, games, on_progress=None):
         _cron = ensure_content_update_cron(server, content_user)
     except Exception:
         _core._log.debug("content update cron setup failed", exc_info=True)
-    return True, buckets["installed"], _content_install_message(buckets, _cron, content_user)
+    return (True, buckets["installed"] + buckets["already"],
+            _content_install_message(buckets, _cron, content_user))
 
 
 def _installed_content_lgsm_names(server, content_user):
