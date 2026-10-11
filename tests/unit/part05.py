@@ -502,10 +502,10 @@ _nsr_ns["_install"]()
 # this suite directly. app.py's eventlet.monkey_patch() has run by now (part01 imports the app), so
 # the guard patches the socket class the suite actually uses.
 _nsr_ns["_install_egress_guard"]()
-import socket as _nsr_socket  # noqa: E402
+_nsr_connect = sys.modules["socket"].socket.connect
 check("no-sudo runner: its egress guard is installed for the rest of the run",
-      _nsr_socket.socket.connect.__qualname__.startswith("_install_egress_guard"),
-      "socket.connect is %s" % _nsr_socket.socket.connect.__qualname__)
+      _nsr_connect.__qualname__.startswith("_install_egress_guard"),
+      "socket.connect is %s" % _nsr_connect.__qualname__)
 from panel.ops.ssh_manager import _core as _nsr_core, cron as _nsr_cron, files as _nsr_files
 from panel.ops import system_ops as _nsr_so
 check("no-sudo runner: it stubs the DEFINITION site of _run_local, not just the package",

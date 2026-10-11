@@ -2639,6 +2639,13 @@ def _so7_panel_diagnostics_2():
     _d3, _d3s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": "abc1234"}, helper=True)
 
 
+def _so7_empty_cred_key(d4):
+    # The same card's Host credentials row calls an empty cred_key MISSING; this one said "present".
+    check("so/diagnostics: an EMPTY cred_key is not reported as a credential key present",
+          d4["Encryption keys"][0] == "ok" and "created when the first" in d4["Encryption keys"][1],
+          repr(d4.get("Encryption keys")))
+
+
 def _so7_panel_diagnostics_3():
     global _d4s, _d5s, f
     from panel.ops.system_ops import _DB_DAMAGED_TEXT as _p7_dmg  # noqa: E402
@@ -2659,10 +2666,7 @@ def _so7_panel_diagnostics_3():
     _hv["res"], _hv["exc"] = None, OSError("helper vanished")
     open(os.path.join(_dg, "data", "cred_key"), "w").close()      # truncated to 0 bytes
     _d4, _d4s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""}, helper=True)
-    # The same card's Host credentials row calls an empty cred_key MISSING; this one said "present".
-    check("so/diagnostics: an EMPTY cred_key is not reported as a credential key present",
-          _d4["Encryption keys"][0] == "ok" and "created when the first" in _d4["Encryption keys"][1],
-          repr(_d4.get("Encryption keys")))
+    _so7_empty_cred_key(_d4)
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(b"-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n")
     _d5, _d5s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""})

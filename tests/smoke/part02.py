@@ -2947,6 +2947,32 @@ def _r12d_returns(fn_node):
     return out
 
 
+def _r12d_const_kind(value):
+    """The shape of a literal constant return: None, a bool, or one particular string."""
+    if value is None:
+        return {("none", None)}
+    if isinstance(value, bool):
+        return {("bool", None)}
+    return {("str", value)} if isinstance(value, str) else None
+
+
+def _r12d_const_keys(keys):
+    return bool(keys) and all(isinstance(k, _r12d_ast.Constant) for k in keys)
+
+
+# How each literal return reads, by its node type: (node, the {name: dict keys} a list was built
+# from) -> its shapes, or None when this node of that type is not a literal one.
+_R12D_LITERALS = {
+    _r12d_ast.Constant: lambda v, ap: _r12d_const_kind(v.value),
+    _r12d_ast.Tuple: lambda v, ap: {("tuple", len(v.elts))},
+    _r12d_ast.Compare: lambda v, ap: {("bool", None)},
+    _r12d_ast.UnaryOp: lambda v, ap: {("bool", None)} if isinstance(v.op, _r12d_ast.Not) else None,
+    _r12d_ast.Dict: lambda v, ap: ({("dict", frozenset(k.value for k in v.keys))}
+                                   if _r12d_const_keys(v.keys) else None),
+    _r12d_ast.Name: lambda v, ap: {("listof", ap[v.id])} if v.id in ap else None,
+}
+
+
 def _r12d_kind(v, appended, real, depth):
     """The shapes one return value can take, as {(kind, detail)}; None when it cannot be told.
 
@@ -2954,58 +2980,63 @@ def _r12d_kind(v, appended, real, depth):
     that function, three calls deep at most; a name or call it cannot follow makes the whole
     answer unknown, so a function is judged only when EVERY return it has was read.
     """
-    A = _r12d_ast
-    if v is None or (isinstance(v, A.Constant) and v.value is None):
+    if v is None:
         return {("none", None)}
-    if isinstance(v, A.Tuple):
-        return {("tuple", len(v.elts))}
-    if isinstance(v, A.Constant) and isinstance(v.value, bool):
-        return {("bool", None)}
-    if isinstance(v, A.Constant) and isinstance(v.value, str):
-        return {("str", v.value)}
-    if isinstance(v, A.Compare) or (isinstance(v, A.UnaryOp) and isinstance(v.op, A.Not)):
-        return {("bool", None)}
-    if isinstance(v, A.Dict) and v.keys and all(isinstance(k, A.Constant) for k in v.keys):
-        return {("dict", frozenset(k.value for k in v.keys))}
-    if isinstance(v, A.Name) and v.id in appended:
-        return {("listof", appended[v.id])}
-    if isinstance(v, A.IfExp):
+    if isinstance(v, _r12d_ast.IfExp):
         a, b = (_r12d_kind(v.body, appended, real, depth),
                 _r12d_kind(v.orelse, appended, real, depth))
         return None if a is None or b is None else a | b
-    if isinstance(v, A.Call) and depth < 3:
-        f, g = v.func, getattr(real, "__globals__", {})
-        target = (g.get(f.id) if isinstance(f, A.Name)
-                  else getattr(g.get(f.value.id), f.attr, None)
-                  if isinstance(f, A.Attribute) and isinstance(f.value, A.Name) else None)
-        if _r12d_inspect.isfunction(target):
-            return _r12d_shape_of(target, depth + 1)
-    return None
+    if isinstance(v, _r12d_ast.Call):
+        return _r12d_follow(v, real, depth) if depth < 3 else None
+    read = _R12D_LITERALS.get(type(v))
+    return read(v, appended) if read is not None else None
 
 
-def _r12d_shape_of(real, depth=0):
-    """{(kind, detail), ...} the real function can return; None when any return is unreadable."""
+def _r12d_follow(call, real, depth):
+    """The shapes of the function `call` calls, looked up in `real`'s module; None if unknown."""
+    f, g = call.func, getattr(real, "__globals__", {})
+    if isinstance(f, _r12d_ast.Name):
+        target = g.get(f.id)
+    elif isinstance(f, _r12d_ast.Attribute) and isinstance(f.value, _r12d_ast.Name):
+        target = getattr(g.get(f.value.id), f.attr, None)
+    else:
+        return None
+    return _r12d_shape_of(target, depth + 1) if _r12d_inspect.isfunction(target) else None
+
+
+def _r12d_parse(real):
+    """`real`'s own def node, parsed from its source; None for a module, a lambda or no source."""
     if not _r12d_inspect.isfunction(real):     # a module or namespace swapped whole (`time`)
         return None
     try:
         tree = _r12d_ast.parse(_r12d_textwrap.dedent(_r12d_inspect.getsource(real)))
     except (OSError, TypeError, SyntaxError):
         return None
-    fn = next((n for n in tree.body
-               if isinstance(n, (_r12d_ast.FunctionDef, _r12d_ast.AsyncFunctionDef))), None)
+    return next((n for n in tree.body
+                 if isinstance(n, (_r12d_ast.FunctionDef, _r12d_ast.AsyncFunctionDef))), None)
+
+
+def _r12d_dict_append(n):
+    """(list name, dict keys) when `n` is `name.append({"k": ..., ...})`, else None."""
+    if not (isinstance(n, _r12d_ast.Call) and isinstance(n.func, _r12d_ast.Attribute)):
+        return None
+    if n.func.attr != "append" or not isinstance(n.func.value, _r12d_ast.Name) or not n.args:
+        return None
+    d = n.args[0]
+    if not (isinstance(d, _r12d_ast.Dict) and _r12d_const_keys(d.keys)):
+        return None
+    return n.func.value.id, frozenset(k.value for k in d.keys)
+
+
+def _r12d_shape_of(real, depth=0):
+    """{(kind, detail), ...} the real function can return; None when any return is unreadable."""
+    fn = _r12d_parse(real)
     if fn is None:
         return None
     # `rows.append({"cmd": ..., ...})` then `return rows`: a list of dicts with those keys.
-    appended = {}
-    for n in _r12d_ast.walk(fn):
-        if (isinstance(n, _r12d_ast.Call) and isinstance(n.func, _r12d_ast.Attribute)
-                and n.func.attr == "append" and isinstance(n.func.value, _r12d_ast.Name)
-                and n.args and isinstance(n.args[0], _r12d_ast.Dict)
-                and all(isinstance(k, _r12d_ast.Constant) for k in n.args[0].keys)):
-            appended[n.func.value.id] = frozenset(k.value for k in n.args[0].keys)
+    appended = dict(filter(None, map(_r12d_dict_append, _r12d_ast.walk(fn))))
     kinds = set()
-    returns = _r12d_returns(fn)
-    for r in returns:
+    for r in _r12d_returns(fn):
         k = _r12d_kind(r.value, appended, real, depth)
         if k is None:
             return None
@@ -3014,18 +3045,21 @@ def _r12d_shape_of(real, depth=0):
     return kinds or {("none", None)}
 
 
+# Does a value have a shape: kind -> (detail, value) -> bool.
+_R12D_FITS = {
+    "none": lambda d, v: v is None,
+    "tuple": lambda d, v: isinstance(v, tuple) and len(v) == d,
+    "bool": lambda d, v: isinstance(v, bool),
+    "str": lambda d, v: v == d,
+    "dict": lambda d, v: isinstance(v, dict) and set(v) == set(d),
+    "listof": lambda d, v: isinstance(v, list) and all(isinstance(e, dict) and set(e) == set(d)
+                                                       for e in v),
+}
+
+
 def _r12d_fits(kinds, v):
     """Does `v` have one of the shapes in `kinds`?"""
-    for kind, detail in kinds:
-        if ((kind == "none" and v is None)
-                or (kind == "tuple" and isinstance(v, tuple) and len(v) == detail)
-                or (kind == "bool" and isinstance(v, bool))
-                or (kind == "str" and v == detail)
-                or (kind == "dict" and isinstance(v, dict) and set(v) == set(detail))
-                or (kind == "listof" and isinstance(v, list)
-                    and all(isinstance(e, dict) and set(e) == set(detail) for e in v))):
-            return True
-    return False
+    return any(_R12D_FITS[kind](detail, v) for kind, detail in kinds)
 
 
 def _r12d_shaped(real, fn, name, bad=None):
@@ -3055,6 +3089,7 @@ class _R12dCrontab:
     """
 
     def __init__(self):
+        """An empty crontab for every user."""
         self.lines = {}
 
     def _line(self, user, selfname):

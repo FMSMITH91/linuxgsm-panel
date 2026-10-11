@@ -48,7 +48,8 @@ def _join13(t, secs=5):
     Under the monkey-patched suite a green join that times out raises eventlet.timeout.Timeout, a
     BaseException: a pump that never retired — exactly what these checks look for — ended the
     whole unit run with a traceback and no tally. The checks after each join name a pump that is
-    still running."""
+    still running.
+    """
     try:
         t.join(timeout=secs)
     except _EvTimeout13:

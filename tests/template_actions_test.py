@@ -2333,10 +2333,11 @@ check("_appendConsole" in _sd and _sd.count("function _appendConsole(") == 1,
 # that the steady-state path goes through the overlap check and that the wipe stays behind the
 # one-shot primed flag.
 def _window_r12d(text, first, last):
-    """text from `first` up to `last`; "" when either marker is missing or out of order.
+    """Return `text` from `first` up to `last`; "" when either marker is missing or out of order.
 
     A plain slice between two find()s ran to the END of the file when `last` was renamed (-1), so
-    the `in` checks below could pass on text that lies past the function they mean."""
+    the `in` checks below could pass on text that lies past the function they mean.
+    """
     i = text.find(first)
     j = text.find(last, i + 1) if i >= 0 else -1
     return text[i:j] if 0 <= i < j else ""
