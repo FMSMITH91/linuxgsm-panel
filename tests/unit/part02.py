@@ -2958,6 +2958,17 @@ for _rel in _totp_files:
     _path = os.path.join(_totp_root, _rel)
     _tree = _totp_ast.parse(open(_path, encoding="utf-8").read())
     for _n in _totp_ast.walk(_tree):
+        # A rename on import (`from ...auth import verify_totp as _vt`) or a lookup by string
+        # (`getattr(auth, "verify_totp")`) reaches it under a name the call test cannot see.
+        if isinstance(_n, _totp_ast.ImportFrom) and any(
+                _a.name == "verify_totp" and _a.asname not in (None, "verify_totp")
+                for _a in _n.names):
+            _totp_bad.append("%s:%d (imported under another name)" % (_rel, _n.lineno))
+            continue
+        if (isinstance(_n, _totp_ast.Constant) and _n.value == "verify_totp"
+                and _rel != os.path.join("panel", "security", "auth.py")):
+            _totp_bad.append("%s:%d (named as a string)" % (_rel, _n.lineno))
+            continue
         if not (isinstance(_n, _totp_ast.Call)
                 and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "verify_totp"):
             continue

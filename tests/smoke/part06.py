@@ -465,7 +465,7 @@ try:
     _bn_game = _sm_game
     _ban_saved["ensure"] = _bn_game.ensure_persistent_bans
     _ban_saved["moderate"] = _bn_game.moderate
-    _bn_game.ensure_persistent_bans = lambda r, u, sn=None: _ban_ensured.append(u)
+    _bn_game.ensure_persistent_bans = lambda r, u, sn=None: (_ban_ensured.append(u), True)[1]
     _bn_game.moderate = (lambda r, u, gt, action, target="", message="", selfname=None,
                          steamid="", num=None: (True, "ok"))
     c.post("/api/server/%d/moderate" % gs_id,
@@ -840,16 +840,18 @@ finally:
     with app.app_context():
         db.session.delete(db.session.get(CustomCommand, _oc_id))
         db.session.commit()
-# An unparseable argument pattern must not 500 or store itself — it falls back to the default.
-_cc_re_added = _cc_add("cc_badre", "say {}", argument_pattern="([unclosed")
-check("custom command form: an invalid argument pattern does not store a broken regex",
-      _cc_re_added in (0, 1), "unexpected result %s" % _cc_re_added)
-if _cc_re_added == 1:
-    with app.app_context():
-        _bad = CustomCommand.query.filter_by(name="cc_badre").first()
-        check("custom command form: ...it falls back to a pattern that compiles",
-              _bad is not None and _bad.argument_pattern != "([unclosed",
-              "stored %r" % (getattr(_bad, "argument_pattern", None),))
+# An unparseable argument pattern is REFUSED, by name, and never stored (_custom_cmd_form). This
+# accepted "0 or 1 added" — every possible outcome of the count, a 500 included, since the status
+# was never read — with a follow-up for a "falls back to the default" the form no longer does.
+_cc_re_before = _cc_count()
+_cc_re_resp = c.post("/commands/add", data={
+    "name": "cc_badre", "command_template": "say {}", "scope": "all", "enabled": "on",
+    "argument_pattern": "([unclosed"}, follow_redirects=True)
+_cc_re_added = _cc_count() - _cc_re_before
+check("custom command form: an invalid argument pattern is refused, saying why, and not stored",
+      _cc_re_resp.status_code < 500 and _cc_re_added == 0
+      and "a valid regular expression" in _cc_re_resp.get_data(as_text=True),
+      "status=%d added=%d" % (_cc_re_resp.status_code, _cc_re_added))
 with app.app_context():
     for _n in ("cc_ok", "cc_badre"):
         _row = CustomCommand.query.filter_by(name=_n).first()
@@ -1728,10 +1730,15 @@ try:  # noqa: MC0001
         # (`(a if x else b)(sid)`, as the safe helper itself uses) or a module-level call went
         # unseen. Only the two helpers' own bodies are left out of the walk.
         _bkc_todo = [_bkc_ast.parse(_bkc_py.read_text(encoding="utf-8"))]
+        _bkc_top = _bkc_todo[0].body
         while _bkc_todo:
             _bkc_n = _bkc_todo.pop()
+            # By (file, name), and at module level only: a function of that name defined in
+            # any other file, or nested anywhere, is not one of the two helpers.
             if (isinstance(_bkc_n, (_bkc_ast.FunctionDef, _bkc_ast.AsyncFunctionDef))
-                    and _bkc_n.name in ("_record_game_clock", "_record_full_clock")):
+                    and _bkc_n.name in ("_record_game_clock", "_record_full_clock")
+                    and _bkc_py.parts[-3:] == ("panel", "routes", "_shared.py")
+                    and _bkc_n in _bkc_top):
                 continue
             _bkc_ref = (_bkc_n.attr if isinstance(_bkc_n, _bkc_ast.Attribute)
                         else _bkc_n.id if isinstance(_bkc_n, _bkc_ast.Name)
@@ -3122,8 +3129,17 @@ import os as _gh_os  # pylint: disable=reimported
 # stubbed seams; a path through another transport would RUN the payload and still read as clean,
 # so the file itself is looked for too (a leftover from an earlier run is cleared first).
 _GH_PWN = _gh_os.path.join(_gh_os.sep + "tmp", _GH_MARK)
+# A leftover owned by another account (sticky /tmp) cannot be removed, and the PermissionError
+# ended the rest of this part with a traceback; it is a named failure instead — the file is what
+# this check looks for, so one this run cannot clear leaves its verdict unreadable.
+_gh_pwn_stale = None
 if _gh_os.path.lexists(_GH_PWN):
-    _gh_os.remove(_GH_PWN)
+    try:
+        _gh_os.remove(_GH_PWN)
+    except OSError as _gh_e:
+        _gh_pwn_stale = "%s could not be cleared before the sweep: %s" % (_GH_PWN, _gh_e)
+check("GHSA sweep: (setup) no payload file is left from an earlier run", _gh_pwn_stale is None,
+      _gh_pwn_stale or "")
 _gh_ids = {}
 with app.app_context():
     # The review of the first fix added two more rows: the SCRIPT name injected through
