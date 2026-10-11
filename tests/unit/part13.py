@@ -4173,7 +4173,10 @@ try:
         _abn_done10, _abn10 = threading.Event(), []
 
         def _abr_now10(remote):
-            _abn10.append(remote.name)
+            # Recorded BEFORE it is dereferenced: `remote.name` first raised AttributeError on a
+            # None, which _go's `except Exception` swallowed — so a lost `if remote:` (the unknown
+            # id reconciled as None) left _abn10 == ["west"] and the check below passed.
+            _abn10.append(getattr(remote, "name", remote))
             _abn_done10.set()
             raise RuntimeError("ufw exploded")
 

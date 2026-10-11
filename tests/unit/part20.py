@@ -15,6 +15,8 @@ import threading as _th20
 import time as _time20
 from contextlib import contextmanager
 
+from eventlet.timeout import Timeout as _EvTimeout20  # noqa: E402 - a timed-out green join raises it
+
 from flask import Flask as _Flask20
 
 from unit.part01 import SO, check, config, eq
@@ -51,6 +53,19 @@ def _restore_all():
             owner.__dict__.pop(name, None)
         else:
             setattr(owner, name, value)
+
+
+def _join20(t, secs=5):
+    """t.join(secs) that RETURNS on a timeout: eventlet's green join RAISES its Timeout instead.
+
+    That is a BaseException, which the harness's `except Exception` does not catch, so a waiter that
+    never woke (the single-flight regressions these checks exist for) ended the unit run with no
+    tally. The checks after each join name a result that never arrived.
+    """
+    try:
+        t.join(secs)
+    except _EvTimeout20:   # a timed-out green join raises it; the caller's check reports it
+        pass
 
 
 @contextmanager
@@ -405,7 +420,7 @@ def _p20_single_flight():
             _time20.sleep(0.05)
         gate.set()
         for t in threads:
-            t.join(5)
+            _join20(t)
     check("debug report: a second request while one report builds waits for it and gets the same result",
           calls == [1] and got == [{"report": "r1"}, {"report": "r1"}], repr((calls, got)))
 
@@ -684,7 +699,7 @@ def _p20_one_journal_read():
         for t in threads:
             t.start()
         for t in threads:
-            t.join(5)
+            _join20(t)
     eq("debug report: the digest and the recent log share ONE journal read of 5000 lines", calls, [5000])
 
 

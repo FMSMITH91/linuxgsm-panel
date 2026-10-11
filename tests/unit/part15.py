@@ -20,6 +20,8 @@ import tarfile as _tar15
 import tempfile
 import time as _time15
 
+from eventlet.timeout import Timeout as _EvTimeout15  # noqa: E402 - a timed-out green join raises it
+
 from unit.part01 import SO, check
 from unit.part05 import _root
 from unit.part06 import _inst_shfn
@@ -331,7 +333,10 @@ _thr15_t = _thr15.Thread(target=_thr15_probe, daemon=True)
 _thr15_t.start()
 _thr15_seen = _live_threads15(lambda mod, qual: qual == "_thr15_probe", grace=0)
 _THR15_HOLD.set()
-_thr15_t.join(5)
+try:
+    _thr15_t.join(5)
+except _EvTimeout15:   # a timed-out green join raises it (a BaseException), not ending the run
+    pass
 check("threads: the end-of-run lookup finds a live thread by its target (a probe started here)",
       len(_thr15_seen) == 1, repr(_thr15_seen))
 # ...and the filter takes the modules the panel's workers live in: a lookup that works is no
