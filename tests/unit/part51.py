@@ -220,3 +220,37 @@ check("self-update launcher: while a run is in progress it leaves that run's log
       "launch it then makes is refused)",
       _li51[0] is False and _li51_seen == [True] and os.path.exists(_li51_log),
       repr((_li51, _li51_seen)))
+
+# ── A02: a disconnect hook (and a ban-change listener) is keyed by module AND qualified name ───
+from panel.ops import socket_hooks as _sh51  # noqa: E402
+from panel.security import banlist as _bl51mod  # noqa: E402
+
+
+def _same_site51(module, heard, tag):
+    """A `lambda sid: ...` as register() in `module` would build it."""
+    fn = (lambda *a: heard.append(tag))  # noqa: E731 - it is the lambda shape under test
+    fn.__qualname__, fn.__module__ = "register.<locals>.<lambda>", module
+    return fn
+
+
+_heard51 = []
+_saved_hooks51, _saved_ls51 = dict(_sh51._hooks), dict(_bl51mod._listeners)
+try:
+    _sh51._hooks.clear()
+    _sh51.add_disconnect_hook(_same_site51("panel.routes.host_terminal", _heard51, "terminal"))
+    _sh51.add_disconnect_hook(_same_site51("panel.routes.p51_other", _heard51, "other"))
+    _sh51.add_disconnect_hook(_same_site51("panel.routes.p51_other", _heard51, "other again"))
+    _sh51.run_disconnect_hooks("sid51")
+    _bl51mod._listeners.clear()
+    _bl51mod.on_change(_same_site51("panel.routes.server_files", _heard51, "ban sweep"))
+    _bl51mod.on_change(_same_site51("panel.routes.p51_other", _heard51, "ban other"))
+    _bl51_n = len(_bl51mod._listeners)
+finally:
+    _sh51._hooks.clear()
+    _sh51._hooks.update(_saved_hooks51)
+    _bl51mod._listeners.clear()
+    _bl51mod._listeners.update(_saved_ls51)
+check("socket hooks: two modules' register.<locals>.<lambda> hooks both run (a second module's no "
+      "longer replaces the terminal's cleanup), while one re-registered from the same site replaces "
+      "itself", sorted(_heard51) == ["other again", "terminal"], repr(_heard51))
+check("ban listeners: ...and the same for banlist.on_change", _bl51_n == 2, repr(_bl51_n))
