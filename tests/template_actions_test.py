@@ -2300,9 +2300,19 @@ else:
 # sit side by side and you click fastest. Reported as "on the game server page ... restart ... showed
 # me a confirm box ... on the overall gameservers dashboard ... there was no confirm box". Stop had
 # none either, and bulk restart skipped it while bulk stop did not.
+def _window_r12d(text, first, last):
+    """Return `text` from `first` up to `last`; "" when either marker is missing or out of order.
+
+    A plain slice between two find()s ran to the END of the file when `last` was renamed (-1), so
+    the `in` checks below could pass on text that lies past the function they mean.
+    """
+    i = text.find(first)
+    j = text.find(last, i + 1) if i >= 0 else -1
+    return text[i:j] if 0 <= i < j else ""
+
+
 _dash = (STATIC_JS / "dashboard.js").read_text(encoding="utf-8")
-_da_start = _dash.find("function doAction(")
-_da = _dash[_da_start:_dash.find("function _runAction(", _da_start)] if _da_start != -1 else ""
+_da = _window_r12d(_dash, "function doAction(", "function _runAction(")
 check(bool(_da) and "confirmDialog" in _da and "'restart'" in _da and "'stop'" in _da,
       "dashboard: per-row restart/stop ask before firing",
       "doAction no longer confirms — a row click would stop a populated server with no prompt")
@@ -2332,17 +2342,6 @@ check("_appendConsole" in _sd and _sd.count("function _appendConsole(") == 1,
 # of the server-rendered seed. What must not come back is wiping on EVERY poll, so the assertion is
 # that the steady-state path goes through the overlap check and that the wipe stays behind the
 # one-shot primed flag.
-def _window_r12d(text, first, last):
-    """Return `text` from `first` up to `last`; "" when either marker is missing or out of order.
-
-    A plain slice between two find()s ran to the END of the file when `last` was renamed (-1), so
-    the `in` checks below could pass on text that lies past the function they mean.
-    """
-    i = text.find(first)
-    j = text.find(last, i + 1) if i >= 0 else -1
-    return text[i:j] if 0 <= i < j else ""
-
-
 _rc = _window_r12d(_sd, "function refreshConsole(", "function loadMoreConsole(")
 check("_newConsoleRows(_consoleLines, rows)" in _rc and "_consolePrimed" in _rc,
       "console: a poll appends what is new instead of rebuilding from its window",
@@ -3313,8 +3312,7 @@ check(len(_pee) > 150
       "js: an update is reported as ended only when its log says it finished AND the process that "
       "answered is the one that started it — failed and held say why",
       "panelUpdateEndedEarly is missing, or no longer requires both: %r" % _pee[:200])
-_wpr_log = _wpr[_wpr.find("fetch(MOUNT+'/api/panel/update-log')"):
-                _wpr.find("rmhReadRestartedStatus(")]
+_wpr_log = _window_r12d(_wpr, "fetch(MOUNT+'/api/panel/update-log')", "rmhReadRestartedStatus(")
 _wpr_early = _js_block_after(_wpr_log, "if(early){") or ""
 # The reason is up to two sentences of the installer's own text. Beside the buttons on a 375px phone
 # the status line was squeezed into a column 90px wide and 313px tall (measured in a browser); the
@@ -3391,8 +3389,8 @@ check("d.error" in _pu_fn and "d.unread" in _pu_fn and "typeof d.rc !== 'number'
       _pu_fn[:200])
 check(0 <= _po_fn.find("if(_osuPollUnread(d)){") < _po_fn.find("logEl.textContent=")
       and _po_fn.find("if(_osuPollUnread(d)){") < _po_fn.find("if(d.done){")
-      and "_osuTimer=setTimeout(_pollOsUpdate" in _po_fn[_po_fn.find("if(_osuPollUnread(d)){"):
-                                                          _po_fn.find("_osuMiss=0;")],
+      and "_osuTimer=setTimeout(_pollOsUpdate" in _window_r12d(_po_fn, "if(_osuPollUnread(d)){",
+                                                                "_osuMiss=0;"),
       "js: ...and such a poll keeps the log, is not taken as done, and polls again",
       _po_fn[:400])
 check("d.running === false ? (_osuStale+1)" in _po_fn,
@@ -4068,7 +4066,9 @@ check(not _id_offenders,
 # instead of lying. Each window starts at the line that decides what is iterated, so a gate cannot
 # pass by looking at rendering the change never touched.
 #
-# Every window below is sliced with _between, which ANSWERS "" when either marker is gone. Cut
+# Every window below is sliced with _between, which ANSWERS "" when either marker is gone — the
+# END marker too (it ran to the end of the file instead, so a renamed end marker turned a window
+# into the rest of the file and its `in` checks passed on text past the function). Cut
 # with a bare str.index these gates did not fail when the fix was reverted — they raised
 # ValueError, and this suite prints its results only after the last check, so a crash here
 # discarded all 172 of them and reported rc=1 with no FAIL line. A gate that cannot survive the
@@ -4081,7 +4081,7 @@ def _between(text, first, last=None):
     if last is None:
         return rest
     j = rest.find(last)
-    return rest if j < 0 else rest[:j]
+    return "" if j < 0 else rest[:j]
 
 
 _dm_js = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
@@ -4365,7 +4365,9 @@ check("return sid, None" in _bk_py,
       "its except branch still answers [] for a host it could not reach")
 # The delete path is the one that must never act on a listing it does not have.
 _bk_cron = (ROOT / "panel" / "ops" / "ssh_manager" / "cron.py").read_text(encoding="utf-8")
-_hr = _between(_bk_cron, "def _ensure_backup_headroom", "def run_game_backup")
+# Ended at the NEXT function: `def run_game_backup` moved to game.py, and this window ran from here
+# to the end of cron.py, where any later `if backups is None:` satisfied the check.
+_hr = _between(_bk_cron, "def _ensure_backup_headroom", "def _backup_shortfall")
 check("if backups is None:" in _hr,
       "backups: the prune-to-make-room path refuses a listing it could not read",
       "the one path here that DELETES backups still acts on an unknown listing")
