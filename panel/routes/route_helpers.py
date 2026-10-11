@@ -592,7 +592,9 @@ def _rebind_pending(cfg):
 def _r12a_funnel_maybe(cfg):
     """Whether the panel's Serve route may be on Funnel: it is, or Serve could not be read."""
     info = ts.get_tailscale_info()
-    return bool(info.serve_unreadable) or ts.panel_funnelled(info.serve_config, cfg.get("port", 5000))
+    # Both ports, with a port change pending: Serve still reaches the bound one (ts._r13b_panel_ports).
+    return bool(info.serve_unreadable) or any(ts.panel_funnelled(info.serve_config, p)
+                                              for p in ts._r13b_panel_ports(cfg))
 
 
 def _complete_facts(cfg):

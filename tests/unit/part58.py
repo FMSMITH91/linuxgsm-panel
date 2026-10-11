@@ -39,9 +39,11 @@ from panel.ops.debug_report import logs as _logs58
 from panel.ops.debug_report import network as _nw58
 from panel.ops.ssh_manager import files as _files58
 from panel.ops.ssh_manager import game as _game58
+from panel.routes import route_helpers as _rh58
 from panel.security import auth as _auth58
 from panel.security import privileged as _priv58
 from panel.services import lgsm_data as _lgd58
+from panel.services import monitoring as _mon58
 from panel.services.bots import commands as _botcmd58
 
 _TRIP58_START = len(_P9_TRIPPED)
@@ -193,6 +195,18 @@ def _persistent_bans58():
           ok is True and "exec banned_user.cfg" in text, repr((ok, text)))
 
 
+def _console_slots58():
+    _p9_patch(_mon58, "sm_game_engine", lambda gt: "valve")
+    _p9_patch(_mon58, "_server_max_config", lambda gs: 24)
+    _p9_patch(_mon58, "sm_console_status", lambda *a, **k: (None, None))
+    gs = NS(remote=None, short_name=_USER58, game_type="gmod", lgsm_name="gmodserver")
+    unread = _mon58._server_slots(gs, allow_console=True, primary=(None, None, None))
+    _p9_patch(_mon58, "sm_console_status", lambda *a, **k: ([], "x"))
+    empty = _mon58._server_slots(gs, allow_console=True, primary=(None, None, None))
+    check("player count: a console read that failed is no count, not 0 players; an empty table "
+          "is 0 (control)", unread[0] is None and empty[0] == 0, repr((unread, empty)))
+
+
 # ── A04: the bots and the Refresh reason ────────────────────────────────────────────────────────
 def _connect_echo58():
     with _p9.app_context():
@@ -264,20 +278,25 @@ def _funnel_port58():
           and "could not be read" in said, said)
     seen = []
     _p9_patch(_p9_ts, "get_tailscale_info", lambda *a, **k: NS(serve_config={}))
-    _p9_patch(_p9_ts, "panel_funnelled", lambda sc, port: (seen.append(port), False)[1])
+    _p9_patch(_p9_ts, "get_tailscale_info", lambda *a, **k: NS(serve_config={}, serve_unreadable=False))
+    _p9_patch(_p9_ts, "panel_funnelled", lambda sc, port: (seen.append(port), port == 5002)[1])
     _p9_patch(_p9_ts, "shared_funnel_apps", lambda sc, port, use: (seen.append(port), [])[1])
     saved = _p9.config.get("BOOT_PORT")
     _p9.config["BOOT_PORT"] = 5002
+    cfg = {"tailscale_setup_done": True, "port": 5000}
     try:
         with _p9.app_context():
-            _p9_ts.panel_funnel_facts({"tailscale_setup_done": True, "port": 5000})
+            facts = _p9_ts.panel_funnel_facts(cfg)
+            maybe = _rh58._r12a_funnel_maybe(cfg)
     finally:
         if saved is None:
             _p9.config.pop("BOOT_PORT", None)
         else:
             _p9.config["BOOT_PORT"] = saved
-    check("tailscale: the pages' 'reachable from the internet' facts read the bound port too",
-          seen == [5002, 5002], repr(seen))
+    check("tailscale: with a port change pending, 'reachable from the internet' asks the bound port "
+          "too — the pages' facts and the setup wizard's 'only your devices' test",
+          facts["funnelled"] is True and maybe is True and 5000 in seen and 5002 in seen,
+          repr((facts, maybe, seen)))
 
 
 # ── A07: who reaches root, as the helper reads sudoers ──────────────────────────────────────────
@@ -353,8 +372,10 @@ def _remote_content58():
         sh = _priv58.remote_command("content-game-present", [user, game]).replace(
             "/home/", _HOME58 + "/")
         rcs[tag] = _sp58.run(["bash", "-c", sh], env=env, capture_output=True, check=False).returncode  # nosec B603 B607 - bash on the rendered verb
-    with open(log, encoding="utf-8") as fh:
-        asked = sorted(set(fh.read().split()))
+    asked = []
+    if os.path.exists(log):                 # no log at all: nothing was asked as an account
+        with open(log, encoding="utf-8") as fh:
+            asked = sorted(set(fh.read().split()))
     check("remote content-game-present: asked AS the account — present 0, absent 1, no account 1, "
           "and 2 (unknown) when it cannot be run as the account",
           rcs == {"present": 0, "absent": 1, "no account": 1, "cannot ask": 2}
@@ -382,13 +403,15 @@ def _flags58(client, rid, sid):
         "game backup": ("/api/panel/backup/game/%d" % sid, "force"),
         "log timestamps": ("/api/server/%d/log-timestamps" % sid, "enabled"),
     }
-    got = {}
+    got, said = {}, {}
     for tag, (url, key) in posts.items():
         r = client.post(url, json={"ip": "198.51.100.58", key: "false"})
         got[tag] = r.status_code
+        said[tag] = (_p9_json(r) or {}).get("message") or (_p9_json(r) or {}).get("error") or ""
     check("routes: a switch posted as the string \"false\" is refused (400), not read as yes — "
           "daily restart, notify-empty, whitelist remove, block/unblock, auto-block, backup force, "
-          "log timestamps", got == {t: 400 for t in posts} and calls == [], repr((got, calls)))
+          "log timestamps", got == {t: 400 for t in posts} and calls == []
+          and all("must be true or false" in m for m in said.values()), repr((got, calls, said)))
     r1 = client.post("/api/server/%d/daily-restart" % sid, json={"enabled": False})
     r2 = client.post("/api/server/%d/notify-empty" % sid, json={"enabled": True})
     check("routes: ...while a JSON boolean still works (control)",
@@ -425,6 +448,7 @@ try:
     _player_reply58()
     _capture_since58()
     _persistent_bans58()
+    _console_slots58()
     _connect_echo58()
     _refresh_reason58()
     _localized_continued58()
