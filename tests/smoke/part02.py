@@ -2957,7 +2957,7 @@ try:
     _ij_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
     _ij_stub(_sm_core, "run_as_game_user", _ij_run_as)
     _ij_stub(_sm_core, "run_privileged", _ij_priv)
-    _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop", "monitor"])
+    _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: [{"cmd": c} for c in ("start", "stop", "monitor")])
     _ij_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
     _ij_stub(_msmod, "_looks_installed", lambda *a, **k: True)
     _ij_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
