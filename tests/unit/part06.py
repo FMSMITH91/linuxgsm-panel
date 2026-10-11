@@ -127,8 +127,13 @@ try:
     while not os.path.exists(_marker) and _time.time() < _t_end:
         _time.sleep(0.2)
     check("reboot: the detached child fires after the delay", os.path.exists(_marker))
-except Exception as _e:                     # a sandbox that forbids fork should not fail the suite
+except OSError as _e:                       # a sandbox that forbids fork should not fail the suite
     skip("reboot: the detached child fires after the delay", _e)
+except Exception as _e:  # noqa: BLE001 - anything else is the code's answer, and fails by name
+    # A probe that BLOCKED past its 60 s (TimeoutExpired — the regression this exists for) or
+    # printed no number used to land in the skip above: a SKIP, under a reason about sandboxes.
+    check("reboot: the call returns at once instead of blocking for the delay", False,
+          "the probe did not answer: %r" % (_e,))
 
 _shutil.rmtree(_sandbox, ignore_errors=True)
 
@@ -10300,8 +10305,8 @@ import importlib as _il6
 _hooks_mod = _il6.import_module("panel.ops.socket_hooks")
 _seen6 = []
 # Put back below: left registered, the raising lambda and _second_hook ran on every later socket
-# disconnect in the run (a traceback each time), and the "<lambda>" key stood in for any lambda a
-# later check registered.
+# disconnect in the run (a traceback each time). _hooks is keyed (module, qualname) since #416, so
+# the cleanup is checked as the whole table being what it was, not by looking for one key.
 _hooks_saved6 = dict(_hooks_mod._hooks)
 _hooks_mod.add_disconnect_hook(lambda sid: (_ for _ in ()).throw(RuntimeError("boom")))
 def _second_hook(sid): _seen6.append(sid)
@@ -10317,8 +10322,8 @@ check("socket: registering the same hook twice does not run it twice", _seen6 ==
 _hooks_mod._hooks.clear()
 _hooks_mod._hooks.update(_hooks_saved6)
 check("socket: (cleanup) the hooks registered above are gone again",
-      "<lambda>" not in _hooks_mod._hooks and _second_hook not in _hooks_mod._hooks.values(),
-      repr(sorted(_hooks_mod._hooks)))
+      _hooks_mod._hooks == _hooks_saved6,
+      "left: %r" % sorted(set(_hooks_mod._hooks) - set(_hooks_saved6), key=repr))
 
 # ── a closed browser must take the shell with it, even when SIGHUP is ignored ─────────────────
 # The teardown sent one SIGHUP to the process group and moved on. An ignored signal disposition
@@ -11237,16 +11242,18 @@ def _wt_run():
     _wt_done.append(_time.time() - _t0)
 
 
+from eventlet.timeout import Timeout as _EvTimeout06  # noqa: E402 - a timed-out green join raises it
 _wt_thread = _th6.Thread(target=_wt_run, daemon=True)
 _wt_thread.start()
 try:
     _wt_thread.join(timeout=10)
-except BaseException:
-    # BaseException, not Exception: eventlet's green join RAISES eventlet.timeout.Timeout rather
-    # than returning quietly, and that class derives from BaseException BY DESIGN so it cannot be
-    # swallowed by a generic handler. An exception at module level takes the whole suite down —
-    # which is what happened the first two times this guard ran against the regression it exists
-    # to catch. _wt_done staying empty is what the check below reports.
+except _EvTimeout06:
+    # Not Exception: eventlet's green join RAISES eventlet.timeout.Timeout rather than returning
+    # quietly, and that class derives from BaseException BY DESIGN so it cannot be swallowed by a
+    # generic handler. An exception at module level takes the whole suite down — which is what
+    # happened the first two times this guard ran against the regression it exists to catch.
+    # Caught by its class, not as BaseException, so a Ctrl-C or SystemExit still stops the run.
+    # _wt_done staying empty is what the check below reports.
     pass
 check("terminal: a paste the program is not reading RETURNS instead of hanging",
       bool(_wt_done),

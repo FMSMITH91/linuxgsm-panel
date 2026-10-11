@@ -24,12 +24,18 @@ from unit import REPO_ROOT as _gh_root  # noqa: E402
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 # 1. GATES
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-# Text that ends in `sudo [-flags] -u ` (or --user=): whatever is interpolated next is the account.
+# Text that ends in `sudo [options] -u ` (or --user=): whatever is interpolated next is the account.
 # The last flag may be a COMBINED one ending in u (`sudo -nu `, `sudo -Hu `): `-u` as its own token
-# only, the gate never saw `f"sudo -nu {user} ..."` outside the builder.
-_GH_TAIL = re.compile(r"\bsudo(?:\s+-{1,2}[A-Za-z][\w-]*)*\s+(?:-[A-Za-z]*u\s*|--user[=\s]\s*)\Z")
-_GH_FORMAT_TAIL = re.compile(
-    r"\bsudo(?:\s+-{1,2}[A-Za-z][\w-]*)*\s+(?:-[A-Za-z]*u\s*|--user[=\s]\s*)\{")
+# only, the gate never saw `f"sudo -nu {user} ..."` outside the builder. The options before it may
+# take a VALUE — sudo's -C -D -g -h -p -R -r -T -t -U do, as `--opt=value` does — and that value
+# may itself be interpolated (_GH_HOLE stands for it): with value-less flags only, `sudo -g {grp}
+# -u {user}`, `sudo -C 3 -u` and `sudo --preserve-env=PATH -u` all read as clean. A bare word
+# (`sudo journalctl -u`) is a command, and ends the options.
+_GH_HOLE = "\x00"
+_GH_OPTS = (r"\bsudo(?:\s+(?:-[A-Za-z]*[CDghpRrTtU]\s+\S+|--?[A-Za-z][\w-]*(?:=\S*)?|"
+            + _GH_HOLE + r"))*\s+(?:-[A-Za-z]*u\s*|--user[=\s]\s*)")
+_GH_TAIL = re.compile(_GH_OPTS + r"\Z")
+_GH_FORMAT_TAIL = re.compile(_GH_OPTS + r"\{")
 _GH_PCT = re.compile(r"%(?:\(([^)]*)\))?[#0\- +]*(?:\*|\d+)?(?:\.(?:\*|\d+))?([diouxXeEfFgGcrsa%])")
 _GH_QUOTERS = {"_quote", "quote"}
 _GH_BUILDERS = {"game_user_cmd", "game_user_exec_cmd"}
@@ -57,28 +63,51 @@ def _gh_quoted(v):
     return isinstance(v, _gh_ast.Call) and _gh_callee(v) in _GH_QUOTERS
 
 
-def _gh_trailing_text(node):
-    """The literal text a string expression ENDS with, or None when it ends in a value."""
+def _gh_hole(value):
+    """The text an interpolated `value` stands for: the word sudo when it names sudo, else a hole."""
+    # `f"{sudo} -u {user}"` / `f"{self._sudo} -u ..."`: the command word itself interpolated.
+    return "sudo" if "sudo" in _gh_ast.unparse(value).lower() else _GH_HOLE
+
+
+def _gh_text(node):
+    """The WHOLE text a string expression builds, each interpolated value replaced by _gh_hole."""
+    # The whole chain, not its last literal: `"sudo " + "-u " + user` keeps `sudo` and `-u` in two
+    # literals, and an f-string's `sudo` and `-u` can sit either side of an interpolated flag.
     if isinstance(node, _gh_ast.Constant) and isinstance(node.value, str):
         return node.value
-    if isinstance(node, _gh_ast.JoinedStr) and node.values:
-        last = node.values[-1]
-        return last.value if isinstance(last, _gh_ast.Constant) else None
+    if isinstance(node, _gh_ast.JoinedStr):
+        return "".join(v.value if isinstance(v, _gh_ast.Constant) else _gh_hole(v.value)
+                       for v in node.values)
     if isinstance(node, _gh_ast.BinOp) and isinstance(node.op, _gh_ast.Add):
-        return _gh_trailing_text(node.right)
+        return _gh_text(node.left) + _gh_text(node.right)
+    return _gh_hole(node)
+
+
+def _gh_trailing_text(node):
+    """The text a string expression ENDS with, or None when it ends in a value."""
+    if isinstance(node, _gh_ast.JoinedStr) and node.values and not isinstance(
+            node.values[-1], _gh_ast.Constant):
+        return None
+    if isinstance(node, (_gh_ast.Constant, _gh_ast.JoinedStr)) or (
+            isinstance(node, _gh_ast.BinOp) and isinstance(node.op, _gh_ast.Add)
+            and _gh_trailing_text(node.right) is not None):
+        text = _gh_text(node)
+        return text if isinstance(text, str) else None
     return None
 
 
-def _gh_fstring_sites(n):
-    """(line, value, "fstring") for each value f-string `n` interpolates right after `sudo -u`."""
-    out, prev = [], ""
+def _gh_fstring_sites(n, prefix=""):
+    """(line, value, "fstring") for each value f-string `n` interpolates right after `sudo -u`.
+
+    `prefix` is the text a `+` chain put before the f-string."""
+    out, text = [], prefix
     for v in n.values:
         if isinstance(v, _gh_ast.Constant) and isinstance(v.value, str):
-            prev = v.value
+            text += v.value
         elif isinstance(v, _gh_ast.FormattedValue):
-            if _GH_TAIL.search(prev):
+            if _GH_TAIL.search(text):
                 out.append((n.lineno, v.value, "fstring"))
-            prev = ""
+            text += _gh_hole(v.value)
     return out
 
 
@@ -129,6 +158,17 @@ def _gh_concat_sites(n):
     return []
 
 
+def _gh_concat_fstring_sites(n):
+    """The sites of an f-string on the right of `+`, read with the text the left put before it."""
+    # `"sudo " + f"-u {user}"`: alone, the f-string has no `sudo` in it. Its own sites (when it
+    # does) are found again here, so _gh_sites drops the duplicates.
+    if isinstance(n.right, _gh_ast.JoinedStr):
+        left = _gh_trailing_text(n.left)
+        if left is not None:
+            return [(ln, v, "concat") for ln, v, _k in _gh_fstring_sites(n.right, left)]
+    return []
+
+
 def _gh_is_str_format(n):
     """Is `n` a `"literal text".format(...)` call?"""
     return (isinstance(n, _gh_ast.Call) and isinstance(n.func, _gh_ast.Attribute)
@@ -160,7 +200,7 @@ def _gh_node_sites(n):
     if _gh_is_str_percent(n):
         return _gh_percent_sites(n)
     if isinstance(n, _gh_ast.BinOp) and isinstance(n.op, _gh_ast.Add):
-        return _gh_concat_sites(n)
+        return _gh_concat_sites(n) + _gh_concat_fstring_sites(n)
     if _gh_is_str_format(n) and isinstance(n.func.value.value, str):
         return [(n.lineno, None, "format")] if _GH_FORMAT_TAIL.search(n.func.value.value) else []
     if isinstance(n, (_gh_ast.List, _gh_ast.Tuple)):
@@ -172,7 +212,13 @@ def _gh_sites(tree):
     """Every [(line, value node or None, kind)] where a command puts a value after `sudo -u`."""
     # kind is how the COMMAND STRING is built — "fstring", "percent", "concat" or "format" — or
     # "argv" for a list-form argv.
-    return [site for n in _gh_ast.walk(tree) for site in _gh_node_sites(n)]
+    out, seen = [], set()
+    for n in _gh_ast.walk(tree):
+        for site in _gh_node_sites(n):
+            if site[1] is None or id(site[1]) not in seen:
+                seen.add(id(site[1]))
+                out.append(site)
+    return out
 
 
 def _gh_functions(tree):
@@ -401,6 +447,17 @@ _gh_ctl = {
     "G1 combined flag": _gh_plant('def f(user):\n    return f"sudo -nu {user} bash -c x"\n'),
     "G1 combined flag, .format": _gh_plant('def f(user):\n    return "sudo -Hu {} bash".format(user)\n'),
     "G1 .format": _gh_plant('def f(user):\n    return "sudo -u {} bash".format(user)\n'),
+    # Options that take a value, before the -u (review 1011b): each read as clean before.
+    "G1 a -g value before -u": _gh_plant('def f(grp, user):\n    return f"sudo -g {grp} -u {user} bash -c x"\n'),
+    "G1 a -C value before -u": _gh_plant('def f(user):\n    return f"sudo -C 3 -u {user} bash"\n'),
+    "G1 an --opt=value before -u": _gh_plant(
+        'def f(user):\n    return f"sudo --preserve-env=PATH -u {user} bash"\n'),
+    "G1 the sudo word interpolated": _gh_plant('def f(sudo, user):\n    return f"{sudo} -u {user} bash"\n'),
+    "G1 sudo and -u in separate literals": _gh_plant('def f(user):\n    return "sudo " + "-u " + user\n'),
+    "G1 -u in an f-string after a sudo literal": _gh_plant(
+        'def f(user):\n    return "sudo " + f"-u {user} bash"\n'),
+    "G1 a -g value in a % format": _gh_plant(
+        'def f(g, user):\n    return "sudo -g %s -u %s bash" % (g, user)\n'),
     "G2 quoted but outside the builder": _gh_plant(
         'def f(user):\n    return f"sudo -u {_quote(user)} bash -c x"\n'),
     "G2 the builder without its check": _gh_plant(
@@ -446,6 +503,8 @@ _gh_good = {
         'def f(server, user, selfname):\n'
         '    if not _core.game_idents_ok(user, selfname):\n        return None\n'
         '    return _rewrite_crontab(server, user, "", [f"/home/{user}/{selfname}"])\n'),
+    "a command of sudo's whose own -u is not sudo's": _gh_plant(
+        'def f(unit):\n    return f"sudo journalctl -u {_quote(unit)} -n 5"\n'),
     "a comment or docstring mentioning it": _gh_plant(
         'def f(user):\n    """`sudo -u {user} bash -c` used to be spelled here."""\n'
         '    # f"sudo -u {user}"\n    return 1\n'),
