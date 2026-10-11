@@ -11,8 +11,9 @@ from smoke.part01 import (_check_audit_zone_cleanup_on_upgrade,
                           DATA_DIR, db, DB_PATH, GameServer, Group, os, RemoteServer, SECRET_FILE,
                           sys, User)
 from smoke.part02 import (_appmod_ij, _cg_remote_id, _ij_game, _ij_ps, _ij_wait, _ijw_time,
-                          _install_jobs_sm, _install_lock_sm, _msmod, _TSAudit, admin_id, bc_code,
-                          c, deleg_id, encrypt_secret, gs_id, mru_id, remote_id)
+                          _install_jobs_sm, _install_lock_sm, _msmod, _r12d_cmds, _r12d_ports,
+                          _r12d_shape_bad, _r12d_shaped, _R12dCrontab, _TSAudit, admin_id,
+                          bc_code, c, deleg_id, encrypt_secret, gs_id, mru_id, remote_id)
 
 # ── a port scan that could not be read allocates NO port (Aikido 745379002) ────────────────
 # resolve_free_port read a failed scan as "nothing is listening" (`or ()`, over a comment
@@ -25,7 +26,7 @@ _su_saved, _su_ss, _su_allow = {}, [], []
 
 def _su_stub(mod, name, fn):
     _su_saved[(mod, name)] = getattr(mod, name)
-    setattr(mod, name, fn)
+    setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 
 def _su_run(server, cmd, **k):
@@ -74,12 +75,12 @@ finally:
 # Until now this was checked by reading the AST. Here it is executed: step 6 must keep the
 # port the panel allocated, and — the part that was actually broken — the firewall must not be
 # opened for the port it just refused, in either of the two places that open ports.
-_cf_saved, _cf_calls = {}, []
+_cf_saved, _cf_calls, _cf_cron = {}, [], _R12dCrontab()
 
 
 def _cf_stub(mod, name, fn):
     _cf_saved[(mod, name)] = getattr(mod, name)
-    setattr(mod, name, fn)
+    setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 
 try:
@@ -100,26 +101,26 @@ try:
         return ("", "", 0)
 
     _cf_stub(_sm_core, "run_as_game_user", _cf_run_as)
-    _cf_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
-    _cf_stub(_ij_game, "list_server_commands", lambda *a, **k: [{"cmd": c} for c in ("start", "stop")])
+    _cf_stub(_sm_core, "run_privileged", _cf_cron.priv)
+    _cf_stub(_ij_game, "list_server_commands", lambda *a, **k: _r12d_cmds("start", "stop"))
     _cf_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
     _cf_stub(_msmod, "_looks_installed", lambda *a, **k: True)
-    _cf_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
+    _cf_stub(_msmod, "install_game_dependencies", lambda *a, **k: (True, ""))
     _cf_stub(_msmod, "parse_missing_deps", lambda *a, **k: [])
     _cf_stub(_msmod, "lgsm_write_config", lambda *a, **k: (True, ""))
-    _cf_stub(_msmod, "install_game_cron", lambda *a, **k: None)
-    _cf_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: None)
-    _cf_stub(_msmod, "sm_game_engine", lambda *a, **k: "source")
-    _cf_stub(_msmod, "set_autostart", lambda *a, **k: (True, ""))
-    _cf_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: None)
+    _cf_stub(_msmod, "install_game_cron", _cf_cron.install)
+    _cf_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: True)
+    _cf_stub(_msmod, "sm_game_engine", lambda *a, **k: "valve")
+    _cf_stub(_msmod, "set_autostart", _cf_cron.autostart)
+    _cf_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: (0, "", []))
     # 28995 is occupied by something the panel has no row for — a hand-installed server, a
     # container, anything never imported through /discover.
     _cf_stub(_msmod, "_remote_listening_ports",
              lambda r: ({22, 28995, 28994} if _cf_state["started"] else {22, 28995}))
     _cf_stub(_msmod, "detect_game_ports",
-             lambda *a, **k: {"game_port": 28995, "open_ports": [28995, 28996]})
+             lambda *a, **k: _r12d_ports(28995, [28995, 28996]))
     _cf_stub(_msmod, "remote_ufw_allow_game_ports",
-             lambda r, ports, name: _cf_calls.append(tuple(sorted(ports))))
+             lambda r, ports, name: (_cf_calls.append(tuple(sorted(ports))), (sorted(ports), ""))[1])
     _cf_saved[(_appmod_ij, "_remote_listening_ports")] = _appmod_ij._remote_listening_ports
     _appmod_ij._remote_listening_ports = lambda r: {22, 28995}
 
@@ -149,12 +150,15 @@ try:
               "differing only by comment, so this retags the other server's rule" % (_cf_opened,))
         check("install job (clash): ...while still opening its own",
               28994 in _cf_opened, "opened %s" % (_cf_opened,))
-        with app.app_context():
-            _d = db.session.get(GameServer, _cf_id)
-            if _d is not None:
-                db.session.delete(_d); db.session.commit()
-        with _install_lock_sm:
-            _install_jobs_sm.pop(_cf_id, None)
+        # Only a settled worker's row and job go (as _lv_install does): SQLite hands a deleted
+        # row's id to the next INSERT, which a still-running worker's _fail() then writes onto.
+        if _cf_settled:
+            with app.app_context():
+                _d = db.session.get(GameServer, _cf_id)
+                if _d is not None:
+                    db.session.delete(_d); db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_cf_id, None)
 finally:
     for (_m, _n), _v in _cf_saved.items():
         setattr(_m, _n, _v)
@@ -169,12 +173,12 @@ finally:
 # `install_complete success=False detail="port 28998 clashes with something the panel could
 # not check for"`, and the firewall was narrowed over a clash nobody observed — so the query
 # port the game does need was left closed too. 28998 was very probably free.
-_ur_saved, _ur_calls = {}, []
+_ur_saved, _ur_calls, _ur_cron = {}, [], _R12dCrontab()
 
 
 def _ur_stub(mod, name, fn):
     _ur_saved[(mod, name)] = getattr(mod, name)
-    setattr(mod, name, fn)
+    setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 
 # time.sleep, skipped. The post-start verification polls 30 × 3s, and with the host
@@ -189,24 +193,24 @@ try:
     _ur_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
     _ur_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
     _ur_stub(_sm_core, "run_as_game_user", lambda *a, **k: ("", "", 0))
-    _ur_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
-    _ur_stub(_ij_game, "list_server_commands", lambda *a, **k: [{"cmd": c} for c in ("start", "stop")])
+    _ur_stub(_sm_core, "run_privileged", _ur_cron.priv)
+    _ur_stub(_ij_game, "list_server_commands", lambda *a, **k: _r12d_cmds("start", "stop"))
     _ur_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
     _ur_stub(_msmod, "_looks_installed", lambda *a, **k: True)
-    _ur_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
+    _ur_stub(_msmod, "install_game_dependencies", lambda *a, **k: (True, ""))
     _ur_stub(_msmod, "parse_missing_deps", lambda *a, **k: [])
     _ur_stub(_msmod, "lgsm_write_config", lambda *a, **k: (True, ""))
-    _ur_stub(_msmod, "install_game_cron", lambda *a, **k: None)
-    _ur_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: None)
-    _ur_stub(_msmod, "sm_game_engine", lambda *a, **k: "source")
-    _ur_stub(_msmod, "set_autostart", lambda *a, **k: (True, ""))
-    _ur_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: None)
+    _ur_stub(_msmod, "install_game_cron", _ur_cron.install)
+    _ur_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: True)
+    _ur_stub(_msmod, "sm_game_engine", lambda *a, **k: "valve")
+    _ur_stub(_msmod, "set_autostart", _ur_cron.autostart)
+    _ur_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: (0, "", []))
     # The scan never answers — the failure mode the paramiko-only `except` below it misses.
     _ur_stub(_msmod, "_remote_listening_ports", lambda r: None)
     _ur_stub(_msmod, "detect_game_ports",
-             lambda *a, **k: {"game_port": 28998, "open_ports": [28998, 28999]})
+             lambda *a, **k: _r12d_ports(28998, [28998, 28999]))
     _ur_stub(_msmod, "remote_ufw_allow_game_ports",
-             lambda r, ports, name: _ur_calls.append(tuple(sorted(ports))))
+             lambda r, ports, name: (_ur_calls.append(tuple(sorted(ports))), (sorted(ports), ""))[1])
     _ur_saved[(_appmod_ij, "_remote_listening_ports")] = _appmod_ij._remote_listening_ports
     _appmod_ij._remote_listening_ports = lambda r: {22}
 
@@ -249,12 +253,15 @@ try:
               28997 in _ur_opened and 28999 in _ur_opened,
               "opened %s — query/rcon were closed over a clash nobody observed"
               % (_ur_opened,))
-        with app.app_context():
-            _d = db.session.get(GameServer, _ur_id)
-            if _d is not None:
-                db.session.delete(_d); db.session.commit()
-        with _install_lock_sm:
-            _install_jobs_sm.pop(_ur_id, None)
+        # Only a settled worker's row and job go (as _lv_install does): SQLite hands a deleted
+        # row's id to the next INSERT, which a still-running worker's _fail() then writes onto.
+        if _ur_settled:
+            with app.app_context():
+                _d = db.session.get(GameServer, _ur_id)
+                if _d is not None:
+                    db.session.delete(_d); db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_ur_id, None)
 finally:
     for (_m, _n), _v in _ur_saved.items():
         setattr(_m, _n, _v)
@@ -268,12 +275,12 @@ finally:
 # operator told "it hasn't opened port X yet", with `install_complete success=False detail=
 # "started; port X not open after 90s"` in the audit log. Here the scan works at step 6 (so
 # the port is adopted — the positive half) and stops answering from `start` onwards.
-_pu_saved, _pu_state = {}, {"started": False}
+_pu_saved, _pu_state, _pu_cron = {}, {"started": False}, _R12dCrontab()
 
 
 def _pu_stub(mod, name, fn):
     _pu_saved[(mod, name)] = getattr(mod, name)
-    setattr(mod, name, fn)
+    setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 
 def _pu_run_as(remote, user, action, **k):
@@ -288,23 +295,23 @@ try:
     _pu_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
     _pu_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
     _pu_stub(_sm_core, "run_as_game_user", _pu_run_as)
-    _pu_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
-    _pu_stub(_ij_game, "list_server_commands", lambda *a, **k: [{"cmd": c} for c in ("start", "stop")])
+    _pu_stub(_sm_core, "run_privileged", _pu_cron.priv)
+    _pu_stub(_ij_game, "list_server_commands", lambda *a, **k: _r12d_cmds("start", "stop"))
     _pu_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
     _pu_stub(_msmod, "_looks_installed", lambda *a, **k: True)
-    _pu_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
+    _pu_stub(_msmod, "install_game_dependencies", lambda *a, **k: (True, ""))
     _pu_stub(_msmod, "parse_missing_deps", lambda *a, **k: [])
     _pu_stub(_msmod, "lgsm_write_config", lambda *a, **k: (True, ""))
-    _pu_stub(_msmod, "install_game_cron", lambda *a, **k: None)
-    _pu_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: None)
-    _pu_stub(_msmod, "sm_game_engine", lambda *a, **k: "source")
-    _pu_stub(_msmod, "set_autostart", lambda *a, **k: (True, ""))
-    _pu_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: None)
-    _pu_stub(_msmod, "remote_ufw_allow_game_ports", lambda *a, **k: None)
+    _pu_stub(_msmod, "install_game_cron", _pu_cron.install)
+    _pu_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: True)
+    _pu_stub(_msmod, "sm_game_engine", lambda *a, **k: "valve")
+    _pu_stub(_msmod, "set_autostart", _pu_cron.autostart)
+    _pu_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: (0, "", []))
+    _pu_stub(_msmod, "remote_ufw_allow_game_ports", lambda *a, **k: ([], ""))
     _pu_stub(_msmod, "_remote_listening_ports",
              lambda r: (None if _pu_state["started"] else {22}))
     _pu_stub(_msmod, "detect_game_ports",
-             lambda *a, **k: {"game_port": 29002, "open_ports": [29002]})
+             lambda *a, **k: _r12d_ports(29002, [29002]))
     _pu_saved[(_appmod_ij, "_remote_listening_ports")] = _appmod_ij._remote_listening_ports
     _appmod_ij._remote_listening_ports = lambda r: {22}
 
@@ -333,12 +340,15 @@ try:
               "empty socket table, on a server that started fine (start rc 0)" % (_pu_status,))
         check("install job (unreadable poll): ...and the operator is not told the port is shut",
               "hasn't opened port" not in _pu_msg, repr(_pu_msg[:220]))
-        with app.app_context():
-            _d = db.session.get(GameServer, _pu_id)
-            if _d is not None:
-                db.session.delete(_d); db.session.commit()
-        with _install_lock_sm:
-            _install_jobs_sm.pop(_pu_id, None)
+        # Only a settled worker's row and job go (as _lv_install does): SQLite hands a deleted
+        # row's id to the next INSERT, which a still-running worker's _fail() then writes onto.
+        if _pu_settled:
+            with app.app_context():
+                _d = db.session.get(GameServer, _pu_id)
+                if _d is not None:
+                    db.session.delete(_d); db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_pu_id, None)
 finally:
     for (_m, _n), _v in _pu_saved.items():
         setattr(_m, _n, _v)
@@ -357,7 +367,7 @@ _lv_saved, _lv_cmds = {}, []
 
 def _lv_stub(mod, name, fn):
     _lv_saved[(mod, name)] = getattr(mod, name)
-    setattr(mod, name, fn)
+    setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 
 def _lv_run_command(remote, cmd, **k):
@@ -406,15 +416,15 @@ try:
     _lv_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
     _lv_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
     _lv_stub(_sm_core, "run_as_game_user", lambda *a, **k: ("", "", 0))
-    _lv_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
-    _lv_stub(_ij_game, "list_server_commands", lambda *a, **k: [{"cmd": c} for c in ("start", "stop")])
+    _lv_stub(_sm_core, "run_privileged", _R12dCrontab().priv)
+    _lv_stub(_ij_game, "list_server_commands", lambda *a, **k: _r12d_cmds("start", "stop"))
     _lv_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
-    _lv_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
+    _lv_stub(_msmod, "install_game_dependencies", lambda *a, **k: (True, ""))
     _lv_stub(_msmod, "parse_missing_deps", lambda *a, **k: [])
     _lv_stub(_msmod, "lgsm_write_config", lambda *a, **k: (True, ""))
     _lv_stub(_msmod, "_remote_listening_ports", lambda r: {22})
-    _lv_stub(_msmod, "detect_game_ports", lambda *a, **k: {"game_port": 0, "open_ports": []})
-    _lv_stub(_msmod, "remote_ufw_allow_game_ports", lambda *a, **k: None)
+    _lv_stub(_msmod, "detect_game_ports", lambda *a, **k: _r12d_ports(0, []))
+    _lv_stub(_msmod, "remote_ufw_allow_game_ports", lambda *a, **k: ([], ""))
     _lv_saved[(_appmod_ij, "_remote_listening_ports")] = _appmod_ij._remote_listening_ports
     _appmod_ij._remote_listening_ports = lambda r: {22}
 
@@ -450,6 +460,13 @@ try:
 finally:
     for (_m, _n), _v in _lv_saved.items():
         setattr(_m, _n, _v)
+
+# The four blocks above install their stand-ins through _r12d_shaped (smoke part02): anything
+# one of them answered that the real function never returns is named here, so a block cannot
+# again walk a failure branch while its comment says the host was stubbed to succeed.
+check("install jobs (clash, unreadable scan and poll, step 4): every stand-in answered in the "
+      "real function's shape",
+      not _r12d_shape_bad, "; ".join(_r12d_shape_bad[:5]))
 
 # ── /api/installs: the progress a corner widget can follow from any page ────────────────────
 # A game-server install runs for five to forty-five minutes, and its only progress row lived on
@@ -2660,7 +2677,12 @@ _imp_priv_orig = _imp_mod.privileged_accounts
 # The import refuses a port that is this host's SSH or the panel's: it asks the host's sshd for
 # its ports, which the blackholed fixture host would only answer with a connect timeout.
 _imp_prot_orig = _sm_hosts.protected_host_ports
+# An import starts _bg_cache_commands for what it added: a real worker on the live transport
+# (list_server_commands, then set_autostart), which outlived this block and called whatever a
+# LATER block had stubbed. The sibling blocks below stub it for that reason; these do too.
+_imp_bg_orig = _imp_mod._bg_cache_commands
 try:
+    _imp_mod._bg_cache_commands = lambda *a, **k: None
     _sm_hosts.protected_host_ports = lambda _r: {22}
     _imp_mod.privileged_accounts = lambda _r, _users: {}
     _imp_mod.discover_linuxgsm_servers = lambda _s: [
@@ -2892,6 +2914,7 @@ finally:
     _imp_mod.discover_linuxgsm_servers = _imp_orig
     _imp_mod.privileged_accounts = _imp_priv_orig
     _sm_hosts.protected_host_ports = _imp_prot_orig
+    _imp_mod._bg_cache_commands = _imp_bg_orig
 imp_denied = client_as(mru_id).post("/api/remote/%d/import" % remote_id,
                                     json={"servers": [{"user": "x", "game_type": "csgo"}]})
 check("import: caller without manage_servers is denied",
@@ -2906,8 +2929,9 @@ check("import: caller without manage_servers is denied",
 # account is not filtered out as a GMod content box either; the per-account rule is then the
 # only thing that can refuse them. The control below imports ONE of them from the same scan.
 _imm_saved = (_imp_mod.discover_linuxgsm_servers, _imp_mod.privileged_accounts,
-              _sm_hosts.protected_host_ports)
+              _sm_hosts.protected_host_ports, _imp_mod._bg_cache_commands)
 try:
+    _imp_mod._bg_cache_commands = lambda *a, **k: None
     _sm_hosts.protected_host_ports = lambda _r: {22}
     _imp_mod.privileged_accounts = lambda _r, _users: {}
     _imp_mod.discover_linuxgsm_servers = lambda _s: [
@@ -2933,7 +2957,7 @@ try:
           _im1.get("added") == ["multibox"], str(_im1)[:140])
 finally:
     (_imp_mod.discover_linuxgsm_servers, _imp_mod.privileged_accounts,
-     _sm_hosts.protected_host_ports) = _imm_saved
+     _sm_hosts.protected_host_ports, _imp_mod._bg_cache_commands) = _imm_saved
     with app.app_context():
         GameServer.query.filter_by(remote_id=remote_id, short_name="multibox").delete(
             synchronize_session=False)
