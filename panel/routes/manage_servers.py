@@ -1315,8 +1315,8 @@ def _configure_and_start(job, remote, gs):
     # withheld nothing", and the re-read then opened every port `details` reported — SSH included.
     _reopen_runtime_ports(remote, job.short_name, gs, port_conflict, port_unchecked,
                           getattr(job, "withheld", None))
-    _report_install_outcome(_noting_firewall_failure(job), gs, (port_conflict, port_unchecked),
-                            started)
+    _report_install_outcome(_r13b_noting_content_note(_noting_firewall_failure(job)), gs,
+                            (port_conflict, port_unchecked), started)
 
 
 # Appended to whatever the install's last word is when step 6 raised (see _open_game_ports). The
@@ -1339,6 +1339,23 @@ def _noting_firewall_failure(job):
 
     def finish(msg, warn=False):
         job.finish("%s %s" % (msg, FIREWALL_STEP_FAILED), warn=True)
+    return SimpleNamespace(**dict(vars(job), finish=finish))
+
+
+def _r13b_noting_content_note(job):
+    """`job`, with a finish that also says what step 8's GMod content did not do — when it did not.
+
+    The step is best-effort, so a skipped or failed one never fails the install; but it only
+    logged, and the install finished "installed and started" with nothing downloaded or mounted
+    (the maps then show ERROR textures). Said the way _noting_firewall_failure says a failed
+    firewall step: appended to the last word, the job a warning, and named in the audit entry.
+    """
+    note = getattr(job, "content_note", None)
+    if not note:
+        return job
+
+    def finish(msg, warn=False):
+        job.finish("%s %s" % (msg, note), warn=True)
     return SimpleNamespace(**dict(vars(job), finish=finish))
 
 
@@ -1825,22 +1842,33 @@ def _install_gmod_content(job, remote):
         if not _claim_gmod_content_host(remote.id):
             _log.warning("gmod content for %s: another content job is running on %s, so the "
                          "content step was skipped", short_name, remote.name)
+            job.content_note = ("The GMod content was not installed: another content job was "
+                                "running on this host. Apply it from the Content card once that "
+                                "finishes.")
             return start_step
         try:
-            _r12b_gmod_content_step(remote, short_name, content_games, _p)
+            job.content_note = _r12b_gmod_content_step(remote, short_name, content_games, _p)
         except Exception:
             _log.warning("gmod content setup failed for %s", short_name, exc_info=True)
+            job.content_note = _R13B_CONTENT_FAILED
         finally:
             _release_gmod_content_host(remote.id)
     return start_step
 
 
+_R13B_CONTENT_FAILED = ("The GMod content could not be set up, so none is mounted: apply it from "
+                        "the Content card.")
+
+
 def _r12b_gmod_content_step(remote, short_name, content_games, _p):
-    """Step 8's body, the host claimed: fetch the picked content, then mount what is on disk."""
+    """Step 8's body, the host claimed: fetch the picked content, then mount what is on disk.
+
+    -> None when everything picked was mounted, else the sentence the install ends with
+    (_r13b_noting_content_note)."""
     cu = ensure_content_user(remote)
     if not cu:
         _log.warning("gmod content: no content user could be prepared on %s", remote.name)
-        return
+        return _R13B_CONTENT_FAILED
     _ok_i, on_disk, _imsg = install_gmod_content(remote, cu["user"], content_games,
                                                  on_progress=lambda m: _p(8, m))
     # Mount only what is on disk, as the Content tab does (_split_on_disk): a game whose download
@@ -1854,6 +1882,11 @@ def _r12b_gmod_content_step(remote, short_name, content_games, _p):
     ok_m, msg_m = gmod_mount_setup(remote, short_name, cu["user"], _mountable)
     if not ok_m:
         _log.warning("gmod content mount for %s: %s", short_name, msg_m)
+        return ("The GMod content could not be mounted: apply it from the Content card.")
+    if _missing:
+        return ("Some GMod content is not on the host, so it was not mounted (%s): apply it from "
+                "the Content card." % ", ".join(GMOD_CONTENT_GAMES.get(g, (g,))[0] for g in _missing))
+    return None
 
 
 def _start_and_verify(job, remote, gs, start_step):
@@ -2057,6 +2090,8 @@ def _audit_install(job, gs, success, detail=""):
     """
     if getattr(job, "firewall_failed", False):
         detail = "; ".join(d for d in (detail, "firewall step failed") if d)
+    if getattr(job, "content_note", None):
+        detail = "; ".join(d for d in (detail, "gmod content step incomplete") if d)
     log_action(None, "install_complete", target=gs.name, success=success, detail=detail[:300],
                server=gs)
 

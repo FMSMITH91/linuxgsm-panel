@@ -55,6 +55,11 @@ def _r12c_json_flag(body, key, default):
     return v if isinstance(v, bool) else None
 
 
+def _r13b_not_a_flag(name):
+    """The 400 for a switch _r12c_json_flag read as None (not a JSON boolean)."""
+    return jsonify({"success": False, "message": "%s must be true or false." % name}), 400
+
+
 def _wants_json():
     """True when the caller is an in-page fetch().
 

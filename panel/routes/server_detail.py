@@ -1093,7 +1093,12 @@ def _register_schedules(app):
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         body = _json_body()
-        enabled = bool(body.get("enabled"))
+        # A JSON boolean or a 400, as Autostart: bool("false") is True, so `{"enabled": "false"}`
+        # wrote the restart-when-empty cron line it asked to remove.
+        enabled = _r12c_json_flag(body, "enabled", None)
+        refused = _r12c_not_a_flag(enabled, "enabled")
+        if refused is not None:
+            return refused
         viewer_tz = clock.valid_timezone(body.get("tz"))
         host_tz = _host_timezone_cached(gs.remote)
         try:
@@ -1139,7 +1144,10 @@ def _register_schedules(app):
         gs = get_game(server_id)
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        enabled = bool(_json_body().get("enabled"))
+        enabled = _r12c_json_flag(_json_body(), "enabled", None)     # bool("false") is True
+        refused = _r12c_not_a_flag(enabled, "enabled")
+        if refused is not None:
+            return refused
         gs.notify_when_empty = enabled
         db.session.commit()
         log_action(current_user, "set_notify_when_empty", target=gs.name, detail=str(enabled),

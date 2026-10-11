@@ -19,7 +19,8 @@ import concurrent.futures
 import os
 import threading
 import time
-from panel.core.http import (_json_body, _json_str, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
+                             _r13b_not_a_flag)
 from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _marked_backup, _record_full_clock,
     _record_game_clock)
@@ -467,7 +468,11 @@ def _register_game_backup(app):
             return jsonify({"success": False, "message": "Server is not installed."}), 400
         # `force` = the admin already saw the "players online" prompt and chose to back up anyway
         # (which will disconnect them). Default off, so a normal click never kicks players.
-        force = bool(_json_body().get("force"))
+        # A JSON boolean or a 400: bool("false") is True, so `{"force": "false"}` backed up over
+        # the players-online prompt it asked to be stopped by.
+        force = _r12c_json_flag(_json_body(), "force", False)
+        if force is None:
+            return _r13b_not_a_flag("force")
         if _button_backup_running(server_id):
             # The maintenance menu's Backup is archiving it now, outside the lock below; a second
             # run would take that backup's lock for an orphan and archive the same files again.

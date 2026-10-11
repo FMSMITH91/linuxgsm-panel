@@ -2631,11 +2631,15 @@ try:
           "with the files kept (installed, offline)",
           _ja.get("status") == "done" and _ja.get("warn") is True
           and _ja.get("message")
-          == "p9gmod installed, but it didn't start — check the console for the reason."
+          == "p9gmod installed, but it didn't start — check the console for the reason. The GMod "
+             "content could not be mounted: apply it from the Content card."
           and _ra.installed is True and _ra.status == "offline", repr((_ja, _ra.status)))
-    check("install flow A: the audit row says the start failed",
-          _p9_audit("install_complete").success is False
-          and _p9_audit("install_complete").detail == "start failed")
+    # The mount was scripted to fail (`mount` above): the step is best-effort, so the install goes
+    # on, and its last word and audit row say the content is not mounted (part58 has the rest).
+    check("install flow A: the audit row says the start failed, and that the content step did not "
+          "finish", _p9_audit("install_complete").success is False
+          and _p9_audit("install_complete").detail == "start failed; gmod content step incomplete",
+          _p9_audit("install_complete").detail)
 
     # ── Flow F: minecraft that starts but has not opened its port yet ───────────────────────────
     _ms_free[:] = [(25600, False)]

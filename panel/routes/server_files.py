@@ -32,7 +32,7 @@ import re
 import secrets
 import threading
 import time
-from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
 from panel.core.validation import (_attachment_header)
 from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES,
     _apply_mod_restart, _clean_console_text, _log, _socketio_cors, _sync_toggles_from_cron,
@@ -2354,7 +2354,12 @@ def _register_console_routes(app):
                 # — but this endpoint still accepted `enabled: true`, so anyone with the config
                 # permission could still freeze every viewer's console with one request. The
                 # reading side stays: a log someone stamped by hand is still parsed.
-                if _json_body().get("enabled"):
+                # Read as a JSON boolean: by truthiness, `{"enabled": "false"}` was answered with
+                # the turn-on refusal below, about a request to turn them off.
+                flag = _r12c_json_flag(_json_body(), "enabled", None)
+                if flag is None:
+                    return jsonify({"error": "enabled must be true or false."}), 400
+                if flag:
                     return jsonify({"error": "Turning LinuxGSM's log timestamps on freezes the "
                                              "live console, so the panel only turns them off."}), 400
                 want = "off"

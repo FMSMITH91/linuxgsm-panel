@@ -14,7 +14,8 @@ from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from types import (SimpleNamespace)
-from panel.core.http import (_json_body, _json_str, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
+                             _r13b_not_a_flag)
 from panel.core.validation import (NOT_AN_IP, canonical_ip)
 from app import (_autoblock_hosts, _local_remote_id, _maybe_set_threshold, _os_update_note,
     _run_autoblock_now, _security_whitelist, _set_autoblock_host)
@@ -389,7 +390,11 @@ def _register_panel_blocking(app):
     def api_panel_security_block():
         """UFW-block (all ports, permanent) an IP on the panel host."""
         ip = _json_str(_json_body(), "ip")
-        unblock = bool(_json_body().get("unblock"))
+        # JSON booleans or a 400, here and in the auto-block switch: bool("false") is True, so
+        # `{"unblock": "false"}` unblocked the address it asked to block.
+        unblock = _r12c_json_flag(_json_body(), "unblock", False)
+        if unblock is None:
+            return _r13b_not_a_flag("unblock")
         if not unblock:
             lr = RemoteServer.query.filter_by(is_local=True).first()
             if lr and tailnet_exempt_ips(lr, {ip}):
@@ -418,7 +423,9 @@ def _register_panel_blocking(app):
         The auto-block acts on attempts >= threshold over 7 days, and the threshold is the shared
         one.
         """
-        enabled = bool(_json_body().get("enabled"))
+        enabled = _r12c_json_flag(_json_body(), "enabled", None)
+        if enabled is None:
+            return _r13b_not_a_flag("enabled")
         rid = _local_remote_id()
         if rid is None:
             return jsonify({"success": False, "message": "No local host record."}), 200
