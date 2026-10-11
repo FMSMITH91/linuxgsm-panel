@@ -1398,6 +1398,9 @@ def _rv43_posted_ids(admin):
     r2 = admin.post("/users/add", data={"username": "rv43_k2", "groups": [arabic, str(2 ** 64)]})
     edit_uid = _rv43_user("rv43_k3")
     r3 = admin.post("/users/%d/edit" % edit_uid, data={"display_name": "k3", "groups": [huge]})
+    from panel.db.models import Invite as _Inv43
+    with _p9.app_context():
+        inv_before = {i.id for i in _Inv43.query.all()}
     r4 = admin.post("/users/invite", data={"hours": "1", "groups": [huge]})
     with _p9.app_context():
         made = {n: (u.id, sorted(g.id for g in u.groups)) for n in ("rv43_k1", "rv43_k2")
@@ -1410,8 +1413,8 @@ def _rv43_posted_ids(admin):
                 cmd_groups = cmd.groups
             except Exception as e:
                 cmd_groups = repr(e)
-        from panel.db.models import Invite as _Inv43
-        _Inv43.query.delete()
+        # Only the invite this made: `Invite.query.delete()` took every invite in part12's database.
+        _Inv43.query.filter(~_Inv43.id.in_(inv_before)).delete(synchronize_session=False)
         db.session.commit()
     codes = [r.status_code for r in (r1, r2, r3, r4)]
     check("users: a 5,000-digit or 2**64 group id on add, edit and invite is skipped, not a 500",

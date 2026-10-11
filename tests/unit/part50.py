@@ -284,8 +284,28 @@ check("docs-only wiring: zizmor's upload job takes the scan job's answer, and sk
       and _if50(_zz_steps50[3]) == ("needs.zizmor.outputs.docs_only != 'true' && "
                                     "needs.zizmor.outputs.current != 'false'"),
       repr([_if50(s) for s in _zz_steps50]))
+# Any trigger a pull request can start, in either YAML spelling: the block key (`  pull_request:`),
+# and `on: pull_request` / `on: [push, pull_request]`. Only the block form of pull_request itself
+# was seen, so a workflow on pull_request_target or merge_group, or written in the flow form,
+# escaped this gate unlisted.
+_PR_EVENTS50 = r"(?:pull_request(?:_target)?|merge_group)"
+
+
+def _pr_triggered50(text):
+    head = text.split("\njobs:")[0]
+    return bool(_re50.search(r"^  " + _PR_EVENTS50 + r":", head, _re50.M)
+                or _re50.search(r"^on:\s*(?:\[[^\]\n]*\b" + _PR_EVENTS50 + r"\b[^\]\n]*\]|"
+                                + _PR_EVENTS50 + r")\s*$", head, _re50.M))
+
+
+check("docs-only wiring: (control) a pull-request trigger is seen in every spelling, and a push-only "
+      "workflow is not",
+      [_pr_triggered50(t) for t in ("on:\n  pull_request:\n", "on:\n  pull_request_target:\n",
+                                    "on:\n  merge_group:\n", "on: [push, pull_request]\n",
+                                    "on: pull_request\n", "on:\n  push:\n", "on: [push]\n")]
+      == [True, True, True, True, True, False, False])
 _pr_wfs50 = sorted(os.path.basename(f) for f in os.listdir(os.path.join(_root, ".github", "workflows"))
-                   if _re50.search(r"^  pull_request:", _code29(_wf29(f)).split("\njobs:")[0], _re50.M))
+                   if _pr_triggered50(_code29(_wf29(f))))
 _wf_calls50 = {f: "pr_scope.py" in _wf29(f) for f in _pr_wfs50}
 check("docs-only wiring: every workflow a pull request runs is scoped here or named as always running "
       "in full, and those named never call the script",

@@ -37,8 +37,9 @@ from types import SimpleNamespace as _NS53
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _p9, _p9_cfg, _p9_client,
-                         _p9_json, _p9_patch, _p9_restore_all, _p9_so)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_cfg,
+                         _p9_client, _p9_core, _p9_json, _p9_patch, _p9_restore_all, _p9_so,
+                         _p9_trip)
 from unit.part47 import _cut47, _node47
 from panel.db.models import AuditLog, CustomCommand, Group, RemoteServer, User, db
 from panel.ops import backup as _bk53
@@ -78,7 +79,19 @@ def _node53(name, prog):
 
 
 _A53 = _p9_client(P9_ADMIN)
+# part12 disarmed its transport tripwire when it ended, and every check below stubs only the leaf
+# it names: a route that reached one more host call ran it for real (as root on CI's root leg) and
+# this part still passed. Re-armed, as parts 40, 43, 49 and 52 do, and closed with a check below.
+_TRIP53_START = len(_P9_TRIPPED)
 try:
+    _p9_patch(_p9_core, "get_connection",
+              _p9_trip("paramiko", exc=ConnectionError("refused by part53's tripwire")))
+    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
+    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
+    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
+    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+    _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # 1. routes
     # ════════════════════════════════════════════════════════════════════════════════════════════
@@ -318,7 +331,13 @@ try:
 
     # A user-authored name as a whole text node is a catalog key the page's translator swaps: a host
     # called "Server" read "Servidor" in its own page's title. Each must sit in a data-no-i18n element.
-    _NAME53 = _re53.compile(r"\{\{\s*(?:server|gs|srv|remote|r|peer|g)\.(?:name|display_name|hostname)\s*\}\}")
+    # Any loop variable's display_name or hostname, a server/host/peer variable's name, and with
+    # filters (`|e`, `|default('—')`): `{{ remote.display_name|e }}` or `{{ info.hostname }}` was
+    # not seen by the narrower pattern. A name inside an element i18n.js never walks (its SKIP list:
+    # code, pre, textarea, script, style, noscript) is safe as it is.
+    _NAME53 = _re53.compile(r"\{\{\s*(?:\w+\.(?:display_name|hostname)|(?:server|gs|srv|remote|r|"
+                            r"peer|g|host|h)\.name)\s*(?:\|\s*\w+(?:\([^)]*\))?\s*)*\}\}")
+    _SKIPTAG53 = _re53.compile(r"<(?:code|pre|textarea|script|style|noscript)\b", _re53.I)
 
     def _bare_names53():
         bad = []
@@ -336,10 +355,17 @@ try:
                 if strip(before[gt + 1:]) or strip(after[:after.find("<")]):
                     continue                  # part of a longer text node, never matched whole
                 tag = before[lt:gt + 1]
+                if _SKIPTAG53.match(tag):
+                    continue                  # i18n.js does not translate inside it
                 if tag.startswith("</") or "data-no-i18n" not in tag:
                     bad.append("%s:%d" % (fname, src.count("\n", 0, m.start()) + 1))
         return bad
     _bare53 = _bare_names53()
+    check("templates: (control) the name gate sees a filtered display_name and a hostname, and not "
+          "one inside <code>",
+          [bool(_NAME53.search(t)) for t in ("{{ remote.display_name|e }}", "{{ info.hostname }}",
+                                             "{{ gs.name | default('x') }}")] == [True, True, True]
+          and _SKIPTAG53.match("<code>") is not None, "")
     check("templates: no host, server or peer name is a bare text node the translator can swap",
           not _bare53, repr(_bare53))
 
@@ -385,6 +411,8 @@ finally:
             _P9_CFG_PATH.unlink()
     else:
         _P9_CFG_PATH.write_bytes(_CFG53_SNAPSHOT)
+check("part53: nothing its routes drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP53_START, repr(_P9_TRIPPED[_TRIP53_START:][:6]))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -573,8 +601,10 @@ _out53 = _node53(_name53, _SETTLE53 + (
     "function syncGutter(){}\n"
     "const pending = {}; global.fetch = u => new Promise(res => { pending[decodeURIComponent(u.split('path=')[1])] =\n"
     "  c => res({json: () => Promise.resolve({content: c})}); });\n"
-    + _SF53[_SF53.index("var _openSeq"):_SF53.index("\n", _SF53.index("var _openSeq"))]
-    if "var _openSeq" in _SF53 else "") + "\n" + _cut47(_SF53, "function openFile(") + "\n" + (
+    # Only the _openSeq line is conditional: unparenthesised, the `if` took the whole stub prefix
+    # (window, fetch, syncGutter) with it when _openSeq was renamed, and node failed on THAT.
+    + (_SF53[_SF53.index("var _openSeq"):_SF53.index("\n", _SF53.index("var _openSeq"))]
+       if "var _openSeq" in _SF53 else "")) + "\n" + _cut47(_SF53, "function openFile(") + "\n" + (
     "(async () => { openFile('a.cfg'); openFile('b.cfg');\n"
     "  pending['b.cfg']('B'); await settle(); pending['a.cfg']('A'); await settle();\n"
     "  console.log(JSON.stringify({curFile, text: els.editor.value})); })();\n"))
@@ -685,10 +715,26 @@ check("install.sh update hint: ufw_port_state reads the same way — a (v6) rule
       _states53 == ["closed", "closed", "open"], repr(_states53))
 
 # ── js_coverage: a flow's own check failing fails the run ───────────────────────────────────────
-_spec53 = _ilu53.spec_from_file_location("jscov53_run", os.path.join(_root, "tools", "js_coverage", "run.py"))
-_run53 = _ilu53.module_from_spec(_spec53)
-_spec53.loader.exec_module(_run53)
-_flows53, _walk53, _drv53 = _sys53.modules["flows"], _sys53.modules["walk"], _sys53.modules["driver"]
+# run.py puts tools/js_coverage at sys.path[0] and imports its siblings as TOP-LEVEL modules (walk,
+# driver, flows, cdp, v8_lcov). part14 puts both back after its load, and checks it; this load did
+# not, and read its modules out of the leak — so every part after this one, and any panel module,
+# importing a top-level `walk`, `driver`, `flows`, `cdp` or `run` got the harness's file. Taken by
+# name here, then sys.path and the module table are put back.
+_jc53_path0, _jc53_mods0 = list(_sys53.path), set(_sys53.modules)
+try:
+    _spec53 = _ilu53.spec_from_file_location("jscov53_run", os.path.join(_root, "tools", "js_coverage", "run.py"))
+    _run53 = _ilu53.module_from_spec(_spec53)
+    _spec53.loader.exec_module(_run53)
+    _flows53, _walk53, _drv53 = (_sys53.modules.get("flows"), _sys53.modules.get("walk"),
+                                 _sys53.modules.get("driver"))
+finally:
+    _sys53.path[:] = _jc53_path0
+    for _jc53_m in set(_sys53.modules) - _jc53_mods0:
+        del _sys53.modules[_jc53_m]
+check("part53: loading run.py leaves sys.path and the top-level module names as they were",
+      _sys53.path == _jc53_path0 and not ({"walk", "driver", "flows", "cdp", "v8_lcov"}
+                                          & set(_sys53.modules))
+      and None not in (_flows53, _walk53, _drv53), repr(_sys53.path[:2]))
 
 
 class _Drv53:
@@ -743,6 +789,30 @@ def _subprocess_importers53():
     return out | {"db_maintenance"}
 
 
+def _subprocess_escapes53():
+    """Imports of subprocess the shim cannot reach: it replaces `<module>.subprocess` only.
+
+    `import subprocess as _sp`, `from subprocess import run`, or an import inside a function or a
+    module-level try binds another name (or none on the module), so the module would run its
+    commands for real under the coverage walk while the gate above, which counted plain top-level
+    imports only, still passed.
+    """
+    out = []
+    for dirpath, _dirs, files in os.walk(os.path.join(_root, "panel")):
+        for f in files:
+            if f.endswith(".py"):
+                path = os.path.join(dirpath, f)
+                tree = _ast53.parse(_read53(path))
+                top = {id(n) for n in tree.body}
+                for n in _ast53.walk(tree):
+                    if (isinstance(n, _ast53.ImportFrom) and n.module == "subprocess") or (
+                            isinstance(n, _ast53.Import)
+                            and any(a.name == "subprocess" and (a.asname or id(n) not in top)
+                                    for a in n.names)):
+                        out.append("%s:%d" % (os.path.relpath(path, _root), n.lineno))
+    return out
+
+
 def _import_names53(fn):
     """{local name: dotted module} for the imports inside function node `fn`."""
     names = {}
@@ -766,6 +836,9 @@ _imp53, _shim53 = _subprocess_importers53(), _serve_shimmed53()
 check("js coverage: serve.py's deny-all subprocess shim covers every panel module that imports "
       "subprocess (the debug report's readers ran `systemctl show` and `sudo --version` for real)",
       len(_imp53) >= 10 and not (_imp53 - _shim53), "not shimmed: %s" % sorted(_imp53 - _shim53))
+_esc53 = _subprocess_escapes53()
+check("js coverage: ...and no panel module imports subprocess in a form the shim cannot replace "
+      "(aliased, `from subprocess import`, or inside a function)", not _esc53, repr(_esc53))
 
 # ── lhci_serve removes the auth log and setup token it created ──────────────────────────────────
 _lh53 = _ast53.parse(_read53(_root, "tools", "lhci_serve.py"))
@@ -779,8 +852,18 @@ check("lhci_serve: its cleanup removes the failed-login log create_app always op
       and _ast53.unparse(_auth53a[0].value) == "DATA_DIR / 'auth.log'", repr(sorted(_rm53n)))
 
 # ── the i18n scanners see the labels they skipped ───────────────────────────────────────────────
+# tools/ on sys.path only for this import: left at sys.path[0], every later import of a top-level
+# name that matches a file in tools/ got that file.
+_i18n53_path0, _i18n53_mods0 = list(_sys53.path), set(_sys53.modules)
 _sys53.path.insert(0, os.path.join(_root, "tools"))
-import i18n_scan as _i18n53  # noqa: E402
+try:
+    import i18n_scan as _i18n53  # noqa: E402
+finally:
+    _sys53.path[:] = _i18n53_path0
+    for _i18n53_m in set(_sys53.modules) - _i18n53_mods0:
+        del _sys53.modules[_i18n53_m]
+check("part53: importing tools/i18n_scan leaves sys.path and the module table as they were",
+      _sys53.path == _i18n53_path0 and "i18n_scan" not in _sys53.modules, repr(_sys53.path[:2]))
 _tdir53 = _tf53.mkdtemp(prefix="lgsm-unit-p53-i18n-")
 try:
     with open(os.path.join(_tdir53, "t.html"), "w", encoding="utf-8") as _fh53:

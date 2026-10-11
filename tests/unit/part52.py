@@ -198,7 +198,10 @@ def _lgd_memo52():
         with _lgd52._lock:
             first = _lgd52._memo_store(key, None, [], None, True)
             exp1 = _lgd52._mem[key][0] - _time52.time()
-            # A minute on, the fetch fails again: the hit is the empty one this stored itself.
+            # A minute on, the fetch fails again: the hit is the empty one this stored itself, and
+            # EXPIRED — as _memoised hands it over. Passed the live first store instead, a memo
+            # that was never re-stored still read about a minute from now and passed.
+            _lgd52._mem[key] = (_time52.time() - 1, [])
             second = _lgd52._memo_store(key, _lgd52._mem[key], [], None, True)
             exp2 = _lgd52._mem[key][0] - _time52.time()
     finally:
@@ -206,7 +209,7 @@ def _lgd_memo52():
             _lgd52._mem.pop(key, None)
     check("lgsm_data: an empty read after an empty read is remembered for a minute again, not the "
           "hour a failed refetch of a real list waits",
-          first == [] and second == [] and exp1 <= 61 and exp2 <= 61, repr((exp1, exp2)))
+          first == [] and second == [] and 55 <= exp1 <= 61 and 55 <= exp2 <= 61, repr((exp1, exp2)))
 
 
 # ── A04: uploads into, and browsing of, a symlinked folder ───────────────────────────────────────
@@ -284,8 +287,15 @@ def _cred_key52():
     tmp = _tf52.mkdtemp(prefix="lgsm-unit-p52-key-")
     empty = _cfg52.CRED_KEY_FILE.__class__(os.path.join(tmp, "cred_key"))
     empty.write_bytes(b"")
+    full = _cfg52.CRED_KEY_FILE.__class__(os.path.join(tmp, "cred_key_full"))
+    full.write_bytes(b"k" * 44)
     decrypts = []
+    orig = _cfg52.CRED_KEY_FILE
     try:
+        # The control: a key file WITH a key is present, so "not present" below is the emptiness.
+        _p9_patch(_cfg52, "CRED_KEY_FILE", full)
+        check("debug report hosts: a cred_key with a key in it is a key present (control)",
+              _hosts52.key_present() is True, "")
         _p9_patch(_cfg52, "CRED_KEY_FILE", empty)
         check("debug report hosts: an empty cred_key is not a key present (a decrypt would mint one)",
               _hosts52.key_present() is False, "")
@@ -302,7 +312,7 @@ def _cred_key52():
         check("debug report privacy: an empty cred_key is reported missing (no decrypting name read)",
               st.cred_key_missing is True, repr(st.source_errors))
         seen = []
-        _p9_patch(_so52, "_read_host_fields", lambda: ([], {}))
+        _p9_patch(_so52, "_read_host_fields", lambda: ([], []))   # (host rows, session values)
         _tally = {"ok": 0, "bad": 0, "plain": 0, "session_bad": 0}
         _p9_patch(_so52, "_cred_tally", lambda hosts, sv, key: (seen.append(key), (_tally, []))[1])
         _so52._diag_host_credentials()
@@ -311,6 +321,9 @@ def _cred_key52():
         check("debug report: ...and none of it wrote a key over the empty file",
               empty.read_bytes() == b"", repr(empty.read_bytes()[:8]))
     finally:
+        # Back to the run's own path now, not at part52's final restore: until then any section
+        # whose route decrypted a field reached _cred_fernet in the directory removed below.
+        _p9_patch(_cfg52, "CRED_KEY_FILE", orig)
         _shutil52.rmtree(tmp, ignore_errors=True)
 
 
