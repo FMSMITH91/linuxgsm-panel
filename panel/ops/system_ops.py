@@ -2611,7 +2611,16 @@ def _compute_panel_integrity():
             continue
         parts = line.split("\t")
         status = _STATUS_WORD.get(parts[0][:1], "changed")
-        modified.append({"path": parts[-1], "status": status})
+        entry = {"path": parts[-1], "status": status}
+        # head_path, where it is not `path`: what `git checkout HEAD --` can restore for this
+        # entry. A rename or copy lists its source first (in HEAD) and its new name last (not in
+        # HEAD); an added file has no HEAD copy at all. Naming either new path to checkout fails
+        # the WHOLE command with "pathspec did not match", so "restore all" restored nothing.
+        if status in ("renamed", "copied") and len(parts) > 2:
+            entry["head_path"] = parts[1]
+        elif status == "added":
+            entry["head_path"] = None
+        modified.append(entry)
     modified.sort(key=lambda x: x["path"])
     return {"git": True, "clean": not modified, "verified": True, "current_sha": sha.strip(),
             "modified": modified, "count": len(modified)}
@@ -2635,6 +2644,7 @@ def panel_repair(paths=None):
     # HTTP request ever reaches the git command line (defeats path-traversal /
     # command-injection; git also only touches tracked files, and _git shlex-quotes).
     tampered = sorted(m["path"] for m in info["modified"])
+    head_of = {m["path"]: m.get("head_path", m["path"]) for m in info["modified"]}
     if not tampered:
         return True, "Nothing to repair — all panel files match the installed version.", []
     # `paths is not None`, not `if paths`. An empty LIST is a caller who asked for nothing, and
@@ -2651,14 +2661,19 @@ def panel_repair(paths=None):
     else:
         targets = list(tampered)
     # Restore from HEAD. The explicit '--' plus paths validated against git's own
-    # changed-file list means git only ever touches files in that set.
-    _, err, rc = _git(["checkout", "HEAD", "--"] + targets)
+    # changed-file list means git only ever touches files in that set. Each target as HEAD knows
+    # it (head_path): a renamed file's original, and nothing for a file HEAD does not have.
+    checkout = sorted({head_of.get(p) for p in targets if head_of.get(p)})
+    if not checkout:
+        return False, ("The selected files are new — the installed version has no copy of them "
+                       "to restore."), []
+    _, err, rc = _git(["checkout", "HEAD", "--"] + checkout)
     if rc != 0:
         _log.error("panel repair failed: %s", (err or "").strip())
         return False, "Repair failed — see the panel logs.", []
     _integrity_cache["data"] = None   # files changed on disk — next check must re-read
     return True, ("Restored %d file(s) from the installed version. Restart the panel "
-                  "to load the corrected code." % len(targets)), targets
+                  "to load the corrected code." % len(checkout)), checkout
 
 
 def _apt_periodic_on(dump):

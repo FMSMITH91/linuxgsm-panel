@@ -286,3 +286,34 @@ check("self-update: not launched while a backup restore holds the restore lock",
       _rx51_u[0] is False and "restore is in progress" in _rx51_u[1] and _rx51_run == []
       and not os.path.exists(os.path.join(_rx51_dir, "data", "self-update.sh")),
       repr((_rx51_u, _rx51_run)))
+
+# ── A02 lead: repair restores a renamed file's original and skips a new one ─────────────────────
+_rp51 = []
+
+
+def _rp51_git(args, timeout=45):
+    a = list(args)
+    if a[:1] == ["checkout"]:
+        # git refuses the WHOLE command when any path is not in HEAD.
+        _rp51.append(a)
+        return ("", "", 1 if {"new.py", "renamed.py"} & set(a) else 0)
+    if a == ["rev-parse", "--short", "HEAD"]:
+        return ("abc1234\n", "", 0)
+    if a[:3] == ["diff", "--name-status", "HEAD"]:
+        return ("M\tapp.py\nA\tnew.py\nR100\told.py\trenamed.py\n", "", 0)
+    return ("", "", 0)
+
+
+with _patched():
+    _patch(SO, "_git", _rp51_git)
+    _patch(SO, "_is_git_checkout", lambda: True)
+    _patch(SO, "_update_in_progress", lambda: False)
+    _rp51_all = SO.panel_repair(None)
+    _rp51_new = SO.panel_repair(["new.py"])
+    SO._integrity_cache["data"] = None
+check("repair: with a staged add and a rename present, 'restore all' checks out only paths HEAD "
+      "has (the rename's original), so git does not refuse the whole command",
+      _rp51_all[0] is True and _rp51_all[2] == ["app.py", "old.py"]
+      and _rp51[:1] == [["checkout", "HEAD", "--", "app.py", "old.py"]], repr((_rp51_all, _rp51)))
+check("repair: ...and a selection of only a NEW file says there is nothing to restore it to",
+      _rp51_new[0] is False and "new" in _rp51_new[1] and len(_rp51) == 1, repr((_rp51_new, _rp51)))
