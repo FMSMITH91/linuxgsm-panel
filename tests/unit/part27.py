@@ -280,13 +280,15 @@ for _lk in sorted(_locks27):
         with open(_cfg, encoding="utf-8") as _fh27:
             _osv_cfgs27[os.path.relpath(_cfg, _root)] = _ignored27(_fh27.read())
 _osv_ign27 = [_e for _es in _osv_cfgs27.values() for _e in _es]
-check("osv-scanner.toml: gamedig's sits beside its lockfile and carries the reviewed advisory",
-      "tools/gamedig/osv-scanner.toml" in _osv_cfgs27
-      and "GHSA-ch52-4w7c-c8xp" in [_e["id"] for _e in _osv_ign27], repr(_osv_cfgs27))
+# No specific advisory is named: an exemption is meant to be REMOVED once its package moves out of
+# range (GHSA-ch52 outlived #417's bump, pinned here by id, and would have let 4.2.0 pass both
+# dependency gates). An empty list is a good state, not a broken read.
+check("osv-scanner.toml: gamedig's sits beside its lockfile, and is read",
+      "tools/gamedig/osv-scanner.toml" in _osv_cfgs27, repr(_osv_cfgs27))
 _osv_bad27 = [_e for _e in _osv_ign27
               if not _e["id"] or not _e["until"] or len(_e["reason"] or "") < 80]
 check("osv-scanner.toml: every exemption has an id, an ignoreUntil date and a written reason",
-      _osv_ign27 and not _osv_bad27, repr(_osv_bad27))
+      not _osv_bad27, repr(_osv_bad27))
 check("osv-scanner.toml: ...and an entry with no date, or no reason, is caught (control)",
       [_e["id"] for _e in _ignored27('[[IgnoredVulns]]\nid = "GHSA-x"\nreason = "%s"\n\n'
                                      '[[IgnoredVulns]]\nid = "GHSA-y"\nignoreUntil = 2027-01-01\n'
@@ -306,10 +308,11 @@ def _dr_unreviewed27(ids, entries):
 
 
 check("dependency review: every allow-ghsas id is a dated osv-scanner exemption (one triage)",
-      _dr_ids27 == ["GHSA-ch52-4w7c-c8xp"] and not _dr_unreviewed27(_dr_ids27, _osv_ign27),
+      not _dr_unreviewed27(_dr_ids27, _osv_ign27),
       repr((_dr_ids27, _dr_unreviewed27(_dr_ids27, _osv_ign27))))
 check("dependency review: ...and an id with no osv-scanner entry is caught (control)",
-      _dr_unreviewed27(["GHSA-ch52-4w7c-c8xp", "GHSA-p27z-none"], _osv_ign27) == ["GHSA-p27z-none"])
+      _dr_unreviewed27(["GHSA-p27z-dated", "GHSA-p27z-none"],
+                       [{"id": "GHSA-p27z-dated", "until": "2027-01-01"}]) == ["GHSA-p27z-none"])
 
 
 # ── Dependabot: every entry waits out Renovate's release-age floor ──────────────────────────────

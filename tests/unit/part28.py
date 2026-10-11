@@ -155,7 +155,7 @@ _cd2_escape = _drive28([], [_acc28("../" + os.path.basename(_TMP28) + "/x.py")],
 check("codacy gate: ...an accepted path outside the checkout is never read as the checkout's",
       _cd2_escape[0] == 0 and _cg28._checkout_file("/etc/passwd") is None, _cd2_escape[1][-300:])
 # The live case: the real accepted list against the real checkout. Codacy reports each accepted
-# finding in a file it analyses (CODACY_MAX_BYTES or less: the gamedig lockfile's Trivy entry) and nothing for
+# finding in a file it analyses (CODACY_MAX_BYTES or less; none is listed today) and nothing for
 # system_ops.py, which is over 150 KB, so this is what the daily run sees.
 _cd2_real_acc = _json28.loads(_read28(".github/codacy-accepted-errors.json"))["accepted"]
 _cd2_real_seen = [{"filePath": a["filePath"], "patternInfo": {"id": a["patternId"]},

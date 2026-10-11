@@ -29,6 +29,7 @@ rate limit at Codacy is not a reason to fail the build, and the next scheduled r
 this one missed. Any other answer it cannot read (another 4xx, a redirect, a body that is not JSON,
 JSON that is not the object it expects) exits 1.
 """
+import http.client
 import json
 import os
 import pathlib
@@ -155,8 +156,10 @@ def _fetch_or_exit_code():
         print("::error::the Codacy API answered with %s for %s/%s — refusing to report it clean."
               % (what, ORG, REPO))
         return None, 1
-    except (urllib.error.URLError, OSError) as exc:
-        # No answer at all — DNS, a refused connection, a timeout. An outage, not a verdict.
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+        # No answer at all — DNS, a refused connection, a timeout. An outage, not a verdict. So is a
+        # body cut short: http.client.IncompleteRead is an HTTPException, neither an OSError nor a
+        # ValueError, and escaped as a traceback (exit 1: a red check on main's head for a day).
         print("::warning::could not reach the Codacy API (%s) — not failing the build; the next "
               "scheduled run will re-check." % type(exc).__name__)
         return None, 0
