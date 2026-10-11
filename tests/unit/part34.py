@@ -42,6 +42,7 @@ import ast as _ast34
 import json as _json34
 import os
 import pwd as _pwd34
+from eventlet.timeout import Timeout as _EvTimeout34  # a timed-out green join raises it
 import re as _re34
 import shutil as _shutil34
 import subprocess as _sp34  # nosec B404 - runs bash/node/jq on this part's own fixtures
@@ -482,7 +483,7 @@ def _section_map_dedupe34():
         # unit run with no tally. A thread still alive is reported by the check instead.
         try:
             t.join(10)
-        except BaseException:  # noqa: BLE001 - is_alive() below says what happened
+        except _EvTimeout34:   # is_alive() below says what happened
             pass
     _alive34 = sum(1 for t in threads if t.is_alive())
     check("B map: three lookups that miss the cache together run gamedig ONCE and share it",

@@ -7,6 +7,7 @@ import os
 import shlex as _shlex41
 import subprocess as _sp41  # nosec B404 - runs this part's own stand-in scripts under bash
 import tempfile as _tf41
+from eventlet.timeout import Timeout as _EvTimeout41  # a timed-out green join raises it
 import threading as _th41
 import uuid as _uuid41
 
@@ -518,9 +519,8 @@ def _spawn41(target):
     # reboot job ended the whole unit run with no tally instead of failing this check by name.
     try:
         t.join(120)
-    except BaseException as exc:  # noqa: BLE001 - eventlet.timeout.Timeout is not an Exception
-        if type(exc).__name__ != "Timeout":
-            raise
+    except _EvTimeout41:   # eventlet.timeout.Timeout is not an Exception; the check below reports it
+        pass
     check("job thread: finished (not left running)", not t.is_alive())
 
 

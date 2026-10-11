@@ -3,6 +3,7 @@ from unit.part01 import (N, NS, SO, _Path, _command_arg, _parse_tg_command, _sm_
 from unit.part02 import (_pre)  # noqa: F401,E402
 from unit.part03 import (_GS, _app, _orig_disc_rc, _so)  # noqa: F401,E402
 from unit import REPO_ROOT as _UNIT_ROOT  # noqa: E402
+from eventlet.timeout import Timeout as _EvTimeout04  # noqa: E402 - a timed-out green join raises it
 try:
     _sm_core.run_command = lambda *a, **k: (
         "FOUND|gmodserver|gmodserver|27015|3|2|4|1\n"
@@ -1333,7 +1334,7 @@ for _cw_w in (_cw, _cw2):
         _cwt.Event().wait(0.05)
     try:
         _cw_w._thread.join(10)
-    except BaseException:  # noqa: BLE001 - eventlet's join RAISES its Timeout; reported below
+    except _EvTimeout04:   # eventlet's join RAISES its Timeout (not an Exception); reported below
         pass
     if _cw_w._thread.is_alive():
         _cw_left.append(_cw_w.name)
@@ -1822,7 +1823,7 @@ for _dc_th in _dc_thr.enumerate():
     if "discord_gateway_run" in getattr(getattr(_dc_th, "_target", None), "__qualname__", ""):
         try:
             _dc_th.join(5)
-        except BaseException:  # noqa: BLE001 - eventlet's join RAISES its Timeout; reported below
+        except _EvTimeout04:   # eventlet's join RAISES its Timeout (not an Exception); reported below
             pass
         if _dc_th.is_alive():
             _dc_hb_left.append(_dc_th.name)
