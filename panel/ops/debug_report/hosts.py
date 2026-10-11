@@ -388,12 +388,15 @@ def _read_host_details():
 
 
 def key_present():
-    """Whether data/cred_key exists.
+    """Whether data/cred_key exists and is not empty.
 
     Every decrypting read here is gated on it: without the key, decrypting CREATES a new one
-    (config._cred_fernet), on exactly the install this report is diagnosing.
+    (config._cred_fernet), on exactly the install this report is diagnosing. An EMPTY file counts
+    as missing (config._key_missing, as _cred_fernet itself decides): `.exists()` passed it, and
+    the decrypt then wrote a fresh key over it.
     """
-    return bool(mod("panel.core.config").CRED_KEY_FILE.exists())
+    cfg = mod("panel.core.config")
+    return not cfg._key_missing(cfg.CRED_KEY_FILE)
 
 
 def host_details(ctx):

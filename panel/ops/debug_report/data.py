@@ -230,7 +230,9 @@ def _audit_line(rows, ip_rows, conf, res):
     from panel.core import runtime_stats as rs
     count, age = _count_age(rows)
     keep, ip_days = conf
-    if keep is None:
+    if conf is _R11B_CONF_UNREADABLE:
+        ret = "not known (config.json unreadable)"
+    elif keep is None:
         ret = "audit_log_retention_days is not a number, so nothing is pruned"
     elif keep <= 0:
         ret = "keep forever (audit_log_retention_days unset)"
@@ -238,7 +240,8 @@ def _audit_line(rows, ip_rows, conf, res):
         # Applied once at start: allowed to be as old as the retention plus this process's uptime.
         allowed = keep + (time.time() - rs.started()) / _DAY + 1
         ret = "%d d %s" % (keep, "✓" if age is None or age <= allowed else "✗ (not pruned)")
-    ips = "IP reduction off" if not ip_days else "IPs reduced after %d d" % ip_days
+    ips = ("IP reduction not known" if conf is _R11B_CONF_UNREADABLE
+           else "IP reduction off" if not ip_days else "IPs reduced after %d d" % ip_days)
     if isinstance(ip_rows, list):
         ips += " (%d older rows not reduced)" % int(ip_rows[0][0] or 0)
     res.add("- **audit_log** %s rows · oldest %s · retention: %s · %s" % (
@@ -286,9 +289,22 @@ def _digest_lines(got, res):
     res.add(_digest_line("rows by origin", got.get("origin"), _origin_text))
 
 
+# What section_database passes when config.json could not be read: compared by IDENTITY, so a
+# config whose two settings are both not numbers ((None, None) too) still reads as that.
+_R11B_CONF_UNREADABLE = (None, None)
+
+
 def _retention_conf():
+    """(audit_log_retention_days, audit_ip_retention_days); raises when config.json is unreadable.
+
+    load_config() does not raise for that: it answers the DEFAULTS, wrapped as UnreadableConfig,
+    and those printed as the operator's settings ("keep forever", "IPs reduced after 90 d") —
+    the very thing config_section's rule forbids ("An unreadable config.json prints no values").
+    """
     from panel.core import config as cfg
     c = cfg.load_config()
+    if cfg.is_unreadable(c):
+        raise ValueError("config.json unreadable")
     return (_int_cfg(c, "audit_log_retention_days", 0), _int_cfg(c, "audit_ip_retention_days", 90))
 
 
@@ -320,7 +336,7 @@ def section_database(ctx):
     try:
         conf = _retention_conf()
     except Exception:  # noqa: BLE001 - unreadable config: said as such on the audit line
-        conf = (None, None)
+        conf = _R11B_CONF_UNREADABLE
     queries = {"page_size": ("PRAGMA page_size", ()), "freelist_count": ("PRAGMA freelist_count", ()),
                "journal_mode": ("PRAGMA journal_mode", ())}
     queries.update(_census_queries(conf[1]))
@@ -346,7 +362,7 @@ def _passphrase_state():
     from panel.ops import backup as bk
     if not bk.get_settings().get("encrypt"):
         return "ok", "encryption off"
-    if not cfg.CRED_KEY_FILE.exists():
+    if cfg._key_missing(cfg.CRED_KEY_FILE):     # absent or EMPTY: either way a decrypt would mint one
         return "fail", "encryption on, but cred_key is missing, so the passphrase is unreadable"
     try:
         readable = bool(bk.get_passphrase())

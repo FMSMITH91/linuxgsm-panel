@@ -3880,7 +3880,9 @@ def _diag_host_credentials():
     from panel.core import config as _cfg
     try:
         hosts, session_vals = _read_host_fields()
-        key = _cfg.CRED_KEY_FILE.exists()
+        # Not .exists(): an EMPTY cred_key passed that, and _cred_state's decrypt then wrote a new
+        # key over it (config._cred_fernet treats empty as missing, as _key_missing does).
+        key = not _cfg._key_missing(_cfg.CRED_KEY_FILE)
         tally, bad_hosts = _cred_tally(hosts, session_vals, key)
     except Exception as exc:  # noqa: BLE001 - reported by class
         return "warn", "Could not read the hosts table (%s)." % type(exc).__name__
@@ -4444,8 +4446,11 @@ def _redact_emails(text, hit=None):
     return "".join(out)
 
 
+# The separator may open with the key's own closing quote: `{"password": "hunter2"}` and
+# `'password': 'hunter2'` (a dict dumped into a log line) put a quote between the key and ':', and
+# both printed unchanged.
 _SECRET_KV_RE = re.compile(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
-                           r"cred(?:ential)?|cookie|bearer)[\w-]*)(\s*[=:]\s*)(\S+)")
+                           r"cred(?:ential)?|cookie|bearer)[\w-]*)([\"']?\s*[=:]\s*)(\S+)")
 
 
 def _redact(text, hit=None):

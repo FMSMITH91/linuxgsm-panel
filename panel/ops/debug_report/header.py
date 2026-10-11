@@ -104,16 +104,28 @@ def _restart_pending(res, running, head, started):
     res.find("warn", "Panel process", "restart pending: the running code is not the checkout")
 
 
+def _r11b_same_commit(running, head):
+    """Whether two `git rev-parse --short` answers name one commit.
+
+    By prefix, not equality: git's auto-abbreviation grows with the object count, so a fetch made
+    after the start can lengthen HEAD's short form while HEAD itself is unchanged, and the report
+    then said RESTART PENDING until the next restart.
+    """
+    a, b = running.rstrip("+"), head
+    return a.startswith(b) or b.startswith(a)
+
+
 def _commit_lines(ctx, res):
     running, head = _running_commit(ctx), ctx.memo("head_sha", _head_sha)
     started = _process_start()
     known = bool(running and head)
+    same = known and _r11b_same_commit(running, head)
     res.add("- **Running commit**: %s (loaded at start, %s) · **Checkout HEAD**: %s%s · "
             "**Tracked branch**: %s" % (
                 running or "unknown", _start_text(started),
                 head or "unknown (not a git checkout, or git failed)",
-                ", same" if known and running.rstrip("+") == head else "", _branch()))
-    if known and running.rstrip("+") != head:
+                ", same" if same else "", _branch()))
+    if known and not same:
         _restart_pending(res, running, head, started)
 
 
