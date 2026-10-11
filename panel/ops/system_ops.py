@@ -4681,12 +4681,18 @@ def _debug_run(argv, timeout=5, cap=2 * 1024 * 1024):
     running. rc -1 with stderr "timed out" / "could not start" for those two cases.
     """
     from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    # In the C locale, as the helper runs its journal reads (tools/panel-helper pins LANG/LC_ALL).
+    # The service inherits the system's: under fr_FR or de_DE journalctl dates its lines "oct. 11"
+    # or "Mär 11", the report's parsers (logs._PREFIX_RE) did not know that prefix, and sudo's
+    # "(command continued)" lines — a long argv's tail, passwords included — were printed whole.
+    env = {k: v for k, v in os.environ.items() if k != "LANGUAGE"}
+    env.update(LC_ALL="C.UTF-8", LANG="C.UTF-8")
     try:
         # Both rule ids on ONE line (see _run_verb): the argv is a literal list in
         # panel/ops/debug_report (journalctl, timedatectl), never text from a request.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         p = subprocess.Popen(list(argv), shell=False,  # nosec B603 - fixed argv, no shell
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
                              stdin=subprocess.DEVNULL, start_new_session=True)
     except OSError:
         return "", "could not start", -1

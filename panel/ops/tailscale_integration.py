@@ -573,10 +573,29 @@ def panel_funnel_facts(cfg):
     if not cfg.get("tailscale_setup_done"):
         return {"funnelled": False, "shared_funnel": []}
     info = get_tailscale_info()
-    port = cfg.get("port", 5000)
+    port = _r13b_bound_port(cfg)
     return {"funnelled": panel_funnelled(info.serve_config, port),
             "shared_funnel": shared_funnel_apps(info.serve_config, port,
                                                 cfg.get("tailscale_use_funnel"))}
+
+
+def _r13b_bound_port(cfg):
+    """The port this process is bound to (app.config BOOT_PORT), else config.json's.
+
+    Serve's routes reach the bound port. With a port change saved and the restart still pending,
+    config.json's found no panel route, and a panel on Funnel read as not reachable from the
+    internet.
+    """
+    boot = None
+    try:
+        from flask import current_app, has_app_context
+        if has_app_context():
+            boot = current_app.config.get("BOOT_PORT")
+    except Exception:  # noqa: BLE001 - no app to ask: config.json's port, as before
+        boot = None
+    if isinstance(boot, int) and not isinstance(boot, bool) and 0 < boot < 65536:
+        return boot
+    return cfg.get("port", 5000)
 
 
 def panel_funnelled(serve_config, port):
