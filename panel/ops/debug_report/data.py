@@ -230,7 +230,7 @@ def _audit_line(rows, ip_rows, conf, res):
     from panel.core import runtime_stats as rs
     count, age = _count_age(rows)
     keep, ip_days = conf
-    if conf is _R11B_CONF_UNREADABLE:
+    if isinstance(conf, _R11bConfUnreadable):
         ret = "not known (config.json unreadable)"
     elif keep is None:
         ret = "audit_log_retention_days is not a number, so nothing is pruned"
@@ -240,7 +240,7 @@ def _audit_line(rows, ip_rows, conf, res):
         # Applied once at start: allowed to be as old as the retention plus this process's uptime.
         allowed = keep + (time.time() - rs.started()) / _DAY + 1
         ret = "%d d %s" % (keep, "✓" if age is None or age <= allowed else "✗ (not pruned)")
-    ips = ("IP reduction not known" if conf is _R11B_CONF_UNREADABLE
+    ips = ("IP reduction not known" if isinstance(conf, _R11bConfUnreadable)
            else "IP reduction off" if not ip_days else "IPs reduced after %d d" % ip_days)
     if isinstance(ip_rows, list):
         ips += " (%d older rows not reduced)" % int(ip_rows[0][0] or 0)
@@ -289,9 +289,14 @@ def _digest_lines(got, res):
     res.add(_digest_line("rows by origin", got.get("origin"), _origin_text))
 
 
-# What section_database passes when config.json could not be read: compared by IDENTITY, so a
-# config whose two settings are both not numbers ((None, None) too) still reads as that.
-_R11B_CONF_UNREADABLE = (None, None)
+class _R11bConfUnreadable(tuple):
+    """(None, None) that is told apart by its TYPE from two settings that are not numbers."""
+
+
+# What section_database passes when config.json could not be read. Not a plain (None, None) compared
+# by identity: CPython merges equal constant tuples, so a literal (None, None) elsewhere in this
+# module IS that object, and two non-numeric settings read as "unreadable".
+_R11B_CONF_UNREADABLE = _R11bConfUnreadable((None, None))
 
 
 def _retention_conf():
