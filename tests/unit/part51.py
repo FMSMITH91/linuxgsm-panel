@@ -485,3 +485,104 @@ _tn51_unread = [_tailnet51(("", "timed out", -1)), _tailnet51(_ss51("203.0.113.5
 check("tailnet ssh state: ...while a wildcard or a Tailscale address still is, and an unread or "
       "empty listing changes nothing (the firewall test decides, as before)",
       all(t == (True, False, True) for t in _tn51_ok + _tn51_unread), repr((_tn51_ok, _tn51_unread)))
+
+# ── A05: a count the stop phase cannot read is read the census's way, and does not loop silently ──
+from panel.services import host_reboot as _hr51  # noqa: E402
+from panel.services import notifications as _notif51  # noqa: E402
+
+
+class _JobLike51:
+    """The _Job methods under test, on an object holding only what they read."""
+    _back_to_waiting = _hr51._Job._back_to_waiting
+    _wait_back = _hr51._Job._wait_back
+    _waiting_again = _hr51._Job._waiting_again
+    _stop_group = _hr51._Job._stop_group
+    _still_empty = _hr51._Job._still_empty
+    _past_deadline = _hr51._Job._past_deadline
+    _bounced = _hr51._Job._bounced
+
+    def __init__(self, rid):
+        self.remote_id, self.by, self.fired, self.wait_info = rid, "p51", False, None
+        self.remote = NS(id=rid, name="p51-host", display_name="p51-host")
+        self.job = {"mode": "when_empty", "boot": "b51"}
+        self.bounce = self.bounce_joined = False
+        self.bounce_unread = ""
+        self.deadline = None
+        self.entries, self.stopped = [], []
+
+    def _cancelled(self):
+        return False
+
+    def _stop_one(self, e):
+        self.stopped.append(e["id"])
+        e["stop"] = "stopped"
+
+
+_RID51 = 951051
+_sent51 = []
+with _patched():
+    _patch(_notif51, "notify", lambda key, title, body, **k: _sent51.append((key, title, body)))
+    _j51 = _JobLike51(_RID51)
+    try:
+        for _i51 in range(_hr51.BOUNCE_NOTIFY_AT + 1):
+            _j51._back_to_waiting(None, bounce=False, reason="a player count could not be read",
+                                  backoff=True, unread="fctr")
+            with _hr51._rwe_lock:
+                _j51.wait_info = _hr51._reboot_when_empty.pop(_RID51, None)   # the next fire's
+    finally:
+        with _hr51._rwe_lock:
+            _hr51._reboot_when_empty.pop(_RID51, None)
+_unread51 = [b for _k, t, b in _sent51 if t == "Host reboot cannot read a player count"]
+check("reboot when empty: a count unread just before the stop, again and again, sends ONE notice "
+      "naming the server at the bounce threshold (it was silent for the whole wait), and is still "
+      "not counted as a player joining",
+      len(_unread51) == 1 and "fctr" in _unread51[0]
+      and not any("Players keep joining" in b for _k, _t, b in _sent51)
+      and not (_j51.wait_info or {}).get("bounces")
+      and (_j51.wait_info or {}).get("unread_bounces") == _hr51.BOUNCE_NOTIFY_AT + 1,
+      repr((_sent51, _j51.wait_info)))
+
+
+def _stop_group51(per_server, batched):
+    """_stop_group over one server whose own read answers `per_server`, the host batch `batched`."""
+    j = _JobLike51(_RID51)
+    gs = NS(id=5101, name="fctr", short_name="fctrserver")
+    other = NS(id=5102, name="gmod", short_name="gmodserver")
+    e = {"id": 5101, "name": "fctr"}
+    seen = []
+    with _patched():
+        _patch(_hr51._mon, "_server_slots", lambda g, allow_console=False, primary=None: per_server)
+        _patch(_hr51._mon, "_batched_slots",
+               lambda servers: (seen.append(sorted(s.id for s in servers)), batched)[1])
+        j._stop_group([e], {5101: gs, 5102: other})
+    return j, seen
+
+
+_sg51_batch, _sg51_seen = _stop_group51((None, None, None), {5101: (0, 16, None)})
+_sg51_none, _ = _stop_group51((None, None, None), {})
+_sg51_own, _sg51_own_seen = _stop_group51((0, 16, None), {5101: (3, 16, None)})
+check("reboot when empty: a server its own account cannot read is read by the host's batched "
+      "query (the census's path) before its stop, and stopped when that reads it empty",
+      _sg51_batch.stopped == [5101] and not _sg51_batch.bounce and _sg51_seen == [[5101, 5102]],
+      repr((_sg51_batch.stopped, _sg51_batch.bounce, _sg51_seen)))
+check("reboot when empty: ...one neither read can see still stops the reboot, recorded by name; "
+      "and a server its own account reads is not asked twice",
+      _sg51_none.stopped == [] and _sg51_none.bounce and not _sg51_none.bounce_joined
+      and _sg51_none.bounce_unread == "fctr"
+      and _sg51_own.stopped == [5101] and _sg51_own_seen == [],
+      repr((_sg51_none.__dict__, _sg51_own.stopped, _sg51_own_seen)))
+
+_jb51 = _JobLike51(_RID51)
+_jb51.bounce, _jb51.bounce_unread = True, "fctr"
+with _patched():
+    _patch(_hr51, "rollback", lambda *a, **k: None)
+    _patch(_notif51, "notify", lambda *a, **k: None)
+    try:
+        _jb51._bounced()
+        with _hr51._rwe_lock:
+            _jb51_info = dict(_hr51._reboot_when_empty.get(_RID51) or {})
+    finally:
+        with _hr51._rwe_lock:
+            _hr51._reboot_when_empty.pop(_RID51, None)
+check("reboot when empty: ...and the stop phase's own bounce (_bounced) is what counts it",
+      _jb51_info.get("unread_bounces") == 1 and not _jb51_info.get("bounces"), repr(_jb51_info))
