@@ -822,7 +822,10 @@ check("R36: state, Serve and Funnel print without any node name, tailnet, IP, UR
       and not any(s in _text(_tl22) for s in ("secret-node", "tail9999", "100.10", "peer-secret",
                                                "me@github", "https://")), _text(_tl22))
 check("R36: Funnel on in Serve but off in the config is a fail (switched on outside the panel)",
-      any("Funnel is ON" in f["text"] and f["level"] == "fail" for f in _tl22.findings),
+      # This fixture's listener is SHARED with another app ("/"), so the finding names that cause
+      # (part54); a Funnel switched on with no other app still reads "Funnel is ON".
+      any(("Funnel is ON" in f["text"] or "Funnel is on for the whole :443 listener" in f["text"])
+          and f["level"] == "fail" for f in _tl22.findings),
       repr(_tl22.findings))
 _tl22u, _ = _ts_lines(dict(_tsd22, serve_unreadable=True), {"port": 5000})
 check("R36: an unreadable Serve status is UNREADABLE, never 'no routes'",
