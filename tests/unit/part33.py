@@ -50,6 +50,7 @@ from flask import Flask as _Flask33
 from flask.logging import default_handler as _flask_default_handler33
 
 from unit.part01 import check, eq
+from unit.part01 import skip as _skip33
 from panel.core import config as _cfg33
 from panel.core import panel_state as _ps33
 from panel.core import runtime_stats as _rs33
@@ -805,6 +806,14 @@ def _f_js_source():
 def _f_js():
     out = _f_node()
     if out is None:
+        # The five driven checks below did NOT run: each is said as a SKIP, as part38 and part43
+        # say theirs, instead of vanishing behind the one source-text check standing in for them.
+        for _sk33 in ("a manual run yesterday does not read as the schedule's status",
+                      "a button never pressed says so, naming the button",
+                      "no scheduled backup yet, a failed one, and a running backup are each said",
+                      "the per-request part of each line (an age, a summary naming servers)",
+                      "when the newest automatic backup failed and an older one worked"):
+            _skip33("backups page: " + _sk33, "no node on this host")
         _f_js_source()
         return
     rs, nv = out.get("reassured") or {}, out.get("never") or {}

@@ -477,9 +477,17 @@ def _section_map_dedupe34():
     for t in threads:
         t.start()
     for t in threads:
-        t.join(10)
+        # Never raising: under eventlet a join that times out RAISES its Timeout (a BaseException
+        # the harness's `except Exception` does not catch), so a hung single-flight ended the whole
+        # unit run with no tally. A thread still alive is reported by the check instead.
+        try:
+            t.join(10)
+        except BaseException:  # noqa: BLE001 - is_alive() below says what happened
+            pass
+    _alive34 = sum(1 for t in threads if t.is_alive())
     check("B map: three lookups that miss the cache together run gamedig ONCE and share it",
-          all((len(slow.calls) == 1, res == ["gm_bconstruct/b"] * 3)), repr((len(slow.calls), res)))
+          all((_alive34 == 0, len(slow.calls) == 1, res == ["gm_bconstruct/b"] * 3)),
+          repr((_alive34, len(slow.calls), res)))
 
 
 def _section_map_race34():

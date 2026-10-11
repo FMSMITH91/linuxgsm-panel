@@ -1065,10 +1065,16 @@ check("notify: telegram rejects an empty chat id",
 check("notify: EVENTS entries are (label:str, default:bool)",
       all(isinstance(v, tuple) and len(v) == 2 and isinstance(v[0], str) and isinstance(v[1], bool)
           for v in N.EVENTS.values()))
-_app_src = (_pl.Path(_UNIT_ROOT) / "app.py").read_text(encoding="utf-8")
-_used_keys = set(_re.findall(r'notifications\.notify\(\s*"(\w+)"', _app_src))
-check("notify: every notify() key in app.py is registered in EVENTS",
-      _used_keys and _used_keys <= set(N.EVENTS), "unregistered: %s" % sorted(_used_keys - set(N.EVENTS)))
+# app.py AND every panel module: app.py now holds 2 of the ~38 notify() calls, the rest moved to
+# monitoring, host_reboot, certs and the routes, and an unregistered key there never fires
+# (event_enabled defaults to False for a key EVENTS does not have).
+_used_keys = set()
+for _nk_py in [_pl.Path(_UNIT_ROOT) / "app.py"] + sorted((_pl.Path(_UNIT_ROOT) / "panel").rglob("*.py")):
+    _used_keys |= set(_re.findall(r'notifications\.notify\(\s*"(\w+)"',
+                                  _nk_py.read_text(encoding="utf-8")))
+check("notify: every notify() key in app.py and panel/ is registered in EVENTS",
+      len(_used_keys) >= 10 and _used_keys <= set(N.EVENTS),
+      "unregistered: %s (%d keys read)" % (sorted(_used_keys - set(N.EVENTS)), len(_used_keys)))
 
 # The global 'enabled' master switch was removed (a channel's own toggle is the on/off). The one-time
 # migration must PRESERVE a previously-muted state: master off -> disable both channels, then drop the
@@ -1311,6 +1317,28 @@ check("bot worker: a full queue refuses instead of growing without bound",
 _cw_block.set()
 check("bots: the busy reply says the command was dropped, not merely delayed",
       "again" in _CWBUSY and "shortly" not in _CWBUSY, _CWBUSY)
+
+# Both workers are ended here: a CommandWorker loops on its queue for the life of the process, so
+# the two above outlived the run (part15's thread gate names them). A SystemExit is the one thing
+# its `except Exception` lets out of the loop; the thread ends on it, as a thread does.
+def _cw_stop():
+    raise SystemExit
+
+
+_cw_left = []
+for _cw_w in (_cw, _cw2):
+    for _ in range(200):          # _cw2's queue may still be full, draining after the block above
+        if _cw_w.submit(_cw_stop):
+            break
+        _cwt.Event().wait(0.05)
+    try:
+        _cw_w._thread.join(10)
+    except BaseException:  # noqa: BLE001 - eventlet's join RAISES its Timeout; reported below
+        pass
+    if _cw_w._thread.is_alive():
+        _cw_left.append(_cw_w.name)
+check("bot worker: (cleanup) the test's workers are ended, not left looping on their queues",
+      not _cw_left, repr(_cw_left))
 
 # telegram_set_commands registers the '/' autocomplete menu via setMyCommands (through _post).
 import json as _json_tg  # noqa: E402
@@ -1723,6 +1751,27 @@ class _FakeWS:
         pass
 
 
+# Each session below starts a heartbeat thread that sleeps out the 600 s interval before it sees
+# that its session ended, so all three outlived the run (part15's thread gate names them). Their
+# sleep is made wakeable, unchanged while a session runs, and woken once the three have ended.
+import threading as _dc_thr  # noqa: E402
+import time as _dc_time  # noqa: E402
+_dc_wake = _dc_thr.Event()
+
+
+class _DcTime(object):
+    """notifications' `time`, with a sleep the end of this block can cut short."""
+
+    def __getattr__(self, name):
+        return getattr(_dc_time, name)
+
+    @staticmethod
+    def sleep(secs):
+        _dc_wake.wait(secs)
+
+
+_dc_time_saved = N.time
+N.time = _DcTime()
 _dc_seen = []
 _fake_ws = _FakeWS([
     '{"op":10,"d":{"heartbeat_interval":600000}}',
@@ -1767,6 +1816,19 @@ N.discord_gateway_run("A" * 50, lambda ch, is_bot, content, author=None: _dcq_se
                       _connect=lambda: _dcq_ws2)
 check("discord: ...while a recv that really times out still ends the session (control)",
       _dcq_seen2 == [] and _dcq_ws2._frames == ['{"op":0}'], repr(_dcq_ws2._frames))
+_dc_wake.set()
+_dc_hb_left = []
+for _dc_th in _dc_thr.enumerate():
+    if "discord_gateway_run" in getattr(getattr(_dc_th, "_target", None), "__qualname__", ""):
+        try:
+            _dc_th.join(5)
+        except BaseException:  # noqa: BLE001 - eventlet's join RAISES its Timeout; reported below
+            pass
+        if _dc_th.is_alive():
+            _dc_hb_left.append(_dc_th.name)
+N.time = _dc_time_saved
+check("discord: the test sessions' heartbeat threads end with this block, not with the run",
+      not _dc_hb_left, repr(_dc_hb_left))
 
 # player_slots parses gamedig's compact JSON into (count, max, name); a name with spaces/quotes
 # round-trips and junk output is rejected. run_command is stubbed so no SSH/gamedig is needed.

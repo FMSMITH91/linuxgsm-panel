@@ -305,8 +305,15 @@ def _live_threads15(match, grace=5.0):
 
 
 def _reaches_host15(mod, _qual):
-    """Tell whether a thread's target is app.py's background code or a panel.ops worker."""
-    return mod == "app" or mod.startswith("panel.ops.")
+    """Tell whether a thread's target is app.py's background code or a panel worker.
+
+    panel.routes and panel.services too, not panel.ops alone: 16 of the panel's thread starts are
+    in panel/routes (host bootstrap, the public-IP and timezone resolves, the command-cache fill,
+    installs, power actions, backups) and 5 in panel/services, the host-reboot job among them --
+    the very worker this gate was written for, which moved to panel/services/host_reboot.py after
+    it was. Those all ran on unseen.
+    """
+    return mod == "app" or mod.startswith(("panel.ops.", "panel.routes.", "panel.services."))
 
 
 _THR15_HOLD = _thr15.Event()
@@ -326,6 +333,13 @@ _THR15_HOLD.set()
 _thr15_t.join(5)
 check("threads: the end-of-run lookup finds a live thread by its target (a probe started here)",
       len(_thr15_seen) == 1, repr(_thr15_seen))
+# ...and the filter takes the modules the panel's workers live in: a lookup that works is no
+# use with a filter that never matches the host-reboot job.
+check("threads: the end-of-run filter covers app.py, panel.ops, panel.routes and panel.services "
+      "workers (the host-reboot job included), and not the suite's own",
+      [_reaches_host15(m, "") for m in ("app", "panel.ops.system_ops", "panel.routes._shared",
+                                         "panel.services.host_reboot", "unit.part41")]
+      == [True, True, True, True, False])
 _thr15_left = _live_threads15(_reaches_host15)
-check("threads: no app.py ticker or panel.ops worker is still running when the unit run ends",
+check("threads: no app.py ticker or panel worker is still running when the unit run ends",
       not _thr15_left, "still running: %s" % _thr15_left)

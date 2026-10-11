@@ -74,6 +74,17 @@ check("code-scanning gates: the category list is exactly what codeql.yml's langu
       "upload-sarif steps of security-code.yml and zizmor.yml upload, each named with its workflow",
       set(CSA.CATEGORIES.items()) == _from_wf26 and len(CSA.CATEGORIES) == len(_from_wf26),
       repr((sorted(CSA.CATEGORIES.items()), sorted(_from_wf26))))
+# ...and no OTHER workflow uploads SARIF: the comparison above reads three named workflows, so a
+# fourth uploader would never be compared and the alert gates would not wait for its category.
+# cflite_pr.yml's upload is the one deliberate exception (it has no category and is not waited
+# for; .github/required-checks.txt says why).
+_up_wfs26 = sorted(os.path.basename(_p26) for _p26 in __import__("glob").glob(
+    os.path.join(_root, ".github", "workflows", "*.yml"))
+    if "github/codeql-action/upload-sarif@" in _wf14_code(os.path.basename(_p26)))
+check("code-scanning gates: every workflow that uploads SARIF is one the list above is held to "
+      "(or cflite_pr.yml, the named exception)",
+      _up_wfs26 == ["cflite_pr.yml", "codeql.yml", "security-code.yml", "zizmor.yml"],
+      repr(_up_wfs26))
 check("code-scanning gates: ...read from the workflows themselves (positive control: three "
       "languages, CodeQL's category formula, and all three SARIF uploads found)",
       len(_langs26) == 3 and 'category: "/language:${{ matrix.language }}"' in _an26
@@ -433,3 +444,81 @@ check("code-scanning gates: only a PR merge ref or main, rebuilt from validated 
       and _ref26 == []
       and '["gh", "api", "--", path]' in open(_CSA26_PATH, encoding="utf-8").read(),
       repr((_val26, _refused26, _ref26)))
+
+
+# ── a scheduled analysis of a commit main has moved past is neither uploaded nor judged ──────────
+# A Monday schedule run analyses main's head X; a push lands Y meanwhile, and Y's run (another
+# concurrency group) can upload first. X's upload landing after it made X's the newest analysis in
+# that category, so the gate judging Y answered "moved on" and Y was never judged. Each scheduled
+# upload now checks main's head first, and the gate answers MOVED for the run that skipped.
+_X26, _Y26 = "1" * 40, "2" * 40
+_mh_calls26, _mh_rows26 = [], []
+_saved_csa26 = (CSA.subprocess.run, CSA.read_rows)
+_saved_repo26 = os.environ.get("GITHUB_REPOSITORY")
+
+
+class _MhAnswer26(object):
+    def __init__(self, out, rc=0):
+        self.stdout, self.returncode, self.stderr = out, rc, ""
+
+
+try:
+    os.environ["GITHUB_REPOSITORY"] = "o/r"
+    CSA.read_rows = lambda repo, ref: (_mh_rows26.append(ref), [])[1]
+    CSA.subprocess.run = lambda argv, **_k: (_mh_calls26.append(list(argv)), _MhAnswer26(_Y26 + "\n"))[1]
+    _mh_moved26 = CSA.main(["--ref", "refs/heads/main", "--sha", _X26, "--event", "schedule",
+                            "--workflow", ".github/workflows/codeql.yml", "--tries", "1"])
+    _mh_read_moved26 = list(_mh_rows26)
+    CSA.subprocess.run = lambda argv, **_k: _MhAnswer26(_X26 + "\n")
+    _mh_head26 = CSA.main(["--ref", "refs/heads/main", "--sha", _X26, "--event", "schedule",
+                           "--workflow", ".github/workflows/codeql.yml", "--tries", "1"])
+    CSA.subprocess.run = lambda argv, **_k: _MhAnswer26("", 1)
+    _mh_unread26 = CSA.main(["--ref", "refs/heads/main", "--sha", _X26, "--event", "schedule",
+                             "--workflow", ".github/workflows/codeql.yml", "--tries", "1"])
+finally:
+    CSA.subprocess.run, CSA.read_rows = _saved_csa26
+    if _saved_repo26 is None:
+        os.environ.pop("GITHUB_REPOSITORY", None)
+    else:
+        os.environ["GITHUB_REPOSITORY"] = _saved_repo26
+check("code-scanning gates: a scheduled run whose commit main has moved past answers MOVED (3) "
+      "without reading the analyses; one still at the head, or a head that could not be read, is "
+      "judged as before (1: nothing analysed in these stand-in rows)",
+      (_mh_moved26, _mh_read_moved26, _mh_head26, _mh_unread26) == (3, [], 1, 1)
+      and _mh_calls26[:1] == [["gh", "api", "--jq", ".sha", "--", "repos/%s/commits/main"
+                               % "o/r"]],
+      repr((_mh_moved26, _mh_read_moved26, _mh_head26, _mh_unread26, _mh_calls26[:1])))
+
+# ...and every SARIF upload a schedule can make is held back the same way: in each workflow the
+# alert gates wait for, each upload-sarif step's `if:` reads the still_head step, which runs only on
+# a schedule and comes earlier in the same job.
+_sh_bad26 = []
+# zizmor's upload job writes security events and runs no shell, so it reads the scan job's answer.
+_sh_want26 = {"codeql.yml": "steps.still_head.outputs.current != 'false'",
+              "security-code.yml": "steps.still_head.outputs.current != 'false'",
+              "zizmor.yml": "needs.zizmor.outputs.current != 'false'"}
+check("code-scanning gates: zizmor's scan job hands the head check to its upload job",
+      "current: ${{ steps.still_head.outputs.current }}" in _wf14_code("zizmor.yml")
+      and "id: still_head" in _wf14_code("zizmor.yml").split("\n  upload:\n")[0], "")
+for _shw26 in ("codeql.yml", "security-code.yml", "zizmor.yml"):
+    _sht26 = _wf14_code(_shw26)
+    for _shm26 in re.finditer(r"^( +)- name: [^\n]*\n((?:\1  [^\n]*\n)*?)\1  uses: "
+                              r"github/codeql-action/upload-sarif@", _sht26, re.M):
+        _sh_if26 = re.search(r"^\s+if: (.*)$", _shm26.group(2), re.M)
+        # This job's steps: from its last `steps:` line before the upload.
+        _sh_before26 = _sht26[:_shm26.start()]
+        _sh_steps26 = list(re.finditer(r"^\s+steps:\s*$", _sh_before26, re.M))
+        _sh_job26 = _sh_before26[_sh_steps26[-1].start():] if _sh_steps26 else ""
+        if _shw26 == "zizmor.yml":         # the step lives in the scan job (checked above)
+            _sh_job26 = _sht26.split("\n  upload:\n")[0]
+        _sh_ok26 = (_sh_if26 is not None and _sh_want26[_shw26] in _sh_if26.group(1)
+                    and re.search(r"- name: Is the analysed commit still main's head\? \(scheduled "
+                                  r"runs only\)\n\s+id: still_head\n\s+if: .*github\.event_name == "
+                                  r"'schedule'\n", _sh_job26) is not None)
+        if not _sh_ok26:
+            _sh_bad26.append("%s: %s" % (_shw26, _shm26.group(0).splitlines()[0].strip()))
+_sh_count26 = sum(len(re.findall(r"uses: github/codeql-action/upload-sarif@", _wf14_code(w)))
+                  for w in ("codeql.yml", "security-code.yml", "zizmor.yml"))
+check("code-scanning gates: each of the four SARIF uploads the gates wait for is skipped by a "
+      "scheduled run whose commit is no longer main's head",
+      _sh_count26 == 4 and not _sh_bad26, repr((_sh_count26, _sh_bad26)))

@@ -381,7 +381,7 @@ def _permission40(v_client, sid):
     n_audit = len(_audits40())
     code, _body = _post40(v_client, sid, "cfg/a.cfg", "z.cfg")
     check("rename route: a user without the file-manager permission is refused (403)",
-          code == 403, "got %d" % code)
+          code == 403, "got %r" % (code,))   # %r: a request that RAISED gives None, not a code
     check("rename route: ...nothing is asked, sent or audited, and the file keeps its name",
           (_PROBES40, _SHELLS40, len(_audits40()), _read40("cfg/a.cfg")) == ([], [], n_audit, "A"),
           repr((_PROBES40, _SHELLS40[:1])))

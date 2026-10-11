@@ -589,3 +589,16 @@ try:
     _sc8_pins()
 finally:
     _shutil29.rmtree(_TMP29, ignore_errors=True)
+
+
+# The firewall harness fuzzes the numbered-rule regex remote_ufw_status really uses, not a copy: its
+# copy was the old `\s*(.*)` shape production replaced for quadratic backtracking, so the regex in
+# production was never the one fuzzed. Read from the harness's AST: the name is bound to the
+# module's attribute, and no regex literal is compiled for it.
+_ff29_src = open(os.path.join(_ROOT29, "tests", "fuzz", "fuzz_firewall.py"), encoding="utf-8").read()
+_ff29_bind = [n.value for n in _ast29.walk(_ast29.parse(_ff29_src)) if isinstance(n, _ast29.Assign)
+              and any(getattr(t, "id", None) == "_RULE_RE" for t in n.targets)]
+check("fuzz_firewall: _RULE_RE is the production regex (firewall._UFW_NUMBERED_RE), not a copy",
+      len(_ff29_bind) == 1 and isinstance(_ff29_bind[0], _ast29.Attribute)
+      and _ff29_bind[0].attr == "_UFW_NUMBERED_RE",
+      repr([_ast29.unparse(v) for v in _ff29_bind]))

@@ -1026,15 +1026,23 @@ def _alert_updates(data):
     return updates
 
 
+# A read that did not happen is said, not shown as two empty lists: the card read those as "This
+# game doesn't have any LinuxGSM-installable mods", a false statement about a host that simply did
+# not answer. mods_available/mods_installed return None for exactly that case (files.py).
+_MODS_UNREADABLE = "Couldn't read this server's mods — the host didn't answer."
+
+
 def _mods_listing(app, gs):
     """The mods card's GET answer: what LinuxGSM offers, what is installed, and whether it can."""
-    available, installed, supported = [], [], True
     try:
         available, av_ok = mods_available(gs.remote, gs.short_name, gs.lgsm_name)
         installed, in_ok = mods_installed(gs.remote, gs.short_name, gs.lgsm_name)
-        supported = av_ok and in_ok   # this game has a LinuxGSM mods installer
     except Exception:
-        app.logger.debug("mods list failed", exc_info=True)  # unreachable host — return empties
+        app.logger.debug("mods list failed", exc_info=True)  # unreachable host
+        return jsonify({"error": _MODS_UNREADABLE})
+    if available is None or installed is None:
+        return jsonify({"error": _MODS_UNREADABLE})
+    supported = av_ok and in_ok   # this game has a LinuxGSM mods installer
     return jsonify({"available": available, "installed": installed, "supported": supported})
 
 

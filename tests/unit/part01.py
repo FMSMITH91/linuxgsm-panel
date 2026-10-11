@@ -1470,8 +1470,18 @@ def _cr_drive(fn, *a, **kw):
         os.remove(_dst)
     # `E=$(crontab -l 2>&1 >"$L")` since the rewrite keeps the listing's stderr to tell "no
     # crontab for" from a failed read (_core._rewrite_crontab).
+    # Both spellings must be there to replace, and no `crontab` may be left after: a replace()
+    # that silently matched nothing (`crontab -l 2>/dev/null`, `crontab -- "$T"`) would run the
+    # REAL crontab below, and install these fixture lines as this account's whole crontab — root's
+    # on CI's root leg. Refused instead, which fails whichever check drove it, by name.
+    if "crontab -l 2>&1" not in pipeline or 'crontab "$T"' not in pipeline:
+        return None, "pipeline shape changed, not run: %r" % pipeline[:160]
     pipeline = pipeline.replace("crontab -l 2>&1", "cat %s 2>&1" % _cr_shlex.quote(_src))
     pipeline = pipeline.replace('crontab "$T"', 'cp "$T" %s' % _cr_shlex.quote(_dst))
+    # In COMMAND position only: the pipeline's own messages ("could not read the crontab") and the
+    # "no crontab for" marker it matches `crontab -l`'s answer against name it as a word.
+    if re.search(r"(?:^|[;&|(`]|\$\()\s*crontab\b", pipeline):
+        return None, "a crontab call is left in the pipeline, not run: %r" % pipeline[:160]
     _r = _cr_sub.run(["bash", "-c", pipeline], capture_output=True, text=True)
     return (open(_dst, encoding="utf-8").read() if os.path.exists(_dst) else None), _r.stderr
 
@@ -1731,12 +1741,19 @@ try:
                                   advertise_routes="1.2.3.0/24; reboot", tags="tag:x; rm -rf /")
     _ts_up = [a for v, a in _ts_calls if v == "tailscale-up-key"]
     check("tailscale: the join goes through the verb, not a composed command", _ts_up, str(_ts_calls))
+    # One bad argument per check, the rest the known-good values below: with all three injected
+    # at once, check_args refused on the auth key first, so "routes" and "tags" passed with their
+    # own validators deleted.
+    _ts_good = ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"]
     for _i, _label in ((0, "auth_key"), (2, "routes"), (3, "tags")):
+        _ts_one = list(_ts_good)
+        if _ts_up:
+            _ts_one[_i] = _ts_up[0][_i]
         check("tailscale: an injected %s is refused by privileged.py, not quoted into a command"
               % _label,
               _ts_up and _ufw_raises_verb(
-                  lambda a=_ts_up[0]: _privmod.check_args("tailscale-up-key", a)),
-              str(_ts_up[:1]))
+                  lambda a=_ts_one: _privmod.check_args("tailscale-up-key", a)),
+              str(_ts_one))
     # And the clean case is accepted, so the validators are not simply refusing everything.
     check("tailscale: a well-formed key, route and tag ARE accepted",
           _privmod.check_args("tailscale-up-key",
@@ -2177,8 +2194,13 @@ try:
     _sm_core.run_command = lambda *a, **k: ("__OUTSIDE_HOME__", "", 9)
     check("stat_path: a path that escapes home is refused",
           _sm_files.stat_path(_FakeSrv(), "csgoserver", "escape") is None)
+    # Recorded, and answering a FILE: with the transport above still answering
+    # __OUTSIDE_HOME__, the result was None whether or not the traversal was sent.
+    _stat_cmds = []
+    _sm_core.run_command = lambda s, c, **k: (_stat_cmds.append(c), ("f 1", "", 0))[1]
+    _stat_tr = _sm_files.stat_path(_FakeSrv(), "csgoserver", "../../etc/passwd")
     check("stat_path: a traversal is refused before any command runs",
-          _sm_files.stat_path(_FakeSrv(), "csgoserver", "../../etc/passwd") is None)
+          _stat_tr is None and _stat_cmds == [], "%r after %s" % (_stat_tr, str(_stat_cmds)[:150]))
 
     class _FakeProc:
         """A Popen stand-in whose stdout hands back a fixed list of chunks."""

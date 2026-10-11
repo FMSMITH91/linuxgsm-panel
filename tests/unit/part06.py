@@ -427,6 +427,25 @@ finally:
 # only. This suite is not root, so the drop is a stub that RECORDS (to a file — it runs in the
 # forked child) and the accounts are a stub passwd mapping every name to this uid; "nodrop" is an
 # account whose drop does not take, "rootish" one with uid 0, "ghost" a /home dir with no account.
+def _r11d_skip_or_fail(label, exc):
+    """An OSError out of a fixture block: a SKIP only when the fixture raised it.
+
+    These blocks wrap their temp-dir setup AND the helper verbs in one `except OSError: skip()`,
+    so an OSError the verb under test raised — gzip.BadGzipFile, a FileNotFoundError it no longer
+    handles — was reported as an environment gap and the run still exited 0. One that came up
+    through the helper's own code is a failure, by name.
+    """
+    tb, files = exc.__traceback__, set()
+    while tb is not None:
+        files.add(os.path.realpath(tb.tb_frame.f_code.co_filename))
+        tb = tb.tb_next
+    if os.path.realpath(_helper_path) in files:
+        check("%s: the helper verb under test raised %s instead of answering"
+              % (label, type(exc).__name__), False, repr(exc))
+    else:
+        skip(label, exc)
+
+
 try:
     _scanroot = _tempfile.mkdtemp(prefix="panel-scan-")
     _scandisk = _tempfile.mkdtemp(prefix="panel-scan-disk-")
@@ -494,8 +513,15 @@ try:
           not any("bad" in h for h in _hits), str(_hits))
     check("content scan: serverfiles moved to another disk and linked back is found (as on a remote)",
           "HIT|moved|cstrike" in _hits, str(_hits))
-    check("content scan: a link to where the account cannot look reports nothing",
-          os.geteuid() == 0 or not any(h.startswith("HIT|locked|") for h in _hits), str(_hits))
+    # As root the stubbed drop does not really drop, so the probe reads the 0-mode directory and the
+    # property cannot be observed: a SKIP there, not a PASS line claiming a check that did not run.
+    _cs_unobservable = "the stubbed drop does not drop privilege under euid 0"
+    if os.geteuid() == 0:
+        skip("content scan: a link to where the account cannot look reports nothing",
+             _cs_unobservable)
+    else:
+        check("content scan: a link to where the account cannot look reports nothing",
+              not any(h.startswith("HIT|locked|") for h in _hits), str(_hits))
     check("content scan: a /home dir with no account, a uid-0 account, or a drop that did not take "
           "is not reported", not any(h.split("|")[1] in ("ghost", "rootish", "nodrop")
                                      for h in _hits), str(_hits))
@@ -508,8 +534,13 @@ try:
         ("srcds", "cstrike"), ("moved", "cstrike"), ("gmodserver", "hl2"), ("locked", "cstrike"),
         ("ghost", "cstrike"), ("nodrop", "cstrike"), ("rootish", "cstrike")))
     check("content-game-present: present, present through the account's own link, absent, absent "
-          "past a place it cannot look, absent with no account; 2 (unknown) when it cannot be asked",
-          _cp_got == (0, 0, 1, 0 if os.geteuid() == 0 else 1, 1, 2, 2), repr(_cp_got))
+          "with no account; 2 (unknown) when it cannot be asked",
+          _cp_got[:3] + _cp_got[4:] == (0, 0, 1, 1, 2, 2), repr(_cp_got))
+    if os.geteuid() == 0:
+        skip("content-game-present: absent past a place the account cannot look", _cs_unobservable)
+    else:
+        check("content-game-present: absent past a place the account cannot look",
+              _cp_got[3] == 1, repr(_cp_got))
     _cs_got = tuple(_hs.do_content_script_present([_u, _sc], None) for _u, _sc in (
         ("srcds", "cssserver"), ("moved", "cssserver"), ("srcds", "notexec"), ("nodrop", "cssserver")))
     check("content-script-present: an executable is present, directly or through the account's own "
@@ -524,7 +555,7 @@ try:
     _shutil.rmtree(_scanroot, ignore_errors=True)
     _shutil.rmtree(_scandisk, ignore_errors=True)
 except OSError as _e:
-    skip("content scan", _e)
+    _r11d_skip_or_fail("content scan", _e)
 
 
 # ── the detached OS-update runner ─────────────────────────────────────────────────────────────
@@ -743,7 +774,7 @@ try:
           "PasswordAuthentication no" in open(_hh.SSHD_CONFIG).read())
     _shutil.rmtree(_hdir, ignore_errors=True)
 except OSError as _e:
-    skip("sshd hardening", _e)
+    _r11d_skip_or_fail("sshd hardening", _e)
 
 # The swap shell form had a precedence bug. `a && b && c && grep -q … || echo … >> /etc/fstab`
 # parses as `((a && b) && c && grep) || echo`, so the fstab line was appended whenever ANY step
@@ -872,7 +903,7 @@ try:
     os.remove(_vanished)
     _shutil.rmtree(_logdir, ignore_errors=True)
 except OSError as _e:
-    skip("f2b log read", _e)
+    _r11d_skip_or_fail("f2b log read", _e)
 
 
 # ── isdigit() is not "int() will accept this" ─────────────────────────────────────────────────
@@ -1053,8 +1084,6 @@ for _ok in ("/", "/panel", "/a/b/c", "/x.y_z-1", "/" + "a" * 32):
     eq("privileged: _ts_mount(%r) is unchanged in value" % _ok, _priv._ts_mount(_ok), _ok)
     check("privileged: _ts_mount(%r) returns characters from the literal alphabet only" % _ok,
           all(c in _priv._MOUNT_ALPHABET for c in _priv._ts_mount(_ok)))
-check("privileged: _ts_mount does not hand back the caller's own object",
-      _priv._ts_mount("".join(["/", "panel"])) is not None)
 _mnt_in = "".join(["/", "p", "a", "n", "e", "l"])          # built at runtime, not interned
 check("privileged: _ts_mount's result is a NEW string, not the input object",
       _priv._ts_mount(_mnt_in) is not _mnt_in)
@@ -4628,7 +4657,9 @@ check("codeql: the SARIF is uploaded only when the analyze step, the database ch
       _cq_up_if is not None and -1 not in _cq_order and _cq_order == sorted(_cq_order)
       and [_x.strip() for _x in _cq_up_if.group(1).split("&&")]
       == ["success()", "steps.analyze.outcome == 'success'", "steps.extracted.outcome == 'success'",
-          "steps.sarif.outcome == 'success'"]
+          "steps.sarif.outcome == 'success'",
+          # ...and not from a scheduled run whose commit main has moved past (part26)
+          "steps.still_head.outputs.current != 'false'"]
       and "always()" not in _cq_code and "cancelled()" not in _cq_code
       and "continue-on-error" not in _cq_code, _cq_up[:200])
 check("codeql: ...and a SARIF that lists no rules, or reports an unsuccessful invocation, fails the "
@@ -6383,9 +6414,9 @@ _mw_call = _mw_src[_mw_src.index("def __call__"):]
 check("prefix header: __call__ gates the header read on _may_trust_header",
       "_may_trust_header" in _mw_call
       and _mw_call.index("_may_trust_header") < _mw_call.index("if not prefix"))
-# Loopback ALONE is no longer enough: any local account can dial it. The header is believed from a
-# loopback peer only when root owns its socket (tailscaled); tests/unit/part02.py drives that
-# against a socket table. Here there is no socket to own, so loopback reads False.
+# Loopback is not enough: any local account can dial it. The header is believed only when the
+# operator has declared a reverse proxy with trust_proxy (_may_trust_header reads nothing else), so
+# every peer, loopback included, reads False without it.
 for _ra, _cfg, _want in (("127.0.0.1", {}, False), ("::1", {}, False),
                          ("203.0.113.7", {}, False), ("10.1.2.3", {}, False),
                          ("", {}, False),
@@ -7856,13 +7887,16 @@ try:
             lambda *a, **k: None)
         eq("prefix: %r is routed as %r" % (_path, _want[1]), _pm_seen[-1], _want)
     # ...and a hostile header, all the way through __call__ — not just through _clean_prefix,
-    # which a test can call while the middleware has stopped calling it.
+    # which a test can call while the middleware has stopped calling it. With trust_proxy ON:
+    # _may_trust_header reads only that, so without it the header was never read and SCRIPT_NAME
+    # was "/panel" with _clean_prefix deleted. Trusted, only _clean_prefix can refuse it.
+    _o_lc.load_config = lambda: {"tailscale_mount": "/panel", "trust_proxy": True}
     for _hostile in ("//evil.example", "https://evil.example"):
         _pm_seen.clear()
         _pm({"PATH_INFO": "/login", "REMOTE_ADDR": "127.0.0.1", "SCRIPT_NAME": "",
              "HTTP_X_FORWARDED_PREFIX": _hostile}, lambda *a, **k: None)
         check("prefix: X-Forwarded-Prefix %r never becomes SCRIPT_NAME" % _hostile,
-              _pm_seen and _pm_seen[-1][0] != _hostile, str(_pm_seen[-1:]))
+              _pm_seen and _pm_seen[-1][0] == "/panel", str(_pm_seen[-1:]))
 finally:
     _o_lc.load_config = _pm_o_cfg
 
@@ -10265,6 +10299,10 @@ check("socket: ...it registers a hook instead",
 import importlib as _il6
 _hooks_mod = _il6.import_module("panel.ops.socket_hooks")
 _seen6 = []
+# Put back below: left registered, the raising lambda and _second_hook ran on every later socket
+# disconnect in the run (a traceback each time), and the "<lambda>" key stood in for any lambda a
+# later check registered.
+_hooks_saved6 = dict(_hooks_mod._hooks)
 _hooks_mod.add_disconnect_hook(lambda sid: (_ for _ in ()).throw(RuntimeError("boom")))
 def _second_hook(sid): _seen6.append(sid)
 _hooks_mod.add_disconnect_hook(_second_hook)
@@ -10276,6 +10314,11 @@ _seen6.clear()
 _hooks_mod.run_disconnect_hooks("sid-2")
 check("socket: registering the same hook twice does not run it twice", _seen6 == ["sid-2"],
       f"ran {len(_seen6)} times: {_seen6}")
+_hooks_mod._hooks.clear()
+_hooks_mod._hooks.update(_hooks_saved6)
+check("socket: (cleanup) the hooks registered above are gone again",
+      "<lambda>" not in _hooks_mod._hooks and _second_hook not in _hooks_mod._hooks.values(),
+      repr(sorted(_hooks_mod._hooks)))
 
 # ── a closed browser must take the shell with it, even when SIGHUP is ignored ─────────────────
 # The teardown sent one SIGHUP to the process group and moved on. An ignored signal disposition
@@ -11468,11 +11511,15 @@ try:
     _after7 = _open_fds7()
 finally:
     _tsmod7.subprocess.Popen = _saved_popen7
-check("terminal: a shell that fails to start leaks no descriptors",
-      _before7 is None or _after7 is None or _after7 <= _before7 + 1,
-      "five failed opens took the process from %s to %s open descriptors — two per attempt is a "
-      "pty pair and a /dev/pts device each time, and the operator's answer to 'could not start a "
-      "shell' is to click again" % (_before7, _after7))
+if _before7 is None or _after7 is None:      # no /proc/self/fd here: a SKIP, never a pass
+    skip("terminal: a shell that fails to start leaks no descriptors",
+         "cannot list this process's descriptors (/proc/self/fd)")
+else:
+    check("terminal: a shell that fails to start leaks no descriptors",
+          _after7 <= _before7 + 1,
+          "five failed opens took the process from %s to %s open descriptors — two per attempt is "
+          "a pty pair and a /dev/pts device each time, and the operator's answer to 'could not "
+          "start a shell' is to click again" % (_before7, _after7))
 check("terminal: ...and leaves no session registered either",
       _tsmod7.count() == 0, "sessions left behind: %d" % _tsmod7.count())
 
