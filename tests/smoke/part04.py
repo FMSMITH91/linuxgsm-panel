@@ -234,17 +234,39 @@ def _count_query(*_a, **_k):
 
 
 _orig_rc = _sm_core.run_command
-_sm_core.run_command = lambda *a, **k: ("", "", 0)   # port scan: no real SSH, no matches
+# The port scan: no real SSH, and a FRAMED answer. An empty one is not "nothing listening": since
+# _remote_listening_ports reads "" as a blip (None), every poll measured below skipped every host
+# (`if ports is None: continue`) — no status flips, no _apply_status_flips, so the per-server write
+# this budget guards was never inside the count, and the install-status check further down could
+# not fail. Each _qcount poll alternates whether the first five game ports listen, so every
+# measured poll flips five servers per host one way or the other.
+_scan_r13d = {"up": False}
+
+
+def _rc_scan_r13d(*_a, **_k):
+    if not _scan_r13d["up"]:
+        return ("0.0.0.0:22", "", 0)
+    return ("0.0.0.0:22\n" + "\n".join("0.0.0.0:%d" % (27100 + _g) for _g in range(5)), "", 0)
+
+
+_sm_core.run_command = _rc_scan_r13d
 _sa_event.listen(_engine, "after_cursor_execute", _count_query)
 try:
     def _qcount(path, client=None):
         _sm_mod._port_scan_cache.clear()   # force the (stubbed) scan each time, for consistency
+        _scan_r13d["up"] = not _scan_r13d["up"]
         _Q["n"] = 0
         resp = (client or c).get(path)
         return _Q["n"], resp.status_code
 
     c.get("/api/servers")                  # warm one-time caches so the count is steady
     _api_q, _api_code = _qcount("/api/servers")
+    with app.app_context():
+        _flipped_r13d = GameServer.query.filter(GameServer.name.like("qc%"),
+                                                GameServer.status == "online").count()
+    # Setup: the measured poll really scanned and wrote — 5 hosts x 5 listening ports came up.
+    check("perf: (setup) the measured /api/servers poll scanned the hosts and flipped statuses",
+          _flipped_r13d == 25, "%d qc servers online after the poll" % _flipped_r13d)
     _dash_q, _dash_code = _qcount("/")
     check("perf: /api/servers renders with 50 servers", _api_code == 200, "got %d" % _api_code)
     check("perf: /api/servers query count is host-bounded, not per-server (no N+1)",
@@ -325,9 +347,9 @@ try:
         _dmapp.host_live_metrics = _sv_slm2
 
     # Regression: the /api/servers status poll must NOT clobber an in-progress install's
-    # status. The port scan (stubbed empty here) finds nothing listening for a still-installing
-    # server, so the old code flipped "installing" -> "offline" — which made the progress row
-    # vanish and show "Not installed" the moment you navigated back to the page.
+    # status. The port scan (stubbed: a framed answer with 27099 not listening) finds nothing for a
+    # still-installing server, so the old code flipped "installing" -> "offline" — which made the
+    # progress row vanish and show "Not installed" the moment you navigated back to the page.
     with app.app_context():
         _rid = RemoteServer.query.first().id
         _inst = GameServer(remote_id=_rid, name="inst-cs", short_name="instcs",
@@ -339,6 +361,9 @@ try:
     c.get("/api/servers")   # the poll that reconcileServerList / the dashboard fires
     with app.app_context():
         _after_status = db.session.get(GameServer, _inst_id).status
+    # Setup: the host was scanned (a failed scan skips the host, and the guard below with it).
+    check("install: (setup) the poll really scanned the installing server's host",
+          _rid in _sm_mod._port_scan_cache, repr(sorted(_sm_mod._port_scan_cache)))
     check("install: /api/servers poll does NOT clobber an installing server's status",
           _after_status == "installing", "status became %r after the poll" % _after_status)
 finally:
