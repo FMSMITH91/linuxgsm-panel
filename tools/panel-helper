@@ -1882,23 +1882,29 @@ def _r13b_sudoers_file_lines(path, seen, depth):
     for line in _sudoers_logical_lines(text):
         m = _SUDOERS_INCLUDE_RE.fullmatch(line)
         if m:
-            target = m.group(2).strip()
-            if target.startswith('"') and target.endswith('"'):
-                target = target[1:-1]
-            if "%" in target or "\\" in target:
-                raise ValueError("an include path with escapes or %%h: %s" % target)
-            if not os.path.isabs(target):
-                target = os.path.join(os.path.dirname(path), target)
-            if m.group(1):
-                for name in sorted(os.listdir(target)):
-                    # sudo skips these in an includedir, and so may we: they are not policy.
-                    if name.endswith("~") or "." in name:
-                        continue
-                    out.extend(_sudoers_lines(os.path.join(target, name), seen, depth + 1))
-            else:
-                out.extend(_sudoers_lines(target, seen, depth + 1))
+            out.extend(_r13b_included_lines(m, path, seen, depth))
             continue
         out.append(line)
+    return out
+
+
+def _r13b_included_lines(m, path, seen, depth):
+    """The lines one @include / @includedir directive (`m`, in file `path`) pulls in."""
+    target = m.group(2).strip()
+    if target.startswith('"') and target.endswith('"'):
+        target = target[1:-1]
+    if "%" in target or "\\" in target:
+        raise ValueError("an include path with escapes or %%h: %s" % target)
+    if not os.path.isabs(target):
+        target = os.path.join(os.path.dirname(path), target)
+    if not m.group(1):
+        return _sudoers_lines(target, seen, depth + 1)
+    out = []
+    for name in sorted(os.listdir(target)):
+        # sudo skips these in an includedir, and so may we: they are not policy.
+        if name.endswith("~") or "." in name:
+            continue
+        out.extend(_sudoers_lines(os.path.join(target, name), seen, depth + 1))
     return out
 
 
