@@ -224,16 +224,30 @@ _osv56 = [_r.replace("\\\n", "") for _r in
           _re56.findall(r'^reason\s*=\s*"""(.*?)"""', _read56(_root, "tools", "gamedig", "osv-scanner.toml"),
                         _re56.S | _re56.M)]
 _lock56 = _json56.loads(_read56(_root, "tools", "gamedig", "package-lock.json"))["packages"]
-_stale56 = []
-for _e56 in _osv56:
-    for _pkg56, _ver56 in _re56.findall(r"->\s+([@a-z0-9._/-]+)\s+(\d+\.\d+\.\d+)", _e56):
-        _have56 = (_lock56.get("node_modules/" + _pkg56) or {}).get("version")
-        if _have56 != _ver56:
-            _stale56.append((_pkg56, _ver56, _have56))
-_named56 = sum(len(_re56.findall(r"->\s+[@a-z0-9._/-]+\s+\d", _e)) for _e in _osv56)
+
+
+def _stale_versions56(reasons):
+    """Each "-> name version" a reason names that the lockfile does not install, as (name, named, locked)."""
+    out = []
+    for _e in reasons:
+        for _pkg, _ver in _re56.findall(r"->\s+([@a-z0-9._/-]+)\s+(\d+\.\d+\.\d+)", _e):
+            _have = (_lock56.get("node_modules/" + _pkg) or {}).get("version")
+            if _have != _ver:
+                out.append((_pkg, _ver, _have))
+    return out
+
+
+# The file may hold no ignores at all (the GHSA-ch52 one was removed once 4.3.0 left its range), so
+# the real read can be empty; the control below keeps the reader honest whether or not it is.
+_stale56 = _stale_versions56(_osv56)
 check("gamedig osv-scanner: every package version an ignore's reason names is the one the lockfile "
       "installs (the reason still named http-cache-semantics 4.2.0 after the lock moved to 4.3.0)",
-      _named56 >= 2 and not _stale56, repr((_named56, _stale56)))
+      not _stale56, repr((len(_osv56), _stale56)))
+_ctl56 = _stale_versions56(["here only as got 13.0.0 -> cacheable-request 10.2.14 -> "
+                            "http-cache-semantics 4.2.0 (reviewed)"])
+check("gamedig osv-scanner: ...a reason naming a version the lock does not install IS caught (control: "
+      "the #417 text naming http-cache-semantics 4.2.0 against the locked 4.3.0)",
+      ("http-cache-semantics", "4.2.0", "4.3.0") in _ctl56, repr(_ctl56))
 
 
 # ── js_coverage: the 375px rename flow's cleanup cannot swallow its own failed check ─────────────
