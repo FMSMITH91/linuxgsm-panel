@@ -54,6 +54,7 @@ noise docs/
 noise tests/
 noise tools/
 noise .vscode/
+noise .claude/
 noise .clusterfuzzlite/
 noise *.md
 noise LICENSE

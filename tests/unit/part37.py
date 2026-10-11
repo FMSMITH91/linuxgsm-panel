@@ -723,6 +723,15 @@ def _v2_update_paths():
           "runtime?: %r" % {p: v for p, v in got.items() if v != want[p]})
 
 
+def _claude_settings_noise37():
+    """A change to the repo's Claude Code settings is not a panel update: no host runs .claude/."""
+    rules = _so37._parse_update_paths(_read29(".github", "update-paths.txt")) or {}
+    got = {p: _so37._is_runtime_path(p, rules) for p in (".claude/settings.json", "panel/__init__.py")}
+    check("update card: a commit touching only .claude/ offers no panel an update (#419's settings "
+          "file read as runtime, since a path on neither list counts as runtime), while panel/ still does",
+          bool(rules) and got == {".claude/settings.json": False, "panel/__init__.py": True}, repr(got))
+
+
 # ── V3: gitleaks' Telegram rule, and part05's fixture shape ──────────────────────────────────────
 _TG_RULE_ID37 = "telegram-bot-token-any-context"
 _TG_PLACES37 = {
@@ -1104,6 +1113,7 @@ _v2_socketio(_PJ37, _LOCK37)
 _v2_embedded(_PJ37, _LOCK37)
 _v2_asset_urls()
 _v2_update_paths()
+_claude_settings_noise37()
 _v3_rule()
 _v3_allowlist()
 _v3_fixture_shape()
