@@ -77,7 +77,7 @@ def _sanitize_slotnum(s):
     return n if (n is not None and 0 <= n <= 128) else None
 
 
-def capture_console(server, user, selfname=None, lines=180):
+def capture_console(server, user, selfname=None, lines=180, since=None):
     """Read-only snapshot of the last `lines` of a LinuxGSM instance's live tmux console.
 
     Used to read a `status`/`list` reply back. rc 3 + NO_SESSION when the server isn't running.
@@ -94,9 +94,25 @@ def capture_console(server, user, selfname=None, lines=180):
     and eleven were gone. That count feeds the Players panel, the empty-server notification and
     reboot-when-empty, and the ids moderation acts on. Five players with ordinary names is enough
     to cross 80 columns.
+
+    since=(history_size, cursor_y), the PANE_MARK a marked send printed: capture from that row on,
+    and nothing above it — the reply to that send, never an older one. The row's number is
+    history_size + cursor_y; tmux keeps it until its history is full, and then drops
+    history_limit/10 rows at once (grid_collect_history), which shows as a history_size that went
+    DOWN. Counting a drop that did not happen, or missing a second one, only starts the capture
+    later, inside what is new: a reply cut short reads as unknown, never as an old table.
     """
     selfname = selfname or user
-    inner = _core._tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" capture-pane -p -J -t {selfname} -S -{int(lines)}'
+    if since is not None:
+        hs, cy = int(since[0]), int(since[1])
+        start = (f'set -- $(tmux -L "$SOCK" display -p -t {selfname} "#{{history_size}} #{{history_limit}}"); '
+                 '[ -n "$2" ] || exit 4; '
+                 f's=$(( {hs} + {cy} - $1 )); '
+                 f'if [ "$1" -lt {hs} ]; then t=$(( $2 / 10 )); [ "$t" -ge 1 ] || t=1; s=$(( s - t )); fi; ')
+        inner = (_core._tmux_live_socket_sh(selfname) + start
+                 + f'tmux -L "$SOCK" capture-pane -p -J -t {selfname} -S "$s"')
+    else:
+        inner = _core._tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" capture-pane -p -J -t {selfname} -S -{int(lines)}'
     return _core.shell_as_game_user(server, user, inner, timeout=15, selfname=selfname)
 
 
@@ -314,6 +330,10 @@ def _send_rc(result):
     return result[2] if isinstance(result, tuple) and len(result) >= 3 else 1
 
 
+# What send_console_command(mark=True) prints before it types: the pane's history_size, cursor_y.
+_R13B_PANE_MARK_RE = re.compile(r"^PANE_MARK (\d{1,9}) (\d{1,6})(?:\n|\Z)", re.M)
+
+
 def _send_and_capture(server, user, eng, selfname):
     """Send the engine's player-list command and capture the reply: (out, rc), or None.
 
@@ -331,22 +351,70 @@ def _send_and_capture(server, user, eng, selfname):
         # table — parsed and returned as the answer to a question the server was never asked:
         # players who had already disconnected, with their SteamIDs, on rows whose Ban fans out
         # fleet-wide and into GlobalBan. Same idiom moderate() and console_steamid_ban() use.
-        _sent = _core.send_console_command(server, user, cmd, timeout=12, selfname=selfname)
+        #
+        # And only what the pane printed AFTER the send. A send that worked with a reply slower
+        # than 0.8s (a map change, a load spike) left the capture holding the previous `status`
+        # table — the background poller sends one every pass — and the parsers take the LAST
+        # table, so that one was returned as current: players who had left, and a Ban by name
+        # resolved to whoever held that name before. The send prints where the pane stood just
+        # before it typed (mark=True), and the capture starts there: no reply yet is no table,
+        # which is unknown.
+        _sent = _core.send_console_command(server, user, cmd, timeout=12, selfname=selfname,
+                                           mark=True)
         if _send_rc(_sent) != 0:
             return None
+        mark = _R13B_PANE_MARK_RE.search(_sent[0] or "")
+        if mark is None:
+            return None
         time.sleep(0.8)   # let the server print its reply into the pane before we capture it
-        out, _, rc = capture_console(server, user, selfname=selfname, lines=180)
+        out, _, rc = capture_console(server, user, selfname=selfname,
+                                     since=(int(mark.group(1)), int(mark.group(2))))
     except Exception:
         return None
     return out, rc
 
 
-def _parse_player_reply(eng, out):
-    """Parse a captured player-list reply with the engine's own parser."""
+# A valve reply's own count, printed above its table: "players : 2 humans, 1 bots (24 max)"
+# (Source), "players : 2 active (32 max)" (GoldSrc), "players : 2 (24 max)" (Garry's Mod).
+_R13B_VALVE_COUNT_RE = re.compile(
+    r"\s*players\s*:\s*(\d+)\s+(?:humans?\s*,\s*(\d+)\s+bots?|active\b|\(\d+\s+max\))", re.I)
+
+
+def _r13b_reply_complete(eng, out):
+    """Whether a capture holds a whole valve/idTech3 reply: its table header, and for valve no
+    fewer rows than its own `players :` line counts.
+
+    The capture is only what the pane printed after the send (capture_console's `since`), so a
+    reply that has not arrived has no header — and the parsers read rows with no header as a
+    table that starts at the top, which made "no reply yet" an empty server. A valve reply caught
+    part-way through printing had nothing to check it against, unlike Minecraft's (whose count
+    _parse_minecraft_list compares): a short player list, read as the whole one.
+    """
+    lines = (out or "").splitlines()
     if eng == "idtech3":
-        return _parse_idtech3_status(out)
+        return _idtech3_table_start(lines) > 0
+    head = None
+    for i, ln in enumerate(lines):
+        if "uniqueid" in ln.lower() and not _VALVE_ROW_RE.match(ln):
+            head = i
+    if head is None:
+        return False
+    for ln in reversed(lines[:head]):
+        m = _R13B_VALVE_COUNT_RE.match(ln)
+        if m:
+            return len(_parse_valve_status(out)) >= int(m.group(1)) + int(m.group(2) or 0)
+    return True
+
+
+def _parse_player_reply(eng, out):
+    """Parse a captured player-list reply with the engine's own parser; None when the capture
+    holds no complete reply (_r13b_reply_complete)."""
     if eng == "minecraft":
         return _parse_minecraft_list(out)
+    if not _r13b_reply_complete(eng, out):
+        return None
+    if eng == "idtech3":
+        return _parse_idtech3_status(out)
     return _parse_valve_status(out)
 
 
@@ -823,8 +891,13 @@ def ensure_persistent_bans(server, user, selfname):
                  or "%s.cfg" % selfname)
         if not re.match(r"^[A-Za-z0-9_.-]+\.cfg\Z", fname):     # guard the value going into `find`
             fname = "%s.cfg" % selfname
+        # The home by its path, not `~`: `sudo -u` keeps the caller's HOME wherever a sudoers
+        # env_keep holds it, and then this searched the panel account's own home, found nothing
+        # and answered False — bans left unpersisted with only that False to say so. The game
+        # account's home is /home/<account> by construction (cron.py's runner says the same).
+        home = _core._quote("/home/%s/serverfiles" % user)
         inner = (
-            f"F=$(find ~/serverfiles -maxdepth 4 -path '*/cfg/{fname}' 2>/dev/null | head -1); "
+            f"F=$(find {home} -maxdepth 4 -path '*/cfg/{fname}' 2>/dev/null | head -1); "
             '[ -z "$F" ] && exit 1; '
             'grep -qiE "^[[:space:]]*exec[[:space:]]+banned_user" "$F" && exit 0; '
             'printf "\\n// panel: load persistent bans on every (re)start\\n'

@@ -2685,7 +2685,7 @@ def _tmux_live_socket_sh(selfname):
     )
 
 
-def send_console_command(server, user, command, timeout=20, selfname=None):
+def send_console_command(server, user, command, timeout=20, selfname=None, mark=False):
     """Inject a command into a LinuxGSM instance's live console.
 
     LinuxGSM runs every server inside a tmux session named `<selfname>` on a
@@ -2693,6 +2693,10 @@ def send_console_command(server, user, command, timeout=20, selfname=None):
     with `tmux send-keys`, which works for EVERY game — including ones (e.g. cod)
     that don't expose LinuxGSM's own `send` subcommand. Returns rc 3 with
     NO_SESSION when the server isn't running (no tmux session to send to).
+
+    mark=True prints `PANE_MARK <history_size> <cursor_y>` first, in the same round trip: where
+    the pane stood just before the command was typed, so a capture can read only what came after
+    (game.capture_console's `since`).
     """
     selfname = selfname or user
     # The same guard run_as_game_user applies, for the same reason it gives at length: the model's
@@ -2707,7 +2711,10 @@ def send_console_command(server, user, command, timeout=20, selfname=None):
     if not game_idents_ok(user, selfname):
         _log.warning("refusing to send to an unsafe account/script name")
         return GAME_ACCOUNT_REFUSED
-    inner = _tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" send-keys -t {selfname} {_quote(command)} Enter'
+    pos = (f'tmux -L "$SOCK" display -p -t {selfname} "PANE_MARK #{{history_size}} #{{cursor_y}}" && '
+           if mark else '')
+    inner = (_tmux_live_socket_sh(selfname) + pos
+             + f'tmux -L "$SOCK" send-keys -t {selfname} {_quote(command)} Enter')
     return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
 
 
