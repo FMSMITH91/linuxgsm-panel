@@ -7,7 +7,7 @@ from flask_login import (current_user, login_required)
 from panel.core.config import (load_config)
 from panel.core.panel_state import (_os_update_seen)
 from panel.db.models import (GameServer, RemoteServer, db)
-from panel.ops import (system_ops as so)
+from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_game_ports,
     host_specs, remote_os_run_updates, remote_os_update_start, remote_os_update_status,
     remote_public_ssh_status, remote_reboot_required, remote_set_public_ssh,
@@ -505,7 +505,7 @@ def _register_panel_port(app):
                 # and force-deleted as though it were letting traffic in.
                 if (not g.get("is_iface") and str(g.get("port_num", "")) == str(port)
                         and g.get("action", "ALLOW") in ("ALLOW", "LIMIT")
-                        and g.get("direction", "IN") != "OUT"):
+                        and (g.get("direction") or "IN") == "IN"):   # a FWD rule is no way in
                     nums.extend((n, g.get("key")) for n in g.get("nums", []))
             return sorted(set(nums), reverse=True), True   # highest first so numbering stays valid
 
@@ -528,9 +528,16 @@ def _register_panel_port(app):
         # A verify read that FAILED cannot say the port is closed either.
         ok = _verify_ok and not _left
         log_action(current_user, "close_panel_port", target=str(port), success=ok, remote=remote)
-        return jsonify({"success": ok, "message": (
-            f"Public port {port} closed — the panel is now reachable only over your tailnet."
-            if ok else f"Couldn't remove every rule for port {port}; check the firewall page.")})
+        if not ok:
+            return jsonify({"success": False, "message": (
+                f"Couldn't remove every rule for port {port}; check the firewall page.")})
+        # "Only over your tailnet" is false while the panel's Serve route is on Funnel.
+        if ts.panel_funnel_facts(load_config())["funnelled"]:
+            return jsonify({"success": True, "message": (
+                f"Public port {port} closed. Funnel is on for the panel's Tailscale Serve address, "
+                f"so the panel is still reachable from the internet through it.")})
+        return jsonify({"success": True, "message": (
+            f"Public port {port} closed — the panel is now reachable only over your tailnet.")})
 
 
 def _rv_on_panel_host(gs):
@@ -956,8 +963,11 @@ def _register_host_pages(app):
         # consumes it is local-only. The template's `{% if status and … %}` / `… if status else …`
         # forms already handle an explicit None for every remote.
         status = so.get_server_status() if remote.is_local else None
+        cfg = load_config()
+        # Whether the panel is on Funnel (so "tailnet-only" may not be said): local host only.
+        funnel_facts = ts.panel_funnel_facts(cfg) if remote.is_local else None
         return render_template("remote_manage.html", remote=remote, games=games,
-                               status=status, config=load_config())
+                               status=status, config=cfg, funnel_facts=funnel_facts)
 
     @app.route("/api/remote/<int:remote_id>/specs")
     @login_required

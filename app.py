@@ -3258,6 +3258,28 @@ def _boot_serve(app, cfg, port):
     if app.config["BOOT_SERVE"] == "ok":
         app.config["BOOT_SERVE_LEFTOVERS"] = _remove_serve_leftovers(
             port, mount, "at boot", lambda detail, ok: _boot_audit(app, detail, ok))
+        _boot_shared_funnel(app, cfg, port)
+
+
+def _boot_shared_funnel(app, cfg, port):
+    """Put on record a panel the boot left on Funnel, against its own setting, for another app.
+
+    Funnel is per listener, and the re-point keeps the shared :443 listener's Funnel as it is
+    (setup_tailscale_serve's keep_shared_funnel) rather than take the other app off the internet.
+    With it on and tailscale_use_funnel off, the panel is reachable from the internet; read back
+    from the host, and said in the audit log, not only in a log line.
+    """
+    try:
+        others = ts.shared_funnel_apps(ts.get_tailscale_info().serve_config, port,
+                                       cfg.get("tailscale_use_funnel", False))
+    except Exception:
+        _log.debug("shared-Funnel read at boot failed", exc_info=True)
+        return
+    if others:
+        _boot_audit(app, "at boot: Funnel is on for the whole :443 listener because %s uses it, so "
+                         "the panel is reachable from the internet too, although its own Funnel "
+                         "setting is off" % ts._r12a_apps_at(others), True,
+                    action="tailscale_serve_funnel_shared")
 
 
 def _ts_backend_scheme(cfg):

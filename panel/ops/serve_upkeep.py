@@ -34,12 +34,11 @@ def _panel_tailscale_url(conf, stored, scheme_now):
     return ts.route_url(route) if route is not None else None
 
 
-def _boot_audit(flask_app, detail, ok):
+def _boot_audit(flask_app, detail, ok, action="tailscale_serve_leftover_removed"):
     """One audit row from boot, outside any request (as _f2b_record_events writes its rows)."""
     try:
         with flask_app.test_request_context():
-            log_action(None, "tailscale_serve_leftover_removed", target=LOCAL_HOST_LABEL,
-                       detail=detail, success=ok)
+            log_action(None, action, target=LOCAL_HOST_LABEL, detail=detail, success=ok)
     except Exception:
         _log.debug("boot audit row not written", exc_info=True)
 

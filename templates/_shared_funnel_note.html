@@ -1,0 +1,11 @@
+{% if shared_funnel %}
+{# Funnel is per listener: the panel shares :443 with an app that uses it, so it is public
+   although its own Funnel setting is off (tailscale_integration.shared_funnel_apps). The mounts
+   are <code> (never translated); the words around them are their own text nodes. #}
+<div class="alert alert-warning small py-2 mb-2" role="status" data-shared-funnel>
+  <i class="bi bi-globe2" aria-hidden="true"></i>
+  <span>Funnel is on for the whole :443 listener because it is used by</span>
+  {% for m in shared_funnel %}<span>the app at</span> <code>{{ m }}</code>{% if not loop.last %}, {% endif %}{% endfor %}<span>, so the panel is reachable from the internet too.</span>
+  <span>Turn Funnel off for that app, or move the panel to another port, to make it tailnet-only.</span>
+</div>
+{% endif %}

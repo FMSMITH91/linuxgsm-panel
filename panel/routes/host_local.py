@@ -8,7 +8,7 @@ from flask_login import (current_user, login_required)
 from panel.core.clock import (utcnow)
 from panel.core.config import (DB_PATH, load_config)
 from panel.db.models import (LOCAL_HOST_LABEL, RemoteServer, db)
-from panel.ops import (system_ops as so)
+from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.security import banlist as _banlist
 from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
@@ -68,8 +68,9 @@ def _register_server_management(app):
         # (no network) — hand that to the shared snapshot so the banner reflects it immediately
         # rather than waiting for the next daily sweep.
         _os_update_note(local, status.get("updates") or {})
-        return render_template("remote_manage.html", remote=local, status=status,
-                               config=load_config())
+        cfg = load_config()
+        return render_template("remote_manage.html", remote=local, status=status, config=cfg,
+                               funnel_facts=ts.panel_funnel_facts(cfg))
 
     @app.route("/api/server-management")
     @login_required

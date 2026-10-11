@@ -221,5 +221,6 @@
   "The archive is built while it downloads, so the total size is not known in advance — a big folder like serverfiles can run to many gigabytes.": "L'archive est créée pendant le téléchargement, donc sa taille totale n'est pas connue à l'avance — un gros dossier comme serverfiles peut atteindre plusieurs gigaoctets.",
   "This folder links outside the account's home, so the file browser cannot open it.": "Ce dossier pointe en dehors du répertoire personnel du compte, le navigateur de fichiers ne peut donc pas l'ouvrir.",
   "Invalid path": "Chemin invalide",
-  "Permission denied": "Permission refusée"
+  "Permission denied": "Permission refusée",
+  "The public panel port is already closed, but Funnel is on, so the panel is still reachable from the internet.": "Le port public du panneau est déjà fermé, mais Funnel est activé : le panneau reste accessible depuis Internet."
 }
