@@ -76,13 +76,27 @@ def _guard_chain(view):
     return chain
 
 
+def rule_of(key):
+    """The rule path in a snapshot key ("GET,POST /path" -> "/path")."""
+    return key.split(" ", 1)[1]
+
+
 def snapshot(app):
-    """Map every rule to its endpoint, its methods and the guard chain around its view."""
+    """Map every rule to its endpoint, its methods and the guard chain around its view.
+
+    Keyed by METHODS AND PATH, not the path alone: one path can carry several rules (GET
+    /api/tags is api_tags_list, POST /api/tags api_tags_create), and keyed by path the last one
+    registered silently replaced the others — the baseline held no GET /api/tags at all, so
+    dropping its login_required, renaming it or deleting it passed this gate.
+    """
     out = {}
     for rule in app.url_map.iter_rules():
         methods = sorted((rule.methods or set()) - {"HEAD", "OPTIONS"})
         view = app.view_functions.get(rule.endpoint)
-        out[str(rule)] = {
+        key = "%s %s" % (",".join(methods), rule)
+        if key in out:
+            raise RuntimeError("two rules share %r — the snapshot cannot tell them apart" % key)
+        out[key] = {
             "endpoint": rule.endpoint,
             "methods": methods,
             "guards": _guard_chain(view) if view is not None else ["<missing view>"],
@@ -129,7 +143,10 @@ def _docstring_drift(current):
     problems = []
     _doc = (pathlib.Path(__file__).resolve().parent.parent / "app.py").read_text(
         encoding="utf-8").split('"""')[1]
-    _live = {re.sub(r"<[^>]+>", "<>", r): meta for r, meta in current.items()}
+    _live = {}
+    for _key, _meta in current.items():    # every rule on one path: their methods together
+        _live.setdefault(re.sub(r"<[^>]+>", "<>", rule_of(_key)), {"methods": []})["methods"] += \
+            _meta["methods"]
     # The regex pins the docstring's SHAPE (two leading spaces, then the verb). Re-indent that
     # list by one space and findall returns nothing, the loop below runs zero times, and the gate
     # reports clean having read nothing — proven by doing exactly that: 29 matching lines became

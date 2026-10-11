@@ -236,21 +236,27 @@ GROUPS_LARGE = 24        # same servers, 8x the groups
 
 
 def seed_groups(user_id, first, count):
-    """Put `user_id` in `count` more groups, each granting one whole host."""
+    """Put `user_id` in `count` more groups, each granting one whole host.
+
+    MANAGE_GROUPS and MANAGE_USERS too: /groups is one of the two pages the group axis exists for
+    (190 queries at sixty groups), and with view rights alone the probed user got a 302 from it
+    and from /users, so a per-group N+1 there could never show.
+    """
     with app.app_context():
         u = db.session.get(User, user_id)
         remotes = RemoteServer.query.all()
         for i in range(first, first + count):
             g = Group(name="perfgrp%03d" % i, description="", is_default=False)
-            g.set_permissions([auth.VIEW_SERVERS, auth.VIEW_CONSOLE])
+            g.set_permissions([auth.VIEW_SERVERS, auth.VIEW_CONSOLE, auth.MANAGE_GROUPS,
+                               auth.MANAGE_USERS])
             g.servers.append(remotes[i % len(remotes)])
             db.session.add(g)
             u.groups.append(g)
         db.session.commit()
 
 
-def probe(client, paths):
-    """{path: query_count} for one pass over every page."""
+def probe(client, paths, statuses=None):
+    """{path: query_count} for one pass over every page; each page's status into `statuses`."""
     from sqlalchemy import event as sa_event
     counter = {"n": 0}
 
@@ -265,9 +271,11 @@ def probe(client, paths):
         for path in paths:
             counter["n"] = 0
             try:
-                client.get(path)
+                _resp = client.get(path)
             except Exception:  # nosec B112 - a page that raises is smoke_test's business, not this gate's
                 continue
+            if statuses is not None:
+                statuses[path] = _resp.status_code
             out[path] = counter["n"]
         return out
     finally:
@@ -331,7 +339,8 @@ def _signed_in_client(user_id):
 def _check_the_sweep_ran(small, large):
     """The sweep rendered pages, reached the privileged path, and ran no sudo and no git."""
     check("perf: the probe actually rendered pages (a run that measures nothing proves nothing)",
-          len(small) >= 40 and len(large) >= 40, "%d / %d pages" % (len(small), len(large)))
+          len(small) >= 40 and len(large) >= 40, "%d / %d pages answered 200"
+          % (len(small), len(large)))
     check("perf: the sweep started no sudo, and no git in the checkout",
           not _PB_TRIPPED, "%d: %r" % (len(_PB_TRIPPED), _PB_TRIPPED[:4]))
     check("perf: ...and it did reach the privileged path, where the stub refused it",
@@ -380,12 +389,21 @@ def _check_no_growth_with_groups(paths):
     seed_groups(restricted_id, 0, GROUPS_SMALL)
 
     cu = _signed_in_client(restricted_id)
-    few = probe(cu, paths)
+    few_st, many_st = {}, {}
+    few = probe(cu, paths, few_st)
     seed_groups(restricted_id, GROUPS_SMALL, GROUPS_LARGE - GROUPS_SMALL)
-    many = probe(cu, paths)
+    many = probe(cu, paths, many_st)
 
-    check("perf: the group probe rendered pages too", len(few) >= 10 and len(many) >= 10,
-          "%d / %d pages" % (len(few), len(many)))
+    # Rendered means 200: a redirect or a 403 answers before any per-group work, so counting every
+    # response let a sweep of refusals pass as "rendered".
+    _few_ok = [p for p, c in few_st.items() if c == 200]
+    _many_ok = [p for p, c in many_st.items() if c == 200]
+    check("perf: the group probe rendered pages too", len(_few_ok) >= 10 and len(_many_ok) >= 10,
+          "%d / %d pages answered 200" % (len(_few_ok), len(_many_ok)))
+    check("perf: ...among them /groups and /users, the pages the group axis is for",
+          all(few_st.get(p) == 200 and many_st.get(p) == 200 for p in ("/groups", "/users")),
+          "/groups %s/%s, /users %s/%s" % (few_st.get("/groups"), many_st.get("/groups"),
+                                           few_st.get("/users"), many_st.get("/users")))
     grew_g = _pages_that_grew(few, many)
     check("perf: no page's query count grows with the number of GROUPS a user is in",
           not grew_g, "; ".join(grew_g[:4]))
@@ -436,12 +454,14 @@ try:
     c = _signed_in_client(admin_id)
 
     t0 = time.perf_counter()
-    small = probe(c, paths)
+    small_st, large_st = {}, {}
+    small = probe(c, paths, small_st)
     seed_servers(SERVERS_SMALL, SERVERS_LARGE - SERVERS_SMALL)
-    large = probe(c, paths)
+    large = probe(c, paths, large_st)
     elapsed = time.perf_counter() - t0
 
-    _check_the_sweep_ran(small, large)
+    _check_the_sweep_ran({p: n for p, n in small.items() if small_st.get(p) == 200},
+                         {p: n for p, n in large.items() if large_st.get(p) == 200})
     grew = _pages_that_grew(small, large)
     check("perf: no page's query count grows with the number of game servers (N+1)",
           not grew, "; ".join(grew[:4]))

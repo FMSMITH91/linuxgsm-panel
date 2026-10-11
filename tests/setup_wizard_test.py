@@ -961,7 +961,28 @@ try:
 
     # ── Once setup is COMPLETE, the wizard is permanently locked ──────────────────────────────
     mark_setup_complete()
+    # The OWNER's browser is kept: once an admin exists, an anonymous client is refused by the owner
+    # gate (_setup_gate) before the completion lock is consulted, so every "locked:" check below sent
+    # from a fresh client passed with the lock deleted. The owner passes that gate, which leaves the
+    # lock as the only thing that can refuse it; the "...to its owner" checks are the lock's own.
+    _owner = c
     c = app.test_client()
+    r = _owner.get("/setup", follow_redirects=False)
+    check("locked: GET /setup redirects to login, even for the browser that ran the wizard",
+          r.status_code in (301, 302, 303) and "login" in (r.headers.get("Location") or ""),
+          "%d -> %s" % (r.status_code, r.headers.get("Location")))
+    _before_o = load_config()
+    _owner.post("/setup", data={"step": "welcome", "site_title": "OwnerHijack",
+                                "port": "1235", "bind_host": "0.0.0.0"}, follow_redirects=False)  # nosec B104 - hostile input
+    _after_o = load_config()
+    check("locked: POST step=welcome cannot rewrite the binding, even from the browser that ran "
+          "the wizard", (_after_o.get("bind_host"), _after_o.get("port"), _after_o.get("site_title"))
+          == (_before_o.get("bind_host"), _before_o.get("port"), _before_o.get("site_title")),
+          "%r -> %r" % ((_before_o.get("bind_host"), _before_o.get("port")),
+                        (_after_o.get("bind_host"), _after_o.get("port"))))
+    rr = _owner.post("/api/setup/tailscale/up", json={})
+    check("locked: tailscale/up is refused, even to the browser that ran the wizard",
+          rr.status_code in (401, 403, 301, 302, 303), "got %d" % rr.status_code)
 
     r = c.get("/setup", follow_redirects=False)
     check("locked: GET /setup redirects to login",
@@ -1048,6 +1069,19 @@ try:
         rr = c2.post("/api/setup/tailscale/up", json={})
         check("locked: with config.json %s, tailscale/up is refused" % _label,
               rr.status_code in (401, 403, 301, 302, 303), "got %d" % rr.status_code)
+        # ...and to the owner, whom only the lock can refuse. "deleted" is the case that tests
+        # the lock for welcome: with the file truncated or invalid, save_config refuses on its own.
+        _owner.post("/setup", data={"step": "welcome", "site_title": "OwnerHijack-%s" % _label[:4],
+                                    "port": "1236", "bind_host": "0.0.0.0"},  # nosec B104 - hostile input
+                    follow_redirects=False)
+        _cfg_now = load_config()
+        check("locked: with config.json %s, the wizard's own browser cannot rewrite the binding"
+              % _label, not str(_cfg_now.get("site_title", "")).startswith("OwnerHijack")
+              and _cfg_now.get("port") != 1236,
+              "config now says %s / %s" % (_cfg_now.get("site_title"), _cfg_now.get("port")))
+        rr = _owner.post("/api/setup/tailscale/up", json={})
+        check("locked: with config.json %s, tailscale/up is refused to the wizard's own browser"
+              % _label, rr.status_code in (401, 403, 301, 302, 303), "got %d" % rr.status_code)
 
     # Put a valid config back so the final state is sane for cleanup.
     # Written directly: save_config now REFUSES to replace a config.json it cannot read (the file
