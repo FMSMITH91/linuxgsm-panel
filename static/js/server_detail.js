@@ -891,7 +891,9 @@ var _primeOwed = false;
 function _primeAt(at, mark) {
   if (!Array.isArray(at) || at.length !== 3) { _rebuildRestore(mark); return; }
   _logAt = at;
-  if (_returnOwed) return;
+  // The return's catch-up reads on from this place — but one already asked was asked from the
+  // place the page had before this window replaced it (after Clear), and would append from there.
+  if (_returnOwed) { if (_resync) _startResync(_resync.prime); return; }
   if (socket.connected) _primeCatchUp();
   else _primeOwed = true;
 }
@@ -964,6 +966,13 @@ function loadMoreConsole(btn) {
       // way the first load does.
       _renderPanelLines(_loadOlderRows(data.panel_lines));
       _consoleSig = null;   // let the next poll re-evaluate against the new buffer
+      // A catch-up still in flight was asked from the page's OLD place, and its answer appends
+      // everything from there without matching — so every line between that place and this window's
+      // end showed twice. Ask it again from where the rebuilt console ends (no place: by text).
+      if (_resync) {
+        if (Array.isArray(data.at) && data.at.length === 3) _logAt = data.at;
+        _startResync(_resync.prime);
+      }
       if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
     })
     .catch(function(){ if (window.toast) toast('Could not load more console output', 'danger'); })
