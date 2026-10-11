@@ -8,6 +8,7 @@ Run locally (from anywhere):
     pip install atheris
     python tests/fuzz/fuzz_fail2ban.py -max_total_time=60 tests/fuzz/corpus/fail2ban
 """
+import importlib
 import os
 import sys
 
@@ -15,7 +16,16 @@ import atheris
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-# system_ops imports only the standard library, so it can be instrumented directly.
+# Pre-load the heavy dependencies UNINSTRUMENTED (see fuzz_game_status). This said "system_ops
+# imports only the standard library, so it can be instrumented directly", which stopped being true
+# when system_ops began importing eventlet.patcher (#403): Atheris then instrumented 329 modules
+# for this target (eventlet, dnspython, asyncio, cryptography...) against 20 for its siblings, and
+# ClusterFuzzLite killed it as "process timed out" on every PR and nightly run while the job stayed
+# green. The same list as the four ssh_manager harnesses; part29 holds all five to it.
+for _dep in ("paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
+             "sqlalchemy.dialects.sqlite", "panel.core.config"):
+    importlib.import_module(_dep)
+
 with atheris.instrument_imports():
     from panel.ops import system_ops
 

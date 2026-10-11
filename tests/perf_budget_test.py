@@ -164,6 +164,7 @@ from panel.services import lgsm_data as _lgsm  # noqa: E402
 import tempfile as _tf  # noqa: E402
 import pathlib as _pl  # noqa: E402
 _lgsm._CACHE_DIR = _pl.Path(_tf.mkdtemp())
+__import__("atexit").register(__import__("shutil").rmtree, str(_lgsm._CACHE_DIR), True)   # not left in /tmp
 _lgsm._CACHE_DIR.mkdir(parents=True, exist_ok=True)
 (_lgsm._CACHE_DIR / _lgsm.SERVERLIST).write_text(
     "shortname,gameservername,gamename,os\ncsgo,csgoserver,CS,ubuntu-24.04\n", encoding="utf-8")

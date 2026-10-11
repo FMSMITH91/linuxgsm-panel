@@ -122,8 +122,10 @@ def _cf1_preload():
     found = _harness_lists()
     lists = set(found.values())
     one = next(iter(lists)) if len(lists) == 1 else ()
-    check("fuzz harnesses: the four ssh_manager harnesses pre-load one list, SQLAlchemy and Flask in it",
-          set(found) == {"fuzz_config.py", "fuzz_cron.py", "fuzz_firewall.py", "fuzz_game_status.py"}
+    check("fuzz harnesses: the four ssh_manager harnesses and fuzz_fail2ban (system_ops) pre-load "
+          "one list, SQLAlchemy and Flask in it",
+          set(found) == {"fuzz_config.py", "fuzz_cron.py", "fuzz_firewall.py", "fuzz_game_status.py",
+                         "fuzz_fail2ban.py"}
           and len(lists) == 1
           and {"paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
                "sqlalchemy.dialects.sqlite"} <= set(one)
@@ -176,6 +178,60 @@ def _cf1_imports(preload, tmp):
           all([len(panel) >= 10, "panel.ops.ssh_manager.cron" in panel, not other, not out["opened"]]),
           repr({"outside panel and stdlib": other, "panel": len(panel),
                 "opened under data/": out["opened"], "error": out.get("error")}))
+
+
+# ...and that holds for EVERY harness, through what it actually instruments. The probe above
+# imports ssh_manager only, so a harness reaching eventlet another way was outside both checks:
+# fuzz_fail2ban instruments system_ops, which began importing eventlet.patcher (#403), and Atheris
+# instrumented 329 modules for it — ClusterFuzzLite then killed it as "process timed out" on every
+# run while its job reported green. Each harness's own pre-load is run, then the imports inside its
+# `with atheris.instrument_imports():`, and anything loaded outside panel/ and the standard library
+# is named. A timeout-only target is a harness that fails this.
+_HARNESS_PROBE29 = """import importlib, json, sys
+for d in %r:
+    importlib.import_module(d)
+before = set(sys.modules)
+exec(%r)
+print(json.dumps(sorted(set(sys.modules) - before)))
+"""
+
+
+def _harness_instrumented29(path):
+    """(its pre-load list, the import statements inside its instrument_imports() block, as code)."""
+    tree = _ast29.parse(open(path, encoding="utf-8").read())
+    preload = _harness_lists().get(os.path.basename(path), ())
+    body = []
+    for n in _ast29.walk(tree):
+        if isinstance(n, _ast29.With) and any(
+                "instrument_imports" in _ast29.unparse(i.context_expr) for i in n.items):
+            body += [_ast29.unparse(b) for b in n.body if isinstance(b, (_ast29.Import, _ast29.ImportFrom))]
+    return preload, "\n".join(body)
+
+
+def _cf1_every_harness(tmp):
+    bad, read = {}, []
+    for p in sorted(_glob29.glob(os.path.join(_ROOT29, "tests", "fuzz", "fuzz_*.py"))):
+        preload, code = _harness_instrumented29(p)
+        name = os.path.basename(p)
+        if not code:
+            bad[name] = "no import inside instrument_imports() found"
+            continue
+        r = _run29([_sys29.executable, "-W", "ignore", "-c", _HARNESS_PROBE29 % (preload, code)],
+                   cwd=tmp, env=dict(os.environ, PYTHONPATH=_ROOT29))
+        try:
+            new = _json29.loads(r.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            bad[name] = "probe failed: " + (r.stdout[-200:] + r.stderr[-400:])
+            continue
+        read.append(name)
+        foreign = sorted({m.split(".")[0] for m in new if _foreign_module29(m)})
+        if foreign:
+            bad[name] = "instruments %d modules outside panel/ and the stdlib, from %s" % (
+                len([m for m in new if _foreign_module29(m)]), foreign[:8])
+    check("fuzz harnesses: EVERY harness's instrumented imports load only panel modules and the "
+          "standard library after its own pre-load (no target spends its fuzz time instrumenting "
+          "eventlet and timing out)",
+          not bad and len(read) >= 6, repr(bad or read))
 
 
 # ── ClusterFuzzLite keeps everything as Actions artifacts, and nothing waits on a secret ──────────
@@ -576,6 +632,7 @@ _TMP29 = _tf29.mkdtemp(prefix="lgsm-unit-p29-")
 try:
     _cf1_seconds()
     _cf1_imports(_cf1_preload(), _TMP29)
+    _cf1_every_harness(_TMP29)
     _CFL29 = _cflite_files()
     _cf2_no_secret(_CFL29)
     _cf2_producers(_CFL29)
