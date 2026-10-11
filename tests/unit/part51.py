@@ -67,7 +67,7 @@ check("recovery CLI: manage.py sets the no-workers flag BEFORE it builds the app
       "os.environ[NO_WORKERS_ENV] = \"1\"" in _msrc51
       and _msrc51.index("os.environ[NO_WORKERS_ENV]") < _msrc51.index("app = create_app()"))
 
-# ── A01: allocating a port refuses when a valve sibling's config could not be read ──────────────
+# ── A01: a valve sibling whose config could not be read is SAID, not silently "no aux ports" ────
 
 
 class _Q51:
@@ -82,18 +82,22 @@ class _Q51:
 
 
 def _alloc51(read):
-    """resolve_free_port's answer (or the exception it raised) over five stopped csgo siblings."""
+    """(resolve_free_port's answer or exception, warnings logged) over five stopped csgo siblings."""
     sibs = [NS(game_type="csgo", port=27015 + i, short_name="csgo%d" % i, lgsm_name="csgoserver")
             for i in range(5)]
+    warned = []
     with _patched():
         _patch(_app51, "_remote_listening_ports", lambda remote: set())
         _patch(_app51, "GameServer", NS(query=_Q51(sibs)))
         _patch(_app51, "sm_game_engine", lambda gt: "valve")
         _patch(_app51, "lgsm_get_values", read)
+        _patch(_app51, "_log", NS(warning=lambda msg, *a, **k: warned.append(msg % a),
+                                  debug=lambda *a, **k: None))
         try:
-            return _app51.resolve_free_port(NS(name="h51"), 1, 27015, "csgo")
+            got = _app51.resolve_free_port(NS(name="h51"), 1, 27015, "csgo")
         except Exception as e:  # noqa: BLE001 - the answer under test
-            return e
+            got = e
+    return got, warned
 
 
 def _first_unread51(remote, user, selfname, keys):
@@ -111,13 +115,14 @@ _a51_none = _alloc51(_first_unread51)
 _a51_raise = _alloc51(_first_raises51)
 _a51_ok = _alloc51(lambda remote, user, selfname, keys: {
     "clientport": "", "sourcetvport": "27020" if user == "csgo0" else ""})
-check("free-port: a valve sibling whose config could not be read (None, or a raise) refuses with "
-      "PortScanUnreadable instead of handing out a port it may own",
-      type(_a51_none).__name__ == "PortScanUnreadable"
-      and type(_a51_raise).__name__ == "PortScanUnreadable"
-      and "csgo0" in str(_a51_none), repr((_a51_none, _a51_raise)))
-check("free-port: ...while a sibling read that answered still steers past its SourceTV port",
-      _a51_ok == (27021, True), repr(_a51_ok))
+check("free-port: a valve sibling whose config could not be read (None, or a raise) is logged as a "
+      "warning naming it -- the later 'Port N was unavailable' has a recorded reason -- and does not "
+      "block the install (an orphaned row would block every install on the host)",
+      _a51_none[0] == (27020, True) and _a51_raise[0] == (27020, True)
+      and any("csgo0" in w and "not reserved" in w for w in _a51_none[1])
+      and any("csgo0" in w for w in _a51_raise[1]), repr((_a51_none, _a51_raise)))
+check("free-port: ...while a sibling read that answered still steers past its SourceTV port, "
+      "with no warning", _a51_ok == ((27021, True), []), repr(_a51_ok))
 with _patched():
     _patch(_app51, "_remote_listening_ports", lambda remote: set())
     _patch(_app51, "GameServer", NS(query=_Q51([NS(game_type="csgo", port=27015, short_name="csgo0",
