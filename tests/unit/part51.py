@@ -365,3 +365,74 @@ check("firewall: ...while a whole-interface allow, or an SSH-port allow on tails
       _fw51_ok[_fw51_k]["warn"] and not _fw51_ok[_fw51_k]["protected"]
       and _fw51_ssh[_fw51_k]["warn"] and not _fw51_ssh[_fw51_k]["protected"],
       repr((_fw51_state(_fw51_ok), _fw51_state(_fw51_ssh))))
+
+# ── A03: the bootstrap reads the exit codes of its UFW, timezone, swap and fail2ban steps ───────
+from panel.ops.ssh_manager import _core as _smc51  # noqa: E402
+from panel.ops.ssh_manager import hosts as _smh51  # noqa: E402
+
+_BS51_EFF = ("port 22\nclientaliveinterval 300\nclientalivecountmax 2\n"
+             "permitrootlogin without-password\npasswordauthentication no\n")
+
+
+def _bootstrap51(fail):
+    """remote_bootstrap_vps on a stubbed host where the verbs named in `fail` exit 1."""
+    calls = []
+
+    def _priv(server, verb, args=None, **_k):
+        calls.append((verb, tuple(args or ())))
+        if verb == "sshd-effective-config":
+            return (_BS51_EFF, "", 0)
+        if verb in fail or (verb, tuple(args or ())) in fail:
+            return ("", "ERROR: %s failed on p51" % verb, 1)
+        return ("", "", 0)
+
+    def _run(server, cmd, **_k):
+        if "swapon" in cmd:
+            return ("0\n", "", 0)
+        return ("", "", 0)
+
+    with _patched():
+        _patch(_smc51, "is_local_server", lambda s: True)   # no reboot step
+        _patch(_smc51, "_wait_for_dpkg_lock", lambda *a, **k: True)
+        _patch(_smc51, "run_privileged", _priv)
+        _patch(_smc51, "run_command", _run)
+        _patch(_smc51, "write_root_file", lambda s, target, content, **k: (
+            calls.append(("write", (target,))),
+            ("", "disk full", 1) if ("write", target) in fail else ("", "", 0))[1])
+        _patch(_smc51, "_restart_sshd", lambda *a, **k: ("", "", 0))
+        _patch(_smh51, "_bootstrap_node", lambda s: [])
+        _patch(_smh51, "install_gamedig", lambda s, timeout=600: ("", 0))
+        _patch(_smh51, "_write_node_tools_cron", lambda s: True)
+        _patch(_smh51, "_bootstrap_ssh_ports", lambda s: ["22"])
+        ok, msg, log = _smh51.remote_bootstrap_vps(
+            NS(id=9151, host="203.0.113.51", auth_method="key"), set_timezone="America/Chicago",
+            enable_ufw=True, install_lgsm_deps=False, username="", install_fail2ban=True,
+            do_reboot=False)
+    return ok, msg, log, calls
+
+
+_bs51_ok = _bootstrap51(())
+check("bootstrap (control): with every step succeeding the job is 'complete'",
+      _bs51_ok[0] is True and "VPS bootstrap complete" in _bs51_ok[1] and "NOT DONE" not in _bs51_ok[2],
+      repr(_bs51_ok[:2]))
+_bs51_ufw = _bootstrap51({"ufw-enable"})
+check("bootstrap: a `ufw enable` that failed is 'finished, but the firewall was NOT enabled', never "
+      "'complete'",
+      _bs51_ufw[0] is False and "firewall was NOT enabled" in _bs51_ufw[1]
+      and "ufw enable" in _bs51_ufw[1] and "NOT DONE" in _bs51_ufw[2], repr(_bs51_ufw[:2]))
+_bs51_dd = _bootstrap51({("ufw-default", ("deny", "incoming"))})
+check("bootstrap: ...and so is a `ufw default deny incoming` that failed",
+      _bs51_dd[0] is False and "ufw default deny incoming" in _bs51_dd[1], repr(_bs51_dd[:2]))
+_bs51_tz = _bootstrap51({"set-timezone"})
+_bs51_sw = _bootstrap51({"create-swapfile"})
+_bs51_f2 = _bootstrap51({"service-enable-now"})
+_bs51_jw = _bootstrap51({("write", "fail2ban-jail-local")})
+check("bootstrap: a failed timezone, swap file or fail2ban step is named in a 'finished, but' "
+      "answer and logged NOT DONE, not reported as done",
+      _bs51_tz[0] is False and "timezone was not set to America/Chicago" in _bs51_tz[1]
+      and _bs51_sw[0] is False and "swap file was not created" in _bs51_sw[1]
+      and "2G swap file created" not in _bs51_sw[2]
+      and _bs51_f2[0] is False and "fail2ban is not protecting SSH" in _bs51_f2[1]
+      and _bs51_jw[0] is False and "jail could not be written" in _bs51_jw[1]
+      and not any(c[0] == "service-enable-now" and c[1] == ("fail2ban",) for c in _bs51_jw[3]),
+      repr([r[1] for r in (_bs51_tz, _bs51_sw, _bs51_f2, _bs51_jw)]))

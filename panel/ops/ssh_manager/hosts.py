@@ -1877,6 +1877,23 @@ GAME_SESSIONS_PROBE = ("if pgrep -x 'tmux: server|tmux|SCREEN|screen' >/dev/null
                        "then echo YES; else echo NO; fi")
 
 
+def _r11a_why(res):
+    """A failed (out, err, rc)'s reason on one line, for a bootstrap NOT DONE note."""
+    out, err, rc = res
+    return (err or out or "exit %s" % rc).replace("\n", " ").strip()[:160]
+
+
+def _r11a_step_failed(note, not_done, res, what):
+    """Record a bootstrap step whose (out, err, rc) failed: a NOT DONE note, and `what` in
+    `not_done` for the final "finished, but" message. Returns whether it failed."""
+    if res[2] == 0:
+        return False
+    msg = "%s (%s)" % (what, _r11a_why(res))
+    not_done.append(msg)
+    note("NOT DONE: %s." % msg)
+    return True
+
+
 def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lgsm_deps=True,
                            username="", install_fail2ban=True, do_reboot=True,
                            progress=None):
@@ -1998,14 +2015,21 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     _core.write_root_file(server, "apt-auto-upgrades", au_conf, timeout=30)
     _core.run_privileged(server, "service-enable-now", ["unattended-upgrades"], timeout=30)
 
+    # Steps that ran and FAILED, by their exit codes: each is "finished, but", never "complete".
+    # The timezone, swap and fail2ban steps discarded their tuples and logged success — a typo'd
+    # timezone, a full disk, a fail2ban that never installed all read "VPS bootstrap complete".
+    not_done = []
+
     # ── 4. Set timezone ──
     if set_timezone:
         emit(f"Setting timezone to {set_timezone}")
         # set_timezone is user-supplied and runs as root — quote it against injection.
-        _core.run_privileged(server, "set-timezone", [set_timezone], timeout=10)
+        _tz = _core.run_privileged(server, "set-timezone", [set_timezone], timeout=10)
+        _r11a_step_failed(note, not_done, _tz, "the timezone was not set to %s" % set_timezone)
 
     # ── 5. Configure UFW ──
     ufw_not_enabled = None
+    ufw_enable_failed = ""
     # The ports SSH answers on, read ONCE for both steps that name them (UFW here, fail2ban's jail
     # at step 10). Both said 22: a host whose sshd had been moved to 2222 had UFW switched on at
     # deny-incoming with only 22 let in — the panel's next connection, and the operator's, met a
@@ -2035,9 +2059,16 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             if "22" in ssh_ports:
                 for _verb, _args in _SSH22_SHADOWING:
                     _core.run_privileged(server, _verb, _args, timeout=15)
-            _core.run_privileged(server, "ufw-default", ["deny", "incoming"], timeout=15)
+            # Read, both: a container-class VPS whose `ufw --force enable` fails ("problem running
+            # ufw-init") or times out was reported "VPS bootstrap complete" with its firewall off.
+            _dd = _core.run_privileged(server, "ufw-default", ["deny", "incoming"], timeout=15)
             _core.run_privileged(server, "ufw-default", ["allow", "outgoing"], timeout=15)
-            _core.run_privileged(server, "ufw-enable", [], timeout=15)
+            _en = _core.run_privileged(server, "ufw-enable", [], timeout=15)
+            for _what, _res in (("`ufw enable`", _en), ("`ufw default deny incoming`", _dd)):
+                if _res[2] != 0:
+                    ufw_enable_failed = "%s failed (%s)" % (_what, _r11a_why(_res))
+                    note("NOT DONE: %s — the firewall is not protecting this host." % ufw_enable_failed)
+                    break
         else:
             # The limit's exit code was never read, so when it failed the rules that DO let SSH in
             # were deleted "now that the limit is in place" and UFW was switched on at deny-incoming
@@ -2096,8 +2127,9 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     _swap_txt = (swap_out or "").strip()
     if _swap_rc == 0 and _swap_txt.isdecimal():
         if _swap_txt == "0":
-            _core.run_privileged(server, "create-swapfile", [], timeout=60, merge_stderr=False)
-            note("2G swap file created")
+            _sw = _core.run_privileged(server, "create-swapfile", [], timeout=60, merge_stderr=False)
+            if not _r11a_step_failed(note, not_done, _sw, "the swap file was not created"):
+                note("2G swap file created")
         else:
             note("Swap already present")
     else:
@@ -2159,9 +2191,19 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             "[DEFAULT]\nbantime = 1h\nfindtime = 10m\nmaxretry = 5\n\n"
             "[sshd]\nenabled = true\nport = %s\n" % ",".join(ssh_ports)
         )
-        _core.write_root_file(server, "fail2ban-jail-local", jail_content, timeout=15)
-        _core.run_privileged(server, "service-enable-now", ["fail2ban"], timeout=20)
-        _core.run_privileged(server, "service-restart", ["fail2ban"], timeout=20)
+        # Each read, and the first that fails is the step's answer: a fail2ban whose package
+        # install failed at step 3 got its jail written, `enable --now` failed, and the job said
+        # SSH brute-force protection was configured.
+        for _f2b_call, _f2b_what in (
+                (lambda: _core.write_root_file(server, "fail2ban-jail-local", jail_content,
+                                               timeout=15), "its jail could not be written"),
+                (lambda: _core.run_privileged(server, "service-enable-now", ["fail2ban"],
+                                              timeout=20), "it could not be started"),
+                (lambda: _core.run_privileged(server, "service-restart", ["fail2ban"],
+                                              timeout=20), "it could not be restarted")):
+            if _r11a_step_failed(note, not_done, _f2b_call(),
+                                 "fail2ban is not protecting SSH: %s" % _f2b_what):
+                break
 
     # ── 11. Reboot ONLY if an update actually requires one, and NEVER out from under running game
     #        servers (a reboot would drop the players). We check /var/run/reboot-required and, before
@@ -2233,9 +2275,11 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # The same reasoning for a firewall that was asked for and not switched on: a door left open.
     ufw_msg = (("the firewall was NOT enabled: %s, and turning UFW on without a rule letting SSH "
                 "in would have locked this host out. Fix ufw on the host and run the bootstrap "
-                "again." % ufw_not_enabled) if ufw_not_enabled else "")
+                "again." % ufw_not_enabled) if ufw_not_enabled else
+               ("the firewall was NOT enabled: %s. Fix ufw on the host and run the bootstrap "
+                "again." % ufw_enable_failed) if ufw_enable_failed else "")
     # Steps that were asked for and did not happen; each is "finished, but", never "complete".
-    ufw_msg = "; and ".join(m for m in (ufw_msg, user_msg, reboot_msg) if m)
+    ufw_msg = "; and ".join(m for m in [ufw_msg] + not_done + [user_msg, reboot_msg] if m)
     if hardening_failed:
         # Not "complete": the one step whose whole point is closing a door reported the door is
         # still open. The rest of the work did happen, and the message says both.
