@@ -1180,17 +1180,20 @@ def _content_grant_remote(a):
     # _chmod_nofollow, left open on every remote. As the owner, chmod can change only what the
     # account already owns, which is all a content grant ever needs to touch. usermod stays root's.
     as_cu = "runuser -u %s -- " % shlex.quote(content_user)
-    parts = ["usermod -aG %s %s" % (shlex.quote(group), shlex.quote(gmod_user)),
-             # Traversal outermost-first: the home, then serverfiles. The shell form skipped
-             # serverfiles because it was created group-readable; it is created private now.
-             as_cu + "chmod g+x %s" % shlex.quote(home_of(content_user)),
-             as_cu + "chmod g+x %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR))]
-    parts += [as_cu + "chmod -R g+rX %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR, g))
-              for g in games]
-    # Every step still runs when one fails, as it did, but the exit status is now ANY step's
-    # failure, not the last chmod's: `a; b; c` answered 0 after a usermod that failed, and the
-    # GMod mount then said "Mounted" for a server that could read none of the content.
-    return "_cgr=0; " + "; ".join("%s || _cgr=1" % p for p in parts) + '; [ "$_cgr" = 0 ]'
+    # Traversal outermost-first: the home, then serverfiles. The shell form skipped serverfiles
+    # because it was created group-readable; it is created private now.
+    chmods = [as_cu + "chmod g+x %s" % shlex.quote(home_of(content_user)),
+              as_cu + "chmod g+x %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR))]
+    chmods += [as_cu + "chmod -R g+rX %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR, g))
+               for g in games]
+    # Every step still runs when one fails, and the verb's answer is usermod's — the helper's rule
+    # (do_content_grant_read): the membership IS the grant, so `a; b; c` answering 0 after a
+    # usermod that failed made the GMod mount say "Mounted" for a server that could read none of
+    # the content. The chmods stay best-effort, as the helper's are: counting them too made one
+    # missing game tree (a TF2 download that ran out of disk) fail the whole grant on a remote,
+    # so the CS:S beside it was not mounted either, while the panel host mounted it.
+    return ("_cgr=0; usermod -aG %s %s || _cgr=1; " % (shlex.quote(group), shlex.quote(gmod_user))
+            + "; ".join("%s || :" % p for p in chmods) + '; [ "$_cgr" = 0 ]')
 
 
 # Verbs the helper implements itself, with no tool to run. A REMOTE host has no helper, so each one

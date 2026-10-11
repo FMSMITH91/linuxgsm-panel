@@ -7243,8 +7243,12 @@ def _bx_remote_rc(usermod_rc, chmod_rc):
 _bx_rcs = {k: _bx_remote_rc(*k) for k in ((1, 0), (0, 1), (0, 0))}
 check("privileged: the remote content grant fails when its usermod fails (not the last chmod's 0)",
       _bx_rcs[(1, 0)] != 0, repr(_bx_rcs))
-check("privileged: ...and when a chmod fails, while all succeeding is still 0 (positive control)",
-      _bx_rcs[(0, 1)] != 0 and _bx_rcs[(0, 0)] == 0, repr(_bx_rcs))
+# A chmod that fails does NOT fail it (review 2026-10-11): the helper's form answers usermod's
+# status only, and counting the chmods made one missing game tree (a TF2 download that ran out of
+# disk) fail the whole remote grant, so the CS:S beside it was not mounted either.
+check("privileged: ...but a chmod that fails (a missing game tree) does not, as in the helper; all "
+      "succeeding is still 0 (positive control)",
+      _bx_rcs[(0, 1)] == 0 and _bx_rcs[(0, 0)] == 0, repr(_bx_rcs))
 
 _bx_saved = (_helper.pwd, _helper.grp, _helper.subprocess, _helper.HOME_ROOT)
 _bx_dir = _tempfile.mkdtemp(prefix="bx-grant-")
