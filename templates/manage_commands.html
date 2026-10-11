@@ -77,7 +77,7 @@
         <input type="checkbox" name="groups" value="{{ grp.id }}" class="form-check-input"
                id="{{ idp }}-grp-{{ grp.id }}"
                {% if cmd and grp in cmd.groups %}checked{% endif %}>
-        <label class="form-check-label small" for="{{ idp }}-grp-{{ grp.id }}">{{ grp.name }}</label>
+        <label class="form-check-label small" for="{{ idp }}-grp-{{ grp.id }}" data-no-i18n>{{ grp.name }}</label>
       </div>
       {% else %}
       <span class="text-secondary small">No groups yet — create one on Groups &amp; Permissions.</span>
@@ -117,7 +117,7 @@
 <div class="card mb-2">
   <div class="card-header d-flex justify-content-between align-items-center py-2">
     <div>
-      <strong>{{ cmd.name }}</strong>
+      <strong data-no-i18n>{{ cmd.name }}</strong>
       {% if not cmd.enabled %}<span class="badge bg-secondary ms-2">Disabled</span>{% endif %}
       <code class="ms-2 small">{{ cmd.command_template }}</code>
       <span class="badge bg-dark border ms-2">
@@ -142,7 +142,7 @@
   <div class="card-body py-2">
     <span class="text-secondary small">Groups:</span>
     {% for grp in cmd.groups %}
-      <span class="badge bg-secondary">{{ grp.name }}</span>
+      <span class="badge bg-secondary" data-no-i18n>{{ grp.name }}</span>
     {% else %}
       <span class="text-secondary small">Not handed to any group yet — only super admins can run it.</span>
     {% endfor %}

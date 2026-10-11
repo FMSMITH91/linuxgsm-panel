@@ -103,6 +103,9 @@ window.publishDashLayout = function(btn){
         .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
         .then(function(res){
           if(!res.ok || !res.d || res.d.success === false) throw new Error((res.d && res.d.message) || '');
+          // There is a default to remove now: its button stayed greyed out until a reload.
+          var clear = document.querySelector('[data-action="clearDashDefault"]');
+          if(clear) clear.disabled = false;
           if(window.toast) toast('This is now the panel default.', 'success');
         })
         .catch(function(e){ if(window.toast) toast(e.message || 'Could not publish the default', 'danger'); });
@@ -138,6 +141,13 @@ window.resetDashLayout = function(btn){
         .then(function(d){
           if(!d || d.success === false) throw 0;
           if(btn) btn.disabled = true;
+          // The rest of the card follows: it went on saying "You're using your own order." and
+          // offering to publish a layout that no longer exists, until a reload.
+          var own = document.getElementById('acct-layout-own'), dflt = document.getElementById('acct-layout-default');
+          if(own) own.hidden = true;
+          if(dflt) dflt.hidden = false;
+          var pub = document.querySelector('[data-action="publishDashLayout"]');
+          if(pub){ pub.disabled = true; pub.title = window.t ? window.t('Arrange your own layout first') : 'Arrange your own layout first'; }
           if(window.toast) toast('Your dashboard is back to the default order.', 'success');
         })
         .catch(function(){ if(window.toast) toast('Could not reset your layout', 'danger'); });

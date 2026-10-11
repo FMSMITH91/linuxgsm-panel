@@ -117,6 +117,10 @@ function filterGamesForHost() {
         if (sel.value === opt.value) sel.value = '';
       }
     });
+    // The GMod content option follows the game actually selected now: a deselect above, or a
+    // refreshed game list (Refresh list swaps the select in fresh), left it showing beside no game.
+    var contentOpt = document.getElementById('gmod-content-opt');
+    if (contentOpt) contentOpt.style.display = (sel.value === 'gmod') ? '' : 'none';
     var note = document.getElementById('game-os-note');
     if (note) {
       note.textContent = hidden
@@ -477,7 +481,10 @@ function refreshGameList(btn){
         if (window.toast) toast('Loaded ' + d.games + ' games from LinuxGSM', 'success');
         // The game column only, not the page: a reload discarded the host and name already chosen.
         // The new list is then greyed for the chosen host again, as choosing it did.
-        window.refreshSection('#game-col', 'filterGamesForHost');
+        // The button is put back once the swap is over. A swap replaces it (it lives in #game-col),
+        // but one whose page fetch failed left it disabled on "Refreshing…" until a reload.
+        Promise.resolve(window.refreshSection('#game-col', 'filterGamesForHost'))
+          .then(function(){ btn.disabled = false; btn.innerHTML = orig; });   // nosemgrep
         return;
       }
       if (window.toast) toast((d && d.message) || 'Still could not reach LinuxGSM', 'danger');

@@ -267,3 +267,407 @@ except Exception as _e56:  # noqa: BLE001 - which class arrives IS the check
 check("js coverage: the 375px rename flow's failed fit check reaches the run as a FlowAssertion even when "
       "its cleanup's page load cannot log in (the cleanup's LoginFailed replaced it, and only warned)",
       _ph56 == "FlowAssertion", _ph56)
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 4. the console's catch-up against a rebuild (server_detail.js, in node)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_SD56 = _read56(_JS56, "server_detail.js")
+_CONSOLE56 = (
+    "global.window = global; var _lastPanelT = 0, _resync = null, _logAt = null, _consoleLines = [],\n"
+    "  _awayRead = false, _shownOnReturn = {}, shown = [], _rebuildPushes = [], _rebuildSeq = 0,\n"
+    "  _REBUILD_KEEP = 2000;\n"
+    "function appendConsole(text, ts){ shown.push(text); }\n"
+    "function _showReturnGap(){ shown.push('GAP'); }\n"
+    "function _appendConsoleRows(rows, ts, at){ if (!rows.length) return;\n"
+    "  _consoleLines = _consoleLines.concat(rows.map(r => r.line)); _logAt = Array.isArray(at) ? at : null; }\n"
+    + "\n".join(_cut47(_SD56, h) for h in (
+        "function _panelShownAt(", "function _endResync(", "function _showPanelPush(",
+        "function _r11c_resyncFrom(", "function _resyncRelease(", "function _pushAfter(", "function _resyncRows(",
+        "function _rebuildNotePush(", "function _rebuildMark(", "function _rebuildHasRun(",
+        "function _rebuildRestore(", "function _sameLine(", "function _eqRange(", "function _newConsoleLines(",
+        "function _resyncShowAway(", "function _returnOverlap(", "function _appendReturnRows("))
+    + "\nfunction _startResync(prime){ _endResync(); }\n")
+
+_name56 = "console: held panel pushes and a rebuild"
+_out56 = _node56(_name56, _CONSOLE56 + (
+    "const out = {};\n"
+    # Load older rendered the backlog up to t=110; the catch-up held pushes at 100 and 110 (in that
+    # backlog) and one at 120 (after it).
+    "_resync = {held: [{panel: true, ts: 100, data: 'p100'}, {panel: true, ts: 110, data: 'p110'},\n"
+    "  {panel: true, ts: 120, data: 'p120'}], prime: false};\n"
+    "_lastPanelT = 110; _r11c_resyncFrom([0, 1, 50]); out.older = shown.splice(0);\n"
+    # The answer path releases what is held the same way.
+    "_lastPanelT = 0; _resyncRelease({held: [{panel: true, ts: 5, data: 'p5'}]}, null);\n"
+    "out.release = shown.splice(0);\n"
+    # Load older asks at T; a catch-up answers before it, appending c..e from the page's place; the
+    # read's answer then rebuilds the console from a window ending at c, and restores what was noted.
+    "_consoleLines = ['a', 'b']; const mark = _rebuildMark();\n"
+    "_resyncShowAway([{line: 'c'}, {line: 'd'}, {line: 'e'}],\n"
+    "  {since: [0, 1, 5], at: [0, 1, 9], now: 1}, false);\n"
+    "_consoleLines = []; _appendConsoleRows([{line: 'a'}, {line: 'b'}, {line: 'c'}], null, [0, 1, 6]);\n"
+    "_rebuildRestore(mark); out.race = _consoleLines.slice();\n"
+    # A held log push released by the answer is noted as well.
+    "_consoleLines = ['a']; const mark2 = _rebuildMark();\n"
+    "_resyncRelease({held: [{rows: [{line: 'f'}], ts: 2, at: [0, 1, 12]}]}, [0, 1, 10]);\n"
+    "_consoleLines = ['a']; _rebuildRestore(mark2); out.released = _consoleLines.slice();\n"
+    "console.log(JSON.stringify(out));\n"))
+if _out56 is not None:
+    check("console: Load older during a catch-up does not show the held panel lines its backlog already "
+          "rendered a second time — only the newer one",
+          _out56.get("older") == ["p120"], repr(_out56))
+    check("console: ...and a held panel line nothing has shown is still shown when released (control)",
+          _out56.get("release") == ["p5"], repr(_out56))
+    check("console: a catch-up answered while Load older is in flight is put back after the rebuilt window "
+          "(the lines between the window's end and the catch-up's were silently missing)",
+          _out56.get("race") == ["a", "b", "c", "d", "e"], repr(_out56))
+    check("console: ...and a held log push the catch-up releases is put back the same way",
+          _out56.get("released") == ["a", "f"], repr(_out56))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 5. pages a Spanish or French viewer reads (node, on a small DOM of this part's own)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _catalog56(lang):
+    out = {}
+    tdir = os.path.join(_root, "translations", lang)
+    for fname in sorted(os.listdir(tdir)):
+        if fname.endswith(".json"):
+            out.update(_json56.loads(_read56(tdir, fname)))
+    return out
+
+
+_ES56 = _catalog56("es")
+
+
+def _es_for56(*sources):
+    """The Spanish catalog cut to the keys `sources` contain: node takes the program as ONE argument,
+    and the whole catalog is past the kernel's limit for one."""
+    text = "".join(sources)
+    return {_k: _v for _k, _v in _ES56.items() if _k in text}
+
+
+# Elements with children, text nodes, attributes, and a walk that lists every visible text node the
+# page's translator would reach (none under data-no-i18n): enough to build a dialog and read it.
+_DOM56 = r"""
+class Node56 { constructor(tag){ this.tagName = tag; this.children = []; this.attrs = {}; this.style = {};
+    this.className = ''; this.listeners = {}; this.parentNode = null; this.hidden = false; this.disabled = false; }
+  appendChild(c){ c.parentNode = this; this.children.push(c); return c; }
+  insertBefore(c, ref){ c.parentNode = this; const i = this.children.indexOf(ref);
+    if (i < 0) this.children.push(c); else this.children.splice(i, 0, c); return c; }
+  get firstChild(){ return this.children[0] || null; }
+  setAttribute(k, v){ this.attrs[k] = String(v); } getAttribute(k){ return k in this.attrs ? this.attrs[k] : null; }
+  hasAttribute(k){ return k in this.attrs; }
+  set textContent(v){ this.children = []; if (v !== '' && v != null) this.appendChild(new Text56(String(v))); }
+  get textContent(){ return this.children.map(c => c.textContent).join(''); }
+  addEventListener(ev, fn){ this.listeners[ev] = fn; } remove(){ this.removed = true; }
+  querySelector(){ return new Node56('STUB'); } }
+class Text56 { constructor(v){ this.nodeValue = v; this.parentNode = null; }
+  get textContent(){ return this.nodeValue; } }
+global.document = { body: new Node56('BODY'), createElement: t => new Node56(t.toUpperCase()),
+  createTextNode: v => new Text56(v), createDocumentFragment: () => new Node56('FRAG'),
+  getElementById: id => (global.__ids || {})[id] || null, querySelector: s => (global.__qs || {})[s] || null,
+  querySelectorAll: () => [] };
+function visibleTexts(n, out){ out = out || [];
+  if (n instanceof Text56){ const v = n.nodeValue.replace(/\s+/g, ' ').trim(); if (v) out.push(v); return out; }
+  if (n.hasAttribute && n.hasAttribute('data-no-i18n')) return out;
+  // markup a script assigned: each text run between tags is a text node of its own
+  if (typeof n.innerHTML === 'string')
+    n.innerHTML.split(/<[^>]*>/).forEach(v => { v = v.replace(/\s+/g, ' ').trim(); if (v) out.push(v); });
+  n.children.forEach(c => visibleTexts(c, out)); return out; }
+"""
+
+# ── the players dialogs: every word reaches the translator, as a whole catalog key ──────────────
+_SA56 = _read56(_JS56, "server_actions.js")
+_name56 = "players dialog: every sentence translatable"
+_out56 = _node56(_name56, _DOM56 + (
+    "global.window = global; global.MOUNT = ''; global.serverId = 1; global.SERVER_NAME = 'Test';\n"
+    "const ES = %s; global.t = s => (Object.prototype.hasOwnProperty.call(ES, s) ? ES[s] : s);\n"
+    "global._discT = global.t; global.toast = () => 0; global.bkMsg = () => 0; global.fbStart = () => 0;\n"
+    "global._doServerAction = () => 0; global.showPendingBanner = () => 0;\n"
+    "global._esc = s => String(s);\n" % _json56.dumps(_es_for56(_SA56, _RMB56))
+    + (_cut47(_SA56, "function _r12c_el(") if "function _r12c_el(" in _SA56 else "") + "\n"
+    + _cut47(_SA56, "function actionPlayersDialog(") + "\n"
+    + _cut47(_RMB56, "function fbPlayersDialog(") + "\n"
+    "const vals = new Set(Object.values(ES)); const out = {english: [], names: []};\n"
+    "for (const [kind, n] of [['stop', 1], ['stop', 3], ['restart', 1], ['restart', 3],\n"
+    "                         ['backup', 1], ['backup', 4]]) {\n"
+    "  document.body.children = [];\n"
+    "  try {\n"
+    "    if (kind === 'backup') fbPlayersDialog([{name: 'Server', players: n}, {name: 'Game', players: 1}]);\n"
+    "    else actionPlayersDialog(kind, n, {});\n"
+    "  } catch (e) { out.english.push(kind + ': ' + e.message); continue; }\n"
+    "  for (const v of visibleTexts(document.body))\n"
+    "    if (/[A-Za-z]{2}/.test(v) && !vals.has(v)) out.english.push(kind + n + ': ' + v);\n"
+    "  // the server's name and the counts are shown, kept from the translator\n"
+    "  const all = JSON.stringify(document.body, (k, v) => k === 'parentNode' ? undefined : v);\n"
+    "  if (all.indexOf(kind === 'backup' ? 'Server (' : '\"Test\"') < 0) out.names.push(kind + n);\n"
+    "}\n"
+    "console.log(JSON.stringify(out));\n"))
+if _out56 is not None:
+    check("players dialog (restart/stop, and the backup one): with Spanish selected every sentence in it is "
+          "translated — it was one innerHTML string with the count and name spliced in, all English but "
+          "\"Cancel\"", _out56.get("english") == [] and "error" not in _out56, repr(_out56))
+    check("players dialog: ...and it still names the server and the count, kept from the translator (control)",
+          _out56.get("names") == [], repr(_out56))
+
+# ── the i18n gate reads text built inside markup, and what is handed to t() ─────────────────────
+_sys56.path.insert(0, os.path.join(_root, "tools"))
+import i18n_scan as _i18n56  # noqa: E402
+_tdir56 = os.path.realpath(__import__("tempfile").mkdtemp(prefix="lgsm-unit-p56-i18n-"))
+try:
+    with open(os.path.join(_tdir56, "a.js"), "w", encoding="utf-8") as _fh56:
+        _fh56.write("el.innerHTML = '<thead><tr><th>Widgetry</th><th title=\"x\">Gadgets galore</th>"
+                    "</tr></thead>';\n"
+                    "out.innerHTML = '<span class=\"s\"><i class=\"bi bi-x\"></i> Scan went sideways.</span>';\n"
+                    "p.innerHTML = '<strong>' + n + '</strong> players are connected to <strong>';\n"
+                    "head.textContent = t(one ? 'player is wired to' : 'players are wired to');\n"
+                    "x.title = t(action === 'halt' ? 'Halt server' : 'Resume server');\n")
+    _js56 = set(_i18n56.scan_js(_tdir56))
+finally:
+    __import__("shutil").rmtree(_tdir56, ignore_errors=True)
+check("i18n scan: an element's whole text inside an innerHTML-built literal is asked for (the players "
+      "dialog and 117 more strings were invisible to the gate: a literal with `<` was dropped whole)",
+      {"Widgetry", "Gadgets galore", "Scan went sideways."} <= _js56, repr(sorted(_js56)))
+check("i18n scan: ...and so is every literal handed to t(), lower-case or one word",
+      {"player is wired to", "players are wired to", "Halt server", "Resume server"} <= _js56,
+      repr(sorted(_js56)))
+check("i18n scan: ...but not prose spliced to a value at a literal's edge, nor the value t() chooses by "
+      "(control)", "players are connected to" not in _js56 and "halt" not in _js56, repr(sorted(_js56)))
+
+# ── the discovery card (#disc-result is data-no-i18n): built translated ──────────────────────────
+_name56 = "discovery card: built translated"
+_out56 = _node56(_name56, (
+    "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
+    "global.window = global; global.MOUNT = ''; global.REMOTE_ID = 2;\n"
+    "const ES = %s; global.t = s => (Object.prototype.hasOwnProperty.call(ES, s) ? ES[s] : s);\n"
+    "global.escapeHtml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')\n"
+    "  .replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n"
+    "global._da = () => ''; const out = {innerHTML: '', insertBefore(){}, firstChild: null};\n"
+    "global.document = {getElementById: id => id === 'disc-result' ? out : null,\n"
+    "  createDocumentFragment: () => ({appendChild(){}})};\n"
+    "global.fetch = () => Promise.resolve({json: () => Promise.resolve({servers: [\n"
+    "  {user: 'mc', game_type: 'mc', game_name: 'Minecraft', port: 25565, autostart: true}]})});\n"
+    % _json56.dumps(_es_for56(_RMB56))
+    + _cut47(_RMB56, "function _discT(") + "\n" + _cut47(_RMB56, "function prependContentNotes(") + "\n"
+    + _cut47(_RMB56, "function scanExisting(") + "\n"
+    "(async () => { scanExisting(); await settle(); console.log(JSON.stringify({html: out.innerHTML})); })();\n"))
+if _out56 is not None:
+    _h56 = _out56.get("html", "")
+    _want56 = [_ES56.get(_k) for _k in ("Import selected", "Mods", "User", "autostart", "Installed mods")]
+    check("discovery card: with Spanish selected its headers, badge and Import button are translated (the "
+          "container is data-no-i18n, so they stayed English)",
+          all(_w and _w in _h56 for _w in _want56) and ">Import selected<" not in _h56, _h56[:600])
+
+
+# ── names are guarded one by one; the containers around them are not ───────────────────────────
+_NAME56 = _re56.compile(r"\{\{\s*[a-z_]+(?:\.[a-z_]+)*\.(?:name|username|display_name|hostname|comment|"
+                        r"created_by|player_name|reason)(?:\s+or\s+'[^']*')?\s*\}\}")
+_VOID56 = {"input", "br", "img", "hr", "meta", "link", "source", "wbr", "col", "area", "base", "embed"}
+
+
+def _guarded_stack56(src, pos):
+    """Whether an element open at `pos` carries data-no-i18n, or is one the translator skips."""
+    stack = []
+    head = _re56.sub(r"\{#.*?#\}", "", src[:pos], flags=_re56.S)
+    for m in _re56.finditer(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)([^>]*)>", head):
+        close, tag, attrs = m.group(1), m.group(2).lower(), m.group(3)
+        if close:
+            for k in range(len(stack) - 1, -1, -1):
+                if stack[k][0] == tag:
+                    del stack[k:]
+                    break
+        elif tag not in _VOID56 and not attrs.rstrip().endswith("/"):
+            stack.append((tag, "data-no-i18n" in attrs))
+    return any(g or t in ("code", "pre", "script", "style", "textarea") for t, g in stack)
+
+
+def _bare_user_text56():
+    bad = []
+    strip = lambda t: _re56.sub(r"\{%.*?%\}|\{#.*?#\}", "", t, flags=_re56.S).strip()  # noqa: E731
+    for fname in sorted(os.listdir(_TPL56)):
+        if not fname.endswith(".html"):
+            continue
+        src = _read56(_TPL56, fname)
+        for m in _NAME56.finditer(src):
+            before, after = src[:m.start()], src[m.end():]
+            lt, gt = before.rfind("<"), before.rfind(">")
+            if lt > gt or strip(before[gt + 1:]) or strip(after[:after.find("<")]):
+                continue                  # an attribute value, or part of a longer text node
+            if not _guarded_stack56(src, m.start()):
+                bad.append("%s:%d" % (fname, src.count("\n", 0, m.start()) + 1))
+    return bad
+
+
+_bare56 = _bare_user_text56()
+check("templates: no user-authored text (a username, a group, command or tag name, a rule comment, a ban's "
+      "player, reason or author) is a bare text node the translator can swap — \"Admin\" read "
+      "\"Administrador\" on its own Account page", not _bare56, repr(_bare56))
+_dash56, _rmh56 = _read56(_TPL56, "dashboard.html"), _read56(_TPL56, "remote_manage.html")
+check("templates: the tag list and the Panel Server's game-backup list are not data-no-i18n as a whole "
+      "(\"Delete\", \"Back up now\" and the empty states stayed English)",
+      _re56.search(r'id="tag-list"[^>]*data-no-i18n', _dash56) is None
+      and _re56.search(r'id="fb-games"[^>]*data-no-i18n', _rmh56) is None, "a container is still guarded")
+_logs56 = _read56(_TPL56, "logs.html")
+check("templates: the audit log's User filter lists each user under data-no-i18n",
+      _re56.search(r"<option [^>]*data-no-i18n>\{\{ u \}\}</option>", _logs56) is not None, "unguarded")
+
+_JSNAMES56 = (("nags.js", r'class="alert-link"[^\']*data-no-i18n\'\s*\+\s*\' href="\'\s*\+\s*escapeHtml\(h\.url\)'),
+              ("remote_manage.js", r"<td class=\"small\" data-no-i18n>'\+escapeHtml\(e\.user"),
+              ("remote_firewall.js", r"data-no-i18n>' \+ esc\(g\.comment"),
+              ("remote_firewall.js", r'badge bg-dark" data-no-i18n>\' \+ esc\(c\)'),
+              ("remote_manage_backups.js", r"<strong data-no-i18n>'\+escapeHtml\(g\.name\)"),
+              ("remote_manage_backups.js", r"<span data-no-i18n>'\+escapeHtml\(g\.host\)"))
+_jsbad56 = [f for f, rx in _JSNAMES56 if _re56.search(rx, _read56(_JS56, f)) is None]
+check("scripts: a host name, a username, a rule comment and a game or host name in the backup list are "
+      "each written under data-no-i18n", not _jsbad56, repr(_jsbad56))
+
+# ── the tag list: the count is a node, each phrase another ───────────────────────────────────────
+_ST56 = _read56(_JS56, "server_tags.js")
+_name56 = "tag list: phrases the translator can match"
+_out56 = _node56(_name56, _DOM56 + (
+    "global.window = global; const box = new Node56('DIV'); global.__ids = {'tag-list': box};\n"
+    "var TAGS = [{id: 1, name: 'Admin', color: '', server_count: 3, notify: false}];\n"
+    "function deleteTag(){}\n"
+    + _cut47(_ST56, "function tagMuted(") + "\n" + _cut47(_ST56, "function chip(") + "\n"
+    + _cut47(_ST56, "function renderTagList(") + "\n"
+    "renderTagList(); console.log(JSON.stringify(visibleTexts(box)));\n"))
+if _out56 is not None:
+    check("tag list: each row's words are whole nodes the catalog has (\"3 server(s) · alerts muted\" was one "
+          "node no key matched), and the tag's own name is kept from the translator",
+          isinstance(_out56, list) and "Admin" not in _out56
+          and all(_v in _ES56 or not _re56.search(r"[A-Za-z]{2}", _v) for _v in _out56), repr(_out56))
+
+# ── the host page's Maintenance tab and its loaders, for a delegated host admin ──────────────────
+_mli56 = _rmh56.index('data-mtab-btn="maintenance"')
+_mif56 = _rmh56.rfind("{% if _host_ctl %}", 0, _mli56)
+check("host page: the Maintenance tab is offered only where its cards render (_host_ctl) — a delegated host "
+      "admin on the panel host opened it onto a blank page",
+      _mif56 > 0 and "{% endif %}" not in _rmh56[_mif56:_mli56], _rmh56[max(0, _mli56 - 300):_mli56])
+_RMHJ56 = _read56(_JS56, "remote_manage_host.js")
+_name56 = "host page: panel-only loaders"
+_out56 = _node56(_name56, (
+    "global.window = global; global.MOUNT = ''; const asked = [];\n"
+    "global.fetch = u => { asked.push(u); return new Promise(() => {}); };\n"
+    "global.document = {getElementById: () => null};\n"
+    + "\n".join(_cut47(_RMHJ56, h)
+                for h in ("function loadIntegrity(", "function loadDbStats(", "function loadAutoUpd(")) + "\n"
+    + _cut47(_RMB56, "function loadBackups(") + "\n"
+    "loadIntegrity(); loadDbStats(); loadAutoUpd(); loadBackups(); console.log(JSON.stringify(asked));\n"))
+if _out56 is not None:
+    check("host page: with the panel-only cards not rendered (a delegate's page) their four loaders ask "
+          "nothing — each was a superadmin-only request answered 403 on every load",
+          _out56 == [], repr(_out56))
+
+# ── the account page's layout card follows its own buttons ───────────────────────────────────────
+_AS56 = _read56(_JS56, "account_sessions.js")
+_name56 = "account: layout card after publish and reset"
+_out56 = _node56(_name56, (
+    "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
+    "global.window = global; global.MOUNT = ''; global.toast = () => 0; global.t = s => s;\n"
+    "global.confirmDialog = o => o.onConfirm(); function mp(){ return ''; }\n"
+    "const clear = {disabled: true}, pub = {disabled: false}, reset = {disabled: false};\n"
+    "const own = {hidden: false}, dflt = {hidden: true};\n"
+    "global.document = {getElementById: id => ({'acct-layout-own': own, 'acct-layout-default': dflt})[id] || null,\n"
+    "  querySelector: s => s.indexOf('clearDashDefault') >= 0 ? clear\n"
+    "                   : s.indexOf('publishDashLayout') >= 0 ? pub : null};\n"
+    "global.fetch = () => Promise.resolve({ok: true, json: () => Promise.resolve({success: true})});\n"
+    + _AS56[_AS56.index("// Publish this superadmin"):_AS56.rindex("})();")] + "\n"
+    "(async () => { publishDashLayout(pub); await settle(); const out = {clear: clear.disabled};\n"
+    "  resetDashLayout(reset); await settle();\n"
+    "  Object.assign(out, {reset: reset.disabled, pub: pub.disabled, own: own.hidden, dflt: dflt.hidden});\n"
+    "  console.log(JSON.stringify(out)); })();\n"))
+if _out56 is not None:
+    check("account: after Publish, \"Remove the panel default\" is enabled; after Reset, Publish is disabled "
+          "and the card says the default order is in use (both waited for a reload)",
+          _out56 == {"clear": False, "reset": True, "pub": True, "own": True, "dflt": False}, repr(_out56))
+_acct56 = _read56(_TPL56, "account.html")
+check("account: both layout sentences are in the page, one hidden, so the swap stays translated",
+      'id="acct-layout-own"' in _acct56 and 'id="acct-layout-default"' in _acct56, "a sentence is missing")
+
+# ── the install page: Refresh list comes back; the GMod option follows the game ──────────────────
+_MS56 = _read56(_JS56, "manage_servers.js")
+_name56 = "install page: Refresh list after a failed swap"
+_out56 = _node56(_name56, (
+    "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
+    "global.window = global; global.MOUNT = ''; global.toast = () => 0;\n"
+    "global.refreshSection = () => Promise.resolve();   // its page fetch failed: nothing swapped\n"
+    "global.fetch = () => Promise.resolve({json: () => Promise.resolve({success: true, games: 141})});\n"
+    "const opt = {style: {display: ''}}, sel = {value: '', options: []};\n"
+    "global.document = {getElementById: id => ({'gmod-content-opt': opt, 'game-type-select': sel})[id] || null};\n"
+    + _cut47(_MS56, "function refreshGameList(") + "\n" + _cut47(_MS56, "function filterGamesForHost(") + "\n"
+    "(async () => { const btn = {innerHTML: 'Refresh list', getAttribute: () => null, disabled: false};\n"
+    "  refreshGameList(btn); await settle(); filterGamesForHost();\n"
+    "  console.log(JSON.stringify({disabled: btn.disabled, label: btn.innerHTML, gmod: opt.style.display})); })();\n"))
+if _out56 is not None:
+    check("install page: Refresh list is usable again after a refresh whose page fetch failed (it stayed "
+          "disabled on \"Refreshing…\")", _out56.get("disabled") is False and _out56.get("label") == "Refresh list",
+          repr(_out56))
+    check("install page: ...and the GMod content option hides when no game is selected (a refreshed list "
+          "left it showing beside an empty select)", _out56.get("gmod") == "none", repr(_out56))
+
+# ── the 2FA reminder with site data blocked ─────────────────────────────────────────────────────
+_name56 = "2fa reminder: blocked storage"
+_out56 = _node56(_name56, (
+    "global.window = global; const nag = {removed: false, remove(){ this.removed = true; }};\n"
+    "global.document = {getElementById: () => nag};\n"
+    "Object.defineProperty(global, 'sessionStorage', {get(){ throw new Error('SecurityError'); }});\n"
+    "let threw = null;\n"
+    "try { eval(" + _json56.dumps(_read56(_JS56, "otp_nag.js")) + "); } catch (e) { threw = e.message; }\n"
+    "console.log(JSON.stringify({threw, removed: nag.removed}));\n"))
+if _out56 is not None:
+    check("2fa reminder: where sessionStorage throws (site data blocked) the script does not throw on load, "
+          "and the banner stays", _out56 == {"threw": None, "removed": False}, repr(_out56))
+
+# ── the file editor: the highlighted row is the file it holds ────────────────────────────────────
+_SF56 = _read56(_JS56, "server_files.js")
+_name56 = "file editor: highlight follows the open file"
+_out56 = _node56(_name56, (
+    "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
+    "global.window = global; global.MOUNT = ''; global.serverId = 1; global.toast = () => 0;\n"
+    "global.CSS = {escape: s => s}; var curFile = 'a.cfg';\n"
+    "const mk = p => ({p, on: false, classList: {add(){ this.o.on = true; }, remove(){ this.o.on = false; }}});\n"
+    "const rows = [mk('a.cfg'), mk('big.bin')]; rows.forEach(r => r.classList.o = r); rows[1].on = true;\n"
+    "global.document = {getElementById: () => ({textContent: '', style: {}}),\n"
+    "  querySelectorAll: () => rows.filter(r => r.on),\n"
+    "  querySelector: s => rows.find(r => s.indexOf('\"' + r.p + '\"') >= 0) || null};\n"
+    "global.fetch = () => Promise.resolve({json: () => Promise.resolve({error: 'File too large'})});\n"
+    + ("var _openSeq = 0;\n" + _cut47(_SF56, "function _r12c_markOpenFile(") + "\n"
+       if "function _r12c_markOpenFile(" in _SF56 else "var _openSeq = 0;\n")
+    + _cut47(_SF56, "function openFile(") + "\n"
+    "(async () => { openFile('big.bin'); await settle();\n"
+    "  console.log(JSON.stringify({cur: curFile, lit: rows.filter(r => r.on).map(r => r.p)})); })();\n"))
+if _out56 is not None:
+    check("file editor: a file that cannot be opened leaves the highlight on the file the editor still holds "
+          "(the refused row stayed lit over the other file's text)",
+          _out56 == {"cur": "a.cfg", "lit": ["a.cfg"]}, repr(_out56))
+
+# ── the dashboard's failed-install resync is bounded ─────────────────────────────────────────────
+_DJ56 = _read56(_JS56, "dashboard.js")
+_name56 = "dashboard: failed-banner resync bounded"
+_out56 = _node56(_name56, (
+    "global.window = global; let swaps = 0; global.refreshSection = () => { swaps++; };\n"
+    "let shown = [];\n"
+    "global.document = {getElementById: () => ({}),\n"
+    "  querySelectorAll: () => shown.map(id => ({getAttribute: () => id}))};\n"
+    + (_DJ56[_DJ56.index("var _r12c_failedAsked"):_DJ56.index("\n", _DJ56.index("var _r12c_failedAsked"))] + "\n"
+       if "var _r12c_failedAsked" in _DJ56 else "")
+    + _cut47(_DJ56, "function _dashResyncFailedBanners(") + "\n"
+    "const failed = [{id: 7, status: 'failed'}]; const out = {};\n"
+    "for (let i = 0; i < 6; i++) _dashResyncFailedBanners(failed);   // a banner the page never renders\n"
+    "out.stuck = swaps; shown = ['7']; _dashResyncFailedBanners(failed); shown = [];\n"
+    "_dashResyncFailedBanners(failed); out.again = swaps;\n"
+    "console.log(JSON.stringify(out));\n"))
+if _out56 is not None:
+    check("dashboard: a failed set the page never shows a banner for is re-rendered for a few times, not on "
+          "every 8 s poll forever", _out56.get("stuck") == 3, repr(_out56))
+    check("dashboard: ...and once the two agree, a new disagreement re-renders again (control)",
+          _out56.get("again") == 4, repr(_out56))
+
+# ── the host page's Console button while a server installs ───────────────────────────────────────
+_con56 = _re56.search(r'<a href="\{\{ url_for\(\'server_detail\', server_id=gs\.id\) \}\}"[^>]*>', _rmh56)
+check("host page: a server still installing has its Console button disabled, as on the dashboard (it "
+      "bounced with \"still installing\")",
+      _con56 is not None and "{% if busy %} disabled{% endif %}" in _con56.group(0)
+      and "{% set busy = (not gs.installed) or gs.status in ('installing', 'configuring') %}"
+      in _rmh56[:_con56.start()], _con56.group(0) if _con56 else "no Console link")

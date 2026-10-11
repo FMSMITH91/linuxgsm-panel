@@ -245,12 +245,19 @@ function browse(path){
 // Only the LATEST open is shown, as browse() keeps only its latest listing: two quick clicks whose
 // answers came back out of order left the second row highlighted over the first file's text.
 var _openSeq = 0;
+// The highlighted row is the file the editor HOLDS. A click highlights its row before the read, and
+// a read that is refused (too large, binary) or fails left that row lit over the earlier file's
+// text — which is the one Save writes.
+function _r12c_markOpenFile(){
+  document.querySelectorAll('#file-list .list-group-item.active').forEach(function(x){ x.classList.remove('active'); });
+  if(curFile){ var open=document.querySelector('#file-list [data-path="'+CSS.escape(curFile)+'"]'); if(open) open.classList.add('active'); }
+}
 function openFile(path){
   var seq = ++_openSeq;
   document.getElementById('file-save-msg').textContent='';
   fetch(MOUNT+'/api/server/'+serverId+'/file?path='+encodeURIComponent(path)).then(r=>r.json()).then(d=>{
     if(seq !== _openSeq) return;
-    if(d.error){ if(window.toast) toast(d.error, 'danger'); return; }
+    if(d.error){ _r12c_markOpenFile(); if(window.toast) toast(d.error, 'danger'); return; }
     curFile=path;
     document.getElementById('editor-empty').style.display='none';
     document.getElementById('editor-wrap').style.display='';
@@ -261,7 +268,7 @@ function openFile(path){
     syncGutter();
     var edl=document.getElementById('editor-download');
     if(edl) edl.href=MOUNT+'/server/'+serverId+'/download?path='+encodeURIComponent(path);
-  }).catch(()=>{});
+  }).catch(function(){ if(seq === _openSeq) _r12c_markOpenFile(); });
 }
 // ── Editor line numbers ───────────────────────────────────────────────────────────────────────
 // A textarea cannot draw its own line numbers, so a gutter sits beside it and is kept in step by

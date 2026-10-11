@@ -89,7 +89,8 @@ function _cap(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
 
 function confirmActionDialog(action, btn, note){
   confirmDialog({
-    title: _cap(action) + ' server',
+    // The whole title, translated: "Restart server" was a catalog key, "Stop server" was not.
+    title: t(action === 'stop' ? 'Stop server' : 'Restart server'),
     icon: action === 'stop' ? 'stop-fill' : 'arrow-clockwise',
     body: _esc(_cap(action)) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?'
           + (note ? ' <span class="text-secondary">' + _esc(note) + '</span>' : ''),
@@ -118,37 +119,81 @@ function actionWithPlayerCheck(action, btn) {
   });
 }
 
+// One element with its class and text — textContent, so nothing here is markup.
+function _r12c_el(tag, cls, text){
+  var el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+// Built node by node, every fixed piece a WHOLE sentence chosen per action and per count. It was
+// one innerHTML string with the count and the server name spliced into the prose, so the page's
+// translator met text nodes like " players are connected to " that no catalog key could match:
+// a Spanish or French viewer got the whole dialog in English except "Cancel". The count and the
+// server's name sit in their own data-no-i18n elements; t() translates each sentence as it is
+// built (the walker would too, but this way the dialog is right on its first frame).
 function actionPlayersDialog(action, n, btn) {
-  var lower = action;                                        // restart / stop
-  var endpoint = action === 'stop' ? 'stop-when-empty' : 'restart-when-empty';
-  var nowIcon = action === 'stop' ? 'stop-fill' : 'arrow-clockwise';
-  // "Stop" + "ping" happens to spell Stopping; "Restart" + "ping" spells Restartping, which is
-  // what this dialog said on every restart with players connected.
-  var gerund = action === 'stop' ? 'Stopping' : 'Restarting';
+  var stop = action === 'stop';
+  var endpoint = stop ? 'stop-when-empty' : 'restart-when-empty';
+  var one = n === 1;
   var ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML = '<div class="card" style="max-width:540px;width:100%;">'  // nosemgrep
-    + '<div class="card-header"><i class="bi bi-people-fill"></i> Players are online</div>'
-    + '<div class="card-body">'
-    + '<p class="mb-2"><strong>' + n + '</strong> player' + (n===1?' is':'s are') + ' connected to <strong>' + _esc(SERVER_NAME) + '</strong>. ' + gerund + ' now disconnects ' + (n===1?'them':'everyone') + '.</p>'
-    + '<p class="small text-secondary mb-3">Are you sure you want to ' + lower + ' with players on?</p>'
-    + '<div class="d-flex flex-column gap-2">'
-    + '<button class="btn btn-warning" id="rd-now"><i class="bi bi-' + nowIcon + '"></i> Yes, ' + lower + ' now (disconnect ' + n + ' player' + (n===1?'':'s') + ')</button>'
-    + '<button class="btn btn-success" id="rd-wait"><i class="bi bi-hourglass-split"></i> No — ' + lower + ' when the server is empty</button>'
-    + '<button class="btn btn-outline-secondary" id="rd-cancel">Cancel</button>'
-    + '</div></div></div>';
+  var card = _r12c_el('div', 'card');
+  card.style.cssText = 'max-width:540px;width:100%;';
+  var head = _r12c_el('div', 'card-header');
+  head.appendChild(_r12c_el('i', 'bi bi-people-fill'));
+  head.appendChild(document.createTextNode(' '));
+  head.appendChild(_r12c_el('span', null, t('Players are online')));
+  card.appendChild(head);
+  var body = _r12c_el('div', 'card-body');
+  var who = _r12c_el('p', 'mb-2');
+  var count = _r12c_el('strong', null, String(n));
+  count.setAttribute('data-no-i18n', '');
+  who.appendChild(count);
+  who.appendChild(document.createTextNode(' '));
+  who.appendChild(_r12c_el('span', null, t(one ? 'player is connected to' : 'players are connected to')));
+  who.appendChild(document.createTextNode(' '));
+  var name = _r12c_el('strong', null, SERVER_NAME);
+  name.setAttribute('data-no-i18n', '');
+  who.appendChild(name);
+  who.appendChild(document.createTextNode('. '));
+  who.appendChild(_r12c_el('span', null, t(stop ? (one ? 'Stopping now disconnects them.' : 'Stopping now disconnects everyone.')
+                                                 : (one ? 'Restarting now disconnects them.' : 'Restarting now disconnects everyone.'))));
+  body.appendChild(who);
+  body.appendChild(_r12c_el('p', 'small text-secondary mb-3',
+                            t(stop ? 'Are you sure you want to stop with players on?'
+                                   : 'Are you sure you want to restart with players on?')));
+  var btns = _r12c_el('div', 'd-flex flex-column gap-2');
+  function button(id, cls, icon, label){
+    var b = _r12c_el('button', cls);
+    b.id = id;
+    if (icon) { b.appendChild(_r12c_el('i', 'bi bi-' + icon)); b.appendChild(document.createTextNode(' ')); }
+    b.appendChild(_r12c_el('span', null, label));
+    btns.appendChild(b);
+    return b;
+  }
+  var now = button('rd-now', 'btn btn-warning', stop ? 'stop-fill' : 'arrow-clockwise',
+                   t(stop ? 'Yes, stop now and disconnect them' : 'Yes, restart now and disconnect them'));
+  var wait = button('rd-wait', 'btn btn-success', 'hourglass-split',
+                    t(stop ? 'No — stop when the server is empty' : 'No — restart when the server is empty'));
+  var cancel = button('rd-cancel', 'btn btn-outline-secondary', null, t('Cancel'));
+  body.appendChild(btns);
+  card.appendChild(body);
+  ov.appendChild(card);
   document.body.appendChild(ov);
   function close(){ ov.remove(); }
-  ov.querySelector('#rd-now').onclick = function(){ close(); _doServerAction(action, btn); };
-  ov.querySelector('#rd-wait').onclick = function(){
+  now.onclick = function(){ close(); _doServerAction(action, btn); };
+  wait.onclick = function(){
     close();
     fetch(MOUNT + '/api/server/' + serverId + '/' + endpoint, {method:'POST', headers:{'Content-Type':'application/json'}})
       .then(r => r.json()).then(function(d){
-        toast(d.message || ('Queued — will ' + lower + ' once empty.'), d.success ? 'success' : 'danger');
+        toast(d.message || t(stop ? 'Queued — will stop once empty.' : 'Queued — will restart once empty.'),
+              d.success ? 'success' : 'danger');
         if (d.success) { showPendingBanner(action); }
-      }).catch(function(){ toast('Could not queue the ' + lower, 'danger'); });
+      }).catch(function(){ toast(t(stop ? 'Could not queue the stop' : 'Could not queue the restart'), 'danger'); });
   };
-  ov.querySelector('#rd-cancel').onclick = close;
+  cancel.onclick = close;
   ov.addEventListener('click', function(e){ if (e.target === ov) close(); });
 }
 
