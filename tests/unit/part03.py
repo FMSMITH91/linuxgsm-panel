@@ -97,10 +97,10 @@ try:
     _p, _ch = _app_mod.resolve_free_port(None, 1, 27015, "csgo")
     check("free-port: a STOPPED Source sibling's configured SourceTV port is not handed out",
           _p == 27025, "picked %s" % _p)
-    # The control that names the cause: with the aux read failing, the blocks are all the
+    # The control that names the cause: with no aux ports configured, the blocks are all the
     # allocator has and it goes back to 27020 — so the check above is measuring the aux ports and
-    # not merely the five game-port blocks.
-    _app_mod.lgsm_get_values = lambda remote, user, selfname, keys: None
+    # not merely the five game-port blocks. (A read that FAILED — None — now refuses; part51.)
+    _app_mod.lgsm_get_values = lambda remote, user, selfname, keys: {k: "" for k in keys}
     _p_noaux, _ = _app_mod.resolve_free_port(None, 1, 27015, "csgo")
     check("free-port: ...and the blocks alone would have picked 27020, which is what this fixes",
           _p_noaux == 27020, "picked %s" % _p_noaux)

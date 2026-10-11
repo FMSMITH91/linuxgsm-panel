@@ -399,7 +399,7 @@ def _dedupe_aux_ports(have, occupied):
     return updates
 
 
-def _add_sibling_ports(occupied, remote, remote_id, skip_short_name=None):
+def _add_sibling_ports(occupied, remote, remote_id, skip_short_name=None, strict=False):
     """Union into `occupied` every panel game server's reserved port block on this remote, plus
     every OTHER valve server's CONFIGURED SourceTV/client ports. Returns `occupied`.
 
@@ -414,19 +414,32 @@ def _add_sibling_ports(occupied, remote, remote_id, skip_short_name=None):
     cannot drift apart again.
 
     `skip_short_name` is the instance being resolved: its own aux ports are the values being
-    moved, not a constraint on them."""
+    moved, not a constraint on them.
+
+    `strict` (resolve_free_port): a sibling whose config could not be read raises
+    PortScanUnreadable instead of counting as "no aux ports". lgsm_get_values answers None for
+    exactly that — a tailscale/local read that timed out does not raise — and `or {}` read it as
+    "none configured", so the stopped sibling's sourcetvport looked free and a new install took
+    it: the very collision this walk exists to prevent. Allocating a port refuses on an unread
+    live scan for the same reason; the post-install aux-port move stays best-effort."""
     for e in GameServer.query.filter_by(remote_id=remote_id).all():
         for k in range(_port_span(e.game_type)):
             occupied.add(e.port + k)
         if e.short_name == skip_short_name or sm_game_engine(e.game_type) != "valve":
             continue
         try:
-            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS) or {}
-            for v in sib.values():
-                if str(v).strip().isdecimal():
-                    occupied.add(int(str(v).strip()))
+            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS)
         except Exception:
             _log.debug("aux-port: sibling servercfg read failed", exc_info=True)
+            sib = None
+        if sib is None:
+            if strict:
+                raise PortScanUnreadable("the LinuxGSM config of %s on %s could not be read"
+                                         % (e.short_name, getattr(remote, "name", "the host")))
+            continue
+        for v in sib.values():
+            if str(v).strip().isdecimal():
+                occupied.add(int(str(v).strip()))
     return occupied
 
 
@@ -2143,7 +2156,8 @@ def resolve_free_port(remote, remote_id, desired, game_type):
     configured on this remote's valve servers, which no span covers and which a stopped server
     still owns. Returns (start_port, changed), or (None, False)
     when no free block exists near `desired` — see _first_free_block on why that is not a port.
-    Raises PortScanUnreadable when the host's listening ports could not be read.
+    Raises PortScanUnreadable when the host's listening ports, or a valve sibling's configured
+    aux ports, could not be read.
 
     The span makes the increment game-correct: single-port games (most, incl. Call of Duty and
     Source) pack sequentially (28960, 28961, …) instead of wastefully skipping every other
@@ -2167,7 +2181,7 @@ def resolve_free_port(remote, remote_id, desired, game_type):
     # Plus every panel server's reserved block (covers STOPPED servers, which aren't listening) —
     # AND every valve sibling's configured SourceTV/client ports, which are reserved for exactly
     # the same reason and were missing here. See _add_sibling_ports for what that cost.
-    _add_sibling_ports(occupied, remote, remote_id)
+    _add_sibling_ports(occupied, remote, remote_id, strict=True)
     p = _first_free_block(desired, span, occupied)
     if p is None:
         return None, False      # nothing free nearby — the caller must refuse, not guess
