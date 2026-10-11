@@ -339,13 +339,18 @@ def _bind_refusal(served, new_bind):
             return ("Bind address must be an IP — e.g. 0.0.0.0 (all "
                     "interfaces), 127.0.0.1 (localhost), or this host's "
                     "Tailscale IP.")
+        # With Tailscale Serve the one bind besides the wildcard is Serve's own upstream,
+        # 127.0.0.1 (privileged.ts_serve_argv hardcodes it). Any other address breaks Serve and
+        # locks you out — ::1 too: it is loopback, but an IPv6 socket on ::1 refuses Serve's
+        # IPv4 connection, and the move closes the public port as well. It passed while this
+        # tested "not in loopback", and the page then showed the stored ::1 as 127.0.0.1.
+        # (new_bind is canonical here, so no other spelling of 127.0.0.1 reaches this.)
+        if served and new_bind != "127.0.0.1":
+            return ("Tailscale Serve reaches the panel on localhost, so "
+                    "bind to 0.0.0.0 (all) or 127.0.0.1 (localhost). A "
+                    "specific IP would break Serve and lock you out.")
         if new_bind not in loopback:
-            # A specific IP: with Tailscale Serve (which proxies to localhost) this would
-            # break Serve and lock you out; without Serve it must at least be a real local IP.
-            if served:
-                return ("Tailscale Serve reaches the panel on localhost, so "
-                        "bind to 0.0.0.0 (all) or 127.0.0.1 (localhost). A "
-                        "specific IP would break Serve and lock you out.")
+            # A specific IP without Serve: it must at least be a real local IP.
             if not so.host_has_ip(new_bind):
                 return (f"{new_bind} isn't an address on this host — the "
                         "panel couldn't bind to it.")

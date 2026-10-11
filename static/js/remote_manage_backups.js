@@ -440,6 +440,10 @@ function bkRefreshDefaultNotes(full){
 }
 function setGameSchedule(id){
   var kpEl=document.getElementById('gsk-'+id);
+  // A number box reads "" for text it cannot parse ("7d", "-", "e"), and "" is the route's
+  // "inherit the default": the override was cleared and the page said "Schedule saved". Only the
+  // page can tell the two apart, so an unparseable box is refused here.
+  if(kpEl.validity && kpEl.validity.badInput){ bkMsg('Enter a whole number, or leave it empty.','text-danger'); return; }
   var iv=document.getElementById('gsi-'+id).value, kp=kpEl.value.trim();   // "" = inherit the default
   // Only the field that CHANGED from what is stored. The select and the box both fire this, and
   // the route leaves an absent field alone; posting both meant a change to one re-sent the other

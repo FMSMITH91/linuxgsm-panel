@@ -801,25 +801,32 @@ def _register_panel_backups(app):
     @superadmin_required
     def api_panel_backup_settings():
         data = _json_body()
+        # Absent key = leave it alone, so an unrelated settings save cannot silently turn
+        # encryption off. "" is the explicit "stop encrypting". Never logged or echoed back.
+        _pp = data.get("passphrase") if "passphrase" in data else None
+        # Text only, and judged BEFORE any default: a `null`, `false`, `0` or `[]` was turned into
+        # "" by an `or ""` ahead of the type test, so a script meaning "leave it" switched
+        # encryption off. And not stripped (a passphrase's spaces are part of it): a number raised
+        # TypeError out of len() and a list reached encrypt_secret, both as a 500.
+        if "passphrase" in data and not isinstance(_pp, str):
+            return jsonify({"success": False, "message": "The passphrase must be text."}), 400
+        # bk.MIN_PASSPHRASE_LEN, not a literal 12: set_passphrase() enforces the same rule and
+        # raises below it, so two independent numbers here would mean a drift turns a friendly
+        # 400 into a 500.
+        if _pp and len(_pp) < bk.MIN_PASSPHRASE_LEN:
+            return jsonify({"success": False,
+                            "message": "Use at least %d characters — this is the only thing "
+                                       "protecting a backup that leaves the machine."
+                                       % bk.MIN_PASSPHRASE_LEN}), 400
+        # A JSON boolean when given: bool("false") is True, so a request to stop backups started them.
+        if data.get("enabled") is not None and not isinstance(data.get("enabled"), bool):
+            return jsonify({"success": False, "message": "enabled must be true or false."}), 400
+        # Only now, with the passphrase known good: a refused one used to leave the other settings
+        # saved while the page reported the save as failed.
         s = bk.set_settings(enabled=data.get("enabled"), keep_days=data.get("keep_days"))
         full = bk.set_full_settings(interval_days=data.get("full_interval_days"),
                                     keep=data.get("full_keep"))
-        # Absent key = leave it alone, so an unrelated settings save cannot silently turn
-        # encryption off. "" is the explicit "stop encrypting". Never logged or echoed back.
-        if "passphrase" in data:
-            _pp = data.get("passphrase") or ""
-            # Text only, and not stripped (a passphrase's spaces are part of it): a number raised
-            # TypeError out of len() and a list reached encrypt_secret, both as a 500.
-            if not isinstance(_pp, str):
-                return jsonify({"success": False, "message": "The passphrase must be text."}), 400
-            # bk.MIN_PASSPHRASE_LEN, not a literal 12: set_passphrase() enforces the same rule and
-            # raises below it, so two independent numbers here would mean a drift turns a friendly
-            # 400 into a 500.
-            if _pp and len(_pp) < bk.MIN_PASSPHRASE_LEN:
-                return jsonify({"success": False,
-                                "message": "Use at least %d characters — this is the only thing "
-                                           "protecting a backup that leaves the machine."
-                                           % bk.MIN_PASSPHRASE_LEN}), 400
+        if _pp is not None:
             bk.set_passphrase(_pp)
             s = bk.get_settings()
             log_action(current_user, "panel_backup_encryption", target=LOCAL_HOST_LABEL,

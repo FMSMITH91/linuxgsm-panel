@@ -6,7 +6,7 @@ from flask import (jsonify)
 from flask_login import (current_user, login_required)
 from panel.security.auth import (log_action, MANAGE_REMOTES, get_remote, permission_required)
 import time
-from panel.core.http import (_json_body)
+from panel.core.http import (_json_body, _r12c_json_flag)
 from app import (_refuse_on_panel_host)
 from panel.routes._shared import (_bootstrap_jobs, _bootstrap_lock)
 from panel.routes._shared import (_begin_bootstrap)
@@ -33,12 +33,19 @@ def register(app):
         data = _json_body()
         opts = {
             "set_timezone": data.get("timezone", "UTC"),
-            "enable_ufw": data.get("enable_ufw", True),
-            "install_lgsm_deps": data.get("install_lgsm_deps", True),
+            "enable_ufw": _r12c_json_flag(data, "enable_ufw", True),
+            "install_lgsm_deps": _r12c_json_flag(data, "install_lgsm_deps", True),
             "username": data.get("lgsm_user", ""),
-            "install_fail2ban": data.get("install_fail2ban", True),
-            "do_reboot": data.get("reboot", True),
+            "install_fail2ban": _r12c_json_flag(data, "install_fail2ban", True),
+            "do_reboot": _r12c_json_flag(data, "reboot", True),
         }
+        # Each switch is a JSON boolean or a 400: read by truthiness, {"reboot": "false"} rebooted
+        # the host and {"enable_ufw": "no"} turned its firewall on.
+        _r12c_bad = [k for k in ("enable_ufw", "install_lgsm_deps", "install_fail2ban", "do_reboot")
+                     if opts[k] is None]
+        if _r12c_bad:
+            return jsonify({"success": False,
+                            "message": "These options must be true or false: %s." % ", ".join(_r12c_bad)}), 400
         # Refused HERE as well as in the worker: the worker's refusal came after the kick-off
         # audit row below, which then recorded whatever timezone and account text was posted.
         bad = _sm._bsval_refusal(opts["set_timezone"], opts["username"])

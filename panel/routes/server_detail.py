@@ -26,7 +26,7 @@ import concurrent.futures
 import functools
 import re
 import threading
-from panel.core.http import (_json_body, _json_str, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
     _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons)
@@ -1052,7 +1052,11 @@ def _register_schedules(app):
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         data = _json_body()
-        enabled = bool(data.get("enabled"))
+        # A JSON boolean or a 400: bool("false") is True, so a request to turn autostart off
+        # turned it ON (and installed the monitor cron).
+        enabled = _r12c_json_flag(data, "enabled", None)
+        if enabled is None:
+            return jsonify({"success": False, "message": "enabled must be true or false."}), 400
         refused = _autostart_reboot_gate(gs, enabled)
         if refused is not None:
             return refused

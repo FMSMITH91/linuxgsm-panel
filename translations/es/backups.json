@@ -60,5 +60,6 @@
   "Your account password": "La contraseña de tu cuenta",
   "days": "días",
   "no backups yet": "sin copias todavía",
-  "“Back up game servers now” has never been run.": "«Copiar servidores de juego ahora» nunca se ha ejecutado."
+  "“Back up game servers now” has never been run.": "«Copiar servidores de juego ahora» nunca se ha ejecutado.",
+  "Enter a whole number, or leave it empty.": "Escribe un número entero o déjalo vacío."
 }
