@@ -245,6 +245,10 @@ def _register_panel_binding(app):
         cur_bind = (cfg.get("bind_host") or "0.0.0.0").strip()  # nosec B104
         new_port = _port_or(data.get("port"), None, lo=MIN_UNPRIVILEGED_PORT)
         new_bind = str(data.get("bind_host") or cur_bind).strip()
+        # Stored and judged in canonical form: "0:0:0:0:0:0:0:1" and "0::1" are ::1, and the
+        # loopback guard below once compared the TEXT, so those spellings bound the panel to
+        # loopback with no Serve in front of it. Text that is not an IP stays as typed (refused).
+        new_bind = canonical_ip(new_bind) or new_bind
 
         local = RemoteServer.query.filter_by(is_local=True).first()
         refusal = (_port_refusal(local, cur_port, new_port)
@@ -317,10 +321,15 @@ def _bind_refusal(served, new_bind):
     # binding to it.
     wildcard = {"0.0.0.0", "::"}  # nosec B104
     loopback = {"127.0.0.1", "::1", "localhost"}
+    addr = ip_address_or_none(new_bind)
+    # Judged on the parsed address, not the text: any spelling of ::1 or of a 127/8 address is
+    # loopback, and a loopback bind without Serve locks the panel out (as _panel_bind_is_public
+    # and app._bind_is_loopback already read it).
+    is_loopback = addr is not None and addr.is_loopback
     # ── Validate the bind address ──
     if new_bind not in wildcard:
         # A zone id is not an address to bind (see panel/core/validation.py).
-        if ip_address_or_none(new_bind) is None:
+        if addr is None:
             return ("Bind address must be an IP — e.g. 0.0.0.0 (all "
                     "interfaces), 127.0.0.1 (localhost), or this host's "
                     "Tailscale IP.")
@@ -334,7 +343,7 @@ def _bind_refusal(served, new_bind):
             if not so.host_has_ip(new_bind):
                 return (f"{new_bind} isn't an address on this host — the "
                         "panel couldn't bind to it.")
-    if new_bind in loopback and not served:
+    if is_loopback and not served:
         return ("Binding to localhost only would lock you out unless "
                 "Tailscale Serve is set up to reach the panel. Set up "
                 "Serve first.")
