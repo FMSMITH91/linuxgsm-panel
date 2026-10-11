@@ -478,6 +478,14 @@ _SCHED_REPORT_ACTIONS = (("scheduled_backup_overdue", "reported overdue"),
 _SCHED_AUDIT_DAYS = 30
 
 
+def _r12b_manual_line(res):
+    """_manual_line, unless config.json is unreadable: its defaults would say "never run"."""
+    if _r12b_config_unreadable():
+        res.add("- **Manual 'Back up game servers now'**: not known (config.json could not be read)")
+        return
+    _manual_line(res)
+
+
 def _manual_line(res):
     """The MANUAL "Back up game servers now" run, from COUNTS parsed off its summary's prefix.
 
@@ -489,9 +497,6 @@ def _manual_line(res):
     """
     from panel.ops import backup as bk
     head = "- **Manual 'Back up game servers now'**:"
-    if _r12b_config_unreadable():
-        res.add(head + " not known (config.json could not be read)")   # its defaults say "never run"
-        return
     s = bk.get_full_settings()
     if not s.get("last"):
         res.add(head + " never run")
@@ -698,7 +703,7 @@ def section_backups(ctx):
             ("game-server schedule", lambda: _schedule_lines(res, got.get("sched_servers"))),
             ("unattended game-server backups",
              lambda: _scheduled_audit_line(res, got.get("sched_audit"))),
-            ("manual full backup", lambda: _manual_line(res)),
+            ("manual full backup", lambda: _r12b_manual_line(res)),
             ("snapshots", lambda: _snapshots_line(res))):
         try:
             part()

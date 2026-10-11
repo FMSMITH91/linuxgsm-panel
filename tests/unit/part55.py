@@ -1,5 +1,6 @@
-"""Part 55 of the unit suite: the second 2026-10-11 review's game-files, debug-report, helper and
-route fixes (builder B).
+"""Part 55 of the unit suite: the second 2026-10-11 review's fixes (builder B).
+
+Game files, the debug report, the privileged helper and routes:
 
 * LinuxGSM configs: a value posted unchanged from secrets-<instance>.cfg is not copied into the
   plaintext instance cfg, and the Alerts card posts only the fields the user changed (run in node).
@@ -240,7 +241,7 @@ def _backups_unreadable55():
     _p9_patch(_bk55, "load_config", lambda *a, **k: _cfg55.UnreadableConfig({}))
     res = _base55.Result()
     _data55._settings_line(res)
-    _data55._manual_line(res)
+    _data55._r12b_manual_line(res)
     text = "\n".join(res.lines)
     fails = [f for f in res.findings if "fail" in repr(f)]
     check("debug report backups: an unreadable config.json is said, with backups refused, not "
