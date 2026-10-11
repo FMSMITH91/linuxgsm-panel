@@ -73,7 +73,8 @@ def _tool58(name, body):
     path = os.path.join(_BIN58, name)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("#!/bin/bash\n" + body)
-    os.chmod(path, 0o755)  # nosec B103 - a stand-in tool in this part's own temp dir
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in tool this part runs
+    os.chmod(path, 0o700)  # nosec B103 - a stand-in tool in this part's own temp dir
 
 
 def _arm58():
