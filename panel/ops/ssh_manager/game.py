@@ -1165,10 +1165,27 @@ def _bkpart_cleanup(server, user, selfname, before, rc, lock_refused, text_faile
     try:
         after = _bkpart_listing(server, user)
         name = _bkpart_candidate(before, after, selfname) if after else None
-        if name and _bkpart_remove(server, user, name, before[0]):
-            return " Removed the partial archive it left (%s)." % name
+        return _r13b_bkpart_judge(server, user, name, before[0]) if name else ""
     except Exception:
         _core._log.debug("partial backup cleanup failed", exc_info=True)
+    return ""
+
+
+def _r13b_bkpart_judge(server, user, name, started):
+    """Read this run's archive, and remove it only when the read PROVES it broken: a note, or "".
+
+    A failure LinuxGSM reported is not proof the archive is broken. v26.3.0 prints "FAIL: Problem
+    identifying the previous backup directory for exclusion", then "Backup created" and exits 0
+    with the archive whole; text alone removed two such archives on a live host (#416's rule). A
+    later step failing (the restart after the backup) exits 1 the same way. So the archive is read
+    first: whole is kept, empty or not readable to the end is removed, and anything the read could
+    not settle (the host not answering, a read that timed out, no decompressor) removes nothing.
+    """
+    code = _r13b_bkverify_code(server, user, name, started)
+    if code is None:
+        return " Its archive (%s) reads to the end, so it was kept." % name
+    if code in _R13B_BKVERIFY_BROKEN and _bkpart_remove(server, user, name, started):
+        return " Removed the partial archive it left (%s)." % name
     return ""
 
 
@@ -1196,7 +1213,11 @@ _BKVERIFY_TIMEOUT = 1700
 _BKVERIFY_OK = "__LGSMP_BKVERIFY_OK__"
 _BKVERIFY_WHY = {"MISSING": "the archive is not there", "EMPTY": "the archive is empty",
                  "OLD": "the archive was not written by this run",
-                 "CORRUPT": "the archive does not read to the end (incomplete or damaged)"}
+                 "CORRUPT": "the archive does not read to the end (incomplete or damaged)",
+                 "UNREAD": "the archive could not be read through here (the read timed out, or "
+                           "this host has no decompressor for it)"}
+# The answers that PROVE an archive broken, so a cleanup may remove it (_r13b_bkpart_judge).
+_R13B_BKVERIFY_BROKEN = frozenset({"EMPTY", "CORRUPT"})
 
 
 def _bkverify_text_failed(out, err):
@@ -1215,22 +1236,37 @@ def _bkverify_name(server, user, selfname, before, out):
 
 def _bkverify_archive(server, user, name, started):
     """None when ~/lgsm/backup/<name> is whole, else why not (a reason for the message)."""
+    code = _r13b_bkverify_code(server, user, name, started)
+    return None if code is None else _BKVERIFY_WHY.get(code, "the host could not be asked")
+
+
+def _r13b_bkverify_code(server, user, name, started):
+    """None when ~/lgsm/backup/<name> is whole, else a _BKVERIFY_WHY key ("ASK": no answer).
+
+    CORRUPT only when tar itself said so. A read that timed out (timeout's 124, or 125-127 for
+    timeout/tar not running) and an archive whose decompressor this host lacks are UNREAD: tar's
+    failure there says nothing about the archive, and a cleanup must not take it as proof.
+    """
     path = _core._quote("/home/%s/lgsm/backup/%s" % (user, name))
     since = (f'[ "$(stat -c %Y -- {path})" -ge {int(started)} ] || {{ echo OLD; exit 0; }}; '
              if started is not None else "")
     cmd = (f"[ -f {path} ] && [ ! -L {path} ] || {{ echo MISSING; exit 0; }}; "
            f"[ -s {path} ] || {{ echo EMPTY; exit 0; }}; " + since +
-           f"if timeout {_BKVERIFY_TIMEOUT} nice -n 10 tar -tf {path} >/dev/null 2>&1; "
-           f"then printf %s {_BKVERIFY_OK}; else echo CORRUPT; fi")
+           f"case {path} in *.zst) d=zstd;; *.gz) d=gzip;; *.xz) d=xz;; *.bz2) d=bzip2;; "
+           "*) d=;; esac; "
+           '[ -z "$d" ] || command -v "$d" >/dev/null 2>&1 || { echo UNREAD; exit 0; }; '
+           f"timeout {_BKVERIFY_TIMEOUT} nice -n 10 tar -tf {path} >/dev/null 2>&1; r=$?; "
+           f'if [ "$r" = 0 ]; then printf %s {_BKVERIFY_OK}; '
+           'elif [ "$r" -ge 124 ]; then echo UNREAD; else echo CORRUPT; fi')
     try:
         out, _, rc = _core.shell_as_game_user(server, user, cmd, timeout=_BKVERIFY_TIMEOUT + 100)
     except Exception:
         _core._log.debug("backup archive check failed", exc_info=True)
-        return "the host could not be asked"
+        return "ASK"
     out = (out or "").strip()
     if rc == 0 and out == _BKVERIFY_OK:
         return None
-    return _BKVERIFY_WHY.get(out, "the host could not be asked")
+    return out if rc == 0 and out in _BKVERIFY_WHY else "ASK"
 
 
 def _bkverify_unconfirmed(server, user, selfname, before, out):
@@ -1249,6 +1285,33 @@ def _bkverify_success(server, user, selfname, before, out, keep, headroom_note):
                        "No old backups were removed." % why), False
     _bkprune_after_success(server, user, keep)
     return True, ("Backed up — " + headroom_note if headroom_note else "Backed up"), False
+
+
+def _r13b_bk_warned(server, user, selfname, before, output, keep, headroom_note):
+    """run_game_backup's answer to an exit-0 run whose output has a LinuxGSM backup FAIL line.
+
+    The archive decides, not the text (_r13b_bkpart_judge): one that reads to the end is a backup —
+    kept, the old ones pruned as after any success, and LinuxGSM's line passed on as a warning.
+    One the read proves broken is removed; anything else is left where it is.
+    """
+    out, err = output
+    reason = _backup_failure_reason(out, err)
+    name = _bkverify_name(server, user, selfname, before, out)
+    if not name:
+        return False, (reason + " Which archive it wrote could not be found, so nothing was "
+                                "removed."), False
+    started = before[0] if before else None
+    code = _r13b_bkverify_code(server, user, name, started)
+    if code is None:
+        _bkprune_after_success(server, user, keep)
+        msg = ("Backed up, with a warning from LinuxGSM: %s. The archive (%s) was checked and "
+               "reads to the end." % (reason, name))
+        return True, (msg + " " + headroom_note if headroom_note else msg), False
+    note = ""
+    if (code in _R13B_BKVERIFY_BROKEN and started is not None
+            and _bkpart_remove(server, user, name, started)):
+        note = " Removed the partial archive it left (%s)." % name
+    return False, reason + " (" + _BKVERIFY_WHY.get(code, "the host could not be asked") + ")." + note, False
 
 
 def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
@@ -1290,6 +1353,8 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     text_failed = _bkverify_text_failed(out, err)
     if ok and not text_failed:
         return _bkverify_success(server, user, selfname, before, out, keep, headroom_note)
+    if ok:
+        return _r13b_bk_warned(server, user, selfname, before, (out, err), keep, headroom_note)
     if lock_refused:
         return False, ("A backup lock was in the way — a previous backup may still be running, or it "
                        "left a stale lock. Try again in a minute."), False

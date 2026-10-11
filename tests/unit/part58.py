@@ -26,7 +26,9 @@ import os
 import pwd as _pwd58
 import shutil as _shutil58
 import subprocess as _sp58  # nosec B404 - runs bash on the commands this part's code builds
+import tarfile as _tar58
 import tempfile as _tf58
+import time as _time58
 from types import SimpleNamespace as NS
 
 from unit.part01 import check
@@ -207,6 +209,83 @@ def _console_slots58():
     empty = _mon58._server_slots(gs, allow_console=True, primary=(None, None, None))
     check("player count: a console read that failed is no count, not 0 players; an empty table "
           "is 0 (control)", unread[0] is None and empty[0] == 0, repr((unread, empty)))
+
+
+# ── live regression from #416: a backup LinuxGSM called failed while its archive is whole ──────
+# LinuxGSM v26.3.0 on the owner's host: the FAIL below, then "Backup created" and exit 0, and the
+# archive complete (1.2G, the size of the earlier ones). #416's rule took the FAIL text alone as
+# proof and deleted that day's archives for two servers.
+_SELF58 = "csgoserver"
+_BKDIR58 = os.path.join("lgsm", "backup")
+_V26FAIL58 = ("[ FAIL ] Backup %s: Problem identifying the previous backup directory for exclusion.\n"
+              "BACKUP: FAIL: Problem identifying the previous backup directory for exclusion\n"
+              "[  OK  ] Backup %s: Completed: NAME, total size 1.2G\n"
+              "PASS: Backup created: NAME, total size 1.2G\n" % (_SELF58, _SELF58))
+_OLDBK58 = ["%s-2026-01-0%d-000000.tar.gz" % (_SELF58, d) for d in (1, 2, 3, 4)]
+
+
+def _tgz58(path, truncate=False):
+    """A real .tar.gz at `path` (random bytes, so it does not compress away); cut mid-stream."""
+    src = os.path.join(_BIN58, "bksrc")
+    os.makedirs(src, exist_ok=True)
+    for i in range(4):
+        with open(os.path.join(src, "f%d.bin" % i), "wb") as fh:
+            fh.write(os.urandom(16384))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with _tar58.open(path, "w:gz") as tf:
+        tf.add(src, arcname="serverfiles")
+    if truncate:
+        with open(path, "r+b") as fh:
+            fh.truncate(os.path.getsize(path) // 2)
+
+
+def _backup58(rc, out, truncate=False):
+    """run_game_backup over the throwaway home, LinuxGSM standing in: (result, name, listing)."""
+    bk = os.path.join(_HOME58, _BKDIR58)
+    _shutil58.rmtree(bk, ignore_errors=True)
+    for i, n in enumerate(_OLDBK58):
+        _tgz58(os.path.join(bk, n))
+        os.utime(os.path.join(bk, n), (_time58.time() - 86400 * (10 - i),) * 2)
+    name = "%s-%s.tar.gz" % (_SELF58, _time58.strftime("%Y-%m-%d-%H%M%S"))
+
+    def _run(server, user, action, **_k):
+        _tgz58(os.path.join(bk, name), truncate)
+        return out.replace("NAME", name), "", rc
+    _p9_patch(_p9_core, "run_as_game_user", _run)
+    # The disk checks before the run are part49's subject; here there is room.
+    _p9_patch(_game58.cron, "_ensure_backup_headroom", lambda *a, **k: "")
+    _p9_patch(_game58.cron, "backup_disk_info", lambda *a, **k: {"free": 0, "total": 0})
+    res = _game58.run_game_backup(NS(id=58), _USER58, _SELF58, keep=3, force=True)
+    return res, name, sorted(os.listdir(bk))
+
+
+def _backup_kept58():
+    res, name, ls = _backup58(0, _V26FAIL58)
+    check("backup: LinuxGSM's FAIL line with exit 0 and a WHOLE archive keeps the archive (read to "
+          "the end first) and is a backup with LinuxGSM's line as a warning",
+          res[0] is True and name in ls and "Problem identifying the previous backup" in res[1]
+          and "reads to the end" in res[1], repr((res, ls)))
+    check("backup: ...and the old backups are pruned to keep=3 as after any backup",
+          ls == sorted(_OLDBK58[2:] + [name]), repr(ls))
+    res, name, ls = _backup58(1, "[ FAIL ] Backup %s: Starting backup\n" % _SELF58)
+    check("backup: a run that exited 1 with a whole archive (a later step failed) keeps it, and "
+          "says why", res[0] is False and name in ls and "reads to the end, so it was kept" in res[1],
+          repr((res, ls)))
+
+
+def _backup_removed58():
+    res, name, ls = _backup58(0, _V26FAIL58, truncate=True)
+    check("backup: the same FAIL lines over an archive cut mid-stream still remove it, and nothing "
+          "old is pruned", res[0] is False and name not in ls and all(o in ls for o in _OLDBK58)
+          and "Removed the partial archive" in res[1], repr((res, ls)))
+    _tool58("timeout", "exit 124\n")         # the archive read runs out of time
+    try:
+        res, name, ls = _backup58(0, _V26FAIL58, truncate=True)
+    finally:
+        os.unlink(os.path.join(_BIN58, "timeout"))
+    check("backup: an archive whose read timed out is not taken as broken: kept, nothing pruned",
+          res[0] is False and name in ls and all(o in ls for o in _OLDBK58)
+          and "Removed" not in res[1], repr((res, ls)))
 
 
 # ── A04: the bots and the Refresh reason ────────────────────────────────────────────────────────
@@ -463,6 +542,8 @@ try:
     _capture_since58()
     _persistent_bans58()
     _console_slots58()
+    _backup_kept58()
+    _backup_removed58()
     _connect_echo58()
     _refresh_reason58()
     _localized_continued58()
