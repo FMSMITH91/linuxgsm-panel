@@ -317,7 +317,7 @@ def _localized_continued58():
     lines = ["oct. 11 10:00:00 h sudo[1]:      bob : (command continued) -pS3cretPass2",
              "Mär 11 10:00:00 h sudo[1]:      bob : (command continued) -pS3cretPass3",
              "Oct 11 10:00:00 h pkexec[2]: bob: Executing command [USER=root] [TTY=pts/0] "
-             "[CWD=/home/bob] [COMMAND=/usr/bin/mysql -u root -pS3cretPass4]",
+             + "[CWD=/home/bob] [COMMAND=/usr/bin/mysql -u root -pS3cretPass4]",
              "Oct 11 10:00:00 h doas[3]: bob ran command mysql -pS3cretPass5 as root from /home/bob"]
     kept, _v, _s = _logs58._split_priv(lines)
     text = "\n".join(kept)
