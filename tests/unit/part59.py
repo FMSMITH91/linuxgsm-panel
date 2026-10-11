@@ -410,7 +410,7 @@ _CON59 = (
     + "".join(_cut47(_SD59, h) + "\n" for h in (
         "function _loadOlderRows(", "function _r13c_notePanelPush(", "function _r13c_reshowPanelPushes(",
         "function loadMoreConsole(", "function refreshConsole(", "function showPanelBacklog(",
-        "function _newerPanelRows(", "function _panelLinesWiped("))
+        "function _newerPanelRows(", "function _panelLinesWiped(", "function _r13c_primeWipesPushes("))
     + "global.fetch = () => Promise.resolve({ok: true, json: () => Promise.resolve({lines: [{line: 'log1'}],\n"
     "  panel_lines: [{t: 100, line: '[panel] a'}], at: null})});\n"
     "function push(ts, data){ const d = {panel: true, ts: ts, data: data}; appendConsole(d.data);\n"

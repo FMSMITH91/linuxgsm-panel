@@ -405,6 +405,36 @@ def _js_claims(text, before):
     return is_js_ui_text(text) or is_js_ui_word(text, before[-80:]) or is_js_t_arg(text, before)
 
 
+def _js_whole_claim(joined, before):
+    """A literal-only run's text as ONE node, whitespace-collapsed, when it is claimed as such."""
+    key = re.sub(r"\s+", " ", joined).strip()
+    if _JS_TEXT_SLOT.search(before) and re.search(r"[A-Za-z]{3}", key):
+        return key
+    # A paragraph break: a confirm body ('Close the public web port?\n\nFunnel is on…'), often
+    # chosen by a ternary and passed on in a variable. is_js_ui_text refuses a "\n" (a fragment of
+    # a longer splice), but with nothing spliced in it is the whole node, and i18n.js looks it up
+    # whitespace-collapsed.
+    if "\n" in joined and is_js_ui_text(key):
+        return key
+    return None
+
+
+def _js_run_claims(run, standalone, source):
+    """The user-visible texts one run of literals (from _js_literal_runs) makes, as a list."""
+    before = source[max(0, run[0][2] - 160):run[0][2]]
+    joined = "".join(s[0] for s in run)
+    whole = _js_whole_claim(joined, before) if standalone else None
+    if whole:
+        return [whole]
+    # Judged whole when nothing is spliced in; part by part otherwise, as before.
+    parts = [(joined, before)] if standalone and len(run) > 1 else \
+        [(s[0], source[max(0, s[2] - 160):s[2]]) for s in run]
+    out = [text for text, bef in parts if _js_claims(text, bef)]
+    for s in run:
+        out.extend(js_markup_texts(s[0]))
+    return out
+
+
 def scan_js(js_dir=JS_DIR):
     """{string: {filename}} for every JS literal that reads as user-visible text."""
     found = {}
@@ -416,31 +446,8 @@ def scan_js(js_dir=JS_DIR):
         for run, standalone in _js_literal_runs(source):
             if any(1 <= s[1] <= len(lines) and JS_IGNORE in lines[s[1] - 1] for s in run):
                 continue
-            before = source[max(0, run[0][2] - 160):run[0][2]]
-            joined = "".join(s[0] for s in run)
-            if standalone and _JS_TEXT_SLOT.search(before):
-                key = re.sub(r"\s+", " ", joined).strip()
-                if re.search(r"[A-Za-z]{3}", key):
-                    found.setdefault(key, set()).add(name)
-                    continue
-            # A paragraph break: a confirm body ('Close the public web port?\n\nFunnel is on…'),
-            # often chosen by a ternary and passed on in a variable. is_js_ui_text refuses a "\n" (a
-            # fragment of a longer splice), but with nothing spliced in it is the whole node, and
-            # i18n.js looks it up whitespace-collapsed.
-            if standalone and "\n" in joined:
-                key = re.sub(r"\s+", " ", joined).strip()
-                if is_js_ui_text(key):
-                    found.setdefault(key, set()).add(name)
-                    continue
-            # Judged whole when nothing is spliced in; part by part otherwise, as before.
-            parts = [(joined, before)] if standalone and len(run) > 1 else \
-                [(s[0], source[max(0, s[2] - 160):s[2]]) for s in run]
-            for text, bef in parts:
-                if _js_claims(text, bef):
-                    found.setdefault(text, set()).add(name)
-            for s in run:
-                for seg in js_markup_texts(s[0]):
-                    found.setdefault(seg, set()).add(name)
+            for text in _js_run_claims(run, standalone, source):
+                found.setdefault(text, set()).add(name)
     return found
 
 

@@ -368,6 +368,20 @@ def _r13c_whole_number(v):
     return True
 
 
+def _r13c_settings_refusal(data):
+    """The 400 for a backup-settings field of the wrong type, or None."""
+    # A JSON boolean when given: bool("false") is True, so a request to stop backups started them.
+    if data.get("enabled") is not None and not isinstance(data.get("enabled"), bool):
+        return jsonify({"success": False, "message": "enabled must be true or false."}), 400
+    # A whole number or null (null = leave it): set_settings/set_full_settings skip a value they
+    # cannot read, so "7d" kept the stored number while this answered success — the 400 the
+    # per-server schedule gives (_BAD_FIELD).
+    bad = _r13c_unreadable_numbers(data, ("keep_days", "full_interval_days", "full_keep"))
+    if bad:
+        return jsonify({"success": False, "message": "Use a whole number for: %s." % ", ".join(bad)}), 400
+    return None
+
+
 def _r13c_unreadable_numbers(data, keys):
     """The keys in `keys` whose value is present, not null, and not readable as a whole number."""
     return [k for k in keys if data.get(k) is not None and not _r13c_whole_number(data.get(k))]
@@ -842,16 +856,9 @@ def _register_panel_backups(app):
                             "message": "Use at least %d characters — this is the only thing "
                                        "protecting a backup that leaves the machine."
                                        % bk.MIN_PASSPHRASE_LEN}), 400
-        # A JSON boolean when given: bool("false") is True, so a request to stop backups started them.
-        if data.get("enabled") is not None and not isinstance(data.get("enabled"), bool):
-            return jsonify({"success": False, "message": "enabled must be true or false."}), 400
-        # A whole number or null (null = leave it): set_settings/set_full_settings skip a value they
-        # cannot read, so "7d" kept the stored number while this answered success — the 400 the
-        # per-server schedule gives (_BAD_FIELD).
-        _bad = _r13c_unreadable_numbers(data, ("keep_days", "full_interval_days", "full_keep"))
-        if _bad:
-            return jsonify({"success": False,
-                            "message": "Use a whole number for: %s." % ", ".join(_bad)}), 400
+        refused = _r13c_settings_refusal(data)
+        if refused:
+            return refused
         # Only now, with the passphrase known good: a refused one used to leave the other settings
         # saved while the page reported the save as failed.
         s = bk.set_settings(enabled=data.get("enabled"), keep_days=data.get("keep_days"))

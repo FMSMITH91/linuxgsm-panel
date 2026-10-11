@@ -539,19 +539,23 @@ def _register_panel_port(app):
         if not ok:
             return jsonify({"success": False, "message": (
                 f"Couldn't remove every rule for port {port}; check the firewall page.")})
-        # "Only over your tailnet" is false while the panel's Serve route is on Funnel, and not
-        # known when Serve could not be read.
-        _facts = ts.panel_funnel_facts(load_config())
-        if _facts["funnelled"]:
-            return jsonify({"success": True, "message": (
-                f"Public port {port} closed. Funnel is on for the panel's Tailscale Serve address, "
-                f"so the panel is still reachable from the internet through it.")})
-        if _facts.get("unread"):
-            return jsonify({"success": True, "message": (
-                f"Public port {port} closed. Tailscale Serve could not be read, so whether Funnel "
-                f"still makes the panel reachable from the internet is not known.")})
-        return jsonify({"success": True, "message": (
-            f"Public port {port} closed — the panel is now reachable only over your tailnet.")})
+        return jsonify({"success": True, "message": _r13c_closed_port_message(port)})
+
+
+def _r13c_closed_port_message(port):
+    """What closing the panel's public port leaves: tailnet-only, still on Funnel, or not known.
+
+    "Only over your tailnet" is false while the panel's Serve route is on Funnel, and not known
+    when Serve could not be read (panel_funnel_facts' `unread`).
+    """
+    facts = ts.panel_funnel_facts(load_config())
+    if facts["funnelled"]:
+        return (f"Public port {port} closed. Funnel is on for the panel's Tailscale Serve address, "
+                f"so the panel is still reachable from the internet through it.")
+    if facts.get("unread"):
+        return (f"Public port {port} closed. Tailscale Serve could not be read, so whether Funnel "
+                f"still makes the panel reachable from the internet is not known.")
+    return f"Public port {port} closed — the panel is now reachable only over your tailnet."
 
 
 def _rv_on_panel_host(gs):

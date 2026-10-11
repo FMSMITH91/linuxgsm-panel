@@ -379,7 +379,7 @@ socket.on('console_output', function(data) {
     updateTsNotice();
   } else {
     appendConsole(data.data, data.ts, fromLog);
-    if (data.panel) _r13c_notePanelPush(data);
+    _r13c_notePanelPush(data);
   }
   if (stick) stickConsole();
 });
@@ -817,9 +817,9 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
       _consoleSig = sig;
       // Whether this answer primes the console on a page whose backlog is still to be shown: its
       // wipe then takes panel pushes off the page that only _r13c_reshowPanelPushes brings back.
-      var primed = false;
+      var reshow = false;
       if (!_consolePrimed && lines.length) {
-        primed = !_panelBacklogShown && !_returnOwed;
+        reshow = _r13c_primeWipesPushes();
         // FIRST poll after page load, and it actually returned something. The page was
         // server-rendered with a short tail, and this window reaches much further back — that
         // extra history is exactly what we want on screen, and appending only "what is newer than
@@ -867,7 +867,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
       }
       showPanelBacklog(panelLines);
       // The priming wipe took any panel push already shown; put back those the backlog lacks.
-      if (primed && !_returnOwed) _r13c_reshowPanelPushes(panelLines);
+      _r13c_reshowPanelPushes(panelLines, reshow);
       updateTsNotice();
       _showTsOffNote(data);
       if (stick) stickConsole();
@@ -983,7 +983,7 @@ function loadMoreConsole(btn) {
       // way the first load does.
       var backlog = _loadOlderRows(data.panel_lines);
       _renderPanelLines(backlog);
-      _r13c_reshowPanelPushes(backlog);
+      _r13c_reshowPanelPushes(backlog, true);
       _consoleSig = null;   // let the next poll re-evaluate against the new buffer
       _r11c_resyncFrom(data.at);
       if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
@@ -1214,14 +1214,22 @@ var _r13c_panelPushes = [];
 var _R13C_PANEL_KEEP = 200;
 
 function _r13c_notePanelPush(d) {
-  if (!Number(d.ts) || _r13c_panelPushes.indexOf(d) >= 0) return;
+  if (!d.panel || !Number(d.ts) || _r13c_panelPushes.indexOf(d) >= 0) return;
   _r13c_panelPushes.push(d);
   if (_r13c_panelPushes.length > _R13C_PANEL_KEEP) _r13c_panelPushes.shift();
 }
 
-// `backlog`: the panel rows the rebuild rendered. By their newest time, not _lastPanelT: Load older
+// A priming wipe takes shown panel pushes off a page whose backlog is still to be shown. Not after
+// Clear (the backlog was shown: the viewer cleared those lines), nor while a return's catch-up is
+// owed (it reads the backlog itself).
+function _r13c_primeWipesPushes() {
+  return !_panelBacklogShown && !_returnOwed;
+}
+
+// `backlog`: the panel rows the rebuild rendered; `wiped`: whether its wipe took pushes off the page. By their newest time, not _lastPanelT: Load older
 // does not reset that on its wipe, so every wiped push read as already shown.
-function _r13c_reshowPanelPushes(backlog) {
+function _r13c_reshowPanelPushes(backlog, wiped) {
+  if (!wiped) return;
   var upTo = 0;
   (backlog || []).forEach(function (r) { if (Number(r.t) > upTo) upTo = Number(r.t); });
   _r13c_panelPushes.forEach(function (d) {

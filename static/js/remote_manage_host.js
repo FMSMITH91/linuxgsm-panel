@@ -64,13 +64,7 @@ function loadSshStatus(){
           cp.title = 'UFW is not active on this host, so no firewall rule keeps the panel port closed — the panel is reachable on its public port.';
         } else if (d.panel_port_open === false) {
           cp.disabled = true;
-          // data-funnel: the panel's Serve route is on Funnel ("1"), or Serve could not be read
-          // ("unknown"); either way a closed port is not known to be tailnet-only.
-          var _fun = cp.getAttribute('data-funnel');
-          cp.title = _fun === 'unknown'
-            ? 'The public panel port is already closed. Tailscale Serve could not be read, so whether Funnel makes the panel reachable from the internet is not known.'
-            : (_fun ? 'The public panel port is already closed, but Funnel is on, so the panel is still reachable from the internet.'
-              : 'The public panel port is already closed — the panel is tailnet-only.');
+          cp.title = _r13c_closedPortTitle(cp.getAttribute('data-funnel'));
         } else if (d.panel_port_open === true) {
           cp.disabled = false;
           cp.title = '';
@@ -91,6 +85,13 @@ function sshMode(mode){
       bodyText:'Disable PUBLIC SSH (port 22)? SSH will only work over Tailscale after this. Make sure Tailscale SSH works first!',
       onConfirm:run});
   } else { run(); }
+}
+// The closed public port's tooltip. data-funnel: the panel's Serve route is on Funnel ("1"), or
+// Serve could not be read ("unknown"); either way a closed port is not known to be tailnet-only.
+function _r13c_closedPortTitle(funnel){
+  if (funnel === 'unknown') return 'The public panel port is already closed. Tailscale Serve could not be read, so whether Funnel makes the panel reachable from the internet is not known.';
+  return funnel ? 'The public panel port is already closed, but Funnel is on, so the panel is still reachable from the internet.'
+    : 'The public panel port is already closed — the panel is tailnet-only.';
 }
 function closePanelPort(){
   // data-funnel: the panel's Serve route is on Funnel ("1") or Serve could not be read

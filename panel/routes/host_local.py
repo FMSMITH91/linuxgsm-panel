@@ -381,6 +381,18 @@ def _register_panel_ban_lists(app):
         return jsonify(dict(_settings, ips=_ips))
 
 
+def _r13c_block_refusal(ip):
+    """Why `ip` may not be blocked on the panel host (a JSON answer), or None."""
+    lr = RemoteServer.query.filter_by(is_local=True).first()
+    if lr and tailnet_exempt_ips(lr, {ip}):
+        return jsonify({"success": False, "message":
+                        "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
+    if _whitelisted(ip):
+        return jsonify({"success": False, "message":
+                        "%s is on the security whitelist — remove it there first to block it." % ip})
+    return None
+
+
 def _register_panel_blocking(app):
     """Blocking an address on the panel host, and its auto-block switch."""
     @app.route("/api/panel/security/block", methods=["POST"])
@@ -393,14 +405,9 @@ def _register_panel_blocking(app):
         unblock = _r12c_json_flag(_json_body(), "unblock", False)
         if unblock is None:
             return jsonify({"success": False, "message": "unblock must be true or false."}), 400
-        if not unblock:
-            lr = RemoteServer.query.filter_by(is_local=True).first()
-            if lr and tailnet_exempt_ips(lr, {ip}):
-                return jsonify({"success": False, "message":
-                                "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
-            if _whitelisted(ip):
-                return jsonify({"success": False, "message":
-                                "%s is on the security whitelist — remove it there first to block it." % ip})
+        refused = None if unblock else _r13c_block_refusal(ip)
+        if refused:
+            return refused
         try:
             ok, msg = (so.ufw_undeny_ip(ip) if unblock else so.ufw_deny_ip(ip))
             # The address, never the request's text: the row records what was acted on.
