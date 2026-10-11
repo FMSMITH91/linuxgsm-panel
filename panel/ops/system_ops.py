@@ -1158,7 +1158,8 @@ _CI_REQUIRED = ("checks (", "coverage", "js coverage", "gamedig lockfile (", "An
                 "Open code-scanning alerts")
 # ci.yml's and codeql.yml's shared paths-ignore (a unit test holds the three equal): a commit
 # that changed only these runs neither workflow, so none of _CI_REQUIRED will ever appear on it.
-_CI_PATHS_IGNORED_FILES = {"LICENSE", ".gitignore", ".gitattributes", ".editorconfig"}
+# (.gitattributes is not one: it changes the bytes every checkout gets, so the workflows run for it.)
+_CI_PATHS_IGNORED_FILES = {"LICENSE", ".gitignore", ".editorconfig"}
 
 
 def _ci_path_ignored(path):
