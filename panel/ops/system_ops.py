@@ -4537,10 +4537,14 @@ def _redact_emails(text, hit=None):
 # The separator may open with the key's own closing quote: `{"password": "hunter2"}` and
 # `'password': 'hunter2'` (a dict dumped into a log line) put a quote between the key and ':', and
 # both printed unchanged. A QUOTED value is taken whole: `\S+` alone stopped at its first blank, so
-# `{"password": "correct horse battery"}` printed "horse battery".
+# `{"password": "correct horse battery"}` printed "horse battery". An escaped quote inside it (how
+# json.dumps writes one) does not end it, and a quote with no close within the bound runs to the end
+# of the line: `"ab\"c de"` printed `c de"`, and a value over the bound fell back to `\S+` and
+# printed everything after its first blank.
 _SECRET_KV_RE = re.compile(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
                            r"cred(?:ential)?|cookie|bearer)[\w-]*)([\"']?\s*[=:]\s*)"
-                           r"(\"[^\"\n]{0,1024}\"|'[^'\n]{0,1024}'|\S+)")
+                           r"(\"(?:[^\"\\\n]|\\.){0,1024}\"|'(?:[^'\\\n]|\\.){0,1024}'"
+                           r"|[\"'][^\n]*|\S+)")
 
 
 def _redact(text, hit=None):

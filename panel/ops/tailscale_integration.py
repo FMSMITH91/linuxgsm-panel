@@ -313,11 +313,15 @@ def _serve_url_line(line):
     return (line[:cut], line[cut:]) if cut > 0 else None
 
 
+_SERVE_ROUTE_RE = re.compile(r"\|--\s+(\S+)\s+(proxy|path|text)\s+(.+)")
+
+
 def _parse_serve_status(text):
     """Parse `tailscale serve status` output into a structured dict."""
     result = {"services": [], "raw": text}
     current_url = None
     current_funnel = False
+    current_svc = ""
     current_routes = []
 
     for line in text.split("\n"):
@@ -328,8 +332,14 @@ def _parse_serve_status(text):
         # Match URL line
         url_line = _serve_url_line(stripped)
         if url_line:
-            _append_service(result["services"], current_url, current_funnel, current_routes)
+            _append_service(result["services"], current_url, current_funnel, current_routes,
+                            current_svc)
             current_url = url_line[0].rstrip(".")
+            # A Tailscale Service's listener ends "(svc:<name>)" (upstream printWebStatusTree). It
+            # is not the node's own: the panel's `serve --https=443` never writes it, so its routes
+            # and Funnel say nothing about the listener the panel shares.
+            _svc = re.search(r"\((svc:[^()]*)\)\Z", url_line[1] or "")
+            current_svc = _svc.group(1) if _svc else ""
             # Tailscale prints "(Funnel on)" or "(tailnet only)" after the URL, with a CAPITAL F.
             # This compared case-sensitively against "funnel", so it was always False, and the page
             # called a panel that was on the public internet "private - tailnet only".
@@ -337,29 +347,37 @@ def _parse_serve_status(text):
             current_routes = []
             continue
 
-        # Match route line
-        route_match = re.match(r'\|--\s+(\S+)\s+proxy\s+(\S+)', stripped)
+        # Match route line: `|-- <mount> <type> <what>`, the type `proxy`, `path` (a directory
+        # `tailscale serve <dir>` shares) or `text` (upstream serveHandlerDesc). Only proxy routes
+        # were kept, so a file share on the panel's listener was invisible: the panel's Serve write
+        # flipped its Funnel (Funnel is per listener) and the wizard published over its mount.
+        route_match = _SERVE_ROUTE_RE.match(stripped)
         if route_match and current_url:
             current_routes.append({
                 "mount": route_match.group(1),
-                "target": route_match.group(2),
+                "type": route_match.group(2),
+                "target": route_match.group(3).strip(),
             })
         # There used to be a "funnel anywhere in the line" fallback here. It could never see the
         # URL line (that `continue`s above), and the "# Funnel on:" header comes before any URL, so
         # all it could ever match was a ROUTE — a mount or backend with "funnel" in its name.
 
-    _append_service(result["services"], current_url, current_funnel, current_routes)
+    _append_service(result["services"], current_url, current_funnel, current_routes, current_svc)
 
     return result
 
 
-def _append_service(services, url, funnel, routes):
-    """Append one parsed Serve service to `services` — only when it has a URL and routes."""
+def _append_service(services, url, funnel, routes, svc=""):
+    """Append one parsed Serve service to `services` — only when it has a URL and routes.
+
+    `svc` is the Tailscale Service it belongs to ("svc:<name>"), "" for the node's own listener.
+    """
     if url and routes:
         services.append({
             "url": url,
             "funnel": funnel,
             "routes": routes,
+            "svc": svc,
         })
 
 
@@ -488,11 +506,13 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     # works (and status reads back) without root. Also make sure the tailnet interface is
     # allowed through UFW, or the Serve URL would be unreachable on a firewalled host.
     ensure_operator()
-    allow_tailscale_ufw()
 
     verb, note = _r12a_serve_verb(port, mount, funnel, keep_shared_funnel)
     if verb is None:
         return False, note
+    # After the refusal, not before: the refusal says "Nothing was changed", and the tailscale0
+    # rule (every port open to the tailnet) stayed behind when the write was then refused.
+    allow_tailscale_ufw()
     ok, err = _apply_serve(verb, mount, backend_scheme, port)
     if ok:
         with _cache_lock:
@@ -504,7 +524,7 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
 def _r12a_listener_funnel(serve_config, port):
     """(Funnel on?, [mounts of OTHER apps]) for the :443 listener the panel writes; (False, []) if none."""
     for svc in (serve_config or {}).get("services") or []:
-        if _serve_port_flag(svc.get("url")) == "--https=443":
+        if _serve_port_flag(svc.get("url")) == "--https=443" and not svc.get("svc"):
             return (bool(svc.get("funnel")),
                     [r.get("mount", "") for r in svc.get("routes") or []
                      if not route_targets_port(r.get("target"), port)])
@@ -558,9 +578,13 @@ def shared_funnel_apps(serve_config, port, use_funnel):
     shared, others = _r12a_listener_funnel(serve_config, port)
     if not shared or use_funnel or not others:
         return []
-    on_443 = any(_serve_port_flag(r["url"]) == "--https=443"
-                 for r in panel_serve_routes(serve_config, port))
-    return others if on_443 else []
+    return others if _r13a_panel_on_listener(serve_config, port) else []
+
+
+def _r13a_panel_on_listener(serve_config, port):
+    """Whether the panel has a route on the node's own :443 listener (a Tailscale Service's is not)."""
+    return any(_serve_port_flag(r["url"]) == "--https=443" and not r.get("svc")
+               for r in panel_serve_routes(serve_config, port))
 
 
 def panel_funnel_facts(cfg):
@@ -588,7 +612,7 @@ def _r12a_panel_on_443(serve_config, port, mount):
     """Whether the panel already has its route at `mount` on the :443 listener."""
     want = norm_mount(mount)
     return any(norm_mount(r["mount"]) == want and _serve_port_flag(r["url"]) == "--https=443"
-               for r in panel_serve_routes(serve_config, port))
+               and not r.get("svc") for r in panel_serve_routes(serve_config, port))
 
 
 def _r12a_funnel_refusal(funnel, names):
@@ -742,7 +766,8 @@ def panel_serve_routes(serve_config, port):
         for r in svc.get("routes") or []:
             if route_targets_port(r.get("target"), port):
                 out.append({"url": svc.get("url", ""), "mount": r.get("mount", ""),
-                            "target": r.get("target", ""), "funnel": bool(svc.get("funnel"))})
+                            "target": r.get("target", ""), "funnel": bool(svc.get("funnel")),
+                            "svc": svc.get("svc", "")})
     return out
 
 
@@ -868,7 +893,7 @@ def free_panel_mount(serve_config, port, mount):
     """
     taken = {norm_mount(r.get("mount"))
              for svc in (serve_config or {}).get("services") or []
-             if _serve_port_flag(svc.get("url")) == "--https=443"
+             if _serve_port_flag(svc.get("url")) == "--https=443" and not svc.get("svc")
              for r in svc.get("routes") or []
              if not route_targets_port(r.get("target"), port)}
     for cand in dict.fromkeys((norm_mount(mount), "/lgsm")):
