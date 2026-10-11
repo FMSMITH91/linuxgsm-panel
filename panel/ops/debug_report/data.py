@@ -390,8 +390,23 @@ def _passphrase_state():
                     "every backup is being refused")
 
 
+def _r12b_config_unreadable():
+    """Whether config.json is unreadable, as the backup module reads it (it then answers defaults)."""
+    from panel.ops import backup as bk
+    return bk.is_unreadable(bk.load_config())
+
+
 def _settings_line(res):
     from panel.ops import backup as bk
+    if _r12b_config_unreadable():
+        # The defaults it answers would print "enabled · keep <default> d · encryption off" with no
+        # finding, while every backup is refused: create_backup asks get_passphrase, which raises
+        # PassphraseUnreadable on an unreadable config.json rather than write an archive that may
+        # have been meant to be encrypted.
+        res.add("- **Daily**: config.json could not be read, so its settings are unknown and "
+                "every panel backup is refused until it can")
+        res.find("fail", "Backups", "config.json is unreadable: panel backups are refused")
+        return
     s = bk.get_settings()
     level, words = _passphrase_state()
     res.add("- **Daily**: %s · keep %s d · %s" % ("enabled" if s.get("enabled") else "OFF",
@@ -463,6 +478,14 @@ _SCHED_REPORT_ACTIONS = (("scheduled_backup_overdue", "reported overdue"),
 _SCHED_AUDIT_DAYS = 30
 
 
+def _r12b_manual_line(res):
+    """_manual_line, unless config.json is unreadable: its defaults would say "never run"."""
+    if _r12b_config_unreadable():
+        res.add("- **Manual 'Back up game servers now'**: not known (config.json could not be read)")
+        return
+    _manual_line(res)
+
+
 def _manual_line(res):
     """The MANUAL "Back up game servers now" run, from COUNTS parsed off its summary's prefix.
 
@@ -473,8 +496,8 @@ def _manual_line(res):
     carries their error text, so it is never printed.
     """
     from panel.ops import backup as bk
-    s = bk.get_full_settings()
     head = "- **Manual 'Back up game servers now'**:"
+    s = bk.get_full_settings()
     if not s.get("last"):
         res.add(head + " never run")
         return
@@ -680,7 +703,7 @@ def section_backups(ctx):
             ("game-server schedule", lambda: _schedule_lines(res, got.get("sched_servers"))),
             ("unattended game-server backups",
              lambda: _scheduled_audit_line(res, got.get("sched_audit"))),
-            ("manual full backup", lambda: _manual_line(res)),
+            ("manual full backup", lambda: _r12b_manual_line(res)),
             ("snapshots", lambda: _snapshots_line(res))):
         try:
             part()

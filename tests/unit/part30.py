@@ -83,11 +83,23 @@ check("cflite: the continuous build on main has no concurrency group (a cancelle
 
 # ── E5: a scheduled CodeQL or security-code run never cancels the push run of the same ref ───────
 _conc30 = {f: (_block30(_wf29(f), "concurrency", 0) or {}).get("group", "")
-           for f in ("codeql.yml", "security-code.yml", "zizmor.yml")}
-check("CodeQL, security-code and zizmor: the concurrency group includes the event, so the Monday "
-      "schedule does not cancel an in-progress push run on main",
+           for f in ("codeql.yml", "security-code.yml", "zizmor.yml", "security.yml", "ci.yml")}
+check("CodeQL, security-code, zizmor, security (Gitleaks) and CI: the concurrency group includes "
+      "the event, so the Monday schedule or a manual run does not cancel an in-progress push run "
+      "on main",
       all("${{ github.event_name }}" in g and "${{ github.ref }}" in g for g in _conc30.values()),
       repr(_conc30))
+
+# ── review 1011b: Bandit and Semgrep read .github/scripts, and Semgrep's exit status is judged ──
+_sc30 = _wf29("security-code.yml")
+_bandit_flags30 = _re30.findall(r'^ +FLAGS="([^"]*)"', _sc30, _re30.M)
+_semgrep_ex30 = _re30.findall(r"--exclude (\S+)", _sc30)
+check("security-code: Bandit and Semgrep scan .github/scripts (those run in CI with tokens); Semgrep "
+      "leaves out only the workflows, and a non-zero Semgrep exit fails its step",
+      len(_bandit_flags30) == 1 and ".github" not in _bandit_flags30[0]
+      and ".github/workflows" in _semgrep_ex30 and ".github" not in _semgrep_ex30
+      and 'if [ "${rc:-0}" != "0" ]; then' in _sc30,
+      repr((_bandit_flags30, _semgrep_ex30)))
 
 # ── SEC1: the guard runs before the build, directly before fuzzing, and after it ────────────────
 _pr30 = _steps30(_job29(_wf29("cflite_pr.yml"), "code-change"))
@@ -137,9 +149,15 @@ def _guarded30(tree):
             continue
         caught = set()
         for h in node.handlers:
+            if h.type is None:              # a bare `except:`
+                caught.add(None)
+                continue
+            # Named by their LAST component: `except subprocess.TimeoutExpired` is an Attribute,
+            # whose missing `.id` read as None — a bare except — so every import in that try was
+            # exempted, though nothing there catches ImportError.
             types = h.type.elts if isinstance(h.type, _ast30.Tuple) else [h.type]
-            caught |= {getattr(t, "id", None) for t in types}
-        if caught & {"ImportError", "ModuleNotFoundError", "Exception", None}:
+            caught |= {_ast30.unparse(t).rsplit(".", 1)[-1] for t in types}
+        if caught & {"ImportError", "ModuleNotFoundError", "Exception", "BaseException", None}:
             out |= {id(n) for stmt in node.body for n in _ast30.walk(stmt)}
     return out
 
@@ -204,3 +222,17 @@ check("unit suite: every third-party module a part imports unguarded is a packag
       "(requirements.txt or requirements-bootstrap.txt), not just something the dev venv has",
       not _unknown30 and len(_base30) > 20 and {"flask", "werkzeug"} <= set(_dists30)
       and "flask" in _dists30["flask"], repr(sorted(_unknown30) or (len(_base30), _dists30.get("flask"))))
+
+
+def _exempt30(handler):
+    tree = _ast30.parse("try:\n    import yaml\nexcept %s:\n    pass\n" % handler if handler
+                        else "try:\n    import yaml\nexcept:\n    pass\n")
+    imp = next(n for n in _ast30.walk(tree) if isinstance(n, _ast30.Import))
+    return id(imp) in _guarded30(tree)
+
+
+check("unit suite: ...an import is exempt only under a handler that can catch ImportError — not "
+      "under `except subprocess.TimeoutExpired` or `(OSError, json.JSONDecodeError)` (control)",
+      [_exempt30(h) for h in ("ImportError", "(ValueError, ModuleNotFoundError)", "Exception", "",
+                              "subprocess.TimeoutExpired", "(OSError, json.JSONDecodeError)")]
+      == [True, True, True, True, False, False])

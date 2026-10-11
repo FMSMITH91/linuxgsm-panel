@@ -150,7 +150,9 @@
           var td = row.firstChild;
           td.textContent = '';
           var line = el('div', 'ip-step ' + view.cls, res.s.message || view.text);
-          line.setAttribute('data-no-i18n', '');
+          // Only the job's own text is kept from the translator. The fallback ("Installed",
+          // "Install failed") is the panel's, a catalog key, and was left English with it.
+          if (res.s.message) line.setAttribute('data-no-i18n', '');
           td.appendChild(line);
           // Settled once, for good: the row keeps data-progress-for, so without this every later
           // poll (while any other install keeps the timer alive) fetched install-status again —

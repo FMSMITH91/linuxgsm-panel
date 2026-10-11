@@ -27,6 +27,7 @@ from types import SimpleNamespace as NS
 
 from flask import Flask as _Flask21
 
+from eventlet.timeout import Timeout as _EvTimeout21  # noqa: E402 - a timed-out green join raises it
 from unit.part01 import check, eq
 from panel.core import config as _cfg21
 from panel.core import runtime_stats as _rs21
@@ -114,7 +115,8 @@ def _join21(thread):
     """
     try:
         thread.join(10)
-    except BaseException:  # noqa: BLE001 - the check after this reports the thread did not finish
+    # By its class, not BaseException: a Ctrl-C or SystemExit inside the wait still stops the run.
+    except _EvTimeout21:   # a timed-out green join raises it; the caller reads is_alive()
         pass
 
 

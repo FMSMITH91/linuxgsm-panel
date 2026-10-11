@@ -7,6 +7,7 @@ HOW IT RUNS. Every outside call is a stand-in (patched with part20's _patch / _p
 the end of each block); nothing touches the network, sudo, a real host or the checkout's data/.
 """
 import os
+import shutil as _shutil51
 import tempfile as _tf51
 import types as _types51
 
@@ -160,13 +161,19 @@ def _fetch_rec51():
     _bl51["fetched"].append(SO._update_lock.locked())
 
 
+def _git51(args, timeout=45):
+    """for-each-ref's two branches; rev-parse names a tip that moves with every fetch."""
+    if args[:1] == ["rev-parse"]:
+        return ("tip%d\n" % len(_bl51["fetched"]), "", 0)
+    return ("refs/remotes/origin/main\nrefs/remotes/origin/dev\n", "", 0)
+
+
 with _patched():
     _patch(SO, "_is_git_checkout", lambda: True)
     _patch(SO, "_tracked_branch", lambda: "main")
     _patch(SO, "_fetch_all_branches", _fetch_rec51)
     _patch(SO, "_update_in_progress", lambda: _bl51["updating"])
-    _patch(SO, "_git", lambda args, timeout=45: ("refs/remotes/origin/main\nrefs/remotes/origin/dev\n",
-                                                 "", 0))
+    _patch(SO, "_git", _git51)
     _bl51_ts0 = SO._update_cache["ts"]
     SO._update_cache["ts"] = 12345.0
     try:
@@ -226,6 +233,7 @@ check("self-update launcher: while a run is in progress it leaves that run's log
       "launch it then makes is refused)",
       _li51[0] is False and _li51_seen == [True] and os.path.exists(_li51_log),
       repr((_li51, _li51_seen)))
+_shutil51.rmtree(_li51_dir, ignore_errors=True)
 
 # ── A02: a disconnect hook (and a ban-change listener) is keyed by module AND qualified name ───
 from panel.ops import socket_hooks as _sh51  # noqa: E402
@@ -292,6 +300,7 @@ check("self-update: not launched while a backup restore holds the restore lock",
       _rx51_u[0] is False and "restore is in progress" in _rx51_u[1] and _rx51_run == []
       and not os.path.exists(os.path.join(_rx51_dir, "data", "self-update.sh")),
       repr((_rx51_u, _rx51_run)))
+_shutil51.rmtree(_rx51_dir, ignore_errors=True)
 
 # ── A02 lead: repair restores a renamed file's original and skips a new one ─────────────────────
 _rp51 = []

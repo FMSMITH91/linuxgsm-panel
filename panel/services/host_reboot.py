@@ -1468,8 +1468,7 @@ class _Job:
                 list(ex.map(lambda grp: self._stop_group(grp, loaded), groups.values()))
         for e in self.entries:
             self._update_row(e, stop=e["stop"])
-            if e["stop"] == "stopped" and e["stop_pending"]:
-                self._clear_stop_pending(e)
+            self._clear_stop_pending(e)
         self._check_cancel()
 
     def _loaded_rows(self):
@@ -1541,8 +1540,9 @@ class _Job:
         e["stop"] = {0: "stopped", 1: "still_running"}.get(sess, "failed")
 
     def _clear_stop_pending(self, e):
+        # Only for a server this job stopped that had a deferred stop queued (stop_pending).
         from panel.db.models import same_row
-        gs = same_row(GameServer, e["id"], e["born"])
+        gs = same_row(GameServer, e["id"], e["born"]) if e["stop"] == "stopped" and e.get("stop_pending") else None
         if gs is not None and gs.stop_pending:
             gs.stop_pending = False
             db.session.commit()
@@ -1595,6 +1595,9 @@ class _Job:
         else:
             self._stop_one(e)
         self._update_row(e, stop=e["stop"])
+        # As _stop_phase does for the plan's first entries: a server joined by _rescan is stopped
+        # here, and its deferred stop is then done.
+        self._clear_stop_pending(e)
 
     def _join_plan(self, gs, probe):
         """A server found running that the plan does not hold: in the plan now, or None (not ours)."""

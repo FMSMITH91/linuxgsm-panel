@@ -1,5 +1,6 @@
-# The coverage job's tool. That job later holds CODACY_PROJECT_TOKEN, and a step's code can reach
-# later steps on a runner that has passwordless sudo.
+# The coverage job's tool (ci.yml). It holds no secret: the Codacy upload, with
+# CODACY_PROJECT_TOKEN, is a separate workflow_run job (codacy-coverage.yml) that installs nothing
+# from here. Pinned with hashes all the same, as every CI tool is.
 #
 # pip-compile turns this into coverage.txt: every package, exact versions AND hashes, installed with
 # `--require-hashes`. Dependabot keeps it current by re-running pip-compile on the Python its

@@ -8,7 +8,7 @@ from flask_login import (current_user, login_required)
 from panel.core.clock import (utcnow)
 from panel.core.config import (DB_PATH, load_config)
 from panel.db.models import (LOCAL_HOST_LABEL, RemoteServer, db)
-from panel.ops import (system_ops as so)
+from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.security import banlist as _banlist
 from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
@@ -68,8 +68,9 @@ def _register_server_management(app):
         # (no network) — hand that to the shared snapshot so the banner reflects it immediately
         # rather than waiting for the next daily sweep.
         _os_update_note(local, status.get("updates") or {})
-        return render_template("remote_manage.html", remote=local, status=status,
-                               config=load_config())
+        cfg = load_config()
+        return render_template("remote_manage.html", remote=local, status=status, config=cfg,
+                               funnel_facts=ts.panel_funnel_facts(cfg))
 
     @app.route("/api/server-management")
     @login_required
@@ -254,7 +255,9 @@ def _register_panel_repair(app):
         paths = data.get("paths")
         # A paths value that is not a list is refused, not read as "restore all": a malformed
         # request for one file must not become the widest restore there is.
-        if paths is not None and not isinstance(paths, list):
+        # ...and each entry is a path, text: an object in the list raised TypeError out of
+        # panel_repair's set(paths) and came back as a 500.
+        if paths is not None and not (isinstance(paths, list) and all(isinstance(p, str) for p in paths)):
             return jsonify({"success": False, "message": "paths must be a list of files."}), 400
         try:
             # `paths`, not `paths or None`: an empty list is a request to restore NOTHING, and

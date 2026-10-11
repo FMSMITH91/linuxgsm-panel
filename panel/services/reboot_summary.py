@@ -82,10 +82,16 @@ def _bare_rebooted_text(remote, job, boot):
     # exclude_row took each out of the plan. The job's own server list tells them apart: the
     # second used to be announced as "no running game server was found", about a reboot that
     # had stopped servers (its own audit row lists them).
-    n = len(job.get("servers") or ())
+    servers = job.get("servers") or ()
+    n = len(servers)
+    # "it stopped" only of the ones whose stop ended "stopped": one LinuxGSM refused to stop (or
+    # whose stop failed) was ended by the shutdown, not by the panel.
+    stopped = sum(1 for s in servers if (s or {}).get("stop") == "stopped")
     what = (" (no running game server was found before it)" if not n else
             "; the operator took over the %d game server%s it stopped, so the panel started "
-            "none of them" % (n, "" if n == 1 else "s"))
+            "none of them" % (n, "" if n == 1 else "s") if stopped == n else
+            "; the operator took over the %d game server%s it was to start again (it stopped %d "
+            "of them), so the panel started none of them" % (n, "" if n == 1 else "s", stopped))
     return "%s rebooted%s%s.%s" % (
         _host_label(remote), _boot_clause(boot, job.get("sent")), what,
         _unread_note(job.get("unread"), "stop or start"))

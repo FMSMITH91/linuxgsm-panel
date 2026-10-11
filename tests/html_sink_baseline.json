@@ -38,7 +38,6 @@
   "remote_manage_backups.js": [
     "_da,rows",
     "bkFmtBytes,dk.free,dk.total,pct",
-    "busy.length,list,total",
     "n"
   ],
   "remote_manage_host.js": [
@@ -53,7 +52,6 @@
     "window.escapeHtml"
   ],
   "server_actions.js": [
-    "gerund,lower,n,nowIcon",
     "ok"
   ],
   "server_detail.js": [

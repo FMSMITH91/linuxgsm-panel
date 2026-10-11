@@ -2066,11 +2066,18 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             _dd = _core.run_privileged(server, "ufw-default", ["deny", "incoming"], timeout=15)
             _core.run_privileged(server, "ufw-default", ["allow", "outgoing"], timeout=15)
             _en = _core.run_privileged(server, "ufw-enable", [], timeout=15)
-            for _what, _res in (("`ufw enable`", _en), ("`ufw default deny incoming`", _dd)):
-                if _res[2] != 0:
-                    ufw_enable_failed = "%s failed (%s)" % (_what, _r11a_why(_res))
-                    note("NOT DONE: %s — the firewall is not protecting this host." % ufw_enable_failed)
-                    break
+            # Worded apart: a failed default with `ufw enable` at 0 leaves UFW ON, so "the
+            # firewall was NOT enabled" was false there; what failed is the incoming policy.
+            if _en[2] != 0:
+                ufw_enable_failed = ("the firewall was NOT enabled: `ufw enable` failed (%s)"
+                                     % _r11a_why(_en))
+                note("NOT DONE: %s — the firewall is not protecting this host." % ufw_enable_failed)
+            elif _dd[2] != 0:
+                ufw_enable_failed = ("UFW is on, but its default incoming policy could not be set "
+                                     "to deny: `ufw default deny incoming` failed (%s)"
+                                     % _r11a_why(_dd))
+                note("NOT DONE: %s — run `ufw status verbose` on the host to see the policy in "
+                     "force." % ufw_enable_failed)
         else:
             # The limit's exit code was never read, so when it failed the rules that DO let SSH in
             # were deleted "now that the limit is in place" and UFW was switched on at deny-incoming
@@ -2278,8 +2285,8 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     ufw_msg = (("the firewall was NOT enabled: %s, and turning UFW on without a rule letting SSH "
                 "in would have locked this host out. Fix ufw on the host and run the bootstrap "
                 "again." % ufw_not_enabled) if ufw_not_enabled else
-               ("the firewall was NOT enabled: %s. Fix ufw on the host and run the bootstrap "
-                "again." % ufw_enable_failed) if ufw_enable_failed else "")
+               ("%s. Fix ufw on the host and run the bootstrap again." % ufw_enable_failed)
+               if ufw_enable_failed else "")
     # Steps that were asked for and did not happen; each is "finished, but", never "complete".
     ufw_msg = "; and ".join(m for m in [ufw_msg] + not_done + [user_msg, reboot_msg] if m)
     if hardening_failed:
@@ -3685,6 +3692,11 @@ def _r11a_sshd_off_tailnet(server):
         ports = {int(p) for p in _sshd_current_ports(server)}
         if not ports:
             return False
+        # With the port the panel connects on, as _bootstrap_ssh_ports does: under socket
+        # activation `sshd -T` prints sshd_config's Port while ssh.socket listens where it was
+        # edited to, so a socket moved to <public-ip>:2222 showed no listener on 22 and answered
+        # False. Only once sshd -T was read: an unread one still leaves the firewall test to decide.
+        ports.add(int(getattr(server, "port", 22) or 22))
         out, _err, rc = _core.run_privileged(server, "listening-sockets", [], timeout=15,
                                              merge_stderr=False)
     except Exception:

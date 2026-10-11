@@ -1437,6 +1437,10 @@ finally:
     _sm_core.run_privileged = _crj_saved
 
 
+_CR_REACHED = "REAL crontab reached:"
+_CR_SHADOW = 'crontab() { echo "%s $*" >&2; return 97; }; ' % _CR_REACHED
+
+
 def _cr_drive(fn, *a, **kw):
     """Run a cron editor for real: capture its command and execute it against files."""
     seen = {}
@@ -1478,11 +1482,14 @@ def _cr_drive(fn, *a, **kw):
         return None, "pipeline shape changed, not run: %r" % pipeline[:160]
     pipeline = pipeline.replace("crontab -l 2>&1", "cat %s 2>&1" % _cr_shlex.quote(_src))
     pipeline = pipeline.replace('crontab "$T"', 'cp "$T" %s' % _cr_shlex.quote(_dst))
-    # In COMMAND position only: the pipeline's own messages ("could not read the crontab") and the
-    # "no crontab for" marker it matches `crontab -l`'s answer against name it as a word.
-    if re.search(r"(?:^|[;&|(`]|\$\()\s*crontab\b", pipeline):
-        return None, "a crontab call is left in the pipeline, not run: %r" % pipeline[:160]
-    _r = _cr_sub.run(["bash", "-c", pipeline], capture_output=True, text=True)
+    # And any `crontab` still in the pipeline is SHADOWED, in every command position bash has: a
+    # function of that name is found before the binary after `{`, `then`, `do`, `!`, a `case` arm
+    # or `||` alike. This was a regex listing the positions (`^ ; & | ( \` $(`), which a
+    # `|| { crontab -r; }` or `*) crontab "$L" ;;` — the constructs this pipeline is built from —
+    # walked straight past, to run the real crontab against the runner's account.
+    _r = _cr_sub.run(["bash", "-c", _CR_SHADOW + pipeline], capture_output=True, text=True)
+    if _CR_REACHED in _r.stderr:
+        return None, "a crontab call is left in the pipeline (shadowed, not run): %r" % _r.stderr[:200]
     return (open(_dst, encoding="utf-8").read() if os.path.exists(_dst) else None), _r.stderr
 
 

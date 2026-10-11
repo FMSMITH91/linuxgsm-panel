@@ -1957,17 +1957,27 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         return False, "Invalid branch name."
     # Not while a backup restore is in flight: its detached swap and install.sh's snapshot and
     # rollback both replace panel.db, and the rollback could put the pre-update copy back over the
-    # restored one. (backup.restore_backup refuses the other way round.)
-    from panel.ops import backup as _bk
-    if _bk._restore_lock.locked():
-        return False, ("A backup restore is in progress — update once it has finished and the "
-                       "panel has restarted.")
+    # restored one. (backup.restore_backup refuses the other way round.) In flight includes the
+    # detached swap after the restore's lock is released (backup.restore_pending).
+    #
+    # The launch is recorded FIRST, then the restore asked: it was recorded only once the launcher
+    # returned (up to 15-20 s of green yields), and a restore taking its lock in that window saw no
+    # update and went ahead beside it. Announce-then-check on both sides means one always sees the
+    # other. A launch that does not happen takes its record back (_r12a_unmark).
+    was_running = _update_in_progress()
     # Write the wrapper + its log inside the panel's own data dir (owned by the service user,
     # not world-writable) rather than /tmp. This script is later executed as root via
     # `sudo systemd-run`, so a predictable /tmp path would let a local user pre-plant a
     # symlink/file and get root code execution.
     _upd_dir = os.path.join(PANEL_DIR, "data")
-    os.makedirs(_upd_dir, exist_ok=True)
+    os.makedirs(_upd_dir, exist_ok=True)   # before the record: the one step below that can raise
+    saved = dict(_update_launched)
+    _mark_update_launched()
+    from panel.ops import backup as _bk
+    if _bk.restore_pending():
+        _r12a_unmark(saved)
+        return False, ("A backup restore is in progress — update once it has finished and the "
+                       "panel has restarted.")
     _log_path = _update_log_path()
     # The update card finishes on the first "=== installer exit N ===" it reads while the panel has
     # not restarted (see _update_log_outcome). The PREVIOUS run's log ends in one, and it is still
@@ -1981,7 +1991,7 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
     # the card, and once the launch grace passed the status checks resumed fetching the ref the
     # installer was still fetching.
     try:
-        if not _update_in_progress():
+        if not was_running:
             os.unlink(_log_path)
     except FileNotFoundError:
         pass   # first update on this install, or already cleared
@@ -2003,28 +2013,51 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         'echo "=== installer exit $? ===" >> "$LOG"\n'
     )
     path = os.path.join(_upd_dir, "self-update.sh")
+    ok, msg = _r12a_start_installer(path, script, target_ref, branch, started_msg)
+    if not ok:
+        _r12a_unmark(saved)
+    return ok, msg
 
+
+def _r12a_unmark(saved):
+    """Take back a launch record _launch_installer made for a launch that did not happen."""
+    _update_launched.clear()
+    _update_launched.update(saved)
+
+
+_UPDATE_STARTED_MSG = ("Update started — the panel is backing up, updating, and verifying it "
+                       "restarts cleanly. If the new version fails to come up it rolls back "
+                       "automatically. This takes up to a minute.")
+
+
+def _r12a_start_installer(path, script, target_ref, branch, started_msg):
+    """Start the installer (helper verb, or the wrapper `script` at `path` under systemd-run)."""
     if _is_system_service() and _helper_present():
-        # The helper runs the ROOT-OWNED installer with the three variables in its environment,
-        # detached. The wrapper script below — written by the panel, into a directory the panel
-        # owns, then executed by root — is what this replaces.
-        #
-        # Being clear about what this does and does not buy: self-update means "fetch new code and
-        # run it", and no argv discipline makes that untrusted-safe. What changes is that the
-        # ROOT-run part is now fixed and small. The code the installer pulls goes on to run as the
-        # panel user, and its trustworthiness rests on the signed, CI-verified commit — which
-        # panel_update_status() has already checked before we get here.
-        out, err, rc = _run_verb("panel-self-update",
-                                 [target_ref or "-", branch or "-"], timeout=20)
-        if rc == 0:
-            _mark_update_launched()
-            return True, (started_msg or
-                          ("Update started — the panel is backing up, updating, and verifying it "
-                           "restarts cleanly. If the new version fails to come up it rolls back "
-                           "automatically. This takes up to a minute."))
-        _log.error("self-update verb failed: rc=%s %s", rc, (err or out or "")[:200])
-        return False, "Could not start the updater — check the panel logs."
+        return _r12a_start_via_helper(target_ref, branch, started_msg)
+    return _r12a_start_via_systemd_run(path, script, started_msg)
 
+
+def _r12a_start_via_helper(target_ref, branch, started_msg):
+    """The helper's panel-self-update verb: a root-owned installer run, detached."""
+    # The helper runs the ROOT-OWNED installer with the three variables in its environment,
+    # detached. The wrapper script (_r12a_start_via_systemd_run) — written by the panel, into a
+    # directory the panel owns, then executed by root — is what this replaces.
+    #
+    # Being clear about what this does and does not buy: self-update means "fetch new code and
+    # run it", and no argv discipline makes that untrusted-safe. What changes is that the
+    # ROOT-run part is now fixed and small. The code the installer pulls goes on to run as the
+    # panel user, and its trustworthiness rests on the signed, CI-verified commit — which
+    # panel_update_status() has already checked before we get here.
+    out, err, rc = _run_verb("panel-self-update",
+                             [target_ref or "-", branch or "-"], timeout=20)
+    if rc == 0:
+        return True, (started_msg or _UPDATE_STARTED_MSG)
+    _log.error("self-update verb failed: rc=%s %s", rc, (err or out or "")[:200])
+    return False, "Could not start the updater — check the panel logs."
+
+
+def _r12a_start_via_systemd_run(path, script, started_msg):
+    """The wrapper `script`, written to `path`, run under systemd-run in a transient unit."""
     if _is_system_service():
         launcher = ["sudo", "systemd-run"]
     else:
@@ -2039,9 +2072,9 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         # a fixed location under DATA_DIR written at 0700 just above. No shell. Not a static
         # string only because the sudo/--user prefix varies with whether the panel runs as root.
         #
-        # CHECKED, like the helper branch 25 lines up. This was subprocess.Popen with both streams
-        # to DEVNULL and the status never collected, so it only ever reported that the child was
-        # SPAWNED. `--no-block` means systemd-run schedules the unit and exits within milliseconds
+        # CHECKED, like the helper branch (_r12a_start_via_helper). This was subprocess.Popen
+        # with both streams to DEVNULL and the status never collected, so it only ever reported
+        # that the child was SPAWNED. `--no-block` means systemd-run schedules the unit and exits within milliseconds
         # with a real exit status, so a refusal — unit name still held by a running
         # panel-selfupdate, no user D-Bus session, a later sudoers.d rule re-imposing a password —
         # was completely silent, and this returned True asserting the whole
@@ -2059,11 +2092,7 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
             _log.error("self-update launcher failed: rc=%s %s",
                        _r.returncode, (_r.stderr or "")[:200])
             return False, "Could not start the updater — check the panel logs."
-        _mark_update_launched()
-        return True, (started_msg or
-                      ("Update started — the panel is backing up, updating, and verifying it "
-                       "restarts cleanly. If the new version fails to come up it rolls back "
-                       "automatically. This takes up to a minute."))
+        return True, (started_msg or _UPDATE_STARTED_MSG)
     except Exception:
         _log.exception("panel installer launch failed to start")
         return False, "Could not start the updater — check the panel logs."
@@ -2088,6 +2117,14 @@ def _fetch_all_branches():
         _git(["fetch", "--prune", "--no-tags", "origin"], timeout=90)
 
 
+def _r12a_tracked_tip(branch):
+    """The commit refs/remotes/origin/<branch> names now, or None when it cannot be read."""
+    out, _, rc = _git(["rev-parse", "--verify", "--quiet", _REMOTE_TRACKING + branch], timeout=20)
+    if rc != 0:
+        return None
+    return (out or "").strip() or None
+
+
 def list_panel_branches():
     """Remote branches available to switch to, most-recently-updated first, plus the currently
     tracked branch. Returns (branches, current). Best-effort: ([current], current) on failure."""
@@ -2100,10 +2137,15 @@ def list_panel_branches():
     # caches "Couldn't reach the update source" for five minutes; lose the installer's and the
     # update aborts. So: never while an update runs (list the refs already here), otherwise under
     # _update_lock, and a status cached from before the ref moved is recomputed next time.
+    # Only when it DID move (or could not be read): dropping the cache on every list re-spent the
+    # anonymous GitHub budget it exists to protect, since the host page lists on every load.
     if not _update_in_progress():
         with _update_lock:
+            before = _r12a_tracked_tip(branch)
             _fetch_all_branches()   # widen a single-branch/shallow clone so ALL branches show + refresh
-        _update_cache["ts"] = 0.0
+            after = _r12a_tracked_tip(branch)
+            if before is None or after != before:
+                _update_cache["ts"] = 0.0
     # The FULL refname, stripped here. `%(refname:short)` is the shortest UNAMBIGUOUS name, so the
     # moment a tag `origin/main` existed, main came back as `remotes/origin/main`, failed the prefix
     # test and vanished from the switcher.
@@ -2617,9 +2659,12 @@ def _compute_panel_integrity():
         # entry. A rename or copy lists its source first (in HEAD) and its new name last (not in
         # HEAD); an added file has no HEAD copy at all. Naming either new path to checkout fails
         # the WHOLE command with "pathspec did not match", so "restore all" restored nothing.
-        if status in ("renamed", "copied") and len(parts) > 2:
+        # A COPY's source is not what it replaced: the source is still there (usually untouched),
+        # and the copy is a new file HEAD has no version of, as an added one is. Checking out the
+        # source answered "Restored 1 file(s)" while integrity went on listing the copy.
+        if status == "renamed" and len(parts) > 2:
             entry["head_path"] = parts[1]
-        elif status == "added":
+        elif status in ("added", "copied"):
             entry["head_path"] = None
         modified.append(entry)
     modified.sort(key=lambda x: x["path"])
@@ -3853,10 +3898,13 @@ def _diag_encryption_keys():
     # fault. The credential key is created ONLY when the first password-based credential is
     # saved, so a missing cred_key is normal (e.g. all remotes use SSH-key / Tailscale / local
     # auth) — not a fault. Whether the stored values DECRYPT is the Host credentials check.
+    # _key_missing, not .exists(): an EMPTY key file (an interrupted _create_key_once, a bad
+    # restore) is a missing key to every reader (get_secret_key mints a new one, logging everyone
+    # out), and read "present" here beside a Host credentials check that already said MISSING.
     from panel.core import config as _cfg
-    if not _cfg.SECRET_FILE.exists():
+    if _cfg._key_missing(_cfg.SECRET_FILE):
         return "fail", "Session secret key is missing."
-    if not _cfg.CRED_KEY_FILE.exists():
+    if _cfg._key_missing(_cfg.CRED_KEY_FILE):
         return "ok", ("Session key present; the credential key is created when the first "
                       "saved password/credential needs it.")
     return "ok", "Session + credential keys present."
@@ -4488,9 +4536,11 @@ def _redact_emails(text, hit=None):
 
 # The separator may open with the key's own closing quote: `{"password": "hunter2"}` and
 # `'password': 'hunter2'` (a dict dumped into a log line) put a quote between the key and ':', and
-# both printed unchanged.
+# both printed unchanged. A QUOTED value is taken whole: `\S+` alone stopped at its first blank, so
+# `{"password": "correct horse battery"}` printed "horse battery".
 _SECRET_KV_RE = re.compile(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
-                           r"cred(?:ential)?|cookie|bearer)[\w-]*)([\"']?\s*[=:]\s*)(\S+)")
+                           r"cred(?:ential)?|cookie|bearer)[\w-]*)([\"']?\s*[=:]\s*)"
+                           r"(\"[^\"\n]{0,1024}\"|'[^'\n]{0,1024}'|\S+)")
 
 
 def _redact(text, hit=None):

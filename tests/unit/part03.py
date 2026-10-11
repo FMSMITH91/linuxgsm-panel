@@ -4229,7 +4229,8 @@ try:
     _mig_closed = []
     _sm_hosts.remote_check_tailscale = lambda s: {
         "running": True, "dns_name": "host.tail1234.ts.net", "tailscale_ip": "100.64.0.9"}
-    _sm_hosts.remote_ufw_close_port_22 = lambda s: _mig_closed.append(getattr(s, "id", "?"))
+    _sm_hosts.remote_ufw_close_port_22 = lambda s: (_mig_closed.append(getattr(s, "id", "?")),
+                                                    (True, "Port 22 rule removed from UFW"))[1]
     _mig_srv = NS(); _mig_srv.id, _mig_srv.host, _mig_srv.username = 7001, "203.0.113.9", "root"
 
     # 1. tailscaled up but its SSH server OFF — refuse, and close nothing.

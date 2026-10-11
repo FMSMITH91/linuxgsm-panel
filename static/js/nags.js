@@ -418,7 +418,8 @@ window.osUpdatesNagCheck = function(){
         var n = Number(h.count) || 0, s = Number(h.security) || 0;
         // inline-block + padding: a bare inline link is only as tall as its text (16px), which is
         // an unfair target on a phone. This lifts each one to a 24px row without padding the banner.
-        return '<div><a class="alert-link" style="display:inline-block;padding:.25rem 0;"'
+        // data-no-i18n: the link's text is the host's NAME (a host called "Server" read "Servidor").
+        return '<div><a class="alert-link" style="display:inline-block;padding:.25rem 0;" data-no-i18n'
              + ' href="' + escapeHtml(h.url) + '#os-updates">'
              + escapeHtml(h.name) + '</a> — ' + n + ' update' + (n===1?'':'s')
              + (s ? ' <span class="badge bg-danger" style="font-weight:normal;">'

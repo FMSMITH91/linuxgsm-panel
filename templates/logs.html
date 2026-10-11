@@ -42,7 +42,7 @@
         <label class="form-label mb-1" style="font-size:.7rem;" for="filter-user">User</label>
         <select name="user" id="filter-user" class="form-select form-select-sm">
           <option value="">All users</option>
-          {% for u in users %}<option value="{{ u }}" {% if u == filters.user %}selected{% endif %}>{{ u }}</option>{% endfor %}
+          {% for u in users %}<option value="{{ u }}" {% if u == filters.user %}selected{% endif %} data-no-i18n>{{ u }}</option>{% endfor %}
         </select>
       </div>
       <div class="col-6 col-md-2">

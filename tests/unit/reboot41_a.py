@@ -3,6 +3,7 @@ import importlib.machinery as _mach41
 import importlib.util as _ilu41
 import json as _json41
 import math as _math41
+import re as _re41
 import sys
 import time as _time41
 from types import SimpleNamespace as NS
@@ -134,13 +135,18 @@ def _probe_pattern_checks41():
     _write_exec41(os.path.join(d, name), "#!/bin/bash\nsleep 30\n")
     me = _run41(["id", "-un"]).stdout.strip()
     before = _pgrep_count41(me, name)
-    proc = _popen41(["./" + name, "start"], cwd=d)
+    # In a session of its own, so the kill below takes its `sleep 30` child too: killing the bash
+    # alone orphaned that sleep, which outlived the check by up to 30 s.
+    proc = _popen41(["./" + name, "start"], cwd=d, start_new_session=True)
     try:
         _time41.sleep(0.3)
         during = _pgrep_count41(me, name)
         other = _pgrep_count41(me, name[1:])
     finally:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, 9)
+        except OSError:
+            proc.kill()
         proc.wait()
     check("probe pattern: the shell asking is never counted — 0 with nothing running, though its "
           "own command line holds the pattern", before == "0", repr(before))
@@ -1572,6 +1578,12 @@ def _helper41():
     return helper
 
 
+def _umask41():
+    m = os.umask(0o022)
+    os.umask(m)
+    return m
+
+
 def _helper_checks41():
     import pwd as _pwd41
     helper = _helper41()
@@ -1585,11 +1597,38 @@ def _helper_checks41():
                   % (name, _shlex41.quote(out)))
     os.symlink("/bin/true", os.path.join(home, "escape"))
     pw = _pwd41.getpwuid(os.getuid())
-    rc = helper._lgsm_child(pw, home, name, "start", "", False)
-    with open(out) as fh:
-        seen = fh.read().strip()
-    os.remove(out)
-    rc_escape = helper._lgsm_child(pw, home, "escape", "start", "", False)
+    # _lgsm_child is the FORKED child's half: in production it sets the session umask and dups
+    # stdout in a process that then exits. Called in this one, it changed the unit suite's umask
+    # for every later part (022 -> 002 under pam_umask's USERGROUPS_ENAB rule on a dev box, not on
+    # CI's root leg: a suite whose answers depended on the machine) and leaked the dup'd fd. The
+    # umask it would set is this process's own, it is put back regardless, and each dup is closed.
+    mask = os.umask(0o022)
+    os.umask(mask)
+    helper._q_session_umask = lambda pw_: mask
+    dups = []
+
+    class _DupOs41(object):
+        def __getattr__(self, n):
+            return getattr(os, n)
+
+        @staticmethod
+        def dup(fd):
+            dups.append(os.dup(fd))
+            return dups[-1]
+    helper.os = _DupOs41()
+    try:
+        rc = helper._lgsm_child(pw, home, name, "start", "", False)
+        with open(out) as fh:
+            seen = fh.read().strip()
+        os.remove(out)
+        rc_escape = helper._lgsm_child(pw, home, "escape", "start", "", False)
+        after = _umask41()           # read BEFORE the restore below, so a change is seen
+    finally:
+        os.umask(mask)
+        for fd in dups:
+            os.close(fd)
+    check("helper: (setup) running its LinuxGSM child here leaves this process's umask as it was",
+          after == mask, "umask %o, was %o" % (after, mask))
     check("helper: a LinuxGSM start it runs is `/bin/bash ./<s> start` — exactly what LinuxGSM's "
           "monitor looks for before it starts a second copy", (rc, seen) == (0, "1"), repr((rc, seen)))
     check("helper: ...and a script that is a symlink out of the home directory is still refused",
@@ -1601,8 +1640,17 @@ def _helper_checks41():
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _TMUX_NAME41 = ("import ctypes, time; ctypes.CDLL(None).prctl(15, b'tmux: server', 0, 0, 0); "
                 "time.sleep(30)")
+# sudo passes through only the stand-in reboot: the blocks run in a real bash, and the idle control
+# drives each one TO its reboot line. Anything else sudo is asked for is refused and said.
 _STUBS41 = ('ok() { echo "OK $*"; }; warn() { echo "WARN $*"; }; info() { :; }; sleep() { :; }; '
-            'reboot() { echo REBOOTING; }; sudo() { "$@"; }; UPG_SUDO=""\n')
+            'reboot() { echo REBOOTING; }; '
+            'sudo() { if [ "$1" = reboot ]; then reboot; else echo "REFUSED sudo $*"; return 1; fi; }; '
+            'UPG_SUDO=""\n')
+# ...and the blocks may hold no power command but that bare `reboot`: rewritten as `systemctl
+# reboot`, `shutdown -r now` or `/sbin/reboot`, the idle control would run the REAL one — through
+# polkit as a dev box's desktop user, or as root on CI's root leg — and reboot the machine mid-run.
+_POWER41 = _re41.compile(r"systemctl|shutdown|/sbin/|\binit\s+6|telinit|poweroff|halt\b|"
+                         r"\bkexec\b")
 
 
 def _install_block41(txt, start, end):
@@ -1631,6 +1679,8 @@ def _run_blocks41(blocks):
 def _session_probe_checks41():
     probe = _hosts41.GAME_SESSIONS_PROBE
     blocks = _install_blocks41()
+    if not _only_bare_reboot41(blocks):
+        return
     pre = _run41(["bash", "-c", probe]).stdout.strip()
     idle = _run_blocks41(blocks)
     proc = _popen41([sys.executable, "-c", _TMUX_NAME41])
@@ -1642,8 +1692,11 @@ def _session_probe_checks41():
     finally:
         proc.kill()
         proc.wait()
+    _idle_name = "install.sh: ...while an idle host that needs one is still rebooted (control)"
     if str(proc.pid) not in named:
-        skip("game-session probe: a process named 'tmux: server'", "prctl(PR_SET_NAME) did not take here")
+        for _sp41n in ("game-session probe: a process named 'tmux: server'",
+                       "install.sh: with it running, neither reboot spot reboots", _idle_name):
+            skip(_sp41n, "prctl(PR_SET_NAME) did not take here")
         return
     # On a machine already running a tmux or screen session of its own, the probe says YES before
     # the stand-in starts, so the busy checks would pass on THAT session (perhaps through another
@@ -1659,10 +1712,27 @@ def _session_probe_checks41():
               busy_probe == "YES", repr(busy_probe))
         check("install.sh: with it running, neither reboot spot reboots, and both say why",
               all("REBOOTING" not in o and "game servers" in o for o in busy), repr(busy))
-    if pre == "NO" and all("REBOOTING" in o for o in idle):
-        check("install.sh: ...while an idle host that needs one is still rebooted (control)", True)
+    _idle_control41(_idle_name, pre, idle)
+
+
+def _only_bare_reboot41(blocks):
+    """Whether install.sh's reboot spots hold no power command but the stubbed bare `reboot`."""
+    power = sorted({m.group(0) for b in blocks for m in _POWER41.finditer(b[len(_STUBS41):])})
+    check("install.sh: (setup) its reboot spots' only power command is the bare `reboot` this "
+          "drives a stand-in for", not power, "found %s — not run" % power)
+    return not power
+
+
+def _idle_control41(name, pre, idle):
+    """An idle host that needs a reboot still gets one: checked whenever this machine is idle."""
+    # The machine decides whether this RUNS, never whether it passes: it was `if pre == "NO" and
+    # <the control holds>: check(True) else: skip(...)`, so a probe that always answered "busy"
+    # (`pgrep -f` matching its own `bash -c` line, say) read as a SKIP about tmux sessions, and
+    # install.sh never rebooting a host that needed it passed the suite.
+    if pre == "NO":
+        check(name, all("REBOOTING" in o for o in idle), repr(idle))
     else:
-        skip("install.sh: the idle control", "this machine runs a tmux or screen session of its own")
+        skip(name, "this machine runs a tmux or screen session of its own")
 
 
 def _bootstrap_run_checks41():

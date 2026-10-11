@@ -49,10 +49,10 @@ jobs:
           # osv-scanner hold every lockfile to. It was `high`, so a moderate advisory a pull request
           # added (to gamedig's tree, or a CI tool's lockfile, which pip-audit never read) passed.
           fail-on-severity: low
-          # Reviewed advisories with no fix, comma-separated. Each must also be an expiring,
-          # reasoned [[IgnoredVulns]] entry in the osv-scanner.toml beside its lockfile, which is
-          # where the triage is written; a unit check (part27) holds the two lists together, so an
-          # exemption cannot be added here alone. When that entry's date passes, the dependency
-          # audit fails, and the advisory is looked at again: both entries renewed or removed.
-          #   GHSA-ch52-4w7c-c8xp: http-cache-semantics, gamedig's tree (tools/gamedig/osv-scanner.toml).
-          allow-ghsas: GHSA-ch52-4w7c-c8xp
+          # Reviewed advisories with no fix go in `allow-ghsas:`, comma-separated — none at the
+          # moment. Each must also be an expiring, reasoned [[IgnoredVulns]] entry in the
+          # osv-scanner.toml beside its lockfile, which is where the triage is written; a unit check
+          # (part27) holds the two lists together, so an exemption cannot be added here alone. When
+          # that entry's date passes, the dependency audit fails, and the advisory is looked at
+          # again: both entries renewed or removed. (GHSA-ch52-4w7c-c8xp, http-cache-semantics, was
+          # removed from both when #417 moved gamedig's lock past the advisory's range.)

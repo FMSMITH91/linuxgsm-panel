@@ -1156,7 +1156,7 @@ def _install_and_mount(remote, gmod_user, cu, games):
         _labels = ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing)
         return {
             "status": "error",
-            "msg": ("Not installed, so not mounted: %s. Check free disk on "
+            "msg": ("Not confirmed on the host, so not mounted: %s. Check free disk on "
                     "the host, then try again. %s" % (_labels, msg or "")).strip(),
             "ts": time.time()}
     return {"status": "done" if ok else "error", "msg": msg, "ts": time.time()}
@@ -1351,7 +1351,10 @@ def _gmod_apply_request(app, gs, remote, sel):
 def _write_refused(gs, action, detail=""):
     """A refusal response when `gs`'s game account may not be written as, else None.
 
-    Every file-manager and cron WRITE asks this before it touches the host: a row imported before
+    Every file-manager, LinuxGSM-config and cron WRITE asks this before it touches the host (the
+    alerts card and the log-timestamps switch write the cfg the settings form does). Not asked: a
+    LinuxGSM command (mods install/remove, like start or update) and the server's own autostart and
+    daily-restart cron lines, whose text is the panel's, not the operator's. A row imported before
     the import refused root-capable accounts can name the host's own sudo login, and a write as
     it (~/.bashrc, authorized_keys, a crontab line) is root on the host. See
     _shared.game_account_write_refusal — cached, and closed when the host cannot answer.
@@ -1694,7 +1697,11 @@ def _register_alerts(app):
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
             return _alerts_read(app, gs)
-        # POST: only the known alert keys; toggles coerced to on/off.
+        # POST: only the known alert keys; toggles coerced to on/off. It writes the same instance
+        # cfg the settings form does (sourced as bash by the account), so it asks the same refusal.
+        refused = _write_refused(gs, "server_alerts_save")
+        if refused is not None:
+            return refused
         updates = _alert_updates(_json_body().get("values"))
         try:
             ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, updates)
@@ -2351,6 +2358,13 @@ def _register_console_routes(app):
                     return jsonify({"error": "Turning LinuxGSM's log timestamps on freezes the "
                                              "live console, so the panel only turns them off."}), 400
                 want = "off"
+                # The instance cfg the settings form writes: the same refusal, said as `error`,
+                # which is what the page reads here.
+                why = game_account_write_refusal(gs.remote, gs.short_name)
+                if why is not None:
+                    log_action(current_user, "set_log_timestamps", target=gs.name,
+                               detail=("refused: " + why)[:250], success=False, server=gs)
+                    return jsonify({"error": why}), 409
                 ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name,
                                             {"logtimestamp": want})
                 if not ok:

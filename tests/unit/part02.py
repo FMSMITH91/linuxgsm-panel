@@ -774,6 +774,11 @@ try:
     _o_hp, _o_rv, _o_ss = _bk._helper_present, _bk._run_verb, _bk._is_system_service
     _bk._helper_present = _bk._is_system_service = lambda: True
     _bk._run_verb = lambda *a, **k: ("", "", 0)
+    # restore_backup refuses over a running self-update, read from THIS checkout's
+    # data/self-update.log: stubbed, so the machine's own log cannot decide these (as part09 does).
+    from panel.ops import system_ops as _bk_so
+    _o_upd = _bk_so._update_in_progress
+    _bk_so._update_in_progress = lambda: False
     try:
         _rok, _rmsg = _bk.restore_backup(_ename, passphrase=_bk_pass)
         check("backup/enc: restoring an encrypted archive succeeds end to end", _rok, str(_rmsg))
@@ -923,6 +928,7 @@ try:
         _sh2.rmtree(_stage_dir, ignore_errors=True)
     finally:
         _bk._helper_present, _bk._run_verb, _bk._is_system_service = _o_hp, _o_rv, _o_ss
+        _bk_so._update_in_progress = _o_upd
 finally:
     _bk.get_passphrase = _orig_getpass
 
@@ -2958,6 +2964,17 @@ for _rel in _totp_files:
     _path = os.path.join(_totp_root, _rel)
     _tree = _totp_ast.parse(open(_path, encoding="utf-8").read())
     for _n in _totp_ast.walk(_tree):
+        # A rename on import (`from ...auth import verify_totp as _vt`) or a lookup by string
+        # (`getattr(auth, "verify_totp")`) reaches it under a name the call test cannot see.
+        if isinstance(_n, _totp_ast.ImportFrom) and any(
+                _a.name == "verify_totp" and _a.asname not in (None, "verify_totp")
+                for _a in _n.names):
+            _totp_bad.append("%s:%d (imported under another name)" % (_rel, _n.lineno))
+            continue
+        if (isinstance(_n, _totp_ast.Constant) and _n.value == "verify_totp"
+                and _rel != os.path.join("panel", "security", "auth.py")):
+            _totp_bad.append("%s:%d (named as a string)" % (_rel, _n.lineno))
+            continue
         if not (isinstance(_n, _totp_ast.Call)
                 and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "verify_totp"):
             continue

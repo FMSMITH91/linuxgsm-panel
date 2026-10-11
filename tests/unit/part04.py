@@ -1816,16 +1816,27 @@ N.discord_gateway_run("A" * 50, lambda ch, is_bot, content, author=None: _dcq_se
                       _connect=lambda: _dcq_ws2)
 check("discord: ...while a recv that really times out still ends the session (control)",
       _dcq_seen2 == [] and _dcq_ws2._frames == ['{"op":0}'], repr(_dcq_ws2._frames))
+
+def _dc_heartbeats():
+    return [t for t in _cwt.enumerate()
+            if "discord_gateway_run" in getattr(getattr(t, "_target", None), "__qualname__", "")]
+
+
+# Counted BEFORE the wake, while they still sleep: if the heartbeat's target stopped naming
+# discord_gateway_run, the filter below would match nothing and the cleanup check pass on no
+# threads at all. Three sessions ran above, so three heartbeats are asleep here.
+_dc_hb_asleep = len(_dc_heartbeats())
+check("discord: (setup) the heartbeat threads are found by the filter the cleanup uses",
+      _dc_hb_asleep >= 3, "found %d" % _dc_hb_asleep)
 _dc_wake.set()
 _dc_hb_left = []
-for _dc_th in _cwt.enumerate():
-    if "discord_gateway_run" in getattr(getattr(_dc_th, "_target", None), "__qualname__", ""):
-        try:
-            _dc_th.join(5)
-        except _EvTimeout04:   # eventlet's join RAISES its Timeout (not an Exception); reported below
-            pass
-        if _dc_th.is_alive():
-            _dc_hb_left.append(_dc_th.name)
+for _dc_th in _dc_heartbeats():
+    try:
+        _dc_th.join(5)
+    except _EvTimeout04:   # eventlet's join RAISES its Timeout (not an Exception); reported below
+        pass
+    if _dc_th.is_alive():
+        _dc_hb_left.append(_dc_th.name)
 N.time = _dc_time_saved
 check("discord: the test sessions' heartbeat threads end with this block, not with the run",
       not _dc_hb_left, repr(_dc_hb_left))

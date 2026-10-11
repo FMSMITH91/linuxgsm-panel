@@ -33,6 +33,7 @@ Routes:
   socket.io join_console    -> Live console streaming (events, not a route:
                                connect / join_console / leave_console / disconnect)
 """
+import collections
 import logging
 import os
 import re
@@ -152,7 +153,7 @@ from panel.ops import system_ops as so
 # (R17) and Serve's boot outcome as a fixed reason (R20). Through the modules, at call time.
 from panel.ops.debug_report import errors as _dr_errors
 from panel.ops.debug_report import process as _dr_process
-from panel.ops.serve_upkeep import (_boot_audit, _panel_tailscale_url,
+from panel.ops.serve_upkeep import (_boot_audit, _boot_shared_funnel, _panel_tailscale_url,
     _remove_serve_leftovers, _tailscale_banner)
 from panel.ops import backup as bk
 from panel.services import lgsm_data
@@ -1298,10 +1299,18 @@ def load_game_list():
     # four do, and the picker cannot know which host is about to be chosen — so state the game's
     # OWN limit rather than guess. That is true whatever the target, and it is the fact the
     # operator needs before spending an install on it.
-    newest = max((row.get("os") or "" for row in games), default="")
+    #
+    # "The rest of the catalogue" is its MOST COMMON release, not its newest. The file is fetched
+    # weekly from upstream, and during a staged rollout a few games declare the next release
+    # first: against the newest, every other game then read as capped at the old one, and on a
+    # host running the new release _os_cap_refusal refused them all. A tie takes the newer
+    # release, which is what the newest-wins rule answered for it.
+    counts = collections.Counter(row["os"] for row in games if row.get("os"))
+    top = max(counts.values(), default=0)
+    common = max((o for o, n in counts.items() if n == top), default="")
     for row in games:
-        row["legacy_os"] = (row.get("os") or "") if (row.get("os") and newest
-                                                     and game_os_unsupported(row["os"], newest)) \
+        row["legacy_os"] = (row.get("os") or "") if (row.get("os") and common
+                                                     and game_os_unsupported(row["os"], common)) \
             else ""
     games.sort(key=lambda row: row["name"].lower())
     # Only memoise a real answer: caching [] would make one failed fetch permanent for the life
@@ -2667,8 +2676,11 @@ def _explicit_socket_origins(explicit):
     if not isinstance(explicit, (str, list, tuple)):
         return []
     listed = [explicit] if isinstance(explicit, str) else list(explicit)
-    exact = [o for o in listed if str(o).strip() != "*"]
-    if len(exact) != len(listed) and not _socket_wildcard_warned:
+    # A blank entry ("" or spaces, from a hand edit) is no origin: kept, it made the list truthy
+    # and every handshake was compared against "" and refused -- no console, no terminal -- where
+    # dropping it lets an otherwise-empty list fall through to the per-request check, as "*" does.
+    exact = [o for o in listed if str(o).strip() not in ("*", "")]
+    if any(str(o).strip() == "*" for o in listed) and not _socket_wildcard_warned:
         _socket_wildcard_warned.append(True)
         _log.warning('socketio_cors_origins "*" is ignored; set site_domain or list the exact '
                      'origin (e.g. https://panel.example.com)')
@@ -3235,6 +3247,9 @@ def _boot_serve(app, cfg, port):
             mount=mount,
             funnel=cfg.get("tailscale_use_funnel", False),
             backend_scheme=_serve_scheme_now(cfg, app.config),
+            # A restart re-points the panel's route and changes no one's Funnel: Funnel is per
+            # listener, and the default False here took another app on :443 off the internet.
+            keep_shared_funnel=True,
         )
         app.config["BOOT_SERVE"] = "ok" if _ok else "failed:" + _dr_process.serve_reason(_msg)
     except Exception as e:
@@ -3243,6 +3258,7 @@ def _boot_serve(app, cfg, port):
     if app.config["BOOT_SERVE"] == "ok":
         app.config["BOOT_SERVE_LEFTOVERS"] = _remove_serve_leftovers(
             port, mount, "at boot", lambda detail, ok: _boot_audit(app, detail, ok))
+        _boot_shared_funnel(app, cfg, port, _boot_audit)
 
 
 def _ts_backend_scheme(cfg):

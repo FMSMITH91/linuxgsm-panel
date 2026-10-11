@@ -890,7 +890,12 @@ with app.app_context():
     _mon_id, _r1_id = _mon.id, _r1.id
     _rec = []
     _saved = {n: getattr(_monmod, n) for n in ("_host_reachable", "_remote_listening_ports",
-              "_host_disk_pct", "_host_load_mem", "_server_slots", "_server_max_config")}
+              "_host_disk_pct", "_host_load_mem", "_server_slots", "_server_max_config",
+              "_batched_slots")}
+    # The poller asks _batched_slots first (one gamedig per host) and hands its answer to
+    # _server_slots as `primary`. Left real, every pass below made a live batched query over SSH,
+    # and the checks held only because the fixture host never answers.
+    _monmod._batched_slots = lambda servers: {}
     _saved_notify = _am.notifications.notify
     _saved_mstate = {k: dict(v) for k, v in _ps._monitor_state.items()}
     _saved_exp = dict(_ps._expected_offline)
@@ -1138,7 +1143,9 @@ with app.app_context():
         # server going empty or full would otherwise satisfy (or break) a check about this one.
         def _slots_for_mon(mon):
             """`mon` is (count, max, name) for THIS server; every other reports a quiet 1/16."""
-            return lambda gs: mon if gs.id == _mon_id else (1, 16, None)
+            # The real signature: called with `primary=` whenever _batched_slots answered.
+            return (lambda gs, allow_console=False, primary=None:
+                    mon if gs.id == _mon_id else (1, 16, None))
 
         # Poller: notify_when_empty is a one-shot on a CONFIRMED 0 that then disarms itself.
         _mon.notify_when_empty = True; _mon_running()

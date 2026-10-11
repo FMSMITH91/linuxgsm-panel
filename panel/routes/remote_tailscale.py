@@ -11,7 +11,7 @@ from panel.ops.ssh_manager import (close_connection, remote_bootstrap_tailscale,
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action,
     permission_required)
 from panel.security import privileged as _priv
-from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
 from panel.core.validation import HOST_RE
 from app import (_refuse_on_panel_host)
 
@@ -65,10 +65,14 @@ def _register_status_and_link_join(app):
         if refused:
             return refused
         data = _json_body()
+        # A JSON boolean or a 400: by truthiness the string "false" turned Tailscale SSH ON.
+        enable_ssh = _r12c_json_flag(data, "enable_ssh", True)
+        if enable_ssh is None:
+            return jsonify({"success": False, "message": "enable_ssh must be true or false."}), 400
         try:
             ok, result = remote_tailscale_up_url(
                 remote,
-                enable_ssh=data.get("enable_ssh", True),
+                enable_ssh=enable_ssh,
                 advertise_routes=_json_str(data, "advertise_routes"),
             )
             log_action(current_user, "remote_tailscale_up", target=remote.name, success=ok,
@@ -210,7 +214,10 @@ def _register_key_join_and_migrate(app):
             return refused
         data = _json_body()
         auth_key = _json_str(data, "auth_key")
-        enable_ssh = data.get("enable_ssh", True)
+        # A JSON boolean or a 400: by truthiness the string "false" turned Tailscale SSH ON.
+        enable_ssh = _r12c_json_flag(data, "enable_ssh", True)
+        if enable_ssh is None:
+            return jsonify({"success": False, "message": "enable_ssh must be true or false."}), 400
         advertise_routes = _json_str(data, "advertise_routes")
 
         if not auth_key:

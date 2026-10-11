@@ -335,7 +335,13 @@ try:
     from panel.ops.ssh_manager import hosts as _p9_hosts                         # noqa: E402
     _p9_patch(_p9_hosts, "paramiko", _p9_Over(_p9_hosts.paramiko, SSHClient=_p9_trip(
         "hosts.paramiko.SSHClient", exc=ConnectionError("refused by part12's tripwire"))))
-    for _p9_tm, _p9_tn in ((_p9_files, "files"), (_p9_cron, "cron"), (_p9_ts, "tailscale")):
+    # system_ops and the web terminal too: _launch_installer, restart_panel, _helper_probe_run and
+    # the repair path call system_ops.subprocess directly (past _run/_run_verb above), and the
+    # terminal starts its shells with its own Popen. Every route here stubs the function first, so
+    # nothing reaches these today; the final check's "every host call" is only true if they count.
+    from panel.ops import terminal_session as _p9_term                         # noqa: E402
+    for _p9_tm, _p9_tn in ((_p9_files, "files"), (_p9_cron, "cron"), (_p9_ts, "tailscale"),
+                           (_p9_so, "system_ops"), (_p9_term, "terminal_session")):
         _p9_patch(_p9_tm, "subprocess", _p9_Over(
             _p9_tm.subprocess,
             Popen=_p9_trip(_p9_tn + ".subprocess.Popen", exc=OSError("refused by part12's tripwire")),
@@ -1763,6 +1769,14 @@ try:
     _d = _p9_json(_A.get(_sf_url + "/mods"))
     check("mods GET: a host that did not answer (a None list) is said too, not shown as empty",
           set(_d) == {"error"}, repr(_d))
+    # ...and the mirror: the offer read, the INSTALLED list did not. Shown as `installed: null`,
+    # loadMods' `d.installed||[]` listed every installed mod with an Install button.
+    _p9_patch(_p9_sf, "mods_available", lambda *a, **k: ([{"id": "sourcemod"}], True))
+    _p9_patch(_p9_sf, "mods_installed", lambda *a, **k: (None, True))
+    _d = _p9_json(_A.get(_sf_url + "/mods"))
+    check("mods GET: ...as is an INSTALLED list that could not be read beside a readable offer",
+          set(_d) == {"error"}, repr(_d))
+    _p9_patch(_p9_sf, "mods_installed", lambda *a, **k: ([], True))
     # Control: a host that answered with nothing installed or offered is still two empty lists.
     _p9_patch(_p9_sf, "mods_available", lambda *a, **k: ([], True))
     _d = _p9_json(_A.get(_sf_url + "/mods"))

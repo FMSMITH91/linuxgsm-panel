@@ -1176,11 +1176,20 @@ function _resyncRelease(r, cut) {
   r.held = [];
   held.forEach(function (d) {
     if (d.panel) _showPanelPush(d);
-    else if (_pushAfter(d.at, cut)) _appendConsoleRows(_resyncRows(d.rows), d.ts, d.at);
+    else if (_pushAfter(d.at, cut)) {
+      var rows = _resyncRows(d.rows);
+      _appendConsoleRows(rows, d.ts, d.at);
+      // Noted as the push it is: a Load older or priming read in flight rebuilds the console from
+      // a window that may end before it, and puts back only what _rebuildRestore knows of.
+      _rebuildNotePush(rows, d.ts, d.at);
+    }
   });
 }
 
+// A held panel push, shown — unless a rebuild since it arrived (Load older renders the whole
+// backlog, which holds every push already) has shown it: it then appeared twice.
 function _showPanelPush(d) {
+  if (Number(d.ts) && Number(d.ts) <= _lastPanelT) return;
   appendConsole(d.data, d.ts, false);
   _panelShownAt(d.ts);
 }
@@ -1222,6 +1231,10 @@ function _resyncShowAway(rows, data, prime) {
   if (data.since || data.gap) {
     if (data.gap && !prime) _showReturnGap();
     _appendConsoleRows(rows, _awayRead || prime ? data.now : null, data.at);
+    // Noted like a push: a catch-up that lands while a Load older (or a priming read) is in flight
+    // is wiped by that read's rebuild, whose window can end before these rows — and _rebuildRestore
+    // puts back only what was noted, so the lines between the two were silently missing.
+    _rebuildNotePush(rows, _awayRead || prime ? data.now : null, data.at);
     if (!prime) _awayRead = true;
   } else {
     _appendReturnRows(rows, data.now);
@@ -1381,6 +1394,7 @@ function _appendReturnRows(rows, now) {
   // are missing, rather than run the two spans together as if nothing were between them.
   if (k < 0 && rows.length && _consoleLines.length) _showReturnGap();
   _appendConsoleRows(rows.slice(k + 1), _awayRead ? now : null);
+  _rebuildNotePush(rows.slice(k + 1), _awayRead ? now : null, null);   // as _resyncShowAway notes its rows
   _awayRead = true;
 }
 

@@ -100,6 +100,15 @@ def _safe_abspath(user, relpath):
 _OUTSIDE_HOME = "__OUTSIDE_HOME__"
 
 
+def _r12b_outside_home(out):
+    """Whether a guarded command's output is the guard's refusal: the sentinel as its first output.
+
+    The guard runs before anything else and prints only that. A substring test read a listing with
+    a file of that name in it, or a file whose text holds it, as "outside the home" and refused it.
+    """
+    return (out or "").lstrip().startswith(_OUTSIDE_HOME)
+
+
 def _guarded(user, abspath, inner):
     """Prefix `inner` with a check that `abspath` still resolves inside /home/<user> ON THE HOST.
 
@@ -185,7 +194,7 @@ def _write_one_shot(server, user, abspath, b64, tmp, mk):
              f"&& {_keep_mode(abspath, tmp)} && {{ mv -f -T {_core._quote(tmp)} {_core._quote(abspath)} "
              f"|| {{ rm -f {_core._quote(tmp)}; false; }}; }}")
     out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, inner), timeout=60)
-    if _OUTSIDE_HOME in (out or ""):
+    if _r12b_outside_home(out):
         return False, "Invalid path"
     return (rc == 0), (e or out or "")
 
@@ -201,7 +210,7 @@ def _write_chunked(server, user, abspath, b64, tmp, mk):
             inner = f"{mk} && {inner}"
             inner = _guarded(user, abspath, inner)
         out, e, rc = _core.shell_as_game_user(server, user, inner, timeout=60)
-        if first and _OUTSIDE_HOME in (out or ""):
+        if first and _r12b_outside_home(out):
             return False, "Invalid path"
         if rc != 0:
             return False, e or "write failed"
@@ -501,6 +510,13 @@ def lgsm_write_config(server, user, selfname, updates):
         return False, ("%s is set in secrets-%s.cfg, which LinuxGSM reads after %s.cfg, so a change "
                        "here would not take effect. Edit it in that file — nothing has been changed."
                        % (", ".join(_shadowed), selfname, selfname))
+    # A key posted with the value secrets-<selfname>.cfg already gives it is in effect as it is;
+    # writing it would copy the secret into the instance cfg, the file people back up and share,
+    # which is what the secrets file is there to keep it out of.
+    updates = {k: v for k, v in (updates or {}).items()
+               if not (k in secrets and _r12b_cfg_value(v) == secrets[k])}
+    if not updates:
+        return True, ""
     _apply_cfg_updates(lines, updates)
     content = "\n".join(lines).rstrip("\n") + "\n"
     return _write_file_as_user(server, user, inst, content.encode())
@@ -516,10 +532,15 @@ def _turns_logtimestamp_on(updates):
             and str(updates["logtimestamp"]).strip().strip('"').lower() != "off")
 
 
+def _r12b_cfg_value(val):
+    """A posted value as _apply_cfg_updates writes it (a line break is a space), to compare with a read one."""
+    return str(val).replace("\r", " ").replace("\n", " ")
+
+
 def _shadowed_by_secrets(updates, secrets):
     """The keys `updates` changes that secrets-<selfname>.cfg also sets, sorted."""
     return sorted(k for k, v in (updates or {}).items()
-                  if k in secrets and str(v).replace("\r", " ").replace("\n", " ") != secrets[k])
+                  if k in secrets and _r12b_cfg_value(v) != secrets[k])
 
 
 def _read_instance_cfg_lines(server, user, selfname, inst, secrets=None):
@@ -894,7 +915,7 @@ def browse_dir(server, user, relpath="", selfname=None):
     # in the home is the boundary, so that is reported as such rather than as "Invalid path".
     inner = f"find -H {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%Y\\t%s\\t%f\\0' 2>/dev/null"
     out, _, rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
-    if _OUTSIDE_HOME in (out or ""):
+    if _r12b_outside_home(out):
         return {"path": (relpath or "").strip("/"), "entries": [], "outside_home": True}
     # A read that FAILED prints nothing, and so does a genuinely empty directory — rc is the only
     # thing that tells them apart, and without it the browser rendered "this folder is empty"
@@ -1017,7 +1038,7 @@ def _decode_read_frame(framed, ap):
 
 def _read_file_reply(out, ap, _rc):
     """Turn read_file's script output into (content, error) — see read_file."""
-    if _OUTSIDE_HOME in (out or ""):
+    if _r12b_outside_home(out):
         return None, "Invalid path"
     stripped = (out or "").strip()
     if stripped in _READ_REFUSALS:
@@ -1167,7 +1188,7 @@ def stat_upload_targets(server, user, reldir, names):
     inner = (f"find -H {_core._quote(apdir)} -maxdepth 1 -mindepth 1 "
              f"-printf '%y\\t%s\\t%T@\\t%f\\0' 2>/dev/null")
     out, err, rc = _core.shell_as_game_user(server, user, _guarded(user, apdir, inner), timeout=20)
-    if _OUTSIDE_HOME in (out or ""):
+    if _r12b_outside_home(out):
         return None
     # A listing that did not RUN is not a listing with nothing in it. rc was discarded here, so an
     # unreachable host produced out="" -> no matches -> the caller answered {"existing": [],
@@ -1248,7 +1269,7 @@ def _existing_target_refusal(server, user, target):
     """Why a no-overwrite upload must not proceed (UPLOAD_EXISTS, or a failed check), else None."""
     chk = f"test -e {_core._quote(target)} && echo __YES__ || true"
     out, _, rc = _core.shell_as_game_user(server, user, _guarded(user, target, chk), timeout=15)
-    if _OUTSIDE_HOME in (out or ""):
+    if _r12b_outside_home(out):
         return "Invalid path"
     # The probe prints NOTHING when the file is absent, so silence is its ordinary success —
     # rc is what separates that from a read that never ran. Without it, a failed check read as
@@ -1299,7 +1320,7 @@ def delete_path(server, user, relpath, selfname=None):
 
 def _files_delete_outcome(out, e, rc):
     """delete_path's (ok, message) from what its guarded host-side `rm -rf` printed."""
-    if _OUTSIDE_HOME in (out or ""):
+    if _r12b_outside_home(out):
         return False, "Refusing to delete this path"
     if _PROTECTED_MARK in (out or ""):
         return False, "This file/folder is protected — deleting it would break the server."
@@ -1572,7 +1593,7 @@ def stat_path(server, user, relpath):
              f"elif [ -f {_core._quote(ap)} ]; then echo f $(stat -Lc %s {_core._quote(ap)} 2>/dev/null); "
              f"else echo __NOFILE__; fi")
     out, _, _ = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
-    if _OUTSIDE_HOME in (out or ""):
+    if _r12b_outside_home(out):
         return None
     parts = (out or "").strip().split()
     if not parts or parts[0] not in ("d", "f"):

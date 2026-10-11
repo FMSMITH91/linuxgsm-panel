@@ -585,6 +585,30 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A second full review on 2026-10-11, rerun after the first one's fixes: fixes.** Every item below
+  has a check that fails without its fix.
+  - **Settings sent as text.** A switch sent as the text `"false"` counted as on. During VPS setup
+    that meant `"reboot": "false"` rebooted the host. The same applied to installing fail2ban or the
+    dependencies, enabling UFW, Tailscale SSH, tag notifications, autostart and backups. Each one
+    now accepts only a real true or false. A backup passphrase sent as `null`, `false` or `0` no
+    longer turns encryption off. Text typed into a server's Keep box no longer clears its setting.
+  - **Game servers.** Saving the Alerts card no longer copies values from `secrets-*.cfg` into the
+    plain instance config. The Alerts and log-timestamp writes now get the same safety check as the
+    settings form. The install's GMod content step no longer runs at the same time as a Content-tab
+    job, and it no longer skips content that is already on the host. A file whose name happens to
+    match an internal marker no longer makes its folder read as "outside the home".
+  - **Panel host.** A staged Ubuntu rollout no longer limits the whole game list to the older release.
+    "Restore all" in Repair works on a copied file. The OS-update lock check reads the probe's exit
+    codes correctly.
+  - **Pages.** The players dialog (shown before a restart or a Panel Server backup) and 147 other
+    page strings are now translated for Spanish and French viewers. Usernames, group names and
+    command names are no longer run through the translator.
+  - **Tests and CI.** About 30 more test checks could pass without testing what they named; each was
+    shown blind to a deliberate break and now catches it. The install-job tests now use stand-ins
+    shaped like the real functions, and a new check catches a wrong-shaped one. The fail2ban fuzz
+    target had timed out on every run while its job showed green; it runs now, and a timeout fails
+    the unit suite. Bandit and Semgrep now also scan `.github/scripts`. A documentation-only push
+    during the weekly scan no longer throws that scan away.
 - **Findings from a full code review including the tests and CI (2026-10-11): fixes.** Every item
   below has a check that fails without its fix.
   - **Game servers.** A remote GMod install whose content download partly failed (one game out of
@@ -1908,10 +1932,31 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
-- **gamedig's dependency `http-cache-semantics` is 4.3.0, not 4.2.0.** 4.2.0 carries
-  CVE-2026-93748 (reported by Codacy's Trivy scan). gamedig, the player-query tool every game host
-  installs from `tools/gamedig/package-lock.json`, already allows 4.3.0; only the lockfile moved,
-  and `npm ci` from it installs and loads gamedig as before.
+- **A second full review on 2026-10-11: security.** Every item below has a check that fails without
+  its fix.
+  - **Turning Funnel on or off for the panel changed it for other apps too.** Funnel applies to the
+    whole :443 listener, so when another app shared that listener with the panel, the panel's
+    Serve setup switched that app's Funnel on (putting it on the internet) or off. The panel now
+    leaves another app's Funnel alone. It refuses a change that would flip it, and says so.
+    When another app's Funnel makes the panel reachable from the internet too, the Tailscale and
+    Panel Server pages now say that, and no longer claim the panel is tailnet-only.
+  - **Binding the panel to `::1` with Tailscale Serve set up locked you out.** Serve forwards to
+    `127.0.0.1` only, and the same change closed the public port. The change is now refused.
+  - **SSH lockout guards.** SSH rules written as a port list or range, or forwarding (`FWD`) rules,
+    were misread when deciding whether another way in remains. "Close port" also deleted a
+    forwarding rule it took for the panel's own way in.
+  - **The privileged helper's root-access check.** The installer's own game-group line could cancel
+    out a real root grant. A negated host, a withdrawal through an alias, and a trailing `PASSWD:`
+    still counted as root.
+  - **The debug report** printed sudo lines it could not parse in full, including their arguments and
+    `ENV=` values. It now prints only the fixed label.
+  - **The installer** opened the panel's port past a UFW `DENY` written as a port range.
+- **gamedig's dependency `http-cache-semantics` is 4.3.0, not 4.2.0.** Only the lockfile moved;
+  `npm ci` from it installs and loads gamedig as before. This does **not** fix CVE-2026-93748:
+  scanners list only 4.2.0 because the advisory predates 4.3.0, but 4.3.0's max-stale handling is
+  unchanged and the upstream fix was never merged. It remains unreachable here (gamedig never gives
+  its HTTP client a cache). The scanner exceptions for it are removed, so a lockfile that brought
+  4.2.0 back would fail the audit again.
 - **Findings from a full code review including the tests and CI (2026-10-11): security.** Every
   item below has a check that fails without its fix.
   - **The debug report could print a password.** A sudo command that sudo refused (a mistyped sudo

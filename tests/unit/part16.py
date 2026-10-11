@@ -1514,7 +1514,10 @@ check("capped reader: ...and one killed at its timeout, a stand-in holding the p
 
 try:
     _rv16_out, _rv16_err = _rv16_child.communicate(timeout=120)
-except _sp16.TimeoutExpired:
+# Both classes: green communicate(timeout=) raises the ORIGINAL module's TimeoutExpired, which is
+# not subprocess.TimeoutExpired, so a hung child escaped this clause, ended the run with no tally
+# and skipped the stand-ins' cleanup below (as _core does at its own communicate).
+except (_sp16.TimeoutExpired, _core16._real_subprocess.TimeoutExpired):
     _rv16_child.kill()
     _rv16_out, _rv16_err = _rv16_child.communicate()
 _rv16_line = [ln for ln in _rv16_out.decode("utf-8", "replace").splitlines()

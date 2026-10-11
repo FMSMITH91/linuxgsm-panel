@@ -161,6 +161,7 @@
               {% if info.funnel_enabled %}
                 <span class="badge bg-warning text-dark">Enabled</span>
                 <span class="text-secondary" style="font-size:.7rem;">public internet</span>
+                {% include "_shared_funnel_note.html" %}
               {% else %}
                 <span class="badge bg-secondary">Disabled</span>
                 <span class="text-secondary" style="font-size:.7rem;">private — tailnet only (recommended)</span>

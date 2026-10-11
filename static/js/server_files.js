@@ -245,12 +245,19 @@ function browse(path){
 // Only the LATEST open is shown, as browse() keeps only its latest listing: two quick clicks whose
 // answers came back out of order left the second row highlighted over the first file's text.
 var _openSeq = 0;
+// The highlighted row is the file the editor HOLDS. A click highlights its row before the read, and
+// a read that is refused (too large, binary) or fails left that row lit over the earlier file's
+// text — which is the one Save writes.
+function _r12c_markOpenFile(){
+  document.querySelectorAll('#file-list .list-group-item.active').forEach(function(x){ x.classList.remove('active'); });
+  if(curFile){ var open=document.querySelector('#file-list [data-path="'+CSS.escape(curFile)+'"]'); if(open) open.classList.add('active'); }
+}
 function openFile(path){
   var seq = ++_openSeq;
   document.getElementById('file-save-msg').textContent='';
   fetch(MOUNT+'/api/server/'+serverId+'/file?path='+encodeURIComponent(path)).then(r=>r.json()).then(d=>{
     if(seq !== _openSeq) return;
-    if(d.error){ if(window.toast) toast(d.error, 'danger'); return; }
+    if(d.error){ _r12c_markOpenFile(); if(window.toast) toast(d.error, 'danger'); return; }
     curFile=path;
     document.getElementById('editor-empty').style.display='none';
     document.getElementById('editor-wrap').style.display='';
@@ -261,7 +268,7 @@ function openFile(path){
     syncGutter();
     var edl=document.getElementById('editor-download');
     if(edl) edl.href=MOUNT+'/server/'+serverId+'/download?path='+encodeURIComponent(path);
-  }).catch(()=>{});
+  }).catch(function(){ if(seq === _openSeq) _r12c_markOpenFile(); });
 }
 // ── Editor line numbers ───────────────────────────────────────────────────────────────────────
 // A textarea cannot draw its own line numbers, so a gutter sits beside it and is kept in step by
@@ -1167,12 +1174,12 @@ function loadAlerts(){
     (d.providers||[]).forEach(function(p){
       var on=String(vals[p.toggle]||'').toLowerCase()==='on';
       html += '<div class="border rounded p-2 mb-2">'
-        + '<div class="form-check form-switch mb-1"><input class="form-check-input" type="checkbox" data-alert-toggle="'+escA(p.toggle)+'"'+(on?' checked':'')+'>'
+        + '<div class="form-check form-switch mb-1"><input class="form-check-input" type="checkbox" data-alert-toggle="'+escA(p.toggle)+'" data-orig="'+(on?'on':'off')+'"'+(on?' checked':'')+'>'
         + '<label class="form-check-label"><strong>'+esc(p.label)+'</strong></label></div>'
         + '<div class="row g-2">';
       (p.fields||[]).forEach(function(f){
         html += '<div class="col-md-6"><label class="form-label small mb-0">'+esc(f.label)+'</label>'
-          + '<input type="text" class="form-control form-control-sm font-monospace" data-alert-key="'+escA(f.key)+'" value="'+escA(vals[f.key]||'')+'" spellcheck="false"></div>';
+          + '<input type="text" class="form-control form-control-sm font-monospace" data-alert-key="'+escA(f.key)+'" data-orig="'+escA(vals[f.key]||'')+'" value="'+escA(vals[f.key]||'')+'" spellcheck="false"></div>';
       });
       html += '</div></div>';
     });
@@ -1182,12 +1189,28 @@ function loadAlerts(){
   }).catch(function(){ document.getElementById('alerts-loading').innerHTML='<span class="text-danger">Could not load alert settings.</span>'; });
 }
 function saveAlerts(btn){
+  // Only the fields the user changed, as saveConfig does. The card shows the values the server runs
+  // with, secrets-common.cfg and secrets-<instance>.cfg included, so posting every field copied
+  // those secrets into the plaintext instance cfg (and a copy of a secrets-common.cfg value then
+  // outlived a later change to it there).
   var values={};
-  document.querySelectorAll('[data-alert-toggle]').forEach(function(el){ values[el.getAttribute('data-alert-toggle')] = el.checked ? 'on' : 'off'; });
-  document.querySelectorAll('[data-alert-key]').forEach(function(el){ values[el.getAttribute('data-alert-key')] = el.value.trim(); });
+  document.querySelectorAll('[data-alert-toggle]').forEach(function(el){
+    var v = el.checked ? 'on' : 'off';
+    if(v !== el.getAttribute('data-orig')) values[el.getAttribute('data-alert-toggle')] = v;
+  });
+  document.querySelectorAll('[data-alert-key]').forEach(function(el){
+    if(el.value !== el.getAttribute('data-orig')) values[el.getAttribute('data-alert-key')] = el.value.trim();
+  });
+  if(Object.keys(values).length===0){ alertsMsg('No changes to save.','text-secondary'); return; }
   if(btn) btn.disabled=true; alertsMsg('Saving…','text-secondary');
   fetch(MOUNT+'/api/server/'+serverId+'/alerts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:values})})
-    .then(r=>r.json()).then(function(d){ alertsMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger'); if(btn) btn.disabled=false; })
+    .then(r=>r.json()).then(function(d){
+      alertsMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger'); if(btn) btn.disabled=false;
+      // What was saved is the new baseline, so a second Save does not post it again.
+      if(d.success) document.querySelectorAll('[data-alert-toggle],[data-alert-key]').forEach(function(el){
+        el.setAttribute('data-orig', el.hasAttribute('data-alert-toggle') ? (el.checked ? 'on' : 'off') : el.value);
+      });
+    })
     .catch(function(){ alertsMsg('✗ Save failed','text-danger'); if(btn) btn.disabled=false; });
 }
 function testAlert(btn){

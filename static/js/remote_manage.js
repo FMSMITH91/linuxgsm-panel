@@ -207,7 +207,7 @@ function loadSecurityEvents(){
       var cls=e.action==='fail2ban_ban'?'text-danger':((e.action==='login_blocked'||e.action==='api_token_blocked')?'text-warning':'text-secondary');
       return '<tr><td class="small text-secondary text-nowrap">'+escapeHtml(t)+'</td>'
         +'<td class="small"><code class="'+cls+'">'+escapeHtml(e.action)+'</code></td>'
-        +'<td class="small">'+escapeHtml(e.user||'')+'</td>'
+        +'<td class="small" data-no-i18n>'+escapeHtml(e.user||'')+'</td>'
         +'<td class="small text-secondary">'+escapeHtml(e.detail||'')+'</td>'
         +'<td class="small text-secondary">'+escapeHtml(e.ip||e.target||'')+'</td></tr>';
     }).join('');

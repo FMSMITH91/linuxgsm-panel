@@ -2653,9 +2653,12 @@ finally:
 _all_src, _all_unread = [], []
 for _d, _, _fs in os.walk(_repo_root):
     # tests/smoke is this suite's own source (its parts are not named *_test.py), and this very
-    # check spells the string it looks for.
-    if any(_x in _d for _x in (".git", ".venv", "venv", "node_modules", "__pycache__", "/data",
-                               os.path.join("tests", "smoke"))):
+    # check spells the string it looks for. Skipped by the path's COMPONENTS below the checkout:
+    # matching substrings of the absolute path skipped everything when the checkout itself lived
+    # under a "/data" or "venv" directory, and ".git" also took ".github" with it.
+    _parts = os.path.relpath(_d, _repo_root).split(os.sep)
+    if (_parts[0] in (".git", ".venv", "venv", "node_modules", "data") or "__pycache__" in _parts
+            or _parts[:2] == ["tests", "smoke"]):
         continue
     for _f in _fs:
         if _f.endswith(".py") and not _f.endswith("_test.py"):
@@ -2663,7 +2666,10 @@ for _d, _, _fs in os.walk(_repo_root):
                 _all_src.append(open(os.path.join(_d, _f), encoding="utf-8").read())
             except OSError as _e:
                 _all_unread.append("%s (%s)" % (os.path.join(_d, _f), _e))
-# An absence check passes for any file it could not read, so an unread file fails it.
+# An absence check passes for any file it could not read, so an unread file fails it — and one
+# that read nothing at all passes too, so it has a floor (the panel has well over 100 modules).
+check("server status api: (setup) the scan read the panel's sources",
+      len(_all_src) >= 50, "read %d .py files under %s" % (len(_all_src), _repo_root))
 check("server status api: no longer cats the console log to count players",
       not any("grep -c 'ClientConnect" in _x for _x in _all_src) and not _all_unread,
       "not read, so not scanned: %s" % _all_unread[:3])

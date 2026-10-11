@@ -26,7 +26,7 @@ import concurrent.futures
 import functools
 import re
 import threading
-from panel.core.http import (_json_body, _json_str, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
     _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons)
@@ -1022,6 +1022,13 @@ def _register_when_empty(app):
                         "message": "Queued — %s will stop automatically once it's empty." % gs.name})
 
 
+def _r12c_not_a_flag(value, name):
+    """The 400 for a switch that was not a JSON boolean (_r12c_json_flag gave None), else None."""
+    if value is None:
+        return jsonify({"success": False, "message": "%s must be true or false." % name}), 400
+    return None
+
+
 def _autostart_reboot_gate(gs, enabled):
     """The Autostart switch while its host is being rebooted: a 409 to return, or None to go on.
 
@@ -1052,8 +1059,10 @@ def _register_schedules(app):
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         data = _json_body()
-        enabled = bool(data.get("enabled"))
-        refused = _autostart_reboot_gate(gs, enabled)
+        # A JSON boolean or a 400: bool("false") is True, so a request to turn autostart off
+        # turned it ON (and installed the monitor cron).
+        enabled = _r12c_json_flag(data, "enabled", None)
+        refused = _r12c_not_a_flag(enabled, "enabled") or _autostart_reboot_gate(gs, enabled)
         if refused is not None:
             return refused
         try:

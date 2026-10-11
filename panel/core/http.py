@@ -40,6 +40,21 @@ def _json_str(body, key, default=""):
     return str(v).strip()
 
 
+def _r12c_json_flag(body, key, default):
+    """Read a request field that must be a JSON boolean.
+
+    The bool, `default` when the key is absent, and None for anything else (the caller refuses it
+    with a 400).
+
+    A flag read by truthiness takes the STRING "false" as yes: `{"enable_ssh": "false"}` ran
+    `tailscale up --ssh`, opening a root-capable login path the caller asked not to open, and
+    `{"reboot": "no"}` rebooted a bootstrapped host. tailscale.py's Funnel had the same defect and
+    reads `is True`; a guess either way is wrong for one of the two meanings, so neither is guessed.
+    """
+    v = body.get(key, default)
+    return v if isinstance(v, bool) else None
+
+
 def _wants_json():
     """True when the caller is an in-page fetch().
 

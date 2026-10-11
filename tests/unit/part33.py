@@ -49,6 +49,7 @@ import paramiko as _pk33
 from flask import Flask as _Flask33
 from flask.logging import default_handler as _flask_default_handler33
 
+from eventlet.timeout import Timeout as _EvTimeout33  # noqa: E402 - a timed-out green join raises it
 from unit.part01 import check, eq
 from unit.part01 import skip as _skip33
 from panel.core import config as _cfg33
@@ -964,7 +965,8 @@ def _join33(thread, limit):
     """
     try:
         thread.join(limit)
-    except BaseException:  # noqa: BLE001 - the caller reads is_alive() and reports it
+    # By its class, not BaseException: a Ctrl-C or SystemExit inside the wait still stops the run.
+    except _EvTimeout33:   # a timed-out green join raises it; the caller reads is_alive()
         pass
 
 

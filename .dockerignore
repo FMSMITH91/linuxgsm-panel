@@ -1,7 +1,8 @@
 # The build context of .clusterfuzzlite/Dockerfile is the repository root (ClusterFuzzLite, and
-# OSS-Fuzz's `helper.py build_image --external $PWD`, both build with it), and its
-# `COPY . $SRC/linuxgsm-panel` takes everything in it, gitignored or not. Docker does not read
-# .gitignore or .git/info/exclude, so without this file a local fuzz build copied the working
+# OSS-Fuzz's `helper.py build_image --external $PWD`, both build with it). Its COPYs take only
+# requirements.txt, panel/, tests/fuzz and build.sh today, but the whole context is still sent to
+# the builder, and a `COPY .` (as it once was) takes everything in it, gitignored or not. Docker
+# does not read .gitignore or .git/info/exclude, so without this file a local fuzz build copied the working
 # tree's secrets into an image layer: data/ (secret_key, cred_key, panel.db), the .venv, .git and
 # every worktree checkout under .claude/, each with its own data/.
 #

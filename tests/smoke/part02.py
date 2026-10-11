@@ -2908,18 +2908,262 @@ def _ij_wait(gid, secs=180):
     return j, _row_status, False
 
 
+# ── a stand-in answers in the shape of the function it replaces ─────────────────────────────
+# These blocks say the host is stubbed to SUCCEED so the job walks the whole way, and for two
+# steps it did not. install_game_dependencies was stubbed ("", "", 0) — a 3-tuple where the real
+# one answers (ok, msg) — so step 2's unpacking raised and every walk took the "Some dependencies
+# did not install" branch. install_game_cron was stubbed None where the real one answers
+# (ok, why), so step 5 always logged "the maintenance cron was not written" and never recorded
+# Autostart. #416 corrected list_server_commands' stand-in (strings -> {"cmd"} dicts) to reach
+# that step, and the cron stand-in still stopped it one line later. Every one of those mistakes
+# lands in a broad `except` inside the job, which is right for production and blind here: the
+# job carries on, and the checks read only the end state.
+#
+# So every stand-in installed by the install blocks goes through _r12d_shaped, which reads the
+# REAL function's literal `return`s (a tuple's width, a dict's keys, the strings it can return,
+# a bool, a list built from dict literals) and records any answer that fits none of them. The
+# expected shape is taken from the function being replaced, not written down here, so it moves
+# with the code. A return it cannot read (a variable, a call it cannot follow — run_privileged's
+# transports) leaves that function unjudged rather than judged on half its answers.
+import ast as _r12d_ast
+import inspect as _r12d_inspect
+import textwrap as _r12d_textwrap
+from panel.ops.ssh_manager import cron as _r12d_cron
+
+_r12d_shape_bad = []
+
+
+def _r12d_returns(fn_node):
+    """The Return nodes of `fn_node` itself — not of a def, lambda or class nested inside it."""
+    out, todo = [], list(fn_node.body)
+    while todo:
+        n = todo.pop()
+        if isinstance(n, (_r12d_ast.FunctionDef, _r12d_ast.AsyncFunctionDef, _r12d_ast.Lambda,
+                          _r12d_ast.ClassDef)):
+            continue
+        if isinstance(n, _r12d_ast.Return):
+            out.append(n)
+        todo.extend(_r12d_ast.iter_child_nodes(n))
+    return out
+
+
+def _r12d_const_kind(value):
+    """The shape of a literal constant return: None, a bool, or one particular string."""
+    if value is None:
+        return {("none", None)}
+    if isinstance(value, bool):
+        return {("bool", None)}
+    return {("str", value)} if isinstance(value, str) else None
+
+
+def _r12d_const_keys(keys):
+    return bool(keys) and all(isinstance(k, _r12d_ast.Constant) for k in keys)
+
+
+# How each literal return reads, by its node type: (node, the {name: dict keys} a list was built
+# from) -> its shapes, or None when this node of that type is not a literal one.
+_R12D_LITERALS = {
+    _r12d_ast.Constant: lambda v, ap: _r12d_const_kind(v.value),
+    _r12d_ast.Tuple: lambda v, ap: {("tuple", len(v.elts))},
+    _r12d_ast.Compare: lambda v, ap: {("bool", None)},
+    _r12d_ast.UnaryOp: lambda v, ap: {("bool", None)} if isinstance(v.op, _r12d_ast.Not) else None,
+    _r12d_ast.Dict: lambda v, ap: ({("dict", frozenset(k.value for k in v.keys))}
+                                   if _r12d_const_keys(v.keys) else None),
+    _r12d_ast.Name: lambda v, ap: {("listof", ap[v.id])} if v.id in ap else None,
+}
+
+
+def _r12d_kind(v, appended, real, depth):
+    """The shapes one return value can take, as {(kind, detail)}; None when it cannot be told.
+
+    A call to another function (set_autostart returns _rewrite_crontab(...)) is followed into
+    that function, three calls deep at most; a name or call it cannot follow makes the whole
+    answer unknown, so a function is judged only when EVERY return it has was read.
+    """
+    if v is None:
+        return {("none", None)}
+    if isinstance(v, _r12d_ast.IfExp):
+        a, b = (_r12d_kind(v.body, appended, real, depth),
+                _r12d_kind(v.orelse, appended, real, depth))
+        return None if a is None or b is None else a | b
+    if isinstance(v, _r12d_ast.Call):
+        return _r12d_follow(v, real, depth) if depth < 3 else None
+    read = _R12D_LITERALS.get(type(v))
+    return read(v, appended) if read is not None else None
+
+
+def _r12d_follow(call, real, depth):
+    """The shapes of the function `call` calls, looked up in `real`'s module; None if unknown."""
+    f, g = call.func, getattr(real, "__globals__", {})
+    if isinstance(f, _r12d_ast.Name):
+        target = g.get(f.id)
+    elif isinstance(f, _r12d_ast.Attribute) and isinstance(f.value, _r12d_ast.Name):
+        target = getattr(g.get(f.value.id), f.attr, None)
+    else:
+        return None
+    return _r12d_shape_of(target, depth + 1) if _r12d_inspect.isfunction(target) else None
+
+
+def _r12d_parse(real):
+    """`real`'s own def node, parsed from its source; None for a module, a lambda or no source."""
+    if not _r12d_inspect.isfunction(real):     # a module or namespace swapped whole (`time`)
+        return None
+    try:
+        tree = _r12d_ast.parse(_r12d_textwrap.dedent(_r12d_inspect.getsource(real)))
+    except (OSError, TypeError, SyntaxError):
+        return None
+    return next((n for n in tree.body
+                 if isinstance(n, (_r12d_ast.FunctionDef, _r12d_ast.AsyncFunctionDef))), None)
+
+
+def _r12d_dict_append(n):
+    """(list name, dict keys) when `n` is `name.append({"k": ..., ...})`, else None."""
+    if not (isinstance(n, _r12d_ast.Call) and isinstance(n.func, _r12d_ast.Attribute)):
+        return None
+    if n.func.attr != "append" or not isinstance(n.func.value, _r12d_ast.Name) or not n.args:
+        return None
+    d = n.args[0]
+    if not (isinstance(d, _r12d_ast.Dict) and _r12d_const_keys(d.keys)):
+        return None
+    return n.func.value.id, frozenset(k.value for k in d.keys)
+
+
+def _r12d_shape_of(real, depth=0):
+    """{(kind, detail), ...} the real function can return; None when any return is unreadable."""
+    fn = _r12d_parse(real)
+    if fn is None:
+        return None
+    # `rows.append({"cmd": ..., ...})` then `return rows`: a list of dicts with those keys.
+    appended = dict(filter(None, map(_r12d_dict_append, _r12d_ast.walk(fn))))
+    kinds = set()
+    for r in _r12d_returns(fn):
+        k = _r12d_kind(r.value, appended, real, depth)
+        if k is None:
+            return None
+        kinds |= k
+    # A function that falls off its end returns None too (a body with no return at all).
+    return kinds or {("none", None)}
+
+
+# Does a value have a shape: kind -> (detail, value) -> bool.
+_R12D_FITS = {
+    "none": lambda d, v: v is None,
+    "tuple": lambda d, v: isinstance(v, tuple) and len(v) == d,
+    "bool": lambda d, v: isinstance(v, bool),
+    "str": lambda d, v: v == d,
+    "dict": lambda d, v: isinstance(v, dict) and set(v) == set(d),
+    "listof": lambda d, v: isinstance(v, list) and all(isinstance(e, dict) and set(e) == set(d)
+                                                       for e in v),
+}
+
+
+def _r12d_fits(kinds, v):
+    """Does `v` have one of the shapes in `kinds`?"""
+    return any(_R12D_FITS[kind](detail, v) for kind, detail in kinds)
+
+
+def _r12d_shaped(real, fn, name, bad=None):
+    """`fn`, recording into `bad` (default _r12d_shape_bad) any answer `real` could not give."""
+    kinds = _r12d_shape_of(real)
+    if kinds is None:
+        return fn
+    sink = _r12d_shape_bad if bad is None else bad
+
+    def _shaped(*a, **k):
+        v = fn(*a, **k)
+        if not _r12d_fits(kinds, v):
+            sink.append("%s answered %r; the real one returns %s"
+                        % (name, v, sorted(kinds, key=repr)))
+        return v
+    _shaped.r12d_kinds = kinds
+    return _shaped
+
+
+class _R12dCrontab:
+    """The game user's crontab, shared by the three cron seams the install job calls.
+
+    install_game_cron and set_autostart write the monitor line here (as the real ones do, in the
+    real wrapped form), and the `crontab-list` verb reads it back. Answering that verb with the
+    generic "freed=0 ..." reply, as these blocks did, read back a crontab with no jobs: step 7's
+    reconcile then turned Autostart OFF right after set_autostart reported it on.
+    """
+
+    def __init__(self):
+        """An empty crontab for every user."""
+        self.lines = {}
+
+    def _line(self, user, selfname):
+        return "*/5 * * * * " + _r12d_cron._record_managed_cmd(
+            user, "/home/%s/%s monitor" % (user, selfname or user))
+
+    def install(self, server, user, selfname=None, supported=None):
+        if "monitor" in (supported or ()):
+            self.lines.setdefault(user, set()).add(self._line(user, selfname))
+        return (True, "")
+
+    def autostart(self, server, user, enabled, selfname=None):
+        mine = self.lines.setdefault(user, set())
+        (mine.add if enabled else mine.discard)(self._line(user, selfname))
+        return (True, "")
+
+    def priv(self, server, verb, args=(), *a, **k):
+        if verb == "crontab-list":
+            return ("\n".join(sorted(self.lines.get((list(args) or [""])[0], ()))), "", 0)
+        return ("freed=0 held=0 slots=10", "", 0)
+
+
+def _r12d_ports(game_port, open_ports):
+    """detect_game_ports' full answer for a stubbed `details` (no Status line: started None)."""
+    return {"game_port": game_port, "open_ports": list(open_ports), "ports": [],
+            "answered": True, "started": None}
+
+
+def _r12d_cmds(*names):
+    """list_server_commands' rows: {"cmd", "short", "desc"}, as the real one builds them."""
+    return [{"cmd": n, "short": "", "desc": ""} for n in names]
+
+
 _ij_saved, _ij_calls, _ij_state = {}, [], {"started": False}
 _ij_verbs = []
+_ij_cron = _R12dCrontab()
+_ij_bans = []
 
 
 def _ij_priv(server, verb, args=(), *a, **k):
     _ij_verbs.append((verb, list(args)))
-    return ("freed=0 held=0 slots=10", "", 0)
+    return _ij_cron.priv(server, verb, args, *a, **k)
 
 
 def _ij_stub(mod, name, fn):
     _ij_saved[(mod, name)] = getattr(mod, name)
-    setattr(mod, name, fn)
+    setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
+
+
+# The gate's own controls: each shape these blocks were walked with before is named, and each
+# corrected one is not. A gate that read nothing (a seam whose real returns it cannot parse)
+# would pass every block below, so the seams it must be able to judge are listed too.
+_r12d_ctl_bad = []
+for _r12d_n, _r12d_mod, _r12d_old, _r12d_new in (
+        ("list_server_commands", _ij_game, ["start", "stop"], _r12d_cmds("start", "stop")),
+        ("install_game_dependencies", _msmod, ("", "", 0), (True, "")),
+        ("install_game_cron", _msmod, None, (True, "")),
+        ("sm_game_engine", _msmod, "source", "valve"),
+        ("detect_game_ports", _msmod, {"game_port": 1, "open_ports": [1]},
+         _r12d_ports(1, [1])),
+        ("ensure_persistent_bans", _msmod, None, True),
+        ("remote_ufw_allow_game_ports", _msmod, None, ([], "opened 0 port(s): none"))):
+    _r12d_old_bad, _r12d_new_bad = [], []
+    _r12d_real = getattr(_r12d_mod, _r12d_n)
+    _r12d_shaped(_r12d_real, (lambda v: lambda *a, **k: v)(_r12d_old), _r12d_n, _r12d_old_bad)()
+    _r12d_shaped(_r12d_real, (lambda v: lambda *a, **k: v)(_r12d_new), _r12d_n, _r12d_new_bad)()
+    if _r12d_shape_of(_r12d_real) is None or not _r12d_old_bad or _r12d_new_bad:
+        _r12d_ctl_bad.append("%s: kinds=%r old named=%r new named=%r" % (
+            _r12d_n, sorted(_r12d_shape_of(_r12d_real) or (), key=repr), bool(_r12d_old_bad),
+            _r12d_new_bad))
+check("install job: the stand-in shape gate reads the real seams, names each wrong shape the "
+      "walks used before (list_server_commands as [\"start\", \"stop\"] among them), and "
+      "passes the corrected ones",
+      not _r12d_ctl_bad, "; ".join(_r12d_ctl_bad))
 
 
 def _ij_ports(_remote):
@@ -2956,25 +3200,38 @@ try:
     _ij_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
     _ij_stub(_sm_core, "run_as_game_user", _ij_run_as)
     _ij_stub(_sm_core, "run_privileged", _ij_priv)
-    _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: [{"cmd": c} for c in ("start", "stop", "monitor")])
+    _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: _r12d_cmds("start", "stop", "monitor"))
     _ij_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
     _ij_stub(_msmod, "_looks_installed", lambda *a, **k: True)
-    _ij_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
+    _ij_stub(_msmod, "install_game_dependencies", lambda *a, **k: (True, ""))
     _ij_stub(_msmod, "parse_missing_deps", lambda *a, **k: [])
     _ij_stub(_msmod, "lgsm_write_config", lambda *a, **k: (True, ""))
-    _ij_stub(_msmod, "install_game_cron", lambda *a, **k: None)
-    _ij_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: None)
-    _ij_stub(_msmod, "sm_game_engine", lambda *a, **k: "source")
-    _ij_stub(_msmod, "set_autostart", lambda *a, **k: (True, ""))
+    _ij_stub(_msmod, "install_game_cron", _ij_cron.install)
+    _ij_stub(_msmod, "ensure_persistent_bans",
+             lambda r, u, *a, **k: (_ij_bans.append(u), True)[1])
+    # gmod is a Source game: game_engine answers "valve" for it, the value step 5 tests before it
+    # makes bans persist. "source" is not a value game_engine returns.
+    _ij_stub(_msmod, "sm_game_engine", lambda *a, **k: "valve")
+    _ij_stub(_msmod, "set_autostart", _ij_cron.autostart)
     # remote_ufw_close_game_port is left REAL: the adoption below leaves 28990, and what it
     # sends the host for that is checked verb by verb.
     _ij_stub(_msmod, "_remote_listening_ports", _ij_ports)
     _ij_stub(_msmod, "remote_ufw_allow_game_ports",
-             lambda r, ports, name: _ij_calls.append(("ufw_allow", tuple(sorted(ports)))))
+             lambda r, ports, name: (_ij_calls.append(("ufw_allow", tuple(sorted(ports)))),
+                                     (sorted(ports), "opened"))[1])
     # LinuxGSM reports a port other than the one the panel allocated — the ordinary case for a
     # game that reads its own config — and nothing else holds it, so step 6 adopts it.
-    _ij_stub(_msmod, "detect_game_ports",
-             lambda *a, **k: {"game_port": 28991, "open_ports": [28991, 28992]})
+    _ij_stub(_msmod, "detect_game_ports", lambda *a, **k: _r12d_ports(28991, [28991, 28992]))
+    # What the job logs at warning. Steps 2 and 5 are not fatal by design, so a stand-in that
+    # sent them down their failure branch changed no end state; their warnings are the record.
+    import logging as _ij_logging
+    _ij_warned = []
+
+    class _IjWarnings(_ij_logging.Handler):
+        def emit(self, record):
+            _ij_warned.append(record.getMessage())
+    _ij_handler = _IjWarnings(level=_ij_logging.WARNING)
+    _msmod._log.addHandler(_ij_handler)
     _appmod_ij = sys.modules["app"]
     _ij_saved[(_appmod_ij, "_remote_listening_ports")] = _appmod_ij._remote_listening_ports
     _appmod_ij._remote_listening_ports = lambda r: {22}
@@ -3021,15 +3278,37 @@ try:
         check("install job: ...and leaving the allocated port deleted NO firewall rule — "
               "nothing on it was this new server's",
               _ij_deletes == [], "delete verbs: %r | %s" % (_ij_deletes, _why_job))
+        # Steps 2, 5 and 7 on their SUCCESS branches, which is what "stubbed to succeed" claims.
+        check("install job: ...every stand-in it called answered in the real function's shape",
+              not _r12d_shape_bad, "; ".join(_r12d_shape_bad[:5]))
+        _ij_failed_steps = [w for w in _ij_warned if any(s in w for s in (
+            "dependency step failed", "maintenance cron", "could not enable autostart",
+            "enabling autostart failed", "unconfirmed"))]
+        check("install job: ...its dependency, maintenance-cron and autostart steps took their "
+              "success branches",
+              _ij_failed_steps == [], "warnings: %r | %s" % (_ij_failed_steps[:4], _why_job))
         with app.app_context():
-            _d = db.session.get(GameServer, _ij_id)
-            if _d is not None:
-                db.session.delete(_d); db.session.commit()
-        with _install_lock_sm:
-            _install_jobs_sm.pop(_ij_id, None)
+            _ij_auto = db.session.get(GameServer, _ij_id).autostart
+        check("install job: ...and the row ends with Autostart on, as the crontab it read back "
+              "says",
+              _ij_auto is True and any(" monitor " in ln for ln in _ij_cron.lines.get("jobwalk", ())),
+              "autostart=%r crontab=%r" % (_ij_auto, sorted(_ij_cron.lines.get("jobwalk", ()))))
+        check("install job: ...and a Source game's bans were made to persist",
+              _ij_bans == ["jobwalk"], "ensure_persistent_bans calls: %r" % (_ij_bans,))
+        # Only a settled worker's row and job go (as _lv_install does): SQLite hands a deleted
+        # row's id to the next INSERT, which a still-running worker's _fail() then writes onto.
+        if _ij_settled:
+            with app.app_context():
+                _d = db.session.get(GameServer, _ij_id)
+                if _d is not None:
+                    db.session.delete(_d); db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_ij_id, None)
 finally:
     for (_m, _n), _v in _ij_saved.items():
         setattr(_m, _n, _v)
+    if "_ij_handler" in globals():
+        _msmod._log.removeHandler(_ij_handler)
 
 
 # What later parts import from this one (`from smoke.part02 import ...`). The parts are
@@ -3047,6 +3326,11 @@ __all__ = [
     '_install_seam_closed',
     '_msmod',
     '_nre',
+    '_r12d_cmds',
+    '_r12d_ports',
+    '_r12d_shape_bad',
+    '_r12d_shaped',
+    '_R12dCrontab',
     '_TSAudit',
     'admin2_id',
     'admin_id',

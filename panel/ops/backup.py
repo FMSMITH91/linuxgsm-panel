@@ -524,6 +524,22 @@ def _service_restart_launcher(script_path):
 # restore nobody is watching. (What is left is the second or so between a dispatch returning and
 # the detached swap stopping the panel; a restart there is already under way.)
 _restore_lock = threading.Lock()
+# When this process last DISPATCHED a restore. The lock is released as soon as the dispatch
+# returns, but the swap itself (stop, copy, start) runs later in the detached unit; a self-update
+# launched in that window would snapshot the pre-swap database and could roll back onto it. The
+# swap's last step removes the staging directory (the helper's panel-restore in a `finally`, the
+# legacy script as its last line), so "dispatched, and the stage is still there" is a swap not yet
+# done. The grace bounds it: a stage a dead swap left behind blocks nothing for longer than that.
+_r12a_restore_dispatched = {"ts": 0.0}
+_RESTORE_SWAP_GRACE = 120
+
+
+def restore_pending():
+    """Whether a restore is in flight here: held, or dispatched and its detached swap not yet over."""
+    if _restore_lock.locked():
+        return True
+    return ((time.time() - _r12a_restore_dispatched["ts"]) < _RESTORE_SWAP_GRACE
+            and os.path.isdir(os.path.join(str(DATA_DIR), ".restore-stage")))
 
 
 def restore_backup(name, passphrase=None, skip_safety_backup=False):
@@ -540,7 +556,10 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
         if _so._update_in_progress():
             return False, ("A panel update is being installed right now — restore once it has "
                            "finished.")
-        return _restore_backup_locked(name, passphrase, skip_safety_backup)
+        ok, msg = _restore_backup_locked(name, passphrase, skip_safety_backup)
+        if ok:
+            _r12a_restore_dispatched["ts"] = time.time()
+        return ok, msg
     finally:
         _restore_lock.release()
 
