@@ -235,6 +235,17 @@ def _harness_loads29(path, tmp):
         return None, "probe failed: " + (r.stdout[-200:] + r.stderr[-400:])
 
 
+def _panel_files29(modules):
+    return {_module_file29(m) for m in modules if m.split(".")[0] == "panel"}
+
+
+def _foreign_note29(modules):
+    """Empty when every module is the panel's or the stdlib's; else how many are not, and whose."""
+    foreign = [m for m in modules if _foreign_module29(m)]
+    return ("instruments %d modules outside panel/ and the stdlib, from %s"
+            % (len(foreign), sorted({m.split(".")[0] for m in foreign})[:8])) if foreign else ""
+
+
 def _cf1_every_harness(tmp):
     bad, read, fuzzed = {}, [], set()
     for p in sorted(_glob29.glob(os.path.join(_ROOT29, "tests", "fuzz", "fuzz_*.py"))):
@@ -244,11 +255,9 @@ def _cf1_every_harness(tmp):
             bad[name] = why
             continue
         read.append(name)
-        fuzzed |= {_module_file29(m) for m in new if m.split(".")[0] == "panel"}
-        foreign = sorted({m.split(".")[0] for m in new if _foreign_module29(m)})
-        if foreign:
-            bad[name] = "instruments %d modules outside panel/ and the stdlib, from %s" % (
-                len([m for m in new if _foreign_module29(m)]), foreign[:8])
+        fuzzed |= _panel_files29(new)
+        if _foreign_note29(new):
+            bad[name] = _foreign_note29(new)
     check("fuzz harnesses: EVERY harness's instrumented imports load only panel modules and the "
           "standard library after its own pre-load (no target spends its fuzz time instrumenting "
           "eventlet and timing out)",

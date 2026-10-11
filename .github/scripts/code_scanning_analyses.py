@@ -194,7 +194,16 @@ def _compare_paths(repo, base, head):
     None for anything unread: the comparison failed, `head` is not a descendant of `base`, or the
     file list is GitHub's 300-file cut, which is not the whole list.
     """
-    if not (_REPO_RE.match(repo or "") and _SHA_RE.match(base or "") and _SHA_RE.match(head or "")):
+    files = _compare_files(_compare(repo, base, head))
+    if files is None:
+        return None
+    return [f.get("filename") for f in files] + [f["previous_filename"] for f in files
+                                                 if f.get("previous_filename")]
+
+
+def _compare(repo, base, head):
+    """The compare API's answer for `base...head` as a dict, or None when it could not be read."""
+    if not all(r.match(v or "") for r, v in ((_REPO_RE, repo), (_SHA_RE, base), (_SHA_RE, head))):
         return None
     try:
         res = subprocess.run(["gh", "api", "--", "repos/%s/compare/%s...%s" % (repo, base, head)],  # nosec B603 B607
@@ -202,12 +211,16 @@ def _compare_paths(repo, base, head):
         data = json.loads(res.stdout) if res.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    files = data.get("files") if isinstance(data, dict) else None
-    if not (isinstance(files, list) and data.get("status") == "ahead" and 0 < len(files) < 300
-            and all(isinstance(f, dict) for f in files)):
+    return data if isinstance(data, dict) else None
+
+
+def _compare_files(data):
+    """The comparison's file rows when `head` is ahead and the list is whole (under 300)."""
+    files = (data or {}).get("files")
+    if (data or {}).get("status") != "ahead" or not isinstance(files, list):
         return None
-    return [f.get("filename") for f in files] + [f["previous_filename"] for f in files
-                                                 if f.get("previous_filename")]
+    whole = 0 < len(files) < 300 and all(isinstance(f, dict) for f in files)
+    return files if whole else None
 
 
 def _docs_only_since(repo, base, head):

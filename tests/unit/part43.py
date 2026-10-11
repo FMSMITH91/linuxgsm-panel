@@ -1392,8 +1392,8 @@ def _rv43_invite_ids():
 
 
 def _rv43_drop_invites_but(keep):
-    """Delete the invites made since `keep` was read: `Invite.query.delete()` took every one in
-    part12's database, not only this check's."""
+    """Delete the invites made since `keep` was read."""
+    # Not `Invite.query.delete()`, which took every invite in part12's database, not only this one.
     from panel.db.models import Invite as _Inv43
     with _p9.app_context():
         _Inv43.query.filter(~_Inv43.id.in_(keep)).delete(synchronize_session=False)
