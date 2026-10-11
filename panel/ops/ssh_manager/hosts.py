@@ -2073,7 +2073,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
                                      % _r11a_why(_en))
                 note("NOT DONE: %s — the firewall is not protecting this host." % ufw_enable_failed)
             elif _dd[2] != 0:
-                ufw_enable_failed = ("UFW is on, but its default incoming policy could not be set "
+                ufw_enable_failed = ("UFW is on, though its default incoming policy could not be set "
                                      "to deny: `ufw default deny incoming` failed (%s)"
                                      % _r11a_why(_dd))
                 note("NOT DONE: %s — run `ufw status verbose` on the host to see the policy in "

@@ -2055,15 +2055,20 @@ check("ufw grouping: ...and no two groups share one (positive control)",
 
 # ── firewall lock-out protection ──────────────────────────────
 def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False),
-            cfg_unreadable=None, sshd_ports=()):
+            cfg_unreadable=None, sshd_ports=(), tsifaces=("tailscale0",), sshd_off_tailnet=False):
     # Restores what it replaces. It used to leave sm.is_local_server stubbed for the REST of the
     # suite — every later test saw whatever the last protect() call happened to pass, which is how
     # a stub stops being scaffolding and starts being a silent global. Nothing depended on the leak
     # (this fix changed no other result), but the transport tests further down do read the real
     # is_local_server, and would have been testing the wrong branch.
     _saved = (_sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config,
-              _sm_firewall._config_unreadable, _sm_hosts._sshd_current_ports)
+              _sm_firewall._config_unreadable, _sm_hosts._sshd_current_ports,
+              _sm_hosts._tsiface_names, _sm_hosts._r11a_sshd_off_tailnet)
     try:
+        # The two host probes a tailscale0 rule must also pass to count as a way in over the
+        # tailnet (a TUN interface exists; sshd listens where tailnet traffic arrives).
+        _sm_hosts._tsiface_names = lambda s: list(tsifaces)
+        _sm_hosts._r11a_sshd_off_tailnet = lambda s: sshd_off_tailnet
         _sm_core.is_local_server = lambda s: is_local
         _sm_hosts._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic
         # sshd's listen ports as `sshd -T` gives them (strings); () = the read failed.
@@ -2080,7 +2085,8 @@ def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(Fa
         return _sm_firewall._annotate_firewall_protection(server, enabled, _sm_firewall._group_ufw_rules(_rules(rules)))
     finally:
         (_sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config,
-         _sm_firewall._config_unreadable, _sm_hosts._sshd_current_ports) = _saved
+         _sm_firewall._config_unreadable, _sm_hosts._sshd_current_ports,
+         _sm_hosts._tsiface_names, _sm_hosts._r11a_sshd_off_tailnet) = _saved
 
 
 # SSH-only: port 22 is the last way in -> protected.

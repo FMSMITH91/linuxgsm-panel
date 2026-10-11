@@ -272,7 +272,7 @@ _bs54_en = _bootstrap54({"ufw-enable"})
 check("bootstrap: a failed `ufw default deny incoming` beside a `ufw enable` that worked says UFW is "
       "on and the incoming policy is what failed, never 'the firewall was NOT enabled'",
       _bs54_dd[0] is False and "firewall was NOT enabled" not in _bs54_dd[1]
-      and "UFW is on, but its default incoming policy could not be set to deny" in _bs54_dd[1]
+      and "UFW is on, though its default incoming policy could not be set to deny" in _bs54_dd[1]
       and "not protecting this host" not in _bs54_dd[2], repr(_bs54_dd[:2]))
 check("bootstrap: ...while a failed `ufw enable` still says the firewall was NOT enabled",
       _bs54_en[0] is False and "the firewall was NOT enabled: `ufw enable` failed" in _bs54_en[1],
