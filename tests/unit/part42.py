@@ -27,7 +27,7 @@ import shutil as _shutil42
 import subprocess as _sp42  # nosec B404 - runs bash on a workflow step and this part's own stand-in
 import tempfile as _tf42
 
-from unit.part01 import check
+from unit.part01 import _r13d_window, check
 from unit.part03 import _cls_files as _cls_files42
 from unit.part05 import _root
 from unit.part06 import _wf_run_block
@@ -234,7 +234,7 @@ check("harden-runner: the deploy job's note (why it has none), the CHANGELOG and
 
 # ── zizmor: what it runs on ─────────────────────────────────────────────────────────────────────
 _zz42 = _wf29("zizmor.yml")
-_zz_on42 = _code29(_zz42[_zz42.find("\non:\n"):_zz42.find("\nconcurrency:")])
+_zz_on42 = _code29(_r13d_window(_zz42, "\non:\n", "\nconcurrency:"))
 _zz_pr42 = _re42.search(r"^  pull_request:\n((?:    .*\n)*)", _zz_on42 + "\n", _re42.M)
 _sec_on42 = _code29(_wf29("security-code.yml"))
 _pi42 = {f: _re42.findall(r"    paths-ignore:\n((?:      - .*\n)+)", t)

@@ -83,12 +83,18 @@ check("cflite: the continuous build on main has no concurrency group (a cancelle
 
 # ── E5: a scheduled CodeQL or security-code run never cancels the push run of the same ref ───────
 _conc30 = {f: (_block30(_wf29(f), "concurrency", 0) or {}).get("group", "")
-           for f in ("codeql.yml", "security-code.yml", "zizmor.yml", "security.yml", "ci.yml")}
-check("CodeQL, security-code, zizmor, security (Gitleaks) and CI: the concurrency group includes "
-      "the event, so the Monday schedule or a manual run does not cancel an in-progress push run "
-      "on main",
+           for f in ("codeql.yml", "security-code.yml", "zizmor.yml", "security.yml", "ci.yml",
+                     "lighthouse.yml", "fuzz.yml")}
+check("CodeQL, security-code, zizmor, security (Gitleaks), CI, Lighthouse and fuzz: the concurrency "
+      "group includes the event, so the Monday schedule or a manual run does not cancel an "
+      "in-progress push run on main",
       all("${{ github.event_name }}" in g and "${{ github.ref }}" in g for g in _conc30.values()),
       repr(_conc30))
+# Scorecard runs on every push to main and does not cancel: one group for the whole repository
+# still kept only ONE pending run, so a burst of pushes cancelled the middle commit's queued run.
+_sc_conc30 = _block30(_wf29("scorecard.yml"), "concurrency", 0) or {}
+check("Scorecard: its concurrency group is per commit, so a queued run is never replaced by a "
+      "later push's", "${{ github.sha }}" in _sc_conc30.get("group", ""), repr(_sc_conc30))
 
 # ── review 1011b: Bandit and Semgrep read .github/scripts, and Semgrep's exit status is judged ──
 _sc30 = _wf29("security-code.yml")
@@ -100,6 +106,49 @@ check("security-code: Bandit and Semgrep scan .github/scripts (those run in CI w
       and ".github/workflows" in _semgrep_ex30 and ".github" not in _semgrep_ex30
       and 'if [ "${rc:-0}" != "0" ]; then' in _sc30,
       repr((_bandit_flags30, _semgrep_ex30)))
+
+# ...and that exit-status test is DRIVEN, not found as text: the `if` line passed as a substring
+# anywhere in the file, so a body that only warned (or an `exit 1` moved out of the block) kept it
+# green while a failed rule-pack fetch uploaded a partial SARIF as a clean scan. The step runs under
+# `bash -e`, as the runner runs it, with a stand-in semgrep that writes a one-run SARIF and exits
+# as told, in a temp dir (the step writes semgrep.txt and semgrep.sarif into its cwd).
+import shutil as _sh30  # noqa: E402
+import subprocess as _sp30  # noqa: E402 # nosec B404 - bash on the workflow's own step
+import tempfile as _tf30  # noqa: E402
+from unit.part06 import _wf_run_block  # noqa: E402
+
+_SG_STUB30 = """import json, os, sys
+out = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--sarif-output="))
+json.dump({"runs": [{"results": [], "invocations": [{"toolExecutionNotifications": []}]}]},
+          open(out, "w"))
+print("stand-in semgrep")
+sys.exit(int(os.environ["P30_RC"]))
+"""
+_sg_tmp30 = _tf30.mkdtemp(prefix="lgsm-unit-p30-sg-")
+try:
+    _sg_run30 = _wf_run_block(_sc30, "Semgrep scan")
+    _sg_bin30 = os.path.join(_sg_tmp30, "bin")
+    os.makedirs(_sg_bin30)
+    with open(os.path.join(_sg_bin30, "semgrep"), "w", encoding="utf-8") as _fh30:
+        _fh30.write("#!%s\n%s" % (_sys30.executable, _SG_STUB30))
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
+    os.chmod(os.path.join(_sg_bin30, "semgrep"), 0o700)
+
+    def _sg30(rc):
+        _env = dict(os.environ, PATH=_sg_bin30 + os.pathsep + os.environ.get("PATH", ""),
+                    P30_RC=str(rc), GITHUB_STEP_SUMMARY=os.path.join(_sg_tmp30, "summary.md"))
+        _p = _sp30.run(["bash", "-e", "-c", _sg_run30], cwd=_sg_tmp30, env=_env,  # nosec B603 B607 - bash on the workflow's own step
+                       capture_output=True, text=True, timeout=60, check=False)
+        return _p.returncode, _p.stdout + _p.stderr
+
+    _sg_bad30, _sg_ok30 = _sg30(2), _sg30(0)
+    check("security-code: a Semgrep that exits 2 beside a whole SARIF fails its step, saying so "
+          "(driven)", _sh30.which("jq") is not None and _sg_bad30[0] != 0
+          and "::error::Semgrep exited 2" in _sg_bad30[1], repr(_sg_bad30))
+    check("security-code: ...and one that exits 0 passes it (control)", _sg_ok30[0] == 0,
+          repr(_sg_ok30))
+finally:
+    _sh30.rmtree(_sg_tmp30, ignore_errors=True)
 
 # ── SEC1: the guard runs before the build, directly before fuzzing, and after it ────────────────
 _pr30 = _steps30(_job29(_wf29("cflite_pr.yml"), "code-change"))

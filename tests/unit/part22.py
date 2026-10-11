@@ -821,12 +821,24 @@ check("R36: state, Serve and Funnel print without any node name, tailnet, IP, UR
       and "1 other app route" in _text(_tl22) and "health warnings 2" in _text(_tl22)
       and not any(s in _text(_tl22) for s in ("secret-node", "tail9999", "100.10", "peer-secret",
                                                "me@github", "https://")), _text(_tl22))
-check("R36: Funnel on in Serve but off in the config is a fail (switched on outside the panel)",
-      # This fixture's listener is SHARED with another app ("/"), so the finding names that cause
-      # (part54); a Funnel switched on with no other app still reads "Funnel is ON".
-      any(("Funnel is ON" in f["text"] or "Funnel is on for the whole :443 listener" in f["text"])
-          and f["level"] == "fail" for f in _tl22.findings),
+check("R36: Funnel on for a listener another app shares, config off: a fail naming that cause",
+      # This fixture's listener is SHARED with another app ("/"), so the finding names that cause.
+      any("Funnel is on for the whole :443 listener" in f["text"] and f["level"] == "fail"
+          for f in _tl22.findings),
       repr(_tl22.findings))
+# ...and the OTHER branch, with the panel's route alone on the listener: an OR of the two texts
+# above passed with this branch deleted, since the shared fixture only ever took the first.
+_tl22s, _ = _ts_lines(dict(_tsv22, serve_services=[
+    {"url": "https://secret-node.tail9999.ts.net", "funnel": True,
+     "routes": [{"mount": "/lgsm", "target": "http://127.0.0.1:5000"}]}]),
+    {"port": 5000, "tailscale_setup_done": True, "tailscale_use_funnel": False,
+     "tailscale_mount": "/lgsm"})
+check("R36: Funnel on in Serve but off in the config, no other app: a fail (switched on outside "
+      "the panel)",
+      any("Funnel is ON in Serve but off" in f["text"] and f["level"] == "fail"
+          for f in _tl22s.findings)
+      and not any("for the whole :443 listener" in f["text"] for f in _tl22s.findings),
+      repr(_tl22s.findings))
 _tl22u, _ = _ts_lines(dict(_tsd22, serve_unreadable=True), {"port": 5000})
 check("R36: an unreadable Serve status is UNREADABLE, never 'no routes'",
       "Serve**: UNREADABLE" in _text(_tl22u) and "0 routes" not in _text(_tl22u), _text(_tl22u))

@@ -25,7 +25,7 @@ import subprocess as _sp27  # nosec B404 - runs bash on the workflow's own step,
 import sys
 import tempfile as _tf27
 
-from unit.part01 import _root, check
+from unit.part01 import _r13d_window, _root, check
 from unit.part06 import _ci_installs, _wf_run_block
 
 
@@ -238,7 +238,7 @@ finally:
 
 # Pinned and checksummed (part19's Renovate gate covers the marker); both osv steps run even when
 # pip-audit failed, so a Python finding never hides an npm one.
-_osv_inst27 = _DA27[_DA27.find("- name: Install osv-scanner"):_DA27.find("- name: Audit every lockfile")]
+_osv_inst27 = _r13d_window(_DA27, "- name: Install osv-scanner", "- name: Audit every lockfile")
 check("osv-scanner: installed from the release tag and checked against its sha256 before it runs",
       _re27.search(r"OSV_SCANNER_VERSION: 'v[0-9.]+'\n\s+OSV_SCANNER_SHA256: '[0-9a-f]{64}'",
                    _osv_inst27) is not None
@@ -263,8 +263,11 @@ check("dependency audit: the workflow runs it on every pull request, on main and
 def _ignored27(text):
     """[[IgnoredVulns]] entries as dicts of their id, ignoreUntil and reason (raw text)."""
     _out = []
-    for _blk in _re27.split(r"^\[\[IgnoredVulns\]\]\s*$", text, flags=_re27.M)[1:]:
-        _blk = _re27.split(r"^\[", _blk, flags=_re27.M)[0]
+    # TOML allows blanks inside the brackets and a trailing comment, and osv-scanner honours both:
+    # `^\[\[IgnoredVulns\]\]\s*$` did not split on `[[IgnoredVulns]]  # why`, so such an entry was
+    # never parsed — and an undated, unreasoned ignore read as "no exemptions".
+    for _blk in _re27.split(r"^\s*\[\[\s*IgnoredVulns\s*\]\]\s*(?:#.*)?$", text, flags=_re27.M)[1:]:
+        _blk = _re27.split(r"^\s*\[", _blk, flags=_re27.M)[0]
         _id = _re27.search(r'^id = "([^"]+)"\s*$', _blk, _re27.M)
         _until = _re27.search(r"^ignoreUntil = (\d{4}-\d{2}-\d{2})\s*$", _blk, _re27.M)
         _reason = _re27.search(r'^reason = (?:"""(.*?)"""|"([^"\n]*)")', _blk, _re27.M | _re27.S)
@@ -273,18 +276,32 @@ def _ignored27(text):
     return _out
 
 
-_osv_cfgs27 = {}
+def _declared27(text, word):
+    """How many non-comment lines of `text` name `word`: what a parser of it must have read."""
+    return sum(1 for _l in text.splitlines() if word in _l.split("#", 1)[0])
+
+
+_osv_cfgs27, _osv_unread27 = {}, []
 for _lk in sorted(_locks27):
     _cfg = os.path.join(_root, os.path.dirname(_lk), "osv-scanner.toml")
     if os.path.exists(_cfg):
         with open(_cfg, encoding="utf-8") as _fh27:
-            _osv_cfgs27[os.path.relpath(_cfg, _root)] = _ignored27(_fh27.read())
+            _osv_txt27 = _fh27.read()
+        _osv_cfgs27[os.path.relpath(_cfg, _root)] = _ignored27(_osv_txt27)
+        if _declared27(_osv_txt27, "IgnoredVulns") != len(_osv_cfgs27[os.path.relpath(_cfg, _root)]):
+            _osv_unread27.append(os.path.relpath(_cfg, _root))
 _osv_ign27 = [_e for _es in _osv_cfgs27.values() for _e in _es]
 # No specific advisory is named: an exemption is meant to be REMOVED once its package moves out of
 # range (GHSA-ch52 outlived #417's bump, pinned here by id, and would have let 4.2.0 pass both
 # dependency gates). An empty list is a good state, not a broken read.
-check("osv-scanner.toml: gamedig's sits beside its lockfile, and is read",
-      "tools/gamedig/osv-scanner.toml" in _osv_cfgs27, repr(_osv_cfgs27))
+# "is read": as many entries parsed as the file declares. The list is empty today, so a parser that
+# read nothing passed every check below; this names a declared entry it did not parse.
+check("osv-scanner.toml: gamedig's sits beside its lockfile, and every entry it declares is read",
+      "tools/gamedig/osv-scanner.toml" in _osv_cfgs27 and not _osv_unread27,
+      repr((_osv_cfgs27, _osv_unread27)))
+check("osv-scanner.toml: ...an entry headed with blanks or a trailing comment is read (control)",
+      [_e["id"] for _e in _ignored27('[[IgnoredVulns]]  # why\nid = "GHSA-a"\n\n'
+                                     '[[ IgnoredVulns ]]\nid = "GHSA-b"\n')] == ["GHSA-a", "GHSA-b"])
 _osv_bad27 = [_e for _e in _osv_ign27
               if not _e["id"] or not _e["until"] or len(_e["reason"] or "") < 80]
 check("osv-scanner.toml: every exemption has an id, an ignoreUntil date and a written reason",
@@ -301,6 +318,13 @@ check("dependency review: fails a pull request that adds an advisory of any seve
       "(fail-on-severity: low, the action's default)", _dr_sev27 == ["low"], repr(_dr_sev27))
 _dr_allow27 = _re27.findall(r"^\s+allow-ghsas: (.+?)\s*$", _DR27, _re27.M)
 _dr_ids27 = [_i.strip() for _i in ",".join(_dr_allow27).split(",") if _i.strip()]
+# Every allow-ghsas the workflow declares is one the line regex above read: one written another way
+# (a block list, a quoted key) read as none, and "every id is dated" passed over an empty list. No
+# `config-file:` either: an allow list kept in a separate file is one this never opens.
+check("dependency review: every allow-ghsas line it declares is read, and none hides in a config-file",
+      _declared27(_DR27, "allow-ghsas") == len(_dr_allow27) and not _declared27(_DR27, "config-file"),
+      "%d declared, %d read; config-file lines %d" % (
+          _declared27(_DR27, "allow-ghsas"), len(_dr_allow27), _declared27(_DR27, "config-file")))
 
 
 def _dr_unreviewed27(ids, entries):

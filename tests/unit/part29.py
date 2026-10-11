@@ -22,7 +22,7 @@ import subprocess as _sp29  # nosec B404 - runs bash and python on this part's o
 import sys as _sys29
 import tempfile as _tf29
 
-from unit.part01 import check
+from unit.part01 import _r13d_window, check
 from unit.part01 import skip as _skip29
 from unit.part06 import _wf_run_block
 
@@ -300,7 +300,7 @@ def _cf2_no_secret(cfl):
 def _producer_bad(name, text, job):
     """What is wrong with one artifact-making job: it must run only on this repository's main."""
     # Comment lines dropped: a `# zizmor: ignore[...]` line sits in the `on:` block it is about.
-    on = _code29(text[text.find("\non:\n"):text.find("\npermissions:")])
+    on = _code29(_r13d_window(text, "\non:\n", "\npermissions:"))
     jt = _job29(text, job)
     m = _re29.search(r"^    if: (.*)$", jt, _re29.M)
     cond = m.group(1) if m else ""
