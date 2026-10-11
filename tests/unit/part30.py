@@ -137,9 +137,15 @@ def _guarded30(tree):
             continue
         caught = set()
         for h in node.handlers:
+            if h.type is None:              # a bare `except:`
+                caught.add(None)
+                continue
+            # Named by their LAST component: `except subprocess.TimeoutExpired` is an Attribute,
+            # whose missing `.id` read as None — a bare except — so every import in that try was
+            # exempted, though nothing there catches ImportError.
             types = h.type.elts if isinstance(h.type, _ast30.Tuple) else [h.type]
-            caught |= {getattr(t, "id", None) for t in types}
-        if caught & {"ImportError", "ModuleNotFoundError", "Exception", None}:
+            caught |= {_ast30.unparse(t).rsplit(".", 1)[-1] for t in types}
+        if caught & {"ImportError", "ModuleNotFoundError", "Exception", "BaseException", None}:
             out |= {id(n) for stmt in node.body for n in _ast30.walk(stmt)}
     return out
 
@@ -204,3 +210,17 @@ check("unit suite: every third-party module a part imports unguarded is a packag
       "(requirements.txt or requirements-bootstrap.txt), not just something the dev venv has",
       not _unknown30 and len(_base30) > 20 and {"flask", "werkzeug"} <= set(_dists30)
       and "flask" in _dists30["flask"], repr(sorted(_unknown30) or (len(_base30), _dists30.get("flask"))))
+
+
+def _exempt30(handler):
+    tree = _ast30.parse("try:\n    import yaml\nexcept %s:\n    pass\n" % handler if handler
+                        else "try:\n    import yaml\nexcept:\n    pass\n")
+    imp = next(n for n in _ast30.walk(tree) if isinstance(n, _ast30.Import))
+    return id(imp) in _guarded30(tree)
+
+
+check("unit suite: ...an import is exempt only under a handler that can catch ImportError — not "
+      "under `except subprocess.TimeoutExpired` or `(OSError, json.JSONDecodeError)` (control)",
+      [_exempt30(h) for h in ("ImportError", "(ValueError, ModuleNotFoundError)", "Exception", "",
+                              "subprocess.TimeoutExpired", "(OSError, json.JSONDecodeError)")]
+      == [True, True, True, True, False, False])

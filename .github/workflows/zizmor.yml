@@ -148,22 +148,16 @@ jobs:
       # "moved on" for the alert gates, and nothing judged it again until the next push. So a
       # scheduled run uploads only while its commit is still main's head; a head that cannot be read
       # uploads as before. code_scanning_analyses.py answers "moved on" for the run that skipped.
+      # A head that only added DOCUMENTATION on top of it is still current: that push runs none of
+      # the uploaders (the shared paths-ignore), so skipping here threw the week's scan away with
+      # nothing to replace it. The script asks GitHub's compare API (moved_past).
       # Asked here, in the scan job: the upload job, which can write security events, runs no shell.
       - name: Is the analysed commit still main's head? (scheduled runs only)
         id: still_head
         if: steps.scope.outputs.docs_only != 'true' && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if ! head="$(gh api --jq .sha -- "repos/${GITHUB_REPOSITORY}/commits/main" 2>/dev/null)"; then
-            head=""
-          fi
-          if [ -n "${head}" ] && [ "${head}" != "${GITHUB_SHA}" ]; then
-            echo "current=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::main moved on to ${head} while ${GITHUB_SHA} was analysed; not uploading over the newer commit's analysis"
-          else
-            echo "current=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 .github/scripts/code_scanning_analyses.py still-head --sha "${GITHUB_SHA}"
 
       - name: Hand the SARIF to the upload job
         if: steps.scope.outputs.docs_only != 'true'

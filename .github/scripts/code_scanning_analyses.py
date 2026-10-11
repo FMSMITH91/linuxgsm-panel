@@ -175,15 +175,84 @@ def read_rows(repo, ref):
 
 def main_head(repo):
     """The head commit of main, or None when it could not be read."""
+    # heads/main, not main: a bare name is resolved as a TAG first (as git does), so a tag called
+    # main would have answered for the branch and every scheduled upload been skipped as "moved".
     if not _REPO_RE.match(repo or ""):
         return None
     try:
-        res = subprocess.run(["gh", "api", "--jq", ".sha", "--", "repos/%s/commits/main" % repo],  # nosec B603 B607
+        res = subprocess.run(["gh", "api", "--jq", ".sha", "--", "repos/%s/commits/heads/main" % repo],  # nosec B603 B607
                              capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError):
         return None
     head = (res.stdout or "").strip()
     return head if res.returncode == 0 and _SHA_RE.match(head) else None
+
+
+def _docs_only_since(repo, base, head):
+    """True when `head` is `base` plus commits that change documentation only, else False.
+
+    pr_scope.py's docs-only paths: a push of only those runs none of the uploaders (they share one
+    paths-ignore list), so nothing analyses it and nothing ever replaces `base`'s scan. Anything
+    this cannot establish — the comparison unread, `head` not a descendant, a file list GitHub cut
+    at 300 — is False: moved on, as before.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import pr_scope  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return False
+    finally:
+        sys.path.pop(0)
+    if not (_REPO_RE.match(repo or "") and _SHA_RE.match(base or "") and _SHA_RE.match(head or "")):
+        return False
+    try:
+        res = subprocess.run(["gh", "api", "--", "repos/%s/compare/%s...%s" % (repo, base, head)],  # nosec B603 B607
+                             capture_output=True, text=True, timeout=60, check=False)
+        data = json.loads(res.stdout) if res.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    files = data.get("files") if isinstance(data, dict) else None
+    if not (isinstance(data, dict) and data.get("status") == "ahead" and isinstance(files, list)
+            and 0 < len(files) < 300 and all(isinstance(f, dict) for f in files)):
+        return False
+    paths = [f.get("filename") for f in files] + [f["previous_filename"] for f in files
+                                                  if f.get("previous_filename")]
+    return pr_scope.docs_only(paths)
+
+
+def moved_past(repo, sha):
+    """main's head when main has moved past `sha` with a change that is not docs-only, else None.
+
+    The one answer for a scheduled (or manual) run's upload guards and for main()'s MOVED: main at
+    `sha` itself, a head that could not be read, or a head that only added documentation on top of
+    `sha` are all "still current". A docs-only push runs no uploader, so skipping the upload over
+    it threw the week's scan away with nothing to replace it.
+    """
+    head = main_head(repo)
+    if not head or head == sha or _docs_only_since(repo, sha, head):
+        return None
+    return head
+
+
+def still_head_main(argv):
+    """`still-head --sha SHA`: write current=true|false to $GITHUB_OUTPUT for the upload guards."""
+    ap = argparse.ArgumentParser(prog="code_scanning_analyses.py still-head")
+    ap.add_argument("--sha", required=True)
+    a = ap.parse_args(argv)
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    head = moved_past(repo, a.sha) if _SHA_RE.match(a.sha or "") else None
+    line = "current=%s\n" % ("false" if head else "true")
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    if head:
+        print("::notice::main moved on to %s while %s was analysed; not uploading over the newer "
+              "commit's analysis" % (head, a.sha))
+    else:
+        print("%s is still main's head (or only documentation landed on top of it, or the head could "
+              "not be read): uploading" % a.sha)
+    return 0
 
 
 def describe(rows, sha, missing, moved):
@@ -239,10 +308,11 @@ def main(argv=None):
     # A scheduled run analyses main's head as it was when the run STARTED. If a push landed since,
     # the run's own upload was skipped (each scheduled upload step checks this first), so that a
     # stale analysis cannot land on top of the newer commit's; this commit is no longer what main's
-    # alerts are about. Moved on, not missing. A head that could not be read changes nothing.
+    # alerts are about. Moved on, not missing. A head that could not be read changes nothing, and
+    # neither does one that only added documentation (moved_past): that push analysed nothing.
     if a.event == "schedule" and safe_ref(a.ref) == "refs/heads/main":
-        head = main_head(repo)
-        if head and head != a.sha:
+        head = moved_past(repo, a.sha)
+        if head:
             print("::warning::main has moved on to %s since %s was analysed by this scheduled run; "
                   "its alerts say nothing about %s." % (head[:10], a.sha[:10], a.sha))
             return MOVED
@@ -261,4 +331,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(still_head_main(sys.argv[2:]) if sys.argv[1:2] == ["still-head"] else main())
