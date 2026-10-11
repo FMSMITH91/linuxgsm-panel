@@ -348,11 +348,22 @@ def _expected_scheme(conf, cfg):
         return None
 
 
-def _funnel_findings(res, v, cfg):
-    """Funnel on in Serve while the panel's config says off: for another app, or switched on."""
+def _funnel_findings(res, v, cfg, port, readable):
+    """Funnel on in Serve while the panel's config says off: for another app, or switched on.
+
+    `port` is the one the panel is bound to (running_port), which is the one Serve's routes reach:
+    config.json's, read with a restart pending, found no panel route and blamed the operator for a
+    Funnel another app had put the panel on. With config.json unreadable there is no setting to
+    compare with, and saying "its config says off" claimed a value nobody read.
+    """
     from panel.ops import tailscale_integration as ts
+    if not readable:
+        if v.get("funnel_enabled"):
+            res.find("warn", AREA, "Funnel is ON in Serve, and config.json could not be read to say "
+                                   "whether the panel is meant to be on it")
+        return
     shared = ts.shared_funnel_apps({"services": v.get("serve_services") or []},
-                                   cfg.get("port", 5000), cfg.get("tailscale_use_funnel"))
+                                   port, cfg.get("tailscale_use_funnel"))
     if shared:
         # Funnel is per listener: another app on the panel's :443 listener uses it, so the panel
         # is public against its own setting (the boot keeps it so rather than take that app off).
@@ -364,7 +375,7 @@ def _funnel_findings(res, v, cfg):
                                "outside the panel)")
 
 
-def _ts_findings(res, v, cfg, routes):
+def _ts_findings(res, v, cfg, routes, port=None, readable=True):
     if v.get("backend_state") == "NeedsLogin":
         res.find("fail", AREA, "Tailscale needs login (node key expired or logged out)")
     elif v.get("backend_state") != "Running" and cfg.get("tailscale_setup_done"):
@@ -373,7 +384,7 @@ def _ts_findings(res, v, cfg, routes):
         res.find("warn", AREA, "Tailscale Serve status is unreadable (not the same as no routes)")
     elif cfg.get("tailscale_setup_done") and not routes:
         res.find("warn", AREA, "no Tailscale Serve route reaches the panel")
-    _funnel_findings(res, v, cfg)
+    _funnel_findings(res, v, cfg, cfg.get("port", 5000) if port is None else port, readable)
     if "EXPIRED" in _key_text(v.get("key_expiry")):
         res.find("fail", AREA, "the Tailscale node key has expired")
 
@@ -503,7 +514,7 @@ def _tailscale_lines(ctx, res, facts, got):
         for r in routes:
             if not ts.is_managed_route(r, cfg):
                 res.add("- **Serve route the panel does not manage**: " + _remedy_text(r, conf, cfg))
-    _ts_findings(res, v, cfg, routes)
+    _ts_findings(res, v, cfg, routes, port, readable)
     _route_findings(res, cfg, routes, want, readable, conf)
     state = v.get("backend_state")
     facts["ts"] = "%s, Funnel %s" % (state if state in _STATES else "other",

@@ -598,17 +598,44 @@ def panel_funnel_facts(cfg):
     if not cfg.get("tailscale_setup_done"):
         return {"funnelled": False, "shared_funnel": [], "unread": False}
     info = get_tailscale_info()
-    port = cfg.get("port", 5000)
     if info.serve_unreadable:
         # An unread Serve has an empty serve_config, which read as "not on Funnel", and the close
         # route then said "reachable only over your tailnet" of a panel Funnel still published.
         # The panel's own record of choosing Funnel is the best that is known.
         return {"funnelled": bool(cfg.get("tailscale_use_funnel")), "shared_funnel": [],
                 "unread": True}
-    return {"funnelled": panel_funnelled(info.serve_config, port),
-            "shared_funnel": shared_funnel_apps(info.serve_config, port,
-                                                cfg.get("tailscale_use_funnel")),
-            "unread": False}
+    ports = _r13b_panel_ports(cfg)
+    shared = []
+    for port in ports:
+        shared = shared or shared_funnel_apps(info.serve_config, port,
+                                              cfg.get("tailscale_use_funnel"))
+    return {"funnelled": any(panel_funnelled(info.serve_config, p) for p in ports),
+            "shared_funnel": shared, "unread": False}
+
+
+def _r13b_panel_ports(cfg):
+    """The ports a Serve route to this panel may target: the one it is bound to, and config.json's.
+
+    The same port unless a port change is saved and the restart is pending. Then Serve's routes
+    reach the bound port, and config.json's found no panel route: a panel on Funnel read as "not
+    reachable from the internet". A question about whether it IS reachable asks both.
+    """
+    bound, stored = _r13b_bound_port(cfg), cfg.get("port", 5000)
+    return [bound] if bound == stored else [bound, stored]
+
+
+def _r13b_bound_port(cfg):
+    """The port this process is bound to (app.config BOOT_PORT), else config.json's."""
+    boot = None
+    try:
+        from flask import current_app, has_app_context
+        if has_app_context():
+            boot = current_app.config.get("BOOT_PORT")
+    except Exception:  # noqa: BLE001 - no app to ask: config.json's port, as before
+        boot = None
+    if isinstance(boot, int) and not isinstance(boot, bool) and 0 < boot < 65536:
+        return boot
+    return cfg.get("port", 5000)
 
 
 def panel_funnelled(serve_config, port):

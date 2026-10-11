@@ -26,7 +26,8 @@ import concurrent.futures
 import functools
 import re
 import threading
-from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
+                             _r13b_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
     _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons)
@@ -1093,7 +1094,9 @@ def _register_schedules(app):
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         body = _json_body()
-        enabled = bool(body.get("enabled"))
+        # A JSON boolean or a 400, as Autostart: bool("false") is True, so `{"enabled": "false"}`
+        # wrote the restart-when-empty cron line it asked to remove.
+        enabled = _r13b_json_flag(body, "enabled", None)
         viewer_tz = clock.valid_timezone(body.get("tz"))
         host_tz = _host_timezone_cached(gs.remote)
         try:
@@ -1139,7 +1142,7 @@ def _register_schedules(app):
         gs = get_game(server_id)
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        enabled = bool(_json_body().get("enabled"))
+        enabled = _r13b_json_flag(_json_body(), "enabled", None)     # bool("false") is True
         gs.notify_when_empty = enabled
         db.session.commit()
         log_action(current_user, "set_notify_when_empty", target=gs.name, detail=str(enabled),

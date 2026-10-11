@@ -14,7 +14,7 @@ from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from types import (SimpleNamespace)
-from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r13b_json_flag)
 from panel.core.validation import (NOT_AN_IP, canonical_ip)
 from app import (_autoblock_hosts, _local_remote_id, _maybe_set_threshold, _os_update_note,
     _run_autoblock_now, _security_whitelist, _set_autoblock_host)
@@ -401,10 +401,9 @@ def _register_panel_blocking(app):
     def api_panel_security_block():
         """UFW-block (all ports, permanent) an IP on the panel host."""
         ip = _json_str(_json_body(), "ip")
-        # A JSON boolean or a 400: bool("false") is True, so {"unblock": "false"} lifted the block.
-        unblock = _r12c_json_flag(_json_body(), "unblock", False)
-        if unblock is None:
-            return jsonify({"success": False, "message": "unblock must be true or false."}), 400
+        # JSON booleans or a 400, here and in the auto-block switch: bool("false") is True, so
+        # `{"unblock": "false"}` unblocked the address it asked to block.
+        unblock = _r13b_json_flag(_json_body(), "unblock", False)
         refused = None if unblock else _r13c_block_refusal(ip)
         if refused:
             return refused
@@ -428,11 +427,7 @@ def _register_panel_blocking(app):
         The auto-block acts on attempts >= threshold over 7 days, and the threshold is the shared
         one.
         """
-        # A JSON boolean or a 400: bool("false") is True, so {"enabled": "false"} turned the
-        # auto-block ON and ran it at once.
-        enabled = _r12c_json_flag(_json_body(), "enabled", False)
-        if enabled is None:
-            return jsonify({"success": False, "message": "enabled must be true or false."}), 400
+        enabled = _r13b_json_flag(_json_body(), "enabled", False)
         rid = _local_remote_id()
         if rid is None:
             return jsonify({"success": False, "message": "No local host record."}), 200

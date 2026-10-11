@@ -1554,7 +1554,8 @@ def _server_slots(gs, allow_console=False, primary=None):
             # Console backup — ONE `status` gives BOTH the count (a real 0 for a stopped/empty console
             # game) and the advertised name. Only on an explicit, on-demand request — NEVER on a poll.
             players, name = sm_console_status(gs.remote, gs.short_name, gs.game_type, selfname=gs.lgsm_name)
-            return len(players or []), _server_max_config(gs), name
+            # None is "could not read" (console_status' contract), not an empty server.
+            return (None if players is None else len(players)), _server_max_config(gs), name
     except Exception:
         return None, _server_max_config(gs), None
     # Not in the panel's gamedig map and not a console engine — ask LinuxGSM's OWN query settings

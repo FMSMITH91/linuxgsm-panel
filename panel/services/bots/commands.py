@@ -74,7 +74,12 @@ def _find_server(arg):
         return partial[0], None
     if len(partial) > 1:
         return None, "Matches several: %s — be more specific." % ", ".join(g.name for g in partial[:8])
-    return None, "No server matches '%s'. Send /servers for the list." % arg[:40]
+    # The argument echoed back as letters, digits, blank, `.`, `_` and `-` only. `!connect` is open
+    # to every member of the channel (OPEN_COMMANDS), and Discord renders the bot's own message as
+    # markdown: `!connect [Session expired, sign in](https://evil.example/x)` fits in 40 characters
+    # and came back as a clickable masked link posted by the operator's bot. No server name needs
+    # more than this to be recognised in the reply.
+    return None, "No server matches '%s'. Send /servers for the list." % re.sub(r"[^\w .-]", "", arg)[:40]
 
 
 def _players_text(app, arg, fence=None):

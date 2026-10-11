@@ -413,8 +413,11 @@ def status():
     errs = dict(_last_error)
     reason = ""
     if errs:
-        # The serverlist is the one the menu is built from; name it first if both failed.
-        _first = SERVERLIST if SERVERLIST in errs else sorted(errs)[0]
+        # The serverlist is the one the menu is built from; name it first if both failed. Then the
+        # default package list, the other file refresh() fetches: an older failure for another
+        # distro's list stays here until that name next fetches, which can be a week, and sorted
+        # first it was named as the reason the Refresh just pressed had failed.
+        _first = next((n for n in (SERVERLIST, DEPS) if n in errs), None) or sorted(errs)[0]
         reason = "%s: %s" % (_first, errs[_first])
     return {
         "have_serverlist": bool(serverlist(allow_fetch=False)),

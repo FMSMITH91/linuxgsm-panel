@@ -1053,23 +1053,92 @@ def _r12b_may_retract_root_all(rest):
     members. Read as a take-back, it refused every sudo-capable LinuxGSM account on a host whose
     panel user really is root. A command that is an alias name may be ALL (`Cmnd_Alias EVERY =
     ALL`, then `PASSWD: EVERY`).
+
+    Every item of the command list is judged, each under the Runas in force for it: a `(...)`
+    carries on to the items after it, and tags sit before each command. Reading only the first
+    Runas and only untagged items missed `NOPASSWD: /usr/bin/true, PASSWD: ALL` and
+    `(nobody) NOPASSWD: ALL, (root) PASSWD: ALL`, both of which leave every root command asking
+    a password — and answered "root-capable", which switches v_game_account off.
     """
-    m = re.fullmatch(r"(\S+)\s*=\s*(?:\(([^)]*)\))?\s*(.*)", rest.strip())
-    if not m:
+    m = re.fullmatch(r"(\S+)\s*=\s*(.*)", rest.strip())
+    items = _r13b_cmnd_items(m.group(2)) if m else None
+    if items is None:
         return True
-    if not _r12b_runas_may_be_root(m.group(2)):
-        return False
-    _tags, cmd = _r12b_cmd_tags(m.group(3))
-    return any(c.strip() == "ALL" or _SUDOERS_ALIAS_NAME_RE.fullmatch(c.strip())
-               for c in cmd.split(","))
+    runas = None
+    for item in items:
+        r = re.match(r"\(([^)]*)\)\s*", item)
+        if r:
+            runas, item = r.group(1), item[r.end():]
+        _tags, cmd = _r12b_cmd_tags(item)
+        cmd = cmd.strip()
+        if "(" in cmd or re.search(r"(?:^|\s):\s*[^\s=]+\s*=", cmd):
+            return True       # a second `: host = ...` spec on the line, or a shape not read here
+        if (cmd == "ALL" or _SUDOERS_ALIAS_NAME_RE.fullmatch(cmd)) and _r12b_runas_may_be_root(runas):
+            return True
+    return False
+
+
+def _r13b_cmnd_items(spec):
+    """Split a Cmnd_Spec_List into its comma-separated items.
+
+    A comma inside `(...)` does not split. None when the parentheses do not balance (a shape this
+    does not read).
+    """
+    items, depth, cur = [], 0, []
+    for ch in spec:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return None
+        if ch == "," and depth == 0:
+            items.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    if depth:
+        return None
+    items.append("".join(cur).strip())
+    return items
 
 
 def _r12b_runas_may_be_root(runas):
-    """Whether a Runas spec may include root: none given (root is the default), ALL, root, #0, an alias."""
+    """Whether a Runas spec may include root.
+
+    None given (root is the default), ALL, root, #0, an alias, a negation, a netgroup or non-Unix
+    group, or a Unix group root belongs to (`%root`, `%#0`: root's primary group is root). A group
+    that does not exist has no members.
+    """
     if runas is None:
         return True
     users = [u.strip() for u in runas.split(":")[0].split(",") if u.strip()]
-    return any(u in ("ALL", "root", "#0") or _SUDOERS_ALIAS_NAME_RE.fullmatch(u) for u in users)
+    return any(u in ("ALL", "root", "#0") or u.startswith(("!", "+", "%:"))
+               or _SUDOERS_ALIAS_NAME_RE.fullmatch(u)
+               or (u.startswith("%") and _r13b_group_holds_root(u[1:])) for u in users)
+
+
+def _r13b_group_holds_root(group):
+    """Whether Unix group `group` (a name, or `#<gid>`) has root in it.
+
+    As its primary group or a listed member. Unreadable answers True (the take-back side).
+    """
+    try:
+        root_gid = pwd.getpwnam("root").pw_gid
+        if group.startswith("#"):
+            if not group[1:].isdigit():
+                return True
+            gid = int(group[1:])
+            if gid == root_gid:
+                return True
+            entry = grp.getgrgid(gid)
+        else:
+            entry = grp.getgrnam(group)
+    except KeyError:
+        return False          # no such group: sudo matches no one through it
+    except Exception:
+        return True
+    return entry.gr_gid == root_gid or "root" in entry.gr_mem
 
 
 def _r12b_cmd_tags(cmd):
@@ -1790,33 +1859,52 @@ def _sudoers_lines(path, seen, depth=0):
     include it will not follow), which the caller turns into "can escalate"."""
     if depth > 8:
         raise ValueError("sudoers includes nest too deeply")
+    # `seen` is the include CHAIN, not every file read so far. sudo has no "already read" skip:
+    # a file included twice is applied twice, at both places (its toke.l push_include keeps only
+    # a depth limit). Skipping the second read moved a top-of-sudoers `@include sudoers.d/zz-pw`
+    # (PASSWD: ALL) ahead of a NOPASSWD grant that sudo applies it AFTER as well, and the caller
+    # read as root-capable. A real cycle is a policy sudo itself refuses to parse.
     real = os.path.realpath(path)
     if real in seen:
-        return []
+        raise ValueError("a sudoers include cycle at %s" % path)
     seen.add(real)
+    try:
+        return _r13b_sudoers_file_lines(path, seen, depth)
+    finally:
+        seen.discard(real)
+
+
+def _r13b_sudoers_file_lines(path, seen, depth):
+    """_sudoers_lines' body: read one file, following its includes with `seen` as the chain."""
     with open(path, encoding="utf-8", errors="replace") as fh:
         text = fh.read()
     out = []
     for line in _sudoers_logical_lines(text):
         m = _SUDOERS_INCLUDE_RE.fullmatch(line)
         if m:
-            target = m.group(2).strip()
-            if target.startswith('"') and target.endswith('"'):
-                target = target[1:-1]
-            if "%" in target or "\\" in target:
-                raise ValueError("an include path with escapes or %%h: %s" % target)
-            if not os.path.isabs(target):
-                target = os.path.join(os.path.dirname(path), target)
-            if m.group(1):
-                for name in sorted(os.listdir(target)):
-                    # sudo skips these in an includedir, and so may we: they are not policy.
-                    if name.endswith("~") or "." in name:
-                        continue
-                    out.extend(_sudoers_lines(os.path.join(target, name), seen, depth + 1))
-            else:
-                out.extend(_sudoers_lines(target, seen, depth + 1))
+            out.extend(_r13b_included_lines(m, path, seen, depth))
             continue
         out.append(line)
+    return out
+
+
+def _r13b_included_lines(m, path, seen, depth):
+    """The lines one @include / @includedir directive (`m`, in file `path`) pulls in."""
+    target = m.group(2).strip()
+    if target.startswith('"') and target.endswith('"'):
+        target = target[1:-1]
+    if "%" in target or "\\" in target:
+        raise ValueError("an include path with escapes or %%h: %s" % target)
+    if not os.path.isabs(target):
+        target = os.path.join(os.path.dirname(path), target)
+    if not m.group(1):
+        return _sudoers_lines(target, seen, depth + 1)
+    out = []
+    for name in sorted(os.listdir(target)):
+        # sudo skips these in an includedir, and so may we: they are not policy.
+        if name.endswith("~") or "." in name:
+            continue
+        out.extend(_sudoers_lines(os.path.join(target, name), seen, depth + 1))
     return out
 
 

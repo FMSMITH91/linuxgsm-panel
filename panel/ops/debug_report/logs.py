@@ -58,7 +58,15 @@ _SUDO_CMD_RE = re.compile(r" :[ \t]{1,4}(?:(?:HOST|TTY|CHROOT|PWD|CWD)=[^;\n]{0,
 # a counted call gets (_priv_verb); USER= stays, as the refusal's own subject.
 _SUDO_REFUSED_TAIL_RE = re.compile(r"COMMAND=(\S{1,512})(?: ([^\n]{0,4096}))?")
 _SUDO_USER_RE = re.compile(r"USER=([^;\n]{1,64});")
-_SUDO_CONTINUED_RE = re.compile(r"^[ \t]*\S{1,64} :[ \t]{1,4}\(command continued\) ")
+# Searched for, not anchored to the body: a prefix _PREFIX_RE does not know (a journal read in a
+# locale whose month is "oct." or "Mär") left the whole line as the body, the anchored form never
+# matched, and the continuation — the tail of a long argv, passwords included — was printed whole.
+_SUDO_CONTINUED_RE = re.compile(r"\S{1,64} :[ \t]{1,4}\(command continued\) ")
+# Other privilege tools' command lines, which are not sudo's shape: pkexec's
+# "bob: Executing command [USER=root] [TTY=…] [CWD=…] [COMMAND=<argv>]" and doas's
+# "doas[N]: bob ran command <argv> as root from <dir>". Both name the whole argv.
+_R13B_PKEXEC_RE = re.compile(r"Executing command \[USER=[^\]\n]{0,64}\][^\n]{0,1024}?\[COMMAND=")
+_R13B_DOAS_RE = re.compile(r"\bdoas\[\d{1,10}\]: \S{1,64} ran command ")
 # sudo's own shape: a USER= field followed by ENV= or COMMAND=, or its JSON event (log_format=json).
 # A line of that shape that neither the refusal phrases nor _SUDO_CMD_RE account for is cut as a
 # refused one is (fail closed): an unknown refusal reason ("user NOT authorized on host", a custom
@@ -356,13 +364,13 @@ def _split_priv(lines):
             kept.append(_r11b_refused_without_argv(ln, own))
         elif _PAM_SESSION_RE.match(body):
             sessions += 1
-        elif _SUDO_CONTINUED_RE.match(body):
+        elif _SUDO_CONTINUED_RE.search(body):
             continue
         else:
             m = _SUDO_CMD_RE.search(body)
             if m is None:
                 kept.append(_r11b_refused_without_argv(ln, own) if _R12B_SUDO_SHAPE_RE.search(body)
-                            else ln)
+                            else _r13b_cut_other_priv(ln))
                 continue
             _count_priv(verbs, *_priv_verb(m.group(2), m.group(3), m.group(1), own))
     return kept, verbs, sessions
@@ -381,6 +389,15 @@ def _r11b_refused_without_argv(line, own):
     env = line.find("ENV=", 0, m.start())
     cut = env if env != -1 else m.start()
     return line[:cut] + "COMMAND=(%s)" % (label if sub is None else "%s: %s" % (label, sub))
+
+
+def _r13b_cut_other_priv(line):
+    """`line`, or a pkexec / doas command line cut before its argv (_R13B_PKEXEC_RE, _DOAS_RE)."""
+    for rx in (_R13B_PKEXEC_RE, _R13B_DOAS_RE):
+        m = rx.search(line)
+        if m:
+            return line[:m.end()] + "(command not shown)"
+    return line
 
 
 def _r12b_cut_without_command(line):
