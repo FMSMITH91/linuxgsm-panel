@@ -1431,6 +1431,20 @@ _SECRET_REMOTE = {
 }
 
 
+def _r13b_probe_as_remote(user, test):
+    """Render a remote probe verb: `test`, run as `user`.
+
+    Exit 0 / 1 as the test answers, 1 when no account has that name (the helper's _probe_rc
+    answer), and 2 when the account exists but the test could not be run as it.
+    """
+    u = shlex.quote(user)
+    # if/then, not `a || exit 1`: a rendering with a `||` in it reads, to part05's gate, as one
+    # that may end in a succeeding `||` (the `&& echo Y || echo N` that always exited 0).
+    return ("if ! id -u -- {u} >/dev/null 2>&1; then exit 1; fi; "
+            "if runuser -u {u} -- {t}; then exit 0; fi; "
+            "if runuser -u {u} -- true; then exit 1; fi; exit 2").format(u=u, t=test)
+
+
 _REMOTE_ACTIONS = {
     "sshd-backup-dropin": lambda a: (
         "[ -f %s ] && cp -f %s %s || true"
@@ -1548,16 +1562,26 @@ _REMOTE_ACTIONS = {
         "{ grep -q %s %s || echo %s >> %s ; }"
         % (SWAPFILE, SWAPFILE, SWAPFILE, SWAPFILE, shlex.quote(SWAPFILE), FSTAB,
            shlex.quote(SWAP_FSTAB_LINE), FSTAB)),
+    # Each home is looked at AS ITS ACCOUNT (runuser), as do_content_scan does through _probe_as:
+    # as root, `[ -d ]` follows a link the account made, so `~/serverfiles -> /root` answered
+    # whether /root/<game> exists. A /home entry no account has, or a uid-0 one, is skipped.
     "content-scan": lambda a: (
         'for u in $(ls -1 %s 2>/dev/null); do '
-        '  d="%s/$u/%s"; [ -d "$d" ] || continue; '
-        '  for g in %s; do [ -d "$d/$g" ] && echo "HIT|$u|$g"; done; '
+        '  i=$(id -u -- "$u" 2>/dev/null) || continue; [ "$i" = 0 ] && continue; '
+        '  d="%s/$u/%s"; runuser -u "$u" -- test -d "$d" || continue; '
+        '  for g in %s; do runuser -u "$u" -- test -d "$d/$g" && echo "HIT|$u|$g"; done; '
         'done' % (HOME_ROOT, HOME_ROOT, CONTENT_SUBDIR, " ".join(a))),
     # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
     # access is actually granted, so both transports share nothing until then.
+    #
+    # AS THE CONTENT ACCOUNT. `install -d -o cu -g cu -m 700` as root follows a symlink at that
+    # path, so `~/serverfiles -> /etc/sudoers.d` had root hand that directory to the account —
+    # the hole do_content_dir_create closes locally with O_NOFOLLOW. The home is the account's
+    # own, so it can make the directory itself, and its chmod through a link reaches only what it
+    # could change anyway.
     "content-dir-create": lambda a: (
-        "install -d -o %s -g %s -m 700 %s"
-        % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR)))),
+        "runuser -u {u} -- mkdir -p -m 700 {p} && runuser -u {u} -- chmod 700 {p}".format(
+            u=shlex.quote(a[0]), p=shlex.quote(content_path(a[0], CONTENT_SUBDIR)))),
     # Exit status ONLY, because that is the whole of the helper's answer: do_content_game_present
     # and do_content_script_present in tools/panel-helper return 0 or 1 and print nothing.
     #
@@ -1569,10 +1593,14 @@ _REMOTE_ACTIONS = {
     # exist. The `or "Y" in out` half was the correct one; the rc clause, added later under a
     # comment reading "The verb's own rc says the same thing", was true of the helper and false
     # here. One rendering, one answer, and the comment is now true of both.
-    "content-game-present": lambda a: (
-        "test -d %s/." % shlex.quote(content_path(a[0], CONTENT_SUBDIR, a[1]))),
-    "content-script-present": lambda a: (
-        "test -x %s" % shlex.quote(content_path(a[0], a[1]))),
+    #
+    # Asked AS THE ACCOUNT, as the helper's _probe_rc asks: as root, `test` follows a link the
+    # account made, so the answer told it about places only root can see. Exit 2 when the
+    # account exists and runuser cannot run as it, which the callers read as "unknown".
+    "content-game-present": lambda a: _r13b_probe_as_remote(
+        a[0], "test -d %s/." % shlex.quote(content_path(a[0], CONTENT_SUBDIR, a[1]))),
+    "content-script-present": lambda a: _r13b_probe_as_remote(
+        a[0], "test -x %s" % shlex.quote(content_path(a[0], a[1]))),
     # AS THE CONTENT ACCOUNT (runuser: util-linux, root-only, present wherever useradd is — unlike
     # sudo, which a root-login host may not have). Every path here is inside that account's home,
     # and rm follows a symlink in any component but the last: as root, `~/serverfiles -> /usr/share`

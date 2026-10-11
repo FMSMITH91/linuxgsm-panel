@@ -3026,9 +3026,16 @@ check("system_ops: the update and reboot workers those calls start were recorded
 # ...and with no helper and no sudo it still refuses, which is the whole point of the gate.
 SO._HELPER_STATE["present"] = False
 SO._SUDO_PROBE.update(at=0.0, ok=None)
-with _so_stub(_run=lambda c, **k: ("NOPASS", "", 0), _run_verb=lambda *a, **k: ("", "", 0)):
+# threading recorded here too: under a regression where either stops refusing, the worker it
+# starts would outlive these stubs — server_reboot's sleeps 5 s and then calls the REAL
+# _run_verb("reboot") (passwordless sudo on a CI runner, the helper's verb on a dev box).
+_so_workers_before = len(_so_workers)
+with _so_stub(threading=_so_threads, _run=lambda c, **k: ("NOPASS", "", 0),
+              _run_verb=lambda *a, **k: ("", "", 0)):
     check("system_ops: with neither helper nor sudo, both still refuse",
           SO.os_run_update()[0] is False and SO.server_reboot()[0] is False)
+check("system_ops: ...and neither refusal started a worker",
+      _so_workers[_so_workers_before:] == [], repr(_so_workers[_so_workers_before:]))
 SO._HELPER_STATE["present"] = None
 
 # 14. Both background workers threw the privileged verb's (out, err, rc) away. _run_verb NEVER

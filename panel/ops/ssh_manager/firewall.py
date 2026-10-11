@@ -4,6 +4,7 @@ Part of the SSH connection manager for remote LinuxGSM servers, which also suppo
 execution for running on the panel's own machine (see the package docstring for how names
 resolve across its submodules).
 """
+import ipaddress
 import json as _json
 import re
 from panel.ops.ssh_manager import (_core, hosts)  # noqa: E402,F401  (module objects: the
@@ -314,8 +315,31 @@ def _is_ssh_rule(g, pn, inbound, ts_iface, ssh_ports):
     # Both profiles are port 22, so they are a way in only where sshd serves 22.
     words = pn.split()
     _named_ssh = bool(words) and words[-1].lower() in _SSH_APP_PROFILES and 22 in ssh_ports
+    # sshd is TCP only: a UDP rule naming its port (`1:1024/udp`, `22/udp`) is no way in, and
+    # counted as one it marked the host's only real `22/tcp` rule "another way in exists".
     return (g.get("action") in ("ALLOW", "LIMIT") and inbound and not ts_iface
-            and (_r12a_names_port(pn, ssh_ports) or _named_ssh))
+            and g.get("proto_label") != "UDP"
+            and (_r12a_names_port(pn, ssh_ports) or _named_ssh or _r13a_every_port(g, pn)))
+
+
+def _r13a_every_port(g, pn):
+    """Whether a rule's To column names no port at all, so it admits EVERY port, sshd's included.
+
+    `ufw allow from <admin ip>` (To "Anywhere"), `ufw allow in on eth0` ("All ports") and
+    `ufw allow to <address>` (an address alone) are the common ways to keep SSH to one admin
+    address or interface; none named a port, so the host's only way in got an ordinary delete ×.
+    """
+    if g.get("port_label") == "All ports":
+        return True
+    words = str(pn).split()
+    last = words[-1] if words else ""
+    if last.lower() == "anywhere":
+        return True
+    try:
+        ipaddress.ip_network(last, strict=False)
+    except ValueError:
+        return False
+    return True
 
 
 def _r12a_names_port(pn, ports):
@@ -357,8 +381,9 @@ def _classify_access_rule(g, ssh_ports):
 
 
 def _r11a_reaches_ssh(g, pn, ssh_ports):
-    """Whether interface rule `g` covers sshd: every port on it, or one of `ssh_ports`."""
-    return g.get("port_label") == "All ports" or _r12a_names_port(pn, ssh_ports)
+    """Whether interface rule `g` covers sshd: every port on it, or one of `ssh_ports` over TCP."""
+    return g.get("port_label") == "All ports" or (g.get("proto_label") != "UDP"
+                                                  and _r12a_names_port(pn, ssh_ports))
 
 
 def _r11a_tailnet_ssh_iface(g, ssh_ports):
@@ -428,9 +453,11 @@ def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_
         # Tailscale SSH, or regular SSH over a running tailnet (Tailscale isn't affected).
         other_way = (ssh_count > 1) or ts_ssh_ok or ts_iface_ok
         reason_last = (
-            "Port %s is the SSH port used to reach this host, and there's no working Tailscale "
+            "%s the SSH port used to reach this host, and there's no working Tailscale "
             "route to fall back on — removing it would lock you out. Enable Tailscale SSH, or "
-            "connect Tailscale and allow the tailscale0 interface, first." % g["port_num"])
+            "connect Tailscale and allow the tailscale0 interface, first."
+            % ("This rule lets every port in, including" if _r13a_every_port(g, g["port_num"])
+               else "Port %s is" % g["port_num"]))
     else:  # is_tailscale — deleting it drops regular SSH over the tailnet; Tailscale SSH is unaffected
         if served_over_ts:
             # This is the panel host and its UI is published over Tailscale Serve, so this
@@ -478,6 +505,20 @@ def _live_tailscale_state(server, enabled, groups):
     return ts_running, ts_ssh_enabled
 
 
+def _r13a_tailnet_ssh_ok(server, groups, ssh_ports):
+    """Whether regular SSH reaches this (tailnet-running) host over the tailnet.
+
+    An interface rule UFW lets through, first match wins -- AND what hosts._tailnet_ssh_state asks
+    of the same question: a Tailscale TUN interface to carry it (userspace networking has none) and
+    sshd listening where tailnet traffic arrives (after the panel's own bind-address change it is
+    the public address alone). Without them the host's only public SSH rule read "another way in
+    exists" while Disable public SSH refused the same lockout. The host is probed only when the
+    rule list already says yes.
+    """
+    return (_r11a_tailnet_ssh_open(groups, ssh_ports) and bool(hosts._tsiface_names(server))
+            and not hosts._r11a_sshd_off_tailnet(server))
+
+
 def _annotate_firewall_protection(server, enabled, groups):
     """Flag rules whose removal could LOCK YOU OUT.
 
@@ -500,8 +541,7 @@ def _annotate_firewall_protection(server, enabled, groups):
     panel_port = _panel_web_port(server, ts_running=ts_running)
     served_over_ts = _panel_served_over_tailscale(server)
     ts_ssh_ok = ts_running and ts_ssh_enabled    # Tailscale SSH → a way in regardless of UFW
-    # regular SSH over the tailnet: needs an interface rule that UFW, first match wins, lets through
-    ts_iface_ok = ts_running and _r11a_tailnet_ssh_open(groups, ssh_ports)
+    ts_iface_ok = ts_running and _r13a_tailnet_ssh_ok(server, groups, ssh_ports)
 
     for g in groups:
         g["protected"] = False

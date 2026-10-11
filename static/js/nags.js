@@ -421,9 +421,11 @@ window.osUpdatesNagCheck = function(){
         // data-no-i18n: the link's text is the host's NAME (a host called "Server" read "Servidor").
         return '<div><a class="alert-link" style="display:inline-block;padding:.25rem 0;" data-no-i18n'
              + ' href="' + escapeHtml(h.url) + '#os-updates">'
-             + escapeHtml(h.name) + '</a> — ' + n + ' update' + (n===1?'':'s')
+             // Each word in its own span, apart from its count: "12 updates" as one node matched
+             // no catalog key, so the banner stayed English on every page of a translated panel.
+             + escapeHtml(h.name) + '</a> — ' + n + ' <span>' + (n===1?'update':'updates') + '</span>'
              + (s ? ' <span class="badge bg-danger" style="font-weight:normal;">'
-                  + s + ' security</span>' : '') + '</div>';
+                  + s + ' <span>security</span></span>' : '') + '</div>';
       }).join('');
       // alert-dismissible parks the close button in the corner and reserves room for it; laying it
       // out in the flow instead drops it onto a line of its own at 375px.

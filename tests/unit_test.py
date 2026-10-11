@@ -108,17 +108,24 @@ for _attr, _fns in _WATCHED.items():
 # part53 (the 2026-10-11 review's routes, installer, tools and page fixes) drives part12's app and
 # runs node/bash on its own fixtures; imports part01, 05, 12 and 47.
 # part54 (review 1011b: core, system_ops, ssh-core and Tailscale Funnel fixes) runs part32's fake
-# tailscale on its own PATH; imports part01 and 20.
+# tailscale on its own PATH; imports part01, 02, 12, 20 and 51 (part12's app for two page renders).
 # part55 (the second 2026-10-11 review: game files, debug report, helper, routes) drives part12's
 # app in a real bash over a throwaway home, and node on one page function; imports part01, 05, 12, 47.
 # part56 (the 2026-10-11 second review's routes, tools and page fixes) drives part12's app and runs
+# node on its own fixtures; imports part01, 05, 12 and 47.
+# part57 (review 1011c: core, system_ops, ssh-core and reboot fixes) drives part12's app; imports
+# part01, 12 and 20.
+# part58 (the third 2026-10-11 review: game files, bots, debug report, helper, routes) drives
+# part12's app in a real bash over a throwaway home, with stand-in tools; imports part01, 05, 12.
+# part59 (the 2026-10-11 third review's routes, tools and page fixes) drives part12's app and runs
 # node on its own fixtures; imports part01, 05, 12 and 47.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
           "part28", "part29", "part30", "part31", "part32", "part33", "part34", "part35", "part36", "part37",
           "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
-          "part50", "part51", "part52", "part53", "part54", "part55", "part56", "part15")
+          "part50", "part51", "part52", "part53", "part54", "part55", "part56", "part57", "part58",
+          "part59", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -161,10 +168,27 @@ def _hub_leftovers():
 
 
 _hub_after = []
+_path_moved = []           # (part, what it added to / took off sys.path)
 for _part in _PARTS:
+    _path_before = list(sys.path)
     importlib.import_module("unit." + _part)
     _hub_after.append((_part, _hub_leftovers()))
+    # An entry added or taken off, or a tools/ directory moved AHEAD of the repository root. Not
+    # the plain order: part01 puts the root (already on it) first, which shadows nothing. But
+    # tools/ is on sys.path already when the suite runs under tools/nosudo_runner.py, BEHIND the
+    # root, so a leaked insert(0, tools) only reorders — and puts tools/run.py, serve.py and the
+    # rest ahead of every top-level name the panel and the parts import.
+    _ahead = [_p for _p in sys.path[:sys.path.index(_root) if _root in sys.path else len(sys.path)]
+              if os.path.realpath(_p).startswith(os.path.join(os.path.realpath(_root), "tools"))]
+    if set(sys.path) != set(_path_before) or _ahead:
+        _path_moved.append((_part, sorted(set(sys.path) ^ set(_path_before)) or _ahead))
 from unit.part01 import check, results, hub_leaks, hub_swept  # noqa: E402
+
+# A part that leaves a directory on sys.path (tools/, tools/js_coverage) hands every later import of
+# a top-level name in it — `run`, `walk`, `flows`, `serve` — that directory's file. part14, part53
+# and part56 each put it back and say so; this names any part, present or future, that does not.
+check("unit suite: no part leaves sys.path changed for the parts after it",
+      not _path_moved, "; ".join("%s: %s" % _pm for _pm in _path_moved))
 
 _hub_first_after = {}      # each leftover once, with the part it first outlived
 for _part, _left in _hub_after:

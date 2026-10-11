@@ -55,8 +55,10 @@ def _boot_shared_funnel(app, cfg, port, audit=None):
     from the host, and said in the audit log, not only in a log line.
     """
     try:
-        others = ts.shared_funnel_apps(ts.get_tailscale_info().serve_config, port,
-                                       cfg.get("tailscale_use_funnel", False))
+        serve_config = ts.get_tailscale_info().serve_config
+        use_funnel = bool(cfg.get("tailscale_use_funnel", False))
+        others = ts.shared_funnel_apps(serve_config, port, use_funnel)
+        kept_off = _r13a_kept_off(serve_config, port, use_funnel)
     except Exception:
         _log.debug("shared-Funnel read at boot failed", exc_info=True)
         return
@@ -65,6 +67,25 @@ def _boot_shared_funnel(app, cfg, port, audit=None):
             app, "at boot: Funnel is on for the whole :443 listener because %s uses it, so the "
                  "panel is reachable from the internet too, although its own Funnel setting is off"
                  % ts._r12a_apps_at(others), True, action="tailscale_serve_funnel_shared")
+    elif kept_off:
+        # The other direction, which nothing reported: the panel's setting says Funnel, the
+        # re-point kept the shared listener's Funnel OFF, so the panel is tailnet-only.
+        (audit or _boot_audit)(
+            app, "at boot: Funnel is off for the whole :443 listener because %s shares it without "
+                 "Funnel, so the panel is tailnet-only, although its own Funnel setting is on"
+                 % ts._r12a_apps_at(kept_off), True, action="tailscale_serve_funnel_shared")
+
+
+def _r13a_kept_off(serve_config, port, use_funnel):
+    """Return the other apps' mounts when the boot kept the shared listener's Funnel off.
+
+    That is: off against the panel's own setting (on), on the node's :443 listener the panel
+    shares; [] otherwise. The mirror of ts.shared_funnel_apps.
+    """
+    shared, others = ts._r12a_listener_funnel(serve_config, port)
+    if shared or not use_funnel or not others:
+        return []
+    return others if ts._r13a_panel_on_listener(serve_config, port) else []
 
 
 def _remove_serve_leftovers(panel_port, mount, where, audit):

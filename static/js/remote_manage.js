@@ -47,7 +47,7 @@ function loadSecurityTopIps(){
       // (after _F2B_EVENT_RE) should not be the only thing keeping markup out of the page.
       var att = Number(o.attempts) || 0, bans = Number(o.bans) || 0;
       var badge = o.banned_now ? '<span class="badge bg-danger">banned now</span>'
-                : (bans>0 ? '<span class="badge bg-secondary" style="font-weight:normal;">'+bans+' ban'+(bans===1?'':'s')+'</span>' : '');
+                : (bans>0 ? '<span class="badge bg-secondary" style="font-weight:normal;">'+bans+' <span>'+(bans===1?'ban':'bans')+'</span></span>' : '');
       var block = o.blocked
         ? '<span class="badge bg-dark border me-1" style="font-weight:normal;"><i class="bi bi-shield-fill-x"></i> blocked</span>'
           +'<button class="btn btn-link btn-sm p-0" style="font-size:.72rem;"'+_da('unblockOffender',[o.ip,'@self'])+'>unblock</button>'
@@ -174,9 +174,12 @@ function loadSecurityBans(){
     if(!d.installed){ el.innerHTML='<div class="small text-secondary">fail2ban isn\'t installed on this host.</div>'; return; }
     if(!d.jails||!d.jails.length){ el.innerHTML='<div class="small text-secondary">No fail2ban jails found.</div>'; return; }
     el.innerHTML=d.jails.map(function(j){  // nosemgrep
-      var head='<div class="small mb-1"><strong>'+escapeHtml(j.jail)+'</strong> '
-        +'<span class="badge bg-'+(j.currently_banned?'danger':'secondary')+'">'+j.currently_banned+' banned</span> '
-        +'<span class="text-secondary" style="font-size:.7rem;">'+j.total_banned+' total · '+j.total_failed+' failed</span> '
+      var head='<div class="small mb-1"><strong data-no-i18n>'+escapeHtml(j.jail)+'</strong> '
+        // Counts apart from their words (and made numbers here, at the innerHTML sink), so each
+        // word is a whole node the i18n walker can translate.
+        +'<span class="badge bg-'+(j.currently_banned?'danger':'secondary')+'">'+(Number(j.currently_banned)||0)+' <span>banned</span></span> '
+        +'<span class="text-secondary" style="font-size:.7rem;">'+(Number(j.total_banned)||0)+' <span>total</span> · '
+        +(Number(j.total_failed)||0)+' <span>failed</span></span> '
         +'<button class="btn btn-link p-0 ms-1" style="font-size:.7rem;vertical-align:baseline;"'
         +_da('loadSecurityLog',['fail2ban',j.jail])+' title="Show this jail\'s ban/unban activity">view log</button></div>';
       var body=(j.banned_ips&&j.banned_ips.length)
@@ -335,7 +338,9 @@ function _livePaintCpu(d){
   var ov=d.cpu_overall||0;
   document.getElementById('cpu-overall-val').textContent=ov;
   var ob=document.getElementById('cpu-overall-bar'); ob.style.width=ov+'%'; ob.style.backgroundColor=barColor(ov);
-  document.getElementById('cpu-cores-label').textContent=(d.core_count||(d.cpu_cores||[]).length)+' cores';
+  var cl=document.getElementById('cpu-cores-label');
+  cl.textContent=(d.core_count||(d.cpu_cores||[]).length)+' ';
+  var cw=document.createElement('span'); cw.textContent=t('cores'); cl.appendChild(cw);   // "8 cores" matched no key
   var cores=d.cpu_cores||[];
   if(cores.length!==coresBuilt) buildCores(cores.length);
   cores.forEach(function(p,i){
@@ -369,8 +374,8 @@ function renderUpdates(d, note){
   var n=d.count||0, pkgs=d.packages||[];
   var sec=pkgs.filter(isSecurityPkg).length;
   var head=(n ? '<div class="mb-1"><span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> '
-                + n + ' update' + (n===1?'':'s') + ' available</span>'
-                + (sec ? ' <span class="badge bg-danger" style="font-weight:normal;">'+sec+' security</span>' : '')
+                + n + ' <span>' + (n===1?'update available':'updates available') + '</span></span>'
+                + (sec ? ' <span class="badge bg-danger" style="font-weight:normal;">'+sec+' <span>security</span></span>' : '')
                 + '</div>'
               : '<div class="text-success"><i class="bi bi-check-circle"></i> System is up to date.</div>')
          + (note ? '<div class="text-secondary" style="font-size:.68rem;">'+escapeHtml(note)+'</div>' : '');

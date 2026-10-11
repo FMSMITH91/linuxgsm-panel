@@ -56,7 +56,7 @@
              HOST: a 20.04 remote under a 24.04 panel runs those games perfectly well. The game's
              raw os column is not it — every game declares the newest release LinuxGSM builds deps
              for, so that comparison would grey out the whole menu on a 26.04 host. #}
-          <option value="{{ g.shortname }}"{% if g.legacy_os %} data-legacy-os="{{ g.legacy_os }}"{% endif %}>{{ g.name }}{% if g.legacy_os %} ({{ g.legacy_os }}){% endif %}</option>
+          <option value="{{ g.shortname }}"{% if g.legacy_os %} data-legacy-os="{{ g.legacy_os }}"{% endif %} data-no-i18n>{{ g.name }}{% if g.legacy_os %} ({{ g.legacy_os }}){% endif %}</option>
           {% endfor %}
         </select>
         {% if games %}
@@ -69,7 +69,7 @@
                   title="Fetch LinuxGSM's latest game list now (it refreshes on its own once a week)">Refresh list</button>
           {% endif %}
         </div>
-        <div class="form-text text-warning" id="game-os-note" data-no-i18n></div>
+        <div class="form-text text-warning" id="game-os-note"></div>
         {% else %}
         {# The list comes from LinuxGSM at runtime (see lgsm_data). If it could not be fetched and
            nothing is cached, say so — an empty menu with no explanation is the worst outcome. #}

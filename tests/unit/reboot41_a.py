@@ -1331,6 +1331,15 @@ def _per_user_one41(unit, scope_ok):
 def _per_user_checks41():
     unit = os.path.join(_TMP41, "linuxgsm-panel.service")
     open(unit, "w").close()
+    try:
+        _per_user_body41(unit)
+    finally:
+        # Even when a check above raised: the user-scope verdict the stand-in answered is cached
+        # in _core for every later section and part.
+        _core41._USER_SCOPE.update(ok=None, at=0.0)
+
+
+def _per_user_body41(unit):
     h, _boot, _at = _per_user_one41(unit, True)
     check("per-user panel host: the restore asks the user manager again and starts the "
           "server in a scope of its own, out of the panel's cgroup",
@@ -1341,7 +1350,6 @@ def _per_user_checks41():
           "after the boot) rather than land in the panel's cgroup; then it starts anyway",
           _all41(_lines41(h, "start ") == ["start mcserver starting_lock=1"], not h.scoped,
                  bool(at) and at[0] - boot >= 120), repr((h.events(), at, boot)))
-    _core41._USER_SCOPE.update(ok=None, at=0.0)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1649,8 +1657,31 @@ _STUBS41 = ('ok() { echo "OK $*"; }; warn() { echo "WARN $*"; }; info() { :; }; 
 # ...and the blocks may hold no power command but that bare `reboot`: rewritten as `systemctl
 # reboot`, `shutdown -r now` or `/sbin/reboot`, the idle control would run the REAL one — through
 # polkit as a dev box's desktop user, or as root on CI's root leg — and reboot the machine mid-run.
+#
+# A list of spellings is not enough on its own (review 1011c): `command reboot`, `exec reboot`,
+# `env reboot`, `loginctl reboot` and `"$(command -v reboot)"` skip the `reboot` FUNCTION and look
+# the name up on PATH, and none of them was in this list. So the blocks also run with
+# _POWER_BIN41 at the head of PATH: a refusing stand-in under every power and escalation command's
+# name, which whatever skips a function finds first. What PATH cannot cover is refused as text: a
+# command named by PATH (`/sbin/reboot`, `/usr/bin/sudo reboot`, whose secure_path ignores ours),
+# a PATH reassigned in the block, and the kernel's sysrq trigger.
+_POWER_NAMES41 = ("reboot", "shutdown", "poweroff", "halt", "systemctl", "loginctl", "telinit",
+                  "init", "kexec", "busctl", "dbus-send", "gdbus", "sudo", "doas", "pkexec", "run0",
+                  "su", "env")
 _POWER41 = _re41.compile(r"systemctl|shutdown|/sbin/|\binit\s+6|telinit|poweroff|halt\b|"
-                         r"\bkexec\b")
+                         r"\bkexec\b|loginctl|busctl|dbus-send|gdbus|sysrq|\bPATH=|"
+                         # a path's last part only: /var/run/reboot-required is no command
+                         r"/(?:%s)(?![\w.-])" % "|".join(_re41.escape(n) for n in _POWER_NAMES41))
+_POWER_BIN41 = os.path.join(_TMP41, "power-refused")
+os.makedirs(_POWER_BIN41, exist_ok=True)
+for _pn41 in _POWER_NAMES41:
+    _write_exec41(os.path.join(_POWER_BIN41, _pn41),
+                  '#!/bin/sh\necho "REFUSED $(basename "$0") $*"\nexit 1\n')
+
+
+def _power_env41():
+    """The environment install.sh's blocks run in: the refusing stand-ins first on PATH."""
+    return dict(os.environ, PATH=_POWER_BIN41 + os.pathsep + os.environ.get("PATH", ""))
 
 
 def _install_block41(txt, start, end):
@@ -1673,12 +1704,38 @@ def _install_blocks41():
 
 
 def _run_blocks41(blocks):
-    return [_run41(["bash", "-c", b]).stdout for b in blocks]
+    return [_run41(["bash", "-c", b], env=_power_env41()).stdout for b in blocks]
+
+
+def _power_guard_checks41():
+    """The guard's own controls, each HARMLESS were it broken (--help / --version / a text test)."""
+    # Run for real through the same stand-ins, functions and PATH: each spelling that skips the
+    # `reboot` function must land on a refusing stand-in. A real one here would print its help.
+    ran = {}
+    for form in ('command reboot --help', '(exec reboot --help)', 'env reboot --help',
+                 'loginctl --version', '"$(command -v reboot)" --help', 'command sudo -V',
+                 'env -i reboot --help', '${RB_SUDO} command reboot --help'):
+        out = _run41(["bash", "-c", _STUBS41 + "RB_SUDO=\n" + form], env=_power_env41()).stdout
+        if "REFUSED" not in out and "REBOOTING" not in out:
+            ran[form] = out[:120]
+    check("install.sh reboot drive: a power command that skips the stand-in function (command, "
+          "exec, env, loginctl, $(command -v), command sudo) still lands on a refusing stand-in",
+          not ran, repr(ran))
+    # ...and what PATH cannot reach is refused before anything runs.
+    unread = [f for f in ("/sbin/reboot", "/usr/sbin/reboot", "/usr/bin/sudo reboot",
+                          "PATH=/usr/sbin command reboot", "echo b > /proc/sysrq-trigger",
+                          "/usr/bin/env -i reboot", "loginctl reboot", "busctl call x Reboot")
+              if not _POWER41.search(f)]
+    check("install.sh reboot drive: a power command named by path, a reassigned PATH and sysrq "
+          "are refused as text", not unread, repr(unread))
+    check("install.sh reboot drive: ...while the bare `${RB_SUDO} reboot` it drives is not "
+          "(control)", not _POWER41.search("${RB_SUDO} reboot\n${UPG_SUDO} reboot"))
 
 
 def _session_probe_checks41():
     probe = _hosts41.GAME_SESSIONS_PROBE
     blocks = _install_blocks41()
+    _power_guard_checks41()
     if not _only_bare_reboot41(blocks):
         return
     pre = _run41(["bash", "-c", probe]).stdout.strip()
@@ -1695,8 +1752,11 @@ def _session_probe_checks41():
     _idle_name = "install.sh: ...while an idle host that needs one is still rebooted (control)"
     if str(proc.pid) not in named:
         for _sp41n in ("game-session probe: a process named 'tmux: server'",
-                       "install.sh: with it running, neither reboot spot reboots", _idle_name):
+                       "install.sh: with it running, neither reboot spot reboots"):
             skip(_sp41n, "prctl(PR_SET_NAME) did not take here")
+        # Not the idle control: its `idle` was run before the stand-in started, so prctl is no
+        # reason to skip it — and skipping it hid the "always busy" regression as a SKIP.
+        _idle_control41(_idle_name, pre, idle)
         return
     # On a machine already running a tmux or screen session of its own, the probe says YES before
     # the stand-in starts, so the busy checks would pass on THAT session (perhaps through another

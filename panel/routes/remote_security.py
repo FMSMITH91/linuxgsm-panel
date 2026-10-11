@@ -13,7 +13,8 @@ from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action, permission_required,
     superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
-from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r13b_json_flag,
+                             _unreachable)
 from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, NOT_AN_IP, _port_or,
                                    canonical_ip, ip_address_or_none)
 from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
@@ -125,7 +126,9 @@ def _register_blocking(app):
         """UFW-block (all ports, permanent) an IP on a remote host."""
         remote = get_host_remote(remote_id)
         ip = _json_str(_json_body(), "ip")
-        unblock = bool(_json_body().get("unblock"))
+        # JSON booleans or a 400, here and in the auto-block switch: bool("false") is True, so
+        # `{"unblock": "false"}` unblocked the address it asked to block.
+        unblock = _r13b_json_flag(_json_body(), "unblock", False)
         if not unblock and tailnet_exempt_ips(remote, {ip}):
             return jsonify({"success": False, "message":
                             "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
@@ -155,7 +158,7 @@ def _register_blocking(app):
         value (disabling it everywhere). Confirmed by driving both routes as such a user.
         """
         remote = get_host_remote(remote_id)
-        enabled = bool(_json_body().get("enabled"))
+        enabled = _r13b_json_flag(_json_body(), "enabled", False)
         if current_user.is_superadmin:
             _maybe_set_threshold(_json_body())
         _set_autoblock_host(remote_id, enabled)

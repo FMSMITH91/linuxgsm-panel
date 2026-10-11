@@ -1,9 +1,11 @@
 name: Lighthouse
 
 # Boot a throwaway panel and run Lighthouse against the login page (same base.html as
-# every page, so it catches CSS/layout-shift regressions). CLS is a hard failure; the
-# category scores are advisory warnings (they wobble run-to-run). Separate from CI, so
-# it never blocks the deploy pipeline.
+# every page, so it catches CSS/layout-shift regressions). CLS, the accessibility and
+# best-practices scores and redirects FAIL the check (.github/lighthouserc.json); only the
+# performance score is a warning (it wobbles run-to-run). It is a required check, and a red
+# result on main holds the deploy (deploy.yml's verify) and the panel's update offer like any
+# other check.
 
 on:
   # Docs-only pushes/PRs skip the Lighthouse run — a README/LICENSE edit can't change the
@@ -32,8 +34,12 @@ on:
 permissions:
   contents: read
 
+# The event is part of the group, as in ci.yml and security.yml: on main a manual run shares the
+# ref with a push run, and without it the manual run CANCELLED the in-progress push run, leaving a
+# "cancelled" required check on that commit, which deploy.yml and the panel's update gate read as
+# a failure.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

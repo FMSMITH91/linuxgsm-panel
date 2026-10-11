@@ -1105,7 +1105,11 @@ def _restart_check36():
 
 def _gamedig_counts36():
     if not (_shutil36.which("jq") and _shutil36.which("bash")):
-        for name in ("V8 count: every reader counts numplayers", "V8 restart line (driven)"):
+        # Named as the checks they stand for begin, so a SKIP reads as the checks that did not run.
+        for name in ("V8 count: (every check: the readers, Source bots, the queued restart and the "
+                     "reboot confirm)",
+                     "V8 restart line: (every check: the hourly check, driven, and the daily "
+                     "upgrade pass)"):
             skip(name, "no jq or bash on this machine")
         return
     _count_readers36()

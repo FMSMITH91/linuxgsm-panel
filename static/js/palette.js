@@ -135,6 +135,7 @@ var PALETTE_HOST_SECTIONS = [
 
 (function () {
   var ACTION_LABEL = { start: 'Start', restart: 'Restart', stop: 'Stop' };
+  function _tr(s) { return window.t ? window.t(s) : s; }
   var ACTION_ICON = { start: 'bi bi-play-fill', restart: 'bi bi-arrow-clockwise',
                       stop: 'bi bi-stop-fill' };
   var GROUP_ORDER = { pages: 0, sections: 1, servers: 2, actions: 3 };
@@ -316,7 +317,9 @@ var PALETTE_HOST_SECTIONS = [
       // action the user cannot perform is a menu of 403s.
       (s.actions || []).forEach(function (act, j) {
         consider({
-          label: ACTION_LABEL[act] + ' ' + s.name,
+          // The verb through t(): the label span is data-no-i18n (for the name), so the walker
+          // never reached it and the row read "Restart MyServer" on a translated page.
+          label: _tr(ACTION_LABEL[act]) + ' ' + s.name,
           act: act, sid: s.id, sname: s.name,
           icon: ACTION_ICON[act] || 'bi bi-play-fill',
           meta: [s.game, s.host].filter(Boolean).join(' · ')
@@ -419,6 +422,23 @@ var PALETTE_HOST_SECTIONS = [
   // Stop and restart disconnect whoever is playing. The buttons on the page ask first, and a
   // search box must not be the one place where a keystroke skips that — Enter is easy to hit on
   // a row you did not mean to land on. Start is not destructive and runs straight away.
+  function _actionBody(action, name) {
+    var wrap = document.createElement('span');
+    var verb = document.createElement('span');
+    verb.textContent = ACTION_LABEL[action];
+    var who = document.createElement('strong');
+    who.setAttribute('data-no-i18n', '');
+    who.textContent = name;
+    var warn = document.createElement('span');
+    warn.textContent = 'Anyone playing will be disconnected.';
+    wrap.appendChild(verb);
+    wrap.appendChild(document.createTextNode(' '));
+    wrap.appendChild(who);
+    wrap.appendChild(document.createTextNode('? '));
+    wrap.appendChild(warn);
+    return wrap;
+  }
+
   function runAction(action, id, name) {
     function fire() {
       // No X-CSRFToken here on purpose: panel.js wraps fetch and adds it to every mutating
@@ -441,7 +461,10 @@ var PALETTE_HOST_SECTIONS = [
       window.confirmDialog({
         title: ACTION_LABEL[action], icon: 'exclamation-triangle',
         confirmLabel: ACTION_LABEL[action], confirmClass: 'btn-danger',
-        bodyText: ACTION_LABEL[action] + ' ' + name + '? Anyone playing will be disconnected.',
+        // Built as nodes: the verb and the warning are whole text nodes the i18n walker translates,
+        // the server's name is guarded (it is its owner's text). As one spliced sentence none of it
+        // could match a catalog key.
+        bodyNode: _actionBody(action, name),
         onConfirm: fire
       });
       return;

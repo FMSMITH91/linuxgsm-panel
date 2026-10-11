@@ -2055,15 +2055,20 @@ check("ufw grouping: ...and no two groups share one (positive control)",
 
 # ── firewall lock-out protection ──────────────────────────────
 def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False),
-            cfg_unreadable=None, sshd_ports=()):
+            cfg_unreadable=None, sshd_ports=(), tsifaces=("tailscale0",), sshd_off_tailnet=False):
     # Restores what it replaces. It used to leave sm.is_local_server stubbed for the REST of the
     # suite — every later test saw whatever the last protect() call happened to pass, which is how
     # a stub stops being scaffolding and starts being a silent global. Nothing depended on the leak
     # (this fix changed no other result), but the transport tests further down do read the real
     # is_local_server, and would have been testing the wrong branch.
     _saved = (_sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config,
-              _sm_firewall._config_unreadable, _sm_hosts._sshd_current_ports)
+              _sm_firewall._config_unreadable, _sm_hosts._sshd_current_ports,
+              _sm_hosts._tsiface_names, _sm_hosts._r11a_sshd_off_tailnet)
     try:
+        # The two host probes a tailscale0 rule must also pass to count as a way in over the
+        # tailnet (a TUN interface exists; sshd listens where tailnet traffic arrives).
+        _sm_hosts._tsiface_names = lambda s: list(tsifaces)
+        _sm_hosts._r11a_sshd_off_tailnet = lambda s: sshd_off_tailnet
         _sm_core.is_local_server = lambda s: is_local
         _sm_hosts._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic
         # sshd's listen ports as `sshd -T` gives them (strings); () = the read failed.
@@ -2080,7 +2085,8 @@ def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(Fa
         return _sm_firewall._annotate_firewall_protection(server, enabled, _sm_firewall._group_ufw_rules(_rules(rules)))
     finally:
         (_sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config,
-         _sm_firewall._config_unreadable, _sm_hosts._sshd_current_ports) = _saved
+         _sm_firewall._config_unreadable, _sm_hosts._sshd_current_ports,
+         _sm_hosts._tsiface_names, _sm_hosts._r11a_sshd_off_tailnet) = _saved
 
 
 # SSH-only: port 22 is the last way in -> protected.
@@ -2960,26 +2966,65 @@ _totp_files = ["app.py"] + sorted(
 check("2FA: the verify_totp gate reads app.py and every panel module (a floor, so an empty walk "
       "fails)", len(_totp_files) > 50 and "panel/routes/auth_routes.py" in _totp_files,
       "%d files" % len(_totp_files))
+_TOTP_HOME = os.path.join("panel", "security", "auth.py")
+
+
+def _totp_name(n):
+    """The name a Name, Attribute or Call node refers to (a Call by its callee), else None."""
+    f = n.func if isinstance(n, _totp_ast.Call) else n
+    return getattr(f, "id", getattr(f, "attr", None))
+
+
+def _totp_renamed(n):
+    """Is `n` an import of verify_totp under another name?"""
+    return isinstance(n, _totp_ast.ImportFrom) and any(
+        _a.name == "verify_totp" and _a.asname not in (None, "verify_totp") for _a in n.names)
+
+
+def _totp_why(n, rel):
+    """How AST node `n` (in file `rel`) can reach verify_totp: a label, "" for a plain use, or None."""
+    # A rename on import (`from ...auth import verify_totp as _vt`) or a lookup by string
+    # (`getattr(auth, "verify_totp")`) reaches it under a name the call test cannot see.
+    if _totp_renamed(n):
+        return " (imported under another name)"
+    outside = rel != _TOTP_HOME
+    if isinstance(n, _totp_ast.Constant):
+        return " (named as a string)" if outside and n.value == "verify_totp" else None
+    # ANY reference outside auth.py, not only a call: `partial(verify_totp, s)(c)`,
+    # `_v = auth.verify_totp` or `map(verify_totp, ...)` consume a live code just the same, and
+    # none is a Call whose func is named verify_totp. Outside auth.py nothing has a reason to name
+    # it; inside, its own definition may exist, and callers may not.
+    kinds = (_totp_ast.Name, _totp_ast.Attribute, _totp_ast.Call) if outside else (_totp_ast.Call,)
+    return "" if isinstance(n, kinds) and _totp_name(n) == "verify_totp" else None
+
+
+def _totp_refs(tree, rel):
+    """Every place in `tree` (the file `rel`) that can reach verify_totp: '<line><how>'."""
+    found = []
+    for _n in _totp_ast.walk(tree):
+        _w = _totp_why(_n, rel)
+        if _w is not None:
+            found.append("%d%s" % (_n.lineno, _w))
+    return found
+
+
 for _rel in _totp_files:
     _path = os.path.join(_totp_root, _rel)
     _tree = _totp_ast.parse(open(_path, encoding="utf-8").read())
-    for _n in _totp_ast.walk(_tree):
-        # A rename on import (`from ...auth import verify_totp as _vt`) or a lookup by string
-        # (`getattr(auth, "verify_totp")`) reaches it under a name the call test cannot see.
-        if isinstance(_n, _totp_ast.ImportFrom) and any(
-                _a.name == "verify_totp" and _a.asname not in (None, "verify_totp")
-                for _a in _n.names):
-            _totp_bad.append("%s:%d (imported under another name)" % (_rel, _n.lineno))
-            continue
-        if (isinstance(_n, _totp_ast.Constant) and _n.value == "verify_totp"
-                and _rel != os.path.join("panel", "security", "auth.py")):
-            _totp_bad.append("%s:%d (named as a string)" % (_rel, _n.lineno))
-            continue
-        if not (isinstance(_n, _totp_ast.Call)
-                and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "verify_totp"):
-            continue
-        # its own definition site is allowed to exist; callers are not
-        _totp_bad.append("%s:%d" % (_rel, _n.lineno))
+    _totp_bad.extend("%s:%s" % (_rel, _w) for _w in _totp_refs(_tree, _rel))
+# The gate's own controls: each indirect use is named, and the step form is not.
+_totp_ctl = {_src: _totp_refs(_totp_ast.parse(_src), os.path.join("panel", "routes", "x.py"))
+             for _src in ("import functools\nfunctools.partial(verify_totp, s)(c)\n",
+                          "_v = auth.verify_totp\n_v(s, c)\n",
+                          "list(map(verify_totp, ss, cs))\n",
+                          "auth.verify_totp(s, c)\n",
+                          "from panel.security.auth import verify_totp as _vt\n",
+                          "getattr(auth, 'verify_totp')(s, c)\n")}
+_totp_ok = _totp_refs(_totp_ast.parse("auth.verify_totp_step(s, c)\n"),
+                      os.path.join("panel", "routes", "x.py"))
+check("2FA: the verify_totp gate names a partial, an alias, a map, a call, a renamed import and a "
+      "string lookup — and not verify_totp_step (controls)",
+      all(_totp_ctl.values()) and not _totp_ok, repr((_totp_ctl, _totp_ok)))
 check("2FA: no route consumes a live code with the yes/no verify_totp",
       not _totp_bad,
       "verify_totp is called at %s — use verify_totp_step and record the step, or an observed "

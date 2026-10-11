@@ -45,7 +45,12 @@
      markup, conditionals and JS — only visibility changes. -->
 <ul class="nav nav-pills mb-3 flex-nowrap overflow-auto" id="mtab-nav">
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="overview"><i class="bi bi-speedometer2"></i> Overview</button></li>
+  {# Host Controls holds OS updates, firewall, power and Connection & SSH (_host_ctl), the
+     terminal (superadmin-only on the panel host) and Existing servers (manage_servers): a
+     delegated host admin on the panel host with none of those opened it onto a blank page. #}
+  {% if _host_ctl or has_permission('manage_servers') %}
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="controls"><i class="bi bi-sliders"></i> Host Controls</button></li>
+  {% endif %}
   {# Every Maintenance card is gated like this (the panel-only ones on a superadmin, Ubuntu Pro on
      _host_ctl), so for a delegated host admin on the panel host the tab opened onto a blank page. #}
   {% if _host_ctl %}
@@ -720,6 +725,10 @@
         {% include "_shared_funnel_note.html" %}
         {% if not shared_funnel %}<p class="small text-warning mb-1">Funnel is on for the panel’s Tailscale Serve address, so it stays reachable from the internet even with this port closed.</p>{% endif %}
         <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort" data-funnel="1"><i class="bi bi-shield-lock"></i> Close public panel port</button>
+        {% elif funnel_facts and funnel_facts.unread %}
+        {# Serve did not answer: whether Funnel publishes the panel is not known, so not "tailnet-only" either. #}
+        <p class="small text-warning mb-1">Tailscale Serve could not be read just now, so whether Funnel also makes the panel reachable from the internet is not known.</p>
+        <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort" data-funnel="unknown"><i class="bi bi-shield-lock"></i> Close public panel port</button>
         {% else %}
         <p class="small text-secondary mb-1">Close the public web port to make the panel tailnet-only, with no open ports at all.</p>
         <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort"><i class="bi bi-shield-lock"></i> Close public panel port (tailnet-only)</button>

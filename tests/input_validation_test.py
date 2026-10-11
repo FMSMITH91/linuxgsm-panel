@@ -113,7 +113,13 @@ def cleanup():
             db.engine.dispose()
     except Exception:  # nosec B110
         pass
-    for p in (DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE):
+    # The sidecars too, as manage_test, perf_budget_test and setup_wizard_test remove theirs: the
+    # panel runs in WAL mode, and a -wal/-shm (or the rolling .backup) this run created and left
+    # is read by the next run as part of a database it never made. _PREEXISTING keeps any that
+    # were already here.
+    for p in (DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE,
+              DB_PATH.with_name("panel.db.backup"), DB_PATH.with_name("panel.db-wal"),
+              DB_PATH.with_name("panel.db-shm")):
         if p not in _PREEXISTING and p.exists():
             try:
                 p.unlink()

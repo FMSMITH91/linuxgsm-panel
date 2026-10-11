@@ -25,8 +25,12 @@ on:
 permissions:
   contents: read
 
+# One group per commit and event. It was one group for the whole repository, and with
+# cancel-in-progress false GitHub still keeps only ONE pending run per group: three quick pushes
+# CANCELLED the middle commit's queued run, a "cancelled" check on that commit, which its own
+# deploy verify reads as a failure. Runs on different commits do not share anything to serialise.
 concurrency:
-  group: scorecard
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:

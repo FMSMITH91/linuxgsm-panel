@@ -14,7 +14,7 @@ from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from types import (SimpleNamespace)
-from panel.core.http import (_json_body, _json_str, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r13b_json_flag)
 from panel.core.validation import (NOT_AN_IP, canonical_ip)
 from app import (_autoblock_hosts, _local_remote_id, _maybe_set_threshold, _os_update_note,
     _run_autoblock_now, _security_whitelist, _set_autoblock_host)
@@ -381,6 +381,18 @@ def _register_panel_ban_lists(app):
         return jsonify(dict(_settings, ips=_ips))
 
 
+def _r13c_block_refusal(ip):
+    """Why `ip` may not be blocked on the panel host (a JSON answer), or None."""
+    lr = RemoteServer.query.filter_by(is_local=True).first()
+    if lr and tailnet_exempt_ips(lr, {ip}):
+        return jsonify({"success": False, "message":
+                        "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
+    if _whitelisted(ip):
+        return jsonify({"success": False, "message":
+                        "%s is on the security whitelist — remove it there first to block it." % ip})
+    return None
+
+
 def _register_panel_blocking(app):
     """Blocking an address on the panel host, and its auto-block switch."""
     @app.route("/api/panel/security/block", methods=["POST"])
@@ -389,15 +401,12 @@ def _register_panel_blocking(app):
     def api_panel_security_block():
         """UFW-block (all ports, permanent) an IP on the panel host."""
         ip = _json_str(_json_body(), "ip")
-        unblock = bool(_json_body().get("unblock"))
-        if not unblock:
-            lr = RemoteServer.query.filter_by(is_local=True).first()
-            if lr and tailnet_exempt_ips(lr, {ip}):
-                return jsonify({"success": False, "message":
-                                "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
-            if _whitelisted(ip):
-                return jsonify({"success": False, "message":
-                                "%s is on the security whitelist — remove it there first to block it." % ip})
+        # JSON booleans or a 400, here and in the auto-block switch: bool("false") is True, so
+        # `{"unblock": "false"}` unblocked the address it asked to block.
+        unblock = _r13b_json_flag(_json_body(), "unblock", False)
+        refused = None if unblock else _r13c_block_refusal(ip)
+        if refused:
+            return refused
         try:
             ok, msg = (so.ufw_undeny_ip(ip) if unblock else so.ufw_deny_ip(ip))
             # The address, never the request's text: the row records what was acted on.
@@ -418,7 +427,7 @@ def _register_panel_blocking(app):
         The auto-block acts on attempts >= threshold over 7 days, and the threshold is the shared
         one.
         """
-        enabled = bool(_json_body().get("enabled"))
+        enabled = _r13b_json_flag(_json_body(), "enabled", False)
         rid = _local_remote_id()
         if rid is None:
             return jsonify({"success": False, "message": "No local host record."}), 200
@@ -494,6 +503,11 @@ def _register_panel_security_misc(app):
             return jsonify({"text": "", "error": "unknown log"}), 400
         jail = (request.args.get("jail") or "").strip() or None   # only meaningful for which=fail2ban
         try:
-            return jsonify({"text": so.security_log_tail(which, 300, jail=jail)})
+            text = so.security_log_tail(which, 300, jail=jail)
         except Exception:
             return jsonify({"text": "", "error": _log_and_generic("log read failed")}), 200
+        if text is None:
+            # No helper read answered: an unknown, which the viewer must not print as "(log is
+            # empty)" — the remote twin (remote_security.api_remote_security_log) answers the same.
+            return jsonify({"text": "", "error": "The host did not answer the log read."}), 200
+        return jsonify({"text": text})

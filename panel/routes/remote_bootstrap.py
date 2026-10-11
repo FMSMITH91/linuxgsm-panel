@@ -44,8 +44,10 @@ def register(app):
         _r12c_bad = [k for k in ("enable_ufw", "install_lgsm_deps", "install_fail2ban", "do_reboot")
                      if opts[k] is None]
         if _r12c_bad:
+            # Named as the request names them: `do_reboot` is the panel's key, read from "reboot".
+            _sent = [{"do_reboot": "reboot"}.get(k, k) for k in _r12c_bad]
             return jsonify({"success": False,
-                            "message": "These options must be true or false: %s." % ", ".join(_r12c_bad)}), 400
+                            "message": "These options must be true or false: %s." % ", ".join(_sent)}), 400
         # Refused HERE as well as in the worker: the worker's refusal came after the kick-off
         # audit row below, which then recorded whatever timezone and account text was posted.
         bad = _sm._bsval_refusal(opts["set_timezone"], opts["username"])

@@ -723,6 +723,15 @@ def _v2_update_paths():
           "runtime?: %r" % {p: v for p, v in got.items() if v != want[p]})
 
 
+def _claude_settings_noise37():
+    """A change to the repo's Claude Code settings is not a panel update: no host runs .claude/."""
+    rules = _so37._parse_update_paths(_read29(".github", "update-paths.txt")) or {}
+    got = {p: _so37._is_runtime_path(p, rules) for p in (".claude/settings.json", "panel/__init__.py")}
+    check("update card: a commit touching only .claude/ offers no panel an update (#419's settings "
+          "file read as runtime, since a path on neither list counts as runtime), while panel/ still does",
+          bool(rules) and got == {".claude/settings.json": False, "panel/__init__.py": True}, repr(got))
+
+
 # ── V3: gitleaks' Telegram rule, and part05's fixture shape ──────────────────────────────────────
 _TG_RULE_ID37 = "telegram-bot-token-any-context"
 _TG_PLACES37 = {
@@ -1027,9 +1036,16 @@ def _is_removal_try37(node):
     return isinstance(call, _ast37.Call) and _callee37(call.func).endswith((".unlink", ".remove"))
 
 
+_WIDE37 = ("OSError", "IOError", "PermissionError", "Exception", "BaseException")
+
+
 def _silent_oserror37(handler):
-    """Does this handler catch OSError (or a tuple naming it) and do nothing but `pass`?"""
-    if handler.type is None or "OSError" not in _ast37.unparse(handler.type):
+    """Does this handler catch a failed delete (OSError, or wider) and do nothing but `pass`?"""
+    # Wider than OSError too: `except Exception: pass` (or a bare except) swallows a delete that
+    # failed for a permission or a busy file exactly as `except OSError: pass` did. Only
+    # FileNotFoundError alone stays quiet — the file being gone already is the delete's goal.
+    if handler.type is not None and not _re37.search(
+            r"\b(?:%s)\b" % "|".join(_WIDE37), _ast37.unparse(handler.type)):
         return False
     return all(isinstance(b, _ast37.Pass) for b in handler.body)
 
@@ -1046,10 +1062,14 @@ def _f7_cleanups():
     for f in _test_files37():
         lines = _swallowed_removals37(_ast37.parse(open(f, encoding="utf-8").read()))
         bad += ["%s:%d" % (_rel37(f), ln) for ln in lines]
-    probe = "try:\n    p.unlink()\nexcept OSError:\n    pass\n"
+    probes = ["try:\n    p.unlink()\nexcept %s:\n    pass\n" % h
+              for h in ("OSError", "Exception", "(ValueError, OSError)")] + [
+        "try:\n    p.unlink()\nexcept:\n    pass\n"]
+    gone = "try:\n    p.unlink()\nexcept FileNotFoundError:\n    pass\n"
     check("tests: no cleanup swallows a failed delete (a panel.db it leaves makes the next run of "
-          "every DB-owning suite SKIP and exit 0, with nothing said)",
-          not bad and _swallowed_removals37(_ast37.parse(probe)) == [1], "; ".join(bad))
+          "every DB-owning suite SKIP and exit 0, with nothing said) — OSError, Exception or bare",
+          not bad and all(_swallowed_removals37(_ast37.parse(p_)) == [1] for p_ in probes)
+          and _swallowed_removals37(_ast37.parse(gone)) == [], "; ".join(bad))
 
 
 def _exits_in_finally37(node):
@@ -1093,6 +1113,7 @@ _v2_socketio(_PJ37, _LOCK37)
 _v2_embedded(_PJ37, _LOCK37)
 _v2_asset_urls()
 _v2_update_paths()
+_claude_settings_noise37()
 _v3_rule()
 _v3_allowlist()
 _v3_fixture_shape()

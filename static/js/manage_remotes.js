@@ -645,7 +645,7 @@ function removeRemote(btn){
     // Its own line, one literal, so the whole sentence is one catalog entry. A block <span>, not a
     // <p>: confirmDialog puts the body inside a <p> already, and a <p> in a <p> is closed early by
     // the parser, leaving a stray empty paragraph behind the text.
-    body: 'Delete <strong>' + escapeHtml(name) + '</strong>? This removes it and all of its game servers from the panel.'
+    body: 'Delete <strong data-no-i18n>' + escapeHtml(name) + '</strong>? This removes it and all of its game servers from the panel.'
       + '<span class="d-block small text-muted mt-2">'
       + 'Nothing on the host itself is changed: its game servers keep running, and the gamedig tool and weekly cron the panel installed there stay. The README’s “Removing a host” section says how to remove them.'
       + '</span>',

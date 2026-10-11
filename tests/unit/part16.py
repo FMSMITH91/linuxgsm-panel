@@ -36,6 +36,8 @@ import tempfile as _tf16
 from datetime import datetime as _dt16
 from types import SimpleNamespace as NS
 
+from eventlet.timeout import Timeout as _EvTimeout16  # noqa: E402 - a timed-out green join raises it
+
 from unit import REPO_ROOT as _REPO16
 from unit import idreuse_support as _reuse16
 from unit.part01 import check, eq, skip  # noqa: F401
@@ -1946,7 +1948,10 @@ try:
           repr((_h16_res["meanwhile"], _h16_took)))
     _lg16h.refresh(force=False)                   # a newer copy lands while the slow one is out
     _h16_release.set()
-    _h16_t.join(10)
+    try:
+        _h16_t.join(10)
+    except _EvTimeout16:   # a timed-out green join raises it; the check below reads the result
+        pass
     check("game list: a slow re-read that finishes after a refresh does not put its older copy "
           "back", _lg16h._mem.get("serverlist", (0, None))[1] == [{"shortname": "new"}]
           and _lg16h.serverlist() == [{"shortname": "new"}], repr(_lg16h._mem.get("serverlist")))

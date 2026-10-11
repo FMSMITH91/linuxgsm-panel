@@ -2867,7 +2867,7 @@ def _panel_login_proxied():
     except Exception:
         _log.debug("f2b: config unreadable; banning on all ports", exc_info=True)
         return True
-    bind = (cfg.get("bind_host") or "").strip().lower()
+    bind = _cfg._r13a_cfg_text(cfg, "bind_host").strip().lower()
     return bool(cfg.get("trust_proxy") or cfg.get("tailscale_setup_done")
                 or bind in ("127.0.0.1", "::1", "localhost"))
 
@@ -3546,7 +3546,12 @@ def security_log_tail(which, lines=200, jail=None):
     """Tail of a WHITELISTED security log for the raw-log viewer. `which` is one of a fixed set —
     never a path from the request — so there's no traversal. For 'fail2ban', an optional `jail`
     (allowlisted against the host's real jails) narrows the activity to that one jail. Returns text
-    (may be empty)."""
+    (may be empty), or None when no helper read for 'fail2ban'/'ssh' answered.
+
+    None, not "": _run_verb returns ("", "Command timed out", -1) rather than raising, and two
+    unanswered reads joined to "" were shown as "(log is empty)", i.e. no attacks, on the card whose
+    job is showing them — the panel-host twin of hosts.remote_security_log. A read that ANSWERED
+    (rc 0) with nothing in it is a real empty log and still comes back as ""."""
     lines = max(20, min(int(lines or 200), 1000))
     if which == "panel":
         from panel.core import config as _cfg
@@ -3561,18 +3566,26 @@ def security_log_tail(which, lines=200, jail=None):
         # jail — lives in /var/log/fail2ban.log (fail2ban's default logtarget). `journalctl -u
         # fail2ban` only carries the systemd unit's start/stop noise, so read the file first and
         # fall back to the journal only if it isn't there.
-        out, _, _ = _run_verb("log-tail", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
+        out, _, frc = _run_verb("log-tail", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
+        answered = frc == 0
         if not out:
-            out, _, _ = _run_verb("journal", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
+            out, _, jrc = _run_verb("journal", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
+            answered = answered or jrc == 0
+        if not answered and not out:
+            return None
         rows = (out or "").splitlines()
         if jail and jail in (_fail2ban_jails() or []):   # allowlist; used only for in-Python filtering, never a command
             tag = "[%s]" % jail
             rows = [ln for ln in rows if tag in ln]
         return "\n".join(rows[-lines:])
     if which == "ssh":
-        out, _, _ = _run_verb("journal", ["ssh", str(lines * 2)], timeout=15, merge_stderr=False)
+        out, _, jrc = _run_verb("journal", ["ssh", str(lines * 2)], timeout=15, merge_stderr=False)
+        answered = jrc == 0
         if not out:
-            out, _, _ = _run_verb("log-tail", ["auth", str(lines)], timeout=15, merge_stderr=False)
+            out, _, arc = _run_verb("log-tail", ["auth", str(lines)], timeout=15, merge_stderr=False)
+            answered = answered or arc == 0
+        if not answered and not out:
+            return None
         return "\n".join((out or "").splitlines()[-lines:])
     return ""
 
@@ -4537,10 +4550,14 @@ def _redact_emails(text, hit=None):
 # The separator may open with the key's own closing quote: `{"password": "hunter2"}` and
 # `'password': 'hunter2'` (a dict dumped into a log line) put a quote between the key and ':', and
 # both printed unchanged. A QUOTED value is taken whole: `\S+` alone stopped at its first blank, so
-# `{"password": "correct horse battery"}` printed "horse battery".
+# `{"password": "correct horse battery"}` printed "horse battery". An escaped quote inside it (how
+# json.dumps writes one) does not end it, and a quote with no close within the bound runs to the end
+# of the line: `"ab\"c de"` printed `c de"`, and a value over the bound fell back to `\S+` and
+# printed everything after its first blank.
 _SECRET_KV_RE = re.compile(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
                            r"cred(?:ential)?|cookie|bearer)[\w-]*)([\"']?\s*[=:]\s*)"
-                           r"(\"[^\"\n]{0,1024}\"|'[^'\n]{0,1024}'|\S+)")
+                           r"(\"(?:[^\"\\\n]|\\.){0,1024}\"|'(?:[^'\\\n]|\\.){0,1024}'"
+                           r"|[\"'][^\n]*|\S+)")
 
 
 def _redact(text, hit=None):
@@ -4681,12 +4698,18 @@ def _debug_run(argv, timeout=5, cap=2 * 1024 * 1024):
     running. rc -1 with stderr "timed out" / "could not start" for those two cases.
     """
     from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    # In the C locale, as the helper runs its journal reads (tools/panel-helper pins LANG/LC_ALL).
+    # The service inherits the system's: under fr_FR or de_DE journalctl dates its lines "oct. 11"
+    # or "Mär 11", the report's parsers (logs._PREFIX_RE) did not know that prefix, and sudo's
+    # "(command continued)" lines — a long argv's tail, passwords included — were printed whole.
+    env = {k: v for k, v in os.environ.items() if k != "LANGUAGE"}
+    env.update(LC_ALL="C.UTF-8", LANG="C.UTF-8")
     try:
         # Both rule ids on ONE line (see _run_verb): the argv is a literal list in
         # panel/ops/debug_report (journalctl, timedatectl), never text from a request.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         p = subprocess.Popen(list(argv), shell=False,  # nosec B603 - fixed argv, no shell
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
                              stdin=subprocess.DEVNULL, start_new_session=True)
     except OSError:
         return "", "could not start", -1

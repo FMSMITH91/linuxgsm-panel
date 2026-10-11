@@ -585,6 +585,24 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A third full review on 2026-10-11: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Backups.** A scheduled backup no longer deletes a good archive because LinuxGSM printed a
+    FAIL line. LinuxGSM 26.3.0 prints a spurious "Problem identifying the previous backup directory
+    for exclusion" on every backup and still writes a complete archive. The panel now reads the
+    archive to the end and keeps it when it is whole, showing LinuxGSM's line as a warning. It
+    removes only an empty or cut-off archive.
+  - **Settings sent as text.** Ten more switches no longer read the text `"false"` as yes. They
+    include whitelist removal, blocking and unblocking, auto-block, backup force, daily restart and
+    log timestamps. Each accepts only a real true or false.
+  - **Bots and settings.** A Discord channel id or Telegram chat id entered as a number no longer
+    stops the bots and their alerts. A setting in config.json that is not text no longer takes down
+    pages, the console or the boot.
+  - **Game servers.** The player list no longer shows the previous status table when the server
+    answers slowly. The install no longer hides a GMod content step it skipped.
+  - **Pages.** Confirm dialogs, the command palette and more page text are translated, and the
+    translation check now finds text split across pieces. Names stay as typed. The users page fits
+    a phone screen.
 - **A second full review on 2026-10-11, rerun after the first one's fixes: fixes.** Every item below
   has a check that fails without its fix.
   - **Settings sent as text.** A switch sent as the text `"false"` counted as on. During VPS setup
@@ -1932,6 +1950,21 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **A third full review on 2026-10-11: security.** Every item below has a check that fails without
+  its fix.
+  - **Tailscale Serve.** File shares and text pages served by Tailscale were not read, so turning
+    Funnel on for the panel could publish one of them on the internet, or take it off. A Tailscale
+    Service listener is no longer mistaken for the server's own :443. The firewall is opened for
+    Tailscale only after the panel has decided the change is safe. Proven against a real Tailscale
+    install, changing nothing on it.
+  - **SSH lockout guards.** An all-ports rule no longer counts as an SSH rule, and a UDP rule no
+    longer does either.
+  - **The privileged helper.** Four more sudoers forms that withdraw a root grant are now read the
+    way sudo reads them. Content commands on a remote host now run as the content account, not as
+    root.
+  - **The debug report** no longer prints sudo arguments when the host's language is not English.
+  - **The panel no longer says "tailnet-only"** when it could not read Tailscale Serve, or during a
+    pending port change.
 - **A second full review on 2026-10-11: security.** Every item below has a check that fails without
   its fix.
   - **Turning Funnel on or off for the panel changed it for other apps too.** Funnel applies to the

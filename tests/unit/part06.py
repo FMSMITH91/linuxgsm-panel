@@ -1,5 +1,5 @@
 """Part 6 of the unit suite. Imported for its side effects."""
-from unit.part01 import (N, NS, SO, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
+from unit.part01 import (N, NS, SO, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, _r13d_window, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
 
 from unit.part05 import (_SMOKE_SUITE_FILES, _ast_scan, _helper, _helper_path, _ilu, _machinery, _priv, _re, _root, _shutil, _sp, _t, _tempfile, _time)  # noqa: F401,E402
 check("ufw: _ufw_is_active is false for empty output", _sm_firewall._ufw_is_active("") is False)
@@ -5309,7 +5309,7 @@ _cc_code = "\n".join(_l for _l in _cc_raw.splitlines() if not _l.lstrip().starts
 _cc_job = _cc_code[_cc_code.index("\n  upload:\n"):]
 # From `if:` to `runs-on:`, which every job has: a key between them going missing must fail the
 # checks below by name, not end the suite with a ValueError.
-_cc_if = " ".join(_cc_job[_cc_job.find("    if: >-"):_cc_job.find("\n    runs-on:")].split())
+_cc_if = " ".join(_r13d_window(_cc_job, "    if: >-", "\n    runs-on:").split())
 _cc_env = _wf_step_env(_cc_raw, "Send coverage to Codacy")
 check("codacy-coverage: runs on CI's completion, in the `codacy` environment (no deployment "
       "record), for this repository's push and pull-request runs only",
@@ -8332,7 +8332,9 @@ check("lgsm_data: ...and still reports success when the fetch works", _lg_good i
 from panel.ops.ssh_manager import game as _sm_game                                 # noqa: E402
 _pl_o_send, _pl_o_cap = _sm_game._core.send_console_command, _sm_game.capture_console
 try:
-    _sm_game._core.send_console_command = lambda *a, **k: ("", "", 0)
+    # The send prints where the pane stood (mark=True); _send_and_capture needs it to read only
+    # the reply that came after.
+    _sm_game._core.send_console_command = lambda *a, **k: ("PANE_MARK 0 0\n", "", 0)
     _sm_game.capture_console = lambda *a, **k: ("NO_SESSION", "", 3)
     check("players: a stopped server reads as UNKNOWN, not as empty",
           _sm_game.console_player_list(None, "u", "cod", selfname="codserver") is None)
@@ -8364,7 +8366,7 @@ try:
     check("players: ...and console_status says unknown too, rather than ([], None)",
           _stale_cs == (None, None), str(_stale_cs))
     # Positive control: with the send accepted, the very same pane still parses.
-    _sm_game._core.send_console_command = lambda *a, **k: ("", "", 0)
+    _sm_game._core.send_console_command = lambda *a, **k: ("PANE_MARK 0 0\n", "", 0)
     _live = _sm_game.console_player_list(None, "u", "gmod", selfname="gmodserver")
     check("players: ...while a delivered `status` still parses that table",
           [p["name"] for p in (_live or [])] == ["Ghost"], str(_live))

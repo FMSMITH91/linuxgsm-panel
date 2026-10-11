@@ -22,7 +22,7 @@ from types import SimpleNamespace as NS
 
 import pyotp as _pyotp18
 
-from unit.part01 import check
+from unit.part01 import _r13d_window, check
 from unit.part01 import skip as _skip18
 from unit.part05 import _helper as _helper18, _priv as _priv18
 from unit.part12 import (_p9, _p9_app, _p9_client, _p9_core, _p9_json, _p9_patch, _p9_restore_all,
@@ -218,7 +218,7 @@ def _p18b_overflow():
           and _hosts18._ufw_port_int(27015.0) == 27015,
           repr(_raises18b(_hosts18._ufw_port_int, _inf18)))
     _rs18 = []
-    _sess18 = _ts18.Session("p18-rs", "p18", lambda d: None, lambda r: None)
+    _sess18 = _ts18.Session("p18-rs", "p18", lambda sid, d: None, lambda sid, r: None)   # (sid, …), as called
     _sess18._chan = NS(resize_pty=lambda width, height: _rs18.append((width, height)))
     _rs18_err = (_raises18b(_sess18.resize, _inf18, 24), _raises18b(_sess18.resize, 80, -_inf18),
                  _raises18b(_sess18.resize, _math18.nan, 24))
@@ -816,11 +816,28 @@ with open(os.path.join(_rn_root, ".github", "required-checks.txt"), encoding="ut
 
 
 def _rq_on_pr(text):
-    """(has a pull_request trigger, that trigger carries a path filter)."""
+    """(has a pull_request trigger, that trigger can skip a pull request to main).
+
+    A path filter skips one; so does `types:` (a list without `synchronize` never re-runs on a
+    push to the PR) and any branch filter but the main-only one every workflow here carries.
+    """
     _on = text[:text.index("\npermissions:")] if "\npermissions:" in text else text
     _m = _sg_re.search(r"^  pull_request:\n((?:    .*\n)*)", _on, _sg_re.M)
-    return (_m is not None, bool(_m) and _sg_re.search(r"^    paths(-ignore)?:", _m.group(1), _sg_re.M)
-            is not None)
+    if _m is None:
+        return False, False
+    _keys = _sg_re.findall(r"^    ([\w-]+):(.*)$", _m.group(1), _sg_re.M)
+    return True, any(k in ("paths", "paths-ignore", "types", "branches-ignore")
+                     or (k == "branches" and v.strip() not in ("[ main ]", "[main]"))
+                     for k, v in _keys)
+
+
+_rq_ctl = [_rq_on_pr("on:\n  pull_request:\n    branches: [ main ]\n" + _x)[1]
+           for _x in ("    paths:\n      - 'x'\n", "    types: [opened]\n", "",
+                      "    branches-ignore: [ dev ]\n")]
+_rq_ctl.append(_rq_on_pr("on:\n  pull_request:\n    branches: [ dev ]\n")[1])
+check("required checks: a pull_request trigger narrowed by paths, types or a branch filter is "
+      "read as skipping PRs, and the main-only one is not (controls)",
+      _rq_ctl == [True, True, False, True, True], repr(_rq_ctl))
 
 
 _rq_jobs = {}   # workflow file -> [(job name template, matrix-free regex)]
@@ -901,7 +918,7 @@ for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/sy
     _sc_steps = _sg_re.sub(r"\A(    steps:\n)      - name: Harden Runner\n(?:        .*\n)+\n?", r"\1",
                            _sc_steps)
     _sc_at = _sc_steps.find("        id: scope\n")
-    _sc_list = _sc_steps[_sc_steps.find("scope=(", _sc_at):_sc_steps.find("            )", _sc_at)]
+    _sc_list = _r13d_window(_sc_steps, "scope=(", "            )", _sc_at) if _sc_at >= 0 else ""
     _sc_after = [_b for _b in _sc_steps[_sc_at:].split("\n      - ")[1:]
                  if _sg_re.search(r"(uses: (actions/checkout|actions/setup-python|google/clusterfuzzlite)"
                                   r"|^name: (Install|Fuzz))", _b, _sg_re.M)]

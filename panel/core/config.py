@@ -127,6 +127,18 @@ def autoblock_host_ids(raw):
     return {h for h in raw if isinstance(h, int) and not isinstance(h, bool)}
 
 
+def _r13a_cfg_text(cfg, key, default=""):
+    """config.json's `key` when it holds a string, else `default`.
+
+    For a text setting read on every request or at boot (the mount, the bind, the tagline, the
+    site domain). The panel only ever writes strings there, but config.json is hand-editable, and
+    `(5 or "").strip()` raised AttributeError out of every page, the socket handshake or the boot
+    itself. Not a string: not a value the panel stored, so it reads as unset.
+    """
+    value = cfg.get(key, default)
+    return value if isinstance(value, str) else default
+
+
 def load_config():
     config = dict(DEFAULT_CONFIG)
     try:

@@ -5,7 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (current_app, flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user)
 from panel.core.clock import (utcnow)
-from panel.core.config import (encrypt_secret, load_config, remove_setup_token, save_config)
+from panel.core.config import (_r13a_cfg_text, encrypt_secret, load_config, remove_setup_token, save_config)
 from panel.db.models import (Group, RemoteServer, SetupState, User, db)
 from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.ops.ssh_manager import (ssh_test_connection)
@@ -585,14 +585,16 @@ def _rebind_pending(cfg):
     ONLY on the tailnet. False when the running bind is unknown (not started by app.py's main).
     """
     running = current_app.config.get("_BOOT_BIND")
-    stored = (cfg.get("bind_host") or "").strip()
+    stored = _r13a_cfg_text(cfg, "bind_host").strip()
     return bool(running and stored) and _bind_is_loopback(stored) and not _bind_is_loopback(running)
 
 
 def _r12a_funnel_maybe(cfg):
     """Whether the panel's Serve route may be on Funnel: it is, or Serve could not be read."""
     info = ts.get_tailscale_info()
-    return bool(info.serve_unreadable) or ts.panel_funnelled(info.serve_config, cfg.get("port", 5000))
+    # Both ports, with a port change pending: Serve still reaches the bound one (ts._r13b_panel_ports).
+    return bool(info.serve_unreadable) or any(ts.panel_funnelled(info.serve_config, p)
+                                              for p in ts._r13b_panel_ports(cfg))
 
 
 def _complete_facts(cfg):

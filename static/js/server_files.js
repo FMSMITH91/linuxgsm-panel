@@ -1199,7 +1199,10 @@ function saveAlerts(btn){
     if(v !== el.getAttribute('data-orig')) values[el.getAttribute('data-alert-toggle')] = v;
   });
   document.querySelectorAll('[data-alert-key]').forEach(function(el){
-    if(el.value !== el.getAttribute('data-orig')) values[el.getAttribute('data-alert-key')] = el.value.trim();
+    // Compared as it is posted (trimmed): a stray space counted as a change and copied a secrets
+    // file's value into the plaintext instance cfg unchanged.
+    var v = el.value.trim();
+    if(v !== (el.getAttribute('data-orig') || '').trim()) values[el.getAttribute('data-alert-key')] = v;
   });
   if(Object.keys(values).length===0){ alertsMsg('No changes to save.','text-secondary'); return; }
   if(btn) btn.disabled=true; alertsMsg('Saving…','text-secondary');

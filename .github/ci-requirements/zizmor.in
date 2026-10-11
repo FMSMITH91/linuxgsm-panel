@@ -1,7 +1,8 @@
 # The zizmor job's tool (.github/workflows/zizmor.yml): zizmor, the static analyser for GitHub
 # Actions workflows (docs.zizmor.sh). One package with no dependencies: the wheel carries the
-# compiled binary. That job holds `security-events: write`, so nothing it installs floats. Wheels
-# only.
+# compiled binary. The scan job that installs it reads with a read-only token and hands its SARIF
+# to an upload job that installs nothing; it is pinned with hashes all the same, as every CI tool
+# is, so nothing it installs floats. Wheels only.
 #
 # pip-compile turns this into zizmor.txt: exact version AND hashes, installed with
 # `--require-hashes`. Dependabot keeps it current by re-running pip-compile on the Python its

@@ -530,8 +530,13 @@ def telegram_get_updates(token, offset=None, timeout=25):
         # HTTPError, a URLError, so this answers None like any other failed poll.
         with _OPENER.open(req, timeout=timeout + 10) as resp:  # nosec B310 - https, host-literal, no redirects
             data = json.loads(resp.read(2_000_000).decode("utf-8", "replace"))
+        # A reply that is not an object (a list, a bare number) raised AttributeError here, out of
+        # a function that promises never to raise; a `result` that is not a list is no updates.
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+        result = data.get("result")
         _poll_counted(bool(data.get("ok")), None)
-        return (data.get("result") or []) if data.get("ok") else None
+        return (result if isinstance(result, list) else []) if data.get("ok") else None
     except (urllib.error.URLError, OSError, ValueError) as e:
         # The class, not exc_info: a URLError renders the URL, and this one carries the bot token.
         _log.debug("telegram getUpdates failed (%s)", e.__class__.__name__)
@@ -919,7 +924,7 @@ def _channel_senders(tg, dc, nt, text):
     """Return (name, enabled, send) for each channel; `send()` decrypts and sends only when called."""
     return (("telegram", tg.get("enabled"),
              lambda: send_telegram(decrypt_secret(tg.get("token") or ""),
-                                   (tg.get("chat_id") or "").strip(), text)),
+                                   str(tg.get("chat_id") or "").strip(), text)),
             ("discord", dc.get("enabled"),
              lambda: send_discord(decrypt_secret(dc.get("webhook") or ""), text)),
             ("ntfy", nt.get("enabled"),

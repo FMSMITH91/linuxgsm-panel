@@ -12,7 +12,8 @@ from smoke.part01 import (_check_audit_zone_cleanup_on_upgrade,
                           sys, User)
 from smoke.part02 import (_appmod_ij, _cg_remote_id, _ij_game, _ij_ps, _ij_wait, _ijw_time,
                           _install_jobs_sm, _install_lock_sm, _msmod, _r12d_cmds, _r12d_ports,
-                          _r12d_shape_bad, _r12d_shaped, _R12dCrontab, _TSAudit, admin_id,
+                          _r12d_shape_bad, _r12d_shaped, _r12d_unjudged, _R12D_UNJUDGED_OK,
+                          _R12dCrontab, _TSAudit, admin_id,
                           bc_code, c, deleg_id, encrypt_secret, gs_id, mru_id, remote_id)
 
 # ── a port scan that could not be read allocates NO port (Aikido 745379002) ────────────────
@@ -22,6 +23,9 @@ from smoke.part02 import (_appmod_ij, _cg_remote_id, _ij_game, _ij_ps, _ij_wait,
 # in front of whatever was already listening there. The tailscale and local transports do not
 # raise on a timeout; they return ("", "…timed out", -1), which is what `ss` answers here.
 _su_saved, _su_ss, _su_allow = {}, [], []
+# Taken BEFORE the first block here (scan-fail): part02's _ij is checked there, and a marker taken
+# after _su recorded its stand-ins' answers into a window no check read.
+_r12d_bad_from = len(_r12d_shape_bad)
 
 
 def _su_stub(mod, name, fn):
@@ -76,7 +80,6 @@ finally:
 # port the panel allocated, and — the part that was actually broken — the firewall must not be
 # opened for the port it just refused, in either of the two places that open ports.
 _cf_saved, _cf_calls, _cf_cron = {}, [], _R12dCrontab()
-_r12d_bad_from = len(_r12d_shape_bad)      # this file's blocks only: part02's _ij is checked there
 
 
 def _cf_stub(mod, name, fn):
@@ -462,12 +465,16 @@ finally:
     for (_m, _n), _v in _lv_saved.items():
         setattr(_m, _n, _v)
 
-# The four blocks above install their stand-ins through _r12d_shaped (smoke part02): anything
+# The five blocks above install their stand-ins through _r12d_shaped (smoke part02): anything
 # one of them answered that the real function never returns is named here, so a block cannot
 # again walk a failure branch while its comment says the host was stubbed to succeed.
-check("install jobs (clash, unreadable scan and poll, step 4): every stand-in answered in the "
-      "real function's shape",
+check("install jobs (scan-fail, clash, unreadable scan and poll, step 4): every stand-in answered "
+      "in the real function's shape",
       not _r12d_shape_bad[_r12d_bad_from:], "; ".join(_r12d_shape_bad[_r12d_bad_from:][:5]))
+check("install jobs (scan-fail, clash, unreadable scan and poll, step 4): every stand-in the "
+      "shape gate could not read is a seam it is known not to judge",
+      _r12d_unjudged <= _R12D_UNJUDGED_OK,
+      "newly unjudged: %r" % sorted(_r12d_unjudged - _R12D_UNJUDGED_OK))
 
 # ── /api/installs: the progress a corner widget can follow from any page ────────────────────
 # A game-server install runs for five to forty-five minutes, and its only progress row lived on

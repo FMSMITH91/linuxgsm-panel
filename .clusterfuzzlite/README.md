@@ -13,7 +13,7 @@ the diff touched and files any crash as a SARIF finding in the Security tab, alo
 and Bandit alerts.
 
 This overlaps with `.github/workflows/fuzz.yml` on purpose. That one is the broad sweep — every
-target, fixed 60s, plain Atheris. This one is targeted, uses the real OSS-Fuzz toolchain, and
+target, a fixed 60s on each pull request (600s nightly), plain Atheris. This one is targeted, uses the real OSS-Fuzz toolchain, and
 dedupes/reports crashes. Dropping either is a reasonable choice; keeping both is the current one.
 
 ## Running it locally
