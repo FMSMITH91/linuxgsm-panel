@@ -51,6 +51,21 @@ class _Over:
         return getattr(self._real, name)
 
 
+def _p7_restore(*a, **k):
+    """_bk7.restore_backup(...) with no self-update in progress.
+
+    restore_backup refuses while system_ops._update_in_progress() is true (#416), which reads THIS
+    checkout's data/self-update.log: a recent unfinished one turned every restore check here into
+    the update refusal, an answer decided by the machine (part09 and part02 stub it the same way).
+    """
+    saved = SO._update_in_progress
+    SO._update_in_progress = lambda: False
+    try:
+        return _bk7.restore_backup(*a, **k)
+    finally:
+        SO._update_in_progress = saved
+
+
 def _p7_call(fn, *a, **k):
     """fn(*a, **k), or 'raised <Type>: <msg> at <file>:<line>' if it raised — so a check fails by name.
 
@@ -963,7 +978,7 @@ def _bk7_restore_backup_refusal_happens():
     global _p7_archive, _stage
     _stage = os.path.join(str(_b7), ".restore-stage")
     eq("backup/restore: an unknown name is refused",
-       _p7_call(_bk7.restore_backup, "panel-backup-19990101-000000-manual.tar.gz"),
+       _p7_call(_p7_restore, "panel-backup-19990101-000000-manual.tar.gz"),
        (False, "No such backup."))
     _enc_name = "panel-backup-20240101-000000-manual.tar.gz.enc"
     _p7_enc_file(str(_bk7.BACKUP_DIR / _enc_name), _plain_bytes, "a passphrase here")
@@ -971,7 +986,7 @@ def _bk7_restore_backup_refusal_happens():
     _bk7.tempfile = _Over(_p7_tf, mkdtemp=lambda prefix="": _p7_tf.mkdtemp(prefix=prefix, dir=_dec_tmp_root))
     _bk7.get_passphrase = _p7_raise(_bk7.PassphraseUnreadable("cred_key rotated"))
     try:
-        _ru_res = _p7_call(_bk7.restore_backup, _enc_name)
+        _ru_res = _p7_call(_p7_restore, _enc_name)
     finally:
         _bk7.get_passphrase = _bk7_saved["get_passphrase"]
         _bk7.tempfile = _bk7_saved["tempfile"]
@@ -993,11 +1008,11 @@ def _bk7_restore_backup_refusal_happens():
     _foreign = _p7_archive("panel-backup-20240102-000000-manual.tar.gz",
                            {"panel.db": b"x", "../../etc/cron.d/x": b"* * * * * root id"})
     eq("backup/restore: an archive carrying anything but the four members is refused",
-       _p7_call(_bk7.restore_backup, _foreign), (False, "Backup archive looks invalid."))
+       _p7_call(_p7_restore, _foreign), (False, "Backup archive looks invalid."))
     _nottar = "panel-backup-20240103-000000-manual.tar.gz"
     (_bk7.BACKUP_DIR / _nottar).write_bytes(b"not a gzip at all")
     eq("backup/restore: an archive that does not open is refused",
-       _p7_call(_bk7.restore_backup, _nottar), (False, "Could not read the backup archive."))
+       _p7_call(_p7_restore, _nottar), (False, "Could not read the backup archive."))
     check("backup/restore: ...and neither refusal staged anything",
           not os.path.exists(_stage))
 
@@ -1013,7 +1028,7 @@ def _bk7_restore_backup_refusal_happens():
     _bk7._run_verb = lambda verb, args=(), **k: (_rv_verbs.append((verb, list(args), k.get("timeout"))),
                                                  ("", "helper: refused", 1))[1]
     try:
-        _hv_res = _p7_call(_bk7.restore_backup, _plain_name, skip_safety_backup=True)
+        _hv_res = _p7_call(_p7_restore, _plain_name, skip_safety_backup=True)
     finally:
         _bk7._helper_present, _bk7._run_verb = _bk7_saved["_helper_present"], _bk7_saved["_run_verb"]
         _bk7._is_system_service = _bk7_saved["_is_system_service"]
@@ -1027,7 +1042,7 @@ def _bk7_restore_backup_refusal_happens_2():
     global _lg_script, _lg_text
     _bk7._helper_present = _p7_raise(RuntimeError("stat failed"))
     try:
-        _hx_res = _p7_call(_bk7.restore_backup, _plain_name, skip_safety_backup=True)
+        _hx_res = _p7_call(_p7_restore, _plain_name, skip_safety_backup=True)
     finally:
         _bk7._helper_present = _bk7_saved["_helper_present"]
     check("backup/restore: a dispatch that raises is a failure, and the stage is wiped",
@@ -1047,7 +1062,7 @@ def _bk7_restore_backup_refusal_happens_2():
         with open(_lg_db, "rb") as _lg_f:
             _lg_name = _p7_archive("panel-backup-20240104-000000-manual.tar.gz",
                                    {"panel.db": _lg_f.read(), "config.json": b"{}"})
-        _lg_res = _p7_call(_bk7.restore_backup, _lg_name, skip_safety_backup=True)
+        _lg_res = _p7_call(_p7_restore, _lg_name, skip_safety_backup=True)
     finally:
         _bk7._helper_present = _bk7_saved["_helper_present"]
         _bk7.subprocess = _bk7_saved["subprocess"]

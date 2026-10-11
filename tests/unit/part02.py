@@ -774,6 +774,11 @@ try:
     _o_hp, _o_rv, _o_ss = _bk._helper_present, _bk._run_verb, _bk._is_system_service
     _bk._helper_present = _bk._is_system_service = lambda: True
     _bk._run_verb = lambda *a, **k: ("", "", 0)
+    # restore_backup refuses over a running self-update, read from THIS checkout's
+    # data/self-update.log: stubbed, so the machine's own log cannot decide these (as part09 does).
+    from panel.ops import system_ops as _bk_so
+    _o_upd = _bk_so._update_in_progress
+    _bk_so._update_in_progress = lambda: False
     try:
         _rok, _rmsg = _bk.restore_backup(_ename, passphrase=_bk_pass)
         check("backup/enc: restoring an encrypted archive succeeds end to end", _rok, str(_rmsg))
@@ -923,6 +928,7 @@ try:
         _sh2.rmtree(_stage_dir, ignore_errors=True)
     finally:
         _bk._helper_present, _bk._run_verb, _bk._is_system_service = _o_hp, _o_rv, _o_ss
+        _bk_so._update_in_progress = _o_upd
 finally:
     _bk.get_passphrase = _orig_getpass
 
