@@ -414,19 +414,31 @@ def _add_sibling_ports(occupied, remote, remote_id, skip_short_name=None):
     cannot drift apart again.
 
     `skip_short_name` is the instance being resolved: its own aux ports are the values being
-    moved, not a constraint on them."""
+    moved, not a constraint on them.
+
+    A sibling whose config could not be read (lgsm_get_values' None — a tailscale/local read
+    that timed out does not raise) reserves nothing, but is SAID: `or {}` read it silently as "no
+    aux ports configured", and a new install could then take that stopped sibling's sourcetvport
+    with nothing anywhere explaining the later "Port N was unavailable". Not a refusal: a sibling
+    whose account is gone (an orphaned row) would then block every install on the host for good."""
     for e in GameServer.query.filter_by(remote_id=remote_id).all():
         for k in range(_port_span(e.game_type)):
             occupied.add(e.port + k)
         if e.short_name == skip_short_name or sm_game_engine(e.game_type) != "valve":
             continue
         try:
-            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS) or {}
-            for v in sib.values():
-                if str(v).strip().isdecimal():
-                    occupied.add(int(str(v).strip()))
+            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS)
         except Exception:
             _log.debug("aux-port: sibling servercfg read failed", exc_info=True)
+            sib = None
+        if sib is None:
+            _log.warning("aux-port: the LinuxGSM config of %s on %s could not be read, so its "
+                         "SourceTV/client ports were not reserved", e.short_name,
+                         getattr(remote, "name", "the host"))
+            continue
+        for v in sib.values():
+            if str(v).strip().isdecimal():
+                occupied.add(int(str(v).strip()))
     return occupied
 
 
@@ -1447,7 +1459,12 @@ def _spawn_daemon(fn, *args):
 
 
 def _start_hub_lag_watch():
-    """The hub-lag greenlet (R17): once per process, only under eventlet's thread patching."""
+    """The hub-lag greenlet (R17): once per process, only under eventlet's thread patching.
+
+    Not in the recovery CLI (NO_WORKERS_ENV): it is background work of the service's.
+    """
+    if os.environ.get(NO_WORKERS_ENV):
+        return
     try:
         _dr_process.start_hub_lag_watch(spawn=_spawn_daemon)
     except Exception:
@@ -2668,6 +2685,11 @@ def _explicit_socket_origins(explicit):
     """
     if not explicit:
         return []
+    # A hand-edited config can hold anything; list() of a number raised TypeError inside engineio's
+    # CORS callback, on every handshake — no console and no terminal. Not a list: none listed, so
+    # the per-request check below decides (which is not "*" either).
+    if not isinstance(explicit, (str, list, tuple)):
+        return []
     listed = [explicit] if isinstance(explicit, str) else list(explicit)
     exact = [o for o in listed if str(o).strip() != "*"]
     if len(exact) != len(listed) and not _socket_wildcard_warned:
@@ -2726,6 +2748,15 @@ def _os_updates_for(remote):
 
 
 
+# Set by manage.py, the offline recovery CLI, before it calls create_app(). That CLI runs BESIDE
+# the live service, and importing this module monkey-patches threading, so every ticker
+# register_routes starts would be a green thread in it: a prompt held past a ticker's first delay,
+# then the first yield (hash_password's tpool hop), ran due restarts, install reconciles and update
+# checks inside the CLI — blind to the service's in-memory state (a backup in progress) — and
+# os._exit then cut them off part-way. Background work belongs to the service alone.
+NO_WORKERS_ENV = "LGSM_PANEL_NO_WORKERS"
+
+
 def _make_supervisor(app):
     """The supervisor register_routes hands every ticker: supervise(name, target).
 
@@ -2736,6 +2767,9 @@ def _make_supervisor(app):
     Module level so a check can drive one runner without building the whole app.
     """
     def _supervise(name, target):
+        if os.environ.get(NO_WORKERS_ENV):
+            return   # the recovery CLI: no background workers (see NO_WORKERS_ENV)
+
         def _runner():
             while True:
                 t = threading.Thread(target=target, name=name, daemon=True)

@@ -1097,6 +1097,7 @@ class _Job:
         self.unread = 0            # running servers the plan could not read: left to the reboot
         self.bounce = False
         self.bounce_joined = False  # the bounce saw a player (not only a count it could not read)
+        self.bounce_unread = ""    # the server whose count could not be read, when that stopped it
         self.deadline = None       # the end of the stop phase's budget (STOP_PHASE_CAP)
         self.fired = False         # this job is a wait's, and its fire was audited and announced
         self.rolled_back = False   # a bounce has already (quietly) undone the stops
@@ -1255,13 +1256,17 @@ class _Job:
         self._finish_note(False, "%s was not rebooted: %s" % (_host_label(self.remote), reason))
         return None
 
-    def _back_to_waiting(self, census, bounce, reason=None, refused=False, backoff=False):
+    def _back_to_waiting(self, census, bounce, reason=None, refused=False, backoff=False, unread=""):
         """The wait this job fired goes back to waiting — unless the operator cancelled meanwhile.
 
         Raises _Cancelled then: the check and the put-back are one step under _hr_lock, as cancel()
         takes it, so an accepted Cancel never leaves a wait behind to reboot the host later.
         """
         info = self._wait_back(census, bounce, reason, refused or backoff)
+        if unread:
+            # Not a bounce (nobody joined), but counted, or a count that never reads would go round
+            # stop-and-restart for the whole wait without a word: _waiting_again tells once.
+            info["unread_bounces"] = int(info.get("unread_bounces") or 0) + 1
         tell = refused and not info.get("refused_told")
         if tell:
             info["refused_told"] = True
@@ -1272,7 +1277,7 @@ class _Job:
                     _reboot_when_empty.setdefault(self.remote_id, info)
         if cancelled:
             raise _Cancelled()
-        self._waiting_again(info, bounce, tell, reason)
+        self._waiting_again(info, bounce, tell, reason, unread)
 
     def _wait_back(self, census, bounce, reason, refused):
         """The wait as it goes back: what it waits on now, and a back-off after a bounce or refusal."""
@@ -1289,7 +1294,7 @@ class _Job:
             info["not_before"] = now + BOUNCE_BACKOFF
         return info
 
-    def _waiting_again(self, info, bounce, tell, reason):
+    def _waiting_again(self, info, bounce, tell, reason, unread=""):
         """What a wait that went back says: its audit row, and at most one notice of each kind."""
         if self.fired:
             # Its fire was audited: an arm row after it is what tells a restart a wait is pending.
@@ -1302,6 +1307,14 @@ class _Job:
                                  "Players keep joining %s just before it reboots (%d times now); "
                                  "it keeps waiting for them to leave." % (
                                      _host_label(self.remote), info["bounces"]))
+        if unread and info.get("unread_bounces") == BOUNCE_NOTIFY_AT:
+            notifications.notify("host_reboot", "Host reboot cannot read a player count",
+                                 "%s's queued reboot has stopped short %d times: %s's player count "
+                                 "could not be read just before its stop, so its servers were "
+                                 "started again each time. It keeps waiting and tries again every "
+                                 "%d min; cancel it from the host's Power card." % (
+                                     _host_label(self.remote), info["unread_bounces"], unread,
+                                     BOUNCE_BACKOFF // 60))
         if tell:
             notifications.notify("host_reboot", "Host reboot still waiting",
                                  "%s's queued reboot could not run: %s It keeps waiting and tries "
@@ -1444,6 +1457,7 @@ class _Job:
         """Stop every plan server: parallel across accounts, serial within one, verified by state."""
         self._phase("stopping", done=0, total=len(self.entries))
         self.bounce = self.bounce_joined = False
+        self.bounce_unread = ""
         self.deadline = time.monotonic() + STOP_PHASE_CAP
         loaded = self._loaded_rows()
         groups = {}
@@ -1474,25 +1488,38 @@ class _Job:
         for e in group:
             if self.bounce or self._cancelled() or self._past_deadline():
                 return
-            empty = (self._still_empty(loaded.get(e["id"])) if self.job["mode"] == "when_empty"
-                     else True)
+            empty = (self._still_empty(loaded.get(e["id"]), loaded)
+                     if self.job["mode"] == "when_empty" else True)
             if empty is not True:
                 # Unread (None) still stops the reboot -- the server may hold a player -- but it is
-                # not a player joining: _bounced neither counts it nor says so.
+                # not a player joining: _bounced does not count it as one (see _waiting_again).
                 self.bounce = True
                 self.bounce_joined = self.bounce_joined or empty is False
+                if empty is None:
+                    self.bounce_unread = self.bounce_unread or e.get("name") or ""
                 return
             self._stop_one(e)
             done = sum(1 for x in self.entries if x.get("stop"))
             with _hr_lock:
                 self.job["done"], self.job["total"] = done, len(self.entries)
 
-    def _still_empty(self, gs):
-        """True when the server reads 0 players, False when it reads more, None when unread."""
+    def _still_empty(self, gs, loaded=None):
+        """True when the server reads 0 players, False when it reads more, None when unread.
+
+        Per server first, as the server's own account. When that cannot read it, the way the census
+        that fired this wait read it: the host's batched query (_mon._batched_slots over the plan's
+        rows), which runs as one other game account. A server only the batch can read — one under
+        the panel's own account on a per-user host, where `sudo -u <itself>` is refused — read None
+        here every time, and the wait stopped and restarted the host's servers every ten minutes
+        for its whole length.
+        """
         if gs is None:
             return True
         try:
             n = _mon._server_slots(gs)[0]
+            if n is None and loaded:
+                got = _mon._batched_slots(list(loaded.values())).get(gs.id)
+                n = got[0] if got else None
         except Exception:  # noqa: BLE001 - an unread count is not an empty server
             return None
         return None if n is None else n == 0
@@ -1534,7 +1561,8 @@ class _Job:
         if self.bounce_joined:
             self._back_to_waiting(None, bounce=True)
         else:
-            self._back_to_waiting(None, bounce=False, reason=why, backoff=True)
+            self._back_to_waiting(None, bounce=False, reason=why, backoff=True,
+                                  unread=self.bounce_unread or "a game server")
         return True
 
     def _rescan(self):
@@ -2148,8 +2176,17 @@ def _bare_answered(remote, job, ident, now, sent):
         _rbhold_remark_unplanned(remote.id)
         # From the uptime as read just now, not the tick's `now` (see _new_boot).
         boot = time.time() - float(ident.get("uptime") or 0)
-        return "%s rebooted%s (no running game server was found before it).%s" % (
-            _host_label(remote), _boot_clause(boot, job.get("sent")),
+        # A job reaches here with no plan rows for two reasons. Its plan was empty — nothing was
+        # running — or the operator acted on every planned server while the host rebooted, and
+        # exclude_row took each out of the plan. The job's own server list tells them apart: the
+        # second used to be announced as "no running game server was found", about a reboot that
+        # had stopped servers (its own audit row lists them).
+        n = len(job.get("servers") or ())
+        what = (" (no running game server was found before it)" if not n else
+                "; the operator took over the %d game server%s it stopped, so the panel started "
+                "none of them" % (n, "" if n == 1 else "s"))
+        return "%s rebooted%s%s.%s" % (
+            _host_label(remote), _boot_clause(boot, job.get("sent")), what,
             _unread_note(job.get("unread"), "stop or start")), True
     if now - sent >= DID_NOT_HAPPEN_AFTER and ident.get("state") != "stopping":
         _reboot_awaiting.pop(remote.id, None)

@@ -713,8 +713,13 @@ def _lgsm_maintenance_running(remote, gs):
         if not user or not selfname or not game_idents_ok(user, selfname):
             return False
         # pgrep -f takes an ERE. With the names checked above, "." is the one metacharacter that
-        # can reach here; make it literal so it can't match a neighbouring name.
-        pattern = "%s (%s)" % (selfname.replace(".", "[.]"), "|".join(_LGSM_MAINTENANCE_CMDS))
+        # can reach here; make it literal so it can't match a neighbouring name. Anchored as
+        # host_reboot._cmd_pattern anchors it: the slash before the script name (`./s update`,
+        # cron's `/home/u/s force-update`) and the end of the command word. Unanchored, one
+        # account's `myrustserver update` read as rustserver's maintenance and muted its alerts.
+        # (No bracket needed against the asking shell: it is not the game account's, and its
+        # command line has "(" after the name, not a command.)
+        pattern = "/%s (%s)( |$)" % (selfname.replace(".", "[.]"), "|".join(_LGSM_MAINTENANCE_CMDS))
         out, _, _ = run_command(
             remote,
             "pgrep -u %s -f %s >/dev/null 2>&1 && echo BUSY || echo IDLE"

@@ -1954,6 +1954,13 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         return False, "install.sh is missing, so the panel can't self-update safely."
     if branch and not _valid_branch(branch):
         return False, "Invalid branch name."
+    # Not while a backup restore is in flight: its detached swap and install.sh's snapshot and
+    # rollback both replace panel.db, and the rollback could put the pre-update copy back over the
+    # restored one. (backup.restore_backup refuses the other way round.)
+    from panel.ops import backup as _bk
+    if _bk._restore_lock.locked():
+        return False, ("A backup restore is in progress — update once it has finished and the "
+                       "panel has restarted.")
     # Write the wrapper + its log inside the panel's own data dir (owned by the service user,
     # not world-writable) rather than /tmp. This script is later executed as root via
     # `sudo systemd-run`, so a predictable /tmp path would let a local user pre-plant a
@@ -1967,8 +1974,14 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
     # and systemd-run's unit both start a moment later — so a card polling in that gap read the
     # last run's ending as this one's. Remove it first: until the new log exists, the card reads
     # "not started yet". Unlinking a name in the panel's own data dir never touches another file.
+    #
+    # Not while a run is in progress, though: that log is the RUNNING update's, and this launch is
+    # about to be refused (its unit name is still held) — unlinking it hid the run's outcome from
+    # the card, and once the launch grace passed the status checks resumed fetching the ref the
+    # installer was still fetching.
     try:
-        os.unlink(_log_path)
+        if not _update_in_progress():
+            os.unlink(_log_path)
     except FileNotFoundError:
         pass   # first update on this install, or already cleared
     except OSError:
@@ -2080,7 +2093,16 @@ def list_panel_branches():
     branch = _tracked_branch()
     if not _is_git_checkout():
         return [branch], branch
-    _fetch_all_branches()   # widen a single-branch/shallow clone so ALL branches show up + refresh
+    # The fetch moves refs/remotes/origin/<tracked branch>, the ref a status check and the
+    # installer fetch too, and the page fires this beside its status check. Unserialised, two
+    # fetches of one ref collide on its lock and one fails: lose the status fetch and the card
+    # caches "Couldn't reach the update source" for five minutes; lose the installer's and the
+    # update aborts. So: never while an update runs (list the refs already here), otherwise under
+    # _update_lock, and a status cached from before the ref moved is recomputed next time.
+    if not _update_in_progress():
+        with _update_lock:
+            _fetch_all_branches()   # widen a single-branch/shallow clone so ALL branches show + refresh
+        _update_cache["ts"] = 0.0
     # The FULL refname, stripped here. `%(refname:short)` is the shortest UNAMBIGUOUS name, so the
     # moment a tag `origin/main` existed, main came back as `remotes/origin/main`, failed the prefix
     # test and vanished from the switcher.
@@ -2156,9 +2178,11 @@ def panel_switch_branch(branch):
     # newest verified commit, or a refusal saying why); any other branch is the explicit testing
     # escape hatch it always was, and the messages say it installs an unverified tip.
     target = ""
+    # Whatever the branch: a switch IS an update, and one launched over a running one writes the
+    # config and reaches the launcher before the launch is refused.
+    if _update_in_progress():
+        return False, "An update is being installed right now — switch once it has finished."
     if branch == _DEFAULT_BRANCH:
-        if _update_in_progress():
-            return False, "An update is being installed right now — switch once it has finished."
         with _update_lock:
             target, why = _verified_branch_target(branch)
         if not target:
@@ -2587,7 +2611,16 @@ def _compute_panel_integrity():
             continue
         parts = line.split("\t")
         status = _STATUS_WORD.get(parts[0][:1], "changed")
-        modified.append({"path": parts[-1], "status": status})
+        entry = {"path": parts[-1], "status": status}
+        # head_path, where it is not `path`: what `git checkout HEAD --` can restore for this
+        # entry. A rename or copy lists its source first (in HEAD) and its new name last (not in
+        # HEAD); an added file has no HEAD copy at all. Naming either new path to checkout fails
+        # the WHOLE command with "pathspec did not match", so "restore all" restored nothing.
+        if status in ("renamed", "copied") and len(parts) > 2:
+            entry["head_path"] = parts[1]
+        elif status == "added":
+            entry["head_path"] = None
+        modified.append(entry)
     modified.sort(key=lambda x: x["path"])
     return {"git": True, "clean": not modified, "verified": True, "current_sha": sha.strip(),
             "modified": modified, "count": len(modified)}
@@ -2611,6 +2644,7 @@ def panel_repair(paths=None):
     # HTTP request ever reaches the git command line (defeats path-traversal /
     # command-injection; git also only touches tracked files, and _git shlex-quotes).
     tampered = sorted(m["path"] for m in info["modified"])
+    head_of = {m["path"]: m.get("head_path", m["path"]) for m in info["modified"]}
     if not tampered:
         return True, "Nothing to repair — all panel files match the installed version.", []
     # `paths is not None`, not `if paths`. An empty LIST is a caller who asked for nothing, and
@@ -2627,14 +2661,19 @@ def panel_repair(paths=None):
     else:
         targets = list(tampered)
     # Restore from HEAD. The explicit '--' plus paths validated against git's own
-    # changed-file list means git only ever touches files in that set.
-    _, err, rc = _git(["checkout", "HEAD", "--"] + targets)
+    # changed-file list means git only ever touches files in that set. Each target as HEAD knows
+    # it (head_path): a renamed file's original, and nothing for a file HEAD does not have.
+    checkout = sorted({head_of.get(p) for p in targets if head_of.get(p)})
+    if not checkout:
+        return False, ("The selected files are new — the installed version has no copy of them "
+                       "to restore."), []
+    _, err, rc = _git(["checkout", "HEAD", "--"] + checkout)
     if rc != 0:
         _log.error("panel repair failed: %s", (err or "").strip())
         return False, "Repair failed — see the panel logs.", []
     _integrity_cache["data"] = None   # files changed on disk — next check must re-read
     return True, ("Restored %d file(s) from the installed version. Restart the panel "
-                  "to load the corrected code." % len(targets)), targets
+                  "to load the corrected code." % len(checkout)), checkout
 
 
 def _apt_periodic_on(dump):
