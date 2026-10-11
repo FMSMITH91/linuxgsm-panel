@@ -253,8 +253,12 @@ def _register_server_status(app):
             # and _query_server_slots all then repeated it until something else happened to correct
             # it. Same rule /api/servers already applies to a failed port scan, and /stats to an
             # all-zero sample: a failed read leaves the column alone.
+            # still_held: the read takes up to 30s, and a server deleted meanwhile raised
+            # StaleDataError on this commit, or, its id reused, had the old server's status
+            # written onto its successor (the guard _apply_status_flips already has).
             if status in ("online", "offline") and gs.installed \
-                    and gs.status not in ("installing", "configuring") and gs.status != status:
+                    and gs.status not in ("installing", "configuring") and gs.status != status \
+                    and still_held(gs):
                 gs.status = status
                 db.session.commit()
         except Exception:
@@ -658,8 +662,10 @@ def _persisted_stats_status(gs, m, _readable):
     # is polled by the very page that shows the install progress, and "installing" -> "online"
     # (steamcmd is a process; with the old predicate it was also 'online') ends the progress
     # row mid-download.
+    # still_held last (it is a query): the metrics read is an SSH round trip, and a row deleted or
+    # replaced meanwhile is not the server that was measured.
     if _readable and gs.installed and gs.status not in ("installing", "configuring") \
-            and gs.status != status:
+            and gs.status != status and still_held(gs):
         gs.status = status
         return status, True
     if not _readable:

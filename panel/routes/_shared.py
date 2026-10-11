@@ -14,7 +14,7 @@ from flask import (jsonify)
 from flask_login import (current_user)
 from panel.core.clock import (utcnow)
 from panel.core.config import (ConfigUnreadable, is_unreadable, load_config)
-from panel.core.http import (_json_str)
+from panel.core.http import (_json_str, _r12c_json_flag)
 from panel.core.validation import (NOT_AN_IP, unzoned_ip_or_network)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
     _game_backup_status, register_remote_state, register_server_state)
@@ -118,7 +118,11 @@ def _whitelist_mutate(app, body):
     responds instantly — the config is already saved and reflected in the response.
     """
     raw = _json_str(body, "ip")
-    remove = bool(body.get("remove"))
+    # A JSON boolean or a 400: bool("false") is True, so {"remove": "false"} dropped the entry the
+    # request meant to add, and the whitelisted admin could be blocked again.
+    remove = _r12c_json_flag(body, "remove", False)
+    if remove is None:
+        return jsonify({"success": False, "message": "remove must be true or false."}), 400
     if remove:
         # The raw text only picks the entry to drop, so one stored with a zone id before the add
         # refused them can still go. What is audited and answered is the address or network it

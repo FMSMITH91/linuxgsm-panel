@@ -27,7 +27,7 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     get_host_remote, get_remote, has_permission, log_action, permission_required, server_access_required)
 import collections
 import threading
-from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
 from panel.core.validation import (NOT_AN_IP)
 from panel.security import privileged as _priv
 from panel.services import host_reboot as _hr
@@ -304,7 +304,11 @@ def _register_firewall_rules(app):
         source = _json_str(data, "source")
         port = _fw_port_arg(data.get("port", ""))
         proto = _fw_proto_arg(data.get("protocol", "tcp"))
-        on = data.get("allow", True) is not False
+        # A JSON boolean or a 400: by `is not False` the string "false" ADDED the rule it asked to
+        # remove.
+        on = _r12c_json_flag(data, "allow", True)
+        if on is None:
+            return jsonify({"success": False, "message": "allow must be true or false."}), 400
         if not source or not port:
             return jsonify({"success": False, "message": "Source and port required"}), 400
         success, msg = remote_ufw_allow_from(remote, source, port, proto,
@@ -330,7 +334,11 @@ def _register_firewall_rules(app):
         data = _json_body()
         port = _fw_port_arg(data.get("port", ""))
         proto = _fw_proto_arg(data.get("protocol", "tcp"))
-        on = data.get("limit", True) is not False
+        # A JSON boolean or a 400: by `is not False` the string "false" applied the limit it asked
+        # to lift.
+        on = _r12c_json_flag(data, "limit", True)
+        if on is None:
+            return jsonify({"success": False, "message": "limit must be true or false."}), 400
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_limit_port(remote, port, proto, limit=on)
@@ -531,11 +539,17 @@ def _register_panel_port(app):
         if not ok:
             return jsonify({"success": False, "message": (
                 f"Couldn't remove every rule for port {port}; check the firewall page.")})
-        # "Only over your tailnet" is false while the panel's Serve route is on Funnel.
-        if ts.panel_funnel_facts(load_config())["funnelled"]:
+        # "Only over your tailnet" is false while the panel's Serve route is on Funnel, and not
+        # known when Serve could not be read.
+        _facts = ts.panel_funnel_facts(load_config())
+        if _facts["funnelled"]:
             return jsonify({"success": True, "message": (
                 f"Public port {port} closed. Funnel is on for the panel's Tailscale Serve address, "
                 f"so the panel is still reachable from the internet through it.")})
+        if _facts["unread"]:
+            return jsonify({"success": True, "message": (
+                f"Public port {port} closed. Tailscale Serve could not be read, so whether Funnel "
+                f"still makes the panel reachable from the internet is not known.")})
         return jsonify({"success": True, "message": (
             f"Public port {port} closed — the panel is now reachable only over your tailnet.")})
 

@@ -3013,10 +3013,13 @@ try:
           and _fw_calls[-1] == ("from", "10.0.0.0/24", 22, "tcp", "", False)
           and _rv_log[-1] == ("remote_port_allow_from_remove", "%s:22/tcp" % _r.name, "from 10.0.0.0/24",
                               False), "calls=%r log=%r" % (_fw_calls[-1:], _rv_log[-1:]))
-    _rv_client.post("/api/remote/%d/firewall/allow-from" % _r.id, json={"source": "10.0.0.0/24", "port": 22,
-                                                                      "allow": "no"})
-    check("firewall allow-from: only a literal false removes — any other value adds",
-          _fw_calls[-1][-1] is True and _rv_log[-1][0] == "remote_port_allow_from")
+    _n_fw = len(_fw_calls)
+    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/firewall/allow-from" % _r.id,
+                                          json={"source": "10.0.0.0/24", "port": 22, "allow": "no"}))
+    # Not "anything but a literal false adds": "false" then ADDED the rule asked to be removed
+    # (review 1011c). A switch that is not a JSON boolean is refused, as every flag route does.
+    check("firewall allow-from: an allow that is not a JSON boolean is a 400 and nothing is sent",
+          _st == 400 and len(_fw_calls) == _n_fw, "status=%r calls=%r" % (_st, _fw_calls[_n_fw:]))
     _rv_client.post("/api/remote/%d/firewall/limit" % _r.id, json={"port": 22, "limit": False})
     check("firewall limit: limit:false lifts the limit and is audited as an unlimit",
           _fw_calls[-1] == ("limit", 22, "tcp", False) and _rv_log[-1][0] == "remote_port_unlimit")

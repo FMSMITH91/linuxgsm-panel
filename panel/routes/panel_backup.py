@@ -19,7 +19,7 @@ import concurrent.futures
 import os
 import threading
 import time
-from panel.core.http import (_json_body, _json_str, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag)
 from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _marked_backup, _record_full_clock,
     _record_game_clock)
@@ -357,6 +357,22 @@ def _publish_backup_status(app, server_id, born, status):
 _BAD_FIELD = object()
 
 
+def _r13c_whole_number(v):
+    """Whether bk.set_settings/set_full_settings can read `v` as a whole number."""
+    if isinstance(v, bool):   # an int to Python; a switch sent into a number box is not a number
+        return False
+    try:
+        int(v)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return True
+
+
+def _r13c_unreadable_numbers(data, keys):
+    """The keys in `keys` whose value is present, not null, and not readable as a whole number."""
+    return [k for k in keys if data.get(k) is not None and not _r13c_whole_number(data.get(k))]
+
+
 def register(app):
     """Register the game-server and panel backup routes, and the panel host's OS maintenance."""
     _register_full_backup(app)
@@ -466,8 +482,11 @@ def _register_game_backup(app):
         if not gs.installed or not gs.remote_id:
             return jsonify({"success": False, "message": "Server is not installed."}), 400
         # `force` = the admin already saw the "players online" prompt and chose to back up anyway
-        # (which will disconnect them). Default off, so a normal click never kicks players.
-        force = bool(_json_body().get("force"))
+        # (which will disconnect them). Default off, so a normal click never kicks players. A JSON
+        # boolean or a 400: bool("false") is True, so {"force": "false"} stopped the server anyway.
+        force = _r12c_json_flag(_json_body(), "force", False)
+        if force is None:
+            return jsonify({"success": False, "message": "force must be true or false."}), 400
         if _button_backup_running(server_id):
             # The maintenance menu's Backup is archiving it now, outside the lock below; a second
             # run would take that backup's lock for an orphan and archive the same files again.
@@ -779,9 +798,14 @@ def _register_panel_backups(app):
         # Optional: only an encrypted archive needs it, and only when it was written under a
         # different passphrase than the one configured now (or this is a fresh install).
         # skip_safety_backup: the operator's answer to a pre-restore copy that could not be
-        # written. Never a default — see backup._restore_validated.
+        # written. Never a default — see backup._restore_validated — and a JSON boolean or a 400:
+        # bool("false") is True, so {"skip_safety_backup": "false"} overwrote the panel's data with
+        # no copy to go back to.
+        skip = _r12c_json_flag(_b, "skip_safety_backup", False)
+        if skip is None:
+            return jsonify({"success": False, "message": "skip_safety_backup must be true or false."}), 400
         ok, msg = bk.restore_backup(name, passphrase=_b.get("passphrase") or None,
-                                    skip_safety_backup=bool(_b.get("skip_safety_backup")))
+                                    skip_safety_backup=skip)
         log_action(current_user, "panel_backup_restore", target=name, success=ok)
         return jsonify({"success": ok, "message": msg})
 
@@ -821,6 +845,13 @@ def _register_panel_backups(app):
         # A JSON boolean when given: bool("false") is True, so a request to stop backups started them.
         if data.get("enabled") is not None and not isinstance(data.get("enabled"), bool):
             return jsonify({"success": False, "message": "enabled must be true or false."}), 400
+        # A whole number or null (null = leave it): set_settings/set_full_settings skip a value they
+        # cannot read, so "7d" kept the stored number while this answered success — the 400 the
+        # per-server schedule gives (_BAD_FIELD).
+        _bad = _r13c_unreadable_numbers(data, ("keep_days", "full_interval_days", "full_keep"))
+        if _bad:
+            return jsonify({"success": False,
+                            "message": "Use a whole number for: %s." % ", ".join(_bad)}), 400
         # Only now, with the passphrase known good: a refused one used to leave the other settings
         # saved while the page reported the save as failed.
         s = bk.set_settings(enabled=data.get("enabled"), keep_days=data.get("keep_days"))

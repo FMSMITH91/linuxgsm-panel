@@ -3546,7 +3546,12 @@ def security_log_tail(which, lines=200, jail=None):
     """Tail of a WHITELISTED security log for the raw-log viewer. `which` is one of a fixed set —
     never a path from the request — so there's no traversal. For 'fail2ban', an optional `jail`
     (allowlisted against the host's real jails) narrows the activity to that one jail. Returns text
-    (may be empty)."""
+    (may be empty), or None when no helper read for 'fail2ban'/'ssh' answered.
+
+    None, not "": _run_verb returns ("", "Command timed out", -1) rather than raising, and two
+    unanswered reads joined to "" were shown as "(log is empty)", i.e. no attacks, on the card whose
+    job is showing them — the panel-host twin of hosts.remote_security_log. A read that ANSWERED
+    (rc 0) with nothing in it is a real empty log and still comes back as ""."""
     lines = max(20, min(int(lines or 200), 1000))
     if which == "panel":
         from panel.core import config as _cfg
@@ -3561,18 +3566,26 @@ def security_log_tail(which, lines=200, jail=None):
         # jail — lives in /var/log/fail2ban.log (fail2ban's default logtarget). `journalctl -u
         # fail2ban` only carries the systemd unit's start/stop noise, so read the file first and
         # fall back to the journal only if it isn't there.
-        out, _, _ = _run_verb("log-tail", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
+        out, _, frc = _run_verb("log-tail", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
+        answered = frc == 0
         if not out:
-            out, _, _ = _run_verb("journal", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
+            out, _, jrc = _run_verb("journal", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
+            answered = answered or jrc == 0
+        if not answered and not out:
+            return None
         rows = (out or "").splitlines()
         if jail and jail in (_fail2ban_jails() or []):   # allowlist; used only for in-Python filtering, never a command
             tag = "[%s]" % jail
             rows = [ln for ln in rows if tag in ln]
         return "\n".join(rows[-lines:])
     if which == "ssh":
-        out, _, _ = _run_verb("journal", ["ssh", str(lines * 2)], timeout=15, merge_stderr=False)
+        out, _, jrc = _run_verb("journal", ["ssh", str(lines * 2)], timeout=15, merge_stderr=False)
+        answered = jrc == 0
         if not out:
-            out, _, _ = _run_verb("log-tail", ["auth", str(lines)], timeout=15, merge_stderr=False)
+            out, _, arc = _run_verb("log-tail", ["auth", str(lines)], timeout=15, merge_stderr=False)
+            answered = answered or arc == 0
+        if not answered and not out:
+            return None
         return "\n".join((out or "").splitlines()[-lines:])
     return ""
 

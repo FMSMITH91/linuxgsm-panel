@@ -11,7 +11,7 @@ from panel.security import privileged as _priv
 from panel.ops import (tailscale_integration as ts)
 from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required,
     superadmin_required)
-from panel.core.http import (_json_body, _json_str)
+from panel.core.http import (_json_body, _json_str, _r12c_json_flag)
 from panel.db.models import LOCAL_HOST_LABEL
 from panel.ops.serve_upkeep import (_leftover_note, _remove_serve_leftovers)
 from app import (_bind_is_loopback, _effective_https, _resolved_bind, _serve_scheme_now)
@@ -369,9 +369,14 @@ def _register_tailscale_serve(app):
                             "message": "That isn't a usable mount point. Use \"/\" or a short "
                                        "path like \"/lgsm\"."}), 400
         if action == "enable":
-            # Exactly true, as the page sends it: Funnel exposes the panel to the internet, and a
-            # truthiness test read the string "false" as yes (and stored it as given).
-            return _serve_enable(port, mount, data.get("funnel") is True, _json_str(data, "page"))
+            # A JSON boolean or a 400, as the page sends it: Funnel exposes the panel to the
+            # internet, and a truthiness test read the string "false" as yes (and stored it as
+            # given). `is True` failed safe but published {"funnel": "true"} WITHOUT Funnel and
+            # answered success.
+            funnel = _r12c_json_flag(data, "funnel", False)
+            if funnel is None:
+                return jsonify({"success": False, "message": "funnel must be true or false."}), 400
+            return _serve_enable(port, mount, funnel, _json_str(data, "page"))
         return _serve_disable(port, mount)
 
     @app.route("/api/tailscale/check-peer", methods=["POST"])

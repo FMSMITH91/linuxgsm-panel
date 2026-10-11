@@ -564,19 +564,27 @@ def shared_funnel_apps(serve_config, port, use_funnel):
 
 
 def panel_funnel_facts(cfg):
-    """{"funnelled", "shared_funnel"} for a page that says where the panel can be reached.
+    """{"funnelled", "shared_funnel", "unread"} for a page that says where the panel can be reached.
 
-    Read from the host (the cached reading) and only once Serve is set up; both False/[] otherwise
-    and when Serve cannot be read. "funnelled": a Serve route to the panel is on a Funnel listener.
-    "shared_funnel": shared_funnel_apps — on Funnel against its own setting, for another app.
+    Read from the host (the cached reading) and only once Serve is set up; False/[]/False
+    otherwise. "funnelled": a Serve route to the panel is on a Funnel listener. "shared_funnel":
+    shared_funnel_apps — on Funnel against its own setting, for another app. "unread": `tailscale
+    serve status` did not answer, so neither was read.
     """
     if not cfg.get("tailscale_setup_done"):
-        return {"funnelled": False, "shared_funnel": []}
+        return {"funnelled": False, "shared_funnel": [], "unread": False}
     info = get_tailscale_info()
     port = cfg.get("port", 5000)
+    if info.serve_unreadable:
+        # An unread Serve has an empty serve_config, which read as "not on Funnel", and the close
+        # route then said "reachable only over your tailnet" of a panel Funnel still published.
+        # The panel's own record of choosing Funnel is the best that is known.
+        return {"funnelled": bool(cfg.get("tailscale_use_funnel")), "shared_funnel": [],
+                "unread": True}
     return {"funnelled": panel_funnelled(info.serve_config, port),
             "shared_funnel": shared_funnel_apps(info.serve_config, port,
-                                                cfg.get("tailscale_use_funnel"))}
+                                                cfg.get("tailscale_use_funnel")),
+            "unread": False}
 
 
 def panel_funnelled(serve_config, port):

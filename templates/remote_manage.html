@@ -720,6 +720,10 @@
         {% include "_shared_funnel_note.html" %}
         {% if not shared_funnel %}<p class="small text-warning mb-1">Funnel is on for the panel’s Tailscale Serve address, so it stays reachable from the internet even with this port closed.</p>{% endif %}
         <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort" data-funnel="1"><i class="bi bi-shield-lock"></i> Close public panel port</button>
+        {% elif funnel_facts and funnel_facts.unread %}
+        {# Serve did not answer: whether Funnel publishes the panel is not known, so not "tailnet-only" either. #}
+        <p class="small text-warning mb-1">Tailscale Serve could not be read just now, so whether Funnel also makes the panel reachable from the internet is not known.</p>
+        <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort" data-funnel="unknown"><i class="bi bi-shield-lock"></i> Close public panel port</button>
         {% else %}
         <p class="small text-secondary mb-1">Close the public web port to make the panel tailnet-only, with no open ports at all.</p>
         <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort"><i class="bi bi-shield-lock"></i> Close public panel port (tailnet-only)</button>
