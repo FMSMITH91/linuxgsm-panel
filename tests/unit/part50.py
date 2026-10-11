@@ -371,8 +371,20 @@ _cs50 = _json50.load(open(os.path.join(_root, ".claude", "settings.json"), encod
 check("session links: the committed .claude/settings.json turns the session link off "
       "(attribution.sessionUrl is false, which cloud sessions read from the repository)",
       (_cs50.get("attribution") or {}).get("sessionUrl") is False, repr(_cs50))
-_needle50 = "claude.ai/code/" + "session_"
-_hits50 = _sp50.run(["git", "-C", _root, "grep", "-l", "-F", "-e", _needle50],  # nosec B603 B607
-                    capture_output=True, text=True, check=False)
-check("session links: no tracked file carries a claude.ai session link",
-      _hits50.returncode == 1 and not _hits50.stdout.strip(), repr((_hits50.returncode, _hits50.stdout)))
+_needle50 = ("claude.ai/code/" + "session_").encode()
+# Walked, not `git grep`: the suites run on a copy of the tree that is not a git checkout.
+_skip50 = {".git", ".venv", "venv", "node_modules", "data", "__pycache__", "worktrees"}
+_hits50 = []
+for _dp50, _dn50, _fn50 in os.walk(_root):
+    _dn50[:] = [d for d in _dn50 if d not in _skip50]
+    for _f50 in _fn50:
+        try:
+            with open(os.path.join(_dp50, _f50), "rb") as _fh50:
+                if _needle50 in _fh50.read():
+                    _hits50.append(os.path.relpath(os.path.join(_dp50, _f50), _root))
+        except OSError:
+            continue
+_walked50 = os.path.isfile(os.path.join(_root, "README.md")) and os.path.isfile(
+    os.path.join(_root, "tests", "unit", "part50.py"))
+check("session links: no file in the tree carries a claude.ai session link",
+      _walked50 and not _hits50, repr(_hits50))
