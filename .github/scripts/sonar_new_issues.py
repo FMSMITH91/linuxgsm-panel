@@ -44,6 +44,7 @@ KNOWN_OPEN = {
 
 def _get(path, **params):
     url = API + path + "?" + urllib.parse.urlencode(params)
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- API is a constant https URL; the path is this script's own, the params urlencoded
     with urllib.request.urlopen(url, timeout=30) as resp:  # nosec B310 - a fixed https host
         return json.load(resp)
 
