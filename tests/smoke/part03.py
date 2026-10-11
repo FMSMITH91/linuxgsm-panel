@@ -76,6 +76,7 @@ finally:
 # port the panel allocated, and — the part that was actually broken — the firewall must not be
 # opened for the port it just refused, in either of the two places that open ports.
 _cf_saved, _cf_calls, _cf_cron = {}, [], _R12dCrontab()
+_r12d_bad_from = len(_r12d_shape_bad)      # this file's blocks only: part02's _ij is checked there
 
 
 def _cf_stub(mod, name, fn):
@@ -466,7 +467,7 @@ finally:
 # again walk a failure branch while its comment says the host was stubbed to succeed.
 check("install jobs (clash, unreadable scan and poll, step 4): every stand-in answered in the "
       "real function's shape",
-      not _r12d_shape_bad, "; ".join(_r12d_shape_bad[:5]))
+      not _r12d_shape_bad[_r12d_bad_from:], "; ".join(_r12d_shape_bad[_r12d_bad_from:][:5]))
 
 # ── /api/installs: the progress a corner widget can follow from any page ────────────────────
 # A game-server install runs for five to forty-five minutes, and its only progress row lived on
