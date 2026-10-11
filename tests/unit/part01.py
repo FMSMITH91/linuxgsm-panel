@@ -1483,7 +1483,8 @@ _CR_BIN = os.path.join(_cr_sb, "bin")
 os.makedirs(_CR_BIN, exist_ok=True)
 with open(os.path.join(_CR_BIN, "crontab"), "w", encoding="utf-8") as _cr_fh:
     _cr_fh.write('#!/bin/sh\necho "$*" >> "$CR_MARK"\nexit 97\n')
-os.chmod(os.path.join(_CR_BIN, "crontab"), 0o755)  # nosec B103 - a test stand-in in a private temp dir
+# nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this part runs itself
+os.chmod(os.path.join(_CR_BIN, "crontab"), 0o700)  # nosec B103 - a test stand-in in a private temp dir
 _CR_BY_PATH = re.compile(r"/crontab(?![\w.-])")
 
 
