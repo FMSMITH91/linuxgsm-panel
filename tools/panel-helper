@@ -1007,15 +1007,13 @@ def _caller_reaches_root(caller):
             return True
         pw = pwd.getpwnam(caller)
         gids = {pw.pw_gid} | {grp.getgrnam(n).gr_gid for n in names}
-        lines, seen = [], set()
-        # sudo's own includedir rule (as _sudoers_lines applies it): a name with a '.' or ending
-        # in '~' is not policy. The glob counted `lgsmpanel-full.disabled` or an editor's `…~`
-        # as a live NOPASSWD ALL grant — the permissive direction on this switch, which turns
-        # v_game_account off for every account.
-        for path in [SUDOERS_FILE] + sorted(
-                p for p in glob.glob(os.path.join(SUDOERS_DIR, "*"))
-                if not (os.path.basename(p).endswith("~") or "." in os.path.basename(p))):
-            lines.extend(_sudoers_lines(path, seen))
+        # SUDOERS_FILE alone, as sudo reads it: its @includedir pulls sudoers.d in, at its place
+        # and with sudo's own skip rule (_sudoers_lines). A glob of sudoers.d read a file sudo
+        # never reads when sudoers has no includedir, and counted `lgsmpanel-full.disabled` or an
+        # editor's `…~` as a live NOPASSWD ALL grant — the permissive direction on this switch,
+        # which turns v_game_account off for every account. (_escalation_verdict keeps its glob:
+        # an extra grant there only refuses an account.)
+        lines = _sudoers_lines(SUDOERS_FILE, set())
         rules = _sudoers_matching_rules(lines, caller, names, pw.pw_uid, gids)
     except Exception as exc:
         sys.stderr.write("panel-helper: could not read the sudo policy for %s (%s); treating it as "
@@ -1040,9 +1038,36 @@ def _r11b_rules_reach_root(rules, caller, names, uid):
         if _rule_is_nopasswd_root_all(rest):
             if _r11b_names_caller_for_certain(items, caller, names, uid):
                 reach = True
-        elif reach and ("!" in rest or re.search(r"(?:^|[:,=)\s])ALL\s*(?:,|$)", rest.split("=", 1)[-1])):
+        elif reach and ("!" in rest or _r12b_may_retract_root_all(rest)):
             reach = False
     return reach
+
+
+def _r12b_may_retract_root_all(rest):
+    """Whether a later rule may cover every command AS ROOT (and so, not being a NOPASSWD grant,
+    takes one back). Anything it cannot read answers True: a false take-back only keeps
+    v_game_account on.
+
+    Its Runas list counts: install.sh's own `lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL`
+    sorts after an operator's real root grant in sudoers.d, and covers only the game group's
+    members. Read as a take-back, it refused every sudo-capable LinuxGSM account on a host whose
+    panel user really is root. A command that is an alias name may be ALL (`Cmnd_Alias EVERY =
+    ALL`, then `PASSWD: EVERY`)."""
+    m = re.fullmatch(r"(\S+)\s*=\s*(?:\(([^)]*)\))?\s*(.*)", rest.strip())
+    if not m:
+        return True
+    if m.group(2) is not None:
+        users = [u.strip() for u in m.group(2).split(":")[0].split(",") if u.strip()]
+        if not any(u in ("ALL", "root", "#0") or _SUDOERS_ALIAS_NAME_RE.fullmatch(u) for u in users):
+            return False
+    cmd = m.group(3)
+    while True:
+        t = re.match(r"([A-Z_]+)\s*:\s*", cmd)
+        if not t:
+            break
+        cmd = cmd[t.end():]
+    return any(c.strip() == "ALL" or _SUDOERS_ALIAS_NAME_RE.fullmatch(c.strip())
+               for c in cmd.split(","))
 
 
 def _r11b_names_caller_for_certain(items, caller, names, uid):
@@ -1073,6 +1098,9 @@ def _rule_is_nopasswd_root_all(rest):
     hosts, runas, cmd = m.group(1), m.group(2), m.group(3)
     here = {socket.gethostname()}
     here.add(next(iter(here)).split(".")[0])
+    # A negated host (`ALL, !thishost`) is not evaluated: it may exclude this machine.
+    if any(h.strip().startswith("!") for h in hosts.split(",")):
+        return False
     if not any(h.strip() in ({"ALL"} | here) for h in hosts.split(",")):
         return False
     if runas is not None and runas.split(":")[0].strip() not in ("ALL", "root"):
@@ -1084,7 +1112,9 @@ def _rule_is_nopasswd_root_all(rest):
             break
         tags.append(t.group(1))
         cmd = cmd[t.end():]
-    return "NOPASSWD" in tags and "ALL" in [c.strip() for c in cmd.split(",")]
+    # The LAST of PASSWD / NOPASSWD is the one in force: `NOPASSWD: PASSWD: ALL` asks a password.
+    pw_tags = [t for t in tags if t in ("PASSWD", "NOPASSWD")]
+    return bool(pw_tags) and pw_tags[-1] == "NOPASSWD" and "ALL" in [c.strip() for c in cmd.split(",")]
 
 
 def _home_holds_a_panel(name):
