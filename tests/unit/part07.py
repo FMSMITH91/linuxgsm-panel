@@ -34,8 +34,13 @@ from unit import REPO_ROOT as _gh_root  # noqa: E402
 _GH_HOLE = "\x00"
 _GH_OPTS = (r"\bsudo(?:\s+(?:-[A-Za-z]*[CDghpRrTtU]\s+\S+|--?[A-Za-z][\w-]*(?:=\S*)?|"
             + _GH_HOLE + r"))*\s+(?:-[A-Za-z]*u\s*|--user[=\s]\s*)")
-_GH_TAIL = re.compile(_GH_OPTS + r"\Z")
-_GH_FORMAT_TAIL = re.compile(_GH_OPTS + r"\{")
+# An opening quote may sit between the flag and the account (`sudo -u '{user}'`): hand-typed
+# quotes are no quoting at all against a name holding `'` (GHSA-hh39's own payload class), and
+# without the `['"]?` such a site was not seen as a site, by G1 or G2.
+_GH_TAIL = re.compile(_GH_OPTS + r"['\"]?\Z")
+_GH_FORMAT_TAIL = re.compile(_GH_OPTS + r"['\"]?\{")
+# An argv ELEMENT that carries the flag and the account together (`"--user=" + user`, f"-u{user}").
+_GH_ARGV_JOINED = re.compile(r"(?:-[A-Za-z]*u|--user=)['\"]?" + _GH_HOLE)
 _GH_PCT = re.compile(r"%(?:\(([^)]*)\))?[#0\- +]*(?:\*|\d+)?(?:\.(?:\*|\d+))?([diouxXeEfFgGcrsa%])")
 _GH_QUOTERS = {"_quote", "quote"}
 _GH_BUILDERS = {"game_user_cmd", "game_user_exec_cmd"}
@@ -191,6 +196,9 @@ def _gh_argv_sites(n):
         elif (seen_sudo and _gh_is_user_flag(e)
               and j + 1 < len(elts) and not isinstance(elts[j + 1], _gh_ast.Constant)):
             out.append((n.lineno, elts[j + 1], "argv"))
+        elif (seen_sudo and not isinstance(e, _gh_ast.Constant)
+              and _GH_ARGV_JOINED.match(_gh_text(e))):
+            out.append((n.lineno, e, "argv"))
     return out
 
 
@@ -459,6 +467,16 @@ _gh_ctl = {
         'def f(user):\n    return "sudo " + f"-u {user} bash"\n'),
     "G1 a -g value in a % format": _gh_plant(
         'def f(g, user):\n    return "sudo -g %s -u %s bash" % (g, user)\n'),
+    # The account in hand-typed quotes (review 1011c): no site at all before, so no gate fired.
+    "G1 hand-quoted, f-string": _gh_plant('def f(user):\n    return f"sudo -u \'{user}\' bash -c x"\n'),
+    "G1 hand-double-quoted, f-string": _gh_plant("def f(user):\n    return f'sudo -u \"{user}\" bash'\n"),
+    "G1 hand-quoted, %": _gh_plant('def f(user):\n    return "sudo -u \'%s\' bash" % user\n'),
+    "G1 hand-quoted, .format": _gh_plant('def f(user):\n    return "sudo -u \'{}\' bash".format(user)\n'),
+    "G1 hand-quoted, concat": _gh_plant('def f(user):\n    return "sudo -u \'" + user + "\' bash"\n'),
+    "G2 an argv with --user= joined to the account": _gh_plant(
+        'def f(user):\n    return ["sudo", "--user=" + user, "cat"]\n'),
+    "G2 an argv with -u joined to the account": _gh_plant(
+        'def f(user):\n    return ["sudo", f"-u{user}", "cat"]\n'),
     "G2 quoted but outside the builder": _gh_plant(
         'def f(user):\n    return f"sudo -u {_quote(user)} bash -c x"\n'),
     "G2 the builder without its check": _gh_plant(
@@ -894,8 +912,10 @@ def _bf_watch(codes, hours=24.0, lasted=0.0, on_sleep=None):
 # about 5,400 a day against Discord's 1,000, which gets the bot's token reset.
 _bf_calls, _bf_sleeps, _bf_warn = _bf_watch([4014])
 check("discord watch: a 4014 (disallowed intents) is NOT retried every 15 s — a handful of "
-      "IDENTIFYs a day at most", 1 <= len(_bf_calls) <= 24 * 3600 // _bf_dc._DC_FATAL_RETRY + 1,
-      "%d sessions in 24h" % len(_bf_calls))
+      # 5, the design's number (a 6 h hold: 24/6 + the first). Not computed from _DC_FATAL_RETRY:
+      # a bound that moves with the constant passed it lowered to 15 s, the storm this names.
+      "IDENTIFYs a day at most", 1 <= len(_bf_calls) <= 5,
+      "%d sessions in 24h (hold %ss)" % (len(_bf_calls), _bf_dc._DC_FATAL_RETRY))
 check("discord watch: ...and says why ONCE per attempt, at WARNING, naming the Message Content intent",
       len(_bf_warn) == len(_bf_calls) and "Message Content" in _bf_warn[0], repr(_bf_warn[:2]))
 _bf_problem = []
