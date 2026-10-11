@@ -3749,7 +3749,9 @@ check('data-ajax-after="watchInstallsNow"' in _inst_tpl,
 _pj = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
 _dr = _pj[_pj.index("var doRefresh = function()"):]
 _dr = _dr[:_dr.index("};")]
-check("else if (after &&" in _dr and "window[after]()" in _dr,
+# ...through _actionFn, as refreshSection's hook is, so the deny list holds on this path too (part53).
+check("else if (after)" in _dr and "_actionFn(after)" in _dr and "afterFn()" in _dr
+      and "window[after]()" not in _dr,
       "js: an ajax-form's after-hook runs even with no section to refresh",
       "data-ajax-after is dropped unless data-ajax-refresh is also set")
 

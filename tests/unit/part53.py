@@ -25,6 +25,7 @@ _p9_patch and undone in the finally. Scripts in node and bash on this part's own
 """
 import ast as _ast53
 import contextlib as _ctx53
+import importlib.util as _ilu53
 import io as _io53
 import os
 import re as _re53
@@ -342,8 +343,10 @@ try:
     # ── js_coverage's fake host lists the folder browse_dir asks for ─────────────────────────────
     # browse_dir has passed `find -H` since #403, and the fake host's pattern had no room for it:
     # every folder listed empty, so the walk's rename flow found no row (broken on main since).
-    _sys53.path.insert(0, os.path.join(_root, "tools", "js_coverage"))
-    import fake_host as _fh53
+    _spec53 = _ilu53.spec_from_file_location("jscov53_fake_host",
+                                             os.path.join(_root, "tools", "js_coverage", "fake_host.py"))
+    _fh53 = _ilu53.module_from_spec(_spec53)
+    _spec53.loader.exec_module(_fh53)
     from panel.ops.ssh_manager import _core as _core53
     from panel.ops.ssh_manager import files as _files53
     _sent53 = []
@@ -679,7 +682,6 @@ check("install.sh update hint: ufw_port_state reads the same way — a (v6) rule
       _states53 == ["closed", "closed", "open"], repr(_states53))
 
 # ── js_coverage: a flow's own check failing fails the run ───────────────────────────────────────
-import importlib.util as _ilu53  # noqa: E402
 _spec53 = _ilu53.spec_from_file_location("jscov53_run", os.path.join(_root, "tools", "js_coverage", "run.py"))
 _run53 = _ilu53.module_from_spec(_spec53)
 _spec53.loader.exec_module(_run53)
