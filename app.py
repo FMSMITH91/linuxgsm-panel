@@ -1447,7 +1447,12 @@ def _spawn_daemon(fn, *args):
 
 
 def _start_hub_lag_watch():
-    """The hub-lag greenlet (R17): once per process, only under eventlet's thread patching."""
+    """The hub-lag greenlet (R17): once per process, only under eventlet's thread patching.
+
+    Not in the recovery CLI (NO_WORKERS_ENV): it is background work of the service's.
+    """
+    if os.environ.get(NO_WORKERS_ENV):
+        return
     try:
         _dr_process.start_hub_lag_watch(spawn=_spawn_daemon)
     except Exception:
@@ -2723,6 +2728,15 @@ def _os_updates_for(remote):
 
 
 
+# Set by manage.py, the offline recovery CLI, before it calls create_app(). That CLI runs BESIDE
+# the live service, and importing this module monkey-patches threading, so every ticker
+# register_routes starts would be a green thread in it: a prompt held past a ticker's first delay,
+# then the first yield (hash_password's tpool hop), ran due restarts, install reconciles and update
+# checks inside the CLI — blind to the service's in-memory state (a backup in progress) — and
+# os._exit then cut them off part-way. Background work belongs to the service alone.
+NO_WORKERS_ENV = "LGSM_PANEL_NO_WORKERS"
+
+
 def _make_supervisor(app):
     """The supervisor register_routes hands every ticker: supervise(name, target).
 
@@ -2733,6 +2747,9 @@ def _make_supervisor(app):
     Module level so a check can drive one runner without building the whole app.
     """
     def _supervise(name, target):
+        if os.environ.get(NO_WORKERS_ENV):
+            return   # the recovery CLI: no background workers (see NO_WORKERS_ENV)
+
         def _runner():
             while True:
                 t = threading.Thread(target=target, name=name, daemon=True)

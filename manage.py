@@ -33,7 +33,7 @@ import warnings
 # hard-exit at the end (below) to skip the noisy teardown, so a locked-out admin sees a clean tool.
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
-    from app import create_app   # noqa: E402  (inside the warnings guard)
+    from app import NO_WORKERS_ENV, create_app   # noqa: E402  (inside the warnings guard)
     # password_problem moved to panel.core.validation with the rest of the pure layer —
     # the CLI enforces the SAME rule as the web forms, which is the point of sharing it.
     from panel.core.validation import password_problem   # noqa: E402
@@ -47,6 +47,9 @@ with warnings.catch_warnings():
 # the rolling backup in its place. Healing belongs to the service's own startup, when nothing else
 # has the file; a corrupt database here just makes this command fail, with SQLite's error.
 os.environ[NO_SELF_HEAL_ENV] = "1"
+# Nor any of the service's background workers: create_app() would start every supervised ticker
+# (due restarts, install reconcile, update checks, backups) inside this process — see NO_WORKERS_ENV.
+os.environ[NO_WORKERS_ENV] = "1"
 app = create_app()
 
 
