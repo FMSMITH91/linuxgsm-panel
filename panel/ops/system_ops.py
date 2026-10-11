@@ -2025,28 +2025,39 @@ def _r12a_unmark(saved):
     _update_launched.update(saved)
 
 
+_UPDATE_STARTED_MSG = ("Update started — the panel is backing up, updating, and verifying it "
+                       "restarts cleanly. If the new version fails to come up it rolls back "
+                       "automatically. This takes up to a minute.")
+
+
 def _r12a_start_installer(path, script, target_ref, branch, started_msg):
     """Start the installer (helper verb, or the wrapper `script` at `path` under systemd-run)."""
     if _is_system_service() and _helper_present():
-        # The helper runs the ROOT-OWNED installer with the three variables in its environment,
-        # detached. The wrapper script below — written by the panel, into a directory the panel
-        # owns, then executed by root — is what this replaces.
-        #
-        # Being clear about what this does and does not buy: self-update means "fetch new code and
-        # run it", and no argv discipline makes that untrusted-safe. What changes is that the
-        # ROOT-run part is now fixed and small. The code the installer pulls goes on to run as the
-        # panel user, and its trustworthiness rests on the signed, CI-verified commit — which
-        # panel_update_status() has already checked before we get here.
-        out, err, rc = _run_verb("panel-self-update",
-                                 [target_ref or "-", branch or "-"], timeout=20)
-        if rc == 0:
-            return True, (started_msg or
-                          ("Update started — the panel is backing up, updating, and verifying it "
-                           "restarts cleanly. If the new version fails to come up it rolls back "
-                           "automatically. This takes up to a minute."))
-        _log.error("self-update verb failed: rc=%s %s", rc, (err or out or "")[:200])
-        return False, "Could not start the updater — check the panel logs."
+        return _r12a_start_via_helper(target_ref, branch, started_msg)
+    return _r12a_start_via_systemd_run(path, script, started_msg)
 
+
+def _r12a_start_via_helper(target_ref, branch, started_msg):
+    """The helper's panel-self-update verb: a root-owned installer run, detached."""
+    # The helper runs the ROOT-OWNED installer with the three variables in its environment,
+    # detached. The wrapper script (_r12a_start_via_systemd_run) — written by the panel, into a
+    # directory the panel owns, then executed by root — is what this replaces.
+    #
+    # Being clear about what this does and does not buy: self-update means "fetch new code and
+    # run it", and no argv discipline makes that untrusted-safe. What changes is that the
+    # ROOT-run part is now fixed and small. The code the installer pulls goes on to run as the
+    # panel user, and its trustworthiness rests on the signed, CI-verified commit — which
+    # panel_update_status() has already checked before we get here.
+    out, err, rc = _run_verb("panel-self-update",
+                             [target_ref or "-", branch or "-"], timeout=20)
+    if rc == 0:
+        return True, (started_msg or _UPDATE_STARTED_MSG)
+    _log.error("self-update verb failed: rc=%s %s", rc, (err or out or "")[:200])
+    return False, "Could not start the updater — check the panel logs."
+
+
+def _r12a_start_via_systemd_run(path, script, started_msg):
+    """The wrapper `script`, written to `path`, run under systemd-run in a transient unit."""
     if _is_system_service():
         launcher = ["sudo", "systemd-run"]
     else:
@@ -2061,9 +2072,9 @@ def _r12a_start_installer(path, script, target_ref, branch, started_msg):
         # a fixed location under DATA_DIR written at 0700 just above. No shell. Not a static
         # string only because the sudo/--user prefix varies with whether the panel runs as root.
         #
-        # CHECKED, like the helper branch 25 lines up. This was subprocess.Popen with both streams
-        # to DEVNULL and the status never collected, so it only ever reported that the child was
-        # SPAWNED. `--no-block` means systemd-run schedules the unit and exits within milliseconds
+        # CHECKED, like the helper branch (_r12a_start_via_helper). This was subprocess.Popen
+        # with both streams to DEVNULL and the status never collected, so it only ever reported
+        # that the child was SPAWNED. `--no-block` means systemd-run schedules the unit and exits within milliseconds
         # with a real exit status, so a refusal — unit name still held by a running
         # panel-selfupdate, no user D-Bus session, a later sudoers.d rule re-imposing a password —
         # was completely silent, and this returned True asserting the whole
@@ -2081,10 +2092,7 @@ def _r12a_start_installer(path, script, target_ref, branch, started_msg):
             _log.error("self-update launcher failed: rc=%s %s",
                        _r.returncode, (_r.stderr or "")[:200])
             return False, "Could not start the updater — check the panel logs."
-        return True, (started_msg or
-                      ("Update started — the panel is backing up, updating, and verifying it "
-                       "restarts cleanly. If the new version fails to come up it rolls back "
-                       "automatically. This takes up to a minute."))
+        return True, (started_msg or _UPDATE_STARTED_MSG)
     except Exception:
         _log.exception("panel installer launch failed to start")
         return False, "Could not start the updater — check the panel logs."

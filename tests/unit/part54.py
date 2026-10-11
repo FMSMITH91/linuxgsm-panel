@@ -408,12 +408,35 @@ check("reboot: a bare job one of whose two servers LinuxGSM refused to stop does
 # ── A05 lead: a server joined by the rescan has its deferred stop cleared once stopped ─────────
 from panel.services import host_reboot as _hr54  # noqa: E402
 
+from panel.db import models as _models54  # noqa: E402
+
 _rs54_cleared = []
 _rs54_self = NS(_check_cancel=lambda: None, _past_deadline=lambda: False,
-                _stop_one=lambda e: e.update(stop="stopped"), _update_row=lambda e, **k: None,
-                _clear_stop_pending=lambda e: _rs54_cleared.append(e["id"]))
-_hr54._Job._restop(_rs54_self, {"id": 54, "stop": None, "stop_pending": True})
-_hr54._Job._restop(_rs54_self, {"id": 55, "stop": None, "stop_pending": False})
+                _stop_one=lambda e: e.update(stop="stopped"), _update_row=lambda e, **k: None)
+_rs54_self._clear_stop_pending = lambda e: _hr54._Job._clear_stop_pending(_rs54_self, e)
+
+
+class _Row54:
+    """A GameServer row stand-in whose stop_pending clears are recorded by id."""
+
+    def __init__(self, rid):
+        self.id, self._sp = rid, True
+
+    @property
+    def stop_pending(self):
+        return self._sp
+
+    @stop_pending.setter
+    def stop_pending(self, v):
+        self._sp = v
+        _rs54_cleared.append(self.id)
+
+
+with _patched():
+    _patch(_models54, "same_row", lambda model, rid, born: _Row54(rid))
+    _patch(_hr54, "db", NS(session=NS(commit=lambda: None)))
+    _hr54._Job._restop(_rs54_self, {"id": 54, "born": 1, "stop": None, "stop_pending": True})
+    _hr54._Job._restop(_rs54_self, {"id": 55, "born": 1, "stop": None, "stop_pending": False})
 check("reboot: a stop_pending server the rescan joined and stopped has the flag cleared, as the "
       "stop phase does for the plan's own (one without the flag is left alone)",
       _rs54_cleared == [54], repr(_rs54_cleared))

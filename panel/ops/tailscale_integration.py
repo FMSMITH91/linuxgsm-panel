@@ -527,21 +527,30 @@ def _r12a_serve_verb(port, mount, funnel, keep_shared_funnel):
     if not others or shared == bool(funnel):
         return want, ""
     names = ", ".join(others)
-    if keep_shared_funnel and any(
-            norm_mount(r["mount"]) == norm_mount(mount) and _serve_port_flag(r["url"]) == "--https=443"
-            for r in panel_serve_routes(info.serve_config, port)):
+    if keep_shared_funnel and _r12a_panel_on_443(info.serve_config, port, mount):
+        state = "on" if shared else "off"
         _log.warning("Tailscale Serve: Funnel left %s on the :443 listener it shares with %s",
-                     "on" if shared else "off", names)
+                     state, names)
         return ("funnel" if shared else "serve"), (
-            " (Funnel left %s: it is set per listener, and %s shares it)"
-            % ("on" if shared else "off", names))
+            " (Funnel left %s: it is set per listener, and %s shares it)" % (state, names))
+    return None, _r12a_funnel_refusal(funnel, names)
+
+
+def _r12a_panel_on_443(serve_config, port, mount):
+    """Whether the panel already has its route at `mount` on the :443 listener."""
+    want = norm_mount(mount)
+    return any(norm_mount(r["mount"]) == want and _serve_port_flag(r["url"]) == "--https=443"
+               for r in panel_serve_routes(serve_config, port))
+
+
+def _r12a_funnel_refusal(funnel, names):
+    """Why a Serve write that would change another app's Funnel (`names`) was not made."""
     if funnel:
-        return None, ("Funnel is set per listener, not per app: publishing the panel with Funnel "
-                      "here would also put %s on the public internet. Nothing was changed." % names)
-    return None, ("Funnel is set per listener, not per app, and it is on for %s: publishing the "
-                  "panel here without Funnel would take it off the public internet. Nothing was "
-                  "changed; turn Funnel off for that app first, or publish the panel with Funnel."
-                  % names)
+        return ("Funnel is set per listener, not per app: publishing the panel with Funnel here "
+                "would also put %s on the public internet. Nothing was changed." % names)
+    return ("Funnel is set per listener, not per app, and it is on for %s: publishing the panel "
+            "here without Funnel would take it off the public internet. Nothing was changed; turn "
+            "Funnel off for that app first, or publish the panel with Funnel." % names)
 
 
 def _apply_serve(verb, mount, backend_scheme, port):
@@ -955,15 +964,20 @@ def disable_tailscale_serve(mount, port):
         return False, msg
     with _cache_lock:
         _cache["info"] = None
-    msg = ("Tailscale Serve mapping removed" if len(ours) == 1
-           else "Tailscale Serve mappings removed")
-    # Funnel is per listener: it stays on while another app still holds a mount on :443, and
-    # that is the other app's setting to change, not the panel's. Said, so "off" is not assumed.
+    return True, ("Tailscale Serve mapping removed" if len(ours) == 1
+                  else "Tailscale Serve mappings removed") + _r12a_funnel_kept_note(info, port)
+
+
+def _r12a_funnel_kept_note(info, port):
+    """A note for Disable's answer when Funnel stays on for another app on :443, else "".
+
+    Funnel is per listener: it stays on while another app still holds a mount on :443, and that
+    is the other app's setting to change, not the panel's. Said, so "off" is not assumed.
+    """
     shared, others = _r12a_listener_funnel(info.serve_config, port)
     if shared and others:
-        msg += ("; Funnel stays on for the :443 listener, which still serves %s"
-                % ", ".join(others))
-    return True, msg
+        return "; Funnel stays on for the :443 listener, which still serves %s" % ", ".join(others)
+    return ""
 
 
 def _remove_serve_mappings(routes, port):
