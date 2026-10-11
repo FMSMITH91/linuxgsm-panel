@@ -59,11 +59,15 @@ var PALETTE_SECTIONS = [
     kw: 'security session timeout remember proxy https cookie hardening' },
   { page: '/settings', hash: 'sec-reboots',      label: 'Host reboots',
     kw: 'reboot reboots wait empty autostart restore give up hours' },
-  { page: '/users',    hash: 'sec-invites',      label: 'Invite links',
+  // `need`: a card with a stricter gate than its page (window.PALETTE_CAN, from base.html). The
+  // sidebar offers /users to a delegated user admin and / to everyone, but the invite card is a
+  // super admin's and the tags card a server manager's: offered to anyone else, the result opened
+  // the page at its top with nothing there.
+  { page: '/users',    hash: 'sec-invites',      label: 'Invite links', need: 'superadmin',
     kw: 'invite invitation onboard new user link signup join' },
   { page: '/servers/install', hash: 'install-server', label: 'Install a game server',
     kw: 'install new server add game create setup' },
-  { page: '/', hash: 'sec-tags', label: 'Server tags',
+  { page: '/', hash: 'sec-tags', label: 'Server tags', need: 'edit_tags',
     kw: 'tag tags label group colour filter' },
   // The Panel Server page is the heaviest in the app — fifteen cards, ten of them hidden until
   // something reveals them — and NONE of it was reachable from here. Typing "backup" returned
@@ -164,15 +168,18 @@ var PALETTE_HOST_SECTIONS = [
     lastFocus = null;
   }
 
+  // A read that failed (a phone just woken, the panel restarting) leaves `servers` null again, so the
+  // next open asks once more. It was left [], which every later open took for "loaded, no servers",
+  // and the palette found no server by name until the page was reloaded.
   function loadServers() {
     servers = [];   // claim it now: a second open while this is in flight must not re-request
     fetch((window.MOUNT || '') + '/api/palette', { cache: 'no-store' })
-      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        servers = Array.isArray(d) ? d : [];
-        if (EL.box && !EL.box.hidden) render(EL.input.value);
+        servers = Array.isArray(d) ? d : null;
+        if (servers && EL.box && !EL.box.hidden) render(EL.input.value);
       })
-      .catch(function () { servers = []; });
+      .catch(function () { servers = null; });
   }
 
   // Every sidebar link, with the section heading above it as its group. Read fresh each time so a
@@ -291,6 +298,7 @@ var PALETTE_HOST_SECTIONS = [
     PALETTE_SECTIONS.forEach(function (sec, i) {
       var full = (window.MOUNT || '') + sec.page;
       if (!reachable[pathOf(full)]) return;
+      if (sec.need && !(window.PALETTE_CAN || {})[sec.need]) return;
       addSection(sec, full, i);
     });
     (servers || []).forEach(function (s, i) {

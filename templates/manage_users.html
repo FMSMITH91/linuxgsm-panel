@@ -97,9 +97,14 @@
   </div>
 </div>
 
-{% if current_user.is_superadmin and invites %}
+{# Rendered for every superadmin, with or without invites: the command palette's "Invite links"
+   lands on #sec-invites, and with none made yet it opened the page at its top with nothing there. #}
+{% if current_user.is_superadmin %}
 <div class="card mt-3" id="sec-invites">
   <div class="card-header"><i class="bi bi-link-45deg"></i> Invite links</div>
+  {% if not invites %}
+  <div class="card-body text-secondary small">No invite links yet. Create one with the Invite Link button above.</div>
+  {% else %}
   <div class="card-body p-0">
     <div class="table-responsive">
       <table class="table table-sm mb-0">
@@ -149,6 +154,7 @@
       </table>
     </div>
   </div>
+  {% endif %}
 </div>
 {% endif %}
 

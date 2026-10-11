@@ -283,20 +283,23 @@ window.rebootStateRefresh = function(hostId){
 };
 window.rebootStateWatch = function(hostId, label, isLocal){
   var box = document.getElementById('power-state'); if (!box || hostId == null) return;
-  var timer = null, wentDown = false;
+  var timer = null, wentDown = false, rebooting = false;
   function tick(){
     fetch(MOUNT+'/api/remote/'+hostId+'/reboot-plan',{cache:'no-store'})  // nosemgrep
       .then(function(r){ if (!r.ok) throw new Error('status'); return r.json(); })
       .then(function(st){
         if (wentDown && isLocal) { window.location.reload(); return; }
+        rebooting = !!st.job;
         var active = _rbRenderState(box, hostId, label, isLocal, st);
         if (st.job && st.job.phase === 'rebooting') wentDown = false;
         schedule(active ? 10000 : 0);
       })
       // A failed read polls again for every host: one blip (a phone's network, a 502 while the panel
       // restarts) used to stop a remote's card for good, still "Waiting to reboot…" after the host was
-      // back. Only the panel's own host takes a failure as it going down, and reloads once it answers.
-      .catch(function(){ if (isLocal) wentDown = true; schedule(10000); });
+      // back. Only the panel's own host takes a failure as it going down, and reloads once it answers —
+      // and only while a reboot of it is under way: one 502 on an idle page reloaded it 10 s later,
+      // losing whatever was typed into it (a backup passphrase).
+      .catch(function(){ if (isLocal && rebooting) wentDown = true; schedule(10000); });
   }
   function schedule(ms){
     if (timer) { clearTimeout(timer); timer = null; }
@@ -326,7 +329,16 @@ window.rebootNagRender = function(el, hostId, label, d){
   el.appendChild(_rbEl('i', 'bi bi-arrow-clockwise fs-5'));
   var text = _rbEl('div', 'flex-grow-1'); text.style.minWidth = '220px';
   var acts = _rbEl('div', 'd-flex gap-2 flex-wrap');
-  if (d.job) {
+  // The panel host's reboot, wait and cancel are a super admin's (get_host_remote): a delegated host
+  // admin is shown the state, without buttons that could only fail.
+  if (isLocal && !window.LOCAL_HOST_CTL) {
+    if (d.job) text.appendChild(_rbEl('span', null, _RB_PHASE[d.job.phase] || 'Rebooting…'));
+    else if (d.pending_empty) text.appendChild(_rbEl('span', null, 'Auto-reboot scheduled once empty'));
+    else text.appendChild(_rbEl('strong', null, 'Reboot needed'));
+    text.appendChild(document.createTextNode(' — ')); text.appendChild(_rbHost(label));
+    text.appendChild(document.createTextNode(' '));
+    text.appendChild(_rbEl('span', 'text-secondary', 'Only a superadmin can reboot the panel host.'));
+  } else if (d.job) {
     text.appendChild(_rbEl('span', null, _RB_PHASE[d.job.phase] || 'Rebooting…'));
     text.appendChild(document.createTextNode(' ')); text.appendChild(_rbHost(label));
     if (!d.job.sent) acts.appendChild(_rbButton('Cancel', 'btn-sm btn-outline-secondary', function(){ window.rebootCancel(hostId); }));

@@ -474,8 +474,10 @@ function refreshGameList(btn){
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d && d.success && d.games) {
-        if (window.toast) toast('Loaded ' + d.games + ' games from LinuxGSM — reloading…', 'success');
-        setTimeout(function(){ location.reload(); }, 900);
+        if (window.toast) toast('Loaded ' + d.games + ' games from LinuxGSM', 'success');
+        // The game column only, not the page: a reload discarded the host and name already chosen.
+        // The new list is then greyed for the chosen host again, as choosing it did.
+        window.refreshSection('#game-col', 'filterGamesForHost');
         return;
       }
       if (window.toast) toast((d && d.message) || 'Still could not reach LinuxGSM', 'danger');

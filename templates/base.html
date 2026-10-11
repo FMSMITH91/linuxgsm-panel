@@ -257,7 +257,10 @@
          243px — 30% of the viewport — and pushed the first page-specific content to y=987, past
          the fold. The rationale text and the long dismiss label are therefore shown from `sm` up
          only; on a phone the headline plus Enable/Not now says the same thing in one strip. -->
-    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 py-2" id="otp-nag" role="alert" style="display:none;">
+    {# Shown from the first paint: d-flex is display:flex !important, so an inline display:none here
+       never hid it (it was dead), and hiding it until otp_nag.js runs would shift every page down
+       when it appeared (Lighthouse's CLS gate). "Not now" removes it as the script loads. #}
+    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 py-2" id="otp-nag" role="alert">
       <i class="bi bi-shield-exclamation fs-5"></i>
       <div class="flex-grow-1" style="min-width:0;">
         {# Two COMPLETE sentences, one per breakpoint, rather than one sentence with its tail in a
@@ -296,6 +299,12 @@ window.MOUNT = {{ (mount_prefix if mount_prefix and mount_prefix != '/' else '')
 // redirect only mean something then: on /invite/<token> or the setup wizard there is no session to
 // expire, and they threw the visitor off a half-filled form to /login.
 window.SIGNED_IN = {{ 'true' if current_user.is_authenticated else 'false' }};
+// What the command palette needs beyond the sidebar's pages: a card with a stricter gate than the
+// page it sits on (palette.js `need`). The same tests the cards are rendered by.
+window.PALETTE_CAN = {
+  superadmin: {{ 'true' if current_user.is_authenticated and current_user.is_superadmin else 'false' }},
+  edit_tags: {{ 'true' if current_user.is_authenticated and (current_user.is_superadmin or has_permission('manage_servers')) else 'false' }}
+};
 
 // ── CSRF ──────────────────────────────────────────────────────────────────
 // One token per session. We inject it everywhere automatically so no individual
@@ -309,6 +318,9 @@ window.CSRF = {{ csrf_token()|tojson }};
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/palette.js') }}"></script>
 <script nonce="{{ csp_nonce }}">
   window.LOCAL_HOST_ID = {{ local_remote_id|default(none)|tojson }};
+  {# Whether this user may act on the panel host (reboot, cancel): every such route takes it through
+     get_host_remote, which is superadmin-only there. LOCAL_HOST_ID alone is any host admin. #}
+  window.LOCAL_HOST_CTL = {{ 'true' if current_user.is_authenticated and current_user.is_superadmin else 'false' }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/nags.js') }}"></script>
 {% if show_app_chrome and current_user.is_superadmin %}
