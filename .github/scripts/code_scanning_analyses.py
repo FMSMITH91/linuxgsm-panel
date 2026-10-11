@@ -188,13 +188,34 @@ def main_head(repo):
     return head if res.returncode == 0 and _SHA_RE.match(head) else None
 
 
+def _compare_paths(repo, base, head):
+    """Every path `base...head` changes (renames' old paths too), or None when it cannot be told.
+
+    None for anything unread: the comparison failed, `head` is not a descendant of `base`, or the
+    file list is GitHub's 300-file cut, which is not the whole list.
+    """
+    if not (_REPO_RE.match(repo or "") and _SHA_RE.match(base or "") and _SHA_RE.match(head or "")):
+        return None
+    try:
+        res = subprocess.run(["gh", "api", "--", "repos/%s/compare/%s...%s" % (repo, base, head)],  # nosec B603 B607
+                             capture_output=True, text=True, timeout=60, check=False)
+        data = json.loads(res.stdout) if res.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    files = data.get("files") if isinstance(data, dict) else None
+    if not (isinstance(files, list) and data.get("status") == "ahead" and 0 < len(files) < 300
+            and all(isinstance(f, dict) for f in files)):
+        return None
+    return [f.get("filename") for f in files] + [f["previous_filename"] for f in files
+                                                 if f.get("previous_filename")]
+
+
 def _docs_only_since(repo, base, head):
     """True when `head` is `base` plus commits that change documentation only, else False.
 
     pr_scope.py's docs-only paths: a push of only those runs none of the uploaders (they share one
     paths-ignore list), so nothing analyses it and nothing ever replaces `base`'s scan. Anything
-    this cannot establish — the comparison unread, `head` not a descendant, a file list GitHub cut
-    at 300 — is False: moved on, as before.
+    this cannot establish is False: moved on, as before.
     """
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -203,25 +224,12 @@ def _docs_only_since(repo, base, head):
         return False
     finally:
         sys.path.pop(0)
-    if not (_REPO_RE.match(repo or "") and _SHA_RE.match(base or "") and _SHA_RE.match(head or "")):
-        return False
-    try:
-        res = subprocess.run(["gh", "api", "--", "repos/%s/compare/%s...%s" % (repo, base, head)],  # nosec B603 B607
-                             capture_output=True, text=True, timeout=60, check=False)
-        data = json.loads(res.stdout) if res.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return False
-    files = data.get("files") if isinstance(data, dict) else None
-    if not (isinstance(data, dict) and data.get("status") == "ahead" and isinstance(files, list)
-            and 0 < len(files) < 300 and all(isinstance(f, dict) for f in files)):
-        return False
-    paths = [f.get("filename") for f in files] + [f["previous_filename"] for f in files
-                                                  if f.get("previous_filename")]
-    return pr_scope.docs_only(paths)
+    paths = _compare_paths(repo, base, head)
+    return paths is not None and pr_scope.docs_only(paths)
 
 
 def moved_past(repo, sha):
-    """main's head when main has moved past `sha` with a change that is not docs-only, else None.
+    """The head of main when main has moved past `sha` with a change that is not docs-only, else None.
 
     The one answer for a scheduled (or manual) run's upload guards and for main()'s MOVED: main at
     `sha` itself, a head that could not be read, or a head that only added documentation on top of

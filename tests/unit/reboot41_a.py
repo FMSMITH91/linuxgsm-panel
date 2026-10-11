@@ -1679,10 +1679,7 @@ def _run_blocks41(blocks):
 def _session_probe_checks41():
     probe = _hosts41.GAME_SESSIONS_PROBE
     blocks = _install_blocks41()
-    _power = sorted({m.group(0) for b in blocks for m in _POWER41.finditer(b[len(_STUBS41):])})
-    check("install.sh: (setup) its reboot spots' only power command is the bare `reboot` this "
-          "drives a stand-in for", not _power, "found %s — not run" % _power)
-    if _power:
+    if not _only_bare_reboot41(blocks):
         return
     pre = _run41(["bash", "-c", probe]).stdout.strip()
     idle = _run_blocks41(blocks)
@@ -1715,14 +1712,27 @@ def _session_probe_checks41():
               busy_probe == "YES", repr(busy_probe))
         check("install.sh: with it running, neither reboot spot reboots, and both say why",
               all("REBOOTING" not in o and "game servers" in o for o in busy), repr(busy))
+    _idle_control41(_idle_name, pre, idle)
+
+
+def _only_bare_reboot41(blocks):
+    """Whether install.sh's reboot spots hold no power command but the stubbed bare `reboot`."""
+    power = sorted({m.group(0) for b in blocks for m in _POWER41.finditer(b[len(_STUBS41):])})
+    check("install.sh: (setup) its reboot spots' only power command is the bare `reboot` this "
+          "drives a stand-in for", not power, "found %s — not run" % power)
+    return not power
+
+
+def _idle_control41(name, pre, idle):
+    """An idle host that needs a reboot still gets one: checked whenever this machine is idle."""
     # The machine decides whether this RUNS, never whether it passes: it was `if pre == "NO" and
     # <the control holds>: check(True) else: skip(...)`, so a probe that always answered "busy"
     # (`pgrep -f` matching its own `bash -c` line, say) read as a SKIP about tmux sessions, and
     # install.sh never rebooting a host that needed it passed the suite.
     if pre == "NO":
-        check(_idle_name, all("REBOOTING" in o for o in idle), repr(idle))
+        check(name, all("REBOOTING" in o for o in idle), repr(idle))
     else:
-        skip(_idle_name, "this machine runs a tmux or screen session of its own")
+        skip(name, "this machine runs a tmux or screen session of its own")
 
 
 def _bootstrap_run_checks41():

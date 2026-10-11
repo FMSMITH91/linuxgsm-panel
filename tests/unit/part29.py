@@ -222,20 +222,26 @@ def _scope_globs29(wf):
     return _re29.findall(r"^\s+'([^']+)'\s*$", txt[at:txt.find("\n            )", at)], _re29.M)
 
 
+def _harness_loads29(path, tmp):
+    """(the modules a harness's instrumented imports load after its pre-load, or None; why not)."""
+    preload, code = _harness_instrumented29(path)
+    if not code:
+        return None, "no import inside instrument_imports() found"
+    r = _run29([_sys29.executable, "-W", "ignore", "-c", _HARNESS_PROBE29 % (preload, code)],
+               cwd=tmp, env=dict(os.environ, PYTHONPATH=_ROOT29))
+    try:
+        return _json29.loads(r.stdout.strip().splitlines()[-1]), ""
+    except (ValueError, IndexError):
+        return None, "probe failed: " + (r.stdout[-200:] + r.stderr[-400:])
+
+
 def _cf1_every_harness(tmp):
     bad, read, fuzzed = {}, [], set()
     for p in sorted(_glob29.glob(os.path.join(_ROOT29, "tests", "fuzz", "fuzz_*.py"))):
-        preload, code = _harness_instrumented29(p)
         name = os.path.basename(p)
-        if not code:
-            bad[name] = "no import inside instrument_imports() found"
-            continue
-        r = _run29([_sys29.executable, "-W", "ignore", "-c", _HARNESS_PROBE29 % (preload, code)],
-                   cwd=tmp, env=dict(os.environ, PYTHONPATH=_ROOT29))
-        try:
-            new = _json29.loads(r.stdout.strip().splitlines()[-1])
-        except (ValueError, IndexError):
-            bad[name] = "probe failed: " + (r.stdout[-200:] + r.stderr[-400:])
+        new, why = _harness_loads29(p, tmp)
+        if new is None:
+            bad[name] = why
             continue
         read.append(name)
         fuzzed |= {_module_file29(m) for m in new if m.split(".")[0] == "panel"}
@@ -247,10 +253,14 @@ def _cf1_every_harness(tmp):
           "standard library after its own pre-load (no target spends its fuzz time instrumenting "
           "eventlet and timing out)",
           not bad and len(read) >= 6, repr(bad or read))
-    # What they load is what they fuzz, so a pull request changing any of it must run the fuzzers:
-    # each scope list is checked against the files, not a list kept by hand. They listed the three
-    # target modules only, so a change to panel/core/validation.py — canonical_ip, which the
-    # fail2ban parser calls on every row — skipped both fuzz jobs.
+    _cf1_scopes(fuzzed)
+
+
+def _cf1_scopes(fuzzed):
+    """What the harnesses load is what they fuzz: both fuzz jobs' scope lists must cover it."""
+    # Checked against the files, not a list kept by hand. The lists named the three target modules
+    # only, so a change to panel/core/validation.py — canonical_ip, which the fail2ban parser calls
+    # on every row — skipped both fuzz jobs.
     _fn29 = __import__("fnmatch").fnmatchcase
     unscoped = {wf: sorted(f for f in fuzzed if not any(_fn29(f, g) for g in _scope_globs29(wf)))
                 for wf in ("fuzz.yml", "cflite_pr.yml")}

@@ -799,18 +799,19 @@ def _subprocess_escapes53():
     """
     out = []
     for dirpath, _dirs, files in os.walk(os.path.join(_root, "panel")):
-        for f in files:
-            if f.endswith(".py"):
-                path = os.path.join(dirpath, f)
-                tree = _ast53.parse(_read53(path))
-                top = {id(n) for n in tree.body}
-                for n in _ast53.walk(tree):
-                    if (isinstance(n, _ast53.ImportFrom) and n.module == "subprocess") or (
-                            isinstance(n, _ast53.Import)
-                            and any(a.name == "subprocess" and (a.asname or id(n) not in top)
-                                    for a in n.names)):
-                        out.append("%s:%d" % (os.path.relpath(path, _root), n.lineno))
+        for path in (os.path.join(dirpath, f) for f in files if f.endswith(".py")):
+            out += ["%s:%d" % (os.path.relpath(path, _root), ln)
+                    for ln in _unshimmable_imports53(_ast53.parse(_read53(path)))]
     return out
+
+
+def _unshimmable_imports53(tree):
+    """The lines importing subprocess under a name the shim does not replace, or not at top level."""
+    top = {id(n) for n in tree.body}
+    return [n.lineno for n in _ast53.walk(tree)
+            if (isinstance(n, _ast53.ImportFrom) and n.module == "subprocess")
+            or (isinstance(n, _ast53.Import) and any(
+                a.name == "subprocess" and (a.asname or id(n) not in top) for a in n.names))]
 
 
 def _import_names53(fn):

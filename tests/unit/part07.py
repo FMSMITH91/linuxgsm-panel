@@ -99,7 +99,8 @@ def _gh_trailing_text(node):
 def _gh_fstring_sites(n, prefix=""):
     """(line, value, "fstring") for each value f-string `n` interpolates right after `sudo -u`.
 
-    `prefix` is the text a `+` chain put before the f-string."""
+    `prefix` is the text a `+` chain put before the f-string.
+    """
     out, text = [], prefix
     for v in n.values:
         if isinstance(v, _gh_ast.Constant) and isinstance(v.value, str):

@@ -1385,6 +1385,21 @@ def _rv43_panel_host_reads(admin, deleg):
 
 
 # ── group ids from a form: what an id is ─────────────────────────────────────────────────────────
+def _rv43_invite_ids():
+    from panel.db.models import Invite as _Inv43
+    with _p9.app_context():
+        return {i.id for i in _Inv43.query.all()}
+
+
+def _rv43_drop_invites_but(keep):
+    """Delete the invites made since `keep` was read: `Invite.query.delete()` took every one in
+    part12's database, not only this check's."""
+    from panel.db.models import Invite as _Inv43
+    with _p9.app_context():
+        _Inv43.query.filter(~_Inv43.id.in_(keep)).delete(synchronize_session=False)
+        db.session.commit()
+
+
 def _rv43_posted_ids(admin):
     with _p9.app_context():
         target = _Group43(name="rv43_posted", description="", is_default=False)
@@ -1398,9 +1413,7 @@ def _rv43_posted_ids(admin):
     r2 = admin.post("/users/add", data={"username": "rv43_k2", "groups": [arabic, str(2 ** 64)]})
     edit_uid = _rv43_user("rv43_k3")
     r3 = admin.post("/users/%d/edit" % edit_uid, data={"display_name": "k3", "groups": [huge]})
-    from panel.db.models import Invite as _Inv43
-    with _p9.app_context():
-        inv_before = {i.id for i in _Inv43.query.all()}
+    inv_before = _rv43_invite_ids()
     r4 = admin.post("/users/invite", data={"hours": "1", "groups": [huge]})
     with _p9.app_context():
         made = {n: (u.id, sorted(g.id for g in u.groups)) for n in ("rv43_k1", "rv43_k2")
@@ -1413,9 +1426,7 @@ def _rv43_posted_ids(admin):
                 cmd_groups = cmd.groups
             except Exception as e:
                 cmd_groups = repr(e)
-        # Only the invite this made: `Invite.query.delete()` took every invite in part12's database.
-        _Inv43.query.filter(~_Inv43.id.in_(inv_before)).delete(synchronize_session=False)
-        db.session.commit()
+    _rv43_drop_invites_but(inv_before)
     codes = [r.status_code for r in (r1, r2, r3, r4)]
     check("users: a 5,000-digit or 2**64 group id on add, edit and invite is skipped, not a 500",
           500 not in codes and "rv43_k1" in made, "codes=%r made=%r" % (codes, made))

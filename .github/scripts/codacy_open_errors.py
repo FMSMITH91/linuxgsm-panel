@@ -96,7 +96,8 @@ def fetch_errors():
         url = API + ("&cursor=%s" % cursor if cursor else "")
         req = urllib.request.Request(
             url, data=json.dumps({"levels": list(LEVELS)}).encode(), headers=headers, method="POST")
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- API is a constant https URL; only the cursor Codacy returned is appended to its query
+        # API is a constant https URL; only the cursor Codacy returned is appended to its query.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- see above
         with urllib.request.urlopen(req, timeout=30) as resp:   # nosec B310 - constant https host
             data, cursor = _read_page(json.loads(resp.read().decode("utf-8", "replace")))
         if data is not None:
