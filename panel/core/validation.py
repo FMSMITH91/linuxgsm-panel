@@ -465,7 +465,9 @@ def _valid_hex_color(value):
     The accent colour is emitted into a CSS custom property, so it must be a strict
     colour literal — never arbitrary text that could carry `}` / `<` and break out.
     """
-    v = (value or "").strip()
+    # Not a string (a hand-edited config.json): no colour. `(5 or "").strip()` raised on every
+    # template render, /login included, so every page answered 500.
+    v = value.strip() if isinstance(value, str) else ""
     if not v.startswith("#"):
         v = "#" + v
     return v.lower() if _HEX_COLOR_RE.match(v) else ""

@@ -108,7 +108,7 @@ from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, authori
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     encrypt_secret, is_encrypted, harden_data_permissions, read_setup_token, remove_setup_token,
-    autoblock_host_ids)
+    autoblock_host_ids, _r13a_cfg_text)
 from panel.services import notifications
 # The two chat bots. They import nothing from app.py — every dependency they have comes from
 # the module that owns it — so unlike panel.routes.* this needs no lazy import to break a cycle.
@@ -2093,7 +2093,7 @@ def register_context_processors(app):
         lang = _current_lang()
         return {
             "site_title": cfg.get("site_title", "LinuxGSM Panel"),
-            "login_tagline": (cfg.get("login_tagline") or "").strip(),
+            "login_tagline": _r13a_cfg_text(cfg, "login_tagline").strip(),
             "accent_color": _valid_hex_color(cfg.get("accent_color")),
             # Templates ask for their own panel order: panel_layout(region, default_keys) ->
             # (visible, hidden). Passed as a callable so a page declares the panels IT emitted and
@@ -2679,8 +2679,11 @@ def _explicit_socket_origins(explicit):
     # A blank entry ("" or spaces, from a hand edit) is no origin: kept, it made the list truthy
     # and every handshake was compared against "" and refused -- no console, no terminal -- where
     # dropping it lets an otherwise-empty list fall through to the per-request check, as "*" does.
-    exact = [o for o in listed if str(o).strip() not in ("*", "")]
-    if any(str(o).strip() == "*" for o in listed) and not _socket_wildcard_warned:
+    # Only strings are origins: str(None) is "None", which passed the blank test above, so a
+    # hand-edited [null] or [0] made the list truthy and refused every handshake the same way.
+    listed = [o.strip() for o in listed if isinstance(o, str)]
+    exact = [o for o in listed if o not in ("*", "")]
+    if "*" in listed and not _socket_wildcard_warned:
         _socket_wildcard_warned.append(True)
         _log.warning('socketio_cors_origins "*" is ignored; set site_domain or list the exact '
                      'origin (e.g. https://panel.example.com)')
@@ -3056,7 +3059,7 @@ _RESOLVED_BIND = {}
 
 
 def _resolved_bind(cfg):
-    host = (cfg.get("bind_host") or "").strip()
+    host = _r13a_cfg_text(cfg, "bind_host").strip()
     if host:
         return host
     port = cfg.get("port", 5000)
@@ -3208,7 +3211,7 @@ def _boot_ssl_args(app, cfg, host, port):
         cert_path = str(DATA_DIR / "ssl" / "cert.pem")
         key_path = str(DATA_DIR / "ssl" / "key.pem")
         try:
-            _ensure_self_signed_cert(cert_path, key_path, cfg.get("site_domain") or host)
+            _ensure_self_signed_cert(cert_path, key_path, _r13a_cfg_text(cfg, "site_domain") or host)
             ssl_args = {"certfile": cert_path, "keyfile": key_path}
             print(f"  🔒 HTTPS enabled (self-signed) — https://{host}:{port}")
             print("     Browsers will show a certificate warning; click through to proceed.")

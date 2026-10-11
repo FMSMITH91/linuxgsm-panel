@@ -2867,7 +2867,7 @@ def _panel_login_proxied():
     except Exception:
         _log.debug("f2b: config unreadable; banning on all ports", exc_info=True)
         return True
-    bind = (cfg.get("bind_host") or "").strip().lower()
+    bind = _cfg._r13a_cfg_text(cfg, "bind_host").strip().lower()
     return bool(cfg.get("trust_proxy") or cfg.get("tailscale_setup_done")
                 or bind in ("127.0.0.1", "::1", "localhost"))
 

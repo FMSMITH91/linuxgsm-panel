@@ -13,6 +13,7 @@ import sys
 import time
 
 from panel.core import runtime_stats
+from panel.core.config import _r13a_cfg_text as _cfg_text
 from panel.ops import system_ops as so
 from panel.ops.debug_report import _src_net, _src_systemd
 from panel.ops.debug_report._base import Result, ago, unread_line
@@ -660,7 +661,7 @@ def _listen_lines(ctx, res, facts):
         res.add("- **Bind**: config.json could not be read · bound at boot %s"
                 % (_src_net.shown(boot_bind) if boot_bind else "unknown (no boot record)"))
         return
-    stored = (cfg.get("bind_host") or "").strip()
+    stored = _cfg_text(cfg, "bind_host").strip()
     res.add("- **Bind**: config %s · bound at boot %s · port: config %s / boot %s" % (
         _src_net.shown(stored) if stored else "auto", _src_net.shown(boot_bind) if boot_bind
         else "unknown (no boot record)", cfg.get("port", 5000), boot_port or "unknown"))

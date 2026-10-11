@@ -18,7 +18,10 @@ def _origin_candidates(environ, cfg):
     fwd = environ.get("HTTP_X_FORWARDED_HOST")
     if fwd:
         out.append(fwd.split(",")[0].strip())
-    out.append((cfg.get("site_domain") or "").strip())
+    # Not a string (a hand edit): no domain. `(5 or "").strip()` raised inside engineio's CORS
+    # callback, on every handshake: no console and no terminal.
+    domain = cfg.get("site_domain")
+    out.append(domain.strip() if isinstance(domain, str) else "")
     return [h for h in out if h]
 
 

@@ -5,7 +5,7 @@ relation to either. It closes over nothing from app.py — it reads the mount po
 config.load_config() on each call — so it moved verbatim.
 """
 from panel.core import runtime_stats
-from panel.core.config import load_config
+from panel.core.config import _r13a_cfg_text, load_config
 
 
 class PrefixMiddleware:
@@ -77,7 +77,9 @@ class PrefixMiddleware:
         prefix = (self._clean_prefix(environ.get("HTTP_X_FORWARDED_PREFIX", ""))
                   if self._may_trust_header(environ, cfg) else "")
         if not prefix:
-            mount = cfg.get("tailscale_mount", "")
+            # A non-string mount (a hand edit) is no mount: prefix.rstrip below raised on every
+            # request, static files and the Socket.IO handshake included.
+            mount = _r13a_cfg_text(cfg, "tailscale_mount")
             if mount and mount != "/":
                 prefix = mount
             else:
