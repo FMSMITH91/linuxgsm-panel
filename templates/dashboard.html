@@ -462,7 +462,9 @@
         <i class="bi bi-plus-lg"></i> Add tag
       </button>
     </div>
-    <div id="tag-list" class="d-flex flex-column gap-2" data-no-i18n></div>
+    {# Not data-no-i18n as a whole: that kept "Delete" and the empty state English. Each tag chip
+       guards its own (user-authored) name (server_tags.js chip()). #}
+    <div id="tag-list" class="d-flex flex-column gap-2"></div>
   </div>
 </details>
 {% endif %}

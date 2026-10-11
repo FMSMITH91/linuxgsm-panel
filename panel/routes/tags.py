@@ -9,7 +9,7 @@ from panel.db.models import (db)
 from panel.db.prefs import (_clean_panel_map)
 from panel.security.auth import (_can_edit_tags, get_game, get_user_servers,
     hash_password, log_action, server_access_required, verify_totp_step)
-from panel.core.http import (_json_body, _json_str, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag)
 from panel.core.validation import (_valid_hex_color, password_problem)
 from app import (_has_remember_cookie, _log, _register_session, _tag_json)
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _json_int, reauth_password, reauth_release,
@@ -233,9 +233,13 @@ def _register_tag_catalog(app):
             return jsonify({"success": False, "message": TAG_NAME_HELP}), 400
         if ServerTag.query.filter(db.func.lower(ServerTag.name) == name.lower()).first():
             return jsonify({"success": False, "message": "A tag with that name already exists."}), 409
+        # A JSON boolean or a 400: bool("false") is True, so a tag asked to be muted alerted.
+        notify = _r12c_json_flag(data, "notify", True)
+        if notify is None:
+            return jsonify({"success": False, "message": "notify must be true or false."}), 400
         try:
             tag = ServerTag(name=name, color=_valid_hex_color(data.get("color")),
-                            notify=bool(data.get("notify", True)),
+                            notify=notify,
                             created_by=current_user.username)
             db.session.add(tag)
             db.session.commit()

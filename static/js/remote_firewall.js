@@ -68,7 +68,7 @@ function _fwRenderRules(listEl, openGroups) {
       var scope = (g.action !== 'ALLOW' ? '<span class="badge bg-danger me-1">' + esc(g.action) + '</span>' : '') + esc(g.scope);
       html += '<tr><td>' + port + '</td>'
         + '<td>' + protoBadge(g.proto_label) + '</td>'
-        + '<td class="small">' + esc(g.comment || '—') + '</td>'
+        + '<td class="small" data-no-i18n>' + esc(g.comment || '—') + '</td>'
         + '<td class="small text-secondary">' + scope + '</td>'
         + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
         + '<td>' + (g.protected
@@ -146,7 +146,8 @@ function _fwUnlisted(message) {
 function blockBadge(c) {
   if (c === 'panel-autoblock') return '<span class="badge bg-info text-dark">Auto</span>';
   if (c === 'panel-block')     return '<span class="badge bg-secondary">Manual</span>';
-  return c ? '<span class="badge bg-dark">' + esc(c) + '</span>' : '<span class="text-secondary">—</span>';
+  // data-no-i18n: an operator's comment ("Game", "Test") is not the panel's text to translate.
+  return c ? '<span class="badge bg-dark" data-no-i18n>' + esc(c) + '</span>' : '<span class="text-secondary">—</span>';
 }
 
 function blockIp() {

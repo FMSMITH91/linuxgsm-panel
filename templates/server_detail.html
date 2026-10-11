@@ -294,13 +294,13 @@
       <div class="custom-cmd" data-cmd-id="{{ c.id }}" data-has-arg="{{ '1' if c.has_argument else '0' }}">
         {% if c.has_argument %}
         <div class="input-group input-group-sm" style="width:auto;">
-          <span class="input-group-text">{{ c.name }}</span>
+          <span class="input-group-text" data-no-i18n>{{ c.name }}</span>
           <input type="text" class="form-control cc-arg" style="max-width:180px;" maxlength="64"
                  placeholder="{{ c.argument_label or 'value' }}" aria-label="{{ c.argument_label or c.name }}">
           <button class="btn btn-outline-primary cc-run" type="button">Run</button>
         </div>
         {% else %}
-        <button class="btn btn-sm btn-outline-primary cc-run" type="button">{{ c.name }}</button>
+        <button class="btn btn-sm btn-outline-primary cc-run" type="button" data-no-i18n>{{ c.name }}</button>
         {% endif %}
       </div>
       {% endfor %}
@@ -502,7 +502,7 @@
         <table class="table table-borderless table-sm mb-0">
           <tr>
             <th scope="row" class="text-secondary fw-normal">Machine</th>
-            <td class="text-end"><span data-no-i18n>{{ remote.name }}</span>{% if remote.is_local %} <span class="badge bg-secondary" style="font-size:.6rem;">this panel</span>{% endif %}</td>
+            <td class="text-end"><span data-no-i18n>{{ remote.display_name }}</span>{% if remote.is_local %} <span class="badge bg-secondary" style="font-size:.6rem;">this panel</span>{% endif %}</td>
           </tr>
           {# Only while there is nothing to connect to yet. Once resolved, the Connect row below is
              the same address plus the port — and it is the one you can click to copy. #}

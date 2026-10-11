@@ -332,6 +332,38 @@ def is_js_ui_word(text, before):
     return bool(_JS_UI_WORD.match(text) and _JS_UI_SLOT.search(before))
 
 
+# A literal handed to t() (or a file's own wrapper for it, _discT) is a string the code itself says
+# a person reads, whatever its shape: lower-case ("player is connected to"), one word, or a branch
+# of a ternary inside the call. Matched as "an open t( call with no unbalanced bracket since".
+_JS_T_CALL = re.compile(r"""\b(?:t|_discT)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
+
+
+def is_js_t_arg(text, before):
+    """Is this literal an argument of t() / _discT(), given the source just `before` it?"""
+    # Not the right-hand side of a comparison: t(action === 'stop' ? … : …) chooses by 'stop'.
+    return bool(re.search(r"[A-Za-z]{2}", text) and not _JS_CODEY.search(text)
+                and not re.search(r"[=!]==?\s*$", before) and _JS_T_CALL.search(before))
+
+
+# An innerHTML-built literal: the text of a WHOLE element inside it (`<th>Mods</th>`, an icon then
+# `Scan failed.</span>`) reaches the page as its own text node, translated on the same terms as any
+# other — and _JS_CODEY drops the whole literal for its `<`, so none of it was ever asked for. That
+# is how a dialog built as one innerHTML string stayed English for every viewer (review 2026-10-11,
+# the players dialog; 117 such strings had no entry). Only an element's whole text counts: prose at
+# a literal's edge is spliced to a value and no catalog key can match it.
+_JS_MARKUP_TEXT = re.compile(r"(?:<(?!/)[^<>]*>|</i>)([^<>]+)</[a-zA-Z0-9]+>")
+
+
+def js_markup_texts(text):
+    """The user-visible whole-element texts inside an innerHTML-built literal."""
+    out = []
+    for m in _JS_MARKUP_TEXT.finditer(text):
+        seg = re.sub(r"\s+", " ", html.unescape(m.group(1))).strip()
+        if seg and (is_js_ui_text(seg) or _JS_UI_WORD.match(seg)):
+            out.append(seg)
+    return out
+
+
 def scan_js(js_dir=JS_DIR):
     """{string: {filename}} for every JS literal that reads as user-visible text."""
     found = {}
@@ -341,11 +373,13 @@ def scan_js(js_dir=JS_DIR):
             source = fh.read()
         lines = source.splitlines()
         for text, line, at in _js_strings_at(source):
-            if not (is_js_ui_text(text) or is_js_ui_word(text, source[max(0, at - 80):at])):
-                continue
             if 1 <= line <= len(lines) and JS_IGNORE in lines[line - 1]:
                 continue
-            found.setdefault(text, set()).add(name)
+            before = source[max(0, at - 160):at]
+            if is_js_ui_text(text) or is_js_ui_word(text, before[-80:]) or is_js_t_arg(text, before):
+                found.setdefault(text, set()).add(name)
+            for seg in js_markup_texts(text):
+                found.setdefault(seg, set()).add(name)
     return found
 
 

@@ -144,14 +144,24 @@ function _dashShowCounts(data) {
 
 // Re-render the card region when the failed set the API reports is not the set of failed-install
 // banners on screen. Why that is needed is at the call, in refreshStatus.
+//
+// A few tries per failed set, not one per poll: this assumes the template renders one banner for
+// every server the API calls failed. If a later template change gated a banner (by permission, by
+// host), the two would never agree, and every 8 s poll would re-fetch the whole dashboard. Three
+// tries leave room for a re-render whose fetch failed; agreement starts the count again.
+var _r12c_failedAsked = null, _r12c_failedTries = 0;
 function _dashResyncFailedBanners(data) {
   var failedNow = data.filter(function(s){ return s.status === 'failed'; })
                       .map(function(s){ return String(s.id); }).sort().join(',');
   var failedShown = Array.prototype.map
     .call(document.querySelectorAll('.install-failed[data-server-id]'),
           function(el){ return el.getAttribute('data-server-id'); }).sort().join(',');
-  if (failedNow !== failedShown && document.getElementById('server-cards')
-      && window.refreshSection) {
+  // In agreement again, the next disagreement is new (a reinstall that fails again).
+  if (failedNow === failedShown) _r12c_failedAsked = null;
+  else if (failedNow !== _r12c_failedAsked) { _r12c_failedAsked = failedNow; _r12c_failedTries = 0; }
+  if (failedNow !== failedShown && _r12c_failedTries < 3
+      && document.getElementById('server-cards') && window.refreshSection) {
+    _r12c_failedTries++;
     // With the after-hook, same as the other #server-cards swap above. Without it the region
     // comes back re-rendered but un-re-armed: a filter the user has typed stops applying (every
     // row reappears) and host-card dragging stops working, until a reload. The swap replaces

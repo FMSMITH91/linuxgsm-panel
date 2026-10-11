@@ -226,7 +226,7 @@
                   {% elif g.proto_label == 'BOTH' %}<span class="badge bg-secondary">Both</span>
                   {% else %}<span class="text-secondary">—</span>{% endif %}
                 </td>
-                <td class="small">{{ g.comment or '—' }}</td>
+                <td class="small" data-no-i18n>{{ g.comment or '—' }}</td>
                 <td class="small text-secondary">
                   {% if g.action != 'ALLOW' %}<span class="badge bg-danger me-1">{{ g.action }}</span>{% endif %}
                   {{ g.scope }}
@@ -311,7 +311,7 @@
                 <td>
                   {% if g.comment == 'panel-autoblock' %}<span class="badge bg-info text-dark">Auto</span>
                   {% elif g.comment == 'panel-block' %}<span class="badge bg-secondary">Manual</span>
-                  {% elif g.comment %}<span class="badge bg-dark">{{ g.comment }}</span>
+                  {% elif g.comment %}<span class="badge bg-dark" data-no-i18n>{{ g.comment }}</span>
                   {% else %}<span class="text-secondary">—</span>{% endif %}
                 </td>
                 <td><span class="text-secondary" style="font-size:.68rem;">{{ g.family_label }}</span></td>

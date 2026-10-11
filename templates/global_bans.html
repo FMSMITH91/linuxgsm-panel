@@ -73,9 +73,9 @@
           {% for b in bans %}
           <tr>
             <td><code class="text-info">{{ b.steamid }}</code></td>
-            <td>{{ b.player_name or '—' }}</td>
-            <td class="small">{{ b.reason or '' }}</td>
-            <td class="d-none d-md-table-cell small text-secondary">{{ b.created_by }}</td>
+            <td data-no-i18n>{{ b.player_name or '—' }}</td>
+            <td class="small" data-no-i18n>{{ b.reason or '' }}</td>
+            <td class="d-none d-md-table-cell small text-secondary" data-no-i18n>{{ b.created_by }}</td>
             <td class="d-none d-md-table-cell small text-secondary">{{ b.created_at|datetime if b.created_at else '' }}</td>
             <td class="text-end text-nowrap">
               <form method="POST" action="{{ url_for('global_bans_delete', ban_id=b.id) }}" class="d-inline mb-0">

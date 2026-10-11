@@ -46,7 +46,11 @@
 <ul class="nav nav-pills mb-3 flex-nowrap overflow-auto" id="mtab-nav">
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="overview"><i class="bi bi-speedometer2"></i> Overview</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="controls"><i class="bi bi-sliders"></i> Host Controls</button></li>
+  {# Every Maintenance card is gated like this (the panel-only ones on a superadmin, Ubuntu Pro on
+     _host_ctl), so for a delegated host admin on the panel host the tab opened onto a blank page. #}
+  {% if _host_ctl %}
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="maintenance"><i class="bi bi-tools"></i> Maintenance</button></li>
+  {% endif %}
   {# Same rule as the Connection & SSH card: on the panel host every Security endpoint is
      /api/panel/security/*, all @superadmin_required, and their 403 JSON rendered as "fail2ban isn't
      installed", "No security events yet." and a green "Auto-block on" that wrote nothing. #}
@@ -407,8 +411,9 @@
     </div>
     <div id="fb-disk" class="small text-secondary mb-1"></div>
     <div id="fb-summary" class="small text-info-emphasis mb-2"></div>
-    {# data-no-i18n: remote_manage_backups.js writes game and host NAMES in here. #}
-    <div id="fb-games" class="small" data-no-i18n></div>
+    {# Not data-no-i18n as a whole (that kept "Back up now", "no backups yet" and the column heads
+       English): remote_manage_backups.js guards each game name, host name and file name itself. #}
+    <div id="fb-games" class="small"></div>
   </div>
 </div>
 
@@ -773,11 +778,11 @@
       </div>
     </div>
     {% else %}
-    {# This branch also renders for the PANEL HOST when the viewer is not a superadmin. The panel
-       reaches its own host locally, not over SSH, so "Panel connects via local → local@127.0.0.1",
-       a Migrate button whose test login as the user "local" always fails, and a host key that
-       "pins automatically on first connection" (there is none) were all false there. Only the
-       public-SSH and SSH-port rows, whose endpoints work for the panel host, are shown for it. #}
+    {# A REMOTE host's branch. It once rendered for the panel host too (a non-superadmin viewer), where
+       "Panel connects via local → local@127.0.0.1", a Migrate button whose test login always fails
+       and a host key that "pins automatically" were all false; since the whole card moved inside
+       `{% if _host_ctl %}` that viewer never gets here. The `not remote.is_local` guards below are
+       kept as a backstop, so a later change to the card's gate cannot bring those rows back. #}
     <div class="row g-3">
       {% if not remote.is_local %}
       <div class="col-md-6">
@@ -881,7 +886,9 @@
           </td>
           <td><span class="badge {% if gs.status == 'online' %}bg-success{% elif gs.status in ('installing', 'configuring') %}bg-info text-dark{% else %}bg-secondary{% endif %}">{{ gs.status|title }}</span></td>
           <td class="text-end text-nowrap">
-            <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart"><i class="bi bi-terminal-fill"></i> Console</a>
+            {# Disabled while it installs, as the dashboard's is: the page bounces it with "still installing". #}
+            {% set busy = (not gs.installed) or gs.status in ('installing', 'configuring') %}
+            <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary{% if busy %} disabled{% endif %}" title="Console, commands, restart"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}><i class="bi bi-terminal-fill"></i> Console</a>
             {# Gated as the dashboard gates them (can_files / can_uninstall): this page needs only
                MANAGE_REMOTES, and a host operator without these rights was walked through the
                typed-name uninstall confirm to be refused at the end of it. #}

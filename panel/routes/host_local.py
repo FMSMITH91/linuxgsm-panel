@@ -254,7 +254,9 @@ def _register_panel_repair(app):
         paths = data.get("paths")
         # A paths value that is not a list is refused, not read as "restore all": a malformed
         # request for one file must not become the widest restore there is.
-        if paths is not None and not isinstance(paths, list):
+        # ...and each entry is a path, text: an object in the list raised TypeError out of
+        # panel_repair's set(paths) and came back as a 500.
+        if paths is not None and not (isinstance(paths, list) and all(isinstance(p, str) for p in paths)):
             return jsonify({"success": False, "message": "paths must be a list of files."}), 400
         try:
             # `paths`, not `paths or None`: an empty list is a request to restore NOTHING, and

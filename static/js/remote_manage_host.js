@@ -557,7 +557,10 @@ function runDiagnostics(){
   .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
+// Each panel-only loader asks only when its card was rendered: the cards are a superadmin's, and a
+// delegated host admin's page fired all four requests and got four 403s on every load.
 function loadIntegrity(){
+  if(!document.getElementById('diag-integrity')) return;
   fetch(MOUNT+'/api/panel/integrity').then(function(r){return r.json();}).then(function(d){
     var wrap=document.getElementById('diag-integrity');
     var clean=document.getElementById('diag-integrity-clean');
@@ -634,6 +637,7 @@ function fmtBytes(b){
   return b+' B';
 }
 function loadDbStats(){
+  if(!document.getElementById('diag-db-stats')) return;
   fetch(MOUNT+'/api/panel/db-stats').then(function(r){return r.json();}).then(function(d){
     var el=document.getElementById('diag-db-stats'); if(!el) return;
     if(d.error){ el.textContent='Could not read database stats.'; return; }
@@ -705,6 +709,7 @@ function repairDb(){
 
 // ── Automatic security updates (panel host only) ────────────────────
 function loadAutoUpd(){
+  if(!document.getElementById('diag-autoupd-status')) return;
   fetch(MOUNT+'/api/panel/auto-updates').then(function(r){return r.json();}).then(function(d){
     var el=document.getElementById('diag-autoupd-status');
     var btn=document.getElementById('diag-autoupd-btn');

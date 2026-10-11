@@ -3011,8 +3011,10 @@ echo ""
 PORT="$(panel_port)"
 SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO="sudo"
 
-PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
-    || curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null \
+# -4: the open/closed decision below reads the IPv4 rule, so the address printed must be IPv4 too.
+# api.ipify.org only ever answers IPv4; ifconfig.me answers in whichever family curl connected over.
+PUBLIC_IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+    || curl -4 -fsS --max-time 5 https://ifconfig.me 2>/dev/null \
     || hostname -I 2>/dev/null | awk '{print $1}')"
 
 # Tailscale address, only if it's installed AND logged in (MagicDNS name preferred).
@@ -3062,6 +3064,25 @@ if command -v ufw >/dev/null 2>&1; then
         # DENY/REJECT from Anywhere opens nothing.
         _ufw_blocked=0
         while IFS= read -r _ufw_line; do
+            # A port RANGE or LIST covering the port (`5000:5010/tcp DENY Anywhere`, ufw prints them
+            # only with a protocol) is a rule for it too: it set neither flag, so the auto-open
+            # appended an ALLOW behind a DENY and printed "Opened". Read as the port itself.
+            _ufw_spec="${_ufw_line%%[[:space:]]*}"
+            if [[ "${_ufw_spec}" =~ ^[0-9][0-9,:]*/tcp$ ]] && [[ "${_ufw_spec}" == *[,:]* ]]; then
+                IFS=, read -r -a _ufw_items <<< "${_ufw_spec%/tcp}"
+                for _ufw_item in "${_ufw_items[@]}"; do
+                    if { [[ "${_ufw_item}" =~ ^([0-9]+):([0-9]+)$ ]] \
+                            && (( PORT >= BASH_REMATCH[1] && PORT <= BASH_REMATCH[2] )); } \
+                            || [[ "${_ufw_item}" == "${PORT}" ]]; then
+                        _ufw_line="${PORT}/tcp${_ufw_line#"${_ufw_spec}"}"
+                        break
+                    fi
+                done
+            fi
+            # An OUTBOUND rule (`5000/tcp ALLOW OUT Anywhere`) says nothing about reaching the
+            # panel, and counted as the operator's rule: the port was left closed and the banner
+            # said a rule "limits" it.
+            [[ "${_ufw_line}" =~ ^${PORT}(/tcp)?(\ \(v6\))?[[:space:]]+[A-Z]+[[:space:]]+OUT([[:space:]]|$) ]] && continue
             if [[ "${PORT_OPEN}" -eq 0 ]] \
                     && [[ "${_ufw_line}" =~ ^${PORT}(/tcp)?[[:space:]]+(DENY|REJECT)([[:space:]]+IN)?[[:space:]]+Anywhere ]]; then
                 _ufw_blocked=1

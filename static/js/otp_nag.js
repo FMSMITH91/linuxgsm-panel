@@ -1,8 +1,11 @@
 // The "turn on 2FA" reminder banner.
 // Show unless suppressed for this browser session ("Not now"). Permanent dismissal is stored
 // server-side, so if we got here the account hasn't chosen "Don't remind me again".
+// The read is guarded like the write below: where site data is blocked, sessionStorage THROWS,
+// and unguarded that was an uncaught error on every page load (the banner simply stays).
 (function(){ var n=document.getElementById('otp-nag'); if(!n) return;
-  if(sessionStorage.getItem('otpNagHidden')==='1'){ n.remove(); } })();
+  var hidden=false; try{ hidden=sessionStorage.getItem('otpNagHidden')==='1'; }catch(e){}
+  if(hidden){ n.remove(); } })();
 function hideOtpNag(session){ var n=document.getElementById('otp-nag'); if(n) n.remove();
   if(session){ try{ sessionStorage.setItem('otpNagHidden','1'); }catch(e){} } }
 function dismissOtpNagForever(){

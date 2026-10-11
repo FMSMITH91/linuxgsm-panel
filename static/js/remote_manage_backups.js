@@ -27,6 +27,7 @@ function bkReconcile(id, saved){
   return (typed!=='' && String(saved)!==typed) ? (' — ' + typed + ' is out of range, kept ' + saved) : '';
 }
 function loadBackups(){
+  if(!document.getElementById('bk-tbody')) return;   // the Backups card is a superadmin's (see loadIntegrity)
   fetch(MOUNT+'/api/panel/backups').then(r=>r.json()).then(function(d){
     var s=d.settings||{};
     var en=document.getElementById('bk-enabled'); if(en) en.checked = s.enabled!==false;
@@ -70,11 +71,13 @@ function bkRenderGames(fg, d){
     var st=g.status, stHtml=bkGameStatus(g, st);
     // Host label disambiguates same-named servers on different machines; per-server disk is
     // that server's OWN host, so the numbers/warnings are right even with multiple hosts.
-    var hostHtml = g.host ? ' <span class="text-secondary small">· <i class="bi bi-hdd-network"></i> '+escapeHtml(g.host)+'</span>' : '';
+    // Each NAME is data-no-i18n on its own (a host called "Server" read "Servidor"); #fb-games is
+    // not, so the fixed words around them are translated.
+    var hostHtml = g.host ? ' <span class="text-secondary small">· <i class="bi bi-hdd-network"></i> <span data-no-i18n>'+escapeHtml(g.host)+'</span></span>' : '';
     var dkHtml = bkGameDisk(g);
     gh += '<div class="mb-3 border-bottom pb-2">'
         + '<div class="d-flex justify-content-between align-items-center gap-2">'
-        + '<span><strong>'+escapeHtml(g.name)+'</strong>'+hostHtml+'</span>'
+        + '<span><strong data-no-i18n>'+escapeHtml(g.name)+'</strong>'+hostHtml+'</span>'
         + '<button class="btn btn-sm btn-outline-success py-0 px-2" '+(st&&st.running?'disabled':'')
         + '' + _da('backupOneGame', [g.id, '@self']) + '><i class="bi bi-play-circle"></i> Back up now</button>'
         + '</div>'
@@ -191,7 +194,7 @@ function bkGameRows(g){
     .filter(function(b){ return !b.in_progress; })
     .map(function(b){
     return '<tr>'
-      + '<td><div style="font-family:monospace;font-size:.72rem;word-break:break-all;">'+escapeHtml(b.name)+'</div>'
+      + '<td><div style="font-family:monospace;font-size:.72rem;word-break:break-all;" data-no-i18n>'+escapeHtml(b.name)+'</div>'
       +   '<div class="text-secondary" style="font-size:.68rem;">'+escapeHtml(bkAgo(b.created))+'</div></td>'
       + '<td>'+bkFmtBytes(b.size)+'</td>'
       + '<td class="text-end text-nowrap">'
@@ -340,26 +343,43 @@ function fbStart(mode){
       [4000,15000,45000,90000,150000].forEach(function(ms){ setTimeout(loadBackups, ms); });   // refresh as it runs
     }).catch(function(){ bkMsg('✗ Could not start','text-danger'); });
 }
+// Built node by node, like server_actions.js's restart dialog and for the same reason: as one
+// innerHTML string the counts and server names were spliced into the prose, so no catalog key could
+// match it and the whole dialog stayed English. Counts and names sit in data-no-i18n elements.
 function fbPlayersDialog(busy){
   var total=busy.reduce(function(s,b){return s+(b.players||0);},0);
-  var list=busy.map(function(b){return escapeHtml(b.name)+' ('+b.players+')';}).join(', ');
+  function el(tag, cls, text){ var e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
+  function data(tag, text){ var e=el(tag, null, text); e.setAttribute('data-no-i18n',''); return e; }
   var ov=document.createElement('div');
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML='<div class="card" style="max-width:540px;width:100%;">'  // nosemgrep
-    +'<div class="card-header"><i class="bi bi-people-fill"></i> Players are online</div>'
-    +'<div class="card-body">'
-    +'<p class="mb-2"><strong>'+total+'</strong> player'+(total===1?' is':'s are')+' connected to <strong>'+busy.length+'</strong> server'+(busy.length===1?'':'s')+': '+list+'.</p>'
-    +'<p class="small text-secondary mb-3">A backup briefly stops each server — this is about the busy ones.</p>'
-    +'<div class="d-flex flex-column gap-2">'
-    +'<button class="btn btn-warning" id="fbd-now"><i class="bi bi-play-circle"></i> Back up now (disconnects '+total+' player'+(total===1?'':'s')+')</button>'
-    +'<button class="btn btn-success" id="fbd-wait"><i class="bi bi-hourglass-split"></i> Wait until they\'re empty, then back up</button>'
-    +'<button class="btn btn-outline-secondary" id="fbd-cancel">Cancel</button>'
-    +'</div></div></div>';
+  var card=el('div','card'); card.style.cssText='max-width:540px;width:100%;';
+  var head=el('div','card-header'); head.appendChild(el('i','bi bi-people-fill')); head.appendChild(document.createTextNode(' '));
+  head.appendChild(el('span', null, _discT('Players are online'))); card.appendChild(head);
+  var body=el('div','card-body');
+  var who=el('p','mb-2');
+  who.appendChild(data('strong', String(total))); who.appendChild(document.createTextNode(' '));
+  who.appendChild(el('span', null, _discT(total===1 ? 'player is connected to' : 'players are connected to')));
+  who.appendChild(document.createTextNode(' '));
+  who.appendChild(data('strong', String(busy.length))); who.appendChild(document.createTextNode(' '));
+  who.appendChild(el('span', null, _discT(busy.length===1 ? 'server:' : 'servers:'))); who.appendChild(document.createTextNode(' '));
+  who.appendChild(data('span', busy.map(function(b){ return b.name+' ('+b.players+')'; }).join(', ')+'.'));
+  body.appendChild(who);
+  body.appendChild(el('p','small text-secondary mb-3', _discT('A backup briefly stops each server — this is about the busy ones.')));
+  var btns=el('div','d-flex flex-column gap-2');
+  function button(id, cls, icon, label){
+    var b=el('button', cls); b.id=id;
+    if(icon){ b.appendChild(el('i','bi bi-'+icon)); b.appendChild(document.createTextNode(' ')); }
+    b.appendChild(el('span', null, label)); btns.appendChild(b); return b;
+  }
+  var now=button('fbd-now','btn btn-warning','play-circle', _discT('Back up now and disconnect them'));
+  var wait=button('fbd-wait','btn btn-success','hourglass-split', _discT("Wait until they're empty, then back up"));
+  var cancel=button('fbd-cancel','btn btn-outline-secondary',null, _discT('Cancel'));
+  body.appendChild(btns); card.appendChild(body); ov.appendChild(card);
   document.body.appendChild(ov);
   function close(){ ov.remove(); }
-  ov.querySelector('#fbd-now').onclick=function(){ close(); fbStart('now'); };
-  ov.querySelector('#fbd-wait').onclick=function(){ close(); fbStart('wait'); };
-  ov.querySelector('#fbd-cancel').onclick=function(){ close(); bkMsg('',''); };
+  now.onclick=function(){ close(); fbStart('now'); };
+  wait.onclick=function(){ close(); fbStart('wait'); };
+  cancel.onclick=function(){ close(); bkMsg('',''); };
   ov.addEventListener('click',function(e){ if(e.target===ov){ close(); bkMsg('',''); } });
 }
 function backupOneGame(id,btn,force){
@@ -440,6 +460,10 @@ function bkRefreshDefaultNotes(full){
 }
 function setGameSchedule(id){
   var kpEl=document.getElementById('gsk-'+id);
+  // A number box reads "" for text it cannot parse ("7d", "-", "e"), and "" is the route's
+  // "inherit the default": the override was cleared and the page said "Schedule saved". Only the
+  // page can tell the two apart, so an unparseable box is refused here.
+  if(kpEl.validity && kpEl.validity.badInput){ bkMsg('Enter a whole number, or leave it empty.','text-danger'); return; }
   var iv=document.getElementById('gsi-'+id).value, kp=kpEl.value.trim();   // "" = inherit the default
   // Only the field that CHANGED from what is stored. The select and the box both fire this, and
   // the route leaves an absent field alone; posting both meant a change to one re-sent the other
@@ -638,17 +662,19 @@ pollWhenVisible(pollLive, 2000);
 function scanExisting(){
   var btn=document.getElementById('disc-scan-btn'), out=document.getElementById('disc-result');
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Scanning…'; }
-  if(out) out.innerHTML='<span class="text-secondary small"><i class="bi bi-hourglass-split"></i> Scanning every user account on this host…</span>';
+  // Every fixed word inside #disc-result goes through _discT: the container is data-no-i18n (it
+  // holds account names read off the host), so the page's translator never reaches it.
+  if(out) out.innerHTML='<span class="text-secondary small"><i class="bi bi-hourglass-split"></i> '+escapeHtml(_discT('Scanning every user account on this host…'))+'</span>';
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/discover').then(function(r){return r.json();}).then(function(d){
     if(!out) return;
     if(d.error){ out.innerHTML='<span class="text-danger small">'+escapeHtml(d.error)+'</span>'; return; }  // nosemgrep
     var s=d.servers||[];
-    if(!s.length){ out.innerHTML='<span class="text-secondary small"><i class="bi bi-check2"></i> No new LinuxGSM servers found — anything already in the panel is skipped.</span>'; prependContentNotes(out, d.content); return; }
+    if(!s.length){ out.innerHTML='<span class="text-secondary small"><i class="bi bi-check2"></i> '+escapeHtml(_discT('No new LinuxGSM servers found — anything already in the panel is skipped.'))+'</span>'; prependContentNotes(out, d.content); return; }
     var rows=s.map(function(g){
       return '<tr>'
         +'<td><input type="checkbox" class="form-check-input disc-chk" checked data-user="'+escapeHtml(g.user)+'"'
         +' data-game="'+escapeHtml(g.game_type)+'" data-autostart="'+(g.autostart?1:0)+'"></td>'
-        +'<td class="font-monospace">'+escapeHtml(g.user)+(g.autostart?' <span class="badge bg-success" style="font-size:.58rem;">autostart</span>':'')+'</td>'
+        +'<td class="font-monospace">'+escapeHtml(g.user)+(g.autostart?' <span class="badge bg-success" style="font-size:.58rem;">'+escapeHtml(_discT('autostart'))+'</span>':'')+'</td>'
         +'<td>'+escapeHtml(g.game_name||g.game_type)+'</td>'
         +(g.port ? '<td>'+Number(g.port)+'</td>'
                  : '<td title="'+escapeHtml(_discT('Not in its LinuxGSM config: read from LinuxGSM when imported'))+'">—</td>')
@@ -657,11 +683,16 @@ function scanExisting(){
         +'<td>'+(g.cron||0)+'</td></tr>';
     }).join('');
     out.innerHTML='<div class="table-responsive"><table class="table table-sm align-middle mb-2">'  // nosemgrep
-      +'<thead><tr><th style="width:1%"><input type="checkbox" class="form-check-input" checked' + _da('discToggleAll', ['@self']) + ' aria-label="Select all"></th><th>User</th><th>Game</th><th>Port</th><th title="LinuxGSM backups on disk">Backups</th><th title="Installed mods">Mods</th><th title="Cron entries for this user">Cron</th></tr></thead>'
+      +'<thead><tr><th style="width:1%"><input type="checkbox" class="form-check-input" checked' + _da('discToggleAll', ['@self'])
+      +' aria-label="'+escapeHtml(_discT('Select all'))+'"></th>'
+      +'<th>'+escapeHtml(_discT('User'))+'</th><th>'+escapeHtml(_discT('Game'))+'</th><th>'+escapeHtml(_discT('Port'))+'</th>'
+      +'<th title="'+escapeHtml(_discT('LinuxGSM backups on disk'))+'">'+escapeHtml(_discT('Backups'))+'</th>'
+      +'<th title="'+escapeHtml(_discT('Installed mods'))+'">'+escapeHtml(_discT('Mods'))+'</th>'
+      +'<th title="'+escapeHtml(_discT('Cron entries for this user'))+'">'+escapeHtml(_discT('Cron'))+'</th></tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'
-      +'<button class="btn btn-sm btn-primary"' + _da('importExisting', ['@self']) + '><i class="bi bi-plus-circle"></i> Import selected</button> <span id="disc-msg" class="small ms-2"></span>';
+      +'<button class="btn btn-sm btn-primary"' + _da('importExisting', ['@self']) + '><i class="bi bi-plus-circle"></i> '+escapeHtml(_discT('Import selected'))+'</button> <span id="disc-msg" class="small ms-2"></span>';
     prependContentNotes(out, d.content);
-  }).catch(function(){ if(out) out.innerHTML='<span class="text-danger small">Scan failed.</span>'; })
+  }).catch(function(){ if(out) out.innerHTML='<span class="text-danger small">'+escapeHtml(_discT('Scan failed.'))+'</span>'; })
   .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-search"></i> Scan'; } })
   .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
@@ -687,7 +718,8 @@ function appendSkippedNote(msg, skipped){
   if(!msg || !sk.length) return;
   var span=document.createElement('span');
   span.className='text-warning ms-1';
-  span.textContent='Skipped '+sk.length+': '+sk.join(', ')+'.';
+  // The count and the account names are data; only the word is translated.
+  span.textContent=_discT('Skipped')+' ('+sk.length+'): '+sk.join(', ')+'.';
   msg.appendChild(span);
 }
 // An imported account the helper would not put in the panel's game-account group (it can already
@@ -756,10 +788,12 @@ function prependContentNotes(out, content){
     var div=document.createElement('div'); div.className='text-secondary small mb-2';
     var icon=document.createElement('i'); icon.className='bi bi-info-circle';
     div.appendChild(icon);
-    div.appendChild(document.createTextNode(' Skipped '+n+' GMod content install'+(n===1?'':'s')+' under '));
+    // One fixed sentence, then the data (the account, its count and its games) after it: a sentence
+    // with the count and the account inside it could not be translated.
+    div.appendChild(document.createTextNode(' '+_discT('Skipped GMod content installs — mountable content, not servers:')+' '));
     var who=document.createElement('span'); who.className='font-monospace'; who.textContent=c.user||'?';
     div.appendChild(who);
-    div.appendChild(document.createTextNode(' ('+games.join(', ')+') — mountable content, not servers.'));
+    div.appendChild(document.createTextNode(' ('+n+': '+games.join(', ')+')'));
     frag.appendChild(div);
   });
   out.insertBefore(frag, out.firstChild);
@@ -772,22 +806,23 @@ function importExisting(btn){
     picks.push({user:c.getAttribute('data-user'), game_type:c.getAttribute('data-game'),
                 autostart:c.getAttribute('data-autostart')==='1'});
   });
-  if(!picks.length){ if(msg) msg.innerHTML='<span class="text-warning">Select at least one.</span>'; return; }
-  btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Importing…';
+  if(!picks.length){ if(msg) msg.innerHTML='<span class="text-warning">'+escapeHtml(_discT('Select at least one.'))+'</span>'; return; }
+  btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> '+escapeHtml(_discT('Importing…'));
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/import',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({servers:picks})})
     .then(function(r){return r.json();}).then(function(d){
       var n=(d.added||[]).length;
-      if(n){ window.toast('Imported '+n+' server'+(n===1?'':'s')+'.', 'success');
-             if(msg) msg.innerHTML='<span class="text-success">Imported '+n+' — see the Game Servers list.</span>';  // nosemgrep
-             btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected';
+      if(n){ window.toast(_discT('Imported')+' '+n, 'success');
+             if(msg) msg.innerHTML='<span class="text-success">'+escapeHtml(_discT('Imported'))+' '+n+' — '  // nosemgrep
+                                   +escapeHtml(_discT('see the Game Servers list.'))+'</span>';
+             btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> '+escapeHtml(_discT('Import selected'));
              window.refreshSection('#host-servers-card'); }   // show the new rows in place, no reload
-      else { if(msg) msg.innerHTML='<span class="text-danger">'+escapeHtml(d.message||'Nothing imported.')+'</span>';  // nosemgrep
-             btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; }
+      else { if(msg) msg.innerHTML='<span class="text-danger">'+escapeHtml(d.message||_discT('Nothing imported.'))+'</span>';  // nosemgrep
+             btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> '+escapeHtml(_discT('Import selected')); }
       appendSkippedNote(msg, d.skipped);
       if(n) appendNotImportedNote(msg, (d.refused||[]).concat(d.unread||[]));
       appendEnrolNote(msg, d.not_enrolled);
       appendSharedPortNote(msg, d.shared_ports);
-    }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Import failed.</span>';
-             btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; });
+    }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">'+escapeHtml(_discT('Import failed.'))+'</span>';
+             btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> '+escapeHtml(_discT('Import selected')); });
 }

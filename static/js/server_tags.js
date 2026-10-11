@@ -64,8 +64,18 @@
       // strips the tag from every server that carries it.
       var count = (typeof tag.server_count === 'number') ? tag.server_count
                                                           : (tag.server_ids || []).length;
-      meta.textContent = count + ' server(s)'
-                         + (tag.notify ? '' : ' · alerts muted');
+      // The count is its own node and each phrase another, so the page's translator can match the
+      // phrases ("3 server(s)" as one node matched no catalog key).
+      meta.appendChild(document.createTextNode(String(count)));
+      var unit = document.createElement('span');
+      unit.textContent = ' server(s)';
+      meta.appendChild(unit);
+      if (!tag.notify){
+        meta.appendChild(document.createTextNode(' · '));
+        var muted = document.createElement('span');
+        muted.textContent = 'alerts muted';
+        meta.appendChild(muted);
+      }
       row.appendChild(meta);
       var del = document.createElement('button');
       del.className = 'btn btn-sm btn-link text-danger text-decoration-none ms-auto';
