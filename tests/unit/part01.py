@@ -113,6 +113,25 @@ from panel.services.monitoring import (_whitelisted)  # noqa: F401 - re-export: 
 from panel.db.prefs import (_apply_user_order)
 from panel.security.auth import can_access_remote, client_ip  # noqa: F401 - re-export: a later part imports this from here
 
+# The self-update log, for the whole run: this checkout's own data/self-update.log decided every
+# check that reaches system_ops._update_in_progress() (a backup restore, a repair, an update
+# launch) — a recent, unfinished one on a dev box turned them all into "an update is being
+# installed" (part10, part03's repair). A check that points PANEL_DIR elsewhere still gets that
+# directory's log, as before; only the checkout's own is swapped for one in a temp dir.
+_r13d_real_ulp, _r13d_real_pd = SO._update_log_path, SO.PANEL_DIR
+_R13D_ULOG_DIR = __import__("tempfile").mkdtemp(prefix="lgsm-unit-ulog-")
+
+
+def _r13d_update_log_path():
+    """The update log a check sees: never the checkout's own."""
+    if SO.PANEL_DIR == _r13d_real_pd:
+        return os.path.join(_R13D_ULOG_DIR, "self-update.log")
+    return _r13d_real_ulp()
+
+
+SO._update_log_path = _r13d_update_log_path
+__import__("atexit").register(__import__("shutil").rmtree, _R13D_ULOG_DIR, True)
+
 results = []
 
 # ── the eventlet hub, swept at every check() ────────────────────────────────────────────────────

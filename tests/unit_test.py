@@ -166,10 +166,15 @@ for _part in _PARTS:
     _path_before = list(sys.path)
     importlib.import_module("unit." + _part)
     _hub_after.append((_part, _hub_leftovers()))
-    # The entries, not their order: part01 puts the repository root (already on it) first, which
-    # gives no top-level name a new file to resolve to.
-    if set(sys.path) != set(_path_before):
-        _path_moved.append((_part, sorted(set(sys.path) ^ set(_path_before))))
+    # An entry added or taken off, or a tools/ directory moved AHEAD of the repository root. Not
+    # the plain order: part01 puts the root (already on it) first, which shadows nothing. But
+    # tools/ is on sys.path already when the suite runs under tools/nosudo_runner.py, BEHIND the
+    # root, so a leaked insert(0, tools) only reorders — and puts tools/run.py, serve.py and the
+    # rest ahead of every top-level name the panel and the parts import.
+    _ahead = [_p for _p in sys.path[:sys.path.index(_root) if _root in sys.path else len(sys.path)]
+              if os.path.realpath(_p).startswith(os.path.join(os.path.realpath(_root), "tools"))]
+    if set(sys.path) != set(_path_before) or _ahead:
+        _path_moved.append((_part, sorted(set(sys.path) ^ set(_path_before)) or _ahead))
 from unit.part01 import check, results, hub_leaks, hub_swept  # noqa: E402
 
 # A part that leaves a directory on sys.path (tools/, tools/js_coverage) hands every later import of
