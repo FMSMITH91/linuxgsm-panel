@@ -295,6 +295,7 @@ _CONSOLE56 = (
     "  _awayRead = false, _shownOnReturn = {}, shown = [], _rebuildPushes = [], _rebuildSeq = 0,\n"
     "  _REBUILD_KEEP = 2000;\n"
     "function appendConsole(text, ts){ shown.push(text); }\n"
+    "function _r13c_notePanelPush(){}\n"
     "function _showReturnGap(){ shown.push('GAP'); }\n"
     "function _appendConsoleRows(rows, ts, at){ if (!rows.length) return;\n"
     "  _consoleLines = _consoleLines.concat(rows.map(r => r.line)); _logAt = Array.isArray(at) ? at : null; }\n"

@@ -13,7 +13,13 @@ Held here, each against the code path the finding named:
 HOW IT RUNS. Routes on part12's Flask app and client (part12 has run), every stub through
 _p9_patch and undone in the finally. Scripts in node on this part's own fixtures.
 """
+import ast as _ast59
+import json as _json59
 import os
+import re as _re59
+import shutil as _shutil59
+import sys as _sys59
+import tempfile as _tf59
 from types import SimpleNamespace as _NS59
 
 from unit.part01 import check, skip
@@ -270,3 +276,336 @@ finally:
             _P9_CFG_PATH.unlink()
     else:
         _P9_CFG_PATH.write_bytes(_CFG59_SNAPSHOT)
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 2. templates and pages
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_A59 = _p9_client(P9_ADMIN)
+try:
+    # ── /tailscale: another app's Serve mount is shown to superadmins only ──────────────────────
+    _p9_patch(_ts59, "get_tailscale_info",
+              lambda *a, **k: _ts59.TailscaleInfo(installed=True, running=True, funnel_enabled=True))
+    _p9_patch(_ts59, "shared_funnel_apps", lambda *a, **k: ["/r13c-other-app"])
+    _tsp59 = {}
+    for _who59 in (False, True):
+        _p9_patch(_tsr59, "_sees_panel_host_tailnet", lambda user, _w=_who59: _w)
+        _r59 = _A59.get("/tailscale")
+        _tsp59[_who59] = (_r59.status_code, "/r13c-other-app" in _r59.get_data(as_text=True))
+    check("tailscale page: a viewer who is not a superadmin is not shown the host's other Serve mounts in "
+          "the shared-Funnel note (the page reserves Serve mappings for superadmins)",
+          _tsp59[False] == (200, False), repr(_tsp59))
+    check("tailscale page: ...while a superadmin still reads which app shares the Funnel (control)",
+          _tsp59[True] == (200, True), repr(_tsp59))
+finally:
+    _p9_restore_all()
+
+_RM59 = _read59(_TPL59, "remote_manage.html")
+_ctl59 = _RM59.index('data-mtab-btn="controls"')
+check("host page: the Host Controls pill renders only when one of its cards can (a delegated host admin "
+      "on the panel host without manage_servers opened it onto a blank page)",
+      "{% if _host_ctl or has_permission('manage_servers') %}" in _RM59[_RM59.rfind("{%", 0, _ctl59) - 3:_ctl59],
+      _RM59[max(0, _ctl59 - 300):_ctl59])
+_unk59 = _RM59.find('data-funnel="unknown"')
+check("host page: with Serve unread, the Panel Server card has its own branch — no \"tailnet-only\" "
+      "button text, and the close button marked unknown",
+      "{% elif funnel_facts and funnel_facts.unread %}" in _RM59 and _unk59 > 0
+      and "tailnet-only" not in _re59.sub(r"\{#.*?#\}", "", _RM59[_RM59.index(
+          "{% elif funnel_facts and funnel_facts.unread %}"):_unk59], flags=_re59.S),
+      "no unread branch")
+_ACC59 = _read59(_TPL59, "account.html")
+_SDT59 = _read59(_TPL59, "server_detail.html")
+_ccarg59 = _SDT59[_SDT59.index('class="form-control cc-arg"'):]
+check("templates: user-authored text in a translated attribute is guarded — the display-name "
+      "placeholder (a user named Admin read \"Administrador\") and a custom command's argument box",
+      'placeholder="{{ current_user.username }}" data-no-i18n>' in _ACC59
+      and "data-no-i18n" in _ccarg59[:_ccarg59.index(">")]
+      and "t('value')" in _ccarg59[:_ccarg59.index(">")], _ccarg59[:200])
+check("notifications page: the in-game alerts hint names the Files & Config page, not an \"Alerts tab\" "
+      "no server page has", "Alerts tab" not in _read59(_TPL59, "notifications.html")
+      and "Files &amp; Config page (Alerts &amp; Notifications)" in _read59(_TPL59, "notifications.html"))
+_IS59 = _read59(_TPL59, "install_server.html")
+check("install page: the game list's names are LinuxGSM's, kept from the translator as manage_commands "
+      "keeps them, and the greyed-out note is no longer guarded (its words are the panel's)",
+      '{% endif %} data-no-i18n>{{ g.name }}' in _IS59 and 'id="game-os-note"></div>' in _IS59,
+      "option or note")
+
+# ── scripts: names kept from the translator, words given to it ──────────────────────────────────
+_unguarded59 = []
+for _f59 in sorted(os.listdir(_JS59)):
+    if _f59.endswith(".js"):
+        _src59 = _read59(_JS59, _f59)
+        _unguarded59 += ["%s: %s" % (_f59, _m.group(0)) for _m in _re59.finditer(
+            r"<strong>'\s*\+\s*(?:_esc|escapeHtml)\(\s*(?:SERVER_NAME|name)\s*\)", _src59)]
+check("scripts: no confirm names a server or host in a bare <strong> (one called \"Backup\" read \"Copia "
+      "de seguridad\"; the players dialog beside it was already guarded)", not _unguarded59,
+      repr(_unguarded59))
+_PAL59 = _read59(_JS59, "palette.js")
+check("palette: an action row's verb goes through t() (the label span is data-no-i18n for the name, so "
+      "\"Restart MyServer\" stayed English)", "label: _tr(ACTION_LABEL[act]) + ' ' + s.name," in _PAL59
+      and "label: ACTION_LABEL[act] + ' ' + s.name," not in _PAL59, "label line")
+_name59 = "palette: the stop/restart confirm"
+_out59 = _node59(_name59, (
+    "class El { constructor(tag){ this.tag = tag; this.kids = []; this.attrs = {}; this.textContent = ''; }\n"
+    "  appendChild(c){ this.kids.push(c); return c; } setAttribute(k, v){ this.attrs[k] = v; } }\n"
+    "global.document = {createElement: t => new El(t), createTextNode: s => ({text: s})};\n"
+    "var ACTION_LABEL = { start: 'Start', restart: 'Restart', stop: 'Stop' };\n"
+    + _cut47(_PAL59, "function _actionBody(") + "\n"
+    "const w = _actionBody('restart', 'Backup');\n"
+    "console.log(JSON.stringify(w.kids.map(k => k.tag ? [k.tag, k.textContent, 'data-no-i18n' in k.attrs]"
+    " : ['#text', k.text])));\n"))
+if _out59 is not None:
+    check("palette: the stop/restart confirm is built as nodes — the verb and the warning whole (so "
+          "translated), the server's name guarded",
+          _out59 == [["span", "Restart", False], ["#text", " "], ["strong", "Backup", True], ["#text", "? "],
+                     ["span", "Anyone playing will be disconnected.", False]], repr(_out59))
+
+_RMJ59, _NAG59, _MSJ59 = (_read59(_JS59, "remote_manage.js"), _read59(_JS59, "nags.js"),
+                          _read59(_JS59, "manage_servers.js"))
+_name59 = "host page: the OS updates card's counts"
+_out59 = _node59(_name59, (
+    "const el = {innerHTML: ''}; global.document = {getElementById: () => el};\n"
+    "function escapeHtml(s){ return String(s); } function isSecurityPkg(p){ return !!p.sec; }\n"
+    "function setInstallUpdatesState(){}\n"
+    + _cut47(_RMJ59, "function renderUpdates(") + "\n"
+    "renderUpdates({count: 12, packages: [{name: 'a', version: '1', sec: true}]});\n"
+    "console.log(JSON.stringify(el.innerHTML));\n"))
+if _out59 is not None:
+    check("host page: OS updates puts each count apart from its words (\"12 updates available\" as one "
+          "node matched no catalog key)", isinstance(_out59, str)
+          and "12 <span>updates available</span>" in _out59 and "1 <span>security</span>" in _out59,
+          repr(_out59)[:300])
+check("scripts: the update banner, the ban counts, the jail counters, the cores label and the greyed-out "
+      "note no longer splice a count into a phrase",
+      "' update' + (n===1?'':'s')" not in _NAG59 and "<span>' + (n===1?'update':'updates') + '</span>'" in _NAG59
+      and "' ban'+(bans===1?'':'s')" not in _RMJ59 and "' <span>total</span> · '" in _RMJ59
+      and "+' cores';" not in _RMJ59 and "t('cores')" in _RMJ59
+      and "hidden + ' game(s) are greyed out" not in _MSJ59, "a spliced count is back")
+_cat59 = {"es": {}, "fr": {}}
+for _L59 in ("es", "fr"):
+    for _f59 in os.listdir(os.path.join(_root, "translations", _L59)):
+        _cat59[_L59].update(_json59.loads(_read59(_root, "translations", _L59, _f59)))
+_words59 = ["update", "updates", "update available", "updates available", "security", "ban", "bans",
+            "banned", "total", "failed", "cores", "value"]
+check("catalogs: every word the split counts and the argument box's fallback hand the walker is in es and fr",
+      all(_w in _cat59[_L] for _w in _words59 for _L in ("es", "fr")),
+      repr([(_L, _w) for _L in ("es", "fr") for _w in _words59 if _w not in _cat59[_L]]))
+
+# ── the console: a panel push the rebuild's backlog lacks comes back ────────────────────────────
+_SD59 = _read59(_JS59, "server_detail.js")
+_CON59 = (
+    "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
+    "global.window = global; global.MOUNT = ''; global.serverId = 1; global.toast = () => 0;\n"
+    "var shown = [], _consoleLines = [], _consolePrimed = false, _consoleSig = null, _lastPanelT = 0;\n"
+    "var _returnOwed = false, _panelBacklogShown = false, _r13c_panelPushes = [], _R13C_PANEL_KEEP = 200;\n"
+    "var consoleEl = {set innerHTML(v){ shown.length = 0; }};\n"
+    "var socket = {connected: true};\n"
+    "function _rebuildMark(){ return 0; } function _rebuildRestore(){} function _r11c_resyncFrom(){}\n"
+    "function _primeAt(){} function updateTsNotice(){} function _showTsOffNote(){} function stickConsole(){}\n"
+    "function consoleAtBottom(){ return true; } function _notePanelMarker(){}\n"
+    "function _appendConsoleRows(rows){ (rows || []).forEach(r => shown.push(r.line)); }\n"
+    "function appendConsole(text){ shown.push(text); }\n"
+    "function _panelShownAt(t){ if (Number(t) > _lastPanelT) _lastPanelT = Number(t); }\n"
+    "function _renderPanelLines(rows){ rows.forEach(r => { shown.push(r.line); _panelShownAt(r.t); }); }\n"
+    + "".join(_cut47(_SD59, h) + "\n" for h in (
+        "function _loadOlderRows(", "function _r13c_notePanelPush(", "function _r13c_reshowPanelPushes(",
+        "function loadMoreConsole(", "function refreshConsole(", "function showPanelBacklog(",
+        "function _newerPanelRows(", "function _panelLinesWiped("))
+    + "global.fetch = () => Promise.resolve({ok: true, json: () => Promise.resolve({lines: [{line: 'log1'}],\n"
+    "  panel_lines: [{t: 100, line: '[panel] a'}], at: null})});\n"
+    "function push(ts, data){ const d = {panel: true, ts: ts, data: data}; appendConsole(d.data);\n"
+    "  _panelShownAt(d.ts); _r13c_notePanelPush(d); }\n")
+_name59 = "console: a panel push after the backlog read survives Load older"
+_out59 = _node59(_name59, _CON59 + (
+    "(async () => { push(100, '[panel] a'); push(105, '[panel] b'); _consolePrimed = true;\n"
+    "  loadMoreConsole(null); await settle(); const older = shown.slice();\n"
+    "  shown.length = 0; _lastPanelT = 0; _consolePrimed = false; _r13c_panelPushes = [];\n"
+    "  push(100, '[panel] a'); push(105, '[panel] b'); refreshConsole(true); await settle();\n"
+    "  console.log(JSON.stringify({older: older, primed: shown.slice()})); })();\n"))
+if _out59 is not None:
+    check("console: Load older keeps a panel push sent after the server read its backlog (it was wiped by "
+          "the rebuild and never came back)",
+          _out59.get("older") == ["log1", "[panel] a", "[panel] b"], repr(_out59))
+    check("console: ...and so does the first (priming) window", _out59.get("primed") == ["log1", "[panel] a",
+                                                                                           "[panel] b"],
+          repr(_out59))
+
+# ── the dashboard filter takes a failed install's banner with its row ───────────────────────────
+_DJ59 = _read59(_JS59, "dashboard.js")
+_name59 = "dashboard: filter hides the failed banner"
+_out59 = _node59(_name59, (
+    "var _tagFilter = [];\n"
+    "function row(id, text){ return {style: {}, textContent: text, querySelectorAll: () => [],\n"
+    "  hasAttribute: () => false, getAttribute: () => id}; }\n"
+    "const rows = [row('7', 'rust1'), row('8', 'ark1')], banner = {style: {}};\n"
+    "const card = {style: {}, querySelectorAll: () => rows,\n"
+    "  querySelector: s => s === '.install-failed[data-server-id=\"7\"]' ? banner : null};\n"
+    "const search = {value: 'ark'};\n"
+    "global.document = {getElementById: id => id === 'srv-search' ? search : null,\n"
+    "  querySelectorAll: () => [card]};\n"
+    + _cut47(_DJ59, "function rowHasEveryTag(") + "\n" + _cut47(_DJ59, "function filterServers(") + "\n"
+    "filterServers(); const hidden = banner.style.display; search.value = 'rust'; filterServers();\n"
+    "console.log(JSON.stringify({hidden: hidden, shown: banner.style.display}));\n"))
+if _out59 is not None:
+    check("dashboard: a search that hides a failed install's row hides its banner (Retry/Remove showed "
+          "beside the one matching server)", _out59 == {"hidden": "none", "shown": ""}, repr(_out59))
+
+# ── small page guards ───────────────────────────────────────────────────────────────────────────
+_name59 = "panel.js: the after-add path"
+_out59 = _node59(_name59, _cut47(_read59(_JS59, "panel.js"), "function _r11c_goPath(") + "\n"
+                 "console.log(JSON.stringify(['/\\t/evil.example', '/\\n/x', '//x', '/remote/3/discover']"
+                 ".map(_r11c_goPath)));\n")
+if _out59 is not None:
+    check("panel.js: a `go` path is tested as the URL parser reads it — \"/<tab>/evil.example\" passed and "
+          "location.assign read it as //evil.example", _out59 == [None, None, None, "/remote/3/discover"],
+          repr(_out59))
+_name59 = "files: Alerts save"
+_out59 = _node59(_name59, (
+    "global.MOUNT = ''; global.serverId = 1; const posted = [], msgs = [];\n"
+    "function alertsMsg(m){ msgs.push(m); }\n"
+    "const key = {value: 'tok ', getAttribute: k => k === 'data-orig' ? 'tok' : 'discord_webhook'};\n"
+    "global.document = {querySelectorAll: s => s.indexOf('data-alert-key') >= 0 && s.indexOf('toggle') < 0 ? [key] : []};\n"
+    "global.fetch = (u, o) => { posted.push(o.body); return new Promise(() => {}); };\n"
+    + _cut47(_read59(_JS59, "server_files.js"), "function saveAlerts(") + "\n"
+    "saveAlerts(null); key.value = 'tok2'; saveAlerts(null);\n"
+    "console.log(JSON.stringify({posted: posted, msgs: msgs}));\n"))
+if _out59 is not None:
+    check("files: an Alerts field changed only by a trailing space is not a change (it copied a secrets "
+          "file's value into the plaintext instance cfg)",
+          _out59.get("posted", [None])[:1] == ['{"values":{"discord_webhook":"tok2"}}']
+          and len(_out59.get("posted")) == 1, repr(_out59))
+_name59 = "host page: closing the panel port with Serve unread"
+_out59 = _node59(_name59, (
+    "let asked; global.confirmDialog = o => { asked = o.bodyText; };\n"
+    "let funnel = 'unknown'; global.document = {getElementById: () => ({getAttribute: () => funnel,\n"
+    "  hasAttribute: () => funnel !== null})};\n"
+    + _cut47(_read59(_JS59, "remote_manage_host.js"), "function closePanelPort(") + "\n"
+    "const out = []; for (const f of ['unknown', '1', null]) { funnel = f; closePanelPort(); out.push(asked); }\n"
+    "console.log(JSON.stringify(out));\n"))
+if _out59 is not None:
+    check("host page: with Serve unread, Close public port asks without promising \"ONLY over your "
+          "tailnet\", and says Funnel is unknown",
+          isinstance(_out59, list) and "could not be read" in _out59[0] and "ONLY" not in _out59[0]
+          and "Funnel is on" in _out59[1] and "ONLY over your tailnet" in _out59[2], repr(_out59))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 3. tools
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+
+# ── the i18n gate reads a confirm body however it is written ────────────────────────────────────
+if os.path.join(_root, "tools") not in _sys59.path:
+    _sys59.path.insert(0, os.path.join(_root, "tools"))
+import i18n_scan as _i18n59  # noqa: E402
+_tdir59 = os.path.realpath(_tf59.mkdtemp(prefix="lgsm-unit-p59-i18n-"))
+try:
+    with open(os.path.join(_tdir59, "a.js"), "w", encoding="utf-8") as _fh59:
+        _fh59.write(
+            "confirmDialog({title: 'x', bodyText: 'Split over two literals for line length, '\n"
+            "  + 'and judged whole.', onConfirm: f});\n"
+            "confirmDialog({requireLabel: 'Type your code to confirm:', bodyText: 'Use the IP/DNS name.'});\n"
+            "var body = on ? 'Close the thing?\\n\\nIt stays reachable from elsewhere.' : 'Plain other branch.';\n"
+            "confirmDialog({bodyText: 'Firewall-block ' + ip + ' on every port of the host?'});\n"
+            "confirmDialog({bodyText: 'Delete this widget?\\n\\n' + name});\n")
+    _js59 = set(_i18n59.scan_js(_tdir59))
+finally:
+    _shutil59.rmtree(_tdir59, ignore_errors=True)
+check("i18n scan: a sentence split over `'…' + '…'` literals is asked for whole (the six confirm bodies "
+      "were never asked: each half was a fragment)",
+      "Split over two literals for line length, and judged whole." in _js59, repr(sorted(_js59)))
+check("i18n scan: a confirm's requireLabel / bodyText is asked for whatever its last character or a "
+      "slash (\"…to confirm:\" and \"…IP/DNS name.\" were dropped)",
+      {"Type your code to confirm:", "Use the IP/DNS name."} <= _js59, repr(sorted(_js59)))
+check("i18n scan: a whole confirm body with a paragraph break is asked for, whitespace-collapsed as "
+      "i18n.js looks it up", "Close the thing? It stays reachable from elsewhere." in _js59,
+      repr(sorted(_js59)))
+check("i18n scan: ...while a body with per-request text spliced in is not claimed, whole or in part "
+      "(no catalog key could match it) (control)",
+      not [_s for _s in _js59 if "Firewall-block" in _s or "Delete this widget" in _s
+           or _s.startswith("on every port")], repr(sorted(_js59)))
+
+# ── install.sh: a gamedig command left alone is not "could not be installed" ────────────────────
+_ig_run59 = getattr(_sys59.modules.get("unit.part06"), "_ig_run", None)
+if _ig_run59 is None:
+    skip("install.sh: gamedig installed with a link left alone", "part06's install_gamedig driver is not loaded")
+else:
+    # part06's sandbox root is gone once part06 ends; this run gets its own.
+    _p06_59 = _sys59.modules["unit.part06"]
+    _sb_was59, _p06_59._su_sb = _p06_59._su_sb, _tf59.mkdtemp(prefix="lgsm-unit-p59-ig-")
+    try:
+        _o59, _p59, _l59 = _ig_run59(script_rc=2)
+    finally:
+        _shutil59.rmtree(_p06_59._su_sb, ignore_errors=True)
+        _p06_59._su_sb = _sb_was59
+    check("install.sh: gamedig installed with a foreign command left alone (exit 2) says it was installed, "
+          "not \"could not be installed … uses the gamedig this host already had\"",
+          "WARN gamedig was installed from its lockfile" in _o59 and "could not be installed" not in _o59
+          and "RC=0" in _o59, repr(_o59[-300:]))
+
+# ── perf_bench: its leftovers include auth.log, and a failed boot puts config.json back ──────────
+_pbf59 = os.path.join(_root, "tools", "perf_bench.py")
+_pbt59 = _ast59.parse(_read59(_pbf59))
+_pbdefs59 = [_n for _n in _pbt59.body if isinstance(_n, _ast59.FunctionDef) and _n.name == "cleanup"]
+_pbdir59 = _tf59.mkdtemp(prefix="lgsm-unit-p59-perf-")
+try:
+    import pathlib as _pl59
+    _d59 = _pl59.Path(_pbdir59)
+    (_d59 / "auth.log").write_text("x\n")
+    _pbns59 = {"_CFG_BACKUP": None, "DATA_DIR": _d59, "DB_PATH": _d59 / "panel.db", "SECRET_FILE": _d59 / "s",
+               "CRED_KEY_FILE": _d59 / "k", "CONFIG_FILE": _d59 / "config.json", "AUTH_LOG": _d59 / "auth.log",
+               "_PREEXISTING": set(), "sys": _sys59, "print": print}
+    # nosemgrep: python.lang.security.audit.exec-detected.exec-detected -- this repo's own tool's cleanup, on a temp dir
+    exec(compile(_ast59.Module(body=_pbdefs59, type_ignores=[]), _pbf59, "exec"), _pbns59)  # nosec B102 - this repo's own tool  # pylint: disable=exec-used
+    _pbns59["cleanup"]()
+    _gone59 = not (_d59 / "auth.log").exists()
+finally:
+    _shutil59.rmtree(_pbdir59, ignore_errors=True)
+check("perf_bench: cleanup removes the auth.log create_app opened (lhci_serve already did; a run left one)",
+      len(_pbdefs59) == 1 and _gone59, repr(_gone59))
+_pbtry59 = [_n for _n in _pbt59.body if isinstance(_n, _ast59.Try)
+            and any(isinstance(_s, _ast59.Import) and any(_a.name == "app" for _a in _s.names) for _s in _n.body)]
+check("perf_bench: the imports after the setup_complete flip restore config.json when they fail (it was "
+      "left flipped: main's cleanup is not reached yet)",
+      len(_pbtry59) == 1 and "_r13c_restore_config" in _ast59.dump(_pbtry59[0].handlers[0]), "no guarded import")
+
+# ── js_coverage: the 375px flow's metrics reset cannot replace its own failed check ─────────────
+_flows59 = _sys59.modules.get("flows")
+_cdp59 = _sys59.modules.get("cdp")
+if _flows59 is None or _cdp59 is None:
+    skip("js coverage: the 375px flow's metrics reset", "part56 did not leave the js_coverage modules loaded")
+else:
+    class _PhoneDrv59:
+        """The fit answer is `fit`; clearing the metrics override raises a CDPError."""
+
+        def __init__(self, fit):
+            self.fit = fit
+            self.cdp = _NS59(call=self._call)
+
+        def _call(self, method, *a, **k):
+            if method == "Emulation.clearDeviceMetricsOverride":
+                raise _cdp59.CDPError("target closed")
+
+        def goto(self, path):
+            return None
+
+        def run(self, js):
+            return self.fit if js == _flows59.RENAME_FIT else {}
+
+        def keys(self, text):
+            return None
+
+        def settle(self, **k):
+            return None
+
+    _ph59 = []
+    for _fit59 in ({}, dict({_k: True for _k in _flows59._FITS}, vw=375)):
+        try:
+            _flows59._rename_phone(_PhoneDrv59(_fit59))
+            _ph59.append("no exception")
+        except Exception as _e59:  # noqa: BLE001 - which class arrives IS the check
+            _ph59.append(type(_e59).__name__)
+    check("js coverage: a failed 375px fit check reaches the run as a FlowAssertion even when resetting the "
+          "device metrics then fails (the CDPError replaced it, and only warned)",
+          _ph59[:1] == ["FlowAssertion"], repr(_ph59))
+    check("js coverage: ...while that reset failing on a passing flow is still reported (control)",
+          _ph59[1:] == ["CDPError"], repr(_ph59))

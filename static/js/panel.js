@@ -45,7 +45,7 @@ document.addEventListener('click', function(e){
   var short = form.getAttribute('data-server-short') || '';
   confirmDialog({
     title:'Uninstall server', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Uninstall',
-    body:'Uninstall <strong>'+escapeHtml(name)+'</strong>? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone.',
+    body:'Uninstall <strong data-no-i18n>'+escapeHtml(name)+'</strong>? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone.',
     requireText: short,
     requireLabel:'Type the server’s username ('+short+') to confirm:',
     // form.submit() is a NATIVE post: no fetch wrapper, so no X-CSRFToken header, so the hidden
@@ -446,9 +446,13 @@ function _submitAjaxForm(form){
 // A form the server accepted: toast, reset, then refresh the section and run the after-hook -
 // once its modal has fully closed, when it sits in one.
 // `go`: the server's next page for a success (Add Remote's "existing server" goes on to its scan).
-// A path on this panel only — never another origin, nor a protocol-relative "//host".
+// A path on this panel only — never another origin, nor a protocol-relative "//host". Tested with
+// tab, CR and LF taken out, as the URL parser takes them out: "/\t/evil.example" passed the test
+// raw and location.assign read it as "//evil.example".
 function _r11c_goPath(go){
-  return (typeof go === 'string' && /^\/(?![\/\\])/.test(go)) ? go : null;
+  if (typeof go !== 'string') return null;
+  go = go.replace(/[\t\n\r]/g, '');
+  return /^\/(?![\/\\])/.test(go) ? go : null;
 }
 function _ajaxFormSucceeded(form, res){
   var go = _r11c_goPath(res.d.go);

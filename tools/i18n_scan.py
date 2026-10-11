@@ -232,7 +232,12 @@ def _js_strings(source):
 
 
 def _js_strings_at(source):
-    """Every string literal in a JS file, as (text, line, index of its opening quote).
+    """Every string literal in a JS file, as (text, line, index of its opening quote)."""
+    return [(text, line, start) for text, line, start, _end in _js_string_spans(source)]
+
+
+def _js_string_spans(source):
+    """Every string literal in a JS file, as (text, line, index of its opening quote, index past it).
 
     A hand-rolled scanner rather than a regex over the whole file: a regex cannot tell the `//` of
     a line comment from the one inside "https://ntfy.sh", and stripping comments first is exactly
@@ -250,7 +255,7 @@ def _js_strings_at(source):
         elif c in "'\"`":
             start, start_line = i, line
             text, i, line = _read_js_string(source, i, line)
-            out.append((text, start_line, start))
+            out.append((text, start_line, start, i))
         else:
             i += 1
     return out
@@ -364,6 +369,42 @@ def js_markup_texts(text):
     return out
 
 
+# A value the code writes into the page as ONE text node, whatever its shape: a confirm dialog's
+# body (bodyText) and its password prompt (requireLabel) are set with textContent (panel.js
+# _cdFillBody). The prose rules above guess at fragments, and left these out for a trailing colon
+# ("Enter your account password to confirm:"), a slash ("the Tailscale IP/DNS name.") or a
+# paragraph break — all English bodies on a translated page. Claimed only when the value is
+# literal from end to end (_js_literal_runs), and whitespace-collapsed, as i18n.js looks it up.
+_JS_TEXT_SLOT = re.compile(r"\b(?:bodyText|requireLabel)\s*:\s*$")
+
+
+def _js_literal_runs(source):
+    """The literals of a JS file grouped into `'…' + '…'` runs: [(spans, standalone)].
+
+    A sentence split over several literals for line length reaches the page as ONE string, so it
+    has to be judged — and looked up — whole: judged literal by literal, each half was a fragment
+    (it ends in a space, or starts lower-case) and the sentence was never asked for. `standalone`
+    is a run with no `+` on either side, i.e. no per-request text spliced into it.
+    """
+    spans, runs = _js_string_spans(source), []
+    for span in spans:
+        if runs and re.fullmatch(r"\s*\+\s*", source[runs[-1][-1][3]:span[2]]):
+            runs[-1].append(span)
+        else:
+            runs.append([span])
+    out = []
+    for run in runs:
+        lead = source[max(0, run[0][2] - 40):run[0][2]].rstrip()
+        tail = source[run[-1][3]:run[-1][3] + 40].lstrip()
+        out.append((run, not lead.endswith("+") and not tail.startswith("+")))
+    return out
+
+
+def _js_claims(text, before):
+    """Whether a literal (or a whole run of them) reads as user-visible text, given what precedes it."""
+    return is_js_ui_text(text) or is_js_ui_word(text, before[-80:]) or is_js_t_arg(text, before)
+
+
 def scan_js(js_dir=JS_DIR):
     """{string: {filename}} for every JS literal that reads as user-visible text."""
     found = {}
@@ -372,14 +413,34 @@ def scan_js(js_dir=JS_DIR):
         with open(path, encoding="utf-8") as fh:
             source = fh.read()
         lines = source.splitlines()
-        for text, line, at in _js_strings_at(source):
-            if 1 <= line <= len(lines) and JS_IGNORE in lines[line - 1]:
+        for run, standalone in _js_literal_runs(source):
+            if any(1 <= s[1] <= len(lines) and JS_IGNORE in lines[s[1] - 1] for s in run):
                 continue
-            before = source[max(0, at - 160):at]
-            if is_js_ui_text(text) or is_js_ui_word(text, before[-80:]) or is_js_t_arg(text, before):
-                found.setdefault(text, set()).add(name)
-            for seg in js_markup_texts(text):
-                found.setdefault(seg, set()).add(name)
+            before = source[max(0, run[0][2] - 160):run[0][2]]
+            joined = "".join(s[0] for s in run)
+            if standalone and _JS_TEXT_SLOT.search(before):
+                key = re.sub(r"\s+", " ", joined).strip()
+                if re.search(r"[A-Za-z]{3}", key):
+                    found.setdefault(key, set()).add(name)
+                    continue
+            # A paragraph break: a confirm body ('Close the public web port?\n\nFunnel is on…'),
+            # often chosen by a ternary and passed on in a variable. is_js_ui_text refuses a "\n" (a
+            # fragment of a longer splice), but with nothing spliced in it is the whole node, and
+            # i18n.js looks it up whitespace-collapsed.
+            if standalone and "\n" in joined:
+                key = re.sub(r"\s+", " ", joined).strip()
+                if is_js_ui_text(key):
+                    found.setdefault(key, set()).add(name)
+                    continue
+            # Judged whole when nothing is spliced in; part by part otherwise, as before.
+            parts = [(joined, before)] if standalone and len(run) > 1 else \
+                [(s[0], source[max(0, s[2] - 160):s[2]]) for s in run]
+            for text, bef in parts:
+                if _js_claims(text, bef):
+                    found.setdefault(text, set()).add(name)
+            for s in run:
+                for seg in js_markup_texts(s[0]):
+                    found.setdefault(seg, set()).add(name)
     return found
 
 

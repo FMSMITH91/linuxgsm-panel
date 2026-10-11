@@ -287,5 +287,13 @@
   "server(s)": "servidor(es)",
   "alerts muted": "alertas silenciadas",
   "(couldn't check who's online)": "(no se pudo comprobar quién está conectado)",
-  "The public panel port is already closed, but Funnel is on, so the panel is still reachable from the internet.": "El puerto público del panel ya está cerrado, pero Funnel está activado, así que el panel sigue siendo accesible desde internet."
+  "The public panel port is already closed, but Funnel is on, so the panel is still reachable from the internet.": "El puerto público del panel ya está cerrado, pero Funnel está activado, así que el panel sigue siendo accesible desde internet.",
+  "Anyone playing will be disconnected.": "Quien esté jugando será desconectado.",
+  "Delete this tag and remove it from every server that carries it? The servers themselves are not touched.": "¿Eliminar esta etiqueta y quitarla de todos los servidores que la llevan? Los servidores en sí no se modifican.",
+  "Enter your account password to confirm:": "Introduce la contraseña de tu cuenta para confirmar:",
+  "Install all available updates on this host? You can watch it live in a popup; it runs unattended and answers prompts safely (keeps your config files, assumes yes), so it never gets stuck waiting.": "¿Instalar todas las actualizaciones disponibles en este host? Puedes seguirlo en directo en una ventana emergente; se ejecuta sin supervisión y responde a las preguntas de forma segura (conserva tus archivos de configuración y asume «sí»), así que nunca se queda esperando.",
+  "Make your current dashboard arrangement the default for this panel? New accounts start from it, and anyone who resets their layout returns to it. Users who have arranged their own layout keep theirs.": "¿Hacer que la disposición actual de tu panel de control sea la predeterminada de este panel? Las cuentas nuevas empiezan con ella, y quien restablezca su disposición vuelve a ella. Los usuarios que hayan organizado la suya la conservan.",
+  "Remove this panel’s default layout? Accounts without their own arrangement go back to the built-in order. Nobody’s personal layout is affected.": "¿Quitar la disposición predeterminada de este panel? Las cuentas sin disposición propia vuelven al orden integrado. No se modifica la disposición personal de nadie.",
+  "Restart the server now to load the change? Anyone currently playing will be disconnected.": "¿Reiniciar el servidor ahora para cargar el cambio?\n\nQuien esté jugando en este momento será desconectado.",
+  "game(s) are greyed out: LinuxGSM caps them at an older Ubuntu than this host runs.": "juego(s) aparecen en gris: LinuxGSM los limita a un Ubuntu más antiguo que el de este host."
 }

@@ -134,7 +134,7 @@
   "Filter": "Filtrar",
   "For": "Para",
   "Game:": "Juego:",
-  "Get alerted on Telegram or Discord when something needs your attention — a server drops, a host goes unreachable, a backup fails, an admin signs in. These are the panel's own alerts to you; a game's in-game alerts are still set per server on its Alerts tab.": "Recibe avisos en Telegram o Discord cuando algo requiera tu atención: se cae un servidor, un host deja de responder, falla una copia de seguridad, un administrador inicia sesión. Estas son las alertas del propio panel para ti; las alertas dentro del juego se siguen configurando por servidor en su pestaña Alertas.",
+  "Get alerted on Telegram or Discord when something needs your attention — a server drops, a host goes unreachable, a backup fails, an admin signs in. These are the panel's own alerts to you; a game's in-game alerts are still set per server on its Files & Config page (Alerts & Notifications).": "Recibe avisos en Telegram o Discord cuando algo requiera tu atención: se cae un servidor, un host deja de responder, falla una copia de seguridad, un administrador inicia sesión. Estas son las alertas del propio panel para ti; las alertas dentro del juego se siguen configurando por servidor en su página Archivos y configuración (Alertas y notificaciones).",
   "Get the Channel ID with User Settings → Advanced → Developer Mode, then right-click the channel → Copy Channel ID. Type !help in that channel for the command list (Discord reserves the slash prefix for its own menu, so the bot uses an exclamation mark).": "Obtén el ID del canal con User Settings → Advanced → Developer Mode y luego haz clic derecho en el canal → Copy Channel ID. Escribe !help en ese canal para ver la lista de comandos (Discord reserva el prefijo de barra para su propio menú, así que el bot usa un signo de exclamación).",
   "Group Name": "Nombre del grupo",
   "Groups allowed to run this": "Grupos autorizados a ejecutarlo",
@@ -408,5 +408,16 @@
   "Uninstalled": "Desinstalado",
   "Working…": "Trabajando…",
   "Ask a superadmin to retry fetching it.": "Pide a un superadministrador que vuelva a intentar obtenerla.",
-  "No invite links yet. Create one with the Invite Link button above.": "Aún no hay enlaces de invitación. Crea uno con el botón Enlace de invitación de arriba."
+  "No invite links yet. Create one with the Invite Link button above.": "Aún no hay enlaces de invitación. Crea uno con el botón Enlace de invitación de arriba.",
+  "update": "actualización",
+  "updates": "actualizaciones",
+  "update available": "actualización disponible",
+  "updates available": "actualizaciones disponibles",
+  "security": "de seguridad",
+  "ban": "baneo",
+  "bans": "baneos",
+  "banned": "baneados",
+  "total": "en total",
+  "cores": "núcleos",
+  "value": "valor"
 }

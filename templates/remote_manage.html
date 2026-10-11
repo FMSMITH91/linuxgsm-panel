@@ -45,7 +45,12 @@
      markup, conditionals and JS — only visibility changes. -->
 <ul class="nav nav-pills mb-3 flex-nowrap overflow-auto" id="mtab-nav">
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="overview"><i class="bi bi-speedometer2"></i> Overview</button></li>
+  {# Host Controls holds OS updates, firewall, power and Connection & SSH (_host_ctl), the
+     terminal (superadmin-only on the panel host) and Existing servers (manage_servers): a
+     delegated host admin on the panel host with none of those opened it onto a blank page. #}
+  {% if _host_ctl or has_permission('manage_servers') %}
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="controls"><i class="bi bi-sliders"></i> Host Controls</button></li>
+  {% endif %}
   {# Every Maintenance card is gated like this (the panel-only ones on a superadmin, Ubuntu Pro on
      _host_ctl), so for a delegated host admin on the panel host the tab opened onto a blank page. #}
   {% if _host_ctl %}

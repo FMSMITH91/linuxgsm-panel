@@ -40,6 +40,10 @@ function filterServers(){
       tr.style.display = match ? '' : 'none';
       var prog = card.querySelector('tr[data-progress-for="' + tr.getAttribute('data-server-id') + '"]');
       if (prog) prog.style.display = match ? '' : 'none';
+      // ...and so does its failed-install banner, which sits above the table (dashboard.html):
+      // a filter that hid the row left its reason, Retry and Remove showing beside other servers.
+      var failed = card.querySelector('.install-failed[data-server-id="' + tr.getAttribute('data-server-id') + '"]');
+      if (failed) failed.style.display = match ? '' : 'none';
       if(match) cardHas = true;
     });
     card.style.display = cardHas ? '' : 'none';

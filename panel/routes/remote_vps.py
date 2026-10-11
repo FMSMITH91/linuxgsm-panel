@@ -546,7 +546,7 @@ def _register_panel_port(app):
             return jsonify({"success": True, "message": (
                 f"Public port {port} closed. Funnel is on for the panel's Tailscale Serve address, "
                 f"so the panel is still reachable from the internet through it.")})
-        if _facts["unread"]:
+        if _facts.get("unread"):
             return jsonify({"success": True, "message": (
                 f"Public port {port} closed. Tailscale Serve could not be read, so whether Funnel "
                 f"still makes the panel reachable from the internet is not known.")})

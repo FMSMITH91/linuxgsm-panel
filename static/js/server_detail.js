@@ -379,6 +379,7 @@ socket.on('console_output', function(data) {
     updateTsNotice();
   } else {
     appendConsole(data.data, data.ts, fromLog);
+    if (data.panel) _r13c_notePanelPush(data);
   }
   if (stick) stickConsole();
 });
@@ -814,7 +815,11 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
       var sig = lines.length + ' ' + (lines[lines.length - 1] || '');
       if (sig === _consoleSig && !forceScroll) return;
       _consoleSig = sig;
+      // Whether this answer primes the console on a page whose backlog is still to be shown: its
+      // wipe then takes panel pushes off the page that only _r13c_reshowPanelPushes brings back.
+      var primed = false;
       if (!_consolePrimed && lines.length) {
+        primed = !_panelBacklogShown && !_returnOwed;
         // FIRST poll after page load, and it actually returned something. The page was
         // server-rendered with a short tail, and this window reaches much further back — that
         // extra history is exactly what we want on screen, and appending only "what is newer than
@@ -861,6 +866,8 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         if (!_returnOwed) _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now);
       }
       showPanelBacklog(panelLines);
+      // The priming wipe took any panel push already shown; put back those the backlog lacks.
+      if (primed && !_returnOwed) _r13c_reshowPanelPushes(panelLines);
       updateTsNotice();
       _showTsOffNote(data);
       if (stick) stickConsole();
@@ -974,7 +981,9 @@ function loadMoreConsole(btn) {
       // The panel's own lines (an update's output and markers) are not in the log, so a rebuild
       // from the log alone threw them away for good. Put the kept backlog back after it, the same
       // way the first load does.
-      _renderPanelLines(_loadOlderRows(data.panel_lines));
+      var backlog = _loadOlderRows(data.panel_lines);
+      _renderPanelLines(backlog);
+      _r13c_reshowPanelPushes(backlog);
       _consoleSig = null;   // let the next poll re-evaluate against the new buffer
       _r11c_resyncFrom(data.at);
       if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
@@ -1192,6 +1201,34 @@ function _showPanelPush(d) {
   if (Number(d.ts) && Number(d.ts) <= _lastPanelT) return;
   appendConsole(d.data, d.ts, false);
   _panelShownAt(d.ts);
+  _r13c_notePanelPush(d);
+}
+
+// The panel pushes shown, kept with their time: the panel-line half of _rebuildPushes. A rebuild
+// (Load older, the priming window) wipes the console and renders the backlog its answer carries —
+// read on the server as that answer's LAST step — so a push sent after that read, whose socket
+// frame beat the bigger HTTP body, was wiped and never came back: the poller had already sent it
+// and the backlog shows once per page. After such a rebuild the ones newer than every backlog row
+// it rendered are shown again; the older ones are in that backlog.
+var _r13c_panelPushes = [];
+var _R13C_PANEL_KEEP = 200;
+
+function _r13c_notePanelPush(d) {
+  if (!Number(d.ts) || _r13c_panelPushes.indexOf(d) >= 0) return;
+  _r13c_panelPushes.push(d);
+  if (_r13c_panelPushes.length > _R13C_PANEL_KEEP) _r13c_panelPushes.shift();
+}
+
+// `backlog`: the panel rows the rebuild rendered. By their newest time, not _lastPanelT: Load older
+// does not reset that on its wipe, so every wiped push read as already shown.
+function _r13c_reshowPanelPushes(backlog) {
+  var upTo = 0;
+  (backlog || []).forEach(function (r) { if (Number(r.t) > upTo) upTo = Number(r.t); });
+  _r13c_panelPushes.forEach(function (d) {
+    if (Number(d.ts) <= upTo) return;
+    appendConsole(d.data, d.ts, false);
+    _panelShownAt(d.ts);
+  });
 }
 
 socket.on('console_catchup', function(data) {
