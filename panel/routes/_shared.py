@@ -1156,10 +1156,16 @@ def _looks_installed(app, remote, short_name, lgsm_name):
             remote, short_name, f"cd /home/{short_name} && ./{lgsm_name} details 2>&1",
             timeout=30, selfname=lgsm_name)
         low = terminal.strip_escapes((out or "") + "\n" + (err or "")).lower()
-        if re.search(r"not installed|please run .*install|serverfiles.*(missing|not found)|no such file", low):
+        if re.search(r"not installed|please run .*install", low):
             return False
+        # The positive answer before the WEAK negatives: `details` that printed its Status / Server
+        # IP block ran past LinuxGSM's own install checks, and a game whose config does not exist
+        # until its first start can print "No such file" in the same output. Tested first, that
+        # line read as "not installed", and the install's step 4 wiped lgsm/tmp and re-downloaded.
         if "status:" in low or "server ip:" in low:
             return True
+        if re.search(r"serverfiles.*(missing|not found)|no such file", low):
+            return False
         # Fallback: real content in serverfiles means the download completed.
         return _serverfiles_verdict(remote, short_name)
     except Exception:
