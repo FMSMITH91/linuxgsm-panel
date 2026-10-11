@@ -3437,7 +3437,7 @@ else:
         _st3 = _gds_state(_gds)
         check("install-gamedig.sh: an operator's own gamedig (a file, or a link elsewhere) is left, "
               "and the run says so",
-              _r.returncode == 1 and _st3[1] == "FILE" and _st3[2] == _foreign
+              _r.returncode == 2 and _st3[1] == "FILE" and _st3[2] == _foreign
               and _r.stdout.count("left ") == 2
               and _gds_read(os.path.join(_gds, "usr-local-bin", "gamedig")) == "mine\n",
               "rc=%d %r %r" % (_r.returncode, _st3, _r.stdout[-300:]))
@@ -3461,7 +3461,7 @@ else:
             _fh.write("somebody else's\n")
         _r, _c = _gds_run(_gds)
         check("install-gamedig.sh: npm's global gamedig stays while any link is not the panel's",
-              _r.returncode == 1 and os.path.isdir(os.path.join(_gds, "npm-global", "gamedig"))
+              _r.returncode == 2 and os.path.isdir(os.path.join(_gds, "npm-global", "gamedig"))
               and _gds_state(_gds)[2] == os.path.join(_gds, "gamedig", "current", "node_modules",
                                                       ".bin", "gamedig"),
               "rc=%d state=%r calls=%r" % (_r.returncode, _gds_state(_gds), _c))

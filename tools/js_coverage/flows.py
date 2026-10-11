@@ -17,6 +17,7 @@ import os
 
 import pyotp
 
+from cdp import CDPError
 from driver import FlowAssertion
 
 # ── shared ─────────────────────────────────────────────────────────────────────────────────────
@@ -421,6 +422,7 @@ def _rename_phone(d):
     """At 375px wide: open the field, send a name the panel refuses, and measure the row."""
     d.cdp.call("Emulation.setDeviceMetricsOverride",
                {"width": 375, "height": 812, "deviceScaleFactor": 2, "mobile": True})
+    failed = True
     try:
         d.goto("/server/1/files")
         d.run(RENAME_OPEN % ("server.cfg", "server.cfg"))
@@ -430,8 +432,15 @@ def _rename_phone(d):
         _expect(fit.get("vw") == 375 and all(fit.get(k) for k in _FITS),
                 "at 375px the field and its error fit the row", fit)
         _press(d, "Escape", "Escape", 27)
+        failed = False
     finally:
-        d.cdp.call("Emulation.clearDeviceMetricsOverride")
+        # A CDP error here, while a FlowAssertion is on its way out, REPLACED it (and only that
+        # name fails the run); the assertion is the result then, and this one is dropped.
+        try:
+            d.cdp.call("Emulation.clearDeviceMetricsOverride")
+        except CDPError:
+            if not failed:
+                raise
     # Not in the finally: goto can log in again and raise LoginFailed, which there REPLACED a
     # FlowAssertion on its way out, and run.py fails the run only on that name (the rest warn).
     d.goto("/server/1/files")

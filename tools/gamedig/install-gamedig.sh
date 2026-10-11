@@ -103,6 +103,9 @@ fi
 # The two commands. A link is replaced when it is missing, dangling, the panel's, or npm's; a
 # regular file, or a link to some other gamedig, is somebody else's and is left alone, and the run
 # reports it. Each is swapped in with one rename, so `gamedig` never stops resolving in between.
+# Exit 2 when the tree is in place and a link was only LEFT ALONE: install.sh read every non-zero
+# exit as "could not be installed … uses the gamedig this host already had", which was false — the
+# new tree was installed and linked from the other path. A link that could not be made stays 1.
 TARGET="${HERE}/current/${BIN}"
 rc=0
 for d in "${LINK_DIRS[@]}"; do
@@ -111,7 +114,7 @@ for d in "${LINK_DIRS[@]}"; do
     if [[ -e "${link}" ]] || [[ -L "${link}" ]]; then
         if [[ ! -L "${link}" ]]; then
             say "left ${link} alone: it is a file, not the panel's link or npm's"
-            rc=1
+            [[ "${rc}" -eq 1 ]] || rc=2
             continue
         fi
         cur="$(readlink -- "${link}")"
@@ -121,7 +124,7 @@ for d in "${LINK_DIRS[@]}"; do
             *)
                 if [[ -e "${link}" ]]; then
                     say "left ${link} alone: it points at ${cur}, which is not the panel's gamedig or npm's"
-                    rc=1
+                    [[ "${rc}" -eq 1 ]] || rc=2
                     continue
                 fi ;;
         esac

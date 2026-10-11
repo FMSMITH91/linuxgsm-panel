@@ -65,7 +65,10 @@ if DB_PATH.exists():
 # panel.db EXISTS, so the only state in which they run and the backup is present is "the live
 # database is missing and this copy is the last one left". The WAL/SHM pair is here for the same
 # reason — they hold committed pages the main file may not have yet.
-_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE,
+# auth.log too: create_app opens it (app.AUTH_LOG_PATH) on every run, so a run that found none
+# left one behind — the leftover class lhci_serve.py already tracks.
+AUTH_LOG = DATA_DIR / "auth.log"
+_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE, AUTH_LOG,
                             DB_PATH.with_name("panel.db.backup"),
                             DB_PATH.with_name("panel.db-wal"),
                             DB_PATH.with_name("panel.db-shm")) if p.exists()}
@@ -93,14 +96,28 @@ def mark_setup_complete():
     save_config(cfg)
 
 
+def _r13c_restore_config():
+    """Put config.json back as it was before this run: the copy, or none at all."""
+    if _CFG_BACKUP is not None:
+        CONFIG_FILE.write_bytes(_CFG_BACKUP)
+    elif CONFIG_FILE not in _PREEXISTING and CONFIG_FILE.exists():
+        CONFIG_FILE.unlink()
+
+
 mark_setup_complete()
 
-from panel.ops import system_ops as so                                    # noqa: E402
-so._check_sudo = lambda force=False: False                 # never probe real sudo (pam_faillock)
+# The flip above has rewritten config.json, and main()'s try/finally cleanup() is not reached
+# yet: an import that fails here left a developer's config.json with setup_complete flipped.
+try:
+    from panel.ops import system_ops as so                                    # noqa: E402
+    so._check_sudo = lambda force=False: False             # never probe real sudo (pam_faillock)
 
-import app as appmod                                       # noqa: E402
-from panel.db.models import db, User, Group, RemoteServer, GameServer, ServerTag, SetupState  # noqa: E402
-from panel.security import auth                                                # noqa: E402
+    import app as appmod                                   # noqa: E402
+    from panel.db.models import db, User, Group, RemoteServer, GameServer, ServerTag, SetupState  # noqa: E402
+    from panel.security import auth                                            # noqa: E402
+except Exception:
+    _r13c_restore_config()
+    raise
 
 # The I/O boundary the panel does not own: every remote call is stubbed to return promptly, so the
 # numbers below are panel CPU + DB only. _host_reachable/_remote_listening_ports keep the monitor
@@ -360,8 +377,9 @@ def run_size(total_servers, hosts, iterations, paths):
 def cleanup():
     if _CFG_BACKUP is not None:
         CONFIG_FILE.write_bytes(_CFG_BACKUP)
-    # create_app() also drops a startup backup next to the DB.
-    leftovers = (DATA_DIR / "panel.db-wal", DATA_DIR / "panel.db-shm", DATA_DIR / "panel.db.backup")
+    # create_app() also drops a startup backup next to the DB, and opens auth.log.
+    leftovers = (DATA_DIR / "panel.db-wal", DATA_DIR / "panel.db-shm", DATA_DIR / "panel.db.backup",
+                 AUTH_LOG)
     for p in (DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) + leftovers:
         if p in _PREEXISTING or not p.exists():
             continue
