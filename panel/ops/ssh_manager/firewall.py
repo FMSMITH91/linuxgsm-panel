@@ -505,6 +505,20 @@ def _live_tailscale_state(server, enabled, groups):
     return ts_running, ts_ssh_enabled
 
 
+def _r13a_tailnet_ssh_ok(server, groups, ssh_ports):
+    """Whether regular SSH reaches this (tailnet-running) host over the tailnet.
+
+    An interface rule UFW lets through, first match wins -- AND what hosts._tailnet_ssh_state asks
+    of the same question: a Tailscale TUN interface to carry it (userspace networking has none) and
+    sshd listening where tailnet traffic arrives (after the panel's own bind-address change it is
+    the public address alone). Without them the host's only public SSH rule read "another way in
+    exists" while Disable public SSH refused the same lockout. The host is probed only when the
+    rule list already says yes.
+    """
+    return (_r11a_tailnet_ssh_open(groups, ssh_ports) and bool(hosts._tsiface_names(server))
+            and not hosts._r11a_sshd_off_tailnet(server))
+
+
 def _annotate_firewall_protection(server, enabled, groups):
     """Flag rules whose removal could LOCK YOU OUT.
 
@@ -527,14 +541,7 @@ def _annotate_firewall_protection(server, enabled, groups):
     panel_port = _panel_web_port(server, ts_running=ts_running)
     served_over_ts = _panel_served_over_tailscale(server)
     ts_ssh_ok = ts_running and ts_ssh_enabled    # Tailscale SSH → a way in regardless of UFW
-    # regular SSH over the tailnet: needs an interface rule that UFW, first match wins, lets through
-    # -- AND what hosts._tailnet_ssh_state asks of the same question: a Tailscale TUN interface to
-    # carry it (userspace networking has none) and sshd listening where tailnet traffic arrives
-    # (after the panel's own bind-address change it is the public address alone). Without them the
-    # host's only public SSH rule read "another way in exists" while Disable public SSH refused
-    # the same lockout. Probed only when the rule list already says yes.
-    ts_iface_ok = (ts_running and _r11a_tailnet_ssh_open(groups, ssh_ports)
-                   and bool(hosts._tsiface_names(server)) and not hosts._r11a_sshd_off_tailnet(server))
+    ts_iface_ok = ts_running and _r13a_tailnet_ssh_ok(server, groups, ssh_ports)
 
     for g in groups:
         g["protected"] = False

@@ -883,6 +883,15 @@ def panel_route(serve_config, port, mount, scheme=None):
     return hits[0] if hits else None
 
 
+def _r13a_taken_on_443(serve_config, port):
+    """The mounts other apps hold on the node's own :443 listener (a Tailscale Service's is not it)."""
+    return {norm_mount(r.get("mount"))
+            for svc in (serve_config or {}).get("services") or []
+            if _serve_port_flag(svc.get("url")) == "--https=443" and not svc.get("svc")
+            for r in svc.get("routes") or []
+            if not route_targets_port(r.get("target"), port)}
+
+
 def free_panel_mount(serve_config, port, mount):
     """Where to publish the panel: `mount`, unless ANOTHER app holds it on :443; then /lgsm.
 
@@ -891,11 +900,7 @@ def free_panel_mount(serve_config, port, mount):
     it. Counting it as taken is how the setup wizard published the panel twice, at "/" and then at
     /lgsm, and left the "/" route behind to answer 502 at the next flip of the panel's scheme.
     """
-    taken = {norm_mount(r.get("mount"))
-             for svc in (serve_config or {}).get("services") or []
-             if _serve_port_flag(svc.get("url")) == "--https=443" and not svc.get("svc")
-             for r in svc.get("routes") or []
-             if not route_targets_port(r.get("target"), port)}
+    taken = _r13a_taken_on_443(serve_config, port)
     for cand in dict.fromkeys((norm_mount(mount), "/lgsm")):
         if cand not in taken:
             return cand
