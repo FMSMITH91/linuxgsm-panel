@@ -108,7 +108,7 @@ for _attr, _fns in _WATCHED.items():
 # part53 (the 2026-10-11 review's routes, installer, tools and page fixes) drives part12's app and
 # runs node/bash on its own fixtures; imports part01, 05, 12 and 47.
 # part54 (review 1011b: core, system_ops, ssh-core and Tailscale Funnel fixes) runs part32's fake
-# tailscale on its own PATH; imports part01 and 20.
+# tailscale on its own PATH; imports part01, 02, 12, 20 and 51 (part12's app for two page renders).
 # part55 (the second 2026-10-11 review: game files, debug report, helper, routes) drives part12's
 # app in a real bash over a throwaway home, and node on one page function; imports part01, 05, 12, 47.
 # part56 (the 2026-10-11 second review's routes, tools and page fixes) drives part12's app and runs
