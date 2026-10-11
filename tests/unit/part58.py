@@ -56,8 +56,10 @@ _mine58 = {"hosts": [], "servers": [], "users": []}
 
 
 def _bash58(server, user, sh, timeout=30, selfname=None, scope=False):
-    """shell_as_game_user, in a real bash, /home/<account> pointing at the throwaway home and the
-    stand-in tools first on PATH."""
+    """Run shell_as_game_user's command in a real bash.
+
+    /home/<account> points at the throwaway home, and the stand-in tools are first on PATH.
+    """
     env = dict(os.environ, PATH=_BIN58 + os.pathsep + os.environ.get("PATH", ""))
     sh = sh.replace("/home/" + _USER58, _HOME58).replace("D=/tmp/tmux-$(id -u)", "D=" + _TMUX58)  # nosec B108 - the text replaced, not a path used
     p = _sp58.run(["bash", "-c", sh],  # nosec B603 B607 - bash on this part's own command
@@ -276,8 +278,10 @@ def _funnel_port58():
     check("debug report: with config.json unreadable, Funnel on is not blamed on a config value "
           "nobody read", "config says off" not in said and "off in the panel's config" not in said
           and "could not be read" in said, said)
+
+
+def _funnel_facts58():
     seen = []
-    _p9_patch(_p9_ts, "get_tailscale_info", lambda *a, **k: NS(serve_config={}))
     _p9_patch(_p9_ts, "get_tailscale_info", lambda *a, **k: NS(serve_config={}, serve_unreadable=False))
     _p9_patch(_p9_ts, "panel_funnelled", lambda sc, port: (seen.append(port), port == 5002)[1])
     _p9_patch(_p9_ts, "shared_funnel_apps", lambda sc, port, use: (seen.append(port), [])[1])
@@ -387,6 +391,12 @@ def _remote_content58():
 
 
 # ── A08: request flags, and the GMod content step ───────────────────────────────────────────────
+def _said58(resp):
+    """A JSON answer's message, or its error (the log-timestamps switch answers with `error`)."""
+    body = _p9_json(resp) or {}
+    return body.get("message") or body.get("error") or ""
+
+
 def _flags58(client, rid, sid):
     calls = []
     _p9_patch(_p9_sd, "set_daily_restart", lambda *a, **k: (calls.append(a[5]), (True, ""))[1])
@@ -407,11 +417,15 @@ def _flags58(client, rid, sid):
     for tag, (url, key) in posts.items():
         r = client.post(url, json={"ip": "198.51.100.58", key: "false"})
         got[tag] = r.status_code
-        said[tag] = (_p9_json(r) or {}).get("message") or (_p9_json(r) or {}).get("error") or ""
+        said[tag] = _said58(r)
     check("routes: a switch posted as the string \"false\" is refused (400), not read as yes — "
           "daily restart, notify-empty, whitelist remove, block/unblock, auto-block, backup force, "
           "log timestamps", got == {t: 400 for t in posts} and calls == []
           and all("must be true or false" in m for m in said.values()), repr((got, calls, said)))
+    _flags_control58(client, sid, calls)
+
+
+def _flags_control58(client, sid, calls):
     r1 = client.post("/api/server/%d/daily-restart" % sid, json={"enabled": False})
     r2 = client.post("/api/server/%d/notify-empty" % sid, json={"enabled": True})
     check("routes: ...while a JSON boolean still works (control)",
@@ -453,6 +467,7 @@ try:
     _refresh_reason58()
     _localized_continued58()
     _funnel_port58()
+    _funnel_facts58()
     _reach58()
     _remote_content58()
     _flags58(_A58, _R58, _S58)

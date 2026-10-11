@@ -1079,8 +1079,11 @@ def _r12b_may_retract_root_all(rest):
 
 
 def _r13b_cmnd_items(spec):
-    """The comma-separated items of a Cmnd_Spec_List, a comma inside `(...)` not splitting; None
-    when the parentheses do not balance (a shape this does not read)."""
+    """Split a Cmnd_Spec_List into its comma-separated items.
+
+    A comma inside `(...)` does not split. None when the parentheses do not balance (a shape this
+    does not read).
+    """
     items, depth, cur = [], 0, []
     for ch in spec:
         if ch == "(":
@@ -1101,9 +1104,12 @@ def _r13b_cmnd_items(spec):
 
 
 def _r12b_runas_may_be_root(runas):
-    """Whether a Runas spec may include root: none given (root is the default), ALL, root, #0, an
-    alias, a negation, a netgroup or non-Unix group, or a Unix group root belongs to (`%root`,
-    `%#0`: root's primary group is root). A group that does not exist has no members."""
+    """Whether a Runas spec may include root.
+
+    None given (root is the default), ALL, root, #0, an alias, a negation, a netgroup or non-Unix
+    group, or a Unix group root belongs to (`%root`, `%#0`: root's primary group is root). A group
+    that does not exist has no members.
+    """
     if runas is None:
         return True
     users = [u.strip() for u in runas.split(":")[0].split(",") if u.strip()]
@@ -1113,8 +1119,10 @@ def _r12b_runas_may_be_root(runas):
 
 
 def _r13b_group_holds_root(group):
-    """Whether Unix group `group` (a name, or `#<gid>`) has root in it, as its primary group or a
-    listed member. Unreadable answers True (the take-back side)."""
+    """Whether Unix group `group` (a name, or `#<gid>`) has root in it.
+
+    As its primary group or a listed member. Unreadable answers True (the take-back side).
+    """
     try:
         root_gid = pwd.getpwnam("root").pw_gid
         if group.startswith("#"):

@@ -381,9 +381,9 @@ _R13B_VALVE_COUNT_RE = re.compile(
 
 
 def _r13b_reply_complete(eng, out):
-    """Whether a capture holds a whole valve/idTech3 reply: its table header, and for valve no
-    fewer rows than its own `players :` line counts.
+    """Whether a capture holds a whole valve/idTech3 reply.
 
+    That is its table header, and for valve no fewer rows than its own `players :` line counts.
     The capture is only what the pane printed after the send (capture_console's `since`), so a
     reply that has not arrived has no header — and the parsers read rows with no header as a
     table that starts at the top, which made "no reply yet" an empty server. A valve reply caught
@@ -407,8 +407,10 @@ def _r13b_reply_complete(eng, out):
 
 
 def _parse_player_reply(eng, out):
-    """Parse a captured player-list reply with the engine's own parser; None when the capture
-    holds no complete reply (_r13b_reply_complete)."""
+    """Parse a captured player-list reply with the engine's own parser.
+
+    None when the capture holds no complete reply (_r13b_reply_complete).
+    """
     if eng == "minecraft":
         return _parse_minecraft_list(out)
     if not _r13b_reply_complete(eng, out):

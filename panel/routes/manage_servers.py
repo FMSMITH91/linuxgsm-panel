@@ -1864,7 +1864,8 @@ def _r12b_gmod_content_step(remote, short_name, content_games, _p):
     """Step 8's body, the host claimed: fetch the picked content, then mount what is on disk.
 
     -> None when everything picked was mounted, else the sentence the install ends with
-    (_r13b_noting_content_note)."""
+    (_r13b_noting_content_note).
+    """
     cu = ensure_content_user(remote)
     if not cu:
         _log.warning("gmod content: no content user could be prepared on %s", remote.name)

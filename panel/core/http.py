@@ -11,7 +11,7 @@ not a cycle at runtime but is one to every static analyser that reads the tree. 
 They depend on Flask's request/response machinery and nothing else — no models, no panel state, no
 app factory — so there is nothing here for app.py to own.
 """
-from flask import current_app, flash, jsonify, redirect, request, url_for
+from flask import abort, current_app, flash, jsonify, make_response, redirect, request, url_for
 
 
 def _json_body():
@@ -55,9 +55,17 @@ def _r12c_json_flag(body, key, default):
     return v if isinstance(v, bool) else None
 
 
-def _r13b_not_a_flag(name):
-    """The 400 for a switch _r12c_json_flag read as None (not a JSON boolean)."""
-    return jsonify({"success": False, "message": "%s must be true or false." % name}), 400
+def _r13b_json_flag(body, key, default):
+    """_r12c_json_flag, ending the request with a 400 when the field is not a JSON boolean.
+
+    abort() rather than a None for the route to test: the refusal is the same at every switch,
+    and a branch per route pushed the route registrars over the complexity limit.
+    """
+    v = _r12c_json_flag(body, key, default)
+    if v is None:
+        abort(make_response(jsonify({"success": False,
+                                     "message": "%s must be true or false." % key}), 400))
+    return v
 
 
 def _wants_json():

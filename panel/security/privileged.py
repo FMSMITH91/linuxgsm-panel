@@ -1432,9 +1432,11 @@ _SECRET_REMOTE = {
 
 
 def _r13b_probe_as_remote(user, test):
-    """A remote probe verb, `test` run as `user`: exit 0 / 1 as the test answers, 1 when no
-    account has that name (the helper's _probe_rc answer), and 2 when the account exists but the
-    test could not be run as it."""
+    """Render a remote probe verb: `test`, run as `user`.
+
+    Exit 0 / 1 as the test answers, 1 when no account has that name (the helper's _probe_rc
+    answer), and 2 when the account exists but the test could not be run as it.
+    """
     u = shlex.quote(user)
     # if/then, not `a || exit 1`: a rendering with a `||` in it reads, to part05's gate, as one
     # that may end in a succeeding `||` (the `&& echo Y || echo N` that always exited 0).
