@@ -153,7 +153,7 @@ from panel.ops import system_ops as so
 # (R17) and Serve's boot outcome as a fixed reason (R20). Through the modules, at call time.
 from panel.ops.debug_report import errors as _dr_errors
 from panel.ops.debug_report import process as _dr_process
-from panel.ops.serve_upkeep import (_boot_audit, _panel_tailscale_url,
+from panel.ops.serve_upkeep import (_boot_audit, _boot_shared_funnel, _panel_tailscale_url,
     _remove_serve_leftovers, _tailscale_banner)
 from panel.ops import backup as bk
 from panel.services import lgsm_data
@@ -3258,6 +3258,7 @@ def _boot_serve(app, cfg, port):
     if app.config["BOOT_SERVE"] == "ok":
         app.config["BOOT_SERVE_LEFTOVERS"] = _remove_serve_leftovers(
             port, mount, "at boot", lambda detail, ok: _boot_audit(app, detail, ok))
+        _boot_shared_funnel(app, cfg, port, _boot_audit)
 
 
 def _ts_backend_scheme(cfg):

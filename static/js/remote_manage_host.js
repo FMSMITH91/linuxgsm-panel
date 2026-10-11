@@ -64,7 +64,10 @@ function loadSshStatus(){
           cp.title = 'UFW is not active on this host, so no firewall rule keeps the panel port closed — the panel is reachable on its public port.';
         } else if (d.panel_port_open === false) {
           cp.disabled = true;
-          cp.title = 'The public panel port is already closed — the panel is tailnet-only.';
+          // data-funnel: the panel's Serve route is on Funnel, so a closed port is not tailnet-only.
+          cp.title = cp.hasAttribute('data-funnel')
+            ? 'The public panel port is already closed, but Funnel is on, so the panel is still reachable from the internet.'
+            : 'The public panel port is already closed — the panel is tailnet-only.';
         } else if (d.panel_port_open === true) {
           cp.disabled = false;
           cp.title = '';
@@ -87,8 +90,14 @@ function sshMode(mode){
   } else { run(); }
 }
 function closePanelPort(){
+  // data-funnel: the panel's Serve route is on Funnel, so closing this port does not make it
+  // tailnet-only, and the question must not say it does.
+  var cpb=document.getElementById('close-panel-btn');
+  var body=(cpb && cpb.hasAttribute('data-funnel'))
+    ? 'Close the public web port?\n\nFunnel is on for the panel’s Tailscale Serve address, so the panel stays reachable from the internet through it.'
+    : 'Close the public web port so the panel is reachable ONLY over your tailnet?\n\nMake sure you can already reach the panel at your ts.net URL (Tailscale Serve) — this removes the public way in.';
   confirmDialog({title:'Close public panel port', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Close public port',
-    bodyText:'Close the public web port so the panel is reachable ONLY over your tailnet?\n\nMake sure you can already reach the panel at your ts.net URL (Tailscale Serve) — this removes the public way in.',
+    bodyText:body,
     onConfirm:function(){
       var m=document.getElementById('panel-port-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Closing…</span>';
       fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/close-panel-port',{method:'POST'}).then(r=>r.json())

@@ -526,14 +526,63 @@ def _r12a_serve_verb(port, mount, funnel, keep_shared_funnel):
     shared, others = _r12a_listener_funnel(info.serve_config, port)
     if not others or shared == bool(funnel):
         return want, ""
-    names = ", ".join(others)
+    names = _r12a_apps_at(others)
     if keep_shared_funnel and _r12a_panel_on_443(info.serve_config, port, mount):
-        state = "on" if shared else "off"
-        _log.warning("Tailscale Serve: Funnel left %s on the :443 listener it shares with %s",
-                     state, names)
-        return ("funnel" if shared else "serve"), (
-            " (Funnel left %s: it is set per listener, and %s shares it)" % (state, names))
+        _log.warning("Tailscale Serve: Funnel left as it is on the :443 listener it shares with %s",
+                     names)
+        return ("funnel" if shared else "serve"), _r12a_kept_note(shared, names)
     return None, _r12a_funnel_refusal(funnel, names)
+
+
+def _r12a_kept_note(shared, names):
+    """What a boot re-point that left the shared listener's Funnel as it was appends to its answer."""
+    if shared:
+        return (" (Funnel left on: it is set per listener, and %s shares it, so the panel is "
+                "reachable from the internet too)" % names)
+    return " (Funnel left off: it is set per listener, and %s shares it)" % names
+
+
+def _r12a_apps_at(mounts):
+    """Other apps named by where they are mounted: "the app at /", never a bare "/"."""
+    return ", ".join("the app at %s" % m for m in mounts)
+
+
+def shared_funnel_apps(serve_config, port, use_funnel):
+    """The other apps' mounts when the panel is on Funnel only because they share its listener.
+
+    [] unless the panel has a route on the :443 listener, that listener has Funnel on, the panel's
+    own setting (`use_funnel`, tailscale_use_funnel) is off, and another app holds a mount there.
+    Funnel is per listener, so then the panel IS on the public internet against its own setting,
+    and every page that shows its Serve or Funnel state has to say so (the boot keeps it that way
+    rather than take the other app off the internet: _r12a_serve_verb).
+    """
+    shared, others = _r12a_listener_funnel(serve_config, port)
+    if not shared or use_funnel or not others:
+        return []
+    on_443 = any(_serve_port_flag(r["url"]) == "--https=443"
+                 for r in panel_serve_routes(serve_config, port))
+    return others if on_443 else []
+
+
+def panel_funnel_facts(cfg):
+    """{"funnelled", "shared_funnel"} for a page that says where the panel can be reached.
+
+    Read from the host (the cached reading) and only once Serve is set up; both False/[] otherwise
+    and when Serve cannot be read. "funnelled": a Serve route to the panel is on a Funnel listener.
+    "shared_funnel": shared_funnel_apps — on Funnel against its own setting, for another app.
+    """
+    if not cfg.get("tailscale_setup_done"):
+        return {"funnelled": False, "shared_funnel": []}
+    info = get_tailscale_info()
+    port = cfg.get("port", 5000)
+    return {"funnelled": panel_funnelled(info.serve_config, port),
+            "shared_funnel": shared_funnel_apps(info.serve_config, port,
+                                                cfg.get("tailscale_use_funnel"))}
+
+
+def panel_funnelled(serve_config, port):
+    """Whether any Serve route to the panel is on a listener with Funnel on (internet-reachable)."""
+    return any(r["funnel"] for r in panel_serve_routes(serve_config, port))
 
 
 def _r12a_panel_on_443(serve_config, port, mount):
@@ -976,7 +1025,7 @@ def _r12a_funnel_kept_note(info, port):
     """
     shared, others = _r12a_listener_funnel(info.serve_config, port)
     if shared and others:
-        return "; Funnel stays on for the :443 listener, which still serves %s" % ", ".join(others)
+        return "; Funnel stays on for the :443 listener, which still serves %s" % _r12a_apps_at(others)
     return ""
 
 

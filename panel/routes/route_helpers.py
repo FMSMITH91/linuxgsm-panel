@@ -589,13 +589,22 @@ def _rebind_pending(cfg):
     return bool(running and stored) and _bind_is_loopback(stored) and not _bind_is_loopback(running)
 
 
+def _r12a_funnel_maybe(cfg):
+    """Whether the panel's Serve route may be on Funnel: it is, or Serve could not be read."""
+    info = ts.get_tailscale_info()
+    return bool(info.serve_unreadable) or ts.panel_funnelled(info.serve_config, cfg.get("port", 5000))
+
+
 def _complete_facts(cfg):
     """What the complete page may truthfully say about where the panel can be reached."""
     running = current_app.config.get("_BOOT_BIND")
     # "Only your devices can reach it" is true only while nothing but loopback is listening (Serve
     # is then the one way in) and Funnel is not publishing it to the internet.
+    # And "Funnel is not publishing it" is read from the host, not only from the setting: Funnel is
+    # per listener, so a panel sharing :443 with a funnelled app is public with the setting off.
     private = (bool(running) and _bind_is_loopback(running)
-               and not cfg.get("tailscale_use_funnel") and not cfg.get("trust_proxy"))
+               and not cfg.get("tailscale_use_funnel") and not cfg.get("trust_proxy")
+               and not _r12a_funnel_maybe(cfg))
     return {"rebind_pending": _rebind_pending(cfg), "running_bind": running or "",
             "panel_port": cfg.get("port", 5000), "tailnet_private": private}
 

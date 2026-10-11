@@ -457,5 +457,10 @@
   "Tailscale is installed but not connected to a tailnet yet.": "Tailscale est installé mais pas encore connecté à un tailnet.",
   "Tailscale isn't installed on this host yet.": "Tailscale n'est pas encore installé sur cet hôte.",
   "Timezone": "Fuseau horaire",
-  "Waiting for you to authorize…": "En attente de votre autorisation…"
+  "Waiting for you to authorize…": "En attente de votre autorisation…",
+  "Funnel is on for the whole :443 listener because it is used by": "Funnel est activé pour tout l’écouteur :443 car il est utilisé par",
+  "the app at": "l’application sur",
+  ", so the panel is reachable from the internet too.": ", donc le panneau est aussi accessible depuis Internet.",
+  "Turn Funnel off for that app, or move the panel to another port, to make it tailnet-only.": "Désactivez Funnel pour cette application, ou déplacez le panneau vers un autre port, pour qu’il soit limité au tailnet.",
+  "Funnel is on for the panel’s Tailscale Serve address, so it stays reachable from the internet even with this port closed.": "Funnel est activé pour l’adresse Tailscale Serve du panneau : il reste accessible depuis Internet même avec ce port fermé."
 }

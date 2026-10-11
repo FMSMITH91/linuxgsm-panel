@@ -348,6 +348,22 @@ def _expected_scheme(conf, cfg):
         return None
 
 
+def _funnel_findings(res, v, cfg):
+    """Funnel on in Serve while the panel's config says off: for another app, or switched on."""
+    from panel.ops import tailscale_integration as ts
+    shared = ts.shared_funnel_apps({"services": v.get("serve_services") or []},
+                                   cfg.get("port", 5000), cfg.get("tailscale_use_funnel"))
+    if shared:
+        # Funnel is per listener: another app on the panel's :443 listener uses it, so the panel
+        # is public against its own setting (the boot keeps it so rather than take that app off).
+        res.find("fail", AREA, "Funnel is on for the whole :443 listener because another app on it "
+                               "uses Funnel, so the panel is reachable from the internet although its "
+                               "config says off")
+    elif v.get("funnel_enabled") and not cfg.get("tailscale_use_funnel"):
+        res.find("fail", AREA, "Funnel is ON in Serve but off in the panel's config (switched on "
+                               "outside the panel)")
+
+
 def _ts_findings(res, v, cfg, routes):
     if v.get("backend_state") == "NeedsLogin":
         res.find("fail", AREA, "Tailscale needs login (node key expired or logged out)")
@@ -357,9 +373,7 @@ def _ts_findings(res, v, cfg, routes):
         res.find("warn", AREA, "Tailscale Serve status is unreadable (not the same as no routes)")
     elif cfg.get("tailscale_setup_done") and not routes:
         res.find("warn", AREA, "no Tailscale Serve route reaches the panel")
-    if v.get("funnel_enabled") and not cfg.get("tailscale_use_funnel"):
-        res.find("fail", AREA, "Funnel is ON in Serve but off in the panel's config (switched on "
-                               "outside the panel)")
+    _funnel_findings(res, v, cfg)
     if "EXPIRED" in _key_text(v.get("key_expiry")):
         res.find("fail", AREA, "the Tailscale node key has expired")
 

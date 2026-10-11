@@ -286,5 +286,6 @@
   "players are connected to": "joueurs sont connectés à",
   "server(s)": "serveur(s)",
   "alerts muted": "alertes coupées",
-  "(couldn't check who's online)": "(impossible de vérifier qui est en ligne)"
+  "(couldn't check who's online)": "(impossible de vérifier qui est en ligne)",
+  "The public panel port is already closed, but Funnel is on, so the panel is still reachable from the internet.": "Le port public du panneau est déjà fermé, mais Funnel est activé : le panneau reste accessible depuis Internet."
 }

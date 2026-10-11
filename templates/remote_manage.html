@@ -713,8 +713,17 @@
       <div class="col-md-6">
         <div class="small text-secondary mb-1"><span>Public panel access</span> (<span>port</span> {{ (config.port if config else 5000) }})</div>
         {% if config and config.tailscale_setup_done %}
+        {# Never "tailnet-only" while the panel's Serve route is on Funnel: it is on the internet
+           whatever this port does (tailscale_integration.panel_funnel_facts). #}
+        {% if funnel_facts and funnel_facts.funnelled %}
+        {% set shared_funnel = funnel_facts.shared_funnel %}
+        {% include "_shared_funnel_note.html" %}
+        {% if not shared_funnel %}<p class="small text-warning mb-1">Funnel is on for the panel’s Tailscale Serve address, so it stays reachable from the internet even with this port closed.</p>{% endif %}
+        <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort" data-funnel="1"><i class="bi bi-shield-lock"></i> Close public panel port</button>
+        {% else %}
         <p class="small text-secondary mb-1">Close the public web port to make the panel tailnet-only, with no open ports at all.</p>
         <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort"><i class="bi bi-shield-lock"></i> Close public panel port (tailnet-only)</button>
+        {% endif %}
         {% else %}
         <p class="small text-secondary mb-1">Set up Tailscale Serve first, then you can close the public port safely.
           <a href="{{ url_for('tailscale_page') }}">Open Tailscale settings</a></p>

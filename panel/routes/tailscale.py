@@ -260,8 +260,13 @@ def _register_tailscale_setup(app):
         # its own Remove. Disable was the only control, and it cleared tailscale_mount, so a page
         # in use at /lgsm rebuilt every link for "/" the moment it next loaded.
         panel_leftovers = [r for r in panel_routes if not ts.is_managed_route(r, cfg)]
+        # The other apps whose Funnel the panel's :443 route shares against its own setting:
+        # Funnel is per listener, so the panel is public then, and the page says so.
+        shared_funnel = ts.shared_funnel_apps(info.serve_config, port,
+                                              cfg.get("tailscale_use_funnel"))
         return render_template("tailscale.html", info=info, config=cfg, suggestion=suggestion,
                                panel_routes=panel_routes, panel_leftovers=panel_leftovers,
+                               shared_funnel=shared_funnel,
                                serve_default_mount=_serve_default_mount(info, cfg, port),
                                ts_detail=_sees_panel_host_tailnet(current_user))
 
