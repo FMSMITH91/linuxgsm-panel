@@ -28,7 +28,7 @@
     "inputHtml,opts.body"
   ],
   "remote_manage.js": [
-    "_da,body,head,j.banned_ips.map,j.currently_banned,j.total_banned,j.total_failed,return",
+    "Number,_da,body,head,j.banned_ips.map,j.currently_banned,return",
     "_da,return",
     "d.rc",
     "head,rows",
