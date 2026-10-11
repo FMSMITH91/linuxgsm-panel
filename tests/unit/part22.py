@@ -52,6 +52,7 @@ from panel.security import banlist as _bl22
 from panel.security import privileged as _priv22
 from panel.services import notifications as _notif22
 from unit.part01 import check, eq
+from unit.part01 import skip as _skip22
 
 _TMP22 = _tf22.mkdtemp(prefix="lgsm-p22-")
 _APP22 = _Flask22("p22")
@@ -511,9 +512,15 @@ _pl22b = _b22.Result()
 with _patched(_so22, _check_sudo=_no_check_sudo,
               _SUDO_PROBE={"at": _time22.time() - 180, "ok": False}, _helper_present=lambda: False):
     _inst22._privilege_lines(_pl22b, {})
-check("R16: a cached refusal is printed with its age; no helper and no sudo is a fail",
-      "refused (cached, probed 3 m ago)" in _text(_pl22b) and "fail" in _levels(_pl22b)
-      or os.geteuid() == 0, _text(_pl22b))
+# As root the "no helper and no sudo" verdict does not apply, so the check cannot be observed
+# there: a SKIP, not a PASS line (`... or geteuid() == 0` passed it unconditionally as root).
+if os.geteuid() == 0:
+    _skip22("R16: a cached refusal is printed with its age; no helper and no sudo is a fail",
+            "running as uid 0, where no-sudo is not a failure")
+else:
+    check("R16: a cached refusal is printed with its age; no helper and no sudo is a fail",
+          "refused (cached, probed 3 m ago)" in _text(_pl22b) and "fail" in _levels(_pl22b),
+          _text(_pl22b))
 
 _pc22 = _w("panel.conf", "panel_dir=%s\ndata_dir=/elsewhere/data\n# db_path=x\n" % _so22.PANEL_DIR)
 _pct22 = _inst22.panel_conf_text(_pc22)

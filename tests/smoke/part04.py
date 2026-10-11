@@ -257,8 +257,13 @@ try:
     # and re-fetch the server + host, so it cost 2 queries PER SERVER — 104 at 50 servers, and
     # ~1000 on a big install, every poll. It is the most expensive thing to get wrong here
     # because nobody has to click anything for it to run.
-    _sv_slm2 = _sm_core.server_live_metrics
-    _sm_core.server_live_metrics = lambda *a, **k: {"game_procs": 0, "cpu_percent": 1.0}
+    # Stubbed at host_live_metrics, the one sample per host the poll takes (see the top of this
+    # file). The stub here used to sit on _core.server_live_metrics, which the poll never calls,
+    # so these budgets were measured with the sample going to the fixture host's real read path.
+    _sv_slm2 = _dmapp.host_live_metrics
+    _dmapp.host_live_metrics = lambda remote, force=False: {
+        "host": {"cpu_percent": 1.0, "ram_used": 1, "ram_total": 8, "disk_used": 1,
+                 "disk_total": 4, "uptime_secs": 60, "cores": 4}, "users": {}, "ports": set()}
     try:
         _met_q, _met_code = _qcount("/api/dashboard/metrics")
         check("perf: /api/dashboard/metrics renders with 50 servers", _met_code == 200,
@@ -317,7 +322,7 @@ try:
               _umet_code == 200 and _umet_q <= 20,
               "%d queries (status %d)" % (_umet_q, _umet_code))
     finally:
-        _sm_core.server_live_metrics = _sv_slm2
+        _dmapp.host_live_metrics = _sv_slm2
 
     # Regression: the /api/servers status poll must NOT clobber an in-progress install's
     # status. The port scan (stubbed empty here) finds nothing listening for a still-installing
@@ -1786,9 +1791,12 @@ check("errors: an unauthenticated API call keeps its 401 contract",
       _resp.status_code in (401, 302), "%s" % _resp.status_code)
 _eh_c.get("/logout")
 # ...and a genuine same-site destination is still honoured, or the guard is just breaking things.
+import time as _rd_time  # pylint: disable=reimported
 _okc = app.test_client()
+_ok_t0 = _rd_time.monotonic()
 _okr = _okc.post("/login?next=/settings",
                  data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+_ok_dt = _rd_time.monotonic() - _ok_t0      # the same login with a benign next: the baseline
 check("login redirect: a same-site path is still followed",
       _okr.status_code == 302 and _okr.headers.get("Location", "").endswith("/settings"),
       "%d %r" % (_okr.status_code, _okr.headers.get("Location")))
@@ -1796,17 +1804,19 @@ _okc.get("/logout")
 # ...and the guard answers in linear time. Its path group was `(?:[seg]+/?)*`, which split a
 # run of segment characters 2^n ways before failing: "/"+"a"*30+"!" held the one eventlet hub
 # for ~50s, freezing every other user, console and poller. 26 characters is ~3s with the old
-# pattern and microseconds with the new, so the bound below is far from either.
-import time as _rd_time  # pylint: disable=reimported
+# pattern and microseconds with the new, so the bound below is far from either. Measured as the
+# time OVER the benign login above: the whole request includes a cost-12 bcrypt verify and the
+# session and audit writes, which a slow or loaded runner can stretch past a fixed bound on its own.
 _rd_c = app.test_client()
 _rd_t0 = _rd_time.monotonic()
 _rd_r = _rd_c.post("/login?next=/" + "a" * 26 + "!",
                    data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
 _rd_dt = _rd_time.monotonic() - _rd_t0
 check("login redirect: a pathological ?next= is refused without backtracking",
-      _rd_dt < 0.75 and _rd_r.status_code == 302
+      _rd_dt - _ok_dt < 0.5 and _rd_r.status_code == 302
       and _rd_r.headers.get("Location", "").split("localhost", 1)[-1] == "/",
-      "%.2fs %s %r" % (_rd_dt, _rd_r.status_code, _rd_r.headers.get("Location")))
+      "%.2fs (benign login %.2fs) %s %r" % (_rd_dt, _ok_dt, _rd_r.status_code,
+                                            _rd_r.headers.get("Location")))
 _rd_c.get("/logout")
 # The unauthenticated twin: the login redirect's ?next= is built from the requested path by
 # the same kind of pattern, and an <int:> converter takes any number of digits.

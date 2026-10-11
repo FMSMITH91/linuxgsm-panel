@@ -41,7 +41,9 @@ import sys
 
 # The docs-only paths: the paths-ignore list, as the panel's _ci_path_ignored reads it. GitHub's
 # '**/*.md' matches a .md file at any depth, the root included, and 'docs/**' everything under docs/.
-DOCS_ONLY_PATTERNS = ("**/*.md", "docs/**", "LICENSE", ".gitignore", ".gitattributes", ".editorconfig")
+# Not .gitattributes: it decides the bytes git checks out (eol conversion of every .sh and .py,
+# -text on the fuzz corpus), so a change to it alone is a change to what every later run builds.
+DOCS_ONLY_PATTERNS = ("**/*.md", "docs/**", "LICENSE", ".gitignore", ".editorconfig")
 DOCS_ONLY_FILES = frozenset(p for p in DOCS_ONLY_PATTERNS if "*" not in p)
 
 _REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}\Z")

@@ -26,11 +26,14 @@ _hooks = {}
 def add_disconnect_hook(fn):
     """Register fn(sid) to run when any socket disconnects.
 
-    Keyed by qualified name, not by identity: register() builds a fresh closure every call, so a
-    second app in the same process (which the test suite does routinely) would otherwise stack up
-    hooks holding references to a torn-down app.
+    Keyed by definition site (module and qualified name), not by identity: register() builds a
+    fresh closure every call, so a second app in the same process (which the test suite does
+    routinely) would otherwise stack up hooks holding references to a torn-down app. The module is
+    part of the key because the qualified name alone is not unique: every route module's entry
+    point is called register, so two modules' `lambda sid: ...` were both
+    "register.<locals>.<lambda>" and the second silently replaced the first.
     """
-    key = getattr(fn, "__qualname__", None) or repr(fn)
+    key = (getattr(fn, "__module__", None) or "", getattr(fn, "__qualname__", None) or repr(fn))
     _hooks[key] = fn
     return fn
 

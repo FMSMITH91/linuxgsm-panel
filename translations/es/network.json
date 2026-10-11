@@ -392,5 +392,14 @@
   "The wait gives up after": "La espera se abandona tras",
   "The wait has no time limit.": "La espera no tiene límite de tiempo.",
   "A superadmin can switch the panel to reach this server over the tailnet (Tailscale SSH).": "Un superadministrador puede hacer que el panel llegue a este servidor por la tailnet (Tailscale SSH).",
-  "A superadmin can now switch the panel to reach this host over Tailscale SSH.": "Un superadministrador ya puede hacer que el panel llegue a este host por Tailscale SSH."
+  "A superadmin can now switch the panel to reach this host over Tailscale SSH.": "Un superadministrador ya puede hacer que el panel llegue a este host por Tailscale SSH.",
+  "Ban": "Banear",
+  "Blocked": "Bloqueado",
+  "Unblock": "Desbloquear",
+  "Unblocked": "Desbloqueado",
+  "Unbanned": "Desbaneado",
+  "Migrate": "Migrar",
+  "Migrated": "Migrado",
+  "Migrating…": "Migrando…",
+  "Only a superadmin can reboot the panel host.": "Solo un superadministrador puede reiniciar el host del panel."
 }

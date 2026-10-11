@@ -1012,6 +1012,11 @@ def _rf16_transport(awk=None):
             return "", "not under test", 1
         cmd = command.replace(_privm16.F2B_LOG_GLOB, _RF16_GLOB)
         if awk:
+            # Refused, and recorded, when there is no " awk " to replace: a rendering respelled
+            # (`|awk`) would otherwise run the DEFAULT awk under the gawk and mawk labels.
+            if " awk " not in cmd:
+                _RF16_OTHER.append("no ' awk ' to substitute %s for: %s" % (awk, command[:60]))
+                return "", "awk not substituted", 1
             cmd = cmd.replace(" awk ", " %s " % awk, 1)
         return _core16._exec_local_shell("export LC_ALL=C.UTF-8; " + cmd, timeout=timeout)
     return _run

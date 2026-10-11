@@ -101,12 +101,18 @@ for _attr, _fns in _WATCHED.items():
 # part49 (raw-cfg logtimestamp and failed-backup partial archives) drives part12's app; imports part01, 12.
 # part50 (documentation-only pull requests skip the heavy checks) reads the workflows and runs
 # .github/scripts/pr_scope.py; imports part01, 05 and 29.
+# part51 (review 1011: the recovery CLI's workers, system_ops, ssh core and reboot fixes) imports
+# part01, 05 and 20.
+# part52 (fixes from the 2026-10-11 review: game files, debug report, helper, routes) drives part12's
+# app in a real bash over a throwaway home; imports part01, 05 and 12.
+# part53 (the 2026-10-11 review's routes, installer, tools and page fixes) drives part12's app and
+# runs node/bash on its own fixtures; imports part01, 05, 12 and 47.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
           "part28", "part29", "part30", "part31", "part32", "part33", "part34", "part35", "part36", "part37",
           "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
-          "part50", "part15")
+          "part50", "part51", "part52", "part53", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -171,6 +177,17 @@ check("unit suite: no check leaves the eventlet hub a listener or IOClosed for a
 check("suites: no unit check reads or writes the machine's own config.json or keys",
       not _config_touches,
       "%d call(s): %s" % (len(_config_touches), "; ".join(sorted(set(_config_touches)))))
+
+# part05 installs tools/nosudo_runner's shim for the rest of the run (it answers any sudo with "a
+# password is required", as an unprivileged host would), and nothing read what it refused: a check
+# that reached an escalation got a canned rc=1, tested the "could not escalate" branch under
+# another name, and the run said nothing. What the shim refused is named here.
+_nsr_blocked = getattr(sys.modules.get("unit.part05"), "_nsr_ns", {}).get("BLOCKED")
+check("unit suite: no check reached sudo or the network through part05's no-sudo shim",
+      _nsr_blocked == [],
+      "the shim is not installed" if _nsr_blocked is None
+      else "%d refused, first: %s" % (len(_nsr_blocked), "; ".join(
+          "%s: %s" % _b for _b in _nsr_blocked[:4])))
 
 # Every part file ran. Checked HERE, after the imports, because a gate inside a part cannot see
 # that part being dropped: the old one lived in part06 and matched part names as substrings of this

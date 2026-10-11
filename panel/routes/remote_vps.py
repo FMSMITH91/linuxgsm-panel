@@ -121,6 +121,7 @@ def register(app):
     _register_firewall_view(app)
     _register_firewall_rules(app)
     _register_ssh_settings(app)
+    _register_ssh_port(app)
     _register_panel_port(app)
     _register_game_ports(app)
     _register_host_stats(app)
@@ -374,7 +375,7 @@ def _register_firewall_rules(app):
 
 
 def _register_ssh_settings(app):
-    """SSH: status, public exposure through UFW (allow / limit / off), and port."""
+    """SSH: status, and public exposure through UFW (allow / limit / off)."""
     @app.route("/api/remote/<int:remote_id>/ssh-status")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -398,12 +399,20 @@ def _register_ssh_settings(app):
     def api_remote_ssh_mode(remote_id):
         """Set public SSH via UFW: allow / limit / off (tailnet-only)."""
         remote = get_host_remote(remote_id)
-        mode = _json_body().get("mode", "")
+        # Checked here, not only in remote_set_public_ssh: a non-string mode raised out of its
+        # .lower() as a 500, and any text the helper refused was still written into the audit
+        # row's target. Only a mode this route acts on is recorded.
+        mode = _json_str(_json_body(), "mode").lower()
+        if mode not in ("allow", "limit", "off"):
+            return jsonify({"success": False, "message": "Invalid mode"}), 400
         success, msg = remote_set_public_ssh(remote, mode)
         log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success,
                    remote=remote)
         return jsonify({"success": success, "message": msg})
 
+
+def _register_ssh_port(app):
+    """SSH: move a host's sshd to a new port."""
     @app.route("/api/remote/<int:remote_id>/ssh-port", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)

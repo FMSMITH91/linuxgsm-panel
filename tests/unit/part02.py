@@ -2944,12 +2944,18 @@ finally:
 import ast as _totp_ast
 _totp_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _totp_bad = []
-for _rel in ["app.py"] + ["panel/" + _p for _p in [
-        "routes/auth_routes.py", "routes/tags.py", "routes/admin_notifications.py",
-        "security/auth.py"]]:
+# EVERY panel module, not a list of five: a new 2FA-gated action in a file the list did not name
+# (users.py, api.py, remote_security.py) was never opened, and a listed file that was renamed was
+# skipped by an `if not exists: continue`. The floor below fails a walk that found nothing to read.
+_totp_files = ["app.py"] + sorted(
+    os.path.relpath(_p, _totp_root)
+    for _p in __import__("glob").glob(os.path.join(_totp_root, "panel", "**", "*.py"),
+                                      recursive=True))
+check("2FA: the verify_totp gate reads app.py and every panel module (a floor, so an empty walk "
+      "fails)", len(_totp_files) > 50 and "panel/routes/auth_routes.py" in _totp_files,
+      "%d files" % len(_totp_files))
+for _rel in _totp_files:
     _path = os.path.join(_totp_root, _rel)
-    if not os.path.exists(_path):
-        continue
     _tree = _totp_ast.parse(open(_path, encoding="utf-8").read())
     for _n in _totp_ast.walk(_tree):
         if not (isinstance(_n, _totp_ast.Call)
@@ -2966,6 +2972,11 @@ check("2FA: no route consumes a live code with the yes/no verify_totp",
 # "is it valid" alone lets an observed code be replayed for the rest of that window. The login
 # path records WHICH step was spent, so it needs the step back, not a boolean.
 from panel.security.auth import verify_totp_step
+# These read the clock more than once and compare steps, so they are kept clear of a 30 s step
+# boundary: within 2 s of one, wait for the next step to begin (rare, and at most 2 s).
+_totp_left = 30 - (_time.time() % 30)
+if _totp_left < 2:
+    _time.sleep(_totp_left + 0.05)
 _step = verify_totp_step(_sec, _pyotp.TOTP(_sec).now())
 check("verify_totp_step returns the step for a valid code", isinstance(_step, int) and _step > 0)
 eq("verify_totp_step is stable for the same code", verify_totp_step(_sec, _pyotp.TOTP(_sec).now()), _step)
@@ -3511,10 +3522,17 @@ try:
     check("status: ...and the caller can tell a dead session from a live one that isn't serving",
           _gsm.get_server_status(NS(id=1), _srv, distinguish_unresponsive=True) == "unresponsive",
           _gsm.get_server_status(NS(id=1), _srv, distinguish_unresponsive=True))
+    # Really STOPPED here (the fixture still said STARTED with only :22 listening, which answers
+    # "unresponsive" and passed), and only "offline" is right: "unresponsive" keeps a queued stop
+    # pending forever on a server that has genuinely stopped.
+    _g_kept = (_g["out"], _g["ports"])
+    _g["out"], _g["ports"] = "Status:  STOPPED", {27015}
+    _st_stopped = _gsm.get_server_status(NS(id=1), NS(short_name="gmodserver",
+                                                      lgsm_name="gmodserver", port=27015),
+                                         distinguish_unresponsive=True)
+    _g["out"], _g["ports"] = _g_kept
     check("status: ...while STOPPED still says offline either way",
-          _gsm.get_server_status(NS(id=1), NS(short_name="gmodserver", lgsm_name="gmodserver",
-                                              port=27015), distinguish_unresponsive=True)
-          in ("unresponsive", "offline"))
+          _st_stopped == "offline", _st_stopped)
     check("status: a queued restart/stop SURVIVES an unresponsive server instead of being cleared",
           _gsm.mod_restart_decision("unresponsive", None) == "pending",
           _gsm.mod_restart_decision("unresponsive", None))

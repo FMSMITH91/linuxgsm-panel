@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 
 import v8_lcov  # noqa: E402
 from cdp import CDP, CDPError  # noqa: E402
-from driver import Driver, LoginFailed  # noqa: E402
+from driver import Driver, FlowAssertion, LoginFailed  # noqa: E402
 from walk import walk  # noqa: E402
 
 MARKER = ".js-coverage-throwaway"
@@ -51,8 +51,8 @@ IN_CI = os.environ.get("GITHUB_ACTIONS") == "true"
 CHROME_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
 
 # Exit codes: 2 the run could not measure (no browser, no panel, no sign-in, a page not reached);
-# 3 it measured and nothing ran.
-EXIT_SETUP, EXIT_EMPTY = 2, 3
+# 3 it measured and nothing ran; 4 a flow's own check found the panel wrong (FlowAssertion).
+EXIT_SETUP, EXIT_EMPTY, EXIT_ASSERT = 2, 3, 4
 
 
 class Abort(Exception):
@@ -374,6 +374,12 @@ def measure_and_report(d, out, summary_path):
     if d.unreached:
         raise Abort("the walk did not reach %d page(s) it names — a renamed or removed route? %s"
                     % (len(d.unreached), "; ".join("%s (%s)" % u for u in d.unreached)))
+    # A flow that broke costs only its coverage; one whose own check FAILED measured the panel
+    # doing the wrong thing, and that is a failed run (walk._run_flow records the exception's type).
+    failed = [f for f in d.flow_errors if f[2].startswith(FlowAssertion.__name__ + ":")]
+    if failed:
+        raise Abort("%d flow check(s) failed: %s" % (len(failed), "; ".join(
+            "%s %s: %s" % f for f in failed)), EXIT_ASSERT)
     return files
 
 

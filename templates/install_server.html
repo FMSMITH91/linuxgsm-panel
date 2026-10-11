@@ -36,11 +36,13 @@
         <select name="remote_id" id="remote-select" class="form-select" required data-action="hostChanged" data-on="change">
           {% if remotes|length != 1 %}<option value="">Select a server...</option>{% endif %}
           {% for r in remotes %}
-          <option value="{{ r.id }}"{% if remotes|length == 1 %} selected{% endif %}>{{ r.display_name }}</option>
+          <option value="{{ r.id }}"{% if remotes|length == 1 %} selected{% endif %} data-no-i18n>{{ r.display_name }}</option>
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-3">
+      {# id: refreshGameList swaps this column alone, so a refreshed list keeps the host and name
+         already chosen (a whole-page reload threw them away). #}
+      <div class="col-md-3" id="game-col">
         <label class="form-label" for="game-type-select">Game</label>
         <select name="game_type" class="form-select" required id="game-type-select" data-action="updatePort" data-on="change">
           {# No count in the option label: <option> holds a single text node, so "Choose game…
@@ -74,7 +76,13 @@
         <div class="form-text text-warning">
           <i class="bi bi-exclamation-triangle"></i>
           Couldn't load LinuxGSM's game list, and there's no cached copy yet.
+          {# Superadmin, as Refresh list above is: the refresh route is @superadmin_required, and
+             anyone else pressing Retry got "That area is for administrators only." #}
+          {% if current_user.is_superadmin %}
           <button type="button" class="btn btn-link btn-sm p-0 align-baseline" data-action="refreshGameList" data-args='["@self"]'>Retry</button>
+          {% else %}
+          <span>Ask a superadmin to retry fetching it.</span>
+          {% endif %}
           <span class="d-block text-secondary" style="font-size:.72rem;">The panel fetches it from LinuxGSM's repository; this host may have no outbound access to GitHub.</span>
           {% if lgsm_status and lgsm_status.reason %}
           {# The actual failure, not a guess at one: a DNS error, an HTTP 403, a response that was

@@ -326,6 +326,20 @@ try:
     _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
     _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
     _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
+    # ...and the exec paths that do not go through those: ssh_test_connection builds its own
+    # paramiko.SSHClient, files.stream_path and the cron reader start `ssh` with their own Popen,
+    # and tailscale_integration runs `tailscale`/`ping` with subprocess.run. Each module's handle is
+    # replaced (only that module sees it), so a check that reaches one is named, not dialled.
+    from unit.part10 import _Over as _p9_Over                                   # noqa: E402
+    from panel.ops.ssh_manager import cron as _p9_cron, files as _p9_files     # noqa: E402
+    from panel.ops.ssh_manager import hosts as _p9_hosts                         # noqa: E402
+    _p9_patch(_p9_hosts, "paramiko", _p9_Over(_p9_hosts.paramiko, SSHClient=_p9_trip(
+        "hosts.paramiko.SSHClient", exc=ConnectionError("refused by part12's tripwire"))))
+    for _p9_tm, _p9_tn in ((_p9_files, "files"), (_p9_cron, "cron"), (_p9_ts, "tailscale")):
+        _p9_patch(_p9_tm, "subprocess", _p9_Over(
+            _p9_tm.subprocess,
+            Popen=_p9_trip(_p9_tn + ".subprocess.Popen", exc=OSError("refused by part12's tripwire")),
+            run=_p9_trip(_p9_tn + ".subprocess.run", exc=OSError("refused by part12's tripwire"))))
     # shell_as_game_user, sending through the PACKAGE's run_command: the checks below stub that
     # name on the package, and the routes' game-account shell reads went through it until
     # GHSA-hh39-76g3-wxcx moved them onto shell_as_game_user, whose own run_command is _core's.
@@ -952,8 +966,9 @@ try:
           _d.get("success") is True and _hl_calls[-1:] and _hl_calls[-1][1] == ("dev",)
           and _p9_audit("panel_switch_branch").target == "dev", repr((_d, _hl_calls)))
 
-    # repair: `paths` is None (restore all) only when absent or not a list — [] restores nothing.
-    for _hl_body, _hl_want in (({"paths": "app.py"}, None), ({"paths": []}, []),
+    # repair: `paths` is None (restore all) only when absent — [] restores nothing, and a `paths`
+    # that is not a list is refused (part53), not widened to restore-all.
+    for _hl_body, _hl_want in (({}, None), ({"paths": []}, []),
                                ({"paths": ["app.py"]}, ["app.py"])):
         _hl_calls.clear()
         _p9_patch(_p9_so, "panel_repair", _hl_rec("panel_repair", (True, "restored", ["app.py"])))
@@ -1736,9 +1751,22 @@ try:
     _sf_write_result[0] = (True, "")
 
     # mods
+    # A read that did not happen is SAID: two empty lists made the card announce "This game doesn't
+    # have any LinuxGSM-installable mods" about a host that had not answered.
     _p9_patch(_p9_sf, "mods_available", _raise_conn)
     _d = _p9_json(_A.get(_sf_url + "/mods"))
-    check("mods GET: an unreachable host lists nothing rather than failing the card",
+    check("mods GET: a read that raises says the host did not answer, not 'no mods'",
+          _d == {"error": "Couldn't read this server's mods — the host didn't answer."}, repr(_d))
+    # ...and the None list mods_available returns, without raising, for "the host did not answer".
+    _p9_patch(_p9_sf, "mods_available", lambda *a, **k: (None, True))
+    _p9_patch(_p9_sf, "mods_installed", lambda *a, **k: ([], True))
+    _d = _p9_json(_A.get(_sf_url + "/mods"))
+    check("mods GET: a host that did not answer (a None list) is said too, not shown as empty",
+          set(_d) == {"error"}, repr(_d))
+    # Control: a host that answered with nothing installed or offered is still two empty lists.
+    _p9_patch(_p9_sf, "mods_available", lambda *a, **k: ([], True))
+    _d = _p9_json(_A.get(_sf_url + "/mods"))
+    check("mods GET: (control) a host that answered 'none' is two empty lists, not an error",
           _d == {"available": [], "installed": [], "supported": True}, repr(_d))
     _r = _F.post(_sf_url + "/mods", json={"action": "install", "mod": "sourcemod"})
     check("mods POST: a file manager without UPDATE_SERVER cannot change mods (403)",
@@ -2194,8 +2222,8 @@ try:
         _p9_patch(_p9_banlist, _n, _P9_PATCHED[(_p9_banlist, _n)])
 
     # ── the console socket handlers, through flask-socketio's test client ───────────────────────
-    # Only the panel's own disconnect hooks run here: an earlier part deliberately registers one that
-    # raises (to prove the next still runs) and leaves it behind, and it would print a traceback.
+    # Only the panel's own disconnect hooks run here. part06 registers one that raises (to prove the
+    # next still runs) and now puts the registry back; this keeps any other test-made hook out too.
     from panel.ops import socket_hooks as _p9_hooks   # noqa: E402
     _p9_hooks_saved = dict(_p9_hooks._hooks)
     _p9_hooks._hooks.clear()
@@ -3252,6 +3280,12 @@ try:
               _pb_rc_member == 0 and _pb_rc_sudomember == 1
               and "sudomember in lgsmpanel-games: it can already reach root" in _pb_errtext,
               "member=%s sudomember=%s %r" % (_pb_rc_member, _pb_rc_sudomember, _pb_errtext[-200:]))
+    else:   # named, so the three checks above show as SKIP instead of leaving the tally unseen
+        for _pb_sk in ("gameuser-group: a login account with no install is refused and nothing runs",
+                       "gameuser-group: an imported LinuxGSM account is enrolled",
+                       "gameuser-group: an existing member needs no install, but one that has "
+                       "since gained sudo is still refused"):
+            _pb_skip(_pb_sk, "needs a home-directory uid in 1000..60000; this one is %d" % _G)
     check("gameuser-group: postgres (a service uid) is refused and nothing runs",
           _pb_rc_pg == 1 and not _pb_calls_pg, "rc=%s ran=%s" % (_pb_rc_pg, _pb_calls_pg))
     check("user-create: the account it has just made is enrolled in the same run",
@@ -3511,7 +3545,11 @@ try:
     _r = _pb_run(_pb_ver_sh + '_owner_read "${PANEL_DIR}/data/config.json"; echo "[done]"',
                  env={"PANEL_DIR": _pb_rd}, timeout=20)
     _pb_fifo_ok = _r.stdout.strip() == "[done]"
-except _pb_sp.TimeoutExpired:
+# Both classes: _pb_run's run(timeout=) under eventlet raises the ORIGINAL module's TimeoutExpired,
+# which `except _pb_sp.TimeoutExpired` alone does not catch, so a regressed _owner_read ended the
+# whole unit run with a traceback instead of failing this check by name.
+except (_pb_sp.TimeoutExpired,
+        __import__("eventlet.patcher", fromlist=["original"]).original("subprocess").TimeoutExpired):
     _pb_fifo_ok = False
 check("install.sh _owner_read: a FIFO in place of config.json is refused, not waited on",
       _pb_fifo_ok)

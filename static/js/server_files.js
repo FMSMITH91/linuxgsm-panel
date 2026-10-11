@@ -242,9 +242,14 @@ function browse(path){
     if(curFile){ var open=l.querySelector('[data-path="'+CSS.escape(curFile)+'"]'); if(open) open.classList.add('active'); }
   }).catch(()=>{});
 }
+// Only the LATEST open is shown, as browse() keeps only its latest listing: two quick clicks whose
+// answers came back out of order left the second row highlighted over the first file's text.
+var _openSeq = 0;
 function openFile(path){
+  var seq = ++_openSeq;
   document.getElementById('file-save-msg').textContent='';
   fetch(MOUNT+'/api/server/'+serverId+'/file?path='+encodeURIComponent(path)).then(r=>r.json()).then(d=>{
+    if(seq !== _openSeq) return;
     if(d.error){ if(window.toast) toast(d.error, 'danger'); return; }
     curFile=path;
     document.getElementById('editor-empty').style.display='none';

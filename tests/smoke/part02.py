@@ -339,19 +339,35 @@ check("session: a signed-out page does not claim a session panel.js could 'expir
 # ── The notifications page must actually OFFER each channel ───────────────────────────────
 # "/notifications renders 200" passes just as well with a channel's whole card missing, which
 # is how a half-wired provider ships: the backend supports it and nobody can reach it.
-_nt_html = c.get("/notifications").get_data(as_text=True)
+# A STORED ntfy token, so the "not sent to the browser" check below has something to leak: with
+# none configured, `"TESTONLY" not in _nt_html` held whatever the template rendered. Both the
+# plaintext and the stored ciphertext are looked for; the config is put back byte for byte.
+import re as _nre
+from panel.core.config import CONFIG_FILE as _nt_cf, encrypt_secret as _nt_enc
+_nt_cfg_bytes = _nt_cf.read_bytes()
+_nt_cipher = _nt_enc("TESTONLYntfy123")
+try:
+    _nt_c = load_config()
+    _nt_c.setdefault("notifications", {})["ntfy"] = {
+        "enabled": False, "server": "https://ntfy.sh", "topic": "smoke", "token": _nt_cipher}
+    save_config(_nt_c)
+    _nt_html = c.get("/notifications").get_data(as_text=True)
+finally:
+    _nt_cf.write_bytes(_nt_cfg_bytes)
 for _field in ("ntfy_enabled", "ntfy_topic", "ntfy_server", "ntfy_token"):
     check("notifications page: the ntfy form offers %s" % _field,
           ('name="%s"' % _field) in _nt_html)
 check("notifications page: ntfy has a Send test button wired to the dispatcher",
       'data-args=\'["ntfy", "@self"]\'' in _nt_html)
+check("notifications page: (control) a stored ntfy token is shown as 'leave blank to keep'",
+      _nre.search(r'id="notifications-ntfy_token"[^>]*placeholder="[^"]*leave blank to keep',
+                    _nt_html) is not None)
 check("notifications page: the stored ntfy token is NOT sent to the browser",
-      "TESTONLY" not in _nt_html)
+      "TESTONLY" not in _nt_html and _nt_cipher not in _nt_html)
 
 # ── Sidebar active-state must use request.endpoint, NOT request.path == url_for(...) — the
 #    latter breaks under a URL mount prefix (e.g. /lgsm), where url_for includes the prefix but
 #    request.path doesn't, so nothing highlights. Exactly the current page's link is active. ──
-import re as _nre
 
 
 def _active_navs(html):
@@ -1992,7 +2008,7 @@ import paramiko as _enr_paramiko
 import types as _enr_types
 from cryptography.fernet import Fernet as _EnrFernet
 from sqlalchemy import text as _enr_text
-from panel.core.config import encrypt_secret as _enr_encrypt
+_enr_encrypt = _nt_enc   # panel.core.config.encrypt_secret, imported above
 import panel.routes.route_helpers as _enr_rh
 
 
@@ -2940,7 +2956,7 @@ try:
     _ij_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
     _ij_stub(_sm_core, "run_as_game_user", _ij_run_as)
     _ij_stub(_sm_core, "run_privileged", _ij_priv)
-    _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop", "monitor"])
+    _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: [{"cmd": c} for c in ("start", "stop", "monitor")])
     _ij_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
     _ij_stub(_msmod, "_looks_installed", lambda *a, **k: True)
     _ij_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))

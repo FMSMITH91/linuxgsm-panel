@@ -20,8 +20,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import atexit
 import signal
 
-from panel.core.config import (CONFIG_FILE, CRED_KEY_FILE, DB_PATH, SECRET_FILE,
-                               load_config, save_config)
+from panel.core.config import (CONFIG_FILE, CRED_KEY_FILE, DATA_DIR, DB_PATH, SECRET_FILE,
+                               SETUP_TOKEN_FILE, load_config, save_config)
+
+# create_app opens the failed-login log (app._setup_auth_log) whether or not anyone fails a login,
+# so it is created on every run; app.AUTH_LOG_PATH is this path, not imported to keep app unloaded
+# until the guard below has run.
+AUTH_LOG = DATA_DIR / "auth.log"
 
 if DB_PATH.exists():
     print("refusing: a real database exists at %s" % DB_PATH)
@@ -30,7 +35,8 @@ if DB_PATH.exists():
 # What was already here BEFORE this script touched anything, so cleanup removes only what it
 # created and restores what it edited. Byte-for-byte for config.json: leaving setup_complete=True
 # behind in a developer's own config is not "a leftover file", it is a changed install.
-_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists()}
+_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE, AUTH_LOG, SETUP_TOKEN_FILE)
+                if p.exists()}
 _CONFIG_SNAPSHOT = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
 
 
@@ -50,7 +56,7 @@ def _cleanup():
             print("lhci_serve: could NOT restore %s (%s) — check it by hand"
                   % (CONFIG_FILE, exc.__class__.__name__), file=sys.stderr)
     for _p in (DB_PATH, DB_PATH.with_name("panel.db-wal"), DB_PATH.with_name("panel.db-shm"),
-               SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE):
+               SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE, AUTH_LOG, SETUP_TOKEN_FILE):
         if _p in _PREEXISTING or not _p.exists():
             continue
         try:

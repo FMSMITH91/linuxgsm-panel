@@ -9,7 +9,6 @@
     "totalMax,totalPlayers"
   ],
   "manage_remotes.js": [
-    "_da",
     "_da,remoteId",
     "_tsMigrateOffer,remoteId",
     "body,title",
@@ -21,8 +20,7 @@
     "warn"
   ],
   "nags.js": [
-    "_da,rows,sec",
-    "actions,pkgs"
+    "_da,rows,sec"
   ],
   "panel.js": [
     "_da,head,rows",

@@ -7,6 +7,7 @@ import os
 import shlex as _shlex41
 import subprocess as _sp41  # nosec B404 - runs this part's own stand-in scripts under bash
 import tempfile as _tf41
+from eventlet.timeout import Timeout as _EvTimeout41  # a timed-out green join raises it
 import threading as _th41
 import uuid as _uuid41
 
@@ -513,12 +514,37 @@ def _spawn41(target):
     """
     t = _th41.Thread(target=target, name="host-reboot-job-p41", daemon=True)
     t.start()
-    t.join(120)
+    # As reboot41_b._join41 does (that module imports this one): under eventlet a join that times
+    # out RAISES its Timeout, a BaseException part41's `except Exception` does not catch, so a hung
+    # reboot job ended the whole unit run with no tally instead of failing this check by name.
+    try:
+        t.join(120)
+    except _EvTimeout41:   # eventlet.timeout.Timeout is not an Exception; the check below reports it
+        pass
     check("job thread: finished (not left running)", not t.is_alive())
+
+
+# What part41's tripwire refused. The stand-ins above cover paramiko, the ssh CLI, _run_local and
+# _exec_local_argv; these are the other ways out (a new connection, a local shell, system_ops' own
+# runners), left live while part41 drives the panel host's own reboot. Each is refused, recorded,
+# and checked once at the end of part41. A section that needs one patches its own over this.
+_TRIPPED41 = []
+
+
+def _trip41(where):
+    def _t(*a, **k):
+        _TRIPPED41.append((where, repr(a[:2])[:100]))
+        raise ConnectionError("refused by part41's tripwire: %s" % where)
+    return _t
 
 
 def _std_patches41():
     """The stubs every check below runs under (inside a _patched() block)."""
+    _patch(_core41, "get_connection", _trip41("_core.get_connection"))
+    _patch(_core41, "_exec_local_shell", _trip41("_core._exec_local_shell"))
+    _patch(_so41, "_run", _trip41("system_ops._run"))
+    _patch(_so41, "_run_verb", _trip41("system_ops._run_verb"))
+    _patch(_so41, "_debug_run", _trip41("system_ops._debug_run"))
     _patch(_core41, "_run_via_paramiko", _paramiko41)
     _patch(_core41, "_run_via_ssh_cli", _sshcli41)
     _patch(_core41, "_run_local", _runlocal41)

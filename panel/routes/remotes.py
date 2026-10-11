@@ -425,6 +425,11 @@ def _register_remote_delete_and_test(app):
     @permission_required(MANAGE_REMOTES)
     def test_remote(remote_id):
         remote = get_remote(remote_id)
+        # The panel's own host is not reached over SSH (auth "local", user "local"): a login test
+        # always failed, and wrote is_online=False onto it until the monitor's next pass. The page
+        # never offers it; a forged POST could.
+        if remote.is_local or remote.auth_method == "local":
+            return _form_err("The panel's own host is not tested over SSH.", "manage_remotes")
         # The row's own host_key, not `or ""`: that turns an UNREADABLE pin into "no pin", i.e.
         # first contact, and the stored credential was offered to whoever answered.
         _seen_key = []
@@ -518,7 +523,14 @@ def _after_add_remote(app, remote, name, lgsm_user, reachable):
                             "— an administrator has to grant it before you can manage or scan "
                             "it.", "manage_remotes")
         flash(f"Remote '{name}' added — scanning it for existing LinuxGSM servers…", "success")
-        return redirect(url_for("remote_manage", remote_id=remote.id) + "?scan=1")
+        scan_url = url_for("remote_manage", remote_id=remote.id) + "?scan=1"
+        # The Add form is an ajax-form, and fetch FOLLOWS a redirect: the page took the followed
+        # 302 for a refusal ("Not permitted, or your session expired."), never went to the scan,
+        # and an admin who pressed Add again got a second row for the same host. A fetch is told
+        # where to go; the flash above is shown on that page.
+        if _wants_json():
+            return jsonify({"success": True, "go": scan_url})
+        return redirect(scan_url)
 
     opts = {
         "set_timezone": request.form.get("timezone", "UTC") or "UTC",

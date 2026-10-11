@@ -477,7 +477,11 @@ _rows18b = {"users": [], "hosts": [], "groups": []}
 _mine18_hosts_before = len(_mine18["hosts"])
 _real_opener18 = _notif18._OPENER
 # The sections above are functions, run here in order under the tripwire; the finally below undoes
-# every patch and removes every row they made, whichever of them raised.
+# every patch and removes every row they made, whichever of them raised. What the tripwire refused
+# is CHECKED after it, as parts 16, 18, 40 and 43 do: armed and never read, an escaped transport
+# call answered ("", "refused...", -1), which callers read as an ordinary failed read.
+from unit.part12 import _P9_TRIPPED as _P9_TRIPPED19  # noqa: E402
+_TRIP19_START = len(_P9_TRIPPED19)
 try:
     # part12's tripwire, re-armed for this block as part18 arms it: nothing below may reach a host.
     _p9_patch(_p9_core, "get_connection",
@@ -514,6 +518,8 @@ finally:
             if _h18 is not None:
                 db.session.delete(_h18)
         db.session.commit()
+check("part19: no route under test reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED19) == _TRIP19_START, repr(_P9_TRIPPED19[_TRIP19_START:][:6]))
 
 
 # ── integration review: three interactions between the review fixes ──────────────────────────────
@@ -626,6 +632,9 @@ if _sg_m is not None and _shutil18b.which("jq"):
     _sg_ids = [r["ruleId"] for r in _sg_json.loads(_sg_out.stdout)["runs"][0]["results"]]
     check("semgrep upload: ...the filter drops only the suppressed result and keeps the run intact",
           _sg_ids == ["b", "c"] and "tool" in _sg_json.loads(_sg_out.stdout)["runs"][0], repr(_sg_ids))
+elif _sg_m is not None:   # named, so it shows as SKIP rather than vanishing from the tally
+    _skip18("semgrep upload: ...the filter drops only the suppressed result and keeps the run intact",
+            "jq is not installed here")
 
 
 # ── Renovate keeps the workflows' sha256-pinned downloads current, and nothing else ─────────────

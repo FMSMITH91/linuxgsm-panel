@@ -30,7 +30,8 @@ any other, with its `error` set and nothing in it. It never counts: see failed_r
 
 Exit status: 0 every category's newest analysis is SHA's, from a complete run; 1 a category has no
 complete analysis of SHA (or the list could not be read); 3 the ref has moved on, a later commit's
-analysis is the newest in some category, so its alerts say nothing about SHA.
+analysis is the newest in some category, so its alerts say nothing about SHA (or, for a scheduled
+run on main, main's head is no longer SHA: the run did not upload over the newer commit's analysis).
 """
 import argparse
 import json
@@ -172,6 +173,19 @@ def read_rows(repo, ref):
     return rows if isinstance(rows, list) else None
 
 
+def main_head(repo):
+    """The head commit of main, or None when it could not be read."""
+    if not _REPO_RE.match(repo or ""):
+        return None
+    try:
+        res = subprocess.run(["gh", "api", "--jq", ".sha", "--", "repos/%s/commits/main" % repo],  # nosec B603 B607
+                             capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    head = (res.stdout or "").strip()
+    return head if res.returncode == 0 and _SHA_RE.match(head) else None
+
+
 def describe(rows, sha, missing, moved):
     """Return one line per category: whose analysis is the newest, and what that means for `sha`."""
     newest, _ = _first_rows(rows or [], sha)
@@ -222,6 +236,16 @@ def main(argv=None):
               % (repo, a.ref, a.sha))
         return MISSING
     own = own_categories(a.event, a.workflow)
+    # A scheduled run analyses main's head as it was when the run STARTED. If a push landed since,
+    # the run's own upload was skipped (each scheduled upload step checks this first), so that a
+    # stale analysis cannot land on top of the newer commit's; this commit is no longer what main's
+    # alerts are about. Moved on, not missing. A head that could not be read changes nothing.
+    if a.event == "schedule" and safe_ref(a.ref) == "refs/heads/main":
+        head = main_head(repo)
+        if head and head != a.sha:
+            print("::warning::main has moved on to %s since %s was analysed by this scheduled run; "
+                  "its alerts say nothing about %s." % (head[:10], a.sha[:10], a.sha))
+            return MOVED
     rc, rows, missing, moved = wait(repo, a.ref, a.sha, own, a.tries, a.interval)
     print("Code-scanning analyses on %s, for %s:" % (a.ref, a.sha[:10]))
     print("\n".join(describe(rows, a.sha, missing, moved)))

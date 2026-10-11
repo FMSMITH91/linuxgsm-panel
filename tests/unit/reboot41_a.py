@@ -1503,7 +1503,9 @@ def _startup_wiring41():
     check("startup: app.py puts the reboot holds in place (and announces dropped waits) BEFORE it "
           "starts the monitor thread, and runs both reboot loops under the supervisor",
           _all41(-1 not in at.values(),
-                 at["_host_reboot.resume_reboot_state(app)"] < at['target=lambda: _monitor_watch(app), name="monitor"']),
+                 at["_host_reboot.resume_reboot_state(app)"] < at['target=lambda: _monitor_watch(app), name="monitor"'],
+                 # the announce's place, which the name claims and nothing compared
+                 at["_host_reboot.announce_dropped_waits(app)"] < at['target=lambda: _monitor_watch(app), name="monitor"']),
           repr(order))
 
 
@@ -1643,11 +1645,20 @@ def _session_probe_checks41():
     if str(proc.pid) not in named:
         skip("game-session probe: a process named 'tmux: server'", "prctl(PR_SET_NAME) did not take here")
         return
-    check("game-session probe: with LinuxGSM's tmux server running (its process is named "
-          "'tmux: server'), the bootstrap's probe answers YES — `pgrep -x tmux` answered NO",
-          busy_probe == "YES", repr(busy_probe))
-    check("install.sh: with it running, neither reboot spot reboots, and both say why",
-          all("REBOOTING" not in o and "game servers" in o for o in busy), repr(busy))
+    # On a machine already running a tmux or screen session of its own, the probe says YES before
+    # the stand-in starts, so the busy checks would pass on THAT session (perhaps through another
+    # branch of the probe) without testing the 'tmux: server' one: they are skipped there, too.
+    if pre != "NO":
+        for _sp41n in ("game-session probe: with LinuxGSM's tmux server running, the bootstrap's "
+                       "probe answers YES",
+                       "install.sh: with it running, neither reboot spot reboots"):
+            skip(_sp41n, "this machine runs a tmux or screen session of its own")
+    else:
+        check("game-session probe: with LinuxGSM's tmux server running (its process is named "
+              "'tmux: server'), the bootstrap's probe answers YES — `pgrep -x tmux` answered NO",
+              busy_probe == "YES", repr(busy_probe))
+        check("install.sh: with it running, neither reboot spot reboots, and both say why",
+              all("REBOOTING" not in o and "game servers" in o for o in busy), repr(busy))
     if pre == "NO" and all("REBOOTING" in o for o in idle):
         check("install.sh: ...while an idle host that needs one is still rebooted (control)", True)
     else:

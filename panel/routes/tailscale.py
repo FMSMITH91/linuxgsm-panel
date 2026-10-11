@@ -364,7 +364,9 @@ def _register_tailscale_serve(app):
                             "message": "That isn't a usable mount point. Use \"/\" or a short "
                                        "path like \"/lgsm\"."}), 400
         if action == "enable":
-            return _serve_enable(port, mount, data.get("funnel", False), _json_str(data, "page"))
+            # Exactly true, as the page sends it: Funnel exposes the panel to the internet, and a
+            # truthiness test read the string "false" as yes (and stored it as given).
+            return _serve_enable(port, mount, data.get("funnel") is True, _json_str(data, "page"))
         return _serve_disable(port, mount)
 
     @app.route("/api/tailscale/check-peer", methods=["POST"])

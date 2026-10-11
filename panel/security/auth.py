@@ -139,7 +139,9 @@ def run_off_hub(fn, *args):
     for an unknown username: a few hundred source addresses each spending their allowed failures
     kept the hub busy hashing, and every page, console stream and poller with it stalled. tpool
     hands the call to a worker thread and parks only the calling greenlet. Off eventlet (the test
-    suites, manage.py) it is a direct call; inside a tpool worker tpool runs it inline itself.
+    suites) it is a direct call; inside a tpool worker tpool runs it inline itself. manage.py IS
+    patched (it imports app), so there this hop yields to the hub: which is why that CLI starts no
+    background workers (app.NO_WORKERS_ENV).
     """
     try:
         import eventlet.patcher

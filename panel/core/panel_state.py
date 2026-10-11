@@ -151,7 +151,7 @@ _rwe_lock = threading.Lock()
 # Hosts the operator asked to "reboot when empty" — reboot once every game server on them is idle.
 # remote_id -> {"by": username, "since": epoch, "origin", "expires", "boot", "waiting_on",
 # "checked_at", "unknown_since", "reminded", "bounces", "not_before"} (host_reboot.arm_wait writes
-# it). In-memory on purpose: a panel restart clears any pending request, so no surprise reboot
+# it; a stop phase that could not read a count adds "unread_bounces"). In-memory on purpose: a panel restart clears any pending request, so no surprise reboot
 # ever survives a restart — and the restart says so (host_reboot.announce_dropped_waits).
 #
 # Registered WITH its lock rather than pruned by name in _forget_deleted_rows, which is what it

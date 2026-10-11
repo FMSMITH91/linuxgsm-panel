@@ -3394,7 +3394,9 @@ try:
     _db10.init_app(_pinapp10)
     _MON_PROBES10 = ("run_command", "_remote_listening_ports", "_host_disk_pct", "_host_load_mem",
                      "_host_restart_flags")
-    _mon_saved10 = {k: getattr(_mon10, k) for k in _MON_PROBES10}
+    # Its own name: rebinding _mon_saved10 (section C's 32-name restore table) left _mon_restore10
+    # holding these five, so any later restore of a section-C name raised KeyError.
+    _mon_probe_saved10 = {k: getattr(_mon10, k) for k in _MON_PROBES10}
     _pin_app_saved10 = _sm_core._pin_app
     _wctx10 = []
     try:
@@ -3437,7 +3439,7 @@ try:
         _nopin_clients10 = _FakeSSH10.made[_made_before_nopin10:]
     finally:
         _sm_core._pin_app = _pin_app_saved10
-        for _k10, _v10 in _mon_saved10.items():
+        for _k10, _v10 in _mon_probe_saved10.items():
             setattr(_mon10, _k10, _v10)
         _sm_core._connections.clear()
         _shutil10.rmtree(_pin_dir10, ignore_errors=True)

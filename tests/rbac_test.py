@@ -1017,7 +1017,9 @@ def _check_limited_user_denied_pages():
               "/tailscale", "/api/tailscale", "/settings", "/notifications",
               "/api/remote/%d/specs" % granted_remote, "/api/panel/update-status"]:
         code = c.get(p).status_code
-        check("limited user DENIED %s" % p, code != 200, "got %d" % code)
+        # < 500 too: a guard that regressed into a crash (a route reaching git or GitHub in CI)
+        # answers 500, which `!= 200` read as DENIED.
+        check("limited user DENIED %s" % p, code != 200 and code < 500, "got %d" % code)
 
 
 def _check_specs_os_slug_for_installers():
@@ -1421,10 +1423,12 @@ def _check_vps_prep_allows_a_remote_host():
                 db.session.commit()
 
     if other_id:
-        check("IDOR: console of non-granted server BLOCKED",
-              c.get("/api/console/%d" % other_id).status_code != 200)
-        check("IDOR: stats of non-granted server BLOCKED",
-              c.get("/api/server/%d/stats" % other_id).status_code != 200)
+        _idor_c = c.get("/api/console/%d" % other_id).status_code
+        check("IDOR: console of non-granted server BLOCKED", _idor_c != 200 and _idor_c < 500,
+              "got %d" % _idor_c)
+        _idor_s = c.get("/api/server/%d/stats" % other_id).status_code
+        check("IDOR: stats of non-granted server BLOCKED", _idor_s != 200 and _idor_s < 500,
+              "got %d" % _idor_s)
         # Probed as a user who HOLDS the action's permission (and MANAGE_SERVERS, for the tag
         # probe below) on the granted host only. As `c`, who holds neither, the route answered 403
         # "Permission denied" whatever the server-access result, so the check could not fail on
@@ -1544,9 +1548,11 @@ def _check_legacy_super_admin_grant():
     c3 = client_as(uid3)
     for p3 in ["/settings", "/notifications", "/server-management", "/users"]:
         _code = c3.get(p3).status_code
-        check("legacy super_admin grant DENIED %s" % p3, _code != 200, "got %d" % _code)
-    check("legacy super_admin grant cannot reboot the panel host",
-          c3.post("/api/server-management/reboot").status_code != 200)
+        check("legacy super_admin grant DENIED %s" % p3, _code != 200 and _code < 500,
+              "got %d" % _code)
+    _code = c3.post("/api/server-management/reboot").status_code
+    check("legacy super_admin grant cannot reboot the panel host", _code != 200 and _code < 500,
+          "got %d" % _code)
     check("legacy super_admin grant cannot publish an install-wide layout",
           c3.post("/api/settings/ui-default").status_code == 403)
     # ...and it is no longer offered in the Groups UI at all.
@@ -1667,8 +1673,11 @@ def _check_unauthenticated():
 
     # CRITICAL: /setup POST must NOT create a superadmin once setup is complete.
     pwn = "pwned_" + tag
+    # A password the policy ACCEPTS: "hackme123" (no capital, no symbol) was refused by
+    # password_problem() itself, so no account could be created with every setup guard removed.
+    accepted = "Sufficient1!pass"
     r = cu.post("/setup", data={"step": "admin_user", "username": pwn,
-                                "password": "hackme123", "confirm_password": "hackme123"})  # nosec B105 - posted by an anonymous probe that must be refused
+                                "password": accepted, "confirm_password": accepted})
     with app.app_context():
         created = User.query.filter_by(username=pwn).first()
         was_created = created is not None
@@ -1677,6 +1686,9 @@ def _check_unauthenticated():
             db.session.commit()
     check("/setup POST CANNOT create a superadmin (unauth)", not was_created,
           "ACCOUNT WAS CREATED (status %d)" % r.status_code if was_created else "blocked")
+    check("/setup POST (unauth): ...refused with the sign-in redirect, not a password-rule message",
+          r.status_code == 302 and "/login" in (r.headers.get("Location") or ""),
+          "%d -> %s" % (r.status_code, r.headers.get("Location")))
     check("unauth GET /setup -> redirect", cu.get("/setup").status_code == 302)
 
 
@@ -2903,6 +2915,43 @@ def _check_bulk_actions_per_id():
             _sm_core.run_as_game_user = _sv_rag
 
 
+def _check_setup_endpoints_shut_to_superadmin():
+    """The setup-only endpoints stay shut, with config.json gone, to a signed-in superadmin too."""
+    global _label, _m, _p, _r
+    # A SIGNED-IN SUPERADMIN is one the owner gate lets through: an anonymous caller is refused by
+    # that gate whatever the lock says, so _check_setup_endpoints_stay_shut's anonymous loop passes
+    # with _setup_open() deleted. Here the lock is the only refusal left. Tailscale is stubbed,
+    # recording, for these requests, so a broken lock cannot run anything on this machine (see the
+    # WARNING in _check_setup_endpoints_stay_shut). Called with config.json pointed away.
+    from panel.ops import tailscale_integration as _ts_sa
+    _ts_sa_saved = (_ts_sa.install_tailscale_local, _ts_sa.tailscale_up_local,
+                    _ts_sa.setup_tailscale_serve, _ts_sa.get_tailscale_info)
+    _ts_sa_calls = []
+    try:
+        _ts_sa.install_tailscale_local = lambda *a, **k: (_ts_sa_calls.append("install"), (True, ""))[1]
+        _ts_sa.tailscale_up_local = lambda *a, **k: (_ts_sa_calls.append("up"), (True, "https://x"))[1]
+        _ts_sa.setup_tailscale_serve = lambda *a, **k: (_ts_sa_calls.append("serve"), (True, ""))[1]
+        _ts_sa.get_tailscale_info = lambda *a, **k: (_ts_sa_calls.append("status"),
+                                                     _ts_sa.TailscaleInfo())[1]
+        _sa = client_as(admin_id)
+        for _p, _m, _label in (("/api/setup/tailscale/status", "get", "status"),
+                               ("/api/setup/tailscale/install", "post", "install"),
+                               ("/api/setup/tailscale/up", "post", "up"),
+                               ("/api/setup/tailscale/serve", "post", "serve")):
+            _r = getattr(_sa, _m)(_p)
+            check("setup endpoint stays SHUT with config.json gone, to a signed-in superadmin "
+                  "too: %s" % _label, _r.status_code == 403,
+                  "%s -> %d %s" % (_p, _r.status_code, _r.data[:80]))
+        check("setup endpoints with config.json gone: nothing reached Tailscale",
+              _ts_sa_calls == [], repr(_ts_sa_calls))
+        _rw_sa = _sa.get("/setup")
+        check("the setup wizard stays locked with config.json gone, to a signed-in superadmin too",
+              _rw_sa.status_code in (301, 302), "/setup -> %d" % _rw_sa.status_code)
+    finally:
+        (_ts_sa.install_tailscale_local, _ts_sa.tailscale_up_local,
+         _ts_sa.setup_tailscale_serve, _ts_sa.get_tailscale_info) = _ts_sa_saved
+
+
 def _check_setup_endpoints_stay_shut():
     """The setup-only endpoints stay shut when config.json is lost."""
     global _label, _m, _p, _r
@@ -2954,6 +3003,7 @@ def _check_setup_endpoints_stay_shut():
             _r = getattr(_anon, _m)(_p)
             check("setup endpoint stays SHUT with config.json gone: %s" % _label,
                   _r.status_code == 403, "%s -> %d %s" % (_p, _r.status_code, _r.data[:80]))
+        _check_setup_endpoints_shut_to_superadmin()
         # ...and the wizard it shares a lock with stays shut too, so the two agree.
         _rw = _anon.get("/setup")
         check("the setup wizard stays locked with config.json gone",
@@ -3916,7 +3966,16 @@ for _rule in app.url_map.iter_rules():
         _src = inspect.getsource(_inner)
     except (OSError, TypeError):
         _src = ""
-    if not (_perms or any(_t in _src for _t in _GATE_TOKENS)):
+    # The token must be a NAME in the code (an ast Name or Attribute), not a substring: a comment
+    # or a string saying "is_superadmin" satisfied the substring test — the trap the <remote_id>
+    # gate was moved to AST matching to avoid.
+    try:
+        _names = {getattr(_n, "id", None) or getattr(_n, "attr", None)
+                  for _n in ast.walk(ast.parse(textwrap.dedent(_src)))
+                  if isinstance(_n, (ast.Name, ast.Attribute))} if _src else set()
+    except SyntaxError:
+        _names = set()
+    if not (_perms or _names & set(_GATE_TOKENS)):
         _mut_unguarded.append(str(_rule))
 # The positive control: a walk that finds no mutating routes at all would pass silently.
 check("rbac: the mutating-route scan found routes to check", _mut_scanned() > 40,

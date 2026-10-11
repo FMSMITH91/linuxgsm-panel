@@ -223,24 +223,38 @@ def _sample_line(name, rows, keep_days, res):
         res.find("warn", "Database", "%s is older than its retention: the prune has not run" % name)
 
 
+def _audit_retention_text(conf, age):
+    """The audit line's "retention:" part: the setting, and whether the oldest row honours it."""
+    from panel.core import runtime_stats as rs
+    keep = conf[0]
+    if isinstance(conf, _R11bConfUnreadable):
+        return "not known (config.json unreadable)"
+    if keep is None:
+        return "audit_log_retention_days is not a number, so nothing is pruned"
+    if keep <= 0:
+        return "keep forever (audit_log_retention_days unset)"
+    # Applied once at start: allowed to be as old as the retention plus this process's uptime.
+    allowed = keep + (time.time() - rs.started()) / _DAY + 1
+    return "%d d %s" % (keep, "✓" if age is None or age <= allowed else "✗ (not pruned)")
+
+
+def _audit_ips_text(conf, ip_rows):
+    """The audit line's IP-reduction part, with the count of older rows still holding an IP."""
+    ip_days = conf[1]
+    ips = ("IP reduction not known" if isinstance(conf, _R11bConfUnreadable)
+           else "IP reduction off" if not ip_days else "IPs reduced after %d d" % ip_days)
+    if isinstance(ip_rows, list):
+        ips += " (%d older rows not reduced)" % int(ip_rows[0][0] or 0)
+    return ips
+
+
 def _audit_line(rows, ip_rows, conf, res):
     if isinstance(rows, str):
         res.add("- **audit_log**: could not count (%s)" % rows.split(":", 1)[-1])
         return
-    from panel.core import runtime_stats as rs
     count, age = _count_age(rows)
-    keep, ip_days = conf
-    if keep is None:
-        ret = "audit_log_retention_days is not a number, so nothing is pruned"
-    elif keep <= 0:
-        ret = "keep forever (audit_log_retention_days unset)"
-    else:
-        # Applied once at start: allowed to be as old as the retention plus this process's uptime.
-        allowed = keep + (time.time() - rs.started()) / _DAY + 1
-        ret = "%d d %s" % (keep, "✓" if age is None or age <= allowed else "✗ (not pruned)")
-    ips = "IP reduction off" if not ip_days else "IPs reduced after %d d" % ip_days
-    if isinstance(ip_rows, list):
-        ips += " (%d older rows not reduced)" % int(ip_rows[0][0] or 0)
+    ret = _audit_retention_text(conf, age)
+    ips = _audit_ips_text(conf, ip_rows)
     res.add("- **audit_log** %s rows · oldest %s · retention: %s · %s" % (
         format(count, ","), "n/a" if age is None else "%.0f d" % age, ret, ips))
 
@@ -286,9 +300,27 @@ def _digest_lines(got, res):
     res.add(_digest_line("rows by origin", got.get("origin"), _origin_text))
 
 
+class _R11bConfUnreadable(tuple):
+    """(None, None) that is told apart by its TYPE from two settings that are not numbers."""
+
+
+# What section_database passes when config.json could not be read. Not a plain (None, None) compared
+# by identity: CPython merges equal constant tuples, so a literal (None, None) elsewhere in this
+# module IS that object, and two non-numeric settings read as "unreadable".
+_R11B_CONF_UNREADABLE = _R11bConfUnreadable((None, None))
+
+
 def _retention_conf():
+    """(audit_log_retention_days, audit_ip_retention_days); raises when config.json is unreadable.
+
+    load_config() does not raise for that: it answers the DEFAULTS, wrapped as UnreadableConfig,
+    and those printed as the operator's settings ("keep forever", "IPs reduced after 90 d") —
+    the very thing config_section's rule forbids ("An unreadable config.json prints no values").
+    """
     from panel.core import config as cfg
     c = cfg.load_config()
+    if cfg.is_unreadable(c):
+        raise ValueError("config.json unreadable")
     return (_int_cfg(c, "audit_log_retention_days", 0), _int_cfg(c, "audit_ip_retention_days", 90))
 
 
@@ -320,7 +352,7 @@ def section_database(ctx):
     try:
         conf = _retention_conf()
     except Exception:  # noqa: BLE001 - unreadable config: said as such on the audit line
-        conf = (None, None)
+        conf = _R11B_CONF_UNREADABLE
     queries = {"page_size": ("PRAGMA page_size", ()), "freelist_count": ("PRAGMA freelist_count", ()),
                "journal_mode": ("PRAGMA journal_mode", ())}
     queries.update(_census_queries(conf[1]))
@@ -346,7 +378,7 @@ def _passphrase_state():
     from panel.ops import backup as bk
     if not bk.get_settings().get("encrypt"):
         return "ok", "encryption off"
-    if not cfg.CRED_KEY_FILE.exists():
+    if cfg._key_missing(cfg.CRED_KEY_FILE):     # absent or EMPTY: either way a decrypt would mint one
         return "fail", "encryption on, but cred_key is missing, so the passphrase is unreadable"
     try:
         readable = bool(bk.get_passphrase())

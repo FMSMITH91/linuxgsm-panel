@@ -59,6 +59,12 @@ check("docs-only: ...and the files in it, and what it matches path by path, are 
       "gate's (system_ops._ci_path_ignored)",
       PS.DOCS_ONLY_FILES == frozenset(_so50._CI_PATHS_IGNORED_FILES) and not _disagree50
       and PS.is_doc("README.md") and not PS.is_doc("app.py"), repr(_disagree50))
+# .gitattributes is not documentation: it decides the bytes every checkout gets (eol conversion of
+# every .sh and .py, -text on the fuzz corpus). Classed as docs, a PR changing only it skipped the
+# heavy checks and the push to main ran none, and the next unrelated PR went red for it.
+check("docs-only: .gitattributes is NOT documentation, in the script or the panel's update gate",
+      not PS.is_doc(".gitattributes") and not _so50._ci_path_ignored(".gitattributes")
+      and not PS.docs_only([".gitattributes"]) and PS.is_doc(".gitignore"))
 check("docs-only: every path must be documentation, and no paths is not documentation",
       PS.docs_only(["README.md", "docs/a.png", "LICENSE"]) and not PS.docs_only([])
       and not PS.docs_only(["README.md", "app.py"]) and not PS.docs_only(["", "README.md"])
@@ -273,7 +279,10 @@ check("docs-only wiring: zizmor's upload job takes the scan job's answer, and sk
       "Harden Runner on it (it never looks for a SARIF that was not made)",
       "docs_only: ${{ steps.scope.outputs.docs_only }}" in _code29(_job29(_wf29("zizmor.yml"), "zizmor"))
       and len(_zz_steps50) == 4 and not _if50(_zz_steps50[0])
-      and all(_if50(s) == "needs.zizmor.outputs.docs_only != 'true'" for s in _zz_steps50[1:]),
+      and all(_if50(s) == "needs.zizmor.outputs.docs_only != 'true'" for s in _zz_steps50[1:3])
+      # the upload also skips a scheduled run whose commit is no longer main's head (part26)
+      and _if50(_zz_steps50[3]) == ("needs.zizmor.outputs.docs_only != 'true' && "
+                                    "needs.zizmor.outputs.current != 'false'"),
       repr([_if50(s) for s in _zz_steps50]))
 _pr_wfs50 = sorted(os.path.basename(f) for f in os.listdir(os.path.join(_root, ".github", "workflows"))
                    if _re50.search(r"^  pull_request:", _code29(_wf29(f)).split("\njobs:")[0], _re50.M))

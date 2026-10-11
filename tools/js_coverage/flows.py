@@ -17,6 +17,8 @@ import os
 
 import pyotp
 
+from driver import FlowAssertion
+
 # ── shared ─────────────────────────────────────────────────────────────────────────────────────
 # Answer the dialog the last step opened: OK (typing the password or the name it asks for) or
 # Cancel. The same helper the walk uses between controls.
@@ -381,9 +383,9 @@ def _press(d, key, code, vk):
 
 
 def _expect(cond, what, got):
-    """Raise, naming what the rename did not do, so the walk reports this flow as broken."""
+    """Raise FlowAssertion, naming what the rename did not do: run.py fails the run on it."""
     if not cond:
-        raise RuntimeError("rename: %s (got %r)" % (what, got))
+        raise FlowAssertion("rename: %s (got %r)" % (what, got))
 
 
 def _rename_state(d):
