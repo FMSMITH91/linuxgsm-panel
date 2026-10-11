@@ -360,3 +360,31 @@ check("docs-only: the PR alert gate passes a docs-only pull request by a step th
       and _if50(_pa_steps50.get("Wait for this merge commit's analysis in every category", "")) == _RUN50
       and _if50(_pa_steps50.get("Judge refs/pull/<n>/merge", "")) == _RUN50,
       repr({k: _if50(v) for k, v in _pa_steps50.items()}))
+
+# ── No Claude session links in the repository ────────────────────────────────────────────────────
+# Cloud and Remote Control sessions append a claude.ai session link to every commit ("Claude-Session:"
+# trailer) and pull request unless attribution.sessionUrl is false. Cloud sessions read only the
+# committed .claude/settings.json, so the switch has to live there. A session link is the owner's
+# private conversation; this repository is public.
+
+_cs50 = _json50.load(open(os.path.join(_root, ".claude", "settings.json"), encoding="utf-8"))
+check("session links: the committed .claude/settings.json turns the session link off "
+      "(attribution.sessionUrl is false, which cloud sessions read from the repository)",
+      (_cs50.get("attribution") or {}).get("sessionUrl") is False, repr(_cs50))
+_needle50 = ("claude.ai/code/" + "session_").encode()
+# Walked, not `git grep`: the suites run on a copy of the tree that is not a git checkout.
+_skip50 = {".git", ".venv", "venv", "node_modules", "data", "__pycache__", "worktrees"}
+_hits50 = []
+for _dp50, _dn50, _fn50 in os.walk(_root):
+    _dn50[:] = [d for d in _dn50 if d not in _skip50]
+    for _f50 in _fn50:
+        try:
+            with open(os.path.join(_dp50, _f50), "rb") as _fh50:
+                if _needle50 in _fh50.read():
+                    _hits50.append(os.path.relpath(os.path.join(_dp50, _f50), _root))
+        except OSError:
+            continue
+_walked50 = os.path.isfile(os.path.join(_root, "README.md")) and os.path.isfile(
+    os.path.join(_root, "tests", "unit", "part50.py"))
+check("session links: no file in the tree carries a claude.ai session link",
+      _walked50 and not _hits50, repr(_hits50))
