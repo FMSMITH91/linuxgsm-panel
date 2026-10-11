@@ -90,8 +90,10 @@ def _bare_rebooted_text(remote, job, boot):
     what = (" (no running game server was found before it)" if not n else
             "; the operator took over the %d game server%s it stopped, so the panel started "
             "none of them" % (n, "" if n == 1 else "s") if stopped == n else
-            "; the operator took over the %d game server%s it was to start again (it stopped %d "
-            "of them), so the panel started none of them" % (n, "" if n == 1 else "s", stopped))
+            # "in its plan", not "it was to start again": the plan also holds owner "none"
+            # servers (a queued stop, restoring turned off), which were never to be started.
+            "; the operator took over the %d game server%s in its plan (it stopped %d of "
+            "them), so the panel started none of them" % (n, "" if n == 1 else "s", stopped))
     return "%s rebooted%s%s.%s" % (
         _host_label(remote), _boot_clause(boot, job.get("sent")), what,
         _unread_note(job.get("unread"), "stop or start"))
