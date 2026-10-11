@@ -585,6 +585,49 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Findings from a full code review including the tests and CI (2026-10-11): fixes.** Every item
+  below has a check that fails without its fix.
+  - **Game servers.** A remote GMod install whose content download partly failed (one game out of
+    disk) mounted nothing; it now mounts the games that are on disk, as the panel host already did.
+    Config reads now include `secrets-common.cfg` and `secrets-<instance>.cfg`, which LinuxGSM reads
+    last: the Alerts card no longer shows a stale webhook, and a save that the secrets file would
+    override is refused with that file's name instead of saying "Saved". A server whose config does
+    not exist until first start is no longer read as "not installed" and downloaded again. Another
+    server's `update` on the same account no longer counts as this server's maintenance and mutes
+    its offline alerts. The mods card says the host did not answer instead of "no mods".
+  - **Host reboots.** "Reboot when everyone has left" no longer loops, stopping and restarting
+    servers, when it cannot read a server's player count; it reads the host's batched count, and
+    says so once if it still cannot. A reboot after the operator took over the planned servers no
+    longer says "no running game server was found".
+  - **Hosts.** VPS setup no longer says "complete" when `ufw enable`, the timezone, the swap file or
+    fail2ban failed; each failure is named in "Bootstrap finished, but …". "Test connection" on the
+    panel host's own row no longer marks it offline.
+  - **Panel updates and repair.** Opening the panel host's page no longer races the update check's
+    `git fetch` (which cached "Couldn't reach the update source" for 5 minutes), and fetches nothing
+    while an update runs. Switching to any branch is refused during an update, and the running
+    update's log is no longer deleted. A backup restore and a self-update now refuse to overlap.
+    "Restore all" in Repair works when a file is staged as added or renamed.
+  - **Recovery tool.** `manage.py` no longer starts the panel's background jobs (scheduled restarts,
+    install checks, update checks) beside the running service. `create-admin` applies the same name
+    rules as the web forms, so it cannot create an account whose name has a stray space and can
+    never sign in.
+  - **Pages.** Adding a host as "Existing server — just scan" no longer shows a red error after it
+    succeeded (pressing Add again made a duplicate) and goes on to the scan. "Load older" during a
+    console catch-up no longer shows lines twice. Two quick file opens leave the editor on the
+    second. A delegated host admin is no longer offered panel-host reboot buttons that always fail.
+    Host, server and device names are no longer translated ("Servidor"). Uploading into a folder
+    that is a symbolic link shows the Replace dialog again. A non-text value from the terminal or
+    a bad `socketio_cors_origins` in config.json no longer breaks the socket.
+  - **Settings input.** A game's backup schedule no longer clears its override on a value it cannot
+    read, Repair no longer restores every file when `paths` is not a list, and a non-text SSH mode
+    or backup passphrase is refused with a 400 instead of an error page.
+  - **Tests and CI.** About seventy test checks could pass without testing what they named; each was
+    shown blind to a deliberate break and now catches it. Fixing them found a test that ran a real
+    `sudo -n`, five test threads left running, real `dpkg-query`/`apt-config` calls from the unit
+    suite, and the JavaScript coverage run's rename flow, broken since 2026-10-08 behind a warning;
+    all fixed. A scheduled code-scanning run of an old commit no longer uploads over a newer one,
+    and one 502 from SonarCloud no longer turns main's check red.
+
 - **The Tailscale page no longer shows "12/31/1" as the last-seen time of every connected
   device.** Tailscale reports a placeholder for "no time" for a device that is online now, and the
   page printed it as a date in year 1. Connected devices now show a dash; offline ones keep their
@@ -1864,6 +1907,30 @@ CI-verified commit regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+
+- **Findings from a full code review including the tests and CI (2026-10-11): security.** Every
+  item below has a check that fails without its fix.
+  - **The debug report could print a password.** A sudo command that sudo refused (a mistyped sudo
+    password in the web terminal), or one logged with `GROUP=`, `ENV=` or `TSID=`, was printed with
+    its full command line, so `sudo mysql -p<password>` appeared in a report meant to be shared. Those
+    lines now show the same fixed label as every other sudo call. An empty `data/cred_key` no longer
+    passes the report's key check, which made the report write a new key on the install it was
+    diagnosing.
+  - **Reinstalling opened the panel's port to the internet.** When a UFW rule already limited the
+    panel's port (for example to Tailscale's addresses), the installer added an allow-from-anywhere
+    rule. Any existing rule for the port is now left alone, and the closing message says access is
+    limited.
+  - **The firewall page let you delete the only public SSH rule.** Any allow rule on the Tailscale
+    interface, for any port, counted as another way in. It now counts only when it admits SSH and UFW
+    reaches it first. "Disable public SSH" and "Close port 22" are also refused when sshd listens only
+    on the public address, where the tailnet rule cannot reach it.
+  - **A loopback address written another way bypassed a lockout guard.** `0::1` or
+    `0:0:0:0:0:0:0:1` as the bind address skipped the "localhost without Serve locks you out" check.
+    Addresses are now parsed, and stored in canonical form.
+  - **The string `"false"` turned Tailscale Funnel on.** Only a JSON `true` enables it now.
+  - **The helper treated sudoers files that sudo ignores as grants.** A `.disabled` or `~` file in
+    `sudoers.d` made the panel treat every game account as root-capable. The helper now applies
+    sudo's own skip rules.
 
 - **Findings from a full code review (2026-10-08): security.** Every item below has a check that
   fails without its fix.
