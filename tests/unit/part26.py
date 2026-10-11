@@ -465,11 +465,15 @@ class _MhAnswer26(object):
         self.stdout, self.returncode, self.stderr = out, rc, ""
 
 
+_mh_repo26 = []   # GH_REPO each compare call was given: the repository reaches gh by env, not argv
+
+
 def _mh_gh26(head, compare=None):
     """A `gh` that answers main's head with `head`, and the compare API with `compare` (a dict)."""
     def _run(argv, **_k):
         _mh_calls26.append(list(argv))
         if "/compare/" in argv[-1]:
+            _mh_repo26.append((_k.get("env") or {}).get("GH_REPO"))
             return _MhAnswer26(_json26.dumps(compare)) if compare is not None else _MhAnswer26("", 1)
         return _MhAnswer26(head + "\n") if head is not None else _MhAnswer26("", 1)
     return _run
@@ -523,7 +527,8 @@ check("code-scanning gates: ...a head that only added DOCUMENTATION on top of it
       "descendant, or a rename out of code still is",
       _mh_docs26 == _MH_JUDGED26 and _mh_cmp_unread26 == (3, []) and _mh_diverged26 == (3, [])
       and _mh_renamed26 == (3, [])
-      and ["gh", "api", "--", "repos/o/r/compare/%s...%s" % (_X26, _Y26)] in _mh_calls26,
+      and ["gh", "api", "--", "repos/{owner}/{repo}/compare/%s...%s" % (_X26, _Y26)] in _mh_calls26
+      and _mh_repo26 and set(_mh_repo26) == {"o/r"},
       repr((_mh_docs26, _mh_cmp_unread26, _mh_diverged26, _mh_renamed26)))
 
 # The upload guards ask the same function, through `still-head`: it writes current=false only when

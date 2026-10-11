@@ -966,7 +966,7 @@ def _join33(thread, limit):
     try:
         thread.join(limit)
     # By its class, not BaseException: a Ctrl-C or SystemExit inside the wait still stops the run.
-    except _EvTimeout33:
+    except _EvTimeout33:   # a timed-out green join raises it; the caller reads is_alive()
         pass
 
 

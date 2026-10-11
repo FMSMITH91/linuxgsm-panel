@@ -136,7 +136,7 @@ try:
 
         _aud54 = []
         _patch(_app54, "_boot_audit", lambda app, detail, ok, action="x": _aud54.append((action, detail)))
-        _b54 = _boot54({"443": {"/": _OTHER54, "/lgsm": _P54}}, ["443"])
+        _boot54({"443": {"/": _OTHER54, "/lgsm": _P54}}, ["443"])
         _aud54_on = list(_aud54)
         del _aud54[:]
         _boot54({"443": {"/": _OTHER54, "/lgsm": _P54}}, [])
@@ -281,13 +281,16 @@ check("bootstrap: ...while a failed `ufw enable` still says the firewall was NOT
 # ── A02: an EMPTY session or credential key is a missing one on the Diagnostics card too ───────
 
 
-def _keys54(secret, cred):
-    """_diag_encryption_keys over key files holding `secret` / `cred` (None: no file)."""
+def _keys54(sess_fill, cred_fill):
+    """_diag_encryption_keys over the two key files filled with `sess_fill` / `cred_fill` (None: none).
+
+    The fills are placeholder bytes of a key's length, not keys.
+    """
     d = _pl54.Path(_tf54.mkdtemp(prefix="lgsm-unit-p54k-"))
     try:
-        for name, body in (("secret_key", secret), ("cred_key", cred)):
-            if body is not None:
-                (d / name).write_text(body, encoding="utf-8")
+        for name, fill in (("secret_key", sess_fill), ("cred_key", cred_fill)):
+            if fill is not None:
+                (d / name).write_text(fill, encoding="utf-8")
         with _patched():
             _patch(_cfg54, "SECRET_FILE", d / "secret_key")
             _patch(_cfg54, "CRED_KEY_FILE", d / "cred_key")

@@ -205,8 +205,11 @@ def _compare(repo, base, head):
     """The compare API's answer for `base...head` as a dict, or None when it could not be read."""
     if not all(r.match(v or "") for r, v in ((_REPO_RE, repo), (_SHA_RE, base), (_SHA_RE, head))):
         return None
+    # No input text reaches argv: the commits are rebuilt from their numbers, and the repository goes
+    # to gh through GH_REPO, which fills the {owner}/{repo} placeholders (Sonar S8705).
+    path = "repos/{owner}/{repo}/compare/%040x...%040x" % (int(base, 16), int(head, 16))
     try:
-        res = subprocess.run(["gh", "api", "--", "repos/%s/compare/%s...%s" % (repo, base, head)],  # nosec B603 B607
+        res = subprocess.run(["gh", "api", "--", path], env=dict(os.environ, GH_REPO=repo),  # nosec B603 B607
                              capture_output=True, text=True, timeout=60, check=False)
         data = json.loads(res.stdout) if res.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError):

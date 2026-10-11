@@ -52,7 +52,7 @@ def _join13(t, secs=5):
     """
     try:
         t.join(timeout=secs)
-    except _EvTimeout13:
+    except _EvTimeout13:   # a timed-out green join raises it; the caller reads is_alive()
         pass
 
 

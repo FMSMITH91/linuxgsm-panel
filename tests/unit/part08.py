@@ -760,7 +760,7 @@ finally:
         # checks — ended the whole run with a traceback instead of failing the check below.
         try:
             _t.join(5)
-        except _EvTimeout08:
+        except _EvTimeout08:   # a timed-out green join raises it; the check below reports it
             pass
     _sm_core.run_privileged, _sm_hosts.firewall.remote_ufw_status = _rv_saved
 check("remote_ufw_delete_rule: an insert racing the guard lands AFTER the delete, never between",

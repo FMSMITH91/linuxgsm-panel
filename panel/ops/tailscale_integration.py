@@ -465,7 +465,6 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     real ts.net cert either way; this just has to match how the panel is actually listening or the
     proxy 502s.
     """
-    verb = "funnel" if funnel else "serve"
     mount = mount or "/"
     # Validate HERE and answer, rather than letting _ts_mount raise out of the call below.
     # `mount` is request JSON (POST /api/tailscale/serve), and the chain from the route down to

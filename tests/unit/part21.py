@@ -116,7 +116,7 @@ def _join21(thread):
     try:
         thread.join(10)
     # By its class, not BaseException: a Ctrl-C or SystemExit inside the wait still stops the run.
-    except _EvTimeout21:
+    except _EvTimeout21:   # a timed-out green join raises it; the caller reads is_alive()
         pass
 
 
