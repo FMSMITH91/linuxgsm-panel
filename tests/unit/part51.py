@@ -332,3 +332,36 @@ for _d51 in (123, ["x"], {"a": 1}, "ls\r"):
 check("terminal: term_input data that is not a string is dropped, not an AttributeError in the "
       "socket handler (a string still counts as input)",
       _tw51 == [False, False, False, True], repr(_tw51))
+
+# ── A03: a tailnet rule counts as a way in only where UFW, first match wins, lets sshd through ──
+from unit.part02 import protect as _protect51  # noqa: E402
+
+
+def _fw51(rules):
+    g = _protect51(NS(port=22), rules, tailscale=(True, False), sshd_ports=(22,))
+    return {(x["port_label"], x["action"], x.get("iface", "")): x for x in g}
+
+
+_fw51_port = _fw51(["22/tcp ALLOW IN Anywhere", "5000/tcp on tailscale0 ALLOW IN Anywhere"])
+_fw51_deny = _fw51(["22/tcp ALLOW IN Anywhere", "Anywhere on tailscale0 DENY IN Anywhere",
+                    "Anywhere on tailscale0 ALLOW IN Anywhere"])
+_fw51_ok = _fw51(["22/tcp ALLOW IN Anywhere", "Anywhere on tailscale0 ALLOW IN Anywhere"])
+_fw51_ssh = _fw51(["22/tcp ALLOW IN Anywhere", "22 on tailscale0 ALLOW IN Anywhere"])
+_fw51_k = ("22/tcp", "ALLOW", "")
+
+
+def _fw51_state(gp):
+    return {k: (v["is_access"], v["protected"], v["warn"]) for k, v in gp.items()}
+
+
+check("firewall: a port-scoped tailnet rule (5000/tcp on tailscale0) is not a way in, so the only "
+      "public SSH rule stays protected",
+      _fw51_port[_fw51_k]["protected"] and not _fw51_port[("5000/tcp", "ALLOW", "tailscale0")]["is_access"],
+      repr(_fw51_state(_fw51_port)))
+check("firewall: ...nor is a tailscale0 allow below a tailscale0 DENY (UFW takes the first match)",
+      _fw51_deny[_fw51_k]["protected"], repr(_fw51_state(_fw51_deny)))
+check("firewall: ...while a whole-interface allow, or an SSH-port allow on tailscale0, is still the "
+      "second way in that makes the public rule only warn",
+      _fw51_ok[_fw51_k]["warn"] and not _fw51_ok[_fw51_k]["protected"]
+      and _fw51_ssh[_fw51_k]["warn"] and not _fw51_ssh[_fw51_k]["protected"],
+      repr((_fw51_state(_fw51_ok), _fw51_state(_fw51_ssh))))

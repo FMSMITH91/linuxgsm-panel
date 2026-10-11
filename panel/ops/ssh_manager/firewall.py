@@ -328,10 +328,42 @@ def _classify_access_rule(g, ssh_ports):
     _iface = str(g.get("iface", "") or "")
     _ts_iface = _iface.startswith("tailscale")
     g["is_ssh"] = _is_ssh_rule(g, pn, inbound, _ts_iface, ssh_ports)
-    # LIMIT here too, for the reason spelled out above: a rate-limited rule is a way in.
+    # LIMIT here too, for the reason spelled out above: a rate-limited rule is a way in. And only
+    # a rule that lets sshd in: the whole interface, or an SSH port on it. `5000/tcp on tailscale0`
+    # (a service kept to the tailnet) carries no SSH, so it is not a way into the host.
     g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") in ("ALLOW", "LIMIT")
-                         and inbound and _ts_iface)
+                         and inbound and _ts_iface and _r11a_reaches_ssh(g, pn, ssh_ports))
     g["is_access"] = g["is_ssh"] or g["is_tailscale"]
+
+
+def _r11a_reaches_ssh(g, pn, ssh_ports):
+    """Whether interface rule `g` covers sshd: every port on it, or one of `ssh_ports`."""
+    return g.get("port_label") == "All ports" or (pn.isdecimal() and int(pn) in ssh_ports)
+
+
+def _r11a_tailnet_ssh_open(groups, ssh_ports):
+    """Whether UFW lets sshd in over a Tailscale interface, read the way UFW reads its rules.
+
+    UFW takes the FIRST rule that matches, in rule order (a group's place is its lowest number).
+    So per tailscale interface the first inbound rule covering sshd decides: an ALLOW/LIMIT lets it
+    in, a DENY/REJECT keeps it out — `Anywhere on tailscale0 DENY IN` above the allow wins. This
+    was any() over is_tailscale, which counted any allow on the interface wherever it sat, and so
+    downgraded the host's only public SSH rule to deletable. hosts._tailnet_ssh_state asks the
+    same question through system_ops.ufw_allows_iface_in; this one also accepts an SSH-port rule
+    on the interface, which that one (deciding the "tailnet-only" lockdown) need not.
+    """
+    decided = {}
+    for g in sorted((g for g in groups if g.get("nums")), key=lambda g: min(g["nums"])):
+        iface = str(g.get("iface") or "")
+        if (not iface.startswith("tailscale") or iface in decided
+                or (g.get("direction") or "IN") != "IN"
+                or not _r11a_reaches_ssh(g, str(g.get("port_num", "")), ssh_ports)):
+            continue
+        if g.get("action") in ("DENY", "REJECT"):
+            decided[iface] = False
+        elif g.get("action") in ("ALLOW", "LIMIT"):
+            decided[iface] = True
+    return any(decided.values())
 
 
 def _is_panel_rule(g, panel_port):
@@ -432,14 +464,14 @@ def _annotate_firewall_protection(server, enabled, groups):
         _classify_access_rule(g, ssh_ports)
 
     ssh_count = sum(1 for g in groups if g.get("is_ssh"))
-    has_ts_iface = any(g.get("is_tailscale") for g in groups)
 
     ts_running, ts_ssh_enabled = _live_tailscale_state(server, enabled, groups)
 
     panel_port = _panel_web_port(server, ts_running=ts_running)
     served_over_ts = _panel_served_over_tailscale(server)
     ts_ssh_ok = ts_running and ts_ssh_enabled    # Tailscale SSH → a way in regardless of UFW
-    ts_iface_ok = ts_running and has_ts_iface     # regular SSH over the tailnet (needs the iface rule)
+    # regular SSH over the tailnet: needs an interface rule that UFW, first match wins, lets through
+    ts_iface_ok = ts_running and _r11a_tailnet_ssh_open(groups, ssh_ports)
 
     for g in groups:
         g["protected"] = False
