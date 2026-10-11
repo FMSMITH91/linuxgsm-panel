@@ -381,13 +381,21 @@ def _lv_install(short, verdict, port):
         _rid = _row.id if _row else None
     if _rid is None:
         return None, list(_lv_cmds)
-    _ij_wait(_rid, 60)
+    # `settled` is checked by name, as every sibling install block does. Ignored, a worker still
+    # inside _run() at the deadline had its row deleted under it (SQLite hands that id to the
+    # next INSERT, which its _fail() then writes onto) and the real transports handed back by the
+    # finally below, with nothing saying so. An unsettled worker keeps its row and job.
+    _job, _row_st, _settled = _ij_wait(_rid, 60)
+    check("install step 4 (%s): the install worker finished before the block moved on" % short,
+          _settled, "job=%r row=%r" % (_job.get("status"), _row_st))
     with app.app_context():
         _r = db.session.get(GameServer, _rid)
         _state = (_r.status, _r.installed, _r.install_error or "", _r.install_retryable)
-        db.session.delete(_r); db.session.commit()
-    with _install_lock_sm:
-        _install_jobs_sm.pop(_rid, None)
+        if _settled:
+            db.session.delete(_r); db.session.commit()
+    if _settled:
+        with _install_lock_sm:
+            _install_jobs_sm.pop(_rid, None)
     return _state, list(_lv_cmds)
 
 
@@ -827,19 +835,34 @@ finally:
 # load_config() falls back to DEFAULT_CONFIG (setup_complete=False) on any unreadable/invalid
 # file, so gating on is_setup_complete() reopened the wizard on a configured install, where
 # step=welcome rewrites bind_host/port and step=remote_server makes the panel SSH out.
+#
+# Driven by the SIGNED-IN superadmin (c), with config.json DELETED. An anonymous client is
+# refused by the owner gate (_setup_gate) before the lock is consulted, and a corrupt config.json
+# is refused by save_config itself, so the version of this block that did both passed with the
+# SetupState lock deleted. Here the owner gate lets the caller through and save_config would
+# write, so the lock is the only thing that can keep step=welcome from rewriting the bind.
 _cfg_backup = CONFIG_FILE.read_bytes()
+from panel.routes import route_helpers as _sl_rh  # pylint: disable=reimported
+_sl_ssh = _sl_rh.ssh_test_connection
 try:
-    CONFIG_FILE.write_text("{ not valid json")
+    CONFIG_FILE.unlink()
     from panel.core.config import load_config as _lc
-    check("setup lock: the corrupt-config precondition really does hold",
+    check("setup lock: the lost-config precondition really does hold",
           _lc().get("setup_complete") is False, "config still reads as complete")
-    _sw = app.test_client().post("/setup", data={"step": "welcome", "site_title": "pwned",
-                                                 "bind_host": "0.0.0.0", "port": "9999"})
-    check("setup lock: a completed install refuses step=welcome even with config.json unreadable",
+    _sw = c.post("/setup", data={"step": "welcome", "site_title": "pwned",
+                                 "bind_host": "0.0.0.0", "port": "9999"})
+    check("setup lock: a completed install refuses step=welcome even with config.json gone, "
+          "to its own superadmin",
           _lc().get("bind_host") != "0.0.0.0" and _lc().get("site_title") != "pwned",
           "bind_host=%r title=%r" % (_lc().get("bind_host"), _lc().get("site_title")))
-    _sw2 = app.test_client().post("/setup", data={"step": "remote_server", "action": "add",
-                                                  "name": "evil-smoke", "host": "192.0.2.66"})
+    # A completed wizard's stored step is "complete", which the step-order rule also refuses
+    # remote_server from, so this one is held by two guards; the fields are valid and the SSH
+    # test is stubbed to succeed so that neither of THOSE is what refuses it.
+    _sl_rh.ssh_test_connection = lambda *a, **k: (True, "ok")
+    _sw2 = c.post("/setup", data={"step": "remote_server", "action": "add",
+                                  "name": "evil-smoke", "host": "192.0.2.66",
+                                  "ssh_port": "22", "ssh_user": "root",
+                                  "auth_method": "password", "credential": "x"})
     with app.app_context():
         check("setup lock: ...and refuses step=remote_server too",
               RemoteServer.query.filter_by(name="evil-smoke").first() is None)
@@ -847,7 +870,11 @@ try:
           _sw.status_code < 500 and _sw2.status_code < 500,
           "%d/%d" % (_sw.status_code, _sw2.status_code))
 finally:
+    _sl_rh.ssh_test_connection = _sl_ssh
     CONFIG_FILE.write_bytes(_cfg_backup)
+    with app.app_context():
+        RemoteServer.query.filter_by(name="evil-smoke").delete(synchronize_session=False)
+        db.session.commit()
 
 # Every one of these maps is keyed by a database row id, and SQLite hands a deleted row's id
 # to the next INSERT — so a new server inherits the old one's alert flags and, via
@@ -2873,17 +2900,44 @@ check("import: caller without manage_servers is denied",
 # ── A host's servers are keyed on the Linux user, so one account can only ever be one server.
 # Seven games under one account (what a GMod content box looks like) used to import the first
 # and silently drop six as duplicates — a panel row for whichever game happened to sort first.
-imp_multi = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
-    {"user": "srcds", "game_type": "css", "port": 27015},
-    {"user": "srcds", "game_type": "tf2", "port": 27015},
-    {"user": "srcds", "game_type": "dods", "port": 27015}]})
-_imm = imp_multi.get_json() or {}
-check("import: one account claiming several games is refused outright, not partly applied",
-      _imm.get("added") == [] and len(_imm.get("skipped") or []) == 3, str(_imm)[:140])
-with app.app_context():
-    _srcds_rows = GameServer.query.filter_by(remote_id=remote_id, short_name="srcds").count()
-check("import: ...and no arbitrary winner was written to the database", _srcds_rows == 0,
-      "rows=%d" % _srcds_rows)
+# The scan is stubbed to REPORT all three games under the account: unstubbed, the blackholed
+# fixture host scans to [], every game is skipped as "not scanned" before the per-account rule is
+# consulted, and these checks passed with that rule deleted. Three non-content games, so the
+# account is not filtered out as a GMod content box either; the per-account rule is then the
+# only thing that can refuse them. The control below imports ONE of them from the same scan.
+_imm_saved = (_imp_mod.discover_linuxgsm_servers, _imp_mod.privileged_accounts,
+              _sm_hosts.protected_host_ports)
+try:
+    _sm_hosts.protected_host_ports = lambda _r: {22}
+    _imp_mod.privileged_accounts = lambda _r, _users: {}
+    _imp_mod.discover_linuxgsm_servers = lambda _s: [
+        {"user": "multibox", "lgsm_name": _n, "port": _p, "backups": 0, "mods": 0, "cron": 0,
+         "autostart": False}
+        for _n, _p in (("csgoserver", 27215), ("rustserver", 28215), ("codserver", 28960))]
+    imp_multi = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+        {"user": "multibox", "game_type": "csgo", "port": 27215},
+        {"user": "multibox", "game_type": "rust", "port": 28215},
+        {"user": "multibox", "game_type": "cod", "port": 28960}]})
+    _imm = imp_multi.get_json() or {}
+    check("import: one account claiming several games is refused outright, not partly applied",
+          _imm.get("added") == [] and len(_imm.get("skipped") or []) == 3, str(_imm)[:140])
+    with app.app_context():
+        _srcds_rows = GameServer.query.filter_by(remote_id=remote_id,
+                                                 short_name="multibox").count()
+    check("import: ...and no arbitrary winner was written to the database", _srcds_rows == 0,
+          "rows=%d" % _srcds_rows)
+    imp_one = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+        {"user": "multibox", "game_type": "csgo", "port": 27215}]})
+    _im1 = imp_one.get_json() or {}
+    check("import: ...control: the same scan with ONE of its games selected imports it",
+          _im1.get("added") == ["multibox"], str(_im1)[:140])
+finally:
+    (_imp_mod.discover_linuxgsm_servers, _imp_mod.privileged_accounts,
+     _sm_hosts.protected_host_ports) = _imm_saved
+    with app.app_context():
+        GameServer.query.filter_by(remote_id=remote_id, short_name="multibox").delete(
+            synchronize_session=False)
+        db.session.commit()
 
 # ── GMod content is filtered out of discovery ──
 # Each mountable game is installed through LinuxGSM, so the host scan cannot tell it from a

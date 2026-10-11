@@ -37,6 +37,35 @@ _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists
 # (which CI does, where no config pre-exists) should not behave differently.
 _CONFIG_SNAPSHOT = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
 
+
+def _restore_files():
+    """Remove what this suite created and put a pre-existing config.json back byte for byte."""
+    for p in (DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE):
+        if p not in _PREEXISTING and p.exists():
+            try:
+                p.unlink()
+            except OSError as e:
+                # Said, not swallowed: a panel.db left behind makes the NEXT run of every
+                # DB-owning suite print SKIP and exit 0, with nothing to say why.
+                print("cleanup: could not remove %s (%s)" % (p, e), file=sys.stderr)
+    if _CONFIG_SNAPSHOT is not None:
+        try:
+            CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
+        except OSError as e:
+            # Said, not swallowed, like a failed remove above: the developer's own config would
+            # be left holding this suite's edits.
+            print("cleanup: could not restore %s (%s)" % (CONFIG_FILE, e), file=sys.stderr)
+
+
+# Registered BEFORE the first edit below. This preamble runs at import, outside the runner's try,
+# so a crash from here on (create_app, a migration, a template gate) skipped cleanup() entirely:
+# the developer's config.json kept setup_complete and ssh_timeout=1 (which turns the unit suite's
+# documented-default check red, pointing at config) and the panel.db create_app made stayed
+# behind, so the next bare run printed SKIP and exited 0. On a normal run cleanup() has already
+# done this, and doing it again changes nothing.
+import atexit as _atexit  # noqa: E402
+_atexit.register(_restore_files)
+
 # Mark setup complete in config BEFORE the app loads it — is_setup_complete()
 # requires both this flag and a SetupState(complete=True) row (added below).
 from panel.core.config import load_config, save_config
@@ -64,6 +93,7 @@ from panel.services import lgsm_data as _lgsm_data
 import tempfile as _lgsm_tempfile
 import pathlib as _lgsm_pathlib
 _lgsm_data._CACHE_DIR = _lgsm_pathlib.Path(_lgsm_tempfile.mkdtemp())
+_atexit.register(__import__("shutil").rmtree, str(_lgsm_data._CACHE_DIR), True)   # not left behind
 _lgsm_data._CACHE_DIR.mkdir(parents=True, exist_ok=True)
 (_lgsm_data._CACHE_DIR / _lgsm_data.SERVERLIST).write_text(
     "shortname,gameservername,gamename,os\n"
@@ -215,21 +245,7 @@ def cleanup():
     except Exception:  # nosec B110
         pass   # best-effort cleanup in a throwaway test
     # Remove only what we created, so a local run leaves the tree clean.
-    for p in (DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE):
-        if p not in _PREEXISTING and p.exists():
-            try:
-                p.unlink()
-            except OSError as e:
-                # Said, not swallowed: a panel.db left behind makes the NEXT run of every
-                # DB-owning suite print SKIP and exit 0, with nothing to say why.
-                print("cleanup: could not remove %s (%s)" % (p, e), file=sys.stderr)
-    if _CONFIG_SNAPSHOT is not None:
-        try:
-            CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
-        except OSError as e:
-            # Said, not swallowed, like a failed remove above: the developer's own config would
-            # be left holding this suite's edits.
-            print("cleanup: could not restore %s (%s)" % (CONFIG_FILE, e), file=sys.stderr)
+    _restore_files()
 
 
 # ── audit IPs: an older version's IPv6 zone text goes at startup, whatever the row's age ────────
