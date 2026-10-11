@@ -3853,10 +3853,12 @@ def _diag_encryption_keys():
     # fault. The credential key is created ONLY when the first password-based credential is
     # saved, so a missing cred_key is normal (e.g. all remotes use SSH-key / Tailscale / local
     # auth) — not a fault. Whether the stored values DECRYPT is the Host credentials check.
+    # _key_missing, not .exists(): an EMPTY key file is missing to every reader of it (#416), so
+    # "present" here sat beside the Host credentials row saying the same cred_key was MISSING.
     from panel.core import config as _cfg
-    if not _cfg.SECRET_FILE.exists():
+    if _cfg._key_missing(_cfg.SECRET_FILE):
         return "fail", "Session secret key is missing."
-    if not _cfg.CRED_KEY_FILE.exists():
+    if _cfg._key_missing(_cfg.CRED_KEY_FILE):
         return "ok", ("Session key present; the credential key is created when the first "
                       "saved password/credential needs it.")
     return "ok", "Session + credential keys present."

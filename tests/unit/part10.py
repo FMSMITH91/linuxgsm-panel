@@ -2617,7 +2617,9 @@ def _so7_panel_diagnostics_2():
     _p7_garbage(os.path.join(_dg, "data", "panel.db"))
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(_p7_cert(-60, -4))
-    open(os.path.join(_dg, "data", "cred_key"), "w").close()
+    # A cred_key WITH a key in it: an empty one is missing to every reader of it, this check too.
+    with open(os.path.join(_dg, "data", "cred_key"), "w") as f:
+        f.write("k" * 44)
     _hv["res"] = _p7_sp.CompletedProcess([], 0, "\n".join(v + "\tdesc" for v in _all_verbs), "")
     _d3, _d3s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": "abc1234"}, helper=True)
 
@@ -2640,7 +2642,12 @@ def _so7_panel_diagnostics_3():
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(_p7_cert(-1, 100))
     _hv["res"], _hv["exc"] = None, OSError("helper vanished")
+    open(os.path.join(_dg, "data", "cred_key"), "w").close()      # truncated to 0 bytes
     _d4, _d4s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""}, helper=True)
+    # The same card's Host credentials row calls an empty cred_key MISSING; this one said "present".
+    check("so/diagnostics: an EMPTY cred_key is not reported as a credential key present",
+          _d4["Encryption keys"][0] == "ok" and "created when the first" in _d4["Encryption keys"][1],
+          repr(_d4.get("Encryption keys")))
     with open(os.path.join(_dg, "data", "ssl", "cert.pem"), "wb") as f:
         f.write(b"-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n")
     _d5, _d5s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": ""})
@@ -2767,6 +2774,9 @@ def _p7_dr_unstub():
         setattr(SO, _n, _v)
     for _n in _cfg7_names:
         setattr(_p7_cfgmod, _n, _cfg7_saved[_n])
+    # helper_probe() caches what the stubbed _helper_probe_run answered for 300 s; a later part
+    # reading the probe would otherwise get this stand-in's verb table as the helper's.
+    SO._HELPER_PROBE.update(at=0.0, res=None)
 
 
 def _p7_report(journal_user="", journal_sys=_dr_log, journal_unit="", helper=True, euid=1000,
