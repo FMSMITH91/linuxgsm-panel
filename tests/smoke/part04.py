@@ -243,10 +243,10 @@ _orig_rc = _sm_core.run_command
 _scan_r13d = {"up": False}
 
 
-def _rc_scan_r13d(*_a, **_k):
+def _rc_scan_r13d(*_a, **_k):   # `ss` prints a wildcard listener as *:PORT
     if not _scan_r13d["up"]:
-        return ("0.0.0.0:22", "", 0)
-    return ("0.0.0.0:22\n" + "\n".join("0.0.0.0:%d" % (27100 + _g) for _g in range(5)), "", 0)
+        return ("*:22", "", 0)
+    return ("*:22\n" + "\n".join("*:%d" % (27100 + _g) for _g in range(5)), "", 0)
 
 
 _sm_core.run_command = _rc_scan_r13d
