@@ -254,3 +254,35 @@ check("socket hooks: two modules' register.<locals>.<lambda> hooks both run (a s
       "longer replaces the terminal's cleanup), while one re-registered from the same site replaces "
       "itself", sorted(_heard51) == ["other again", "terminal"], repr(_heard51))
 check("ban listeners: ...and the same for banlist.on_change", _bl51_n == 2, repr(_bl51_n))
+
+# ── A02 lead: a backup restore and a self-update exclude each other ─────────────────────────────
+from panel.ops import backup as _bk51  # noqa: E402
+
+_rx51 = []
+with _patched():
+    _patch(SO, "_update_in_progress", lambda: True)
+    _patch(_bk51, "_restore_backup_locked", lambda *a, **k: (_rx51.append(a), (True, "restored"))[1])
+    _rx51_r = _bk51.restore_backup("x.tar.gz")
+check("restore: refused while a self-update is in progress (its rollback could put the pre-update "
+      "database back over the restored one), and the restore lock is released",
+      _rx51_r[0] is False and "update is being installed" in _rx51_r[1] and _rx51 == []
+      and not _bk51._restore_lock.locked(), repr((_rx51_r, _rx51)))
+_rx51_dir = _tf51.mkdtemp(prefix="lgsm-p51-rx-")
+with open(os.path.join(_rx51_dir, "install.sh"), "w", encoding="utf-8") as _fh51:
+    _fh51.write("#!/bin/bash\n")
+_rx51_run = []
+with _patched():
+    _patch(SO, "PANEL_DIR", _rx51_dir)
+    _patch(SO, "_is_system_service", lambda: False)
+    _patch(SO, "_helper_present", lambda: False)
+    _patch(SO, "subprocess", NS(run=lambda *a, **k: (_rx51_run.append(a), NS(returncode=0, stderr=""))[1],
+                                DEVNULL=-3, PIPE=-1))
+    _bk51._restore_lock.acquire()
+    try:
+        _rx51_u = SO._launch_installer(target_ref="", branch="main")
+    finally:
+        _bk51._restore_lock.release()
+check("self-update: not launched while a backup restore holds the restore lock",
+      _rx51_u[0] is False and "restore is in progress" in _rx51_u[1] and _rx51_run == []
+      and not os.path.exists(os.path.join(_rx51_dir, "data", "self-update.sh")),
+      repr((_rx51_u, _rx51_run)))

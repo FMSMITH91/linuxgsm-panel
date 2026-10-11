@@ -1954,6 +1954,13 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         return False, "install.sh is missing, so the panel can't self-update safely."
     if branch and not _valid_branch(branch):
         return False, "Invalid branch name."
+    # Not while a backup restore is in flight: its detached swap and install.sh's snapshot and
+    # rollback both replace panel.db, and the rollback could put the pre-update copy back over the
+    # restored one. (backup.restore_backup refuses the other way round.)
+    from panel.ops import backup as _bk
+    if _bk._restore_lock.locked():
+        return False, ("A backup restore is in progress — update once it has finished and the "
+                       "panel has restarted.")
     # Write the wrapper + its log inside the panel's own data dir (owned by the service user,
     # not world-writable) rather than /tmp. This script is later executed as root via
     # `sudo systemd-run`, so a predictable /tmp path would let a local user pre-plant a
