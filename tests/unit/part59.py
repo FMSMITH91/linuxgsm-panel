@@ -501,8 +501,8 @@ _tdir59 = os.path.realpath(_tf59.mkdtemp(prefix="lgsm-unit-p59-i18n-"))
 try:
     with open(os.path.join(_tdir59, "a.js"), "w", encoding="utf-8") as _fh59:
         _fh59.write(
-            "confirmDialog({title: 'x', bodyText: 'Split over two literals for line length, '\n"
-            "  + 'and judged whole.', onConfirm: f});\n"
+            "toast('Split over two literals for line length, '\n"
+            "  + 'and judged whole.', 'info');\n"
             "confirmDialog({requireLabel: 'Type your code to confirm:', bodyText: 'Use the IP/DNS name.'});\n"
             "var body = on ? 'Close the thing?\\n\\nIt stays reachable from elsewhere.' : 'Plain other branch.';\n"
             "confirmDialog({bodyText: 'Firewall-block ' + ip + ' on every port of the host?'});\n"
