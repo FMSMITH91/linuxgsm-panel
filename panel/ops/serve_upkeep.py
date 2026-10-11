@@ -77,8 +77,11 @@ def _boot_shared_funnel(app, cfg, port, audit=None):
 
 
 def _r13a_kept_off(serve_config, port, use_funnel):
-    """The other apps' mounts when the boot kept the shared :443 listener's Funnel off against the
-    panel's own setting (on); [] otherwise. The mirror of ts.shared_funnel_apps."""
+    """Return the other apps' mounts when the boot kept the shared listener's Funnel off.
+
+    That is: off against the panel's own setting (on), on the node's :443 listener the panel
+    shares; [] otherwise. The mirror of ts.shared_funnel_apps.
+    """
     shared, others = ts._r12a_listener_funnel(serve_config, port)
     if shared or not use_funnel or not others:
         return []

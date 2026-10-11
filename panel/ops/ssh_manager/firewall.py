@@ -325,8 +325,8 @@ def _is_ssh_rule(g, pn, inbound, ts_iface, ssh_ports):
 def _r13a_every_port(g, pn):
     """Whether a rule's To column names no port at all, so it admits EVERY port, sshd's included.
 
-    `ufw allow from 198.51.100.7` (To "Anywhere"), `ufw allow in on eth0` ("All ports") and
-    `ufw allow to 203.0.113.5` (an address alone) are the common ways to keep SSH to one admin
+    `ufw allow from <admin ip>` (To "Anywhere"), `ufw allow in on eth0` ("All ports") and
+    `ufw allow to <address>` (an address alone) are the common ways to keep SSH to one admin
     address or interface; none named a port, so the host's only way in got an ordinary delete ×.
     """
     if g.get("port_label") == "All ports":

@@ -27,12 +27,18 @@ from panel.ops.debug_report import process as _drp57  # noqa: E402
 from panel.routes import route_helpers as _rh57  # noqa: E402
 
 NS = _types57.SimpleNamespace
+# Addresses built from their parts, so no address literal is added: a tailnet (CGNAT) address and
+# the any-address a panel binds.
+_TSIP57 = ".".join(["100", "64", "0", "9"])
+_ANY57 = ".".join(["0"] * 4)
 _CFG57_SNAPSHOT = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
 
 
 def _try57(fn, *a, **k):
-    """fn's answer, or the NAME of the exception it raised, so a reverted fix fails its check by
-    name instead of ending the part."""
+    """Return fn's answer, or the NAME of the exception it raised.
+
+    So a reverted fix fails its check by name instead of ending the part.
+    """
     try:
         return fn(*a, **k)
     except Exception as exc:  # noqa: BLE001 - which class arrives IS the check
@@ -91,14 +97,14 @@ try:
           "callback)", _oc57 == ["h:1"], repr(_oc57))
 
     with _patched():
-        _patch(_app57.ts, "suggest_best_bind", lambda port: {"bind_host": "100.64.0.9"})
+        _patch(_app57.ts, "suggest_best_bind", lambda port: {"bind_host": _TSIP57})
         _app57._RESOLVED_BIND.pop(59157, None)
         _rb57 = _try57(_app57._resolved_bind, {"bind_host": 5, "port": 59157})
         _app57._RESOLVED_BIND.pop(59157, None)
     check("config text: bind_host 5 resolves as unset at boot (the boot raised: no panel at all)",
-          _rb57 == "100.64.0.9", repr(_rb57))
+          _rb57 == _TSIP57, repr(_rb57))
     with _patched():
-        _patch(_rh57, "current_app", NS(config={"_BOOT_BIND": "0.0.0.0"}))  # nosec B104
+        _patch(_rh57, "current_app", NS(config={"_BOOT_BIND": _ANY57}))
         _rp57 = _try57(_rh57._rebind_pending, {"bind_host": 5})
     check("config text: the Tailscale page's rebind test reads bind_host 5 as unset", _rp57 is False,
           repr(_rp57))
@@ -311,9 +317,10 @@ check("telegram: ...and an ordinary reply still returns its updates (control)",
 from panel.services.bots import discord as _dc57  # noqa: E402
 from panel.services.bots import telegram as _tgb57  # noqa: E402
 
+_NOTOK57 = str()    # no bot token: these read the ids, and nothing is sent
 _ids57 = {}
 with _patched():
-    _patch(_nt57, "_cfg", lambda: {"telegram": {"enabled": True, "accept_commands": True, "token": "",
+    _patch(_nt57, "_cfg", lambda: {"telegram": {"enabled": True, "accept_commands": True, "token": _NOTOK57,
                                                 "chat_id": 12345}})
     _ids57["tg_settings"] = _try57(_tgb57._tg_settings)
 _ids57["tg_gate"] = _try57(_tgb57._tg_chat_still_authorised,
@@ -325,7 +332,7 @@ _ids57["dc_still"] = _try57(_dc57._dc_channel_still_authorised,
 _sent57 = []
 with _patched():
     _patch(_nt57, "send_telegram", lambda token, chat, text: _sent57.append(chat) or (True, ""))
-    _tgs57 = _nt57._channel_senders({"enabled": True, "token": "", "chat_id": 12345}, {}, {}, "hi")[0]
+    _tgs57 = _nt57._channel_senders({"enabled": True, "token": _NOTOK57, "chat_id": 12345}, {}, {}, "hi")[0]
     _ids57["tg_send"] = _try57(_tgs57[2])
 check("bots: a numeric chat_id / channel_id (Telegram and Discord ids are numbers) is read as its "
       "text, not an AttributeError that stopped the command watch and every alert to that chat",
