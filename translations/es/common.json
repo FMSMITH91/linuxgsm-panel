@@ -392,5 +392,21 @@
   "e.g. 123456789, 987654321": "p. ej. 123456789, 987654321",
   "Numeric Telegram user IDs, separated by commas. Only these users can run the commands that change something or reach a server — /start, /stop, /restart, /backup, /update, /console, /say and /players. Anyone in the chat can use /status, /servers, /hosts, /connect and /help. Left empty, nobody can run the others. The bot tells anyone it turns away what their ID is.": "IDs numéricos de usuario de Telegram, separados por comas. Solo estos usuarios pueden ejecutar los comandos que cambian algo o llegan a un servidor: /start, /stop, /restart, /backup, /update, /console, /say y /players. Cualquiera en el chat puede usar /status, /servers, /hosts, /connect y /help. Si se deja vacío, nadie puede ejecutar los demás. El bot le dice a quien rechaza cuál es su ID.",
   "Anonymous group admins all share one Telegram ID, so allowing that ID allows every anonymous admin of the group.": "Todos los administradores anónimos de un grupo comparten un mismo ID de Telegram, así que permitir ese ID permite a todos los administradores anónimos del grupo.",
-  "Numeric Discord user IDs, separated by commas (with Developer Mode on, right-click a user → Copy User ID). Only these users can run the commands that change something or reach a server — !start, !stop, !restart, !backup, !update, !console, !say and !players. Anyone who can post in the channel can use !status, !servers, !hosts, !connect and !help. Left empty, nobody can run the others.": "IDs numéricos de usuario de Discord, separados por comas (con el Modo desarrollador activado, clic derecho en un usuario → Copiar ID de usuario). Solo estos usuarios pueden ejecutar los comandos que cambian algo o llegan a un servidor: !start, !stop, !restart, !backup, !update, !console, !say y !players. Cualquiera que pueda escribir en el canal puede usar !status, !servers, !hosts, !connect y !help. Si se deja vacío, nadie puede ejecutar los demás."
+  "Numeric Discord user IDs, separated by commas (with Developer Mode on, right-click a user → Copy User ID). Only these users can run the commands that change something or reach a server — !start, !stop, !restart, !backup, !update, !console, !say and !players. Anyone who can post in the channel can use !status, !servers, !hosts, !connect and !help. Left empty, nobody can run the others.": "IDs numéricos de usuario de Discord, separados por comas (con el Modo desarrollador activado, clic derecho en un usuario → Copiar ID de usuario). Solo estos usuarios pueden ejecutar los comandos que cambian algo o llegan a un servidor: !start, !stop, !restart, !backup, !update, !console, !say y !players. Cualquiera que pueda escribir en el canal puede usar !status, !servers, !hosts, !connect y !help. Si se deja vacío, nadie puede ejecutar los demás.",
+  "Generate token": "Generar token",
+  "Regenerate token": "Regenerar token",
+  "Inactive": "Inactivo",
+  "On": "Activado",
+  "Target": "Objetivo",
+  "Announced": "Anunciado",
+  "Applying…": "Aplicando…",
+  "Deleted": "Eliminado",
+  "Detach": "Desvincular",
+  "Restore": "Restaurar",
+  "Retrying…": "Reintentando…",
+  "Sent": "Enviado",
+  "Uninstalled": "Desinstalado",
+  "Working…": "Trabajando…",
+  "Ask a superadmin to retry fetching it.": "Pide a un superadministrador que vuelva a intentar obtenerla.",
+  "No invite links yet. Create one with the Invite Link button above.": "Aún no hay enlaces de invitación. Crea uno con el botón Enlace de invitación de arriba."
 }

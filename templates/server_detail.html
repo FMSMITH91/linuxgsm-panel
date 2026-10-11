@@ -7,7 +7,7 @@
     <a href="{{ url_for('index') }}" class="text-secondary text-decoration-none small">
       <i class="bi bi-arrow-left"></i> Dashboard
     </a>
-    <h1 class="page-title mb-0 mt-1">{{ server.name }}</h1>
+    <h1 class="page-title mb-0 mt-1" data-no-i18n>{{ server.name }}</h1>
     <span class="text-secondary small">
       <i class="bi bi-hdd-network-fill"></i> {{ remote.display_name }}
       &middot; <span>Port</span> {{ server.port }}
@@ -502,7 +502,7 @@
         <table class="table table-borderless table-sm mb-0">
           <tr>
             <th scope="row" class="text-secondary fw-normal">Machine</th>
-            <td class="text-end">{{ remote.name }}{% if remote.is_local %} <span class="badge bg-secondary" style="font-size:.6rem;">this panel</span>{% endif %}</td>
+            <td class="text-end"><span data-no-i18n>{{ remote.name }}</span>{% if remote.is_local %} <span class="badge bg-secondary" style="font-size:.6rem;">this panel</span>{% endif %}</td>
           </tr>
           {# Only while there is nothing to connect to yet. Once resolved, the Connect row below is
              the same address plus the port — and it is the one you can click to copy. #}

@@ -9,9 +9,14 @@
    and selected. #}
 {% set orphan_game = cmd and cmd.scope_type == 'game'
                      and cmd.scope_value not in games|map(attribute='shortname')|list %}
+{# ...and the same for an engine the panel's list no longer names (_CUSTOM_CMD_ENGINES). #}
+{% set orphan_engine = cmd and cmd.scope_type == 'engine' and cmd.scope_value not in engines %}
 <select name="scope" class="form-select form-select-sm" id="{{ idp }}-scope">
   <option value="all|" {% if not cmd or cmd.scope_type == 'all' %}selected{% endif %}>All games</option>
   <optgroup label="By engine">
+    {% if orphan_engine %}
+    <option value="engine|{{ cmd.scope_value }}" selected data-no-i18n>{{ cmd.scope_value }}</option>
+    {% endif %}
     {% for ev, el in engines.items() %}
     <option value="engine|{{ ev }}"
             {% if cmd and cmd.scope_type == 'engine' and cmd.scope_value == ev %}selected{% endif %}>{{ el }}</option>
@@ -22,7 +27,7 @@
     <option value="game|{{ cmd.scope_value }}" selected data-no-i18n>{{ cmd.scope_value }}</option>
     {% endif %}
     {% for g in games %}
-    <option value="game|{{ g.shortname }}"
+    <option value="game|{{ g.shortname }}" data-no-i18n
             {% if cmd and cmd.scope_type == 'game' and cmd.scope_value == g.shortname %}selected{% endif %}>{{ g.name }}</option>
     {% endfor %}
   </optgroup>

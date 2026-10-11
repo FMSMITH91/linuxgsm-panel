@@ -891,7 +891,9 @@ var _primeOwed = false;
 function _primeAt(at, mark) {
   if (!Array.isArray(at) || at.length !== 3) { _rebuildRestore(mark); return; }
   _logAt = at;
-  if (_returnOwed) return;
+  // The return's catch-up reads on from this place — but one already asked was asked from the
+  // place the page had before this window replaced it (after Clear), and would append from there.
+  if (_returnOwed) { if (_resync) _startResync(_resync.prime); return; }
   if (socket.connected) _primeCatchUp();
   else _primeOwed = true;
 }
@@ -922,6 +924,16 @@ function _loadOlderRows(list) {
 // A deeper window of the same file is simply a superset of the tail, so showing it as-is is both
 // correct and what the button says. The only thing this can drop is a websocket line not yet
 // flushed to the log file, which the next poll brings back.
+// After Load older rebuilt the console: a catch-up still in flight was asked from the page's OLD
+// place, and its answer appends everything from there without matching — so every line between
+// that place and the rebuilt window's end showed twice. Ask it again from where the console now
+// ends (`at`), or by text when the window gave no place.
+function _r11c_resyncFrom(at) {
+  if (!_resync) return;
+  if (Array.isArray(at) && at.length === 3) _logAt = at;
+  _startResync(_resync.prime);
+}
+
 function loadMoreConsole(btn) {
   var orig = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
@@ -964,6 +976,7 @@ function loadMoreConsole(btn) {
       // way the first load does.
       _renderPanelLines(_loadOlderRows(data.panel_lines));
       _consoleSig = null;   // let the next poll re-evaluate against the new buffer
+      _r11c_resyncFrom(data.at);
       if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
     })
     .catch(function(){ if (window.toast) toast('Could not load more console output', 'danger'); })

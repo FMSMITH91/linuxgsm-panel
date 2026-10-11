@@ -445,7 +445,14 @@ function _submitAjaxForm(form){
 }
 // A form the server accepted: toast, reset, then refresh the section and run the after-hook -
 // once its modal has fully closed, when it sits in one.
+// `go`: the server's next page for a success (Add Remote's "existing server" goes on to its scan).
+// A path on this panel only — never another origin, nor a protocol-relative "//host".
+function _r11c_goPath(go){
+  return (typeof go === 'string' && /^\/(?![\/\\])/.test(go)) ? go : null;
+}
 function _ajaxFormSucceeded(form, res){
+  var go = _r11c_goPath(res.d.go);
+  if (go) { location.assign(go); return; }
   if (window.toast && res.d.message) toast(res.d.message, 'success');
   if (form.getAttribute('data-ajax-reset') !== 'off' && form.reset) form.reset();
   var sel = form.getAttribute('data-ajax-refresh');
@@ -462,10 +469,11 @@ function _ajaxFormSucceeded(form, res){
     // install form, deliberately, because the list it would refresh lives on another page —
     // quietly never ran it. A data- attribute that is silently ignored in one configuration
     // is a trap, not a feature.
-    // nosemgrep - the delegated dispatcher this UI is built on; `after` comes from a data-
-    // attribute in our own template and the typeof guard is the contract.
+    // Through _actionFn, as refreshSection's own after-hook is: called straight off window[after],
+    // this path ran a denied name (sessionExpired) or a native function, which the guard at the top
+    // of this file exists to refuse.
     if (sel) window.refreshSection(sel, after);
-    else if (after && typeof window[after] === 'function') { try { window[after](); } catch(e){} }  // nosemgrep
+    else if (after) { var afterFn = _actionFn(after); if (afterFn) { try { afterFn(); } catch(e){} } }
     if (cred && typeof window.showCredential === 'function'){
       try { window.showCredential(cred); } catch(e){}
     }

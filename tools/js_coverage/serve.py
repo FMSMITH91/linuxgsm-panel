@@ -149,15 +149,23 @@ class _Deny:
 
 
 def _stub_subprocess(fake_shell):
-    """Replace subprocess, in every panel module that imports it, with a refusal."""
+    """Replace subprocess, in every panel module that imports it, with a refusal.
+
+    The same modules nosudo_runner shims, and unit part53 holds this list to every panel module
+    that imports subprocess itself: the debug report's three readers were missing, so the walk's
+    "Generate debug report" ran `systemctl show` and `<sudo> --version` for real.
+    """
     import db_maintenance
     from panel.ops import backup
     from panel.ops import system_ops as so
     from panel.ops import tailscale_integration as ts
     from panel.ops import terminal_session as term
-    from panel.ops.ssh_manager import _core, cron, files
+    from panel.ops.debug_report import _src_systemd as dr_systemd, install as dr_install
+    from panel.ops.debug_report import network as dr_network
+    from panel.ops.ssh_manager import _core, cron, files, firewall, game, gmod, hosts, portscan
     deny = _Deny(fake_shell)
-    for mod in (so, ts, term, backup, db_maintenance, _core, cron, files):
+    for mod in (so, ts, term, backup, db_maintenance, dr_systemd, dr_install, dr_network,
+                _core, cron, files, firewall, game, gmod, hosts, portscan):
         if getattr(mod, "subprocess", None) is not None:
             mod.subprocess = deny
     if getattr(_core, "_real_subprocess", None) is not None:

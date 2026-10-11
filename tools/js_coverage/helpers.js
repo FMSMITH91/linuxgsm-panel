@@ -236,14 +236,17 @@
     // The panel's other dialogs are overlays of their own — who is online before a restart, a
     // ban's scope, a command's output, a full backup's players — and one left open covers the
     // page, so a drop meant for the page lands on it. Each closes on a click on its backdrop;
-    // accepting presses its first button that is not a way out.
+    // accepting presses its first button that is not a way out — and never one that reboots: a
+    // host's reboot dialog is one of these overlays ("Wait: reboot when everyone has left",
+    // "Reboot now…"), and pressing it put the panel into a host-reboot plan that every page after
+    // it was measured in (walk.py's SKIP_CONFIRMING relies on this).
     Array.prototype.slice.call(document.querySelectorAll('body > div')).forEach(function (ov) {
       if (ov.style.position !== 'fixed' || ov.style.inset !== '0px'
           || ov.querySelector('[data-cd]')) return;
       var go = accept && Array.prototype.filter.call(ov.querySelectorAll('button'), function (b) {
         var what = [b.id, b.getAttribute('data-scope'), b.hasAttribute('data-close') ? 'close' : '',
                     b.textContent].join(' ');
-        return !/cancel|close/i.test(what);
+        return !/cancel|close/i.test(what) && !/reboot/i.test(what);
       })[0];
       if (go) go.click();
       else ov.dispatchEvent(new MouseEvent('click', {bubbles: true}));

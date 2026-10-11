@@ -1411,15 +1411,16 @@ try:
           _gdl2.status_code == 502 and b"Couldn't read this server's backups" in _gdl2.data,
           "%s %r" % (_gdl2.status_code, _gdl2.data[:80]))
 
-    # ── per-server schedule: a junk field clears, an absent one is left alone ─────────────────
+    # ── per-server schedule: a junk field is refused (it used to clear the override, part53),
+    # an absent one is left alone ──────────────────────────────────────────────────────────────
     _pb7_sched = []
     _pb7.bk = _Over(_pb7_saved["bk"], set_game_schedule=lambda sid, iv, kp: (
         _pb7_sched.append((sid, iv, kp)), {"interval_days": 1, "keep": 2})[1])
-    _pb7_c.post("/api/panel/backup/game/11/schedule", data='{"interval": "weekly", "keep": Infinity}',
-                content_type="application/json")
+    _pb7_junk = _pb7_c.post("/api/panel/backup/game/11/schedule",
+                            data='{"interval": "weekly", "keep": Infinity}', content_type="application/json")
     _pb7_c.post("/api/panel/backup/game/11/schedule", json={"interval": "5"})
-    eq("panel_backup/schedule: junk (and JSON Infinity) clears a field; an absent field is UNCHANGED",
-       _pb7_sched, [(11, None, None), (11, 5, _pb7_saved["bk"].UNCHANGED)])
+    eq("panel_backup/schedule: junk (and JSON Infinity) is a 400 that writes nothing; an absent field is "
+       "UNCHANGED", (_pb7_junk.status_code, _pb7_sched), (400, [(11, 5, _pb7_saved["bk"].UNCHANGED)]))
 
     # ── the panel's own backups ──────────────────────────────────────────────────────────────
     _pb7.GameServer = _P7Boom()

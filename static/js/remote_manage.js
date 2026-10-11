@@ -495,7 +495,12 @@ function _pollOsUpdate(){
       _osuStale = d.running === true ? 0 : d.running === false ? (_osuStale+1) : _osuStale;
       if(!_osuStillRunning(d, spin, stEl)) return;
       _osuTimer=setTimeout(_pollOsUpdate, 1500);
-    }).catch(function(){ _osuTimer=setTimeout(_pollOsUpdate, 3000); });
+    }).catch(function(){
+      // A rejected fetch or a reply that is not JSON (the panel itself not answering) is an unread
+      // poll too: it polled every 3 s for the page's life, never counted towards the two minutes.
+      if(_osuLostContact(document.getElementById('osu-spin'), document.getElementById('osu-state'))) return;
+      _osuTimer=setTimeout(_pollOsUpdate, 3000);
+    });
 }
 // An unread status poll, for _pollOsUpdate: counted, and said so. True once 40 in a row - two
 // minutes of silence - have ended the watch.

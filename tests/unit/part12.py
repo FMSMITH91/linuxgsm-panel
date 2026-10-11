@@ -952,8 +952,9 @@ try:
           _d.get("success") is True and _hl_calls[-1:] and _hl_calls[-1][1] == ("dev",)
           and _p9_audit("panel_switch_branch").target == "dev", repr((_d, _hl_calls)))
 
-    # repair: `paths` is None (restore all) only when absent or not a list — [] restores nothing.
-    for _hl_body, _hl_want in (({"paths": "app.py"}, None), ({"paths": []}, []),
+    # repair: `paths` is None (restore all) only when absent — [] restores nothing, and a `paths`
+    # that is not a list is refused (part53), not widened to restore-all.
+    for _hl_body, _hl_want in (({}, None), ({"paths": []}, []),
                                ({"paths": ["app.py"]}, ["app.py"])):
         _hl_calls.clear()
         _p9_patch(_p9_so, "panel_repair", _hl_rec("panel_repair", (True, "restored", ["app.py"])))

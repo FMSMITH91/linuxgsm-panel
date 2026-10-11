@@ -252,8 +252,10 @@ def _register_panel_repair(app):
         """
         data = _json_body()
         paths = data.get("paths")
+        # A paths value that is not a list is refused, not read as "restore all": a malformed
+        # request for one file must not become the widest restore there is.
         if paths is not None and not isinstance(paths, list):
-            paths = None
+            return jsonify({"success": False, "message": "paths must be a list of files."}), 400
         try:
             # `paths`, not `paths or None`: an empty list is a request to restore NOTHING, and
             # collapsing it to None turned that into "restore every modified file". The UI sends

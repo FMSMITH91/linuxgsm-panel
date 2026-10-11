@@ -398,7 +398,12 @@ def _register_ssh_settings(app):
     def api_remote_ssh_mode(remote_id):
         """Set public SSH via UFW: allow / limit / off (tailnet-only)."""
         remote = get_host_remote(remote_id)
-        mode = _json_body().get("mode", "")
+        # Checked here, not only in remote_set_public_ssh: a non-string mode raised out of its
+        # .lower() as a 500, and any text the helper refused was still written into the audit
+        # row's target. Only a mode this route acts on is recorded.
+        mode = _json_str(_json_body(), "mode").lower()
+        if mode not in ("allow", "limit", "off"):
+            return jsonify({"success": False, "message": "Invalid mode"}), 400
         success, msg = remote_set_public_ssh(remote, mode)
         log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success,
                    remote=remote)

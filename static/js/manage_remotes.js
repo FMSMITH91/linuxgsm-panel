@@ -677,6 +677,16 @@ function removeRemote(btn){
 // After the remotes list is swapped in place (AJAX add / edit / test), re-arm the per-card
 // live-stats pollers and re-attach to any in-progress bootstrap on the fresh DOM nodes.
 // (loadLiveStats just fetches; watchBootstrap guards against a duplicate timer — both safe to re-run.)
+// After a successful Add the form is reset (panel.js), which puts the select back on "SSH Key" but
+// leaves what toggleCreds wrote: a password field, labelled Password, under "SSH Key" — the next
+// host's password went in as a key path — or, after a Tailscale add, no credential field at all.
+// `reset` fires BEFORE the values are restored, so the field is matched to the select a tick later.
+(function(){
+  var sel = document.getElementById('manage-remotes-auth_method');
+  if (!sel || !sel.form) return;
+  sel.form.addEventListener('reset', function(){ setTimeout(function(){ toggleCreds(sel); }, 0); });
+})();
+
 window.afterRemotesRefresh = function(){
   document.querySelectorAll('[id^="live-stats-"]').forEach(function(el){
     var id = el.id.replace('live-stats-', ''); if (id) loadLiveStats(id);

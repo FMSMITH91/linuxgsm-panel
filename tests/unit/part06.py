@@ -3702,7 +3702,7 @@ try:
         _shutil.rmtree(_stk_dir, ignore_errors=True)
     _banner = _su_between('SETUP_TOKEN="$(setup_link_token)"', "sudo linuxgsm-panel-recover setup-token")
     check("install.sh: every URL the banner prints carries the setup path",
-          _banner.count("${PORT}${SETUP_PATH}${NC}") == 4 and 'SETUP_PATH="/setup?token=${SETUP_TOKEN}"'
+          _banner.count("${PORT}${SETUP_PATH}${NC}") == 5 and 'SETUP_PATH="/setup?token=${SETUP_TOKEN}"'
           in _banner, _banner[:200])
 
     # ── uninstall.sh must not report work it did not do ──────────────────────────────────────

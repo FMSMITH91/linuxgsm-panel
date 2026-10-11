@@ -2409,7 +2409,10 @@ def _custom_cmd_form(cmd=None):
         return None, "The command template can't contain control characters or newlines."
     if scope_type not in ("all", "engine", "game"):
         scope_type = "all"
-    if scope_type == "engine" and scope_value not in _CUSTOM_CMD_ENGINES:
+    # An engine scope the list no longer names is kept the same way as a game below: the form offers
+    # the stored one, selected, so a save on an unrelated edit neither widens nor refuses it.
+    _kept_engine = (cmd is not None and cmd.scope_type == "engine" and scope_value == cmd.scope_value)
+    if scope_type == "engine" and not _kept_engine and scope_value not in _CUSTOM_CMD_ENGINES:
         return None, "Pick a valid engine for the engine scope."
     # A command already scoped to a game keeps it even when the current list lacks that game
     # (dropped or renamed upstream, or no list could be fetched): refusing it would make the
