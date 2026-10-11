@@ -80,6 +80,8 @@ jobs:
               'panel/ops/__init__.py'
               'panel/security/__init__.py'
               'panel/db/__init__.py'
+              'panel/__init__.py'
+              'panel/core/__init__.py'
               'tests/fuzz/**'
               '.github/workflows/fuzz.yml'
               'requirements.txt'
