@@ -17,8 +17,10 @@ import io as _io56
 import json as _json56
 import os
 import re as _re56
+import shutil as _shutil56
 import subprocess as _sp56  # nosec B404 - runs bash on install.sh's own block
 import sys as _sys56
+import tempfile as _tf56
 from types import SimpleNamespace as _NS56
 
 from unit.part01 import check, skip
@@ -122,12 +124,12 @@ try:
               for _p in (None, False, 0, [])]
     check("backup settings: a falsy passphrase that is not text (null, false, 0, []) is a 400, not "
           "\"turn encryption off\"", _bad56 == [400] * 4 and _pp56 == [], repr((_bad56, _pp56)))
-    _A56.post("/api/panel/backup/settings", json={"enabled": False, "passphrase": "short"})
+    _A56.post("/api/panel/backup/settings", json={"enabled": False, "passphrase": "short"})  # nosec B105 - a test value
     _A56.post("/api/panel/backup/settings", json={"enabled": "false"})
     check("backup settings: ...a refused request saves none of the other settings either (a short "
           "passphrase left enabled=false saved while the page said it failed), and enabled is a boolean",
           _set56 == [] and _pp56 == [], repr((_set56, _pp56)))
-    _A56.post("/api/panel/backup/settings", json={"enabled": True, "passphrase": ""})
+    _A56.post("/api/panel/backup/settings", json={"enabled": True, "passphrase": ""})  # nosec B105 - turns it off
     check("backup settings: ...while \"\" still turns encryption off on purpose (control)",
           _pp56 == [""] and len(_set56) == 2, repr((_pp56, _set56)))
 
@@ -244,6 +246,7 @@ _flows56, _drv56 = _sys56.modules["flows"], _sys56.modules["driver"]
 
 class _PhoneDrv56:
     """Every step answers nothing (so the fit check fails); a second goto has lost its session."""
+
     def __init__(self):
         self.gotos, self.cdp = [], _NS56(call=lambda *a, **k: None)
 
@@ -341,8 +344,10 @@ _ES56 = _catalog56("es")
 
 
 def _es_for56(*sources):
-    """The Spanish catalog cut to the keys `sources` contain: node takes the program as ONE argument,
-    and the whole catalog is past the kernel's limit for one."""
+    """Return the Spanish catalog cut to the keys `sources` contain.
+
+    Node takes the program as ONE argument, and the whole catalog is past the kernel's limit for one.
+    """
     text = "".join(sources)
     return {_k: _v for _k, _v in _ES56.items() if _k in text}
 
@@ -414,7 +419,7 @@ if _out56 is not None:
 # ── the i18n gate reads text built inside markup, and what is handed to t() ─────────────────────
 _sys56.path.insert(0, os.path.join(_root, "tools"))
 import i18n_scan as _i18n56  # noqa: E402
-_tdir56 = os.path.realpath(__import__("tempfile").mkdtemp(prefix="lgsm-unit-p56-i18n-"))
+_tdir56 = os.path.realpath(_tf56.mkdtemp(prefix="lgsm-unit-p56-i18n-"))
 try:
     with open(os.path.join(_tdir56, "a.js"), "w", encoding="utf-8") as _fh56:
         _fh56.write("el.innerHTML = '<thead><tr><th>Widgetry</th><th title=\"x\">Gadgets galore</th>"
@@ -425,7 +430,7 @@ try:
                     "x.title = t(action === 'halt' ? 'Halt server' : 'Resume server');\n")
     _js56 = set(_i18n56.scan_js(_tdir56))
 finally:
-    __import__("shutil").rmtree(_tdir56, ignore_errors=True)
+    _shutil56.rmtree(_tdir56, ignore_errors=True)
 check("i18n scan: an element's whole text inside an innerHTML-built literal is asked for (the players "
       "dialog and 117 more strings were invisible to the gate: a literal with `<` was dropped whole)",
       {"Widgetry", "Gadgets galore", "Scan went sideways."} <= _js56, repr(sorted(_js56)))

@@ -41,8 +41,10 @@ def _json_str(body, key, default=""):
 
 
 def _r12c_json_flag(body, key, default):
-    """A request field that must be a JSON boolean: the bool, `default` when the key is absent,
-    and None for anything else (the caller refuses it with a 400).
+    """Read a request field that must be a JSON boolean.
+
+    The bool, `default` when the key is absent, and None for anything else (the caller refuses it
+    with a 400).
 
     A flag read by truthiness takes the STRING "false" as yes: `{"enable_ssh": "false"}` ran
     `tailscale up --ssh`, opening a root-capable login path the caller asked not to open, and
