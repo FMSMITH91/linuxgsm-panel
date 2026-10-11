@@ -342,9 +342,8 @@ check("session: a signed-out page does not claim a session panel.js could 'expir
 # A STORED ntfy token, so the "not sent to the browser" check below has something to leak: with
 # none configured, `"TESTONLY" not in _nt_html` held whatever the template rendered. Both the
 # plaintext and the stored ciphertext are looked for; the config is put back byte for byte.
-from re import search as _nt_search
-import panel.core.config as _nt_config
-_nt_cf, _nt_enc = _nt_config.CONFIG_FILE, _nt_config.encrypt_secret
+import re as _nre
+from panel.core.config import CONFIG_FILE as _nt_cf, encrypt_secret as _nt_enc
 _nt_cfg_bytes = _nt_cf.read_bytes()
 _nt_cipher = _nt_enc("TESTONLYntfy123")
 try:
@@ -361,7 +360,7 @@ for _field in ("ntfy_enabled", "ntfy_topic", "ntfy_server", "ntfy_token"):
 check("notifications page: ntfy has a Send test button wired to the dispatcher",
       'data-args=\'["ntfy", "@self"]\'' in _nt_html)
 check("notifications page: (control) a stored ntfy token is shown as 'leave blank to keep'",
-      _nt_search(r'id="notifications-ntfy_token"[^>]*placeholder="[^"]*leave blank to keep',
+      _nre.search(r'id="notifications-ntfy_token"[^>]*placeholder="[^"]*leave blank to keep',
                     _nt_html) is not None)
 check("notifications page: the stored ntfy token is NOT sent to the browser",
       "TESTONLY" not in _nt_html and _nt_cipher not in _nt_html)
@@ -369,7 +368,6 @@ check("notifications page: the stored ntfy token is NOT sent to the browser",
 # ── Sidebar active-state must use request.endpoint, NOT request.path == url_for(...) — the
 #    latter breaks under a URL mount prefix (e.g. /lgsm), where url_for includes the prefix but
 #    request.path doesn't, so nothing highlights. Exactly the current page's link is active. ──
-import re as _nre
 
 
 def _active_navs(html):
@@ -2010,7 +2008,7 @@ import paramiko as _enr_paramiko
 import types as _enr_types
 from cryptography.fernet import Fernet as _EnrFernet
 from sqlalchemy import text as _enr_text
-from panel.core.config import encrypt_secret as _enr_encrypt
+_enr_encrypt = _nt_enc   # panel.core.config.encrypt_secret, imported above
 import panel.routes.route_helpers as _enr_rh
 
 
