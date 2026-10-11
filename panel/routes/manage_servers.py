@@ -1817,27 +1817,43 @@ def _install_gmod_content(job, remote):
         labels = ", ".join(GMOD_CONTENT_GAMES[g][0]
                            for g in content_games if g in GMOD_CONTENT_GAMES)
         _p(8, "Installing GMod content (%s)" % (labels or "content"))
+        # Content is host-wide (one content user, one ~/serverfiles), so this takes the same
+        # one-job-per-host claim every Content-card job takes. Without it a Content-tab uninstall
+        # on another GMod server could `rm` what this step is downloading, or an Apply start a
+        # second SteamCMD into the same directory. A busy host skips the step: it is best-effort.
+        from panel.routes.server_files import _claim_gmod_content_host, _release_gmod_content_host
+        if not _claim_gmod_content_host(remote.id):
+            _log.warning("gmod content for %s: another content job is running on %s, so the "
+                         "content step was skipped", short_name, remote.name)
+            return start_step
         try:
-            cu = ensure_content_user(remote)
-            if cu:
-                _ok_i, installed, _imsg = install_gmod_content(remote, cu["user"], content_games,
-                                                               on_progress=lambda m: _p(8, m))
-                # Mount only what is on disk, as the Content tab does (_split_on_disk): a game
-                # whose download failed (out of disk) would otherwise be written into mount.cfg
-                # pointing at a directory that is not there.
-                from panel.routes.server_files import _split_on_disk
-                _mountable, _missing = _split_on_disk(cu, installed, content_games)
-                if _missing:
-                    _log.warning("gmod content for %s: not installed, so not mounted: %s",
-                                 short_name, ", ".join(_missing))
-                ok_m, msg_m = gmod_mount_setup(remote, short_name, cu["user"], _mountable)
-                if not ok_m:
-                    _log.warning("gmod content mount for %s: %s", short_name, msg_m)
-            else:
-                _log.warning("gmod content: no content user could be prepared on %s", remote.name)
+            _r12b_gmod_content_step(remote, short_name, content_games, _p)
         except Exception:
             _log.warning("gmod content setup failed for %s", short_name, exc_info=True)
+        finally:
+            _release_gmod_content_host(remote.id)
     return start_step
+
+
+def _r12b_gmod_content_step(remote, short_name, content_games, _p):
+    """Step 8's body, the host claimed: fetch the picked content, then mount what is on disk."""
+    cu = ensure_content_user(remote)
+    if not cu:
+        _log.warning("gmod content: no content user could be prepared on %s", remote.name)
+        return
+    _ok_i, on_disk, _imsg = install_gmod_content(remote, cu["user"], content_games,
+                                                 on_progress=lambda m: _p(8, m))
+    # Mount only what is on disk, as the Content tab does (_split_on_disk): a game whose download
+    # failed (out of disk) would otherwise be written into mount.cfg pointing at a directory that
+    # is not there.
+    from panel.routes.server_files import _split_on_disk
+    _mountable, _missing = _split_on_disk(cu, on_disk, content_games)
+    if _missing:
+        _log.warning("gmod content for %s: not confirmed on disk, so not mounted: %s",
+                     short_name, ", ".join(_missing))
+    ok_m, msg_m = gmod_mount_setup(remote, short_name, cu["user"], _mountable)
+    if not ok_m:
+        _log.warning("gmod content mount for %s: %s", short_name, msg_m)
 
 
 def _start_and_verify(job, remote, gs, start_step):
