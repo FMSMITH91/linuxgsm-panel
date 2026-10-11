@@ -161,10 +161,22 @@ def _hub_leftovers():
 
 
 _hub_after = []
+_path_moved = []           # (part, what it added to / took off sys.path)
 for _part in _PARTS:
+    _path_before = list(sys.path)
     importlib.import_module("unit." + _part)
     _hub_after.append((_part, _hub_leftovers()))
+    # The entries, not their order: part01 puts the repository root (already on it) first, which
+    # gives no top-level name a new file to resolve to.
+    if set(sys.path) != set(_path_before):
+        _path_moved.append((_part, sorted(set(sys.path) ^ set(_path_before))))
 from unit.part01 import check, results, hub_leaks, hub_swept  # noqa: E402
+
+# A part that leaves a directory on sys.path (tools/, tools/js_coverage) hands every later import of
+# a top-level name in it — `run`, `walk`, `flows`, `serve` — that directory's file. part14, part53
+# and part56 each put it back and say so; this names any part, present or future, that does not.
+check("unit suite: no part leaves sys.path changed for the parts after it",
+      not _path_moved, "; ".join("%s: %s" % _pm for _pm in _path_moved))
 
 _hub_first_after = {}      # each leftover once, with the part it first outlived
 for _part, _left in _hub_after:

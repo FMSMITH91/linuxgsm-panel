@@ -163,6 +163,16 @@ try:
         from panel.ops.debug_report import network as _nw54
         from panel.ops.debug_report._base import Result as _Res54
         from panel.routes import route_helpers as _rh54
+        # part12 disarmed its transport tripwire when it ended; these GETs render on the PANEL
+        # host, where a route that reached one more host call would run a real local shell (as
+        # root on CI's root leg) with this part still green. Armed for them (undone with the rest
+        # of _patched), and closed with a check below. tailscale itself is the fake on PATH.
+        from unit.part12 import _P9_TRIPPED as _TRIPPED54, _p9_core as _core54, _p9_trip as _trip54
+        _trip54_start = len(_TRIPPED54)
+        _patch(_core54, "get_connection", _trip54("paramiko", exc=ConnectionError("part54 tripwire")))
+        for _tw54, _tn54w in ((_core54, "_run_via_ssh_cli"), (_core54, "_exec_local_shell"),
+                              (_core54, "_exec_local_argv"), (_so54, "_run"), (_so54, "_git")):
+            _patch(_tw54, _tn54w, _trip54(_tn54w))
         _snap54 = _CFGP54.read_bytes() if _CFGP54.exists() else None
         _pages54 = {}
         try:
@@ -192,6 +202,8 @@ try:
                 _CFGP54.write_bytes(_snap54)
             elif _CFGP54.exists():
                 _CFGP54.unlink()
+        check("part54: the /tailscale and /server-management renders reached no real transport",
+              len(_TRIPPED54) == _trip54_start, repr(_TRIPPED54[_trip54_start:][:6]))
         _sh54, _tn54 = _pages54["shared"], _pages54["tailnet"]
         check("tailscale page: on a shared funnelled :443 it says Funnel is on for the whole listener "
               "because of the app at /, and that the panel is reachable from the internet too",
