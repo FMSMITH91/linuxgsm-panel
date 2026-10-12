@@ -20,7 +20,7 @@ from panel.ops import ssh_manager as _sm
 from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIONS,
     RESTART_SERVER, SEND_COMMAND, VIEW_CONSOLE, _can_manage_files, _perm_for_action,
     allowed_custom_commands,
-    can_access_server, can_moderate_action, can_run_custom_command, get_game,
+    _r17c_row_id, can_access_server, can_moderate_action, can_run_custom_command, get_game,
     get_user_permissions, has_permission, log_action, server_access_required)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _mark_expected_offline)
 import concurrent.futures
@@ -297,8 +297,9 @@ def _bulk_server_ids(raw_ids):
     ids = []
     for sid in raw_ids[:100]:   # cap the batch — bounds the SSH fan-out per request
         # _json_int, not int(): `[Infinity]` raised OverflowError past `except (TypeError,
-        # ValueError)` (a 500), and 3.7 was quietly server 3.
-        n = _json_int(sid)
+        # ValueError)` (a 500), and 3.7 was quietly server 3. _r17c_row_id: an id past SQLite's
+        # range raised OverflowError at the lookup below; it is no server, so it is dropped.
+        n = _r17c_row_id(_json_int(sid))
         if n is not None:
             ids.append(n)
     return ids

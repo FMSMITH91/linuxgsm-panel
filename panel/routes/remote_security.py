@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
-from panel.core.config import (_r13a_cfg_text, load_config, save_config)
+from panel.core.config import (_r13a_cfg_text, _r15a_cfg_int, load_config, save_config)
 from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top_ips,
@@ -245,7 +245,9 @@ def _register_panel_binding(app):
         """
         data = _json_body()
         cfg = load_config()
-        cur_port = int(cfg.get("port", 5000))
+        # _r15a_cfg_int: a hand-edited `port` that is not a number ("5000x", Infinity) made this
+        # form answer a bare 500, the same hand-edit class as bind_host below.
+        cur_port = _r15a_cfg_int(cfg.get("port", 5000), 5000)
         # nosec B104 - not a bind: the stored value, defaulted for a config written
         # before bind_host existed. The operator chooses it; this only reads it back. A non-string
         # (a hand edit) reads as unset, as the boot reads it (_r13a_cfg_text): .strip() on it made

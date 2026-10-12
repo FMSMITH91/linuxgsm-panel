@@ -7,7 +7,7 @@ from flask_login import (current_user, login_required, login_user, logout_user)
 from panel.core.config import (update_config)
 from panel.db.models import (db)
 from panel.db.prefs import (_clean_panel_map)
-from panel.security.auth import (_can_edit_tags, get_game, get_user_servers,
+from panel.security.auth import (_can_edit_tags, _r17c_row_id, get_game, get_user_servers,
     hash_password, log_action, server_access_required, verify_totp_step)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag)
 from panel.core.validation import (_valid_hex_color, password_problem)
@@ -33,7 +33,8 @@ def _int_ids(raw):
     so `{"tag_ids": [Infinity]}` was a 500 (and _clean_ids' layout save swallowed the same raise
     into "save layout failed").
     """
-    return [n for n in (_json_int(ident) for ident in raw[:100]) if n is not None]
+    # _r17c_row_id: an id past SQLite's range raised OverflowError in _existing_tags' IN query.
+    return [n for n in (_r17c_row_id(_json_int(ident)) for ident in raw[:100]) if n is not None]
 
 
 def _clean_ids(raw, allowed):

@@ -101,10 +101,11 @@ from panel.core import i18n
 from flask_login import (current_user)
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException
+from werkzeug.routing import IntegerConverter
 
-from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, authorize_after_body,
-    audit_username, client_ip, configure_proxy_trust, get_user_permissions, init_auth, log_action,
-    strip_legacy_superadmin_grants)
+from panel.security.auth import (ALL_PERMISSIONS, R17C_MAX_ROW_ID, accessible_remote_ids,
+    authorize_after_body, audit_username, client_ip, configure_proxy_trust, get_user_permissions,
+    init_auth, log_action, strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     encrypt_secret, is_encrypted, harden_data_permissions, read_setup_token, remove_setup_token,
@@ -1522,6 +1523,20 @@ def _r16a_prune_audit(cfg):
     return deleted
 
 
+class _R17cRowIdConverter(IntegerConverter):
+    """`<int:…>` bounded to the ids SQLite can bind.
+
+    Werkzeug's int converter takes any length of digits, and every such route hands the number to a
+    lookup: `/remote/99999999999999999999/manage` reached get_or_404, whose bind raised OverflowError
+    — a bare 500 with a traceback. Past the bound the URL matches no route, a 404 like any other id
+    with no row. A route that states its own `max` keeps it.
+    """
+
+    def __init__(self, url_map, *args, **kwargs):
+        kwargs.setdefault("max", R17C_MAX_ROW_ID)
+        super().__init__(url_map, *args, **kwargs)
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
@@ -2780,6 +2795,8 @@ def _make_supervisor(app):
 
 
 def register_routes(app):
+    # Before any route is added: a rule's converter is built when the rule is.
+    app.url_map.converters["int"] = _R17cRowIdConverter
     # Lazy, like every other panel.routes import here: those modules do
     # `from app import ...` at their top, so they can only be imported once
     # this module's own body has finished.

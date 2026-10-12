@@ -16,8 +16,8 @@ from panel.ops.ssh_manager import (_remote_listening_ports, get_server_status)
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
-from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, _perm_for_action, get_game,
-    get_remote, get_user_servers, has_permission, permission_required, server_access_required)
+from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, _perm_for_action, _r17c_row_id,
+    get_game, get_remote, get_user_servers, has_permission, permission_required, server_access_required)
 
 # The only actions the command palette will offer. Deliberately the three you do without thinking
 # — a search box is the wrong place to reach uninstall or a branch switch, both of which have a
@@ -147,7 +147,9 @@ def _register_palette(app):
         game = re.sub(r"[^a-z0-9]", "", (request.args.get("game") or "").lower())[:40]
         # get_remote(), not a bare lookup: this scans listening ports on the host, so it must be
         # a host the caller may see (see get_remote's "every remote-scoped route" contract).
-        remote = get_remote(remote_id) if remote_id else None
+        # _r17c_row_id: an id past SQLite's range is "no suggestion", like any other bad id, not
+        # get_remote's 404 (int() reads any length of digits).
+        remote = get_remote(remote_id) if _r17c_row_id(remote_id) else None
         if not remote or not game or not (1 <= desired <= 65535):
             return jsonify({"port": None})
         try:
