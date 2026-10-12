@@ -64,11 +64,11 @@ def _console_send_failure(rc, err):
     _log_and_generic), surfaced the way _run_action surfaces a LinuxGSM failure line.
     """
     if rc == 3:
-        return "That server isn't running, so there's no console session to send to."
+        return i18n.tr("That server isn't running, so there's no console session to send to.")
     lines = [ln.strip() for ln in (err or "").splitlines() if ln.strip()]
     if lines:
         return i18n.tr("The panel could not run that on the host: {why}", why=lines[-1][:200])
-    return "The panel could not run that on the host, and it gave no reason."
+    return i18n.tr("The panel could not run that on the host, and it gave no reason.")
 
 
 def _fire_on_done(on_done, ok, detail, action, server_id):
@@ -110,14 +110,15 @@ def _noop_power_refusal(gs, remote, action):
     costs nothing), and the host decides whether to REFUSE. A stale "online" must never be
     what stops someone starting a server that has actually died. 'restart' is never guarded —
     it is correct from either state, and so is the way out if this ever refuses wrongly.
-    The message deliberately doesn't repeat the server's name: the two callers that show it
-    (both chat bots) already prefix every reply with it, and the background branch
-    doesn't name it either.
+    The message deliberately doesn't repeat the server's name: the chat bots prefix every reply
+    with it, and the background branch doesn't name it either. It is a whole Sentence, though:
+    the web page shows it too (_r15e_said translates it), and the lower-case fragment it was,
+    worded to follow the bots' prefix, matched no catalog key and read as English to every viewer.
     """
     if action == "start" and gs.status == "online" and _live_run_state(gs, remote):
-        return "already running. Use 'restart' if you want it bounced."
+        return i18n.Sentence("That server is already running. Use 'restart' if you want it bounced.")
     if action == "stop" and gs.status == "offline" and _live_run_state(gs, remote) is False:
-        return "already stopped."
+        return i18n.Sentence("That server is already stopped.")
     return None
 
 

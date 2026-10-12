@@ -86,6 +86,14 @@ def _strip_q3_colors(s):
     return re.sub(r"\^[0-9]", "", s or "")
 
 
+_R17B_GAMEDIG_COLOR_RE = re.compile(r"\^(X.{6}|.)")
+
+
+def _r17b_wide_strip(s):
+    """A name as gamedig's quake3 protocol shows it: `^` and the character after it removed."""
+    return _R17B_GAMEDIG_COLOR_RE.sub("", s or "").strip()
+
+
 def _int_or_none(s):
     try:
         return int(str(s).strip())
@@ -877,10 +885,23 @@ def _resolve_from_console(server, user, game_type, name, selfname):
     want = _strip_q3_colors(name or "").strip()
     if not want:
         return None
-    for p in (console_player_list(server, user, game_type, selfname=selfname) or []):
+    listed = console_player_list(server, user, game_type, selfname=selfname) or []
+    for p in listed:
         if _strip_q3_colors(p.get("name") or "").strip() == want:
             return p
-    return None
+    # The name on screen came from gamedig, which strips `^` and ANY character after it (its
+    # quake3 protocol: /\^(X.{6}|.)/), as id's Quake III 1.32 and JK2MV's 1.02 colour mode read a
+    # colour code. The console keeps "^aBob" while gamedig shows "Bob", so a Kick on that row found
+    # no one. Matched the wider way only when exactly one player does: two names that differ only
+    # in such codes are one row on screen, and kicking the first of them could be the wrong player.
+    return _r17b_wide_match(listed, name)
+
+
+def _r17b_wide_match(listed, name):
+    """The one listed player whose name matches `name` with gamedig's stripping, or None."""
+    key = _r17b_wide_strip(name)
+    wide = [p for p in listed if key and _r17b_wide_strip(p.get("name")) == key]
+    return wide[0] if len(wide) == 1 else None
 
 
 _MOD_IDENT_KEYS = ("steamid", "num")
@@ -1041,12 +1062,33 @@ def _r16b_send_moderation(server, user, cmd, selfname, game_type, action):
 # (_R15B_IDT3_BAN). iortcw's `banaddr <clientnum>` (MP/code/server/sv_ccmds.c SV_AddBanToList)
 # refuses a bot or a local client and a full ban list, while the `kicknum` after it still drops the
 # player: the panel answered "Done." and wrote a success row for a kick that was no ban, and the
-# player could rejoin. Its other errors (an empty slot) are the kick's too, and "supersedes" means
-# a broader ban already covers the address.
+# player could rejoin. Its other errors (an empty slot) are the kick's too.
+#
+# "supersedes" is two cases. "Error: Ban <net> supersedes ban <ip>" is a broader BAN already
+# covering the address: the player stays banned, so that is not a refusal. "Error: Exception <net>
+# supersedes ban <ip>" is an `exceptaddr` range that covers the player: the ban was NOT added,
+# and it never will be while the exception stands (review 1012b) — that has its own answer.
+#
+# Each is a LINE PREFIX, matched at the start of a console line: the engine's `Error: ` begins the
+# line, while a player who types the words in chat is echoed as `say: <name>: …`, so chat cannot
+# turn a ban that landed into a reported refusal.
 _R16B_BAN_REFUSED = {
-    "rtcw": ("Can ban players connected via the internet only",
-             "Maximum number of bans/exceptions exceeded"),
+    "rtcw": ("Error: Can ban players connected via the internet only",
+             "Error: Maximum number of bans/exceptions exceeded",
+             "Error: Exception "),
 }
+# The refusal (above) whose answer is the exception's, not the bot/full-list one.
+_R17B_BAN_EXCEPTED = "Error: Exception "
+
+
+def _r17b_ban_refusal(out, game_type):
+    """The refusal prefix the ban's reply starts a line with, or None when it starts none."""
+    for ln in (out or "").splitlines():
+        ln = ln.strip()
+        for w in _R16B_BAN_REFUSED[game_type.lower()]:
+            if ln.startswith(w):
+                return w
+    return None
 
 
 def _r16b_ban_checked(server, user, cmd, selfname, game_type):
@@ -1065,7 +1107,13 @@ def _r16b_ban_checked(server, user, cmd, selfname, game_type):
                                          since=tuple(int(g) for g in mark.groups()))
         except Exception:  # noqa: BLE001 - an unread reply is the old answer, not a failure
             out, rc = "", 1
-        if rc == 0 and any(w in (out or "") for w in _R16B_BAN_REFUSED[game_type.lower()]):
+        refused = _r17b_ban_refusal(out, game_type) if rc == 0 else None
+        if refused == _R17B_BAN_EXCEPTED:
+            return False, i18n.Sentence(
+                "The player was kicked but not banned: an address exception on this server "
+                "(exceptaddr) covers their address, so the server refused the ban. Remove the "
+                "exception to ban them.")
+        if refused:
             return False, i18n.Sentence(
                 "The player was kicked but not banned: this server bans only players connected "
                 "over the internet (not a bot or a local client), and its ban list must not be full.")

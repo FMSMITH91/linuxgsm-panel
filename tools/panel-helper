@@ -4803,7 +4803,7 @@ def do_restart_flags(args, content):
     Walking as root is the one part that needed root. Nothing here is built from an argument --
     the verb takes none.
 
-    The flag ENTRY is the answer, so it is looked at without following it (lexists). The home is
+    The flag ENTRY is the answer, so it is looked at without following it (lstat). The home is
     the account's own, so `ln -s /root/.ssh/id_ed25519 ~/.restart-pending` made exists() -- a stat
     by root, through the link -- answer whether a path the panel user cannot see exists: the
     existence oracle _probe_as was written to close. It also disagreed with the remote form,
@@ -4814,17 +4814,26 @@ def do_restart_flags(args, content):
     except OSError as exc:
         sys.stderr.write("cannot list /home: %s\n" % exc)
         return 1
+    unread = 0
     for name in homes:
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
             continue
+        # os.lstat, not os.path.lexists: lexists answers False for ANY OSError, so a home root
+        # cannot search (NFS root_squash, FUSE without allow_root) read as "no flag" with exit 0,
+        # and this handler never ran. Absent is FileNotFoundError / NotADirectoryError (a file in
+        # /home); anything else is a read that failed.
         try:
-            if os.path.lexists(os.path.join(HOME_ROOT, name, ".restart-pending")):
-                print(name)
-        except OSError:
+            os.lstat(os.path.join(HOME_ROOT, name, ".restart-pending"))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError as exc:
             # One unreadable home must not lose the others. The caller distinguishes "none
             # pending" from "could not look" by this verb's EXIT CODE, not by empty output.
+            sys.stderr.write("cannot look in %s: %s\n" % (name, exc.strerror or exc))
+            unread += 1
             continue
-    return 0
+        print(name)
+    return 1 if unread else 0
 
 
 def do_lgsm_command(args, content):

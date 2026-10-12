@@ -1983,8 +1983,8 @@ def _privileged_write_msg(user, why, reading=False):
     if reading:
         return i18n.Sentence(
             "Refused: the '{user}' account on this host can become root ({why}), so the panel does not "
-            "browse, open or download its files — they include that login's SSH keys and shell "
-            "history. It still reads the game's own LinuxGSM settings at their fixed paths. This "
+            "browse, open or download its files or list its scheduled tasks — its files include that "
+            "login's SSH keys and shell history. It still reads the game's own LinuxGSM settings at their fixed paths. This "
             "server was imported before the panel refused such accounts; remove it from the panel "
             "and run the game under a plain account.", user=user, why=why)
     return i18n.Sentence(

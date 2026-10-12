@@ -111,7 +111,7 @@ def _publish_gmod_job(server_id, remote_id, state, born=_NO_BIRTH):
     if taken_by_another(GameServer, server_id, born):
         return
     _gmod_content_apply_state[server_id] = state or {
-        "status": "error", "msg": "The host is no longer registered with the panel.",
+        "status": "error", "msg": i18n.Sentence("The host is no longer registered with the panel."),
         "ts": time.time()}
 
 
@@ -162,11 +162,14 @@ def _gmod_removal_result(asked, removed):
     if not _unconfirmed:
         # "(none)" belongs to THIS branch only: nothing was asked of the host, or everything asked
         # came back confirmed. It is the one case where "nothing was removed" is a reading.
-        return "done", "Removed from host: " + (", ".join(_done) or "(none)")
-    _tail = ("Couldn't confirm the removal of " + ", ".join(_unconfirmed)
-             + " — the host stopped answering, so that content may still be on disk. Check the "
-               "host is reachable, then run the removal again.")
-    return "error", (("Removed from host: " + ", ".join(_done) + ". " + _tail) if _done else _tail)
+        return "done", (i18n.Sentence("Removed from host: {games}", games=", ".join(_done)) if _done
+                        else i18n.Sentence("Removed from host: (none)"))
+    # Whole Sentences (the card shows them in the viewer's language): the English is unchanged.
+    _tail = i18n.Sentence("Couldn't confirm the removal of {games} — the host stopped answering, so "
+                          "that content may still be on disk. Check the host is reachable, then run "
+                          "the removal again.", games=", ".join(_unconfirmed))
+    return "error", (i18n.Sentences(i18n.Sentence("Removed from host: {games}.", games=", ".join(_done)),
+                                    _tail) if _done else _tail)
 
 
 # server_id -> {socket session id: the user id that joined on it}.
@@ -1147,7 +1150,8 @@ def _apply_gmod_selection(remote, gmod_user, games):
         return {"status": "done" if ok else "error", "msg": msg, "ts": time.time()}
     cu = ensure_content_user(remote)
     if not cu:
-        return {"status": "error", "msg": "No content storage could be prepared on the host.",
+        return {"status": "error",
+                "msg": i18n.Sentence("No content storage could be prepared on the host."),
                 "ts": time.time()}
     return _install_and_mount(remote, gmod_user, cu, games)
 
@@ -1181,8 +1185,9 @@ def _install_and_mount(remote, gmod_user, cu, games):
         _labels = ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing)
         return {
             "status": "error",
-            "msg": ("Not confirmed on the host, so not mounted: %s. Check free disk on "
-                    "the host, then try again. %s" % (_labels, msg or "")).strip(),
+            "msg": i18n.Sentences(i18n.Sentence("Not confirmed on the host, so not mounted: {games}. "
+                                                "Check free disk on the host, then try again.",
+                                                games=_labels), msg or ""),
             "ts": time.time()}
     return {"status": "done" if ok else "error", "msg": msg, "ts": time.time()}
 
@@ -1233,7 +1238,8 @@ def _bg_gmod_content_apply(app, server_id, remote_id, gmod_user, games, born=_NO
             except Exception:
                 _log.warning("gmod content apply failed for %s", gmod_user, exc_info=True)
                 _result[0] = {
-                    "status": "error", "msg": "Content setup failed — check the server logs.",
+                    "status": "error",
+                    "msg": i18n.Sentence("Content setup failed — check the server logs."),
                     "ts": time.time()}
             finally:
                 _publish_gmod_job(server_id, remote_id, _result[0], born)
@@ -1261,7 +1267,8 @@ def _bg_gmod_content_uninstall(app, server_id, remote_id, gmod_user, games, born
             except Exception:
                 _log.warning("gmod content uninstall failed for %s", gmod_user, exc_info=True)
                 _result[0] = {
-                    "status": "error", "msg": "Uninstall failed — check the server logs.",
+                    "status": "error",
+                    "msg": i18n.Sentence("Uninstall failed — check the server logs."),
                     "ts": time.time()}
             finally:
                 _publish_gmod_job(server_id, remote_id, _result[0], born)
@@ -1311,7 +1318,9 @@ def _gmod_content_status(remote, gs, server_id):
                         # Apply built on ticks it could not read.
                         "mounts_readable": _mounts is not None,
                         "disk_free": disk_free, "disk_total": disk_total,
-                        "job": st})
+                        # The message in the viewer's language: every worker stores a Sentence
+                        # (English as a str, for the logs), and the card shows a finished job's.
+                        "job": dict(st, msg=i18n.tr(st.get("msg") or "")) if st else st})
     except Exception:
         return jsonify({"error": _log_and_generic("gmod content status failed"), "games": []}), 200
 

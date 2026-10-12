@@ -2032,9 +2032,11 @@ function loadGmodContent(){
         + '<div class="d-flex flex-column gap-1 mb-2">' + rows + '</div>'
         + (running
             ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Working… (install/removal can take a while) '+_esc((d.job&&d.job.msg)||'')+'</div>'
-            : '<button class="btn btn-sm btn-primary" type="button" id="gmc-apply"><i class="bi bi-save"></i> Apply mounts</button>'
+            : '<div id="gmc-outcome-slot"></div>'
+              + '<button class="btn btn-sm btn-primary" type="button" id="gmc-apply"><i class="bi bi-save"></i> Apply mounts</button>'
               + ' <span class="text-secondary small ms-1">Restart the server afterwards to load changes.</span>');
       // Attach handlers programmatically — the strict CSP (no unsafe-inline) blocks inline onclick=.
+      _gmcOutcome(el.querySelector('#gmc-outcome-slot'), d.job);
       var _ap = el.querySelector('#gmc-apply');
       if(_ap) _ap.onclick = function(){ applyGmodContent(_ap); };
       el.querySelectorAll('[data-gmc-uninstall]').forEach(function(b){
@@ -2043,6 +2045,23 @@ function loadGmodContent(){
       if(running) setTimeout(loadGmodContent, 5000);
     })
     .catch(function(){ el.innerHTML = '<span class="text-danger">Could not load content status.</span>'; });
+}
+
+// A FINISHED content job's outcome, kept by the server for 15 minutes so the card can say it
+// (already in the viewer's language): red for an error, green for done. Only the running branch
+// read job.msg, so a failed install ended in silence and the operator restarted into ERROR textures.
+// Built as nodes, the message a text node: it can quote host output, and is never markup.
+function _gmcOutcome(slot, job){
+  if(!slot) return;
+  if(!job || !job.msg){ slot.remove(); return; }
+  var bad = job.status === 'error';
+  slot.id = 'gmc-outcome';
+  slot.className = 'small mb-2 text-break ' + (bad ? 'text-danger' : 'text-success');
+  slot.setAttribute('role', 'status');
+  var icon = document.createElement('i');
+  icon.className = 'bi bi-' + (bad ? 'exclamation-triangle' : 'check-circle');
+  slot.appendChild(icon);
+  slot.appendChild(document.createTextNode(' ' + job.msg));
 }
 
 function _gmcPost(bodyObj, okMsg){

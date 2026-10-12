@@ -248,8 +248,11 @@ def _proxy_users_existing(value):
     entries = list(_DEFAULT_PROXY_USERS if value is None else
                    ([value] if isinstance(value, (str, int)) else value))
     local = {parts[0] for parts in privacy._etc_rows(privacy.ETC_PASSWD) if parts}
-    found = sum(1 for entry in entries if isinstance(entry, int) or str(entry).strip().isdecimal()
-                or str(entry).strip() in local)
+    # A JSON true/false is an int to Python, but auth._trusted_proxy_uids skips it (it names no
+    # account), so it is no account that exists: it stays in the total, and the shortfall shows.
+    found = sum(1 for entry in entries if not isinstance(entry, bool)
+                and (isinstance(entry, int) or str(entry).strip().isdecimal()
+                     or str(entry).strip() in local))
     return found, len(entries)
 
 

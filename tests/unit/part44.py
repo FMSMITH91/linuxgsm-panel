@@ -201,19 +201,28 @@ check("privacy: a tag or group named after a word of the report's own (public, p
 
 
 # ── journal: the unprivileged plain read is a forward window ────────────────────────────────────
+def _plain44(argv):
+    """Whether `argv` is the plain read: its two field matches LAST, after every option.
+
+    Review 1012b moved them there; before the options, POSIXLY_CORRECT reads the options as matches.
+    """
+    return (len(argv) > 2 and argv[-2].startswith("_SYSTEMD_USER_UNIT=")
+            and argv[-1].startswith("_UID=") and argv[1].startswith("-"))
+
+
 def _journal_plain44(n_lines):
     calls = []
 
     def _run(argv, timeout=5, cap=None):
         calls.append(list(argv))
-        if len(argv) > 1 and argv[1].startswith("_SYSTEMD_USER_UNIT="):
+        if _plain44(argv):
             return "".join("Oct 08 10:00:0%d h p[1]: line %d\n" % (i, i) for i in range(n_lines)), "", 0
         return "", "", 0
     with _patched():
         _patch(SO, "_debug_run", _run)
         _patch(_sj44, "_privileged_allowed", lambda so: False)
         got = _sj44.read(3, timeout=5)
-    plain = [a for a in calls if len(a) > 1 and a[1].startswith("_SYSTEMD_USER_UNIT=")]
+    plain = [a for a in calls if _plain44(a)]
     return got, plain
 
 

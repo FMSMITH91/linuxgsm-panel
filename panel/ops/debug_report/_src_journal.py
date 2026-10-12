@@ -225,7 +225,8 @@ def read(max_lines=5000, timeout=10):
     else:
         got = _first_lines(
             [(True, jctl([], user_unit_matches(uid), "panel-own")),
-             (False, jctl(["_SYSTEMD_USER_UNIT=%s" % _SERVICE, "_UID=%d" % uid],
+             # The field matches as `matches`, after the options, as the comment on jctl says.
+             (False, jctl([], ["_SYSTEMD_USER_UNIT=%s" % _SERVICE, "_UID=%d" % uid],
                           since=_PLAIN_FIELD_SINCE), True)], int(n))
         if got[0]:
             return _found("user-unit", got, jctl([], user_unit_sudo_matches(uid), "panel-sudo"))
