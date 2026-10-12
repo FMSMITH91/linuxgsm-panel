@@ -637,9 +637,11 @@ def _r14a_set_reason(g, which, **params):
 
 
 def r14a_reason_text(g, translate=None):
-    """`g`'s protect_reason in the viewer's language: `translate` (the template's `t`) applied to
-    its template, then its values. The English text when there is no template, or when a
-    translation's placeholders do not match its values."""
+    """`g`'s protect_reason in the viewer's language.
+
+    `translate` (the template's `t`) is applied to its template, then its values go in. The English
+    text when there is no template, or when a translation's placeholders do not match its values.
+    """
     key = g.get("protect_reason_key")
     if not key or translate is None:
         return g.get("protect_reason", "")
@@ -663,14 +665,20 @@ def _r14a_ssh_reason(g):
     return "ssh_ports" if ("," in ports or ":" in ports) else "ssh_port"
 
 
+def _r14a_protect_panel(g, panel_port):
+    """Protect the rule holding the panel's public port open: with no Tailscale route, the only way in.
+
+    A list or range that holds it open says it opens other ports too.
+    """
+    g["protected"] = True
+    _r14a_set_reason(g, "panel_only" if _r14a_panel_port_scope(g, panel_port) == "only"
+                     else "panel_shared", port=panel_port, ports=_r14a_ports_word(g))
+
+
 def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_ok):
     """Set protected / warn / protect_reason on one group of an ENABLED firewall."""
     if g["is_panel"]:
-        # No Tailscale route, so this public port is the only way into the panel. A list or range
-        # that holds it open says it opens other ports too.
-        g["protected"] = True
-        _r14a_set_reason(g, "panel_only" if _r14a_panel_port_scope(g, panel_port) == "only"
-                         else "panel_shared", port=panel_port, ports=_r14a_ports_word(g))
+        _r14a_protect_panel(g, panel_port)
         return
     if not g["is_access"]:
         return
