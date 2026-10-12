@@ -131,39 +131,6 @@ finally:
     _app_mod._remote_listening_ports, _app_mod.GameServer = _o_rlp, _o_gsq
     _app_mod.lgsm_get_values, _app_mod.sm_game_engine = _o_lgv, _o_eng
 
-# ── _find_game_backup: list_game_backups says None for "could not read the host" ────────────────
-# It returns [] for "this server has no backups", and None for a host it never reached — a
-# distinction PR #330 put there deliberately. Iterating the None raised TypeError, which on the
-# download route (a plain navigation, so the JSON handler re-raises) was Werkzeug's HTML 500 page.
-# Collapsing it into the callers' falsy check would be worse: both answer "Backup not found." and
-# a 404, telling the operator their archive is gone when the panel simply could not ask.
-from werkzeug.exceptions import HTTPException as _FGB_HE                           # noqa: E402
-_o_lgb = _app_mod.list_game_backups
-try:
-    _fgb_gs = NS(remote=None, short_name="gmodserver")
-    _app_mod.list_game_backups = lambda r, u: None
-    try:
-        _app_mod._find_game_backup(_fgb_gs, "b-1")
-        _fgb_exc = None
-    except _FGB_HE as _e:
-        _fgb_exc = _e
-    check("game backup: an unreadable host is refused with its own status, not 'not found'",
-          _fgb_exc is not None and _fgb_exc.code == 503,
-          "raised %r" % (_fgb_exc,))
-    check("game backup: ...and the refusal says the host could not be reached",
-          _fgb_exc is not None and "reach" in (_fgb_exc.description or "").lower(),
-          repr(getattr(_fgb_exc, "description", None))[:80])
-    # Positive controls: a real listing still matches, and an ABSENT backup is still a plain None
-    # (the 404 the routes want) rather than the new refusal.
-    _app_mod.list_game_backups = lambda r, u: [{"name": "b-1", "size": 5}]
-    check("game backup: a real listing still finds the archive",
-          (_app_mod._find_game_backup(_fgb_gs, "b-1") or {}).get("size") == 5)
-    _app_mod.list_game_backups = lambda r, u: []
-    check("game backup: a server with NO backups still answers 'not found', not a 503",
-          _app_mod._find_game_backup(_fgb_gs, "b-1") is None)
-finally:
-    _app_mod.list_game_backups = _o_lgb
-
 # ── the install reconcile ticker must not "reconcile" a row that already says failed ────────────
 # "failed" is IN the ticker's own filter set (deliberately — a repaired install has to be picked
 # up), so unlike the True branch that row comes back every tick. Writing the two values it already

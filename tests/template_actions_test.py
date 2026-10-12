@@ -4419,7 +4419,7 @@ _gsch = _js_code_only(_js_function_body(_bk_js2, "gameSchedule"))
 check("['3','Every 3 days']" in _gsch and "ivOpts.push([ivVal" in _gsch,
       "backups: ...and its interval list offers every value Files & Config does, plus the stored one",
       "a 3-day override renders as 'Default' beside a note saying 'Custom — every 3 days'")
-# The two buttons on a backup ROW read the listing too, and app.py's _find_game_backup iterates
+# The two buttons on a backup ROW read the listing too, and panel_backup.py's _find_game_backup iterates
 # it — None included. Both answered a 500 with a traceback in the panel log for a host that
 # simply did not answer.
 check("unreadable" in _between(_bk_py, "def api_panel_backup_game_delete", "def api_panel_backup_game_schedule"),

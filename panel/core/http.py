@@ -134,7 +134,9 @@ def _log_and_generic(context):
     Admins read the detail in the panel logs.
     """
     current_app.logger.exception(context)
-    return "Internal server error"
+    # In the viewer's language: the string is fixed, so a catalog entry is all it needs, but it
+    # reaches the page as a helper's return value, which no literal scan of a sink can see.
+    return i18n.tr("Internal server error")
 
 
 def _unreachable(context):

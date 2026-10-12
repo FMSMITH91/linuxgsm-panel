@@ -4,6 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (flash, jsonify, redirect, request, url_for)
 from flask_login import (current_user, login_required, login_user, logout_user)
+from panel.core import i18n
 from panel.core.config import (update_config)
 from panel.db.models import (db)
 from panel.db.prefs import (_clean_panel_map)
@@ -230,7 +231,7 @@ def _register_tag_catalog(app):
         # validator still guards the data layer, but its exception text is never echoed back —
         # returning str(exc) is how internals leak into an API response.
         if not TAG_NAME_RE.match(name):
-            return jsonify({"success": False, "message": TAG_NAME_HELP}), 400
+            return jsonify({"success": False, "message": i18n.tr(TAG_NAME_HELP)}), 400
         if ServerTag.query.filter(db.func.lower(ServerTag.name) == name.lower()).first():
             return jsonify({"success": False, "message": "A tag with that name already exists."}), 409
         # A JSON boolean or a 400: bool("false") is True, so a tag asked to be muted alerted.
@@ -247,7 +248,7 @@ def _register_tag_catalog(app):
             # Unreachable for the name (checked above); still handled so a validator added to
             # another column later cannot turn a bad request into a 500.
             db.session.rollback()
-            return jsonify({"success": False, "message": TAG_NAME_HELP}), 400
+            return jsonify({"success": False, "message": i18n.tr(TAG_NAME_HELP)}), 400
         except Exception:
             db.session.rollback()
             return jsonify({"success": False, "message": _log_and_generic("create tag failed")}), 500

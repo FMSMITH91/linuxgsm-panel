@@ -94,7 +94,7 @@ from panel.core import runtime_stats
 from panel.core.clock import utcnow
 
 import secrets
-from flask import (Flask, abort, current_app, g, has_request_context, jsonify, redirect, request, session,
+from flask import (Flask, current_app, g, has_request_context, jsonify, redirect, request, session,
                    url_for)
 from markupsafe import Markup
 from panel.core import i18n
@@ -138,7 +138,7 @@ from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupSta
     init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, RowReplaced, claim_row,
     row_birth, row_label, still_held)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
-    game_engine, console_steamid_ban, pro_status, list_game_backups, game_engine as
+    game_engine, console_steamid_ban, pro_status, game_engine as
     sm_game_engine, set_game_priority_bulk, game_users_off_priority, lgsm_get_values,
     remote_set_fail2ban_ignoreip,
     ensure_node_tools_cron, ensure_persistent_bans)
@@ -2517,26 +2517,10 @@ def _maybe_set_threshold(body):
             _log.debug("ignoring a non-numeric autoblock threshold", exc_info=True)
     return _autoblock_threshold()
 
-def _find_game_backup(gs, name):
-    """Return the backup dict whose name matches `name` from the server's real backup list, or
-    None. Validating against the listing (not building a path from user input) keeps this
-    path-injection safe."""
-    listing = list_game_backups(gs.remote, gs.short_name)
-    # None is "the host could not be READ", which list_game_backups was deliberately taught to say
-    # apart from [] ("this server has no backups"). Iterating it raised TypeError: on the download
-    # route — a plain navigation, so the JSON error handler re-raises — that was Werkzeug's HTML
-    # 500 page, and on delete the generic "Something went wrong". Collapsing it into the callers'
-    # falsy check would be worse still: both answer "Backup not found." / 404, which tells the
-    # operator their archive is gone when the panel simply never reached the host. Both callers
-    # turn an HTTPException into their own shape, so say which failure this is.
-    if listing is None:
-        abort(503, description="Couldn't reach this server's host to read its backups, so the "
-                               "panel can't tell whether that archive is still there. Check the "
-                               "host is reachable and try again.")
-    for b in listing:
-        if b["name"] == name:
-            return b
-    return None
+def _r17a_url_host(host):
+    """`host` as a URL's host part: an IPv6 address in brackets (http://:::5000 opens nothing)."""
+    return "[%s]" % host if ":" in (host or "") and not host.startswith("[") else host
+
 
 def _pro_status_cached(remote, force=False):
     """Ubuntu Pro status, served from the persisted value so a page visit (even right after a
@@ -3234,7 +3218,7 @@ def _boot_ssl_args(app, cfg, host, port):
         try:
             _ensure_self_signed_cert(cert_path, key_path, _r13a_cfg_text(cfg, "site_domain") or host)
             ssl_args = {"certfile": cert_path, "keyfile": key_path}
-            print(f"  🔒 HTTPS enabled (self-signed) — https://{host}:{port}")
+            print(f"  🔒 HTTPS enabled (self-signed) — https://{_r17a_url_host(host)}:{port}")
             print("     Browsers will show a certificate warning; click through to proceed.")
         except Exception as e:
             app.config["BOOT_TLS_ERROR"] = type(e).__name__
@@ -3435,7 +3419,7 @@ if __name__ == "__main__":
     if _proxy_bind_note:
         _log.warning("%s", _proxy_bind_note)
         print("  [!] " + _proxy_bind_note)
-    print(f"Open {_scheme}://{host}:{port} in your browser")
+    print(f"Open {_scheme}://{_r17a_url_host(host)}:{port} in your browser")
 
     # Optional built-in HTTPS with a self-signed cert (for public, no-domain, no-proxy
     # setups). Browsers will warn about the self-signed cert — that's expected.

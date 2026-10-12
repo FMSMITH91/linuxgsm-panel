@@ -302,7 +302,7 @@ def _register_panel_db_upkeep(app):
                                detail="freed %d bytes" % info.get("freed", 0), success=True)
                 except Exception:
                     app.logger.warning("optimize: audit-log write failed", exc_info=True)
-            return jsonify({"success": ok, "message": msg, **(info or {})})
+            return jsonify({"success": ok, "message": i18n.tr(msg), **(info or {})})
         except Exception:
             return jsonify({"success": False,
                             "message": _log_and_generic("db optimize failed")}), 500

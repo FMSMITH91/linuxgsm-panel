@@ -1730,7 +1730,7 @@ def optimize_database():
     except Exception:
         _log.exception("database optimize failed")
         return (False, "Database optimize failed — see the panel logs.",
-                {"before": before, "after": before, "freed": 0})
+                {"before": before, "after": before, "freed": 0, "vacuumed": False})
 
     after = _size()
     # Word this from what was OBSERVED, not from what was attempted. VACUUM rewrites the whole
@@ -1747,7 +1747,11 @@ def optimize_database():
     else:
         msg = ("Refreshed stats — VACUUM was deferred because the database was busy, and the "
                "WAL checkpoint returned no result to confirm it ran. Run it again in a moment.")
-    return True, msg, {"before": before, "after": after, "freed": max(0, before - after)}
+    # `vacuumed` goes to the page too: on success it printed "Optimized." whatever the message
+    # said, so a deferred VACUUM was reported as a compaction that ran. The page shows `msg` when
+    # it is False.
+    return True, msg, {"before": before, "after": after, "freed": max(0, before - after),
+                       "vacuumed": bool(vacuumed)}
 
 
 def _silent_remove(p):
