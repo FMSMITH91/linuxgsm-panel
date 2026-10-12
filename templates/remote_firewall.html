@@ -309,14 +309,16 @@
         <div id="block-result" class="small mb-2"></div>
         <div id="blocks-list" style="max-height: 400px; overflow: auto;">
           {% if block_groups %}
-          <table class="table table-sm table-hover mb-0 align-middle">
+          {# table-pin-actions, as the rules table above, and an address that may break: at 375px an
+             IPv6 address made the table 517px in a 285px box, its Unblock button under the scroll. #}
+          <table class="table table-sm table-hover mb-0 align-middle table-pin-actions">
             <thead>
               <tr><th>IP address</th><th>Source</th><th>Family</th><th></th></tr>
             </thead>
             <tbody id="blocks-body">
               {% for g in block_groups %}
               <tr>
-                <td><code>{{ g.block_ip }}</code></td>
+                <td><code class="text-break">{{ g.block_ip }}</code></td>
                 <td>
                   {% if g.comment == 'panel-autoblock' %}<span class="badge bg-info text-dark">Auto</span>
                   {% elif g.comment == 'panel-block' %}<span class="badge bg-secondary">Manual</span>

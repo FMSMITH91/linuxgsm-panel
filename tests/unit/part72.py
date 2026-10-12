@@ -447,3 +447,33 @@ if _out72c is not None:
     # Clear was pressed: it is shown, as u3 is, and neither twice.
     check("console: ...and with the re-prime's backlog holding them, each held line shows once (control)",
           _out72c.get("inBacklog") == ["log3", "[panel] u2", "[panel] u3"], repr(_out72c))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 8. Pages at 375px and for a screen reader (measured in a browser; held here by their markup)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_SF72 = _read72(_root, "templates", "server_files.html")
+_edh72 = _re72.search(r'<div class="([^"]*)">\s*<code class="([^"]*)" id="editor-path">', _SF72)
+check("375px: the file editor's header wraps and its path breaks (a long path pushed Save and Close off "
+      "the card, the page 740px wide)",
+      _edh72 is not None and "flex-wrap" in _edh72.group(1).split() and "text-break" in _edh72.group(2).split(),
+      _edh72.group(0) if _edh72 else "no editor header")
+_FWJS72 = _read72(_JS72, "remote_firewall.js")
+_bjs72 = _FWJS72[_FWJS72.index("function _fwRenderBlocks("):_FWJS72.index("function _fwUnlisted(")]
+_btpl72 = _fw72[_fw72.index('id="blocks-list"'):_fw72.index('id="blocks-body"')]
+check("375px: the blocked-IPs table pins its Unblock button and lets an address break, in the template and "
+      "the repaint (an IPv6 address hid the button under the box's scroll)",
+      "table-pin-actions" in _btpl72 and '<code class="text-break">{{ g.block_ip }}</code>' in _fw72
+      and "table-pin-actions" in _bjs72 and "<code class=\"text-break\">'" in _bjs72, _bjs72[:400])
+check("i18n: the repainted Unblock tooltip is one translated sentence ('Unblock ' + ip was English)",
+      "tf('Unblock {ip}', {ip: g.block_ip})" in _bjs72 and "'Unblock '" not in _bjs72
+      and "Unblock {ip}" in _ES72 and "Unblock {ip}" in _scan72.load_catalog("fr"), _bjs72[-500:])
+_MG72 = _read72(_root, "templates", "manage_groups.html")
+check("a11y: the edit form's permission boxes are a group named by its heading, as the Add modal's are",
+      'id="edit-perms-label-{{ group.id }}"' in _MG72
+      and _re72.search(r'role="group"\s+aria-labelledby="edit-perms-label-\{\{ group\.id \}\}"', _MG72) is not None,
+      "no named group on the edit form's permissions")
+_MR72 = _read72(_root, "templates", "manage_remotes.html")
+_sub72 = _re72.search(r'<button type="submit" class="btn btn-primary btn-sm w-100"([^>]*)>\s*<i class="bi bi-check">', _MR72)
+check("a11y: the host edit form's icon-only submit has a name", _sub72 is not None
+      and 'aria-label="Save changes"' in _sub72.group(1), _sub72.group(0) if _sub72 else "no such button")

@@ -261,8 +261,11 @@
       </div>
       <div class="col-lg-7">
         <div id="editor-wrap" style="display:none;">
-          <div class="d-flex justify-content-between align-items-center mb-1">
-            <code class="small text-info" id="editor-path"></code>
+          {# flex-wrap and text-break: a long path was one unbreakable flex item, and at 375px it
+             pushed Save and Close off the card and the page 740px wide. Now the path breaks, and
+             the buttons take the next line when they do not fit beside it. #}
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-1 mb-1">
+            <code class="small text-info text-break" id="editor-path"></code>
             <div class="d-flex align-items-center gap-2">
               <span id="file-save-msg" class="small"></span>
               <a class="btn btn-outline-secondary btn-sm" id="editor-download" href="#"

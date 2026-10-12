@@ -11,6 +11,7 @@
   "That server isn't running, so there's no console session to send to.": "Ce serveur ne tourne pas, il n'y a donc aucune session de console à qui envoyer.",
   "The panel could not run that on the host, and it gave no reason.": "Le panneau n'a pas pu exécuter cela sur l'hôte, et aucune raison n'a été donnée.",
   "This game's console has no command that bans a player by slot — kick them, and ban their address in the server's own config.": "La console de ce jeu n'a pas de commande pour bannir un joueur par son emplacement : expulsez-le, et bannissez son adresse dans la configuration propre du serveur.",
+  "Unblock {ip}": "Débloquer {ip}",
   "Unmounted all content": "Tout le contenu a été démonté",
   "fail2ban is now protecting the panel login — 5 failed logins from an IP in 10 minutes get it banned for an hour.": "fail2ban protège désormais la connexion au panneau : 5 échecs de connexion depuis une IP en 10 minutes la font bannir pendant une heure.",
   "it is not a game account the panel may run as: {detail}": "ce n'est pas un compte de jeu sous lequel le panneau peut s'exécuter : {detail}",
