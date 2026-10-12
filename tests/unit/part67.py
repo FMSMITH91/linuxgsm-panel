@@ -427,29 +427,41 @@ def _verb_err67(url, mount):
 _rr67 = {"svc": _rm_route67({"svc": "svc:p67"}),
          "mount": _rm_route67({"url": "https://x", "mount": "/x"}, _verb_err67),
          "listener": _rm_route67({"url": "https://x", "mount": "/x"}, lambda url, mount: None)}
-_rr_es67 = {k: _tr67("es", v[1]) for k, v in _rr67.items()}
+# As panel/routes/tailscale.py answers a failed Remove: the reason goes into a translated sentence.
+_rr_es67 = {k: _tr67("es", _i18n67.Sentence("Failed to remove: {why}", why=v[1])) for k, v in _rr67.items()}
+_rr_lead67 = _CAT67["es"]["Failed to remove: {why}"].split("{why}")[0]
 check("serve: remove_panel_route's own reasons (a Tailscale Service route, an unnameable mount, an "
-      "unreadable listener) are Sentences the \"Failed to remove: {why}\" answer translates",
-      _rr_es67 == {"svc": "está en el Tailscale Service svc:p67, que el panel no gestiona",
-                   "mount": "su punto de montaje no es uno que el panel pueda indicar en la línea de comandos",
-                   "listener": "no se pudo leer el listener en el que está"}, repr(_rr_es67))
+      "unreadable listener) read in the viewer's language inside \"Failed to remove: {why}\" (they were "
+      "English inside the translated sentence)",
+      _rr_es67 == {k: _rr_lead67 + v for k, v in (
+          ("svc", "está en el Tailscale Service svc:p67, que el panel no gestiona"),
+          ("mount", "su punto de montaje no es uno que el panel pueda indicar en la línea de comandos"),
+          ("listener", "no se pudo leer el listener en el que está"))}, repr(_rr_es67))
 
 
 # The pre-restore safety copy's reason, and create_backup's refusals inside it.
-def _safety67():
+def _safety67(how):
+    """_restore_validated's refusal when the safety copy fails `how`, as an es viewer reads it."""
     def _raise(p=None):
         raise _bk67.PassphraseUnreadable("p67")
     with _patched():
-        _patch(_bk67, "_safety_copy_passphrase", _raise)
-        return _bk67._take_safety_copy(None)
+        if how == "passphrase":
+            _patch(_bk67, "_safety_copy_passphrase", _raise)
+        else:
+            _patch(_bk67, "_safety_copy_passphrase", lambda p=None: (None, False))
+            _patch(_bk67, "_claim_archive_name", lambda kind, pp: ("p67", None))
+        got = _bk67._restore_validated("p67-src", "p67")
+    return got[0], _tr67("es", got[1])
 
 
-_sf67 = _safety67()
-check("backups: the safety copy's \"passphrase could not be decrypted\" reason, and create_backup's "
-      "\"Backup failed\", are Sentences, so the translated refusal does not carry an English clause",
-      _sf67[0] is False and _tr67("fr", _sf67[1]).startswith("une phrase secrète de sauvegarde")
-      and _tr67("es", _bk67._R16A_BACKUP_FAILED) == "La copia de seguridad falló: consulta los registros del panel.",
-      repr(_sf67))
+_sf67 = {k: _safety67(k) for k in ("passphrase", "backup")}
+_sf_want67 = {"passphrase": _CAT67["es"]["a backup passphrase is configured but could not be decrypted on this "
+                                        "host, so the copy could not be encrypted"],
+              "backup": _CAT67["es"]["Backup failed — see panel logs."]}
+check("backups: a refused restore's \"safety copy could not be written ({why})\" carries its reason in the "
+      "viewer's language (the passphrase clause and create_backup's \"Backup failed\" were English inside "
+      "the translated sentence)",
+      all(v[0] is False and "(" + _sf_want67[k] + ")" in v[1] for k, v in _sf67.items()), repr(_sf67))
 
 
 # A reboot refused on the panel's own host, and one already running.
