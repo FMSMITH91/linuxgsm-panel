@@ -690,6 +690,10 @@ def _first_sleep35(body):
             # The whole while body under the same rule, not its first statement alone: `while
             # True: now = x; time.sleep(30)` read as no sleep before the first pass (review 1011e).
             return _first_sleep35(stmt.body)
+        if isinstance(stmt, (_ast35.Try, _ast35.With)) and stmt.body:
+            # A try or with block runs its body first: `while True: try: time.sleep(30)` sleeps
+            # before its first pass as plainly (review 1012a: read as no sleep at all).
+            return _first_sleep35(stmt.body)
         if _call_name35(stmt) == "sleep":
             return stmt.value.args[0] if stmt.value.args else None
         if not isinstance(stmt, (_ast35.Assign, _ast35.AnnAssign, _ast35.Import, _ast35.ImportFrom)):
@@ -700,9 +704,14 @@ def _first_sleep35(body):
 _r15d_fs_ctl35 = [_first_sleep35(_ast35.parse(_src35).body) is not None for _src35 in (
     "while True:\n    now = x\n    time.sleep(30)\n",
     "import time\nlast = None\nwhile True:\n    time.sleep(5)\n",
-    "while True:\n    work()\n    time.sleep(30)\n")]
-check("beating loops: a sleep after setup assignments heads a while body too, and one after real "
-      "work does not (control)", _r15d_fs_ctl35 == [True, True, False], repr(_r15d_fs_ctl35))
+    "while True:\n    work()\n    time.sleep(30)\n",
+    "while True:\n    try:\n        time.sleep(30)\n        work()\n    except Exception:\n        pass\n",
+    "while True:\n    with lock:\n        n = 1\n        time.sleep(5)\n",
+    "while True:\n    try:\n        _t0 = time.time()\n        work()\n        time.sleep(5)\n"
+    "    except Exception:\n        pass\n")]
+check("beating loops: a sleep after setup assignments heads a while body too (and a try or with "
+      "block's), and one after real work does not (control)",
+      _r15d_fs_ctl35 == [True, True, False, True, True, False], repr(_r15d_fs_ctl35))
 
 
 def _loop_first_pass35(fn_node):
