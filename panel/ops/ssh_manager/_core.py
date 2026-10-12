@@ -2718,8 +2718,18 @@ def send_console_command(server, user, command, timeout=20, selfname=None, mark=
     # `--` before the text: tmux parses its arguments as flags until one does not start with "-",
     # so a console command like `-R` or `-X ...` was taken as send-keys' own option (a reset, an
     # "unknown flag" error) and never typed into the console.
+    # -l: the text is typed as characters. Without it tmux first looks the whole argument up as a
+    # KEY NAME, so a console line that is exactly `C-c`, `C-z`, `Escape` or `0x3` sent that key (an
+    # interrupt or a suspend of the game in the pane), not the text. Enter, which must be the key,
+    # goes in a second send-keys in the same tmux command (`\;`), so the two are not interleaved.
+    # tmux ends a command at an argument that ENDS in ";" (cmd-parse.y, cmd_parse_from_arguments)
+    # and drops that ";", unless a backslash precedes it, which it turns into the ";". So a Source
+    # line like `sv_cheats 0;` lost its ";" and Enter was run as a command of its own: nothing was
+    # submitted. A trailing ";" goes as "\;", which tmux types as ";".
+    typed = command[:-1] + "\\;" if command.endswith(";") else command
     inner = (_tmux_live_socket_sh(selfname) + pos
-             + f'tmux -L "$SOCK" send-keys -t {selfname} -- {_quote(command)} Enter')
+             + f'tmux -L "$SOCK" send-keys -t {selfname} -l -- {_quote(typed)} \\; '
+               f'send-keys -t {selfname} Enter')
     return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
 
 

@@ -531,3 +531,71 @@ check("config: a hand-edited \"false\" / \"No\" in an on/off setting is off (boo
       _flags67 == {"trust_proxy": False, "backup_enabled": False, "reboot_restore_no_autostart": False,
                    "tailscale_use_funnel": True, "use_https": True, "setup_complete": True,
                    "tailscale_setup_done": True} and _rna67 is False, repr((_flags67, _rna67)))
+
+
+# ── A03 lead: a console line is typed as text, never looked up as a tmux key name ────────────────
+import subprocess as _sp67  # noqa: E402  # nosec B404 - runs bash on the panel's own script, no shell=True
+
+
+def _tmux_cmds67(argv):
+    """tmux's own reading of its argv (cmd-parse.y cmd_parse_from_arguments): [[args of each command]].
+
+    An argument ending in ";" ends the command and loses the ";", unless a backslash precedes it,
+    which becomes the ";".
+    """
+    cmds, cur = [], []
+    for a in argv:
+        end = False
+        if a.endswith(";"):
+            a = a[:-1]
+            if a.endswith("\\"):
+                a = a[:-1] + ";"
+            else:
+                end = True
+        if not end or a:
+            cur.append(a)
+        if end:
+            cmds.append(cur)
+            cur = []
+    return cmds + ([cur] if cur else [])
+
+
+def _typed67(cmd):
+    """[(send-keys flags, keys)] for each tmux command the console send of `cmd` runs, read as tmux reads it."""
+    tool = _tempfile67.mkdtemp(prefix="lgsm-p67-tmux-")
+    try:
+        path = _os67.path.join(tool, "tmux")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/bash\nshift 2\nprintf "%s\\0" "$@"\n')
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in tool this part runs
+        _os67.chmod(path, 0o700)
+        with _patched():
+            _patch(_smc67, "shell_as_game_user", lambda s, u, inner, **k: (inner, "", 0))
+            inner = _smc67.send_console_command(None, "p67game", cmd, selfname="p67srv")[0]
+        tail = inner[inner.index('tmux -L "$SOCK" send-keys'):]
+        out = _sp67.run(["bash", "-c", "SOCK=p67; " + tail], capture_output=True, text=True, timeout=10,
+                        env={"PATH": tool + ":/usr/bin:/bin"}).stdout  # nosec B603 B607
+    finally:
+        _shutil67.rmtree(tool, ignore_errors=True)
+    got = []
+    for c in _tmux_cmds67(out.split("\0")[:-1]):
+        i, flags = 1, []
+        while i < len(c) and c[i].startswith("-") and c[i] != "-":
+            if c[i] == "--":
+                i += 1
+                break
+            if c[i] == "-t":        # takes the next word as its value
+                i += 2
+                continue
+            flags.append(c[i])
+            i += 1
+        got.append((c[0] if c else "", flags, c[i:]))     # an empty command reads as ""
+    return got
+
+
+_CON67 = ("C-c", "Escape", "0x3", "sv_cheats 0;", "a\;", ";", "-R", "say it's \"ok\" $HOME")
+_con67 = {c: _typed67(c) for c in _CON67}
+check("console send: a line that is exactly a tmux key name (C-c, Escape, 0x3) is typed as text with -l, "
+      "not sent as that key (an interrupt of the game); a line ending in \";\" keeps it and is still "
+      "submitted (tmux took the \";\" as its own command separator); Enter follows as the key",
+      _con67 == {c: [("send-keys", ["-l"], [c]), ("send-keys", [], ["Enter"])] for c in _CON67}, repr(_con67))
