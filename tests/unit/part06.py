@@ -5121,6 +5121,7 @@ _cd_rl = {_label: _cd_run(_b) for _label, _b in (
     ("HTTP 403", _cd_err.HTTPError("u", 403, "forbidden", {}, None)))}
 check("codacy gate: a rate limit (429) or request timeout (408) warns; 401/403 still fail",
       _cd_rl == {"HTTP 429": 0, "HTTP 408": 0, "HTTP 401": 1, "HTTP 403": 1}, repr(_cd_rl))
+_shutil.rmtree(str(_cd.ACCEPTED_FILE.parent), ignore_errors=True)   # its mkdtemp, not left per run
 
 # ── the code-scanning gate's concurrency group tells a fork PR from main ─────────────────────────
 # Keyed on head_branch alone, a fork PR opened from the fork's default branch (main) shared
@@ -11266,6 +11267,7 @@ check("route_coverage: ...and it runs every suite the repo has",
       _rc_suites6 == _repo_suites6,
       "SUITES=%r but tests/ has %r — a suite missing from it makes every route only that suite "
       "covers look untested" % (_rc_suites6, _repo_suites6))
+_shutil.rmtree(_rs6_dir, ignore_errors=True)   # run_suite's stub dir, not left per run
 
 # ── the sudo hint has to know WHICH install it is talking about ───────────────────────────────
 # It only knew about the root install: "if sudo refuses rather than asking for a password, that

@@ -1931,7 +1931,10 @@ try:
             "https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/v26.1.0/lgsm/data/"
             "ubuntu-24.04.csv"], repr(_p8_urls))
     finally:
-        __import__("shutil").rmtree(str(_p8_ld._CACHE_DIR), ignore_errors=True)
+        # Only this block's own temp dir: if mkdtemp raised, _CACHE_DIR is still the saved one —
+        # part04's seeded fixture cache, which every later part reads.
+        if _p8_ld._CACHE_DIR != _p8_ld_saved["_CACHE_DIR"]:
+            __import__("shutil").rmtree(str(_p8_ld._CACHE_DIR), ignore_errors=True)
         for _k8, _v8 in _p8_ld_saved.items():
             setattr(_p8_ld, _k8, _v8)
         _p8_ld.urllib.request.urlopen = _p8_urlopen_saved

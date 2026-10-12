@@ -54,13 +54,21 @@ check("zone id: every payload really is accepted by ipaddress, text kept (so eac
 
 
 def _z_not_refused(fn, refused=lambda got: got is None, values=_Z_PAYLOADS):
-    """The payloads `fn` let through, as 'payload -> answer' strings; [] when it refused them all."""
+    """The payloads `fn` let through, as 'payload -> answer' strings; [] when it refused them all.
+
+    A RAISE is not a refusal here (review 1011d). Every function judged through this helper is
+    documented to ANSWER — None, False, "unknown", a message — and its callers act on the answer:
+    app._log_ip raising turns a failed login with a forged X-Forwarded-For zone into a 500 with no
+    auth.log line for fail2ban. The verb validators whose contract is to raise are judged on their
+    own, further down, and do not come through here.
+    """
     out = []
     for _p in values:
         try:
             got = fn(_p)
-        except ValueError:
-            continue                  # a validator that RAISES has refused
+        except Exception as _e:       # noqa: BLE001 - any raise is the defect being looked for
+            out.append("%r -> raised %r" % (_p, _e))
+            continue
         if not refused(got):
             out.append("%r -> %r" % (_p, got))
     return out
