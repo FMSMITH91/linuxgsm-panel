@@ -405,6 +405,29 @@ def _r12a_names_port(pn, ports):
     return False
 
 
+def _r14a_panel_port_scope(rule, port):
+    """How rule `rule` holds `port` open to the public: "only", "shared" or "" (it does not).
+
+    `rule` is a display group, or a parsed row with its `port_num` added: inbound ALLOW/LIMIT on no
+    interface, whose To column names `port` (_r12a_names_port: alone, after an address, in a list or
+    a range). "only" when that port is all it opens; "shared" when the list or range opens others too
+    (`80,443,5000/tcp`, `5000:5010/tcp`). The Network card (hosts.remote_public_ssh_status) and
+    Close public panel port (remote_vps) both read it, so the card never calls open a port the close
+    route calls already closed. The From column is not read: a rule from one address still leaves
+    the port listening to it.
+    """
+    if (rule.get("iface") or rule.get("is_iface") or rule.get("action", "ALLOW") not in ("ALLOW", "LIMIT")
+            or (rule.get("direction") or "IN") != "IN"):
+        return ""
+    pn = str(rule.get("port_num", ""))
+    if not _r12a_names_port(pn, {int(port)}):
+        return ""
+    words = pn.split()
+    items = (words[-1] if words else "").split(",")
+    m = hosts._UFW_PORT_ITEM_RE.match(items[0]) if len(items) == 1 else None
+    return "only" if m and int(m.group(1)) == int(m.group(2) or m.group(1)) else "shared"
+
+
 def _classify_access_rule(g, ssh_ports):
     """Set is_ssh / is_tailscale / is_access on one group: is it a way into the host."""
     pn = str(g.get("port_num", ""))
@@ -425,6 +448,81 @@ def _classify_access_rule(g, ssh_ports):
     g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") in ("ALLOW", "LIMIT")
                          and inbound and _ts_iface and _r11a_reaches_ssh(g, pn, ssh_ports))
     g["is_access"] = g["is_ssh"] or g["is_tailscale"]
+
+
+def _r14a_admits(g, port):
+    """Whether rule `g` matches TCP traffic to `port` (named alone, in a list or range, or every port)."""
+    pn = str(g.get("port_num", ""))
+    words = pn.split()
+    named = bool(words) and words[-1].lower() in _SSH_APP_PROFILES and port == 22
+    return not _r14a_udp_only(g) and (named or _r12a_names_port(pn, {port}) or _r13a_every_port(g, pn))
+
+
+def _r14a_net(word):
+    """The network a To / From address word names (its /tcp or /udp suffix dropped), else None."""
+    try:
+        return ipaddress.ip_network(re.sub(r"/(?:tcp|udp)\Z", "", word, flags=re.I), strict=False)
+    except ValueError:
+        return None
+
+
+def _r14a_src_covers(deny_src, allow_src):
+    """Whether every source a rule's From column `allow_src` admits is inside `deny_src`'s.
+
+    "Anywhere" covers all. A network covers an address or network inside it, of the same family.
+    A From with a source PORT matches only that port, so it covers only the very same column. An
+    auto-block DENY from one attacker covers nothing an ALLOW from Anywhere admits.
+    """
+    d, a = str(deny_src or "Anywhere").split(), str(allow_src or "Anywhere").split()
+    if len(d) > 1 or len(a) > 1:
+        return d == a
+    dn, an = _r14a_src_net(d), _r14a_src_net(a)
+    if dn == "any":
+        return True
+    nets = (ipaddress.IPv4Network, ipaddress.IPv6Network)
+    return (isinstance(dn, nets) and isinstance(an, nets) and an.version == dn.version
+            and an.subnet_of(dn))
+
+
+def _r14a_src_net(words):
+    """A one-word From column as "any" (Anywhere), its network, or None when it is neither."""
+    word = re.sub(r"/(?:tcp|udp)\Z", "", words[0], flags=re.I) if words else "Anywhere"
+    return "any" if word.lower() == "anywhere" else _r14a_net(word)
+
+
+def _r14a_dest_addr(g):
+    """The destination address a rule's To column names ("203.0.113.5 22" -> it), else ""."""
+    words = str(g.get("port_num", "")).split()
+    return words[0] if words and _r14a_net(words[0]) is not None else ""
+
+
+def _r14a_deny_covers(deny, allow, port):
+    """Whether DENY/REJECT group `deny` blocks every packet ALLOW group `allow` admits on `port`."""
+    return ((deny.get("direction") or "IN") == "IN"
+            and (not deny.get("iface") or deny.get("iface") == allow.get("iface"))
+            and _r14a_admits(deny, port)
+            and _r14a_dest_addr(deny) in ("", _r14a_dest_addr(allow))
+            and _r14a_src_covers(deny.get("src"), allow.get("src")))
+
+
+def _r14a_mark_live_ssh(groups, ssh_ports):
+    """Set ssh_live on each group: an SSH rule UFW actually lets act, read in UFW's order.
+
+    UFW takes the first rule a packet matches (a group's place is its lowest number). An SSH ALLOW
+    is live when, for at least one sshd port it admits, no DENY/REJECT above it blocks every packet
+    it would let in. `22/tcp DENY IN Anywhere` above `22/tcp ALLOW IN Anywhere` leaves no way in, yet
+    counted as one beside another rule it made that rule deletable. A DENY from one address (the
+    hourly auto-block inserts those at 1) shadows nothing an ALLOW from Anywhere admits.
+    """
+    order = sorted((g for g in groups if g.get("nums")), key=lambda g: min(g["nums"]))
+    for g in groups:
+        g["ssh_live"] = bool(g.get("is_ssh"))   # a group with no number has no place to read
+    for i, g in enumerate(order):
+        if not g.get("is_ssh"):
+            continue
+        denies = [d for d in order[:i] if d.get("action") in ("DENY", "REJECT")]
+        g["ssh_live"] = any(_r14a_admits(g, p) and not any(_r14a_deny_covers(d, g, p) for d in denies)
+                            for p in ssh_ports)
 
 
 def _r11a_reaches_ssh(g, pn, ssh_ports):
@@ -503,7 +601,10 @@ def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_
     if g["is_ssh"]:
         # Deleting this SSH rule is safe only if another way in remains: another SSH rule,
         # Tailscale SSH, or regular SSH over a running tailnet (Tailscale isn't affected).
-        other_way = (ssh_count > 1) or ts_ssh_ok or ts_iface_ok
+        # `ssh_count` counts only the SSH rules UFW lets act (_r14a_mark_live_ssh); this one is
+        # "another" way only to the others. A rule a DENY above it shadows is no way in itself, and
+        # it stays protected while nothing else is (in doubt, protect).
+        other_way = (ssh_count - (1 if g.get("ssh_live") else 0) > 0) or ts_ssh_ok or ts_iface_ok
         reason_last = (
             "%s the SSH port used to reach this host, and there's no working Tailscale "
             "route to fall back on — removing it would lock you out. Enable Tailscale SSH, or "
@@ -586,7 +687,10 @@ def _annotate_firewall_protection(server, enabled, groups):
     for g in groups:
         _classify_access_rule(g, ssh_ports)
 
-    ssh_count = sum(1 for g in groups if g.get("is_ssh"))
+    # An SSH rule counts only where UFW lets it act: a DENY/REJECT above it for the same traffic
+    # wins (first match), as the tailnet side already reads it (_r11a_tailnet_ssh_open).
+    _r14a_mark_live_ssh(groups, ssh_ports)
+    ssh_count = sum(1 for g in groups if g.get("ssh_live"))
 
     ts_running, ts_ssh_enabled = _live_tailscale_state(server, enabled, groups)
 

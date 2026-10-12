@@ -285,3 +285,130 @@ finally:
             _P9_CFG_PATH.unlink()
     else:
         _P9_CFG_PATH.write_bytes(_CFG61_SNAPSHOT)
+
+# ── follow-up 1: Close public panel port reads the panel port the way the Network card does ─────
+from unit.part12 import P9_LOCAL  # noqa: E402
+from panel.ops.ssh_manager import firewall as _fw61  # noqa: E402
+from panel.routes import remote_vps as _rv61  # noqa: E402
+
+_DST61 = ".".join(["203", "0", "113", "61"])     # a documentation address (TEST-NET-3)
+_PORT_ROWS61 = {   # row -> (what the card and the route both read it as)
+    "5000/tcp ALLOW IN Anywhere": "only",
+    "5000/tcp LIMIT IN Anywhere": "only",
+    "5000 ALLOW IN %s" % _ADMIN61: "only",
+    "%s 5000/tcp ALLOW IN Anywhere" % _DST61: "only",
+    "80,443,5000/tcp ALLOW IN Anywhere": "shared",
+    "5000:5010/tcp ALLOW IN Anywhere": "shared",
+    "4000:6000 ALLOW IN Anywhere": "shared",
+    "5000/tcp DENY IN Anywhere": "",
+    "5000/tcp ALLOW OUT Anywhere": "",
+    "5000/tcp on tailscale0 ALLOW IN Anywhere": "",
+    "Anywhere on eth0 ALLOW IN Anywhere": "",
+    "15000/tcp ALLOW IN Anywhere": "",
+    "50000:50010/tcp ALLOW IN Anywhere": "",
+}
+
+
+def _close61(row):
+    """(the route's answer, the rule numbers it deleted) for a firewall holding `row` alone."""
+    rows, deleted = [row], []
+
+    def _status(remote):
+        return {"installed": True, "groups": _fw61._group_ufw_rules(
+            [{"num": str(i + 1), "detail": d} for i, d in enumerate(rows)])}
+
+    def _delete(remote, num, force=False, expect_key=None):
+        deleted.append(num)
+        rows[:] = [d for i, d in enumerate(rows) if i + 1 != num]
+        return True, "deleted"
+    with _patched():
+        _patch(_rv61, "remote_ufw_status", _status)
+        _patch(_rv61, "remote_ufw_delete_rule", _delete)
+        _patch(_rv61.ts, "get_tailscale_info", lambda *a, **k: NS(serve_unreadable=False, serve_config={}))
+        resp = _p9_client(P9_ADMIN).post("/api/remote/%d/close-panel-port" % P9_LOCAL)
+    return _p9_json(resp), deleted
+
+
+try:
+    _p9_cfg.save_config(dict(_p9_cfg.load_config(), port=5000, tailscale_setup_done=True,
+                             tailscale_use_funnel=False))
+    _scope61, _route61, _card61 = {}, {}, {}
+    for _row61, _want61 in _PORT_ROWS61.items():
+        _g61 = _fw61._group_ufw_rules([{"num": "1", "detail": _row61}])[0]
+        _scope61[_row61] = _fw61._r14a_panel_port_scope(_g61, 5000)
+        _body61, _del61 = _close61(_row61)
+        _msg61 = _body61.get("message", "")
+        _route61[_row61] = ("closed" if _del61 and _body61.get("success") else
+                            "refused" if "opens other ports too" in _msg61 and not _del61 else
+                            "already" if "already closed" in _msg61 else repr((_body61, _del61)))
+        _card61[_row61] = _panel_open61(" ".join(_row61.replace(" IN ", " ").split()))
+    check("panel port: a rule naming the panel port in a list or range holds it open, one that only "
+          "names it is the panel's own, and a DENY / OUT / interface / other-port rule does not (both "
+          "directions)", _scope61 == _PORT_ROWS61,
+          repr({k: v for k, v in _scope61.items() if v != _PORT_ROWS61[k]}))
+    _wroute61 = {k: {"only": "closed", "shared": "refused", "": "already"}[v] for k, v in _PORT_ROWS61.items()}
+    check("close panel port: a list or range that opens the panel port is refused, naming the rule and "
+          "deleting nothing (it said 'already closed' while the card said open); the panel port's own "
+          "rule is deleted; nothing else reads as open",
+          _route61 == _wroute61, repr({k: v for k, v in _route61.items() if v != _wroute61[k]}))
+    _body61, _ = _close61("80,443,5000/tcp ALLOW IN Anywhere")
+    check("close panel port: ...the refusal names the rule it would not delete",
+          "80,443,5000/tcp" in _body61.get("message", ""), repr(_body61))
+    check("close panel port: the Network card calls the port open exactly when the route does not say "
+          "'already closed' (they never disagree)",
+          {k: v is True for k, v in _card61.items()} == {k: v != "already" for k, v in _route61.items()},
+          repr(_card61))
+finally:
+    if _CFG61_SNAPSHOT is None:
+        if _P9_CFG_PATH.exists():
+            _P9_CFG_PATH.unlink()
+    else:
+        _P9_CFG_PATH.write_bytes(_CFG61_SNAPSHOT)
+
+# ── follow-up 2: a DENY/REJECT above an SSH ALLOW wins (UFW's first match), on the public side ──
+_NET61 = ".".join(["198", "51", "100", "0"]) + "/24"
+_OTHER61 = ".".join(["203", "0", "113", "9"])
+_REAL61 = "22/tcp ALLOW IN Anywhere"
+_SHADOWED61 = {   # the allow from the admin address is no way in: the public 22/tcp stays protected
+    "DENY from it above": ["22/tcp DENY IN %s" % _ADMIN61, "22/tcp ALLOW IN %s" % _ADMIN61, _REAL61],
+    "REJECT from it above": ["22/tcp REJECT IN %s" % _ADMIN61, "22/tcp ALLOW IN %s" % _ADMIN61, _REAL61],
+    "DENY from its /24 above": ["22/tcp DENY IN %s" % _NET61, "22/tcp ALLOW IN %s" % _ADMIN61, _REAL61],
+    "DENY every port from it": ["Anywhere DENY IN %s" % _ADMIN61, "22/tcp ALLOW IN %s" % _ADMIN61, _REAL61],
+    "DENY both protocols": ["22 DENY IN %s" % _ADMIN61, "22/tcp ALLOW IN %s" % _ADMIN61, _REAL61],
+}
+_LIVE61 = {   # the allow from the admin address still lets SSH in: the public 22/tcp only warns
+    "DENY below it": ["22/tcp ALLOW IN %s" % _ADMIN61, "22/tcp DENY IN %s" % _ADMIN61, _REAL61],
+    "DENY from another address": ["22/tcp DENY IN %s" % _OTHER61, "22/tcp ALLOW IN %s" % _ADMIN61, _REAL61],
+    "DENY of another port": ["2222/tcp DENY IN %s" % _ADMIN61, "22/tcp ALLOW IN %s" % _ADMIN61, _REAL61],
+    "DENY of udp": ["22/udp DENY IN %s" % _ADMIN61, "22/tcp ALLOW IN %s" % _ADMIN61, _REAL61],
+    "DENY on another interface": ["22/tcp on eth1 DENY IN %s" % _ADMIN61, "22/tcp ALLOW IN %s" % _ADMIN61,
+                                  _REAL61],
+    "DENY OUT": ["22/tcp DENY OUT %s" % _ADMIN61, "22/tcp ALLOW IN %s" % _ADMIN61, _REAL61],
+    "DENY narrower than the allow": ["22/tcp DENY IN %s" % _ADMIN61, "22/tcp ALLOW IN %s" % _NET61, _REAL61],
+    "auto-block DENY above an allow from Anywhere": ["Anywhere DENY IN %s" % _OTHER61, "22 ALLOW IN Anywhere",
+                                                     _REAL61],
+}
+
+
+def _real61(rules):
+    """(protected, warn) of the public `22/tcp ALLOW IN Anywhere` among `rules`."""
+    got = {(x["port_label"], x["scope"]): x for x in _protect61(NS(port=22), rules, sshd_ports=(22,))}
+    g = got[("22/tcp", "Any address")]
+    return (g["protected"], g["warn"])
+
+
+_sh61 = {k: _real61(v) for k, v in _SHADOWED61.items()}
+check("firewall: an SSH allow a DENY/REJECT above it shadows (same source or wider, same port, every "
+      "port, both protocols) is no other way in: the public 22/tcp is protected",
+      {k: v for k, v in _sh61.items() if v != (True, False)} == {}, repr(_sh61))
+_lv61 = {k: _real61(v) for k, v in _LIVE61.items()}
+check("firewall: ...while a DENY below the allow, from another or a narrower source, of another port, of "
+      "UDP, on another interface, OUT, or an auto-block DENY from one address, shadows nothing: the public "
+      "22/tcp only warns", {k: v for k, v in _lv61.items() if v != (False, True)} == {}, repr(_lv61))
+_g61 = {(x["port_label"], x["scope"]): x for x in _protect61(
+    NS(port=22), ["22/tcp DENY IN %s" % _ADMIN61, "22/tcp ALLOW IN %s" % _ADMIN61, _REAL61], sshd_ports=(22,))}
+check("firewall: ...and the shadowed allow itself is no way in (ssh_live False), the real one is, so "
+      "the shadowed one may go with a warning",
+      not _g61[("22/tcp", _ADMIN61)]["ssh_live"] and _g61[("22/tcp", "Any address")]["ssh_live"]
+      and _g61[("22/tcp", _ADMIN61)]["warn"] and not _g61[("22/tcp", _ADMIN61)]["protected"],
+      repr({k: v.get("ssh_live") for k, v in _g61.items()}))
