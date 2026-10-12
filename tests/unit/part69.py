@@ -293,3 +293,70 @@ check("firewall close (es): the lockout guard's \"couldn't read the firewall\" r
 check("install/bootstrap progress (es): an install step and a bootstrap NOT DONE note read in Spanish",
       _es3.get("install") == "Descargando LinuxGSM"
       and _es3.get("note") == ["NO HECHO: no se configuró la zona horaria UTC (no space)."], repr(_es3))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 4. Sign-out's retry clears the session rows the epoch bump just signed out
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The retry (a momentary SQLite lock on the first attempt) bumped the global auth_epoch — every
+# device signed out — and left every UserSession row, so the account page listed them as live
+# sessions with Revoke buttons until they idled out. The legacy branch clears them since #423.
+from panel.db.models import UserSession as _US69  # noqa: E402
+from panel.security import auth as _auth69  # noqa: E402
+
+
+class _FlakyRows69:
+    """UserSession.query whose first `fails` filter_by() calls raise, as a locked database does."""
+
+    def __init__(self, fails):
+        self.fails, self.calls = fails, 0
+
+    def filter_by(self, **kw):
+        self.calls += 1
+        if self.calls <= self.fails:
+            raise RuntimeError("database is locked")
+        return _db69.session.query(_US69).filter_by(**kw)
+
+
+def _lo_user69(name):
+    with _p9.app_context():
+        u = _User69(username=name, password_hash=_auth69.hash_password("Str0ng!passw0rd-p69"),
+                    display_name=name, is_superadmin=False, is_active=True)
+        _db69.session.add(u)
+        _db69.session.commit()
+        for k in range(2):
+            _db69.session.add(_US69(user_id=u.id, sid="p69-%s-%d" % (name, k)))
+        _db69.session.commit()
+        return u.id
+
+
+def _lo_state69(uid):
+    with _p9.app_context():
+        u = _db69.session.get(_User69, uid)
+        return _US69.query.filter_by(user_id=uid).count(), (u.auth_epoch or 0) if u else None
+
+
+_lo69 = {}
+try:
+    for _case69, _fails69 in (("retry", 1), ("retry_rows_locked", 2)):
+        _uid69 = _lo_user69("p69_" + _case69)
+        _flaky69 = _FlakyRows69(_fails69)
+        _US69.query = _flaky69          # a class attribute over the model's query property
+        try:
+            _r69 = _p9_client(_uid69).post("/logout", follow_redirects=True)
+        finally:
+            del _US69.query             # the property answers again
+        _lo69[_case69] = (_lo_state69(_uid69), _flaky69.calls,
+                          "You have been logged out." in _r69.get_data(as_text=True))
+finally:
+    with _p9.app_context():
+        for _u69 in _User69.query.filter(_User69.username.like("p69_retry%")).all():
+            _US69.query.filter_by(user_id=_u69.id).delete()
+            _db69.session.delete(_u69)
+        _db69.session.commit()
+check("logout: when the first attempt fails, the retry's epoch bump (every device) clears every "
+      "session row too, and says signed out",
+      _lo69.get("retry") == ((0, 1), 2, True), repr(_lo69))
+check("logout: ...and when the rows cannot be cleared either, the epoch bump is still committed (the "
+      "revocation is never lost to the cleanup)",
+      _lo69.get("retry_rows_locked") == ((2, 1), 2, True), repr(_lo69))

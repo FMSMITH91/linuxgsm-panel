@@ -25,6 +25,28 @@ from panel.routes._shared import (REAUTH_BLOCKED_MSG, reauth_password, reauth_re
     reauth_reserve, spend_totp_step)
 
 
+def _r16c_bump_epoch_everywhere(user):
+    """logout's retry: bump `user`'s auth_epoch (every device signed out) and clear their rows.
+
+    The bump signs out every device, so every UserSession row goes too — left, they listed as live
+    sessions, with Revoke buttons, on the account page until they idled out (the legacy-cookie
+    branch already clears them). The rows are the cleanup, the bump is the revocation: when the
+    delete is what fails, the bump is committed alone. Raises when even that cannot be committed.
+    """
+    from panel.db.models import UserSession
+    try:
+        user.auth_epoch = (user.auth_epoch or 0) + 1
+        UserSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        with suppress(Exception):
+            _log.warning("logout: the session rows could not be cleared; revoking by epoch alone",
+                         exc_info=True)
+        user.auth_epoch = (user.auth_epoch or 0) + 1
+        db.session.commit()
+
+
 def register(app):
     _register_sign_in(app)
     _register_account(app)
@@ -109,9 +131,7 @@ def _register_sign_in(app):
             # failed — and a momentary SQLite lock (a concurrent backup, a WAL checkpoint during a
             # monitor sweep) is exactly the failure it is for.
             try:
-                _u = current_user._get_current_object()
-                _u.auth_epoch = (_u.auth_epoch or 0) + 1
-                db.session.commit()
+                _r16c_bump_epoch_everywhere(current_user._get_current_object())
                 revoked = True
             except Exception:
                 db.session.rollback()
