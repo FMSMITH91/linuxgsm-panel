@@ -32,7 +32,8 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
                              _r13b_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
-    _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons)
+    _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons,
+    game_account_write_refusal)
 
 
 def _summarise_action_output(detail):
@@ -910,8 +911,30 @@ def _register_players(app):
         db.session.commit()
         log_action(current_user, "set_query_type", target=gs.name, detail=raw or "(default)",
                    server=gs)
+        _r16b_retype_restart_check(gs)
         return jsonify({"success": True, "query_type": gs.query_type or "",
                         "queryable": is_player_queryable(gs.game_type, gs.query_type)})
+
+
+def _r16b_retype_restart_check(gs):
+    """Re-type the server's restart-when-empty check after its query-type override changed.
+
+    The hourly line names the gamedig type it queries, or is the unconditional `if true` when there
+    is none, and the daily heal only runs once a day: until then the line kept the old type, and a
+    game queryable only through the new override was still restarted at the daily time whoever was
+    playing. The in-place upgrade rewrites a recognised check to what set_daily_restart writes now.
+    It rewrites the crontab, so it asks what every cron write asks, silently, as _cron_listing does.
+    Best-effort: the override is stored either way, and the daily pass rewrites the line.
+    """
+    if not gs.daily_restart:
+        return
+    try:
+        if game_account_write_refusal(gs.remote, gs.short_name) is None:
+            _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
+                                              game_type=gs.game_type, port=gs.port,
+                                              query_type=gs.query_type)
+    except Exception:  # noqa: BLE001 - best-effort, see above
+        _log.debug("restart check re-type skipped", exc_info=True)
 
 
 def _register_moderation(app):
@@ -955,7 +978,10 @@ def _register_moderation(app):
         if action == "ban":
             steamid = _preresolve_ban_steamid(gs, target, steamid)
         try:
-            ok, msg = _moderate_here(gs, action, target, message, steamid, num)
+            ok, said = _moderate_here(gs, action, target, message, steamid, num)
+            # In the viewer's language: moderate()'s answers are catalog sentences. The fan-out's
+            # _r15e_then looks it up again, which leaves a translated sentence as it is.
+            msg = i18n.tr(said)
             # Cross-server ban: on a successful ban with scope "all", apply the SAME ban to every
             # OTHER server the user can moderate that acts on this player's identifier — see
             # _ban_on_every_server.
@@ -1158,7 +1184,7 @@ def _register_schedules(app):
             host_h, host_m = at
             ok, detail = set_daily_restart(gs.remote, gs.short_name, gs.lgsm_name,
                                            gs.game_type, gs.port, enabled,
-                                           hour=host_h, minute=host_m)
+                                           hour=host_h, minute=host_m, query_type=gs.query_type)
             if ok:
                 gs.daily_restart = enabled
                 gs.daily_restart_at = "%02d:%02d" % (host_h, host_m)

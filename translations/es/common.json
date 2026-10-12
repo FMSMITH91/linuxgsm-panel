@@ -921,5 +921,18 @@
   "Timed out reaching {host} over Tailscale. Is the node online?": "Se agotó el tiempo al contactar con {host} por Tailscale. ¿Está el nodo en línea?",
   "Tailscale SSH failed: {why}": "Falló Tailscale SSH: {why}",
   "'{name}' on this host": "'{name}' en este host",
-  "another process on this host": "otro proceso de este host"
+  "another process on this host": "otro proceso de este host",
+  "That task has changed since the page loaded — reload Scheduled Tasks and try again.": "Esa tarea ha cambiado desde que se cargó la página: recarga Tareas programadas e inténtalo de nuevo.",
+  "The player was kicked but not banned: this server bans only players connected over the internet (not a bot or a local client), and its ban list must not be full.": "El jugador fue expulsado pero no baneado: este servidor solo banea a jugadores conectados por internet (no a un bot ni a un cliente local), y su lista de baneos no debe estar llena.",
+  "this host's SSH or the panel itself": "el SSH de este host o el propio panel",
+  "it is not a port": "no es un puerto",
+  "the ports already in use on the host could not be read before it started, so whether another process had it cannot be told": "no se pudieron leer los puertos ya en uso en el host antes de que arrancara, así que no se puede saber si otro proceso lo tenía",
+  "something else was listening on it before this server started": "otra cosa ya escuchaba en él antes de que arrancara este servidor",
+  "it is held by {holder}": "lo tiene {holder}",
+  "it is uid 0 (root)": "es el uid 0 (root)",
+  "it is in the {groups} group, which can become root": "está en el grupo {groups}, que puede convertirse en root",
+  "it has sudo rules of its own": "tiene sus propias reglas de sudo",
+  "it is root": "es root",
+  "it is the account the panel signs in to this host as": "es la cuenta con la que el panel inicia sesión en este host",
+  "it is the panel's own account": "es la propia cuenta del panel"
 }

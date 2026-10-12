@@ -3207,10 +3207,20 @@ def _cpu_core_names(A):
 # Drops the one line whose content — leading and trailing whitespace ignored — equals
 # $CRON_DROP. Through ENVIRON, not `-v`: awk expands backslash escapes in a `-v` value, and a
 # cron command may legitimately contain one.
+#
+# The FIRST such line only, and exit 3 when there is none. The `raw` an edit or delete names is
+# the line as the page listed it, and the line may have changed since (another viewer's edit, a
+# toggle, the daily in-place upgrade, a port move): the filter then dropped nothing and exited 0,
+# so delete answered "Deleted" having removed nothing and update appended its line beside the
+# old one — two schedules. And every line equal to `raw` went, so deleting one of two identical
+# tasks removed both.
 _CRON_DROP_AWK = (
     'awk \'BEGIN{w=ENVIRON["CRON_DROP"]} '
-    '{t=$0; gsub(/^[ \\t]+|[ \\t]+$/,"",t); if (t!=w) print}\' '
+    '{t=$0; gsub(/^[ \\t]+|[ \\t]+$/,"",t); if (t==w && !d) d=1; else print} '
+    'END{exit (d ? 0 : 3)}\' '
 )
+# _rewrite_crontab's answer when `drop_line` matched no line: nothing was installed.
+CRON_DROP_GONE = "drop_line matched no line"
 
 
 def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line=None):
@@ -3237,13 +3247,15 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     than `-v`, because `-v` processes backslash escapes in the value and a cron command may
     contain one.
     """
-    env_pre = ""
+    env_pre, gone = "", ""
     # `filt_ok` is the highest exit status that still means the filter did its job: grep answers 1
     # when it selected no line (every line filtered out — a legitimate empty result), cat and awk
     # answer 0 and nothing else; a write error (ENOSPC) is 2 from grep and awk, 1 from cat.
     if drop_line is not None:
         env_pre = "CRON_DROP=%s; export CRON_DROP; " % _quote(str(drop_line).strip())
         filt, filt_ok = _CRON_DROP_AWK, 0
+        # The line it names is not there (_CRON_DROP_AWK's exit 3): install nothing, and say so.
+        gone = '[ $R -eq 3 ] && exit 3; '
     elif grep_args:
         filt, filt_ok = f"grep {grep_args} ", 1
     else:
@@ -3286,7 +3298,8 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
         'E=$(crontab -l 2>&1 >"$L") || case "$E" in '
         '*"no crontab for"*) : >"$L" || exit 1 ;; '
         '*) printf "could not read the crontab: %s\\n" "$E" >&2; exit 1 ;; esac; '
-        f'{filt}<"$L" >"$T"; [ $? -le {filt_ok} ] || {{ echo "could not filter the crontab" >&2; exit 1; }}; '
+        f'{filt}<"$L" >"$T"; R=$?; {gone}'
+        f'[ $R -le {filt_ok} ] || {{ echo "could not filter the crontab" >&2; exit 1; }}; '
         f'{appends}crontab "$T"'
     )
     # It WAS a hand-built `sudo bash -c …` passed with sudo=False — the exact shape SECURITY.md
@@ -3308,6 +3321,8 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     # overlap lose whichever wrote first (see _host_locks).
     with crontab_lock(server, user):
         out, err, rc = shell_as_game_user(server, user, pipeline, timeout=20)
+    if drop_line is not None and rc == 3:
+        return False, CRON_DROP_GONE
     return rc == 0, (err or out or "")
 
 
@@ -3502,7 +3517,7 @@ def gamedig_cron_call():
 
 
 def set_daily_restart(server, user, selfname=None, game_type=None, port=None, enabled=True,
-                      hour=5, minute=0):
+                      hour=5, minute=0, query_type=None):
     """Enable/disable a daily restart that only fires when the server is EMPTY.
 
     A daily cron sets a 'restart-pending' flag; an hourly cron checks the player
@@ -3527,7 +3542,11 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
         _log.warning("daily restart: refusing a port that is not a number: %r", str(port)[:40])
         return False, "invalid port"
     flag = f"/home/{user}/.restart-pending"
-    gdtype = GAMEDIG_TYPE.get(game_type or "", "")
+    # The per-server query-type override first, as every player read resolves it
+    # (cron._gamedig_type): the map alone has no type for a game queryable only through the
+    # override, and the check below was then the unconditional `if true`, restarting the server
+    # daily whoever was playing.
+    gdtype = cron._gamedig_type(game_type, query_type)
     # Crontab-only (no separate script file — file writes inside a `sudo bash -c`
     # pipeline misbehave under eventlet's green subprocess; crontab-only works).
     #   daily <hour>:<minute>: set the "pending" flag

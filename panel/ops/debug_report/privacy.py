@@ -793,6 +793,11 @@ def scrub(ctx, text):
     except Exception as exc:  # noqa: BLE001 - nothing pattern-only is printed after this
         st.pattern_error = type(exc).__name__
         return _withhold(text)
+    try:
+        text = _r16b_named_tokens(text, st)
+    except Exception as exc:  # noqa: BLE001 - withhold rather than print a token in fragments
+        st.pattern_error = type(exc).__name__
+        return _withhold(text)
     text = _names_pass(text, st)
     found = set()
     try:
@@ -806,6 +811,36 @@ def scrub(ctx, text):
         # so an address or a long token holding the name is still redacted whole.
         text = _names_pass(text, st, only=found)
     return text
+
+
+def _r16b_named_tokens(text, st):
+    """`text` with every long token that holds a known name redacted whole, before the names run.
+
+    The names run before _redact, and a name is matched between any non-alphanumerics, so a
+    28+-character secret with a known name inside it between '-', '_', '/' or '+' became
+    fragments around the name's token, each under the long-token rule's 28 — and printed. The
+    same token holding no known name was redacted whole; now this one is too. A traceback frame
+    path the long-token rule keeps (_so._SAFE_FRAME_PATH_RE) is kept here as well.
+    """
+    tokens = list(_so._LONG_TOKEN_RE.finditer(text))
+    if not tokens:
+        return text
+    names = st.snapshot()[0]
+    low = _fold(" ".join(m.group(0) for m in tokens))
+    present = sorted((n for n in names if " " not in n and n in low), key=len, reverse=True)
+    if not present:
+        return text
+    rx = re.compile(r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])" % "|".join(map(re.escape, present)),
+                    re.I)
+    safe = [m.span(2) for m in _so._FRAME_RE.finditer(text)
+            if _so._SAFE_FRAME_PATH_RE.match(m.group(2))]
+
+    def _sub(m):
+        if not rx.search(m.group(0)) or any(a <= m.start() and m.end() <= b for a, b in safe):
+            return m.group(0)
+        st.hit("redact:token", m.group(0))
+        return "[redacted]"
+    return _so._LONG_TOKEN_RE.sub(_sub, text)
 
 
 def _names_pass(text, st, only=None):

@@ -4155,7 +4155,8 @@ try:
         _app10mod.ensure_node_tools_cron = lambda r: (
             _nt10.append(("host", r.name)),
             (_ for _ in ()).throw(ConnectionError("down")) if r.name == "east" else None)
-        _smcron10.upgrade_managed_cron_tracking = lambda remote, short, lgsm, game_type=None, port=None: (
+        _smcron10.upgrade_managed_cron_tracking = lambda remote, short, lgsm, game_type=None, port=None, \
+            query_type=None: (
             _nt10.append(("cron", short, game_type, port)),
             (_ for _ in ()).throw(RuntimeError("x")) if short == "css1" else None)
         try:

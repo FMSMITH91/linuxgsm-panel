@@ -1769,11 +1769,12 @@ def _account_probe_cmd(users):
 def _fold_acct_line(verdict, words):
     """Fold an `ACCT <user> <uid> <groups...>` line: uid 0 or a root group refuses, else "ok"."""
     groups = set(words[3:]) & _ROOT_EQUIVALENT_GROUPS
+    # Sentences, as every reason here: each fills the {why} of a refusal the routes translate.
     if words[2] == "0":
-        verdict[words[1]] = "it is uid 0 (root)"
+        verdict[words[1]] = i18n.Sentence("it is uid 0 (root)")
     elif groups:
-        verdict[words[1]] = ("it is in the %s group, which can become root"
-                             % ", ".join(sorted(groups)))
+        verdict[words[1]] = i18n.Sentence("it is in the {groups} group, which can become root",
+                                          groups=", ".join(sorted(groups)))
     else:
         verdict.setdefault(words[1], "ok")
 
@@ -1790,7 +1791,7 @@ def _fold_probe_line(verdict, words, users):
     elif kind == "NOACCT":
         verdict.setdefault(user, "absent")
     elif kind == "SUDOERS" and verdict.get(user) in (None, "ok"):   # uid 0 / a group says more
-        verdict[user] = "it has sudo rules of its own"
+        verdict[user] = i18n.Sentence("it has sudo rules of its own")
 
 
 def _parse_account_probe(out, users):
@@ -1830,15 +1831,15 @@ def _refused_by_name(remote, users, local):
     refused = {}
     for u in users:
         if u == "root":
-            refused[u] = "it is root"
+            refused[u] = i18n.Sentence("it is root")
         elif not _sm.game_idents_ok(u):
             refused[u] = INVALID_ACCOUNT_NAME
         elif u == login:
-            refused[u] = "it is the account the panel signs in to this host as"
+            refused[u] = i18n.Sentence("it is the account the panel signs in to this host as")
         elif local:
             from panel.security.privileged import _is_panel_account
             if _is_panel_account(u):
-                refused[u] = "it is the panel's own account"
+                refused[u] = i18n.Sentence("it is the panel's own account")
     return refused
 
 

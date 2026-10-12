@@ -1341,6 +1341,11 @@ def _trusted_proxy_uids(value):
     explicit = value is not None
     for pos, entry in enumerate(_DEFAULT_PROXY_USERS if value is None else
                                 ([value] if isinstance(value, (str, int)) else value), 1):
+        # A JSON true is an int to Python, and trusted uid 1 (daemon): it names no account.
+        if isinstance(entry, bool):
+            logging.getLogger("panel.app").warning(
+                "trusted_proxy_users: entry %d is true/false, not an account; ignored", pos)
+            continue
         if isinstance(entry, int) or str(entry).strip().isdecimal():
             uids.add(int(entry))
             continue

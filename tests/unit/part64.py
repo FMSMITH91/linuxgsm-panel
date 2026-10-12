@@ -107,7 +107,7 @@ try:
             _gone64(r)
             raise RuntimeError("stand-in: deleted during its own install")
 
-    def _upg64(remote, short_name, lgsm_name, game_type=None, port=None):
+    def _upg64(remote, short_name, lgsm_name, game_type=None, port=None, query_type=None):
         _up64.append(short_name)
         if short_name == "p64gsa":
             _gone64(db.session.get(GameServer, _gsa64))

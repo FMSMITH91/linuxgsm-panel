@@ -686,7 +686,8 @@ def _node_tools_cron_pass(app):
                 continue
             try:
                 _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
-                                                  game_type=gs.game_type, port=gs.port)
+                                                  game_type=gs.game_type, port=gs.port,
+                                                  query_type=gs.query_type)
             except Exception:
                 _log.debug("cron upgrade failed for %s", row_label(gs, "name"), exc_info=True)
 

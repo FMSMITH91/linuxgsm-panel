@@ -114,7 +114,10 @@ def shared_port_note(names, port):
 # One game server row as the re-read found it: plain values. A commit expires every row the session
 # has loaded, and touching an expired row that a request deleted meanwhile raises — so with the rows
 # held as models, one row deleted while the pass ran ended the pass for every row and host after it.
-_Row = collections.namedtuple("_Row", "id remote_id name short_name lgsm_name game_type port installed")
+# query_type is the per-server gamedig override: the restart-when-empty check _cron_follows rewrites
+# is typed by it as well as by the game.
+_Row = collections.namedtuple(
+    "_Row", "id remote_id name short_name lgsm_name game_type port installed query_type")
 # One host, as its pass knows it: the row, its SSH and panel ports, a callable answering its
 # listening ports (read on first use, at most once), and its rows as the pass began.
 _Host = collections.namedtuple("_Host", "remote protected listening rows")
@@ -129,7 +132,7 @@ _Move = collections.namedtuple("_Move", "row port notes server")
 def _row(gs):
     """`gs` as a _Row."""
     return _Row(gs.id, gs.remote_id, gs.name, gs.short_name, gs.lgsm_name, gs.game_type, gs.port,
-                bool(gs.installed))
+                bool(gs.installed), gs.query_type)
 
 
 def _host_rows(remote_id):
@@ -337,7 +340,8 @@ def _cron_follows(remote, row, port):
     """
     try:
         changed = _sm.upgrade_managed_cron_tracking(remote, row.short_name, row.lgsm_name,
-                                                    game_type=row.game_type, port=port)
+                                                    game_type=row.game_type, port=port,
+                                                    query_type=row.query_type)
     except Exception:  # noqa: BLE001 - the move stands; the daily pass rewrites the line
         _log.warning("%s: its cron could not be pointed at port %s", row_label(row, "name"), port,
                      exc_info=True)

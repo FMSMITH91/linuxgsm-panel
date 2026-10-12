@@ -2970,9 +2970,19 @@ def _launch_job(job, args):
 
 
 def _in_own_unit(unit):
-    """True when this process runs inside the transient service `unit`."""
+    """True when this process runs inside the transient service `unit`.
+
+    The SYSTEM manager's unit: _launch_job's `systemd-run` as root puts it in system.slice. A name
+    alone was not enough. On a per-user install with a lingering user manager, the panel account
+    could start `systemd-run --user --unit=<unit>` and call the job from inside it: its cgroup
+    path, .../user@<uid>.service/app.slice/<unit>, ends in the same name, and the job then ran in
+    a unit the panel controls, the cgroup-kill bug this guard exists for. A user manager may name a
+    slice `system` too, so its own subtree is refused by its user@ component.
+    """
     cg = _cgroup_of(os.getpid())
-    return bool(cg) and cg.endswith("/" + unit)
+    if not cg or not cg.endswith("/system.slice/" + unit):
+        return False
+    return not any(part.startswith("user@") or part == "user.slice" for part in cg.split("/"))
 
 
 def _detach():
@@ -4792,9 +4802,15 @@ def do_restart_flags(args, content):
 
     Walking as root is the one part that needed root. Nothing here is built from an argument --
     the verb takes none.
+
+    The flag ENTRY is the answer, so it is looked at without following it (lexists). The home is
+    the account's own, so `ln -s /root/.ssh/id_ed25519 ~/.restart-pending` made exists() -- a stat
+    by root, through the link -- answer whether a path the panel user cannot see exists: the
+    existence oracle _probe_as was written to close. It also disagreed with the remote form,
+    `ls -1d`, which lists a dangling link.
     """
     try:
-        homes = sorted(os.listdir("/home"))
+        homes = sorted(os.listdir(HOME_ROOT))
     except OSError as exc:
         sys.stderr.write("cannot list /home: %s\n" % exc)
         return 1
@@ -4802,7 +4818,7 @@ def do_restart_flags(args, content):
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
             continue
         try:
-            if os.path.exists(os.path.join("/home", name, ".restart-pending")):
+            if os.path.lexists(os.path.join(HOME_ROOT, name, ".restart-pending")):
                 print(name)
         except OSError:
             # One unreadable home must not lose the others. The caller distinguishes "none

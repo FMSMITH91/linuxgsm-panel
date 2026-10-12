@@ -4365,7 +4365,8 @@ _AX_ACTION_FROM_CALLER = {
                                 # cron_delete / cron_run_now — each the action that route audits on
                                 # success
     "_read_refused",            # server_files' read routes pass browse_files / read_file /
-                                # upload_check — the refusal of a read as a root-capable account
+                                # upload_check / list_cron — the refusal of a read as a
+                                # root-capable account
     "_create_refused",          # server_files' create-path passes create_file / create_folder,
     "_create_answer",           # by the kind it was asked for
 }
