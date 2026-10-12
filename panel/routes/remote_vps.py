@@ -494,14 +494,9 @@ def _register_panel_port(app):
             port = 5000
 
         nums, shared, read_ok = _r14a_panel_port_rules(remote, port)
-        if not read_ok:
-            return jsonify({"success": False, "message": (
-                f"Couldn't read the firewall on this host, so port {port} can't be closed from "
-                f"here. Check the host is reachable and that UFW is installed, then try again.")})
-        if shared:
-            log_action(current_user, "close_panel_port", target=str(port), success=False,
-                       remote=remote, detail="opened by a multi-port rule: " + ", ".join(shared))
-            return jsonify({"success": False, "message": _r14a_shared_rule_message(port, shared)})
+        refusal = _r14a_close_refusal(remote, port, shared, read_ok)
+        if refusal is not None:
+            return refusal
         if not nums:
             return jsonify({"success": True, "message": f"Public port {port} is already closed."})
         # Delete by rule NUMBER (reliable across any rule format), force=True since this is
@@ -552,6 +547,19 @@ def _r14a_panel_port_rules(remote, port):
         elif scope:
             shared.append(str(g.get("port_label") or g.get("port_num")))
     return sorted(set(nums), reverse=True), shared, True   # highest first: numbers stay valid
+
+
+def _r14a_close_refusal(remote, port, shared, read_ok):
+    """Close public panel port's answer when it must close nothing, else None."""
+    if not read_ok:
+        return jsonify({"success": False, "message": (
+            f"Couldn't read the firewall on this host, so port {port} can't be closed from "
+            f"here. Check the host is reachable and that UFW is installed, then try again.")})
+    if shared:
+        log_action(current_user, "close_panel_port", target=str(port), success=False,
+                   remote=remote, detail="opened by a multi-port rule: " + ", ".join(shared))
+        return jsonify({"success": False, "message": _r14a_shared_rule_message(port, shared)})
+    return None
 
 
 def _r14a_shared_rule_message(port, shared):
