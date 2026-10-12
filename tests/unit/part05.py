@@ -5140,18 +5140,27 @@ def _r17d_root_names(tree, depth):
     imported under another name, a dirname chain of __file__ that long, or a name assigned from
     another root (through abspath/realpath/normpath), followed to a fixed point.
     """
-    roots = {_a.asname or _a.name for _n in _smg_ast.walk(tree)
-             if isinstance(_n, _smg_ast.ImportFrom) and _n.module == "unit"
-             for _a in _n.names if _a.name == "REPO_ROOT"}
+    roots = set()
+    for _n in _smg_ast.walk(tree):
+        roots |= _r17d_repo_root_imports(_n)
     is_root = _functools05.partial(_r17d_is_root, roots=roots, depth=depth)
     _assigns = [_n for _n in _smg_ast.walk(tree) if isinstance(_n, _smg_ast.Assign)]
-    _grew = True
-    while _grew:
-        _new = {_t.id for _n in _assigns if is_root(_n.value) for _t in _n.targets
-                if isinstance(_t, _smg_ast.Name)} - roots
+    _new = True
+    while _new:
+        _new = {_t for _n in _assigns if is_root(_n.value) for _t in _r17d_target_names(_n)} - roots
         roots |= _new
-        _grew = bool(_new)
     return is_root
+
+
+def _r17d_repo_root_imports(node):
+    """The names `from unit import REPO_ROOT [as X]` binds, if `node` is that import."""
+    if not (isinstance(node, _smg_ast.ImportFrom) and node.module == "unit"):
+        return set()
+    return {_a.asname or _a.name for _a in node.names if _a.name == "REPO_ROOT"}
+
+
+def _r17d_target_names(assign):
+    return {_t.id for _t in assign.targets if isinstance(_t, _smg_ast.Name)}
 
 
 def _r17d_call_name(call):
