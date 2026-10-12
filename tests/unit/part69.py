@@ -507,16 +507,19 @@ _prog69 = (_es69("{n} player is connected to {name}.", "{n} players are connecte
            "console.log(JSON.stringify(out));\n")
 _got69 = _node69(_name69, _prog69)
 if _got69 is not None:
+    # Each sentence inside the one <span> tfNodes hands back (review 1012b: so a live language switch
+    # can build it again).
     check("players dialog (es): \"3 jugadores están conectados a NAME.\" is one translated sentence, the "
           "count and the name escaped and guarded",
-          (_got69.get("three") or "").startswith('<strong data-no-i18n>3</strong> jugadores están conectados a '
-                                                 '<strong data-no-i18n>Mi&lt;Srv&gt;</strong>.')
-          and (_got69.get("one") or "").startswith('<strong data-no-i18n>1</strong> jugador está conectado a '),
+          (_got69.get("three") or "").startswith('<span><strong data-no-i18n>3</strong> jugadores están conectados a '
+                                                 '<strong data-no-i18n>Mi&lt;Srv&gt;</strong>.</span>')
+          and (_got69.get("one") or "").startswith('<span><strong data-no-i18n>1</strong> jugador está conectado a '),
           repr(_got69)[:900])
     check("backup players dialog (es): the counts and the server list sit in one translated sentence",
-          _got69.get("backup") == '<strong data-no-i18n>3</strong> jugadores están conectados a <strong '
+          _got69.get("backup") == '<span><strong data-no-i18n>3</strong> jugadores están conectados a <strong '
                                   'data-no-i18n>2</strong> servidores: <span data-no-i18n>A&lt;b&gt; (2), B (1)</span>.'
-          and (_got69.get("backup1") or "").startswith('<strong data-no-i18n>1</strong> jugador está conectado a '
+                                  '</span>'
+          and (_got69.get("backup1") or "").startswith('<span><strong data-no-i18n>1</strong> jugador está conectado a '
                                                        '<strong data-no-i18n>1</strong> servidor: '),
           repr(_got69)[:900])
     check("reboot banner (es): \"HOST necesita reiniciarse…\" is one sentence with the host in it, and the "
