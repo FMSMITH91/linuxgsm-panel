@@ -373,10 +373,15 @@ check("session links: the committed .claude/settings.json turns the session link
       (_cs50.get("attribution") or {}).get("sessionUrl") is False, repr(_cs50))
 _needle50 = ("claude.ai/code/" + "session_").encode()
 # Walked, not `git grep`: the suites run on a copy of the tree that is not a git checkout.
-_skip50 = {".git", ".venv", "venv", "node_modules", "data", "__pycache__", "worktrees"}
+# Skipped by name anywhere: tool output. Skipped only where the checkout puts them (the repo root,
+# .claude/worktrees): a `data` or `venv` directory deeper in the tree is tracked content, and was
+# skipped at any depth (review 1011d).
+_skip50 = {".git", "node_modules", "__pycache__"}
+_skip_at50 = {(".", ".venv"), (".", "venv"), (".", "data"), (".claude", "worktrees")}
 _hits50 = []
 for _dp50, _dn50, _fn50 in os.walk(_root):
-    _dn50[:] = [d for d in _dn50 if d not in _skip50]
+    _dn50[:] = [d for d in _dn50 if d not in _skip50
+                and (os.path.relpath(_dp50, _root), d) not in _skip_at50]
     for _f50 in _fn50:
         try:
             with open(os.path.join(_dp50, _f50), "rb") as _fh50:

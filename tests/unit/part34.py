@@ -127,7 +127,11 @@ def _bash34(sh, env_path=None, timeout=60):
     try:
         r = _sp34.run(["bash", "-c", sh],  # nosec B603 B607 - bash on this part's own fixtures
                       capture_output=True, text=True, timeout=timeout, env=env, check=False)
-    except _sp34.TimeoutExpired:
+    # Both classes: under the monkey-patched suite run(timeout=) raises the ORIGINAL module's
+    # TimeoutExpired (part43/part44 measure it), so a hung bash raised past this and ended part38's
+    # whole section instead of answering as a timed-out command (review 1011d).
+    except (_sp34.TimeoutExpired,
+            __import__("eventlet.patcher", fromlist=["original"]).original("subprocess").TimeoutExpired):
         return "", "Command timed out", -1
     return r.stdout.strip(), r.stderr, r.returncode
 

@@ -116,6 +116,18 @@ try:
     check("config text: the debug report reads bind_host 5 as unset (control: the helper it uses)",
           _drp57._cfg_text({"bind_host": 5}, "bind_host") == "" and _drp57._cfg_text(
               {"bind_host": "::1"}, "bind_host") == "::1")
+    # The report's own read, driven (review 1011d): the helper above stays green with
+    # _listen_lines reverted to `(cfg.get("bind_host") or "").strip()`, which raises on a 5.
+    _ll57 = []
+    _res57 = _types57.SimpleNamespace(add=_ll57.append, find=lambda *a, **k: None)
+    _ctx57 = _types57.SimpleNamespace(app=_types57.SimpleNamespace(config={"BOOT_PORT": 5000}),
+                                      memo=lambda key, fn: [])
+    with _patched():
+        _patch(_drp57, "_load_cfg", lambda: ({"bind_host": 5, "port": 5000}, True))
+        _ll57_err = _try57(_drp57._listen_lines, _ctx57, _res57, {})
+    check("config text: the debug report's network section reads bind_host 5 as unset (config auto)",
+          _ll57_err is None and any(_l.startswith("- **Bind**: config auto ·") for _l in _ll57),
+          repr((_ll57_err, _ll57)))
 finally:
     if _CFG57_SNAPSHOT is None:
         if _P9_CFG_PATH.exists():

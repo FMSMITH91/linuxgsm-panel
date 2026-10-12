@@ -118,7 +118,7 @@ for _attr, _fns in _WATCHED.items():
 # part58 (the third 2026-10-11 review: game files, bots, debug report, helper, routes) drives
 # part12's app in a real bash over a throwaway home, with stand-in tools; imports part01, 05, 12.
 # part59 (the 2026-10-11 third review's routes, tools and page fixes) drives part12's app and runs
-# node on its own fixtures; imports part01, 05, 12 and 47.
+# node on its own fixtures; imports part01, 05, 12, 47 and 56 (the js_coverage module part56 holds).
 # part60 (New file / New folder in the file browser) drives part12's app in a real bash over a
 # throwaway home, as part40 does for rename; imports part01, 12 and 40.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
