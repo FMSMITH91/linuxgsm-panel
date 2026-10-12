@@ -85,6 +85,7 @@ def _r15d_remove_made_tmp():
             for _dp, _dns, _fns in os.walk(_p):
                 for _d in _dns:
                     if not os.path.islink(os.path.join(_dp, _d)):
+                        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, on the suite's own temp dir, so rmtree can enter it
                         os.chmod(os.path.join(_dp, _d), 0o700)
             shutil.rmtree(_p, ignore_errors=True)   # what would not go is named below
         elif os.path.lexists(_p):

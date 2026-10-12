@@ -1915,7 +1915,7 @@ def _r14b_refused(detail, reason, path_room=200):
     """
     reason = _audit_safe(reason)
     if not detail:
-        return "refused: " + reason
+        return ": ".join(("refused", reason))
     shown = _audit_safe(detail, path_room + 1)
     if len(shown) > path_room:
         shown = shown[:path_room - 1] + "…"
