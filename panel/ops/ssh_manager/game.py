@@ -99,8 +99,14 @@ def capture_console(server, user, selfname=None, lines=180, since=None):
     and nothing above it — the reply to that send, never an older one. The row's number is
     history_size + cursor_y; tmux keeps it until its history is full, and then drops
     history_limit/10 rows at once (grid_collect_history), which shows as a history_size that went
-    DOWN. Counting a drop that did not happen, or missing a second one, only starts the capture
-    later, inside what is new: a reply cut short reads as unknown, never as an old table.
+    DOWN, and the start moves up by that many rows. A history that went down is counted as that
+    collect ONLY when one was possible — the history at the mark was already within
+    history_limit/10 of the limit. Otherwise something else shrank it: a resize reflows the pane
+    and resets the history (grid_reflow), as when an admin attaches `./<script> console` from a
+    terminal of another size. Subtracting then started the capture ABOVE the mark, in rows from
+    before the send, and the parsers took the previous table as current. That is unknown (rc 4),
+    as an unreadable pane is. Missing a second collect only starts the capture later, inside what
+    is new: a reply cut short reads as unknown, never as an old table.
     """
     selfname = selfname or user
     if since is not None:
@@ -108,7 +114,8 @@ def capture_console(server, user, selfname=None, lines=180, since=None):
         start = (f'set -- $(tmux -L "$SOCK" display -p -t {selfname} "#{{history_size}} #{{history_limit}}"); '
                  '[ -n "$2" ] || exit 4; '
                  f's=$(( {hs} + {cy} - $1 )); '
-                 f'if [ "$1" -lt {hs} ]; then t=$(( $2 / 10 )); [ "$t" -ge 1 ] || t=1; s=$(( s - t )); fi; ')
+                 f'if [ "$1" -lt {hs} ]; then t=$(( $2 / 10 )); [ "$t" -ge 1 ] || t=1; '
+                 f'[ {hs} -gt $(( $2 - t )) ] || exit 4; s=$(( s - t )); fi; ')
         inner = (_core._tmux_live_socket_sh(selfname) + start
                  + f'tmux -L "$SOCK" capture-pane -p -J -t {selfname} -S "$s"')
     else:
@@ -120,6 +127,19 @@ def capture_console(server, user, selfname=None, lines=180, since=None):
 # negation, to tell the column header from a row: both carry the word "uniqueid" when a player
 # picks the right name, and only one of them starts with a number.
 _VALVE_ROW_RE = re.compile(r'\s*#\s*\d+\s+"([^"]*)"')
+# The `status` table's header by its own shape: Source's "# userid name uniqueid connected …" and
+# GoldSrc's "#      name userid uniqueid frag time …" (tabs in ReHLDS's other layout). "uniqueid"
+# anywhere on a line that is not a row also took a player's chat line (`Bob : uniqueid`) printed
+# after the table, and the rows after it were none. Longer than a player name may be (31), so no
+# line starting with a name can be one.
+_R14B_VALVE_HEADER_RE = re.compile(
+    r"\s*#\s+(?:userid\s+name\s+uniqueid\s+connected|name\s+userid\s+uniqueid\s+frag\s+time)\b",
+    re.I)
+
+
+def _r14b_valve_header(ln):
+    """Whether `ln` is a valve `status` table header (_R14B_VALVE_HEADER_RE)."""
+    return _R14B_VALVE_HEADER_RE.match(ln) is not None
 
 
 def _parse_valve_status(text):
@@ -148,7 +168,7 @@ def _parse_valve_status(text):
     lines = (text or "").splitlines()
     start = 0
     for i, ln in enumerate(lines):
-        if "uniqueid" in ln.lower() and not _VALVE_ROW_RE.match(ln):
+        if _r14b_valve_header(ln):
             start = i + 1
     players, seen = [], set()
     for ln in lines[start:]:
@@ -170,18 +190,28 @@ def _parse_valve_status(text):
     return players
 
 
+# The `status` header by its own shape, from the start of the line: "num score ping [guid] name
+# lastmsg address …" (ioq3-derived, CoD, ET:Legacy). Matched as a substring test ("num", "score"
+# and "ping" anywhere, not a row), a player's chat line `say: Bob: num score ping`, which a
+# dedicated server echoes to its console after the real table, became the LAST header: the rows
+# after it were none, and a full server read as confirmed-empty (the Players card, the bots'
+# /players, and Kick/Ban finding nobody). Chat and every other log line start with their own tag
+# or a name, never with these words, and the shape is longer than a player name may be.
+_R14B_IDT3_HEADER_RE = re.compile(r"\s*num\s+score\s+ping\s+(?:guid\s+)?name\s+lastmsg\s+address\b",
+                                  re.I)
+
+
 def _idtech3_table_start(lines):
     """Index of the first row after the LAST 'num…score…ping' header (0 when there is none)."""
     start = 0
     for i, ln in enumerate(lines):
-        low = ln.lower()
         # ...and the header is a line that is NOT a player row. Every row begins with the slot
-        # number and the header begins with the word "num", so the leading character separates
-        # them. Without that, a player called "numscoreping" — twelve characters, well inside a
-        # CoD name limit — made their own row the header: last in the table it returned an empty
+        # number and the header begins with the word "num", so the anchored shape separates them.
+        # Without that, a player called "numscoreping" — twelve characters, well inside a CoD
+        # name limit — made their own row the header: last in the table it returned an empty
         # list, mid-table it dropped them and everyone above them, and either way the slot numbers
         # moderation needs came back None for the whole server.
-        if "num" in low and "score" in low and "ping" in low and not re.match(r"\s*\d", ln):
+        if _R14B_IDT3_HEADER_RE.match(ln):
             start = i + 1
     return start
 
@@ -354,7 +384,7 @@ def _send_and_capture(server, user, eng, selfname):
         #
         # And only what the pane printed AFTER the send. A send that worked with a reply slower
         # than 0.8s (a map change, a load spike) left the capture holding the previous `status`
-        # table — the background poller sends one every pass — and the parsers take the LAST
+        # table — the Players card's or a ban's own earlier send — and the parsers take the LAST
         # table, so that one was returned as current: players who had left, and a Ban by name
         # resolved to whoever held that name before. The send prints where the pane stood just
         # before it typed (mark=True), and the capture starts there: no reply yet is no table,
@@ -395,7 +425,7 @@ def _r13b_reply_complete(eng, out):
         return _idtech3_table_start(lines) > 0
     head = None
     for i, ln in enumerate(lines):
-        if "uniqueid" in ln.lower() and not _VALVE_ROW_RE.match(ln):
+        if _r14b_valve_header(ln):
             head = i
     if head is None:
         return False
@@ -489,9 +519,10 @@ def console_status(server, user, game_type, selfname=None):
     """One console `status`/`list` capture → (players, name), from a SINGLE round-trip.
 
     The parsed player list AND the server's advertised in-game name (the valve/idTech3 `hostname:`
-    line). Used by the background poller so a server gamedig can't query (e.g. no GSLT) isn't hit
-    with two separate `status` sends per pass — which would spam the very console an admin is
-    watching.
+    line). For monitoring._server_slots(allow_console=True), so a server gamedig can't query (e.g.
+    no GSLT) isn't hit with two separate `status` sends per read — which would spam the very
+    console an admin is watching. No background poll passes allow_console=True: the pollers never
+    type into a console.
 
     Returns (None, None) for a non-console game or on failure — NOT ([], None). An empty list is
     "confirmed empty", and this returned it for a send that never arrived, a capture that failed

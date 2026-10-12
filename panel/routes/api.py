@@ -265,7 +265,8 @@ def _register_server_status(app):
             status = "error"
 
         # The player counts come from the SAME cache /api/servers reads, kept fresh by the
-        # background poller (gamedig, with the console and LinuxGSM-query fallbacks).
+        # background poller (gamedig, with the LinuxGSM-query fallback; it never types into a
+        # console).
         #
         # This used to run `cat <console_log> | grep -c '...'` over SSH and then scan the result for
         # a line containing both "players" and "has". `grep -c` prints a bare number, so that loop
