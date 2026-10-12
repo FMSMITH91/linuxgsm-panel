@@ -885,8 +885,14 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         if (!_returnOwed) _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now);
       }
       showPanelBacklog(panelLines);
-      // The priming wipe took any panel push already shown; put back those the backlog lacks.
-      _r13c_reshowPanelPushes(panelLines, reshow, floor);
+      // The priming wipe took any panel push already shown; put back those the backlog lacks —
+      // and not one shown again since the wipe. The re-prime ends a catch-up still out (_primeAt
+      // -> _startResync -> _endResync), which shows the panel pushes it held AFTER the wipe; one
+      // newer than this backlog was put back a second time: Clear pressed while the first window's
+      // catch-up was out showed the next [panel] line twice. Here, not in the reshow: on this path
+      // the wipe set _lastPanelT back to the cut (_panelLinesWiped), so it now holds only what was
+      // shown since. Load older's wipe does not reset it, so there it would hide its own pushes.
+      _r13c_reshowPanelPushes(panelLines, reshow, Math.max(floor, _lastPanelT));
       updateTsNotice();
       _showTsOffNote(data);
       if (stick) stickConsole();
@@ -1254,12 +1260,6 @@ function _r13c_reshowPanelPushes(backlog, wiped, floor) {
   if (!wiped) return;
   var upTo = Number(floor) || 0;
   (backlog || []).forEach(function (r) { if (Number(r.t) > upTo) upTo = Number(r.t); });
-  // Nor any already shown since the wipe. The re-prime ends a catch-up still out (_primeAt ->
-  // _startResync -> _endResync), and that shows the panel pushes it held AFTER the wipe; one newer
-  // than this backlog was then put back here a second time — Clear pressed while the first
-  // window's catch-up was out showed the next [panel] line twice. Nothing else raises _lastPanelT
-  // between the wipe (which sets it back to the cut) and here but the backlog, already counted.
-  if (_lastPanelT > upTo) upTo = _lastPanelT;
   _r13c_panelPushes.forEach(function (d) {
     if (Number(d.ts) <= upTo) return;
     appendConsole(d.data, d.ts, false);
