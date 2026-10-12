@@ -297,12 +297,11 @@ check("moderation: a non-console game (rust) supports nothing",
 # success audit row, counted the Bedrock servers in "Also banned on N other servers", and the
 # griefer reconnected. Kick and say are real on Bedrock and must stay.
 check("moderation: a Bedrock server offers kick + say but NOT ban (BDS has no ban command)",
-      _sm_game.moderation_caps("mcb") == {"kick": True, "ban": False, "say": True}
-      and _sm_game.moderation_caps("mcbe") == {"kick": True, "ban": False, "say": True},
-      str((_sm_game.moderation_caps("mcb"), _sm_game.moderation_caps("mcbe"))))
+      _sm_game.moderation_caps("mcb") == {"kick": True, "ban": False, "say": True},
+      str(_sm_game.moderation_caps("mcb")))
 # ...and the API refuses it too, not just the button — the route is reachable directly.
 _mcb_ban = _sm_game.moderate(None, "u", "mcb", "ban", "Steve", selfname="mcbserver")
-_mc_ban_ok = _sm_game.moderation_caps("paper")["ban"]
+_mc_ban_ok = _sm_game.moderation_caps("pmc")["ban"]
 check("moderation: ...and moderate() refuses a Bedrock ban rather than reporting 'Done.'",
       _mcb_ban[0] is False and "allowlist" in _mcb_ban[1],
       str(_mcb_ban))

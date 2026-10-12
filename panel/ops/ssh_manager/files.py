@@ -6,7 +6,7 @@ resolve across its submodules).
 """
 import re
 import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
-from panel.core import terminal
+from panel.core import i18n, terminal
 from panel.security import privileged as _priv
 import posixpath as _pp
 import unicodedata as _ud
@@ -519,8 +519,11 @@ def lgsm_write_config(server, user, selfname, updates):
         return False, LGSM_CONFIG_UNREAD
     _shadowed = _shadowed_by_secrets(updates, secrets)
     if _shadowed:
-        return False, ("%s is set in secrets-%s.cfg, which LinuxGSM reads after %s.cfg, so a change "
-                       % (", ".join(_shadowed), selfname, selfname) + _SECRETS_SHADOW_TAIL)
+        # One whole sentence (an i18n.Sentence); its English still ends with _SECRETS_SHADOW_TAIL, which
+        # write_failure_reason recognises it by.
+        return False, i18n.Sentence("{keys} is set in secrets-{name}.cfg, which LinuxGSM reads after {name}.cfg, "
+                                    "so a change here would not take effect. Edit it in that file — nothing "
+                                    "has been changed.", keys=", ".join(_shadowed), name=selfname)
     # A key posted with the value secrets-<selfname>.cfg already gives it is in effect as it is;
     # writing it would copy the secret into the instance cfg, the file people back up and share,
     # which is what the secrets file is there to keep it out of.

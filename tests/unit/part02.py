@@ -929,6 +929,9 @@ try:
     finally:
         _bk._helper_present, _bk._run_verb, _bk._is_system_service = _o_hp, _o_rv, _o_ss
         _bk_so._update_in_progress = _o_upd
+        # Each successful restore above stamped restore_pending's grace window (backup.py). Zero it,
+        # not restore a snapshot: a snapshot taken after an earlier restore puts that time back.
+        _bk._r12a_restore_dispatched["ts"] = 0.0
 finally:
     _bk.get_passphrase = _orig_getpass
 
@@ -1228,7 +1231,7 @@ try:
           _fok is True and _fskip is False and "./gmodserver backup" in " ".join(_cap_busy["cmds"]))
     # ── the per-server query_type override reaches the guard ──────────────────────────────────
     # run_game_backup had no query_type parameter at all, so player_count's fourth argument was
-    # always None and the gamedig type came from the 26-entry built-in map ALONE. A game the map
+    # always None and the gamedig type came from the built-in map ALONE. A game the map
     # does not cover — Project Zomboid, ARK, Mordhau, Killing Floor — whose operator set the
     # override precisely so the panel could query it resolved to "", player_count answered None,
     # and this function's documented rule reads None as empty: the hourly ticker ran LinuxGSM's
@@ -1274,7 +1277,7 @@ finally:
 _sm_game._bkverify_unconfirmed = _orig_bkverify
 
 # ── player_count_via_lgsm_query: the THIRD reader in this file to need the `ok` guard ──────────
-# It covers games absent from the 26-entry GAMEDIG_TYPE map by using LinuxGSM's own querytype, and
+# It covers games absent from the built-in GAMEDIG_TYPE map by using LinuxGSM's own querytype, and
 # it fed the reboot-when-empty poller (monitoring._host_idle_state -> _reboot_when_empty_watch).
 # It asked jq for a bare `.players|length`; gamedig writes its failure to stdout as
 # {"error":"Failed all 1 attempts"}, `.players` is then null, and jq reports the length of null as

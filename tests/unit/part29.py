@@ -256,6 +256,10 @@ def _cf1_every_harness(tmp):
             continue
         read.append(name)
         fuzzed |= _panel_files29(new)
+        # ...and the panel modules its pre-load imports. Loaded before instrumentation, but a change
+        # to one still changes what the harness runs (or breaks its bundle): panel.core.config is
+        # the last entry of every pre-load, and so was in neither job's scope (review 1011e).
+        fuzzed |= _panel_files29(_harness_lists().get(name, ()))
         if _foreign_note29(new):
             bad[name] = _foreign_note29(new)
     check("fuzz harnesses: EVERY harness's instrumented imports load only panel modules and the "
@@ -499,8 +503,10 @@ def _ci1_wiring():
 _U29 = ("PASS  a\nPASS  b\nSKIP  root gate   [skipped: needs root and a daemon account]\n"
         "SKIP  zsh thing   [skipped: no zsh on this machine]\n\n2 / 2 checks passed\n\n"
         "2 CHECK(S) DID NOT RUN:\n  SKIP  root gate   [skipped: needs root and a daemon account]\n")
-_R_OK29 = ("PASS  a\nFAIL  b   [a detail\nthat spans lines]\nPASS  r1\nPASS  r2\n"
-           "SKIP  zsh thing   [skipped: no zsh on this machine]\n\n3 / 4 checks passed\n")
+# As root the gate's branch runs, and records itself under the skip's own name (part12's
+# _r15d_root_ran), beside its own checks r1 and r2.
+_R_OK29 = ("PASS  a\nFAIL  b   [a detail\nthat spans lines]\nPASS  r1\nPASS  r2\nPASS  root gate\n"
+           "SKIP  zsh thing   [skipped: no zsh on this machine]\n\n4 / 5 checks passed\n")
 
 
 def _verdict29(code, tmp, user, root):
@@ -519,17 +525,29 @@ def _ci1_verdict(tmp):
     code = src[src.find("<<'EOF'\n") + 8:src.rfind("\nEOF")]
     v = {"ok": _verdict29(code, tmp, _U29, _R_OK29),
          "fail": _verdict29(code, tmp, _U29, _R_OK29.replace("PASS  r2\n", "FAIL  r2   [boom]\n")),
-         "shut": _verdict29(code, tmp, _U29, _R_OK29 + "SKIP  root gate   [skipped: needs root and x]\n"),
-         "tally": _verdict29(code, tmp, _U29, _R_OK29.replace("3 / 4 checks passed", "Traceback")),
+         "shut": _verdict29(code, tmp, _U29, _R_OK29.replace(
+             "PASS  root gate\n", "SKIP  root gate   [skipped: needs root and x]\n")),
+         # Review 1011e: the branch ran as root but emitted nothing under the gate's name, or
+         # skipped under another one; both read as run, because only a SKIP of the same name failed.
+         "silent": _verdict29(code, tmp, _U29, _R_OK29.replace("PASS  root gate\n", "")),
+         "renamed": _verdict29(code, tmp, _U29, _R_OK29.replace(
+             "PASS  root gate\n", "SKIP  root gate, renamed   [skipped: needs root]\n")),
+         "tally": _verdict29(code, tmp, _U29, _R_OK29.replace("4 / 5 checks passed", "Traceback")),
          "none": _verdict29(code, tmp, _U29, _U29),
          "nogate": _verdict29(code, tmp, _U29.replace("needs root and", "needs"), _R_OK29)}
     check("ci root step: passes when every check that ran only as root passed, a check failing as "
           "root that also ran as the runner aside (control)",
-          all([code, v["ok"][0] == 0, "ran only as root: 2" in v["ok"][1]]), repr(v["ok"]))
+          all([code, v["ok"][0] == 0, "ran only as root: 3" in v["ok"][1]]), repr(v["ok"]))
     check("ci root step: ...fails on a root-only check that failed, naming it",
           all([v["fail"][0], "::error::failed as root: r2" in v["fail"][1]]), repr(v["fail"]))
     check("ci root step: ...and when a check skipped for want of root still skipped as root",
-          all([v["shut"][0], "still skipped as root: root gate" in v["shut"][1]]), repr(v["shut"]))
+          all([v["shut"][0], "did not run and pass under its own name as root: root gate" in v["shut"][1]]),
+          repr(v["shut"]))
+    check("ci root step: ...and when its branch ran as root but recorded nothing under the gate's "
+          "name, or skipped under another name",
+          all([v["silent"][0], "did not run and pass under its own name as root: root gate" in v["silent"][1],
+               v["renamed"][0], "did not run and pass under its own name as root: root gate" in v["renamed"][1]]),
+          repr((v["silent"], v["renamed"])))
     check("ci root step: ...and when a run left no tally, or nothing ran only as root, or nothing "
           "was skipped for want of root (it judged nothing)",
           all([v["tally"][0], "left no tally" in v["tally"][1],

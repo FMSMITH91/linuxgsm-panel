@@ -14,6 +14,7 @@ from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from types import (SimpleNamespace)
+from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r13b_json_flag)
 from panel.core.validation import (NOT_AN_IP, canonical_ip)
 from app import (_autoblock_hosts, _local_remote_id, _maybe_set_threshold, _os_update_note,
@@ -111,8 +112,8 @@ def _register_host_tailscale(app):
         if success:
             so.invalidate_server_status()   # firewall changed → next page load re-probes
             log_action(current_user, "ufw_allow_tailscale", target=LOCAL_HOST_LABEL, detail=msg)
-            return jsonify({"success": True, "message": msg})
-        return jsonify({"success": False, "message": msg}), 500
+            return jsonify({"success": True, "message": i18n.tr(msg)})
+        return jsonify({"success": False, "message": i18n.tr(msg)}), 500
 
     @app.route("/api/server-management/ts-ssh-enable", methods=["POST"])
     @login_required
@@ -168,7 +169,7 @@ def _register_panel_update(app):
         from panel.services import host_reboot as _hr
         _busy = _hr.panel_host_busy()
         if _busy:
-            return jsonify({"success": False, "message": _busy}), 409
+            return jsonify({"success": False, "message": i18n.tr(_busy)}), 409
         success, msg = so.panel_self_update()
         log_action(current_user, "panel_self_update", target=LOCAL_HOST_LABEL, detail=msg, success=success)
         return jsonify({"success": success, "message": msg})
@@ -211,7 +212,7 @@ def _register_panel_update(app):
         branch = _json_str(_json_body(), "branch")
         success, msg = so.panel_switch_branch(branch)
         log_action(current_user, "panel_switch_branch", target=branch, detail=msg, success=success)
-        return jsonify({"success": success, "message": msg})
+        return jsonify({"success": success, "message": i18n.tr(msg)})
 
 
 def _register_panel_repair(app):
@@ -267,7 +268,7 @@ def _register_panel_repair(app):
             if ok and restored:
                 log_action(current_user, "panel_repair", target="panel",
                            detail=", ".join(restored)[:500], success=True)
-            return jsonify({"success": ok, "message": msg, "restored": restored})
+            return jsonify({"success": ok, "message": i18n.tr(msg), "restored": restored})
         except Exception:
             return jsonify({"success": False,
                             "message": _log_and_generic("panel repair failed")}), 500
@@ -338,7 +339,7 @@ def _register_panel_db_repair(app):
         try:
             ok, msg = so.panel_repair_database()
             log_action(current_user, "panel_repair_db", target="database", detail=msg, success=ok)
-            return jsonify({"success": ok, "message": msg})
+            return jsonify({"success": ok, "message": i18n.tr(msg)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("db repair failed")}), 500
 
@@ -386,10 +387,12 @@ def _r13c_block_refusal(ip):
     lr = RemoteServer.query.filter_by(is_local=True).first()
     if lr and tailnet_exempt_ips(lr, {ip}):
         return jsonify({"success": False, "message":
-                        "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
+                        i18n.tr("{ip} is a Tailscale address — "
+                                "blocking it would cut off tailnet access.", ip=ip)})
     if _whitelisted(ip):
         return jsonify({"success": False, "message":
-                        "%s is on the security whitelist — remove it there first to block it." % ip})
+                        i18n.tr("{ip} is on the security whitelist — "
+                                "remove it there first to block it.", ip=ip)})
     return None
 
 
@@ -414,7 +417,7 @@ def _register_panel_blocking(app):
                        target=canonical_ip(ip) or NOT_AN_IP, success=ok)
             if ok:
                 _banlist.refresh_soon(0)   # the panel's own gate, for traffic UFW cannot see
-            return jsonify({"success": ok, "message": msg})
+            return jsonify({"success": ok, "message": i18n.tr(msg)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("block failed")}), 500
 
@@ -465,7 +468,7 @@ def _register_panel_security_misc(app):
                 _banlist.refresh_soon(0)
             log_action(current_user, "fail2ban_unban", target=canonical_ip(banned_ip) or NOT_AN_IP,
                        detail="%s — %s" % (jail, msg), success=ok)
-            return jsonify({"success": ok, "message": msg})
+            return jsonify({"success": ok, "message": i18n.tr(msg)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("unban failed")}), 500
 

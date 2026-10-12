@@ -1017,7 +1017,26 @@ def _r14d_ignores_deprecations(call):
     _act = call.args[0] if call.args else _kw.get("action")
     return (isinstance(_act, _dw_ast.Constant) and _act.value == "ignore"
             and "module" not in _kw and "message" not in _kw
-            and (_cat is None or "DeprecationWarning" in _dw_ast.dump(_cat)))
+            and _r15d_category_covers_deprecations(_cat))
+
+
+# DeprecationWarning and every class it inherits from: ignoring any of them silences it. Only the
+# exact name was read (review 1011e), so `category=Warning` — the natural spelling for quieting
+# eventlet's banner, which subclasses Warning — passed this gate while deafening the panel.
+_R15D_DW_BASES = {"DeprecationWarning", "Warning", "Exception", "BaseException"}
+
+
+def _r15d_category_covers_deprecations(cat):
+    """Does a filter's category (an AST node, or None for none given) cover DeprecationWarning?"""
+    if cat is None:
+        return True
+    if isinstance(cat, _dw_ast.Tuple):
+        return any(_r15d_category_covers_deprecations(_e) for _e in cat.elts)
+    _name = getattr(cat, "attr", getattr(cat, "id", None))
+    if not isinstance(cat, (_dw_ast.Name, _dw_ast.Attribute)) or _name is None:
+        return True                       # computed: cannot be shown not to cover it
+    # A name that is not a warning class is a variable holding one, which could be any of them.
+    return _name in _R15D_DW_BASES or not _name.endswith("Warning")
 
 
 def _r14d_blanket_filters(tree):
@@ -1054,11 +1073,19 @@ _dw_ctl = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings as w\nw.filterwarnings(\n    "ignore",\n    category=DeprecationWarning)',
     'import warnings\nwarnings.simplefilter("ignore", DeprecationWarning)',
     'import warnings\nwarnings.simplefilter("ignore")',
-    'from warnings import filterwarnings\nfilterwarnings("ignore", "", DeprecationWarning)')}
+    'from warnings import filterwarnings\nfilterwarnings("ignore", "", DeprecationWarning)',
+    # Review 1011e: a base class of DeprecationWarning, or a category the gate cannot read.
+    'import warnings\nwarnings.filterwarnings("ignore", category=Warning)',
+    'import warnings\nwarnings.simplefilter("ignore", Warning)',
+    'import warnings\nwarnings.filterwarnings("ignore", ".*", Warning)',
+    'import warnings\nwarnings.filterwarnings("ignore", category=builtins.Exception)',
+    'import warnings\ncat = DeprecationWarning\nwarnings.filterwarnings("ignore", category=cat)',
+    'import warnings\nwarnings.simplefilter("ignore", (UserWarning, DeprecationWarning))')}
 _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", message="x", category=DeprecationWarning)',
     'import warnings\nwith warnings.catch_warnings():\n    warnings.simplefilter("ignore")',
     'import warnings\nwarnings.filterwarnings("ignore", category=UserWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", category=eventlet.EventletDeprecationWarning)',
     'import warnings\nwarnings.simplefilter("default", DeprecationWarning)')}
 check("...the filter gate names each blanket spelling, and passes the scoped ones (controls)",
       all(_dw_ctl.values()) and not any(_dw_ok.values()), repr((_dw_ctl, _dw_ok)))
@@ -1817,7 +1844,7 @@ def _enclosing_bodies(node):
 _open_calls, _unguarded = 0, []
 for _c in _ast.walk(_ms_ast):
     if not (isinstance(_c, _ast.Call)
-            and getattr(_c.func, "id", "") == "remote_ufw_allow_game_ports"):
+            and getattr(_c.func, "id", getattr(_c.func, "attr", "")) == "remote_ufw_allow_game_ports"):
         continue
     _arg = _c.args[1] if len(_c.args) > 1 else None
     _opened = getattr(_arg, "id", None)
@@ -1863,7 +1890,7 @@ for _n in _ast.walk(_ms_ast):
     if not (isinstance(_n, _ast.FunctionDef) and _n.name == "uninstall_server"):
         continue
     for _c in _ast.walk(_n):
-        if (isinstance(_c, _ast.Call) and getattr(_c.func, "id", "") == "url_for"
+        if (isinstance(_c, _ast.Call) and getattr(_c.func, "id", getattr(_c.func, "attr", "")) == "url_for"
                 and _c.args and isinstance(_c.args[0], _ast.Constant)
                 and _c.args[0].value == "manage_servers"):
             _uninstall_bad.append("line %d" % _c.lineno)
@@ -1886,7 +1913,7 @@ check("uninstall: no exit sends the operator to a page their permission cannot o
 # this code, so a substring check proves nothing. Assert the reset is in a finalbody.
 _prime_resets, _prime_unprotected = 0, []
 for _n in _ast.walk(_ms_ast):
-    if not (isinstance(_n, _ast.Call) and getattr(_n.func, "id", "") == "lgsm_write_config"):
+    if not (isinstance(_n, _ast.Call) and getattr(_n.func, "id", getattr(_n.func, "attr", "")) == "lgsm_write_config"):
         continue
     _src = _ast.dump(_n)
     if "'steamcmdforcewindows'" not in _src or "'no'" not in _src:
@@ -2218,6 +2245,7 @@ try:
     del _dbr_became[:]
     _dbr_rc = _dbr.main(["db_maintenance.py", "repair", os.path.join(_dbr_cf + "-link", "panel.db")])
     os.chdir(_dbr_cwd)
+    os.unlink(_dbr_cf + "-link")    # beside the temp dir, not in it: the run's cleanup would miss it
     check("db repair as root: a symlinked database directory is refused, and nothing runs",
           _dbr_rc == 1 and not _dbr_repaired and not _dbr_became,
           "rc=%r repaired=%r became=%r" % (_dbr_rc, _dbr_repaired, _dbr_became))
@@ -5001,23 +5029,23 @@ _NO_TARGET_OK = {
     "lgsm_data_refresh",
 }
 import ast as _ast_log
-_missing_target = []
+_missing_target, _r15d_log_calls = [], 0
 for _dirpath, _dirnames, _filenames in os.walk(_root):
-    if any(_skip in _dirpath for _skip in (".venv", "venv", "/tests", "node_modules", "/.git")):
-        continue
+    # Skipped by the path INSIDE the checkout: matched on the absolute path, a checkout under a
+    # directory named `venv` or `tests…` read nothing and passed (review 1011e).
+    _dirnames[:] = [_d for _d in _dirnames
+                    if _d not in (".venv", "venv", "tests", "node_modules", ".git")]
     for _fn in _filenames:
         if not _fn.endswith(".py"):
             continue
         _fp = os.path.join(_dirpath, _fn)
-        try:
-            _tree = _ast_log.parse(open(_fp, encoding="utf-8").read())
-        except (SyntaxError, OSError):
-            continue
+        _tree = _ast_log.parse(open(_fp, encoding="utf-8").read())   # unreadable: fail, not skip
         for _n in _ast_log.walk(_tree):
             if not isinstance(_n, _ast_log.Call):
                 continue
             if getattr(_n.func, "id", getattr(_n.func, "attr", None)) != "log_action":
                 continue
+            _r15d_log_calls += 1
             # log_action(user, action, target=..., ...) — target is the 3rd positional or a kwarg
             if "target" in {_k.arg for _k in _n.keywords if _k.arg} or len(_n.args) >= 3:
                 continue
@@ -5027,7 +5055,8 @@ for _dirpath, _dirnames, _filenames in os.walk(_root):
                 continue
             _missing_target.append("%s:%d %s" % (os.path.relpath(_fp, _root), _n.lineno, _act))
 check("audit: every logged action names a target (or is listed as having none)",
-      not _missing_target,
+      _r15d_log_calls >= 100 and not _missing_target,
+      "%d log_action calls read; " % _r15d_log_calls +
       "; ".join(sorted(_missing_target)[:5]) +
       " — pass target= (LOCAL_HOST_LABEL for panel-host actions), or add it to _NO_TARGET_OK "
       "with a reason")

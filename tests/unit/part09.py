@@ -452,6 +452,11 @@ finally:
     for _gh_a, _gh_v in _gh_bk_saved.items():
         setattr(_gh_bk, _gh_a, _gh_v)
     _gh_so._update_in_progress = _gh_upd_saved
+    # The successful restores above stamped restore_pending's 120 s grace window, and part10 runs
+    # next: zero it, or every stage under backup.DATA_DIR reads as a pending restore (review 1011e).
+    _gh_bk._r12a_restore_dispatched["ts"] = 0.0
+check("backup: part09's restores leave no restore-dispatch stamp for the parts after it",
+      _gh_bk._r12a_restore_dispatched.get("ts") == 0.0, repr(_gh_bk._r12a_restore_dispatched))
 
 # ── load: a row @validates never saw is FLAGGED, not fatal, and not rewritten ────────────────────
 _gh_logdb = os.path.join(_gh_dir, "load.db")

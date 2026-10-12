@@ -229,7 +229,7 @@ window.stopPolling = function(id){
 // something last happened, and a second copy of this would drift from the first.
 window.agoText = function(epoch){
   var s = Math.max(0, Math.floor(Date.now()/1000 - epoch));
-  if(s < 60) return 'just now';
+  if(s < 60) return t('just now');   // a tf value is never translated: the caller's sentence takes it as is
   if(s < 3600) return tf('{n}m ago', {n: Math.floor(s/60)});
   if(s < 86400) return tf('{n}h ago', {n: Math.floor(s/3600)});
   return tf('{n}d ago', {n: Math.floor(s/86400)});

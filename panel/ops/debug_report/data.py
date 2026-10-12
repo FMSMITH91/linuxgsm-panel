@@ -76,7 +76,7 @@ def _db_path():
 def _int_cfg(c, key, default):
     try:
         return int(c.get(key, default) or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):   # OverflowError: a hand-edited `Infinity`
         return None
 
 

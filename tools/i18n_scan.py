@@ -34,6 +34,7 @@ Usage:
     python tools/i18n_scan.py            # report gaps against the es catalog
     python tools/i18n_scan.py --all      # also list the strings that ARE covered
 """
+import ast
 import glob
 import html
 import json
@@ -65,13 +66,102 @@ _HAS_LETTER = re.compile(r"[A-Za-z]")
 def _resolve_jinja(src):
     """Turn template source into markup carrying _SPLIT / _DYNAMIC where Jinja tags were."""
     src = re.sub(r"\{#.*?#\}", "", src, flags=re.S)
-    # The title block renders into <head><title>, and the runtime walker only ever walks
-    # document.body — so nothing in it is translatable and reporting it would be reporting a gap
-    # no catalog entry could close.
-    src = re.sub(r"\{%\s*block title\s*%\}.*?\{%\s*endblock\s*%\}", "", src, flags=re.S)
+    # The title block renders into <head><title>, which the runtime walker never reads (it walks
+    # document.body), so its text is translated on the server or not at all: through t() there,
+    # which _expression_labels claims. Literal words left in it are reported (_r15c_title_words).
+    src = re.sub(_R15C_TITLE_BLOCK, "", src, flags=re.S)
+    # An if/elif/else/endif ends no text node in the rendered page: `{% if a %}Super Admin{% else
+    # %}Standard{% endif %} · Account` is ONE node per branch, branch and neighbours together. Read
+    # as a split, each half was found in the catalog and the welded whole, which the walker looks
+    # up, was never asked for (review 1011e: three such nodes stayed English). Marked apart here;
+    # handle_data rebuilds each branch's node where it can, and splits as before where it cannot.
+    src = re.sub(r"\{%-?\s*if\b.*?%\}", _R15C_IF, src, flags=re.S)
+    src = re.sub(r"\{%-?\s*elif\b.*?-?%\}", _R15C_ELIF, src, flags=re.S)
+    src = re.sub(r"\{%-?\s*else\s*-?%\}", _R15C_ELSE, src, flags=re.S)
+    src = re.sub(r"\{%-?\s*endif\s*-?%\}", _R15C_ENDIF, src, flags=re.S)
     src = re.sub(r"\{%.*?%\}", _SPLIT, src, flags=re.S)
     src = re.sub(r"\{\{.*?\}\}", _DYNAMIC, src, flags=re.S)
     return src
+
+
+_R15C_IF, _R15C_ELIF, _R15C_ELSE, _R15C_ENDIF = "\x03", "\x06", "\x04", "\x05"
+_R15C_BRANCH_MARKS = _R15C_IF + _R15C_ELIF + _R15C_ELSE + _R15C_ENDIF
+
+
+def _r15c_as_splits(text):
+    """`text` with every if/else/endif mark read as the plain split it was before."""
+    return re.sub("[%s]" % _R15C_BRANCH_MARKS, _SPLIT, text)
+
+
+def _r15c_branch_nodes(run):
+    """The text nodes one run renders, one per way through the {% if %}s in it (nested ones too).
+
+    None when the run holds no if, or marks this cannot pair (an element inside a branch puts its
+    tags in different text runs): the marks are then read as splits, as before.
+    """
+    if not any(c in run for c in _R15C_BRANCH_MARKS):
+        return None
+    tokens = re.split("([%s])" % _R15C_BRANCH_MARKS, run)
+    try:
+        variants, _end = _r15c_expand(tokens, 0, False)
+    except ValueError:
+        return None
+    return variants
+
+
+_R15C_MAX_NODES = 64
+
+
+def _r15c_if_branches(tokens, i):
+    """(every text one {% if %}…{% endif %} starting after tokens[i-1] renders, the index past it)."""
+    branches, has_else = [], False
+    while True:
+        got, i = _r15c_expand(tokens, i, True)
+        branches.extend(got)
+        if tokens[i] == _R15C_ENDIF:
+            break
+        has_else = has_else or tokens[i] == _R15C_ELSE
+        i += 1                                        # past an elif/else: the next branch
+    # With an else one branch always renders; without one, none may.
+    return branches + ([] if has_else else [""]), i + 1
+
+
+def _r15c_expand(tokens, i, inside):
+    """(every text tokens[i:] renders up to a closing mark, where it stopped). ValueError: unpaired."""
+    out = [""]
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in (_R15C_ELIF, _R15C_ELSE, _R15C_ENDIF):
+            if not inside:
+                raise ValueError(tok)
+            return out, i
+        if tok == _R15C_IF:
+            branches, i = _r15c_if_branches(tokens, i + 1)
+            out = [o + b for o in out for b in branches]
+            if len(out) > _R15C_MAX_NODES:
+                raise ValueError("too many ways through")
+            continue
+        out = [o + tok for o in out]
+        i += 1
+    if inside:
+        raise ValueError("unclosed if")
+    return out, i
+
+
+_R15C_TITLE_BLOCK = r"\{%\s*block title\s*%\}(.*?)\{%\s*endblock\s*%\}"
+
+
+def _r15c_title_words(source):
+    """The literal words of a template's title block: English in every tab, whatever the language.
+
+    The block used to be dropped as "a gap no catalog entry could close", and every page's tab
+    title stayed English; t() is in every template's context, so it can be closed there.
+    """
+    out = []
+    for m in re.finditer(_R15C_TITLE_BLOCK, re.sub(r"\{#.*?#\}", "", source, flags=re.S), re.S):
+        bare = re.sub(r"\{%.*?%\}|\{\{.*?\}\}", _SPLIT, m.group(1), flags=re.S)
+        out.extend(part.strip() for part in bare.split(_SPLIT) if is_translatable(part))
+    return out
 
 
 def is_translatable(text):
@@ -144,7 +234,7 @@ class _Walker(HTMLParser):
             # left") reach the browser as one value no catalog key can equal. Those were skipped,
             # so the gate passed while every such label stayed English; reported as unreachable
             # now, as text runs are.
-            for branch in html.unescape(value).split(_SPLIT):
+            for branch in _r15c_as_splits(html.unescape(value)).split(_SPLIT):
                 branch = re.sub(r"\s+", " ", branch).strip()
                 if _DYNAMIC not in branch:
                     if is_translatable(branch):
@@ -167,9 +257,13 @@ class _Walker(HTMLParser):
 
     def handle_data(self, data):
         if self._skip_at is not None:
-            self._skipped_prose(data)
+            self._skipped_prose(_r15c_as_splits(data))
             return
+        runs = []
         for run in data.split(_SPLIT):
+            nodes = _r15c_branch_nodes(run)
+            runs.extend(nodes if nodes is not None else _r15c_as_splits(run).split(_SPLIT))
+        for run in runs:
             collapsed = re.sub(r"\s+", " ", run.replace(_DYNAMIC, "\x00")).strip()
             if not is_translatable(collapsed):
                 continue
@@ -279,6 +373,8 @@ def scan_template(path):
     walker.close()
     for text in _expression_labels(source):
         walker.strings.setdefault(text, set()).add("expr")
+    for text in _r15c_title_words(source):
+        walker.dynamic.setdefault(text, set()).add("title")
     return walker.strings, walker.dynamic
 
 
@@ -426,12 +522,19 @@ def is_js_ui_word(text, before):
 _JS_T_CALL = re.compile(r"""\b(?:t|_discT|tf|tfHtml|tfn)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
 
 
+_R15C_QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
+
+
 def is_js_t_arg(text, before):
     """Is this literal an argument of t() / _discT(), given the source just `before` it?"""
     # Not the right-hand side of a comparison: t(action === 'stop' ? … : …) chooses by 'stop'.
     m = _JS_T_CALL.search(before)
     # Nor a VALUE of tf()/tfHtml(): `{dir: base || 'home'}` goes in untranslated, after the sentence.
-    if m and m.group(0).startswith("tf") and "{" in m.group(0):
+    # Judged on the call with its quoted literals taken out: a template's own {placeholder} is no
+    # values object, and read as one it left every template after it unclaimed (tfn's plural, the
+    # second branch of a ternary), so a new sentence there passed the gate with no translation.
+    call = _R15C_QUOTED.sub("", m.group(0)) if m else ""
+    if call.startswith("tf") and "{" in call:
         return False
     # A tf() template is a sentence by construction: its {placeholders}, a "/" or a "=" are words
     # there ("{used} / {total} used", "Blank = use the default"); only markup or code is refused.
@@ -617,16 +720,21 @@ def _js_whole_claim(joined, before):
     return None
 
 
+# How far back a literal's t()/tf() call is looked for. 160 characters lost the call of a plural
+# whose singular before it was longer than that (tfn(n, '<a long sentence>', '<its plural>', …)).
+_R15C_LOOKBACK = 600
+
+
 def _js_claim_parts(run, standalone, source):
     """(text, source before it) to judge: judged whole when nothing is spliced in; part by part otherwise."""
     if standalone and len(run) > 1:
-        return [("".join(s[0] for s in run), source[max(0, run[0][2] - 160):run[0][2]])]
-    return [(s[0], source[max(0, s[2] - 160):s[2]]) for s in run]
+        return [("".join(s[0] for s in run), source[max(0, run[0][2] - _R15C_LOOKBACK):run[0][2]])]
+    return [(s[0], source[max(0, s[2] - _R15C_LOOKBACK):s[2]]) for s in run]
 
 
 def _js_run_claims(run, standalone, source):
     """The user-visible texts one run of literals (from _js_literal_runs) makes, as a list."""
-    before = source[max(0, run[0][2] - 160):run[0][2]]
+    before = source[max(0, run[0][2] - _R15C_LOOKBACK):run[0][2]]
     joined = "".join(s[0] for s in run)
     whole = _js_whole_claim(joined, before) if standalone else None
     if whole:
@@ -803,10 +911,54 @@ def _js_splice_runs(source):
             runs.append([span])
     out = []
     for run in runs:
-        lead = re.search(r"\+(?:\s|//[^\n]*\n)*\Z", source[max(0, run[0][2] - 200):run[0][2]])
-        tail = re.match(r"(?:\s|//[^\n]*\n)*\+", source[run[-1][3]:run[-1][3] + 200])
-        out.append((run, bool(lead), bool(tail)))
+        before = source[max(0, run[0][2] - 200):run[0][2]]
+        after = source[run[-1][3]:run[-1][3] + 200]
+        out.append((run, _r15c_plus_before(before), _r15c_plus_after(after)))
     return out
+
+
+def _r15c_skip_blank(text, i):
+    """Index of the first character at or after `i` that is not a blank or inside a comment.
+
+    `/* */` as well as `//`, as the joins inside a run (_js_gap_is_plus) take them: the edges of a
+    run took only `//`, so `n + /* count */ ' items left'` was never reported as a splice.
+    len(text) when the rest is all blanks and comments; -1 inside an unclosed comment.
+    """
+    while i < len(text):
+        if text[i].isspace():
+            i += 1
+        elif text.startswith("//", i):
+            nl = text.find("\n", i)
+            if nl < 0:
+                return -1
+            i = nl + 1
+        elif text.startswith("/*", i):
+            close = text.find("*/", i + 2)
+            if close < 0:
+                return -1
+            i = close + 2
+        else:
+            return i
+    return i
+
+
+def _r15c_plus_after(text):
+    """Whether `text` (what follows a run) starts with a `+`, past blanks and comments."""
+    i = _r15c_skip_blank(text, 0)
+    return 0 <= i < len(text) and text[i] == "+"
+
+
+def _r15c_plus_before(text):
+    """Whether `text` (what precedes a run) ends with a `+` and then only blanks and comments.
+
+    Tried at each `+` from the right, so a `+` inside a trailing comment is not taken for the join.
+    """
+    i = text.rfind("+")
+    while i >= 0:
+        if _r15c_skip_blank(text + "\n", i + 1) == len(text) + 1:
+            return True
+        i = text.rfind("+", 0, i)
+    return False
 
 
 _JS_INLINE_EDGE = r"(?:b|strong|em|u|span|code)"
@@ -821,10 +973,30 @@ def _js_edge_text(joined, side):
     if side == "lead":
         joined = re.sub(r"\A(?:</%s>)+" % _JS_INLINE_EDGE, "", joined)
         seg = joined.split("<", 1)[0]
-        return "" if ">" in seg else seg              # starts inside an opening tag: not text
+        if ">" in seg:
+            return ""                                 # starts inside an opening tag: not text
+        return seg if seg.strip() else _r15c_span_at_edge(joined, side)
     joined = re.sub(r"(?:<%s\b[^<>]*>)+\Z" % _JS_INLINE_EDGE, "", joined)
     seg = joined.rsplit(">", 1)[-1]
-    return "" if "<" in seg else seg                  # ends inside a tag: not text
+    if "<" in seg:
+        return ""                                     # ends inside a tag: not text
+    return seg if seg.strip() else _r15c_span_at_edge(joined, side)
+
+
+# A bare <span> of prose with only blanks between it and the join: '<span>Tailscale is not installed
+# on</span> <strong>' + name + '</strong>.' The text node at the join is the blank, so the edge read
+# above found nothing, yet the span holds the sentence's first half and no catalog key can be
+# written for the whole of it (review 1011e). An attributed span (`<span class="badge">`) is a label
+# of its own, not half a sentence; so is one word beside a count ('3 <span>banned</span>'), which is
+# split from its number on purpose so the word is a node the walker can translate.
+_R15C_SPAN_TAIL = re.compile(r"<span>([^<>]*)</span>\s*\Z")
+_R15C_SPAN_LEAD = re.compile(r"\A\s*<span>([^<>]*)</span>")
+
+
+def _r15c_span_at_edge(joined, side):
+    """The text of a bare <span> that sits, past blanks only, at the join's end of `joined`."""
+    m = (_R15C_SPAN_LEAD.match(joined) if side == "lead" else _R15C_SPAN_TAIL.search(joined))
+    return m.group(1) if m and len(m.group(1).split()) > 1 else ""
 
 
 def _js_splice_prose(seg):
@@ -879,7 +1051,22 @@ def spliced_js(js_dir=JS_DIR):
             if (lead or tail) and not _js_ignored(run, lines):
                 found.extend((os.path.basename(path), run[0][1], seg)
                              for seg in _js_run_splices(run, lead, tail, source))
+            if not _js_ignored(run, lines):
+                found.extend((os.path.basename(path), s[1], seg)
+                             for s in run for seg in _r15c_template_splices(s, source))
     return sorted(set(found))
+
+
+def _r15c_template_splices(span, source):
+    """The prose around each `${…}` of a backtick literal: the same splice as `+`, spelled otherwise.
+
+    `Saved ${n} files` reaches the page as one node no key can match, and none of the checks above
+    could see it: the literal holds `$` and `{`, so it was never claimed, and nothing is joined by `+`.
+    """
+    text, _line, start, _end = span
+    if source[start:start + 1] != "`" or "${" not in text:
+        return []
+    return [seg.strip() for seg in re.split(r"\$\{[^{}]*\}", text) if _js_splice_prose(seg)]
 
 
 # A sentence split by emphasis: 'Click <strong>Repair database</strong> — it rebuilds…'. Each piece
@@ -939,6 +1126,383 @@ def missing(lang="es", template_dir=TEMPLATE_DIR, translation_dir=TRANSLATION_DI
     found, _ = scan_templates(template_dir)
     catalog = load_catalog(lang, translation_dir)
     return {text: where for text, where in found.items() if text not in catalog}
+
+
+# ── Python: sentences a route or service sends the viewer ──────────────────────────────────────
+# A flash, a form answer or a JSON "message"/"error"/"warning" reaches the page as one text node, and
+# the walker above only swaps EXACT catalog text. Built with an f-string, `%`, `+` or .format(), it
+# is a different string for every value it carries ("Group 'ops' created."), so no catalog key can
+# ever match it: es/fr viewers read English. Such a sentence goes through panel.core.i18n.tr — the
+# WHOLE sentence is the key, with named {slots}, and the values go in after. Reported here: every
+# such sink fed a built string directly, through a local variable assigned one in the same function,
+# or through a call to a function (anywhere scanned) that returns one. A line holding PY_IGNORE is
+# skipped — for a string that is not shown to anyone (the reason goes beside the marker).
+PY_IGNORE = "i18n-ignore"
+PY_SINK_CALLS = ("flash", "_form_err", "_form_ok", "_form_credential")
+PY_SINK_KEYS = ("message", "error", "warning")
+
+
+def _py_files(root):
+    """app.py and every .py under panel/."""
+    paths = [os.path.join(root, "app.py")]
+    for path in sorted(glob.glob(os.path.join(root, "panel", "**", "*.py"), recursive=True)):
+        paths.append(path)
+    return paths
+
+
+def _py_call_name(node):
+    """The called name of a Call (`f(…)` or `x.f(…)`), else None."""
+    if not isinstance(node, ast.Call):
+        return None
+    return getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+
+
+def _py_text(node):
+    """Whether a node is a str literal."""
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _py_built_binop(node, plain):
+    """`%` (any: the template may be a constant held elsewhere, BUSY % host) or `+` with text."""
+    if isinstance(node.op, ast.Mod):
+        return not (isinstance(node.left, ast.Constant) and isinstance(node.left.value, (int, float)))
+    if isinstance(node.op, ast.Add):
+        return any(_py_built(n, plain) or _py_text(n) for n in (node.left, node.right))
+    return False
+
+
+def _py_built(node, plain=False):
+    """Whether an expression BUILDS a string from text and values (f-string, %, +, .format()).
+
+    An i18n.Sentence counts, unless `plain`: it is English, remembering how it was built, and a sink
+    still has to pass it through tr. `plain` asks the other question — is this English that tr()
+    could never translate, because it was built before tr saw it?
+    """
+    if isinstance(node, ast.JoinedStr):
+        return any(isinstance(v, ast.FormattedValue) for v in node.values)
+    if isinstance(node, ast.BinOp):
+        return _py_built_binop(node, plain)
+    if isinstance(node, ast.IfExp):
+        return _py_built(node.body, plain) or _py_built(node.orelse, plain)
+    name = _py_call_name(node)
+    return (name in ("Sentence", "Sentences") and not plain) or (name == "format" and _py_text(node.func.value))
+
+
+class _PyBuilders(dict):
+    """_py_builders' table, carrying which question it answers (see _py_built's `plain`)."""
+
+    plain = False
+
+
+def _py_call_sinks(node, wrappers):
+    """The message arguments of a sink call, or of a wrapper's sink parameter."""
+    name = _py_call_name(node)
+    out = [node.args[0]] if name in PY_SINK_CALLS and node.args else []
+    out.extend(k.value for k in node.keywords if k.arg in PY_SINK_KEYS)
+    for pos, param in wrappers.get(name, ()):
+        out.extend(node.args[pos:pos + 1])
+        out.extend(k.value for k in node.keywords if k.arg == param)
+    return out
+
+
+def _py_sink_values(node, wrappers=None):
+    """The expressions a node hands the viewer as a message.
+
+    `wrappers` ({function name: {(position, parameter name)}}) are the panel's own functions that
+    pass a parameter straight to a sink (`_changed(message, …)` answers jsonify({"message": message})).
+    """
+    if isinstance(node, ast.Call):
+        return _py_call_sinks(node, wrappers or {})
+    if isinstance(node, ast.Dict):
+        return [v for k, v in zip(node.keys, node.values) if _py_sink_key(k)]
+    if isinstance(node, ast.Assign):     # reply["message"] = …
+        return [node.value for t in node.targets if isinstance(t, ast.Subscript) and _py_sink_key(t.slice)]
+    return []
+
+
+def _py_sink_key(node):
+    """Whether a dict key or subscript is "message", "error" or "warning"."""
+    return _py_text(node) and node.value in PY_SINK_KEYS
+
+
+def _py_ignored(lines, node):
+    """Whether any line of `node` carries the PY_IGNORE marker."""
+    return any(PY_IGNORE in lines[n - 1] for n in range(node.lineno, (node.end_lineno or node.lineno) + 1)
+               if n <= len(lines))
+
+
+def _py_trees(root):
+    """[(relpath, source lines, ast)] for every scanned file."""
+    out = []
+    for path in _py_files(root):
+        with open(path, encoding="utf-8") as fh:
+            source = fh.read()
+        out.append((os.path.relpath(path, root), source.splitlines(), ast.parse(source)))
+    return out
+
+
+def _py_unpacked(n, builders):
+    """[(local name, line)] that `ok, msg = f(…)` binds from a tuple builder's built items.
+
+    `ok, msg = f(…) if c else g(…)` (or `f(…) or g(…)`) asks each call.
+    """
+    names = [_py_call_name(v) for v in [n.value] + _py_operands(n.value)]
+    return [(elt.id, builders[(name, i)][1]) for t in n.targets if isinstance(t, ast.Tuple)
+            for i, elt in enumerate(t.elts) for name in names
+            if isinstance(elt, ast.Name) and (name, i) in builders]
+
+
+def _py_assigned(fn, lines, builders):
+    """{local name: line} for each local of one function assigned a built string.
+
+    Unpacking counts: `ok, msg = svc(…)` binds `msg` built when svc returns (…, a built string).
+    """
+    assigned = {}
+    for n in _py_own_nodes(fn):
+        if isinstance(n, (ast.Assign, ast.AugAssign)) and not _py_ignored(lines, n):
+            for local, line in _py_assignment_binds(n, assigned, builders):
+                assigned.setdefault(local, line)
+    return assigned
+
+
+def _py_assignment_binds(n, assigned, builders):
+    """[(local name, line)] one assignment binds to a built string (see _py_assigned)."""
+    targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+    built = ((isinstance(n, ast.AugAssign) and isinstance(n.op, ast.Add))
+             or _py_fed_built(n.value, assigned, builders) is not None)
+    out = [(t.id, n.lineno) for t in targets if built and isinstance(t, ast.Name)]
+    return out + (_py_unpacked(n, builders) if isinstance(n, ast.Assign) else [])
+
+
+def _py_functions(tree):
+    """Every function defined in a module, nested ones included."""
+    return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+
+def _py_returns_built(fn, lines, builders):
+    """{key: line} for `fn`'s returns of a built string (see _py_builders).
+
+    The key is the function's name for a returned string, and (name, i) for item i of a returned
+    tuple — the `(ok, message)` every service answers with.
+    """
+    assigned = _py_assigned(fn, lines, builders)
+    found = {}
+    for n in _py_own_nodes(fn):
+        if isinstance(n, ast.Return) and n.value is not None and not _py_ignored(lines, n):
+            for key in _py_return_keys(fn.name, n.value, assigned, builders):
+                found.setdefault(key, n.lineno)
+    return found
+
+
+def _py_return_keys(name, value, assigned, builders):
+    """The _py_builders keys one `return value` of function `name` earns."""
+    items = list(enumerate(value.elts)) if isinstance(value, ast.Tuple) else [(None, value)]
+    keys = [name if i is None else (name, i) for i, item in items
+            if _py_fed_built(item, assigned, builders) is not None]
+    # `return other(…)`: whatever items of other's tuple are built, this one's are too.
+    callee = _py_call_name(value)
+    return keys + [(name, k[1]) for k in builders if isinstance(k, tuple) and k[0] == callee]
+
+
+def _py_builders(trees, plain=False):
+    """{function name or (name, item): (file, line)} for every function that returns a built string.
+
+    Directly, or a local it built, or another builder's answer — or as an item of a returned tuple.
+    Repeated until nothing new is found.
+    """
+    found = _PyBuilders()
+    found.plain = plain
+    while True:
+        before = len(found)
+        for rel, lines, tree in trees:
+            for fn in _py_functions(tree):
+                for key, line in _py_returns_built(fn, lines, found).items():
+                    found.setdefault(key, (rel, line))
+        if len(found) == before:
+            return found
+
+
+def _py_operands(value):
+    """The operands that decide whether `a or b`, `a if c else b` or `a + b` was built."""
+    if isinstance(value, ast.BoolOp):
+        return value.values
+    if isinstance(value, ast.IfExp):
+        return [value.body, value.orelse]
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+        return [value.left, value.right]
+    return []
+
+
+def _py_fed_built(value, assigned, builders):
+    """Where a sink's value was built, or None when it was not.
+
+    Itself, a local assigned one, a builder's return, or (for `a or b`, `a if c else b` and `a + b`)
+    any operand that is one of those.
+    """
+    if _py_built(value, getattr(builders, "plain", False)):
+        return value.lineno
+    if isinstance(value, ast.Name) and value.id in assigned:
+        return assigned[value.id]
+    if _py_call_name(value) in builders:
+        return builders[_py_call_name(value)]
+    for operand in _py_operands(value):
+        where = _py_fed_built(operand, assigned, builders)
+        if where is not None:
+            return where
+    return None
+
+
+def _py_own_nodes(fn):
+    """Every node of one function (or module) body, not those of a function defined inside it.
+
+    A route registrar defines its routes as nested functions: walking it whole mixed every route's
+    locals into one table, so a `msg` built in one route was "found" feeding another's answer.
+    """
+    stack = list(ast.iter_child_nodes(fn))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def _py_wrapped_params(fn, lines, wrappers):
+    """{(position, parameter)} of `fn`'s parameters that it hands to a sink as they are."""
+    params = [a.arg for a in fn.args.args]
+    if params[:1] in (["self"], ["cls"]):
+        params = params[1:]     # obj.method(a, …): `a` is the parameter after self
+    return {(params.index(v.id), v.id) for n in _py_own_nodes(fn) for v in _py_sink_values(n, wrappers)
+            if isinstance(v, ast.Name) and v.id in params and not _py_ignored(lines, v)}
+
+
+def _py_wrappers(trees):
+    """{function name: {(position, parameter)}}: functions that hand a parameter to a sink as it is.
+
+    Repeated until nothing new is found, so a wrapper of a wrapper counts too.
+    """
+    wrappers = {}
+    while True:
+        before = sum(len(v) for v in wrappers.values())
+        for _rel, lines, tree in trees:
+            for fn in _py_functions(tree):
+                got = _py_wrapped_params(fn, lines, wrappers)
+                if got:
+                    wrappers.setdefault(fn.name, set()).update(got)
+        if sum(len(v) for v in wrappers.values()) == before:
+            return wrappers
+
+
+# A service (panel/services, panel/ops) hands its payload BACK to a route, which translates it
+# (host_reboot.shown): an i18n.Sentence in a payload there — one that is built, but not in plain
+# English — is the hand-off, not the page. In a
+# route or app.py the same Sentence reaching jsonify/flash untranslated is English on the page.
+_PY_PAYLOAD_DIRS = ("panel/services/", "panel/ops/")
+
+
+def _py_function_splices(rel, lines, fn, tables, wrappers):
+    """[(file, line, where built)] for one function's (or module's) sinks fed a built string.
+
+    `tables` is (builders, plain builders): see _py_built's `plain`.
+    """
+    builders, plain = tables
+    assigned = _py_assigned(fn, lines, builders)
+    payload = rel.replace(os.sep, "/").startswith(_PY_PAYLOAD_DIRS)
+    plain_assigned = _py_assigned(fn, lines, plain) if payload else {}
+    found = []
+    for n in _py_own_nodes(fn):
+        for value in _py_sink_values(n, wrappers):
+            if _py_ignored(lines, value) or (payload and _py_fed_built(value, plain_assigned, plain) is None):
+                continue
+            where = _py_fed_built(value, assigned, builders)
+            if where is not None:
+                found.append((rel, value.lineno, where))
+    return found
+
+
+def _py_tr_fed(rel, lines, fn, plain_builders):
+    """[(file, line, where built)]: an i18n.tr() handed English built before it (never a key)."""
+    assigned = _py_assigned(fn, lines, plain_builders)
+    return [(rel, n.lineno, where) for n in _py_own_nodes(fn)
+            if _py_call_name(n) == "tr" and n.args and not _py_ignored(lines, n.args[0])
+            for where in [_py_fed_built(n.args[0], assigned, plain_builders)] if where is not None]
+
+
+def spliced_py(root=ROOT):
+    """[(file, line, where built)]: a message for the viewer built from text and values, untranslatable.
+
+    Two ways: a sink fed a built string (or an untranslated Sentence) — and an i18n.tr() fed a string
+    built in plain English, by an f-string, `%` or `+` anywhere upstream (a service's `(ok, message)`
+    unpacked by the route included): tr() can only look that up, never match it.
+    """
+    trees = _py_trees(root)
+    builders, wrappers = _py_builders(trees), _py_wrappers(trees)
+    plain = _py_builders(trees, plain=True)
+    found = [hit for rel, lines, tree in trees for fn in [tree] + _py_functions(tree)
+             for hit in _py_function_splices(rel, lines, fn, (builders, plain), wrappers)
+             + _py_tr_fed(rel, lines, fn, plain)]
+    return sorted(set(found), key=repr)
+
+
+def _py_module_consts(tree):
+    """{name: text} for a module's top-level `NAME = "literal"` assignments."""
+    return {t.id: n.value.value for n in tree.body if isinstance(n, ast.Assign) and _py_text(n.value)
+            for t in n.targets if isinstance(t, ast.Name)}
+
+
+def tr_keys_py(root=ROOT):
+    """{key: "file:line"} for every literal sentence handed to i18n.tr or i18n.Sentence.
+
+    A module constant handed to one counts too.
+    """
+    keys = {}
+    for rel, _lines, tree in _py_trees(root):
+        consts = _py_module_consts(tree)
+        for n in ast.walk(tree):
+            for key in (k for a in _py_key_args(n) for k in _py_key_texts(a, consts) if k):
+                keys.setdefault(key, "%s:%d" % (rel, n.lineno))
+    return keys
+
+
+def _py_key_args(n):
+    """The arguments of a tr()/Sentence()/Sentences() call that are sentences to translate.
+
+    Sentences(…) says each of its parts, and its separator, through tr(): a literal one is a key too.
+    """
+    name = _py_call_name(n)
+    if name in ("tr", "Sentence"):
+        return n.args[:1]
+    if name == "Sentences":
+        return n.args + [k.value for k in n.keywords if k.arg == "sep"]
+    return []
+
+
+def _py_key_texts(arg, consts):
+    """The sentence(s) one tr()/Sentence() first argument can be.
+
+    A literal, a module constant, or each branch of `a if c else b` / `a or b`.
+    """
+    if _py_text(arg):
+        return [arg.value]
+    if isinstance(arg, ast.Name) and arg.id in consts:
+        return [consts[arg.id]]
+    if isinstance(arg, ast.IfExp):
+        return _py_key_texts(arg.body, consts) + _py_key_texts(arg.orelse, consts)
+    if isinstance(arg, ast.BoolOp):
+        return [k for v in arg.values for k in _py_key_texts(v, consts)]
+    return []
+
+
+def tr_gaps_py(lang, root=ROOT, translation_dir=TRANSLATION_DIR):
+    """[(key, problem)]: a tr() sentence missing from `lang`, or translated with other {slots}."""
+    catalog = load_catalog(lang, translation_dir)
+    slot = re.compile(r"\{(\w+)\}")
+    gaps = []
+    for key in sorted(tr_keys_py(root)):
+        if key not in catalog:
+            gaps.append((key, "missing"))
+        elif sorted(slot.findall(key)) != sorted(slot.findall(catalog[key])):
+            gaps.append((key, "slots differ"))
+    return gaps
 
 
 def _main():

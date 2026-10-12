@@ -4424,12 +4424,18 @@ try:
               _fdt10(None) == "Never"
               and 'data-utc="2026-09-26T07:05:09Z"' in _fdt_out10 and "2026-09-26 07:05:09 UTC" in _fdt_out10,
               _fdt_out10)
-        _app10mod.current_user = _RaisingUser10()
-        with _dbapp10.test_request_context("/"):
-            __import__("flask").session["lang"] = "fr"
-            _lang_sess10 = _app10mod._current_lang()
-        _lang_none10 = _app10mod._current_lang()
-        _app_restore10("current_user")
+        # The language is read in panel.core.i18n (one definition for the page's t() and a route's
+        # i18n.tr), so the unreadable user stands in there.
+        _i18n10 = __import__("panel.core.i18n", fromlist=["i18n"])
+        _i18n_cu10 = _i18n10.current_user
+        _i18n10.current_user = _RaisingUser10()
+        try:
+            with _dbapp10.test_request_context("/"):
+                __import__("flask").session["lang"] = "fr"
+                _lang_sess10 = _app10mod._current_lang()
+            _lang_none10 = _app10mod._current_lang()
+        finally:
+            _i18n10.current_user = _i18n_cu10
         check("app language: an unreadable user falls back to the session's choice, and no request "
               "at all to English", _lang_sess10 == "fr" and _lang_none10 == "en",
               repr((_lang_sess10, _lang_none10)))

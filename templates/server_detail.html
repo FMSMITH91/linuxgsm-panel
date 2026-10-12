@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ server.name }} - Console{% endblock %}
+{% block title %}{{ t('%s - Console')|format(server.name) }}{% endblock %}
 {% block content %}
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -562,7 +562,8 @@
         {% else %}
         <div class="p-3 text-secondary small">
           No command list cached yet.
-          {% if server.installed %}{% if _can_refresh_cmds %}Use the refresh button above to load it from the server.{% endif %}{% else %}Available once the server is installed.{% endif %}
+          {# each second sentence its own node: welded to the first, the pair was no catalog key #}
+          {% if server.installed %}{% if _can_refresh_cmds %}<span>Use the refresh button above to load it from the server.</span>{% endif %}{% else %}<span>Available once the server is installed.</span>{% endif %}
         </div>
         {% endif %}
       </div>

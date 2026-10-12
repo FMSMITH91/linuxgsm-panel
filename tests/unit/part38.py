@@ -2265,6 +2265,9 @@ def _poller38():
     return got.get("console-poller")
 
 
+_PASS38_EARLY = []   # passes whose loop returned before its sleep: judged at the end of the part
+
+
 def _pass38(loop):
     """One pass of the real loop: it runs until its two-second sleep, which ends it."""
     def _sleep(_s):
@@ -2277,6 +2280,9 @@ def _pass38(loop):
         return True
     finally:
         _sf38.time = saved
+    # No caller read the False: a loop that returned early made the "no host call" checks pass
+    # with nothing tested (review 1011e). Recorded, and the part fails by name below.
+    _PASS38_EARLY.append(getattr(loop, "__qualname__", repr(loop)))
     return False
 
 
@@ -3324,3 +3330,5 @@ except Exception as _e38:  # noqa: BLE001 - a harness failure must fail by name,
 finally:
     _restore38()
     _shutil38.rmtree(_TMP38, ignore_errors=True)
+check("console poller: every pass these checks drove reached the loop's sleep (none returned early, "
+      "which would leave its checks testing nothing)", not _PASS38_EARLY, repr(_PASS38_EARLY[:3]))

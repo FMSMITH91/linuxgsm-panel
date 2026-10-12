@@ -188,6 +188,12 @@ def cmd_reset_password(args):
         # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- _read_password() already enforced password_problem() on it
         u.set_password(auth.hash_password(_read_password(args)))
         u.auth_epoch = (u.auth_epoch or 0) + 1   # revoke existing sessions
+        # ...and clear their registry rows, as the deactivate path below does: the bump stops them
+        # working, but the rows went on LISTING as live sessions on the account page (the
+        # attacker's device, IP and browser among them) until they idled out — on the CLI an
+        # operator reaches for when an account is compromised.
+        from panel.db.models import UserSession
+        UserSession.query.filter_by(user_id=u.id).delete(synchronize_session=False)
         # The API token too. It is a SECOND credential for the same account, and it did not
         # answer to any of the controls that exist to take an account back: it carries no
         # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted

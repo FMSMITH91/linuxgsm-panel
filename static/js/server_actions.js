@@ -95,7 +95,10 @@ function confirmActionDialog(action, btn, note){
     title: t(action === 'stop' ? 'Stop server' : 'Restart server'),
     icon: action === 'stop' ? 'stop-fill' : 'arrow-clockwise',
     // data-no-i18n: the name is the server's own; one called "Backup" read "Copia de seguridad".
-    body: _esc(_cap(action)) + ' <strong data-no-i18n>' + _esc(SERVER_NAME) + '</strong>?'
+    // One template, as serverAction's: verb + bold name + "?" was three pieces, so Spanish lost its
+    // opening "¿" and French its space before "?".
+    body: tfHtml('{action} {name}?', {action: t(_cap(action)),
+                                      name: {html: '<strong data-no-i18n>' + _esc(SERVER_NAME) + '</strong>'}})
           + (note ? ' <span class="text-secondary">' + _esc(note) + '</span>' : ''),
     confirmLabel: _cap(action),
     confirmClass: action === 'stop' ? 'btn-danger' : 'btn-warning',

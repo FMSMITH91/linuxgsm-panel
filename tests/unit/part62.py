@@ -59,6 +59,18 @@ def _bash62(server, user, sh, timeout=30, selfname=None, scope=False):
     return p.stdout, p.stderr, p.returncode
 
 
+def _r15d_nosleep62():
+    """game.py's `time` with only sleep stood in for.
+
+    A bare NS(sleep=) stayed until this part's final restore, and a later section reaching
+    game.py's time.time, gmtime, strftime or monotonic would raise (review 1011e) — the trap
+    part58 closed the same way.
+    """
+    import time as _time62
+    return NS(**dict({_n: getattr(_time62, _n) for _n in dir(_time62) if not _n.startswith("_")},
+                     sleep=lambda s: None))
+
+
 def _tool62(name, body):
     path = os.path.join(_BIN62, name)
     with open(path, "w", encoding="utf-8") as fh:
@@ -129,9 +141,9 @@ _COD62 = ('status\nmap: mp_crash\n'
 
 def _idt3_chat62():
     pane = {"text": ""}
-    _p9_patch(_p9_core, "send_console_command", lambda *a, **k: ("PANE_MARK 1200 17\n", "", 0))
+    _p9_patch(_p9_core, "send_console_command", lambda *a, **k: ("PANE_MARK 1200 17 80\n", "", 0))
     _p9_patch(_game62, "capture_console", lambda *a, **k: (pane["text"], "", 0))
-    _p9_patch(_game62, "time", NS(sleep=lambda s: None))
+    _p9_patch(_game62, "time", _r15d_nosleep62())
     got = {}
     for tag, text in (("chat", _COD62 + "say: Bob Smith: num score ping\n"),
                       ("chat, guid name", _COD62 + "say;123;1;Bob: num score ping guid name\n"),
@@ -150,7 +162,7 @@ def _idt3_chat62():
 # ── The guid-less idTech3 status layouts, built with each engine's own printf formats ────────────
 # Upstream sources (copies fetched to work/review-1011d/upstream-status/): ioquake3
 # code/server/sv_ccmds.c SV_Status_f, iortcw MP/code/server/sv_ccmds.c SV_Status_f (the same
-# text), OpenJK codemp/server/sv_ccmds.cpp SV_Status_f, id's Quake III 1.32
+# text), id's Quake III 1.32
 # code/server/sv_ccmds.c SV_Status_f, ET:Legacy src/server/sv_ccmds.c SV_Status_f.
 # (slot, score, ping or state, name, address, rate, lastmsg, qport)
 _IDT3_PLAYERS62 = [(0, 12, 48, "Alice", "203.0.113.5", 25000, 50, 1234),
@@ -179,17 +191,6 @@ def _ioq3_62(rows):
         ln = "%2i " % i + "%5i " % sc + ({"CON": "CON ", "ZMB": "ZMB "}.get(st) or "%4i " % st) + nm
         ln += " " * max(1, 16 - _plen62(nm)) + "^7" + ad + " " * max(1, 39 - len(ad)) + " %5i" % rt
         out += ln + "\n"
-    return out + "\n"
-
-
-def _openjk62(rows):
-    """An OpenJK status reply: "%2i %5i %s %-15.15s ^7%39s %5i", the state "CON "/"ZMB " or "%4i"."""
-    out = ("hostname: p62^7\nplayers : 5 humans, 1 bots (32 max)\n"
-           "cl score ping name            address                                 rate \n"
-           "-- ----- ---- --------------- --------------------------------------- -----\n")
-    for i, sc, st, nm, ad, rt, _lm, _qp in rows:
-        state = {"CON": "CON ", "ZMB": "ZMB "}.get(st) or "%4i" % st
-        out += "%2i %5i %s %-15.15s ^7%39s %5i\n" % (i, sc, state, nm, ad + ":29070", rt)
     return out + "\n"
 
 
@@ -229,25 +230,25 @@ def _etl62(rows):
 
 def _idt3_layouts62():
     pane = {"text": ""}
-    _p9_patch(_p9_core, "send_console_command", lambda *a, **k: ("PANE_MARK 1200 17\n", "", 0))
+    _p9_patch(_p9_core, "send_console_command", lambda *a, **k: ("PANE_MARK 1200 17 80\n", "", 0))
     _p9_patch(_game62, "capture_console", lambda *a, **k: (pane["text"], "", 0))
-    _p9_patch(_game62, "time", NS(sleep=lambda s: None))
+    _p9_patch(_game62, "time", _r15d_nosleep62())
     got = {}
+    # OpenJK's layout was read here under "jamp", which is no LinuxGSM game (jk2server runs JK2MV,
+    # read in part65), so no server could reach it.
     for tag, game, build in (("ioquake3 (q3)", "q3", _ioq3_62), ("iortcw (rtcw)", "rtcw", _ioq3_62),
-                             ("OpenJK (jamp)", "jamp", _openjk62), ("Quake III 1.32", "q3", _q3_132_62),
-                             ("ET:Legacy (etl)", "etl", _etl62)):
+                             ("Quake III 1.32", "q3", _q3_132_62), ("ET:Legacy (etl)", "etl", _etl62)):
         pane["text"] = ("status\n" + build(_IDT3_PLAYERS62).rstrip("\n")
                         + "\n6 0 0 Mallory not a row at all\n"
                         + "say: Bob Smith: cl score ping name address rate\n")
         got[tag] = [(p["num"], p["name"]) for p in _game62.console_player_list(None, _USER62, game) or []]
     want = list(enumerate(_IDT3_NAMES62))
-    ojk = want[:5] + [(5, "AVeryLongPlayer")]          # OpenJK prints %-15.15s
-    check("players (idTech3): the ioquake3 / iortcw / OpenJK `cl score ping …` table and the "
+    check("players (idTech3): the ioquake3 / iortcw `cl score ping …` table and the "
           "guid-less Quake III 1.32 / ET:Legacy tables are read — slots and names, a name with "
           "spaces, a bot, ping 999 and 9999, CON/ZMB and CNCT/ZMBI rows, a long name — while a "
           "line whose trailing columns are not the header's numbers is no row, and a chat line "
           "after the table is not a header",
-          got == {"ioquake3 (q3)": want, "iortcw (rtcw)": want, "OpenJK (jamp)": ojk,
+          got == {"ioquake3 (q3)": want, "iortcw (rtcw)": want,
                   "Quake III 1.32": want, "ET:Legacy (etl)": want}, repr(got))
     pane["text"] = "status\n" + _COD62.split("\n", 1)[1] + (
         "  2     0 CNCT 1100001cccccccccccccccccccccccccc Carl                 0 203.0.113.4:28960 2222 25000\n")
@@ -267,9 +268,9 @@ _GOLD62 = ('players : 1 active (32 max)\n'
 
 def _valve_chat62():
     pane = {"text": ""}
-    _p9_patch(_p9_core, "send_console_command", lambda *a, **k: ("PANE_MARK 1200 17\n", "", 0))
+    _p9_patch(_p9_core, "send_console_command", lambda *a, **k: ("PANE_MARK 1200 17 80\n", "", 0))
     _p9_patch(_game62, "capture_console", lambda *a, **k: (pane["text"], "", 0))
-    _p9_patch(_game62, "time", NS(sleep=lambda s: None))
+    _p9_patch(_game62, "time", _r15d_nosleep62())
     got = {}
     no_count = _SRC62.replace("players : 2 humans, 0 bots (24 max)\n", "")
     for tag, text in (("chat", _SRC62 + "Ben : uniqueid\n"),
@@ -296,9 +297,9 @@ def _capture_shrink62():
         got = {}
         # At the mark the history was 1200 rows of a 2000-row limit: tmux's next trim (200 rows)
         # only comes at 2000, so 1200 cannot fall to 1090 by a trim — a resize reflowed it.
-        for tag, disp in (("reflowed", "1090 2000"), ("trimmed", "1090 1300")):
+        for tag, disp in (("reflowed", "1090 2000 80"), ("trimmed", "1090 1300 80")):
             os.environ["TMUX62_DISPLAY"] = disp
-            out, _e, rc = _CAPTURE62(None, _USER62, selfname="cod62srv", since=(1200, 17))
+            out, _e, rc = _CAPTURE62(None, _USER62, selfname="cod62srv", since=(1200, 17, 80))
             got[tag] = (out.strip(), rc)
         check("capture since the send: a history that went down when no trim was possible "
               "(a resize) is unknown (rc 4, nothing captured), not a capture started above the "
@@ -422,13 +423,14 @@ def _reason_whole62(client, sid):
     row = (_rows62(sid, "rename_file")[-1:] or [("", None)])[0][0]
     check("routes: a refusal's reason is whole in its row however long the path — the path is "
           "cut, marked with …",
-          r.status_code == 400 and len(row) <= 250 and row.endswith(": " + why) and "…" in row,
-          repr((r.status_code, why, row)))
+          r.status_code == 400 and len(row) - len(": " + why) <= len("refused: ") + 200
+          and row.endswith(": " + why) and "…" in row, repr((r.status_code, why, row)))
     _p9_patch(_p9_sf, "write_file", _files62.write_file)      # refused before the host
     client.post("/api/server/%d/file" % sid, json={"path": "../" + "e" * 300, "content": "x"})
     row = (_rows62(sid, "edit_file")[-1:] or [("", None)])[0][0]
     check("routes: ...and a host write's refusal too (an editor save out of the home)",
-          len(row) <= 250 and row.endswith(": Invalid path") and "…" in row, repr(row))
+          len(row) - len(": Invalid path") <= len("refused: ") + 200
+          and row.endswith(": Invalid path") and "…" in row, repr(row))
 
 
 def _cfg_writes_audited62(client, sid):
@@ -475,15 +477,24 @@ def _account_probe62():
 def _not_text62(client, sid):
     for k in ("upload_file", "write_file", "stat_path", "stream_path"):
         _p9_patch(_p9_sf, k, getattr(_files62, k))       # the real ones: refused before the host
+    # Counted from here, and each row tied to its own request: the last two edit_file rows were
+    # read before, and _reason_whole62's "Invalid path" refusal three sections earlier is the same
+    # shape, so an unaudited r1 passed on that stale row (review 1011e).
+    n0 = len(_rows62(sid, "edit_file"))
     r1 = client.post("/api/server/%d/file" % sid, json={"path": "cfg/\ud800.cfg", "content": "x"})
+    rows1 = _rows62(sid, "edit_file")[n0:]
     r2 = client.post("/api/server/%d/file" % sid, json={"path": "cfg/a62.cfg", "content": "x\ud800"})
-    rows = _rows62(sid, "edit_file")[-2:]
+    rows = _rows62(sid, "edit_file")[n0:]
+    answered = [(r.status_code, (_p9_json(r) or {}).get("success")) for r in (r1, r2)]
+    # Each request's own row: r1's names the escaped path, r2's says the contents must be text.
+    own = [d for d, _s in rows1] + [d for d, _s in rows[len(rows1):]]
     check("routes: an editor save whose path or contents cannot be UTF-8 (a lone surrogate) is "
           "refused and audited, not a 500",
-          (r1.status_code, r2.status_code) == (200, 200)
-          and [(_p9_json(r) or {}).get("success") for r in (r1, r2)] == [False, False]
-          and len(rows) == 2 and all(s is False for _d, s in rows)
-          and "must be text" in rows[1][0], repr((r1.status_code, r2.status_code, rows)))
+          all([answered == [(200, False), (200, False)], len(rows1) == 1, len(own) == 2,
+               [s for _d, s in rows] == [False, False],
+               "cfg/\\ud800.cfg" in "".join(own[:1]), "a62.cfg" in "".join(own[1:]),
+               "must be text" in "".join(own[1:])]),
+          repr((answered, rows)))
 
 
 def _audit_floor62(client, sid):
@@ -530,5 +541,14 @@ finally:
     _p9_restore_all()
     _cleanup62()
 
+import ast as _ast62  # noqa: E402
+with open(_game62.__file__, encoding="utf-8") as _gfh62:
+    _time_reads62 = {_n.attr for _n in _ast62.walk(_ast62.parse(_gfh62.read()))
+                     if isinstance(_n, _ast62.Attribute) and getattr(_n.value, "id", "") == "time"}
+check("part62: its `time` stand-in keeps every time.X game.py reads, so a later section cannot "
+      "raise on one (control: sleep is stood in for)",
+      _time_reads62 and all(hasattr(_r15d_nosleep62(), _a) for _a in _time_reads62)
+      and _r15d_nosleep62().sleep(5) is None,
+      repr(sorted(_a for _a in _time_reads62 if not hasattr(_r15d_nosleep62(), _a))))
 check("part62: nothing it drove reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP62_START, repr(_P9_TRIPPED[_TRIP62_START:][:6]))

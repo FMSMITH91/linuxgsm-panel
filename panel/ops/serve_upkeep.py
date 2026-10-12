@@ -8,6 +8,7 @@ scheme this process really serves) is passed in by the caller.
 """
 import logging
 
+from panel.core import i18n
 from panel.db.models import LOCAL_HOST_LABEL
 from panel.ops import tailscale_integration as ts
 from panel.ops.debug_report import process as _dr_process
@@ -117,19 +118,26 @@ def _remove_serve_leftovers(panel_port, mount, where, audit):
 def _leftover_note(outcome):
     """What the answer to a Serve write adds about the panel's routes at other mounts.
 
-    `outcome` is _remove_serve_leftovers' answer. Nothing for "none".
+    `outcome` is _remove_serve_leftovers' answer. "" for "none". A sentence of its own (an
+    i18n.Sentence, translated whole by with_leftover_note): it was a clause spliced onto the
+    write's own message, which no catalog key could match.
     """
     if outcome.startswith("removed:"):
-        return (" — and the panel's old route at %s was removed."
-                % outcome[len("removed:"):].replace(",", ", "))
+        return i18n.Sentence("The panel's old route at {mounts} was removed.",
+                             mounts=outcome[len("removed:"):].replace(",", ", "))
     if outcome.startswith("failed:"):
-        return (" — but a route to the panel at another mount could not be removed (%s). Remove it "
-                "with: sudo tailscale serve --https=443 --set-path=<that mount> off"
-                % outcome[len("failed:"):])
+        return i18n.Sentence("A route to the panel at another mount could not be removed ({why}). "
+                             "Remove it with: sudo tailscale serve --https=443 --set-path=<that "
+                             "mount> off", why=outcome[len("failed:"):])
     if outcome == "unread":
-        return (" — but this host's Serve configuration could not be read afterwards, so a route "
-                "to the panel at another mount may still be there.")
+        return i18n.Sentence("This host's Serve configuration could not be read afterwards, so a route "
+                             "to the panel at another mount may still be there.")
     return ""
+
+
+def with_leftover_note(msg, outcome):
+    """A Serve write's message, then _leftover_note's sentence — each translated whole, joined."""
+    return " ".join(i18n.tr(s) for s in (msg, _leftover_note(outcome)) if s)
 
 
 def _tailscale_banner(stored, panel_port, conf, info, scheme_now):

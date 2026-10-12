@@ -3026,14 +3026,13 @@ finally:
             db.engine.dispose()
     except Exception:  # nosec B110 - best-effort cleanup of a throwaway database
         pass
-    try:
-        if _P9_CFG_SNAPSHOT is None:
-            if _P9_CFG_PATH.exists():
-                _P9_CFG_PATH.unlink()
-        else:
-            _P9_CFG_PATH.write_bytes(_P9_CFG_SNAPSHOT)
-    except OSError:  # nosec B110 - best-effort cleanup of the runner's throwaway config
-        pass
+    # Not swallowed (review 1011e): a config.json this cannot remove or restore is left for the
+    # parts after it to read, so the failure is raised and the run says where.
+    if _P9_CFG_SNAPSHOT is None:
+        if _P9_CFG_PATH.exists():
+            _P9_CFG_PATH.unlink()
+    else:
+        _P9_CFG_PATH.write_bytes(_P9_CFG_SNAPSHOT)
 
 check("part12: no route under test reached a real transport (every host call was stubbed)",
       not _P9_TRIPPED, repr(_P9_TRIPPED[:6]))
@@ -3058,6 +3057,22 @@ import subprocess as _pb_sp  # nosec B404 - bash and python on sandbox fixtures 
 import sys as _pb_sys                                                             # noqa: E402
 
 from unit.part01 import skip as _pb_skip                                         # noqa: E402
+from unit.part01 import results as _r15d_results                                 # noqa: E402
+
+
+def _r15d_root_ran(name, mark):
+    """As root, record the root-only branch under the SAME name its skip uses.
+
+    It passes only when the branch's checks ran and all passed. ci.yml's root step judges a
+    skipped-as-the-runner gate by that name: the branch's own checks have other names, so a root
+    branch that emitted nothing, or skipped under a new name, read as run (review 1011e).
+    """
+    _ran = _r15d_results[mark:]
+    check(name, bool(_ran) and all(_ok is True for _ok, _n, _d in _ran),
+          "%d check(s) in the branch; not passed: %s"
+          % (len(_ran), [_n for _ok, _n, _d in _ran if _ok is not True][:3]))
+
+
 from unit.part05 import _helper as _pbh, _root as _pb_root                       # noqa: E402
 from unit.part06 import _inst_shfn as _pb_shfn                                   # noqa: E402
 from panel.security import privileged as _pb_priv                                # noqa: E402
@@ -3422,9 +3437,11 @@ check("install.sh: the grant opens with `Defaults!<helper> env_reset, secure_pat
       repr((_pb_lines, _r.returncode, _r.stderr[-300:])))
 _pb_visudo = _pb_shutil.which("visudo") or ("/usr/sbin/visudo" if os.path.exists("/usr/sbin/visudo") else "")
 if _pb_visudo and _PB_ROOT:
+    _r15d_m = len(_r15d_results)
     _r = _pb_sp.run([_pb_visudo, "-cf", _pb_sud], capture_output=True, text=True, check=False)  # nosec B603 - fixed argv
     check("install.sh: ...and visudo -cf accepts the three lines", _r.returncode == 0,
           _r.stdout + _r.stderr)
+    _r15d_root_ran("install.sh: visudo accepts the grant", _r15d_m)
 else:
     _pb_skip("install.sh: visudo accepts the grant", "no visudo, or not root")
 check("helper: the sudoers parser skips the Defaults! line (it is no user specification)",
@@ -3461,6 +3478,7 @@ try:
 except KeyError:
     _pb_daemon = None
 if _PB_ROOT and _pb_daemon is not None:
+    _r15d_m = len(_r15d_results)
     _pb_pd = os.path.join(_PB, "chown", "panel")
     os.makedirs(os.path.join(_pb_pd, "sub"))
     for _n in ("plain", "sub/deep"):
@@ -3482,6 +3500,7 @@ if _PB_ROOT and _pb_daemon is not None:
     check("install.sh _chown_panel_tree: ...but a hard link is NOT, nor its target, and it says so",
           _pb_own["sub/hl"] == 0 and os.stat(_pb_v2).st_uid == 0 and "sub/hl" in _r.stdout,
           "%r %r" % (_pb_own, _r.stdout))
+    _r15d_root_ran("install.sh _chown_panel_tree: driven", _r15d_m)
 else:
     _pb_skip("install.sh _chown_panel_tree: driven", "needs root and a daemon account")
 
@@ -3572,6 +3591,7 @@ except (_pb_sp.TimeoutExpired,
 check("install.sh _owner_read: a FIFO in place of config.json is refused, not waited on",
       _pb_fifo_ok)
 if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
+    _r15d_m = len(_r15d_results)
     os.remove(_pb_cfg)
     _pb_shutil.copy(_pb_secret, _pb_cfg)                      # a REAL file, root's, mode 0600
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- traversable by the daemon account; this test's temp dir
@@ -3588,6 +3608,7 @@ if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
           "file there is not read)", _r.stdout.strip() == "5000", repr(_r.stdout + _r.stderr))
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, in this test's temp dir
     os.chmod(_PB, 0o700)
+    _r15d_root_ran("install.sh panel_port: read as the owner", _r15d_m)
 else:
     _pb_skip("install.sh panel_port: read as the owner", "needs root, sudo and a daemon account")
 # uninstall.sh reads config.json the same way, and takes the sudo grants away first.
@@ -3665,6 +3686,7 @@ check("privileged: ...and the remote mount.cfg read is the game account's (a lin
 # Driven, where it can be: the rendered grant as root against a content tree whose game directory
 # is a link to a root-owned one. root's chmod -R used to follow it; the account's cannot touch it.
 if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("runuser"):
+    _r15d_m = len(_r15d_results)
     _pb_ct = tempfile.mkdtemp(prefix="lgsm-unit-pb-ct-")
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- traversable by the daemon account; this test's temp dir
     os.chmod(_pb_ct, 0o755)  # nosec B103 - traversable by the daemon account; this test's temp dir
@@ -3685,6 +3707,7 @@ if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("runuser"):
           "changes nothing there", _pb_stat.S_IMODE(os.stat(os.path.join(_pb_rootdir, "f")).st_mode)
           == 0o600, "%s -> %o" % (_pb_cmd, os.stat(os.path.join(_pb_rootdir, "f")).st_mode))
     _pb_shutil.rmtree(_pb_ct, ignore_errors=True)
+    _r15d_root_ran("privileged: (driven) remote grant as the content account", _r15d_m)
 else:
     _pb_skip("privileged: (driven) remote grant as the content account", "needs root and runuser")
 
@@ -3737,6 +3760,7 @@ check("install.sh: every install.sh function the lifted snapshot and rollback bl
       "defined in their harness (an undefined one dies 'command not found' under set -e, as root only)",
       not _pb_undefined and "snapshot_service_unit" in _pb_calls, repr(sorted(_pb_undefined)))
 if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
+    _r15d_m = len(_r15d_results)
     _pb_up = tempfile.mkdtemp(prefix="lgsm-unit-pb-upd-")
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- traversable by the daemon account; this test's temp dir
     os.chmod(_pb_up, 0o755)  # nosec B103 - traversable by the daemon account; this test's temp dir
@@ -3795,6 +3819,7 @@ if _PB_ROOT and _pb_daemon is not None and _pb_shutil.which("sudo"):
     check("install.sh rollback: ...and root's file behind the hard link is untouched",
           open(_pb_sec).read() == "ROOT-ONLY-SECRET" and os.stat(_pb_sec).st_uid == 0)
     _pb_shutil.rmtree(_pb_up, ignore_errors=True)
+    _r15d_root_ran("install.sh snapshot/rollback as the tree's owner (driven)", _r15d_m)
 else:
     _pb_skip("install.sh snapshot/rollback as the tree's owner (driven)", "needs root, sudo and daemon")
 # SECURITY.md documents the grant install.sh now writes, Defaults line included.

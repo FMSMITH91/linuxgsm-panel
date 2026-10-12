@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Dashboard{% endblock %}
+{% block title %}{{ t('Dashboard') }}{% endblock %}
 {% block content %}
 
 {# Bulk-action bar, rendered both above and below the server list so it's reachable from either
@@ -154,7 +154,7 @@
 {% set tile_visible, tile_hidden = panel_layout('dash_tiles', ['total', 'online', 'offline', 'players', 'host']) %}
 <div class="row row-cols-2 row-cols-md-5 g-3 mb-4" id="dash-tiles" data-region="dash_tiles">
   {% for key in tile_visible %}
-  <div class="col" data-panel="{{ key }}">
+  <div class="col" data-panel="{{ key }}" data-label="{{ TILE_LABELS[key] }}">
     <div class="card text-center p-3 panel-movable">
       <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
         {# A real drag handle, but NOT the only way to reorder — the arrows next to it stay the

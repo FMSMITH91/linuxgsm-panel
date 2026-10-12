@@ -935,7 +935,7 @@ try:
         p = _sp14.run(["bash", "-c", _wf14_run(_cqa_raw14, step)], capture_output=True, text=True,  # nosec B603 B607 - the workflow's own step
                       env=dict(os.environ, PATH=_bin14 + os.pathsep + os.environ["PATH"],
                                GH_LOG=log, GITHUB_OUTPUT=out, GITHUB_STEP_SUMMARY=summ,
-                               GITHUB_REPOSITORY="o/r", **env))
+                               GITHUB_REPOSITORY="o/r", TMPDIR=_sb14, **env))   # its mktemp: here
         outs = dict(ln.split("=", 1) for ln in open(out).read().splitlines() if "=" in ln)
         return p.returncode, outs, open(log).read()
 

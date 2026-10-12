@@ -22,7 +22,8 @@ import types as _types61
 
 from unit.part01 import check, skip
 from unit.part02 import protect as _protect61
-from unit.part12 import P9_ADMIN, _P9_CFG_PATH, _p9, _p9_cfg, _p9_client, _p9_json
+from unit.part12 import (P9_ADMIN, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_cfg, _p9_client, _p9_core,
+                         _p9_json, _p9_Over, _p9_so, _p9_trip)
 from unit.part20 import _patch, _patched
 
 from panel.ops import system_ops as _so61  # noqa: E402
@@ -34,6 +35,33 @@ from panel.services import host_reboot as _hr61  # noqa: E402
 from panel.services import notifications as _nt61  # noqa: E402
 
 NS = _types61.SimpleNamespace
+_TRIP61_START = len(_P9_TRIPPED)
+
+
+def _r15d_arm61():
+    """part12's transport tripwire, armed inside the caller's _patched() block (review 1011e).
+
+    part12 disarmed its own when it ended, and each route block here stubbed only the leaf it names:
+    one more host call on a passing path (close-panel-port's local shell on P9_LOCAL, as root on
+    CI's root leg) ran for real with the part green. Page renders read Tailscale state for the nav
+    through `tailscale`, the real CLI on a box that has it (part12 stubbed it for that reason), so
+    that is answered here and its subprocess is tripwired too.
+    """
+    _patch(_p9_core, "get_connection",
+           _p9_trip("paramiko", exc=ConnectionError("refused by part61's tripwire")))
+    for _n61, _w61 in (("_run_via_ssh_cli", "ssh-cli"), ("_exec_local_shell", "local-shell"),
+                       ("_exec_local_argv", "local-argv")):
+        _patch(_p9_core, _n61, _p9_trip(_w61))
+    for _n61 in ("_run", "_run_verb", "_git"):
+        _patch(_p9_so, _n61, _p9_trip("system_ops." + _n61))
+    _patch(_ts61, "subprocess", _p9_Over(
+        _ts61.subprocess,
+        Popen=_p9_trip("tailscale.subprocess.Popen", exc=OSError("refused by part61's tripwire")),
+        run=_p9_trip("tailscale.subprocess.run", exc=OSError("refused by part61's tripwire"))))
+    _patch(_ts61, "get_tailscale_info",
+           lambda force_refresh=False: NS(dns_name=None, serve_config={}, serve_unreadable=False))
+
+
 # Addresses built from their parts, so no address literal is added: loopback, a documentation
 # address (TEST-NET-2), a private LAN range, Tailscale's CGNAT range and one tailnet address.
 _LB61 = ".".join(["127", "0", "0", "1"])
@@ -273,8 +301,19 @@ check("reboot: a hand-edited `reboot_wait_max_hours: Infinity` reads as the defa
 try:
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), bind_host=5))
     _cur61 = int(_p9_cfg.load_config().get("port", 5000))
-    _rb61 = _p9_client(P9_ADMIN).post("/api/panel/change-port",
-                                      json={"port": _cur61, "bind_host": ".".join(["0"] * 4)})
+    with _patched():
+        _r15d_arm61()
+        # A regression to a 200 goes on to save, follow the binding in the firewall and fail2ban,
+        # and restart the panel: stubbed as part53 does, so it fails by name and does nothing.
+        from panel.routes import remote_security as _rs61   # noqa: E402
+        _patch(_p9_so, "host_has_ip", lambda ip: True)
+        _patch(_p9_so, "port_in_use", lambda port: False)
+        _patch(_p9_so, "restart_panel", lambda: (True, "scheduled"))
+        _patch(_p9_so, "ensure_panel_fail2ban", lambda *a, **k: (True, "jail updated"))
+        _patch(_rs61, "remote_ufw_open_port", lambda *a, **k: (True, "ok"))
+        _patch(_rs61, "remote_ufw_close_port", lambda *a, **k: (True, "ok"))
+        _rb61 = _p9_client(P9_ADMIN).post("/api/panel/change-port",
+                                          json={"port": _cur61, "bind_host": ".".join(["0"] * 4)})
     check("change-port: a non-string bind_host in config.json reads as unset (the form answered a bare "
           "500); asked for the binding it already has, it says so",
           _rb61.status_code == 400 and "already the panel's binding" in _p9_json(_rb61).get("message", ""),
@@ -314,7 +353,7 @@ def _close61(row):
     rows, deleted = [row], []
 
     def _status(remote):
-        return {"installed": True, "groups": _fwm61._group_ufw_rules(
+        return {"installed": True, "enabled": True, "groups": _fwm61._group_ufw_rules(
             [{"num": str(i + 1), "detail": d} for i, d in enumerate(rows)])}
 
     def _delete(remote, num, force=False, expect_key=None):
@@ -322,7 +361,9 @@ def _close61(row):
         rows[:] = [d for i, d in enumerate(rows) if i + 1 != num]
         return True, "deleted"
     with _patched():
+        _r15d_arm61()
         _patch(_rv61, "remote_ufw_status", _status)
+        _patch(_fwm61, "remote_ufw_default_allows_in", lambda remote: False)
         _patch(_rv61, "remote_ufw_delete_rule", _delete)
         _patch(_rv61.ts, "get_tailscale_info", lambda *a, **k: NS(serve_unreadable=False, serve_config={}))
         resp = _p9_client(P9_ADMIN).post("/api/remote/%d/close-panel-port" % P9_LOCAL)
@@ -442,12 +483,14 @@ def _as_plain61(text):
 
 
 # 1. A rule's `# comment` is not part of its source, wherever ufw rows are read.
-_iface61 = {}
+_iface61, _sts61, _tsr61 = {}, {}, {}
 for _cap61, _if61 in (("s7b-lo-net-udp", "lo"), ("s7c-lo-net", "lo"), ("s7d-docker0-udp", "docker0")):
     _vt61 = _as_verbose61(_real61_text(_cap61))
     with _patched():
         _patch(_so61, "_run_verb", lambda verb, args, **k: (_vt61, "", 0))
         _st61 = _so61.ufw_status()
+    _sts61[_cap61] = _st61
+    _tsr61[_cap61] = _smh61._tsiface_ufw_rules(_vt61)
     _iface61[_cap61] = (_so61.ufw_allows_iface_in(_st61["rules"], _if61),
                         _so61.ufw_allows_iface_in(_smh61._tsiface_ufw_rules(_vt61), _if61))
 check("ufw rows: a COMMENTED UDP-only whole-interface allow (the VPS's own `Anywhere on lo  ALLOW IN  "
@@ -463,7 +506,12 @@ _drrows61 = _drn61.ufw_classify(_as_verbose61(_real61_text("s7b-lo-net-udp")), "
 check("ufw rows: no reader's `from` carries the comment (ufw_status, the remote tailnet read, the "
       "debug report)",
       _row61 and _row61["from"] == ".".join(["198", "51", "100", "0"]) + "/24/udp"
-      and not any("#" in r["from"] for r in _st61["rules"] + _drrows61), repr((_row61, _drrows61)))
+      # Every capture's rules, not the last loop's (s7d): s7b is the commented one this names.
+      and len(_sts61) == 3 and all(_v["rules"] for _v in _sts61.values())
+      and not any("#" in r["from"] for _v in _sts61.values() for r in _v["rules"])
+      and all(_v for _v in _tsr61.values())
+      and not any("#" in r["from"] for _v in _tsr61.values() for r in _v)
+      and not any("#" in r["from"] for r in _drrows61), repr((_row61, _drrows61)))
 
 # 2. The Firewall page, the Network card and Close public panel port agree on what holds the
 #    panel port open: the real captures (panel port 47150), and part61's own table (5000).
@@ -500,6 +548,31 @@ check("panel port: on the VPS's own rows, a list or range holding the panel port
       "card says open; its own `47150/tcp` too; an unrelated SSH rule is neither (both directions)",
       _agree61 == {"s6b-list": (True, True, True), "s6d-range": (True, True, True),
                    "s6c-only": (True, True, True), "s3-udp": (False, True, False)}, repr(_agree61))
+def _r15d_page_groups61(text, panel_port, sshd=47122):
+    with _patched():
+        _patch(_smc61, "run_privileged", lambda *a, **k: (text, "", 0))
+        _patch(_smc61, "is_local_server", lambda s: True)
+        _patch(_smh61, "_sshd_current_ports", lambda s: [str(sshd)])
+        _patch(_smh61, "_tailscale_conn_state", lambda s: (False, False))
+        _patch(_fwm61, "_config_unreadable", lambda: False)
+        _patch(_pcfg61, "load_config", lambda: {"port": panel_port, "tailscale_setup_done": True})
+        return _fwm61.remote_ufw_status(NS(port=sshd)).get("groups", [])
+
+
+# 3. The one real capture of follow-up 2's case, s5a (read by no check before review 1011e): on the
+#    VPS, a DENY of a documentation /24 sits above an ALLOW of SSH (47122) from one address in it. That allow
+#    is no way in, so the public rule is the only one left and protected, and the shadowed allow
+#    may go with a warning.
+_s5a61 = {(_g["port_label"], _g.get("scope"), _g.get("action")): (_g.get("ssh_live"), _g.get("protected"),
+                                                                  _g.get("warn"))
+          for _g in _r15d_page_groups61(_real61_text("s5a-deny-above"), 47150)
+          if _g["port_label"] == "47122/tcp"}
+_s5a_net61 = ".".join(["198", "51", "100", "0"]) + "/24"
+check("firewall: on the VPS's own rows (s5a), an SSH allow from an address a DENY of its /24 above it "
+      "shadows is no way in: the public SSH rule is protected, the shadowed allow only warns",
+      _s5a61 == {("47122/tcp", "Any address", "ALLOW"): (True, True, False),
+                 ("47122/tcp", _s5a_net61, "DENY"): (False, False, False),
+                 ("47122/tcp", _ADMIN61, "ALLOW"): (False, False, True)}, repr(_s5a61))
 _pg61 = {}
 for _row61, _want61 in _PORT_ROWS61.items():
     _grp61 = list(_protect61(NS(port=22), [_row61], is_local=True, sshd_ports=(22,),
@@ -580,6 +653,7 @@ def _set_lang61(lang):
 
 try:
     with _patched():
+        _r15d_arm61()
         _patch(_rv61, "remote_ufw_status", lambda remote: _st61)
         for _lang61 in ("en", "es", "fr"):
             _set_lang61(_lang61)
@@ -606,3 +680,5 @@ if _js61 is None:
     skip(_JSNAME61, "node is not installed")
 else:
     check(_JSNAME61, isinstance(_js61, list) and _js61[0] == _es61 and _js61[1] == "plain", repr(_js61))
+check("part61: nothing its routes drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP61_START, repr(_P9_TRIPPED[_TRIP61_START:][:6]))

@@ -103,7 +103,7 @@ from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException
 
 from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, authorize_after_body,
-    client_ip, configure_proxy_trust, get_user_permissions, init_auth, log_action,
+    audit_username, client_ip, configure_proxy_trust, get_user_permissions, init_auth, log_action,
     strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
@@ -136,7 +136,7 @@ from panel.core.panel_state import (_install_jobs, _install_lock,
     _last_sample_prune, _monitor_state, _os_update_seen, _player_counts)
 from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupState, User, db,
     init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, RowReplaced, claim_row,
-    row_birth, still_held)
+    row_birth, row_label, still_held)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, list_game_backups, game_engine as
     sm_game_engine, set_game_priority_bulk, game_users_off_priority, lgsm_get_values,
@@ -321,14 +321,18 @@ _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 # reserve the whole block so two of them can't overlap. Anything not listed defaults to 1. This is
 # only a hint for STOPPED servers — resolve_free_port also unions in the host's live listening
 # ports, so a running server's real footprint is always respected regardless of this table.
+#
+# Keyed by LinuxGSM shortname (held to tests/unit/lgsm_shortnames.txt). "valheim" and "7d2d" were
+# keys and match no LinuxGSM game, and Unturned was keyed "unturned" where LinuxGSM's is "unt", so
+# its block was never reserved.
 _PORT_SPAN = {
     "rust": 2,                       # game 28015 + query 28016
-    "valheim": 3, "vh": 3,           # 2456–2458
-    "sdtd": 3, "7d2d": 3,            # 26900–26902 (game + query)
+    "vh": 3,                         # 2456–2458
+    "sdtd": 3,                       # 26900–26902 (game + query)
     "arma3": 5,                      # 2302 + steam query/voice 2303–2306
     "ark": 2,                        # 7777 game + 7778 raw
     "squad": 2,                      # game 7787 + query 7788
-    "unturned": 2,                   # game 27015 + steam query 27016
+    "unt": 2,                        # game 27015 + steam query 27016
 }
 
 
@@ -675,7 +679,8 @@ def _node_tools_cron_pass(app):
             try:
                 ensure_node_tools_cron(r)
             except Exception:
-                _log.debug("node-tools cron ensure failed for %s", r.name, exc_info=True)
+                _log.debug("node-tools cron ensure failed for %s", row_label(r, "name"),
+                           exc_info=True)
         for gs in GameServer.query.all():
             if not _still_in_db(gs) or gs.remote is None:
                 continue
@@ -683,7 +688,7 @@ def _node_tools_cron_pass(app):
                 _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
                                                   game_type=gs.game_type, port=gs.port)
             except Exception:
-                _log.debug("cron upgrade failed for %s", gs.name, exc_info=True)
+                _log.debug("cron upgrade failed for %s", row_label(gs, "name"), exc_info=True)
 
 
 def _node_tools_cron_watch(app):
@@ -850,7 +855,8 @@ def _apply_whitelist_to_remotes(app, unban_ip=None):
             try:
                 remote_set_fail2ban_ignoreip(remote, wl, unban_ip=unban_ip)
             except Exception:
-                _log.debug("remote fail2ban ignoreip failed for remote %s", remote.id, exc_info=True)
+                _log.debug("remote fail2ban ignoreip failed for remote %s", row_label(remote, "id"),
+                           exc_info=True)
 
 
 def _apply_whitelist_everywhere(app, unban_ip=None):
@@ -1384,7 +1390,7 @@ def _maybe_alert_admin_bruteforce(who, ip, now):
             return
         since = utcnow() - timedelta(seconds=LOGIN_WINDOW)
         fails = AuditLog.query.filter(AuditLog.action == "login_failed",
-                                      AuditLog.username == who,
+                                      AuditLog.username == audit_username(who),
                                       AuditLog.timestamp >= since).count()
         if fails < _ADMIN_BF_THRESHOLD:
             return
@@ -2006,19 +2012,12 @@ def _new_user_language(cfg, known):
 
 
 def _current_lang():
-    """Active UI language: the logged-in user's saved preference, else the session choice, else en."""
-    lang = None
-    try:
-        if getattr(current_user, "is_authenticated", False):
-            lang = getattr(current_user, "language", None)
-    except Exception:
-        lang = None
-    if not lang:
-        try:
-            lang = session.get("lang")
-        except Exception:
-            lang = None
-    return i18n.normalize_lang(lang)
+    """Active UI language: the logged-in user's saved preference, else the session choice, else en.
+
+    One definition, in panel.core.i18n, so a route translating the message it sends back
+    (i18n.tr) asks exactly what the page's t() asks.
+    """
+    return i18n.request_lang()
 
 
 # Content hash per static file, computed once per process. Cheap enough to do lazily and it must
@@ -2369,12 +2368,13 @@ def _apply_mod_restart(gs, remote):
         if gs.restart_pending:              # clear any stale flag; nothing auto-restarts it now
             gs.restart_pending = False
             db.session.commit()
-        return "idle", "The server is stopped — the change will load when you next start it."
+        # Sentences: the caller joins this to its own sentence, each translated whole (i18n.tr).
+        return "idle", i18n.Sentence("The server is stopped — the change will load when you next start it.")
     # Running: a restart is needed to load the change, but we do NOT do it or queue it — the admin
     # decides. (We deliberately don't set restart_pending, so the empty-ticker won't restart it
     # either — no surprise restarts from installing a mod.)
-    return "needed", ("Restart the server to load the change — use Restart now when you're ready "
-                      "(nobody is disconnected until you do).")
+    return "needed", i18n.Sentence("Restart the server to load the change — use Restart now when you're "
+                                   "ready (nobody is disconnected until you do).")
 
 def _selected_remotes(server_ids):
     """Resolve submitted remote ids to RemoteServer rows, skipping anything
@@ -2463,14 +2463,14 @@ def _custom_cmd_form(cmd=None):
     # the failure mode is a validation rule that silently accepts more than the superadmin who
     # wrote it intended, for everyone allowed to run the command. Refuse instead of truncating.
     if len(arg_pattern) > 200:
-        return None, ("The argument validation pattern is too long (%d characters, limit 200). "
-                      "Shorten it — truncating it here could silently widen what it accepts."
-                      % len(arg_pattern))
+        return None, i18n.Sentence("The argument validation pattern is too long ({n} characters, limit 200). "
+                                   "Shorten it — truncating it here could silently widen what it accepts.",
+                                   n=len(arg_pattern))
     # The template is the command itself; a cut changes what runs (a lost closing quote, a lost
     # argument). Same reasoning, same answer.
     if len(template) > 500:
-        return None, ("The command template is too long (%d characters, limit 500)."
-                      % len(template))
+        return None, i18n.Sentence("The command template is too long ({n} characters, limit 500).",
+                                   n=len(template))
     return {"name": name[:80], "command_template": template,
             "argument_label": arg_label[:80], "argument_pattern": arg_pattern,
             "scope_type": scope_type, "scope_value": scope_value[:64],
@@ -2489,7 +2489,9 @@ def _maybe_set_threshold(body):
     """If the request carries a 'threshold', validate + persist it. Returns the effective value."""
     # A JSON boolean is ignored as "many" is: int(True) is 1, and a threshold of 1 had every
     # auto-block host deny an address for a single failed attempt.
-    if body.get("threshold") is not None and not isinstance(body.get("threshold"), bool):
+    # Nor a fraction: int(2.5) is 2, a threshold nobody asked for.
+    _th = body.get("threshold")
+    if _th is not None and not isinstance(_th, bool) and not (isinstance(_th, float) and not _th.is_integer()):
         try:
             val = max(1, min(int(body.get("threshold")), 100000))
             update_config(lambda cfg: cfg.update({"autoblock_threshold": val}))
@@ -2563,17 +2565,22 @@ def _refuse_on_panel_host(remote, what, why=None):
     half of that: a UI-only restriction on a destructive privileged action is not a
     restriction — the route still accepted a POST with the local host's id.
 
-    `why` replaces the reboot reason for an action that does not reboot anything (the Tailscale
-    migration and finalize), so the refusal does not state something untrue about it."""
+    `why` replaces the refusal for an action that does not reboot anything (the Tailscale migration
+    and finalize), so it does not state something untrue about it. Each is a WHOLE sentence with a
+    {what} slot, translated as one: it was two clauses spliced into a third, which no catalog key
+    could match. `what` is an i18n.Sentence (the action's name, translated in its turn)."""
     if not is_local_server(remote):
         return None
     _log.warning("refused %s aimed at the panel's own host (remote_id=%s)", what, remote.id)
     return jsonify({
         "success": False,
-        "message": ("%s prepares a REMOTE VPS and can't target the panel's own host — %s. Use the "
-                    "panel's own pages for updates, firewall and Tailscale."
-                    % (what, why or "it would reboot the panel mid-request")),
+        "message": i18n.tr(why or _PANEL_HOST_REBOOTS, what=what),
     }), 400
+
+
+_PANEL_HOST_REBOOTS = i18n.Sentence(
+    "{what} prepares a REMOTE VPS and can't target the panel's own host — it would reboot the panel "
+    "mid-request. Use the panel's own pages for updates, firewall and Tailscale.")
 
 # ── Scheduled tasks (cron) for the game user ──
 # Same privilege gate as the file editor: a cron entry runs an arbitrary command

@@ -25,13 +25,14 @@ from types import SimpleNamespace as _NS63
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_CFG_PATH, _p9, _p9_client, _p9_patch,
-                         _p9_restore_all)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_client,
+                         _p9_core, _p9_Over, _p9_patch, _p9_restore_all, _p9_so, _p9_trip)
 from panel.db.models import db as _db63
 from unit.part47 import _SETTLE47 as _SETTLE63, _cut47, _node47
 import app as _app63
 from panel.ops import backup as _bk63
 from panel.ops import system_ops as _so63
+from panel.ops import tailscale_integration as _r15d_tsi63
 from panel.routes import host_terminal as _ht63
 from panel.routes import os_updates as _ou63
 from panel.routes import remote_vps as _rv63
@@ -61,8 +62,33 @@ def _rec63(log, name, result):
     return lambda *a, **k: (log.append((name, a, k)) or result)
 
 
+def _r15d_arm63():
+    """part12's transport tripwire, undone by the block's _p9_restore_all (review 1011e).
+
+    part12 disarmed its own when it ended, and the routes below stub only the leaf each check
+    names: one more host call on a passing path ran for real (the auto-block and reboot routes on
+    the panel host, as root on CI's root leg) with this part green. Renders read Tailscale state
+    for the nav through the real `tailscale` CLI on a box that has it; answered and tripwired too.
+    """
+    _p9_patch(_p9_core, "get_connection",
+              _p9_trip("paramiko", exc=ConnectionError("refused by part63's tripwire")))
+    for _n63, _w63 in (("_run_via_ssh_cli", "ssh-cli"), ("_exec_local_shell", "local-shell"),
+                       ("_exec_local_argv", "local-argv")):
+        _p9_patch(_p9_core, _n63, _p9_trip(_w63))
+    for _n63 in ("_run", "_run_verb", "_git"):
+        _p9_patch(_p9_so, _n63, _p9_trip("system_ops." + _n63))
+    _p9_patch(_r15d_tsi63, "subprocess", _p9_Over(
+        _r15d_tsi63.subprocess,
+        Popen=_p9_trip("tailscale.subprocess.Popen", exc=OSError("refused by part63's tripwire")),
+        run=_p9_trip("tailscale.subprocess.run", exc=OSError("refused by part63's tripwire"))))
+    _p9_patch(_r15d_tsi63, "get_tailscale_info",
+              lambda force_refresh=False: _NS63(dns_name=None, serve_config={}, serve_unreadable=False))
+
+
+_TRIP63_START = len(_P9_TRIPPED)
 _A63 = _p9_client(P9_ADMIN)
 try:
+    _r15d_arm63()
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # 1. routes
     # ════════════════════════════════════════════════════════════════════════════════════════════
@@ -328,19 +354,8 @@ check("file browser: ...browse() reads the open fields before it clears them and
       < _br63.find("_r14c_restoreEditors(keep, l)"), _br63[:200])
 
 # ── Clear means the cleared panel lines do not come back ────────────────────────────────────────
-_SD63 = _read63(_JS63, "server_detail.js")
-_name63 = "console: Clear and the backlog"
-_out63 = _node63(_name63, (
-    "var consoleEl = {innerHTML: 'x'}, _consoleLines = [1], _consoleSig = 's', _consolePrimed = true;\n"
-    "var _panelBacklogShown = false, _returnOwed = false, _lastPanelT = 500;\n"
-    + _cut47(_SD63, "function clearConsole(") + "\n" + _cut47(_SD63, "function _panelLinesWiped(") + "\n"
-    + _cut47(_SD63, "function _r13c_primeWipesPushes(") + "\n"
-    "clearConsole();\nvar wipes = _r13c_primeWipesPushes();\n_panelLinesWiped();\n"
-    "console.log(JSON.stringify([wipes, _lastPanelT, consoleEl.innerHTML]));\n"))
-if _out63 is not None:
-    check("console: after Clear on a page whose backlog was never shown, the re-prime neither resets the "
-          "shown-up-to time nor puts back the pushes (the cleared update output came back on the next poll)",
-          _out63 == [False, 500, ""], repr(_out63))
+# Held end to end in part66 now (Clear, then a push, then the re-prime): Clear records where it cut
+# the panel lines instead of marking the backlog shown, which wiped the lines pushed after it.
 
 # ── the auto-block switch believes the answer, not the click ────────────────────────────────────
 _RM63 = _read63(_JS63, "remote_manage.js")
@@ -478,7 +493,7 @@ check("i18n: no script writes panel text, untranslated, into an element the tran
       not _gwr63, repr(_gwr63[:6]))
 
 # ── labels a route supplies, rendered as whole text nodes ───────────────────────────────────────
-from panel.ops import tailscale_integration as _tsi63  # noqa: E402
+_tsi63 = _r15d_tsi63   # imported once, at the top
 from panel.ops import terminal_session as _ts63  # noqa: E402
 from panel.security.auth import ALL_PERMISSIONS as _PERMS63  # noqa: E402
 from panel.services.notifications import EVENTS as _EVENTS63  # noqa: E402
@@ -523,9 +538,11 @@ with _p9.app_context():
     _db63.session.get(_User63, P9_ADMIN).language = None
     _db63.session.commit()
 try:
+    _r15d_arm63()
     _dash63 = _c63.get("/").get_data(as_text=True)
     _users63 = _c63.get("/users").get_data(as_text=True)
 finally:
+    _p9_restore_all()
     with _p9.app_context():
         _db63.session.get(_User63, P9_ADMIN).language = _lang63
         _db63.session.commit()
@@ -536,6 +553,8 @@ check("i18n: the dashboard's row controls are labelled in the viewer's language,
 check("i18n: ...and /users' delete confirm is the translated sentence (it was English with the name "
       "inside)", "¿Eliminar el usuario “" in _users63 and "Delete user “" not in _users63,
       repr(_users63.count("data-confirm=")))
+check("part63: nothing its routes and renders drove reached a real transport (every host call was "
+      "stubbed)", len(_P9_TRIPPED) == _TRIP63_START, repr(_P9_TRIPPED[_TRIP63_START:][:6]))
 
 
 # ── sentences spliced around a value, and split by bold words, in the scripts ──────────────────

@@ -4,6 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (current_app, flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user)
+from panel.core import i18n
 from panel.core.clock import (utcnow)
 from panel.core.config import (_r13a_cfg_text, encrypt_secret, load_config, remove_setup_token, save_config)
 from panel.db.models import (Group, RemoteServer, SetupState, User, db)
@@ -16,7 +17,7 @@ import threading
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
     _port_or, bind_host_error, can_bind_address, password_problem, username_problem)
 from panel.routes.remotes import (_add_remote_field_error, _add_remote_target_error)
-from panel.ops.serve_upkeep import (_leftover_note, _remove_serve_leftovers)
+from panel.ops.serve_upkeep import (_remove_serve_leftovers, with_leftover_note)
 from app import (_bind_is_loopback, _current_lang, _log, _serve_scheme_now, _setup_open,
     _setup_owner_ok, _setup_ts_ok, _superadmin_exists, claim_setup, is_setup_complete,
     issue_setup_owner_token)
@@ -242,7 +243,7 @@ def _register_setup_tailscale(app):
         _setup_log("setup_tailscale_serve", target=_SETUP_TARGET,
                    detail="port %s, mount %s" % (port, mount), success=ok)
         if not ok:
-            return jsonify({"success": False, "message": msg})
+            return jsonify({"success": False, "message": i18n.tr(msg)})
         left = _remove_serve_leftovers(port, mount, "setup wizard", _wizard_audit)
         info = ts.get_tailscale_info(force_refresh=True)
         cfg["tailscale_setup_done"] = True
@@ -251,7 +252,7 @@ def _register_setup_tailscale(app):
         if info.dns_name and not cfg.get("site_domain"):
             cfg["site_domain"] = info.dns_name
         save_config(cfg)
-        return jsonify({"success": True, "message": msg + _leftover_note(left),
+        return jsonify({"success": True, "message": with_leftover_note(msg, left),
                         "url": _wizard_serve_url(info, cfg)})
 
 
@@ -359,7 +360,7 @@ def _setup_welcome(state, data, cfg):
     # route, so the panel's port means one thing wherever it is set.
     _wiz_port = _port_or(request.form.get("port"), None, lo=MIN_UNPRIVILEGED_PORT)
     if _wiz_port is None:
-        flash("Pick a port between %d and %d." % (MIN_UNPRIVILEGED_PORT, MAX_PORT),
+        flash(i18n.tr("Pick a port between {lo} and {hi}.", lo=MIN_UNPRIVILEGED_PORT, hi=MAX_PORT),
               "danger")
         return redirect("/setup")
     cfg["site_title"] = request.form.get("site_title", "LinuxGSM Panel")
@@ -381,7 +382,7 @@ def _setup_welcome(state, data, cfg):
     _wiz_bind = (request.form.get("bind_host") or "0.0.0.0").strip()  # nosec B104
     _bind_err = bind_host_error(_wiz_bind, can_bind_address)
     if _bind_err:
-        flash(_bind_err, "danger")
+        flash(i18n.tr(_bind_err), "danger")
         return redirect("/setup")
     cfg["bind_host"] = _wiz_bind
     save_config(cfg)
@@ -499,7 +500,7 @@ def _setup_add_remote(state, data):
     if not name or not host:
         flash("Name and host are required.", "danger")
     elif ssh_port is None:
-        flash("SSH port must be between %d and %d." % (MIN_PORT, MAX_PORT), "danger")
+        flash(i18n.tr("SSH port must be between {lo} and {hi}.", lo=MIN_PORT, hi=MAX_PORT), "danger")
     elif refusal:
         flash(refusal, "danger")
     else:
@@ -509,7 +510,7 @@ def _setup_add_remote(state, data):
         success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential,
                                            captured=_seen_key)
         if not success:
-            flash(f"Connection test failed: {msg}", "danger")
+            flash(i18n.tr("Connection test failed: {why}", why=msg), "danger")
         else:
             remote = RemoteServer(
                 name=name, host=host, port=ssh_port,
@@ -525,7 +526,7 @@ def _setup_add_remote(state, data):
             db.session.commit()
             _setup_log("add_remote", target=name, detail="%s@%s" % (ssh_user, host),
                        remote=remote)
-            flash(f"Remote '{name}' added successfully!", "success")
+            flash(i18n.tr("Remote '{name}' added successfully!", name=name), "success")
             data["remote_added"] = True
             state.data = json.dumps(data)
 

@@ -6,6 +6,7 @@ from flask import (jsonify)
 from flask_login import (current_user, login_required)
 from panel.security.auth import (log_action, MANAGE_REMOTES, get_remote, permission_required)
 import time
+from panel.core import i18n
 from panel.core.http import (_json_body, _r12c_json_flag)
 from app import (_refuse_on_panel_host)
 from panel.routes._shared import (_bootstrap_jobs, _bootstrap_lock)
@@ -24,12 +25,13 @@ def register(app):
         reboot. Returns immediately; poll /bootstrap-status for live progress.
         """
         remote = get_remote(remote_id)
-        refused = _refuse_on_panel_host(remote, "VPS bootstrap")
+        refused = _refuse_on_panel_host(remote, i18n.Sentence("VPS bootstrap"))
         if refused:
             return refused
         from panel.services import host_reboot as _hr
         if _hr.reboot_busy(remote.id):
-            return jsonify({"success": False, "message": _hr.BUSY_MESSAGE % remote.display_name}), 409
+            return jsonify({"success": False,
+                            "message": i18n.tr(_hr.busy_message(remote.display_name))}), 409
         data = _json_body()
         opts = {
             "set_timezone": data.get("timezone", "UTC"),
@@ -47,12 +49,13 @@ def register(app):
             # Named as the request names them: `do_reboot` is the panel's key, read from "reboot".
             _sent = [{"do_reboot": "reboot"}.get(k, k) for k in _r12c_bad]
             return jsonify({"success": False,
-                            "message": "These options must be true or false: %s." % ", ".join(_sent)}), 400
+                            "message": i18n.tr("These options must be true or false: {names}.",
+                                               names=", ".join(_sent))}), 400
         # Refused HERE as well as in the worker: the worker's refusal came after the kick-off
         # audit row below, which then recorded whatever timezone and account text was posted.
         bad = _sm._bsval_refusal(opts["set_timezone"], opts["username"])
         if bad:
-            return jsonify({"success": False, "message": bad}), 400
+            return jsonify({"success": False, "message": i18n.tr(bad)}), 400
         started, msg = _begin_bootstrap(app, remote_id, opts, current_user.id)
         if not started:
             return jsonify({"success": False, "message": msg}), 409
@@ -88,8 +91,10 @@ def register(app):
                 "step": job["step"],
                 "total": job["total"],
                 "percent": pct,
-                "step_name": job["step_name"],
-                "message": job.get("message", ""),
+                # Written on the bootstrap's worker thread, with no viewer: kept as i18n.Sentences
+                # and translated here, for whoever is asking.
+                "step_name": i18n.tr(job["step_name"]),
+                "message": i18n.tr(job.get("message", "")),
                 "log": job["log"][-200:],
                 "elapsed": int(time.time() - job["started"]),
             })

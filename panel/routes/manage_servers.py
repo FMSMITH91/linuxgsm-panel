@@ -7,7 +7,7 @@ from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.panel_state import (_install_jobs, _install_lock, forget_rows)
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, RowReplaced, claim_row,
-    db, row_birth, same_row)
+    db, row_birth, row_label, same_row)
 from panel.ops import (backup as bk)
 from panel.services import (lgsm_data)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
@@ -29,6 +29,7 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, UNINSTALL_SERVE
 import shlex
 import threading
 import time
+from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok, _log_and_generic, _wants_json)
 from panel.core import terminal
 from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN_PORT,
@@ -172,12 +173,12 @@ def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
         return False, None, False
     other = panel_ports.get(real_port)
     if other:
-        return False, "'%s' on this host" % other, False
+        return False, i18n.Sentence("'{name}' on this host", name=other), False
     live = live_ports()
     if live is None:
         return False, None, True
     if real_port in live:
-        return False, "another process on this host", False
+        return False, i18n.Sentence("another process on this host"), False
     return True, None, False
 
 
@@ -241,8 +242,8 @@ def prepare_install_account(remote, remote_id, short_name, fresh):
     """
     state = host_account_state(remote, short_name)
     if state is None:
-        return False, ("Couldn't check whether an account named '%s' already exists — the host did "
-                       "not answer. Nothing was changed on it." % short_name), True
+        return False, i18n.Sentence("Couldn't check whether an account named '{name}' already exists — the "
+                                    "host did not answer. Nothing was changed on it.", name=short_name), True
     key = (remote_id, short_name)
     if state == "exists":
         verdict = _existing_account_verdict(remote, key, fresh)
@@ -250,8 +251,8 @@ def prepare_install_account(remote, remote_id, short_name, fresh):
             return verdict
     c_out, c_err, c_rc = _sm.create_game_user(remote, short_name, timeout=15)
     if c_rc != 0:
-        return False, ("Couldn't create the account '%s': %s"
-                       % (short_name, (c_err or c_out or "useradd failed").strip()[-200:])), True
+        return False, i18n.Sentence("Couldn't create the account '{name}': {why}", name=short_name,
+                                    why=(c_err or c_out or "useradd failed").strip()[-200:]), True
     with _install_lock:
         _accounts_created.add(key)
     time.sleep(0.3)
@@ -267,9 +268,9 @@ def _existing_account_verdict(remote, key, fresh):
     """
     short_name = key[1]
     if fresh:
-        return False, ("An account named '%s' already exists on this host, and the panel only "
-                       "installs into an account it creates itself. It has been left alone — "
-                       "remove this server and pick a different name." % short_name), False
+        return False, i18n.Sentence("An account named '{name}' already exists on this host, and the panel only "
+                                    "installs into an account it creates itself. It has been left alone — remove "
+                                    "this server and pick a different name.", name=short_name), False
     # Probed AS the account: only that user can read a 0750 home. A probe that fails (rc != 0,
     # or no answer) is no evidence either way: it was taken as "its linuxgsm.sh is there", and the
     # install went on into an account nobody had looked at. It stops instead, retryable.
@@ -281,24 +282,24 @@ def _existing_account_verdict(remote, key, fresh):
     if said == "EXISTS":
         return True, "", True             # its linuxgsm.sh is there
     if said != "NOTEXISTS":
-        return False, ("Couldn't check the existing account '%s' — the host did not answer. "
-                       "Nothing was changed on it." % short_name), True
+        return False, i18n.Sentence("Couldn't check the existing account '{name}' — the host did not answer. "
+                                    "Nothing was changed on it.", name=short_name), True
     with _install_lock:
         ours = key in _accounts_created
     if not ours:
-        return False, ("The account '%s' is on this host but has no LinuxGSM install, and the "
-                       "panel can't confirm it created it (it may have restarted since), so it "
-                       "won't delete it or install into it. If it is this install's leftover, "
-                       "delete the account on the host and retry, or remove the server (which "
-                       "deletes the account) and install again." % short_name), True
+        return False, i18n.Sentence("The account '{name}' is on this host but has no LinuxGSM install, and the "
+                                    "panel can't confirm it created it (it may have restarted since), so it "
+                                    "won't delete it or install into it. If it is this install's leftover, "
+                                    "delete the account on the host and retry, or remove the server (which "
+                                    "deletes the account) and install again.", name=short_name), True
     # A half-finished account an earlier attempt of THIS process made: rebuild it clean. Two
     # verbs, and the home path is built by the helper from the validated name.
     _remove_account_crontab(remote, short_name)
     _, d_err, d_rc = _sm.run_privileged(remote, "user-delete", [short_name], timeout=15,
                                         merge_stderr=False)
     if d_rc != 0:
-        return False, ("Couldn't remove the half-finished account '%s' to start again: %s"
-                       % (short_name, (d_err or "userdel failed").strip()[-200:])), True
+        return False, i18n.Sentence("Couldn't remove the half-finished account '{name}' to start again: {why}",
+                                    name=short_name, why=(d_err or "userdel failed").strip()[-200:]), True
     _sm.run_privileged(remote, "user-remove-home", [short_name], timeout=15,
                        merge_stderr=False)
     with _install_lock:
@@ -381,8 +382,8 @@ def _register_install(app):
 
         desired_port = _desired_install_port(game_type, port)
         if desired_port is None:
-            return _form_err("Port must be a number between %d and %d." % (MIN_PORT, MAX_PORT),
-                             "manage_servers")
+            return _form_err(i18n.tr("Port must be a number between {lo} and {hi}.", lo=MIN_PORT,
+                                     hi=MAX_PORT), "manage_servers")
 
         # Allocate the install "slot" atomically: pick a free port, reject a duplicate name and
         # create the row under one lock. resolve_free_port yields on an SSH scan, so without the
@@ -491,9 +492,11 @@ def _register_install(app):
         if live:
             return _form_err("That install is already running.", "manage_servers")
         if not gs.install_retryable:
-            return _form_err(
-                "Trying again won't change this one — " + (gs.install_error or "see the reason on "
-                "the row") + " Fix the cause first, or remove the server.", "manage_servers")
+            return _form_err(i18n.tr(
+                "Trying again won't change this one — {reason} Fix the cause first, or remove the "
+                "server.", reason=gs.install_error) if gs.install_error else i18n.tr(
+                "Trying again won't change this one — see the reason on the row. Fix the cause first, "
+                "or remove the server."), "manage_servers")
         remote = gs.remote
         if remote is None:
             return _form_err("That server's host is gone.", "manage_servers")
@@ -513,8 +516,8 @@ def _register_install(app):
                          _retry_content)
         _notify_servers_changed(app)   # the corner progress widget picks it up from here
         log_action(current_user, "retry_install", target=gs.name, server=gs)
-        return _form_ok(f"Installing {gs.short_name} again. "
-                        f"Progress is shown in the corner while it runs.", "manage_servers")
+        return _form_ok(i18n.tr("Installing {name} again. Progress is shown in the corner while it runs.",
+                                name=gs.short_name), "manage_servers")
 
 
 def _ms_retry_content(gs):
@@ -548,7 +551,7 @@ def _reboot_refusal(remote):
     """Refuse an install on a host the panel is rebooting right now. -> answer or None."""
     from panel.services import host_reboot as _hr
     if _hr.reboot_busy(remote.id):
-        return _form_err(_hr.BUSY_MESSAGE % remote.display_name, "manage_servers")
+        return _form_err(i18n.tr(_hr.busy_message(remote.display_name)), "manage_servers")
     return None
 
 
@@ -582,13 +585,12 @@ def _os_cap_refusal(remote, game_type):
     except Exception:
         _host_os = None
     if _game_os and _host_os and game_os_unsupported(_game_os, _host_os):
-        return _form_err(
-            "LinuxGSM supports %s only up to %s, and this host runs %s — the install would "
-            "download for several minutes and then fail. Install it on a host running %s, or "
-            "pick a different game."
-            % (game_type, _game_os.replace("-", " ").title(), _host_os.replace("-", " ").title(),
-               _game_os.replace("-", " ").title()),
-            "manage_servers")
+        return _form_err(i18n.tr(
+            "LinuxGSM supports {game} only up to {game_os}, and this host runs {host_os} — the install "
+            "would download for several minutes and then fail. Install it on a host running "
+            "{game_os}, or pick a different game.",
+            game=game_type, game_os=_game_os.replace("-", " ").title(),
+            host_os=_host_os.replace("-", " ").title()), "manage_servers")
     return None
 
 
@@ -603,40 +605,49 @@ def _server_name_refusal(server_name):
     return None
 
 
+# Best-effort default port per game for the install form. This is only a pre-install HINT — after
+# install the panel reads LinuxGSM's real port(s) via `details` and opens every one, so an imperfect
+# default self-corrects. static/js/manage_servers.js PORTS is the same table for the form.
+#
+# Keyed by LinuxGSM shortname (held to tests/unit/lgsm_shortnames.txt). "insurgency", "gesource",
+# "spigot", "paper", "bukkit", "mcbe", "7d2d", "valheim", "projectzomboid", "tshock", "mumble" and
+# "openttd" were keys and match no LinuxGSM game; Unturned, Factorio, Avorion, Mordhau and Xonotic
+# were keyed by their full names where LinuxGSM's are unt, fctr, av, mh and xnt; and "vs" carried
+# Vintage Story's 42420, while LinuxGSM's vs is Vampire Slayer (GoldSrc, port 27015) and Vintage
+# Story is "vints".
+_R15F_KNOWN_PORTS = {
+    # Source engine — default 27015
+    "gmod": 27015, "cs": 27015, "css": 27015, "cs2": 27015, "csgo": 27015,
+    "tf2": 27015, "hl2dm": 27015, "hldm": 27015, "hldms": 27015, "dods": 27015,
+    "ins": 27015, "nmrih": 27015, "l4d": 27015, "l4d2": 27015,
+    "zps": 27015, "fof": 27015, "cscz": 27015, "tfc": 27015,
+    "ns": 27015, "ricochet": 27015, "dmc": 27015, "sfc": 27015, "bb2": 27015, "vs": 27015,
+    "unt": 27015, "bt": 27015,
+    # Call of Duty — 28960
+    "cod": 28960, "coduo": 28960, "cod2": 28960, "cod4": 28960, "codwaw": 28960,
+    # Minecraft family
+    "mc": 25565, "pmc": 25565, "mcb": 19132,
+    # Survival / sandbox
+    "rust": 28015, "sdtd": 26900, "vh": 2456,
+    "ark": 7777, "pz": 16261, "terraria": 7777,
+    "fctr": 34197, "av": 27000, "eco": 3000, "vints": 42420,
+    # Mil-sim / shooters
+    "arma3": 2302, "squad": 7787, "mh": 7777, "kf": 7707, "kf2": 7777,
+    "q2": 27910, "q3": 27960, "ql": 27960, "wet": 27960, "etl": 27960, "rtcw": 27960,
+    "jk2": 27960,
+    "xnt": 26000, "ut99": 7777, "ut2k4": 7777,
+    # Voice / misc
+    "ts3": 9987, "samp": 7777, "mta": 22003,
+}
+
+
 def _desired_install_port(game_type, port):
     """The port the install asks for: the form's, or the game's usual one in place of 27015.
 
     -> None when it is out of range, which the route refuses.
     """
-    # Best-effort default port per game for the install form. This is only a
-    # pre-install HINT — after install the panel reads LinuxGSM's real port(s)
-    # via `details` and opens every one, so an imperfect default self-corrects.
-    KNOWN_PORTS = {
-        # Source engine — default 27015
-        "gmod": 27015, "cs": 27015, "css": 27015, "cs2": 27015, "csgo": 27015,
-        "tf2": 27015, "hl2dm": 27015, "hldm": 27015, "hldms": 27015, "dods": 27015,
-        "ins": 27015, "insurgency": 27015, "nmrih": 27015, "l4d": 27015, "l4d2": 27015,
-        "zps": 27015, "fof": 27015, "gesource": 27015, "cscz": 27015, "tfc": 27015,
-        "ns": 27015, "ricochet": 27015, "dmc": 27015, "sfc": 27015, "bb2": 27015,
-        "unturned": 27015, "bt": 27015,
-        # Call of Duty — 28960
-        "cod": 28960, "coduo": 28960, "cod2": 28960, "cod4": 28960, "codwaw": 28960,
-        # Minecraft family
-        "mc": 25565, "pmc": 25565, "spigot": 25565, "paper": 25565, "bukkit": 25565,
-        "mcbe": 19132, "mcb": 19132,
-        # Survival / sandbox
-        "rust": 28015, "sdtd": 26900, "7d2d": 26900, "valheim": 2456, "vh": 2456,
-        "ark": 7777, "pz": 16261, "projectzomboid": 16261, "terraria": 7777,
-        "tshock": 7777, "factorio": 34197, "avorion": 27000, "eco": 3000, "vs": 42420,
-        # Mil-sim / shooters
-        "arma3": 2302, "squad": 7787, "mordhau": 7777, "kf": 7707, "kf2": 7777,
-        "q2": 27910, "q3": 27960, "ql": 27960, "et": 27960, "etl": 27960, "rtcw": 27960,
-        "xonotic": 26000, "ut99": 7777, "ut2k4": 7777,
-        # Voice / misc
-        "mumble": 64738, "ts3": 9987, "samp": 7777, "mta": 22003, "openttd": 3979,
-    }
     if not port or port == "27015":
-        port = str(KNOWN_PORTS.get(game_type, 27015))
+        port = str(_R15F_KNOWN_PORTS.get(game_type, 27015))
     # _port_or, not int(): a port has a RANGE, and `int(port)` carried none — so 0, -5 and
     # 99999 all reached the row below, the firewall verbs that take it, and the LinuxGSM
     # config written from it. A typo is corrected to the game's default; nothing out of range
@@ -670,17 +681,17 @@ def _pick_install_port(remote, remote_id, desired_port, game_type):
             final_port, port_changed = resolve_free_port(remote, remote_id, desired_port,
                                                          game_type)
     except (ConnectionError, OSError):
-        _log.warning("install: host %s unreachable while picking a port", remote.name)
-        return None, False, _form_err("Can't reach %s right now, so the panel can't check which ports "
-                                      "are free. Check the host is up and try again." % remote.name,
-                                      "manage_servers")
+        _log.warning("install: host %s unreachable while picking a port", row_label(remote, "name"))
+        return None, False, _form_err(i18n.tr(
+            "Can't reach {host} right now, so the panel can't check which ports are free. Check the "
+            "host is up and try again.", host=remote.name), "manage_servers")
     # None = the allocator found nothing free near the requested port. Refusing names the
     # real problem; storing its old best-guess handed the install a port already in use and
     # let it fail later as the GAME's error.
     if final_port is None:
-        return None, False, _form_err("No free port near %d on this host — every port in the search "
-                                      "range is taken. Pick a different port." % desired_port,
-                                      "manage_servers")
+        return None, False, _form_err(i18n.tr(
+            "No free port near {port} on this host — every port in the search range is taken. Pick "
+            "a different port.", port=desired_port), "manage_servers")
     return final_port, port_changed, None
 
 
@@ -708,9 +719,9 @@ def _dedupe_install_name(remote_id, short_name, server_name, lgsm_name):
     """
     if _install_name_taken(remote_id, short_name):
         if server_name:
-            return short_name, False, 1, _form_err(
-                f"A server named '{short_name}' already exists on this remote — "
-                f"pick a different name.", "manage_servers")
+            return short_name, False, 1, _form_err(i18n.tr(
+                "A server named '{name}' already exists on this remote — pick a different name.",
+                name=short_name), "manage_servers")
         short_name, n = _next_default_name(remote_id, lgsm_name, 1)
         return short_name, True, n, None
     return short_name, False, 1, None
@@ -722,14 +733,15 @@ def _host_account_refusal(remote, short_name, _acct):
     -> the form answer, or None when the account is absent.
     """
     if _acct is None:
-        return _form_err("Can't reach %s right now, so the panel can't check whether an "
-                         "account named '%s' already exists there. Check the host is up "
-                         "and try again." % (remote.name, short_name), "manage_servers")
+        return _form_err(i18n.tr(
+            "Can't reach {host} right now, so the panel can't check whether an account named "
+            "'{name}' already exists there. Check the host is up and try again.",
+            host=remote.name, name=short_name), "manage_servers")
     if _acct == "exists":
-        return _form_err(f"An account named '{short_name}' already exists on this host, "
-                         f"and the install would take it over. Pick a different name — or, "
-                         f"if it is a LinuxGSM server, import it from the host's page.",
-                         "manage_servers")
+        return _form_err(i18n.tr(
+            "An account named '{name}' already exists on this host, and the install would take it "
+            "over. Pick a different name — or, if it is a LinuxGSM server, import it from the host's "
+            "page.", name=short_name), "manage_servers")
     return None
 
 
@@ -788,16 +800,30 @@ def _install_job_running(server_id):
 
 
 def _install_started_message(short_name, final_port, desired_port, port_changed, name_changed):
-    """What the install route answers once the job is queued."""
-    port_note = (f" (port {desired_port} was busy — using {final_port})" if port_changed else "")
-    name_note = (f" (the default name was taken — using '{short_name}')" if name_changed else "")
+    """What the install route answers once the job is queued.
+
+    One whole sentence per case: the two parenthesised notes were spliced into the middle of it,
+    so no catalog key matched any of the four.
+    """
     # "Progress is shown live below" was not true here. This route is submitted from the
     # Install a Server page, whose only progress row is on a DIFFERENT page — so the install
     # produced a toast pointing at nothing, and the dashboard then showed the server as
     # "installing" with no progress of any kind. The corner widget (install_progress.js) is
     # what makes the sentence true now, on whatever page you happen to be on.
-    return (f"Installing {short_name} on port {final_port}{port_note}{name_note}. "
-            f"Progress is shown in the corner while it runs.")
+    sentence = _R15E_INSTALL_STARTED[(bool(port_changed), bool(name_changed))]
+    return i18n.tr(sentence, name=short_name, port=final_port, wanted=desired_port)
+
+
+_R15E_INSTALL_STARTED = {
+    (False, False): "Installing {name} on port {port}. Progress is shown in the corner while it runs.",
+    (True, False): ("Installing {name} on port {port} (port {wanted} was busy — using {port}). Progress "
+                    "is shown in the corner while it runs."),
+    (False, True): ("Installing {name} on port {port} (the default name was taken — using '{name}'). "
+                    "Progress is shown in the corner while it runs."),
+    (True, True): ("Installing {name} on port {port} (port {wanted} was busy — using {port}) (the "
+                   "default name was taken — using '{name}'). Progress is shown in the corner while "
+                   "it runs."),
+}
 
 
 def _install_job_runner(app):
@@ -941,7 +967,8 @@ class _InstallRun:
                 return
             j["step"], j["step_name"], j["status"], j["updated"] = step, name, status, time.time()
             if message:
-                j["message"] = message
+                # A record, not the page: install-status translates it for the viewer who asks.
+                j["message"] = message  # i18n-ignore
             j["log"].append(f"[{step}/{j['total']}] {name}")
 
     def progress(self, step, name, status="running", message=""):
@@ -987,7 +1014,10 @@ class _InstallRun:
         # The panel has had strip_escapes since the console was written; this path just never
         # called it. Collapse the whitespace too: the raw tail arrives full of \r and column
         # padding that turns one sentence into five ragged lines in a corner card.
-        detail = readable_reason(detail)
+        # A Sentence keeps its template, so the viewer is shown it whole (install-status translates it);
+        # only the host's raw text is cleaned.
+        if not isinstance(detail, i18n.Sentence):
+            detail = readable_reason(detail)
         with _install_lock:
             j = self.job()
             cur = j["step"] if j else 0
@@ -1071,7 +1101,7 @@ def _install_linuxgsm(job, remote):
             break
         time.sleep(0.5 * (attempt + 1))
     if "Unknown game server" in out:
-        _fail("Invalid game type", f"'{game_type}' is not a valid LinuxGSM shortname."); return False
+        _fail("Invalid game type", i18n.Sentence("'{game}' is not a valid LinuxGSM shortname.", game=game_type)); return False
     if rc != 0:
         _fail("LinuxGSM setup failed", (out or err)[-300:]); return False
     return True
@@ -1095,9 +1125,13 @@ def _install_dependencies(job, remote):
         # regardless (its pipeline ended in `echo deps-done`) — so on a host where
         # the whole step was REFUSED by sudo, nothing was written anywhere and the
         # install carried on to fail later looking like a bad download.
-        _p(2, "Installing dependencies", message=(
-            "Some dependencies did not install — continuing; step 4 reports "
-            "anything still missing. %s" % (deps_msg or "")[-200:]))
+        # i18n-ignore: an install job's record, written on a worker thread with no viewer and shown
+        # by the corner card under data-no-i18n (it ends with the tool's own output), as every
+        # other line of the job's log is.
+        # The job's record (install-status translates it for the viewer who asks).
+        _p(2, "Installing dependencies", message=i18n.Sentence(  # i18n-ignore
+            "Some dependencies did not install — continuing; step 4 reports anything still missing. {output}",
+            output=(deps_msg or "")[-200:]))
         _log.warning("install %s: dependency step failed: %s",
                      short_name, (deps_msg or "")[:300])
 
@@ -1326,9 +1360,9 @@ def _configure_and_start(job, remote, gs):
 # Appended to whatever the install's last word is when step 6 raised (see _open_game_ports). The
 # host's Firewall page takes Manage Remotes and an install only Manage Servers, so the sentence
 # says who else can — as edit_server's does for the same button.
-FIREWALL_STEP_FAILED = ("The firewall step failed, so this server's ports may not be open: open "
-                        "them from the host's Firewall page ('Open all ports'), or ask someone who "
-                        "manages the host to.")
+FIREWALL_STEP_FAILED = i18n.Sentence(
+    "The firewall step failed, so this server's ports may not be open: open them from the host's "
+    "Firewall page ('Open all ports'), or ask someone who manages the host to.")
 
 
 def _noting_firewall_failure(job):
@@ -1342,7 +1376,7 @@ def _noting_firewall_failure(job):
         return job
 
     def finish(msg, warn=False):
-        job.finish("%s %s" % (msg, FIREWALL_STEP_FAILED), warn=True)
+        job.finish(i18n.Sentences(msg, FIREWALL_STEP_FAILED), warn=True)
     return SimpleNamespace(**dict(vars(job), finish=finish))
 
 
@@ -1359,7 +1393,7 @@ def _r13b_noting_content_note(job):
         return job
 
     def finish(msg, warn=False):
-        job.finish("%s %s" % (msg, note), warn=True)
+        job.finish(i18n.Sentences(msg, note), warn=True)
     return SimpleNamespace(**dict(vars(job), finish=finish))
 
 
@@ -1470,9 +1504,15 @@ def _record_autostart(gs, on):
         db.session.commit()
 
 
+# The Minecraft games whose server stops at eula.txt on first start: vanilla Java (mc) and PaperMC
+# (pmc). Keyed by LinuxGSM shortname; "mcbe", "spigot" and "paper" were here and match no LinuxGSM
+# game (Bedrock is "mcb", and bedrock_server has no eula.txt).
+_R15F_EULA_GAMES = ("mc", "pmc")
+
+
 def _accept_game_eulas(remote, short_name, gs):
     """Accept the EULA of the games that stop at a prompt on first start: Minecraft and SCP:SL."""
-    if gs.game_type in ("mc", "mcbe", "pmc", "spigot", "paper"):
+    if gs.game_type in _R15F_EULA_GAMES:
         try:
             _sm.run_command(remote, _sm.game_user_cmd(
                 short_name, f"echo 'eula=true' > /home/{short_name}/serverfiles/eula.txt 2>/dev/null; true"),
@@ -1846,9 +1886,9 @@ def _install_gmod_content(job, remote):
         if not _claim_gmod_content_host(remote.id):
             _log.warning("gmod content for %s: another content job is running on %s, so the "
                          "content step was skipped", short_name, remote.name)
-            job.content_note = ("The GMod content was not installed: another content job was "
-                                "running on this host. Apply it from the Content card once that "
-                                "finishes.")
+            job.content_note = i18n.Sentence("The GMod content was not installed: another content job was "
+                                             "running on this host. Apply it from the Content card once that "
+                                             "finishes.")
             return start_step
         try:
             job.content_note = _r12b_gmod_content_step(remote, short_name, content_games, _p)
@@ -1860,8 +1900,8 @@ def _install_gmod_content(job, remote):
     return start_step
 
 
-_R13B_CONTENT_FAILED = ("The GMod content could not be set up, so none is mounted: apply it from "
-                        "the Content card.")
+_R13B_CONTENT_FAILED = i18n.Sentence("The GMod content could not be set up, so none is mounted: apply "
+                                     "it from the Content card.")
 
 
 def _r12b_gmod_content_step(remote, short_name, content_games, _p):
@@ -1887,10 +1927,11 @@ def _r12b_gmod_content_step(remote, short_name, content_games, _p):
     ok_m, msg_m = gmod_mount_setup(remote, short_name, cu["user"], _mountable)
     if not ok_m:
         _log.warning("gmod content mount for %s: %s", short_name, msg_m)
-        return ("The GMod content could not be mounted: apply it from the Content card.")
+        return i18n.Sentence("The GMod content could not be mounted: apply it from the Content card.")
     if _missing:
-        return ("Some GMod content is not on the host, so it was not mounted (%s): apply it from "
-                "the Content card." % ", ".join(GMOD_CONTENT_GAMES.get(g, (g,))[0] for g in _missing))
+        return i18n.Sentence("Some GMod content is not on the host, so it was not mounted ({games}): apply it "
+                             "from the Content card.",
+                             games=", ".join(GMOD_CONTENT_GAMES.get(g, (g,))[0] for g in _missing))
     return None
 
 
@@ -2113,10 +2154,10 @@ def _report_install_outcome(job, gs, ports, started):
         # A port the firewall step held back (see _withhold): another server's, SSH's, or one
         # something was listening on before this server's first start. Not "this game ignores the
         # panel's port" — here it may well be the port the panel chose.
-        _finish(f"{short_name} installed, but port {port_conflict[0]} is already used by "
-                f"{port_conflict[1]}, so the panel did not open it in the firewall. Free that "
-                f"port on the host, or change it in the game's own config (Files & Config).",
-                warn=True)
+        _finish(i18n.Sentence("{name} installed, but port {port} is already used by {holder}, so the panel did "
+                              "not open it in the firewall. Free that port on the host, or change it in the "
+                              "game's own config (Files & Config).", name=short_name, port=port_conflict[0],
+                              holder=port_conflict[1]), warn=True)
         _audit_install(job, gs, False, "port %s clashes with %s"
                        % (port_conflict[0], port_conflict[1]))
     elif port_conflict:
@@ -2124,10 +2165,10 @@ def _report_install_outcome(job, gs, ports, started):
         # not a failed install — but the server cannot serve anyone until the
         # clash is resolved, and saying nothing would leave someone staring at a
         # server that looks fine and answers nobody.
-        _finish(f"{short_name} installed, but it wants port {port_conflict[0]}, "
-                f"which {port_conflict[1]} already uses. This game ignores the "
-                f"port the panel sets, so change it in the game's own config "
-                f"(Files & Config), or free that port on the host.", warn=True)
+        _finish(i18n.Sentence("{name} installed, but it wants port {port}, which {holder} already uses. This "
+                              "game ignores the port the panel sets, so change it in the game's own config "
+                              "(Files & Config), or free that port on the host.", name=short_name,
+                              port=port_conflict[0], holder=port_conflict[1]), warn=True)
         _audit_install(job, gs, False, "port %s clashes with %s"
                        % (port_conflict[0], port_conflict[1]))
     elif port_unchecked:
@@ -2137,17 +2178,16 @@ def _report_install_outcome(job, gs, ports, started):
         # recorded a clash that may never have happened. Say what actually
         # happened: the panel could not read the host, so it left its own port
         # alone. The install itself succeeded, and the audit entry says so.
-        _finish(f"{short_name} installed, but {lgsm_name} reports port "
-                f"{port_unchecked} and the panel could not read this host's "
-                f"listening ports to check whether it is free. It kept port "
-                f"{gs.port} and did not open {port_unchecked} in the firewall. "
-                f"If the server can't be reached, check that port in the game's "
-                f"own config (Files & Config) and on the host's firewall.",
-                warn=True)
+        _finish(i18n.Sentence("{name} installed, but {script} reports port {reported} and the panel could not "
+                              "read this host's listening ports to check whether it is free. It kept port "
+                              "{port} and did not open {reported} in the firewall. If the server can't be "
+                              "reached, check that port in the game's own config (Files & Config) and on the "
+                              "host's firewall.", name=short_name, script=lgsm_name, reported=port_unchecked,
+                              port=gs.port), warn=True)
         _audit_install(job, gs, True, "port %s reported but the host's listening ports "
                                       "could not be read" % port_unchecked)
     elif really_up:
-        _finish(f"{short_name} installed and started")
+        _finish(i18n.Sentence("{name} installed and started", name=short_name))
         _audit_install(job, gs, True)
     else:
         _report_not_started(job, gs, s_rc, start_out)
@@ -2165,15 +2205,17 @@ def _report_not_started(job, gs, s_rc, start_out):
     # by itself the moment the port opens.
     reason = _extract_start_error(start_out)
     if reason or s_rc != 0:
-        note = f"{short_name} installed, but it didn't start"
-        note += (" — " + reason) if reason else " — check the console for the reason."
+        note = (i18n.Sentence("{name} installed, but it didn't start — {why}", name=short_name, why=reason)
+                if reason else
+                i18n.Sentence("{name} installed, but it didn't start — check the console for the reason.",
+                              name=short_name))
         _detail = ("start failed: " + reason) if reason else "start failed"
     elif not getattr(job, "port_read", True):
         note, _detail = _port_unconfirmed_note(job, gs)
     else:
-        note = (f"{short_name} installed and starting — it hasn't opened port "
-                f"{gs.port} yet, which some games take a few minutes to do. "
-                f"It will show as online on its own once it does.")
+        note = i18n.Sentence("{name} installed and starting — it hasn't opened port {port} yet, which some "
+                             "games take a few minutes to do. It will show as online on its own once it "
+                             "does.", name=short_name, port=gs.port)
         _detail = "started; port %s not open after 90s" % gs.port
     _finish(note, warn=True)
     _audit_install(job, gs, False, _detail)
@@ -2190,15 +2232,16 @@ def _port_unconfirmed_note(job, gs):
     short_name, refused = job.short_name, getattr(job, "port_refused", None)
     if refused:
         port, why = refused
-        return ((f"{short_name} installed and starting, but LinuxGSM reports port {port} for it, "
-                 f"which the panel did not take: {why}. It is monitored on port {gs.port} for "
-                 f"now; 'Open all ports' on the host's Firewall page reads LinuxGSM's port again "
-                 f"and stores it unless another server, SSH or the panel has it."),
+        return (i18n.Sentence("{name} installed and starting, but LinuxGSM reports port {reported} for it, "
+                              "which the panel did not take: {why}. It is monitored on port {port} for now; "
+                              "'Open all ports' on the host's Firewall page reads LinuxGSM's port again and "
+                              "stores it unless another server, SSH or the panel has it.", name=short_name,
+                              reported=port, why=why, port=gs.port),
                 "started; port %s not open after 90s; LinuxGSM reports %s, not taken: %s"
                 % (gs.port, port, why))
-    return ((f"{short_name} installed and starting, but LinuxGSM has not reported its game "
-             f"port, so the panel cannot confirm the game uses port {gs.port}. 'Open all ports' "
-             f"on the host's Firewall page reads it again."),
+    return (i18n.Sentence("{name} installed and starting, but LinuxGSM has not reported its game port, so "
+                          "the panel cannot confirm the game uses port {port}. 'Open all ports' on the "
+                          "host's Firewall page reads it again.", name=short_name, port=gs.port),
             "started; port %s not open after 90s; port not reported by LinuxGSM" % gs.port)
 
 
@@ -2223,7 +2266,8 @@ def _register_uninstall_and_edit(app):
         # a thread is running: _prune_jobs only drops an entry after two hours with no progress
         # update, and every download attempt reports progress, so an absent entry means a dead job.
         if _installing:
-            _m = "'%s' is still installing — wait for it to finish before uninstalling." % name
+            _m = i18n.tr("'{name}' is still installing — wait for it to finish before uninstalling.",
+                         name=name)
             # index, not manage_servers: this route needs UNINSTALL_SERVER, and
             # /servers/manage needs MANAGE_SERVERS or INSTALL_SERVER — neither of which
             # an uninstall-only operator has. The form is a native POST, so the browser
@@ -2240,8 +2284,8 @@ def _register_uninstall_and_edit(app):
         # re-asks about a live job under the same lock the retry queues its job under, so the
         # two cannot both win.
         if not _claim_uninstall(server_id):
-            return _index_reply("'%s' is already being uninstalled or installed — wait for that "
-                                "to finish." % name, False, "warning", 409)
+            return _index_reply(i18n.tr("'{name}' is already being uninstalled or installed — wait for "
+                                        "that to finish.", name=name), False, "warning", 409)
         try:
             return _uninstall_claimed(app, gs, gs.remote, server_id, name)
         finally:
@@ -2291,7 +2335,7 @@ def _register_uninstall_and_edit(app):
         gs.game_display = game_display
         db.session.commit()
         log_action(current_user, "edit_server", target=gs.name, server=gs)
-        return _form_ok(f"Server '{gs.name}' updated.", "manage_servers")
+        return _form_ok(i18n.tr("Server '{name}' updated.", name=gs.name), "manage_servers")
 
 
 def _claim_uninstall(server_id):
@@ -2322,11 +2366,11 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
     # row imported before the import check existed is covered too.
     _priv = privileged_accounts(remote, [short_name])
     if _priv is None:
-        return _index_reply(
-            "Couldn't check the '%s' account on %s — the host did not answer, and the panel "
-            "only deletes an account it has confirmed is not an administrator or root "
-            "account. Nothing was changed; try again when the host is reachable."
-            % (short_name, remote.display_name), False, "danger", 409)
+        return _index_reply(i18n.tr(
+            "Couldn't check the '{user}' account on {host} — the host did not answer, and the panel "
+            "only deletes an account it has confirmed is not an administrator or root account. "
+            "Nothing was changed; try again when the host is reachable.",
+            user=short_name, host=remote.display_name), False, "danger", 409)
     if short_name in _priv:
         return _remove_row_only(app, gs, remote, server_id, name, _priv[short_name])
 
@@ -2340,7 +2384,7 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
 
         # Close ALL of this server's firewall rules (multi-port games tag every
         # rule with the server name), then also the legacy single-port cleanup.
-        fw_note, fw_left = _close_game_firewall(remote, gs)
+        fw_notes, fw_left = _close_game_firewall(remote, gs)
 
         # Remove LinuxGSM user and home.
         #
@@ -2369,14 +2413,14 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
         _gone = rc in (0, 6, 12)
         log_action(current_user, "uninstall_server", target=gs.name, success=_gone, server=gs)
         if not _gone:
-            _em = ("Could not remove the '%s' account on %s, so '%s' has been left in place — "
-                   "nothing was deleted from the panel. %s"
-                   % (short_name, remote.display_name, name,
-                      (err or out or "userdel exited %d" % rc).strip()[:200]))
+            _em = i18n.tr("Could not remove the '{user}' account on {host}, so '{name}' has been left in "
+                          "place — nothing was deleted from the panel. {why}",
+                          user=short_name, host=remote.display_name, name=name,
+                          why=(err or out or "userdel exited %d" % rc).strip()[:200])
             return _index_reply(_em, False, "danger", 500)
         if rc == 12:
-            fw_note += (" The account was removed but its home directory could not be — "
-                        "check /home/%s on the host." % short_name)
+            fw_notes.append(i18n.Sentence("The account was removed but its home directory could not "
+                                          "be — check /home/{user} on the host.", user=short_name))
 
         # Remove from DB
         db.session.delete(gs)
@@ -2385,7 +2429,7 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
         # (and can't be inherited if SQLite reuses the row id for a future server).
         _forget_game_server(server_id)
         _notify_servers_changed(app)   # row disappears live on other sessions
-        _m = f"Server '{name}' uninstalled.{fw_note}"
+        _m = _r15e_uninstalled(name, fw_notes)
         # A rule left open is not a clean uninstall: shown as a warning, not a green "done".
         return _index_reply(_m, True, "warning" if fw_left else "success", warn=fw_left)
 
@@ -2393,6 +2437,14 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
         _em = _log_and_generic("uninstall failed")
         log_action(current_user, "uninstall_server", target=name, success=False, server=gs)
         return _index_reply(_em, False, "danger", 500)
+
+
+def _r15e_uninstalled(name, notes):
+    """The uninstall's answer: each sentence translated whole, then joined.
+
+    The firewall notes were appended to the sentence in English, so no catalog key matched it.
+    """
+    return " ".join(i18n.tr(s) for s in [i18n.Sentence("Server '{name}' uninstalled.", name=name)] + notes)
 
 
 def _remove_row_only(app, gs, remote, server_id, name, why):
@@ -2420,12 +2472,13 @@ def _row_only_texts(name, short_name, remote, why):
     """
     if why == INVALID_ACCOUNT_NAME:
         return ("removed from the panel only — nothing on the host was touched: %s" % why,
-                "'%s' was removed from the panel. Its stored account name was not a plain account "
-                "name, so nothing on %s was touched." % (name, remote.display_name))
+                i18n.tr("'{name}' was removed from the panel. Its stored account name was not a plain "
+                        "account name, so nothing on {host} was touched.",
+                        name=name, host=remote.display_name))
     return ("removed from the panel only — the account was left on the host: %s" % why,
-            "'%s' was removed from the panel, but the '%s' account on %s was NOT deleted or "
-            "stopped: %s. Remove its LinuxGSM files by hand if you meant to."
-            % (name, short_name, remote.display_name, why))
+            i18n.tr("'{name}' was removed from the panel, but the '{user}' account on {host} was NOT "
+                    "deleted or stopped: {why}. Remove its LinuxGSM files by hand if you meant to.",
+                    name=name, user=short_name, host=remote.display_name, why=why))
 
 
 def _index_reply(message, success, category, code=None, warn=False):
@@ -2470,7 +2523,10 @@ def _stop_game_processes(remote, short_name, selfname):
 
 
 def _close_game_firewall(remote, gs):
-    """Close every firewall rule this server holds. -> (note for the success message, anything left).
+    """Close every firewall rule this server holds. -> (notes for the success message, anything left).
+
+    The notes are sentences, each translated whole by the caller (i18n.tr): the count is an
+    i18n.Sentence, and the rules left are the firewall reader's own sentences.
 
     The note names every rule still there that carries the server's name or that the cleanup
     meant to take — one that would not go, a DENY or LIMIT or source-restricted rule it leaves on
@@ -2498,9 +2554,9 @@ def _close_game_firewall(remote, gs):
     except Exception:
         _log.debug("uninstall_server: the firewall cleanup failed", exc_info=True)
         left = left + [_sm.UFW_UNREAD_NOTE]
-    notes = ([" %d firewall rule(s) removed." % count] if count > 0 else [])
-    notes += [" " + n for i, n in enumerate(left) if n not in left[:i]]
-    return "".join(notes), bool(left)
+    notes = ([i18n.Sentence("{n} firewall rule(s) removed.", n=count)] if count > 0 else [])
+    notes += [n for i, n in enumerate(left) if n not in left[:i]]
+    return notes, bool(left)
 
 
 def _uninstall_port_plan(remote, gs):
@@ -2537,8 +2593,12 @@ def _forget_game_server(server_id):
 
 def _label_refusal(name, game_display):
     """Refuse a display label SAFE_LABEL_RE does not accept. -> the form answer, or None."""
-    for _label, _value in (("Name", name), ("Game", game_display)):
+    # One whole sentence per field: the field's name was spliced into a shared one.
+    for _refusal, _value in (
+            (i18n.Sentence("Name can't be empty, longer than 120 characters, or contain < > \" ' ` or "
+                           "backslashes."), name),
+            (i18n.Sentence("Game can't be empty, longer than 120 characters, or contain < > \" ' ` or "
+                           "backslashes."), game_display)):
         if _value and not SAFE_LABEL_RE.match(_value):
-            return _form_err("%s can't be empty, longer than 120 characters, or contain "
-                             "< > \" ' ` or backslashes." % _label, "manage_servers")
+            return _form_err(i18n.tr(_refusal), "manage_servers")
     return None

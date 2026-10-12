@@ -1099,8 +1099,20 @@ def _rv43_user(name, perms=(), hosts=(), superadmin=False, **kw):
 
 
 # ── init_db: the default group is found by is_default, not by its name ────────────────────────────
+def _rv43_drop_new_everyone(before):
+    """Delete the "Everyone" groups this check made.
+
+    Not every group of that name in part12's DB (review 1011e; #416 fixed the same for invites in
+    _rv43_drop_invites_but).
+    """
+    for _g43 in _Group43.query.filter_by(name="Everyone").all():
+        if _g43.id not in before:
+            db.session.delete(_g43)
+
+
 def _rv43_default_group():
     with _p9.app_context():
+        _everyone43 = {_g43.id for _g43 in _Group43.query.filter_by(name="Everyone").all()}
         g = _Group43(name="rv43 Members", description="", is_default=True)
         g.set_permissions({"view_servers"})
         db.session.add(g)
@@ -1116,14 +1128,14 @@ def _rv43_default_group():
             check("init_db: a renamed default group does not bring back a second 'Everyone' "
                   "(with view_console) at the next start", False, repr(e))
         finally:
-            _Group43.query.filter_by(name="Everyone").delete()
+            _rv43_drop_new_everyone(_everyone43)
             db.session.delete(db.session.get(_Group43, gid))
             db.session.commit()
         _models43._ensure_default_group()
         made = _Group43.query.filter_by(name="Everyone", is_default=True).first()
         check("init_db: ...while a database with no default group still gets one (positive control)",
               made is not None and "view_console" in made.get_permissions())
-        _Group43.query.filter_by(name="Everyone").delete()
+        _rv43_drop_new_everyone(_everyone43)
         db.session.commit()
 
 

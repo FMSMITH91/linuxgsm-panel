@@ -303,7 +303,8 @@ try:
                       env=dict(os.environ, PATH=_bin26 + os.pathsep + os.environ["PATH"],
                                GH_LOG=paths["log"], GITHUB_OUTPUT=paths["out"],
                                GITHUB_STEP_SUMMARY=paths["summary"], ANALYSES=paths["analyses"],
-                               GITHUB_REPOSITORY="o/r", **env), timeout=120)
+                               GITHUB_REPOSITORY="o/r", TMPDIR=_sb26, **env),   # its mktemp: here
+                      timeout=120)
         outs = dict(ln.split("=", 1) for ln in open(paths["out"]).read().splitlines() if "=" in ln)
         return p.returncode, outs, open(paths["log"]).read(), p.stdout + p.stderr, \
             open(paths["summary"]).read()
@@ -561,6 +562,10 @@ check("code-scanning gates: the upload guards' still-head says current=false onl
       == ["current=false\n", "current=true\n", "current=true\n", "current=true\n"],
       repr([_still26(_Y26, _mh_files26("app.py")), _still26(_X26), _still26(None),
             _still26(_Y26, _mh_files26("README.md"))]))
+# Its temp dir goes with it: left, every run added one to /tmp (review 1011e).
+_shutil26.rmtree(os.path.dirname(_sh_out26), ignore_errors=True)
+check("code-scanning gates: the still-head checks leave no temp dir behind",
+      not os.path.exists(os.path.dirname(_sh_out26)), _sh_out26)
 
 # ...and every SARIF upload a schedule can make is held back the same way: in each workflow the
 # alert gates wait for, each upload-sarif step's `if:` reads the still_head step, which runs only on

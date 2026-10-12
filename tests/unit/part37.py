@@ -1032,10 +1032,27 @@ def _is_removal_try37(node):
     """Is node a try whose body runs `<x>.unlink()` or `os.remove(...)` as one of its statements?"""
     # Any statement of the body, not only a body of one (review 1011d): `try: db.dispose();
     # p.unlink()` swallowed the same failed delete.
+    # ...and one nested in an `if`, `with` or loop of that body too (review 1011e): `try: if
+    # p.exists(): p.unlink()` under `except OSError: pass` swallowed it the same way. A nested
+    # function or try is its own scope, judged on its own.
     if not isinstance(node, _ast37.Try):
         return False
     return any(isinstance(_st, _ast37.Expr) and isinstance(_st.value, _ast37.Call)
-               and _callee37(_st.value.func).endswith((".unlink", ".remove")) for _st in node.body)
+               and _callee37(_st.value.func).endswith((".unlink", ".remove"))
+               and not _callee37(_st.value.func).endswith("session.remove")   # SQLAlchemy's, no file
+               for _top in node.body for _st in _r15d_stmts37(_top))
+
+
+def _r15d_stmts37(stmt):
+    """`stmt` and every statement nested in its blocks, stopping at a nested def, class or try."""
+    out = [stmt]
+    if isinstance(stmt, (_ast37.FunctionDef, _ast37.AsyncFunctionDef, _ast37.ClassDef, _ast37.Try)):
+        return out
+    for _field in ("body", "orelse", "finalbody"):
+        for _ch in getattr(stmt, _field, None) or []:
+            if isinstance(_ch, _ast37.stmt):
+                out += _r15d_stmts37(_ch)
+    return out
 
 
 def _does_nothing37(stmt):
@@ -1077,12 +1094,18 @@ def _f7_cleanups():
         "try:\n    p.unlink()\nexcept:\n    pass\n",
         "try:\n    p.unlink()\nexcept OSError:\n    ...\n",
         "try:\n    db.dispose()\n    os.remove(p)\nexcept OSError:\n    pass\n",
-        "def f():\n    try:\n        p.unlink()\n    except OSError:\n        return\n"]
+        "def f():\n    try:\n        p.unlink()\n    except OSError:\n        return\n",
+        # Nested in the try body's blocks (review 1011e).
+        "try:\n    if p.exists():\n        p.unlink()\nexcept OSError:\n    pass\n",
+        "try:\n    with lock:\n        for x in y:\n            os.remove(x)\nexcept Exception:\n    pass\n"]
     gone = "try:\n    p.unlink()\nexcept FileNotFoundError:\n    pass\n"
+    _r15d_session37 = ("try:\n    with app.app_context():\n        db.session.remove()\n"
+                       "except Exception:\n    pass\n")
     check("tests: no cleanup swallows a failed delete (a panel.db it leaves makes the next run of "
           "every DB-owning suite SKIP and exit 0, with nothing said) — OSError, Exception or bare",
           not bad and all(len(_swallowed_removals37(_ast37.parse(p_))) == 1 for p_ in probes)
-          and _swallowed_removals37(_ast37.parse(gone)) == [], "; ".join(bad))
+          and _swallowed_removals37(_ast37.parse(gone)) == []
+          and _swallowed_removals37(_ast37.parse(_r15d_session37)) == [], "; ".join(bad))
 
 
 def _exits_in_finally37(node):

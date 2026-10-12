@@ -196,9 +196,10 @@ function renderTailscaleStatus(remoteId, name, status) {
     // so "not installed" — with an Install button — would be a guess stated as a reading.
     html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> ' + escapeHtml("Couldn't read Tailscale's state on this host — it did not answer. Try again once it is reachable.") + '</div>';  // nosemgrep
   } else if (installed && running) {
-    // Each sentence a whole node, the host's name apart: with the state words bolded inside it, the
-    // sentence reached the translator as fragments ("Tailscale is", "and", "on") no key matched.
-    html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> <span>Tailscale is installed and running on</span> <strong data-no-i18n>' + safe + '</strong>.</div>';
+    // Each sentence one whole template with the host's name a value: split around the name, the
+    // translator got a dangling "...running on" with no {name} to place, and a language that puts
+    // the name anywhere but last could not be written.
+    html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> ' + tfHtml('Tailscale is installed and running on {name}.', {name: {html: '<strong data-no-i18n>' + escapeHtml(name) + '</strong>'}}) + '</div>';  // nosemgrep
     // escapeHtml: tailscale_ip and dns_name are parsed out of `tailscale status --json` run on
     // the REMOTE host, so a compromised or hostile host picks these bytes. They land in innerHTML
     // via setModalBody below.
@@ -209,7 +210,7 @@ function renderTailscaleStatus(remoteId, name, status) {
     html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> <span>Tailscale is installed but not running.</span></div>';
     html += renderAuthKeyForm(remoteId, name);
   } else {
-    html += '<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> <span>Tailscale is not installed on</span> <strong data-no-i18n>' + safe + '</strong>.</div>';
+    html += '<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> ' + tfHtml('Tailscale is not installed on {name}.', {name: {html: '<strong data-no-i18n>' + escapeHtml(name) + '</strong>'}}) + '</div>';  // nosemgrep
     html += '<button class="btn btn-primary btn-sm mb-2" data-install-ts data-ts-remote="' + Number(remoteId) + '" data-ts-name="' + safe + '"><i class="bi bi-download"></i> Install Tailscale</button>';
     html += '<div id="install-log" class="small mt-2"></div>';
   }

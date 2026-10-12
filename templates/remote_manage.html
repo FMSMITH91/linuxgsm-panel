@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{% if remote.is_local %}Panel Server{% else %}{{ remote.display_name }} — Manage{% endif %}{% endblock %}
+{% block title %}{% if remote.is_local %}{{ t('Panel Server') }}{% else %}{{ t('%s — Manage')|format(remote.display_name) }}{% endif %}{% endblock %}
 {% block content %}
 {# Host-level controls whose routes are superadmin-only on the panel's OWN host (get_host_remote):
    OS updates, firewall, power, Ubuntu Pro, Connection & SSH. A delegate whose group covers the
@@ -589,10 +589,10 @@
              an unchanged value and × repainted an empty whitelist while the address stayed exempt
              on every host. #}
           {% if current_user.is_superadmin %}
-          <input type="number" min="1" class="form-control" id="sec-threshold" value="20">
+          <input type="number" min="1" max="100000" class="form-control" id="sec-threshold" value="20">
           <button class="btn btn-outline-secondary" data-action="saveThreshold" data-args='["@self"]'><i class="bi bi-save"></i> Save</button>
           {% else %}
-          <input type="number" min="1" class="form-control" id="sec-threshold" value="20" disabled
+          <input type="number" min="1" max="100000" class="form-control" id="sec-threshold" value="20" disabled
                  title="Applies to every host — only a superadmin can change it.">
           {% endif %}
         </div>
@@ -759,7 +759,7 @@
               <option value="127.0.0.1"{% if _bind in ('127.0.0.1', '::1', 'localhost') %} selected{% endif %}
                       {% if not (config and config.tailscale_setup_done) %}disabled{% endif %}>Localhost only (needs Tailscale Serve)</option>
               <option value="__custom__"{% if _bind not in ('0.0.0.0', '::', '127.0.0.1', '::1', 'localhost') %} selected{% endif %}
-                      {% if config and config.tailscale_setup_done %}disabled{% endif %}>Specific IP…{% if config and config.tailscale_setup_done %} (n/a with Serve){% endif %}</option>
+                      {% if config and config.tailscale_setup_done %}disabled{% endif %}>{% if config and config.tailscale_setup_done %}Specific IP… (n/a with Serve){% else %}Specific IP…{% endif %}</option>
             </select>
           </div>
           <div id="panel-bind-custom-wrap"{% if _bind in ('0.0.0.0', '::', '127.0.0.1', '::1', 'localhost') %} style="display:none;"{% endif %}>

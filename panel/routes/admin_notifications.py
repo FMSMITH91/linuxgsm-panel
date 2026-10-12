@@ -20,7 +20,7 @@ from datetime import (timedelta)
 from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body, _json_str)
 from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
                                    password_problem, username_problem)
-from app import (_new_user_language)
+from app import (_new_user_language, _session_lifetimes)
 from panel.routes.groups import _posted_ids
 
 
@@ -39,6 +39,10 @@ def _register_panel_settings(app):
     @superadmin_required
     def panel_settings():
         cfg = load_config()
+        # The values in force, read as the boot reads them (_session_lifetimes: coerced and held to
+        # the form's ranges). A bare int() here raised on a hand-edited `Infinity` or "abc", and the
+        # Settings page answered 500.
+        _life_s, _remember = _session_lifetimes(cfg)
         return render_template("settings.html", languages=i18n.LANGUAGES, settings={
             "site_title": cfg.get("site_title", "LinuxGSM Panel"),
             "site_domain": cfg.get("site_domain", ""),
@@ -47,8 +51,8 @@ def _register_panel_settings(app):
             # Always concrete — an older install may still hold "" from the removed
             # "creator's language" option, which means English.
             "default_language": (cfg.get("default_language") or "en"),
-            "session_lifetime_hours": int(cfg.get("session_lifetime_hours", 8) or 8),
-            "remember_days": int(cfg.get("remember_days", 3) or 3),
+            "session_lifetime_hours": _life_s // 3600,
+            "remember_days": _remember.days,
             "session_protection": cfg.get("session_protection", "strong"),
             "autoblock_threshold": _autoblock_threshold(),
             "reboot_wait_max_hours": _hr.wait_max_hours(),
@@ -146,8 +150,8 @@ def _register_notifications(app):
         log_action(current_user, "notifications_update", target="panel")
         flash("Notification settings saved.", "success")
         if rejected:
-            flash("These weren't saved as allowed users, because a user ID is digits only: %s"
-                  % ", ".join(rejected[:10]), "warning")
+            flash(i18n.tr("These weren't saved as allowed users, because a user ID is digits only: "
+                          "{ids}", ids=", ".join(rejected[:10])), "warning")
         return redirect(url_for("notifications_settings"))
 
     @app.route("/api/notifications/test", methods=["POST"])
@@ -220,7 +224,7 @@ def _register_user_edits(app):
         notifications.notify("account_change", "New user created",
                              "%s created the user '%s'%s."
                              % (current_user.username, username, " (SUPER ADMIN)" if is_superadmin else ""))
-        return _form_credential(f"User '{username}' created.", "manage_users",
+        return _form_credential(i18n.tr("User '{name}' created.", name=username), "manage_users",
                                 username=username, password=password)
 
     @app.route("/users/<int:user_id>/edit", methods=["POST"])
@@ -289,9 +293,9 @@ def _register_user_edits(app):
             notifications.notify("account_change", "Password reset",
                                  "%s reset the password for '%s'."
                                  % (current_user.username, user.username))
-            return _form_credential(f"User '{user.username}' updated.", "manage_users",
+            return _form_credential(i18n.tr("User '{name}' updated.", name=user.username), "manage_users",
                                     username=user.username, password=new_password)
-        return _form_ok(f"User '{user.username}' updated.", "manage_users")
+        return _form_ok(i18n.tr("User '{name}' updated.", name=user.username), "manage_users")
 
 
 def _register_invites(app):
@@ -475,7 +479,7 @@ def _register_user_delete(app):
         db.session.delete(user)
         db.session.commit()
         log_action(current_user, "delete_user", target=username)
-        return _form_ok(f"User '{username}' deleted.", "manage_users")
+        return _form_ok(i18n.tr("User '{name}' deleted.", name=username), "manage_users")
 
 
 def _edit_user_refusal(user, want_superadmin):
@@ -562,6 +566,11 @@ def _apply_resets(user, _pending_audit):
         # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- a generated password, not a typed one
         user.set_password(hash_password(new_password))
         user.auth_epoch = (user.auth_epoch or 0) + 1   # revoke existing sessions
+        # ...and clear their registry rows, as the deactivate branch above does: the bump stops
+        # them working, but they went on LISTING as live sessions on the account's page until
+        # they idled out, the revoked devices among them.
+        from panel.db.models import UserSession
+        UserSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         # The API token too. It is a SECOND credential for the same account, and it did not
         # answer to any of the controls that exist to take an account back: it carries no
         # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted

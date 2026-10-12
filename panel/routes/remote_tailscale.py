@@ -11,6 +11,7 @@ from panel.ops.ssh_manager import (close_connection, remote_bootstrap_tailscale,
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action,
     permission_required)
 from panel.security import privileged as _priv
+from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
 from panel.core.validation import HOST_RE
 from app import (_refuse_on_panel_host)
@@ -18,8 +19,10 @@ from app import (_refuse_on_panel_host)
 # Why migrate and finalize refuse the panel host. Not the generic "it would reboot the panel": they
 # reboot nothing. They are the steps after a REMOTE joins the tailnet, and they rewrite that host's
 # record and firewall (migrate deletes its public 22/tcp rule).
-_NOT_A_REMOTE_JOIN = ("it rewrites a joined remote's host record and firewall, and the panel's own "
-                      "host joins the tailnet from its own Tailscale page")
+_NOT_A_REMOTE_JOIN = i18n.Sentence(
+    "{what} prepares a REMOTE VPS and can't target the panel's own host — it rewrites a joined "
+    "remote's host record and firewall, and the panel's own host joins the tailnet from its own "
+    "Tailscale page. Use the panel's own pages for updates, firewall and Tailscale.")
 
 
 def register(app):
@@ -61,7 +64,7 @@ def _register_status_and_link_join(app):
         # privileged action is not a restriction: the route still accepted the local host's id,
         # ran `tailscale up --ssh` on the panel's own machine and handed back the login URL, so
         # whoever called it chose which tailnet the panel host joined, with Tailscale SSH on.
-        refused = _refuse_on_panel_host(remote, "Tailscale join")
+        refused = _refuse_on_panel_host(remote, i18n.Sentence("Tailscale join"))
         if refused:
             return refused
         data = _json_body()
@@ -99,7 +102,7 @@ def _register_finalize_and_install(app):
         # The host-kind check the other Tailscale routes here carry. This one changes a firewall,
         # and the panel host's own tailscale0 rule belongs to its own Tailscale page
         # (allow_tailscale_ufw), not to a remote's post-join step.
-        refused = _refuse_on_panel_host(remote, "Tailscale finalize", _NOT_A_REMOTE_JOIN)
+        refused = _refuse_on_panel_host(remote, i18n.Sentence("Tailscale finalize"), _NOT_A_REMOTE_JOIN)
         if refused:
             return refused
         try:
@@ -139,7 +142,7 @@ def _register_finalize_and_install(app):
     def api_remote_tailscale_install(remote_id):
         """Install Tailscale on the remote VPS."""
         remote = get_remote(remote_id)
-        refused = _refuse_on_panel_host(remote, "Tailscale install")
+        refused = _refuse_on_panel_host(remote, i18n.Sentence("Tailscale install"))
         if refused:
             return refused
         try:
@@ -158,7 +161,7 @@ def _tsmigrate_refusal(remote):
     # Moves the host record onto Tailscale SSH and then deletes the host's public 22/tcp rule.
     # For the panel host that is its own firewall, and the record does not decide where its
     # commands run (is_local does) — nothing about it is a remote's migration.
-    refused = _refuse_on_panel_host(remote, "Tailscale migration", _NOT_A_REMOTE_JOIN)
+    refused = _refuse_on_panel_host(remote, i18n.Sentence("Tailscale migration"), _NOT_A_REMOTE_JOIN)
     if refused:
         return refused
     # Superadmin only, for the reason remotes._delegated_retarget_refusal gives on the edit
@@ -209,7 +212,7 @@ def _register_key_join_and_migrate(app):
         Requires a Tailscale pre-auth key.
         """
         remote = get_remote(remote_id)
-        refused = _refuse_on_panel_host(remote, "Tailscale join")
+        refused = _refuse_on_panel_host(remote, i18n.Sentence("Tailscale join"))
         if refused:
             return refused
         data = _json_body()
@@ -231,7 +234,7 @@ def _register_key_join_and_migrate(app):
             )
             log_action(current_user, "remote_tailscale_bootstrap", target=remote.name, detail=msg, success=success,
                        remote=remote)
-            return jsonify({"success": success, "message": msg, "log": log})
+            return jsonify({"success": success, "message": i18n.tr(msg), "log": log})
         except ConnectionError:
             return _unreachable("tailscale on a remote host")
         # A VerbError is the privilege boundary REFUSING the value — "not an auth key" — which is
@@ -276,7 +279,7 @@ def _register_key_join_and_migrate(app):
                        detail=f"{old_host} -> {new_host} (Tailscale SSH)", remote=remote)
             return jsonify({
                 "success": True,
-                "message": f"Migrated to Tailscale SSH: {new_host}",
+                "message": i18n.tr("Migrated to Tailscale SSH: {host}", host=new_host),
                 "old_host": old_host,
                 "new_host": new_host,
                 "tailscale_ip": status.get("tailscale_ip", ""),

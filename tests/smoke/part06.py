@@ -67,10 +67,14 @@ check("deactivation: the epoch-cookie session stops working once deactivated",
 from panel.ops.ssh_manager import _core as _sw_core
 
 _sw_saved = {}
+# What the restore below must put back. A helper that re-saved on every call kept the PREVIOUS stub
+# as "the original" when a name was stubbed twice, so run_command stayed a canned sudo refusal for
+# every later check in this part (review 1011e); setdefault keeps the first, real one.
+_sw_run_command_real = _sw_core.run_command
 
 
 def _sw_stub(mod, name, fn):
-    _sw_saved[(mod, name)] = getattr(mod, name)
+    _sw_saved.setdefault((mod, name), getattr(mod, name))
     setattr(mod, name, fn)
 
 
@@ -114,6 +118,8 @@ try:
 finally:
     for (_m, _n), _v in _sw_saved.items():
         setattr(_m, _n, _v)
+check("stub restore: run_command, stubbed four times above, is the real one again afterwards",
+      _sw_core.run_command is _sw_run_command_real, repr(_sw_core.run_command))
 
 # ── "the mounts could not be read" is not "this server mounts nothing" ────────────────────
 # gmod_current_mounts has three answers and its docstring calls the third the whole point:
@@ -622,7 +628,7 @@ _bk_saved = {}
 
 
 def _bk_stub(mod, name, fn):
-    _bk_saved[(mod, name)] = getattr(mod, name)
+    _bk_saved.setdefault((mod, name), getattr(mod, name))
     setattr(mod, name, fn)
 
 
@@ -664,6 +670,7 @@ finally:
 import panel.routes.remote_vps as _rvmod
 from panel.ops import ssh_manager as _fr_pkg   # noqa: F401  (documented: stub the DEFINITION site)
 from panel.ops.ssh_manager import game as _fr_game
+_fr_list_commands_real = _fr_game.list_server_commands   # stubbed twice below; must come back
 
 # 1. close-panel-port answered "already closed" from a firewall it never managed to read.
 #    remote_ufw_status returns {"installed": False, ..., "groups": []} for a missing ufw and
@@ -675,7 +682,7 @@ _fr_saved = {}
 
 
 def _fr_stub(mod, name, fn):
-    _fr_saved[(mod, name)] = getattr(mod, name)
+    _fr_saved.setdefault((mod, name), getattr(mod, name))
     setattr(mod, name, fn)
 
 
@@ -697,6 +704,8 @@ try:
     _fr_stub(_rvmod, "remote_ufw_status",
              lambda r: {"installed": False, "enabled": False, "rules": [], "groups": [],
                         "unreachable": True})
+    # The default-policy read is a privileged `ufw status verbose` of its own: never the real one.
+    _fr_stub(_rvmod._fw_rules, "remote_ufw_default_allows_in", lambda r: False)
     _fr_deleted = []
     _fr_stub(_rvmod, "remote_ufw_delete_rule",
              lambda r, n, force=False, **k: _fr_deleted.append(n))
@@ -769,6 +778,8 @@ finally:
     with app.app_context():
         db.session.get(GameServer, gs_id).commands = _rc_before
         db.session.commit()
+check("stub restore: list_server_commands, stubbed twice above, is the real one again afterwards",
+      _fr_game.list_server_commands is _fr_list_commands_real, repr(_fr_game.list_server_commands))
 
 
 # ── the custom-command FORM: the guard that stops a template smuggling a second command ──────

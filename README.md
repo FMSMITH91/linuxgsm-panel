@@ -30,7 +30,9 @@ curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/insta
 **What the installer does** — one command, unattended:
 
 1. Installs the prerequisites it needs (`python3-venv`, `pip`, `git`, `curl`).
-2. Patches the OS with `apt full-upgrade` — skip with `PANEL_NO_UPGRADE=1 bash install.sh`.
+2. Patches the OS with `apt full-upgrade` — skip with `PANEL_NO_UPGRADE=1 bash install.sh`. If the
+   upgrade needs a reboot it reboots the host (unless game servers are running); `PANEL_NO_REBOOT=1`
+   keeps the upgrade and skips the reboot, on a first install and on an update.
 3. Clones the repo, builds a Python virtualenv, and installs the panel's dependencies.
 4. Picks a free port (5000 by default) and records it in `data/config.json`.
 5. Sets up the service — **and never runs the panel as root**:

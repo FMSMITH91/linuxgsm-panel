@@ -14,12 +14,13 @@ from flask import (jsonify)
 from flask_login import (current_user)
 from panel.core.clock import (utcnow)
 from panel.core.config import (ConfigUnreadable, is_unreadable, load_config)
+from panel.core import i18n
 from panel.core.http import (_json_str, _r13b_json_flag)
 from panel.core.validation import (NOT_AN_IP, unzoned_ip_or_network)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
     _game_backup_status, register_remote_state, register_server_state)
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, claim_row, db, row_birth,
-    still_held)
+    row_label, still_held)
 from panel.ops import (backup as bk)
 from panel.ops.ssh_manager import (get_server_status, mod_restart_decision, player_count as
     sm_player_count, remote_bootstrap_vps, remote_public_ip, run_game_backup)
@@ -837,7 +838,8 @@ def _run_queued_action(app, gs):
                    server=gs)
     except Exception:
         db.session.rollback()
-        app.logger.warning("could not audit the queued %s of %s", act, gs.name, exc_info=True)
+        app.logger.warning("could not audit the queued %s of %s", act, row_label(gs, "name"),
+                           exc_info=True)
     if not retry or give_up:
         _queued_action_failures.pop(gs.id, None)
         gs.restart_pending = gs.stop_pending = False
@@ -995,7 +997,8 @@ class _BootstrapRun:
             self.job["status"] = status
             if step_name is not None:
                 self.job["step_name"] = step_name
-            self.job["message"] = message
+            # A record, not the page: bootstrap-status translates it for the viewer who asks.
+            self.job["message"] = message  # i18n-ignore
             if log_line is not None:
                 self.job["log"].append(log_line)
             self.job["updated"] = time.time()
@@ -1924,12 +1927,20 @@ def game_account_write_refusal(remote, user, now=None, reading=False):
     if why is not None:
         return _privileged_write_msg(user, why, reading) if why else None
     verdict = privileged_accounts(remote, [user])
+    # Every refusal is an i18n.Sentence: English in the audit row, translated whole by the route
+    # that shows it. One sentence per case — "reads"/"writes" were spliced into a shared one.
     if verdict is None:
-        return ("Couldn't check whether the '%s' account can become root on this host, and the "
-                "panel only %s files or scheduled tasks as an account it has confirmed is not "
-                "an administrator or root account. Nothing was %s; try again when the host "
-                "answers." % (user, "reads" if reading else "writes",
-                              "read" if reading else "changed"))
+        if reading:
+            return i18n.Sentence(
+                "Couldn't check whether the '{user}' account can become root on this host, and the "
+                "panel only reads files or scheduled tasks as an account it has confirmed is not an "
+                "administrator or root account. Nothing was read; try again when the host answers.",
+                user=user)
+        return i18n.Sentence(
+            "Couldn't check whether the '{user}' account can become root on this host, and the "
+            "panel only writes files or scheduled tasks as an account it has confirmed is not an "
+            "administrator or root account. Nothing was changed; try again when the host answers.",
+            user=user)
     why = verdict.get(user) or ""
     _store_account_verdict(key, now, why)
     return _privileged_write_msg(user, why, reading) if why else None
@@ -1954,16 +1965,25 @@ def _privileged_write_msg(user, why, reading=False):
     if why == INVALID_ACCOUNT_NAME:
         # Not "can become root": nothing was asked of the host. And the name is not repeated —
         # it is exactly the text the panel refuses to handle.
-        return ("Refused: this server's account name is not a plain account name, so the panel "
-                "puts it into no command on the host and %s none of its files or scheduled "
-                "tasks. Remove the server from the panel (that leaves the host untouched) and "
-                "import or install it again under a valid name." % ("reads" if reading else "writes"))
+        if reading:
+            return i18n.Sentence(
+                "Refused: this server's account name is not a plain account name, so the panel puts "
+                "it into no command on the host and reads none of its files or scheduled tasks. "
+                "Remove the server from the panel (that leaves the host untouched) and import or "
+                "install it again under a valid name.")
+        return i18n.Sentence(
+            "Refused: this server's account name is not a plain account name, so the panel puts it "
+            "into no command on the host and writes none of its files or scheduled tasks. Remove the "
+            "server from the panel (that leaves the host untouched) and import or install it again "
+            "under a valid name.")
     if reading:
-        return ("Refused: the '%s' account on this host can become root (%s), so the panel does not "
-                "read its files — they include that login's SSH keys and shell history. This server "
-                "was imported before the panel refused such accounts; remove it from the panel and "
-                "run the game under a plain account." % (user, why))
-    return ("Refused: the '%s' account on this host can become root (%s), so the panel does not "
-            "write its files or scheduled tasks — that would be root on the host. This server was "
+        return i18n.Sentence(
+            "Refused: the '{user}' account on this host can become root ({why}), so the panel does not "
+            "read its files — they include that login's SSH keys and shell history. This server was "
             "imported before the panel refused such accounts; remove it from the panel and run the "
-            "game under a plain account." % (user, why))
+            "game under a plain account.", user=user, why=why)
+    return i18n.Sentence(
+        "Refused: the '{user}' account on this host can become root ({why}), so the panel does not "
+        "write its files or scheduled tasks — that would be root on the host. This server was "
+        "imported before the panel refused such accounts; remove it from the panel and run the game "
+        "under a plain account.", user=user, why=why)

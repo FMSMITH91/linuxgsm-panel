@@ -66,7 +66,7 @@ from panel.ops import system_ops as _so  # noqa: E402
 _so._check_sudo = lambda force=False: False   # never probe real sudo (pam_faillock)
 
 import manage  # noqa: E402   (creates its own app at import, exactly as the CLI does)
-from panel.db.models import db, User  # noqa: E402
+from panel.db.models import db, User, UserSession  # noqa: E402
 from panel.security import auth  # noqa: E402
 
 results = []
@@ -280,6 +280,8 @@ try:
     with manage.app.app_context():
         before = db.session.get(User, admin_id)
         old_hash, old_epoch = before.password_hash, (before.auth_epoch or 0)
+        db.session.add(UserSession(user_id=admin_id, sid="mt-reset-a"))
+        db.session.commit()
     manage.cmd_reset_password(Args(username="cli_admin", password="An0ther!Str0ng1"))  # nosec B106 - test fixture
     with manage.app.app_context():
         after = db.session.get(User, admin_id)
@@ -289,6 +291,10 @@ try:
         check("reset: auth_epoch is bumped, so existing sessions die",
               (after.auth_epoch or 0) > old_epoch,
               "%s -> %s" % (old_epoch, after.auth_epoch))
+        _rows_left = UserSession.query.filter_by(user_id=admin_id).count()
+        check("reset: ...and the account's session rows are cleared, as deactivate clears them (they "
+              "listed as live sessions, the suspect device among them, until they idled out)",
+              _rows_left == 0, "%d rows left" % _rows_left)
 
     exited, msg = raises_exit(manage.cmd_reset_password,
                               Args(username="cli_admin", password="weak"))  # nosec B106 - test fixture

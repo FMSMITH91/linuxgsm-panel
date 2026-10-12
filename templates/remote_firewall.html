@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Firewall - {{ remote.display_name }}{% endblock %}
+{% block title %}{{ t('Firewall - %s')|format(remote.display_name) }}{% endblock %}
 {% block content %}
 {% set block_groups = status.groups|selectattr('is_block')|list %}
 {% set open_groups = status.groups|rejectattr('is_block')|list %}

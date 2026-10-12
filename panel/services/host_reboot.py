@@ -39,13 +39,14 @@ import threading
 import time
 import uuid
 
-from panel.core import runtime_stats
-from panel.core.config import load_config
+from panel.core import i18n, runtime_stats
+from panel.services import reboot_words as _rw
+from panel.core.config import _r15a_cfg_int, load_config
 from panel.core.panel_state import (_action_output, _expected_offline, _full_backup_lock,
                                     _host_reboots, _hr_lock, _install_jobs, _install_lock,
                                     _monitor_state, _reboot_awaiting, _reboot_when_empty, _rwe_lock,
                                     register_remote_state)
-from panel.db.models import AuditLog, GameServer, RemoteServer, db
+from panel.db.models import AuditLog, GameServer, RemoteServer, db, row_label
 from panel.ops import ssh_manager as _sm
 from panel.ops import system_ops as so
 from panel.security.auth import log_action
@@ -107,10 +108,9 @@ _last_result = register_remote_state({})
 # ── Settings ────────────────────────────────────────────────────────────────────────────────────
 def wait_max_hours():
     """How long 'reboot when everyone has left' waits before it gives up; 0 waits for ever."""
-    try:
-        v = int(load_config().get(_SETTING_WAIT_HOURS, DEFAULT_WAIT_HOURS))
-    except (TypeError, ValueError, OverflowError):   # OverflowError: a hand-edited `Infinity`
-        return DEFAULT_WAIT_HOURS
+    # _r15a_cfg_int: a hand-edited `Infinity` (OverflowError) or `true` (a one-hour wait) reads as
+    # the default.
+    v = _r15a_cfg_int(load_config().get(_SETTING_WAIT_HOURS, DEFAULT_WAIT_HOURS), DEFAULT_WAIT_HOURS)
     return max(0, min(v, 24 * 30))
 
 
@@ -661,10 +661,10 @@ def _escalation_refusal(remote):
     """None when the panel can escalate on this host, else the sentence that says why not."""
     esc = escalation(remote)
     if esc == "silent":
-        return "%s did not answer, so it was not rebooted." % _host_label(remote)
+        return i18n.Sentence("{host} did not answer, so it was not rebooted.", host=_host_label(remote))
     if esc != "ok":
-        return ("The panel cannot run privileged commands on %s (sudo is refused), so it could "
-                "not reboot it." % _host_label(remote))
+        return i18n.Sentence("The panel cannot run privileged commands on {host} (sudo is refused), so "
+                             "it could not reboot it.", host=_host_label(remote))
     return None
 
 
@@ -678,7 +678,7 @@ def preflight(remote, census=None):
     if refusal:
         return False, refusal
     if _sm.hosts.host_boot_identity(remote) is None:
-        return False, "%s did not answer the boot check." % _host_label(remote)
+        return False, i18n.Sentence("{host} did not answer the boot check.", host=_host_label(remote))
     if census is not None and census.get("blockers"):
         return False, _blocked_sentence(census["blockers"])
     return True, None
@@ -697,17 +697,7 @@ PANEL_WONT_RETURN = ("The panel itself is not set to start at boot, so the serve
                      "the reboot (those without Autostart) stay stopped until it is started.")
 
 
-_BLOCKER_WORDS = {"install": "an install of %s", "backup": "a backup of %s",
-                  "action": "a LinuxGSM action on %s", "content": "a content install on %s",
-                  "maintenance": "LinuxGSM maintenance on %s", "bootstrap": "a bootstrap of %s",
-                  "dpkg": "a package install on %s", "apt": "a package install on %s",
-                  "self_update": "an update of %s", "restore": "a restore of %s",
-                  "full_backup": "a full backup of %s"}
-
-
-def _blocked_sentence(blockers):
-    what = ", ".join(_BLOCKER_WORDS.get(b["kind"], "work on %s") % b["name"] for b in blockers[:4])
-    return "Not now: %s is running, and a reboot would cut it off." % what
+_blocked_sentence, shown = _rw.blocked_sentence, _rw.shown   # the words: reboot_words
 
 
 _WHY_WORDS = {"autostart": "comes back by Autostart about 5 min after boot",
@@ -751,12 +741,12 @@ def reboot_busy(remote_id):
         return bool(job) and job.get("phase") != "rebooting"
 
 
-BUSY_MESSAGE = ("%s is being rebooted: its game servers are being stopped first. Try again once "
-                "it is back.")
+busy_message = _rw.busy_message
+
 
 
 def panel_host_busy():
-    """BUSY_MESSAGE for the panel's own host while it is being rebooted, else None. Never raises.
+    """busy_message() for the panel's own host while it is being rebooted, else None. Never raises.
 
     For the panel-host routes that have no host row in hand (its self-update, its OS update): a
     lookup that fails refuses nothing, as the reboot route's own lookup does.
@@ -766,7 +756,7 @@ def panel_host_busy():
     except Exception:  # noqa: BLE001 - a courtesy check never blocks on an unreadable row
         return None
     if local is not None and reboot_busy(local.id):
-        return BUSY_MESSAGE % _host_label(local)
+        return busy_message(_host_label(local))
     return None
 
 
@@ -827,12 +817,12 @@ def _pending_conflict(remote):
     job = job_of(remote.id)
     if job:
         return {"success": False, "error": "in_progress", "phase": job.get("phase"),
-                "message": "%s is already being rebooted (%s)." % (_host_label(remote),
-                                                                    job.get("phase"))}
+                "message": i18n.Sentence("{host} is already being rebooted ({phase}).",
+                                         host=_host_label(remote), phase=job.get("phase"))}
     if plan_rows(remote.id):
         return {"success": False, "error": "in_progress", "phase": "restoring",
-                "message": ("%s's last reboot is still bringing its servers back. Try again once "
-                            "that has finished." % _host_label(remote))}
+                "message": i18n.Sentence("{host}'s last reboot is still bringing its servers back. Try "
+                                         "again once that has finished.", host=_host_label(remote))}
     return None
 
 
@@ -851,7 +841,8 @@ def request_reboot(remote, mode, actor, origin, delay=0):
     census = host_player_state(remote)
     if census["state"] == "unreachable":
         return 409, {"success": False, "error": "unreachable",
-                     "message": "%s is not answering, so it was not rebooted." % _host_label(remote)}
+                     "message": i18n.Sentence("{host} is not answering, so it was not rebooted.",
+                                              host=_host_label(remote))}
     if census["state"] == "blocked":
         return 409, _blocked_payload(remote, census)
     if mode is None and census["state"] in ("busy", "unknown"):
@@ -881,17 +872,23 @@ def _public_census(census):
 def _blocked_payload(remote, census):
     return {"success": False, "error": "blocked", "needs_choice": True, "choices": ["when_empty"],
             "blockers": census["blockers"], "players": _public_census(census),
-            "message": _blocked_sentence(census["blockers"]) + (
-                " Choose 'reboot when it's finished' to reboot %s once it is." % _host_label(remote))}
+            "message": i18n.Sentence("{blocked} Choose 'reboot when it's finished' to reboot {host} once "
+                                     "it is.", blocked=_blocked_sentence(census["blockers"]),
+                                     host=_host_label(remote))}
 
 
 def _choice_payload(remote, census):
     n = census["total"]
-    who = ("%d player%s online" % (n, "" if n == 1 else "s")) if n else "players may be online"
+    # One whole sentence per count form: "%d player%s" spliced English's plural into it.
     return {"success": False, "error": "players_online", "needs_choice": True,
             "choices": ["when_empty", "now"], "players": _public_census(census),
-            "message": ("Not rebooted: %s on %s. Choose to reboot when everyone has left, or "
-                        "now (disconnecting them)." % (who, _host_label(remote)))}
+            "message": i18n.Sentence(
+                "Not rebooted: players may be online on {host}. Choose to reboot when everyone has "
+                "left, or now (disconnecting them)." if not n else
+                "Not rebooted: {n} player online on {host}. Choose to reboot when everyone has left, "
+                "or now (disconnecting them)." if n == 1 else
+                "Not rebooted: {n} players online on {host}. Choose to reboot when everyone has left, "
+                "or now (disconnecting them).", n=n, host=_host_label(remote))}
 
 
 def _reboot_now(remote, actor, origin, census, delay):
@@ -912,10 +909,12 @@ def _reboot_now(remote, actor, origin, census, delay):
                                                   "message": "A reboot is already running."}
     # Not "then they come back": a queued stop, or restoring turned off, keeps a server stopped.
     # And the warning only where it is sent: a game with no console message gets none.
-    msg = ("Rebooting %s: its running game servers are stopped cleanly first%s. The Power card shows "
-           "what comes back." % (_host_label(remote),
-                                 " (after a %d-second in-game warning, on the servers whose game "
-                                 "can show one)" % COUNTDOWN[0] if warn else ""))
+    msg = i18n.Sentence(
+        "Rebooting {host}: its running game servers are stopped cleanly first (after a {secs}-second "
+        "in-game warning, on the servers whose game can show one). The Power card shows what comes "
+        "back." if warn else
+        "Rebooting {host}: its running game servers are stopped cleanly first. The Power card shows "
+        "what comes back.", host=_host_label(remote), secs=COUNTDOWN[0])
     body = {"success": True, "message": msg, "phase": "preflight"}
     if warning:
         body["warning"] = warning
@@ -934,7 +933,7 @@ def _arm_refusal(remote):
         return refusal, None
     ident = _sm.hosts.host_boot_identity(remote)
     if ident is None:
-        return "%s did not answer the boot check." % _host_label(remote), None
+        return i18n.Sentence("{host} did not answer the boot check.", host=_host_label(remote)), None
     return None, ident
 
 
@@ -957,8 +956,8 @@ def arm_wait(remote, actor, origin):
         if got is not None:
             return 200, _armed_payload(remote, got, hours)
     return 409, {"success": False, "error": "in_progress",
-                 "message": "The reboot wait of %s changed while it was being set; try again."
-                            % _host_label(remote)}
+                 "message": i18n.Sentence("The reboot wait of {host} changed while it was being set; "
+                                          "try again.", host=_host_label(remote))}
 
 
 def _arm_now(remote, actor, origin, ident, hours):
@@ -989,9 +988,11 @@ def _arm_now(remote, actor, origin, ident, hours):
 def _armed_payload(remote, info, hours):
     return {"success": True, "pending": True, "waiting_on": info.get("waiting_on"),
             "expires_at": info.get("expires"),
-            "message": ("%s will reboot once nobody is on its game servers%s. It shows on the "
-                        "host's Power card, where you can cancel it." % (
-                            _host_label(remote), (" (it gives up after %d h)" % hours) if hours else ""))}
+            "message": i18n.Sentence(
+                "{host} will reboot once nobody is on its game servers (it gives up after {hours} h). "
+                "It shows on the host's Power card, where you can cancel it." if hours else
+                "{host} will reboot once nobody is on its game servers. It shows on the host's Power "
+                "card, where you can cancel it.", host=_host_label(remote), hours=hours)}
 
 
 def cancel(remote, actor):
@@ -1015,8 +1016,8 @@ def cancel(remote, actor):
         log_action(actor, "reboot_when_empty_cancel", target=remote.name, remote=remote)
     if stoppable:
         return 200, {"success": True, "pending": False,
-                     "message": ("Cancelling the reboot of %s. The Power card shows what comes "
-                                 "back." % _host_label(remote))}
+                     "message": i18n.Sentence("Cancelling the reboot of {host}. The Power card shows "
+                                              "what comes back.", host=_host_label(remote))}
     if had:
         return 200, {"success": True, "pending": False, "message": "Auto-reboot canceled."}
     if job:
@@ -1334,7 +1335,7 @@ class _Job:
                 _sm.moderate(self.remote, gs.short_name, gs.game_type, "say", message=text_for(gs),
                              selfname=gs.lgsm_name)
             except Exception:  # noqa: BLE001 - a warning that failed must never stop the job
-                _log.debug("in-game warning failed for %s", gs.id, exc_info=True)
+                _log.debug("in-game warning failed for %s", row_label(gs, "id"), exc_info=True)
 
     def _comes_back(self, census):
         """{server id: True} for the servers this reboot brings back, as the plan will decide it."""
@@ -1946,8 +1947,13 @@ def _act_one(remote, gs, d, now, rollback_):
         return _act_monitor(remote, gs, d, now, rollback_)
     if owner == "panel":
         return _act_panel(remote, gs, d, now, rollback_)
-    # 'none': stopped, and its lock (moved aside) dropped, as an operator's stop drops it.
-    put_locks_back(remote, gs.short_name, [(gs.lgsm_name, "none")])
+    # 'none': stopped, and its lock (moved aside) dropped, as an operator's stop drops it. Only once
+    # the drop is confirmed, as _act_kept and _act_unarmed wait for theirs: the shell can time out
+    # on a host still settling after its boot, and the row was reported "done, stopped" with the
+    # aside file left — which the host's NEXT panel reboot (_rearm_leftover) put back as a live
+    # monitoring lock, so LinuxGSM's monitor started a server whose queued stop had been honoured.
+    if gs.lgsm_name not in put_locks_back(remote, gs.short_name, [(gs.lgsm_name, "none")]):
+        return None
     if rollback_ and d.get("queued") is False:
         # The reboot it was to stay stopped through never happened, so it is put back as it was:
         # running. Only a queued stop stays stopped (it was due). A plan recorded before "queued"
@@ -2057,7 +2063,7 @@ def _after_start(remote, gs):
         _sm.set_game_priority(remote, gs.short_name)
     except Exception:  # noqa: BLE001 - bookkeeping; the server is running
         db.session.rollback()
-        _log.debug("after-start bookkeeping failed for %s", gs.id, exc_info=True)
+        _log.debug("after-start bookkeeping failed for %s", row_label(gs, "id"), exc_info=True)
 
 
 def _after_plan(gs, d, rollback_):

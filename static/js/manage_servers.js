@@ -6,22 +6,23 @@ document.addEventListener('click', function(ev){
 
 // Auto-populate a sensible default port when the game changes. This is only a
 // hint — after install the panel detects LinuxGSM's real port(s) and opens all of
-// them, so it self-corrects even for games not listed here.
+// them, so it self-corrects even for games not listed here. Keyed by LinuxGSM shortname, the same
+// table as _R15F_KNOWN_PORTS in panel/routes/manage_servers.py (the unit suite holds them equal).
 var PORTS = {
   "gmod":27015,"cs":27015,"css":27015,"cs2":27015,"csgo":27015,"tf2":27015,
-  "hl2dm":27015,"hldm":27015,"hldms":27015,"dods":27015,"ins":27015,"insurgency":27015,
-  "nmrih":27015,"l4d":27015,"l4d2":27015,"zps":27015,"fof":27015,"gesource":27015,
+  "hl2dm":27015,"hldm":27015,"hldms":27015,"dods":27015,"ins":27015,
+  "nmrih":27015,"l4d":27015,"l4d2":27015,"zps":27015,"fof":27015,
   "cscz":27015,"tfc":27015,"ns":27015,"ricochet":27015,"dmc":27015,"sfc":27015,
-  "bb2":27015,"unturned":27015,"bt":27015,
+  "bb2":27015,"vs":27015,"unt":27015,"bt":27015,
   "cod":28960,"coduo":28960,"cod2":28960,"cod4":28960,"codwaw":28960,
-  "mc":25565,"pmc":25565,"spigot":25565,"paper":25565,"bukkit":25565,"mcbe":19132,"mcb":19132,
-  "rust":28015,"sdtd":26900,"7d2d":26900,"valheim":2456,"vh":2456,"ark":7777,
-  "pz":16261,"projectzomboid":16261,"terraria":7777,"tshock":7777,"factorio":34197,
-  "avorion":27000,"eco":3000,"vs":42420,
-  "arma3":2302,"squad":7787,"mordhau":7777,"kf":7707,"kf2":7777,
-  "q2":27910,"q3":27960,"ql":27960,"et":27960,"etl":27960,"rtcw":27960,
-  "xonotic":26000,"ut99":7777,"ut2k4":7777,
-  "mumble":64738,"ts3":9987,"samp":7777,"mta":22003,"openttd":3979,
+  "mc":25565,"pmc":25565,"mcb":19132,
+  "rust":28015,"sdtd":26900,"vh":2456,"ark":7777,
+  "pz":16261,"terraria":7777,"fctr":34197,
+  "av":27000,"eco":3000,"vints":42420,
+  "arma3":2302,"squad":7787,"mh":7777,"kf":7707,"kf2":7777,
+  "q2":27910,"q3":27960,"ql":27960,"wet":27960,"etl":27960,"rtcw":27960,"jk2":27960,
+  "xnt":26000,"ut99":7777,"ut2k4":7777,
+  "ts3":9987,"samp":7777,"mta":22003,
 };
 function updatePort() {
   var select = document.getElementById('game-type-select');
@@ -335,23 +336,6 @@ function doUninstall(id, name, btn){
       }
     })
     .catch(function(){ btn.disabled = false; btn.innerHTML = orig; setRowDisabled(false); if (window.toast) toast('Uninstall request failed', 'danger'); });  // nosemgrep
-}
-
-// Power controls (start/stop/restart) for a row — POST the action, toast the result, then refresh
-// the live cells. Mirrors the dashboard's doAction, but refreshes via this page's reconcile poll.
-function msrvAction(id, action, btn){
-  var orig = btn.innerHTML;
-  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  fetch(MOUNT + '/api/server/' + id + '/action', {method:'POST', headers:{'Content-Type':'application/json'},  // nosemgrep
-    body: JSON.stringify({action: action})})
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if(window.toast) toast(d.message || (d.success ? tf('Server {action} issued', {action: action}) : 'Action failed'), d.success ? 'success' : 'danger');
-      setTimeout(reconcileServerList, 1500);
-    })
-    .catch(function(){ if(window.toast) toast('Action failed', 'danger'); })
-    .finally(function(){ btn.disabled = false; btn.innerHTML = orig; })  // nosemgrep
-    .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 // ── Live sync: reflect servers other users add/remove ──────────────────────

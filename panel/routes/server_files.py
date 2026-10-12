@@ -7,7 +7,7 @@ from flask_login import (current_user, login_required)
 from flask_socketio import (SocketIO, emit, join_room, leave_room)
 from panel.core import (terminal)
 from panel.core import runtime_stats
-from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth,
+from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth, row_label,
     taken_by_another)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAME_EXISTS,
     RENAME_UNCONFIRMED, UPLOAD_EXISTS, add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
@@ -32,6 +32,7 @@ import re
 import secrets
 import threading
 import time
+from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
 from panel.core.validation import (_attachment_header)
 from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES,
@@ -1069,8 +1070,7 @@ def _run_mods_action(gs, which, mod_id):
                server=gs)
     ok = rc == 0
     tail = _last_output_line(clean)
-    msg = (f"Mod {which} finished." if ok
-           else f"Mod {which} reported an error: {tail[:200] or 'check the console'}")
+    said = [_r15e_mod_outcome(which, ok, tail[:200])]
     restart_pending = False
     if ok:
         # A mod change only loads on restart — we never restart automatically; just tell the
@@ -1078,8 +1078,23 @@ def _run_mods_action(gs, which, mod_id):
         state, rmsg = _apply_mod_restart(gs, gs.remote)
         restart_pending = (state == "needed")   # drives the "Restart now" button in the UI
         if rmsg:
-            msg = msg + " " + rmsg
+            said.append(i18n.tr(rmsg))
+    # Each sentence translated whole, then joined: "Mod {which}" spliced the verb into English.
+    msg = " ".join(said)
     return jsonify({"success": ok, "message": msg, "restart_pending": restart_pending})
+
+
+def _r15e_mod_outcome(which, ok, tail):
+    """The first sentence of a mod install/remove answer, whole for each verb and outcome."""
+    if which == "install":
+        if ok:
+            return i18n.tr("Mod install finished.")
+        return (i18n.tr("Mod install reported an error: {why}", why=tail) if tail
+                else i18n.tr("Mod install reported an error: check the console"))
+    if ok:
+        return i18n.tr("Mod remove finished.")
+    return (i18n.tr("Mod remove reported an error: {why}", why=tail) if tail
+            else i18n.tr("Mod remove reported an error: check the console"))
 
 
 def _cron_listing(app, gs):
@@ -1104,10 +1119,11 @@ def _cron_listing(app, gs):
     # well — this is the caller that made an unreadable crontab destructive
     # rather than merely misleading.
     if jobs is None:
-        return jsonify({"error": "Couldn't read the scheduled tasks — %s didn't "
-                                 "answer. This is not the same as there being none."
-                                 % (gs.remote.display_name if gs.remote
-                                    else "the host")})
+        return jsonify({"error": i18n.tr(
+            "Couldn't read the scheduled tasks — {host} didn't answer. This is not the same as there "
+            "being none.", host=gs.remote.display_name) if gs.remote else i18n.tr(
+            "Couldn't read the scheduled tasks — the host didn't answer. This is not the same as "
+            "there being none.")})
     _sync_toggles_from_cron(gs, jobs)
     return jsonify({"jobs": jobs})
 
@@ -1367,7 +1383,7 @@ def _write_refused(gs, action, detail=""):
         return None
     log_action(current_user, action, target=gs.name, detail=_r14b_refused(_audit_name(detail), why),
                success=False, server=gs)
-    return jsonify({"success": False, "message": why}), 409
+    return jsonify({"success": False, "message": i18n.tr(why)}), 409
 
 
 def _read_refused(gs, action, detail=""):
@@ -1382,7 +1398,8 @@ def _read_refused(gs, action, detail=""):
         return None
     log_action(current_user, action, target=gs.name, detail=_r14b_refused(_audit_name(detail), why),
                success=False, server=gs)
-    return jsonify({"success": False, "error": why, "message": why}), 409
+    _said = i18n.tr(why)
+    return jsonify({"success": False, "error": _said, "message": _said}), 409
 
 
 def _store_upload(gs, reldir, f, data, overwrite):
@@ -1520,7 +1537,7 @@ def _console_place_read(gs, server_id, since):
     try:
         got = _catchup_read(gs, None, since)
     except Exception:
-        _log.debug("console place read for server %s failed", gs.id, exc_info=True)
+        _log.debug("console place read for server %s failed", row_label(gs, "id"), exc_info=True)
     if got is None:
         return {"readable": False, "lines": [], "now": time.time(),
                 "panel_lines": list(_console_backlog.get(server_id, []))}
@@ -1659,7 +1676,7 @@ def _sf_config_write(gs, data):
         log_action(current_user, "edit_config", target=gs.name,
                    detail=_failed_detail("", ok, _sm.write_failure_reason(msg)), success=ok,
                    server=gs)
-        return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
+        return jsonify({"success": ok, "message": i18n.tr(msg or ("Saved" if ok else "Failed"))})
     except Exception:
         return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
@@ -1723,7 +1740,7 @@ def _register_alerts(app):
             log_action(current_user, "server_alerts_save", target=gs.name,
                        detail=_failed_detail("", ok, _sm.write_failure_reason(msg)), success=ok,
                        server=gs)
-            return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
+            return jsonify({"success": ok, "message": i18n.tr(msg or ("Saved" if ok else "Failed"))})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("alerts save failed")}), 200
 
@@ -1749,7 +1766,10 @@ def _register_mods(app):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         which, mod_id = _mod_request(_json_body())
         if not which or not re.match(r"^[A-Za-z0-9._-]+\Z", mod_id):
-            return jsonify({"success": False, "message": "Pick a valid mod to " + (which or "act on") + "."}), 400
+            return jsonify({"success": False, "message": (
+                i18n.tr("Pick a valid mod to install.") if which == "install" else
+                i18n.tr("Pick a valid mod to remove.") if which == "remove" else
+                i18n.tr("Pick a valid mod to act on."))}), 400
         try:
             return _run_mods_action(gs, which, mod_id)
         except Exception:
@@ -1902,21 +1922,23 @@ def _failed_detail(detail, ok, reason):
     return _r14b_refused(detail, reason)
 
 
-def _r14b_refused(detail, reason, limit=250):
-    """The row text `refused: <detail>: <reason>` in `limit` characters, the reason always whole.
+def _r14b_refused(detail, reason, path_room=200):
+    """The row text `refused: <detail>: <reason>`, the reason always whole.
 
     The detail is the user's path, and it came first under one 250-character cut: a deep path, or
     a short one in another script (each character escaped to six), cut the reason off with no
-    marker — the WHY the row exists to keep. The path is cut instead, and ends in "…" when it is.
-    An empty detail gives "refused: <reason>".
+    marker — the WHY the row exists to keep. The path is cut instead, to `path_room` characters
+    ending in "…" when it is. The reason is NOT cut: it is text the panel wrote, and the account
+    refusals run past 300 characters. Cutting it to 250 and giving the path what was left of 250
+    left the path one character — "…" — so the row of a refused save named no file at all, and
+    its reason stopped mid-sentence. An empty detail gives "refused: <reason>".
     """
-    reason = _audit_safe(reason, limit)
+    reason = _audit_safe(reason)
     if not detail:
-        return ("refused: " + reason)[:limit]
-    room = max(limit - len("refused: : ") - len(reason), 1)
-    shown = _audit_safe(detail, limit)
-    if len(shown) > room:
-        shown = shown[:room - 1] + "…"
+        return ": ".join(("refused", reason))
+    shown = _audit_safe(detail, path_room + 1)
+    if len(shown) > path_room:
+        shown = shown[:path_room - 1] + "…"
     return ": ".join(("refused", shown, reason))
 
 
@@ -2086,7 +2108,7 @@ def _download_refusal(gs, server_id):
     log_action(current_user, "download_file", target=gs.name,
                detail=_r14b_refused(_audit_name(request.args.get("path", "")), why),
                success=False, server=gs)
-    flash(why, "danger")
+    flash(i18n.tr(why), "danger")
     return redirect(url_for("server_files", server_id=server_id))
 
 
@@ -2125,7 +2147,7 @@ def _register_download(app):
             info = stat_path(gs.remote, gs.short_name, rel)
         except Exception:
             _log.debug("download: could not stat the path", exc_info=True)
-            return _refuse("Couldn't reach %s to read that file." % gs.name, "danger")
+            return _refuse(i18n.tr("Couldn't reach {name} to read that file.", name=gs.name), "danger")
         if not info:
             # stat_path answers None for THREE different things: a path that escapes the home
             # directory, a path that is not there, and a read that never ran — on the non-raising
@@ -2137,8 +2159,9 @@ def _register_download(app):
             # and went looking for what deleted it — or restored a backup over a newer copy. Until
             # stat_path grows the third answer browse_dir already has (`unreadable`, because "rc is
             # the only thing that tells them apart"), say only what was actually checked.
-            return _refuse("%s didn't return that file. It may have been moved or deleted — or the "
-                           "host didn't answer. Reload the file browser to check." % gs.name)
+            return _refuse(i18n.tr("{name} didn't return that file. It may have been moved or deleted — "
+                                   "or the host didn't answer. Reload the file browser to check.",
+                                   name=gs.name))
         if info["rel"] in (".", ""):
             # The home directory itself — by an empty ?path=, or by any spelling that resolves
             # back to it ("." , "/", "cfg/.."). stream_path refuses it too; this is the half that
@@ -2188,14 +2211,18 @@ def _register_lgsm_data(app):
         # message only looked at the count, on the one button an operator presses BECAUSE a game is
         # missing. Name the real error when there is one.
         why = (lgsm_data.status().get("reason") or "").strip()
+        # One whole sentence per case (with and without the reason): the reason was spliced in.
         if ok:
-            message = "Loaded %d games." % games
+            message = i18n.tr("Loaded {n} games.", n=games)
         elif games:
-            message = ("Could not reach LinuxGSM — still showing the cached list of %d games%s."
-                       % (games, (" (%s)" % why) if why else ""))
+            message = (i18n.tr("Could not reach LinuxGSM — still showing the cached list of {n} games "
+                               "({why}).", n=games, why=why) if why else
+                       i18n.tr("Could not reach LinuxGSM — still showing the cached list of {n} games.",
+                               n=games))
         else:
-            message = ("Could not reach LinuxGSM — check this host's outbound access%s."
-                       % ((" (%s)" % why) if why else ""))
+            message = (i18n.tr("Could not reach LinuxGSM — check this host's outbound access ({why}).",
+                               why=why) if why else
+                       i18n.tr("Could not reach LinuxGSM — check this host's outbound access."))
         return jsonify({"success": bool(ok and games), "games": games, "message": message})
 
 
@@ -2217,13 +2244,17 @@ def _register_cron_jobs(app):
         refused = _write_refused(gs, "cron_add")
         if refused is not None:
             return refused
+        # Every field through _json_str. Read raw, a number or a dict was a 500 inside the writer
+        # with no audit row, and a list `raw` matched no line: delete answered "Deleted" having
+        # deleted nothing, and update appended its line beside the old one. A non-text value is
+        # now "" and gets the writer's own refusal.
+        schedule, command = _json_str(data, "schedule"), _json_str(data, "command")
         try:
-            ok, msg = add_cron_job(gs.remote, gs.short_name, data.get("schedule"),
-                                   data.get("command"), gs.lgsm_name)
+            ok, msg = add_cron_job(gs.remote, gs.short_name, schedule, command, gs.lgsm_name)
             if ok:
                 _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
             log_action(current_user, "cron_add", target=gs.name, success=ok,
-                       detail=(data.get("schedule") or "")[:120], server=gs)
+                       detail=schedule[:120], server=gs)
             return jsonify({"success": ok, "message": msg or ("Added" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("add_cron_job failed")}), 500
@@ -2239,11 +2270,12 @@ def _register_cron_jobs(app):
         refused = _write_refused(gs, "cron_update")
         if refused is not None:
             return refused
+        schedule = _json_str(data, "schedule")      # as cron_add reads them
         try:
-            ok, msg = update_cron_job(gs.remote, gs.short_name, data.get("raw") or "",
-                                      data.get("schedule"), data.get("command"), gs.lgsm_name)
+            ok, msg = update_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
+                                      schedule, _json_str(data, "command"), gs.lgsm_name)
             log_action(current_user, "cron_update", target=gs.name, success=ok,
-                       detail=(data.get("schedule") or "")[:120], server=gs)
+                       detail=schedule[:120], server=gs)
             return jsonify({"success": ok, "message": msg or ("Updated" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
@@ -2263,7 +2295,8 @@ def _register_cron_actions(app):
         if refused is not None:
             return refused
         try:
-            ok, msg = _sm.delete_cron_job(gs.remote, gs.short_name, data.get("raw") or "", gs.lgsm_name)
+            ok, msg = _sm.delete_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
+                                          gs.lgsm_name)
             if ok:
                 # The card's own help text promises that deleting `monitor` turns Autostart off.
                 _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
@@ -2280,14 +2313,14 @@ def _register_cron_actions(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
-        raw = _json_body().get("raw") or ""
+        raw = _json_str(_json_body(), "raw")        # as cron_add reads its fields
         refused = _write_refused(gs, "cron_run_now")
         if refused is not None:
             return refused
         try:
             ok, msg = run_cron_job_now(gs.remote, gs.short_name, raw, gs.lgsm_name)
             log_action(current_user, "cron_run_now", target=gs.name, success=ok, server=gs)
-            return jsonify({"success": ok, "message": msg})
+            return jsonify({"success": ok, "message": i18n.tr(msg)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("cron run failed")}), 200
 
@@ -2317,10 +2350,10 @@ def _sf_gmod_host_refusal(gs, remote, action, sel):
             "access to the host, not just this server.")}), 403
     _missing = _sf_gmod_missing(remote, sel)
     if _missing:
-        return jsonify({"success": False, "message": (
-            "Not on this host yet: %s. Downloading content for every Garry's Mod server "
-            "here needs access to the host — ask its admin to install it, then mount it "
-            "here." % ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing))}), 403
+        return jsonify({"success": False, "message": i18n.tr(
+            "Not on this host yet: {games}. Downloading content for every Garry's Mod server here "
+            "needs access to the host — ask its admin to install it, then mount it here.",
+            games=", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing))}), 403
     return None
 
 
@@ -2505,7 +2538,7 @@ def _register_console_routes(app):
                 if why is not None:
                     log_action(current_user, "set_log_timestamps", target=gs.name,
                                detail=("refused: " + why)[:250], success=False, server=gs)
-                    return jsonify({"error": why}), 409
+                    return jsonify({"error": i18n.tr(why)}), 409
                 ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name,
                                             {"logtimestamp": want})
                 if not ok:
@@ -2513,7 +2546,7 @@ def _register_console_routes(app):
                     log_action(current_user, "set_log_timestamps", target=gs.name,
                                detail=_failed_detail(want, False, _sm.write_failure_reason(msg)),
                                success=False, server=gs)
-                    return jsonify({"error": msg or "Could not write the LinuxGSM config"}), 502
+                    return jsonify({"error": i18n.tr(msg or "Could not write the LinuxGSM config")}), 502
                 log_action(current_user, "set_log_timestamps", target=gs.name, detail=want,
                            server=gs)
                 return jsonify({"success": True, "enabled": want == "on",

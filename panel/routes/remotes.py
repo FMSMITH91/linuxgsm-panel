@@ -11,6 +11,7 @@ from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (close_connection, ssh_test_connection)
 from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, can_access_remote,
     get_host_remote, get_remote, log_action, permission_required)
+from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, LINUX_USER_RE, MAX_PORT,
     MIN_PORT, SAFE_LABEL_RE, _port_or)
@@ -240,7 +241,7 @@ def _register_remote_list(app):
         success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential,
                                            captured=_seen_key)
         if not success:
-            return _form_err(f"Connection test failed: {msg}", "manage_remotes")
+            return _form_err(i18n.tr("Connection test failed: {why}", why=msg), "manage_remotes")
 
         remote = RemoteServer(
             name=name, host=host, port=ssh_port,
@@ -310,8 +311,8 @@ def _register_remote_edit(app):
             return _form_err("Host must be a valid hostname or IP address.", "manage_remotes")
         new_port = _port_or(request.form.get("ssh_port"), None)
         if new_port is None:
-            return _form_err("SSH port must be a number between %d and %d." % (MIN_PORT, MAX_PORT),
-                             "manage_remotes")
+            return _form_err(i18n.tr("SSH port must be a number between {lo} and {hi}.", lo=MIN_PORT,
+                                     hi=MAX_PORT), "manage_remotes")
         # Before anything on the row changes: a delegated admin may not move where, or as whom,
         # the panel signs in on its own credentials. See _delegated_retarget_refusal.
         _refused = _delegated_retarget_refusal(
@@ -333,7 +334,7 @@ def _register_remote_edit(app):
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"
         db.session.commit()
         log_action(current_user, "edit_remote", target=remote.name, remote=remote)
-        return _form_ok(f"Remote '{remote.name}' updated.", "manage_remotes")
+        return _form_ok(i18n.tr("Remote '{name}' updated.", name=remote.name), "manage_remotes")
 
 
 def _register_remote_delete_and_test(app):
@@ -414,7 +415,7 @@ def _register_remote_delete_and_test(app):
         _forget_deleted_remote_state(row_id, _doomed_ids)
         _forget_deleted_from_ui_prefs(row_id, _doomed_ids)
         log_action(current_user, "delete_remote", target=name)
-        _m = f"Remote '{name}' deleted."
+        _m = i18n.tr("Remote '{name}' deleted.", name=name)
         if _wants_json():
             return jsonify({"success": True, "message": _m})
         flash(_m, "success")
@@ -447,8 +448,8 @@ def _register_remote_delete_and_test(app):
         remote.last_seen = utcnow()
         db.session.commit()
         if success:
-            return _form_ok(f"Connection to {remote.name} successful!", "manage_remotes")
-        return _form_err(f"Connection failed: {msg}", "manage_remotes")
+            return _form_ok(i18n.tr("Connection to {name} successful!", name=remote.name), "manage_remotes")
+        return _form_err(i18n.tr("Connection failed: {why}", why=msg), "manage_remotes")
 
 
 def _add_remote_field_error(name, ssh_port, lgsm_user, ssh_user):
@@ -456,7 +457,7 @@ def _add_remote_field_error(name, ssh_port, lgsm_user, ssh_user):
     if not name or not SAFE_LABEL_RE.match(name):
         return "Name is required and cannot contain < > \" ' ` or backslashes."
     if ssh_port is None:
-        return "SSH port must be a number between %d and %d." % (MIN_PORT, MAX_PORT)
+        return i18n.tr("SSH port must be a number between {lo} and {hi}.", lo=MIN_PORT, hi=MAX_PORT)
 
     # SECURITY: these reach `sudo -u <user>` / SSH command construction — validate
     # to a safe Linux-username charset so they can't inject shell commands.
@@ -495,8 +496,8 @@ def _add_local_remote(name, lgsm_user):
     db.session.add(remote)
     db.session.commit()
     log_action(current_user, "add_local_remote", target=name, remote=remote)
-    return _form_ok(f"Local server '{name}' added! You can now install game servers on this machine.",
-                    "manage_remotes")
+    return _form_ok(i18n.tr("Local server '{name}' added! You can now install game servers on this "
+                            "machine.", name=name), "manage_remotes")
 
 
 def _grant_to_creator_groups(remote):
@@ -519,10 +520,11 @@ def _after_add_remote(app, remote, name, lgsm_user, reachable):
         setup_type = "fresh" if request.form.get("auto_bootstrap", "on") == "on" else "existing"
     if setup_type == "existing":
         if not reachable:
-            return _form_ok(f"Remote '{name}' added, but your groups don't grant access to it "
-                            "— an administrator has to grant it before you can manage or scan "
-                            "it.", "manage_remotes")
-        flash(f"Remote '{name}' added — scanning it for existing LinuxGSM servers…", "success")
+            return _form_ok(i18n.tr("Remote '{name}' added, but your groups don't grant access to it — "
+                                    "an administrator has to grant it before you can manage or scan "
+                                    "it.", name=name), "manage_remotes")
+        flash(i18n.tr("Remote '{name}' added — scanning it for existing LinuxGSM servers…", name=name),
+              "success")
         scan_url = url_for("remote_manage", remote_id=remote.id) + "?scan=1"
         # The Add form is an ajax-form, and fetch FOLLOWS a redirect: the page took the followed
         # 302 for a refusal ("Not permitted, or your session expired."), never went to the scan,
@@ -542,13 +544,14 @@ def _after_add_remote(app, remote, name, lgsm_user, reachable):
     # will be shown one — /remotes filters to accessible_remote_ids, and the bootstrap-status
     # endpoint behind the card answers 403 to anyone else.
     if started and reachable:
-        _m = f"Remote '{name}' added. Preparing & securing it now — watch the progress on its card."
+        _m = i18n.tr("Remote '{name}' added. Preparing & securing it now — watch the progress on its "
+                     "card.", name=name)
     elif started:
-        _m = (f"Remote '{name}' added and is being prepared & secured now, but your groups "
-              "don't grant access to it — an administrator has to grant it before you can "
-              "see or manage the host.")
+        _m = i18n.tr("Remote '{name}' added and is being prepared & secured now, but your groups don't "
+                     "grant access to it — an administrator has to grant it before you can see or "
+                     "manage the host.", name=name)
     else:
-        _m = f"Remote '{name}' added."
+        _m = i18n.tr("Remote '{name}' added.", name=name)
     return _form_ok(_m, "manage_remotes")
 
 

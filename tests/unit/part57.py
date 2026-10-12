@@ -14,7 +14,7 @@ network, sudo, a real host or the checkout's data/.
 import types as _types57
 
 from unit.part01 import check
-from unit.part12 import _P9_CFG_PATH, _p9, _p9_cfg
+from unit.part12 import _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_cfg, _p9_Over, _p9_trip
 from unit.part20 import _patch, _patched
 
 import app as _app57  # noqa: E402
@@ -53,16 +53,39 @@ try:
     check("config text: ...and a real colour still reads (control)", _hex57("AABBCC") == "#aabbcc")
 
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), accent_color=5, login_tagline=5))
-    _r57 = _p9.test_client().get("/login")
+    # A render reads Tailscale state for the nav (inject_globals), and with a cold cache that ran
+    # the real `tailscale` CLI on a box that has it (review 1011e). Answered here, and the CLI
+    # tripwired so a call that slips past the answer is counted below.
+    from panel.ops import tailscale_integration as _ts57   # noqa: E402
+    _trip57_start = len(_P9_TRIPPED)
+    with _patched():
+        _patch(_ts57, "get_tailscale_info",
+               lambda force_refresh=False: _types57.SimpleNamespace(
+                   dns_name=None, serve_config={}, serve_unreadable=False))
+        _patch(_ts57, "subprocess", _p9_Over(
+            _ts57.subprocess,
+            Popen=_p9_trip("tailscale.subprocess.Popen", exc=OSError("refused by part57's tripwire")),
+            run=_p9_trip("tailscale.subprocess.run", exc=OSError("refused by part57's tripwire"))))
+        _r57 = _p9.test_client().get("/login")
     check("config text: /login renders with accent_color 5 and login_tagline 5 hand-edited in (every "
           "page answered 500, with no way back in through the UI)",
           _r57.status_code == 200 and b"Sign in to manage your game servers" in _r57.data,
           repr(_r57.status_code))
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), accent_color="#123abc", login_tagline="  Hi there "))
-    _r57 = _p9.test_client().get("/login")
+    with _patched():
+        _patch(_ts57, "get_tailscale_info",
+               lambda force_refresh=False: _types57.SimpleNamespace(
+                   dns_name=None, serve_config={}, serve_unreadable=False))
+        _patch(_ts57, "subprocess", _p9_Over(
+            _ts57.subprocess,
+            Popen=_p9_trip("tailscale.subprocess.Popen", exc=OSError("refused by part57's tripwire")),
+            run=_p9_trip("tailscale.subprocess.run", exc=OSError("refused by part57's tripwire"))))
+        _r57 = _p9.test_client().get("/login")
     check("config text: ...and real text values still render (control)",
           _r57.status_code == 200 and b"Hi there" in _r57.data and b"#123abc" in _r57.data,
           repr(_r57.status_code))
+    check("config text: the /login renders ran no real tailscale CLI",
+          len(_P9_TRIPPED) == _trip57_start, repr(_P9_TRIPPED[_trip57_start:][:4]))
 
     def _mw57_run(mount):
         seen = {}

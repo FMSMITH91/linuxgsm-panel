@@ -882,25 +882,29 @@ import panel.routes.panel_backup as _typed_bkmod
 _typed_bkcalls = []
 _typed_bkreal = _typed_bkmod.run_game_backup
 _typed_bkmod.run_game_backup = lambda *a, **k: (_typed_bkcalls.append(1), (True, "", False))[1]
-_typed_lock.acquire(timeout=60)
+# The stub goes back in a finally: a test client that raised would otherwise leave every later
+# check's run_game_backup recording into this list (review 1011e).
 try:
-    for _path, _body in _typed:
-        _tr = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
-        if _tr.status_code >= 500:
-            _typed_500.append("%s -> %d" % (_path, _tr.status_code))
-        if _tr.status_code == 404:
-            _typed_404.append(_path)
-finally:
+    _typed_lock.acquire(timeout=60)
     try:
-        _typed_lock.release()
-    except RuntimeError:
-        pass        # the acquire timed out; nothing of ours to release
-# Settle: a worker the sweep started returns from the route before it reaches the backup.
-for _ in range(40):
-    if _typed_bkcalls:
-        break
-    _ijw_time.sleep(0.05)
-_typed_bkmod.run_game_backup = _typed_bkreal
+        for _path, _body in _typed:
+            _tr = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
+            if _tr.status_code >= 500:
+                _typed_500.append("%s -> %d" % (_path, _tr.status_code))
+            if _tr.status_code == 404:
+                _typed_404.append(_path)
+    finally:
+        try:
+            _typed_lock.release()
+        except RuntimeError:
+            pass        # the acquire timed out; nothing of ours to release
+    # Settle: a worker the sweep started returns from the route before it reaches the backup.
+    for _ in range(40):
+        if _typed_bkcalls:
+            break
+        _ijw_time.sleep(0.05)
+finally:
+    _typed_bkmod.run_game_backup = _typed_bkreal
 check("typed body: %d endpoints were driven, so this is not an empty sweep" % len(_typed),
       len(_typed) >= 20, "the list shrank — the check below would prove less")
 # ...and every one of them REACHES a handler. This list had "/notifications/test" while the
@@ -2363,23 +2367,72 @@ check("log stamps: ...but it does offer the way back OFF",
       "disableLogTimestamps" in _sd_html,
       "no way to turn it off — anyone who enabled it is stuck with a frozen console")
 # Judged per request, not by one spelling anywhere in the file: `enabled: !0` or a variable passed
-# the old literal search, and an unrelated `enabled: true` failed it. Every fetch of the endpoint
-# in any script must send the literal body `{ enabled: false }`, and nothing else in its call.
+# the old literal search, and an unrelated `enabled: true` failed it. EVERY request to the endpoint
+# in any script, found by its URL in any quote, and read to the call's own closing paren: the
+# version before only judged a window holding the exact text `method: 'POST'` and ending at the
+# first `})`, so `method:"POST"`, a body written before the method, or a second call with a
+# double-quoted URL each passed while enabling it (review 1011e). Every `enabled` in the call must
+# be `enabled:false`; a GET sends none and passes.
 import glob as _lt_glob  # pylint: disable=reimported
+import re as _lt_re  # pylint: disable=reimported
+_LT_URL = _lt_re.compile(r"/log-timestamps['\"`]")
+
+
+def _r15d_lt_call(src, at):
+    """The text from `at` to the close of the call it sits in, strings skipped while counting."""
+    depth, k, quote = 1, at, None
+    while k < len(src) and depth:
+        ch = src[k]
+        if quote:
+            if ch == "\\":
+                k += 1
+            elif ch == quote:
+                quote = None
+        elif ch in "'\"`":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        k += 1
+    return src[at:k]
+
+
+def _r15d_lt_judge(src):
+    """(requests seen, [the ones that may enable stamping])."""
+    seen, bad = 0, []
+    for _m in _LT_URL.finditer(src):
+        seen += 1
+        _call = _lt_re.sub(r"\s+", "", _r15d_lt_call(src, _m.end())).replace('"', "'").replace("`", "'")
+        if any(_e != "enabled:false" for _e in _lt_re.findall(r"enabled[^,}]*", _call)):
+            bad.append(_call[:90])
+    return seen, bad
+
+
 _lt_bad, _lt_seen = [], 0
 for _lt_js in sorted(_lt_glob.glob(os.path.join(_repo_root, "static", "js", "*.js"))):
-    _lt_src = open(_lt_js, encoding="utf-8").read()
-    _lt_at = _lt_src.find("/log-timestamps'")
-    while _lt_at != -1:
-        _lt_seen += 1
-        _lt_call = _lt_src[_lt_at:_lt_src.find("})", _lt_at) + 2]
-        if "method: 'POST'" in _lt_call and (
-                _lt_call.count("enabled") != 1 or "JSON.stringify({ enabled: false })" not in _lt_call):
-            _lt_bad.append("%s: %s" % (os.path.basename(_lt_js), " ".join(_lt_call.split())[:90]))
-        _lt_at = _lt_src.find("/log-timestamps'", _lt_at + 1)
+    _lt_n, _lt_b = _r15d_lt_judge(open(_lt_js, encoding="utf-8").read())
+    _lt_seen += _lt_n
+    _lt_bad += ["%s: %s" % (os.path.basename(_lt_js), _b) for _b in _lt_b]
 check("log stamps: and no JS path enables it either",
       _lt_seen >= 1 and not _lt_bad,
       "requests seen: %d; not a literal enabled:false: %s" % (_lt_seen, _lt_bad))
+_LT_HEAD = "fetch(MOUNT + '/api/server/' + id + '/log-timestamps', {"
+_lt_ctl = {_k: _r15d_lt_judge(_v)[1] != [] for _k, _v in {
+    "method: 'POST', enabled: true": _LT_HEAD + "method: 'POST', body: JSON.stringify({ enabled: true }) })",
+    "method:'POST'": _LT_HEAD + "method:'POST', body: JSON.stringify({ enabled: true }) })",
+    'method: "POST"': _LT_HEAD + 'method: "POST", body: JSON.stringify({ enabled: true }) })',
+    "body before method": _LT_HEAD + "body: JSON.stringify({ enabled: true }), method: 'POST' })",
+    "a double-quoted URL": 'fetch(MOUNT + "/log-timestamps", {method: "POST", body: JSON.stringify({enabled: !0})})',
+    "a template literal": "fetch(`${MOUNT}/api/server/${id}/log-timestamps`, {method: 'POST', body: JSON.stringify({enabled})})",
+}.items()}
+_lt_ok = {_k: _r15d_lt_judge(_v) for _k, _v in {
+    "enabled: false": _LT_HEAD + "method: 'POST', body: JSON.stringify({ enabled: false }) })",
+    "a GET": "fetch(MOUNT + '/api/server/' + id + '/log-timestamps').then(r => r.json())",
+}.items()}
+check("log stamps: ...the gate names each spelling that enables it, and passes `enabled: false` and a "
+      "GET (controls)",
+      all(_lt_ctl.values()) and all(_v == (1, []) for _v in _lt_ok.values()), repr((_lt_ctl, _lt_ok)))
 
 # ── The Update button and the bulk endpoint must agree about who HAS an update ──────────
 # They didn't. GameServer.supports_update knows the Call of Duty family is not SteamCMD-based

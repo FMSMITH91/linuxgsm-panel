@@ -2821,6 +2821,11 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
                 ${UPG_SUDO} apt-get -y autoremove --purge >/dev/null 2>&1 || true
                 if [[ ! -f /var/run/reboot-required ]]; then
                     ok "System updated — no reboot required."
+                elif [[ "${PANEL_NO_REBOOT:-0}" == "1" ]]; then
+                    # The fresh-install path honours it (below), and an operator who set it on an
+                    # update was rebooted anyway: PANEL_NO_UPGRADE was this path's only off switch.
+                    warn "The update needs a reboot — skipped (PANEL_NO_REBOOT=1). Reboot the host from its"
+                    warn "Power card in the panel when it suits: running game servers are stopped cleanly first."
                 elif game_sessions_running; then
                     warn "The update needs a reboot, but game servers are running (tmux/screen) —"
                     warn "not rebooting so players aren't dropped. Reboot the host from its Power card in the"

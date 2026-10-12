@@ -21,6 +21,8 @@ import secrets as _secrets
 import unicodedata
 from urllib.parse import quote
 
+from panel.core import i18n
+
 
 # ── Strict input validation ───────────────────────────────────────────────
 # These values become LinuxGSM shortnames, Linux usernames, home-directory paths and
@@ -222,7 +224,9 @@ def bind_host_error(value, host_has_ip=None):
         return ("Bind address must be an IP — e.g. 0.0.0.0 (all interfaces), 127.0.0.1 "
                 "(localhost), or this host's Tailscale IP.")
     if host_has_ip is not None and not host_has_ip(text):
-        return "%s isn't an address on this host — the panel couldn't bind to it." % text
+        # A Sentence: English for anything that records it, whole for tr() to show translated.
+        return i18n.Sentence("{address} isn't an address on this host — the panel couldn't bind to it.",
+                             address=text)
     return None
 
 
@@ -305,10 +309,12 @@ def username_problem(name):
     place that knows whether a clash with the user's OWN current name should count.
     """
     name = (name or "").strip()
+    # i18n-ignore on these length lines: the number is a module constant, so each is ONE fixed
+    # sentence, a catalog key exactly as written (part66 calls these and finds them in es and fr).
     if len(name) < MIN_USERNAME_LEN:
-        return f"Username must be at least {MIN_USERNAME_LEN} characters."
+        return f"Username must be at least {MIN_USERNAME_LEN} characters."  # i18n-ignore
     if len(name) > MAX_USERNAME_LEN:
-        return f"Username must be at most {MAX_USERNAME_LEN} characters."
+        return f"Username must be at most {MAX_USERNAME_LEN} characters."  # i18n-ignore
     if any(c.isspace() for c in name):
         # It is typed into a login box and read off a screen; an interior space (or a tab pasted in
         # from a spreadsheet) is invisible there and makes the account unloggable-into.
@@ -344,7 +350,7 @@ def group_name_problem(name):
     if not name:
         return "Group name is required."
     if len(name) > MAX_GROUP_NAME_LEN:
-        return f"Group name must be at most {MAX_GROUP_NAME_LEN} characters."
+        return f"Group name must be at most {MAX_GROUP_NAME_LEN} characters."  # i18n-ignore: as username_problem's
     # A plain space is fine ("Game Admins"); a newline, tab or line separator is a second row in
     # every listing the name is printed in.
     if any(c.isspace() and c != " " for c in name):
@@ -360,7 +366,7 @@ def password_problem(pw):
     Requires: length, lower, upper, digit, and a symbol (_PW_CLASSES, checked in that order).
     """
     if not pw or len(pw) < MIN_PASSWORD_LEN:
-        return f"Password must be at least {MIN_PASSWORD_LEN} characters."
+        return f"Password must be at least {MIN_PASSWORD_LEN} characters."  # i18n-ignore: as username_problem's
     for has_class, problem in _PW_CLASSES:
         if not any(has_class(c) for c in pw):
             return problem

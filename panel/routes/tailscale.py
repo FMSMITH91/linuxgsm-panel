@@ -11,9 +11,10 @@ from panel.security import privileged as _priv
 from panel.ops import (tailscale_integration as ts)
 from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required,
     superadmin_required)
+from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _r12c_json_flag)
 from panel.db.models import LOCAL_HOST_LABEL
-from panel.ops.serve_upkeep import (_leftover_note, _remove_serve_leftovers)
+from panel.ops.serve_upkeep import (_remove_serve_leftovers, with_leftover_note)
 from app import (_bind_is_loopback, _effective_https, _resolved_bind, _serve_scheme_now)
 
 
@@ -144,7 +145,7 @@ def _serve_enable(port, mount, funnel, page):
     success, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=funnel,
                                             backend_scheme=_serve_scheme_now(cfg, current_app.config))
     if not success:
-        return jsonify({"success": False, "message": msg}), 500
+        return jsonify({"success": False, "message": i18n.tr(msg)}), 500
     cfg = load_config()
     cfg["tailscale_setup_done"] = True
     cfg["tailscale_use_funnel"] = funnel
@@ -152,7 +153,7 @@ def _serve_enable(port, mount, funnel, page):
     save_config(cfg)
     log_action(current_user, "tailscale_serve_enable", target=LOCAL_HOST_LABEL, detail=msg)
     left = _remove_serve_leftovers(port, mount, "Enable on the Tailscale page", _serve_audit)
-    return _changed(msg + _leftover_note(left), port, page)
+    return _changed(with_leftover_note(msg, left), port, page)
 
 
 def _serve_disable(port, mount):
@@ -162,7 +163,7 @@ def _serve_disable(port, mount):
         return jsonify({"success": False, "message": refusal}), 400
     success, msg = ts.disable_tailscale_serve(mount=mount, port=port)
     if not success:
-        return jsonify({"success": False, "message": msg}), 500
+        return jsonify({"success": False, "message": i18n.tr(msg)}), 500
     # Mirror the enable branch. Nothing else in the repo ever cleared these, so a disable left
     # tailscale_setup_done True — which six readers treat as ground truth: one permits a
     # 127.0.0.1-only bind (lockout risk) and the boot path RE-APPLIES Serve, quietly undoing the
@@ -173,7 +174,7 @@ def _serve_disable(port, mount):
     cfg["tailscale_mount"] = ""
     save_config(cfg)
     log_action(current_user, "tailscale_serve_disable", target=LOCAL_HOST_LABEL, detail=msg)
-    return jsonify({"success": True, "message": msg})
+    return jsonify({"success": True, "message": i18n.tr(msg)})
 
 
 def _serve_remove_route(port, data):
@@ -200,12 +201,12 @@ def _serve_remove_route(port, data):
     if state == "removed":
         _serve_audit("removed the Tailscale Serve route to the panel at %s (%s)"
                      % (mount, ts.listener_flag(url)), True)
-        return _changed("Removed the route at %s." % mount, port, _json_str(data, "page"))
+        return _changed(i18n.tr("Removed the route at {mount}.", mount=mount), port, _json_str(data, "page"))
     _serve_audit("could not remove the Tailscale Serve route to the panel at %s: %s"
                  % (mount, err or state), False)
     return jsonify({"success": False, "message": (
         "Couldn't read this host's Tailscale Serve configuration, so nothing was removed."
-        if state == "unread" else "Failed to remove: %s" % err)}), 500
+        if state == "unread" else i18n.tr("Failed to remove: {why}", why=err))}), 500
 
 
 def _r14a_not_removable(route, cfg):
@@ -213,8 +214,8 @@ def _r14a_not_removable(route, cfg):
     if route.get("svc"):
         # A Tailscale Service's route: the panel's `off` has no --service, so it would name the
         # node's own :443 at that mount — another app's route there (ts.remove_panel_route).
-        return ("That route is on the Tailscale Service %s, which the panel does not manage, so "
-                "nothing was removed." % route["svc"])
+        return i18n.tr("That route is on the Tailscale Service {service}, which the panel does not "
+                       "manage, so nothing was removed.", service=route["svc"])
     if ts.is_managed_route(route, cfg):
         return "That is the route the panel is published at. Use Disable to stop publishing it."
     return ""
@@ -233,8 +234,8 @@ def _leftover_route(port, url, raw_mount):
     ours = ts.panel_serve_routes(info.serve_config, port)
     route = next((r for r in ours if r["url"] == url and r["mount"] == mount), None)
     if route is None:
-        return None, (jsonify({"success": False, "message": "No route to the panel is at %s on "
-                               "that listener any more." % mount}), 404)
+        return None, (jsonify({"success": False, "message": i18n.tr(
+            "No route to the panel is at {mount} on that listener any more.", mount=mount)}), 404)
     cfg = load_config()
     why = _r14a_not_removable(route, cfg)
     if why:
@@ -373,7 +374,7 @@ def _register_tailscale_serve(app):
         if action == "remove-route":
             return _serve_remove_route(port, data)
         if action not in ("enable", "disable"):
-            return jsonify({"success": False, "message": f"Unknown action: {action}"}), 400
+            return jsonify({"success": False, "message": i18n.tr("Unknown action: {action}", action=action)}), 400
         # Checked HERE as well as in setup_tailscale_serve, for the reason api_tags_create gives
         # about tag names: this is where the value came from a request, so this is where a bad one
         # can be answered as a 400 with a message the form can show. The branches below report

@@ -17,6 +17,7 @@
 #      touched, and a clean one still restores; a row LOADED with one is flagged, not fatal.
 #      tests/unit/part09.py.
 import ast as _gh_ast
+import string as _gh_string
 
 from unit.part01 import check, os, re  # noqa: E402
 from unit import REPO_ROOT as _gh_root  # noqa: E402
@@ -150,19 +151,60 @@ def _gh_pct_named(right, key):
 
 def _gh_percent_sites(n):
     """(line, value or None, "percent") for each conversion of `n` whose text ends in `sudo -u`."""
+    # The text before each conversion has the EARLIER ones filled with _gh_hole(their value), as
+    # the f-string path does: matched against the raw `"%s -u %s" % (sudo, user)` it had no "sudo"
+    # in it, and the sudo word interpolated by % was no site at all (review 1011e).
     fmt = n.left.value
     args = n.right.elts if isinstance(n.right, _gh_ast.Tuple) else [n.right]
-    out, i = [], 0
+    out, i, text, pos = [], 0, "", 0
     for m in _GH_PCT.finditer(fmt):
+        text += fmt[pos:m.start()]
+        pos = m.end()
         if m.group(2) == "%":
+            text += "%"
             continue
         if m.group(1) is not None:
             val = _gh_pct_named(n.right, m.group(1))
         else:
             val = args[i] if i < len(args) else None
             i += 1
-        if _GH_TAIL.search(fmt[:m.start()]):
+        if _GH_TAIL.search(text):
             out.append((n.lineno, val, "percent"))
+        text += _GH_HOLE if val is None else _gh_hole(val)
+    return out
+
+
+def _gh_format_arg(n, key, auto):
+    """The argument `.format()` call `n` fills field `key` with (auto-numbered at `auto`), or None."""
+    args = list(n.args)
+    if key == "":
+        return args[auto] if auto < len(args) else None
+    if key.isdecimal():
+        return args[int(key)] if int(key) < len(args) else None
+    return {k.arg: k.value for k in n.keywords if k.arg}.get(key)
+
+
+def _gh_format_sites(n):
+    """(line, None, "format") for each `.format()` field whose text ends in `sudo -u`.
+
+    Earlier fields are filled with _gh_hole(their argument), as for % above.
+    """
+    fmt = n.func.value.value
+    try:
+        fields = list(_gh_string.Formatter().parse(fmt))
+    except ValueError:
+        return [(n.lineno, None, "format")] if _GH_FORMAT_TAIL.search(fmt) else []
+    out, text, auto = [], "", 0
+    for literal, field, _spec, _conv in fields:
+        text += literal
+        if field is None:
+            continue
+        if _GH_TAIL.search(text):
+            out.append((n.lineno, None, "format"))
+        key = field.split(".")[0].split("[")[0]
+        val = _gh_format_arg(n, key, auto)
+        auto += key == ""
+        text += _GH_HOLE if val is None else _gh_hole(val)
     return out
 
 
@@ -202,10 +244,22 @@ def _gh_is_user_flag(e):
             and (e.value == "--user" or re.fullmatch(r"-[A-Za-z]*u", e.value)) is not None)
 
 
+_GH_SUDO_BASENAMES = {"sudo", "sudo.ws", "sudo-rs"}
+
+
 def _gh_is_sudo_word(e):
-    """Is argv element `e` the literal sudo, by name or by path (`/usr/bin/sudo`)?"""
-    return (isinstance(e, _gh_ast.Constant) and isinstance(e.value, str)
-            and (e.value == "sudo" or e.value.endswith("/sudo")))
+    """Is argv element `e` sudo?
+
+    By name or path (`/usr/bin/sudo`, `sudo.ws`, `sudo-rs`), or a name that holds it (`SUDO_WS`,
+    `self._sudo`).
+    """
+    # sudo.ws is classic sudo on 26.04 (debug_report/install.py holds SUDO_WS = "/usr/bin/sudo.ws"),
+    # and an argv spelling sudo through a constant was no site at all (review 1011e).
+    if isinstance(e, _gh_ast.Constant) and isinstance(e.value, str):
+        return e.value.rsplit("/", 1)[-1] in _GH_SUDO_BASENAMES
+    if isinstance(e, (_gh_ast.Name, _gh_ast.Attribute)):
+        return "sudo" in (getattr(e, "id", None) or e.attr).lower()
+    return False
 
 
 def _gh_argv_sites(n, elts=None):
@@ -240,10 +294,50 @@ def _gh_node_sites(n):
     if isinstance(n, _gh_ast.BinOp) and isinstance(n.op, _gh_ast.Add):
         return _gh_concat_sites(n) + _gh_concat_fstring_sites(n)
     if _gh_is_str_format(n) and isinstance(n.func.value.value, str):
-        return [(n.lineno, None, "format")] if _GH_FORMAT_TAIL.search(n.func.value.value) else []
+        return _gh_format_sites(n)
     if isinstance(n, (_gh_ast.List, _gh_ast.Tuple)):
         return _gh_argv_sites(n)
     return []
+
+
+def _gh_enclosing_fn(node, parent):
+    """The function node `node` sits in, or None at module level."""
+    fn = parent.get(node)
+    while fn is not None and not isinstance(fn, (_gh_ast.FunctionDef, _gh_ast.AsyncFunctionDef)):
+        fn = parent.get(fn)
+    return fn
+
+
+def _gh_named_list(grown, fn, name):
+    """The elements list name `name` was given in `fn`, else at module level (`BASE = [...]`)."""
+    return grown.get((fn, name)) or grown.get((None, name)) or []
+
+
+def _gh_splice(elts, fn, grown):
+    """`elts` with each `*name` replaced by the elements that name was given."""
+    out = []
+    for e in elts:
+        if isinstance(e, _gh_ast.Starred) and isinstance(e.value, _gh_ast.Name):
+            out += _gh_named_list(grown, fn, e.value.id)
+        else:
+            out.append(e)
+    return out
+
+
+def _gh_flatten(node, fn, grown):
+    """The argv elements expression `node` builds.
+
+    Lists, tuples, a `+` chain of them, a name the function (or the module) gave a list, and
+    `*name` spliced in.
+    """
+    if isinstance(node, _gh_ast.BinOp) and isinstance(node.op, _gh_ast.Add):
+        return _gh_flatten(node.left, fn, grown) + _gh_flatten(node.right, fn, grown)
+    if isinstance(node, _gh_ast.Name):
+        return list(_gh_named_list(grown, fn, node.id))
+    if isinstance(node, (_gh_ast.List, _gh_ast.Tuple)):
+        return _gh_splice(node.elts, fn, grown)
+    return [e for part in _gh_ast.walk(node) if isinstance(part, (_gh_ast.List, _gh_ast.Tuple))
+            for e in part.elts]
 
 
 def _gh_argv_line(n, parent, grown):
@@ -251,20 +345,18 @@ def _gh_argv_line(n, parent, grown):
 
     A `+` chain of lists is one argv (`["sudo", "-n"] + ["-u", user]`, this codebase's own
     style), read as G4 reads an ssh one; a list added to a name with `+=` or .extend() follows the
-    lists that name was given earlier in the same function (`grown`: {name: [elements]}).
+    lists that name was given earlier in the same function (`grown`: {name: [elements]}). A NAME
+    in the chain (`a + ["-u", user]`, `BASE + [...]`) or a `*a` splice is followed the same way:
+    only list literals were read before, so each of those was no site (review 1011e).
     """
     top = n
     while isinstance(parent.get(top), _gh_ast.BinOp) and isinstance(parent[top].op, _gh_ast.Add):
         top = parent[top]
-    elts = [e for part in _gh_ast.walk(top) if isinstance(part, (_gh_ast.List, _gh_ast.Tuple))
-            for e in part.elts]
-    up = parent.get(top)
-    name = _gh_grown_name(up)
+    fn = _gh_enclosing_fn(top, parent)
+    elts = _gh_flatten(top, fn, grown)
+    name = _gh_grown_name(parent.get(top))
     if name is not None:
-        fn = up
-        while fn is not None and not isinstance(fn, (_gh_ast.FunctionDef, _gh_ast.AsyncFunctionDef)):
-            fn = parent.get(fn)
-        elts = grown.get((fn, name), []) + elts
+        elts = _gh_named_list(grown, fn, name) + elts
     return elts
 
 
@@ -279,17 +371,44 @@ def _gh_grown_name(up):
 
 
 def _gh_grown_lists(tree):
-    """{(function, name): elements of every list or tuple literal assigned to it there}."""
+    """{(function or None, name): every element a list name is given there, in source order}.
+
+    `name = [...]`, `name = name + [...]` / `other + [...]`, `name += [...]` and
+    `name.extend([...])` all count (review 1011e: only `name = [...]` did, so `a = []; a +=
+    ["sudo"]; a += ["-u", user]` and `a = a + ["-u", user]` were no site); None is module level.
+    """
     grown = {}
-    for fn in _gh_ast.walk(tree):
-        if not isinstance(fn, (_gh_ast.FunctionDef, _gh_ast.AsyncFunctionDef)):
-            continue
-        for n in _gh_ast.walk(fn):
-            if isinstance(n, _gh_ast.Assign) and isinstance(n.value, (_gh_ast.List, _gh_ast.Tuple)):
-                for t in n.targets:
-                    if isinstance(t, _gh_ast.Name):
-                        grown.setdefault((fn, t.id), []).extend(n.value.elts)
+    parent = {c: p for p in _gh_ast.walk(tree) for c in _gh_ast.iter_child_nodes(p)}
+    nodes = sorted((n for n in _gh_ast.walk(tree) if isinstance(n, (_gh_ast.Assign, _gh_ast.AugAssign,
+                                                                     _gh_ast.Call))),
+                   key=lambda n: (n.lineno, n.col_offset))
+    for n in nodes:
+        fn = _gh_enclosing_fn(n, parent)
+        if isinstance(n, _gh_ast.Assign):
+            _gh_grow_assign(n, fn, grown)
+        else:
+            _gh_grow_added(n, fn, grown)
     return grown
+
+
+def _gh_grow_assign(n, fn, grown):
+    """Record what `name = [...]` or `name = a + [...]` gives each target name."""
+    if not isinstance(n.value, (_gh_ast.List, _gh_ast.Tuple, _gh_ast.BinOp)):
+        return
+    elts = _gh_flatten(n.value, fn, grown)
+    for t in (t for t in n.targets if isinstance(t, _gh_ast.Name)):
+        if isinstance(n.value, _gh_ast.BinOp):
+            grown[(fn, t.id)] = elts     # `a = a + [...]` already holds a's old list
+        else:
+            grown.setdefault((fn, t.id), []).extend(elts)
+
+
+def _gh_grow_added(n, fn, grown):
+    """Record what `name += [...]` or `name.extend([...])` adds to the name."""
+    name = _gh_grown_name(n)
+    added = n.value if isinstance(n, _gh_ast.AugAssign) else (n.args[0] if getattr(n, "args", None) else None)
+    if name is not None and added is not None:
+        grown.setdefault((fn, name), []).extend(_gh_flatten(added, fn, grown))
 
 
 def _gh_sites(tree):
@@ -550,6 +669,10 @@ _gh_ctl = {
     "G1 sudo and -u in separate literals": _gh_plant('def f(user):\n    return "sudo " + "-u " + user\n'),
     "G1 -u in an f-string after a sudo literal": _gh_plant(
         'def f(user):\n    return "sudo " + f"-u {user} bash"\n'),
+    "G1 the sudo word interpolated, %": _gh_plant(
+        'def f(self, user):\n    return "%s -u %s bash" % (self._sudo, user)\n'),
+    "G1 the sudo word interpolated, .format": _gh_plant(
+        'def f(sudo, user):\n    return "{} -u {} bash".format(sudo, user)\n'),
     "G1 a -g value in a % format": _gh_plant(
         'def f(g, user):\n    return "sudo -g %s -u %s bash" % (g, user)\n'),
     # The account in hand-typed quotes (review 1011c): no site at all before, so no gate fired.
@@ -572,6 +695,19 @@ _gh_ctl = {
         'def f(user):\n    a = ["sudo"]\n    a += ["-u", user]\n    return a\n'),
     "G2 an argv grown by .extend()": _gh_plant(
         'def f(user):\n    a = ["sudo"]\n    a.extend(["-u", user])\n    return a\n'),
+    # Review 1011e: each of these was no site at all.
+    "G2 a named list in the + chain": _gh_plant(
+        'def f(user):\n    a = ["sudo", "-n"]\n    return a + ["-u", user, "cat"]\n'),
+    "G2 a module-level list in the + chain": _gh_plant(
+        'BASE = ["sudo", "-n"]\ndef f(user):\n    return BASE + ["-u", user]\n'),
+    "G2 a starred list": _gh_plant('def f(user):\n    a = ["sudo"]\n    return [*a, "-u", user]\n'),
+    "G2 an argv grown by += only": _gh_plant(
+        'def f(user):\n    a = []\n    a += ["sudo"]\n    a += ["-u", user]\n    return a\n'),
+    "G2 an argv rebuilt as a = a + [...]": _gh_plant(
+        'def f(user):\n    a = ["sudo"]\n    a = a + ["-u", user]\n    return a\n'),
+    "G2 an argv naming sudo.ws": _gh_plant('def f(user):\n    return ["sudo.ws", "-u", user]\n'),
+    "G2 an argv naming sudo through a constant": _gh_plant(
+        'SUDO_WS = "/usr/bin/sudo.ws"\ndef f(user):\n    return [SUDO_WS, "-u", user]\n'),
     "G2 an argv naming sudo by path": _gh_plant(
         'def f(user):\n    return ["/usr/bin/sudo", "-u", user, "cat"]\n'),
     "G2 quoted but outside the builder": _gh_plant(

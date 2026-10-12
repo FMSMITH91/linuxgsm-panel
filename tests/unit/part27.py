@@ -190,6 +190,13 @@ for i, a in enumerate(args):
 sys.exit(1 if mode == "rc1" else 0)
 '''
 _osv_tmp27 = _tf27.mkdtemp(prefix="lgsm-unit-p27-osv-")
+
+
+def _r15d_is_osv_config(arg):
+    """Is argv element `arg` osv-scanner's config flag, `-config`/`--config`, with or without `=`?"""
+    return _re27.match(r"--?config(?:=|$)", arg) is not None
+
+
 try:
     _osv_run27 = ""
     try:
@@ -204,7 +211,10 @@ try:
         _rc, _out = _run_step27(_osv_run27, _env) if _osv_run27 else (None, "")
         _argv = ([_json27.loads(_l) for _l in open(_log, encoding="utf-8")]
                  if os.path.exists(_log) else [])
+        _osv_every27[:] = _argv          # every invocation, for the --config check below
         return _rc, _out, (_argv[0] if _argv else [])
+
+    _osv_every27 = []
 
     _rc, _out, _argv = _osv27("")
     _osv_vals27 = [_argv[_i + 1] for _i, _a in enumerate(_argv[:-1]) if _a == "--lockfile"]
@@ -216,10 +226,17 @@ try:
           "missing=%r extra=%r argv=%r" % (sorted(_locks27 - _osv_paths27),
                                            sorted(_osv_paths27 - _locks27), _argv[:6]))
     # `--config <file>` overrides the per-directory osv-scanner.toml the exemption gates below read
-    # (osv-scanner's configuration docs): an exemption there would be read by nothing here.
+    # (osv-scanner's configuration docs): an exemption there would be read by nothing here. In
+    # EVERY invocation the step makes, and in both spellings: osv-scanner's flag parser (urfave/cli
+    # v3) takes `-config` exactly as `--config`, which this read past (review 1011e).
+    _osv_cfg27 = [_a for _inv in _osv_every27 for _a in _inv if _r15d_is_osv_config(_a)]
     check("osv-scanner: ...with no --config of its own, so the exemptions read below are its only ones",
-          bool(_argv) and not [_a for _a in _argv if _a == "--config" or _a.startswith("--config=")],
-          repr(_argv))
+          bool(_osv_every27) and not _osv_cfg27, repr((_osv_cfg27, _osv_every27)))
+    _osv_cfg_ctl27 = [_a for _a in ("-config=/tmp/x.toml", "-config", "--config", "--config=x",
+                                    "--lockfile", "--configx", "-c") if _r15d_is_osv_config(_a)]
+    check("osv-scanner: ...the flag is read in its one- and two-dash spellings (control)",
+          _osv_cfg_ctl27 == ["-config=/tmp/x.toml", "-config", "--config", "--config=x"],
+          repr(_osv_cfg_ctl27))
     check("osv-scanner: ...each pip lockfile with the requirements.txt: parse-as prefix (it picks a "
           "parser by file name), the npm one by its own name",
           bool(_osv_vals27) and all(_v.startswith("requirements.txt:") != _v.endswith(".json")

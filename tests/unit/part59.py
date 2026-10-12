@@ -202,8 +202,9 @@ try:
     def _ufw_status59(remote):
         _ufw59.append(1)
         groups = [{"port_num": 5000, "nums": [3], "key": "k3", "action": "ALLOW"}] if len(_ufw59) % 2 else []
-        return {"installed": True, "groups": groups}
+        return {"installed": True, "enabled": True, "groups": groups}
     _p9_patch(_rv59, "remote_ufw_status", _ufw_status59)
+    _p9_patch(_rv59._fw_rules, "remote_ufw_default_allows_in", lambda remote: False)
     _p9_patch(_rv59, "remote_ufw_delete_rule", lambda *a, **k: (True, "deleted"))
     _closed59 = []
     for _uf59 in (False, True):
@@ -369,21 +370,8 @@ _PAL59 = _read59(_JS59, "palette.js")
 check("palette: an action row's verb goes through t() (the label span is data-no-i18n for the name, so "
       "\"Restart MyServer\" stayed English)", "label: _tr(ACTION_LABEL[act]) + ' ' + s.name," in _PAL59
       and "label: ACTION_LABEL[act] + ' ' + s.name," not in _PAL59, "label line")
-_name59 = "palette: the stop/restart confirm"
-_out59 = _node59(_name59, (
-    "class El { constructor(tag){ this.tag = tag; this.kids = []; this.attrs = {}; this.textContent = ''; }\n"
-    "  appendChild(c){ this.kids.push(c); return c; } setAttribute(k, v){ this.attrs[k] = v; } }\n"
-    "global.document = {createElement: t => new El(t), createTextNode: s => ({text: s})};\n"
-    "var ACTION_LABEL = { start: 'Start', restart: 'Restart', stop: 'Stop' };\n"
-    + _cut47(_PAL59, "function _actionBody(") + "\n"
-    "const w = _actionBody('restart', 'Backup');\n"
-    "console.log(JSON.stringify(w.kids.map(k => k.tag ? [k.tag, k.textContent, 'data-no-i18n' in k.attrs]"
-    " : ['#text', k.text])));\n"))
-if _out59 is not None:
-    check("palette: the stop/restart confirm is built as nodes — the verb and the warning whole (so "
-          "translated), the server's name guarded",
-          _out59 == [["span", "Restart", False], ["#text", " "], ["strong", "Backup", True], ["#text", "? "],
-                     ["span", "Anyone playing will be disconnected.", False]], repr(_out59))
+# The stop/restart confirm's shape (one translated question, the name guarded inside it, the warning
+# whole) is held in part66, run in Spanish: built as verb, name and "?" nodes it lost Spanish's "¿".
 
 _RMJ59, _NAG59, _MSJ59 = (_read59(_JS59, "remote_manage.js"), _read59(_JS59, "nags.js"),
                           _read59(_JS59, "manage_servers.js"))
@@ -423,6 +411,7 @@ _CON59 = (
     "global.window = global; global.MOUNT = ''; global.serverId = 1; global.toast = () => 0;\n"
     "var shown = [], _consoleLines = [], _consolePrimed = false, _consoleSig = null, _lastPanelT = 0;\n"
     "var _returnOwed = false, _panelBacklogShown = false, _r13c_panelPushes = [], _R13C_PANEL_KEEP = 200;\n"
+    "var _r15c_clearedAt = null;\n"
     "var consoleEl = {set innerHTML(v){ shown.length = 0; }};\n"
     "var socket = {connected: true};\n"
     "function _rebuildMark(){ return 0; } function _rebuildRestore(){} function _r11c_resyncFrom(){}\n"

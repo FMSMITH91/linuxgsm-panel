@@ -13,6 +13,7 @@ from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action, permission_required,
     superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
+from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r13b_json_flag,
                              _unreachable)
 from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, NOT_AN_IP, _port_or,
@@ -131,10 +132,12 @@ def _register_blocking(app):
         unblock = _r13b_json_flag(_json_body(), "unblock", False)
         if not unblock and tailnet_exempt_ips(remote, {ip}):
             return jsonify({"success": False, "message":
-                            "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
+                            i18n.tr("{ip} is a Tailscale address — "
+                                    "blocking it would cut off tailnet access.", ip=ip)})
         if not unblock and _whitelisted(ip):
             return jsonify({"success": False, "message":
-                            "%s is on the security whitelist — remove it there first to block it." % ip})
+                            i18n.tr("{ip} is on the security whitelist — "
+                                    "remove it there first to block it.", ip=ip)})
         try:
             ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
             # The address, never the request's text: the row records what was acted on.
@@ -142,7 +145,7 @@ def _register_blocking(app):
                        target=canonical_ip(ip) or NOT_AN_IP, detail=remote.name, success=ok,
                        remote=remote)
             _follow_in_panel_gate(remote, ok)
-            return jsonify({"success": ok, "message": msg})
+            return jsonify({"success": ok, "message": i18n.tr(msg)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("block failed")}), 500
 
@@ -199,7 +202,7 @@ def _register_whitelist_and_log(app):
             log_action(current_user, "fail2ban_unban", target=canonical_ip(banned_ip) or NOT_AN_IP,
                        detail="%s on %s — %s" % (jail, remote.name, msg), success=ok,
                        remote=remote)
-            return jsonify({"success": ok, "message": msg})
+            return jsonify({"success": ok, "message": i18n.tr(msg)})
         except ConnectionError:
             return _unreachable("fail2ban unban")
         except Exception:
@@ -264,7 +267,7 @@ def _register_panel_binding(app):
         cfg["bind_host"] = new_bind
         save_config(cfg)
 
-        fw_note, fw_ok = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port)
+        fw_notes, fw_ok = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port)
         f2b_ok, f2b_msg = _follow_binding_in_fail2ban(app, new_port, cur_port)
 
         # The row says what HAPPENED. It used to be success=True whatever the firewall and the
@@ -278,20 +281,29 @@ def _register_panel_binding(app):
         # is therefore a row of its own, below.
         log_action(current_user, "panel_change_binding", target=LOCAL_HOST_LABEL,
                    detail=f"{cur_bind}:{cur_port} -> {new_bind}:{new_port}; "
-                          f"firewall: {fw_note.strip() or 'n/a'}; fail2ban: {f2b_msg}",
+                          f"firewall: {' '.join(fw_notes) or 'n/a'}; fail2ban: {f2b_msg}",
                    success=fw_ok and f2b_ok)
         ok, restart_msg = so.restart_panel()
         if not ok:
             log_action(current_user, "panel_restart", target=LOCAL_HOST_LABEL,
                        detail=f"after the binding change: {restart_msg}", success=False)
-            return jsonify({"success": False,
-                            "message": "Saved the new binding, but couldn't restart the panel "
-                                       "automatically — restart it (or reboot the host) to apply."
-                                       + fw_note}), 200
+            return jsonify({"success": False, "message": _r15e_with_notes(i18n.Sentence(
+                "Saved the new binding, but couldn't restart the panel automatically — restart it "
+                "(or reboot the host) to apply."), fw_notes)}), 200
         return jsonify({"success": True, "new_port": new_port, "old_port": cur_port,
                         "new_bind": new_bind, "port_changed": new_port != cur_port,
                         "served_over_tailscale": bool(cfg.get("tailscale_setup_done")),
-                        "message": f"Panel binding to {new_bind}:{new_port}. Restarting…{fw_note}"})
+                        "message": _r15e_with_notes(i18n.Sentence(
+                            "Panel binding to {address}:{port}. Restarting…",
+                            address=new_bind, port=new_port), fw_notes)})
+
+
+def _r15e_with_notes(head, notes):
+    """The reply's sentence, then each firewall note — every one translated whole, then joined.
+
+    The notes were one English string appended to the sentence, so the reply never matched a key.
+    """
+    return " ".join(i18n.tr(s) for s in [head] + list(notes))
 
 
 def _port_refusal(local, cur_port, new_port):
@@ -301,14 +313,14 @@ def _port_refusal(local, cur_port, new_port):
     # config key and used to write it unchecked). Kept as an explicit branch so the refusal
     # still carries its own message.
     if new_port is None:
-        return "Pick a port between %d and %d." % (MIN_UNPRIVILEGED_PORT, MAX_PORT)
+        return i18n.tr("Pick a port between {lo} and {hi}.", lo=MIN_UNPRIVILEGED_PORT, hi=MAX_PORT)
     if new_port != cur_port:
         clash = GameServer.query.filter_by(remote_id=local.id, port=new_port).first() if local else None
         if clash:
-            return (f"Port {new_port} is used by game server "
-                    f"'{clash.name}'. Pick another.")
+            return i18n.tr("Port {port} is used by game server '{name}'. Pick another.",
+                           port=new_port, name=clash.name)
         if so.port_in_use(new_port):
-            return f"Port {new_port} is already in use on this host."
+            return i18n.tr("Port {port} is already in use on this host.", port=new_port)
     return None
 
 
@@ -357,8 +369,8 @@ def _bind_refusal(served, new_bind):
         if new_bind not in loopback:
             # A specific IP without Serve: it must at least be a real local IP.
             if not so.host_has_ip(new_bind):
-                return (f"{new_bind} isn't an address on this host — the "
-                        "panel couldn't bind to it.")
+                return i18n.tr("{address} isn't an address on this host — the panel couldn't bind "
+                               "to it.", address=new_bind)
     if is_loopback and not served:
         return ("Binding to localhost only would lock you out unless "
                 "Tailscale Serve is set up to reach the panel. Set up "
@@ -393,15 +405,16 @@ def _follow_binding_in_fail2ban(app, new_port, cur_port):
 def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
     """Open or close the panel's port for the new binding's exposure.
 
-    -> (the reply's note, whether the firewall now matches the binding). With no local host row
-    there is no firewall to follow, which is not a failure.
+    -> (the reply's notes, whether the firewall now matches the binding). With no local host row
+    there is no firewall to follow, which is not a failure. Each note is a whole i18n.Sentence:
+    English in the audit row, translated in the reply.
     """
     # ── Bring the firewall in line with the resulting exposure ──
     # Reached on its port (the wildcard, or the host's own public/LAN address) → the port must
     # be open. Loopback/tailnet-bound → the public port rule isn't needed, so close it. A
     # changed port also gets its old rule gone.
     now_public = _panel_bind_is_public(new_bind)
-    fw_note, fw_ok = "", True
+    fw_notes, fw_ok = [], True
     if local:
         # Each of these returns (ok, msg) and all three were called for effect, with fw_note
         # assigned on the next line regardless — so the panel could restart onto a port the
@@ -410,20 +423,27 @@ def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
         try:
             if now_public:
                 _fw_ok, _fw_msg = remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
-                fw_note = (f" Firewall: opened {new_port}." if _fw_ok
-                           else f" FIREWALL NOT UPDATED — port {new_port} may be blocked ({_fw_msg}).")
+                fw_notes.append(i18n.Sentence("Firewall: opened {port}.", port=new_port) if _fw_ok
+                                else i18n.Sentence("FIREWALL NOT UPDATED — port {port} may be blocked "
+                                                   "({why}).", port=new_port, why=_fw_msg))
             else:
-                _fw_ok, _fw_msg = remote_ufw_close_port(local, new_port, "tcp")
-                fw_note = (f" Firewall: {new_port} kept tailnet-only." if _fw_ok
-                           else f" Firewall rule for {new_port} could not be removed ({_fw_msg}).")
+                # force: the panel's own move (the config already names new_port, so the guard
+                # would read this as the panel's web-port rule and refuse to close it).
+                _fw_ok, _fw_msg = remote_ufw_close_port(local, new_port, "tcp", force=True)
+                fw_notes.append(i18n.Sentence("Firewall: {port} kept tailnet-only.", port=new_port)
+                                if _fw_ok else
+                                i18n.Sentence("Firewall rule for {port} could not be removed ({why}).",
+                                              port=new_port, why=_fw_msg))
             fw_ok = bool(_fw_ok)
             if new_port != cur_port:
-                _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp")
-                fw_note += (f" Removed the old rule for {cur_port}." if _old_ok
-                            else f" The old rule for {cur_port} is still there ({_old_msg}).")
+                _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp", force=True)
+                fw_notes.append(i18n.Sentence("Removed the old rule for {port}.", port=cur_port)
+                                if _old_ok else
+                                i18n.Sentence("The old rule for {port} is still there ({why}).",
+                                              port=cur_port, why=_old_msg))
                 fw_ok = fw_ok and bool(_old_ok)
         except Exception:
             app.logger.warning("change-port: firewall update failed", exc_info=True)
-            fw_note += " The firewall could not be updated."
+            fw_notes.append(i18n.Sentence("The firewall could not be updated."))
             fw_ok = False
-    return fw_note, fw_ok
+    return fw_notes, fw_ok

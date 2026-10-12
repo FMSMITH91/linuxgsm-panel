@@ -395,10 +395,13 @@ def _r11b_refused_without_argv(line, own):
     m = _SUDO_REFUSED_TAIL_RE.search(line)
     if m is None:
         return _r12b_cut_without_command(line)
-    u = _SUDO_USER_RE.search(line)
-    label, sub = _priv_verb(m.group(1), m.group(2), u.group(1) if u else "root", own)
     env = line.find("ENV=", 0, m.start())
     cut = env if env != -1 else m.start()
+    other = _r15b_other_priv_before(line, cut)
+    if other is not None:
+        return other
+    u = _SUDO_USER_RE.search(line)
+    label, sub = _priv_verb(m.group(1), m.group(2), u.group(1) if u else "root", own)
     return line[:cut] + "COMMAND=(%s)" % (label if sub is None else "%s: %s" % (label, sub))
 
 
@@ -411,12 +414,31 @@ def _r13b_cut_other_priv(line):
     return line
 
 
+def _r15b_other_priv_before(line, cut):
+    """`line` cut before its pkexec / doas argv when that argv starts at or before `cut`, else None.
+
+    A doas or pkexec line reaches the sudo cuts too, when its argv holds sudo's words (a refusal
+    phrase, `"command":`, `ENV=`, `COMMAND=`). Those words are then INSIDE the argv, so cutting at
+    the first of them printed everything in the argv before it — a `doas curl` whose `-u` user and
+    password came before `-d {"command": …}` kept the password. The tool's own argv start always
+    comes first in its line, so whichever cut is earlier is the one taken.
+    """
+    for rx in (_R13B_PKEXEC_RE, _R13B_DOAS_RE):
+        m = rx.search(line)
+        if m and m.end() <= cut:
+            return line[:m.end()] + "(command not shown)"
+    return None
+
+
 def _r12b_cut_without_command(line):
     """A sudo line with no COMMAND= (sudo split it, or it is JSON), cut at its ENV= or argv."""
     at = [i for i in (line.find(t) for t in _R12B_SUDO_CUT_TOKENS) if i != -1]
     if not at:
         # Not sudo's: a doas refusal whose argv holds a refusal phrase arrives here too.
         return _r13b_cut_other_priv(line)
+    other = _r15b_other_priv_before(line, min(at))
+    if other is not None:
+        return other
     return line[:min(at)] + "(environment and command not shown)"
 
 

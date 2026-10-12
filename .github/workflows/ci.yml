@@ -193,7 +193,10 @@ jobs:
               fail("a unit run left no tally (as the runner: %s; as root: %s), so nothing can be "
                    "judged" % (user_tally, root_tally))
           gates = sorted(n for n, w in user_why.items() if re.search(r"\broot\b", w))
-          shut = [n for n in gates if "SKIP" in root.get(n, set())]
+          # Each root-only branch also records itself under its skip's own name (tests/unit
+          # part12's _r15d_root_ran), so a gate must PASS under that name as root: one that was
+          # still skipped, skipped under another name, or emitted nothing is caught alike.
+          shut = [n for n in gates if "PASS" not in root.get(n, set())]
           only = sorted(n for n, st in root.items()
                         if st & {"PASS", "FAIL"} and not user.get(n, set()) & {"PASS", "FAIL"})
           bad = [n for n in only if "FAIL" in root[n]]
@@ -205,7 +208,7 @@ jobs:
               fail("no check was skipped for want of root, or none ran only as root: this step "
                    "judged nothing")
           if shut:
-              fail("still skipped as root: %s" % "; ".join(shut))
+              fail("did not run and pass under its own name as root: %s" % "; ".join(shut))
           if bad:
               fail("failed as root: %s" % "; ".join(bad))
           EOF

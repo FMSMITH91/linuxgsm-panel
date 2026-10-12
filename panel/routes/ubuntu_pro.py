@@ -7,6 +7,7 @@ from flask_login import (current_user, login_required)
 from panel.ops.ssh_manager import (_PRO_SERVICES, pro_attach, pro_detach, pro_service,
     remote_live_metrics)
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action, permission_required)
+from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_pro_status_cached)
 
@@ -76,7 +77,7 @@ def _register_pro_changes(app):
             _pro_status_cached(remote, force=True)   # a service toggled → refresh the stored status
         log_action(current_user, f"pro_{action}", target=remote.name,
                    detail=service, success=ok, remote=remote)
-        return jsonify({"success": ok, "message": msg})
+        return jsonify({"success": ok, "message": i18n.tr(msg)})
 
     @app.route("/api/remote/<int:remote_id>/pro-detach", methods=["POST"])
     @login_required

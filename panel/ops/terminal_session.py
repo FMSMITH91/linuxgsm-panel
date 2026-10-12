@@ -108,7 +108,7 @@ def panel_account():
         return ""
 
 
-# The two hints, as catalog keys (translations/*/servers.json). The account's name is put in AFTER
+# The two hints, as catalog keys (translations/*/network.json). The account's name is put in AFTER
 # the sentence is translated: spliced in first, the page showed one text node no catalog key could
 # match, under a data-no-i18n that the name made necessary, so the hint was English in every language.
 SUDO_HINT_PER_USER = (

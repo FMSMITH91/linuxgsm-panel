@@ -633,8 +633,9 @@ _bk7_names = ("BACKUP_DIR", "DATA_DIR", "DB_PATH", "CONFIG_FILE", "SECRET_FILE",
 _bk7_saved = {k: getattr(_bk7, k) for k in _bk7_names}
 # A successful restore stamps this module dict with the time (restore_pending's grace window), and
 # the names above are rebound, not this dict's contents: left set, for 120 s every later stage in
-# backup.DATA_DIR reads as a pending restore and _launch_installer refuses (review 1011d).
-_bk7_dispatched = dict(_bk7._r12a_restore_dispatched)
+# backup.DATA_DIR reads as a pending restore and _launch_installer refuses (review 1011d). The
+# finally ZEROES it rather than restoring a snapshot: part09 runs just before this part and has
+# already stamped it, so a snapshot would put part09's recent time back (review 1011e).
 _b7 = _p7_pl.Path(_p7_tf.mkdtemp(prefix="p7-bk-"))
 _b7_cfg = {}
 
@@ -1161,10 +1162,22 @@ try:
 finally:
     for _k in _bk7_names:
         setattr(_bk7, _k, _bk7_saved[_k])
-    _bk7._r12a_restore_dispatched.update(_bk7_dispatched)
+    _bk7._r12a_restore_dispatched["ts"] = 0.0
     _p7_sh.rmtree(str(_b7), ignore_errors=True)
-check("backup: the restore-dispatch stamp is put back for the parts after this one",
-      _bk7._r12a_restore_dispatched == _bk7_dispatched, repr(_bk7._r12a_restore_dispatched))
+# Judge the hazard itself, not the dict's shape: with a stage present, nothing after this part may
+# read as a restore in flight.
+_bk7_probe_dir = _p7_pl.Path(_p7_tf.mkdtemp(prefix="p7-bk-pending-"))
+_bk7_probe_saved = _bk7.DATA_DIR
+try:
+    (_bk7_probe_dir / ".restore-stage").mkdir()
+    _bk7.DATA_DIR = _bk7_probe_dir
+    _bk7_pending_after = _bk7.restore_pending()
+finally:
+    _bk7.DATA_DIR = _bk7_probe_saved
+    _p7_sh.rmtree(str(_bk7_probe_dir), ignore_errors=True)
+check("backup: no restore reads as in flight for the parts after this one (stamp zeroed)",
+      _bk7._r12a_restore_dispatched == {"ts": 0.0} and not _bk7_pending_after,
+      repr((_bk7._r12a_restore_dispatched, _bk7_pending_after)))
 
 
 # ══ panel/routes/panel_backup.py ═════════════════════════════════════════════════════════════════

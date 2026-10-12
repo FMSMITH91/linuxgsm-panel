@@ -454,7 +454,11 @@ window.hidePanel = function(btn){
   var region = panel && panel.closest('[data-region]');
   if (!region) return;
   var key = panel.getAttribute('data-panel');
-  var label = (panel.querySelector('.text-secondary.small') || {}).textContent || key;
+  // The tile's English label (data-label), not its text: that is already translated, and a chip
+  // written in one language stays in it — setLang() restores each node to the text it first saw,
+  // which for the chip was the translation, so it never followed a live language switch.
+  var label = panel.getAttribute('data-label')
+    || (panel.querySelector('.text-secondary.small') || {}).textContent || key;
   var bar = document.getElementById(region.id + '-hidden');
   if (!bar){
     bar = document.createElement('div');

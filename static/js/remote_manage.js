@@ -102,9 +102,13 @@ function toggleAutoblock(cb){
       setTimeout(loadSecurityTopIps, on?2500:300);   // give the immediate reconcile a moment
     }).catch(function(){ if(window.toast) toast('Couldn\'t change auto-block','danger'); if(cb) cb.checked=!on; });
 }
+// The endpoint clamps to 100000 and answers the clamped value, which thresholdSaveToast below
+// reads as "a non-superadmin was ignored": a superadmin who typed 150000 was told the threshold
+// had not changed and that only a superadmin could change it. Refused here, as below 1 is.
+function _r15aThresholdOk(v){ return !!v && v>=1 && v<=100000; }
 function saveThreshold(btn){
   var inp=document.getElementById('sec-threshold'); var v=Number.parseInt(inp&&inp.value,10);
-  if(!v||v<1){ if(window.toast) toast('Enter a number of attempts (1 or more)','info'); return; }
+  if(!_r15aThresholdOk(v)){ if(window.toast) toast('Enter a number of attempts from 1 to 100000','info'); return; }
   // The on/off state rides along (the endpoint sets both), so it has to be the host's real one:
   // an unpainted toggle reads OFF whatever the host has. Refuse until it has been read.
   if(!_autoblockKnown){ if(window.toast) toast('The auto-block settings are still loading. Save again once they show.','info'); return; }

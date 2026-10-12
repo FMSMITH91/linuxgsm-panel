@@ -129,7 +129,7 @@ def _player_reply58():
     sent, since = [], []
     replies = {"pane": ""}
     _p9_patch(_p9_core, "send_console_command", lambda *a, **k: (
-        sent.append(k.get("mark")), ("PANE_MARK 1200 17\n", "", 0))[1])
+        sent.append(k.get("mark")), ("PANE_MARK 1200 17 80\n", "", 0))[1])
     _p9_patch(_game58, "capture_console", lambda *a, **k: (
         since.append(k.get("since")), (replies["pane"], "", 0))[1])
     # Only sleep stood in for: game.py also reads time.time/gmtime/strftime, and a bare NS(sleep=)
@@ -140,7 +140,7 @@ def _player_reply58():
     slow = _game58.console_player_list(None, _USER58, "gmod", selfname="gmodserver")
     check("players: a `status` whose reply has not been printed yet reads as unknown, not as the "
           "pane's previous table (and the capture starts where the send was typed)",
-          slow is None and sent == [True] and since == [(1200, 17)], repr((slow, sent, since)))
+          slow is None and sent == [True] and since == [(1200, 17, 80)], repr((slow, sent, since)))
     replies["pane"] = ("status\nhostname: p58\nplayers : 3 humans, 0 bots (24 max)\n"
                        "# userid name uniqueid connected ping loss state\n"
                        '#  2 "Ann" STEAM_0:1:5 01:02 40 0 active\n')
@@ -167,13 +167,13 @@ def _capture_since58():
         _tool58("tmux", 'case " $* " in\n'
                         '  *" has-session "*) exit 0;;\n'
                         '  *" display "*) if [ -n "${TMUX58_DISPLAY+x}" ]; then echo "$TMUX58_DISPLAY"; else\n'
-                        '      f="${@: -1}"; f=${f//"#{history_size}"/1200}; echo "${f//"#{cursor_y}"/17}"; fi;;\n'
+                        '      f="${@: -1}"; f=${f//"#{history_size}"/1200}; f=${f//"#{pane_width}"/80}; echo "${f//"#{cursor_y}"/17}"; fi;;\n'
                         '  *" capture-pane "*) while [ $# -gt 0 ]; do [ "$1" = -S ] && echo "S=$2"; shift; done;;\n'
                         'esac\n')
         got = {}
-        for tag, disp in (("grew", "1210 2000"), ("trimmed", "1090 1300"), ("unread", "")):
+        for tag, disp in (("grew", "1210 2000 80"), ("trimmed", "1090 1300 80"), ("unread", "")):
             os.environ["TMUX58_DISPLAY"] = disp
-            out, _e, rc = _CAPTURE58(None, _USER58, selfname="gmod58srv", since=(1200, 17))
+            out, _e, rc = _CAPTURE58(None, _USER58, selfname="gmod58srv", since=(1200, 17, 80))
             got[tag] = (out.strip(), rc)
         check("capture since the send: the row it marked, counted from the pane's history now "
               "(10 rows scrolled in: -S 7), less tmux's 130-row trim when the history went down "
@@ -183,7 +183,7 @@ def _capture_since58():
         os.environ.pop("TMUX58_DISPLAY", None)        # the stand-in now fills tmux's own format
         out, _e, rc = _SEND58(None, _USER58, "status", selfname="gmod58srv", mark=True)
         check("send with mark: prints where the pane stood, in the same round trip as the send",
-              rc == 0 and out == "PANE_MARK 1200 17\n", repr((out, rc)))
+              rc == 0 and out == "PANE_MARK 1200 17 80\n", repr((out, rc)))
     finally:
         os.environ.pop("TMUX58_DISPLAY", None)
         os.unlink(sock)

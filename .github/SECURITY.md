@@ -173,9 +173,9 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 2 |
+| `run_command(..., sudo=True)` | 3 |
 | `_sudo_sh(...)` | **0 — the route is gone** |
-| **root total** | **2** (from 131) |
+| **root total** | **3** (from 131) |
 
 `_sudo_sh()` built `sudo bash -c '<pipeline>'` itself and passed `sudo=False`, which is why a
 search for `sudo=True` never saw it and why its 18 call sites went uncounted for half this work.
@@ -260,10 +260,14 @@ sequence of verbs now — `dpkg-add-arch`, `apt-add-repo` (universe **and** mult
 `apt-update`, `steamcmd-install`, then `apt-install-minimal` in chunks with a per-package retry —
 and it reports the batch's real result, which the caller now surfaces.
 
-**Two `sudo=True` sites remain.** One is the Tailscale installer on a remote host, named below:
-it runs Tailscale's downloaded install script as root, and no verb can narrow that. The other is
+**Three `sudo=True` sites remain.** One is the Tailscale installer on a remote host, named below:
+it runs Tailscale's downloaded install script as root, and no verb can narrow that. Another is
 the remote form of the LinuxGSM discovery scan — a fixed script whose only inputs are file names on
-that host; on the panel's own host the same scan is the `lgsm-discover` verb. The bootstrap's
+that host; on the panel's own host the same scan is the `lgsm-discover` verb. The third is the
+reboot's escalation probe on a remote host: it runs the fixed command `true` as root, only to learn
+whether the reboot that follows can escalate, and nothing from a request reaches it. (Earlier
+revisions said two: the test that counts them read a hand-kept list of files that had no entry for
+the reboot code; it now reads every module.) The bootstrap's
 Node.js step was a third until it became the `nodesource-setup` verb (below). Earlier revisions of
 this paragraph counted four and misdescribed two of them: the per-server metrics probe no longer
 escalates at all, and the dependency installer they named as the fourth is the verb sequence

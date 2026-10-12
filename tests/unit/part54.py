@@ -575,7 +575,7 @@ _cpp54 = {"groups": [], "deleted": []}
 
 
 def _cpp54_status(remote):
-    return {"installed": True, "groups": list(_cpp54["groups"])}
+    return {"installed": True, "enabled": True, "groups": list(_cpp54["groups"])}
 
 
 def _cpp54_delete(remote, n, force=False, expect_key=None):
@@ -598,6 +598,7 @@ with _patched():
     _patch(_rv54, "get_host_remote", lambda rid: NS(id=rid, is_local=True, name="panel"))
     _patch(_rv54, "load_config", lambda: {"tailscale_setup_done": True, "port": 5000})
     _patch(_rv54, "remote_ufw_status", _cpp54_status)
+    _patch(_rv54._fw_rules, "remote_ufw_default_allows_in", lambda remote: False)
     _patch(_rv54, "remote_ufw_delete_rule", _cpp54_delete)
     _patch(_rv54, "log_action", lambda *a, **k: None)
     for _funnel54 in (True, False):

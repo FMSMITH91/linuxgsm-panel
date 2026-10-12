@@ -1483,17 +1483,23 @@ _CR_REACHED = "REAL crontab reached:"
 # PATH too, as reboot41 does for the power commands, and a PATH reassigned in the pipeline is
 # refused as text. The stand-ins name the marker file literally, not through $CR_MARK, so one
 # reached with the environment emptied (`exec -c crontab`, `env -i …`) still records itself.
+# Review 1011e: `command -p crontab` searches bash's built-in default PATH (/bin:/usr/bin), not
+# $PATH, and reached the real binary unreported — refused as text, like a PATH= of its own. And
+# runuser (a login shell resets PATH), systemd-run (the unit gets systemd's PATH), busybox (its
+# own applet), setpriv and nsenter are escalation or exec wrappers like sudo: stood in for too.
 _CR_MARK = os.path.join(_cr_sb, "crontab-reached")
 _CR_SHADOW = 'crontab() { echo "$*" >> "$CR_MARK"; return 97; }; '
 _CR_BIN = os.path.join(_cr_sb, "bin")
 os.makedirs(_CR_BIN, exist_ok=True)
-for _cr_name in ("crontab", "sudo", "doas", "su", "env", "run0", "pkexec"):
+for _cr_name in ("crontab", "sudo", "doas", "su", "env", "run0", "pkexec", "runuser", "systemd-run",
+                 "busybox", "setpriv", "nsenter"):
     with open(os.path.join(_CR_BIN, _cr_name), "w", encoding="utf-8") as _cr_fh:
         _cr_fh.write('#!/bin/sh\necho "%s $*" >> %s\nexit 97\n'
                      % (_cr_name, _cr_shlex.quote(_CR_MARK)))
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this part runs itself
     os.chmod(os.path.join(_CR_BIN, _cr_name), 0o700)  # nosec B103 - a test stand-in in a private temp dir
-_CR_BY_PATH = re.compile(r"/(?:crontab|sudo|doas|su|env|run0|pkexec)(?![\w.-])|\bPATH=")
+_CR_BY_PATH = re.compile(r"/(?:crontab|sudo|doas|su|env|run0|pkexec|runuser|systemd-run|busybox|setpriv"
+                         r"|nsenter)(?![\w.-])|\bPATH=|\bcommand\s+(?:-\w+\s+)*-\w*p\b")
 
 
 def _cr_drive(fn, *a, **kw):
@@ -1578,10 +1584,16 @@ for _cr_form in ('E2=$(crontab -l 2>&1) || true', 'crontab -l 2>/dev/null; true'
                  'env -i PATH=/usr/bin:/bin crontab -l >/dev/null; true',
                  'PATH=/usr/bin:/bin command crontab -l >/dev/null; true',
                  'sudo -n crontab -l >/dev/null; true', '(exec -c crontab -l >/dev/null); true',
-                 'E2=$(sudo -n -u root crontab -l 2>&1) || true'):
+                 'E2=$(sudo -n -u root crontab -l 2>&1) || true',
+                 'command -p crontab -l >/dev/null; true', 'command -p sudo -n crontab -l; true',
+                 'command -V -p crontab >/dev/null; true',
+                 'runuser -u root -- crontab -l >/dev/null; true',
+                 'systemd-run --wait --pipe crontab -l; true', 'busybox crontab -l; true',
+                 'setpriv --reuid=0 crontab -l; true', 'nsenter -t 1 -m crontab -l; true'):
     _cr_ctl[_cr_form] = _cr_guarded_run(_cr_form)
 check("cron drive: a leftover crontab call is refused however it is written (captured, discarded, "
-      "command/exec/env, by path, sudo, env -i, its own PATH)",
+      "command/exec/env, by path, sudo, env -i, its own PATH, command -p, runuser and the other "
+      "exec wrappers)",
       all(isinstance(v, str) for v in _cr_ctl.values()),
       repr({k: v for k, v in _cr_ctl.items() if not isinstance(v, str)}))
 _cr_ok = _cr_guarded_run('echo fine')
