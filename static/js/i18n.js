@@ -38,8 +38,8 @@ window.tfHtml = function(s, vals){ return i18nFill(i18nEsc(window.t(s)), vals, t
 // its {slots} into text nodes, each value's element put where the translation puts it. As nodes, so
 // nothing goes through innerHTML; a string value is a text node, a slot with no value stays as written.
 window.tfNodes = function(s, vals){
-  var out = [], text = window.t(s), re = /\{(\w+)\}/g, last = 0, m;
-  while ((m = re.exec(text)) !== null) {
+  var out = [], text = window.t(s), re = /\{(\w+)\}/g, last = 0;
+  for (var m = re.exec(text); m !== null; m = re.exec(text)) {
     if (!vals || !Object.prototype.hasOwnProperty.call(vals, m[1])) continue;
     if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
     var v = vals[m[1]];
