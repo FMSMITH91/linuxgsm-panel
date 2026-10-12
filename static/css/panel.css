@@ -972,11 +972,15 @@
          (381px); an unbroken 41-char server name pushed /server/N to 487px. So the label and the name
          may each take their own line, and the name may break anywhere when it still does not fit.
          Nothing changes where the heading already fits on one line. */
-      flex-wrap: wrap;
       overflow-wrap: anywhere;
     }
     .page-title i { color: var(--text-muted); }
     .page-title > * { min-width: 0; }
+
+    /* Wrapping only where the heading carries a name. On every heading, a translated title too long
+       for one line (es/fr "Activar la autenticación de dos factores") moved whole to a second flex
+       line and left its icon alone on the first; without the wrap it breaks beside the icon. */
+    .page-title:has(> [data-no-i18n]) { flex-wrap: wrap; }
 
     code {
       font-size: .85rem;
@@ -1139,12 +1143,13 @@
       }
       .table-responsive .table td.col-actions .btn { margin: 1px; }
 
-      /* The second column is which server the row IS, and the table's auto layout gives it
+      /* The Server column is which server the row IS, and the table's auto layout gives it
          whatever is left — 62px, measured, which wraps "CS2 Public" to two lines. Unpinning the
          Actions column frees 80px but the algorithm does not hand it here on its own, so the
-         identity column gets a floor. 120px fits the name and its short_name underneath. */
-      .table-responsive .table.dash-srv-table thead th:nth-child(2),
-      .table-responsive .table.dash-srv-table tbody td:nth-child(2) { min-width: 120px; }
+         identity column gets a floor. 120px fits the name and its short_name underneath. By its
+         class, not as the second column: a viewer with no start/stop/restart/update has no
+         checkbox column, and :nth-child(2) put the floor on the Type column, hidden on a phone. */
+      .table-responsive .table.dash-srv-table .dash-col-name { min-width: 120px; }
 
       /* ...and ONLY that table. Written as `.table-responsive .table`, the floor reached every
          wrapped table on every page, whatever its second column held: the backups table's Type

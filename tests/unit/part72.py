@@ -321,3 +321,32 @@ if _out72 is not None:
           _out72.get("es") == _ES72[_TPL72].replace("{host}", _ES72["the panel host"])
           and _out72.get("en") == _TPL72.replace("{host}", "the panel host")
           and _out72.get("fr") == _FR72[_TPL72].replace("{host}", _FR72["the panel host"]), repr(_out72))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 5. Phone layouts (measured at 375px in a browser; held here by their rules)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+import re as _re72  # noqa: E402
+
+_CSS72 = _re72.sub(r"/\*.*?\*/", "", _read72(_root, "static", "css", "panel.css"), flags=_re72.S)
+_DASH72 = _read72(_root, "templates", "dashboard.html")
+# A viewer with no start/stop/restart/update has no checkbox column: :nth-child(2) was Type.
+check("375px: the dashboard's server-name floor is on the Server column by class, not by position "
+      "(no checkbox column for a view-only viewer moved it onto the hidden Type column)",
+      _re72.search(r"dash-srv-table[^{]*:nth-child", _CSS72) is None
+      and _re72.search(r"\.dash-srv-table\s+\.dash-col-name\s*\{[^}]*min-width:\s*120px", _CSS72) is not None
+      and _re72.search(r'<th class="[^"]*\bdash-col-name\b[^"]*" data-sortkey="name"', _DASH72) is not None
+      and _re72.search(r'\{% endif %\}\s*<td class="dash-col-name">', _DASH72) is not None,
+      "the name column's floor or its class is missing")
+_ptbase72 = _re72.search(r"(?<![\w-])\.page-title\s*\{([^}]*)\}", _CSS72)
+check("375px: a page heading wraps its flex row only when it carries a name (a long translated title "
+      "kept its icon beside it)",
+      _ptbase72 is not None and "flex-wrap" not in _ptbase72.group(1)
+      and _re72.search(r"\.page-title:has\(>\s*\[data-no-i18n\]\)\s*\{\s*flex-wrap:\s*wrap", _CSS72) is not None,
+      _ptbase72.group(1).strip() if _ptbase72 else "no .page-title rule")
+_fw72 = _read72(_root, "templates", "remote_firewall.html")
+_lim72 = _fw72[_fw72.index('id="limit-port"') - 400:_fw72.index('data-action="unlimitPort"')]
+check("375px: the rate-limit row gives its port the whole row below 576px (the × ran past the card "
+      "in French and Spanish)",
+      'class="col-12 col-sm-6"' in _lim72 and 'class="col-6 col-sm-3"' in _lim72
+      and 'class="col-6 col-sm-3 d-flex gap-1"' in _lim72, _lim72[-300:])

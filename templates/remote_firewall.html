@@ -134,17 +134,20 @@
           6 connections in 30 seconds. Right for anything someone logs into (SSH, RCON); wrong for
           gameplay traffic, where that is a quiet evening.</p>
         <div class="row g-2">
-          <div class="col-6">
+          {# Below 576px the port takes the whole row, as the Restrict row's source does: at
+             6/3/3 the button pair's column was 80px, and the × ran 9px past the card's edge in
+             French and Spanish ("Limiter", "Limitar"). #}
+          <div class="col-12 col-sm-6">
             <input type="text" id="limit-port" class="form-control form-control-sm"
                    placeholder="Port" aria-label="Port">
           </div>
-          <div class="col-3">
+          <div class="col-6 col-sm-3">
             <select id="limit-proto" class="form-select form-select-sm" aria-label="Protocol">
               <option value="tcp" selected>TCP</option>
               <option value="udp">UDP</option>
             </select>
           </div>
-          <div class="col-3 d-flex gap-1">
+          <div class="col-6 col-sm-3 d-flex gap-1">
             <button class="btn btn-warning btn-sm flex-grow-1" data-action="limitPort">Limit</button>
             <button class="btn btn-outline-secondary btn-sm" data-action="unlimitPort"
                     title="Remove the rate limit">

@@ -761,12 +761,16 @@ def _top_rules_r16u(pattern):
 
 _pt_r16u = _top_rules_r16u(r"(?<![\w-])\.page-title\s*\{([^}]*)\}")
 _ptk_r16u = _top_rules_r16u(r"\.page-title\s*>\s*\*\s*\{([^}]*)\}")
+# The wrap is scoped to a heading that carries a name (review 1012b, part72): on every heading it
+# left a long translated title's icon alone on its own line.
+_ptn_r16u = _top_rules_r16u(r"\.page-title:has\(>\s*\[data-no-i18n\]\)\s*\{([^}]*)\}")
 check("375px: a page heading wraps its label and name onto separate lines and breaks a long name "
       "inside the word (flex-wrap:wrap, overflow-wrap:anywhere, items min-width:0)",
-      _re_r16u.search(r"flex-wrap:\s*wrap", _pt_r16u) is not None
+      _re_r16u.search(r"flex-wrap:\s*wrap", _ptn_r16u) is not None
       and _re_r16u.search(r"overflow-wrap:\s*anywhere", _pt_r16u) is not None
       and _re_r16u.search(r"min-width:\s*0", _ptk_r16u) is not None,
-      "page-title: %r / children: %r" % (_pt_r16u.strip(), _ptk_r16u.strip()))
+      "page-title: %r / with a name: %r / children: %r" % (_pt_r16u.strip(), _ptn_r16u.strip(),
+                                                           _ptk_r16u.strip()))
 for _tpl_r16u in ("remote_firewall.html", "remote_manage.html"):
     _h1_r16u = _re_r16u.search(r'<h1 class="page-title[^"]*">(.*?)</h1>',
                                _read69(_root, "templates", _tpl_r16u), _re_r16u.S)
