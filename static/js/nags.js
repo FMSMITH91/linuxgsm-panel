@@ -360,10 +360,8 @@ window.rebootNagRender = function(el, hostId, label, d){
     text.appendChild(document.createTextNode(' — '));
     // One whole sentence with the host as a value: the host is its subject, and split off it the
     // predicate was a fragment no language could place the name around.
-    var why = _rbEl('span');
-    why.innerHTML = tfHtml('{host} needs to reboot to finish applying system updates.',
-      {host: {html: _rbHost(label).outerHTML}});  // nosemgrep - _rbHost's text is set by textContent: escaped
-    text.appendChild(why);
+    tfNodes('{host} needs to reboot to finish applying system updates.', {host: _rbHost(label)})
+      .forEach(function(node){ text.appendChild(node); });
     if (d.packages && d.packages.length) {
       var pk = _rbEl('span', 'text-secondary', ' (' + d.packages.slice(0,6).join(', ') + (d.packages.length>6?', …':'') + ')');
       pk.style.fontSize = '.8rem'; pk.setAttribute('data-no-i18n', '');

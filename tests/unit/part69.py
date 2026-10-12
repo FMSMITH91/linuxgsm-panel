@@ -472,14 +472,15 @@ _FAKEDOM69 = (
     "El.prototype.querySelector = function(){ return null; }; El.prototype.querySelectorAll = function(){ return []; };\n"
     "Object.defineProperty(El.prototype, 'innerHTML', {set(v){ this._html = v; this.children = []; },\n"
     "  get(){ return this._html; }});\n"
-    "Object.defineProperty(El.prototype, 'outerHTML', {get(){ var a = Object.keys(this.attrs).map(k => ' ' + k\n"
-    "  + (this.attrs[k] ? '=\"' + this.attrs[k] + '\"' : '')).join(''); var tg = this.tagName.toLowerCase();\n"
-    "  return '<' + tg + a + '>' + escapeHtml(this.textContent) + '</' + tg + '>'; }});\n"
     "function Txt(s){ this.text = s; }\n"
     "global.document.createElement = t => new El(t); global.document.createTextNode = s => new Txt(s);\n"
     "global.document.body = new El('body');\n"
-    "function said(e){ if (e instanceof Txt) return e.text; if (e._html !== null) return e._html;\n"
-    "  return e.children.length ? e.children.map(said).join('') : e.textContent; }\n")
+    # What the page would hold, as markup: an element's tag and attributes, text escaped.
+    "function render(e){ if (e instanceof Txt) return escapeHtml(e.text); if (e._html !== null) return e._html;\n"
+    "  var inner = e.children.length ? e.children.map(render).join('') : escapeHtml(e.textContent);\n"
+    "  var a = Object.keys(e.attrs).map(k => ' ' + k + (e.attrs[k] ? '=\"' + e.attrs[k] + '\"' : '')).join('');\n"
+    "  var tg = e.tagName.toLowerCase(); return '<' + tg + a + '>' + inner + '</' + tg + '>'; }\n"
+    "function said(e){ return e.children.map(render).join(''); }\n")
 _name69 = "players / reboot sentences in Spanish"
 _SA69, _NG69 = _read69(_JS69, "server_actions.js"), _read69(_JS69, "nags.js")
 _prog69 = (_es69("{n} player is connected to {name}.", "{n} players are connected to {name}.",

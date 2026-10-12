@@ -444,7 +444,12 @@ _out56 = _node56(_name56, _DOM56 + (
     + (_cut47(_SA56, "function _r12c_el(") if "function _r12c_el(" in _SA56 else "") + "\n"
     + _cut47(_SA56, "function actionPlayersDialog(") + "\n"
     + _cut47(_RMB56, "function fbPlayersDialog(") + "\n"
+    # A sentence with its count and name in it is one translated template, cut at its {slots}
+    # (i18n.js tfNodes): its text nodes are the pieces of a translated VALUE between the slots.
+    + _cut47(_read56(_JS56, "i18n.js"), "window.tfNodes = function(") + "\n"
     "const vals = new Set(Object.values(ES)); const out = {english: [], names: []};\n"
+    "for (const v of Object.values(ES)) v.split(/\\{\\w+\\}/).forEach(p => {\n"
+    "  p = p.replace(/\\s+/g, ' ').trim(); if (p) vals.add(p); });\n"
     "for (const [kind, n] of [['stop', 1], ['stop', 3], ['restart', 1], ['restart', 3],\n"
     "                         ['backup', 1], ['backup', 4]]) {\n"
     "  document.body.children = [];\n"

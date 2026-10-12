@@ -365,13 +365,11 @@ function fbPlayersDialog(busy){
   var body=el('div','card-body');
   var who=el('p','mb-2');
   // One whole sentence per count, the counts and the list as values — see server_actions.js's.
-  var esc=window.escapeHtml;
   var sentence = total===1 ? (busy.length===1 ? '{n} player is connected to {count} server: {list}.' : '{n} player is connected to {count} servers: {list}.')
                            : (busy.length===1 ? '{n} players are connected to {count} server: {list}.' : '{n} players are connected to {count} servers: {list}.');
-  who.innerHTML = tfHtml(sentence, {
-    n: {html: '<strong data-no-i18n>' + esc(String(total)) + '</strong>'},
-    count: {html: '<strong data-no-i18n>' + esc(String(busy.length)) + '</strong>'},
-    list: {html: '<span data-no-i18n>' + esc(busy.map(function(b){ return b.name+' ('+b.players+')'; }).join(', ')) + '</span>'}});  // nosemgrep - every value escaped
+  tfNodes(sentence, {n: data('strong', String(total)), count: data('strong', String(busy.length)),
+                     list: data('span', busy.map(function(b){ return b.name+' ('+b.players+')'; }).join(', '))})
+    .forEach(function(node){ who.appendChild(node); });
   body.appendChild(who);
   body.appendChild(el('p','small text-secondary mb-3', _discT('A backup briefly stops each server — this is about the busy ones.')));
   var btns=el('div','d-flex flex-column gap-2');

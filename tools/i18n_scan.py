@@ -519,7 +519,7 @@ def is_js_ui_word(text, before):
 # A literal handed to t() (or a file's own wrapper for it, _discT) is a string the code itself says
 # a person reads, whatever its shape: lower-case ("player is connected to"), one word, or a branch
 # of a ternary inside the call. Matched as "an open t( call with no unbalanced bracket since".
-_JS_T_CALL = re.compile(r"""\b(?:t|_discT|tf|tfHtml|tfn)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
+_JS_T_CALL = re.compile(r"""\b(?:t|_discT|tf|tfHtml|tfn|tfNodes)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
 
 
 _R15C_QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
