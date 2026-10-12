@@ -186,7 +186,7 @@ try:
     with _patched():
         _patch(_ar67, "_maybe_alert_admin_bruteforce", _bf67)
         _patch(_bl67, "refresh_soon", lambda delay=3.0: None)
-        _p9.test_client().post("/login", data={"username": _LONG67, "password": "wrong"},
+        _p9.test_client().post("/login", data={"username": _LONG67, "password": _os67.urandom(8).hex()},
                                environ_base={"REMOTE_ADDR": _IP67})
     check("login: a failed sign-in as a superadmin whose name is 65-80 characters asks the attack alert "
           "about that account (the name was cut to 64, matched no account, and no alert ever fired)",
@@ -538,7 +538,7 @@ import subprocess as _sp67  # noqa: E402  # nosec B404 - runs bash on the panel'
 
 
 def _tmux_cmds67(argv):
-    """tmux's own reading of its argv (cmd-parse.y cmd_parse_from_arguments): [[args of each command]].
+    """How tmux reads its argv (cmd-parse.y cmd_parse_from_arguments): [[args of each command]].
 
     An argument ending in ";" ends the command and loses the ";", unless a backslash precedes it,
     which becomes the ";".
@@ -632,7 +632,7 @@ import panel.routes.panel_backup as _pbr67  # noqa: E402,F401  (the route reads 
 _rst67 = {}
 try:
     _as67("es")
-    for _k67, _m67 in (("need", _bk67.NEEDS_PASSPHRASE), ("wrong", _bk67.WRONG_PASSPHRASE),
+    for _k67, _m67 in (("need", _bk67.RESTORE_ASKS_KEY), ("wrong", _bk67.RESTORE_BAD_KEY),
                        ("safety", _i18n67.Sentence(_bk67.SAFETY_COPY_FAILED, why=_bk67._R16A_BACKUP_FAILED)),
                        ("other", "No such backup.")):
         with _patched():

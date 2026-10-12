@@ -358,8 +358,10 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
 
 
 def _r15a_src_key(text):
-    """A rule's source as ufw itself stores it, so a delete's source and a listed rule compare the
-    way ufw's own match does (ufw.util.normalize_address + UFWRule._fix_anywhere):
+    """A rule's source as ufw itself stores it.
+
+    So a delete's source and a listed rule compare the way ufw's own match does
+    (ufw.util.normalize_address + UFWRule._fix_anywhere):
 
     - any /0 network on the unspecified address, and the Firewall page's "Any address", is "any":
       `ufw delete allow from 0.0.0.0/0 ...` (or ::/0) removes that family's half of an
@@ -979,9 +981,8 @@ def _left_on_purpose(status, comment, removable, protected):
     kept = [g for g in status.get("groups", [])
             if g.get("comment") == comment and not removable(g)]
     on_host = [g for g in kept if _is_panel_allow(g) and _port_of(g) in protected]
-    not_ours = [g for g in kept if g not in on_host]
-    return (([i18n.Sentence(_R16A_NOT_OURS, rules=_naming(not_ours))] if not_ours else [])
-            + ([i18n.Sentence(_R16A_ON_HOST_PORT, rules=_naming(on_host))] if on_host else []))
+    return (_naming(_R16A_NOT_OURS, [g for g in kept if g not in on_host])
+            + _naming(_R16A_ON_HOST_PORT, on_host))
 
 
 def _rule_port_words(g):
@@ -1059,9 +1060,17 @@ _R16A_NOT_OURS = "Left in place, as the panel does not make rules like these: {r
 _R16A_ON_HOST_PORT = "Left in place on SSH's or the panel's own port: {rules}."
 
 
-def _naming(groups):
-    """Each rule of `groups`, labelled, as one list for a {rules} slot."""
-    return ", ".join(map(_rule_label, groups))
+def _naming(template, groups):
+    """[`template` (one of the two above) naming each rule of `groups`], or [] when there are none.
+
+    The template is one of two module constants, so tools/i18n_scan holds both to the catalogs
+    (_R16A_NAMING_KEYS hands them to Sentence by name).
+    """
+    return [i18n.Sentence(template, rules=", ".join(map(_rule_label, groups)))] if groups else []
+
+
+# For the catalog gate, which reads a literal or a module constant handed to Sentence().
+_R16A_NAMING_KEYS = (i18n.Sentence(_R16A_NOT_OURS), i18n.Sentence(_R16A_ON_HOST_PORT))
 
 
 def _with_notes(message, notes):

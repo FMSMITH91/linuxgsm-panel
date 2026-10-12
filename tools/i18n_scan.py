@@ -1301,13 +1301,18 @@ def _py_return_keys(name, value, assigned, builders):
     item, never split into its tuples, so four Test-button answers built with % were not seen.
     """
     if isinstance(value, (ast.IfExp, ast.BoolOp)):
-        return [k for v in _py_operands(value) for k in _py_return_keys(name, v, assigned, builders)]
+        return _py_branch_keys(name, value, assigned, builders)
     items = list(enumerate(value.elts)) if isinstance(value, ast.Tuple) else [(None, value)]
     keys = [name if i is None else (name, i) for i, item in items
             if _py_fed_built(item, assigned, builders) is not None]
     # `return other(…)`: whatever items of other's tuple are built, this one's are too.
     callee = _py_call_name(value)
     return keys + [(name, k[1]) for k in builders if isinstance(k, tuple) and k[0] == callee]
+
+
+def _py_branch_keys(name, value, assigned, builders):
+    """_py_return_keys over each branch of `a if c else b` / `a or b`."""
+    return [k for v in _py_operands(value) for k in _py_return_keys(name, v, assigned, builders)]
 
 
 def _py_builders(trees, plain=False):
@@ -1527,14 +1532,14 @@ def _py_shown_literal(text):
     return bool(_HAS_LETTER.search(text)) and not _PY_CODE.fullmatch(text)
 
 
-def _py_return_literals(value):
-    """The str literals after the first item of `return <True|False>, …` (each branch of an IfExp)."""
+def _py_return_items(value):
+    """The items after the first of `return <True|False>, …` (of each branch of an IfExp)."""
     if isinstance(value, (ast.IfExp, ast.BoolOp)):
-        return [n for v in _py_operands(value) for n in _py_return_literals(v)]
+        return [n for v in _py_operands(value) for n in _py_return_items(v)]
     if not (isinstance(value, ast.Tuple) and len(value.elts) >= 2
             and isinstance(value.elts[0], ast.Constant) and isinstance(value.elts[0].value, bool)):
         return []
-    return [n for item in value.elts[1:] for n in _py_literal_nodes(item)]
+    return list(value.elts[1:])
 
 
 def _py_literal_nodes(node):
@@ -1542,6 +1547,17 @@ def _py_literal_nodes(node):
     if _py_text(node):
         return [node]
     return [n for v in _py_operands(node) if not isinstance(node, ast.BinOp) for n in _py_literal_nodes(v)]
+
+
+def _py_node_literals(n, wrappers, consts):
+    """The fixed message nodes one AST node shows: its sink values, and its (ok, message) return."""
+    values = _py_sink_values(n, wrappers)
+    if isinstance(n, ast.Return) and n.value is not None:
+        values = values + _py_return_items(n.value)
+    nodes = [lit for v in values for lit in _py_literal_nodes(v)]
+    nodes += [ast.Constant(value=consts[v.id], lineno=v.lineno, end_lineno=v.lineno)
+              for v in values if isinstance(v, ast.Name) and v.id in consts]
+    return nodes
 
 
 def shown_literals_py(root=ROOT):
@@ -1553,15 +1569,9 @@ def shown_literals_py(root=ROOT):
         if rel.replace(os.sep, "/").startswith(_PY_LITERAL_SKIP_DIRS):
             continue
         consts = _py_module_consts(tree)
-        for n in ast.walk(tree):
-            nodes = [lit for v in _py_sink_values(n, wrappers) for lit in _py_literal_nodes(v)]
-            nodes += [ast.Constant(value=consts[v.id], lineno=v.lineno, end_lineno=v.lineno)
-                      for v in _py_sink_values(n, wrappers) if isinstance(v, ast.Name) and v.id in consts]
-            if isinstance(n, ast.Return) and n.value is not None:
-                nodes += _py_return_literals(n.value)
-            for lit in nodes:
-                if _py_shown_literal(lit.value) and not _py_ignored(lines, lit):
-                    found.setdefault(lit.value, "%s:%d" % (rel, lit.lineno))
+        for lit in (lit for n in ast.walk(tree) for lit in _py_node_literals(n, wrappers, consts)):
+            if _py_shown_literal(lit.value) and not _py_ignored(lines, lit):
+                found.setdefault(lit.value, "%s:%d" % (rel, lit.lineno))
     return found
 
 
