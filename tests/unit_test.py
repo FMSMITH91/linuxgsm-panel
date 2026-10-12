@@ -81,7 +81,12 @@ def _r15d_remove_made_tmp():
     """Remove what is left of every recorded temp path; the paths that would not go."""
     for _p in _r15d_made_tmp:
         if os.path.isdir(_p) and not os.path.islink(_p):
-            # A check that made a directory unwritable (to test a refusal) would stop rmtree.
+            # A check that made a directory unwritable (to test a refusal) would stop rmtree. That
+            # includes the recorded directory itself: part06's TMPDIR stand-in is mode 0o200, which
+            # os.walk cannot list, so it never reaches the loop below.
+            # 0o700 is owner-only, on the suite's own temp dir, so rmtree can enter it.
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+            os.chmod(_p, 0o700)
             for _dp, _dns, _fns in os.walk(_p):
                 for _d in _dns:
                     if not os.path.islink(os.path.join(_dp, _d)):
