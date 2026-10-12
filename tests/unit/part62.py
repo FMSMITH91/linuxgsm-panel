@@ -168,8 +168,11 @@ def _plen62(name):
 
 
 def _ioq3_62(rows):
-    """ioquake3 / iortcw: "%2i ", "%5i ", "CON "/"ZMB "/"%4i ", the name, at least one blank up to
-    16 visible characters (do-while), "^7%s" the address, at least one blank up to 39, " %5i"."""
+    """An ioquake3 / iortcw status reply.
+
+    "%2i ", "%5i ", "CON "/"ZMB "/"%4i ", the name, at least one blank up to 16 visible characters
+    (do-while), "^7%s" the address, at least one blank up to 39, " %5i".
+    """
     out = ("map: q3dm17\ncl score ping name            address                                 rate \n"
            "-- ----- ---- --------------- --------------------------------------- -----\n")
     for i, sc, st, nm, ad, rt, _lm, _qp in rows:
@@ -180,7 +183,7 @@ def _ioq3_62(rows):
 
 
 def _openjk62(rows):
-    """OpenJK: "%2i %5i %s %-15.15s ^7%39s %5i", the state "CON "/"ZMB " or "%4i"."""
+    """An OpenJK status reply: "%2i %5i %s %-15.15s ^7%39s %5i", the state "CON "/"ZMB " or "%4i"."""
     out = ("hostname: p62^7\nplayers : 5 humans, 1 bots (32 max)\n"
            "cl score ping name            address                                 rate \n"
            "-- ----- ---- --------------- --------------------------------------- -----\n")
@@ -191,8 +194,11 @@ def _openjk62(rows):
 
 
 def _q3_132_62(rows):
-    """Quake III 1.32: "%3i ", "%5i ", "CNCT "/"ZMBI "/"%4i ", the name, "^7", blanks up to 16,
-    "%7i " lastmsg, the address, blanks up to 22, "%5i" qport, " %5i" rate."""
+    """A Quake III 1.32 status reply.
+
+    "%3i ", "%5i ", "CNCT "/"ZMBI "/"%4i ", the name, "^7", blanks up to 16, "%7i " lastmsg, the
+    address, blanks up to 22, "%5i" qport, " %5i" rate.
+    """
     out = ("map: q3dm17\nnum score ping name            lastmsg address               qport rate\n"
            "--- ----- ---- --------------- ------- --------------------- ----- -----\n")
     for i, sc, st, nm, ad, rt, lm, qp in rows:
@@ -203,8 +209,11 @@ def _q3_132_62(rows):
 
 
 def _etl62(rows):
-    """ET:Legacy: "%3i ", "%5i ", "CNCT "/"ZMBI "/"%4i ", then "%-*s %7i %-21s %5i %5i %i" with the
-    name's width sizeof(name) (36) + its colour characters + 1."""
+    """An ET:Legacy status reply.
+
+    "%3i ", "%5i ", "CNCT "/"ZMBI "/"%4i ", then "%-*s %7i %-21s %5i %5i %i", the name's width
+    sizeof(name) (36) + its colour characters + 1.
+    """
     out = ("map                   : oasis\n\n"
            "num score ping name                                lastmsg address               qport rate  "
            "lastConnectTime\n"
