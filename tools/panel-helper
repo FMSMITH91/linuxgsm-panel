@@ -1126,7 +1126,7 @@ def _r13b_group_holds_root(group):
     try:
         root_gid = pwd.getpwnam("root").pw_gid
         if group.startswith("#"):
-            if not group[1:].isdigit():
+            if not group[1:].isdecimal():
                 return True
             gid = int(group[1:])
             if gid == root_gid:
@@ -1178,7 +1178,7 @@ def _r11b_item_names_caller(item, caller, names, uid):
         return True
     if item.startswith("%") and not item.startswith(("%:", "%#")) and item[1:] in names:
         return True
-    return item.startswith("#") and item[1:].isdigit() and int(item[1:]) == uid
+    return item.startswith("#") and item[1:].isdecimal() and int(item[1:]) == uid
 
 
 def _rule_is_nopasswd_root_all(rest):
@@ -1520,7 +1520,7 @@ def _login_defs():
         with open(LOGIN_DEFS, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 words = line.split()
-                if len(words) >= 2 and words[0] in out and words[1].isdigit():
+                if len(words) >= 2 and words[0] in out and words[1].isdecimal():
                     out[words[0]] = int(words[1])
     except OSError:
         pass                          # no login.defs: useradd itself falls back to the same values
@@ -1987,13 +1987,13 @@ def _sudoers_matching_rules(lines, user, names, uid, gids):
         if item == "ALL" or item == user:
             return True
         if item.startswith("%#"):
-            return item[2:].isdigit() and int(item[2:]) in gids
+            return item[2:].isdecimal() and int(item[2:]) in gids
         if item.startswith("%:") or item.startswith("+") or '"' in item or "\\" in item:
             return True                  # a non-Unix group, a netgroup, a quoted name: unknown
         if item.startswith("%"):
             return item[1:] in names
         if item.startswith("#"):
-            return item[1:].isdigit() and uid is not None and int(item[1:]) == uid
+            return item[1:].isdecimal() and uid is not None and int(item[1:]) == uid
         if _SUDOERS_ALIAS_NAME_RE.fullmatch(item):
             if item not in aliases:
                 return True              # an alias defined nowhere this can see
@@ -5775,7 +5775,7 @@ def descendants(root):
     """
     kids = {}
     for name in os.listdir("/proc"):
-        if name.isdigit():
+        if name.isdecimal():
             ppid = _ppid_of(int(name))
             if ppid is not None:
                 kids.setdefault(ppid, []).append(int(name))

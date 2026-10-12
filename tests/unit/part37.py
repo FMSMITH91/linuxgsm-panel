@@ -1029,25 +1029,35 @@ def _f7_imports():
 
 
 def _is_removal_try37(node):
-    """Is node `try: <x>.unlink()` or `try: os.remove(...)`, alone in its body?"""
-    if not (isinstance(node, _ast37.Try) and len(node.body) == 1):
+    """Is node a try whose body runs `<x>.unlink()` or `os.remove(...)` as one of its statements?"""
+    # Any statement of the body, not only a body of one (review 1011d): `try: db.dispose();
+    # p.unlink()` swallowed the same failed delete.
+    if not isinstance(node, _ast37.Try):
         return False
-    call = getattr(node.body[0], "value", None)
-    return isinstance(call, _ast37.Call) and _callee37(call.func).endswith((".unlink", ".remove"))
+    return any(isinstance(_st, _ast37.Expr) and isinstance(_st.value, _ast37.Call)
+               and _callee37(_st.value.func).endswith((".unlink", ".remove")) for _st in node.body)
+
+
+def _does_nothing37(stmt):
+    """`pass`, `...` (or any bare constant), `continue`, `break`, or a `return` of nothing."""
+    return (isinstance(stmt, (_ast37.Pass, _ast37.Continue, _ast37.Break))
+            or (isinstance(stmt, _ast37.Return) and stmt.value is None)
+            or (isinstance(stmt, _ast37.Expr) and isinstance(stmt.value, _ast37.Constant)))
 
 
 _WIDE37 = ("OSError", "IOError", "PermissionError", "Exception", "BaseException")
 
 
 def _silent_oserror37(handler):
-    """Does this handler catch a failed delete (OSError, or wider) and do nothing but `pass`?"""
+    """Does this handler catch a failed delete (OSError, or wider) and do nothing with it?"""
     # Wider than OSError too: `except Exception: pass` (or a bare except) swallows a delete that
     # failed for a permission or a busy file exactly as `except OSError: pass` did. Only
     # FileNotFoundError alone stays quiet — the file being gone already is the delete's goal.
     if handler.type is not None and not _re37.search(
             r"\b(?:%s)\b" % "|".join(_WIDE37), _ast37.unparse(handler.type)):
         return False
-    return all(isinstance(b, _ast37.Pass) for b in handler.body)
+    # Doing nothing is not only `pass`: `...`, `continue` and a bare `return` swallow it the same.
+    return all(_does_nothing37(b) for b in handler.body)
 
 
 def _swallowed_removals37(tree):
@@ -1064,11 +1074,14 @@ def _f7_cleanups():
         bad += ["%s:%d" % (_rel37(f), ln) for ln in lines]
     probes = ["try:\n    p.unlink()\nexcept %s:\n    pass\n" % h
               for h in ("OSError", "Exception", "(ValueError, OSError)")] + [
-        "try:\n    p.unlink()\nexcept:\n    pass\n"]
+        "try:\n    p.unlink()\nexcept:\n    pass\n",
+        "try:\n    p.unlink()\nexcept OSError:\n    ...\n",
+        "try:\n    db.dispose()\n    os.remove(p)\nexcept OSError:\n    pass\n",
+        "def f():\n    try:\n        p.unlink()\n    except OSError:\n        return\n"]
     gone = "try:\n    p.unlink()\nexcept FileNotFoundError:\n    pass\n"
     check("tests: no cleanup swallows a failed delete (a panel.db it leaves makes the next run of "
           "every DB-owning suite SKIP and exit 0, with nothing said) — OSError, Exception or bare",
-          not bad and all(_swallowed_removals37(_ast37.parse(p_)) == [1] for p_ in probes)
+          not bad and all(len(_swallowed_removals37(_ast37.parse(p_))) == 1 for p_ in probes)
           and _swallowed_removals37(_ast37.parse(gone)) == [], "; ".join(bad))
 
 

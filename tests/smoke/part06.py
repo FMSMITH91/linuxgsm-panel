@@ -3214,7 +3214,14 @@ try:
                                    ("/api/server/%d/daily-restart", {"enabled": True}),
                                    ("/api/server/%d/cron", {"schedule": "@daily", "command": "/bin/true"}),
                                    ("/api/server/%d/cron/run", {"raw": "@daily /bin/true"}),
-                                   ("/api/server/%d/action", {"action": "start"})):
+                                   ("/api/server/%d/action", {"action": "start"}),
+                                   # The file browser's writes build commands for the server too
+                                   # (review 1011d: #421's create-path was in no sweep).
+                                   ("/api/server/%d/create-path", {"dir": "", "name": "n.cfg",
+                                                                   "kind": "file"}),
+                                   ("/api/server/%d/rename-path", {"path": "a.cfg",
+                                                                   "new_name": "b.cfg"}),
+                                   ("/api/server/%d/delete-path", {"path": "a.cfg"})):
             _gh_r = _gh_c.post(_gh_path % _gh_id, json=_gh_body)
             _gh_status[(_gh_k, _gh_path % _gh_id)] = (_gh_r.status_code,
                                                       _gh_r.get_data(as_text=True)[:400])

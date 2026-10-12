@@ -53,7 +53,7 @@ from types import SimpleNamespace as NS
 
 from flask import Flask as _Flask34
 
-from unit.part01 import check
+from unit.part01 import check, skip
 from unit.part05 import _helper, _root
 from unit.part12 import _p9, _p9_app, _p9_supervised
 from unit.part20 import _env, _patch, _patched
@@ -127,7 +127,11 @@ def _bash34(sh, env_path=None, timeout=60):
     try:
         r = _sp34.run(["bash", "-c", sh],  # nosec B603 B607 - bash on this part's own fixtures
                       capture_output=True, text=True, timeout=timeout, env=env, check=False)
-    except _sp34.TimeoutExpired:
+    # Both classes: under the monkey-patched suite run(timeout=) raises the ORIGINAL module's
+    # TimeoutExpired (part43/part44 measure it), so a hung bash raised past this and ended part38's
+    # whole section instead of answering as a timed-out command (review 1011d).
+    except (_sp34.TimeoutExpired,
+            __import__("eventlet.patcher", fromlist=["original"]).original("subprocess").TimeoutExpired):
         return "", "Command timed out", -1
     return r.stdout.strip(), r.stderr, r.returncode
 
@@ -892,6 +896,8 @@ def _section_banwatch34():
                            (_bl34._ufw_gate, saved[5])):
             live.clear()
             live.update(snap)
+        # Cleared first, as the three above: update() alone kept a listener the section added.
+        _bl34._listeners.clear()
         _bl34._listeners.update(saved[6])
 
 
@@ -1119,6 +1125,9 @@ def _js_fn34(src, name):
     return ""
 
 
+_NO_NODE34 = []
+
+
 def _stitch_py34(have, incoming):
     """server_detail.js's _newConsoleLines, line for line, for a host with no node."""
     def same(a, b):
@@ -1137,6 +1146,11 @@ def _stitch34(have, incoming):
     """What the browser appends: server_detail.js's own _newConsoleLines, run by node when present."""
     node = _shutil34.which("node")
     if not node:
+        # The Python copy is not the page's code: said once, as a SKIP, so a host with no node
+        # never reports the JS as tested (review 1011d). CI's runners have node.
+        if not _NO_NODE34:
+            _NO_NODE34.append(1)
+            skip("console stitch: server_detail.js's own _newConsoleLines", "no node: a Python copy ran")
         return _stitch_py34(have, incoming)
     with open(os.path.join(_root, "static", "js", "server_detail.js"), encoding="utf-8") as fh:
         js = fh.read()

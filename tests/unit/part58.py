@@ -132,7 +132,10 @@ def _player_reply58():
         sent.append(k.get("mark")), ("PANE_MARK 1200 17\n", "", 0))[1])
     _p9_patch(_game58, "capture_console", lambda *a, **k: (
         since.append(k.get("since")), (replies["pane"], "", 0))[1])
-    _p9_patch(_game58, "time", NS(sleep=lambda s: None))
+    # Only sleep stood in for: game.py also reads time.time/gmtime/strftime, and a bare NS(sleep=)
+    # left in place until this part's restore would raise on any of them in a later section.
+    _p9_patch(_game58, "time", NS(sleep=lambda s: None, time=_time58.time, gmtime=_time58.gmtime,
+                                  strftime=_time58.strftime, monotonic=_time58.monotonic))
     replies["pane"] = "status\n"                          # the send landed; no reply printed yet
     slow = _game58.console_player_list(None, _USER58, "gmod", selfname="gmodserver")
     check("players: a `status` whose reply has not been printed yet reads as unknown, not as the "
@@ -468,6 +471,10 @@ def _remote_content58():
     check("remote content-scan: each home looked at as its own account, uid 0 and no-account "
           "entries skipped", 'runuser -u "$u" -- test -d "$d/$g"' in sc and '[ "$i" = 0 ]' in sc
           and "[ -d" not in sc, sc)
+    # Taken off _BIN58 again, as the timeout and tmux stand-ins are: _bash58 puts it first on PATH,
+    # and a section after this one would run `$(id -u)` against a stand-in that exits 1.
+    for _name58 in ("id", "runuser"):
+        os.remove(os.path.join(_BIN58, _name58))
 
 
 # ── A08: request flags, and the GMod content step ───────────────────────────────────────────────

@@ -291,7 +291,7 @@ def _posted_ids(field):
     """
     out = set()
     for raw in request.form.getlist(field):
-        if raw.isascii() and raw.isdigit() and len(raw) <= 19 and int(raw) <= _MAX_ROW_ID:
+        if raw.isascii() and raw.isdecimal() and len(raw) <= 19 and int(raw) <= _MAX_ROW_ID:
             out.add(int(raw))
     return out
 

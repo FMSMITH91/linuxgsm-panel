@@ -600,7 +600,7 @@ def _console_log_stat(remote, gs, log_path):
         f"stat -c '%i %s' {log_path} 2>/dev/null || echo MISSING", timeout=5,
         selfname=gs.lgsm_name)
     parts = (st_out or "").split()
-    if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+    if len(parts) != 2 or not (parts[0].isdecimal() and parts[1].isdecimal()):
         return None
     return int(parts[0]), int(parts[1])
 

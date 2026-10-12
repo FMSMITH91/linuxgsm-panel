@@ -341,15 +341,23 @@ def _rs_group(node):
     verb = node.func.attr
     if verb in _RS_OWN_GROUP:              # a writer with its own fixed group
         return "written", _RS_OWN_GROUP[verb]
-    first = node.args[0] if node.args else None
-    if verb in ("bump", "put", "snapshot") and isinstance(first, _ast24.Constant):
+    return _rs_named_group(verb, node.args[0] if node.args else None)
+
+
+def _rs_named_group(verb, first):
+    """_rs_group for a bump/put/snapshot whose group argument is `first`."""
+    if verb not in ("bump", "put", "snapshot"):
+        return None
+    if isinstance(first, _ast24.Constant):
         return ("read" if verb == "snapshot" else "written"), first.value
-    return None
+    # A group named through a variable cannot be paired by this reader: named, not dropped, or
+    # "every group written is read" holds over whatever it never saw (review 1011d).
+    return "unjudged", "%s(%s)" % (verb, _ast24.unparse(first) if first is not None else "")
 
 
 def _rs_calls():
     """{"read": {group}, "written": {group}} over panel/ and app.py, by the AST."""
-    out = {"read": set(), "written": set()}
+    out = {"read": set(), "written": set(), "unjudged": set()}
     paths = _glob24.glob(os.path.join(_REPO24, "panel", "**", "*.py"), recursive=True)
     for path in paths + [os.path.join(_REPO24, "app.py")]:
         if path.endswith(os.path.join("core", "runtime_stats.py")):
@@ -366,6 +374,9 @@ def _contract_gates():
     check("contract app.config: every PANEL_COMMIT/BOOT_* key a report module reads is assigned by "
           "app.py", keys_read and keys_read <= keys_written, repr(sorted(keys_read - keys_written)))
     rs = _rs_calls()
+    check("contract runtime_stats: every bump/put/snapshot names its group as a literal (so the "
+          "pairing below reads them all)", not rs["unjudged"] and rs["written"],
+          repr(sorted(rs["unjudged"])))
     gaps = (sorted(rs["read"] - rs["written"]), sorted(rs["written"] - rs["read"]))
     eq("contract runtime_stats: every group a section snapshots is written by some loop or hook, "
        "and every group written is read by a section", gaps, ([], []))

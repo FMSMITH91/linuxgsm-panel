@@ -85,7 +85,22 @@ def _gh_text(node):
                        for v in node.values)
     if isinstance(node, _gh_ast.BinOp) and isinstance(node.op, _gh_ast.Add):
         return _gh_text(node.left) + _gh_text(node.right)
-    return _gh_hole(node)
+    formatted = _gh_formatted_text(node)
+    return _gh_hole(node) if formatted is None else formatted
+
+
+def _gh_formatted_text(node):
+    """`"-u%s" % user` / `"--user={}".format(user)` as the literal with each conversion a hole.
+
+    Read as one hole, the flag in the literal was lost and a joined argv element was no site
+    (review 1011d). None for any other node.
+    """
+    if _gh_is_str_percent(node):
+        return _GH_PCT.sub(lambda m: "%" if m.group(2) == "%" else _GH_HOLE, node.left.value)
+    if _gh_is_str_format(node) and isinstance(node.func.value.value, str):
+        return re.sub(r"\{[^{}]*\}", _GH_HOLE,
+                      node.func.value.value.replace("{{", "(").replace("}}", ")"))
+    return None
 
 
 def _gh_trailing_text(node):
@@ -187,11 +202,21 @@ def _gh_is_user_flag(e):
             and (e.value == "--user" or re.fullmatch(r"-[A-Za-z]*u", e.value)) is not None)
 
 
-def _gh_argv_sites(n):
-    """(line, value, "argv") for each value list/tuple literal `n` puts after "sudo" ... "-u"."""
-    out, elts, seen_sudo = [], n.elts, False
+def _gh_is_sudo_word(e):
+    """Is argv element `e` the literal sudo, by name or by path (`/usr/bin/sudo`)?"""
+    return (isinstance(e, _gh_ast.Constant) and isinstance(e.value, str)
+            and (e.value == "sudo" or e.value.endswith("/sudo")))
+
+
+def _gh_argv_sites(n, elts=None):
+    """(line, value, "argv") for each value list/tuple literal `n` puts after "sudo" ... "-u".
+
+    `elts` is the whole command line `n` is part of when that is more than `n` (a `+` chain, a list
+    grown by `+=` or .extend()), so the "sudo" and the "-u" may sit in different literals.
+    """
+    out, elts, seen_sudo = [], (n.elts if elts is None else elts), False
     for j, e in enumerate(elts):
-        if isinstance(e, _gh_ast.Constant) and e.value == "sudo":
+        if _gh_is_sudo_word(e):
             seen_sudo = True
         elif (seen_sudo and _gh_is_user_flag(e)
               and j + 1 < len(elts) and not isinstance(elts[j + 1], _gh_ast.Constant)):
@@ -221,13 +246,63 @@ def _gh_node_sites(n):
     return []
 
 
+def _gh_argv_line(n, parent, grown):
+    """The elements of the whole command line list literal `n` is part of (see _gh_argv_sites).
+
+    A `+` chain of lists is one argv (`["sudo", "-n"] + ["-u", user]`, this codebase's own
+    style), read as G4 reads an ssh one; a list added to a name with `+=` or .extend() follows the
+    lists that name was given earlier in the same function (`grown`: {name: [elements]}).
+    """
+    top = n
+    while isinstance(parent.get(top), _gh_ast.BinOp) and isinstance(parent[top].op, _gh_ast.Add):
+        top = parent[top]
+    elts = [e for part in _gh_ast.walk(top) if isinstance(part, (_gh_ast.List, _gh_ast.Tuple))
+            for e in part.elts]
+    up = parent.get(top)
+    name = _gh_grown_name(up)
+    if name is not None:
+        fn = up
+        while fn is not None and not isinstance(fn, (_gh_ast.FunctionDef, _gh_ast.AsyncFunctionDef)):
+            fn = parent.get(fn)
+        elts = grown.get((fn, name), []) + elts
+    return elts
+
+
+def _gh_grown_name(up):
+    """The list name `up` grows (`name += [...]`, `name.extend([...])`), or None."""
+    if isinstance(up, _gh_ast.Call) and isinstance(up.func, _gh_ast.Attribute) \
+            and up.func.attr == "extend" and isinstance(up.func.value, _gh_ast.Name):
+        return up.func.value.id
+    if isinstance(up, _gh_ast.AugAssign) and isinstance(up.target, _gh_ast.Name):
+        return up.target.id
+    return None
+
+
+def _gh_grown_lists(tree):
+    """{(function, name): elements of every list or tuple literal assigned to it there}."""
+    grown = {}
+    for fn in _gh_ast.walk(tree):
+        if not isinstance(fn, (_gh_ast.FunctionDef, _gh_ast.AsyncFunctionDef)):
+            continue
+        for n in _gh_ast.walk(fn):
+            if isinstance(n, _gh_ast.Assign) and isinstance(n.value, (_gh_ast.List, _gh_ast.Tuple)):
+                for t in n.targets:
+                    if isinstance(t, _gh_ast.Name):
+                        grown.setdefault((fn, t.id), []).extend(n.value.elts)
+    return grown
+
+
 def _gh_sites(tree):
     """Every [(line, value node or None, kind)] where a command puts a value after `sudo -u`."""
     # kind is how the COMMAND STRING is built — "fstring", "percent", "concat" or "format" — or
     # "argv" for a list-form argv.
     out, seen = [], set()
+    parent = {c: p for p in _gh_ast.walk(tree) for c in _gh_ast.iter_child_nodes(p)}
+    grown = _gh_grown_lists(tree)
     for n in _gh_ast.walk(tree):
-        for site in _gh_node_sites(n):
+        node_sites = (_gh_argv_sites(n, _gh_argv_line(n, parent, grown))
+                      if isinstance(n, (_gh_ast.List, _gh_ast.Tuple)) else _gh_node_sites(n))
+        for site in node_sites:
             if site[1] is None or id(site[1]) not in seen:
                 seen.add(id(site[1]))
                 out.append(site)
@@ -385,7 +460,13 @@ def _gh_runner_calls(tree, funcs):
 def _gh_call_problem(rel, n, fn):
     """The G3 problem of runner call `n` in `fn`, or None: its body names the script, unpassed."""
     tainted = _gh_tainted(fn)
-    if not _gh_interpolates_self(fn, tainted):
+    # ...or the runner's own text argument names it anywhere inside, through a helper call too
+    # (review 1011d): `_protected_resolved(user, ap, selfname, inner)` writes the name into the
+    # command, and a call reads as "a new value" to _gh_carries, so delete/rename/create-path
+    # ran a loaded row's lgsm_name unchecked with this gate green.
+    _first_text = 1 if _gh_callee(n) in ("game_user_cmd", "game_user_exec_cmd") else 2
+    in_arg = any(_gh_names_script(a, tainted) for a in n.args[_first_text:])
+    if not (in_arg or _gh_interpolates_self(fn, tainted)):
         return None
     passes_self = _gh_callee(n) in _GH_TEXT_RUNNERS and any(k.arg == "selfname" for k in n.keywords)
     if passes_self or _gh_validates_before(fn, n.lineno, tainted):
@@ -481,6 +562,18 @@ _gh_ctl = {
         'def f(user):\n    return ["sudo", "--user=" + user, "cat"]\n'),
     "G2 an argv with -u joined to the account": _gh_plant(
         'def f(user):\n    return ["sudo", f"-u{user}", "cat"]\n'),
+    # Review 1011d: each of these was no site at all, so G2 never fired.
+    "G2 an argv with -u joined by %": _gh_plant('def f(user):\n    return ["sudo", "-u%s" % user, "cat"]\n'),
+    "G2 an argv with --user= joined by .format()": _gh_plant(
+        'def f(user):\n    return ["sudo", "--user={}".format(user), "cat"]\n'),
+    "G2 an argv split by +": _gh_plant('def f(user):\n    return ["sudo", "-n"] + ["-u", user, "cat"]\n'),
+    "G2 a tuple argv split by +": _gh_plant('def f(user):\n    return ("sudo", "-n") + ("-u", user)\n'),
+    "G2 an argv grown by +=": _gh_plant(
+        'def f(user):\n    a = ["sudo"]\n    a += ["-u", user]\n    return a\n'),
+    "G2 an argv grown by .extend()": _gh_plant(
+        'def f(user):\n    a = ["sudo"]\n    a.extend(["-u", user])\n    return a\n'),
+    "G2 an argv naming sudo by path": _gh_plant(
+        'def f(user):\n    return ["/usr/bin/sudo", "-u", user, "cat"]\n'),
     "G2 quoted but outside the builder": _gh_plant(
         'def f(user):\n    return f"sudo -u {_quote(user)} bash -c x"\n'),
     "G2 the builder without its check": _gh_plant(
@@ -504,6 +597,9 @@ _gh_ctl = {
     "G3 game_type straight into the text": _gh_plant(
         'def f(gs):\n'
         '    return _core.shell_as_game_user(gs.remote, gs.short_name, "./%sserver x" % gs.game_type)\n'),
+    "G3 the name handed to a helper that builds the runner's text": _gh_plant(
+        'def f(server, user, selfname, ap, inner):\n'
+        '    return _core.shell_as_game_user(server, user, _protected_resolved(user, ap, selfname, inner))\n'),
     "G3 through a string method and .format()": _gh_plant(
         'def f(server, user, gs):\n'
         '    name = (gs.lgsm_name or "").strip()\n'

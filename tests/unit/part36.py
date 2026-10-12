@@ -1118,6 +1118,14 @@ def _gamedig_counts36():
     _restart_check36()
 
 
+def _r14d_arm_net36():
+    """part12's tripwire on the transports that leave this machine, and on system_ops' root runner."""
+    _p9_patch(_p9_core, "get_connection",
+              _p9_trip("paramiko", exc=ConnectionError("refused by part36's tripwire")))
+    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
+    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _saved36_emit = _p9.socketio.emit
 try:
@@ -1156,8 +1164,13 @@ try:
     _p9_patch(_p9.socketio, "emit", lambda *a, **k: None)
     _f3_route36()
     _p9_restore_all()
+    # These three ran with no tripwire armed (review 1011d): each stubs only the leaf it names, so a
+    # regressed guard went on to a real connection to its 192.0.2.x host, or a real sudo as root
+    # on CI's root leg, before failing. The transports are refused here too; they reach none today.
+    _r14d_arm_net36()
     _own_guards36()
     _p9_restore_all()
+    _r14d_arm_net36()
     _maintenance_probe36()
     _gamedig_types36()
     _p9_restore_all()

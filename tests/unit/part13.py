@@ -3640,7 +3640,7 @@ try:
         _pl_dead10 = _pl_request10("deadlock")
         _pl_pin10["request_done"].set()
         _pl_dead_closed10 = [c.closed for c in _FakeSSH10.made[_pl_made10:]]
-        _pl_by10.join(_PL_TIMEOUT10 * 3)
+        _join13(_pl_by10, _PL_TIMEOUT10 * 3)
         _sm_core._persist_host_key = _pl_real_persist10
         _pl_dead_gap10 = _pl_beat10["gap"]
         _pl_dead_key10 = _pl_row10("deadlock")
@@ -3700,7 +3700,7 @@ try:
         _pl_pin10["entered"].set()
         _pl_pin10["request_done"].set()
         if _pl_by10.is_alive():
-            _pl_by10.join(_PL_TIMEOUT10 * 3)
+            _join13(_pl_by10, _PL_TIMEOUT10 * 3)
         time.sleep(0.1)      # the heartbeat ends at its next beat
         _sm_core._pin_app = _pl_pin_app_saved10
         _sm_core._connections.clear()

@@ -4361,7 +4361,7 @@ _AX_ACTION_FROM_CALLER = {
     "audit_bot_action",         # the chat bots pass "moderate_say" (server=) / "panel_self_update"
     "_write_refused",           # server_files' write routes pass edit_config / edit_file /
                                 # delete_file / rename_file / create_file / create_folder /
-                                # upload_file / cron_add / cron_update /
+                                # upload_file / server_alerts_save / cron_add / cron_update /
                                 # cron_delete / cron_run_now — each the action that route audits on
                                 # success
     "_read_refused",            # server_files' read routes pass browse_files / read_file /
@@ -4403,6 +4403,39 @@ for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROO
                 elif _shape not in _exact and not any(_l.match(_shape) for _l in _likes):
                     _ax_bad.append("%s: %s= on %r, which models.AUDIT_%s_ACTIONS does not list"
                                    % (_where, _obj, _shape, "SERVER" if _obj == "server" else "HOST"))
+# ...and what the callers of the server-row helpers above PASS (review 1011d): those helpers'
+# action is a parameter, so the scan above exempts it, and the literals the routes hand them were
+# checked against models.AUDIT_SERVER_ACTIONS by nothing but this file's comment. Each of the four
+# writes its row with server=gs; a name passed through a local is read from that local's
+# assignments in the calling function.
+_AX_SERVER_HELPERS = {"_write_refused", "_read_refused", "_create_refused", "_create_answer"}
+_ax_passed = []
+for _f in sorted(pathlib.Path(_ROOT, "panel").rglob("*.py")):
+    _tree = ast.parse(_f.read_text(encoding="utf-8"))
+    for _fd in ast.walk(_tree):
+        if not isinstance(_fd, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for _n in ast.walk(_fd):
+            if not (isinstance(_n, ast.Call)
+                    and getattr(_n.func, "id", getattr(_n.func, "attr", None)) in _AX_SERVER_HELPERS):
+                continue
+            _arg = _n.args[1] if len(_n.args) > 1 else {k.arg: k.value for k in _n.keywords}.get("action")
+            _shapes = _ax_shapes(_arg)
+            if _shapes == [None] and isinstance(_arg, ast.Name):
+                _shapes = [_sh for _a in ast.walk(_fd) if isinstance(_a, ast.Assign)
+                           and any(getattr(_t, "id", None) == _arg.id for _t in _a.targets)
+                           for _sh in _ax_shapes(_a.value)] or [None]
+            _where = "%s:%d" % (_f.relative_to(_ROOT), _n.lineno)
+            for _shape in _shapes:
+                _ax_passed.append(_shape)
+                if _shape is None:
+                    _ax_bad.append("%s: an action this gate cannot read, passed to %s"
+                                   % (_where, getattr(_n.func, "id", getattr(_n.func, "attr", ""))))
+                elif _shape not in _ax_srv[1] and not any(_l.match(_shape) for _l in _ax_srv[0]):
+                    _ax_bad.append("%s: %r passed to a server-row helper, which "
+                                   "models.AUDIT_SERVER_ACTIONS does not list" % (_where, _shape))
+check("audit ids: the actions passed to the server-row helpers were read (positive control)",
+      len(_ax_passed) >= 13, "%d read: %r" % (len(_ax_passed), sorted(set(map(str, _ax_passed)))))
 check("audit ids: the scan found the server and host rows to check (positive control)",
       _ax_counts["server"] >= 40 and _ax_counts["remote"] >= 30,
       "server=%d remote=%d call sites — the check below proves nothing" % (

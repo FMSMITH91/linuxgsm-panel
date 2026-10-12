@@ -261,6 +261,10 @@ def _p20_cred_key():
     finally:
         if saved is not None:
             key.write_bytes(saved)
+        elif key.exists():
+            # A regression that MINTS a key fails the check below by name; the minted key must
+            # not then stay in the run's data dir for every later part to read as the real one.
+            key.unlink()
     check("debug report privacy: with cred_key missing, the encrypted host columns are not decrypted "
           "(which would mint a new key); names come from the plain columns, and the gap is said",
           not created and st.names.get("canary-host-7731") == "[host-1]"

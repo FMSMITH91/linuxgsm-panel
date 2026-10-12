@@ -215,6 +215,11 @@ try:
           and len(_osv_vals27) == len(_locks27),
           "missing=%r extra=%r argv=%r" % (sorted(_locks27 - _osv_paths27),
                                            sorted(_osv_paths27 - _locks27), _argv[:6]))
+    # `--config <file>` overrides the per-directory osv-scanner.toml the exemption gates below read
+    # (osv-scanner's configuration docs): an exemption there would be read by nothing here.
+    check("osv-scanner: ...with no --config of its own, so the exemptions read below are its only ones",
+          bool(_argv) and not [_a for _a in _argv if _a == "--config" or _a.startswith("--config=")],
+          repr(_argv))
     check("osv-scanner: ...each pip lockfile with the requirements.txt: parse-as prefix (it picks a "
           "parser by file name), the npm one by its own name",
           bool(_osv_vals27) and all(_v.startswith("requirements.txt:") != _v.endswith(".json")
@@ -281,12 +286,26 @@ def _declared27(text, word):
     return sum(1 for _l in text.splitlines() if word in _l.split("#", 1)[0])
 
 
-_osv_cfgs27, _osv_unread27 = {}, []
+def _r14d_overrides27(text):
+    """Lines of `text` that suppress findings outside [[IgnoredVulns]].
+
+    osv-scanner also honours [[PackageOverrides]] with `ignore = true` / `vulnerability.ignore =
+    true` (its configuration docs), which needs no id, no date and no reason, so this project
+    refuses that form outright.
+    """
+    return [_l.strip() for _l in text.splitlines()
+            if _re27.search(r"PackageOverrides|^\s*(?:vulnerability\s*\.\s*)?ignore\s*=",
+                            _l.split("#", 1)[0])]
+
+
+_osv_cfgs27, _osv_unread27, _osv_overrides27 = {}, [], {}
 for _lk in sorted(_locks27):
     _cfg = os.path.join(_root, os.path.dirname(_lk), "osv-scanner.toml")
     if os.path.exists(_cfg):
         with open(_cfg, encoding="utf-8") as _fh27:
             _osv_txt27 = _fh27.read()
+        if _r14d_overrides27(_osv_txt27):
+            _osv_overrides27[os.path.relpath(_cfg, _root)] = _r14d_overrides27(_osv_txt27)
         _osv_cfgs27[os.path.relpath(_cfg, _root)] = _ignored27(_osv_txt27)
         if _declared27(_osv_txt27, "IgnoredVulns") != len(_osv_cfgs27[os.path.relpath(_cfg, _root)]):
             _osv_unread27.append(os.path.relpath(_cfg, _root))
@@ -306,6 +325,13 @@ _osv_bad27 = [_e for _e in _osv_ign27
               if not _e["id"] or not _e["until"] or len(_e["reason"] or "") < 80]
 check("osv-scanner.toml: every exemption has an id, an ignoreUntil date and a written reason",
       not _osv_bad27, repr(_osv_bad27))
+check("osv-scanner.toml: exemptions are [[IgnoredVulns]] only — no [[PackageOverrides]] ignore, "
+      "which carries no id, date or reason", not _osv_overrides27, repr(_osv_overrides27))
+check("osv-scanner.toml: ...and the inline and table forms of that ignore are both seen (control)",
+      len(_r14d_overrides27('[[PackageOverrides]]\nname = "x"\necosystem = "npm"\n'
+                            'vulnerability.ignore = true\n')) == 2
+      and _r14d_overrides27('[[PackageOverrides]]\nname = "x"\nignore = true\n') != []
+      and _r14d_overrides27('[[IgnoredVulns]]\nid = "GHSA-a"  # PackageOverrides is refused\n') == [])
 check("osv-scanner.toml: ...and an entry with no date, or no reason, is caught (control)",
       [_e["id"] for _e in _ignored27('[[IgnoredVulns]]\nid = "GHSA-x"\nreason = "%s"\n\n'
                                      '[[IgnoredVulns]]\nid = "GHSA-y"\nignoreUntil = 2027-01-01\n'

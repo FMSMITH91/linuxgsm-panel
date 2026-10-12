@@ -1341,9 +1341,13 @@ eq("R20: TLS that started, TLS that failed (class only), and TLS not configured"
    [(True, True, None), (False, False, "PermissionError"), (False, False, None)])
 
 
+_boot_reads22 = []
+
+
 def _boot_serve(cfg, answer):
     fake = type("A", (), {"config": {}})()
     calls = []
+    del _boot_reads22[:]
 
     def setup(**kw):
         calls.append(kw)
@@ -1352,8 +1356,12 @@ def _boot_serve(cfg, answer):
         return answer
     # The boot then removes the panel's routes at other mounts; that reads the HOST's Serve config,
     # so it is stubbed with the rest (part32 drives it against a fake CLI).
+    # ...and an "ok" boot goes on to read the shared-Funnel state (serve_upkeep's
+    # _boot_shared_funnel), through get_tailscale_info: unstubbed, that ran this machine's real
+    # `tailscale` CLI (`version`, `status --json`, the Serve read) from a part that reaches no host.
     with _patched(_ts22, setup_tailscale_serve=setup,
-                  remove_stale_panel_routes=lambda port, mount: ("none", [], "")), \
+                  remove_stale_panel_routes=lambda port, mount: ("none", [], ""),
+                  get_tailscale_info=lambda force_refresh=False: (_boot_reads22.append(1), _ti())[1]), \
             _patched(_app22, _ts_backend_scheme=lambda c: "http"):
         _app22._boot_serve(fake, cfg, 5000)
     return fake.config.get("BOOT_SERVE"), len(calls)
@@ -1366,5 +1374,8 @@ eq("R20: Serve's boot re-point is recorded as ok / failed:<reason class> / not a
                         "https://secret-node.tail9999.ts.net")),
     _boot_serve({"tailscale_setup_done": True}, RuntimeError("secret"))],
    [("not attempted", 0), ("ok", 1), ("failed:permission", 1), ("failed:RuntimeError", 1)])
+_boot_serve({"tailscale_setup_done": True}, (True, "ok"))
+check("R20: an ok boot reads the host's Tailscale state once, through the stub (no real CLI run)",
+      len(_boot_reads22) == 1, "%d reads" % len(_boot_reads22))
 
 _sh22.rmtree(_TMP22, ignore_errors=True)
