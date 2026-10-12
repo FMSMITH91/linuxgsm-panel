@@ -54,6 +54,24 @@ _MEMBERS = ("panel.db", "config.json", "secret_key", "cred_key")
 # The header is plaintext BY DESIGN — restore needs the salt before it can derive anything, and
 # scrypt params must be readable so a future cost increase can still open today's archives.
 _ENC_MAGIC = b"LGSMBK1\n"
+
+# What the restore page asks next, as a field of the route's answer ("needs"), never read off the
+# message. The page found these refusals by their English words (/passphrase/, /safety copy/) —
+# and the route translates its message, so for a Spanish or French superadmin neither matched:
+# the "Restore anyway" dialog, the only way to send skip_safety_backup, never opened, and every
+# retry got the same refusal. restore_needs() decides from which refusal it was, by these
+# constants, before anything is translated.
+RESTORE_NEEDS_PASSPHRASE = "passphrase"
+RESTORE_NEEDS_SKIP_SAFETY = "skip_safety"
+_R16C_PASSPHRASE_REQUIRED = "This backup is encrypted — a passphrase is required."
+_R16C_PASSPHRASE_WRONG = "Wrong passphrase, or the backup has been altered — it could not be opened."
+_R16C_PASSPHRASE_UNREADABLE = ("Cannot decrypt this backup: a passphrase is configured but could not be "
+                               "decrypted on this host. Enter the passphrase explicitly, or restore "
+                               "data/cred_key first.")
+_R16C_SAFETY_COPY_FAILED = ("The pre-restore safety copy could not be written ({why}). Restoring would "
+                            "overwrite panel.db, config.json, secret_key and cred_key with no way back — "
+                            "without cred_key every stored SSH credential becomes unreadable. Confirm "
+                            "again to restore without one.")
 # ~32MB, ~0.1s. A backup passphrase is typed rarely, so this can be far costlier than a login hash.
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2 ** 15, 8, 1
 
@@ -124,7 +142,7 @@ def _decrypt_archive(src_path, dest_path, passphrase):
     if params is None:
         return False, refusal
     if not passphrase:
-        return False, "This backup is encrypted — a passphrase is required."
+        return False, _R16C_PASSPHRASE_REQUIRED
     salt, n, r, p = params
     try:
         key = _derive_key(passphrase, salt, n=n, r=r, p=p)
@@ -132,7 +150,7 @@ def _decrypt_archive(src_path, dest_path, passphrase):
     except InvalidToken:
         # Fernet authenticates, so a wrong key and a modified archive raise the same thing and
         # genuinely cannot be told apart without the key. Say both rather than guess.
-        return False, "Wrong passphrase, or the backup has been altered — it could not be opened."
+        return False, _R16C_PASSPHRASE_WRONG
     except Exception:
         _log.exception("backup decrypt failed")
         return False, "The backup could not be decrypted."
@@ -542,6 +560,22 @@ def restore_pending():
             and os.path.isdir(os.path.join(str(DATA_DIR), ".restore-stage")))
 
 
+def restore_needs(ok, msg):
+    """What a refused restore asks of the operator: RESTORE_NEEDS_PASSPHRASE, _SKIP_SAFETY, or "".
+
+    Read from WHICH refusal restore_backup answered (its constant, or the Sentence's template),
+    never from the words: the message the viewer sees is translated.
+    """
+    if ok:
+        return ""
+    said = getattr(msg, "template", msg)
+    if said in (_R16C_PASSPHRASE_REQUIRED, _R16C_PASSPHRASE_WRONG, _R16C_PASSPHRASE_UNREADABLE):
+        return RESTORE_NEEDS_PASSPHRASE
+    if said == _R16C_SAFETY_COPY_FAILED:
+        return RESTORE_NEEDS_SKIP_SAFETY
+    return ""
+
+
 def restore_backup(name, passphrase=None, skip_safety_backup=False):
     """Restore a backup, unless another is in flight; see _restore_lock. Returns (ok, message)."""
     if not _restore_lock.acquire(blocking=False):
@@ -635,9 +669,7 @@ def _decrypt_for_restore(src, passphrase):
         # the next person to raise this with a path, a filename or a decryption detail in the
         # message would ship it to the browser without noticing. The log keeps the detail.
         _log.warning("restore refused: the stored backup passphrase could not be decrypted")
-        return None, src, ("Cannot decrypt this backup: a passphrase is configured but could not "
-                           "be decrypted on this host. Enter the passphrase explicitly, or "
-                           "restore data/cred_key first.")
+        return None, src, _R16C_PASSPHRASE_UNREADABLE
     ok, msg = _decrypt_archive(str(src), plain, _pp)
     if not ok:
         shutil.rmtree(_dec_tmp, ignore_errors=True)
@@ -1032,10 +1064,7 @@ def _restore_validated(src, name, skip_safety_backup=False, operator_passphrase=
     if not skip_safety_backup:
         ok, safety, _spp_typed = _take_safety_copy(operator_passphrase)
         if not ok:
-            return False, i18n.Sentence(
-                "The pre-restore safety copy could not be written ({why}). Restoring would overwrite panel.db, "
-                "config.json, secret_key and cred_key with no way back — without cred_key every stored SSH "
-                "credential becomes unreadable. Confirm again to restore without one.", why=safety)
+            return False, i18n.Sentence(_R16C_SAFETY_COPY_FAILED, why=safety)
 
     # A FIXED staging directory inside data/, not a fresh mkdtemp. The helper's restore verb takes
     # no path argument — root copying "whatever is in the directory you name" over the panel's keys

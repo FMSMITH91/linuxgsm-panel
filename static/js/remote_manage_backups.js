@@ -567,13 +567,15 @@ function _bkRestore(name, passphrase, btn, encrypted, skipSafety){
     .catch(function(){ bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
 }
 // A restore refused for want of the archive's passphrase (asked only of an encrypted archive).
+// `needs` is the server's machine-readable answer (backup.restore_needs). The message is
+// translated, so matching its English words never fired for a Spanish or French viewer.
 function _bkRestoreWantsPassphrase(d, encrypted){
-  return !d.success && encrypted && /passphrase/i.test(d.message||'');
+  return !d.success && encrypted && d.needs === 'passphrase';
 }
 // A restore refused because the pre-restore safety copy could not be written, when the operator
 // has not already said to go ahead without one.
 function _bkRestoreWantsSkipSafety(d, skipSafety){
-  return !d.success && !skipSafety && /safety copy/i.test(d.message||'');
+  return !d.success && !skipSafety && d.needs === 'skip_safety';
 }
 // Any other answer: say it, and reload once a restore has gone through (the panel restarts).
 function _bkRestoreDone(d, btn){
@@ -608,7 +610,7 @@ function _bkAskPassphrase(name, btn){
           // refusal says "Confirm again to restore without one", but pressing Restore here re-posts
           // without skip_safety_backup and gets the same refusal for ever. Hand it to the same
           // dialog _bkRestore uses, carrying the passphrase that worked.
-          else if(/safety copy/i.test(d.message||'')){
+          else if(!d.success && d.needs === 'skip_safety'){
             api.close();
             _bkAskSkipSafety(name, val, btn, true, d.message||'');
           }

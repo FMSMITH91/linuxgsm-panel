@@ -1,0 +1,5 @@
+{
+  "Cannot decrypt this backup: a passphrase is configured but could not be decrypted on this host. Enter the passphrase explicitly, or restore data/cred_key first.": "No se puede descifrar esta copia de seguridad: hay una frase de contraseña configurada, pero no se pudo descifrar en este equipo. Introduce la frase de contraseña explícitamente o restaura primero data/cred_key.",
+  "This backup is encrypted — a passphrase is required.": "Esta copia de seguridad está cifrada: se necesita una frase de contraseña.",
+  "Wrong passphrase, or the backup has been altered — it could not be opened.": "Frase de contraseña incorrecta, o la copia de seguridad ha sido alterada: no se pudo abrir."
+}
