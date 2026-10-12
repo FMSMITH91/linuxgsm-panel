@@ -645,24 +645,31 @@ def _r16d_int_or_port_sites(text):
     parent = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
     out = []
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) == "_int_or"):
-            continue
-        said = [ast.get_source_segment(text, node) or ""]
-        up, child = parent.get(node), node
-        while up is not None and not isinstance(up, ast.stmt) and not isinstance(up, ast.Call):
-            up, child = parent.get(up), up
-        if isinstance(up, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-            for t in (up.targets if isinstance(up, ast.Assign) else [up.target]):
-                said += [getattr(x, "id", "") or getattr(x, "attr", "") for x in ast.walk(t)]
-                said += [x.value for x in ast.walk(t) if isinstance(x, ast.Constant) and isinstance(x.value, str)]
-        if isinstance(up, ast.Call):
-            said += [k.arg or "" for k in up.keywords if k is child]
-        if isinstance(parent.get(node), ast.Dict):
-            said += [k.value for k, v in zip(parent[node].keys, parent[node].values) if v is node
-                     and isinstance(k, ast.Constant) and isinstance(k.value, str)]
-        if any("port" in str(w).lower() for w in said):
-            out.append((node.lineno, said[0][:70]))
+        if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) == "_int_or":
+            said = [ast.get_source_segment(text, node) or ""] + _r16d_lands_in(node, parent)
+            if any("port" in str(w).lower() for w in said):
+                out.append((node.lineno, said[0][:70]))
     return sorted(out)
+
+
+def _r16d_lands_in(node, parent):
+    """The names a call's value is stored under: its assignment's targets, its keyword, its dict key."""
+    import ast
+    up, child = parent.get(node), node
+    while up is not None and not isinstance(up, (ast.stmt, ast.Call)):
+        up, child = parent.get(up), up
+    targets = (up.targets if isinstance(up, ast.Assign) else [up.target]
+               if isinstance(up, (ast.AugAssign, ast.AnnAssign)) else [])
+    said = [_r16d_name_of(x) for t in targets for x in ast.walk(t)]
+    said += [k.arg or "" for k in getattr(up, "keywords", None) or [] if k is child]
+    _d = parent.get(node)
+    said += [_r16d_name_of(k) for k, v in zip(getattr(_d, "keys", []), getattr(_d, "values", [])) if v is node]
+    return said
+
+
+def _r16d_name_of(x):
+    """A target node's name: a Name's id, an attribute, or a constant key's text."""
+    return str(getattr(x, "id", "") or getattr(x, "attr", "") or getattr(x, "value", ""))
 
 
 def _check_no_port_parsed_with_int_or():

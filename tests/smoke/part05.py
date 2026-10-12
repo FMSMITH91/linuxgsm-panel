@@ -2462,8 +2462,8 @@ _lt_ctl = {_k: _r15d_lt_judge(_v)[1] != [] for _k, _v in {
 _lt_ok = {_k: _r15d_lt_judge(_v) for _k, _v in {
     "enabled: false": _LT_HEAD + "method: 'POST', body: JSON.stringify({ enabled: false }) })",
     "a GET": "fetch(MOUNT + '/api/server/' + id + '/log-timestamps').then(r => r.json())",
-    "the page's own request": _LT_HEAD + "\n  method: 'POST', headers: {'Content-Type': 'application/json'},\n"
-                              "  body: JSON.stringify({ enabled: false })\n})",
+    "the page's own request": (_LT_HEAD + "\n  method: 'POST', headers: {'Content-Type': 'application/json'},\n"
+                               "  body: JSON.stringify({ enabled: false })\n})"),
 }.items()}
 check("log stamps: ...the gate names each spelling that enables it, and passes `enabled: false` and a "
       "GET (controls)",

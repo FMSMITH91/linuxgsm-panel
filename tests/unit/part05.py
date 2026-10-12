@@ -1053,13 +1053,18 @@ def _r15d_category_covers_deprecations(cat, aliases=None):
     Warning` then `category=BaseWarning` read as an unknown warning class (review 1012a).
     """
     aliases = aliases or {}
-    if cat is None:
-        return True
     if isinstance(cat, _dw_ast.Tuple):
         return any(_r15d_category_covers_deprecations(_e, aliases) for _e in cat.elts)
     if isinstance(cat, _dw_ast.Name) and cat.id in aliases:
         return _r15d_category_covers_deprecations(aliases[cat.id], {k: v for k, v in aliases.items()
                                                                      if k != cat.id})
+    return _r16d_names_a_deprecation_base(cat)
+
+
+def _r16d_names_a_deprecation_base(cat):
+    """_r15d_category_covers_deprecations for one category that is not a tuple or a module alias."""
+    if cat is None:
+        return True
     _name = getattr(cat, "attr", getattr(cat, "id", None))
     if not isinstance(cat, (_dw_ast.Name, _dw_ast.Attribute)) or _name is None:
         return True                       # computed: cannot be shown not to cover it

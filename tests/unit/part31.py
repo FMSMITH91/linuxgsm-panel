@@ -621,6 +621,20 @@ def _job_argv_ok31(argv, unit, job, args):
             and "PATH" not in _r16d_env31(argv))
 
 
+def _r16d_env_words31(head):
+    """(flag, value) for each --setenv/-E/--property/-p in `head`, joined to its value or not."""
+    words = []
+    for i, a in enumerate(head):
+        nxt = head[i + 1] if i + 1 < len(head) else ""
+        for flag, joined in (("--setenv", "--setenv="), ("-E", "-E"), ("--property", "--property="),
+                             ("-p", "-p")):
+            if a == flag:
+                words.append((flag, nxt))
+            elif a.startswith(joined):
+                words.append((flag, a[len(joined):]))
+    return words
+
+
 def _r16d_env31(argv):
     """The names a systemd-run argv puts in the unit's environment, from its options before `--`.
 
@@ -629,17 +643,8 @@ def _r16d_env31(argv):
     "PATH=" (review 1011e) missed the bare `--setenv=PATH` the check before it caught; the name is
     what is judged (review 1012a). An EnvironmentFile= could hold anything, so it counts as PATH.
     """
-    head = argv[:argv.index("--")] if "--" in argv else list(argv)
-    words, names = [], []
-    for i, a in enumerate(head):
-        nxt = head[i + 1] if i + 1 < len(head) else ""
-        for flag, joined in (("--setenv", "--setenv="), ("-E", "-E"), ("--property", "--property="),
-                             ("-p", "-p")):
-            if a == flag:
-                words.append((flag, nxt))
-            elif a.startswith(joined) and a != flag:
-                words.append((flag, a[len(joined):]))
-    for flag, w in words:
+    names = []
+    for flag, w in _r16d_env_words31(argv[:argv.index("--")] if "--" in argv else list(argv)):
         if flag in ("--setenv", "-E"):
             names.append(w.split("=", 1)[0])
         elif w.startswith("EnvironmentFile="):

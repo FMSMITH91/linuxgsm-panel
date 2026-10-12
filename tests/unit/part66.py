@@ -390,24 +390,31 @@ def _r16d_flash_wrappers66(trees):
     Repeated to a fixed point, so a wrapper of a wrapper counts.
     """
     out = dict(_FLASHERS66)
+    fns = [n for _tree in trees for n in _ast66.walk(_tree) if isinstance(n, _ast66.FunctionDef)]
     for _ in range(4):  # at most 4 rounds: it stops at the first that adds nothing
         _before = len(out)
-        for _tree in trees:
-            for _f in (n for n in _ast66.walk(_tree) if isinstance(n, _ast66.FunctionDef)):
-                _params = [a.arg for a in _f.args.args]
-                for _c in (n for n in _ast66.walk(_f) if isinstance(n, _ast66.Call)):
-                    _at = out.get(getattr(_c.func, "id", None) or getattr(_c.func, "attr", None))
-                    if (_at is not None and len(_c.args) > _at and isinstance(_c.args[_at], _ast66.Name)
-                            and _c.args[_at].id in _params):
-                        out.setdefault(_f.name, _params.index(_c.args[_at].id))
+        for _f in fns:
+            _at = _r16d_flashed_param66(_f, out)
+            if _at is not None:
+                out.setdefault(_f.name, _at)
         if len(out) == _before:
-            return out
+            break
     return out
 
 
+def _r16d_flashed_param66(fn, flashers):
+    """The position of `fn`'s parameter it hands, as it is, to a flasher's message; else None."""
+    params = [a.arg for a in fn.args.args]
+    for _c in (n for n in _ast66.walk(fn) if isinstance(n, _ast66.Call)):
+        _at = flashers.get(getattr(_c.func, "id", None) or getattr(_c.func, "attr", None))
+        _arg = _c.args[_at] if _at is not None and len(_c.args) > _at else None
+        if isinstance(_arg, _ast66.Name) and _arg.id in params:
+            return params.index(_arg.id)
+    return None
+
+
 def _flashed66(tree, flashers=None):
-    """(message, line) for each literal message argument of flash / _form_err / _form_ok, or of a
-    function that flashes that argument (see _r16d_flash_wrappers66)."""
+    """(message, line) for each literal message a flasher (see _r16d_flash_wrappers66) is handed."""
     flashers = _FLASHERS66 if flashers is None else flashers
     for _n in _ast66.walk(tree):
         _at = flashers.get(getattr(_n.func, "id", None) or getattr(_n.func, "attr", None)) \

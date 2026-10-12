@@ -1051,6 +1051,15 @@ def _r16d_is_removal37(callee):
             and not callee.endswith("session.remove"))      # SQLAlchemy's, no file
 
 
+def _r16d_fields37(stmt):
+    """The blocks of `stmt` a failure reaches an outer try from: a try's body only if it lets OSError out."""
+    if isinstance(stmt, _ast37.Try) and any(
+            _h.type is None or _re37.search(r"\b(?:%s)\b" % "|".join(_WIDE37), _ast37.unparse(_h.type))
+            for _h in stmt.handlers):
+        return ("orelse", "finalbody")
+    return ("body", "orelse", "finalbody")
+
+
 def _r15d_stmts37(stmt):
     """`stmt` and every statement nested in its blocks, stopping at a nested def or class.
 
@@ -1060,15 +1069,9 @@ def _r15d_stmts37(stmt):
     out = [stmt]
     if isinstance(stmt, (_ast37.FunctionDef, _ast37.AsyncFunctionDef, _ast37.ClassDef)):
         return out
-    _fields = ("body", "orelse", "finalbody")
-    if isinstance(stmt, _ast37.Try):
-        _fields = ("orelse", "finalbody") if any(
-            _h.type is None or _re37.search(r"\b(?:%s)\b" % "|".join(_WIDE37), _ast37.unparse(_h.type))
-            for _h in stmt.handlers) else _fields
-        for _h in stmt.handlers:
-            for _ch in _h.body:
-                out += _r15d_stmts37(_ch)
-    for _field in _fields:
+    for _ch in (_c for _h in getattr(stmt, "handlers", None) or [] for _c in _h.body):
+        out += _r15d_stmts37(_ch)
+    for _field in _r16d_fields37(stmt):
         for _ch in getattr(stmt, _field, None) or []:
             if isinstance(_ch, _ast37.stmt):
                 out += _r15d_stmts37(_ch)

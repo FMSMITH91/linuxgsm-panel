@@ -1550,18 +1550,19 @@ def _r16d_names_helper(node):
 
 def _r16d_helper_aliases(tree):
     """{name: the helper} for each `name = module_from_spec(spec)` whose spec loads tools/panel-helper."""
-    _specs, out = set(), {}
-    _assigns = [_n for _n in _ast_scan.walk(tree)
+    _assigns = [(_n.value, [_t.id for _t in _n.targets if isinstance(_t, _ast_scan.Name)])
+                for _n in _ast_scan.walk(tree)
                 if isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Call)]
-    for _n in _assigns:
-        if (getattr(_n.value.func, "attr", "").startswith("spec_from_")
-                and any(_r16d_names_helper(_a) for _a in _n.value.args)):
-            _specs |= {_t.id for _t in _n.targets if isinstance(_t, _ast_scan.Name)}
-    for _n in _assigns:
-        if (getattr(_n.value.func, "attr", getattr(_n.value.func, "id", "")) == "module_from_spec"
-                and _n.value.args and getattr(_n.value.args[0], "id", None) in _specs):
-            out.update({_t.id: _R16D_HELPER_MOD for _t in _n.targets if isinstance(_t, _ast_scan.Name)})
-    return out
+    _specs = {_t for _v, _ts in _assigns if _r16d_loads_helper(_v) for _t in _ts}
+    return {_t: _R16D_HELPER_MOD for _v, _ts in _assigns
+            if getattr(_v.func, "attr", getattr(_v.func, "id", "")) == "module_from_spec"
+            and _v.args and getattr(_v.args[0], "id", None) in _specs for _t in _ts}
+
+
+def _r16d_loads_helper(call):
+    """Is `call` a spec_from_*(…) naming tools/panel-helper's file?"""
+    return (getattr(call.func, "attr", "").startswith("spec_from_")
+            and any(_r16d_names_helper(_a) for _a in call.args))
 
 
 def _r14d_aliases(tree, carried):
@@ -1572,16 +1573,20 @@ def _r14d_aliases(tree, carried):
     (`_H = _sm_hosts`) is one too, followed to a fixed point.
     """
     alias = _r16d_helper_aliases(tree)
-    _copies = []
     for _n in _ast_scan.walk(tree):
         alias.update(_r14d_import_aliases(_n, carried))
         alias.update(_r14d_sys_modules_alias(_n))
         alias.update(_r16d_import_module_alias(_n))
-        if isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Name):
-            _copies.append(_n)
-    for _ in range(4):  # a copy of a copy: at most 4 rounds, stopping at the first that adds nothing
-        _added = {_t.id: alias[_n.value.id] for _n in _copies if _n.value.id in alias
-                  for _t in _n.targets if isinstance(_t, _ast_scan.Name) and _t.id not in alias}
+    return _r16d_follow_copies(tree, alias)
+
+
+def _r16d_follow_copies(tree, alias):
+    """`alias` plus each name copied from one (`_H = _sm_hosts`), a copy of a copy included."""
+    _copies = [(_n.value.id, _t.id) for _n in _ast_scan.walk(tree)
+               if isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Name)
+               for _t in _n.targets if isinstance(_t, _ast_scan.Name)]
+    for _ in range(4):  # at most 4 rounds, stopping at the first that adds nothing
+        _added = {_dst: alias[_src] for _src, _dst in _copies if _src in alias and _dst not in alias}
         if not _added:
             break
         alias.update(_added)

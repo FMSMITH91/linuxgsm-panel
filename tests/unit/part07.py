@@ -342,6 +342,11 @@ def _gh_flatten(node, fn, grown):
         return list(_gh_named_list(grown, fn, node.id)) or [node]
     if isinstance(node, (_gh_ast.List, _gh_ast.Tuple)):
         return _gh_splice(node.elts, fn, grown)
+    return _gh_flatten_other(node, fn, grown)
+
+
+def _gh_flatten_other(node, fn, grown):
+    """_gh_flatten for a call or attribute: `list(BASE)`'s elements, any literal inside, or itself."""
     if (isinstance(node, _gh_ast.Call) and getattr(node.func, "id", "") in ("list", "tuple")
             and len(node.args) == 1):
         return _gh_flatten(node.args[0], fn, grown)     # `list(BASE)`: BASE's elements
@@ -434,6 +439,11 @@ def _gh_grow_added(n, fn, grown):
         grown.setdefault((fn, name), []).extend(_gh_flatten(added, fn, grown))
         grown.at[(fn, name)] = n.lineno
         return
+    _gh_grow_appended(n, fn, grown)
+
+
+def _gh_grow_appended(n, fn, grown):
+    """Record what `name.append(x)` or `name.insert(i, x)` adds to a list the file gave elements."""
     _f = getattr(n, "func", None)
     if not (isinstance(_f, _gh_ast.Attribute) and isinstance(_f.value, _gh_ast.Name)
             and (_f.attr, len(n.args)) in (("append", 1), ("insert", 2))):
@@ -464,8 +474,16 @@ def _gh_sites(tree):
             if site[1] is None or id(site[1]) not in seen:
                 seen.add(id(site[1]))
                 out.append(site)
-    # Each named list as it ends up, too: one grown by .append()/.insert() has no literal holding
-    # its "-u", so no literal's line above ever read it whole. Filed at the line it last grew on.
+    return out + _gh_grown_sites(grown, seen)
+
+
+def _gh_grown_sites(grown, seen):
+    """Each named list's sites as it ends up, filed at the line it last grew on.
+
+    One grown by .append()/.insert() has no literal holding its "-u", so no literal's line ever
+    read it whole.
+    """
+    out = []
     for _key, _elts in grown.items():
         for site in _gh_argv_sites(_GhAt(grown.at.get(_key, 0)), _elts):
             if id(site[1]) not in seen:

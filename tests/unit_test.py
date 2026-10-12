@@ -503,13 +503,9 @@ check("unit suite: ...and a note listing imports in a wording it cannot read is 
 # Through a shared module too: part41 reaches part01 and part20 by importing unit.reboot41_fixtures,
 # and only direct `from unit.partNN` imports were read (review 1012a), so part41 moved ahead of
 # part20 would have run part20 inside that import with this check green.
-def _r16d_parts_reached(module, seen=None):
-    """{two-digit part number} `module` (unit.<name>) imports, directly or through non-part modules."""
+def _r16d_unit_imports(module):
+    """The unit.* modules `module` (unit.<name>) imports, or none when it has no file."""
     import ast as _ast
-    seen = set() if seen is None else seen
-    if module in seen:
-        return set()
-    seen.add(module)
     _path = os.path.join(_root, "tests", *module.split(".")) + ".py"
     if not os.path.isfile(_path):
         return set()
@@ -517,8 +513,17 @@ def _r16d_parts_reached(module, seen=None):
         _tree = _ast.parse(_fh.read())
     _mods = {_n.module for _n in _ast.walk(_tree) if isinstance(_n, _ast.ImportFrom) and _n.module}
     _mods |= {_a.name for _n in _ast.walk(_tree) if isinstance(_n, _ast.Import) for _a in _n.names}
+    return {_m for _m in _mods if _m.startswith("unit.")}
+
+
+def _r16d_parts_reached(module, seen=None):
+    """{two-digit part number} `module` (unit.<name>) imports, directly or through non-part modules."""
+    seen = set() if seen is None else seen
+    if module in seen:
+        return set()
+    seen.add(module)
     out = set()
-    for _m in (_m for _m in _mods if _m.startswith("unit.")):
+    for _m in _r16d_unit_imports(module):
         if _m.startswith("unit.part") and _m[len("unit.part"):].isdecimal():
             out.add(_m[len("unit.part"):])
         else:
@@ -599,8 +604,9 @@ try:
             except FileNotFoundError:
                 pass
     # Not a tailscale command: the grep's pattern and an echo's word are text, and run.
-    _r16d_ts_text = _r16d_ts_wraps[1].run("echo tailscale | grep -c tailscale", shell=True,
-                                          env=_r16d_ts_env, capture_output=True, text=True).stdout
+    _r16d_ts_text = _r16d_ts_wraps[1].run(  # nosec B604 - a fixed command, through the wrapper under test
+        "echo tailscale | grep -c tailscale", shell=True, env=_r16d_ts_env, capture_output=True,
+        text=True).stdout
 finally:
     _R15D_SYSTEM_DIRS = _r16d_ts_saved_dirs
 # A shell that puts its own stand-in first on PATH still runs it (part05's secret rendering): the
@@ -608,13 +614,18 @@ finally:
 _r16d_ts_own = _r16d_ts_wraps[2].run(["/bin/bash", "-c", "export PATH=%s:\"$PATH\"; tailscale" % (
     os.path.join(_r15d_ts_ctl_dir, "own"))], env=dict(os.environ), capture_output=True, text=True).stdout
 _r16d_ts_ran_refused = os.path.exists(_r16d_ts_mark)
-_r15d_ts_ctl = (_r16d_ts_let, _r16d_ts_ran_refused, _r16d_ts_text, _r16d_ts_own,
+# The green Popen counts as a real spawner: compared with the pre-patch class alone, every Popen
+# passed from part01 on in CI's bare run (here, under smoke-local, eventlet was patched first and
+# the runner captured the green one, so the planted shapes above cannot show it).
+_r16d_green = sys.modules.get("eventlet.green.subprocess")
+_r16d_ts_green = _r16d_green is None or _r16d_green.Popen in _r16d_real_spawners("Popen")
+_r15d_ts_ctl = (_r16d_ts_let, _r16d_ts_ran_refused, _r16d_ts_text, _r16d_ts_own, _r16d_ts_green,
                 _r16d_ts_wraps[0].run(["tailscale"], capture_output=True, text=True,
                                       env=_r16d_ts_env).stdout)
 check("unit suite: the machine's own tailscale is answered 'not installed' through every handle that "
       "runs it, and a part's stand-in on its own PATH still runs (control)",
       all(isinstance(_w, _R15dNoSystemTailscale) for _w in _r16d_ts_wraps)
-      and _r15d_ts_ctl == ([], False, "1\n", "own stand-in\n", "stand-in\n"),
+      and _r15d_ts_ctl == ([], False, "1\n", "own stand-in\n", True, "stand-in\n"),
       repr(([type(_w).__name__ for _w in _r16d_ts_wraps], _r15d_ts_ctl, _r15d_ts_refused[:3])))
 
 # The cleanup, against unlistable directories, in BOTH of shutil.rmtree's modes. Which one a run gets
