@@ -596,6 +596,26 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A sixth full review on 2026-10-12: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Panel backup restore in Spanish and French.** When the safety copy taken before a restore
+    could not be written, the "Restore anyway" choice never appeared for Spanish and French viewers:
+    the page recognised that answer by its English words. It now reads a field the panel sends, and
+    the same holds for the passphrase refusals.
+  - **Daily restart (when empty).** A server whose player count the panel reads through a query type
+    you set on its page was restarted every day with players on it; the hourly check now uses that
+    query type. Jedi Knight II names longer than 15 characters are read whole.
+  - **Console.** A console line is now always typed as text: a line ending in `;`, or one that looks
+    like a key name such as `C-c`, is sent to the game as written instead of being read by tmux.
+  - **Languages.** About 330 more messages, including login refusals, firewall refusals, Close port
+    22, reboot notices and the Test buttons, are translated for Spanish and French viewers, and a new
+    check fails when a message shown to a viewer has no translation.
+  - **Robustness.** A hand-edited on/off or number setting no longer breaks the audit-log cleanup,
+    backup pruning or the time zone setting. Signing everyone out also clears their sessions from the
+    session list.
+  - **CI.** The two longest required jobs get time limits that leave room above their measured run
+    times, so a slower runner no longer fails them.
+
 - **A fifth full review on 2026-10-12: fixes.** Every item below has a check that fails without
   its fix.
   - **Console.** Panel lines that arrive after you press Clear no longer vanish at the next 30-second
@@ -2003,6 +2023,16 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **A sixth full review on 2026-10-12: security.** Every item below has a check that fails without
+  its fix.
+  - **SSH lockout guard.** Removing an "Allow from source" rule could still delete the only way in to
+    SSH or the panel when the source was written in another form than the firewall's (`0.0.0.0/0`,
+    `::/0`, a network such as `/24`, or an address with or without `/32`). The guard now compares
+    sources the way the firewall does. Proven against a real firewall, which was left as it was.
+  - **Root helper.** The restart-flag check no longer follows a symbolic link, and the scheduled
+    restart job runs only inside its own system unit.
+  - **Accounts that can become root.** The panel no longer lists such an account's scheduled tasks,
+    and its refusal says exactly what the panel still reads.
 - **A fifth full review on 2026-10-12: security.** Every item below has a check that fails without
   its fix.
   - **SSH lockout guard.** Removing an allowed address or closing a port now goes through the same
