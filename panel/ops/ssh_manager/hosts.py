@@ -358,12 +358,37 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
 
 
 def _r15a_src_key(text):
-    """A rule's source as ipaddress spells it, so `203.0.113.5` and `203.0.113.5/32` compare equal."""
-    s = str(text or "").strip()
+    """A rule's source as ufw itself stores it, so a delete's source and a listed rule compare the
+    way ufw's own match does (ufw.util.normalize_address + UFWRule._fix_anywhere):
+
+    - any /0 network on the unspecified address, and the Firewall page's "Any address", is "any":
+      `ufw delete allow from 0.0.0.0/0 ...` (or ::/0) removes that family's half of an
+      `allow 22/tcp`, which ufw lists as "Anywhere";
+    - IPv4 is masked to its network (ufw stores 203.0.113.7/24 as 203.0.113.0/24, and a delete
+      typed with the host bits removes it), a /32 is the bare address;
+    - IPv6 keeps its host bits (ufw does) and loses only a /128.
+
+    Comparing ipaddress's text as typed missed all three, and Remove under "Allow from source"
+    deleted the host's only SSH rule past the lockout guard. ufw prints sources lowercased.
+    """
+    s = str(text or "").strip().lower()
+    if s in ("any", "anywhere", "any address"):
+        return "any"
     try:
-        return str(_ipaddress.ip_interface(s))
+        iface = _ipaddress.ip_interface(s)
     except ValueError:
-        return s.lower()
+        return s
+    plen = iface.network.prefixlen
+    if iface.version == 4:
+        if plen == 0:
+            # ufw masks v4 host bits first, so 1.2.3.4/0 is 0.0.0.0/0 to it too.
+            return "any"
+        return str(iface.ip) if plen == 32 else str(iface.network)
+    if plen == 128:
+        return str(iface.ip)
+    if plen == 0 and iface.ip == _ipaddress.IPv6Address("::"):
+        return "any"
+    return "%s/%d" % (iface.ip, plen)
 
 
 def _r15a_spec_names(g, port, proto_label, src=None):
@@ -383,6 +408,8 @@ def _r15a_spec_names(g, port, proto_label, src=None):
         return False
     if src is None:
         return g.get("scope") == "Any address"
+    # The group's scope is ufw's own From column ("Any address" for Anywhere); `src` is what the
+    # operator typed. Both go through ufw's normalisation, so either spelling of a rule finds it.
     return _r15a_src_key(g.get("scope")) == _r15a_src_key(src)
 
 
