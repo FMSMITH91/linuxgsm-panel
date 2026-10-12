@@ -215,6 +215,7 @@ function browse(path){
   fetch(MOUNT+'/api/server/'+serverId+'/browse?path='+encodeURIComponent(want)).then(r=>r.json()).then(d=>{
     if(seq !== _browseSeq) return;   // a later browse() owns the list now
     _renaming = null;                // the row being renamed is about to be rebuilt
+    _creating = null;                // ...and so is the create field at the top of it
     var l=document.getElementById('file-list'); l.innerHTML='';
     if(d.error){ l.innerHTML='<div class="text-danger small p-2">'+esc(d.error)+'</div>'; return; }  // nosemgrep
     curDir = want;
@@ -415,6 +416,7 @@ function _renameStemEnd(name, isDir){
 function startRename(row){
   if(!row) return;
   if(_renaming) cancelRename();
+  if(_creating) cancelCreate();
   var path=row.dataset.path, name=path.split('/').pop(), isDir=row.dataset.type==='dir';
   var box=document.createElement('div'); box.className='fb-rename';
   var line=document.createElement('div'); line.className='d-flex align-items-center gap-1';
@@ -496,6 +498,83 @@ function submitRename(){
     })
     .catch(function(){
       if(_renaming===r) _renameFailed(r, 'Could not reach the panel. Reload the file browser to see whether it was renamed.');
+    });
+}
+// ── New file / New folder, in place at the top of the list ─────────────────────────────────────
+// Built as Rename's field is: a name field with Create and Cancel, Enter creates, Escape cancels,
+// the panel's refusal stays under the field (role=alert) with the field focused again, and the
+// name is sent as typed (only an all-blank one is refused here). One editor at a time: opening it
+// closes a rename, opening a rename closes it, and browse() rebuilds the list without it. A new
+// folder is opened; a new file is opened in the editor.
+var _creating = null;   // {kind, dir, box, input, ok, err, opener, busy}: the one open create field
+function startCreate(kind, opener){
+  var list=document.getElementById('file-list');
+  if(!list || (kind!=='file' && kind!=='folder')) return;
+  if(_renaming) cancelRename();
+  if(_creating) cancelCreate();
+  var box=document.createElement('div'); box.className='list-group-item fb-create';
+  var line=document.createElement('div'); line.className='d-flex align-items-center gap-1';
+  line.appendChild(_icon(kind==='folder' ? 'bi-folder2 text-warning' : 'bi-file-earmark-plus'));
+  var input=document.createElement('input'); input.type='text'; input.className='form-control form-control-sm';
+  input.spellcheck=false; input.autocomplete='off'; input.setAttribute('autocapitalize','off');
+  input.setAttribute('aria-label', _tr(kind==='folder' ? 'New folder name' : 'New file name'));
+  input.dataset.action='createKey'; input.dataset.on='keydown'; input.dataset.args='["@event"]';
+  var ok=document.createElement('button'); ok.type='button'; ok.className='btn btn-sm btn-primary';
+  ok.dataset.action='submitCreate'; ok.textContent=_tr('Create');
+  var no=document.createElement('button'); no.type='button'; no.className='btn btn-sm btn-outline-secondary';
+  no.dataset.action='cancelCreate'; no.textContent=_tr('Cancel');
+  var err=document.createElement('div'); err.className='small text-danger mt-1 fb-create-err';
+  err.setAttribute('role','alert'); err.style.display='none';
+  line.appendChild(input); line.appendChild(ok); line.appendChild(no);
+  box.appendChild(line); box.appendChild(err);
+  list.insertBefore(box, list.firstChild);
+  _creating={kind:kind, dir:curDir, box:box, input:input, ok:ok, err:err, opener:opener||null, busy:false};
+  input.focus();
+}
+function cancelCreate(){
+  var r=_creating;
+  if(!r) return;
+  _creating=null;
+  r.box.remove();
+  if(r.opener && r.opener.focus) r.opener.focus();
+}
+// Enter creates, Escape cancels. Reached through the dispatcher's keydown (data-on).
+function createKey(ev){
+  if(!ev) return;
+  if(ev.key==='Enter'){ ev.preventDefault(); submitCreate(); }
+  else if(ev.key==='Escape'){ ev.preventDefault(); cancelCreate(); }
+}
+function _createFailed(r, msg){
+  r.busy=false; r.input.disabled=false; r.ok.disabled=false;
+  r.err.textContent=_tr(msg); r.err.style.display='';
+  r.input.focus();
+}
+// Opened only while the field is still the open one: a user who browsed elsewhere meanwhile is
+// told it was made, and is not pulled back to it.
+function _created(r, want){
+  var path=r.dir ? r.dir+'/'+want : want, mine=_creating===r;
+  if(mine){ _creating=null; r.box.remove(); }
+  if(window.toast) toast(_tr(r.kind==='folder' ? 'Folder created' : 'File created'),'success');
+  if(!mine) return;
+  if(r.kind==='folder'){ browse(path); return; }
+  browse(r.dir);
+  openFile(path);
+}
+function submitCreate(){
+  var r=_creating;
+  if(!r || r.busy) return;
+  // Sent as typed, as Rename's is: a space at either end is the panel's to refuse, with its reason.
+  var want=r.input.value;
+  if(!want.trim()){ _createFailed(r, 'Enter a name.'); return; }
+  r.busy=true; r.input.disabled=true; r.ok.disabled=true; r.err.style.display='none';
+  fetch(MOUNT+'/api/server/'+serverId+'/create-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir:r.dir,name:want,kind:r.kind})})
+    .then(function(res){ return res.json(); })
+    .then(function(d){
+      if(d.success) _created(r, want);
+      else if(_creating===r) _createFailed(r, d.message||d.error||'Could not create it.');
+    })
+    .catch(function(){
+      if(_creating===r) _createFailed(r, 'Could not reach the panel. Reload the file browser to see whether it was created.');
     });
 }
 // The year is dropped for dates in the current year: at 375px the label and value have to share

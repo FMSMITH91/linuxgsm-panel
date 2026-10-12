@@ -4988,6 +4988,13 @@ class El {
     return c;
   }
   insertAdjacentHTML(){}
+  insertBefore(c, ref){
+    if (!ref) return this.appendChild(c);
+    if (c.parentNode) c.remove(); c.parentNode = this;
+    this.children.splice(this.children.indexOf(ref), 0, c);
+    if (this.isConnected) this._notify({type: 'childList', target: this, addedNodes: [c]});
+    return c;
+  }
   remove(){ if (this.parentNode) { const a = this.parentNode.children; a.splice(a.indexOf(this), 1); this.parentNode = null; } }
   setAttribute(k, v){
     this.attrs[k] = String(v);
@@ -5327,6 +5334,195 @@ else:
           and 0 <= _sfr_submit.find("if(want===r.name)") < _sfr_submit.find("want.trim()"),
           "js (no node): the field's label is left to the translator, and the name is compared "
           "and sent as typed", _sfr_submit[:300])
+
+# ── the file browser's New file / New folder, driven: open, edit, create, refuse ────────────────
+# The toolbar's New file and New folder open a name field at the top of the list, built as
+# Rename's is: Enter or Create sends it, Escape or Cancel closes it (focus back on the button), a
+# refusal stays under the field, one field at a time (a rename closes it, browse() rebuilds the
+# list without it), and on success a folder is opened and a file is opened in the editor. DRIVEN
+# in Node on _RENAME_HARNESS's small DOM, with panel.js's REAL dispatcher and server_files.js loaded
+# whole; the two toolbar buttons are built from the TEMPLATE's own data-action / data-args, so a
+# button wired to the wrong function or kind fails here too. The real browser walk is
+# tools/js_coverage (flows.py, files_create).
+_CREATE_HARNESS = _RENAME_HARNESS[:_RENAME_HARNESS.find("const ENTRY = ")] + r"""
+const ENTRY = (name, dir) => ({name: name, is_dir: dir, size: dir ? 0 : 5, protected: false});
+(async () => {
+  process.on('unhandledRejection', () => {});
+  const root = process.argv[2], buttons = JSON.parse(process.argv[3]), out = {};
+  const S = {listing: [ENTRY('maps', true), ENTRY('notes.txt', false)], reply: {success: true}};
+  function boot(catalog){
+    const c = load(root, url => url.indexOf('/browse?') >= 0 ? {path: '', entries: S.listing}
+      : url.indexOf('/create-path') >= 0 ? S.reply : url.indexOf('/file?') >= 0 ? {content: ''} : {},
+      catalog);
+    // The toolbar's two buttons, as the template writes them.
+    c.tb = buttons.map(b => {
+      const e = c.document.body.appendChild(c.document.createElement('button'));
+      e.dataset.action = b[0]; e.dataset.args = b[1]; e.textContent = b[2];
+      return e;
+    });
+    return c;
+  }
+  const c = boot();
+  await flush();
+  const doc = c.document, list = doc.getElementById('file-list');
+  const box = () => list.querySelector('.fb-create');
+  const field = () => list.querySelector('.fb-create input');
+  const err = () => list.querySelector('.fb-create-err');
+  const key = (el, k) => fire(el, 'keydown', {key: k});
+  const posts = () => c.fetched.filter(f => f.url.indexOf('/create-path') >= 0);
+  const count = part => c.fetched.filter(f => f.url.indexOf(part) >= 0).length;
+  const lastBody = () => { const p = posts(); return p.length ? JSON.parse(p[p.length - 1].body) : null; };
+  const [newFile, newFolder] = c.tb;
+  out.buttons = c.tb.map(b => b.textContent.trim());
+  // Open: a field at the top of the list, focused, with Create and Cancel; the error line hidden.
+  newFile.click();
+  const f1 = field();
+  out.open = {top: list.children[0] === box() && !!box(), focused: !!f1 && doc.activeElement === f1,
+              label: f1 && f1.getAttribute('aria-label'), value: f1 && f1.value,
+              buttons: box() ? box().querySelectorAll('button').map(b => [b.dataset.action, b.textContent]) : null,
+              alert: err() && [err().getAttribute('role'), err().style.display]};
+  // Escape closes, sends nothing, and gives focus back to the button that opened it.
+  if (f1) key(f1, 'Escape');
+  out.escape = {open: !!box(), sent: posts().length, focus_back: doc.activeElement === newFile};
+  // One at a time: New folder replaces New file; a rename closes it, and it closes a rename.
+  newFile.click(); newFolder.click();
+  out.one = {boxes: list.querySelectorAll('.fb-create').length,
+             label: field() && field().getAttribute('aria-label')};
+  const pen = list.querySelector('[data-path="notes.txt"] [data-action="rename"]');
+  if (pen) pen.click();
+  out.rename_closes = {create: !!box(), rename: !!list.querySelector('.fb-rename')};
+  newFolder.click();
+  out.create_closes = {create: !!box(), rename: !!list.querySelector('.fb-rename')};
+  // A blank name is refused here, unsent; the panel's refusal shows under the field, kept open.
+  newFile.click();
+  if (field()) { field().value = '   '; key(field(), 'Enter'); }
+  await flush();
+  out.blank = {sent: posts().length, err: err() && err().textContent, shown: !!err() && err().style.display === ''};
+  S.reply = {success: false, conflict: true, message: 'TAKEN-MESSAGE'};
+  if (field()) { field().value = 'notes.txt'; key(field(), 'Enter'); }
+  doc.activeElement = doc.body;   // a browser takes focus off a field that is disabled
+  await flush();
+  out.refused = {body: lastBody(), err: err() && err().textContent,
+                 shown: !!err() && err().style.display === '', open: !!box(),
+                 editable: !!field() && !field().disabled, focused: doc.activeElement === field(),
+                 toasts: c.toasts.length};
+  // The panel cannot be reached.
+  S.reply = new Error('offline');
+  if (field()) field().value = 'x.txt';
+  const cb = list.querySelector('[data-action="submitCreate"]');
+  if (cb) cb.click();
+  await flush();
+  out.offline = {err: err() && err().textContent, open: !!box()};
+  // Sent as typed, spaces and all.
+  S.reply = {success: false, message: 'NO'};
+  if (field()) { field().value = ' b.txt '; key(field(), 'Enter'); }
+  await flush();
+  out.as_typed = lastBody();
+  // Success, a file: toast, the list refreshes, the field closes and the editor opens it.
+  S.reply = {success: true, message: 'Created'};
+  S.listing = [ENTRY('maps', true), ENTRY('new.txt', false), ENTRY('notes.txt', false)];
+  if (field()) field().value = 'new.txt';
+  const b0 = count('/browse?');
+  if (field()) key(field(), 'Enter');
+  await flush();
+  out.file = {body: lastBody(), browsed: count('/browse?') - b0, open: !!box(),
+              opened: c.fetched.filter(f => f.url.indexOf('/file?') >= 0).map(f => f.url),
+              cur: c.curFile, toast: c.toasts[c.toasts.length - 1] || null};
+  // Success, a folder inside a folder: it is sent with the folder shown, and then opened.
+  c.browse('maps'); await flush();
+  newFolder.click();
+  if (field()) { field().value = 'sub'; key(field(), 'Enter'); }
+  await flush();
+  out.folder = {body: lastBody(), last_browse: (c.fetched.filter(f => f.url.indexOf('/browse?') >= 0).pop() || {}).url,
+                cur_dir: c.curDir, open: !!box(), toast: c.toasts[c.toasts.length - 1] || null};
+  // browse() rebuilds the list without the field, and the editor it held is let go.
+  newFile.click();
+  c.browse(''); await flush();
+  out.browse_clears = {open: !!box(), held: c._creating !== null};
+  // In Spanish, with the real i18n.js: the field's label and its buttons are translated.
+  const c2 = boot({'New file name': 'Nombre del nuevo archivo', 'Create': 'Crear', 'Cancel': 'Cancelar'});
+  await flush();
+  c2.tb[0].click();
+  const l2 = c2.document.getElementById('file-list');
+  const f2 = l2.querySelector('.fb-create input');
+  out.i18n = {label: f2 && f2.getAttribute('aria-label'),
+              buttons: l2.querySelectorAll('.fb-create button').map(b => b.textContent)};
+  console.log(JSON.stringify(out));
+})().catch(e => console.log(JSON.stringify({error: String(e && e.stack || e)})));"""
+# The template's two create buttons: (data-action, data-args, label), in the order they appear.
+_cr_tpl = (TEMPLATES / "server_files.html").read_text(encoding="utf-8")
+_cr_re = r"<button[^>]*data-action=\"(startCreate)\"[^>]*data-args='([^']*)'[^>]*>(.*?)</button>"
+_cr_buttons = [(a, g, re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", t)).strip())
+               for a, g, t in re.findall(_cr_re, _cr_tpl, re.S)]
+check([b[2] for b in _cr_buttons] == ["New file", "New folder"]
+      and [json.loads(b[1])[0] for b in _cr_buttons] == ["file", "folder"],
+      "files page: the toolbar has New file and New folder, each opening its own kind",
+      repr(_cr_buttons))
+if _node and _cr_buttons:
+    with _tf_ta.NamedTemporaryFile("w", suffix=".js", delete=False) as _ch:
+        _ch.write(_CREATE_HARNESS)
+    try:
+        _cr = _sp_ta.run([_node, _ch.name, str(ROOT), json.dumps(_cr_buttons)],
+                         capture_output=True, text=True, timeout=60)
+    finally:
+        _os_ta.unlink(_ch.name)
+    try:
+        _cn = json.loads((_cr.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _cn = {"error": (_cr.stdout + _cr.stderr)[-600:]}
+    check("error" not in _cn, "js (node): the create harness ran", repr(_cn)[:600])
+    check(_cn.get("open") == {"top": True, "focused": True, "label": "New file name", "value": "",
+                              "buttons": [["submitCreate", "Create"], ["cancelCreate", "Cancel"]],
+                              "alert": ["alert", "none"]},
+          "js (node): New file opens an empty, focused name field at the top of the list, with "
+          "Create and Cancel and a hidden role=alert line", repr(_cn.get("open")))
+    check(_cn.get("escape") == {"open": False, "sent": 0, "focus_back": True},
+          "js (node): Escape closes the field, sends nothing, and returns focus to New file",
+          repr(_cn.get("escape")))
+    check(_cn.get("one") == {"boxes": 1, "label": "New folder name"}
+          and _cn.get("rename_closes") == {"create": False, "rename": True}
+          and _cn.get("create_closes") == {"create": True, "rename": False},
+          "js (node): one editor at a time — New folder replaces New file's field, Rename closes "
+          "it, and it closes a rename", repr((_cn.get("one"), _cn.get("rename_closes"),
+                                              _cn.get("create_closes"))))
+    check(_cn.get("blank") == {"sent": 0, "err": "Enter a name.", "shown": True},
+          "js (node): an all-blank name is refused in the page, unsent", repr(_cn.get("blank")))
+    check(_cn.get("refused") == {"body": {"dir": "", "name": "notes.txt", "kind": "file"},
+                                 "err": "TAKEN-MESSAGE", "shown": True, "open": True,
+                                 "editable": True, "focused": True, "toasts": 0},
+          "js (node): Enter sends {dir, name, kind}; the panel's refusal is shown under the field, "
+          "which stays open, editable and focused (no toast)", repr(_cn.get("refused")))
+    check(_cn.get("offline") == {"err": "Could not reach the panel. Reload the file browser to "
+                                        "see whether it was created.", "open": True},
+          "js (node): a panel that cannot be reached is said under the field", repr(_cn.get("offline")))
+    check(_cn.get("as_typed") == {"dir": "", "name": " b.txt ", "kind": "file"},
+          "js (node): the name is sent as typed, spaces and all — the panel refuses them, with "
+          "its reason", repr(_cn.get("as_typed")))
+    check(_cn.get("file") == {"body": {"dir": "", "name": "new.txt", "kind": "file"}, "browsed": 1,
+                              "open": False, "opened": ["/api/server/7/file?path=new.txt"],
+                              "cur": "new.txt", "toast": ["File created", "success"]},
+          "js (node): a created file: a toast, the list refreshes, the field closes, and the new "
+          "file opens in the editor", repr(_cn.get("file")))
+    check(_cn.get("folder") == {"body": {"dir": "maps", "name": "sub", "kind": "folder"},
+                                "last_browse": "/api/server/7/browse?path=maps%2Fsub",
+                                "cur_dir": "maps/sub", "open": False,
+                                "toast": ["Folder created", "success"]},
+          "js (node): a created folder is made in the folder shown, and then opened",
+          repr(_cn.get("folder")))
+    check(_cn.get("browse_clears") == {"open": False, "held": False},
+          "js (node): browse() rebuilds the list without the field and lets it go",
+          repr(_cn.get("browse_clears")))
+    check(_cn.get("i18n") == {"label": "Nombre del nuevo archivo", "buttons": ["Crear", "Cancelar"]},
+          "js (node, es, real i18n.js): the field's accessible name and its buttons are translated",
+          repr(_cn.get("i18n")))
+else:
+    _sfc_start = _js_code_only(_js_function_body(_sfr_src, "startCreate"))
+    _sfc_key = _js_code_only(_js_function_body(_sfr_src, "createKey"))
+    _sfc_submit = _js_code_only(_js_function_body(_sfr_src, "submitCreate"))
+    check("input.dataset.on='keydown'" in _sfc_start and "if(_renaming) cancelRename();" in _sfc_start
+          and "'Enter'" in _sfc_key and "'Escape'" in _sfc_key and "var want=r.input.value;" in _sfc_submit,
+          "js (no node): New file / New folder's field goes through the dispatcher, closes a "
+          "rename, and sends the name as typed", _sfc_start[:300])
 
 # ── the import reply's notes, driven: rendered, translated, kept as text ─────────────────────────
 # Two servers imported onto one port are imported (it is their configured port), and the reply's

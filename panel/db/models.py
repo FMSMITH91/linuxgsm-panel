@@ -938,7 +938,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "server_alerts_save", "edit_file", "delete_file", "download_file", "cron_add",
     "cron_update", "cron_delete", "cron_run_now", "set_log_timestamps", "gmod_content",
     "gmod_content_uninstall", "upload_file", "server_tags_set", "rename_file", "remote_reboot_exclude",
-    "browse_files", "read_file", "upload_check",
+    "browse_files", "read_file", "upload_check", "create_file", "create_folder",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({

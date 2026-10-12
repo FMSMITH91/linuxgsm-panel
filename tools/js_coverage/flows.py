@@ -383,10 +383,10 @@ def _press(d, key, code, vk):
     d.settle(quiet=0.3, limit=4.0)
 
 
-def _expect(cond, what, got):
-    """Raise FlowAssertion, naming what the rename did not do: run.py fails the run on it."""
+def _expect(cond, what, got, flow="rename"):
+    """Raise FlowAssertion, naming what the flow did not do: run.py fails the run on it."""
     if not cond:
-        raise FlowAssertion("rename: %s (got %r)" % (what, got))
+        raise FlowAssertion("%s: %s (got %r)" % (flow, what, got))
 
 
 def _rename_state(d):
@@ -454,6 +454,101 @@ def files_rename(d):
     d.goto("/server/1/files")
     _rename_keys(d)
     _rename_phone(d)
+
+
+CREATE_OPEN = r"""
+const btn = J.q('[data-action="startCreate"][data-args*="%s"]');
+if (!btn) return {err: 'no New %s button'};
+btn.click(); await J.sleep(200);
+const f = J.q('#file-list .fb-create input');
+if (!f) return {err: 'New %s opened no field'};
+return {focused: document.activeElement === f, top: J.q('#file-list').firstElementChild === f.closest('.fb-create')};
+"""
+CREATE_STATE = r"""
+const f = J.q('#file-list .fb-create input'), e = J.q('#file-list .fb-create-err');
+return {open: !!f, err: e && e.style.display !== 'none' ? e.textContent : '', dir: window.curDir,
+        rows: Array.from(document.querySelectorAll('#file-list [data-path]')).map(r => r.dataset.path),
+        editing: (J.q('#editor-path') || {}).textContent || ''};
+"""
+# The open field at a phone's width, a refusal under it, and the toolbar's four buttons: each
+# inside the row or the card, and the page not scrolling sideways.
+CREATE_FIT = r"""
+const box = J.q('#file-list .fb-create'), card = J.q('#file-browser');
+if (!box || !card) return {err: 'no field open'};
+const R = box.getBoundingClientRect(), C = card.getBoundingClientRect();
+const parts = Array.from(box.querySelectorAll('input, button, .fb-create-err')).filter(p => p.offsetParent !== null);
+const tools = Array.from(document.querySelectorAll('.fb-upload button')).filter(p => p.offsetParent !== null);
+const inside = (els, B) => els.every(p => { const r = p.getBoundingClientRect(); return r.left >= B.left - 0.5 && r.right <= B.right + 0.5; });
+return {vw: window.innerWidth, field: Math.round(box.querySelector('input').getBoundingClientRect().width),
+        inside_row: inside(parts, R), toolbar_inside_card: tools.length === 4 && inside(tools, C),
+        no_sideways_scroll: document.documentElement.scrollWidth <= window.innerWidth,
+        error_shown: parts.some(p => p.classList.contains('fb-create-err'))};
+"""
+_CREATE_FITS = ("inside_row", "toolbar_inside_card", "no_sideways_scroll", "error_shown")
+
+
+def _create_state(d):
+    got = d.run(CREATE_STATE) or {}
+    return got.get("open"), got.get("err") or "", got.get("rows") or [], got
+
+
+def _create_keys(d):
+    """New folder (opened), Escape, a taken file name (shown under the field), then a new file."""
+    got = d.run(CREATE_OPEN % (("folder",) * 3)) or {}
+    _expect((got.get("focused"), got.get("top")) == (True, True),
+            "New folder's field is focused, on top", got, flow="create")
+    d.keys("jscov-new\n")
+    d.wait(1.0)
+    is_open, _err, _rows, got = _create_state(d)
+    _expect((is_open, got.get("dir")) == (False, "jscov-new"),
+            "a new folder is made and opened", got, flow="create")
+    d.goto("/server/1/files")
+    d.run(CREATE_OPEN % (("file",) * 3))
+    _press(d, "Escape", "Escape", 27)
+    is_open, _err, _rows, got = _create_state(d)
+    _expect(is_open is False, "Escape closes the field", got, flow="create")
+    d.run(CREATE_OPEN % (("file",) * 3))
+    d.keys("server.cfg\n")
+    is_open, err, _rows, got = _create_state(d)
+    _expect((is_open, "already exists" in err) == (True, True), "a taken name is shown", got, flow="create")
+    _press(d, "Escape", "Escape", 27)
+    d.run(CREATE_OPEN % (("file",) * 3))
+    d.keys("jscov-new.txt\n")
+    d.wait(1.0)
+    is_open, _err, rows, got = _create_state(d)
+    _expect((is_open, "jscov-new.txt" in rows, got.get("editing")) == (False, True, "jscov-new.txt"),
+            "a new file is made, listed, and opened in the editor", got, flow="create")
+
+
+def _create_phone(d):
+    """At 375px wide: open New file, send a name the panel refuses, and measure."""
+    d.cdp.call("Emulation.setDeviceMetricsOverride",
+               {"width": 375, "height": 812, "deviceScaleFactor": 2, "mobile": True})
+    failed = True
+    try:
+        d.goto("/server/1/files")
+        d.run(CREATE_OPEN % (("file",) * 3))
+        d.keys("a/b\n")
+        fit = d.run(CREATE_FIT) or {}
+        _expect(fit.get("vw") == 375 and all(fit.get(k) for k in _CREATE_FITS),
+                "at 375px the field, its error and the toolbar fit", fit, flow="create")
+        _press(d, "Escape", "Escape", 27)
+        failed = False
+    finally:
+        # As in _rename_phone: a CDP error must not replace a FlowAssertion on its way out.
+        try:
+            d.cdp.call("Emulation.clearDeviceMetricsOverride")
+        except CDPError:
+            if not failed:
+                raise
+    d.goto("/server/1/files")
+
+
+def files_create(d):
+    """New folder and New file in the file browser with real keys, then measured at 375px wide."""
+    d.goto("/server/1/files")
+    _create_keys(d)
+    _create_phone(d)
 
 
 def files_drop(d):
@@ -874,7 +969,8 @@ FLOWS = {
                   ("actions", js(SERVER_ACTIONS))],
     "/server/4": [("console", js(CONSOLE)), ("players", js(PLAYERS))],
     "/server/1/files": [("files", js(FILES)), ("drop", files_drop), ("cron", js(CRON)),
-                        ("config", js(GAME_CONFIG)), ("rename", files_rename)],
+                        ("config", js(GAME_CONFIG)), ("rename", files_rename),
+                        ("create", files_create)],
     "/server-management": [("tabs", js(HOST_TABS)), ("security", js(HOST_SECURITY)),
                            ("controls", js(HOST_CONTROLS)), ("maintenance", js(HOST_MAINTENANCE)),
                            ("backups", js(BACKUPS)), ("reboot", js(REBOOT_DIALOG))],

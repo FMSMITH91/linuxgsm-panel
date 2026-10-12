@@ -1482,6 +1482,25 @@ def _check_rename_idor():
           _irn.status_code == 400, "got %d" % _irn.status_code)
 
 
+def _check_create_idor():
+    """New file / New folder, probed as rename is, as the MANAGE_SERVERS holder `_ci`.
+
+    A name with a slash is refused (400) before the host is asked anything, so the probe makes
+    nothing on either branch: a refused server is a 403, a server that got past access a 400.
+    """
+    if not other_id:
+        return
+    for kind in ("file", "folder"):
+        _icr = _ci.post("/api/server/%d/create-path" % other_id,
+                        json={"dir": "", "name": "a/b", "kind": kind})
+        check("IDOR: creating a %s on a non-granted server BLOCKED (for a MANAGE_SERVERS holder)"
+              % kind, _icr.status_code == 403, "got %d" % _icr.status_code)
+        _icr = _ci.post("/api/server/%d/create-path" % accessible_id,
+                        json={"dir": "", "name": "a/b", "kind": kind})
+        check("IDOR: ...while the same %s create on the granted server gets past access (control)"
+              % kind, _icr.status_code == 400, "got %d" % _icr.status_code)
+
+
 def _check_limited_user_server_actions():
     """The limited user's server actions and file/cron/tag writes are refused; tag reads scoped."""
     global _dl
@@ -1496,6 +1515,12 @@ def _check_limited_user_server_actions():
     check("rename file without MANAGE_SERVERS -> 403",
           c.post("/api/server/%d/rename-path" % accessible_id,
                  json={"path": "server.cfg", "new_name": "renamed.cfg"}).status_code == 403)
+    # A VALID create too, for the same reason: without the permission check it would go on to
+    # the account gate and the host, and answer something else.
+    for _kind in ("file", "folder"):
+        check("create %s without MANAGE_SERVERS -> 403" % _kind,
+              c.post("/api/server/%d/create-path" % accessible_id,
+                     json={"dir": "", "name": "new-" + _kind, "kind": _kind}).status_code == 403)
     # The download is the one file-browser route that hands bytes OUT, and it is a plain link
     # rather than an /api/ route — so its refusal is a redirect, not a 403 body.
     #
@@ -3757,6 +3782,7 @@ try:
     _check_host_routes_refuse_delegated_panel_host()
     _check_vps_prep_allows_a_remote_host()
     _check_rename_idor()
+    _check_create_idor()
     _check_limited_user_server_actions()
     _check_legacy_super_admin_grant()
     _check_denials_and_limited_pages()
@@ -4334,11 +4360,14 @@ _AX_ACTION_FROM_CALLER = {
                                 # "queued_backup_waiting"
     "audit_bot_action",         # the chat bots pass "moderate_say" (server=) / "panel_self_update"
     "_write_refused",           # server_files' write routes pass edit_config / edit_file /
-                                # delete_file / rename_file / upload_file / cron_add / cron_update /
+                                # delete_file / rename_file / create_file / create_folder /
+                                # upload_file / cron_add / cron_update /
                                 # cron_delete / cron_run_now — each the action that route audits on
                                 # success
     "_read_refused",            # server_files' read routes pass browse_files / read_file /
                                 # upload_check — the refusal of a read as a root-capable account
+    "_create_refused",          # server_files' create-path passes create_file / create_folder,
+    "_create_answer",           # by the kind it was asked for
 }
 _ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
 _ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)

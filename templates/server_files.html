@@ -27,6 +27,9 @@
   #file-list .fb-rename { flex: 1 1 auto; min-width: 0; }
   #file-list .fb-rename .form-control { min-width: 0; flex: 1 1 auto; }
   #file-list .fb-rename .btn { flex: 0 0 auto; }
+  /* The New file / New folder field: Rename's field, as its own row at the top of the list. */
+  #file-list .fb-create .form-control { min-width: 0; flex: 1 1 auto; }
+  #file-list .fb-create .btn { flex: 0 0 auto; }
   #drop-overlay {
     position: absolute; inset: 0; z-index: 5; pointer-events: none;
     display: none; align-items: center; justify-content: center; text-align: center;
@@ -226,6 +229,14 @@
         </button>
         <input type="file" id="upload-dir-input" aria-label="Upload folder" webkitdirectory directory multiple
                style="display:none;" data-action="doUploadDir" data-args='["@event"]' data-on="change">
+        {# New file / New folder open a name field at the top of the list (server_files.js
+           startCreate), in the folder the list shows. #}
+        <button class="btn btn-sm btn-outline-secondary" data-action="startCreate" data-args='["file", "@self"]'>
+          <i class="bi bi-file-earmark-plus"></i> New file
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-action="startCreate" data-args='["folder", "@self"]'>
+          <i class="bi bi-folder2"></i> New folder
+        </button>
       </div>
     </div>
   </div>
