@@ -537,13 +537,19 @@ def ufw_allows_iface_in(rules, iface):
             continue
         if r.get("action") in ("DENY", "REJECT"):
             return False
-        # Not a UDP-only allow: ufw prints a source-only rule's protocol on the From side
-        # (`ufw allow in on tailscale0 from <net> proto udp` is To "Anywhere on tailscale0", From
-        # "<net>/udp"), and that one carries no SSH at all.
-        if (to == whole and r.get("action") in ("ALLOW", "LIMIT")
-                and not (r.get("from") or "").strip().lower().endswith("/udp")):
+        if to == whole and _r14a_allows_all(r):
             return True
     return False
+
+
+def _r14a_allows_all(r):
+    """Whether a whole-interface rule `r` is an ALLOW/LIMIT for every protocol, not UDP alone.
+
+    ufw prints a source-only rule's protocol on the From side (`ufw allow in on tailscale0 from
+    <net> proto udp` is To "Anywhere on tailscale0", From "<net>/udp"), and that one carries no SSH.
+    """
+    return (r.get("action") in ("ALLOW", "LIMIT")
+            and not (r.get("from") or "").strip().lower().endswith("/udp"))
 
 
 def ufw_allow_tailscale(ts_interface=None):

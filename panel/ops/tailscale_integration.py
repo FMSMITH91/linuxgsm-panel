@@ -354,13 +354,9 @@ def _parse_serve_status(text):
         # `tailscale serve <dir>` shares) or `text` (upstream serveHandlerDesc). Only proxy routes
         # were kept, so a file share on the panel's listener was invisible: the panel's Serve write
         # flipped its Funnel (Funnel is per listener) and the wizard published over its mount.
-        route_match = _SERVE_ROUTE_RE.match(stripped)
-        if route_match and current_url:
-            current_routes.append({
-                "mount": route_match.group(1),
-                "type": route_match.group(2) or "",
-                "target": (route_match.group(3) or "").strip(),
-            })
+        route = _r14a_serve_route(stripped)
+        if route and current_url:
+            current_routes.append(route)
         # There used to be a "funnel anywhere in the line" fallback here. It could never see the
         # URL line (that `continue`s above), and the "# Funnel on:" header comes before any URL, so
         # all it could ever match was a ROUTE — a mount or backend with "funnel" in its name.
@@ -368,6 +364,14 @@ def _parse_serve_status(text):
     _append_service(result["services"], current_url, current_funnel, current_routes, current_svc)
 
     return result
+
+
+def _r14a_serve_route(line):
+    """One `|-- <mount> [<kind> <what>]` line as {mount, type, target}, else None."""
+    m = _SERVE_ROUTE_RE.match(line)
+    if not m:
+        return None
+    return {"mount": m.group(1), "type": m.group(2) or "", "target": (m.group(3) or "").strip()}
 
 
 def _append_service(services, url, funnel, routes, svc=""):
@@ -1084,14 +1088,7 @@ def disable_tailscale_serve(mount, port):
     ours = [r for r in routes if not r.get("svc")]
     on_svc = _r14a_svc_note(routes)
     if not any(r["mount"] == mount for r in ours):
-        # Nothing at `mount` proxies the panel. Another app's mapping there is never touched.
-        if ours:
-            return False, ("The panel is published at %s, not at %s, so nothing was removed."
-                           % (ours[0]["mount"], mount))
-        if on_svc:
-            return True, ("Tailscale Serve wasn't publishing the panel on this node, so there was "
-                          "nothing to remove" + on_svc)
-        return True, "Tailscale Serve wasn't publishing the panel, so there was nothing to remove."
+        return _r14a_nothing_at_mount(ours, mount, on_svc)
     # The panel user has to be the Tailscale operator to change Serve config — the same step the
     # enable path takes first.
     ensure_operator()
@@ -1112,6 +1109,17 @@ def _r14a_svc_note(routes):
         return ""
     return ("; the panel is still published on the Tailscale Service %s, which the panel does not "
             "manage (remove it with `tailscale serve --service=<name> ... off`)" % ", ".join(names))
+
+
+def _r14a_nothing_at_mount(ours, mount, on_svc):
+    """Disable's answer when nothing at `mount` proxies the panel; another app's is never touched."""
+    if ours:
+        return False, ("The panel is published at %s, not at %s, so nothing was removed."
+                       % (ours[0]["mount"], mount))
+    if on_svc:
+        return True, ("Tailscale Serve wasn't publishing the panel on this node, so there was "
+                      "nothing to remove" + on_svc)
+    return True, "Tailscale Serve wasn't publishing the panel, so there was nothing to remove."
 
 
 def _r12a_funnel_kept_note(info, port):

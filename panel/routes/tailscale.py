@@ -208,6 +208,18 @@ def _serve_remove_route(port, data):
         if state == "unread" else "Failed to remove: %s" % err)}), 500
 
 
+def _r14a_not_removable(route, cfg):
+    """Why `route` is not one Remove may take down, or "" when it is."""
+    if route.get("svc"):
+        # A Tailscale Service's route: the panel's `off` has no --service, so it would name the
+        # node's own :443 at that mount — another app's route there (ts.remove_panel_route).
+        return ("That route is on the Tailscale Service %s, which the panel does not manage, so "
+                "nothing was removed." % route["svc"])
+    if ts.is_managed_route(route, cfg):
+        return "That is the route the panel is published at. Use Disable to stop publishing it."
+    return ""
+
+
 def _leftover_route(port, url, raw_mount):
     """(the route to remove, None), or (None, the response that refuses it) — read from the host."""
     try:
@@ -223,16 +235,10 @@ def _leftover_route(port, url, raw_mount):
     if route is None:
         return None, (jsonify({"success": False, "message": "No route to the panel is at %s on "
                                "that listener any more." % mount}), 404)
-    if route.get("svc"):
-        # A Tailscale Service's route: the panel's `off` has no --service, so it would name the
-        # node's own :443 at that mount — another app's route there (ts.remove_panel_route).
-        return None, (jsonify({"success": False, "message": "That route is on the Tailscale Service "
-                               "%s, which the panel does not manage, so nothing was removed."
-                               % route["svc"]}), 400)
     cfg = load_config()
-    if ts.is_managed_route(route, cfg):
-        return None, (jsonify({"success": False, "message": "That is the route the panel is "
-                               "published at. Use Disable to stop publishing it."}), 400)
+    why = _r14a_not_removable(route, cfg)
+    if why:
+        return None, (jsonify({"success": False, "message": why}), 400)
     # The LAST route to a panel bound to localhost is the only way in: the same lock-out Disable
     # refuses (_disable_would_strand_panel), reached through the other button.
     stranded = _disable_would_strand_panel(cfg) if len(ours) == 1 else ""
