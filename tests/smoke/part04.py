@@ -2708,6 +2708,7 @@ def _cp_put_port_back(cfg):
     """Restore the panel's saved port (the change-port check below moves it)."""
     cfg.update({"port": _cp_port})
 
+
 try:
     _am.so.ensure_panel_fail2ban = lambda log, port, ignore=None: (
         _f2b_calls.append((port, list(ignore) if ignore is not None else None)), (True, "ok"))[1]
