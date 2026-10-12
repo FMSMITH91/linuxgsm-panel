@@ -658,13 +658,22 @@ def _r16d_lands_in(node, parent):
     up, child = parent.get(node), node
     while up is not None and not isinstance(up, (ast.stmt, ast.Call)):
         up, child = parent.get(up), up
-    targets = (up.targets if isinstance(up, ast.Assign) else [up.target]
-               if isinstance(up, (ast.AugAssign, ast.AnnAssign)) else [])
-    said = [_r16d_name_of(x) for t in targets for x in ast.walk(t)]
+    said = [_r16d_name_of(x) for t in _r16d_targets(up) for x in ast.walk(t)]
     said += [k.arg or "" for k in getattr(up, "keywords", None) or [] if k is child]
-    _d = parent.get(node)
-    said += [_r16d_name_of(k) for k, v in zip(getattr(_d, "keys", []), getattr(_d, "values", [])) if v is node]
-    return said
+    return said + _r16d_dict_keys_of(parent.get(node), node)
+
+
+def _r16d_targets(stmt):
+    """An assignment statement's targets, or none."""
+    import ast
+    if isinstance(stmt, ast.Assign):
+        return stmt.targets
+    return [stmt.target] if isinstance(stmt, (ast.AugAssign, ast.AnnAssign)) else []
+
+
+def _r16d_dict_keys_of(d, node):
+    """The key `node` is stored under when `d` is the dict literal holding it."""
+    return [_r16d_name_of(k) for k, v in zip(getattr(d, "keys", []), getattr(d, "values", [])) if v is node]
 
 
 def _r16d_name_of(x):

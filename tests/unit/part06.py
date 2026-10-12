@@ -1550,13 +1550,22 @@ def _r16d_names_helper(node):
 
 def _r16d_helper_aliases(tree):
     """{name: the helper} for each `name = module_from_spec(spec)` whose spec loads tools/panel-helper."""
-    _assigns = [(_n.value, [_t.id for _t in _n.targets if isinstance(_t, _ast_scan.Name)])
-                for _n in _ast_scan.walk(tree)
-                if isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Call)]
+    _assigns = _r16d_call_assigns(tree)
     _specs = {_t for _v, _ts in _assigns if _r16d_loads_helper(_v) for _t in _ts}
-    return {_t: _R16D_HELPER_MOD for _v, _ts in _assigns
-            if getattr(_v.func, "attr", getattr(_v.func, "id", "")) == "module_from_spec"
-            and _v.args and getattr(_v.args[0], "id", None) in _specs for _t in _ts}
+    return {_t: _R16D_HELPER_MOD for _v, _ts in _assigns if _r16d_spec_module(_v, _specs) for _t in _ts}
+
+
+def _r16d_call_assigns(tree):
+    """[(call, [names])] for each `names = call(...)` in `tree`."""
+    return [(_n.value, [_t.id for _t in _n.targets if isinstance(_t, _ast_scan.Name)])
+            for _n in _ast_scan.walk(tree)
+            if isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Call)]
+
+
+def _r16d_spec_module(call, specs):
+    """Is `call` module_from_spec(<one of specs>)?"""
+    return (getattr(call.func, "attr", getattr(call.func, "id", "")) == "module_from_spec"
+            and bool(call.args) and getattr(call.args[0], "id", None) in specs)
 
 
 def _r16d_loads_helper(call):
@@ -1580,11 +1589,16 @@ def _r14d_aliases(tree, carried):
     return _r16d_follow_copies(tree, alias)
 
 
+def _r16d_name_copies(tree):
+    """[(source name, copy name)] for each `copy = source` in `tree`."""
+    return [(_n.value.id, _t.id) for _n in _ast_scan.walk(tree)
+            if isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Name)
+            for _t in _n.targets if isinstance(_t, _ast_scan.Name)]
+
+
 def _r16d_follow_copies(tree, alias):
     """`alias` plus each name copied from one (`_H = _sm_hosts`), a copy of a copy included."""
-    _copies = [(_n.value.id, _t.id) for _n in _ast_scan.walk(tree)
-               if isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Name)
-               for _t in _n.targets if isinstance(_t, _ast_scan.Name)]
+    _copies = _r16d_name_copies(tree)
     for _ in range(4):  # at most 4 rounds, stopping at the first that adds nothing
         _added = {_dst: alias[_src] for _src, _dst in _copies if _src in alias and _dst not in alias}
         if not _added:

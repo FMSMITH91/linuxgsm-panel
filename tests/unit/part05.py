@@ -1015,13 +1015,16 @@ def _r14d_ignores_deprecations(call, aliases=None):
     _ci = 2 if _fn == "filterwarnings" else 1
     _cat = _kw.get("category", call.args[_ci] if len(call.args) > _ci else None)
     _act = call.args[0] if call.args else _kw.get("action")
-    # message is positional 2nd and module 4th in filterwarnings(action, message, category, module)
-    _scope = [] if _fn != "filterwarnings" else [
-        _kw.get(_k, call.args[_i] if len(call.args) > _i else None)
-        for _k, _i in (("message", 1), ("module", 3))]
+    _scope = _r16d_scope_args(call, _kw) if _fn == "filterwarnings" else []
     return (isinstance(_act, _dw_ast.Constant) and _act.value == "ignore"
             and not any(_r16d_scopes(_v) for _v in _scope)
             and _r15d_category_covers_deprecations(_cat, aliases))
+
+
+def _r16d_scope_args(call, kw):
+    """A filterwarnings call's message and module: positional 2nd and 4th, or by keyword."""
+    return [kw.get(_k, call.args[_i] if len(call.args) > _i else None)
+            for _k, _i in (("message", 1), ("module", 3))]
 
 
 def _r16d_scopes(node):
