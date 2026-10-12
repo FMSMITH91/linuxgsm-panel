@@ -147,6 +147,106 @@ def _idt3_chat62():
                   "no chat": ["Alice", "Bob Smith"], "chat only": None}, repr(got))
 
 
+# ── The guid-less idTech3 status layouts, built with each engine's own printf formats ────────────
+# Upstream sources (copies fetched to work/review-1011d/upstream-status/): ioquake3
+# code/server/sv_ccmds.c SV_Status_f, iortcw MP/code/server/sv_ccmds.c SV_Status_f (the same
+# text), OpenJK codemp/server/sv_ccmds.cpp SV_Status_f, id's Quake III 1.32
+# code/server/sv_ccmds.c SV_Status_f, ET:Legacy src/server/sv_ccmds.c SV_Status_f.
+# (slot, score, ping or state, name, address, rate, lastmsg, qport)
+_IDT3_PLAYERS62 = [(0, 12, 48, "Alice", "203.0.113.5", 25000, 50, 1234),
+                   (1, -3, 999, "Bob Smith", "203.0.113.6", 25000, 0, 2345),
+                   (2, 0, 0, "^1Red^7Bot", "bot", 0, 0, 0),
+                   (3, 0, "CON", "Newcomer", "203.0.113.7", 5000, 100, 3456),
+                   (4, 7, "ZMB", "Gone Now", "203.0.113.8", 25000, 900, 4567),
+                   (5, 1, 9999, "AVeryLongPlayerNm", "203.0.113.9", 25000, 10, 5678)]
+_IDT3_NAMES62 = ["Alice", "Bob Smith", "RedBot", "Newcomer", "Gone Now", "AVeryLongPlayerNm"]
+
+
+def _plen62(name):
+    """SV_Strlen / Q_PrintStrlen: a name's length without its colour codes."""
+    return len(name) - 2 * name.count("^")
+
+
+def _ioq3_62(rows):
+    """ioquake3 / iortcw: "%2i ", "%5i ", "CON "/"ZMB "/"%4i ", the name, at least one blank up to
+    16 visible characters (do-while), "^7%s" the address, at least one blank up to 39, " %5i"."""
+    out = ("map: q3dm17\ncl score ping name            address                                 rate \n"
+           "-- ----- ---- --------------- --------------------------------------- -----\n")
+    for i, sc, st, nm, ad, rt, _lm, _qp in rows:
+        ln = "%2i " % i + "%5i " % sc + ({"CON": "CON ", "ZMB": "ZMB "}.get(st) or "%4i " % st) + nm
+        ln += " " * max(1, 16 - _plen62(nm)) + "^7" + ad + " " * max(1, 39 - len(ad)) + " %5i" % rt
+        out += ln + "\n"
+    return out + "\n"
+
+
+def _openjk62(rows):
+    """OpenJK: "%2i %5i %s %-15.15s ^7%39s %5i", the state "CON "/"ZMB " or "%4i"."""
+    out = ("hostname: p62^7\nplayers : 5 humans, 1 bots (32 max)\n"
+           "cl score ping name            address                                 rate \n"
+           "-- ----- ---- --------------- --------------------------------------- -----\n")
+    for i, sc, st, nm, ad, rt, _lm, _qp in rows:
+        state = {"CON": "CON ", "ZMB": "ZMB "}.get(st) or "%4i" % st
+        out += "%2i %5i %s %-15.15s ^7%39s %5i\n" % (i, sc, state, nm, ad + ":29070", rt)
+    return out + "\n"
+
+
+def _q3_132_62(rows):
+    """Quake III 1.32: "%3i ", "%5i ", "CNCT "/"ZMBI "/"%4i ", the name, "^7", blanks up to 16,
+    "%7i " lastmsg, the address, blanks up to 22, "%5i" qport, " %5i" rate."""
+    out = ("map: q3dm17\nnum score ping name            lastmsg address               qport rate\n"
+           "--- ----- ---- --------------- ------- --------------------- ----- -----\n")
+    for i, sc, st, nm, ad, rt, lm, qp in rows:
+        ln = "%3i " % i + "%5i " % sc + ({"CON": "CNCT ", "ZMB": "ZMBI "}.get(st) or "%4i " % st)
+        ln += nm + "^7" + " " * max(0, 16 - len(nm)) + "%7i " % lm + ad + " " * max(0, 22 - len(ad))
+        out += ln + "%5i" % qp + " %5i" % rt + "\n"
+    return out + "\n"
+
+
+def _etl62(rows):
+    """ET:Legacy: "%3i ", "%5i ", "CNCT "/"ZMBI "/"%4i ", then "%-*s %7i %-21s %5i %5i %i" with the
+    name's width sizeof(name) (36) + its colour characters + 1."""
+    out = ("map                   : oasis\n\n"
+           "num score ping name                                lastmsg address               qport rate  "
+           "lastConnectTime\n"
+           "--- ----- ---- ----------------------------------- ------- --------------------- ----- ----- "
+           "---------------\n")
+    for i, sc, st, nm, ad, rt, lm, qp in rows:
+        state = {"CON": "CNCT ", "ZMB": "ZMBI "}.get(st) or "%4i " % st
+        width = 36 + (len(nm) - _plen62(nm)) + 1
+        out += "%3i %5i " % (i, sc) + state + "%-*s %7i %-21s %5i %5i %i\n" % (
+            width, nm, lm, ad, qp, rt, 4000)
+    return out + "\n"
+
+
+def _idt3_layouts62():
+    pane = {"text": ""}
+    _p9_patch(_p9_core, "send_console_command", lambda *a, **k: ("PANE_MARK 1200 17\n", "", 0))
+    _p9_patch(_game62, "capture_console", lambda *a, **k: (pane["text"], "", 0))
+    _p9_patch(_game62, "time", NS(sleep=lambda s: None))
+    got = {}
+    for tag, game, build in (("ioquake3 (q3)", "q3", _ioq3_62), ("iortcw (rtcw)", "rtcw", _ioq3_62),
+                             ("OpenJK (jamp)", "jamp", _openjk62), ("Quake III 1.32", "q3", _q3_132_62),
+                             ("ET:Legacy (etl)", "etl", _etl62)):
+        pane["text"] = ("status\n" + build(_IDT3_PLAYERS62).rstrip("\n")
+                        + "\n6 0 0 Mallory not a row at all\n"
+                        + "say: Bob Smith: cl score ping name address rate\n")
+        got[tag] = [(p["num"], p["name"]) for p in _game62.console_player_list(None, _USER62, game) or []]
+    want = list(enumerate(_IDT3_NAMES62))
+    ojk = want[:5] + [(5, "AVeryLongPlayer")]          # OpenJK prints %-15.15s
+    check("players (idTech3): the ioquake3 / iortcw / OpenJK `cl score ping …` table and the "
+          "guid-less Quake III 1.32 / ET:Legacy tables are read — slots and names, a name with "
+          "spaces, a bot, ping 999 and 9999, CON/ZMB and CNCT/ZMBI rows, a long name — while a "
+          "line whose trailing columns are not the header's numbers is no row, and a chat line "
+          "after the table is not a header",
+          got == {"ioquake3 (q3)": want, "iortcw (rtcw)": want, "OpenJK (jamp)": ojk,
+                  "Quake III 1.32": want, "ET:Legacy (etl)": want}, repr(got))
+    pane["text"] = "status\n" + _COD62.split("\n", 1)[1] + (
+        "  2     0 CNCT 1100001cccccccccccccccccccccccccc Carl                 0 203.0.113.4:28960 2222 25000\n")
+    cod = [p["name"] for p in _game62.console_player_list(None, _USER62, "cod4") or []]
+    check("players (idTech3): CoD's guid table still parses, a CNCT row included (control)",
+          cod == ["Alice", "Bob Smith", "Carl"], repr(cod))
+
+
 _SRC62 = ('hostname: p62\nplayers : 2 humans, 0 bots (24 max)\n'
           '# userid name uniqueid connected ping loss state\n'
           '#  2 "Ann" STEAM_0:1:5 01:02 40 0 active\n'
@@ -405,6 +505,7 @@ try:
     _A62 = _p9_client(_ADMIN62)
     _idt3_chat62()
     _valve_chat62()
+    _idt3_layouts62()
     _capture_shrink62()
     _priv_refusals62()
     _reach62()

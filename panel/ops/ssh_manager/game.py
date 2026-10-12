@@ -190,30 +190,44 @@ def _parse_valve_status(text):
     return players
 
 
-# The `status` header by its own shape, from the start of the line: "num score ping [guid] name
-# lastmsg address …" (ioq3-derived, CoD, ET:Legacy). Matched as a substring test ("num", "score"
-# and "ping" anywhere, not a row), a player's chat line `say: Bob: num score ping`, which a
-# dedicated server echoes to its console after the real table, became the LAST header: the rows
-# after it were none, and a full server read as confirmed-empty (the Players card, the bots'
-# /players, and Kick/Ban finding nobody). Chat and every other log line start with their own tag
-# or a name, never with these words, and the shape is longer than a player name may be.
+# The `status` header by its own shape, from the start of the line. Two families:
+#   "num score ping [guid] name lastmsg address …" — Quake III 1.32 (id's code/server/sv_ccmds.c
+#     SV_Status_f), ET:Legacy (src/server/sv_ccmds.c, adds lastConnectTime), CoD (adds guid);
+#   "cl score ping name address rate" — ioquake3 (code/server/sv_ccmds.c SV_Status_f), iortcw
+#     (MP/code/server/sv_ccmds.c) and OpenJK (codemp/server/sv_ccmds.cpp). This family was never
+#     recognised ("num" was required), so q3, rtcw and jamp player lists were always unknown.
+# Matched as a substring test ("num", "score" and "ping" anywhere, not a row), a player's chat
+# line `say: Bob: num score ping`, which a dedicated server echoes to its console after the real
+# table, became the LAST header: the rows after it were none, and a full server read as
+# confirmed-empty (the Players card, the bots' /players, and Kick/Ban finding nobody). Chat and
+# every other log line start with their own tag or a name, never with these words, and the shape
+# is longer than a player name may be.
 _R14B_IDT3_HEADER_RE = re.compile(r"\s*num\s+score\s+ping\s+(?:guid\s+)?name\s+lastmsg\s+address\b",
                                   re.I)
+_R14B_IDT3_CL_HEADER_RE = re.compile(r"\s*cl\s+score\s+ping\s+name\s+address\s+rate\b", re.I)
+
+
+def _r14b_idt3_table(lines):
+    """(index of the first row after the LAST status header, that header's column names).
+
+    (0, None) when there is no header.
+    """
+    start, cols = 0, None
+    for i, ln in enumerate(lines):
+        # ...and the header is a line that is NOT a player row. Every row begins with the slot
+        # number and the header begins with the word "num" (or "cl"), so the anchored shape
+        # separates them. Without that, a player called "numscoreping" — twelve characters, well
+        # inside a CoD name limit — made their own row the header: last in the table it returned
+        # an empty list, mid-table it dropped them and everyone above them, and either way the
+        # slot numbers moderation needs came back None for the whole server.
+        if _R14B_IDT3_HEADER_RE.match(ln) or _R14B_IDT3_CL_HEADER_RE.match(ln):
+            start, cols = i + 1, ln.lower().split()
+    return start, cols
 
 
 def _idtech3_table_start(lines):
-    """Index of the first row after the LAST 'num…score…ping' header (0 when there is none)."""
-    start = 0
-    for i, ln in enumerate(lines):
-        # ...and the header is a line that is NOT a player row. Every row begins with the slot
-        # number and the header begins with the word "num", so the anchored shape separates them.
-        # Without that, a player called "numscoreping" — twelve characters, well inside a CoD
-        # name limit — made their own row the header: last in the table it returned an empty
-        # list, mid-table it dropped them and everyone above them, and either way the slot numbers
-        # moderation needs came back None for the whole server.
-        if _R14B_IDT3_HEADER_RE.match(ln):
-            start = i + 1
-    return start
+    """Index of the first row after the LAST status header (0 when there is none)."""
+    return _r14b_idt3_table(lines)[0]
 
 
 # An idTech3 `status` row: "num score ping guid name … lastmsg address …". The name may hold
@@ -222,7 +236,12 @@ def _idtech3_table_start(lines):
 # of blanks in the row at each character it grew by: quadratic in a row's blanks. The row is now
 # read in the same order the pattern read it — each run of blanks is tried ONCE, as the gap in
 # front of the lastmsg column — so the answers are the pattern's, in linear time.
-_IDT3_ROW_HEAD_RE = re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+(\S+)(\s+)")
+# The ping column holds a number, or the client's state while it is not yet in the game:
+# CNCT/ZMBI (Quake III 1.32, ET:Legacy, CoD; ET:Legacy's DEMO too), CON/ZMB (ioquake3, iortcw,
+# OpenJK). A row with a state word was not read at all. (The row-with-address pattern below
+# and _R14B_IDT3_HEAD_FIELDS_RE spell the alternation out: part06's anchor gate reads a pattern
+# only when it is one literal.)
+_IDT3_ROW_HEAD_RE = re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+|CNCT|ZMBI|DEMO|CON|ZMB)\s+(\S+)(\s+)")
 _IDT3_ADDR_RE = re.compile(r"\d+\s+\d{1,3}(?:\.\d{1,3}){3}:\d+")
 _BLANKS_RE = re.compile(r"\s+")
 # The fallback for rows with no address column: num score ping guid name(rest). The name starts on
@@ -262,17 +281,44 @@ def _match_idtech3_row(ln):
     return row
 
 
+def _r14b_idt3_row_by_columns(ln, cols):
+    """(num, score, ping, "", name) for a row of a table with no guid column, else None.
+
+    Those engines print the name padded, then the columns the header names after "name": ioq3,
+    iortcw and OpenJK `^7<address> <rate>` (OpenJK right-aligns the address); Quake III 1.32
+    `^7<lastmsg> <address> <qport> <rate>`; ET:Legacy the same plus lastConnectTime. So the row is
+    read from the RIGHT, exactly as many fields as the header has after "name", and the name is
+    what is left after the slot, score and ping: a name may hold spaces and digits. The colour
+    codes go first, so the engine's own `^7` before the address is not part of either. Every
+    field but the address must be a number, which a chat or log line does not end in.
+    """
+    tail_cols = cols[cols.index("name") + 1:]
+    parts = _strip_q3_colors(ln).rsplit(None, len(tail_cols))
+    head = parts[0].split(None, 3) if len(parts) == len(tail_cols) + 1 else []
+    if len(head) != 4 or not _R14B_IDT3_HEAD_FIELDS_RE.fullmatch(" ".join(head[:3])):
+        return None
+    if not all(_R14B_INT_RE.fullmatch(v) for c, v in zip(tail_cols, parts[1:]) if c != "address"):
+        return None
+    return head[0], head[1], head[2], "", head[3]
+
+
+_R14B_IDT3_HEAD_FIELDS_RE = re.compile(r"[0-9]+ -?[0-9]+ (?:[0-9]+|CNCT|ZMBI|DEMO|CON|ZMB)")
+_R14B_INT_RE = re.compile(r"-?[0-9]+")
+
+
 def _parse_idtech3_status(text):
     """Parse a Quake3/CoD `status` reply into [{name, num, guid, steamid, score, time}].
 
-    Rows are 'num score ping guid name … address …'; the name can contain spaces + ^-colour codes.
-    Only the most recent table (rows after the last 'num…score…ping' header) is kept.
+    Rows are 'num score ping guid name … address …' (CoD), or the guid-less layouts read by
+    _r14b_idt3_row_by_columns; the name can contain spaces + ^-colour codes. Only the most recent
+    table (rows after the last status header) is kept.
     """
     lines = (text or "").splitlines()
-    start = _idtech3_table_start(lines)
+    start, cols = _r14b_idt3_table(lines)
+    by_columns = cols is not None and "guid" not in cols
     players, seen = [], set()
     for ln in lines[start:]:
-        row = _match_idtech3_row(ln)
+        row = _r14b_idt3_row_by_columns(ln, cols) if by_columns else _match_idtech3_row(ln)
         if not row:
             continue
         num = _int_or_none(row[0])
