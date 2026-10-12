@@ -18,9 +18,15 @@ import os as _os64
 import types as _types64
 
 from unit.part01 import check, skip
-from unit.part12 import P9_ADMIN, _p9, _p9_client
+from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_client
 from unit.part20 import _patch, _patched
 from unit.part47 import _cut47, _node47
+from unit.part61 import _r15d_arm61
+
+# The route blocks below run with part61's transport tripwire armed, and the part ends by reading
+# what it recorded (review 1012a): each stubs only the leaf it names, so a host call on a passing
+# path would have run a real local shell (as root on CI's root leg) with the part green.
+_TRIP64_START = len(_P9_TRIPPED)
 
 import app as _app64  # noqa: E402
 from panel.db.models import GameServer, RemoteServer, User, UserSession, db  # noqa: E402
@@ -121,7 +127,11 @@ try:
         _ntr64 = _try64(_app64._node_tools_cron_pass, _p9)
     check("node-tools pass: a host deleted during its own install is logged and the hosts after it, "
           "and every game server's cron upgrade, still run (`r.name` in the except ended the pass)",
-          _ntr64 is None and "p64-nt-a" in _nt64 and "p64-nt-b" in _nt64, repr((_ntr64, _nt64)))
+          # ...hosts AFTER it: rows come back in rowid order today, so this held only by that order
+          # (review 1012a); the deleted host has to have been reached before one that still ran.
+          _ntr64 is None and "p64-nt-a" in _nt64 and "p64-nt-b" in _nt64 and "p64-wl-b" in _nt64
+          and max(_nt64.index("p64-nt-a"), _nt64.index("p64-nt-b")) > _nt64.index("p64-wl-b"),
+          repr((_ntr64, _nt64)))
     check("node-tools pass: ...and a game server deleted during its cron upgrade does not stop the "
           "next one's (`gs.name` in the except)",
           _ntr64 is None and _up64.index("p64gsb") > _up64.index("p64gsa") if "p64gsb" in _up64 else False,
@@ -199,15 +209,19 @@ def _sess64(uid):
 try:
     with _p9.app_context():
         _rp64, _lo64 = _user64("p64_reset"), _user64("p64_logout")
-    _rpr64 = _p9_client(P9_ADMIN).post("/users/%d/edit" % _rp64, data={
-        "display_name": "p64_reset", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
+    with _patched():
+        _r15d_arm61()
+        _rpr64 = _p9_client(P9_ADMIN).post("/users/%d/edit" % _rp64, data={
+            "display_name": "p64_reset", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
     check("reset: an admin's password reset on /users clears the account's session rows (they listed "
           "as live sessions, revoked devices among them, until they idled out)",
           _rpr64.status_code in (200, 302) and _sess64(_rp64) == (0, 1),
           repr((_rpr64.status_code, _sess64(_rp64))))
     # A cookie with no sid (the legacy shape _p9_client signs in with) is signed out by the global
     # epoch bump; every device goes with it, so every row must too.
-    _lor64 = _p9_client(_lo64).post("/logout")
+    with _patched():
+        _r15d_arm61()
+        _lor64 = _p9_client(_lo64).post("/logout")
     check("logout: a legacy cookie's sign-out (the epoch bump: every device) clears every session row",
           _lor64.status_code in (200, 302) and _sess64(_lo64) == (0, 1),
           repr((_lor64.status_code, _sess64(_lo64))))
@@ -278,7 +292,9 @@ check("config numbers: ...and a real number still reads (control)",
 try:
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), autoblock_threshold=_INF64, session_lifetime_hours=_INF64,
                              remember_days="abc", reboot_wait_max_hours=_INF64))
-    _set64 = _p9_client(P9_ADMIN).get("/settings")
+    with _patched():
+        _r15d_arm61()
+        _set64 = _p9_client(P9_ADMIN).get("/settings")
     _sbody64 = _set64.get_data(as_text=True)
     check("config Infinity: /settings renders with Infinity / \"abc\" hand-edited into the threshold, the "
           "session lifetime, remember-me and the reboot wait (it answered 500)",
@@ -517,3 +533,5 @@ _uc64 = _ssh22_64(["%s ALLOW IN Anywhere" % _PEER64])
 check("firewall: an allow to a multicast group or the limited broadcast (TCP never arrives there) is no "
       "way in, so the only public 22/tcp stays protected; one to a unicast address is (control)",
       set(_mc64.values()) == {(False, True, False)} and _uc64 == (True, False, True), repr((_mc64, _uc64)))
+check("part64: nothing its routes drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP64_START, repr(_P9_TRIPPED[_TRIP64_START:][:6]))

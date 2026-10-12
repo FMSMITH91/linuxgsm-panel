@@ -1772,11 +1772,16 @@ def _r15d_resaving_helpers(tree):
 
     The count is how many `D.setdefault(..., getattr(...))` saves the tree holds.
     """
-    bad, good = [], 0
+    bad, good, seen = [], 0, set()
     for _fn in _ast_scan.walk(tree):
         if not isinstance(_fn, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef)):
             continue
         for _n in _ast_scan.walk(_fn):
+            # Once each: a helper nested in another function was walked from both (review 1012a),
+            # counting each save twice toward the floor.
+            if id(_n) in seen:
+                continue
+            seen.add(id(_n))
             _d = _r15d_resave_target(_n)
             if _d is not None:
                 bad.append((_n.lineno, _d))
@@ -1795,9 +1800,10 @@ check("stub helpers: a (module, name)-keyed save keeps the first value, not the 
       "%d setdefault saves; re-saving: %s" % (_r15d_resave_good, _r15d_resave_bad))
 _r15d_resave_ctl = _r15d_resaving_helpers(_ast_scan.parse(
     "S = {}\ndef st(mod, name, fn):\n    S[(mod, name)] = getattr(mod, name)\n    setattr(mod, name, fn)\n"
-    "def ok(mod, name, fn):\n    S.setdefault((mod, name), getattr(mod, name))\n"))
-check("stub helpers: ...a re-saving helper is named, and a setdefault one is not (control)",
-      _r15d_resave_ctl == ([(3, "S")], 1), repr(_r15d_resave_ctl))
+    "def ok(mod, name, fn):\n    S.setdefault((mod, name), getattr(mod, name))\n"
+    "def outer():\n    def inner(mod, name):\n        S.setdefault((mod, name), getattr(mod, name))\n"))
+check("stub helpers: ...a re-saving helper is named, and a setdefault one is not, each counted once "
+      "though nested (control)", _r15d_resave_ctl == ([(3, "S")], 2), repr(_r15d_resave_ctl))
 
 # ── The installer must not build a SECOND panel beside an existing one ────────────────────────
 # IS_UPDATE asks "is there an app.py and a unit file where I am about to install?" — but where that

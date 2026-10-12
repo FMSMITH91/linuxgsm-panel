@@ -177,17 +177,36 @@ check("i18n scan: ...a branch that is a node of its own is still asked for alone
 # A page's hidden-panel chips are labelled from its {% set …_LABELS %} table: two labels that
 # translate to the same words make two identical chips (fr "Controls" and "Commands" were both
 # "Commandes" on the server page).
-_dup66 = []
+def _r16d_label_dups66(text, cats):
+    """({table names read}, [(table, lang, translated labels)] where two labels translate alike).
+
+    `{%- set … -%}` and any *LABEL* name are read too: the regex took only `{% set …LABELS %}`,
+    and nothing said it had found a table, so a rename passed having compared nothing.
+    """
+    seen, dups = set(), []
+    for _m in _re66.finditer(r"\{%-?\s*set\s+([A-Z_]*LABEL[A-Z_]*)\s*=\s*(\{.*?\})\s*-?%\}", text, _re66.S):
+        seen.add(_m.group(1))
+        _vals = list(_ast66.literal_eval(_m.group(2)).values())
+        for _L, _cat in cats:
+            _tr = [_cat.get(_v, _v) for _v in _vals]
+            if len(set(_tr)) != len(_tr):
+                dups.append((_m.group(1), _L, _tr))
+    return seen, dups
+
+
+_dup66, _seen66 = [], set()
 for _f66 in sorted(os.listdir(_TPL66)):
-    for _m66 in _re66.finditer(r"\{%\s*set\s+([A-Z_]*LABELS)\s*=\s*(\{.*?\})\s*%\}",
-                               _read66(_TPL66, _f66), _re66.S):
-        _vals66 = list(_ast66.literal_eval(_m66.group(2)).values())
-        for _L66, _cat66 in (("es", _ES66), ("fr", _FR66)):
-            _tr66v = [_cat66.get(_v66, _v66) for _v66 in _vals66]
-            if len(set(_tr66v)) != len(_tr66v):
-                _dup66.append((_f66, _m66.group(1), _L66, _tr66v))
+    _s66, _d66 = _r16d_label_dups66(_read66(_TPL66, _f66), (("es", _ES66), ("fr", _FR66)))
+    _seen66 |= _s66
+    _dup66 += [(_f66,) + _x66 for _x66 in _d66]
 check("i18n: the labels of a page's panel table translate to different words in es and fr (two panels' "
-      "chips both read \"Commandes\" in French)", not _dup66, repr(_dup66))
+      "chips both read \"Commandes\" in French)",
+      {"DETAIL_LABELS", "TILE_LABELS"} <= _seen66 and not _dup66, repr((sorted(_seen66), _dup66)))
+_ctl66 = _r16d_label_dups66("{%- set PANEL_LABEL_MAP = {'a': 'Controls', 'b': 'Commands'} -%}",
+                            (("fr", {"Controls": "Commandes", "Commands": "Commandes"}),))
+check("i18n: ...the table reader finds a {%- set … -%} table under another *LABEL* name, and names two "
+      "labels translated alike (control)",
+      _ctl66 == ({"PANEL_LABEL_MAP"}, [("PANEL_LABEL_MAP", "fr", ["Commandes", "Commandes"])]), repr(_ctl66))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -293,9 +312,12 @@ _out66 = _node66(_name66, (
     "  querySelector: () => ({textContent: 'En línea'}), closest: () => region, remove(){}};\n"
     + _cut47(_read66(_JS66, "dashboard.js"), "window.hidePanel = function(") + "\n"
     "hidePanel({closest: () => panel});\nconsole.log(JSON.stringify(chips.map(c => c.textContent)));\n"))
-check("dashboard: a hidden tile's restore chip is labelled from the tile's English label, so the walker "
-      "translates it and a live language switch follows (it copied the tile's already-translated text)",
-      _out66 == ["Online"] or _out66 is None, repr(_out66))
+# Only when node ran: without it _node66 has recorded a SKIP, and `or _out66 is None` recorded a PASS
+# beside it for a hidePanel that never ran (review 1012a).
+if _out66 is not None:
+    check("dashboard: a hidden tile's restore chip is labelled from the tile's English label, so the walker "
+          "translates it and a live language switch follows (it copied the tile's already-translated text)",
+          _out66 == ["Online"], repr(_out66))
 check("dashboard: ...every tile carries that label", 'data-panel="{{ key }}" data-label="{{ TILE_LABELS[key] }}"'
       in _read66(_TPL66, "dashboard.html"), "no data-label on the tile")
 
@@ -357,13 +379,41 @@ def _literal66(node):
     return node.value if isinstance(node, _ast66.Constant) and isinstance(node.value, str) else None
 
 
-def _flashed66(tree):
-    """(message, line) for each literal first argument of flash / _form_err / _form_ok."""
+_FLASHERS66 = {"flash": 0, "_form_err": 0, "_form_ok": 0}
+
+
+def _r16d_flash_wrappers66(trees):
+    """{function: argument position} for each function that flashes one of its parameters as it is.
+
+    `_login_fail(attempt, msg, …)` ends in flash(msg): the sentences its callers hand it ("Invalid
+    username or password.") were read by nothing, and shipped in neither catalog (review 1012a).
+    Repeated to a fixed point, so a wrapper of a wrapper counts.
+    """
+    out = dict(_FLASHERS66)
+    for _ in range(4):  # at most 4 rounds: it stops at the first that adds nothing
+        _before = len(out)
+        for _tree in trees:
+            for _f in (n for n in _ast66.walk(_tree) if isinstance(n, _ast66.FunctionDef)):
+                _params = [a.arg for a in _f.args.args]
+                for _c in (n for n in _ast66.walk(_f) if isinstance(n, _ast66.Call)):
+                    _at = out.get(getattr(_c.func, "id", None) or getattr(_c.func, "attr", None))
+                    if (_at is not None and len(_c.args) > _at and isinstance(_c.args[_at], _ast66.Name)
+                            and _c.args[_at].id in _params):
+                        out.setdefault(_f.name, _params.index(_c.args[_at].id))
+        if len(out) == _before:
+            return out
+    return out
+
+
+def _flashed66(tree, flashers=None):
+    """(message, line) for each literal message argument of flash / _form_err / _form_ok, or of a
+    function that flashes that argument (see _r16d_flash_wrappers66)."""
+    flashers = _FLASHERS66 if flashers is None else flashers
     for _n in _ast66.walk(tree):
-        if isinstance(_n, _ast66.Call) and _n.args \
-                and (getattr(_n.func, "id", None) or getattr(_n.func, "attr", None)) in (
-                    "flash", "_form_err", "_form_ok") and _literal66(_n.args[0]) is not None:
-            yield _n.args[0].value, _n.lineno
+        _at = flashers.get(getattr(_n.func, "id", None) or getattr(_n.func, "attr", None)) \
+            if isinstance(_n, _ast66.Call) else None
+        if _at is not None and len(_n.args) > _at and _literal66(_n.args[_at]) is not None:
+            yield _n.args[_at].value, _n.lineno
 
 
 def _invite_errors66(tree):
@@ -378,9 +428,12 @@ def _invite_errors66(tree):
 def _route_messages66():
     """{message: where} for every literal message a route flashes or answers a form with."""
     out = {}
-    for _p in _py_files66():
-        _tree = _ast66.parse(_read66(_p))
-        for _m, _line in _flashed66(_tree):
+    _trees = {_p: _ast66.parse(_read66(_p)) for _p in _py_files66()}
+    _flashers = _r16d_flash_wrappers66(list(_trees.values()))
+    check("i18n: the message reader follows a function that flashes its parameter (_login_fail), and "
+          "reads its callers' sentences", _flashers.get("_login_fail") == 1, repr(sorted(_flashers)))
+    for _p, _tree in _trees.items():
+        for _m, _line in _flashed66(_tree, _flashers):
             out.setdefault(_m, "%s:%d" % (os.path.relpath(_p, _root), _line))
         for _m in _invite_errors66(_tree):
             out.setdefault(_m, "_invite_form")
@@ -405,8 +458,15 @@ check("i18n: every literal message a route flashes or answers a form with, the a
 
 
 # ── ...and rendered: the tab reads in the viewer's language ─────────────────────────────────────
-from unit.part12 import P9_ADMIN, _p9, _p9_client  # noqa: E402
+from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_client  # noqa: E402
+from unit.part20 import _patch, _patched  # noqa: E402
+from unit.part61 import _r15d_arm61  # noqa: E402
 from panel.db.models import User as _User66, db as _db66  # noqa: E402
+
+# Every route block below runs with part61's transport tripwire armed (each stubs only the leaf it
+# names), and the part ends by reading what it recorded: _p9_trip answers a refusal and does not
+# raise, so a trip nobody read was an empty answer read as "already closed" (review 1012a).
+_TRIP66_START = len(_P9_TRIPPED)
 
 
 def _lang66(lang):
@@ -421,7 +481,9 @@ try:
     for _L66 in ("es", "fr"):
         _lang66(_L66)
         for _u66 in ("/", "/logs"):
-            _h66 = _p9_client(P9_ADMIN).get(_u66).get_data(as_text=True)
+            with _patched():
+                _r15d_arm61()
+                _h66 = _p9_client(P9_ADMIN).get(_u66).get_data(as_text=True)
             _m66 = _re66.search(r"<title>(.*?)</title>", _h66, _re66.S)
             _titles66[(_L66, _u66)] = _html66.unescape(_m66.group(1).strip()) if _m66 else None
 finally:
@@ -438,7 +500,6 @@ check("i18n: a page's tab title is in the viewer's language (\"<site> - Dashboar
 # 4. Close public panel port and the panel-port rule test
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 from unit.part12 import _P9_CFG_PATH, _p9_cfg, _p9_json  # noqa: E402
-from unit.part20 import _patch, _patched  # noqa: E402
 from unit.part61 import _close61, _fwm61, _panel_open61, _rv61  # noqa: E402
 from unit.part12 import P9_LOCAL  # noqa: E402
 
@@ -496,6 +557,7 @@ try:
             _held.clear()                 # the one rule is gone: the verify read finds none
             return True, ""
         with _patched():
+            _r15d_arm61()
             _patch(_rv61, "remote_ufw_status", lambda remote: {"installed": True, "enabled": enabled,
                                                                "rules": [], "groups": list(_held)})
             _patch(_fwm61, "remote_ufw_default_allows_in", lambda remote: default_allow)
@@ -554,9 +616,11 @@ try:
     for _k66, _st66 in {"inactive": ("Status: inactive\n", "", 0), "unread": ("", "", 1),
                         "active": ("Status: active\n\nTo  Action  From\n--  ------  ----\n"
                                    "22/tcp  ALLOW  Anywhere\n", "", 0)}.items():
-        _w66 = _wire66(verbs={"ufw-status": _st66, "ufw-delete-allow-port": ("", "", 0)})
-        _c22[_k66] = (_H66.remote_ufw_close_port_22(_p8_srv66())[0],
-                      [v for v, _a in _w66.verbs_called() if v == "ufw-delete-allow-port"])
+        with _patched():
+            _r15d_arm61()
+            _w66 = _wire66(verbs={"ufw-status": _st66, "ufw-delete-allow-port": ("", "", 0)})
+            _c22[_k66] = (_H66.remote_ufw_close_port_22(_p8_srv66())[0],
+                          [v for v, _a in _w66.verbs_called() if v == "ufw-delete-allow-port"])
 finally:
     for _n66, _v66 in _core22.items():
         setattr(_core66, _n66, _v66)
@@ -575,35 +639,37 @@ from panel.ops import backup as _bk66  # noqa: E402
 
 _A66 = _p9_client(P9_ADMIN)
 try:
-    _calls66 = []
-    _p9_patch(_bk66, "set_game_schedule", lambda *a, **k: (_calls66.append(("game", a, k)) or
-                                                          {"interval_days": 1, "keep": 1}))
-    _p9_patch(_bk66, "set_settings", lambda **k: (_calls66.append(("settings", k)) or {}))
-    _p9_patch(_bk66, "set_full_settings", lambda **k: (_calls66.append(("full", k)) or {}))
-    _frac66 = [_A66.post("/api/panel/backup/game/%d/schedule" % P9_GS, json={"keep": 2.5}).status_code,
-               _A66.post("/api/panel/backup/game/%d/schedule" % P9_GS, json={"interval": 1.5}).status_code,
-               _A66.post("/api/panel/backup/settings", json={"full_keep": 2.5}).status_code,
-               _A66.post("/api/panel/backup/settings", json={"keep_days": 6.9}).status_code]
-    check("backups: a fraction in a whole-number field is a 400 and nothing is stored ({\"keep\": 2.5} kept "
-          "two archives, int() truncating a number nobody sent)", _frac66 == [400] * 4 and _calls66 == [],
-          repr((_frac66, _calls66)))
-    _whole66 = [_A66.post("/api/panel/backup/game/%d/schedule" % P9_GS, json={"keep": 3.0}).status_code,
-                _A66.post("/api/panel/backup/settings", json={"full_keep": 3.0}).status_code]
-    check("backups: ...a whole number sent as 3.0 still saves (control)", _whole66 == [200, 200]
-          and _calls66[0][0] == "game" and _calls66[0][1][-1] == 3 and len(_calls66) == 3, repr((_whole66, _calls66)))
+    with _patched():
+        _r15d_arm61()
+        _calls66 = []
+        _p9_patch(_bk66, "set_game_schedule", lambda *a, **k: (_calls66.append(("game", a, k)) or
+                                                                  {"interval_days": 1, "keep": 1}))
+        _p9_patch(_bk66, "set_settings", lambda **k: (_calls66.append(("settings", k)) or {}))
+        _p9_patch(_bk66, "set_full_settings", lambda **k: (_calls66.append(("full", k)) or {}))
+        _frac66 = [_A66.post("/api/panel/backup/game/%d/schedule" % P9_GS, json={"keep": 2.5}).status_code,
+                   _A66.post("/api/panel/backup/game/%d/schedule" % P9_GS, json={"interval": 1.5}).status_code,
+                   _A66.post("/api/panel/backup/settings", json={"full_keep": 2.5}).status_code,
+                   _A66.post("/api/panel/backup/settings", json={"keep_days": 6.9}).status_code]
+        check("backups: a fraction in a whole-number field is a 400 and nothing is stored ({\"keep\": 2.5} kept "
+              "two archives, int() truncating a number nobody sent)", _frac66 == [400] * 4 and _calls66 == [],
+              repr((_frac66, _calls66)))
+        _whole66 = [_A66.post("/api/panel/backup/game/%d/schedule" % P9_GS, json={"keep": 3.0}).status_code,
+                    _A66.post("/api/panel/backup/settings", json={"full_keep": 3.0}).status_code]
+        check("backups: ...a whole number sent as 3.0 still saves (control)", _whole66 == [200, 200]
+              and _calls66[0][0] == "game" and _calls66[0][1][-1] == 3 and len(_calls66) == 3, repr((_whole66, _calls66)))
 
-    _calls66.clear()
-    _p9_patch(_app66, "update_config", lambda fn: _calls66.append(("update_config", fn)))
-    for _mod66 in ("remote_security", "host_local"):
-        _m66 = __import__("panel.routes." + _mod66, fromlist=["x"])
-        _p9_patch(_m66, "_set_autoblock_host", lambda *a, **k: None)
-        _p9_patch(_m66, "_run_autoblock_now", lambda *a, **k: None)
-    _sec66 = ("/api/remote/%d/security/autoblock" % P9_HOST, "/api/panel/security/autoblock")
-    _tc66 = [_A66.post(_u, json={"enabled": False, "threshold": 2.5}).status_code for _u in _sec66]
-    check("auto-block: a fractional threshold is ignored on both hosts, as \"many\" is (2.5 set it to 2)",
-          _calls66 == [] and _tc66 == [200, 200], repr((_tc66, _calls66)))
-    _A66.post(_sec66[1], json={"enabled": False, "threshold": 7.0})
-    check("auto-block: ...7.0 is still stored (control)", len(_calls66) == 1, repr(_calls66))
+        _calls66.clear()
+        _p9_patch(_app66, "update_config", lambda fn: _calls66.append(("update_config", fn)))
+        for _mod66 in ("remote_security", "host_local"):
+            _m66 = __import__("panel.routes." + _mod66, fromlist=["x"])
+            _p9_patch(_m66, "_set_autoblock_host", lambda *a, **k: None)
+            _p9_patch(_m66, "_run_autoblock_now", lambda *a, **k: None)
+        _sec66 = ("/api/remote/%d/security/autoblock" % P9_HOST, "/api/panel/security/autoblock")
+        _tc66 = [_A66.post(_u, json={"enabled": False, "threshold": 2.5}).status_code for _u in _sec66]
+        check("auto-block: a fractional threshold is ignored on both hosts, as \"many\" is (2.5 set it to 2)",
+              _calls66 == [] and _tc66 == [200, 200], repr((_tc66, _calls66)))
+        _A66.post(_sec66[1], json={"enabled": False, "threshold": 7.0})
+        check("auto-block: ...7.0 is still stored (control)", len(_calls66) == 1, repr(_calls66))
 finally:
     _p9_restore_all()
 
@@ -728,9 +794,12 @@ _got66 = {}
 try:
     _lang66("es")
     _c66 = _p9_client(P9_ADMIN)
-    _got66["json"] = _p9_json(_c66.post("/groups/add", data={"name": _grp66},
-                                        headers={"X-Requested-With": "XMLHttpRequest"}))
-    _got66["dup"] = _c66.post("/groups/add", data={"name": _grp66}, follow_redirects=True).get_data(as_text=True)
+    with _patched():
+        _r15d_arm61()
+        _got66["json"] = _p9_json(_c66.post("/groups/add", data={"name": _grp66},
+                                            headers={"X-Requested-With": "XMLHttpRequest"}))
+        _got66["dup"] = _c66.post("/groups/add", data={"name": _grp66},
+                                  follow_redirects=True).get_data(as_text=True)
 finally:
     _lang66("en")
     with _p9.app_context():
@@ -790,7 +859,9 @@ try:
                                    apps=[_i18n_core66.Sentence("the app at {mount}", mount="/x")])),
                            "log": [], "started": _time66.time(), "updated": _time66.time()}
     _lang66("es")
-    _ist66 = _p9_json(_p9_client(P9_ADMIN).get("/api/server/%d/install-status" % P9_GS))
+    with _patched():
+        _r15d_arm61()
+        _ist66 = _p9_json(_p9_client(P9_ADMIN).get("/api/server/%d/install-status" % P9_GS))
 finally:
     _lang66("en")
     with _ilock66:
@@ -804,3 +875,5 @@ check("install progress: the job's record (written with no viewer) is shown in t
       _ist66.get("message") == ("r15e instalado e iniciado Funnel sigue activado para el puerto de "
                                 "escucha :443, que todavía sirve la aplicación en /x.")
       and _ist66.get("step_name") == "Completado", repr(_ist66))
+check("part66: nothing its routes and renders drove reached a real transport (every host call was "
+      "stubbed)", len(_P9_TRIPPED) == _TRIP66_START, repr(_P9_TRIPPED[_TRIP66_START:][:6]))

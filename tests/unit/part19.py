@@ -1060,3 +1060,33 @@ check("gitleaks: the non-PR scan is the full history of the commit judged (--log
       and '--log-opts "${GITHUB_SHA}"' in _gl_full and "--exit-code 1" in _gl_full
       and len(_r15d_gl_cmds) == 3 and all('--log-opts "' in _c for _c in _r15d_gl_cmds),
       repr((_gl_full[:300], _r15d_gl_cmds)))
+
+
+# ...and gitleaks is run that way only: a scan through the action, a container, or the binary held
+# in a variable (`"$GL" git`) is counted by neither side of the check above (review 1012a), and
+# neither is a `gitleaks …` command in another workflow.
+def _r16d_gl_other_runs(name, text):
+    """[(workflow, line)] of each way of running gitleaks the check above does not read."""
+    code = [_l for _l in _sg_re.sub(r"\\\n\s*", " ", text).splitlines() if not _l.lstrip().startswith("#")]
+    out = [(name, _l.strip()) for _l in code
+           if _sg_re.search(r"\buses:\s*\S*gitleaks", _l)
+           or _sg_re.search(r"\b(?:docker|podman)\s+run\b.*gitleaks", _l)
+           or _sg_re.search(r"^\s*(?:export\s+)?\w+=[\"']?\S*gitleaks[\"']?\s*$", _l)]
+    if name != "security.yml":
+        out += [(name, _l.strip()) for _l in code
+                if _sg_re.search(r"(?:^|[\s/])gitleaks\s+(?!version\b)[a-z]+\b", _l)]
+    return out
+
+
+_r16d_gl_other = [_hit for _wf in sorted(os.listdir(os.path.join(_rn_root, ".github", "workflows")))
+                  if _wf.endswith((".yml", ".yaml"))
+                  for _hit in _r16d_gl_other_runs(_wf, open(os.path.join(_rn_root, ".github", "workflows", _wf),
+                                                            encoding="utf-8").read())]
+_r16d_gl_ctl = _r16d_gl_other_runs("x.yml", "      - uses: gitleaks/gitleaks-action@v2\n"
+                                   "        run: docker run zricethezav/gitleaks:v8 git .\n"
+                                   "          GL=/tmp/gitleaks\n          \"$GL\" git .\n"
+                                   "          /tmp/gitleaks git --log-opts \"x\" .\n"
+                                   "          # uses: gitleaks/gitleaks-action in a comment\n")
+check("gitleaks: nothing else runs it, in any workflow (the action, a container, the binary held in a "
+      "variable, or a `gitleaks …` command outside security.yml), so the check above reads every scan",
+      not _r16d_gl_other and len(_r16d_gl_ctl) == 4, repr((_r16d_gl_other, _r16d_gl_ctl)))

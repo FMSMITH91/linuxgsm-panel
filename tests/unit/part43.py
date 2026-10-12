@@ -1120,7 +1120,10 @@ def _rv43_default_group():
         gid = g.id
         try:
             _models43._ensure_default_group()
-            second = _Group43.query.filter_by(name="Everyone").first()
+            # Only one this call made: an "Everyone" that was there before is the snapshot's
+            # (review 1012a: the snapshot was kept, then this read it as made here).
+            second = _Group43.query.filter(_Group43.name == "Everyone",
+                                           ~_Group43.id.in_(_everyone43)).first()
             check("init_db: a renamed default group does not bring back a second 'Everyone' "
                   "(with view_console) at the next start",
                   second is None, "made %r" % (second and second.get_permissions()))
@@ -1132,7 +1135,8 @@ def _rv43_default_group():
             db.session.delete(db.session.get(_Group43, gid))
             db.session.commit()
         _models43._ensure_default_group()
-        made = _Group43.query.filter_by(name="Everyone", is_default=True).first()
+        made = _Group43.query.filter(_Group43.name == "Everyone", _Group43.is_default.is_(True),
+                                     ~_Group43.id.in_(_everyone43)).first()
         check("init_db: ...while a database with no default group still gets one (positive control)",
               made is not None and "view_console" in made.get_permissions())
         _rv43_drop_new_everyone(_everyone43)
