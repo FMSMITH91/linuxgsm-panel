@@ -1015,9 +1015,29 @@ def _r14d_ignores_deprecations(call):
     _ci = 2 if _fn == "filterwarnings" else 1
     _cat = _kw.get("category", call.args[_ci] if len(call.args) > _ci else None)
     _act = call.args[0] if call.args else _kw.get("action")
+    # message is positional 2nd and module 4th in filterwarnings(action, message, category, module)
+    _scope = [] if _fn != "filterwarnings" else [
+        _kw.get(_k, call.args[_i] if len(call.args) > _i else None)
+        for _k, _i in (("message", 1), ("module", 3))]
     return (isinstance(_act, _dw_ast.Constant) and _act.value == "ignore"
-            and "module" not in _kw and "message" not in _kw
+            and not any(_r16d_scopes(_v) for _v in _scope)
             and _r15d_category_covers_deprecations(_cat))
+
+
+def _r16d_scopes(node):
+    """Does a filter's message= or module= (an AST node, or None) narrow it to some warnings?
+
+    Only a pattern that fails to match an unrelated text does: "" and ".*" match every message and
+    every module, so a filter given either is as blanket as one given neither. Only the key was read
+    (review 1012a), so message="" passed this gate while silencing every DeprecationWarning. A
+    pattern the gate cannot read (a variable) cannot be shown to narrow anything.
+    """
+    if not (isinstance(node, _dw_ast.Constant) and isinstance(node.value, str)):
+        return False
+    try:
+        return _re.match(node.value, "zz unrelated probe 0", _re.I) is None
+    except _re.error:
+        return False
 
 
 # DeprecationWarning and every class it inherits from: ignoring any of them silences it. Only the
@@ -1080,13 +1100,20 @@ _dw_ctl = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", ".*", Warning)',
     'import warnings\nwarnings.filterwarnings("ignore", category=builtins.Exception)',
     'import warnings\ncat = DeprecationWarning\nwarnings.filterwarnings("ignore", category=cat)',
-    'import warnings\nwarnings.simplefilter("ignore", (UserWarning, DeprecationWarning))')}
+    'import warnings\nwarnings.simplefilter("ignore", (UserWarning, DeprecationWarning))',
+    # Review 1012a: a message or module pattern that matches everything narrows nothing.
+    'import warnings\nwarnings.filterwarnings("ignore", message="", category=DeprecationWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", message=".*", category=DeprecationWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", module="", category=DeprecationWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", "", DeprecationWarning, ".*")')}
 _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", message="x", category=DeprecationWarning)',
     'import warnings\nwith warnings.catch_warnings():\n    warnings.simplefilter("ignore")',
     'import warnings\nwarnings.filterwarnings("ignore", category=UserWarning)',
     'import warnings\nwarnings.filterwarnings("ignore", category=eventlet.EventletDeprecationWarning)',
-    'import warnings\nwarnings.simplefilter("default", DeprecationWarning)')}
+    'import warnings\nwarnings.simplefilter("default", DeprecationWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", "x", DeprecationWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", module="eventlet", category=DeprecationWarning)')}
 check("...the filter gate names each blanket spelling, and passes the scoped ones (controls)",
       all(_dw_ctl.values()) and not any(_dw_ok.values()), repr((_dw_ctl, _dw_ok)))
 
