@@ -26,6 +26,7 @@ a REAL bash over a throwaway home; a bash function standing in for `mkdir` or `s
 of a racing host, so a missing guard shows as a replaced file. It ends by checking nothing it drove
 reached a real host.
 """
+import io as _io60
 import json
 import os
 import shutil as _shutil60
@@ -488,6 +489,99 @@ def _host_refusal_audits60(a_client, sid):
           "and none of the host's own output", not bad, "; ".join(bad[:3]))
 
 
+def _row60(action):
+    """The newest audit row of `action`, as (success, detail); (None, None) when there is none."""
+    with _p9.app_context():
+        a = AuditLog.query.filter_by(action=action).order_by(AuditLog.id.desc()).first()
+        return (a.success, a.detail) if a is not None else (None, None)
+
+
+def _send60(client, method_url, **kw):
+    """(status, json) of a request, or (None, {"raised": ...}): a crash fails the check by name."""
+    try:
+        r = client.post(method_url, **kw)
+    except Exception as exc:  # noqa: BLE001 - a crash fails the check that made it, not the part
+        return None, {"raised": repr(exc)[:200]}
+    return r.status_code, _p9_json(r)
+
+
+def _rename_reason60(mark):
+    return next(m for k, m in _files60._RENAME_OUTCOMES if k == mark)
+
+
+def _write_audit_cases60(sid):
+    """(name, prelude, request, audit action, the message, the audit detail) for each case."""
+    f = _files60
+    mv_no = "mv(){ return 1; }; gnumv(){ return 1; }; "
+    leak_rm = "rm(){ echo %s >&2; return 1; }; " % _LEAK60
+    leak_b64 = "base64(){ echo %s >&2; return 1; }; " % _LEAK60
+    rn, dl, fl = "/api/server/%d/rename-path" % sid, "/api/server/%d/delete-path" % sid, \
+        "/api/server/%d/file" % sid
+    cfg = "/api/server/%d/config" % sid
+    up = "/api/server/%d/upload" % sid
+    return (
+        ("rename via a linked folder", "", (rn, {"json": {"path": "lnk/a.cfg", "new_name": "z"}}),
+         "rename_file", _rename_reason60(f._RENAME_LINKED), "refused: lnk/a.cfg -> z: %s"),
+        ("rename of a file that is gone", "", (rn, {"json": {"path": "cfg/nope", "new_name": "z"}}),
+         "rename_file", f._RENAME_GONE_MSG, "refused: cfg/nope -> z: %s"),
+        ("rename out of the home through a link", "",
+         (rn, {"json": {"path": "esc/x.txt", "new_name": "z"}}), "rename_file", f.RENAME_REFUSED,
+         "refused: esc/x.txt -> z: %s"),
+        ("rename of lgsm/ through a link", "",
+         (rn, {"json": {"path": "lg/config-lgsm", "new_name": "z"}}), "rename_file",
+         f.RENAME_PROTECTED, "refused: lg/config-lgsm -> z: %s"),
+        ("rename the host refused", mv_no, (rn, {"json": {"path": "cfg/a.cfg", "new_name": "z"}}),
+         "rename_file", _rename_reason60(f._RENAME_MVFAIL), "refused: cfg/a.cfg -> z: %s"),
+        ("delete out of the home through a link", "", (dl, {"json": {"path": "esc/x.txt"}}),
+         "delete_file", f.DELETE_REFUSED, "refused: esc/x.txt: %s"),
+        ("delete of lgsm/ through a link", "", (dl, {"json": {"path": "lg/config-lgsm"}}),
+         "delete_file", f.DELETE_PROTECTED, "refused: lg/config-lgsm: %s"),
+        ("delete whose rm failed (host output only)", leak_rm, (dl, {"json": {"path": "cfg/a.cfg"}}),
+         "delete_file", _LEAK60, "cfg/a.cfg"),
+        ("save out of the home through a link", "",
+         (fl, {"json": {"path": "esc/n.txt", "content": "x"}}), "edit_file", "Invalid path",
+         "refused: esc/n.txt: %s"),
+        ("save whose write failed (host output only)", leak_b64,
+         (fl, {"json": {"path": "cfg/a.cfg", "content": "x"}}), "edit_file", _LEAK60, "cfg/a.cfg"),
+        ("raw config turning logtimestamp on", "", (cfg, {"json": {"raw": 'logtimestamp="on"\n'}}),
+         "edit_config", f._RAWLTS_REFUSED, "refused: %s"),
+        ("settings turning logtimestamp on", "", (cfg, {"json": {"settings": {"logtimestamp": "on"}}}),
+         "edit_config", f.LGSM_TIMESTAMPS_REFUSED, "refused: %s"),
+        ("upload out of the home through a link", "",
+         (up, {"data": {"path": "esc", "overwrite": "1", "file": (_io60.BytesIO(b"u"), "u.txt")},
+               "content_type": "multipart/form-data"}), "upload_file", "Invalid path",
+         "refused: esc/u.txt (overwrote): %s"),
+    )
+
+
+def _write_audits60(a_client, sid):
+    """Every file-browser write a refusal ends is audited with its fixed reason, never host output.
+
+    rename-path, delete-path, the editor's save, the config save and the upload each wrote a
+    refusal's row with the path alone (the config save with nothing), so a link out of the home or a
+    protected tree reached through one read like any failure. A failure whose only text is the
+    host's own output stays a bare path: that text never goes in a row.
+    """
+    for name, prelude, (url, kw), action, want, detail in _write_audit_cases60(sid):
+        _reset60(prelude)
+        _code, body = _send60(a_client, url, **kw)
+        row = _row60(action)
+        raw = "%s" not in detail
+        check("%s audit: %s is audited as %s" % (action, name, "the bare path, with none of the "
+              "host's own output" if raw else "'refused: <path>: <reason>', the reason the user saw"),
+              (want in (body.get("message") or ""), row) == (True, (False, detail if raw else detail % want))
+              and _LEAK60 not in (row[1] or ""), repr((body.get("message"), row)))
+    _PRELUDE60["text"] = ""
+    _reset60()
+    _write60("cfg/up.txt", "OLD")
+    code, body = _send60(a_client, "/api/server/%d/upload" % sid, content_type="multipart/form-data",
+                         data={"path": "cfg", "file": (_io60.BytesIO(b"NEW"), "up.txt")})
+    check("upload route: an upload onto a name that is there (no overwrite) is refused (409), "
+          "replaces nothing, and is audited as a failure, name taken — as create's and rename's are",
+          (code, _read60("cfg/up.txt"), _row60("upload_file")) == (409, "OLD", (False, "cfg/up.txt (name taken)")),
+          repr((code, body, _row60("upload_file"))))
+
+
 def _gone60(a_client, sid):
     """A folder that is not there — or is a file — says so, rather than 'the host did not answer'."""
     _reset60()
@@ -687,6 +781,7 @@ try:
     _symlinks60(_A60, _S60)
     _gone60(_A60, _S60)
     _host_refusal_audits60(_A60, _S60)
+    _write_audits60(_A60, _S60)
     _builder_wall60()
     _names60()
     _catalog60()

@@ -1386,11 +1386,16 @@ def _store_upload(gs, reldir, f, data, overwrite):
     """Write an uploaded file onto the host and audit it: the upload route's answer."""
     ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data,
                           overwrite=overwrite)
+    detail = "%s/%s%s" % (reldir, f.filename, " (overwrote)" if overwrite else "")
     if not ok and msg == UPLOAD_EXISTS:
+        # A name that appeared after the page's own check: refused, never replaced — and audited,
+        # as a create's or a rename's taken name is.
+        log_action(current_user, "upload_file", target=gs.name, detail=detail + " (name taken)",
+                   success=False, server=gs)
         return jsonify({"success": False, "conflict": True, "name": f.filename,
                         "message": "A file with that name already exists."}), 409
     log_action(current_user, "upload_file", target=gs.name,
-               detail="%s/%s%s" % (reldir, f.filename, " (overwrote)" if overwrite else ""),
+               detail=_failed_detail(detail, ok, _sm.write_failure_reason(msg)),
                success=ok, server=gs)
     return jsonify({"success": ok, "message": msg or ("Uploaded" if ok else "Failed"), "name": f.filename})
 
@@ -1645,7 +1650,9 @@ def _sf_config_write(gs, data):
                 return jsonify({"success": False,
                                 "message": "Settings must be a map of names to values."}), 400
             ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, settings)
-        log_action(current_user, "edit_config", target=gs.name, success=ok, server=gs)
+        log_action(current_user, "edit_config", target=gs.name,
+                   detail=_failed_detail("", ok, _sm.write_failure_reason(msg)), success=ok,
+                   server=gs)
         return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
     except Exception:
         return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
@@ -1795,7 +1802,8 @@ def _register_file_editor(app):
             return refused
         try:
             ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"])
-            log_action(current_user, "edit_file", target=gs.name, detail=rel, success=ok,
+            log_action(current_user, "edit_file", target=gs.name,
+                       detail=_failed_detail(rel, ok, _sm.write_failure_reason(msg)), success=ok,
                        server=gs)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
@@ -1824,7 +1832,9 @@ def _register_file_removal(app):
         try:
             ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
             log_action(current_user, "delete_file", target=gs.name,
-                       detail=_audit_safe(_audit_name(rel)), success=ok, server=gs)
+                       detail=_failed_detail(_audit_safe(_audit_name(rel)), ok,
+                                             _sm.delete_failure_reason(msg)),
+                       success=ok, server=gs)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
@@ -1869,6 +1879,19 @@ def _audit_safe(text, limit=None):
     return out if limit is None else out[:limit]
 
 
+def _failed_detail(detail, ok, reason):
+    """An audit detail for a host write: as it is on success, with the fixed reason on a refusal.
+
+    A refusal is written as one made before the host was asked is, "refused: <detail>: <reason>",
+    so a row says WHY — a path out of the home, a protected path, a folder reached through a link.
+    `reason` is a fixed text the panel wrote (the one the user is shown), or None when the failure
+    has none: the host's own output is never put in a row.
+    """
+    if ok or reason is None:
+        return detail
+    return _audit_safe(("refused: %s: %s" % (detail, reason)) if detail else ("refused: " + reason), 250)
+
+
 def _rename_refused(gs, rel, new_name, why):
     """A rename refused before the host is asked to move anything: audited, then a 400.
 
@@ -1895,17 +1918,29 @@ def _rename_answer(gs, rel, new_name):
     except ConnectionError:
         _log.warning("rename-path: the host did not answer", exc_info=True)
         ok, msg = False, RENAME_UNCONFIRMED
-    detail = _audit_safe("%s -> %s" % (_audit_name(rel), _audit_name(new_name)))
+    detail = _host_audit_detail(_audit_safe("%s -> %s" % (_audit_name(rel), _audit_name(new_name))),
+                                ok, msg, RENAME_EXISTS, RENAME_UNCONFIRMED)
+    log_action(current_user, "rename_file", target=gs.name, detail=detail, success=ok, server=gs)
     if msg == RENAME_EXISTS:
-        log_action(current_user, "rename_file", target=gs.name, detail=detail + " (name taken)",
-                   success=False, server=gs)
         return jsonify({"success": False, "conflict": True,
                         "message": "Something with that name already exists in this folder. "
                                    "Nothing was renamed — choose another name."}), 409
-    log_action(current_user, "rename_file", target=gs.name,
-               detail=detail + ("" if ok or msg != RENAME_UNCONFIRMED else " (unconfirmed)"),
-               success=ok, server=gs)
     return jsonify({"success": ok, "message": msg})
+
+
+def _host_audit_detail(detail, ok, msg, exists, unconfirmed):
+    """rename-path's and create-path's audit detail, from their builder's (ok, message).
+
+    Every message those builders return is a fixed text, so a refusal the host decided (a source
+    or folder reached through a link, gone, out of the home, protected or the console's once
+    resolved, a move or create the host refused) carries it, as _failed_detail writes it. A taken
+    name and an unanswered host keep their short suffixes.
+    """
+    if msg == exists:
+        return detail + " (name taken)"
+    if msg == unconfirmed:
+        return detail + " (unconfirmed)"
+    return _failed_detail(detail, ok, msg)
 
 
 def _register_file_rename(app):
@@ -1959,24 +1994,6 @@ def _create_refused(gs, action, rel, name, why):
     return jsonify({"success": False, "message": why}), 400
 
 
-def _create_audit_detail(rel, name, ok, msg):
-    """The audit row's detail for a create the host was asked to make.
-
-    A refusal the host decided (a symlinked or missing folder, a link out of the home, a reserved
-    or console path once resolved, a create the host refused) is written as a pre-host refusal is,
-    "refused: <path>: <reason>": `msg` is always one of create_path's fixed texts, never the host's
-    own output. A taken name and an unanswered host keep their short suffixes.
-    """
-    target = _create_target(rel, name)
-    if ok:
-        return _audit_safe(target)
-    if msg == _sm.CREATE_EXISTS:
-        return _audit_safe(target) + " (name taken)"
-    if msg == _sm.CREATE_UNCONFIRMED:
-        return _audit_safe(target) + " (unconfirmed)"
-    return _audit_safe("refused: %s: %s" % (target, msg), 250)
-
-
 def _create_answer(gs, action, rel, name, kind):
     """Create on the host and audit it, once every refusal has passed (see _rename_answer)."""
     try:
@@ -1984,8 +2001,9 @@ def _create_answer(gs, action, rel, name, kind):
     except ConnectionError:
         _log.warning("create-path: the host did not answer", exc_info=True)
         ok, msg = False, _sm.CREATE_UNCONFIRMED
-    log_action(current_user, action, target=gs.name, detail=_create_audit_detail(rel, name, ok, msg),
-               success=ok, server=gs)
+    detail = _host_audit_detail(_audit_safe(_create_target(rel, name)), ok, msg,
+                                _sm.CREATE_EXISTS, _sm.CREATE_UNCONFIRMED)
+    log_action(current_user, action, target=gs.name, detail=detail, success=ok, server=gs)
     if msg == _sm.CREATE_EXISTS:
         return jsonify({"success": False, "conflict": True,
                         "message": "Something with that name already exists in this folder. "

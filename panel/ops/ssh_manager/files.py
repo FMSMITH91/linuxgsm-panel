@@ -487,6 +487,15 @@ def lgsm_get_values(server, user, selfname, keys):
     return {k: merged.get(k, "") for k in keys}
 
 
+# The end of lgsm_write_config's refusal of a key secrets-<selfname>.cfg also sets: the one write
+# refusal that names things (the keys and the script), so write_failure_reason knows it by its end.
+LGSM_TIMESTAMPS_REFUSED = ("Turning LinuxGSM's log timestamps on freezes the live console, so the "
+                           "panel only turns them off — nothing has been changed.")
+LGSM_CONFIG_UNREAD = "Could not read the current config — nothing has been changed."
+_SECRETS_SHADOW_TAIL = ("here would not take effect. Edit it in that file — nothing has been "
+                        "changed.")
+
+
 def lgsm_write_config(server, user, selfname, updates):
     """Apply key→value updates to the instance <selfname>.cfg.
 
@@ -497,19 +506,17 @@ def lgsm_write_config(server, user, selfname, updates):
     if not _idents_ok(user, selfname):
         return False, "Invalid account or script name"
     if _turns_logtimestamp_on(updates):
-        return False, ("Turning LinuxGSM's log timestamps on freezes the live console, so the "
-                       "panel only turns them off — nothing has been changed.")
+        return False, LGSM_TIMESTAMPS_REFUSED
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
     secrets = {}
     lines = _read_instance_cfg_lines(server, user, selfname, inst, secrets)
     if lines is None:
-        return False, "Could not read the current config — nothing has been changed."
+        return False, LGSM_CONFIG_UNREAD
     _shadowed = _shadowed_by_secrets(updates, secrets)
     if _shadowed:
         return False, ("%s is set in secrets-%s.cfg, which LinuxGSM reads after %s.cfg, so a change "
-                       "here would not take effect. Edit it in that file — nothing has been changed."
-                       % (", ".join(_shadowed), selfname, selfname))
+                       % (", ".join(_shadowed), selfname, selfname) + _SECRETS_SHADOW_TAIL)
     # A key posted with the value secrets-<selfname>.cfg already gives it is in effect as it is;
     # writing it would copy the secret into the instance cfg, the file people back up and share,
     # which is what the secrets file is there to keep it out of.
@@ -1170,6 +1177,8 @@ def write_file(server, user, relpath, content):
 # A sentinel rather than prose so the route can answer with a machine-readable conflict instead of
 # the UI having to pattern-match an error string.
 UPLOAD_EXISTS = "__EXISTS__"
+UPLOAD_CHECK_FAILED = ("Couldn't check whether that file already exists on the host — "
+                       "nothing was uploaded. Try again.")
 
 
 def stat_upload_targets(server, user, reldir, names):
@@ -1276,20 +1285,23 @@ def _existing_target_refusal(server, user, target):
     # "no file there" and the upload went ahead and replaced a file the caller had explicitly
     # asked not to overwrite.
     if rc != 0:
-        return ("Couldn't check whether that file already exists on the host — "
-                "nothing was uploaded. Try again.")
+        return UPLOAD_CHECK_FAILED
     if "__YES__" in (out or ""):
         return UPLOAD_EXISTS
     return None
+
+
+DELETE_REFUSED = "Refusing to delete this path"
+DELETE_PROTECTED = "This file/folder is protected — deleting it would break the server."
 
 
 def _delete_refusal(user, relpath, selfname, ap):
     """Why delete_path must refuse this path (the home root, outside it, protected), else None."""
     home = f"/home/{user}"
     if ap is None or ap == home or not (relpath or "").strip("/"):
-        return "Refusing to delete this path"
+        return DELETE_REFUSED
     if _is_protected_path(relpath, selfname):
-        return "This file/folder is protected — deleting it would break the server."
+        return DELETE_PROTECTED
     return None
 
 
@@ -1321,12 +1333,33 @@ def delete_path(server, user, relpath, selfname=None):
 def _files_delete_outcome(out, e, rc):
     """delete_path's (ok, message) from what its guarded host-side `rm -rf` printed."""
     if _r12b_outside_home(out):
-        return False, "Refusing to delete this path"
+        return False, DELETE_REFUSED
     if _PROTECTED_MARK in (out or ""):
-        return False, "This file/folder is protected — deleting it would break the server."
+        return False, DELETE_PROTECTED
     if rc == 0 and "__OK__" in (out or ""):
         return True, "Deleted"
     return False, e or out or "Delete failed"
+
+
+def delete_failure_reason(msg):
+    """`msg` when it is one of delete_path's fixed refusals, else None (it may be the host's text)."""
+    return msg if msg in (DELETE_REFUSED, DELETE_PROTECTED) else None
+
+
+def write_failure_reason(msg):
+    """`msg` when it is one of the panel's fixed write refusals, else None.
+
+    write_file, upload_file and lgsm_write_config answer a failure with either a fixed text — a
+    path out of the home (decided lexically, or by the host's _guarded check), a bad filename, a
+    logtimestamp the console cannot survive, an existence check or a config read that did not run,
+    a key the secrets file shadows — or the host's own output. An audit row may carry the first,
+    never the second.
+    """
+    if not isinstance(msg, str):
+        return None
+    if msg in _WRITE_REASONS or msg.endswith(_SECRETS_SHADOW_TAIL):
+        return msg
+    return None
 
 
 # ── Renaming a file or folder, within its own folder ───────────────────────────────────────────
@@ -1950,3 +1983,11 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
             block = block[:limit - sent]
             sent += len(block)
         yield block
+
+
+# The fixed texts write_failure_reason recognises. Built here, after every one is defined.
+_WRITE_REASONS = frozenset({
+    "Invalid path", "Invalid filename", "Invalid account or script name",
+    _RAWLTS_REFUSED, _RAWLTS_UNCHECKED, UPLOAD_CHECK_FAILED,
+    LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD,
+})
