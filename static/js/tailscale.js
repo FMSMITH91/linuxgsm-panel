@@ -95,8 +95,6 @@ function checkPeer() {
   })
   .then(r => r.json())
   .then(data => {
-    // host comes from a text field — escape it before it goes into innerHTML (DOM XSS).
-    var safeHost = escapeHtml(host);
     if (data.reachable) {
       // tfHtml escapes the host (a text field) and the latency; the sentence is translated whole.
       resultEl.innerHTML = '<span class="text-success">✓ ' + (data.latency_ms

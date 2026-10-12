@@ -166,7 +166,6 @@ function toggleEditCreds(select, id) {
 // ── Tailscale Bootstrap ─────────────────────────────────
 
 function checkTailscale(remoteId, name) {
-  var safe = escapeHtml(name);   // name comes from a data-attribute; escape at every HTML sink
   var html = '<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> ' + tfHtml('Checking Tailscale status on {name}...', {name: name}) + '</div>';
   showModal(tfHtml('Tailscale Setup: {name}', {name: name}), html);
 
