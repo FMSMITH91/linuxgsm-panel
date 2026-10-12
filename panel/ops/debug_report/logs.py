@@ -65,8 +65,16 @@ _SUDO_CONTINUED_RE = re.compile(r"\S{1,64} :[ \t]{1,4}\(command continued\) ")
 # Other privilege tools' command lines, which are not sudo's shape: pkexec's
 # "bob: Executing command [USER=root] [TTY=…] [CWD=…] [COMMAND=<argv>]" and doas's
 # "doas[N]: bob ran command <argv> as root from <dir>". Both name the whole argv.
-_R13B_PKEXEC_RE = re.compile(r"Executing command \[USER=[^\]\n]{0,64}\][^\n]{0,1024}?\[COMMAND=")
-_R13B_DOAS_RE = re.compile(r"\bdoas\[\d{1,10}\]: \S{1,64} ran command ")
+# pkexec appends that same [USER=…] … [COMMAND=<argv>] suffix to EVERY message it logs (polkit's
+# log_message), its refusals too: "Error executing command as another user: Not authorized",
+# "…: Request dismissed", the env refusals. Only "Executing command" was cut, so a mistyped
+# password on `pkexec mysql -p<password>` printed the password. The suffix is matched whatever
+# the message before it, with TTY and CWD bounded by PATH_MAX rather than 1024 characters in all.
+# doas names the argv in its refusal too: "command not permitted for bob: <argv>".
+_R13B_PKEXEC_RE = re.compile(r"\[USER=[^\]\n]{0,64}\] \[TTY=[^\]\n]{0,4096}\] "
+                             r"\[CWD=[^\n]{0,4096}?\] \[COMMAND=")
+_R13B_DOAS_RE = re.compile(r"\bdoas\[\d{1,10}\]: (?:\S{1,64} ran command "
+                           r"|command not permitted for \S{1,64}: )")
 # sudo's own shape: a USER= field followed by ENV= or COMMAND=, or its JSON event (log_format=json).
 # A line of that shape that neither the refusal phrases nor _SUDO_CMD_RE account for is cut as a
 # refused one is (fail closed): an unknown refusal reason ("user NOT authorized on host", a custom
@@ -360,12 +368,15 @@ def _split_priv(lines):
     own = _panel_accounts()
     for ln in lines:
         body = _body(ln)
+        # A continuation first: it is the tail of an argv, never the line carrying sudo's refusal
+        # reason, and an argv holding "authentication failure" sent it down the refusal path,
+        # which found no COMMAND= to cut at and printed it whole.
+        if _SUDO_CONTINUED_RE.search(body):
+            continue
         if _SUDO_REFUSED_RE.search(body):
             kept.append(_r11b_refused_without_argv(ln, own))
         elif _PAM_SESSION_RE.match(body):
             sessions += 1
-        elif _SUDO_CONTINUED_RE.search(body):
-            continue
         else:
             m = _SUDO_CMD_RE.search(body)
             if m is None:
@@ -404,7 +415,8 @@ def _r12b_cut_without_command(line):
     """A sudo line with no COMMAND= (sudo split it, or it is JSON), cut at its ENV= or argv."""
     at = [i for i in (line.find(t) for t in _R12B_SUDO_CUT_TOKENS) if i != -1]
     if not at:
-        return line
+        # Not sudo's: a doas refusal whose argv holds a refusal phrase arrives here too.
+        return _r13b_cut_other_priv(line)
     return line[:min(at)] + "(environment and command not shown)"
 
 
