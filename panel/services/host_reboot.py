@@ -524,29 +524,17 @@ def _host_blockers(remote):
 
 
 def _panel_host_blockers():
-    """The panel's own work in flight on its host, each marked `panel` for the reboot dialog.
-
-    The dialog shows a blocker's name as a name, never translated; `panel` tells it this one is
-    the phrase "the panel" (in the viewer's language), without matching the English words.
-    """
-    out = _r17a_panel_work()
-    for b in out:
-        b["panel"] = True
-    return out
-
-
-def _r17a_panel_work():
     out = []
     try:
         if so._update_in_progress():
-            out.append(_blocker("self_update", _rw.PANEL_NAME))
+            out.append(_rw.panel_blocker("self_update"))
     except Exception:  # noqa: BLE001
         _log.debug("self-update state unreadable", exc_info=True)
     from panel.ops import backup as _bk
     if _bk._restore_lock.locked():
-        out.append(_blocker("restore", _rw.PANEL_NAME))
+        out.append(_rw.panel_blocker("restore"))
     if _full_backup_lock.locked():
-        out.append(_blocker("full_backup", _rw.PANEL_NAME))
+        out.append(_rw.panel_blocker("full_backup"))
     return out
 
 
@@ -1849,7 +1837,8 @@ def restore_host(remote, rows, now=None):
         # locks stayed aside and nothing was started when the host came back. So a silent host
         # stops the clock, and the next tick it answers on acts as before.
         if _sm.hosts.host_boot_identity(remote) is None:
-            _r17a_hold_clock(recs)
+            _rw.hold_clock(recs, _set_rr)
+            db.session.commit()
             return True
         _act(remote, recs, now, rollback_=True)
         return True
@@ -1857,17 +1846,6 @@ def restore_host(remote, rows, now=None):
     if ident is None:
         return _host_silent(remote, recs, recs[0][1], now)
     return _by_boot(remote, recs, ident, now)
-
-
-def _r17a_hold_clock(recs):
-    """Stop each pending row's give-up clock (row_gave_up starts it afresh on its next pass)."""
-    changed = False
-    for gs, d in recs:
-        if d.get("restore") == "pending" and d.pop("pending_since", None) is not None:
-            _set_rr(gs, d)
-            changed = True
-    if changed:
-        db.session.commit()
 
 
 def _records(rows):
@@ -2052,11 +2030,7 @@ def _act_panel(remote, gs, d, now, rollback_):
         return None
     outcome, detail = safe_start(remote, gs)
     if outcome == "wait":
-        if detail == "inflight":
-            # A LinuxGSM update or backup is running for it, and a start never goes over one: a
-            # known wait, however long the download takes, not a row that cannot resolve. The
-            # give-up clock starts again once nothing holds it (see row_gave_up).
-            d.pop("pending_since", None)
+        _rw.start_waits(d, detail)
         return None
     if outcome in ("started", "running"):
         _after_start(remote, gs)
