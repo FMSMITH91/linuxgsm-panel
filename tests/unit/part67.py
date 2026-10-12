@@ -593,7 +593,7 @@ def _typed67(cmd):
     return got
 
 
-_CON67 = ("C-c", "Escape", "0x3", "sv_cheats 0;", "a\;", ";", "-R", "say it's \"ok\" $HOME")
+_CON67 = ("C-c", "Escape", "0x3", "sv_cheats 0;", "a\\;", ";", "-R", "say it's \"ok\" $HOME")
 _con67 = {c: _typed67(c) for c in _CON67}
 check("console send: a line that is exactly a tmux key name (C-c, Escape, 0x3) is typed as text with -l, "
       "not sent as that key (an interrupt of the game); a line ending in \";\" keeps it and is still "
