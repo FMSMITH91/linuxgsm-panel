@@ -553,3 +553,33 @@ check("firewall (es): deleting or closing a protected rule is refused in Spanish
       "(the reason was handed to tr() with the port already filled in, so it stayed English)",
       _prot69.get("delete") == _want69 and _prot69.get("close") == _want69 and "5000" in _want69,
       repr((_prot69, _want69)))
+
+
+# ── the spliced-message gate: a keyword-only wrapper, and an item of a held answer ───────────────
+# _py_wrapped_params read only positional parameters, and a sink fed `res[1]` (res = svc(…)) was
+# not followed. Neither shape is in today's tree; each is a way the next one would pass unread.
+_td69b = os.path.realpath(_tf69.mkdtemp(prefix="lgsm-unit-p69b-"))
+try:
+    os.makedirs(os.path.join(_td69b, "panel", "routes"))
+    with open(os.path.join(_td69b, "app.py"), "w") as _fh69:
+        _fh69.write("")
+    with open(os.path.join(_td69b, "panel", "routes", "r.py"), "w") as _fh69:
+        _fh69.write(
+            "def _reply(*, text):\n"
+            "    return jsonify({'success': False, 'message': text})\n"
+            "def a(port):\n"
+            "    return _reply(text='Port %d is busy.' % port)\n"                    # 4 kw-only wrapper
+            "def svc_plain(ip):\n"
+            "    return True, 'Blocked %s.' % ip\n"
+            "def b(ip):\n"
+            "    res = svc_plain(ip)\n"
+            "    flash(res[1], 'info')\n"                                           # 9 item of a held answer
+            "def c(ip):\n"
+            "    res = svc_plain(ip)\n"
+            "    flash(res[0], 'info')\n")                                          # item 0 is not built
+    _sp69 = sorted(line for _f, line, _w in _scan69.spliced_py(_td69b))
+finally:
+    _shutil69.rmtree(_td69b, ignore_errors=True)
+check("i18n gate: a message built in English and handed to a keyword-only wrapper, or an item of a "
+      "service's answer held whole (`res = svc(); flash(res[1])`), is reported; an unbuilt item is not",
+      _sp69 == [4, 9], repr(_sp69))

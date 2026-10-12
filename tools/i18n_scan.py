@@ -1200,7 +1200,8 @@ def _py_call_sinks(node, wrappers):
     out = [node.args[0]] if name in PY_SINK_CALLS and node.args else []
     out.extend(k.value for k in node.keywords if k.arg in PY_SINK_KEYS)
     for pos, param in wrappers.get(name, ()):
-        out.extend(node.args[pos:pos + 1])
+        if pos is not None:
+            out.extend(node.args[pos:pos + 1])
         out.extend(k.value for k in node.keywords if k.arg == param)
     return out
 
@@ -1271,6 +1272,10 @@ def _py_assignment_binds(n, assigned, builders):
     built = ((isinstance(n, ast.AugAssign) and isinstance(n.op, ast.Add))
              or _py_fed_built(n.value, assigned, builders) is not None)
     out = [(t.id, n.lineno) for t in targets if built and isinstance(t, ast.Name)]
+    # `res = svc(…)` then `flash(res[1])`: (res, 1) is bound when svc's item 1 is built (_r16c_).
+    callee = _py_call_name(n.value) if isinstance(n, ast.Assign) else None
+    out += [((t.id, k[1]), builders[k][1]) for t in targets if isinstance(t, ast.Name)
+            for k in builders if isinstance(k, tuple) and k[0] == callee]
     return out + (_py_unpacked(n, builders) if isinstance(n, ast.Assign) else [])
 
 
@@ -1343,6 +1348,9 @@ def _py_fed_built(value, assigned, builders):
         return value.lineno
     if isinstance(value, ast.Name) and value.id in assigned:
         return assigned[value.id]
+    if (isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name)
+            and isinstance(value.slice, ast.Constant) and (value.value.id, value.slice.value) in assigned):
+        return assigned[(value.value.id, value.slice.value)]
     if _py_call_name(value) in builders:
         return builders[_py_call_name(value)]
     for operand in _py_operands(value):
@@ -1371,8 +1379,11 @@ def _py_wrapped_params(fn, lines, wrappers):
     params = [a.arg for a in fn.args.args]
     if params[:1] in (["self"], ["cls"]):
         params = params[1:]     # obj.method(a, …): `a` is the parameter after self
-    return {(params.index(v.id), v.id) for n in _py_own_nodes(fn) for v in _py_sink_values(n, wrappers)
-            if isinstance(v, ast.Name) and v.id in params and not _py_ignored(lines, v)}
+    # A keyword-only parameter (`def _reply(*, message)`) is passed by name only: position None.
+    kwonly = [a.arg for a in fn.args.kwonlyargs]
+    return {(params.index(v.id) if v.id in params else None, v.id)
+            for n in _py_own_nodes(fn) for v in _py_sink_values(n, wrappers)
+            if isinstance(v, ast.Name) and (v.id in params or v.id in kwonly) and not _py_ignored(lines, v)}
 
 
 def _py_wrappers(trees):
