@@ -20,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from panel.core import i18n
 from panel.core import runtime_stats
 from panel.core.config import load_config, update_config, encrypt_secret, decrypt_secret
 
@@ -1140,6 +1141,17 @@ def _form_or_saved_secret(value, saved, key):
     return (value or "").strip() or decrypt_secret(saved.get(key) or "")
 
 
+def _r16a_test_failed(service, detail):
+    """The Test button's failure answer: "<service> error: <detail>", each part translatable.
+
+    It was `"Telegram error: %s" % detail`, one string per detail that no catalog key could match,
+    so es and fr admins read the provider's failure in English. The detail is one of the senders'
+    fixed sentences (or a provider's own text, which stays as it came).
+    """
+    return False, i18n.Sentence("{service} error: {detail}", service=service,
+                                detail=i18n.Sentence(detail or "unknown"))
+
+
 def _test_send_telegram(cfg, token, chat_id, text):
     """test_send for Telegram: check the token and chat id, then send."""
     tg = cfg.get("telegram") or {}
@@ -1152,8 +1164,7 @@ def _test_send_telegram(cfg, token, chat_id, text):
     if not chat:
         return False, "Enter the chat ID first. Message your bot once, then use your numeric chat ID."
     ok, detail = send_telegram(tok, chat, text)
-    return (True, "Test message sent — check Telegram.") if ok \
-        else (False, "Telegram error: %s" % (detail or "unknown"))
+    return (True, "Test message sent — check Telegram.") if ok else _r16a_test_failed("Telegram", detail)
 
 
 def _test_send_discord(cfg, webhook, text):
@@ -1164,8 +1175,7 @@ def _test_send_discord(cfg, webhook, text):
     if not _valid_discord_webhook(wh):
         return False, "That doesn't look like a Discord webhook URL."
     ok, detail = send_discord(wh, text)
-    return (True, "Test message sent — check Discord.") if ok \
-        else (False, "Discord error: %s" % (detail or "unknown"))
+    return (True, "Test message sent — check Discord.") if ok else _r16a_test_failed("Discord", detail)
 
 
 def _test_send_discord_bot(cfg, token, chat_id, text):
@@ -1180,8 +1190,7 @@ def _test_send_discord_bot(cfg, token, chat_id, text):
     if not _DISCORD_CHANNEL_RE.match(chan):
         return False, "Enter the numeric channel ID first (right-click the channel → Copy Channel ID)."
     ok, detail = discord_bot_send(tok, chan, text)
-    return (True, "Test message sent — check the Discord channel.") if ok \
-        else (False, "Discord error: %s" % (detail or "unknown"))
+    return (True, "Test message sent — check the Discord channel.") if ok else _r16a_test_failed("Discord", detail)
 
 
 def _test_send_ntfy(cfg, token, server, topic, text):
@@ -1198,8 +1207,7 @@ def _test_send_ntfy(cfg, token, server, topic, text):
         return False, ("That server isn't usable — give the base URL only, https and no path "
                        "(for example https://ntfy.sh).")
     ok, detail = send_ntfy(srv, top, tok, text)
-    return (True, "Test message sent — check the ntfy app.") if ok \
-        else (False, "ntfy error: %s" % (detail or "unknown"))
+    return (True, "Test message sent — check the ntfy app.") if ok else _r16a_test_failed("ntfy", detail)
 
 
 def test_send(kind, token=None, chat_id=None, webhook=None, server=None, topic=None):

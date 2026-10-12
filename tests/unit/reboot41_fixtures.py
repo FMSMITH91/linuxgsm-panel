@@ -67,7 +67,7 @@ f="$FAKE_STATE/tmux/$sock"
 case "$cmd" in
   list-sessions) [ -f "$f" ] || { echo "no server running on $sock" >&2; exit 1; }; cat "$f"; exit 0 ;;
   has-session) [ -f "$f" ] && grep -Fxq -- "$t" "$f"; exit $? ;;
-  send-keys) [ -f "$f" ] || exit 1; txt="$3"; [ "$txt" = "--" ] && txt="$4"
+  send-keys) [ -f "$f" ] || exit 1; shift 2; [ "$1" = "-l" ] && shift; [ "$1" = "--" ] && shift; txt="$1"
              printf 'say %s %s\n' "$t" "$txt" >> "$FAKE_LOG"; exit 0 ;;
 esac
 exit 1

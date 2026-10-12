@@ -521,7 +521,9 @@ for _cmd64 in ("-R", "-X cancel", "say hello"):
                        and "send-keys" in str(_out64[0]) else _out64)
 check("console send: a command starting with \"-\" (-R, -X cancel) is typed into the console, not taken "
       "as send-keys' own flag (no `--` ended tmux's option parsing)",
-      _sent64 == {c: ([], [c, "Enter"]) for c in ("-R", "-X cancel", "say hello")}, repr(_sent64))
+      # -l (typed as characters, part67), then Enter in a second send-keys of the same tmux command.
+      _sent64 == {c: (["-l"], [c, ";", "send-keys", "-t", "p64srv", "Enter"]) for c in ("-R", "-X cancel", "say hello")},
+      repr(_sent64))
 
 
 # ── A03 lead: a multicast / broadcast destination takes no TCP, so it is no way in ──────────────

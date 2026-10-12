@@ -358,12 +358,39 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
 
 
 def _r15a_src_key(text):
-    """A rule's source as ipaddress spells it, so `203.0.113.5` and `203.0.113.5/32` compare equal."""
-    s = str(text or "").strip()
+    """A rule's source as ufw itself stores it.
+
+    So a delete's source and a listed rule compare the way ufw's own match does
+    (ufw.util.normalize_address + UFWRule._fix_anywhere):
+
+    - any /0 network on the unspecified address, and the Firewall page's "Any address", is "any":
+      `ufw delete allow from 0.0.0.0/0 ...` (or ::/0) removes that family's half of an
+      `allow 22/tcp`, which ufw lists as "Anywhere";
+    - IPv4 is masked to its network (ufw stores 203.0.113.7/24 as 203.0.113.0/24, and a delete
+      typed with the host bits removes it), a /32 is the bare address;
+    - IPv6 keeps its host bits (ufw does) and loses only a /128.
+
+    Comparing ipaddress's text as typed missed all three, and Remove under "Allow from source"
+    deleted the host's only SSH rule past the lockout guard. ufw prints sources lowercased.
+    """
+    s = str(text or "").strip().lower()
+    if s in ("any", "anywhere", "any address"):
+        return "any"
     try:
-        return str(_ipaddress.ip_interface(s))
+        iface = _ipaddress.ip_interface(s)
     except ValueError:
-        return s.lower()
+        return s
+    plen = iface.network.prefixlen
+    if iface.version == 4:
+        if plen == 0:
+            # ufw masks v4 host bits first, so 1.2.3.4/0 is 0.0.0.0/0 to it too.
+            return "any"
+        return str(iface.ip) if plen == 32 else str(iface.network)
+    if plen == 128:
+        return str(iface.ip)
+    if plen == 0 and iface.ip == _ipaddress.IPv6Address("::"):
+        return "any"
+    return "%s/%d" % (iface.ip, plen)
 
 
 def _r15a_spec_names(g, port, proto_label, src=None):
@@ -383,6 +410,8 @@ def _r15a_spec_names(g, port, proto_label, src=None):
         return False
     if src is None:
         return g.get("scope") == "Any address"
+    # The group's scope is ufw's own From column ("Any address" for Anywhere); `src` is what the
+    # operator typed. Both go through ufw's normalisation, so either spelling of a rule finds it.
     return _r15a_src_key(g.get("scope")) == _r15a_src_key(src)
 
 
@@ -406,9 +435,9 @@ def _r15a_guarded_spec_delete(server, verb, vargs, names):
                                exc_info=True)
             status = None
         if status is None or status.get("unreachable"):
-            return (("Couldn't read the firewall to check whether this rule is the one keeping your "
-                     "access open, so this refuses rather than risk locking you out. Check the host "
-                     "is reachable and try again."), "", "", None)
+            return (i18n.Sentence("Couldn't read the firewall to check whether this rule is the one keeping "
+                                  "your access open, so this refuses rather than risk locking you out. "
+                                  "Check the host is reachable and try again."), "", "", None)
         for g in (status.get("groups", []) if status.get("installed") else []):
             if g.get("protected") and names(g):
                 return _r16c_protect_refusal(g), "", "", None
@@ -560,7 +589,8 @@ def _r16c_protect_refusal(g):
     key = g.get("protect_reason_key")
     if key:
         return i18n.Sentence(key, **dict(g.get("protect_reason_params") or {}))
-    return g.get("protect_reason") or "This rule protects your access to the host and can't be removed here."
+    return g.get("protect_reason") or i18n.Sentence("This rule protects your access to the host and can't be "
+                                                    "removed here.")
 
 
 def remote_ufw_close_port(server, port, protocol=None, force=False):
@@ -870,8 +900,12 @@ def remote_ufw_allow_game_ports(server, ports, name="Game"):
         if is_open:
             opened.append(p)
         left_to += [r for r in rules if r not in left_to]
-    return opened, (f"opened {len(opened)} port(s): {', '.join(map(str, opened)) or 'none'}"
-                    + (f"; left to an existing rule: {', '.join(left_to)}" if left_to else ""))
+    # A Sentence: remote_ufw_allow_game_port shows it as the {what} of "Port {port}: {what}".
+    shown = ", ".join(map(str, opened)) or i18n.Sentence("none")
+    if left_to:
+        return opened, i18n.Sentence("opened {n} port(s): {ports}; left to an existing rule: {rules}",
+                                     n=len(opened), ports=shown, rules=", ".join(left_to))
+    return opened, i18n.Sentence("opened {n} port(s): {ports}", n=len(opened), ports=shown)
 
 
 # How many times a cleanup tries one rule, each against a fresh read. ufw numbers are positions and
@@ -917,8 +951,10 @@ def _next_pick(status, pick, refused):
 
 # A cleanup that could not read the firewall knows nothing about what it left. Shared with the
 # uninstall route, which says the same when the cleanup raised.
-UFW_UNREAD_NOTE = ("The firewall could not be read, so this server's rules may still be open — "
-                   "check the host's Firewall page.")
+# The notes below are Sentences: the uninstall answer translates each one whole (_r15e_uninstalled),
+# and %-built English matched no catalog key, so es and fr viewers read them in English.
+UFW_UNREAD_NOTE = i18n.Sentence("The firewall could not be read, so this server's rules may still be open — "
+                                "check the host's Firewall page.")
 
 
 def _still_there(status, pick):
@@ -929,13 +965,16 @@ def _still_there(status, pick):
         return []
     if not status.get("enabled"):
         # An inactive ufw lists no rules, stored ones included: nothing here could be seen or removed.
-        return ["UFW is not active on this host, so its stored rules cannot be listed, and any this "
-                "server had are still stored — they apply again if UFW is enabled."]
+        return [i18n.Sentence("UFW is not active on this host, so its stored rules cannot be listed, and any "
+                              "this server had are still stored — they apply again if UFW is enabled.")]
     stuck = [_rule_label(g) for g in status.get("groups", []) if pick(g)]
     if not stuck:
         return []
-    return ["Still open, as it could not be removed: %s — remove %s from the host's Firewall "
-            "page." % (", ".join(stuck), "it" if len(stuck) == 1 else "them")]
+    if len(stuck) == 1:
+        return [i18n.Sentence("Still open, as it could not be removed: {rules} — remove it from the host's "
+                              "Firewall page.", rules=stuck[0])]
+    return [i18n.Sentence("Still open, as it could not be removed: {rules} — remove them from the host's "
+                          "Firewall page.", rules=", ".join(stuck))]
 
 
 def _left_on_purpose(status, comment, removable, protected):
@@ -943,9 +982,8 @@ def _left_on_purpose(status, comment, removable, protected):
     kept = [g for g in status.get("groups", [])
             if g.get("comment") == comment and not removable(g)]
     on_host = [g for g in kept if _is_panel_allow(g) and _port_of(g) in protected]
-    return (_naming("Left in place, as the panel does not make rules like these",
-                    [g for g in kept if g not in on_host])
-            + _naming("Left in place on SSH's or the panel's own port", on_host))
+    return (_naming(i18n.Sentence(_R16A_NOT_OURS), [g for g in kept if g not in on_host])
+            + _naming(i18n.Sentence(_R16A_ON_HOST_PORT), on_host))
 
 
 def _rule_port_words(g):
@@ -1009,7 +1047,9 @@ def _left_on_own_ports(status, ports, protected, taken):
     labels = list(dict.fromkeys(map(_unnamed_rule_label, stray)))
     if not labels:
         return []
-    return ["Left in place on its port%s: %s." % ("s" if len(ports) > 1 else "", ", ".join(labels))]
+    if len(ports) > 1:
+        return [i18n.Sentence("Left in place on its ports: {rules}.", rules=", ".join(labels))]
+    return [i18n.Sentence("Left in place on its port: {rules}.", rules=", ".join(labels))]
 
 
 def _port_of(g):
@@ -1017,9 +1057,17 @@ def _port_of(g):
     return int(str(g["port_num"]).strip())
 
 
+_R16A_NOT_OURS = "Left in place, as the panel does not make rules like these: {rules}."
+_R16A_ON_HOST_PORT = "Left in place on SSH's or the panel's own port: {rules}."
+
+
 def _naming(lead, groups):
-    """["<lead>: <each rule>."], or [] when there are none."""
-    return ["%s: %s." % (lead, ", ".join(map(_rule_label, groups)))] if groups else []
+    """[`lead` (a Sentence of one of the two above) naming each rule of `groups`], or [] when none.
+
+    The caller hands the module constant to Sentence by name, so tools/i18n_scan holds it to the
+    catalogs; a template passed on as a plain parameter is one the gate cannot read.
+    """
+    return [i18n.Sentence(lead.template, rules=", ".join(map(_rule_label, groups)))] if groups else []
 
 
 def _with_notes(message, notes):

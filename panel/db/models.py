@@ -649,13 +649,20 @@ class RemoteServer(db.Model):
 # plain copyable ip:port instead of offering a button that would do nothing. Every key is a
 # LinuxGSM shortname (held to tests/unit/lgsm_shortnames.txt): "insurgency" and "gesource" were
 # here and match no LinuxGSM game.
+# Steam picks the game to launch from the app id the server reports when queried, so a title
+# that is its own Steam app (Day of Defeat, Day of Infamy, HL Deathmatch: Source, Opposing Force,
+# Nuclear Dawn) joins like the rest; they were left out although they are Valve-engine servers.
 STEAM_CONNECT_GAMES = frozenset({
     # Source engine
     "gmod", "css", "cs2", "csgo", "tf2", "hl2dm", "dods", "l4d", "l4d2",
-    "ins", "nmrih", "zps", "fof", "bb2",
+    "ins", "nmrih", "zps", "fof", "bb2", "hldms", "doi", "nd",
     # GoldSrc engine
-    "cs", "cscz", "tfc", "dmc", "ns", "ricochet", "hldm", "ahl",
+    "cs", "cscz", "tfc", "dmc", "ns", "ricochet", "hldm", "ahl", "dod", "opfor",
 })
+# Valve-engine MODS with no Steam app of their own: the server reports Half-Life's or the SDK's
+# app id, so whether steam://connect lands in the mod is not something the panel can promise.
+# Kept apart deliberately; the unit suite holds every Valve-engine game to one set or the other.
+_STEAM_CONNECT_UNSURE = frozenset({"bb", "sfc", "ts", "vs", "zmr"})
 
 # LinuxGSM game_types with NO `update` command (not SteamCMD-based — LinuxGSM omits update from
 # their menu). Used to hide the Update action even before a server's command list is fetched.
@@ -1320,7 +1327,9 @@ def anonymise_audit_ips(days):
     # privacy control that fails quietly is worse than one that is off, because nobody looks.
     try:
         days = int(days)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):   # OverflowError: a hand-edited `Infinity`
+        # (A JSON `true` is left as int 1 here on purpose: it only ages IPs sooner, where refusing
+        # it would turn the privacy control off.)
         _log.warning("audit_ip_retention_days is not a number (%r); IP ageing is disabled", days)
         return 0
     if days <= 0:

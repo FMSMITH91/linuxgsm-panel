@@ -1031,14 +1031,16 @@ def remove_panel_route(route, port):
     if fresh is False:
         return "gone", ""
     if fresh.get("svc"):
-        return "failed", ("it is on the Tailscale Service %s, which the panel does not manage"
-                          % fresh["svc"])
+        # Sentences: these panel-worded reasons go into "Failed to remove: {why}" and the leftover
+        # note, translated whole; as plain text they stayed English inside a translated sentence.
+        return "failed", i18n.Sentence("it is on the Tailscale Service {svc}, which the panel does not "
+                                       "manage", svc=fresh["svc"])
     try:
         args = serve_off_args(fresh["url"], fresh["mount"])
     except _priv.VerbError:
-        return "failed", "its mount is not one the panel can name on the command line"
+        return "failed", i18n.Sentence("its mount is not one the panel can name on the command line")
     if args is None:
-        return "failed", "the listener it is on could not be read"
+        return "failed", i18n.Sentence("the listener it is on could not be read")
     out, err, rc = _run_ts(args, timeout=10)
     with _cache_lock:
         _cache["info"] = None

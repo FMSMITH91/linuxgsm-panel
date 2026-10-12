@@ -9,6 +9,7 @@ from flask import (flash, g, jsonify, redirect, render_template, request, sessio
 from flask_login import (current_user, login_required, login_user, logout_user)
 from panel.core import (i18n)
 from panel.core.clock import (utcnow)
+from panel.core.validation import (MAX_USERNAME_LEN)
 from panel.core.config import (decrypt_secret, encrypt_secret)
 from panel.security import banlist as _banlist
 from panel.db.models import (User, db)
@@ -638,7 +639,7 @@ def _login_throttled(attempt):
         if _first_block:
             _LOGIN_BLOCK_LOGGED[_tk] = now
     if _first_block:   # one audit entry per block window, not per hammering request
-        _who = (request.form.get("username", "") or "").strip()[:64] or "(blank)"
+        _who = (request.form.get("username", "") or "").strip()[:MAX_USERNAME_LEN] or "(blank)"
         log_action(None, "login_blocked", actor=_who,
                    detail="rate-limited after %d failed attempts" % LOGIN_MAX_FAILS, success=False)
     _authlog.warning("panel login blocked from %s", _log_ip(ip))   # fail2ban: counts as a hit
@@ -670,7 +671,10 @@ def _login_fail(attempt, msg, attempted=None, reason="login failed", **kw):
         _banlist.refresh_soon()
     # The ATTEMPTED username (user-controlled → sanitised + capped) goes in the User
     # column via `actor`; the reason + attempt count go in detail. log_action stores the IP.
-    who = ((attempted if attempted is not None else request.form.get("username", "")) or "").strip()[:64] or "(blank)"
+    # Cut at the longest name an account can have, not 64: a 65-80 character superadmin name was
+    # cut here, matched no account, and never raised the "admin account under attack" alert.
+    who = ((attempted if attempted is not None else request.form.get("username", "")) or "").strip()
+    who = who[:MAX_USERNAME_LEN] or "(blank)"
     # Attempt number = failed logins from THIS IP within the window, counted from the
     # audit log — so it keeps climbing per IP (across different usernames) and, unlike the
     # in-memory throttle counter, isn't reset by a panel restart.

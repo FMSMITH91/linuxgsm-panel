@@ -115,6 +115,23 @@ def _remove_serve_leftovers(panel_port, mount, where, audit):
     return state
 
 
+# The reason class _remove_serve_leftovers records (debug_report.process.serve_reason's token, or an
+# exception's class name) as words the viewer reads. The token itself went into the translated
+# sentence: "no se pudo eliminar (not-running)". Sentences, so the catalog gate reads each one.
+_R16A_LEFTOVER_WHY = {
+    "shared-funnel": i18n.Sentence("Funnel is set for another app on the same listener"),
+    "serve-not-enabled-on-tailnet": i18n.Sentence("Serve is not enabled on the tailnet"),
+    "permission": i18n.Sentence("permission denied"),
+    "not-running": i18n.Sentence("Tailscale is not running"),
+    "bad-mount": i18n.Sentence("not a usable mount point"),
+}
+
+
+def _r16a_leftover_why(token):
+    """A leftover-removal reason class as a translatable phrase; any other class is "an error"."""
+    return _R16A_LEFTOVER_WHY.get(token) or i18n.Sentence("an unexpected error")
+
+
 def _leftover_note(outcome):
     """What the answer to a Serve write adds about the panel's routes at other mounts.
 
@@ -128,7 +145,7 @@ def _leftover_note(outcome):
     if outcome.startswith("failed:"):
         return i18n.Sentence("A route to the panel at another mount could not be removed ({why}). "
                              "Remove it with: sudo tailscale serve --https=443 --set-path=<that "
-                             "mount> off", why=outcome[len("failed:"):])
+                             "mount> off", why=_r16a_leftover_why(outcome[len("failed:"):]))
     if outcome == "unread":
         return i18n.Sentence("This host's Serve configuration could not be read afterwards, so a route "
                              "to the panel at another mount may still be there.")

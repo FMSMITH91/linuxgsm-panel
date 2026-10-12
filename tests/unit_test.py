@@ -357,6 +357,9 @@ _r16d_wrap_ts_handles()
 # part66 (the fifth 2026-10-11 review's routes, tools, page and i18n fixes, builder C) drives
 # part12's app and runs node on its own fixtures; imports part01, 05, 11, 12, 20, 47 and 61 (part61's
 # close-panel-port helpers, part11's transport stand-in).
+# part67 (review 1012a: core, backup, ssh-core and reboot fixes, builder A) drives part12's app and
+# database with stand-ins, and node and bash on its own fixtures; imports part01, 02, 12, 14, 20, 47
+# and 64 (part14's update-status stand-in, part64's firewall stand-in).
 # part68 (review 1012a: cron, game files, helper and routes, builder B) drives part12's app with
 # stand-ins, and the crontab pipeline in a real bash; imports part01, 05 and 12.
 # part69 (the sixth review's routes, tools, page and i18n fixes, builder C) drives part12's app and
@@ -368,7 +371,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
           "part50", "part51", "part52", "part53", "part54", "part55", "part56", "part57", "part58",
           "part59", "part60", "part61", "part62", "part63", "part64", "part65", "part66",
-          "part68", "part69", "part15")
+          "part67", "part68", "part69", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

@@ -172,7 +172,8 @@ def _register_panel_update(app):
             return jsonify({"success": False, "message": i18n.tr(_busy)}), 409
         success, msg = so.panel_self_update()
         log_action(current_user, "panel_self_update", target=LOCAL_HOST_LABEL, detail=msg, success=success)
-        return jsonify({"success": success, "message": msg})
+        # Translated: the Update button prints it, and its refusals are Sentences or catalog keys.
+        return jsonify({"success": success, "message": i18n.tr(msg)})
 
     @app.route("/api/panel/update-log")
     @login_required
