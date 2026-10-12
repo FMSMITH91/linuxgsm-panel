@@ -254,9 +254,16 @@ document.addEventListener('DOMContentLoaded', function(){ window.localizeTimes()
 // bottom-right corner is easy to overlook), then fades. window.toast(message, 'success'|'danger'|'info').
 window.toast = function(msg, kind){
   var c = document.getElementById('toast-area');
+  // The area is centred by margin across the full width, not by left:50% + translateX(-50%). A
+  // fixed box placed at left:50% shrink-wraps into the half of the viewport right of centre, so
+  // the max-width below never applied: measured at 375px every toast was 188px wide (x 94..281),
+  // and a translated lockout refusal stood 257px tall over the header for seven seconds. The
+  // area itself lets clicks through (it is now as wide as the cap, wider than a short toast);
+  // each toast takes them back.
   if(!c){ c = document.createElement('div'); c.id = 'toast-area';
-    c.style.cssText = 'position:fixed;top:1rem;left:50%;transform:translateX(-50%);z-index:11000;'
-      + 'display:flex;flex-direction:column;align-items:center;gap:.5rem;max-width:min(92vw,520px);';
+    c.style.cssText = 'position:fixed;top:1rem;left:0;right:0;margin:0 auto;z-index:11000;'
+      + 'display:flex;flex-direction:column;align-items:center;gap:.5rem;width:min(92vw,520px);'
+      + 'pointer-events:none;';
     document.body.appendChild(c); }
   // 'warning' is honoured: six call sites already passed it and silently got a blue info toast,
   // so a "this only half-worked" message looked like routine information.
@@ -266,7 +273,8 @@ window.toast = function(msg, kind){
   var icon = KINDS[kind];
   var t = document.createElement('div');
   t.className = 'alert alert-' + kind + ' py-2 px-3 mb-0';
-  t.style.cssText = 'font-size:.85rem;box-shadow:0 6px 24px rgba(0,0,0,.55);text-align:center;';
+  t.style.cssText = 'font-size:.85rem;box-shadow:0 6px 24px rgba(0,0,0,.55);text-align:center;'
+    + 'pointer-events:auto;max-width:100%;overflow-wrap:anywhere;';
   // nosemgrep - icon is one of four literals from KINDS above; msg goes through escapeHtml.
   t.innerHTML = '<i class="bi bi-' + icon + '"></i> ' + escapeHtml(msg);
   c.appendChild(t);

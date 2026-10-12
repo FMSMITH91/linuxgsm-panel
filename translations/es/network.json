@@ -582,5 +582,7 @@
   "Starting Tailscale…": "Iniciando Tailscale…",
   "Configuring HTTPS…": "Configurando HTTPS…",
   "Installing Tailscale on the panel host… (up to a minute)": "Instalando Tailscale en el host del panel… (hasta un minuto)",
-  "Configuring...": "Configurando..."
+  "Configuring...": "Configurando...",
+  "Any address": "Cualquier dirección",
+  "1.2.3.4 or 10.0.0.0/8": "1.2.3.4 o 10.0.0.0/8"
 }

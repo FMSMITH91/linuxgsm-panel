@@ -71,7 +71,7 @@ function refreshFirewall() {
 // The open-ports table, or its empty state, and the rule count beside the card title.
 function _fwRenderRules(listEl, openGroups) {
   if (openGroups.length) {
-    var html = '<table class="table table-sm table-hover mb-0 align-middle">'
+    var html = '<table class="table table-sm table-hover mb-0 align-middle table-pin-actions">'
       + '<thead><tr><th>Port</th><th>Protocol</th><th>For</th><th>Scope</th><th>IP</th><th></th></tr></thead><tbody>';
     openGroups.forEach(function(g) {
       var port = g.is_iface

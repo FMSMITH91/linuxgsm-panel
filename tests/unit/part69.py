@@ -637,3 +637,140 @@ if _got69 is not None:
           "lines pushed since Clear are shown once each, none lost to the held pushes the re-prime releases",
           _got69.get("running") is True and _got69.get("after") == ["log2", "[panel] u1", "[panel] u2"]
           and _got69.get("later") == ["log2", "[panel] u1", "[panel] u2"], repr(_got69))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 9. At 375px (builder U): toasts, the firewall's scope and source words, and row buttons in reach
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Measured in a rendered panel at 375px: every toast was 188px wide (x 94..281) — a fixed box at
+# left:50% shrink-wraps into the half of the viewport right of centre, so its max-width never
+# applied, and a Spanish lockout refusal stood 188x257 over the header for 7 s. The firewall's
+# Scope column said "Any address" in Spanish and French, the source field's placeholder was marked
+# data-no-i18n, and the rules and backups tables slid their Delete buttons under the scroll edge.
+_PJS_r16u = _read69(_JS69, "panel.js")
+_TOAST_r16u = (
+    "global.window = global;\n"
+    "const made = [];\n"
+    "global.document = {body: {appendChild(){}}, getElementById(){ return null; },\n"
+    "  createElement(){ const el = {style: {}, children: [], appendChild(c){ this.children.push(c); }};\n"
+    "    made.push(el); return el; }};\n"
+    "global.escapeHtml = s => String(s); global.setTimeout = () => 0;\n"
+    + _cut47(_PJS_r16u, "window.toast = function(") + "\n"
+    "toast('El puerto 22 es el puerto SSH que se usa para llegar a este host.', 'danger');\n"
+    "const area = made[0];\n"
+    "console.log(JSON.stringify({area: area.style.cssText, toast: area.children[0].style.cssText}));\n")
+_name_r16u = "toast: the area spans the capped width, centred by margin"
+_got_r16u = _node69(_name_r16u, _TOAST_r16u)
+if _got_r16u is not None:
+    _a_r16u = (_got_r16u.get("area") or "").replace(" ", "")
+    _t_r16u = (_got_r16u.get("toast") or "").replace(" ", "")
+    check("toast: the area is centred by left:0/right:0/margin:auto with a width of its own, not placed "
+          "at left:50% (where a fixed box shrink-wraps to the right half: 188px of a 375px phone)",
+          "left:50%" not in _a_r16u and "translateX" not in _a_r16u and "left:0;" in _a_r16u
+          and "right:0;" in _a_r16u and "margin:0auto;" in _a_r16u and "width:min(92vw,520px)" in _a_r16u,
+          repr(_got_r16u))
+    check("toast: the full-width area lets clicks through, and each toast takes them back",
+          "pointer-events:none" in _a_r16u and "pointer-events:auto" in _t_r16u, repr(_got_r16u))
+
+# The Scope column. The words stay ENGLISH at the source — hosts.py's lockout guard compares
+# g["scope"] == "Any address" — and the page's catalog walker translates the cell, so the entry
+# must be in each catalog. Every literal _ufw_scope can return is checked, not just the one found.
+_scopes_r16u = {_fwmod69._ufw_scope({"iface": "", "from": "Anywhere"}),
+                _fwmod69._ufw_scope({"iface": "", "from": "anywhere"})}
+check("firewall: the Scope column's 'Any address' stays English at the source (the lockout guard "
+      "matches it)", _scopes_r16u == {"Any address"}, repr(_scopes_r16u))
+for _L_r16u in ("es", "fr"):
+    _cat_r16u = _i18n69.catalog(_L_r16u)
+    _miss_r16u = [s for s in _scopes_r16u if _cat_r16u.get(s, s) == s]
+    check("firewall (%s): every scope word _ufw_scope returns has a translation" % _L_r16u,
+          not _miss_r16u, repr(_miss_r16u))
+
+# The source field's placeholder: translated, addresses literal.
+import re as _re_r16u  # noqa: E402
+_FWT_r16u = _read69(_root, "templates", "remote_firewall.html")
+_cidr_r16u = _re_r16u.search(r'<input\b[^>]*\bid="src-cidr"[^>]*>', _FWT_r16u, _re_r16u.S)
+_ph_r16u = _re_r16u.search(r'placeholder="([^"]*)"', _cidr_r16u.group(0)).group(1) if _cidr_r16u else ""
+check("firewall: the 'Restrict a port' source field is not data-no-i18n, so its placeholder translates",
+      _cidr_r16u is not None and "data-no-i18n" not in _cidr_r16u.group(0),
+      _cidr_r16u.group(0) if _cidr_r16u else "no #src-cidr input")
+# The addresses are read from the English placeholder itself, not written here a second time.
+_addrs_r16u = [a for a in _re_r16u.findall(r"[0-9][0-9./]+", _ph_r16u) if "." in a]
+for _L_r16u in ("es", "fr"):
+    _v_r16u = _i18n69.catalog(_L_r16u).get(_ph_r16u, "")
+    check("firewall (%s): the source placeholder %r has a translation that keeps the addresses literal"
+          % (_L_r16u, _ph_r16u),
+          bool(_v_r16u) and _v_r16u != _ph_r16u and _addrs_r16u
+          and all(a in _v_r16u for a in _addrs_r16u),
+          repr(_v_r16u))
+
+# The protocol select had a col-3: 66px at 375px, "Les deu…" in French and "Both (TC" in English
+# on the desktop column too. It needs at least half the row.
+_proto_r16u = _re_r16u.search(r'<div class="col-(\d+)">\s*<select id="new-proto"', _FWT_r16u)
+check("firewall: the Open-a-port protocol select gets at least half its row",
+      _proto_r16u is not None and int(_proto_r16u.group(1)) >= 6,
+      _proto_r16u.group(0) if _proto_r16u else "no col-N directly around #new-proto")
+
+# Row buttons in reach: each table whose last column is its row buttons is pinned, in the
+# template AND in the script that repaints it, and the rule that pins it exists at phone width.
+_RM_r16u = _read69(_root, "templates", "remote_manage.html")
+_pins_r16u = {
+    "firewall rules (template)": (_FWT_r16u, "<th>Scope</th>"),
+    "firewall rules (repaint)": (_read69(_JS69, "remote_firewall.js"), "<th>Port</th><th>Protocol</th>"),
+    "panel backups": (_RM_r16u, "<th>When</th><th>Type</th>"),
+    "game backups": (_read69(_JS69, "remote_manage_backups.js"), "<th>Backup file</th>"),
+    "host game servers": (_RM_r16u, "<th>Name</th><th>Type</th><th>Connect</th>"),
+    "users": (_read69(_root, "templates", "manage_users.html"), "<th>Username</th>"),
+}
+for _what_r16u, (_src_r16u, _head_r16u) in _pins_r16u.items():
+    _at_r16u = _src_r16u.find(_head_r16u)
+    _tbl_r16u = _src_r16u.rfind("<table", 0, _at_r16u) if _at_r16u >= 0 else -1
+    _tag_r16u = _src_r16u[_tbl_r16u:_src_r16u.find(">", _tbl_r16u)] if _tbl_r16u >= 0 else ""
+    check("375px: the %s table pins its row buttons (table-pin-actions)" % _what_r16u,
+          "table-pin-actions" in _tag_r16u, _tag_r16u or "table not found")
+_CSS_r16u = _read69(_root, "static", "css", "panel.css")
+_mob_r16u = _CSS_r16u.find("@media (width <= 767.98px)")
+_pinrule_r16u = _re_r16u.search(r"\.table-pin-actions\s*>\s*tbody\s*>\s*tr\s*>\s*:last-child\s*\{([^}]*)\}",
+                                _CSS_r16u[_mob_r16u:])
+check("375px: inside the phone-width block, a pinned table's last cell is position:sticky at right:0",
+      _mob_r16u >= 0 and _pinrule_r16u is not None
+      and _re_r16u.search(r"position:\s*sticky", _pinrule_r16u.group(1)) is not None
+      and _re_r16u.search(r"right:\s*0", _pinrule_r16u.group(1)) is not None,
+      _pinrule_r16u.group(0) if _pinrule_r16u else "no .table-pin-actions last-cell rule after the media query")
+# The dashboard's 120px name-column floor was written for every wrapped table and reached the
+# backups table's one-word Type column, which alone pushed it to 323px in a 309px box.
+check("375px: the dashboard's server-name width floor is scoped to the dashboard table, not every "
+      "wrapped table's second column",
+      _re_r16u.search(r"\.table-responsive\s+\.table\s+(thead|tbody)\s+t[hd]:nth-child\(2\)", _CSS_r16u) is None
+      and "dash-srv-table" in _read69(_root, "templates", "dashboard.html"),
+      "an unscoped `.table-responsive .table … :nth-child(2)` rule is back")
+
+# A heading that names a host or a server: measured at 375px with a 45-char host name, the Firewall
+# page's name was a 93px column 7 lines tall (French split "Pare-/feu :") and the page scrolled
+# sideways (381px); a 41-char unbroken server name pushed /server/N to 487px. The heading row may
+# wrap, its items may shrink below their longest word, and the name may break inside a word. The
+# rule is read with its comments stripped, and only from outside any @media block, since every
+# page at every width needs it.
+_css_top_r16u = _re_r16u.sub(r"/\*.*?\*/", "", _CSS_r16u, flags=_re_r16u.S)
+
+
+def _top_rules_r16u(pattern):
+    """The bodies of rules matching `pattern` that sit at brace depth 0 (inside no @media block)."""
+    return " ".join(m.group(1) for m in _re_r16u.finditer(pattern, _css_top_r16u)
+                    if _css_top_r16u.count("{", 0, m.start()) == _css_top_r16u.count("}", 0, m.start()))
+
+
+_pt_r16u = _top_rules_r16u(r"(?<![\w-])\.page-title\s*\{([^}]*)\}")
+_ptk_r16u = _top_rules_r16u(r"\.page-title\s*>\s*\*\s*\{([^}]*)\}")
+check("375px: a page heading wraps its label and name onto separate lines and breaks a long name "
+      "inside the word (flex-wrap:wrap, overflow-wrap:anywhere, items min-width:0)",
+      _re_r16u.search(r"flex-wrap:\s*wrap", _pt_r16u) is not None
+      and _re_r16u.search(r"overflow-wrap:\s*anywhere", _pt_r16u) is not None
+      and _re_r16u.search(r"min-width:\s*0", _ptk_r16u) is not None,
+      "page-title: %r / children: %r" % (_pt_r16u.strip(), _ptk_r16u.strip()))
+for _tpl_r16u in ("remote_firewall.html", "remote_manage.html"):
+    _h1_r16u = _re_r16u.search(r'<h1 class="page-title[^"]*">(.*?)</h1>',
+                               _read69(_root, "templates", _tpl_r16u), _re_r16u.S)
+    check("375px: %s's heading carries the host name as its own item (a direct child the rule reaches)"
+          % _tpl_r16u,
+          _h1_r16u is not None and "<span data-no-i18n>{{ remote.display_name }}</span>" in _h1_r16u.group(1),
+          _h1_r16u.group(1).strip()[:200] if _h1_r16u else "no page-title h1")

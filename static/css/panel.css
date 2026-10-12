@@ -964,8 +964,18 @@
       color: var(--text-heading);
       display: flex; align-items: center; gap: .5rem;
       margin-bottom: 1.25rem;
+      /* A heading that names a host or a server carries whatever its owner typed, often one long
+         hyphenated or unbroken word. As a no-wrap flex row with no break inside a word, a 45-char
+         host name on the Firewall page at 375px was squeezed into a 93px column, 7 lines tall, beside
+         "Cortafuegos:" (French split it as "Pare-/feu :"), and the page itself scrolled sideways
+         (381px); an unbroken 41-char server name pushed /server/N to 487px. So the label and the name
+         may each take their own line, and the name may break anywhere when it still does not fit.
+         Nothing changes where the heading already fits on one line. */
+      flex-wrap: wrap;
+      overflow-wrap: anywhere;
     }
     .page-title i { color: var(--text-muted); }
+    .page-title > * { min-width: 0; }
 
     code {
       font-size: .85rem;
@@ -1132,8 +1142,52 @@
          whatever is left — 62px, measured, which wraps "CS2 Public" to two lines. Unpinning the
          Actions column frees 80px but the algorithm does not hand it here on its own, so the
          identity column gets a floor. 120px fits the name and its short_name underneath. */
-      .table-responsive .table thead th:nth-child(2),
-      .table-responsive .table tbody td:nth-child(2) { min-width: 120px; }
+      .table-responsive .table.dash-srv-table thead th:nth-child(2),
+      .table-responsive .table.dash-srv-table tbody td:nth-child(2) { min-width: 120px; }
+      /* ...and ONLY that table. Written as `.table-responsive .table`, the floor reached every
+         wrapped table on every page, whatever its second column held: the backups table's Type
+         column (a one-word badge) was 120px, and that alone pushed the table to 323px in a
+         309px box at 375px, with the Delete buttons under the scroll edge. */
+
+      /* A table whose last column is its row buttons (Delete, Restore, Download) pins that
+         column like the dashboard's, so the buttons stay on screen when a translated header or
+         a long value makes the table wider than the phone. Measured at 375px: the firewall rules
+         table was 360px in a 341px box, every Delete button's right edge at x=369 — reachable
+         only by scrolling the table sideways. No fixed width here: one to three icon buttons
+         is narrow, unlike the dashboard's seven. */
+      .table-pin-actions > thead > tr > :last-child,
+      .table-pin-actions > tbody > tr > :last-child {
+        position: sticky;
+        right: 0;
+        z-index: 2;
+
+        /* Opaque, and the row's own colour through hover: see the .col-actions note above. */
+        background-color: var(--bs-table-bg);
+        box-shadow: inset 0 0 0 9999px var(--bs-table-bg-state,
+                                         var(--bs-table-bg-type, var(--bs-table-accent-bg))),
+                    -10px 0 10px -10px rgb(0 0 0 / 70%);
+      }
+      .table-pin-actions > thead > tr > :last-child { background-color: var(--bg-elevated); }
+      /* Pinning keeps the buttons reachable, but whatever the table is wider than its box by
+         still slides UNDER them. In French the rules table's narrowest layout was 360px for a
+         341px box (the PROTOCOLE header alone sets that column); .35rem side padding instead
+         of .5rem makes it 331px, so it fits with no scroll at all and the pin is the fallback. */
+      .table-pin-actions > thead > tr > th,
+      .table-pin-actions > tbody > tr > td { padding-left: .35rem; padding-right: .35rem; }
+      /* Labelled buttons (Console, Files & Config, Uninstall) are ~300px side by side: pinned
+         like that they would cover the whole row, the dashboard's problem again. So they stack
+         in a bounded column instead; .text-nowrap is !important, hence this one is too. */
+      .table-pin-actions.pin-wrap > tbody > tr > :last-child {
+        white-space: normal !important;
+        width: 8.5rem;
+        min-width: 8.5rem;
+      }
+      /* ...and a long label wraps inside its button: "Fichiers et configuration" kept on one
+         line made the pinned column 180px of a 341px box; wrapped, it is 136px. */
+      .table-pin-actions.pin-wrap > tbody > tr > :last-child .btn { margin: 1px; white-space: normal; }
+      /* An empty-state row ("No backups yet.") is one cell spanning the table: pinning it would
+         lift the whole message out of the row. */
+      .table-pin-actions > tbody > tr > td[colspan]:last-child { position: static; box-shadow: none; }
 
       /* The header has its own colour by design, and no accent state to track. */
       .table-responsive .table thead th.col-actions { background-color: var(--bg-elevated); }

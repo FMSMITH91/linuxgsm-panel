@@ -596,6 +596,14 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **Phones (375 px wide).** Pop-up messages use the screen's width: they were squeezed into a
+  188-pixel column, and a long Spanish refusal covered the page header. The firewall rules, backups,
+  users and game-server tables fit the screen with their delete buttons in reach. Long host and
+  server names in page headings wrap instead of pushing the page sideways. French labels and
+  placeholders are no longer cut off, and "Any address" and the firewall's example address are
+  translated. Checked in English, Spanish and French; desktop pages are unchanged except the
+  Open-a-port card, whose protocol list was cut off there too.
+
 - **A sixth full review on 2026-10-12: fixes.** Every item below has a check that fails without
   its fix.
   - **Panel backup restore in Spanish and French.** When the safety copy taken before a restore
