@@ -485,24 +485,27 @@ def _js_markup_opener(text, at):
     return gt + 1, (name, inner[len(name):], None)
 
 
+def _js_markup_at(text, at):
+    """The match whose opener begins at `at` (an opener, text with no `<>`, a closing tag), or None."""
+    opened = _js_markup_opener(text, at)
+    if opened is None:
+        return None
+    end, (g1, g2, g3) = opened
+    lt = text.find("<", end)
+    if lt < 0 or lt == end or ">" in text[end:lt]:
+        return None
+    close = _JS_CLOSE_TAG.match(text, lt)
+    return (_MarkupMatch(at, (g1, g2, g3, text[end:lt], close.group(0)[2:-1])), close.end()) if close else None
+
+
 def _js_markup_matches(text):
     """Every element's whole text in `text`, left to right and not overlapping, as re.finditer would."""
-    starts = [0] + [i for i, c in enumerate(text) if c == "<" and i > 0]
     out, floor = [], 0
-    for at in starts:
-        if at < floor:
-            continue
-        opened = _js_markup_opener(text, at)
-        if opened is None:
-            continue
-        end, (g1, g2, g3) = opened
-        lt = text.find("<", end)
-        body = text[end:lt] if lt >= 0 else ""
-        close = _JS_CLOSE_TAG.match(text, lt) if lt >= 0 else None
-        if not body or ">" in body or close is None:
-            continue
-        out.append(_MarkupMatch(at, (g1, g2, g3, body, close.group(0)[2:-1])))
-        floor = close.end()
+    for at in [0] + [i for i, c in enumerate(text) if c == "<" and i > 0]:
+        found = _js_markup_at(text, at) if at >= floor else None
+        if found:
+            out.append(found[0])
+            floor = found[1]
     return out
 # Emphasis inside a sentence: "Attach this host to your <strong>free</strong> subscription". The
 # word is a fragment of prose spliced around it, not a label, so a lower-case one is not claimed.
@@ -827,11 +830,21 @@ def _js_splice_prose(seg):
         return False                                  # a URL, a selector, an attribute, code
     if "_" in seg and re.fullmatch(r"\w+", seg.strip()):
         return False                                  # an identifier: '__i18nA_' + attr
+    return not _js_css_list(seg) and _js_has_word(seg)
+
+
+def _js_css_list(seg):
+    """Whether `seg` is a CSS class list: 'btn text-wrap ' + cls."""
     words = seg.split()
-    if words and all(_JS_CSS_WORDS.match(w) for w in words) and any("-" in w for w in words):
-        return False                                  # 'btn text-wrap ' + cls
-    # Every run of letters with a lower-case one in it (a plain run, then a test: the one-regex
-    # form `[A-Za-z]*[a-z][A-Za-z]*` backtracks super-linearly on a long upper-case run, S8786).
+    return bool(words) and all(_JS_CSS_WORDS.match(w) for w in words) and any("-" in w for w in words)
+
+
+def _js_has_word(seg):
+    """Whether `seg` holds a word of two letters or more, with a lower-case one, that is not a unit.
+
+    Plain letter runs, then a test: the one-regex form `[A-Za-z]*[a-z][A-Za-z]*` backtracks
+    super-linearly on a long upper-case run (SonarCloud S8786).
+    """
     return any(len(w) >= 2 and w.lower() not in _JS_UNITS and w != w.upper()
                for w in re.findall(r"[A-Za-z]+", seg))
 
