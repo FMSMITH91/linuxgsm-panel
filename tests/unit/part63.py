@@ -551,7 +551,9 @@ try:
             "h = '<input title=\"Blank = default. Between ' + lo + ' and ' + hi + '.\">';\n"
             "w.innerHTML = 'Stopped waiting. Once you have approved '  // a comment in the join\n"
             "  + 'this machine:';\n"
-            "q = '<p>Click <strong>Repair database</strong> — it rebuilds the data.</p>';\n")
+            "q = '<p>Click <strong>Repair database</strong> — it rebuilds the data.</p>';\n"
+            "w2.innerHTML = '<i class=\"bi bi-check\"></i> Done with ' + n;\n"
+            "w3.innerHTML = '<strong>' + n + '</strong> files were removed.';\n")
     with open(os.path.join(_td63, "b.js"), "w", encoding="utf-8") as _fh63:
         _fh63.write(
             "el.textContent = '“' + name + '”';\n"
@@ -562,7 +564,8 @@ try:
             "x = 'reboot restart power ' + name;   // i18n-ignore: search keywords\n"
             "m.innerHTML = tfHtml('Connected! IP: {ip}', {ip: {html: '<code>' + esc(ip) + '</code>'}});\n"
             "s = '<strong>1.</strong> Open this link and approve the machine:';\n"
-            "t1 = tf('{used} / {total} used', {used: a, total: b || 'home'});\n")
+            "t1 = tf('{used} / {total} used', {used: a, total: b || 'home'});\n"
+            "z.innerHTML = '<i class=\"bi bi-arrow-repeat\"></i> Starting the widget…';\n")
     _sp63_hits = _i18n63.spliced_js(_td63)
     _em63_hits = _i18n63.emphasis_split_js(_td63)
     _claim63 = set(_i18n63.scan_js(_td63))
@@ -573,7 +576,7 @@ check("i18n scan (JS): words joined by + to a value are reported — a toast, a 
       "an innerHTML text node, a title attribute, past an inline element around the value, across a "
       "comment in the join (the two literals on either side of it are one sentence, not reported)",
       _sp63_a == sorted(["Uninstalling", "uploaded to", "Remove", "from this server?", "Panel restarting on",
-                         "Ban", "from", "and"]), repr(_sp63_hits))
+                         "Ban", "from", "and", "Done with", "files were removed."]), repr(_sp63_hits))
 check("i18n scan (JS): ...a sentence split around bold words is reported too",
       [_t for _f, _l, _t in _em63_hits] == ["Click", "— it rebuilds the data."], repr(_em63_hits))
 check("i18n scan (JS): ...and nothing around a name that is not a sentence: quotes, a unit, a class list, a "
@@ -583,6 +586,10 @@ check("i18n scan (JS): a tf() template is asked for with its {placeholders} and 
       "not ('home' goes in untranslated)",
       "{used} / {total} used" in _claim63 and "Connected! IP: {ip}" in _claim63 and "home" not in _claim63,
       repr(sorted(_claim63)))
+check("i18n scan (JS): the words after an icon, to the end of a literal nothing is spliced onto, are asked "
+      "for (\"Starting Tailscale…\" and twelve more were never asked: the closing tag is in no literal); "
+      "with a value spliced on they are not (control: that is the splice gate's)",
+      "Starting the widget…" in _claim63 and "Done with" not in _claim63, repr(sorted(_claim63)))
 check("i18n: no script splices a sentence around a value, or splits one around bold words",
       not _i18n63.spliced_js() and not _i18n63.emphasis_split_js(),
       repr((_i18n63.spliced_js()[:6], _i18n63.emphasis_split_js()[:6])))

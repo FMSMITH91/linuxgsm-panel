@@ -565,5 +565,14 @@
   "The client will be installed automatically when you attach.": "El cliente se instalará automáticamente al vincularlo.",
   "Attach this host to your free Ubuntu Pro subscription for ~10 years of security updates (ESM) and kernel Livepatch.": "Vincula este host a tu suscripción gratuita de Ubuntu Pro para ~10 años de actualizaciones de seguridad (ESM) y Livepatch del kernel.",
   "Click {button} — it rebuilds the readable data, or restores the last healthy backup; your data is copied aside first, never deleted. The panel briefly restarts.": "Pulsa {button} — reconstruye los datos legibles o restaura la última copia sana; tus datos se copian aparte antes, nunca se borran. El panel se reinicia brevemente.",
-  "the host": "el host"
+  "the host": "el host",
+  "Done — Run Again": "Hecho — Ejecutar de nuevo",
+  "Updates installed.": "Actualizaciones instaladas.",
+  "The update process ended without a completion marker — check the log.": "El proceso de actualización terminó sin marca de finalización — revisa el registro.",
+  "Installing… (safe to close this popup — it keeps running)": "Instalando… (puedes cerrar esta ventana — sigue ejecutándose)",
+  "Installing Tailscale… (up to a minute)": "Instalando Tailscale… (hasta un minuto)",
+  "Starting Tailscale…": "Iniciando Tailscale…",
+  "Configuring HTTPS…": "Configurando HTTPS…",
+  "Installing Tailscale on the panel host… (up to a minute)": "Instalando Tailscale en el host del panel… (hasta un minuto)",
+  "Configuring...": "Configurando..."
 }

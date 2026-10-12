@@ -135,5 +135,7 @@
   "Restore this backup?\n\n{name}\n\nThis OVERWRITES the panel's current database, settings and keys, then restarts the panel. A pre-restore safety backup is taken first.": "Restaurer cette sauvegarde ?\n\n{name}\n\nCela ÉCRASE la base de données, les réglages et les clés actuels du panel, puis le redémarre. Une sauvegarde de sécurité est faite avant.",
   "✓ Saved": "✓ Enregistré",
   "✓ Schedule saved": "✓ Planification enregistrée",
-  "Blank = use the default above. Between {min} and {max}.": "Vide = utiliser la valeur par défaut ci-dessus. Entre {min} et {max}."
+  "Blank = use the default above. Between {min} and {max}.": "Vide = utiliser la valeur par défaut ci-dessus. Entre {min} et {max}.",
+  "Your servers are on more than one host — free disk is shown per server below.": "Vos serveurs sont sur plusieurs hôtes — l'espace libre est indiqué par serveur ci-dessous.",
+  "Backing up…": "Sauvegarde…"
 }

@@ -564,7 +564,23 @@ def _js_run_claims(run, standalone, source):
     out = [text for text, bef in parts if _js_claims(text, bef)]
     for s in run:
         out.extend(js_markup_texts(s[0]))
+    if standalone:
+        out.extend(_js_icon_tail(joined))
     return out
+
+
+# An icon, then words to the END of a literal with nothing spliced on: `'<i class="bi …"></i> Updates
+# installed.'`. The words are the element's whole text, but the closing tag is in no literal (the
+# element was opened earlier, or its parent closes it), so _JS_MARKUP_TEXT never matched them:
+# "Starting Tailscale…", "Backing up…" and eleven more were English with the gate green.
+_JS_ICON_TAIL = re.compile(r"(?:</i>|<i\b[^<>]*></i>)([^<>]+)\Z")
+
+
+def _js_icon_tail(joined):
+    """The words after a trailing icon in a standalone run of literals, as one claimed text."""
+    m = _JS_ICON_TAIL.search(joined)
+    seg = re.sub(r"\s+", " ", html.unescape(m.group(1))).strip() if m else ""
+    return [seg] if seg and _js_markup_claims(seg, "") and not _js_guarded_before(joined[:m.start()]) else []
 
 
 def scan_js(js_dir=JS_DIR):
