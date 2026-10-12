@@ -614,8 +614,8 @@ CI-verified commit regardless of this file — this changelog is for humans.
     in by default, instead of reporting the port as already closed. A UDP-only or loopback rule no
     longer counts as holding the panel port open. Proven against a real firewall, which was left as
     it was.
-  - **Languages.** About 130 more messages that contain a name or a number (confirmations, refusals,
-    host and reboot notices) are translated as whole sentences for Spanish and French viewers, and so
+  - **Languages.** About 300 more messages that contain a name or a number (confirmations, refusals,
+    host, firewall and reboot notices, install progress) are translated as whole sentences for Spanish and French viewers, and so
     are page titles, the Tailscale status line and Discord connection problems. In French,
     "Controls" no longer reads the same as "Commands".
   - **Robustness.** A host or game server deleted while a background pass is running no longer
