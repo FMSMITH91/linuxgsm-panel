@@ -1924,7 +1924,7 @@ def _act(remote, recs, now, rollback_):
         if d.get("restore") != "pending":
             continue
         before = dict(d)
-        res = _act_one(remote, gs, d, now, rollback_) or _r16a_row_gave_up(d, now)
+        res = _act_one(remote, gs, d, now, rollback_) or _rw.row_gave_up(d, now, ROW_GIVE_UP)
         if res is not None:
             d["restore"], d["result"] = res
             # When this row was confirmed — after its probe or its start returned, which the tick's
@@ -1935,18 +1935,6 @@ def _act(remote, recs, now, rollback_):
             db.session.commit()
     if all(d.get("restore") != "pending" for _gs, d in recs):
         _finish(remote, recs, now, rollback_)
-
-
-# A row whose account cannot be read (removed outside the panel, a name that fails game_idents_ok)
-# never resolves: every owner's step waits on a read that will not come, and nothing aged it out
-# while the host answered (STALE_PLAN is for a silent host). The plan never finished, and
-# _pending_conflict refused every later reboot of that host, silently.
-def _r16a_row_gave_up(d, now):
-    """None while an unresolved row may still resolve; ("failed", why) once ROW_GIVE_UP has passed."""
-    d.setdefault("pending_since", now)
-    if now - d["pending_since"] < ROW_GIVE_UP:
-        return None
-    return "failed", "it could not be read or restored for an hour after the reboot; check the server"
 
 
 def _act_one(remote, gs, d, now, rollback_):

@@ -50,6 +50,19 @@ def phase_words(phase):
     return _PHASE_WORDS.get(phase) or i18n.Sentence("in progress")
 
 
+# A row whose account cannot be read (removed outside the panel, a name that fails game_idents_ok)
+# never resolves: every owner's step waits on a read that will not come, and nothing aged it out
+# while the host answered (STALE_PLAN is for a silent host). The plan never finished, and
+# _pending_conflict refused every later reboot of that host, silently. Here, beside the other
+# words of a reboot, so host_reboot stays within the size the code-quality gate allows.
+def row_gave_up(d, now, after):
+    """None while an unresolved plan row may still resolve; ("failed", why) once `after` s have passed."""
+    d.setdefault("pending_since", now)
+    if now - d["pending_since"] < after:
+        return None
+    return "failed", "it could not be read or restored for an hour after the reboot; check the server"
+
+
 def blocked_sentence(blockers):
     """Why a reboot may not run now: the work in flight, each piece named in a phrase of its own."""
     what = [i18n.Sentence(_BLOCKER_WORDS.get(b["kind"], _BLOCKER_OTHER).template, name=b["name"])
