@@ -119,6 +119,11 @@ def _cleanup68():
 # ── A04: the restart-when-empty check and the query-type override ─────────────────────────────
 def _restart_typed68(client, sid):
     host = NS(id=-68, display_name="p68")
+    _restart_written68(host)
+    _restart_callers68(client, sid, host)
+
+
+def _restart_written68(host):
     _p9_patch(_p9_core, "_gamedig_host", lambda server: "192.0.2.168")
     lines = []
     _p9_patch(_p9_core, "_rewrite_crontab",
@@ -126,7 +131,7 @@ def _restart_typed68(client, sid):
                                                                (True, ""))[1])
     want = "--type %s 192.0.2.168:16261 " % _QT68
     # 1. Writing it: the toggle.
-    _p9_core.set_daily_restart(host, _USER68, _USER68, _GAME68, 16261, True, hour=5, minute=0,
+    _p9_core.set_daily_restart(host, _USER68, _USER68, _GAME68, 16261, True, at=(5, 0),
                                query_type=_QT68)
     written = lines[-1][-1] if lines else ""
     check("daily restart: a game the map has no gamedig type for, queried through the server's "
@@ -143,6 +148,9 @@ def _restart_typed68(client, sid):
     check("daily restart (heal): the daily upgrade rewrites an unconditional check to query the "
           "server's override type", want in healed and "if true" not in healed, healed)
     _p9_patch(_p9_core, "run_privileged", _p9_trip("run_privileged"))
+
+
+def _restart_callers68(client, sid, host):
     # 3. Every caller of the heal hands the override over: the page, the daily pass, a port move.
     calls = []
     _p9_patch(_p9_sd._sm, "upgrade_managed_cron_tracking",
@@ -208,12 +216,30 @@ def _crontab68(existing, call):
     return res, now, os.path.exists(store + ".log")
 
 
+def _as_lang68(lang, call):
+    """`call()` with the admin's UI language set to `lang`, then English again."""
+    with _p9.app_context():
+        db.session.get(User, _ADMIN68).language = lang
+        db.session.commit()
+    try:
+        return call()
+    finally:
+        with _p9.app_context():
+            db.session.get(User, _ADMIN68).language = "en"
+            db.session.commit()
+
+
 def _cron_stale68(client, sid):
+    gone = "0 9 * * * /bin/true changed"
+    _cron_stale_pipeline68(gone)
+    _cron_stale_route68(client, sid, gone)
+
+
+def _cron_stale_pipeline68(gone):
     host = NS(id=-68, display_name="p68")
     _p9_patch(_p9_core, "_rewrite_crontab", _REWRITE68)
     _p9_patch(_cron68, "_wrap_cron_command", lambda server, user, command: command)
     have = "0 1 * * * /bin/true a\n0 2 * * * /bin/true b\n"
-    gone = "0 9 * * * /bin/true changed"
     dres, dnow, dinst = _crontab68(have, lambda: _cron68.delete_cron_job(host, _USER68, gone))
     ures, unow, uinst = _crontab68(have, lambda: _cron68.update_cron_job(
         host, _USER68, gone, "0 3 * * *", "/bin/true c"))
@@ -234,19 +260,15 @@ def _cron_stale68(client, sid):
     check("cron: ...and an edit of a line still there replaces it (control)",
           res[0] is True and now == "0 1 * * * /bin/true a\n0 3 * * * /bin/true c\n",
           repr((res, now)))
+
+
+def _cron_stale_route68(client, sid, gone):
     # The route says it in the viewer's language.
     _p9_patch(_p9_sf, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_p9_sf._sm, "delete_cron_job", _cron68.delete_cron_job)
     _p9_patch(_p9_core, "_rewrite_crontab", lambda *a, **k: (False, _p9_core.CRON_DROP_GONE))
-    with _p9.app_context():
-        db.session.get(User, _ADMIN68).language = "es"
-        db.session.commit()
-    try:
-        resp = client.post("/api/server/%d/cron/delete" % sid, json={"raw": gone})
-    finally:
-        with _p9.app_context():
-            db.session.get(User, _ADMIN68).language = "en"
-            db.session.commit()
+    resp = _as_lang68("es", lambda: client.post("/api/server/%d/cron/delete" % sid,
+                                                json={"raw": gone}))
     got = _p9_json(resp) or {}
     check("cron (es viewer): ...the route answers that refusal in the viewer's language",
           got.get("success") is False and "ha cambiado desde que se cargó" in (got.get("message") or ""),
@@ -326,15 +348,8 @@ def _rtcw_ban68(client, sid):
           "(control)", got["added"] == (True, "Done.") and got["no reply yet"] == (True, "Done."),
           repr(got))
     _p9_patch(_p9_sd._sm, "moderate", lambda *a, **k: got["bot"])
-    with _p9.app_context():
-        db.session.get(User, _ADMIN68).language = "fr"
-        db.session.commit()
-    try:
-        resp = client.post("/api/server/%d/moderate" % sid, json={"action": "kick", "num": "2"})
-    finally:
-        with _p9.app_context():
-            db.session.get(User, _ADMIN68).language = "en"
-            db.session.commit()
+    resp = _as_lang68("fr", lambda: client.post("/api/server/%d/moderate" % sid,
+                                                json={"action": "kick", "num": "2"}))
     msg = (_p9_json(resp) or {}).get("message") or ""
     check("moderation (fr viewer): ...and the Players panel says it in the viewer's language",
           "expulsé mais pas banni" in msg, msg)

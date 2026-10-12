@@ -1184,7 +1184,7 @@ def _register_schedules(app):
             host_h, host_m = at
             ok, detail = set_daily_restart(gs.remote, gs.short_name, gs.lgsm_name,
                                            gs.game_type, gs.port, enabled,
-                                           hour=host_h, minute=host_m, query_type=gs.query_type)
+                                           at=(host_h, host_m), query_type=gs.query_type)
             if ok:
                 gs.daily_restart = enabled
                 gs.daily_restart_at = "%02d:%02d" % (host_h, host_m)

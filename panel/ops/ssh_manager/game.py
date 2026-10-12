@@ -1022,6 +1022,12 @@ def moderate(server, user, game_type, action, target="", message="", selfname=No
     if why:
         return False, why
 
+    return _r16b_send_moderation(server, user, cmd, selfname, game_type, action)
+
+
+def _r16b_send_moderation(server, user, cmd, selfname, game_type, action):
+    """Send moderate()'s console command: (ok, msg). A ban pair whose ban can be refused is read
+    back for that refusal (_r16b_ban_checked)."""
     if action == "ban" and (game_type or "").lower() in _R16B_BAN_REFUSED:
         return _r16b_ban_checked(server, user, cmd, selfname, game_type)
     out = _core.send_console_command(server, user, cmd, timeout=15, selfname=selfname)

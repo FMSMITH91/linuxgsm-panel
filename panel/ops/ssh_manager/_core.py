@@ -3517,19 +3517,19 @@ def gamedig_cron_call():
 
 
 def set_daily_restart(server, user, selfname=None, game_type=None, port=None, enabled=True,
-                      hour=5, minute=0, query_type=None):
+                      at=(5, 0), query_type=None):
     """Enable/disable a daily restart that only fires when the server is EMPTY.
 
     A daily cron sets a 'restart-pending' flag; an hourly cron checks the player
     count (via gamedig) and restarts + clears the flag once it hits 0. So if players
     are on at the daily time, it waits and rechecks each hour until they leave.
 
-    `hour`/`minute` are in the HOST's local time, because that is the clock cron reads — the
-    caller converts from whatever the operator entered. They used to be a hardcoded 05:00, which
+    `at` is (hour, minute) in the HOST's local time, because that is the clock cron reads — the
+    caller converts from whatever the operator entered. It used to be a hardcoded 05:00, which
     on a VPS bootstrapped to UTC (the panel's own default) meant 23:00 for someone in US Central,
     with no time shown anywhere in the UI to notice it by.
     """
-    hour, minute = int(hour) % 24, int(minute) % 60
+    hour, minute = int(at[0]) % 24, int(at[1]) % 60
     selfname = selfname or user
     if not game_idents_ok(user, selfname):      # the lines below name the script; see set_autostart
         return False, GAME_ACCOUNT_REFUSED[1]

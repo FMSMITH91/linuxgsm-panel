@@ -1099,6 +1099,14 @@ def _r15e_mod_outcome(which, ok, tail):
 
 def _cron_listing(app, gs):
     """The scheduled-tasks card's GET answer: the game user's cron jobs, or why they're unknown."""
+    # The listing is `crontab -l` AS the account, every line of it: on a legacy row bound to a
+    # remote host's sudo login, that login's own jobs and whatever tokens they carry, which the
+    # refusal the browse and file routes give says the panel does not read. A refused row is not
+    # read at all, so its Autostart and Daily-restart columns are not re-synced from a crontab the
+    # panel will not look at either.
+    refused = _read_refused(gs, "list_cron")
+    if refused is not None:
+        return refused
     # One-time, in-place upgrade so pre-existing managed jobs start reporting
     # success/error (idempotent + state-preserving; never blocks the listing).
     # Given the server's game type and port so a restart-when-empty line is healed
@@ -2237,14 +2245,6 @@ def _register_cron_jobs(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
-            # The listing is `crontab -l` AS the account, every line of it: on a legacy row bound
-            # to a remote host's sudo login, that login's own jobs and whatever tokens they carry,
-            # which the refusal the browse and file routes give says the panel does not read. A
-            # refused row is not read at all, so its Autostart and Daily-restart columns are not
-            # re-synced from a crontab the panel will not look at either.
-            refused = _read_refused(gs, "list_cron")
-            if refused is not None:
-                return refused
             try:
                 return _cron_listing(app, gs)
             except Exception:
