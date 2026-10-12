@@ -169,9 +169,10 @@ check("i18n gate: shown_literals_py reads a message held in a local assigned a l
       "Held in a local" in _shown72, repr(_shown72))
 _rg72 = [(_L72, k) for _L72 in ("es", "fr") for k, _w in _scan72.route_answer_gaps(_L72)]
 _lg72 = [(_L72, k) for _L72 in ("es", "fr") for k, _w in _scan72.literal_gaps_py(_L72)]
-check("i18n gate: with those followed, every route answer and shown literal has an es and fr entry "
-      "(\"Internal server error\", the console-send refusals and the full backup's answers had none)",
-      not _rg72 and not _lg72, repr((_rg72 + _lg72)[:6]))
+_lg72 += [(_L72, k) for _L72 in ("es", "fr") for k, _w in _scan72.tr_gaps_py(_L72)]
+check("i18n gate: with those followed, every route answer, shown literal and tr() sentence has an es "
+      "and fr entry (\"Internal server error\", the console-send refusals and the full backup's answers "
+      "had none)", not _rg72 and not _lg72, repr((_rg72 + _lg72)[:6]))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
