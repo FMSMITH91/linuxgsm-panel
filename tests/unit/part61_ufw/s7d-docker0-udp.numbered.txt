@@ -1,0 +1,15 @@
+Status: active
+
+     To                         Action      From
+     --                         ------      ----
+[ 1] Anywhere on tailscale0     ALLOW IN    Anywhere                  
+[ 2] 28960                      ALLOW IN    Anywhere                   # codserver
+[ 3] 27015                      ALLOW IN    Anywhere                   # gmodserver
+[ 4] 22/tcp                     ALLOW IN    Anywhere                   # SSH panel
+[ 5] Anywhere/udp on docker0    ALLOW IN    Anywhere/udp               # lgsm-fwproof
+[ 6] Anywhere (v6) on tailscale0 ALLOW IN    Anywhere (v6)             
+[ 7] 28960 (v6)                 ALLOW IN    Anywhere (v6)              # codserver
+[ 8] 27015 (v6)                 ALLOW IN    Anywhere (v6)              # gmodserver
+[ 9] 22/tcp (v6)                ALLOW IN    Anywhere (v6)              # SSH panel
+[10] Anywhere/udp (v6) on docker0 ALLOW IN    Anywhere/udp (v6)          # lgsm-fwproof
+

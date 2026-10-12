@@ -3651,7 +3651,7 @@ def _tsiface_ufw_rules(status_out):
     from panel.ops import system_ops as _so
     rules = []
     for line in (status_out or "").splitlines():
-        rule = _so._ufw_rule_split(line.strip())
+        rule = _so._r14a_ufw_row(line.strip())   # the comment out of `from`
         if rule:
             rules.append(rule)
     return rules

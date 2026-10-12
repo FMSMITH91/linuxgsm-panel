@@ -1,0 +1,17 @@
+Status: active
+
+     To                         Action      From
+     --                         ------      ----
+[ 1] Anywhere on tailscale0     ALLOW IN    Anywhere                  
+[ 2] 28960                      ALLOW IN    Anywhere                   # codserver
+[ 3] 27015                      ALLOW IN    Anywhere                   # gmodserver
+[ 4] 22/tcp                     ALLOW IN    Anywhere                   # SSH panel
+[ 5] 47122/tcp                  ALLOW IN    Anywhere                   # lgsm-fwproof
+[ 6] 47122/tcp                  DENY IN     198.51.100.0/24            # lgsm-fwproof
+[ 7] 47122/tcp                  ALLOW IN    198.51.100.7               # lgsm-fwproof
+[ 8] Anywhere (v6) on tailscale0 ALLOW IN    Anywhere (v6)             
+[ 9] 28960 (v6)                 ALLOW IN    Anywhere (v6)              # codserver
+[10] 27015 (v6)                 ALLOW IN    Anywhere (v6)              # gmodserver
+[11] 22/tcp (v6)                ALLOW IN    Anywhere (v6)              # SSH panel
+[12] 47122/tcp (v6)             ALLOW IN    Anywhere (v6)              # lgsm-fwproof
+

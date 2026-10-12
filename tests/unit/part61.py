@@ -412,3 +412,117 @@ check("firewall: ...and the shadowed allow itself is no way in (ssh_live False),
       not _g61[("22/tcp", _ADMIN61)]["ssh_live"] and _g61[("22/tcp", "Any address")]["ssh_live"]
       and _g61[("22/tcp", _ADMIN61)]["warn"] and not _g61[("22/tcp", _ADMIN61)]["protected"],
       repr({k: v.get("ssh_live") for k, v in _g61.items()}))
+
+# ── VPS proof follow-up: real `ufw status numbered` captures from the test VPS, verbatim ────────
+# tests/unit/part61_ufw/*.numbered.txt are the box's own output with one tagged rule added each
+# (comment `lgsm-fwproof`, ports 47100-47199, documentation sources). The SSH port there was
+# 47122 and the panel port 47150.
+import os as _os61  # noqa: E402
+import re as _re61  # noqa: E402
+
+from panel.core import config as _pcfg61  # noqa: E402
+from panel.ops.debug_report import network as _drn61  # noqa: E402
+
+_UFWDIR61 = _os61.path.join(_os61.path.dirname(_os61.path.abspath(__file__)), "part61_ufw")
+
+
+def _real61_text(name):
+    with open(_os61.path.join(_UFWDIR61, name + ".numbered.txt"), encoding="utf-8") as f:
+        return f.read()
+
+
+def _as_verbose61(text):
+    """A numbered capture as `ufw status verbose` prints it: the same rows, without `[ N]`."""
+    return "\n".join(_re61.sub(r"^\[\s*\d+\]\s", "", ln) for ln in text.splitlines())
+
+
+def _as_plain61(text):
+    """...and as `ufw status` prints it: inbound rows say ALLOW, not ALLOW IN."""
+    return _re61.sub(r"\b(ALLOW|DENY|REJECT|LIMIT) IN\b", r"\1   ", _as_verbose61(text))
+
+
+# 1. A rule's `# comment` is not part of its source, wherever ufw rows are read.
+_iface61 = {}
+for _cap61, _if61 in (("s7b-lo-net-udp", "lo"), ("s7c-lo-net", "lo"), ("s7d-docker0-udp", "docker0")):
+    _vt61 = _as_verbose61(_real61_text(_cap61))
+    with _patched():
+        _patch(_so61, "_run_verb", lambda verb, args, **k: (_vt61, "", 0))
+        _st61 = _so61.ufw_status()
+    _iface61[_cap61] = (_so61.ufw_allows_iface_in(_st61["rules"], _if61),
+                        _so61.ufw_allows_iface_in(_smh61._tsiface_ufw_rules(_vt61), _if61))
+check("ufw rows: a COMMENTED UDP-only whole-interface allow (the VPS's own `Anywhere on lo  ALLOW IN  "
+      "<net>/udp  # lgsm-fwproof`) does not read as letting everything in, through ufw_status and "
+      "the remote read (the comment hid the /udp)",
+      _iface61["s7b-lo-net-udp"] == (False, False), repr(_iface61))
+check("ufw rows: ...while the same commented rule without udp does, and a UDP To column does not "
+      "(control, both directions)",
+      _iface61["s7c-lo-net"] == (True, True) and _iface61["s7d-docker0-udp"] == (False, False),
+      repr(_iface61))
+_row61 = _so61._r14a_ufw_row(_as_verbose61(_real61_text("s7b-lo-net-udp")).splitlines()[8])
+_drrows61 = _drn61.ufw_classify(_as_verbose61(_real61_text("s7b-lo-net-udp")), "", 0)["rules"]
+check("ufw rows: no reader's `from` carries the comment (ufw_status, the remote tailnet read, the "
+      "debug report)",
+      _row61 and _row61["from"] == ".".join(["198", "51", "100", "0"]) + "/24/udp"
+      and not any("#" in r["from"] for r in _st61["rules"] + _drrows61), repr((_row61, _drrows61)))
+
+# 2. The Firewall page, the Network card and Close public panel port agree on what holds the
+#    panel port open: the real captures (panel port 47150), and part61's own table (5000).
+
+
+def _page61(text, panel_port, sshd=47122):
+    """{To column: group} as remote_ufw_status annotates `text` on the panel's own host."""
+    with _patched():
+        _patch(_smc61, "run_privileged", lambda *a, **k: (text, "", 0))
+        _patch(_smc61, "is_local_server", lambda s: True)
+        _patch(_smh61, "_sshd_current_ports", lambda s: [str(sshd)])
+        _patch(_smh61, "_tailscale_conn_state", lambda s: (False, False))
+        _patch(_fw61, "_config_unreadable", lambda: False)
+        _patch(_pcfg61, "load_config", lambda: {"port": panel_port, "tailscale_setup_done": True})
+        st = _fw61.remote_ufw_status(NS(port=sshd))
+    return {g["port_label"]: g for g in st.get("groups", [])}
+
+
+def _card61(text, panel_port):
+    with _patched():
+        _patch(_smc61, "run_privileged", lambda *a, **k: (_as_plain61(text), "", 0))
+        got = _smh61.remote_public_ssh_status(NS(port=22), panel_port=panel_port)
+    return got.get("panel_port_open")
+
+
+_agree61 = {}
+for _cap61, _lbl61 in (("s6b-list", "47140,47150,47160/tcp"), ("s6d-range", "47100:47199/tcp"),
+                       ("s6c-only", "47150/tcp"), ("s3-udp", "47122/tcp")):
+    _t61 = _real61_text(_cap61)
+    _g61 = _page61(_t61, 47150)[_lbl61]
+    _agree61[_cap61] = (_g61["is_panel"], _g61["protected"], _card61(_t61, 47150))
+check("panel port: on the VPS's own rows, a list or range holding the panel port open is the panel's "
+      "rule on the Firewall page and protected (`47140,47150,47160/tcp` had a plain delete ×), as the "
+      "card says open; its own `47150/tcp` too; an unrelated SSH rule is neither (both directions)",
+      _agree61 == {"s6b-list": (True, True, True), "s6d-range": (True, True, True),
+                   "s6c-only": (True, True, True), "s3-udp": (False, True, False)}, repr(_agree61))
+_pg61 = {}
+for _row61, _want61 in _PORT_ROWS61.items():
+    _grp61 = list(_protect61(NS(port=22), [_row61], is_local=True, sshd_ports=(22,),
+                             cfg={"port": 5000, "tailscale_setup_done": False}))[0]
+    _pg61[_row61] = _grp61["is_panel"]
+check("panel port: the Firewall page marks as the panel's rule exactly the rows the card calls open and "
+      "Close public panel port does not call already closed (part61's 13-row table)",
+      _pg61 == {k: bool(v) for k, v in _PORT_ROWS61.items()}
+      and _pg61 == {k: v != "already" for k, v in _route61.items()},
+      repr({k: v for k, v in _pg61.items() if v != bool(_PORT_ROWS61[k])}))
+
+# 3. The lock-out reason names a range or a list as one, not as "the SSH port".
+_rs61 = _page61(_real61_text("s6d-range"), 47150)["47100:47199/tcp"]["protect_reason"]
+_rl61 = _page61(_real61_text("s6b-list"), 47150)["47140,47150,47160/tcp"]["protect_reason"]
+_rsr61 = _page61(_real61_text("s6d-range"), 47999)["47100:47199/tcp"]["protect_reason"]
+_rpo61 = _page61(_real61_text("s6c-only"), 47150)["47150/tcp"]["protect_reason"]
+_rss61 = _page61(_real61_text("s3-udp"), 47999)["47122/tcp"]["protect_reason"]
+check("protect reason: a range or list holding the panel port open says it opens those ports, "
+      "including the panel's; the port's own rule still says 'Port 47150 is' (control)",
+      "This rule opens ports 47100:47199, including port 47150" in _rs61
+      and "This rule opens ports 47140,47150,47160, including port 47150" in _rl61
+      and _rpo61.startswith("Port 47150 is where"), repr((_rs61, _rl61, _rpo61)))
+check("protect reason: a range that is the only SSH rule says it opens ports including the SSH port "
+      "('Port 47100:47199 is the SSH port' before); a single port still says 'Port 47122 is' (control)",
+      _rsr61.startswith("This rule opens ports 47100:47199, including the SSH port")
+      and _rss61.startswith("Port 47122 is the SSH port"), repr((_rsr61, _rss61)))

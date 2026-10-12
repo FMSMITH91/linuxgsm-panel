@@ -584,14 +584,45 @@ def _is_panel_rule(g, panel_port):
     only route to the panel UI deletable; an `ALLOW OUT` rule on that port was conversely
     treated AS the panel rule and made undeletable.
     """
-    # IN only: a forwarded (FWD) rule for the port is not the panel's way in. The port stays a
-    # bare one: each panel rule is protected outright (there is no "another way" count), so a
-    # game range that happens to span the panel port must not become undeletable.
-    return (panel_port is not None and not g.get("is_iface")
-            and g.get("action") in ("ALLOW", "LIMIT")
-            and (g.get("direction") or "IN") == "IN"
-            and str(g.get("port_num", "")).isdecimal()
-            and int(g["port_num"]) == panel_port)
+    # IN only: a forwarded (FWD) rule for the port is not the panel's way in. And the port in any
+    # spelling (_r14a_panel_port_scope, the test the Network card and Close public panel port
+    # read): this took only a bare `5000`, so `80,443,5000/tcp` or a range spanning the port —
+    # while it was the only way into the UI — had an ordinary delete × here, and the card and the
+    # close route said it held the port open. Deleting such a rule does close the panel's port, so
+    # it is protected like the port's own rule; the reason says it opens other ports too.
+    return panel_port is not None and bool(_r14a_panel_port_scope(g, panel_port))
+
+
+def _r14a_ports_word(g):
+    """The port part of a rule's To column: `22` of "<addr> 22", `47100:47199`, `22,80`."""
+    words = str(g.get("port_num", "")).split()
+    return words[-1] if words else ""
+
+
+def _r14a_ssh_subject(g):
+    """How an SSH rule's lock-out reason names what it opens: the port, a range or list, or all.
+
+    "Port 47100:47199 is the SSH port" called a range the SSH port; "Port <addr> 22 is" read the
+    address as part of the port.
+    """
+    if _r13a_every_port(g, g.get("port_num", "")):
+        return "This rule lets every port in, including"
+    ports = _r14a_ports_word(g)
+    if ports.lower() in _SSH_APP_PROFILES:
+        return "The %s profile opens" % ports
+    if "," in ports or ":" in ports:
+        return "This rule opens ports %s, including" % ports
+    return "Port %s is" % ports
+
+
+def _r14a_panel_reason(g, panel_port):
+    """Why the rule holding the panel's port open is protected: its own rule, or one of several."""
+    tail = ("and it isn't reachable over Tailscale — removing it would lock you out of the panel. "
+            "Set up Tailscale first if you want to close it.")
+    if _r14a_panel_port_scope(g, panel_port) == "only":
+        return "Port %d is where this panel's own web interface listens, %s" % (panel_port, tail)
+    return ("This rule opens ports %s, including port %d, where this panel's own web interface "
+            "listens, %s" % (_r14a_ports_word(g), panel_port, tail))
 
 
 def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_ok):
@@ -599,10 +630,7 @@ def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_
     if g["is_panel"]:
         # No Tailscale route, so this public port is the only way into the panel.
         g["protected"] = True
-        g["protect_reason"] = (
-            "Port %d is where this panel's own web interface listens, and it isn't reachable "
-            "over Tailscale — removing it would lock you out of the panel. Set up Tailscale "
-            "first if you want to close it." % panel_port)
+        g["protect_reason"] = _r14a_panel_reason(g, panel_port)
         return
     if not g["is_access"]:
         return
@@ -616,9 +644,7 @@ def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_
         reason_last = (
             "%s the SSH port used to reach this host, and there's no working Tailscale "
             "route to fall back on — removing it would lock you out. Enable Tailscale SSH, or "
-            "connect Tailscale and allow the tailscale0 interface, first."
-            % ("This rule lets every port in, including" if _r13a_every_port(g, g["port_num"])
-               else "Port %s is" % g["port_num"]))
+            "connect Tailscale and allow the tailscale0 interface, first." % _r14a_ssh_subject(g))
     else:  # is_tailscale — deleting it drops regular SSH over the tailnet; Tailscale SSH is unaffected
         if served_over_ts:
             # This is the panel host and its UI is published over Tailscale Serve, so this
