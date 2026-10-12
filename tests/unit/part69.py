@@ -443,9 +443,8 @@ try:
 finally:
     _p9_restore_all()
     with _ht69._sid_lock:
-        for _s69 in [_exit69.get("sid")]:
-            _ht69._sid_host.pop(_s69, None)
-            _ht69._sid_owner.pop(_s69, None)
+        _ht69._sid_host.pop(_exit69.get("sid"), None)
+        _ht69._sid_owner.pop(_exit69.get("sid"), None)
 check("terminal: term_exit and term_error carry the template and values with the English (an idle close, "
       "a refusal with a count), so the page can say them in the viewer's language",
       {"reason": "closed after 15 minutes with no input", "reason_key": "closed after {n} minutes with no input",
