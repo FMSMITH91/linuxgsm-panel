@@ -1837,6 +1837,24 @@ def _r17b_fed_calls(rel, lines, tree, wanted):
     return out, names
 
 
+
+def step_name_keys(root=ROOT):
+    """{key: "file:line"} for every literal a job's progress text can be (see _R16C_STEP_WRITERS)."""
+    table = _r16c_returns(_py_trees(root))
+    keys = {}
+    for rel, _line, v, consts, binds, _lines in _r16c_step_walk(root):
+        for t, f, ln in _r16c_found(v, rel, (consts, binds), table):
+            if _r16c_prose(t) or _R16C_LABEL.match(t):
+                keys.setdefault(t, "%s:%d" % (f, ln))
+    return keys
+
+
+def step_names_built(root=ROOT):
+    """[(file, line)]: a job's progress text built in plain English, which no key can match."""
+    return sorted({(rel, line) for rel, line, v, _c, _b, _l in _r16c_step_walk(root)
+                   if any(_py_built(x, plain=True) for x in [v] + _py_operands(v))}
+                  | set(_r17b_forwarded(_py_trees(root))[1]))
+
 # ── Python: fixed messages the viewer is shown ─────────────────────────────────────────────────
 # tr_gaps_py reads only what is handed to tr()/Sentence(), and spliced_py only BUILT messages. A
 # fixed `jsonify({"message": "…"})`, a flash of a literal, or a service's `return False, "…"` that a

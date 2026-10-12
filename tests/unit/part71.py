@@ -210,13 +210,20 @@ def _gmod_outcomes71(client, gid):
 
 # ── the card itself: the page's loadGmodContent, run in node on each answer ─────────────────────
 def _card71(answer):
-    """The innerHTML loadGmodContent draws for one status answer; None without node."""
+    """What loadGmodContent draws for one status answer — its markup, and the outcome slot as the
+    nodes _gmcOutcome put in it — or None without node."""
     src = open(os.path.join(_root, "static", "js", "server_detail.js"), encoding="utf-8").read()
     prog = ("const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r)); };\n"
-            "const el = {innerHTML: '', querySelector: () => null, querySelectorAll: () => []};\n"
+            "const slot = {id: 'gmc-outcome-slot', className: '', removed: false, attrs: {}, kids: [],\n"
+            "  remove() { this.removed = true; }, setAttribute(k, v) { this.attrs[k] = v; },\n"
+            "  appendChild(n) { this.kids.push(n); }};\n"
+            "const el = {innerHTML: '', querySelectorAll: () => [],\n"
+            "  querySelector: q => q === '#gmc-outcome-slot' && el.innerHTML.includes('gmc-outcome-slot')\n"
+            "    ? slot : null};\n"
             "global.window = global; global.MOUNT = ''; global.serverId = 1; let timers = 0;\n"
             "global.setTimeout = () => { timers++; };\n"
-            "global.document = {getElementById: id => id === 'gmod-content-body' ? el : null};\n"
+            "global.document = {getElementById: id => id === 'gmod-content-body' ? el : null,\n"
+            "  createElement: tag => ({tag, className: ''}), createTextNode: text => ({text})};\n"
             "const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')"
             ".replace(/\"/g,'&quot;');\n"
             "global._esc = esc; global.escapeHtml = esc; global.t = s => s;\n"
@@ -226,7 +233,7 @@ def _card71(answer):
             % _json71.dumps(answer)
             + _cut47(src, "function loadGmodContent(") + "\n" + _cut47(src, "function _gmcOutcome(") + "\n"
             "(async () => { loadGmodContent(); await settle();\n"
-            "  console.log(JSON.stringify({html: el.innerHTML, timers})); })();\n")
+            "  console.log(JSON.stringify({html: el.innerHTML, timers, slot})); })();\n")
     return _node47(prog)
 
 
@@ -250,19 +257,23 @@ def _gmod_card71():
 
 def _card_checks71(cards, err_msg):
     html = {k: v.get("html") or repr(v) for k, v in cards.items()}
+    slot = {k: v.get("slot") or {} for k, v in cards.items()}
     check("GMod content card: a job that ENDED IN ERROR shows its message, in red, above Apply — "
           "the card read job.msg only while the job ran, so a failed install ended in silence",
-          all((err_msg in html["error"], "text-danger" in html["error"], 'id="gmc-outcome"' in html["error"],
-               html["error"].find(err_msg) < html["error"].find('id="gmc-apply"'))), html["error"])
-    check("GMod content card: ...a job that finished shows its outcome in green, escaped (the message "
-          "is text, never markup)",
-          all(("Montado: Counter-Strike: Source" in html["done"], "text-success" in html["done"],
-               "&lt;b&gt;para&lt;/b&gt;" in html["done"], "<b>para</b>" not in html["done"])), html["done"])
+          all((slot["error"].get("id") == "gmc-outcome", "text-danger" in slot["error"].get("className", ""),
+               {"text": " " + err_msg} in slot["error"].get("kids", []), not slot["error"].get("removed"),
+               0 <= html["error"].find("gmc-outcome-slot") < html["error"].find('id="gmc-apply"'))),
+          repr((slot["error"], html["error"][-400:])))
+    check("GMod content card: ...a job that finished shows its outcome in green, as a TEXT node (the "
+          "message can quote host output; it is never markup)",
+          all(("text-success" in slot["done"].get("className", ""),
+               {"text": " Montado: Counter-Strike: Source. Reinicia el servidor <b>para</b> aplicarlo"}
+               in slot["done"].get("kids", []))), repr(slot["done"]))
     check("GMod content card: ...a running job still shows the spinner and polls again, and no job "
           "shows no outcome line (controls)",
-          all(("spinner-border" in html["running"], 'id="gmc-outcome"' not in html["running"],
-               cards["running"].get("timers") == 1, 'id="gmc-outcome"' not in html["none"],
-               'id="gmc-apply"' in html["none"])), repr((html["running"][-300:], html["none"][-300:])))
+          all(("spinner-border" in html["running"], "gmc-outcome-slot" not in html["running"],
+               cards["running"].get("timers") == 1, slot["none"].get("removed") is True,
+               'id="gmc-apply"' in html["none"])), repr((html["running"][-300:], slot["none"])))
 
 
 def _gmod_progress71():
