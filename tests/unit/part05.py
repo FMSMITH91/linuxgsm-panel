@@ -967,7 +967,7 @@ _BAD_TS = r"\.utc" + r"fromtimestamp\s*\("
 _offenders = []
 for _dirpath, _dirnames, _files in os.walk(_root):
     _dirnames[:] = [d for d in _dirnames
-                    if d not in {".git", ".venv", "venv", "__pycache__", "node_modules", "data"}]
+                    if d not in {".git", ".claude", ".venv", "venv", "__pycache__", "node_modules", "data"}]
     for _f in _files:
         if not _f.endswith(".py") or _f == "clock.py":
             continue
@@ -1006,7 +1006,7 @@ def _r14d_is_catch_warnings(node):
         _r14d_call_name(_it.context_expr) == "catch_warnings" for _it in node.items)
 
 
-def _r14d_ignores_deprecations(call):
+def _r14d_ignores_deprecations(call, aliases=None):
     """Does filterwarnings/simplefilter `call` ignore DeprecationWarnings with no module/message?"""
     _fn = _r14d_call_name(call)
     _kw = {_k.arg: _k.value for _k in call.keywords}
@@ -1015,9 +1015,32 @@ def _r14d_ignores_deprecations(call):
     _ci = 2 if _fn == "filterwarnings" else 1
     _cat = _kw.get("category", call.args[_ci] if len(call.args) > _ci else None)
     _act = call.args[0] if call.args else _kw.get("action")
+    _scope = _r16d_scope_args(call, _kw) if _fn == "filterwarnings" else []
     return (isinstance(_act, _dw_ast.Constant) and _act.value == "ignore"
-            and "module" not in _kw and "message" not in _kw
-            and _r15d_category_covers_deprecations(_cat))
+            and not any(_r16d_scopes(_v) for _v in _scope)
+            and _r15d_category_covers_deprecations(_cat, aliases))
+
+
+def _r16d_scope_args(call, kw):
+    """A filterwarnings call's message and module: positional 2nd and 4th, or by keyword."""
+    return [kw.get(_k, call.args[_i] if len(call.args) > _i else None)
+            for _k, _i in (("message", 1), ("module", 3))]
+
+
+def _r16d_scopes(node):
+    """Does a filter's message= or module= (an AST node, or None) narrow it to some warnings?
+
+    Only a pattern that fails to match an unrelated text does: "" and ".*" match every message and
+    every module, so a filter given either is as blanket as one given neither. Only the key was read
+    (review 1012a), so message="" passed this gate while silencing every DeprecationWarning. A
+    pattern the gate cannot read (a variable) cannot be shown to narrow anything.
+    """
+    if not (isinstance(node, _dw_ast.Constant) and isinstance(node.value, str)):
+        return False
+    try:
+        return _re.match(node.value, "zz unrelated probe 0", _re.I) is None
+    except _re.error:
+        return False
 
 
 # DeprecationWarning and every class it inherits from: ignoring any of them silences it. Only the
@@ -1026,12 +1049,25 @@ def _r14d_ignores_deprecations(call):
 _R15D_DW_BASES = {"DeprecationWarning", "Warning", "Exception", "BaseException"}
 
 
-def _r15d_category_covers_deprecations(cat):
-    """Does a filter's category (an AST node, or None for none given) cover DeprecationWarning?"""
+def _r15d_category_covers_deprecations(cat, aliases=None):
+    """Does a filter's category (an AST node, or None for none given) cover DeprecationWarning?
+
+    `aliases` is {name: node} of the module's own `Name = <class>` bindings: `BaseWarning =
+    Warning` then `category=BaseWarning` read as an unknown warning class (review 1012a).
+    """
+    aliases = aliases or {}
+    if isinstance(cat, _dw_ast.Tuple):
+        return any(_r15d_category_covers_deprecations(_e, aliases) for _e in cat.elts)
+    if isinstance(cat, _dw_ast.Name) and cat.id in aliases:
+        return _r15d_category_covers_deprecations(aliases[cat.id], {k: v for k, v in aliases.items()
+                                                                     if k != cat.id})
+    return _r16d_names_a_deprecation_base(cat)
+
+
+def _r16d_names_a_deprecation_base(cat):
+    """_r15d_category_covers_deprecations for one category that is not a tuple or a module alias."""
     if cat is None:
         return True
-    if isinstance(cat, _dw_ast.Tuple):
-        return any(_r15d_category_covers_deprecations(_e) for _e in cat.elts)
     _name = getattr(cat, "attr", getattr(cat, "id", None))
     if not isinstance(cat, (_dw_ast.Name, _dw_ast.Attribute)) or _name is None:
         return True                       # computed: cannot be shown not to cover it
@@ -1042,11 +1078,14 @@ def _r15d_category_covers_deprecations(cat):
 def _r14d_blanket_filters(tree):
     """Lines of filterwarnings/simplefilter calls that ignore deprecations outside catch_warnings."""
     out = []
+    _aliases = {_t.id: _a.value for _a in getattr(tree, "body", [])
+                if isinstance(_a, _dw_ast.Assign) and isinstance(_a.value, (_dw_ast.Name, _dw_ast.Attribute))
+                for _t in _a.targets if isinstance(_t, _dw_ast.Name)}
 
     def _walk(node, scoped):
         scoped = scoped or _r14d_is_catch_warnings(node)
         if (not scoped and _r14d_call_name(node) in ("filterwarnings", "simplefilter")
-                and _r14d_ignores_deprecations(node)):
+                and _r14d_ignores_deprecations(node, _aliases)):
             out.append(node.lineno)
         for _ch in _dw_ast.iter_child_nodes(node):
             _walk(_ch, scoped)
@@ -1080,13 +1119,22 @@ _dw_ctl = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", ".*", Warning)',
     'import warnings\nwarnings.filterwarnings("ignore", category=builtins.Exception)',
     'import warnings\ncat = DeprecationWarning\nwarnings.filterwarnings("ignore", category=cat)',
-    'import warnings\nwarnings.simplefilter("ignore", (UserWarning, DeprecationWarning))')}
+    'import warnings\nwarnings.simplefilter("ignore", (UserWarning, DeprecationWarning))',
+    # Review 1012a: a message or module pattern that matches everything narrows nothing.
+    'import warnings\nwarnings.filterwarnings("ignore", message="", category=DeprecationWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", message=".*", category=DeprecationWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", module="", category=DeprecationWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", "", DeprecationWarning, ".*")',
+    'import warnings\nBaseWarning = Warning\nwarnings.simplefilter("ignore", BaseWarning)')}
 _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", message="x", category=DeprecationWarning)',
     'import warnings\nwith warnings.catch_warnings():\n    warnings.simplefilter("ignore")',
     'import warnings\nwarnings.filterwarnings("ignore", category=UserWarning)',
     'import warnings\nwarnings.filterwarnings("ignore", category=eventlet.EventletDeprecationWarning)',
-    'import warnings\nwarnings.simplefilter("default", DeprecationWarning)')}
+    'import warnings\nwarnings.simplefilter("default", DeprecationWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", "x", DeprecationWarning)',
+    'import warnings\nwarnings.filterwarnings("ignore", module="eventlet", category=DeprecationWarning)',
+    'import warnings\nQuiet = UserWarning\nwarnings.simplefilter("ignore", Quiet)')}
 check("...the filter gate names each blanket spelling, and passes the scoped ones (controls)",
       all(_dw_ctl.values()) and not any(_dw_ok.values()), repr((_dw_ctl, _dw_ok)))
 
@@ -5032,9 +5080,10 @@ import ast as _ast_log
 _missing_target, _r15d_log_calls = [], 0
 for _dirpath, _dirnames, _filenames in os.walk(_root):
     # Skipped by the path INSIDE the checkout: matched on the absolute path, a checkout under a
-    # directory named `venv` or `tests…` read nothing and passed (review 1011e).
+    # directory named `venv` or `tests…` read nothing and passed (review 1011e). .claude holds
+    # other branches' worktrees, whose calls an in-place run counted as this tree's (review 1012a).
     _dirnames[:] = [_d for _d in _dirnames
-                    if _d not in (".venv", "venv", "tests", "node_modules", ".git")]
+                    if _d not in (".venv", "venv", "tests", "node_modules", ".git", ".claude")]
     for _fn in _filenames:
         if not _fn.endswith(".py"):
             continue
@@ -5060,6 +5109,32 @@ check("audit: every logged action names a target (or is listed as having none)",
       "; ".join(sorted(_missing_target)[:5]) +
       " — pass target= (LOCAL_HOST_LABEL for panel-host actions), or add it to _NO_TARGET_OK "
       "with a reason")
+
+
+# Every walk of the whole checkout in the suites leaves .claude out: in a dev checkout it holds other
+# branches' worktrees, and three walks read them as this tree's code (review 1012a).
+def _r16d_unpruned_walks(text):
+    """Line numbers of a `for … in os.walk(<checkout root>):` whose next six lines never name .claude.
+
+    Named directly, or through a skip set the file defines with .claude in it (part27's
+    _LOCK_SKIP27, part50's _skip_at50).
+    """
+    lines = text.splitlines()
+    sets = {_m.group(1) for _m in _re.finditer(r"(?m)^(\w+)\s*=.*\.claude", text)}
+    return [_i + 1 for _i, _ln in enumerate(lines)
+            if _re.match(r"\s*for .+ in os\.walk\((?:_root|_repo_root|_ROOT\w*|REPO_ROOT)\):", _ln)
+            and ".claude" not in "\n".join(lines[_i:_i + 7])
+            and not any(_re.search(r"\b%s\b" % _n, "\n".join(lines[_i:_i + 7])) for _n in sets)]
+
+
+_r16d_walks = []
+for _r16d_f in sorted(_smg_glob.glob(os.path.join(_root, "tests", "**", "*.py"), recursive=True)):
+    with open(_r16d_f, encoding="utf-8") as _r16d_fh:
+        _r16d_walks += ["%s:%d" % (os.path.relpath(_r16d_f, _root), _n)
+                        for _n in _r16d_unpruned_walks(_r16d_fh.read())]
+check("suites: every walk of the whole checkout leaves .claude (other worktrees) out",
+      not _r16d_walks and _r16d_unpruned_walks("for d, s, f in os.walk(_root):\n    pass\n") == [1],
+      repr(_r16d_walks))
 
 # ── passwords are not capped at bcrypt's 72 bytes ─────────────────────────────────────────────
 # bcrypt takes at most 72 BYTES. That produced two failures, neither of them visible to the person

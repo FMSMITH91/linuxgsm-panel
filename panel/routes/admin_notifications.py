@@ -169,7 +169,8 @@ def _register_notifications(app):
             server=_json_str(b, "server") or None,
             topic=_json_str(b, "topic") or None,
         )
-        return jsonify({"success": ok, "message": msg})
+        # Translated: the failure is a Sentence ("{service} error: {detail}"), the rest catalog keys.
+        return jsonify({"success": ok, "message": i18n.tr(msg)})
 
 
 def _register_user_edits(app):

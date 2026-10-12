@@ -358,12 +358,39 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
 
 
 def _r15a_src_key(text):
-    """A rule's source as ipaddress spells it, so `203.0.113.5` and `203.0.113.5/32` compare equal."""
-    s = str(text or "").strip()
+    """A rule's source as ufw itself stores it.
+
+    So a delete's source and a listed rule compare the way ufw's own match does
+    (ufw.util.normalize_address + UFWRule._fix_anywhere):
+
+    - any /0 network on the unspecified address, and the Firewall page's "Any address", is "any":
+      `ufw delete allow from 0.0.0.0/0 ...` (or ::/0) removes that family's half of an
+      `allow 22/tcp`, which ufw lists as "Anywhere";
+    - IPv4 is masked to its network (ufw stores 203.0.113.7/24 as 203.0.113.0/24, and a delete
+      typed with the host bits removes it), a /32 is the bare address;
+    - IPv6 keeps its host bits (ufw does) and loses only a /128.
+
+    Comparing ipaddress's text as typed missed all three, and Remove under "Allow from source"
+    deleted the host's only SSH rule past the lockout guard. ufw prints sources lowercased.
+    """
+    s = str(text or "").strip().lower()
+    if s in ("any", "anywhere", "any address"):
+        return "any"
     try:
-        return str(_ipaddress.ip_interface(s))
+        iface = _ipaddress.ip_interface(s)
     except ValueError:
-        return s.lower()
+        return s
+    plen = iface.network.prefixlen
+    if iface.version == 4:
+        if plen == 0:
+            # ufw masks v4 host bits first, so 1.2.3.4/0 is 0.0.0.0/0 to it too.
+            return "any"
+        return str(iface.ip) if plen == 32 else str(iface.network)
+    if plen == 128:
+        return str(iface.ip)
+    if plen == 0 and iface.ip == _ipaddress.IPv6Address("::"):
+        return "any"
+    return "%s/%d" % (iface.ip, plen)
 
 
 def _r15a_spec_names(g, port, proto_label, src=None):
@@ -383,6 +410,8 @@ def _r15a_spec_names(g, port, proto_label, src=None):
         return False
     if src is None:
         return g.get("scope") == "Any address"
+    # The group's scope is ufw's own From column ("Any address" for Anywhere); `src` is what the
+    # operator typed. Both go through ufw's normalisation, so either spelling of a rule finds it.
     return _r15a_src_key(g.get("scope")) == _r15a_src_key(src)
 
 
@@ -406,14 +435,12 @@ def _r15a_guarded_spec_delete(server, verb, vargs, names):
                                exc_info=True)
             status = None
         if status is None or status.get("unreachable"):
-            return (("Couldn't read the firewall to check whether this rule is the one keeping your "
-                     "access open, so this refuses rather than risk locking you out. Check the host "
-                     "is reachable and try again."), "", "", None)
+            return (i18n.Sentence("Couldn't read the firewall to check whether this rule is the one keeping "
+                                  "your access open, so this refuses rather than risk locking you out. "
+                                  "Check the host is reachable and try again."), "", "", None)
         for g in (status.get("groups", []) if status.get("installed") else []):
             if g.get("protected") and names(g):
-                return (g.get("protect_reason")
-                        or "This rule protects your access to the host and can't be removed here.",
-                        "", "", None)
+                return _r16c_protect_refusal(g), "", "", None
         out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
         return None, out, err, rc
 
@@ -551,6 +578,21 @@ def _ufw_first_public_rule(status_out, port, proto):
     return None
 
 
+def _r16c_protect_refusal(g):
+    """The refusal to delete protected rule `g`: its protect reason, as a Sentence the route translates.
+
+    The group carries the reason's fixed template and values (firewall.R14A_REASONS) beside the
+    English. Handed back as that English, the route's i18n.tr() looked up a sentence with the
+    ports already in it — never a key — so a Spanish or French viewer read the refusal in English
+    while the Firewall page showed the same reason translated. As a str it is the same English.
+    """
+    key = g.get("protect_reason_key")
+    if key:
+        return i18n.Sentence(key, **dict(g.get("protect_reason_params") or {}))
+    return g.get("protect_reason") or i18n.Sentence("This rule protects your access to the host and can't be "
+                                                    "removed here.")
+
+
 def remote_ufw_close_port(server, port, protocol=None, force=False):
     """Close a port on the remote server via UFW. With protocol=None (or 'both'/'any'),
     deletes the bare `allow <port>` rule (both protocols); otherwise the proto-specific rule.
@@ -645,8 +687,7 @@ def _delete_rule_locked(server, n, force, expect_key):
                                         "since it was read, so nothing was removed. Refresh and try again.", n=n)
         for g in (status.get("groups", []) if not force else []):
             if n in g.get("nums", []) and g.get("protected"):
-                return False, g.get("protect_reason") or \
-                    "This rule protects your access to the host and can't be removed here."
+                return False, _r16c_protect_refusal(g)
         verb, args = _delete_verb(n, status, expect_key)
     else:
         verb, args = "ufw-delete-num", [n]
@@ -859,8 +900,12 @@ def remote_ufw_allow_game_ports(server, ports, name="Game"):
         if is_open:
             opened.append(p)
         left_to += [r for r in rules if r not in left_to]
-    return opened, (f"opened {len(opened)} port(s): {', '.join(map(str, opened)) or 'none'}"
-                    + (f"; left to an existing rule: {', '.join(left_to)}" if left_to else ""))
+    # A Sentence: remote_ufw_allow_game_port shows it as the {what} of "Port {port}: {what}".
+    shown = ", ".join(map(str, opened)) or i18n.Sentence("none")
+    if left_to:
+        return opened, i18n.Sentence("opened {n} port(s): {ports}; left to an existing rule: {rules}",
+                                     n=len(opened), ports=shown, rules=", ".join(left_to))
+    return opened, i18n.Sentence("opened {n} port(s): {ports}", n=len(opened), ports=shown)
 
 
 # How many times a cleanup tries one rule, each against a fresh read. ufw numbers are positions and
@@ -906,8 +951,10 @@ def _next_pick(status, pick, refused):
 
 # A cleanup that could not read the firewall knows nothing about what it left. Shared with the
 # uninstall route, which says the same when the cleanup raised.
-UFW_UNREAD_NOTE = ("The firewall could not be read, so this server's rules may still be open — "
-                   "check the host's Firewall page.")
+# The notes below are Sentences: the uninstall answer translates each one whole (_r15e_uninstalled),
+# and %-built English matched no catalog key, so es and fr viewers read them in English.
+UFW_UNREAD_NOTE = i18n.Sentence("The firewall could not be read, so this server's rules may still be open — "
+                                "check the host's Firewall page.")
 
 
 def _still_there(status, pick):
@@ -918,13 +965,16 @@ def _still_there(status, pick):
         return []
     if not status.get("enabled"):
         # An inactive ufw lists no rules, stored ones included: nothing here could be seen or removed.
-        return ["UFW is not active on this host, so its stored rules cannot be listed, and any this "
-                "server had are still stored — they apply again if UFW is enabled."]
+        return [i18n.Sentence("UFW is not active on this host, so its stored rules cannot be listed, and any "
+                              "this server had are still stored — they apply again if UFW is enabled.")]
     stuck = [_rule_label(g) for g in status.get("groups", []) if pick(g)]
     if not stuck:
         return []
-    return ["Still open, as it could not be removed: %s — remove %s from the host's Firewall "
-            "page." % (", ".join(stuck), "it" if len(stuck) == 1 else "them")]
+    if len(stuck) == 1:
+        return [i18n.Sentence("Still open, as it could not be removed: {rules} — remove it from the host's "
+                              "Firewall page.", rules=stuck[0])]
+    return [i18n.Sentence("Still open, as it could not be removed: {rules} — remove them from the host's "
+                          "Firewall page.", rules=", ".join(stuck))]
 
 
 def _left_on_purpose(status, comment, removable, protected):
@@ -932,9 +982,8 @@ def _left_on_purpose(status, comment, removable, protected):
     kept = [g for g in status.get("groups", [])
             if g.get("comment") == comment and not removable(g)]
     on_host = [g for g in kept if _is_panel_allow(g) and _port_of(g) in protected]
-    return (_naming("Left in place, as the panel does not make rules like these",
-                    [g for g in kept if g not in on_host])
-            + _naming("Left in place on SSH's or the panel's own port", on_host))
+    return (_naming(i18n.Sentence(_R16A_NOT_OURS), [g for g in kept if g not in on_host])
+            + _naming(i18n.Sentence(_R16A_ON_HOST_PORT), on_host))
 
 
 def _rule_port_words(g):
@@ -998,7 +1047,9 @@ def _left_on_own_ports(status, ports, protected, taken):
     labels = list(dict.fromkeys(map(_unnamed_rule_label, stray)))
     if not labels:
         return []
-    return ["Left in place on its port%s: %s." % ("s" if len(ports) > 1 else "", ", ".join(labels))]
+    if len(ports) > 1:
+        return [i18n.Sentence("Left in place on its ports: {rules}.", rules=", ".join(labels))]
+    return [i18n.Sentence("Left in place on its port: {rules}.", rules=", ".join(labels))]
 
 
 def _port_of(g):
@@ -1006,9 +1057,17 @@ def _port_of(g):
     return int(str(g["port_num"]).strip())
 
 
+_R16A_NOT_OURS = "Left in place, as the panel does not make rules like these: {rules}."
+_R16A_ON_HOST_PORT = "Left in place on SSH's or the panel's own port: {rules}."
+
+
 def _naming(lead, groups):
-    """["<lead>: <each rule>."], or [] when there are none."""
-    return ["%s: %s." % (lead, ", ".join(map(_rule_label, groups)))] if groups else []
+    """[`lead` (a Sentence of one of the two above) naming each rule of `groups`], or [] when none.
+
+    The caller hands the module constant to Sentence by name, so tools/i18n_scan holds it to the
+    catalogs; a template passed on as a plain parameter is one the gate cannot read.
+    """
+    return [i18n.Sentence(lead.template, rules=", ".join(map(_rule_label, groups)))] if groups else []
 
 
 def _with_notes(message, notes):
@@ -1519,15 +1578,17 @@ def classify_install_failure(output):
     low = text.lower()
     # Bandit's hard-coded-/tmp rule (and Sonar's S5443): this is a substring of SteamCMD's error
     # text being matched, not a path anything here opens or writes.
+    # Each message is an i18n.Sentence so the catalog gate holds it to a key: it becomes the failed
+    # install's step name, which install-status translates for whoever asks.
     if "please delete some /tmp/dumps" in low or "/tmp/dumps* directories" in low:   # nosec B108  # NOSONAR - error text, not a path
-        return ("steam_dumps", (
+        return ("steam_dumps", i18n.Sentence(
             "Steam keeps only ten crash-dump slots on a host (/tmp/dumps … /tmp/dumps09), one per "
             "Linux account, and every one of them is in use by a game account that still exists. "
             "SteamCMD cannot run at all until one is freed — remove a game server you no longer "
             "need, or delete one of those directories on the host."))
     if "steam login not set" in low or 'change steamuser="username"' in low \
             or "no license" in low or "no subscription" in low:
-        return ("steam_login", (
+        return ("steam_login", i18n.Sentence(
             "This game is not downloadable with an anonymous Steam login — it needs an account "
             "that owns it. Put a Steam username and password in the server's LinuxGSM config "
             "(steamuser / steampass) and install again."))
@@ -1548,7 +1609,7 @@ def classify_install_failure(output):
         #
         # So the honest answer is "this needs a two-step install", not "give up" — and the panel
         # does that itself rather than making an operator follow a GitHub thread.
-        return ("steam_platform", (
+        return ("steam_platform", i18n.Sentence(
             "SteamCMD refused this game with \"Invalid platform\" — a known SteamCMD bug, not a "
             "problem with this host: the game does have a Linux server. The way through it is to "
             "prime the download with the Windows depot and then validate, which pulls the Linux "
@@ -1978,7 +2039,7 @@ def _r11a_step_failed(note, not_done, res, what):
         return False
     msg = i18n.Sentence("{what} ({why})", what=what, why=_r11a_why(res))
     not_done.append(msg)
-    note("NOT DONE: %s." % msg)
+    note(i18n.Sentence("NOT DONE: {why}.", why=msg))
     return True
 
 
@@ -2110,7 +2171,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     # ── 4. Set timezone ──
     if set_timezone:
-        emit(f"Setting timezone to {set_timezone}")
+        emit(i18n.Sentence("Setting timezone to {tz}", tz=set_timezone))
         # set_timezone is user-supplied and runs as root — quote it against injection.
         _tz = _core.run_privileged(server, "set-timezone", [set_timezone], timeout=10)
         _r11a_step_failed(note, not_done, _tz, i18n.Sentence("the timezone was not set to {tz}", tz=set_timezone))
@@ -2124,8 +2185,8 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # closed port — and its fail2ban jail banned on a port nothing listened on.
     ssh_ports = _bootstrap_ssh_ports(server) if (enable_ufw or install_fail2ban) else []
     if enable_ufw:
-        emit("Configuring UFW firewall (deny incoming, rate-limit SSH on port %s)"
-             % ", ".join(ssh_ports))
+        emit(i18n.Sentence("Configuring UFW firewall (deny incoming, rate-limit SSH on port {ports})",
+                           ports=", ".join(ssh_ports)))
         # Rate-limit SSH by default — `ufw limit` allows SSH (so we never lock ourselves
         # out) while throttling brute-force sources. We do NOT add a plain `allow 22`:
         # a lower-numbered allow rule would match first and shadow the limit, leaving SSH
@@ -2157,20 +2218,21 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             if _en[2] != 0:
                 ufw_enable_failed = i18n.Sentence("the firewall was NOT enabled: `ufw enable` failed ({why})",
                                                   why=_r11a_why(_en))
-                note("NOT DONE: %s — the firewall is not protecting this host." % ufw_enable_failed)
+                note(i18n.Sentence("NOT DONE: {why} — the firewall is not protecting this host.",
+                                   why=ufw_enable_failed))
             elif _dd[2] != 0:
                 ufw_enable_failed = i18n.Sentence("UFW is on, though its default incoming policy could not be set to "
                                                   "deny: `ufw default deny incoming` failed ({why})", why=_r11a_why(_dd))
-                note("NOT DONE: %s — run `ufw status verbose` on the host to see the policy in "
-                     "force." % ufw_enable_failed)
+                note(i18n.Sentence("NOT DONE: {why} — run `ufw status verbose` on the host to see the "
+                                   "policy in force.", why=ufw_enable_failed))
         else:
             # The limit's exit code was never read, so when it failed the rules that DO let SSH in
             # were deleted "now that the limit is in place" and UFW was switched on at deny-incoming
             # — a fresh host cut off from SSH mid-bootstrap. Nothing is removed and the firewall is
             # left as it was; the job says so rather than "complete".
             ufw_not_enabled = _l_why
-            note("NOT DONE: %s. UFW was left as it was — turning it on without a rule letting SSH "
-                 "in would lock this host out." % ufw_not_enabled)
+            note(i18n.Sentence("NOT DONE: {why}. UFW was left as it was — turning it on without a rule "
+                               "letting SSH in would lock this host out.", why=ufw_not_enabled))
 
     # ── 6. Basic SSH hardening ──
     emit("Hardening SSH configuration")
@@ -2200,9 +2262,9 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         note("Could not read sshd's effective configuration to confirm the SSH hardening took "
              "effect — check `sshd -T` on the host.")
     for _key, _want, _got in _unapplied:
-        note("NOT IN EFFECT: sshd reports %s as '%s', not '%s' — something it reads first "
-             "overrides the edit (usually a file in /etc/ssh/sshd_config.d)."
-             % (_key, _got or "unset", _want))
+        note(i18n.Sentence("NOT IN EFFECT: sshd reports {key} as '{got}', not '{want}' — something it "
+                           "reads first overrides the edit (usually a file in /etc/ssh/sshd_config.d).",
+                           key=_key, got=_got or "unset", want=_want))
         if _key in _SSHD_SECURITY_DIRECTIVES:
             hardening_failed.append((_key, _got or "unset"))
     if any(k == "PasswordAuthentication" for k, _ in hardening_failed):
@@ -2245,9 +2307,9 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # stays here so this step can never be the one that lets a bad name through.)
     user_msg = ""
     if username and not re.match(r"^[A-Za-z_][A-Za-z0-9._-]*\Z", username):
-        note(f"Skipped account creation: '{username[:32]}' isn't a valid username")
+        note(i18n.Sentence("Skipped account creation: '{user}' isn't a valid username", user=username[:32]))
     elif username:
-        emit(f"Creating LinuxGSM user: {username}")
+        emit(i18n.Sentence("Creating LinuxGSM user: {user}", user=username))
         out, _, _ = _core.run_command(server, f"id {_core._quote(username)} 2>/dev/null && echo 'EXISTS' || echo 'NOTEXISTS'", timeout=10)
         out = out or ""
         # Same correction: an unread probe is not "the account is already there". Reading it that
@@ -2256,26 +2318,26 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         # branch, whose `useradd` then failed on an existing account while `passwd -l` still
         # locked it — the operator's own password login, if that is the name they typed.
         if "NOTEXISTS" not in out and "EXISTS" in out:
-            note(f"User {username} already exists")
+            note(i18n.Sentence("User {user} already exists", user=username))
         elif "NOTEXISTS" in out:
             _cu_out, _cu_err, _cu_rc = _core.create_game_user(server, username, timeout=15)
             if _cu_rc != 0:
                 user_msg = i18n.Sentence("the account {user} was not created ({why})", user=username,
                                          why=(_cu_err or _cu_out or "exit %s" % _cu_rc).replace("\n", " ").strip()[:160])
-                note("NOT DONE: %s; its password was not touched." % user_msg)
+                note(i18n.Sentence("NOT DONE: {why}; its password was not touched.", why=user_msg))
             else:
                 _lk_out, _lk_err, _lk_rc = _core.run_privileged(server, "user-lock-password",
                                                                 [username], timeout=10)
                 if _lk_rc != 0:
                     user_msg = i18n.Sentence("the account {user} was created but its login password could not be locked",
                                              user=username)
-                    note("NOT DONE: %s." % user_msg)
+                    note(i18n.Sentence("NOT DONE: {why}.", why=user_msg))
                 else:
-                    note(f"User {username} created (login password locked)")
+                    note(i18n.Sentence("User {user} created (login password locked)", user=username))
         else:
             user_msg = i18n.Sentence("the account {user} was not created: the host did not answer whether it "
                                      "already exists", user=username)
-            note("NOT DONE: %s." % user_msg)
+            note(i18n.Sentence("NOT DONE: {why}.", why=user_msg))
 
     # ── 10. Configure fail2ban ──
     if install_fail2ban:
@@ -2351,14 +2413,14 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
                 reboot_msg = i18n.Sentence("the reboot a kernel/library update needs was not sent ({why}) — reboot this "
                                            "host from its Power card",
                                            why=(_rb_err or _rb_out or "exit %s" % _rb_send_rc).replace("\n", " ").strip()[:160])
-                note("NOT DONE: %s." % reboot_msg, status="reboot-required")
+                note(i18n.Sentence("NOT DONE: {why}.", why=reboot_msg), status="reboot-required")
             else:
                 _core.close_connection(server)
                 came_back = _wait_for_reboot(server, on_wait=lambda t: note(t, status="rebooting"))
                 if came_back == _RBWAIT_NEVER_DOWN:
                     reboot_msg = i18n.Sentence("the host never went down for the reboot a kernel/library update needs — "
                                                "reboot it from its Power card")
-                    note("NOT DONE: %s." % reboot_msg, status="reboot-required")
+                    note(i18n.Sentence("NOT DONE: {why}.", why=reboot_msg), status="reboot-required")
                 elif not came_back:
                     return False, "Server was rebooted but did not come back online within the timeout.", "\n".join(log)
                 else:

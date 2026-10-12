@@ -527,14 +527,14 @@ def _panel_host_blockers():
     out = []
     try:
         if so._update_in_progress():
-            out.append(_blocker("self_update", "the panel"))
+            out.append(_blocker("self_update", _rw.PANEL_NAME))
     except Exception:  # noqa: BLE001
         _log.debug("self-update state unreadable", exc_info=True)
     from panel.ops import backup as _bk
     if _bk._restore_lock.locked():
-        out.append(_blocker("restore", "the panel"))
+        out.append(_blocker("restore", _rw.PANEL_NAME))
     if _full_backup_lock.locked():
-        out.append(_blocker("full_backup", "the panel"))
+        out.append(_blocker("full_backup", _rw.PANEL_NAME))
     return out
 
 
@@ -818,7 +818,7 @@ def _pending_conflict(remote):
     if job:
         return {"success": False, "error": "in_progress", "phase": job.get("phase"),
                 "message": i18n.Sentence("{host} is already being rebooted ({phase}).",
-                                         host=_host_label(remote), phase=job.get("phase"))}
+                                         host=_host_label(remote), phase=_rw.phase_words(job.get("phase")))}
     if plan_rows(remote.id):
         return {"success": False, "error": "in_progress", "phase": "restoring",
                 "message": i18n.Sentence("{host}'s last reboot is still bringing its servers back. Try "
@@ -1923,7 +1923,7 @@ def _act(remote, recs, now, rollback_):
         if d.get("restore") != "pending":
             continue
         before = dict(d)
-        res = _act_one(remote, gs, d, now, rollback_)
+        res = _act_one(remote, gs, d, now, rollback_) or _rw.row_gave_up(d, now)
         if res is not None:
             d["restore"], d["result"] = res
             # When this row was confirmed — after its probe or its start returned, which the tick's

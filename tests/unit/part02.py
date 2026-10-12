@@ -3813,6 +3813,40 @@ finally:
 _atg_mint_src = _totp_ast.parse(
     open(os.path.join(_p02_root, "panel", "routes", "auth_routes.py"), encoding="utf-8").read())
 _atg_said = []
+_atg_unread = []
+
+
+def _r16d_module_strs(*rel):
+    """{name: text} for every module-level `NAME = "<str>"` in the given repo files."""
+    _out = {}
+    for _r in rel:
+        for _a in _totp_ast.parse(open(os.path.join(_p02_root, *_r), encoding="utf-8").read()).body:
+            if (isinstance(_a, _totp_ast.Assign) and isinstance(_a.value, _totp_ast.Constant)
+                    and isinstance(_a.value.value, str)):
+                _out.update({_t.id: _a.value.value for _t in _a.targets
+                             if isinstance(_t, _totp_ast.Name)})
+    return _out
+
+
+def _r16d_flash_texts(arg, consts):
+    """The sentences a flash argument can say, or None when one of them cannot be read as text.
+
+    A constant NAME counts as its text: the mint's throttled refusal is flash(REAUTH_BLOCKED_MSG),
+    which a literals-only reader skipped, and that sentence shipped in no catalog at all.
+    """
+    if isinstance(arg, _totp_ast.Constant) and isinstance(arg.value, str):
+        return [arg.value]
+    if isinstance(arg, _totp_ast.Name) and arg.id in consts:
+        return [consts[arg.id]]
+    if isinstance(arg, _totp_ast.IfExp):
+        _b, _o = _r16d_flash_texts(arg.body, consts), _r16d_flash_texts(arg.orelse, consts)
+        return None if _b is None or _o is None else _b + _o
+    return None
+
+
+# The names the route reads: its own module's and those it imports from _shared.
+_atg_consts = _r16d_module_strs(("panel", "routes", "_shared.py"),
+                                ("panel", "routes", "auth_routes.py"))
 # The route and the module-level helpers it hands its refusals to (_auth_token_totp_refusal
 # flashes the 2FA ones): a sentence moved into a helper is still one the mint says.
 for _n in _totp_ast.walk(_atg_mint_src):
@@ -3821,14 +3855,24 @@ for _n in _totp_ast.walk(_atg_mint_src):
         continue
     for _c in _totp_ast.walk(_n):
         if (isinstance(_c, _totp_ast.Call)
-                and getattr(_c.func, "id", getattr(_c.func, "attr", None)) == "flash"
-                and _c.args and isinstance(_c.args[0], _totp_ast.Constant)
-                and isinstance(_c.args[0].value, str)):
-            _atg_said.append(_c.args[0].value)
+                and getattr(_c.func, "id", getattr(_c.func, "attr", None)) == "flash" and _c.args):
+            _t = _r16d_flash_texts(_c.args[0], _atg_consts)
+            if _t is None:
+                _atg_unread.append("line %d" % _c.lineno)
+            else:
+                _atg_said.extend(_t)
+# Every flash is read as text: one built some other way is named rather than skipped, since a
+# skipped one is a sentence nobody checked.
+check("api token: every flash in the mint is read as text (a literal, or a constant naming one)",
+      _atg_unread == [] and "REAUTH_BLOCKED_MSG" in _atg_consts, "unread: %r" % (_atg_unread,))
+check("api token: the resolver reads a constant and both arms of a choice, and names a call (control)",
+      _r16d_flash_texts(_totp_ast.parse('x if c else "b"', mode="eval").body, {"x": "a"}) == ["a", "b"]
+      and _r16d_flash_texts(_totp_ast.parse("tr(x)", mode="eval").body, {"x": "a"}) is None
+      and _r16d_flash_texts(_totp_ast.parse("y", mode="eval").body, {"x": "a"}) is None)
 # A floor, not an inventory: "every sentence found is translated" is satisfied by finding none,
 # which is exactly what a renamed route or a flash built from a variable would produce.
 check("api token: the mint's refusal sentences were found to check",
-      len(_atg_said) >= 3, "the AST walk found %r" % (_atg_said,))
+      len(_atg_said) >= 4, "the AST walk found %r" % (_atg_said,))
 _atg_untranslated = {}
 for _lang in ("es", "fr"):
     _atg_keys = set()

@@ -1099,6 +1099,14 @@ def _r15e_mod_outcome(which, ok, tail):
 
 def _cron_listing(app, gs):
     """The scheduled-tasks card's GET answer: the game user's cron jobs, or why they're unknown."""
+    # The listing is `crontab -l` AS the account, every line of it: on a legacy row bound to a
+    # remote host's sudo login, that login's own jobs and whatever tokens they carry, which the
+    # refusal the browse and file routes give says the panel does not read. A refused row is not
+    # read at all, so its Autostart and Daily-restart columns are not re-synced from a crontab the
+    # panel will not look at either.
+    refused = _read_refused(gs, "list_cron")
+    if refused is not None:
+        return refused
     # One-time, in-place upgrade so pre-existing managed jobs start reporting
     # success/error (idempotent + state-preserving; never blocks the listing).
     # Given the server's game type and port so a restart-when-empty line is healed
@@ -1108,7 +1116,8 @@ def _cron_listing(app, gs):
     try:
         if game_account_write_refusal(gs.remote, gs.short_name) is None:
             _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
-                                              game_type=gs.game_type, port=gs.port)
+                                              game_type=gs.game_type, port=gs.port,
+                                              query_type=gs.query_type)
     except Exception:
         app.logger.debug("cron tracking upgrade skipped", exc_info=True)
     jobs = _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)
@@ -2276,7 +2285,8 @@ def _register_cron_jobs(app):
                                       schedule, _json_str(data, "command"), gs.lgsm_name)
             log_action(current_user, "cron_update", target=gs.name, success=ok,
                        detail=schedule[:120], server=gs)
-            return jsonify({"success": ok, "message": msg or ("Updated" if ok else "Failed")})
+            return jsonify({"success": ok,
+                            "message": i18n.tr(msg) if msg else ("Updated" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
 
@@ -2301,7 +2311,8 @@ def _register_cron_actions(app):
                 # The card's own help text promises that deleting `monitor` turns Autostart off.
                 _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
             log_action(current_user, "cron_delete", target=gs.name, success=ok, server=gs)
-            return jsonify({"success": ok, "message": msg or ("Deleted" if ok else "Failed")})
+            return jsonify({"success": ok,
+                            "message": i18n.tr(msg) if msg else ("Deleted" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_cron_job failed")}), 500
 
@@ -2533,11 +2544,12 @@ def _register_console_routes(app):
                                              "live console, so the panel only turns them off."}), 400
                 want = "off"
                 # The instance cfg the settings form writes: the same refusal, said as `error`,
-                # which is what the page reads here.
+                # which is what the page reads here. Its row keeps the reason whole, as every
+                # other refusal row (_r14b_refused): a 250 cut stopped it mid-sentence.
                 why = game_account_write_refusal(gs.remote, gs.short_name)
                 if why is not None:
                     log_action(current_user, "set_log_timestamps", target=gs.name,
-                               detail=("refused: " + why)[:250], success=False, server=gs)
+                               detail=_r14b_refused("", why), success=False, server=gs)
                     return jsonify({"error": i18n.tr(why)}), 409
                 ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name,
                                             {"logtimestamp": want})

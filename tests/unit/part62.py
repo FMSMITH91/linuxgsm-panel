@@ -447,7 +447,7 @@ def _cfg_writes_audited62(client, sid):
 
 def _daily_time62(client, sid):
     calls = []
-    _p9_patch(_p9_sd, "set_daily_restart", lambda *a, **k: (calls.append(k.get("hour")), (True, ""))[1])
+    _p9_patch(_p9_sd, "set_daily_restart", lambda *a, **k: (calls.append((k.get("at") or (None,))[0]), (True, ""))[1])
     _p9_patch(_p9_sd, "_host_timezone_cached", lambda remote: None)
     got = {}
     for t in ("5pm", "17:60", 5, ["17:30"]):

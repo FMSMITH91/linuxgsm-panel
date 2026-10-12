@@ -717,7 +717,10 @@ check("2FA backup code signs the user in (302)", s2.status_code == 302, "got %d"
 b2 = app.test_client()
 b2.post("/login", data={"username": "smoke_2fa", "password": "Str0ng!passw0rd"})
 s3 = b2.post("/login", data={"totp_code": bc_code})
-check("2FA backup code is one-time (reuse rejected, not 302)", s3.status_code != 302,
+# Refused AS a spent code: "not 302" alone also held for the login throttle's page, so a reuse that
+# went through the backup-code path unread would have passed once the bucket filled (review 1012a).
+check("2FA backup code is one-time (reuse rejected, not 302)",
+      s3.status_code != 302 and "Invalid authentication code or backup code." in s3.get_data(as_text=True),
       "got %d" % s3.status_code)
 
 # ...and a wrong six-digit code does NOT try the backup codes. Each try is a cost-12 bcrypt

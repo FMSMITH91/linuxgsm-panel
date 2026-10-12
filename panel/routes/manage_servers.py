@@ -252,7 +252,7 @@ def prepare_install_account(remote, remote_id, short_name, fresh):
     c_out, c_err, c_rc = _sm.create_game_user(remote, short_name, timeout=15)
     if c_rc != 0:
         return False, i18n.Sentence("Couldn't create the account '{name}': {why}", name=short_name,
-                                    why=(c_err or c_out or "useradd failed").strip()[-200:]), True
+                                    why=readable_reason(c_err or c_out or "useradd failed")[-200:]), True
     with _install_lock:
         _accounts_created.add(key)
     time.sleep(0.3)
@@ -299,7 +299,7 @@ def _existing_account_verdict(remote, key, fresh):
                                         merge_stderr=False)
     if d_rc != 0:
         return False, i18n.Sentence("Couldn't remove the half-finished account '{name}' to start again: {why}",
-                                    name=short_name, why=(d_err or "userdel failed").strip()[-200:]), True
+                                    name=short_name, why=readable_reason(d_err or "userdel failed")[-200:]), True
     _sm.run_privileged(remote, "user-remove-home", [short_name], timeout=15,
                        merge_stderr=False)
     with _install_lock:
@@ -1015,7 +1015,9 @@ class _InstallRun:
         # called it. Collapse the whitespace too: the raw tail arrives full of \r and column
         # padding that turns one sentence into five ragged lines in a corner card.
         # A Sentence keeps its template, so the viewer is shown it whole (install-status translates it);
-        # only the host's raw text is cleaned.
+        # only the host's raw text is cleaned — and a Sentence carrying host output (useradd's or
+        # userdel's stderr, the dependency step's tail) is given it through readable_reason where
+        # it is built, since this skips it.
         if not isinstance(detail, i18n.Sentence):
             detail = readable_reason(detail)
         with _install_lock:
@@ -1131,7 +1133,7 @@ def _install_dependencies(job, remote):
         # The job's record (install-status translates it for the viewer who asks).
         _p(2, "Installing dependencies", message=i18n.Sentence(  # i18n-ignore
             "Some dependencies did not install — continuing; step 4 reports anything still missing. {output}",
-            output=(deps_msg or "")[-200:]))
+            output=readable_reason(deps_msg)[-200:]))
         _log.warning("install %s: dependency step failed: %s",
                      short_name, (deps_msg or "")[:300])
 
@@ -1231,8 +1233,9 @@ def _game_files_command(job, remote):
 def _download_game_files(job, remote, auto, attempt, last_out):
     """One download attempt of step 4, run again with any packages LinuxGSM names. -> last_out."""
     _p = job.p
-    _p(4, "Downloading game server files (this can take a while)"
-          + ("" if attempt == 0 else " — retry %d" % attempt))
+    # Whole sentences: install-status translates the step name for whoever asks.
+    _p(4, "Downloading game server files (this can take a while)" if attempt == 0 else
+          i18n.Sentence("Downloading game server files (this can take a while) — retry {n}", n=attempt))
     out, err, _ = _sm.run_command(remote, auto, timeout=1800, sudo=False)
     last_out = out or err or last_out
     missing = parse_missing_deps((out or "") + "\n" + (err or ""))
@@ -1624,7 +1627,12 @@ def _open_game_ports(job, remote, gs):
 
 
 # Who holds a port a game server may not have, when it is SSH's or the panel's own.
-_PROTECTED_HOLDER = "this host's SSH or the panel itself"
+#
+# This and every holder and reason below are i18n.Sentences: they fill a slot of the install's
+# outcome ({holder}, {why}), and tr() translates a slot's value only when it is one. Built as
+# plain English they printed untranslated inside an es/fr sentence ("…ya lo usa 'rust1' on this
+# host…"). As a str each is still its English, for the audit rows and logs that `%s` them.
+_PROTECTED_HOLDER = i18n.Sentence("this host's SSH or the panel itself")
 
 
 def sibling_port_blocks(rows, gs):
@@ -1657,8 +1665,8 @@ def withheld_game_ports(rows, gs, protected):
     holds on it is left to that server by remote_ufw_allow_game_ports. SSH and the panel are
     refused regardless.
     """
-    held = {p: "'%s' on this host" % n for p, n in sibling_port_blocks(rows, gs).items()
-            if p != gs.port}
+    held = {p: i18n.Sentence("'{name}' on this host", name=n)
+            for p, n in sibling_port_blocks(rows, gs).items() if p != gs.port}
     for p in protected:
         held[p] = _PROTECTED_HOLDER
     return held
@@ -1699,7 +1707,7 @@ def _hold_back_listening(remote, short_name, to_open, port_conflict):
     if foreign.intersection(to_open):
         foreign -= _sm.remote_ufw_tagged_ports(remote, short_name)
     to_open, port_conflict = _withhold(
-        to_open, {p: "another process on this host" for p in foreign}, port_conflict)
+        to_open, {p: i18n.Sentence("another process on this host") for p in foreign}, port_conflict)
     return to_open, port_conflict, foreign
 
 
@@ -1877,7 +1885,8 @@ def _install_gmod_content(job, remote):
         start_step = 9
         labels = ", ".join(GMOD_CONTENT_GAMES[g][0]
                            for g in content_games if g in GMOD_CONTENT_GAMES)
-        _p(8, "Installing GMod content (%s)" % (labels or "content"))
+        _p(8, i18n.Sentence("Installing GMod content ({games})", games=labels) if labels
+           else "Installing GMod content")
         # Content is host-wide (one content user, one ~/serverfiles), so this takes the same
         # one-job-per-host claim every Content-card job takes. Without it a Content-tab uninstall
         # on another GMod server could `rm` what this step is downloading, or an Apply start a
@@ -2099,15 +2108,15 @@ def _post_start_port_refused(job, remote, gs, port):
     told apart from one that was taken before it started.
     """
     if not MIN_PORT <= port <= MAX_PORT:
-        return "it is not a port"
+        return i18n.Sentence("it is not a port")
     if job.withheld is None or not getattr(job, "listening_read", False):
-        return ("the ports already in use on the host could not be read before it started, so "
-                "whether another process had it cannot be told")
+        return i18n.Sentence("the ports already in use on the host could not be read before it "
+                             "started, so whether another process had it cannot be told")
     if port in job.withheld:
-        return "something else was listening on it before this server started"
+        return i18n.Sentence("something else was listening on it before this server started")
     rows = GameServer.query.filter_by(remote_id=remote.id).all()
     holder = withheld_game_ports(rows, gs, _sm.protected_host_ports(remote)).get(port)
-    return ("it is held by %s" % holder) if holder else None
+    return i18n.Sentence("it is held by {holder}", holder=holder) if holder else None
 
 
 def _rescan_started(remote, gs, started):
@@ -2416,7 +2425,7 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
             _em = i18n.tr("Could not remove the '{user}' account on {host}, so '{name}' has been left in "
                           "place — nothing was deleted from the panel. {why}",
                           user=short_name, host=remote.display_name, name=name,
-                          why=(err or out or "userdel exited %d" % rc).strip()[:200])
+                          why=readable_reason(err or out or "userdel exited %d" % rc)[:200])
             return _index_reply(_em, False, "danger", 500)
         if rc == 12:
             fw_notes.append(i18n.Sentence("The account was removed but its home directory could not "

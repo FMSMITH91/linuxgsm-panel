@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/insta
    be typing that password into a terminal the panel itself renders, so it protects you against a
    stolen panel session, not against a compromised panel. Remote hosts are untouched by this —
    whatever their own account already has is what applies.
-7. Serves HTTPS with a built-in self-signed cert (a trusted Tailscale Serve cert is offered in the wizard), then **reboots**.
+7. Serves HTTPS with a built-in self-signed cert (a trusted Tailscale Serve cert is offered in the wizard), then **reboots** if step 2's upgrade needs it and no game server is running.
 
 Then finish in the browser: open **the link the installer prints at the end** — `https://your-server:5000/setup?token=…` (`http://` won't load — it's TLS-only) — accept the one-time cert warning (**Advanced → Proceed**), and the **setup wizard** creates your first super admin.
 

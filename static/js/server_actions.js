@@ -154,16 +154,16 @@ function actionPlayersDialog(action, n, btn) {
   card.appendChild(head);
   var body = _r12c_el('div', 'card-body');
   var who = _r12c_el('p', 'mb-2');
+  // One whole sentence with the count and the name as values: split around them ("players are
+  // connected to"), the translator had a fragment with nothing to place, and a language that puts
+  // the count or the name anywhere else could not be written.
   var count = _r12c_el('strong', null, String(n));
   count.setAttribute('data-no-i18n', '');
-  who.appendChild(count);
-  who.appendChild(document.createTextNode(' '));
-  who.appendChild(_r12c_el('span', null, t(one ? 'player is connected to' : 'players are connected to')));
-  who.appendChild(document.createTextNode(' '));
   var name = _r12c_el('strong', null, SERVER_NAME);
   name.setAttribute('data-no-i18n', '');
-  who.appendChild(name);
-  who.appendChild(document.createTextNode('. '));
+  tfNodes(one ? '{n} player is connected to {name}.' : '{n} players are connected to {name}.',
+          {n: count, name: name}).forEach(function (node) { who.appendChild(node); });
+  who.appendChild(document.createTextNode(' '));
   who.appendChild(_r12c_el('span', null, t(stop ? (one ? 'Stopping now disconnects them.' : 'Stopping now disconnects everyone.')
                                                  : (one ? 'Restarting now disconnects them.' : 'Restarting now disconnects everyone.'))));
   body.appendChild(who);

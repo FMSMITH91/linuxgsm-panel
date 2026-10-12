@@ -616,8 +616,9 @@ def _r14a_ports_word(g):
 # Every protect_reason the Firewall page can show, as a fixed English template. The group carries
 # the template (protect_reason_key) and its values (protect_reason_params) beside the English text,
 # so the page renders it in the viewer's language: the catalogs translate the template, and the
-# values (ports, never words) go in after. protect_reason itself, and every API refusal built from
-# it, stays the English sentence it always was. The unit suite holds each one to both catalogs.
+# values (ports, never words) go in after. protect_reason itself stays the English sentence it always
+# was; an API refusal built from it is an i18n.Sentence of the template (hosts._r16c_protect_refusal),
+# the same English as a str, which the route translates. The unit suite holds each one to both catalogs.
 _R14A_SSH_TAIL = (" the SSH port used to reach this host, and there's no working Tailscale route to "
                   "fall back on — removing it would lock you out. Enable Tailscale SSH, or connect "
                   "Tailscale and allow the tailscale0 interface, first.")

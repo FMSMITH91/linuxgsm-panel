@@ -617,9 +617,50 @@ def _job_argv_ok31(argv, unit, job, args):
     return (argv[:4] == ["/usr/bin/systemd-run", "--unit=" + unit, "--collect", "--quiet"]
             and tail == ["--", os.path.realpath(_helper_path), "--job", job] + args
             and "--setenv=SUDO_UID=999" in argv and "--setenv=SUDO_USER=lgsmpanel" in argv
-            # PATH in the job's environment, however it is spelled before `--`: `--setenv=PATH`,
-            # `--setenv PATH=`, `-E PATH=` (review 1011e: only the first was read).
-            and not any("PATH=" in a for a in (argv[:argv.index("--")] if "--" in argv else argv)))
+            # PATH in the job's environment, however it is spelled before `--` (see _r16d_env31).
+            and "PATH" not in _r16d_env31(argv))
+
+
+def _r16d_env_words31(head):
+    """(flag, value) for each --setenv/-E/--property/-p in `head`, joined to its value or not."""
+    words = []
+    for i, a in enumerate(head):
+        nxt = head[i + 1] if i + 1 < len(head) else ""
+        for flag, joined in (("--setenv", "--setenv="), ("-E", "-E"), ("--property", "--property="),
+                             ("-p", "-p")):
+            if a == flag:
+                words.append((flag, nxt))
+            elif a.startswith(joined):
+                words.append((flag, a[len(joined):]))
+    return words
+
+
+def _r16d_env31(argv):
+    """The names a systemd-run argv puts in the unit's environment, from its options before `--`.
+
+    `--setenv=X`, `--setenv X`, `-E X`, `-EX` (each with `=VALUE` or without: systemd-run then
+    passes on the caller's own X), and a `-p`/`--property` Environment= assignment. Matching
+    "PATH=" (review 1011e) missed the bare `--setenv=PATH` the check before it caught; the name is
+    what is judged (review 1012a). An EnvironmentFile= could hold anything, so it counts as PATH.
+    """
+    names = []
+    for flag, w in _r16d_env_words31(argv[:argv.index("--")] if "--" in argv else list(argv)):
+        if flag in ("--setenv", "-E"):
+            names.append(w.split("=", 1)[0])
+        elif w.startswith("EnvironmentFile="):
+            names.append("PATH")
+        elif w.startswith("Environment="):
+            names += [_kv.split("=", 1)[0] for _kv in w[len("Environment="):].split()]
+    return names
+
+
+check("helper jobs: PATH is read in every way systemd-run takes it, and another variable is not "
+      "(control)",
+      [("PATH" in _r16d_env31(["systemd-run"] + _o + ["--", "x"])) for _o in (
+          ["--setenv=PATH"], ["-E", "PATH"], ["--setenv", "PATH"], ["-EPATH"], ["--setenv=PATH=/x"],
+          ["-E", "PATH=/x"], ["-p", "Environment=A=1 PATH=/x"], ["--property=EnvironmentFile=/e"],
+          ["--setenv=SUDO_UID=999"], ["--setenv=MYPATH=1"], ["--", "--setenv=PATH"])]
+      == [True] * 8 + [False] * 3)
 
 
 def _check_jobs31():
@@ -630,6 +671,11 @@ def _check_jobs31():
               "caller's identity passed on, no fork, and reported as started" % (job, mod.JOB_UNITS[job]),
               rc == 0 and said in out and len(calls) == 1
               and _job_argv_ok31(calls[0], mod.JOB_UNITS[job], job, args), repr((rc, out, calls)))
+        if calls and "--" in calls[0]:
+            _at = calls[0].index("--")
+            check("helper %s: ...and that launch with a bare --setenv=PATH added fails the check above "
+                  "(control)" % job, not _job_argv_ok31(calls[0][:_at] + ["--setenv=PATH"] + calls[0][_at:],
+                                                        mod.JOB_UNITS[job], job, args))
         mod, calls = _job_helper31(rc=1)
         rc, out = _run_verb31(mod, fn, args)
         check("helper %s: a transient service systemd refuses (one already running) is a failure "

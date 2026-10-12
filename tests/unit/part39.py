@@ -961,9 +961,12 @@ def _shell_stop39(name, standin_args, relay_delay=None, via_sudo=True, chain=Fal
 
 def _section_panel_stop39():
     res, took, left, _d = _shell_stop39("d-shell", ("--flat",))
+    # Each of these also requires that its tree STARTED, for d-slow-relay's reason below: rc -1 is
+    # only the timeout firing, which a tree still starting Python at 1 s gets just the same.
     check("D panel: a command it gives up on gets SIGTERM first, which sudo relays, so the root "
           "command under it ends (a SIGKILL to sudo's group reached sudo alone and orphaned it)",
-          all((res == ("", "Command timed out", -1), left == {})), repr((res, round(took, 2), left)))
+          all((res == ("", "Command timed out", -1), sorted(_pids39(_d, ("sudo", "child"))) == ["child", "sudo"],
+               left == {})), repr((res, round(took, 2), sorted(_pids39(_d, ("sudo", "child"))), left)))
     res, took, left, _d = _shell_stop39("d-slow-relay", ("--flat",), relay_delay=0.6, chain=True)
     # ...having run at all: `left` reads only the pid files that exist, so a tree whose sudo or
     # child never started (Python slow to start on a loaded box) read as "nothing left" and passed
@@ -974,11 +977,12 @@ def _section_panel_stop39():
           all((res == ("", "Command timed out", -1), _started39 == ["child", "sudo"], left == {})),
           repr((res, round(took, 2), _started39, left)))
     res, took, left, _d = _shell_stop39("d-ignore", ("--flat", "--ignore-term"), via_sudo=False)
+    # child.pid is written only after SIG_IGN is set, so it proves a process really ignored SIGTERM.
     check("D panel: a process of its own that ignores SIGTERM still gets SIGKILL, and the answer "
           "comes within the timeout plus the two graces",
-          all((res[2] == -1, left == {},
+          all((res[2] == -1, "child" in _pids39(_d, ("child",)), left == {},
                took < 1 + getattr(_core39, "_TERM_GRACE", 2.0) + _core39._KILL_GRACE + 2.5)),
-          repr((res, round(took, 2), left)))
+          repr((res, round(took, 2), sorted(_pids39(_d, ("child",))), left)))
     _section_panel_paths39()
 
 
@@ -990,8 +994,9 @@ def _section_panel_paths39():
         left = _left39(d, ("sudo", "child"), wait=4.0)
     finally:
         _sweep39(d)
+    _started39 = sorted(_pids39(d, ("sudo", "child")))
     check("D panel: the same through the native-thread path (ssh_manager's local argv runner)",
-          res[2] == -1 and left == {}, repr((res, left)))
+          res[2] == -1 and _started39 == ["child", "sudo"] and left == {}, repr((res, _started39, left)))
     green = _sp39.Popen([_PY39, "-c", "pass"])  # nosec B603 - a no-op child of this interpreter
     green.wait()
     real = _core39._real_subprocess.Popen([_PY39, "-c", "pass"])  # nosec B603 - the same

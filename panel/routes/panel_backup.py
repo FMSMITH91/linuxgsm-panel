@@ -826,7 +826,10 @@ def _register_panel_backups(app):
         ok, msg = bk.restore_backup(name, passphrase=_b.get("passphrase") or None,
                                     skip_safety_backup=skip)
         log_action(current_user, "panel_backup_restore", target=name, success=ok)
-        return jsonify({"success": ok, "message": i18n.tr(msg)})
+        # `needs` is what the page asks next (a passphrase, or "restore without a safety copy?"),
+        # decided from which refusal this was: the page matched the English words, which the
+        # translated message no longer has in Spanish or French (see backup.restore_needs).
+        return jsonify({"success": ok, "message": i18n.tr(msg), "needs": bk.restore_needs(ok, msg)})
 
     @app.route("/api/panel/backup/download/<path:name>")
     @login_required

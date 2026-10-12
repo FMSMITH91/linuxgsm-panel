@@ -6,7 +6,7 @@ resolve across its submodules).
 """
 import re
 import threading
-from panel.core import terminal
+from panel.core import i18n, terminal
 import time
 from panel.ops.ssh_manager import (_core, cron, files, portscan)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
@@ -455,12 +455,21 @@ def _send_rc(result):
 _R13B_PANE_MARK_RE = re.compile(r"^PANE_MARK (\d{1,9}) (\d{1,6}) (\d{1,6})(?:\n|\Z)", re.M)
 
 
-def _send_and_capture(server, user, eng, selfname):
+# The player-list command where a game's own differs from its engine's. JK2MV's bare `status` cuts
+# every name to 15 visible characters (src/server/sv_ccmds.cpp SV_Status_f, Q_PrintStrCopy(…, 0,
+# 15, …)) unless it is given `notrunc`: the Players card showed clipped names, and a Kick by name
+# took the first exact match, so "LongPlayerNameA" resolved to a lower slot's "LongPlayerNameAB",
+# and a name over 15 characters never matched at all. The header is the same either way; a long
+# name only pushes the columns after it right, and the row is read from the right.
+_R16B_LIST_CMD = {"jk2": "status notrunc"}
+
+
+def _send_and_capture(server, user, eng, selfname, game_type=None):
     """Send the engine's player-list command and capture the reply: (out, rc), or None.
 
     None when the send itself failed or anything raised — the capture is never trusted then.
     """
-    cmd = "list" if eng == "minecraft" else "status"
+    cmd = _R16B_LIST_CMD.get(game_type or "") or ("list" if eng == "minecraft" else "status")
     try:
         # The SEND's status, not just the capture's. send_console_command returns (out, err, rc)
         # like every other call here and rc is meaningful (3 + NO_SESSION for no live tmux session,
@@ -557,7 +566,7 @@ def console_player_list(server, user, game_type, selfname=None):
     # one: the bot's /players said "no players connected" about a server that was down. Its own
     # docstring already draws the distinction ("an empty list for a confirmed-empty server, or
     # None when it can't be read"); only the code did not.
-    got = _send_and_capture(server, user, eng, selfname)
+    got = _send_and_capture(server, user, eng, selfname, game_type)
     if got is None:
         return None
     out, rc = got
@@ -627,7 +636,7 @@ def console_status(server, user, game_type, selfname=None):
     # The send's status too — see _send_and_capture for what dropping it cost: the capture is a
     # separate round trip and succeeds happily after a send that never landed, so the pane's
     # PREVIOUS table was returned as the current one.
-    got = _send_and_capture(server, user, eng, selfname)
+    got = _send_and_capture(server, user, eng, selfname, game_type)
     if got is None:
         return None, None
     out, rc = got
@@ -1013,9 +1022,54 @@ def moderate(server, user, game_type, action, target="", message="", selfname=No
     if why:
         return False, why
 
+    return _r16b_send_moderation(server, user, cmd, selfname, game_type, action)
+
+
+def _r16b_send_moderation(server, user, cmd, selfname, game_type, action):
+    """Send moderate()'s console command: (ok, msg).
+
+    A ban pair whose ban can be refused is read back for that refusal (_r16b_ban_checked).
+    """
+    if action == "ban" and (game_type or "").lower() in _R16B_BAN_REFUSED:
+        return _r16b_ban_checked(server, user, cmd, selfname, game_type)
     out = _core.send_console_command(server, user, cmd, timeout=15, selfname=selfname)
     rc = _send_rc(out)
     return (rc == 0), ("Done." if rc == 0 else "Console not reachable — is the server running?")
+
+
+# What a ban command prints when it banned nothing, for the games whose ban is a command pair
+# (_R15B_IDT3_BAN). iortcw's `banaddr <clientnum>` (MP/code/server/sv_ccmds.c SV_AddBanToList)
+# refuses a bot or a local client and a full ban list, while the `kicknum` after it still drops the
+# player: the panel answered "Done." and wrote a success row for a kick that was no ban, and the
+# player could rejoin. Its other errors (an empty slot) are the kick's too, and "supersedes" means
+# a broader ban already covers the address.
+_R16B_BAN_REFUSED = {
+    "rtcw": ("Can ban players connected via the internet only",
+             "Maximum number of bans/exceptions exceeded"),
+}
+
+
+def _r16b_ban_checked(server, user, cmd, selfname, game_type):
+    """Send a ban pair and read the reply for the ban's own refusal: (ok, msg) as moderate().
+
+    A reply that has not arrived is not a refusal: the send worked, so it answers as before.
+    """
+    sent = _core.send_console_command(server, user, cmd, timeout=15, selfname=selfname, mark=True)
+    if _send_rc(sent) != 0:
+        return False, "Console not reachable — is the server running?"
+    mark = _R13B_PANE_MARK_RE.search(sent[0] or "")
+    if mark is not None:
+        time.sleep(0.8)   # let the server print its reply into the pane, as _send_and_capture
+        try:
+            out, _, rc = capture_console(server, user, selfname=selfname,
+                                         since=tuple(int(g) for g in mark.groups()))
+        except Exception:  # noqa: BLE001 - an unread reply is the old answer, not a failure
+            out, rc = "", 1
+        if rc == 0 and any(w in (out or "") for w in _R16B_BAN_REFUSED[game_type.lower()]):
+            return False, i18n.Sentence(
+                "The player was kicked but not banned: this server bans only players connected "
+                "over the internet (not a bot or a local client), and its ban list must not be full.")
+    return True, "Done."
 
 
 def console_steamid_ban(server, user, selfname, steamid, unban=False):

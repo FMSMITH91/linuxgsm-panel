@@ -497,8 +497,9 @@ def _cron_get52(client, sid):
     with _p9_sh._ACCOUNT_VERDICTS_LOCK:
         _p9_sh._ACCOUNT_VERDICTS.clear()
     r = client.get("/api/server/%d/cron" % sid)
+    # 409 since review 1012a: a root-capable account's crontab is not even listed (_cron_listing).
     check("cron GET: the tracking upgrade (a crontab REWRITE) is not run as a root-capable account",
-          r.status_code == 200 and upgrades == [], repr((r.status_code, upgrades)))
+          r.status_code == 409 and upgrades == [], repr((r.status_code, upgrades)))
     _p9_patch(_p9_sh, "privileged_accounts", lambda remote, users: {})
     with _p9_sh._ACCOUNT_VERDICTS_LOCK:
         _p9_sh._ACCOUNT_VERDICTS.clear()

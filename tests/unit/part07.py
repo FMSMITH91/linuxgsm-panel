@@ -259,6 +259,9 @@ def _gh_is_sudo_word(e):
         return e.value.rsplit("/", 1)[-1] in _GH_SUDO_BASENAMES
     if isinstance(e, (_gh_ast.Name, _gh_ast.Attribute)):
         return "sudo" in (getattr(e, "id", None) or e.attr).lower()
+    # A call that hands back the prefix (`sudo_prefix() + ["-u", user]`), judged by its name too.
+    if isinstance(e, _gh_ast.Call) and isinstance(e.func, (_gh_ast.Name, _gh_ast.Attribute)):
+        return _gh_is_sudo_word(e.func)
     return False
 
 
@@ -314,11 +317,11 @@ def _gh_named_list(grown, fn, name):
 
 
 def _gh_splice(elts, fn, grown):
-    """`elts` with each `*name` replaced by the elements that name was given."""
+    """`elts` with each `*x` replaced by the elements x was given, or by x itself when unknown."""
     out = []
     for e in elts:
-        if isinstance(e, _gh_ast.Starred) and isinstance(e.value, _gh_ast.Name):
-            out += _gh_named_list(grown, fn, e.value.id)
+        if isinstance(e, _gh_ast.Starred):
+            out += _gh_flatten(e.value, fn, grown)
         else:
             out.append(e)
     return out
@@ -332,12 +335,24 @@ def _gh_flatten(node, fn, grown):
     """
     if isinstance(node, _gh_ast.BinOp) and isinstance(node.op, _gh_ast.Add):
         return _gh_flatten(node.left, fn, grown) + _gh_flatten(node.right, fn, grown)
+    # A name, attribute or call with no list recorded for it (one imported, `self._sudo`,
+    # `sudo_prefix()`) stays ONE element, so the sudo-word rule can judge it by its name: turned
+    # into [] it vanished from the line, and `SUDO_ARGV + ["-u", user]` was no site (review 1012a).
     if isinstance(node, _gh_ast.Name):
-        return list(_gh_named_list(grown, fn, node.id))
+        return list(_gh_named_list(grown, fn, node.id)) or [node]
     if isinstance(node, (_gh_ast.List, _gh_ast.Tuple)):
         return _gh_splice(node.elts, fn, grown)
-    return [e for part in _gh_ast.walk(node) if isinstance(part, (_gh_ast.List, _gh_ast.Tuple))
-            for e in part.elts]
+    return _gh_flatten_other(node, fn, grown)
+
+
+def _gh_flatten_other(node, fn, grown):
+    """_gh_flatten for a call or attribute: `list(BASE)`'s elements, any literal inside, or itself."""
+    if (isinstance(node, _gh_ast.Call) and getattr(node.func, "id", "") in ("list", "tuple")
+            and len(node.args) == 1):
+        return _gh_flatten(node.args[0], fn, grown)     # `list(BASE)`: BASE's elements
+    inner = [e for part in _gh_ast.walk(node) if isinstance(part, (_gh_ast.List, _gh_ast.Tuple))
+             for e in part.elts]
+    return inner or ([node] if isinstance(node, (_gh_ast.Attribute, _gh_ast.Call)) else [])
 
 
 def _gh_argv_line(n, parent, grown):
@@ -370,14 +385,29 @@ def _gh_grown_name(up):
     return None
 
 
+class _GhGrown(dict):
+    """_gh_grown_lists' answer, with `at`: {(function or None, name): the line it last grew on}."""
+
+    def __init__(self):
+        super().__init__()
+        self.at = {}
+
+    def __eq__(self, other):
+        return dict.__eq__(self, other) and getattr(other, "at", None) == self.at
+
+    __hash__ = None             # a dict: unhashable, as before
+
+
 def _gh_grown_lists(tree):
     """{(function or None, name): every element a list name is given there, in source order}.
 
     `name = [...]`, `name = name + [...]` / `other + [...]`, `name += [...]` and
     `name.extend([...])` all count (review 1011e: only `name = [...]` did, so `a = []; a +=
     ["sudo"]; a += ["-u", user]` and `a = a + ["-u", user]` were no site); None is module level.
+    So do `name.append(x)`, `name.insert(0, x)`, `name = list(other)` and `name = other`
+    (review 1012a).
     """
-    grown = {}
+    grown = _GhGrown()
     parent = {c: p for p in _gh_ast.walk(tree) for c in _gh_ast.iter_child_nodes(p)}
     nodes = sorted((n for n in _gh_ast.walk(tree) if isinstance(n, (_gh_ast.Assign, _gh_ast.AugAssign,
                                                                      _gh_ast.Call))),
@@ -392,23 +422,47 @@ def _gh_grown_lists(tree):
 
 
 def _gh_grow_assign(n, fn, grown):
-    """Record what `name = [...]` or `name = a + [...]` gives each target name."""
-    if not isinstance(n.value, (_gh_ast.List, _gh_ast.Tuple, _gh_ast.BinOp)):
+    """Record what `name = [...]`, `name = a + [...]`, `name = list(a)` or `name = a` gives each name."""
+    _copy = isinstance(n.value, _gh_ast.Name) or (
+        isinstance(n.value, _gh_ast.Call) and getattr(n.value.func, "id", "") in ("list", "tuple"))
+    if not (_copy or isinstance(n.value, (_gh_ast.List, _gh_ast.Tuple, _gh_ast.BinOp))):
         return
     elts = _gh_flatten(n.value, fn, grown)
     for t in (t for t in n.targets if isinstance(t, _gh_ast.Name)):
-        if isinstance(n.value, _gh_ast.BinOp):
-            grown[(fn, t.id)] = elts     # `a = a + [...]` already holds a's old list
+        grown.at[(fn, t.id)] = n.lineno
+        if isinstance(n.value, _gh_ast.BinOp) or _copy:
+            grown[(fn, t.id)] = list(elts)   # `a = a + [...]` already holds a's old list
         else:
             grown.setdefault((fn, t.id), []).extend(elts)
 
 
 def _gh_grow_added(n, fn, grown):
-    """Record what `name += [...]` or `name.extend([...])` adds to the name."""
+    """Record what `name += [...]`, `name.extend([...])`, `.append(x)` or `.insert(i, x)` adds."""
     name = _gh_grown_name(n)
     added = n.value if isinstance(n, _gh_ast.AugAssign) else (n.args[0] if getattr(n, "args", None) else None)
     if name is not None and added is not None:
         grown.setdefault((fn, name), []).extend(_gh_flatten(added, fn, grown))
+        grown.at[(fn, name)] = n.lineno
+        return
+    _gh_grow_appended(n, fn, grown)
+
+
+def _gh_grow_appended(n, fn, grown):
+    """Record what `name.append(x)` or `name.insert(i, x)` adds to a list the file gave elements."""
+    _f = getattr(n, "func", None)
+    if not (isinstance(_f, _gh_ast.Attribute) and isinstance(_f.value, _gh_ast.Name)
+            and (_f.attr, len(n.args)) in (("append", 1), ("insert", 2))):
+        return
+    _key = (fn, _f.value.id)
+    if _key not in grown:
+        return          # a list this file never gave elements is not an argv being built
+    if _f.attr == "append":
+        grown[_key].append(n.args[0])
+    elif isinstance(n.args[0], _gh_ast.Constant) and n.args[0].value == 0:
+        grown[_key].insert(0, n.args[1])
+    else:
+        grown[_key].append(n.args[1])
+    grown.at[_key] = n.lineno
 
 
 def _gh_sites(tree):
@@ -425,7 +479,29 @@ def _gh_sites(tree):
             if site[1] is None or id(site[1]) not in seen:
                 seen.add(id(site[1]))
                 out.append(site)
+    return out + _gh_grown_sites(grown, seen)
+
+
+def _gh_grown_sites(grown, seen):
+    """Each named list's sites as it ends up, filed at the line it last grew on.
+
+    One grown by .append()/.insert() has no literal holding its "-u", so no literal's line ever
+    read it whole.
+    """
+    out = []
+    for _key, _elts in grown.items():
+        for site in _gh_argv_sites(_GhAt(grown.at.get(_key, 0)), _elts):
+            if id(site[1]) not in seen:
+                seen.add(id(site[1]))
+                out.append(site)
     return out
+
+
+class _GhAt:
+    """A stand-in node for _gh_argv_sites: only its line is read."""
+
+    def __init__(self, lineno):
+        self.lineno = lineno
 
 
 def _gh_functions(tree):
@@ -705,6 +781,22 @@ _gh_ctl = {
         'def f(user):\n    a = []\n    a += ["sudo"]\n    a += ["-u", user]\n    return a\n'),
     "G2 an argv rebuilt as a = a + [...]": _gh_plant(
         'def f(user):\n    a = ["sudo"]\n    a = a + ["-u", user]\n    return a\n'),
+    # Review 1012a: each of these was still no site at all.
+    "G2 an argv grown by .append()": _gh_plant(
+        'def f(user):\n    a = ["sudo", "-n"]\n    a.append("-u")\n    a.append(user)\n    return a\n'),
+    "G2 an argv grown by .insert(0, sudo)": _gh_plant(
+        'def f(user):\n    a = ["-u", user]\n    a.insert(0, "sudo")\n    return a\n'),
+    "G2 an imported prefix in the + chain": _gh_plant(
+        'from x import SUDO_ARGV\ndef f(user):\n    return SUDO_ARGV + ["-u", user]\n'),
+    "G2 an imported prefix spliced": _gh_plant(
+        'from x import SUDO_ARGV\ndef f(user):\n    return [*SUDO_ARGV, "-u", user]\n'),
+    "G2 an attribute prefix spliced": _gh_plant(
+        'def f(self, user):\n    return [*self._sudo, "-u", user]\n'),
+    "G2 a prefix from a call": _gh_plant('def f(user):\n    return sudo_prefix() + ["-u", user]\n'),
+    "G2 a list(copy) grown by +=": _gh_plant(
+        'BASE = ["sudo"]\ndef f(user):\n    cmd = list(BASE)\n    cmd += ["-u", user]\n    return cmd\n'),
+    "G2 a copy of a name grown by +=": _gh_plant(
+        'def f(user):\n    a = ["sudo"]\n    b = a\n    b += ["-u", user]\n    return b\n'),
     "G2 an argv naming sudo.ws": _gh_plant('def f(user):\n    return ["sudo.ws", "-u", user]\n'),
     "G2 an argv naming sudo through a constant": _gh_plant(
         'SUDO_WS = "/usr/bin/sudo.ws"\ndef f(user):\n    return [SUDO_WS, "-u", user]\n'),

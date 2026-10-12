@@ -491,29 +491,35 @@ def _restart_check_res(user, selfname):
     return [re.compile(head + "(?:" + s + ")" + tail + r"\Z") for s in shapes]
 
 
-def _restart_check_now(server, user, selfname, found, game_type, port, host_of):
+def _restart_check_now(server, user, selfname, found, target, host_of):
     """What set_daily_restart would write today in place of the recognised line `found`.
 
     `found` is a match from _restart_check_res; this is its command, not its schedule.
 
-    The gamedig type and port are the SERVER's (game_type, port), exactly what set_daily_restart is
-    given; a caller that does not know the server passes neither and the line's own are kept. The
+    The gamedig type and port are the SERVER's (`target` is (game_type, port, query_type)), exactly
+    what set_daily_restart is given; a caller that does not know the server passes neither game
+    type nor port and the line's own are kept. The
     address is the host's, via _gamedig_host (`host_of` memoises it across the loop) — except that
     _gamedig_host answers 127.0.0.1 when it could not look, and a line that already names the
     host's real address keeps it rather than being moved to one a Source server never answers on
     by a lookup that failed.
     """
     got = found.groupdict()
-    gdtype, qport = _restart_check_target(got, game_type, port)
+    gdtype, qport = _restart_check_target(got, *target)
     host = _restart_check_host(got, host_of) if (gdtype and qport) else None
     return _core.daily_restart_check_cmd(user, selfname, gdtype, host, qport)
 
 
-def _restart_check_target(got, game_type, port):
-    """(gamedig type, port) for the rewritten check: the server's, or the line's own when unknown."""
+def _restart_check_target(got, game_type, port, query_type=None):
+    """(gamedig type, port) for the rewritten check: the server's, or the line's own when unknown.
+
+    The server's type is _gamedig_type's, the per-server override first, as every player read in
+    this module resolves it. The map alone wrote `if true` for a game queryable only through the
+    override, and the hourly check restarted it daily whoever was playing.
+    """
     if game_type is None and port is None:
         return got.get("type") or "", got.get("port") or ""
-    return _core.GAMEDIG_TYPE.get(game_type or "", ""), port
+    return _gamedig_type(game_type, query_type), port
 
 
 def _restart_check_host(got, host_of):
@@ -524,7 +530,8 @@ def _restart_check_host(got, host_of):
     return host
 
 
-def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, port=None):
+def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, port=None,
+                                  query_type=None):
     """IN-PLACE upgrade of the panel's own cron lines, without changing schedules or on/off state.
 
     Each existing line is transformed where it stands, so nothing is added or removed and no
@@ -535,7 +542,8 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
       * a restart-when-empty check in any shape set_daily_restart has ever written (the table
         above _restart_check_res) is rewritten to exactly what set_daily_restart writes
         for this server today (_core.daily_restart_check_cmd): the host's own address, the server's
-        port and gamedig type (`game_type`/`port`; the line's own when the caller passes neither),
+        port and gamedig type (`game_type`/`port`, and the per-server `query_type` override; the
+        line's own when the caller passes neither game type nor port),
         the guarded jq filter, the counted-zero condition and gamedig's PATH. Lines written before
         #331 restart whenever the player query fails, and the oldest of them send it to 127.0.0.1,
         which a Source server does not answer — so those restarted the server every day with
@@ -576,7 +584,7 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
         # whatever lines arrived before it failed — would be installed as the entire crontab.
         if rc != 0:
             return False
-        upgrade = _cron_upgrade_pass(server, user, selfname, game_type, port)
+        upgrade = _cron_upgrade_pass(server, user, selfname, (game_type, port, query_type))
         new_lines, changed = _upgrade_cron_lines(out, upgrade)
         if not changed:
             return False
@@ -592,8 +600,8 @@ _CronUpgrade = collections.namedtuple(
     "_CronUpgrade", "user simple_cores flag bare pathed checks restart_now")
 
 
-def _cron_upgrade_pass(server, user, selfname, game_type, port):
-    """The _CronUpgrade for one pass over `user`'s crontab."""
+def _cron_upgrade_pass(server, user, selfname, target):
+    """The _CronUpgrade for one pass over `user`'s crontab. `target`: (game_type, port, query_type)."""
     base = f"/home/{user}/{selfname}"
     flag = f"/home/{user}/.restart-pending"
     simple_cores = {f"{base} {c}" for c in ("start", "monitor", "mods-update", "update", "update-lgsm")}
@@ -606,7 +614,7 @@ def _cron_upgrade_pass(server, user, selfname, game_type, port):
         return _host[0]
 
     def restart_now(found):
-        return _restart_check_now(server, user, selfname, found, game_type, port, host_of)
+        return _restart_check_now(server, user, selfname, found, target, host_of)
     return _CronUpgrade(user=user, simple_cores=simple_cores, flag=flag,
                         bare=_core.GAMEDIG_CRON_BARE, pathed=_core.gamedig_cron_call(),
                         checks=_restart_check_res(user, selfname), restart_now=restart_now)
@@ -856,6 +864,18 @@ def add_cron_job(server, user, schedule, command, selfname=None):
 _R15B_NO_TASK = "No scheduled task selected."
 
 
+def _r16b_dropped(res):
+    """_rewrite_crontab's answer for an update or delete, with "no such line" said to the viewer.
+
+    The line `raw` names had changed or gone since the page listed it, and nothing was installed.
+    """
+    ok, msg = res
+    if not ok and msg == _core.CRON_DROP_GONE:
+        return False, i18n.Sentence("That task has changed since the page loaded — reload "
+                                    "Scheduled Tasks and try again.")
+    return ok, msg
+
+
 def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
     """Replace an existing user cron entry (matched exactly by `old_raw`) with a new schedule+command.
 
@@ -878,8 +898,8 @@ def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
         return False, _RUNNER_FAILED
     # -vxF: drop the line that exactly (whole-line, fixed-string) matches old_raw,
     # keep everything else, then append the rewritten (recorder-wrapped) entry.
-    return _core._rewrite_crontab(server, user, "", [f"{schedule} {wrapped}"],
-                                  drop_line=old_raw)
+    return _r16b_dropped(_core._rewrite_crontab(server, user, "", [f"{schedule} {wrapped}"],
+                                                drop_line=old_raw))
 
 
 def delete_cron_job(server, user, old_raw, selfname=None):
@@ -893,7 +913,7 @@ def delete_cron_job(server, user, old_raw, selfname=None):
         return False, _R15B_NO_TASK
     if _cron_line_managed(old_raw, user, selfname):
         return False, "That entry is managed by the panel — use its own toggle to change it."
-    return _core._rewrite_crontab(server, user, "", [], drop_line=old_raw)
+    return _r16b_dropped(_core._rewrite_crontab(server, user, "", [], drop_line=old_raw))
 
 
 # Printed LAST by the backup listing, so an answer that was cut short is not read as "none".

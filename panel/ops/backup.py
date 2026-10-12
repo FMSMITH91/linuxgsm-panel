@@ -54,6 +54,24 @@ _MEMBERS = ("panel.db", "config.json", "secret_key", "cred_key")
 # The header is plaintext BY DESIGN — restore needs the salt before it can derive anything, and
 # scrypt params must be readable so a future cost increase can still open today's archives.
 _ENC_MAGIC = b"LGSMBK1\n"
+
+# What the restore page asks next, as a field of the route's answer ("needs"), never read off the
+# message. The page found these refusals by their English words (/passphrase/, /safety copy/) —
+# and the route translates its message, so for a Spanish or French superadmin neither matched:
+# the "Restore anyway" dialog, the only way to send skip_safety_backup, never opened, and every
+# retry got the same refusal. restore_needs() decides from which refusal it was, by these
+# constants, before anything is translated.
+RESTORE_NEEDS_KEY = "passphrase"
+RESTORE_NEEDS_SKIP_SAFETY = "skip_safety"
+_R16C_LOCKED_NO_KEY = "This backup is encrypted — a passphrase is required."
+_R16C_KEY_DID_NOT_OPEN = "Wrong passphrase, or the backup has been altered — it could not be opened."
+_R16C_STORED_KEY_UNREADABLE = ("Cannot decrypt this backup: a passphrase is configured but could not be "
+                               "decrypted on this host. Enter the passphrase explicitly, or restore "
+                               "data/cred_key first.")
+_R16C_SAFETY_COPY_FAILED = ("The pre-restore safety copy could not be written ({why}). Restoring would "
+                            "overwrite panel.db, config.json, secret_key and cred_key with no way back — "
+                            "without cred_key every stored SSH credential becomes unreadable. Confirm "
+                            "again to restore without one.")
 # ~32MB, ~0.1s. A backup passphrase is typed rarely, so this can be far costlier than a login hash.
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2 ** 15, 8, 1
 
@@ -124,7 +142,7 @@ def _decrypt_archive(src_path, dest_path, passphrase):
     if params is None:
         return False, refusal
     if not passphrase:
-        return False, "This backup is encrypted — a passphrase is required."
+        return False, _R16C_LOCKED_NO_KEY
     salt, n, r, p = params
     try:
         key = _derive_key(passphrase, salt, n=n, r=r, p=p)
@@ -132,7 +150,7 @@ def _decrypt_archive(src_path, dest_path, passphrase):
     except InvalidToken:
         # Fernet authenticates, so a wrong key and a modified archive raise the same thing and
         # genuinely cannot be told apart without the key. Say both rather than guess.
-        return False, "Wrong passphrase, or the backup has been altered — it could not be opened."
+        return False, _R16C_KEY_DID_NOT_OPEN
     except Exception:
         _log.exception("backup decrypt failed")
         return False, "The backup could not be decrypted."
@@ -314,6 +332,11 @@ def _snapshot_db(dest):
         src.close()
 
 
+# A Sentence, because create_backup's refusal is also the {why} of the translated pre-restore
+# "safety copy could not be written" sentence, where plain text stayed English.
+_R16A_BACKUP_FAILED = i18n.Sentence("Backup failed — see panel logs.")
+
+
 def create_backup(kind="manual", encrypt=True, passphrase=None):
     """Create a new backup archive; return (True, name) or (False, message).
 
@@ -339,13 +362,13 @@ def create_backup(kind="manual", encrypt=True, passphrase=None):
         # Refuse. The alternative is a plaintext archive of panel.db, config.json, secret_key and
         # cred_key that looks like a successful encrypted backup.
         _log.error("backup refused: %s", exc)
-        return False, ("Backup refused: a passphrase is configured but could not be decrypted on "
-                       "this host, and writing the archive would leave it unencrypted. Check "
-                       "data/cred_key, or clear the backup passphrase to take plain backups "
-                       "deliberately.")
+        return False, i18n.Sentence("Backup refused: a passphrase is configured but could not be "
+                                    "decrypted on this host, and writing the archive would leave it "
+                                    "unencrypted. Check data/cred_key, or clear the backup passphrase "
+                                    "to take plain backups deliberately.")
     name, dest = _claim_archive_name(kind, passphrase)
     if dest is None:
-        return False, "Backup failed — see panel logs."
+        return False, _R16A_BACKUP_FAILED
     # mkdtemp INSIDE the try: the archive name is already claimed (a 0-byte file), and a mkdtemp
     # that raised (an unusable TMPDIR, a full /tmp) left that empty file behind. list_backups
     # counted it as today's daily, so daily_backup_tick took no backup for 23 h, and the Backups
@@ -361,7 +384,7 @@ def create_backup(kind="manual", encrypt=True, passphrase=None):
             os.remove(dest)
         except OSError:
             _log.debug("could not remove partial backup", exc_info=True)
-        return False, "Backup failed — see panel logs."
+        return False, _R16A_BACKUP_FAILED
     finally:
         if tmp is not None:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -471,7 +494,10 @@ def prune_backups(keep_days=None):
     if keep_days is None:
         keep_days = _r15a_cfg_int(load_config().get("backup_keep_days", DEFAULT_KEEP_DAYS),
                                   DEFAULT_KEEP_DAYS)
-    cutoff = time.time() - max(1, keep_days) * 86400
+    # Both bounds, as get_settings shows it: a hand-edited 100000 read as "kept 365 days" on the
+    # Backups page while this kept every daily archive (panel.db and both keys) until the disk filled.
+    keep_days = max(MIN_KEEP_DAYS, min(MAX_KEEP_DAYS, keep_days))
+    cutoff = time.time() - keep_days * 86400
     removed = 0
     for b in list_backups():
         if b["kind"] == "daily" and b["created"] < cutoff:
@@ -540,6 +566,22 @@ def restore_pending():
         return True
     return ((time.time() - _r12a_restore_dispatched["ts"]) < _RESTORE_SWAP_GRACE
             and os.path.isdir(os.path.join(str(DATA_DIR), ".restore-stage")))
+
+
+def restore_needs(ok, msg):
+    """What a refused restore asks of the operator: RESTORE_NEEDS_KEY (its passphrase), _SKIP_SAFETY, or "".
+
+    Read from WHICH refusal restore_backup answered (its constant, or the Sentence's template),
+    never from the words: the message the viewer sees is translated.
+    """
+    if ok:
+        return ""
+    said = getattr(msg, "template", msg)
+    if said in (_R16C_LOCKED_NO_KEY, _R16C_KEY_DID_NOT_OPEN, _R16C_STORED_KEY_UNREADABLE):
+        return RESTORE_NEEDS_KEY
+    if said == _R16C_SAFETY_COPY_FAILED:
+        return RESTORE_NEEDS_SKIP_SAFETY
+    return ""
 
 
 def restore_backup(name, passphrase=None, skip_safety_backup=False):
@@ -635,9 +677,7 @@ def _decrypt_for_restore(src, passphrase):
         # the next person to raise this with a path, a filename or a decryption detail in the
         # message would ship it to the browser without noticing. The log keeps the detail.
         _log.warning("restore refused: the stored backup passphrase could not be decrypted")
-        return None, src, ("Cannot decrypt this backup: a passphrase is configured but could not "
-                           "be decrypted on this host. Enter the passphrase explicitly, or "
-                           "restore data/cred_key first.")
+        return None, src, _R16C_STORED_KEY_UNREADABLE
     ok, msg = _decrypt_archive(str(src), plain, _pp)
     if not ok:
         shutil.rmtree(_dec_tmp, ignore_errors=True)
@@ -1032,10 +1072,7 @@ def _restore_validated(src, name, skip_safety_backup=False, operator_passphrase=
     if not skip_safety_backup:
         ok, safety, _spp_typed = _take_safety_copy(operator_passphrase)
         if not ok:
-            return False, i18n.Sentence(
-                "The pre-restore safety copy could not be written ({why}). Restoring would overwrite panel.db, "
-                "config.json, secret_key and cred_key with no way back — without cred_key every stored SSH "
-                "credential becomes unreadable. Confirm again to restore without one.", why=safety)
+            return False, i18n.Sentence(_R16C_SAFETY_COPY_FAILED, why=safety)
 
     # A FIXED staging directory inside data/, not a fresh mkdtemp. The helper's restore verb takes
     # no path argument — root copying "whatever is in the directory you name" over the panel's keys
@@ -1071,8 +1108,9 @@ def _take_safety_copy(operator_passphrase):
     except PassphraseUnreadable:
         _log.warning("pre-restore safety copy refused: the stored backup passphrase could not "
                      "be decrypted")
-        return False, ("a backup passphrase is configured but could not be decrypted on "
-                       "this host, so the copy could not be encrypted"), False
+        # A Sentence: it is the {why} of the translated "safety copy could not be written" refusal.
+        return False, i18n.Sentence("a backup passphrase is configured but could not be decrypted on "
+                                    "this host, so the copy could not be encrypted"), False
     return ok, safety, _spp_typed
 
 
@@ -1448,10 +1486,8 @@ def _schedule_entry(cfg, sid):
 def _marker(sid, key):
     """An int marker from a server's game_schedules entry; 0 when absent or not a number."""
     entry = _game_schedules(load_config()).get(str(sid))
-    try:
-        return int(entry.get(key, 0)) if isinstance(entry, dict) else 0
-    except (TypeError, ValueError, OverflowError):
-        return 0
+    # _r15a_cfg_int: a hand-edited `true` is int 1 — queued at epoch 1, read as a wait of decades.
+    return _r15a_cfg_int(entry.get(key, 0), 0) if isinstance(entry, dict) else 0
 
 
 def overdue_alerted(sid):

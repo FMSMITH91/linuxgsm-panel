@@ -1631,11 +1631,12 @@ def _compute_update_status():
     # and with neither, every read below fails and "0 behind" reads as up to date. Neither is.
     _, _, xrc = _git(["show-ref", "--verify", "--quiet", ref])
     if xrc != 0:
-        # Not shown (i18n-ignore below): with "git" True the update card shows only "Update available" or
-        # "You're up to date" (renderUpdate), never this message; it is for the API and the logs.
+        # A Sentence: the update card never shows it, but panel_self_update answers the Update
+        # button with it (update_available is False), and the route translates that answer.
         return {"git": True, "fetched": False, "update_available": False,
                 "current_version": cur_ver, "current_sha": cur_sha.strip(), "branch": branch,
-                "message": "The update source has no branch '%s' to compare against." % branch}  # i18n-ignore
+                "message": i18n.Sentence("The update source has no branch '{branch}' to compare against.",
+                                         branch=branch)}
     # FIRST-PARENT, here and in the walk below: the chain of first parents from the tip — each
     # commit of a push or rebase merge, and each merge commit — not everything the tip reaches, and
     # never what a merge brought in through its second parent. A pull request merged with a merge
@@ -1776,11 +1777,11 @@ def _compute_update_status():
                "changes": _runtime_changelog("HEAD.." + ref)[:10]}
         if unreadable:
             out["unverified_reason"] = unknown_why or _CI_WHY_UNREACHABLE
-            # Not shown (i18n-ignore): with "git" True the card says only "Update available" or
-            # "You're up to date" (renderUpdate); this is for the API and the logs.
-            out["message"] = ("A newer version exists, but it couldn't be verified: %s. It will "  # i18n-ignore
-                              "be offered once its automated checks can be confirmed."
-                              % out["unverified_reason"])
+            # A Sentence: the card shows only "Update available", but a click on Update re-checks,
+            # and panel_self_update answers the button with this message (ci_state "unknown").
+            out["message"] = i18n.Sentence("A newer version exists, but it couldn't be verified: {why}. It "
+                                           "will be offered once its automated checks can be confirmed.",
+                                           why=out["unverified_reason"])
         return out
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).

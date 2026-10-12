@@ -268,7 +268,8 @@ reboot's escalation probe on a remote host: it runs the fixed command `true` as 
 whether the reboot that follows can escalate, and nothing from a request reaches it. (Earlier
 revisions said two: the test that counts them read a hand-kept list of files that had no entry for
 the reboot code; it now reads every module.) The bootstrap's
-Node.js step was a third until it became the `nodesource-setup` verb (below). Earlier revisions of
+Node.js step was once also counted here, before it became the `nodesource-setup` verb (below); it
+is not one of today's three. Earlier revisions of
 this paragraph counted four and misdescribed two of them: the per-server metrics probe no longer
 escalates at all, and the dependency installer they named as the fourth is the verb sequence
 described above.

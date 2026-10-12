@@ -373,7 +373,6 @@
   "Rebooting…": "Reiniciando…",
   "Rebooting; waiting for the host to come back…": "Reiniciando; esperando a que el host vuelva…",
   "Canceled": "Cancelado",
-  "needs to reboot to finish applying system updates.": "necesita reiniciarse para terminar de aplicar las actualizaciones del sistema.",
   "comes back by Autostart about 5 min after boot": "vuelve por autoarranque unos 5 min después del arranque",
   "is started by the panel after the boot": "lo inicia el panel después del arranque",
   "stays stopped (Autostart is off)": "sigue detenido (el autoarranque está desactivado)",

@@ -43,6 +43,20 @@ _ACCESS_RECHECK_SECONDS = 10.0
 # re-asks about: it has no request, so it asks of what term_open recorded.
 _sid_owner = {}
 
+def _r16c_said(field, text):
+    """Build a socket payload's text: the English, and the template and values it was built from.
+
+    `field` holds the English; `<field>_key` and `<field>_vals` the template and values. Most of
+    these are sent from a worker (the idle sweeper, a shell that exited, the revocation sweep) with
+    no request and so no viewer's language, and the page put the English into its own translated
+    sentence ("Sesión cerrada — the shell exited."). The page fills the template's translation with
+    the values instead, as the firewall page does with a rule's protect reason.
+    """
+    vals = getattr(text, "vals", None) or {}
+    return {field: str(text or ""), field + "_key": getattr(text, "template", None) or str(text or ""),
+            field + "_vals": {k: str(v) for k, v in vals.items()}}
+
+
 _REVOKED_MESSAGE = ("Your access to the terminal was removed, so this session has been closed.")
 
 
@@ -194,7 +208,7 @@ def sweep_revoked_terminals(app, socketio, only_sid=None):
     closed = 0
     for sid, user in revoked_terminal_sids(only_sid):
         try:
-            socketio.emit("term_error", {"message": _REVOKED_MESSAGE}, room=sid)
+            socketio.emit("term_error", _r16c_said("message", _REVOKED_MESSAGE), room=sid)
         except Exception:
             app.logger.debug("terminal: could not tell %s it was revoked", sid, exc_info=True)
         _close_and_audit(app, sid, "terminal access was revoked", user=user)
@@ -237,14 +251,14 @@ def _register_terminal_open(app, socketio):
         socketio.emit("term_output", {"data": data}, room=sid)
 
     def _exited(sid, reason):
-        socketio.emit("term_exit", {"reason": reason or ""}, room=sid)
+        socketio.emit("term_exit", _r16c_said("reason", reason), room=sid)
 
     @socketio.on("term_open")
     def on_term_open(data):
         sid = request.sid
         remote_id, remote, why = _terminal_target(data)
         if why is not None:
-            emit("term_error", {"message": why})
+            emit("term_error", _r16c_said("message", why))
             return
         # One shell per socket — and the one being replaced gets its terminal_close row. This was
         # a bare close_for_sid: the previous shell (perhaps root, on another host) went away with
@@ -259,7 +273,7 @@ def _register_terminal_open(app, socketio):
                              cols=_term_dim(data, "cols", 80),
                              rows=_term_dim(data, "rows", 24))
         except _ts.TerminalError as e:
-            emit("term_error", {"message": str(e)})
+            emit("term_error", _r16c_said("message", e.args[0] if e.args else str(e)))
             return
         from panel.routes.server_files import _viewer_credential
         with _sid_lock:
@@ -333,8 +347,8 @@ def _still_allowed(app, sid):
     ok = may_shell_on(current_user, _session_host(entry))
     _sid_access[sid] = (now, ok)
     if not ok:
-        emit("term_error", {"message": "Your access to this host was removed, so the "
-                                       "terminal has been closed."})
+        emit("term_error", _r16c_said("message", "Your access to this host was removed, so the "
+                                                 "terminal has been closed."))
         _close_and_audit(app, sid, "access to the host was revoked")
     return ok
 
