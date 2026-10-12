@@ -471,16 +471,18 @@ def ufw_status():
         # field and EVERY rule whose To column is not numeric was dropped entirely: the
         # tailscale0 allow, app profiles like OpenSSH, and every `panel-block` DENY. Split on the
         # ACTION instead, which is the one column with a fixed vocabulary.
-        rule = _r14a_ufw_row(line)
-        if not rule:
+        raw = _ufw_rule_split(line)
+        if not raw:
             continue
         # Words, not a regex: `\s*\(v6\)` backtracks quadratically over a long run of spaces.
-        key = tuple(" ".join(w for w in rule[k].split() if w != "(v6)")
+        # The twin test reads the row as printed, comment and all (a v6 row whose comment differs
+        # is kept, as it always was); the rule listed has the comment off its source.
+        key = tuple(" ".join(w for w in raw[k].split() if w != "(v6)")
                     for k in ("to", "action", "direction", "from"))
-        if key in seen and "(v6)" in rule["to"]:
+        if key in seen and "(v6)" in raw["to"]:
             continue
         seen.add(key)
-        rules.append(rule)
+        rules.append(_r14a_ufw_row(line))
 
     return {"enabled": enabled, "status_text": status_text, "rules": rules}
 
