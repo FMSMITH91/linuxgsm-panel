@@ -233,6 +233,9 @@ class Session:
         self.label = label
         self._on_output = on_output
         self._on_exit = on_exit
+        # The viewer's language, read while the opening request is still in hand: the pump that
+        # writes the two in-stream notices below has no viewer, so they were English in every one.
+        self._lang = i18n.request_lang()
         self._closed = False
         self._lock = threading.Lock()
         self.last_input = time.time()
@@ -269,6 +272,10 @@ class Session:
         self._drop_window = None
         self._drop_unreported = 0
 
+    def _r17a_said(self, template, **vals):
+        """One in-stream notice in the language of the viewer who opened this session."""
+        return i18n.fill(i18n.translate(self._lang, template), **vals)
+
     # ── output ────────────────────────────────────────────────────────────────────────────────
     def _emit(self, data):
         now = int(time.time())
@@ -279,10 +286,9 @@ class Session:
         if self._window_bytes > _MAX_BYTES_PER_SEC:
             if not self._throttled:
                 self._throttled = True
-                self._on_output(self.sid,
-                                "\r\n\x1b[33m[output truncated — more than %d KB/s. The command is "
-                                "still running; press Ctrl-C to stop it.]\x1b[0m\r\n"
-                                % (_MAX_BYTES_PER_SEC // 1024))
+                self._on_output(self.sid, "\r\n\x1b[33m%s\x1b[0m\r\n" % self._r17a_said(
+                    "[output truncated — more than {kb} KB/s. The command is still running; press "
+                    "Ctrl-C to stop it.]", kb=_MAX_BYTES_PER_SEC // 1024))
             return
         self._on_output(self.sid, data)
 
@@ -341,8 +347,9 @@ class Session:
         n, self._drop_unreported = self._drop_unreported, 0
         _log.warning("terminal %s: dropped %d input bytes — the program is not reading",
                      self.label, n)
-        self._emit("\r\n\x1b[33m[%d bytes of input were dropped — the program running here is "
-                   "not reading its input]\x1b[0m\r\n" % n)
+        self._emit("\r\n\x1b[33m%s\x1b[0m\r\n" % self._r17a_said(
+            "[{n} bytes of input were dropped — the program running here is not reading its input]",
+            n=n))
 
     def resize(self, cols, rows):
         """Follow the browser's window. Without this, anything full-screen draws to the wrong box."""

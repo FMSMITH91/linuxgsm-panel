@@ -1595,6 +1595,17 @@ def _runtime_changelog(rev_range, runtime_only=True):
     return result
 
 
+def _r17a_unread_status(cur_ver, cur_sha, branch):
+    """The update status when the fetched ref could not be read: no update offered, and why.
+
+    The same shape as a failed fetch: `fetched` False, nothing to install, and a message the Update
+    button answers with (panel_self_update translates it).
+    """
+    return {"git": True, "fetched": False, "update_available": False,
+            "current_version": cur_ver, "current_sha": cur_sha.strip(), "branch": branch,
+            "message": "Couldn't read how far behind the update source this panel is."}
+
+
 def _compute_update_status():
     cur_ver = panel_version()
     if not _is_git_checkout():
@@ -1646,8 +1657,13 @@ def _compute_update_status():
     # over plain ancestry offered it as the verified target while the merge was still being
     # checked. install.sh honours a pin only on the first-parent line too, so the two agree on what
     # can be installed.
-    behind, _, _ = _git(["rev-list", "--first-parent", "--count", "HEAD.." + ref])
-    behind_n = int(behind.strip()) if behind.strip().isdecimal() else 0
+    behind, _, brc = _git(["rev-list", "--first-parent", "--count", "HEAD.." + ref])
+    # Its rc too: _git never raises, and a timeout or a damaged object store answers ("", …, -1),
+    # which read as 0 behind — "You're up to date", cached, and the Update button refused with
+    # "already up to date" while the checkout was behind. A count that could not be read is not one.
+    if brc != 0 or not behind.strip().isdecimal():
+        return _r17a_unread_status(cur_ver, cur_sha, branch)
+    behind_n = int(behind.strip())
     rem_sha, _, _ = _git(["rev-parse", "--short", ref])
 
     base = {"git": True, "fetched": True, "current_version": cur_ver,
@@ -1697,8 +1713,12 @@ def _compute_update_status():
     # one whose origin _repo_slug did not recognise, which was that way permanently and silently.
     # The walk stops rather than going on down: whatever stopped one read stops the next (another
     # 8-second timeout each, up to 25 of them), and the card says why instead (below).
-    revs, _, _ = _git(["rev-list", "--first-parent", "-n", "25", "HEAD.." + ref])
+    revs, _, rrc = _git(["rev-list", "--first-parent", "-n", "25", "HEAD.." + ref])
     commits = [c for c in (revs or "").split() if c]
+    # behind_n > 0 here, so an empty walk is a failed read, not "nothing to offer": it fell
+    # through to the silent up-to-date line with no reason at all.
+    if rrc != 0 or not commits:
+        return _r17a_unread_status(cur_ver, cur_sha, branch)
     _ci_unknown_why["reason"] = ""
     walk_started = time.time()
     tip_state = _remote_ci_state(commits[0]) if commits else "unknown"
@@ -2227,7 +2247,11 @@ def _verified_branch_target(branch):
     if frc != 0 or xrc != 0:
         return "", i18n.Sentence("Couldn't fetch '{branch}' from the update source, so there is no "
                                  "verified version to switch to.", branch=branch)
-    revs, _, _ = _git(["rev-list", "--first-parent", "-n", "25", ref])
+    revs, _, rrc = _git(["rev-list", "--first-parent", "-n", "25", ref])
+    if rrc != 0:
+        # Not "none of the recent versions passed": none of them was read.
+        return "", i18n.Sentence("Couldn't read the versions of '{branch}', so there is no verified "
+                                 "version to switch to.", branch=branch)
     states = []
     for sha in [c for c in (revs or "").split() if c]:
         _ci_unknown_why["reason"] = ""
