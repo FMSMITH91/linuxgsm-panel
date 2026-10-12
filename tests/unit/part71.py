@@ -195,8 +195,9 @@ def _gmod_outcomes71(client, gid):
                job["unconfirmed es"].get("msg", "").startswith(
                    "No se pudo confirmar la eliminación de cstrike"))), repr(job))
     check("GMod content (es viewer): ...and a job that succeeded says what it mounted and that a "
-          "restart applies it", job["done es"] == dict(job["done es"], status="done",
-                                                     msg="Montado: Counter-Strike: Source. Reinicia el servidor para aplicarlo"),
+          "restart applies it",
+          (job["done es"].get("status"), job["done es"].get("msg")) == (
+              "done", "Montado: Counter-Strike: Source. Reinicia el servidor para aplicarlo"),
           repr(job["done es"]))
     st = _p9_sf._gmod_job_state(gid) or {}
     check("GMod content: ...while the stored state stays English, for the logs, and an English "
