@@ -231,7 +231,9 @@ def _card71(answer):
             "(typeof v[k] === 'object' ? v[k].html : esc(v[k])) : m);\n"
             "global.fetch = () => Promise.resolve({json: () => Promise.resolve(%s)});\n"
             % _json71.dumps(answer)
-            + _cut47(src, "function loadGmodContent(") + "\n" + _cut47(src, "function _gmcOutcome(") + "\n"
+            + _cut47(src, "function loadGmodContent(") + "\n"
+            # absent from a page that has no outcome line: the checks below fail by name, not crash
+            + (_cut47(src, "function _gmcOutcome(") if "function _gmcOutcome(" in src else "") + "\n"
             "(async () => { loadGmodContent(); await settle();\n"
             "  console.log(JSON.stringify({html: el.innerHTML, timers, slot})); })();\n")
     return _node47(prog)
