@@ -140,3 +140,156 @@ if _got69 is not None:
               {"name": "p.tar.gz.enc"}, {"name": "p.tar.gz.enc", "passphrase": "pw-typed"},
               {"name": "p.tar.gz.enc", "passphrase": "pw-typed", "skip_safety_backup": True}],
           repr(_got69)[:900])
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 2. Every sentence a route answers is a key: the gate, shown on fixtures, then the tree
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The catalog gates read only the literal first argument of tr()/Sentence(). close_port22 answered
+# a module constant (_NO_WAY_BACK) and the (ok, message) of remote_ufw_close_port_22, and
+# /firewall/close handed tr() the lockout guard's refusal from two calls down in hosts.py: no
+# gate saw any of them, and 259 such sentences had no es/fr entry. i18n_scan.route_answer_keys
+# follows them; step_name_keys / step_names_built do the same for a job's progress text, which
+# install-status and bootstrap-status translate but no gate read (every step was English).
+import shutil as _shutil69  # noqa: E402
+import tempfile as _tf69  # noqa: E402
+import importlib.util as _ilu69  # noqa: E402
+
+_spec69 = _ilu69.spec_from_file_location("i18n_scan_p69", os.path.join(_root, "tools", "i18n_scan.py"))
+_scan69 = _ilu69.module_from_spec(_spec69)
+_spec69.loader.exec_module(_scan69)
+
+_td69 = os.path.realpath(_tf69.mkdtemp(prefix="lgsm-unit-p69-"))
+try:
+    for _d69 in (("panel", "routes"), ("panel", "ops"), ("translations", "es")):
+        os.makedirs(os.path.join(_td69, *_d69))
+    with open(os.path.join(_td69, "app.py"), "w") as _fh69:
+        _fh69.write("")
+    with open(os.path.join(_td69, "translations", "es", "x.json"), "w") as _fh69:
+        _fh69.write('{"Already here.": "Ya está."}')
+    with open(os.path.join(_td69, "panel", "routes", "r.py"), "w") as _fh69:
+        _fh69.write(
+            "_REFUSED = ('No way back, so this '\n"
+            "            'was refused.')\n"
+            "def a():\n"
+            "    return jsonify({'message': _REFUSED})\n"                         # a module constant
+            "def b(h):\n"
+            "    ok, msg = svc_close(h)\n"
+            "    return jsonify({'message': msg})\n"                               # a service's answer
+            "def c(h):\n"
+            "    ok, msg = svc_guarded(h)\n"
+            "    return jsonify({'message': i18n.tr(msg)})\n"                      # two calls down
+            "def d(h):\n"
+            "    return jsonify({'message': 'Already here.', 'error': 'bad_code'})\n"  # keyed; a code
+            "def e(h):\n"
+            "    return jsonify({'message': 'Not for the page.'})  # i18n-ignore\n"
+            "def f(h):\n"
+            "    why = classify(h)\n"
+            "    return jsonify({'message': why[1] if why else 'Generic reason.'})\n")
+    with open(os.path.join(_td69, "panel", "ops", "s.py"), "w") as _fh69:
+        _fh69.write(
+            "def svc_close(h):\n"
+            "    if not h:\n"
+            "        return False, 'Rule removed from UFW'\n"
+            "    return svc_relay(h)\n"
+            "def svc_relay(h):\n"
+            "    return False, 'Failed to remove it'\n"
+            "def _guard(h):\n"
+            "    return ('Could not read the firewall, so this refuses.', '', '', None)\n"
+            "def svc_guarded(h):\n"
+            "    refusal, out, err, rc = _guard(h)\n"
+            "    if refusal:\n"
+            "        return False, refusal\n"
+            "    return True, i18n.Sentence('Port {port} closed', port=h)\n"
+            "def classify(h):\n"
+            "    return ('code_x', 'Classified reason.')\n"
+            # a job's progress text
+            "def run(job, tz, user, j):\n"
+            "    job._p(3, 'Downloading things')\n"
+            "    emit(f'Setting timezone to {tz}')\n"
+            "    note('NOT DONE: %s.' % user)\n"
+            "    note(i18n.Sentence('User {user} made', user=user))\n"
+            "    j['step_name'], j['message'] = 'Complete', user\n"
+            "    return {'step_name': 'Queued'}\n")
+    _gaps69 = sorted(k for k, _w in _scan69.route_answer_gaps("es", root=_td69,
+                                                            translation_dir=os.path.join(_td69, "translations")))
+    _steps69 = sorted(_scan69.step_name_keys(root=_td69))
+    _built69 = _scan69.step_names_built(root=_td69)
+finally:
+    _shutil69.rmtree(_td69, ignore_errors=True)
+check("i18n gate: a route's answer is a key — a module constant, a service's (ok, message) through "
+      "`return other()`, a refusal unpacked two calls down and handed to tr(), item 1 of a classifier's "
+      "tuple — and a keyed sentence, a code and an i18n-ignore'd line are not reported",
+      _gaps69 == sorted(["No way back, so this was refused.", "Rule removed from UFW", "Failed to remove it",
+                         "Could not read the firewall, so this refuses.", "Classified reason.",
+                         "Generic reason."]), repr(_gaps69))
+check("i18n gate: a job's progress text — a writer's literal, a job's step_name stored by a tuple "
+      "assignment or a dict — is a key, and one built in plain English (f-string, %) is reported "
+      "(a Sentence is not)",
+      _steps69 == ["Complete", "Downloading things", "Queued"]
+      and [ln for _f, ln in _built69] == [18, 19], repr((_steps69, _built69)))
+
+_rk69 = _scan69.route_answer_keys()
+_sk69 = _scan69.step_name_keys()
+_rgaps69 = [(_L69, k) for _L69 in ("es", "fr") for k, _w in _scan69.route_answer_gaps(_L69)]
+_cat69 = {_L69: _scan69.load_catalog(_L69) for _L69 in ("es", "fr")}
+_sgaps69 = [(_L69, k) for _L69 in ("es", "fr") for k in _sk69 if k not in _cat69[_L69]]
+check("i18n gate: every sentence a route can answer, followed into its services, is in the es and fr "
+      "catalogs (259 were in neither on main, among them close-port-22's every answer and the lockout guard's)",
+      len(_rk69) >= 450 and not _rgaps69, repr((len(_rk69), _rgaps69[:6])))
+check("i18n gate: every install and bootstrap step name is in the es and fr catalogs, and none is built "
+      "in plain English (48 of 51 were in neither; 19 were f-strings or %)",
+      len(_sk69) >= 45 and not _sgaps69 and _scan69.step_names_built() == [],
+      repr((len(_sk69), _sgaps69[:6], _scan69.step_names_built()[:6])))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 3. ...and as a Spanish viewer reads them: close port 22, the lockout guard, install/bootstrap steps
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+import time as _time69  # noqa: E402
+from unit.part12 import P9_GS, P9_HOST  # noqa: E402
+from panel.core import i18n as _i18n69  # noqa: E402
+from panel.core.panel_state import _install_jobs as _ijobs69, _install_lock as _ilock69  # noqa: E402
+from panel.ops.ssh_manager import firewall as _fwmod69, hosts as _hosts69  # noqa: E402
+from panel.routes import close_port22 as _cp69  # noqa: E402
+
+_es3 = {}
+try:
+    _lang69("es")
+    _c69 = _p9_client(P9_ADMIN)
+    _p9_patch(_cp69, "_tailnet_ssh_state", lambda remote: (False, False, False))
+    _es3["no_way_back"] = _p9_json(_c69.post("/api/remote/%d/close-port-22" % P9_HOST)).get("message")
+    _p9_patch(_cp69, "_tailnet_ssh_state", lambda remote: (True, True, True))
+    _p9_patch(_cp69, "remote_ufw_close_port_22", lambda remote: (True, "Port 22 rule removed from UFW"))
+    _es3["closed"] = _p9_json(_c69.post("/api/remote/%d/close-port-22" % P9_HOST)).get("message")
+    # The lockout guard, for real: remote_ufw_close_port → _r15a_guarded_spec_delete, whose firewall
+    # read answers nothing.
+    _p9_patch(_fwmod69, "remote_ufw_status", lambda server: None)
+    _es3["guard"] = _p9_json(_c69.post("/api/remote/%d/firewall/close" % P9_HOST,
+                                       json={"port": "22", "protocol": "tcp"})).get("message")
+    with _ilock69:
+        _ijobs69[P9_GS] = {"status": "running", "step": 3, "total": 8, "step_name": "Downloading LinuxGSM",
+                           "message": "", "log": [], "started": _time69.time(), "updated": _time69.time()}
+    _es3["install"] = _p9_json(_c69.get("/api/server/%d/install-status" % P9_GS)).get("step_name")
+    # A bootstrap note from the real writer: what it hands progress(), read back in Spanish.
+    _noted69 = []
+    _hosts69._r11a_step_failed(_noted69.append, [], ("", "no space", 1),
+                               _i18n69.Sentence("the timezone was not set to {tz}", tz="UTC"))
+    with _p9.test_request_context("/"):
+        __import__("flask").session["lang"] = "es"
+        _es3["note"] = [_i18n69.tr(n) for n in _noted69]
+finally:
+    with _ilock69:
+        _ijobs69.pop(P9_GS, None)
+    _lang69("en")
+    _p9_restore_all()
+check("close port 22 (es): the no-way-back refusal and the removed-rule answer are Spanish (both were "
+      "English in every language)",
+      (_es3.get("no_way_back") or "").startswith("Rechazado: no hay una vía de vuelta por Tailscale")
+      and _es3.get("closed") == "Regla del puerto 22 eliminada de UFW", repr(_es3))
+check("firewall close (es): the lockout guard's \"couldn't read the firewall\" refusal is Spanish",
+      (_es3.get("guard") or "").startswith("No se pudo leer el cortafuegos para comprobar si esta regla"),
+      repr(_es3.get("guard")))
+check("install/bootstrap progress (es): an install step and a bootstrap NOT DONE note read in Spanish",
+      _es3.get("install") == "Descargando LinuxGSM"
+      and _es3.get("note") == ["NO HECHO: no se configuró la zona horaria UTC (no space)."], repr(_es3))

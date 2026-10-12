@@ -1519,15 +1519,17 @@ def classify_install_failure(output):
     low = text.lower()
     # Bandit's hard-coded-/tmp rule (and Sonar's S5443): this is a substring of SteamCMD's error
     # text being matched, not a path anything here opens or writes.
+    # Each message is an i18n.Sentence so the catalog gate holds it to a key: it becomes the failed
+    # install's step name, which install-status translates for whoever asks.
     if "please delete some /tmp/dumps" in low or "/tmp/dumps* directories" in low:   # nosec B108  # NOSONAR - error text, not a path
-        return ("steam_dumps", (
+        return ("steam_dumps", i18n.Sentence(
             "Steam keeps only ten crash-dump slots on a host (/tmp/dumps … /tmp/dumps09), one per "
             "Linux account, and every one of them is in use by a game account that still exists. "
             "SteamCMD cannot run at all until one is freed — remove a game server you no longer "
             "need, or delete one of those directories on the host."))
     if "steam login not set" in low or 'change steamuser="username"' in low \
             or "no license" in low or "no subscription" in low:
-        return ("steam_login", (
+        return ("steam_login", i18n.Sentence(
             "This game is not downloadable with an anonymous Steam login — it needs an account "
             "that owns it. Put a Steam username and password in the server's LinuxGSM config "
             "(steamuser / steampass) and install again."))
@@ -1548,7 +1550,7 @@ def classify_install_failure(output):
         #
         # So the honest answer is "this needs a two-step install", not "give up" — and the panel
         # does that itself rather than making an operator follow a GitHub thread.
-        return ("steam_platform", (
+        return ("steam_platform", i18n.Sentence(
             "SteamCMD refused this game with \"Invalid platform\" — a known SteamCMD bug, not a "
             "problem with this host: the game does have a Linux server. The way through it is to "
             "prime the download with the Windows depot and then validate, which pulls the Linux "
@@ -1978,7 +1980,7 @@ def _r11a_step_failed(note, not_done, res, what):
         return False
     msg = i18n.Sentence("{what} ({why})", what=what, why=_r11a_why(res))
     not_done.append(msg)
-    note("NOT DONE: %s." % msg)
+    note(i18n.Sentence("NOT DONE: {why}.", why=msg))
     return True
 
 
@@ -2110,7 +2112,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     # ── 4. Set timezone ──
     if set_timezone:
-        emit(f"Setting timezone to {set_timezone}")
+        emit(i18n.Sentence("Setting timezone to {tz}", tz=set_timezone))
         # set_timezone is user-supplied and runs as root — quote it against injection.
         _tz = _core.run_privileged(server, "set-timezone", [set_timezone], timeout=10)
         _r11a_step_failed(note, not_done, _tz, i18n.Sentence("the timezone was not set to {tz}", tz=set_timezone))
@@ -2124,8 +2126,8 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # closed port — and its fail2ban jail banned on a port nothing listened on.
     ssh_ports = _bootstrap_ssh_ports(server) if (enable_ufw or install_fail2ban) else []
     if enable_ufw:
-        emit("Configuring UFW firewall (deny incoming, rate-limit SSH on port %s)"
-             % ", ".join(ssh_ports))
+        emit(i18n.Sentence("Configuring UFW firewall (deny incoming, rate-limit SSH on port {ports})",
+                           ports=", ".join(ssh_ports)))
         # Rate-limit SSH by default — `ufw limit` allows SSH (so we never lock ourselves
         # out) while throttling brute-force sources. We do NOT add a plain `allow 22`:
         # a lower-numbered allow rule would match first and shadow the limit, leaving SSH
@@ -2157,20 +2159,21 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             if _en[2] != 0:
                 ufw_enable_failed = i18n.Sentence("the firewall was NOT enabled: `ufw enable` failed ({why})",
                                                   why=_r11a_why(_en))
-                note("NOT DONE: %s — the firewall is not protecting this host." % ufw_enable_failed)
+                note(i18n.Sentence("NOT DONE: {why} — the firewall is not protecting this host.",
+                                   why=ufw_enable_failed))
             elif _dd[2] != 0:
                 ufw_enable_failed = i18n.Sentence("UFW is on, though its default incoming policy could not be set to "
                                                   "deny: `ufw default deny incoming` failed ({why})", why=_r11a_why(_dd))
-                note("NOT DONE: %s — run `ufw status verbose` on the host to see the policy in "
-                     "force." % ufw_enable_failed)
+                note(i18n.Sentence("NOT DONE: {why} — run `ufw status verbose` on the host to see the "
+                                   "policy in force.", why=ufw_enable_failed))
         else:
             # The limit's exit code was never read, so when it failed the rules that DO let SSH in
             # were deleted "now that the limit is in place" and UFW was switched on at deny-incoming
             # — a fresh host cut off from SSH mid-bootstrap. Nothing is removed and the firewall is
             # left as it was; the job says so rather than "complete".
             ufw_not_enabled = _l_why
-            note("NOT DONE: %s. UFW was left as it was — turning it on without a rule letting SSH "
-                 "in would lock this host out." % ufw_not_enabled)
+            note(i18n.Sentence("NOT DONE: {why}. UFW was left as it was — turning it on without a rule "
+                               "letting SSH in would lock this host out.", why=ufw_not_enabled))
 
     # ── 6. Basic SSH hardening ──
     emit("Hardening SSH configuration")
@@ -2200,9 +2203,9 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         note("Could not read sshd's effective configuration to confirm the SSH hardening took "
              "effect — check `sshd -T` on the host.")
     for _key, _want, _got in _unapplied:
-        note("NOT IN EFFECT: sshd reports %s as '%s', not '%s' — something it reads first "
-             "overrides the edit (usually a file in /etc/ssh/sshd_config.d)."
-             % (_key, _got or "unset", _want))
+        note(i18n.Sentence("NOT IN EFFECT: sshd reports {key} as '{got}', not '{want}' — something it "
+                           "reads first overrides the edit (usually a file in /etc/ssh/sshd_config.d).",
+                           key=_key, got=_got or "unset", want=_want))
         if _key in _SSHD_SECURITY_DIRECTIVES:
             hardening_failed.append((_key, _got or "unset"))
     if any(k == "PasswordAuthentication" for k, _ in hardening_failed):
@@ -2245,9 +2248,9 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # stays here so this step can never be the one that lets a bad name through.)
     user_msg = ""
     if username and not re.match(r"^[A-Za-z_][A-Za-z0-9._-]*\Z", username):
-        note(f"Skipped account creation: '{username[:32]}' isn't a valid username")
+        note(i18n.Sentence("Skipped account creation: '{user}' isn't a valid username", user=username[:32]))
     elif username:
-        emit(f"Creating LinuxGSM user: {username}")
+        emit(i18n.Sentence("Creating LinuxGSM user: {user}", user=username))
         out, _, _ = _core.run_command(server, f"id {_core._quote(username)} 2>/dev/null && echo 'EXISTS' || echo 'NOTEXISTS'", timeout=10)
         out = out or ""
         # Same correction: an unread probe is not "the account is already there". Reading it that
@@ -2256,26 +2259,26 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         # branch, whose `useradd` then failed on an existing account while `passwd -l` still
         # locked it — the operator's own password login, if that is the name they typed.
         if "NOTEXISTS" not in out and "EXISTS" in out:
-            note(f"User {username} already exists")
+            note(i18n.Sentence("User {user} already exists", user=username))
         elif "NOTEXISTS" in out:
             _cu_out, _cu_err, _cu_rc = _core.create_game_user(server, username, timeout=15)
             if _cu_rc != 0:
                 user_msg = i18n.Sentence("the account {user} was not created ({why})", user=username,
                                          why=(_cu_err or _cu_out or "exit %s" % _cu_rc).replace("\n", " ").strip()[:160])
-                note("NOT DONE: %s; its password was not touched." % user_msg)
+                note(i18n.Sentence("NOT DONE: {why}; its password was not touched.", why=user_msg))
             else:
                 _lk_out, _lk_err, _lk_rc = _core.run_privileged(server, "user-lock-password",
                                                                 [username], timeout=10)
                 if _lk_rc != 0:
                     user_msg = i18n.Sentence("the account {user} was created but its login password could not be locked",
                                              user=username)
-                    note("NOT DONE: %s." % user_msg)
+                    note(i18n.Sentence("NOT DONE: {why}.", why=user_msg))
                 else:
-                    note(f"User {username} created (login password locked)")
+                    note(i18n.Sentence("User {user} created (login password locked)", user=username))
         else:
             user_msg = i18n.Sentence("the account {user} was not created: the host did not answer whether it "
                                      "already exists", user=username)
-            note("NOT DONE: %s." % user_msg)
+            note(i18n.Sentence("NOT DONE: {why}.", why=user_msg))
 
     # ── 10. Configure fail2ban ──
     if install_fail2ban:
@@ -2351,14 +2354,14 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
                 reboot_msg = i18n.Sentence("the reboot a kernel/library update needs was not sent ({why}) — reboot this "
                                            "host from its Power card",
                                            why=(_rb_err or _rb_out or "exit %s" % _rb_send_rc).replace("\n", " ").strip()[:160])
-                note("NOT DONE: %s." % reboot_msg, status="reboot-required")
+                note(i18n.Sentence("NOT DONE: {why}.", why=reboot_msg), status="reboot-required")
             else:
                 _core.close_connection(server)
                 came_back = _wait_for_reboot(server, on_wait=lambda t: note(t, status="rebooting"))
                 if came_back == _RBWAIT_NEVER_DOWN:
                     reboot_msg = i18n.Sentence("the host never went down for the reboot a kernel/library update needs — "
                                                "reboot it from its Power card")
-                    note("NOT DONE: %s." % reboot_msg, status="reboot-required")
+                    note(i18n.Sentence("NOT DONE: {why}.", why=reboot_msg), status="reboot-required")
                 elif not came_back:
                     return False, "Server was rebooted but did not come back online within the timeout.", "\n".join(log)
                 else:

@@ -1038,7 +1038,8 @@ class _BootstrapRun:
                 success, msg = self._bootstrap(opts)
             self._end("done" if success else "failed", "Complete" if success else "Failed", msg)
         except Exception as e:
-            self._end("failed", None, str(e), f"ERROR: {e}")
+            # The log line is the job's record, kept in English; the message is the exception's.
+            self._end("failed", None, str(e), f"ERROR: {e}")  # i18n-ignore
 
 
 def _settle_bootstrapped_row(remote_id, created, pinned, learned, success):

@@ -1505,6 +1505,202 @@ def tr_gaps_py(lang, root=ROOT, translation_dir=TRANSLATION_DIR):
     return gaps
 
 
+# ── What a route ANSWERS, followed into the service that worded it (_r16c_) ─────────────────────
+# tr_keys_py collects only the literal FIRST ARGUMENT of tr()/Sentence(). A route that answers
+# jsonify({"message": msg}) with a module constant (close_port22's _NO_WAY_BACK), or with the
+# message of a service's (ok, message) — "Port 22 rule removed from UFW", or the lockout guard's
+# "Couldn't read the firewall…" two calls down in ssh_manager/hosts.py, whether or not the route
+# then calls tr(msg) — handed the viewer a sentence no gate read: 259 of them had no es/fr entry.
+# Here every literal a route's sink or tr() can be handed is a key: written there, a module
+# constant, or an item of a service's returned tuple, followed through locals unpacked from
+# another call and through `return other(…)`, to where it is written.
+def _r16c_prose(text):
+    """Whether a literal is a sentence for a person, not a code ("ALREADY_CONNECTED", "bad_mode")."""
+    return " " in text.strip() and bool(_HAS_LETTER.search(text)) and not text.startswith("\\")
+
+
+def _r16c_binds(fn):
+    """{local: [(callee, item index or None)]} for `a, b = f(…)` and `x = f(…)` in one function.
+
+    `f(…) if c else g(…)` and `f(…) or g(…)` bind from each call.
+    """
+    out = {}
+    for n in _py_own_nodes(fn):
+        if not (isinstance(n, ast.Assign) and len(n.targets) == 1):
+            continue
+        names = [c for c in (_py_call_name(v) for v in [n.value] + _py_operands(n.value)) if c]
+        t = n.targets[0]
+        pairs = ([(e, i) for i, e in enumerate(t.elts)] if isinstance(t, ast.Tuple) else [(t, None)])
+        for e, i in pairs:
+            if isinstance(e, ast.Name):
+                out.setdefault(e.id, []).extend((c, i) for c in names)
+    return out
+
+
+def _r16c_item_sources(node, consts, binds):
+    """(texts, refs) one returned item or sink value can be: literals, and (callee, index) to follow."""
+    if node is None:
+        return [], []
+    texts = list(_py_key_texts(node, consts))
+    refs = list(binds.get(node.id, ())) if isinstance(node, ast.Name) else []
+    # `why[1]`, where `why = f(…)`: item 1 of what f answers.
+    if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+            and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, int)):
+        refs += [(c, node.slice.value) for c, i in binds.get(node.value.id, ()) if i is None]
+    for operand in _py_operands(node):
+        t, r = _r16c_item_sources(operand, consts, binds)
+        texts += t
+        refs += r
+    return texts, refs
+
+
+def _r16c_returns(trees):
+    """{(function, item index or None): set((text, file, line))}: the literals a function answers.
+
+    A tuple's items by index, a plain return as None; through locals bound from other calls and
+    `return other(…)`, repeated until nothing new is found.
+    """
+    direct, refs = {}, {}
+    for rel, lines, tree in trees:
+        consts = _py_module_consts(tree)
+        for fn in _py_functions(tree):
+            binds = _r16c_binds(fn)
+            for n in _py_own_nodes(fn):
+                if not isinstance(n, ast.Return) or n.value is None or _py_ignored(lines, n):
+                    continue
+                items = (list(enumerate(n.value.elts)) if isinstance(n.value, ast.Tuple)
+                         else [(None, n.value)])
+                for i, item in items:
+                    texts, follow = _r16c_item_sources(item, consts, binds)
+                    direct.setdefault((fn.name, i), set()).update((t, rel, n.lineno) for t in texts)
+                    refs.setdefault((fn.name, i), set()).update(follow)
+                callee = _py_call_name(n.value)
+                if callee:     # `return other(…)`: whatever other answers, item for item
+                    refs.setdefault(("*", fn.name), set()).add(callee)
+    return _r16c_resolve(direct, refs)
+
+
+def _r16c_resolve(direct, refs):
+    """direct + everything reachable through refs (see _r16c_returns), to a fixed point."""
+    table = {k: set(v) for k, v in direct.items()}
+    while True:
+        before = sum(len(v) for v in table.values())
+        for (name, i), follow in list(refs.items()):
+            if name == "*":
+                for (other, j), got in list(table.items()):
+                    if other in follow:
+                        table.setdefault((i, j), set()).update(got)
+                continue
+            for callee, j in follow:
+                table.setdefault((name, i), set()).update(table.get((callee, j), ()))
+        if sum(len(v) for v in table.values()) == before:
+            return table
+
+
+def _r16c_is_route(rel):
+    rel = rel.replace(os.sep, "/")
+    return rel == "app.py" or rel.startswith("panel/routes/")
+
+
+def route_answer_keys(root=ROOT):
+    """{key: "file:line"} for every sentence a route can hand the viewer as a message, or to tr().
+
+    Its sinks (flash, _form_*, a "message"/"error"/"warning" in a reply) and its tr() arguments:
+    a literal, a module constant, or a service's answer (see _r16c_returns). Codes are left out.
+    """
+    trees = _py_trees(root)
+    table = _r16c_returns(trees)
+    keys = {}
+    for rel, lines, tree in trees:
+        if not _r16c_is_route(rel):
+            continue
+        consts = _py_module_consts(tree)
+        for fn in [tree] + _py_functions(tree):
+            binds = _r16c_binds(fn)
+            for n in _py_own_nodes(fn):
+                values = list(_py_sink_values(n))
+                if _py_call_name(n) == "tr" and n.args:
+                    values.append(n.args[0])
+                for v in values:
+                    if _py_ignored(lines, v):
+                        continue
+                    texts, follow = _r16c_item_sources(v, consts, binds)
+                    found = [(t, rel, v.lineno) for t in texts]
+                    found += [x for ref in follow for x in table.get(ref, ())]
+                    for t, f, line in found:
+                        if _r16c_prose(t):
+                            keys.setdefault(t, "%s:%d" % (f, line))
+    return keys
+
+
+def route_answer_gaps(lang, root=ROOT, translation_dir=TRANSLATION_DIR):
+    """[(key, where)]: a sentence a route can answer (route_answer_keys) with no `lang` entry."""
+    catalog = load_catalog(lang, translation_dir)
+    return sorted((k, w) for k, w in route_answer_keys(root).items() if k not in catalog)
+
+
+# ── A job's progress text: written in English by a worker, translated when it is read (_r16c_) ──
+# An install or bootstrap worker runs with no viewer, so it stores its step names as they are and
+# install-status / bootstrap-status hand them to tr() for whoever asks. None of those names was a
+# key, and no gate read this path: tr() got a subscript (j["step_name"]), never a literal, so
+# every step of every install and bootstrap stayed English in Spanish and French. Every literal
+# handed to a job writer, or stored as a job's step_name or message, is a key here; one BUILT in
+# plain English (an f-string, %, +) is reported, because no key can ever match it.
+_R16C_STEP_WRITERS = ("progress", "p", "_p", "_set", "fail", "_fail", "emit", "note", "_end", "finish")
+_R16C_JOB_KEYS = ("step_name", "message")
+_R16C_LABEL = re.compile(r"^[A-Z][a-z]+(?:…|\.\.\.|\.)?$")
+
+
+def _r16c_step_values(n):
+    """The values one node hands a job as its progress text (see _R16C_STEP_WRITERS)."""
+    if isinstance(n, ast.Call) and _py_call_name(n) in _R16C_STEP_WRITERS:
+        return list(n.args)
+    if isinstance(n, ast.Dict):
+        return [v for k, v in zip(n.keys, n.values) if _py_text(k) and k.value == "step_name"]
+    if isinstance(n, ast.Assign):
+        out = []
+        for t in n.targets:
+            pairs = (list(zip(t.elts, n.value.elts)) if isinstance(t, ast.Tuple) and isinstance(n.value, ast.Tuple)
+                     else [(t, n.value)])
+            out += [v for tt, v in pairs if isinstance(tt, ast.Subscript) and _py_text(tt.slice)
+                    and tt.slice.value in _R16C_JOB_KEYS]
+        return out
+    return []
+
+
+def _r16c_step_walk(root):
+    """[(file, line, value node, consts, binds, lines)] for every job progress value in the tree."""
+    out = []
+    for rel, lines, tree in _py_trees(root):
+        consts = _py_module_consts(tree)
+        for fn in [tree] + _py_functions(tree):
+            binds = _r16c_binds(fn)
+            out += [(rel, v.lineno, v, consts, binds, lines) for n in _py_own_nodes(fn)
+                    for v in _r16c_step_values(n) if not _py_ignored(lines, v)]
+    return out
+
+
+def step_name_keys(root=ROOT):
+    """{key: "file:line"} for every literal a job's progress text can be (see _R16C_STEP_WRITERS)."""
+    table = _r16c_returns(_py_trees(root))
+    keys = {}
+    for rel, line, v, consts, binds, _lines in _r16c_step_walk(root):
+        texts, follow = _r16c_item_sources(v, consts, binds)
+        found = [(t, rel, line) for t in texts] + [x for ref in follow for x in table.get(ref, ())]
+        for t, f, ln in found:
+            if _r16c_prose(t) or _R16C_LABEL.match(t):
+                keys.setdefault(t, "%s:%d" % (f, ln))
+    return keys
+
+
+def step_names_built(root=ROOT):
+    """[(file, line)]: a job's progress text built in plain English, which no key can match."""
+    plain = _PyBuilders()
+    plain.plain = True
+    return sorted({(rel, line) for rel, line, v, _c, _b, _l in _r16c_step_walk(root)
+                   if any(_py_built(x, plain=True) for x in [v] + _py_operands(v))})
+
+
 def _main():
     import sys
     show_all = "--all" in sys.argv
