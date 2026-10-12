@@ -2032,14 +2032,7 @@ function loadGmodContent(){
         + '<div class="d-flex flex-column gap-1 mb-2">' + rows + '</div>'
         + (running
             ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Working… (install/removal can take a while) '+_esc((d.job&&d.job.msg)||'')+'</div>'
-            // A FINISHED job's outcome, kept by the server for 15 minutes so the card can say it
-            // (already in the viewer's language). Only the running branch read job.msg, so a
-            // failed install ended in silence and the operator restarted into ERROR textures.
-            : ((d.job && d.job.msg)
-                ? '<div class="small mb-2 text-break ' + (d.job.status === 'error' ? 'text-danger' : 'text-success')
-                  + '" role="status" id="gmc-outcome"><i class="bi bi-' + (d.job.status === 'error' ? 'exclamation-triangle' : 'check-circle')
-                  + '"></i> ' + _esc(d.job.msg) + '</div>'
-                : '')
+            : _gmcOutcome(d.job)
               + '<button class="btn btn-sm btn-primary" type="button" id="gmc-apply"><i class="bi bi-save"></i> Apply mounts</button>'
               + ' <span class="text-secondary small ms-1">Restart the server afterwards to load changes.</span>');
       // Attach handlers programmatically — the strict CSP (no unsafe-inline) blocks inline onclick=.
@@ -2051,6 +2044,17 @@ function loadGmodContent(){
       if(running) setTimeout(loadGmodContent, 5000);
     })
     .catch(function(){ el.innerHTML = '<span class="text-danger">Could not load content status.</span>'; });
+}
+
+// A FINISHED content job's outcome, kept by the server for 15 minutes so the card can say it
+// (already in the viewer's language): red for an error, green for done. Only the running branch
+// read job.msg, so a failed install ended in silence and the operator restarted into ERROR textures.
+function _gmcOutcome(job){
+  if(!job || !job.msg) return '';
+  var bad = job.status === 'error';
+  return '<div class="small mb-2 text-break ' + (bad ? 'text-danger' : 'text-success')
+    + '" role="status" id="gmc-outcome"><i class="bi bi-' + (bad ? 'exclamation-triangle' : 'check-circle')
+    + '"></i> ' + _esc(job.msg) + '</div>';
 }
 
 function _gmcPost(bodyObj, okMsg){

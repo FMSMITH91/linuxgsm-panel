@@ -185,24 +185,25 @@ def _gmod_outcomes71(client, gid):
     check("GMod content (es viewer): a content job that FAILED reaches the card's status poll with "
           "its outcome in the viewer's language — no storage, a download that did not land, a "
           "removal the host would not confirm",
-          job["no storage es"].get("status") == "error"
-          and job["no storage es"].get("msg") == "No se pudo preparar el almacenamiento de contenido en el host."
-          and job["missing fr"].get("status") == "error"
-          and job["missing fr"].get("msg", "").startswith(
-              "Non confirmé sur l'hôte, donc non monté : Counter-Strike: Source.")
-          and "Monté : Team Fortress 2" in job["missing fr"].get("msg", "")
-          and job["unconfirmed es"].get("status") == "error"
-          and job["unconfirmed es"].get("msg", "").startswith(
-              "No se pudo confirmar la eliminación de cstrike"), repr(job))
+          all((job["no storage es"].get("status") == "error",
+               job["no storage es"].get("msg") == "No se pudo preparar el almacenamiento de contenido en el host.",
+               job["missing fr"].get("status") == "error",
+               job["missing fr"].get("msg", "").startswith(
+                   "Non confirmé sur l'hôte, donc non monté : Counter-Strike: Source."),
+               "Monté : Team Fortress 2" in job["missing fr"].get("msg", ""),
+               job["unconfirmed es"].get("status") == "error",
+               job["unconfirmed es"].get("msg", "").startswith(
+                   "No se pudo confirmar la eliminación de cstrike"))), repr(job))
     check("GMod content (es viewer): ...and a job that succeeded says what it mounted and that a "
-          "restart applies it", job["done es"].get("status") == "done"
-          and job["done es"].get("msg") == "Montado: Counter-Strike: Source. Reinicia el servidor para aplicarlo",
+          "restart applies it", job["done es"] == dict(job["done es"], status="done",
+                                                     msg="Montado: Counter-Strike: Source. Reinicia el servidor para aplicarlo"),
           repr(job["done es"]))
     st = _p9_sf._gmod_job_state(gid) or {}
     check("GMod content: ...while the stored state stays English, for the logs, and an English "
           "viewer reads it as it was (control)",
-          str(st.get("msg")) == "Mounted: Counter-Strike: Source — restart the server to apply"
-          and job["no storage en"].get("msg") == "No content storage could be prepared on the host.",
+          (str(st.get("msg")), job["no storage en"].get("msg")) == (
+              "Mounted: Counter-Strike: Source — restart the server to apply",
+              "No content storage could be prepared on the host."),
           repr((st, job["no storage en"])))
 
 
@@ -222,7 +223,7 @@ def _card71(answer):
             "(typeof v[k] === 'object' ? v[k].html : esc(v[k])) : m);\n"
             "global.fetch = () => Promise.resolve({json: () => Promise.resolve(%s)});\n"
             % _json71.dumps(answer)
-            + _cut47(src, "function loadGmodContent(") + "\n"
+            + _cut47(src, "function loadGmodContent(") + "\n" + _cut47(src, "function _gmcOutcome(") + "\n"
             "(async () => { loadGmodContent(); await settle();\n"
             "  console.log(JSON.stringify({html: el.innerHTML, timers})); })();\n")
     return _node47(prog)
@@ -243,20 +244,24 @@ def _gmod_card71():
     if any(c is None for c in cards.values()):
         skip("GMod content card: the finished job's outcome is drawn", "node is not installed here")
         return
-    html = {k: (v or {}).get("html") or repr(v) for k, v in cards.items()}
+    _card_checks71(cards, err_msg)
+
+
+def _card_checks71(cards, err_msg):
+    html = {k: v.get("html") or repr(v) for k, v in cards.items()}
     check("GMod content card: a job that ENDED IN ERROR shows its message, in red, above Apply — "
           "the card read job.msg only while the job ran, so a failed install ended in silence",
-          err_msg in html["error"] and "text-danger" in html["error"] and 'id="gmc-outcome"' in html["error"]
-          and html["error"].index(err_msg) < html["error"].index('id="gmc-apply"'), html["error"])
+          all((err_msg in html["error"], "text-danger" in html["error"], 'id="gmc-outcome"' in html["error"],
+               html["error"].find(err_msg) < html["error"].find('id="gmc-apply"'))), html["error"])
     check("GMod content card: ...a job that finished shows its outcome in green, escaped (the message "
           "is text, never markup)",
-          "Montado: Counter-Strike: Source" in html["done"] and "text-success" in html["done"]
-          and "&lt;b&gt;para&lt;/b&gt;" in html["done"] and "<b>para</b>" not in html["done"], html["done"])
+          all(("Montado: Counter-Strike: Source" in html["done"], "text-success" in html["done"],
+               "&lt;b&gt;para&lt;/b&gt;" in html["done"], "<b>para</b>" not in html["done"])), html["done"])
     check("GMod content card: ...a running job still shows the spinner and polls again, and no job "
           "shows no outcome line (controls)",
-          "spinner-border" in html["running"] and 'id="gmc-outcome"' not in html["running"]
-          and cards["running"].get("timers") == 1 and 'id="gmc-outcome"' not in html["none"]
-          and 'id="gmc-apply"' in html["none"], repr((html["running"][-300:], html["none"][-300:])))
+          all(("spinner-border" in html["running"], 'id="gmc-outcome"' not in html["running"],
+               cards["running"].get("timers") == 1, 'id="gmc-outcome"' not in html["none"],
+               'id="gmc-apply"' in html["none"])), repr((html["running"][-300:], html["none"][-300:])))
 
 
 def _gmod_progress71():
@@ -336,6 +341,8 @@ def _report71():
           "exists (auth trusts no uid for it, so the report said \"2 of 2\" for one), and a uid still "
           "is (control)", got == ((1, 2), (0, 1), (1, 2)), repr(got))
 
+
+def _census71():
     q = {}
     for days in (90, 10 ** 6, 10 ** 12, 10 ** 300):
         try:
@@ -345,13 +352,15 @@ def _report71():
     texts = {d: _data71._audit_ips_text((None, d), None) for d in (90, 10 ** 6, 10 ** 12, -5)}
     check("debug report: a very large audit_ip_retention_days builds the Database section's queries "
           "(1e12 days raised OSError outside any guard, and the whole section read \"could not be read\")",
-          q[10 ** 12] == q[10 ** 300] == ["audit_log", "host_sample", "metric_sample"]
-          and "audit_ips" in q[90], repr(q))
+          all((q[10 ** 12] == q[10 ** 300] == ["audit_log", "host_sample", "metric_sample"],
+               "audit_ips" in q[90])), repr(q))
     check("debug report: ...and says IP reduction is off for such a value (the panel's own ageing "
           "raises on it), not \"IPs reduced after N d\"; a normal value still says it (control)",
-          texts[10 ** 12].startswith("IP reduction off (") and texts[10 ** 6].startswith("IP reduction off (")
-          and texts[90] == "IPs reduced after 90 d" and texts[-5] == "IP reduction off", repr(texts))
+          all((texts[10 ** 12].startswith("IP reduction off ("), texts[10 ** 6].startswith("IP reduction off ("),
+               texts[90] == "IPs reduced after 90 d", texts[-5] == "IP reduction off")), repr(texts))
 
+
+def _dotted71():
     st = _pv71._State()
     st.add("alice.smith", "account", 1)
     ctx = _Ctx71()
@@ -434,43 +443,48 @@ def _route_messages71(client, oid):
           and "tâches planifiées" in tr["fr"], repr((why, tr)))
 
 
-def _gates71():
+_GATE_ROUTES71 = (
+    "def _failure(rc):\n"
+    "    if rc == 3:\n"
+    "        return 'Not running, so nothing was sent.'\n"
+    "    return 'It gave no reason at all.'\n"
+    "def _refusal(gs):\n"
+    "    return 'already running. Use restart.'\n"
+    "def _act(gs):\n"
+    "    refusal = _refusal(gs)\n"
+    "    if refusal:\n"
+    "        return False, refusal\n"
+    "    return True, 'ok'\n"
+    "def _said(msg):\n"
+    "    return i18n.tr(msg)\n"
+    "def a(rc):\n"
+    "    flash(_failure(rc), 'warning')\n"                          # a helper's literal, flashed
+    "def b(gs):\n"
+    "    ok, msg = _act(gs)\n"
+    "    return jsonify({'message': _said(msg)})\n"                  # through a pass-through helper
+    "def c(remote):\n"
+    "    install(remote, on_progress=lambda m: _p(8, m))\n"           # a job writer in a callback
+    "def d(remote):\n"
+    "    other(remote, on_step=lambda m: _p(9, m))\n")               # a callback nothing feeds
+_GATE_OPS71 = ("def install(remote, on_progress=None):\n"
+               "    on_progress('Installing %s content' % remote)\n"
+               "    on_progress('Fetching the content')\n")
+
+
+def _gate_tree71():
+    """A throwaway tree holding the two fixture modules above; its root."""
     td = os.path.realpath(_tf71.mkdtemp(prefix="lgsm-unit-p71-scan-", dir=_TMP71))
     for d in (("panel", "routes"), ("panel", "ops"), ("translations", "es")):
         os.makedirs(os.path.join(td, *d))
-    with open(os.path.join(td, "app.py"), "w") as fh:
-        fh.write("")
-    with open(os.path.join(td, "translations", "es", "x.json"), "w") as fh:
-        fh.write("{}")
-    with open(os.path.join(td, "panel", "routes", "r.py"), "w") as fh:
-        fh.write(
-            "def _failure(rc):\n"
-            "    if rc == 3:\n"
-            "        return 'Not running, so nothing was sent.'\n"
-            "    return 'It gave no reason at all.'\n"
-            "def _refusal(gs):\n"
-            "    return 'already running. Use restart.'\n"
-            "def _act(gs):\n"
-            "    refusal = _refusal(gs)\n"
-            "    if refusal:\n"
-            "        return False, refusal\n"
-            "    return True, 'ok'\n"
-            "def _said(msg):\n"
-            "    return i18n.tr(msg)\n"
-            "def a(rc):\n"
-            "    flash(_failure(rc), 'warning')\n"                         # a helper's literal, flashed
-            "def b(gs):\n"
-            "    ok, msg = _act(gs)\n"
-            "    return jsonify({'message': _said(msg)})\n"                  # through a pass-through helper
-            "def c(remote):\n"
-            "    install(remote, on_progress=lambda m: _p(8, m))\n"           # a job writer in a callback
-            "def d(remote):\n"
-            "    other(remote, on_step=lambda m: _p(9, m))\n")               # a callback nothing feeds
-    with open(os.path.join(td, "panel", "ops", "s.py"), "w") as fh:
-        fh.write(
-            "def install(remote, on_progress=None):\n"
-            "    on_progress('Installing %s content' % remote)\n"
-            "    on_progress('Fetching the content')\n")
+    for rel, text in (("app.py", ""), ("translations/es/x.json", "{}"),
+                      ("panel/routes/r.py", _GATE_ROUTES71), ("panel/ops/s.py", _GATE_OPS71)):
+        with open(os.path.join(td, *rel.split("/")), "w", encoding="utf-8") as fh:
+            fh.write(text)
+    return td
+
+
+def _gates71():
+    td = _gate_tree71()
     try:
         gaps = sorted(k for k, _w in _scan71.route_answer_gaps(
             "es", root=td, translation_dir=os.path.join(td, "translations")))
@@ -486,15 +500,19 @@ def _gates71():
     check("i18n gate: a job's progress text handed through a callback (`on_progress=lambda m: _p(8, m)`)"
           " is read at the callee's calls: a literal is a key, a % one is reported built, and a "
           "callback no call feeds is reported (it was invisible: the walk never entered a lambda)",
-          steps == ["Fetching the content"]
-          and sorted(built) == [("panel/ops/s.py", 2), ("panel/routes/r.py", 22)], repr((steps, built)))
+          (steps, sorted(built)) == (["Fetching the content"],
+                                     [("panel/ops/s.py", 2), ("panel/routes/r.py", 22)]),
+          repr((steps, built)))
+
+
+def _gates_panel71():
     shown = _scan71.route_answer_keys()
     catalogs = {lg: _scan71.load_catalog(lg) for lg in ("es", "fr")}
     missing = [(lg, k) for lg in catalogs for k in shown if k not in catalogs[lg]]
+    built = _scan71.step_names_built()
     check("i18n gate: ...and over the panel, every answer the wider follow finds is in both catalogs, "
           "with no progress text built in plain English",
-          len(shown) >= 470 and not missing and _scan71.step_names_built() == [],
-          repr((len(shown), missing[:6], _scan71.step_names_built()[:4])))
+          all((len(shown) >= 470, not missing, built == [])), repr((len(shown), missing[:6], built[:4])))
 
 
 try:
@@ -507,9 +525,12 @@ try:
     _rtcw71()
     _wide_names71()
     _report71()
+    _census71()
+    _dotted71()
     _restart_flags71()
     _route_messages71(_A71, _ON71)
     _gates71()
+    _gates_panel71()
 finally:
     _p9_restore_all()
     _cleanup71()

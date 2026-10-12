@@ -1799,13 +1799,16 @@ def _r16c_step_walk(root):
 # calls of that keyword are the values; a callback whose keyword no call names is reported as built.
 def _r17b_lambda_writers(tree, lines):
     """[(keyword, line)]: `kw=lambda …: writer(…, param)` calls in one module."""
-    out = []
-    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
-        for kw in (k for k in call.keywords if k.arg and isinstance(k.value, ast.Lambda)):
-            params = {a.arg for a in kw.value.args.args}
-            out += [(kw.arg, v.lineno) for n in ast.walk(kw.value.body) for v in _r16c_step_values(n)
-                    if isinstance(v, ast.Name) and v.id in params and not _py_ignored(lines, v)]
-    return out
+    kws = [k for call in ast.walk(tree) if isinstance(call, ast.Call) for k in call.keywords
+           if k.arg and isinstance(k.value, ast.Lambda)]
+    return [(kw.arg, line) for kw in kws for line in _r17b_param_writes(kw.value, lines)]
+
+
+def _r17b_param_writes(lam, lines):
+    """The lines where a lambda hands a job writer one of its own parameters as it is."""
+    params = {a.arg for a in lam.args.args}
+    return [v.lineno for n in ast.walk(lam.body) for v in _r16c_step_values(n)
+            if isinstance(v, ast.Name) and v.id in params and not _py_ignored(lines, v)]
 
 
 def _r17b_forwarded(trees):
@@ -1816,32 +1819,22 @@ def _r17b_forwarded(trees):
             wanted.setdefault(kw, []).append((rel, line))
     found, fed = [], set()
     for rel, lines, tree in trees:
-        consts = _py_module_consts(tree)
-        for fn in [tree] + _py_functions(tree):
-            binds = _r16c_binds(fn)
-            for n in _py_own_nodes(fn):
-                if _py_call_name(n) in wanted and not _py_ignored(lines, n):
-                    fed.add(_py_call_name(n))
-                    found += [(rel, a.lineno, a, consts, binds, lines) for a in n.args]
+        entries, names = _r17b_fed_calls(rel, lines, tree, wanted)
+        found += entries
+        fed |= names
     return found, sorted(w for kw, ws in wanted.items() if kw not in fed for w in ws)
 
 
-def step_name_keys(root=ROOT):
-    """{key: "file:line"} for every literal a job's progress text can be (see _R16C_STEP_WRITERS)."""
-    table = _r16c_returns(_py_trees(root))
-    keys = {}
-    for rel, _line, v, consts, binds, _lines in _r16c_step_walk(root):
-        for t, f, ln in _r16c_found(v, rel, (consts, binds), table):
-            if _r16c_prose(t) or _R16C_LABEL.match(t):
-                keys.setdefault(t, "%s:%d" % (f, ln))
-    return keys
-
-
-def step_names_built(root=ROOT):
-    """[(file, line)]: a job's progress text built in plain English, which no key can match."""
-    return sorted({(rel, line) for rel, line, v, _c, _b, _l in _r16c_step_walk(root)
-                   if any(_py_built(x, plain=True) for x in [v] + _py_operands(v))}
-                  | set(_r17b_forwarded(_py_trees(root))[1]))
+def _r17b_fed_calls(rel, lines, tree, wanted):
+    """(step-walk entries for each `wanted` keyword's call arguments, the keywords called), one module."""
+    consts = _py_module_consts(tree)
+    out, names = [], set()
+    for fn in [tree] + _py_functions(tree):
+        calls = [n for n in _py_own_nodes(fn) if _py_call_name(n) in wanted and not _py_ignored(lines, n)]
+        binds = _r16c_binds(fn) if calls else {}
+        names |= {_py_call_name(n) for n in calls}
+        out += [(rel, a.lineno, a, consts, binds, lines) for n in calls for a in n.args]
+    return out, names
 
 
 # ── Python: fixed messages the viewer is shown ─────────────────────────────────────────────────

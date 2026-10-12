@@ -894,6 +894,11 @@ def _resolve_from_console(server, user, game_type, name, selfname):
     # colour code. The console keeps "^aBob" while gamedig shows "Bob", so a Kick on that row found
     # no one. Matched the wider way only when exactly one player does: two names that differ only
     # in such codes are one row on screen, and kicking the first of them could be the wrong player.
+    return _r17b_wide_match(listed, name)
+
+
+def _r17b_wide_match(listed, name):
+    """The one listed player whose name matches `name` with gamedig's stripping, or None."""
     key = _r17b_wide_strip(name)
     wide = [p for p in listed if key and _r17b_wide_strip(p.get("name")) == key]
     return wide[0] if len(wide) == 1 else None

@@ -828,28 +828,36 @@ def _r16b_named_tokens(text, st):
     with token characters of the same length (so every offset still holds), the tokens are found
     in that, and a token holding a masked name is redacted whole in the text (review 1012b).
     """
-    names = st.snapshot()[0]
-    low = _fold(text)
-    present = sorted((n for n in names if " " not in n and n in low), key=len, reverse=True)
-    if not present:
-        return text
-    rx = re.compile(r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])" % "|".join(map(re.escape, present)),
-                    re.I)
-    spans = [m.span() for m in rx.finditer(text)]
+    rx = _r17b_present_names(text, st)
+    spans = [m.span() for m in rx.finditer(text)] if rx is not None else []
     if not spans:
         return text
     masked = rx.sub(lambda m: "a" * len(m.group(0)), text)
     safe = [m.span(2) for m in _so._FRAME_RE.finditer(text)
             if _so._SAFE_FRAME_PATH_RE.match(m.group(2))]
     out, at = [], 0
-    for m in _so._LONG_TOKEN_RE.finditer(masked):
-        a, b = m.span()
-        if not any(a <= x and y <= b for x, y in spans) or any(x <= a and b <= y for x, y in safe):
-            continue
-        st.hit("redact:token", text[a:b])
-        out += [text[at:a], "[redacted]"]
-        at = b
+    for a, b in (m.span() for m in _so._LONG_TOKEN_RE.finditer(masked)):
+        if _r17b_holds_name(a, b, spans, safe):
+            st.hit("redact:token", text[a:b])
+            out += [text[at:a], "[redacted]"]
+            at = b
     return "".join(out + [text[at:]])
+
+
+def _r17b_present_names(text, st):
+    """A regex of the known names present in `text` (longest first), or None when there are none."""
+    low = _fold(text)
+    present = sorted((n for n in st.snapshot()[0] if " " not in n and n in low), key=len, reverse=True)
+    if not present:
+        return None
+    return re.compile(r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])" % "|".join(map(re.escape, present)),
+                      re.I)
+
+
+def _r17b_holds_name(a, b, spans, safe):
+    """Whether the token at [a, b) holds a name's span and is not inside a safe frame path."""
+    return (any(a <= x and y <= b for x, y in spans)
+            and not any(x <= a and b <= y for x, y in safe))
 
 
 def _names_pass(text, st, only=None):
