@@ -1358,11 +1358,14 @@ def _write_refused(gs, action, detail=""):
     the import refused root-capable accounts can name the host's own sudo login, and a write as
     it (~/.bashrc, authorized_keys, a crontab line) is root on the host. See
     _shared.game_account_write_refusal — cached, and closed when the host cannot answer.
+
+    `detail`, the path asked for, goes in the row before the reason. It was taken and never
+    written, so an account refusal (the security-relevant one) named no file.
     """
     why = game_account_write_refusal(gs.remote, gs.short_name)
     if why is None:
         return None
-    log_action(current_user, action, target=gs.name, detail=("refused: " + why)[:250],
+    log_action(current_user, action, target=gs.name, detail=_r14b_refused(_audit_name(detail), why),
                success=False, server=gs)
     return jsonify({"success": False, "message": why}), 409
 
@@ -1377,7 +1380,7 @@ def _read_refused(gs, action, detail=""):
     why = game_account_write_refusal(gs.remote, gs.short_name, reading=True)
     if why is None:
         return None
-    log_action(current_user, action, target=gs.name, detail=("refused: " + why)[:250],
+    log_action(current_user, action, target=gs.name, detail=_r14b_refused(_audit_name(detail), why),
                success=False, server=gs)
     return jsonify({"success": False, "error": why, "message": why}), 409
 
@@ -1386,7 +1389,10 @@ def _store_upload(gs, reldir, f, data, overwrite):
     """Write an uploaded file onto the host and audit it: the upload route's answer."""
     ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data,
                           overwrite=overwrite)
-    detail = "%s/%s%s" % (reldir, f.filename, " (overwrote)" if overwrite else "")
+    # The name as delete's and rename's rows write theirs: a U+202E or a trailing space in an
+    # uploaded name reordered or hid what the audit page showed.
+    detail = _audit_safe(_audit_name("%s/%s" % (reldir, f.filename))) + (
+        " (overwrote)" if overwrite else "")
     if not ok and msg == UPLOAD_EXISTS:
         # A name that appeared after the page's own check: refused, never replaced — and audited,
         # as a create's or a rename's taken name is.
@@ -1713,7 +1719,10 @@ def _register_alerts(app):
         updates = _alert_updates(_json_body().get("values"))
         try:
             ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, updates)
-            log_action(current_user, "server_alerts_save", target=gs.name, success=ok, server=gs)
+            # A refusal says why, as edit_config's does: it calls the same writer.
+            log_action(current_user, "server_alerts_save", target=gs.name,
+                       detail=_failed_detail("", ok, _sm.write_failure_reason(msg)), success=ok,
+                       server=gs)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("alerts save failed")}), 200
@@ -1803,8 +1812,9 @@ def _register_file_editor(app):
         try:
             ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"])
             log_action(current_user, "edit_file", target=gs.name,
-                       detail=_failed_detail(rel, ok, _sm.write_failure_reason(msg)), success=ok,
-                       server=gs)
+                       detail=_failed_detail(_audit_safe(_audit_name(rel)), ok,
+                                             _sm.write_failure_reason(msg)),
+                       success=ok, server=gs)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
@@ -1889,7 +1899,25 @@ def _failed_detail(detail, ok, reason):
     """
     if ok or reason is None:
         return detail
-    return _audit_safe(("refused: %s: %s" % (detail, reason)) if detail else ("refused: " + reason), 250)
+    return _r14b_refused(detail, reason)
+
+
+def _r14b_refused(detail, reason, limit=250):
+    """"refused: <detail>: <reason>" in `limit` characters, the fixed reason always whole.
+
+    The detail is the user's path, and it came first under one 250-character cut: a deep path, or
+    a short one in another script (each character escaped to six), cut the reason off with no
+    marker — the WHY the row exists to keep. The path is cut instead, and ends in "…" when it is.
+    An empty detail gives "refused: <reason>".
+    """
+    reason = _audit_safe(reason, limit)
+    if not detail:
+        return ("refused: " + reason)[:limit]
+    room = max(limit - len("refused: : ") - len(reason), 1)
+    shown = _audit_safe(detail, limit)
+    if len(shown) > room:
+        shown = shown[:room - 1] + "…"
+    return "refused: %s: %s" % (shown, reason)
 
 
 def _rename_refused(gs, rel, new_name, why):
@@ -1900,8 +1928,7 @@ def _rename_refused(gs, rel, new_name, why):
     or the console's log away leaves a trace whatever stopped it.
     """
     log_action(current_user, "rename_file", target=gs.name,
-               detail=_audit_safe("refused: %s -> %s: %s"
-                                  % (_audit_name(rel), _audit_name(new_name), why), 250),
+               detail=_r14b_refused("%s -> %s" % (_audit_name(rel), _audit_name(new_name)), why),
                success=False, server=gs)
     return jsonify({"success": False, "message": why}), 400
 
@@ -1989,7 +2016,7 @@ def _create_refused(gs, action, rel, name, why):
     Every one, as a rename's are, so an attempt to plant a name in the LinuxGSM tree leaves a trace.
     """
     log_action(current_user, action, target=gs.name,
-               detail=_audit_safe("refused: %s: %s" % (_create_target(rel, name), why), 250),
+               detail=_r14b_refused(_create_target(rel, name), why),
                success=False, server=gs)
     return jsonify({"success": False, "message": why}), 400
 
@@ -2057,7 +2084,8 @@ def _download_refusal(gs, server_id):
         return None
     # A link the browser follows, so a flash and a redirect like every refusal after it.
     log_action(current_user, "download_file", target=gs.name,
-               detail=("refused: " + why)[:250], success=False, server=gs)
+               detail=_r14b_refused(_audit_name(request.args.get("path", "")), why),
+               success=False, server=gs)
     flash(why, "danger")
     return redirect(url_for("server_files", server_id=server_id))
 
@@ -2119,7 +2147,8 @@ def _register_download(app):
         is_dir = info["type"] == "d"
         name = info["name"] + (".tar.gz" if is_dir else "")
         log_action(current_user, "download_file", target=gs.name,
-                   detail=rel + (" (as .tar.gz)" if is_dir else ""), server=gs)
+                   detail=_audit_safe(_audit_name(rel)) + (" (as .tar.gz)" if is_dir else ""),
+                   server=gs)
         resp = Response(stream_path(gs.remote, gs.short_name, rel, as_tar=is_dir,
                                     limit=None if is_dir else info["size"]),
                         mimetype="application/gzip" if is_dir else "application/octet-stream")
@@ -2480,6 +2509,10 @@ def _register_console_routes(app):
                 ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name,
                                             {"logtimestamp": want})
                 if not ok:
+                    # Audited as every other refused cfg write is: it wrote no row at all.
+                    log_action(current_user, "set_log_timestamps", target=gs.name,
+                               detail=_failed_detail(want, False, _sm.write_failure_reason(msg)),
+                               success=False, server=gs)
                     return jsonify({"error": msg or "Could not write the LinuxGSM config"}), 502
                 log_action(current_user, "set_log_timestamps", target=gs.name, detail=want,
                            server=gs)

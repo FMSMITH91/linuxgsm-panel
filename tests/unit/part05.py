@@ -6278,8 +6278,10 @@ try:
           any(x[0] == "read_as" and x[1] == "ubuntu" and "linuxgsm.sh" in x[2] for x in _acct_sent),
           repr(_acct_sent))
     _r = _acct_case(False, id="EXISTS", script="", script_rc=1)
-    check("install account: a FAILED script probe deletes nothing (kept as it is)",
-          _r[0] is True and not _acct_destroyed(), "%r %r" % (_r, _acct_sent))
+    check("install account: a FAILED script probe deletes nothing, and the install stops there "
+          "(retryable) rather than going on into an account nobody looked at",
+          _r[0] is False and _r[2] is True and not _acct_destroyed()
+          and not any(x[0] == "create" for x in _acct_sent), "%r %r" % (_r, _acct_sent))
     _r = _acct_case(False, id="EXISTS", script="EXISTS")
     check("install account: an account WITH linuxgsm.sh is kept, not rebuilt",
           _r[0] is True and not _acct_destroyed() and not any(x[0] == "create" for x in _acct_sent),

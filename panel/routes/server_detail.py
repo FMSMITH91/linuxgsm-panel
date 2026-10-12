@@ -1101,9 +1101,14 @@ def _register_schedules(app):
         host_tz = _host_timezone_cached(gs.remote)
         try:
             # No time given (the plain on/off toggle) keeps whatever is already set, so flicking
-            # the switch off and on again cannot silently move the schedule to a default.
-            if body.get("time"):
-                want_h, want_m = clock.parse_hhmm(body.get("time"))
+            # the switch off and on again cannot silently move the schedule to a default. A time
+            # that is given must BE one: "5pm" or "17:60" parsed to the 05:00 default and moved
+            # the schedule there, answering success.
+            if body.get("time") not in (None, ""):
+                want = clock.parse_hhmm(body.get("time"), default=None)
+                if want is None:
+                    return jsonify({"success": False, "message": "time must be HH:MM."}), 400
+                want_h, want_m = want
                 # Entered in the viewer's zone -> stored in the host's. With either zone unknown
                 # this is a no-op, which leaves the time where the operator put it rather than
                 # shifting it by a guess.

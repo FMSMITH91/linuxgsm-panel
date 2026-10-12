@@ -270,15 +270,19 @@ def _existing_account_verdict(remote, key, fresh):
         return False, ("An account named '%s' already exists on this host, and the panel only "
                        "installs into an account it creates itself. It has been left alone — "
                        "remove this server and pick a different name." % short_name), False
-    # Probed AS the account: only that user can read a 0750 home, and a probe that fails
-    # (rc != 0) is no evidence of a leftover at all.
+    # Probed AS the account: only that user can read a 0750 home. A probe that fails (rc != 0,
+    # or no answer) is no evidence either way: it was taken as "its linuxgsm.sh is there", and the
+    # install went on into an account nobody had looked at. It stops instead, retryable.
     chk, _, chk_rc = _sm.read_as_game_user(
         remote, short_name,
         "test -x /home/%s/linuxgsm.sh && echo EXISTS || echo NOTEXISTS" % short_name,
         timeout=10)
-    leftover = chk_rc == 0 and (chk or "").strip().endswith("NOTEXISTS")
-    if not leftover:
-        return True, "", True             # its linuxgsm.sh is there (or the probe said nothing)
+    said = ((chk or "").strip().splitlines() or [""])[-1].strip() if chk_rc == 0 else ""
+    if said == "EXISTS":
+        return True, "", True             # its linuxgsm.sh is there
+    if said != "NOTEXISTS":
+        return False, ("Couldn't check the existing account '%s' — the host did not answer. "
+                       "Nothing was changed on it." % short_name), True
     with _install_lock:
         ours = key in _accounts_created
     if not ours:

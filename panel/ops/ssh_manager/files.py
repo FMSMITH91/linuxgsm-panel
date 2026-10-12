@@ -90,6 +90,10 @@ def _safe_abspath(user, relpath):
         return None
     home = f"/home/{user}"
     rel = str(relpath) if relpath else ""   # tolerate non-str input without crashing
+    if not _is_text(rel):
+        # A lone surrogate (JSON can carry one) names no file. It passed here, and the editor's
+        # save then raised while encoding the command: a generic 500 and no audit row.
+        return None
     ap = _pp.normpath(_pp.join(home, rel.lstrip("/")))
     if ap == home or ap.startswith(home + "/"):
         return ap
@@ -1162,11 +1166,17 @@ def _rawlts_refusal(server, user, ap, data):
     return _RAWLTS_REFUSED if is_cfg else None
 
 
+# write_file's answer for contents that cannot be written as UTF-8 (a lone surrogate in JSON).
+R14B_NOT_TEXT = "The file contents must be text."
+
+
 def write_file(server, user, relpath, content):
     """Write text content to a file in the game user's home."""
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return False, "Invalid path"
+    if not _is_text(content or ""):
+        return False, R14B_NOT_TEXT        # a lone surrogate: .encode() below raised, a 500
     refusal = _rawlts_refusal(server, user, ap, content or "")
     if refusal:
         return False, refusal
@@ -1988,6 +1998,6 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
 # The fixed texts write_failure_reason recognises. Built here, after every one is defined.
 _WRITE_REASONS = frozenset({
     "Invalid path", "Invalid filename", "Invalid account or script name",
-    _RAWLTS_REFUSED, _RAWLTS_UNCHECKED, UPLOAD_CHECK_FAILED,
+    _RAWLTS_REFUSED, _RAWLTS_UNCHECKED, UPLOAD_CHECK_FAILED, R14B_NOT_TEXT,
     LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD,
 })
