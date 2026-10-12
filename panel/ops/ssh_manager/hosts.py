@@ -3514,16 +3514,33 @@ def remote_public_ssh_status(server, panel_port=None):
                     and _p["from"].lower() == "anywhere" and _p["action"]):
                 first_found = True
                 mode = {"LIMIT": "limit", "ALLOW": "allow"}.get(_p["action"], "off")
-        # A public ALLOW rule for the panel port (ignore IPv6 duplicates and the
-        # tailscale0 interface rule, which isn't the *public* port).
-        if (port_re and "allow" in low and " (v6)" not in low
-                and "tailscale" not in low and port_re.search(line)):
+        # A rule that holds the panel port open to the public, read the way the close route
+        # (remote_vps _panel_port_rule_nums) reads it: inbound ALLOW *or LIMIT*, on no interface.
+        # This was `"allow" in low`, so a rate-limited port (`ufw limit 5000/tcp`, which
+        # firewall._is_panel_rule calls "an ordinary thing to do") read as closed, and the card
+        # disabled "Close public panel port" saying the panel was tailnet-only while the port was
+        # open to the internet. An IPv6-only rule is open too, and a comment that happens to say
+        # "tailscale" is no interface.
+        if port_re and port_re.search(line) and _r14a_holds_port_open(line, panel_port):
             panel_open = True
     res = {"active": active, "mode": mode}
     if panel_port:
         res["panel_port"] = int(panel_port)
         res["panel_port_open"] = panel_open
     return res
+
+
+def _r14a_holds_port_open(line, port):
+    """Whether one `ufw status` row lets the public in on `port`: inbound ALLOW/LIMIT, no interface.
+
+    The To column must name the port (alone, in a list or range, after an address), and the From
+    column is not read: a rule from one address still leaves the port listening to it.
+    """
+    p = firewall._parse_ufw_rule(line)
+    if p["iface"] or p["action"] not in ("ALLOW", "LIMIT") or p["direction"] not in ("", "IN"):
+        return False
+    port_num = firewall._split_ufw_proto(firewall._ufw_port_label(p))[0]
+    return firewall._r12a_names_port(port_num, {int(port)})
 
 
 def _tailscale_conn_state(server):

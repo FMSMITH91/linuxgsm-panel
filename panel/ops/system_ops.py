@@ -537,7 +537,11 @@ def ufw_allows_iface_in(rules, iface):
             continue
         if r.get("action") in ("DENY", "REJECT"):
             return False
-        if to == whole and r.get("action") in ("ALLOW", "LIMIT"):
+        # Not a UDP-only allow: ufw prints a source-only rule's protocol on the From side
+        # (`ufw allow in on tailscale0 from <net> proto udp` is To "Anywhere on tailscale0", From
+        # "<net>/udp"), and that one carries no SSH at all.
+        if (to == whole and r.get("action") in ("ALLOW", "LIMIT")
+                and not (r.get("from") or "").strip().lower().endswith("/udp")):
             return True
     return False
 
@@ -4553,11 +4557,14 @@ def _redact_emails(text, hit=None):
 # `{"password": "correct horse battery"}` printed "horse battery". An escaped quote inside it (how
 # json.dumps writes one) does not end it, and a quote with no close within the bound runs to the end
 # of the line: `"ab\"c de"` printed `c de"`, and a value over the bound fell back to `\S+` and
-# printed everything after its first blank.
+# printed everything after its first blank. JSON inside a JSON string escapes every quote
+# (`body={\"password\": \"hunter2 x\"}`): the key's closing quote may follow a backslash, and a value
+# opened by `\"` runs to the next `\"` — it printed whole before.
 _SECRET_KV_RE = re.compile(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
-                           r"cred(?:ential)?|cookie|bearer)[\w-]*)([\"']?\s*[=:]\s*)"
+                           r"cred(?:ential)?|cookie|bearer)[\w-]*)(\\?[\"']?\s*[=:]\s*)"
                            r"(\"(?:[^\"\\\n]|\\.){0,1024}\"|'(?:[^'\\\n]|\\.){0,1024}'"
-                           r"|[\"'][^\n]*|\S+)")
+                           r"|\\\"(?:[^\\\n]|\\[^\"\n]){0,1024}\\\"|\\'(?:[^\\\n]|\\[^'\n]){0,1024}\\'"
+                           r"|\\?[\"'][^\n]*|\S+)")
 
 
 def _redact(text, hit=None):

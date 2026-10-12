@@ -114,6 +114,10 @@ def _new_ufw_group(p, key):
         # page re-finds a group by this before deleting rather than trusting a number
         # read when the table was drawn.
         "key": _json.dumps(list(key)),
+        # The From column as ufw printed it. `scope` drops it for an interface rule, and a
+        # source-only rule carries its protocol HERE (`ufw allow from <ip> proto udp` prints To
+        # "Anywhere", From "<ip>/udp"), so the way-in tests below read it from this.
+        "src": p["from"],
     }
 
 
@@ -317,9 +321,52 @@ def _is_ssh_rule(g, pn, inbound, ts_iface, ssh_ports):
     _named_ssh = bool(words) and words[-1].lower() in _SSH_APP_PROFILES and 22 in ssh_ports
     # sshd is TCP only: a UDP rule naming its port (`1:1024/udp`, `22/udp`) is no way in, and
     # counted as one it marked the host's only real `22/tcp` rule "another way in exists".
+    # Nor is a rule that admits only this machine itself (_r14a_host_only): `ufw allow in on lo`
+    # and a docker0 rule are on most hosts, and once an all-ports rule counted, either one made
+    # the host's only public `22/tcp` deletable.
     return (g.get("action") in ("ALLOW", "LIMIT") and inbound and not ts_iface
-            and g.get("proto_label") != "UDP"
+            and not _r14a_udp_only(g) and not _r14a_host_only(g)
             and (_r12a_names_port(pn, ssh_ports) or _named_ssh or _r13a_every_port(g, pn)))
+
+
+def _r14a_udp_only(g):
+    """Whether rule `g` admits UDP alone, which sshd never reads.
+
+    The protocol is printed beside the To column for a port rule, and beside the From column for a
+    source-only one (ufw's get_status: `ufw allow from <ip> proto udp` is To "Anywhere", From
+    "<ip>/udp"). Reading only the To column counted that one as every port, sshd's included.
+    """
+    return g.get("proto_label") == "UDP" or str(g.get("src") or "").lower().endswith("/udp")
+
+
+# Interfaces that carry only this machine's own traffic or the NAT of its containers and VMs:
+# loopback, and the bridges and veth ends Docker, libvirt, LXC/LXD, Podman and CNI create. Nothing
+# from another machine arrives on one. A bridge the admin named (br0) is NOT here: on a KVM host it
+# is commonly the public uplink itself, and Docker's own user networks are "br-<hex id>".
+_R14A_HOST_ONLY_IFACE_RE = re.compile(
+    r"(?:lo|docker\d*|docker_gwbridge|br-[0-9a-f]{12}|virbr\d+|veth\w+|lxcbr\d+|lxdbr\d+"
+    r"|cni\d+|podman\d+)\Z")
+
+
+def _r14a_loopback_addr(column):
+    """Whether a To / From column's address is loopback (127.0.0.0/8, ::1), with or without a port."""
+    words = str(column or "").split()
+    addr = re.sub(r"/(?:tcp|udp)\Z", "", words[0], flags=re.I) if words else ""
+    try:
+        return ipaddress.ip_network(addr, strict=False).is_loopback
+    except ValueError:
+        return False
+
+
+def _r14a_host_only(g):
+    """Whether rule `g` admits only this machine itself, so it is no way in from anywhere else.
+
+    On loopback or a local bridge (_R14A_HOST_ONLY_IFACE_RE), from a loopback source, or to a
+    loopback destination: a packet from another machine can match none of them. A private source
+    range (`ufw allow from 192.168.1.0/24`) is still a way in: it is how a LAN admin keeps SSH.
+    """
+    return (bool(_R14A_HOST_ONLY_IFACE_RE.match(str(g.get("iface") or "")))
+            or _r14a_loopback_addr(g.get("src")) or _r14a_loopback_addr(g.get("port_num")))
 
 
 def _r13a_every_port(g, pn):
@@ -381,9 +428,14 @@ def _classify_access_rule(g, ssh_ports):
 
 
 def _r11a_reaches_ssh(g, pn, ssh_ports):
-    """Whether interface rule `g` covers sshd: every port on it, or one of `ssh_ports` over TCP."""
-    return g.get("port_label") == "All ports" or (g.get("proto_label") != "UDP"
-                                                  and _r12a_names_port(pn, ssh_ports))
+    """Whether interface rule `g` covers sshd: every port on it, or one of `ssh_ports` over TCP.
+
+    Every port in any spelling (_r13a_every_port), not only the "All ports" label: `ufw allow in on
+    tailscale0 proto tcp` prints To "Anywhere/tcp", and `... to <addr>` an address alone, so a
+    tailnet-only host's one way in got an ordinary delete × with no warning. UDP alone, in either
+    column (_r14a_udp_only), never reaches sshd.
+    """
+    return not _r14a_udp_only(g) and (_r12a_names_port(pn, ssh_ports) or _r13a_every_port(g, pn))
 
 
 def _r11a_tailnet_ssh_iface(g, ssh_ports):
