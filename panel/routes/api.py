@@ -352,7 +352,7 @@ def _register_server_stats(app):
         host = remote.public_ip or (remote.host if not remote.is_local else "")
         return jsonify({
             "status": status,
-            "connect": f"{host}:{gs.port}" if host else f":{gs.port}",
+            "connect": gs.connect_address(host) or f":{gs.port}",
             "connect_url": gs.connect_uri(host),
             "public_ip": remote.public_ip,
             "port": gs.port,
@@ -628,7 +628,7 @@ def _server_row(gs, flipped):
         "status": flipped.get(gs.id, gs.status),
         "installed": gs.installed,
         "remote_name": r.name if r else "",
-        "connect": f"{host}:{gs.port}" if host else "",
+        "connect": gs.connect_address(host),
         "connect_url": gs.connect_uri(host),
         "players": _cached_player_count(gs.id),
         "max_players": _cached_player_max(gs.id),

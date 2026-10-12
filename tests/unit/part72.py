@@ -560,3 +560,19 @@ for _lang72 in ("es", "fr"):
     check("i18n: no script writes literal English into the page that the %s catalog cannot match "
           "(the stat tiles' 'not read', the console's '(connected)', the diagnostics badge)" % _lang72,
           len(_raw72) > 10 and not _gap72, "%d of %d: %s" % (len(_gap72), len(_raw72), _gap72[:12]))
+
+
+# ── connect address: an IPv6 host goes in brackets ─────────────────────────────────────────────
+# `2001:db8::7334:27016` gives no way to tell the address from the port, so the copyable address
+# and the steam:// link reached nothing for a host whose public address is IPv6.
+from panel.db.models import GameServer as _GS72  # noqa: E402
+
+_gs72 = _GS72(game_type="css", port=27016)
+_addr72 = {h: (_gs72.connect_address(h), _gs72.connect_uri(h))
+           for h in ("2001:db8::7334", "203.0.113.10", "play.example.org", "")}
+check("connect address: an IPv6 host is bracketed in the address and the steam:// link; IPv4, a "
+      "hostname and no host are as before",
+      _addr72 == {"2001:db8::7334": ("[2001:db8::7334]:27016", "steam://connect/[2001:db8::7334]:27016"),
+                  "203.0.113.10": ("203.0.113.10:27016", "steam://connect/203.0.113.10:27016"),
+                  "play.example.org": ("play.example.org:27016", "steam://connect/play.example.org:27016"),
+                  "": ("", "")}, repr(_addr72))

@@ -756,6 +756,18 @@ class GameServer(db.Model):
             return "update" in cmds
         return self.game_type not in _NO_UPDATE_GAMES
 
+    def connect_address(self, host):
+        """`host:port` as a game client reads it, or "" with no host.
+
+        An IPv6 host goes in brackets: `2001:db8::7334:27016` gives no way to tell where the
+        address ends and the port begins, so a player copying it, or a steam:// link, reached
+        nothing. A hostname or IPv4 address is written as it is.
+        """
+        if not host:
+            return ""
+        shown = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        return f"{shown}:{self.port}"
+
     def connect_uri(self, host):
         """One-click join URI for clients that support one, else "".
 
@@ -766,7 +778,7 @@ class GameServer(db.Model):
         for games with no scheme so the UI shows a copyable ip:port instead.
         """
         if host and self.game_type in STEAM_CONNECT_GAMES:
-            return f"steam://connect/{host}:{self.port}"
+            return f"steam://connect/{self.connect_address(host)}"
         return ""
 
     # Alias for compatibility

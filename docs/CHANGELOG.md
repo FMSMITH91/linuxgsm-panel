@@ -604,7 +604,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
     refused instead of reaching the game, where it interrupted or suspended the server. After Clear,
     a panel line could appear twice; it now appears once.
   - **Phones.** The file editor's header, the blocked-IP table's Unblock button, the dashboard's
-    server names and the French rate-limit row fit a 375-pixel screen.
+    server names, the server page's Connect row and the French rate-limit row fit a 375-pixel
+    screen. The stat tiles' "not read" and "stopped", the console's connection state and the file
+    editor's save results are translated.
   - **Languages.** Ubuntu Pro, full-backup, import and database-optimise answers, the GMod install
     progress, "Internal server error" and the ✓/✗ results are translated for Spanish and French
     viewers, and the translation checks now follow messages passed through helpers.
@@ -613,7 +615,8 @@ CI-verified commit regardless of this file — this changelog is for humans.
     large for the database is refused instead of failing. After a reboot is called off, a server
     is no longer given up on while its host is silent or a LinuxGSM update is holding its start;
     the hour's wait counts from when the host answers. An IPv6 address is
-    bracketed in the links the panel and installer print.
+    bracketed in the links the panel and installer print, and in a server's copyable connect
+    address and Join link.
   - **Tests.** Seventeen checks that could pass without testing what they named now can fail.
 
 
