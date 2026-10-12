@@ -583,3 +583,55 @@ finally:
 check("i18n gate: a message built in English and handed to a keyword-only wrapper, or an item of a "
       "service's answer held whole (`res = svc(); flash(res[1])`), is reported; an unbuilt item is not",
       _sp69 == [4, 9], repr(_sp69))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 8. Console: Clear while the first window's catch-up is still unanswered, then the re-prime
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Review lead (not a defect, held here): the re-prime's _startResync ends the catch-up still running,
+# which shows the panel pushes it held and raises _lastPanelT before showPanelBacklog runs — would the
+# backlog rows between Clear's cut and those pushes be filtered out? No: while a catch-up runs every
+# panel push is held (_resyncTake), so the pushes since Clear are exactly the ones it shows.
+_SD69 = _read69(_JS69, "server_detail.js")
+_CON69 = (
+    "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
+    "global.window = global; global.MOUNT = ''; global.serverId = 1; global.toast = () => 0;\n"
+    "var shown = [], _consoleLines = [], _consolePrimed = false, _consoleSig = null, _lastPanelT = 0;\n"
+    "var _returnOwed = false, _panelBacklogShown = false, _r13c_panelPushes = [], _R13C_PANEL_KEEP = 200;\n"
+    "var _r15c_clearedAt = null, _resync = null, _shownOnReturn = {}, _primeOwed = false, _logAt = null;\n"
+    "var _resyncSeq = 0, _RESYNC_MAX_MS = 45000;\n"
+    "var consoleEl = {set innerHTML(v){ shown.length = 0; }};\nvar socket = {connected: true};\n"
+    "function _rebuildMark(){ return 0; } function _rebuildRestore(){} function updateTsNotice(){}\n"
+    "function _showTsOffNote(){} function stickConsole(){} function consoleAtBottom(){ return true; }\n"
+    "function _notePanelMarker(){} function _newConsoleRows(){ return []; } function _resyncAsk(){}\n"
+    "global.setTimeout = () => 0; global.clearTimeout = () => 0;\n"
+    "function _appendConsoleRows(rows){ (rows || []).forEach(r => shown.push(r.line)); }\n"
+    "function appendConsole(text){ shown.push(text); }\n"
+    "function _panelShownAt(t){ if (Number(t) > _lastPanelT) _lastPanelT = Number(t); }\n"
+    "function _renderPanelLines(rows){ rows.forEach(r => { shown.push(r.line); _panelShownAt(r.t); }); }\n"
+    + "".join(_cut47(_SD69, h) + "\n" for h in (
+        "function _r13c_notePanelPush(", "function _r13c_reshowPanelPushes(", "function refreshConsole(",
+        "function showPanelBacklog(", "function _newerPanelRows(", "function _panelLinesWiped(",
+        "function _r13c_primeWipesPushes(", "function clearConsole(", "function _primeAt(",
+        "function _primeCatchUp(", "function _startResync(", "function _endResync(", "function _showPanelPush(",
+        "function _resyncTake(", "function _notePanelPush("))
+    + "var backlog = [], logN = 0;\n"
+    "global.fetch = () => { logN++; return Promise.resolve({ok: true, json: () => Promise.resolve(\n"
+    "  {lines: [{line: 'log' + logN}], panel_lines: backlog.slice(), at: ['c', 1, logN * 10]})}); };\n"
+    "function push(ts, data){ const d = {panel: true, ts: ts, data: data};\n"
+    "  if (!_notePanelPush(d)) return; if (_resyncTake(d)) return; appendConsole(d.data); _r13c_notePanelPush(d); }\n"
+    "(async () => { const out = {};\n"
+    "  backlog = [{t: 100, line: '[panel] old'}]; refreshConsole(true); await settle();\n"
+    "  out.running = !!_resync;\n"
+    "  clearConsole(); push(110, '[panel] u1'); push(115, '[panel] u2');\n"
+    "  backlog.push({t: 110, line: '[panel] u1'}, {t: 115, line: '[panel] u2'});\n"
+    "  refreshConsole(false); await settle(); out.after = shown.slice();\n"
+    "  push(120, '[panel] u3'); out.later = shown.slice();\n"
+    "  console.log(JSON.stringify(out)); })();\n")
+_name69 = "console: Clear during an unanswered catch-up, then the re-prime"
+_got69 = _node69(_name69, _CON69)
+if _got69 is not None:
+    check("console: Clear while the first window's catch-up is unanswered, then the re-prime — the panel "
+          "lines pushed since Clear are shown once each, none lost to the held pushes the re-prime releases",
+          _got69.get("running") is True and _got69.get("after") == ["log2", "[panel] u1", "[panel] u2"]
+          and _got69.get("later") == ["log2", "[panel] u1", "[panel] u2"], repr(_got69))
