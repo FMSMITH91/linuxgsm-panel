@@ -1949,8 +1949,10 @@ def _create_target(rel, name):
 
 
 def _create_refused(gs, action, rel, name, why):
-    """A create refused before the host is asked to make anything: audited, then a 400 — every
-    one, as a rename's are, so an attempt to plant a name in the LinuxGSM tree leaves a trace."""
+    """A create refused before the host is asked to make anything: audited, then a 400.
+
+    Every one, as a rename's are, so an attempt to plant a name in the LinuxGSM tree leaves a trace.
+    """
     log_action(current_user, action, target=gs.name,
                detail=_audit_safe("refused: %s: %s" % (_create_target(rel, name), why), 250),
                success=False, server=gs)

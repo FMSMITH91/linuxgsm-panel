@@ -222,17 +222,22 @@ def _reset60(prelude=""):
 
 
 # ── the route's own refusals: nothing reaches the host ──────────────────────────────────────────
+def _hostile_misses60(a_client, sid, kind):
+    """Each hostile name a create of `kind` did NOT refuse (400) with its reason, described."""
+    bad = []
+    for name, why in _HOSTILE60:
+        code, body = _post60(a_client, sid, "cfg", name, kind)
+        if (code, why in (body.get("message") or "")) != (400, True):
+            bad.append("%s %r -> %s %r" % (kind, name[:12], code, body))
+    return bad
+
+
 def _hostile_names60(a_client, sid):
     """Each hostile name is refused (400) with its reason, before the host is asked anything."""
     _reset60()
     before = _snapshot60()
     n_audit = len(_audits60())
-    bad = []
-    for kind in ("file", "folder"):
-        for name, why in _HOSTILE60:
-            code, body = _post60(a_client, sid, "cfg", name, kind)
-            if (code, why in (body.get("message") or "")) != (400, True):
-                bad.append("%s %r -> %s %r" % (kind, name[:12], code, body))
+    bad = [b for kind in ("file", "folder") for b in _hostile_misses60(a_client, sid, kind)]
     check("create route: a name with a slash, a control character, a separator, a text-direction "
           "control, a space at either end, '.', '..', empty, too long or not valid text is "
           "refused (400) with its own reason — for a file and for a folder",
@@ -472,8 +477,10 @@ def _builder_wall60():
 
 
 def _names60():
-    """The shared validator: rename keeps "Enter a new name.", a create asks for "a name", and
-    the wording names neither a rename nor a create."""
+    """The shared validator: rename keeps "Enter a new name.", a create asks for "a name".
+
+    And the wording of the rest names neither a rename nor a create.
+    """
     got = (_files60.rename_name_problem(""), _files60.name_problem(""),
            _files60.name_problem("a/b"), _files60.rename_name_problem("a/b"))
     check("name_problem: an empty name is asked for as 'a name' (create) and 'a new name' "

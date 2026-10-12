@@ -1362,8 +1362,10 @@ _RENAME_GONE_MSG = "That file or folder is no longer there. Reload the file brow
 
 
 def rename_name_problem(name):
-    """Why `name` cannot be the new name of a file or folder, or None when it can: name_problem's
-    rules, with an empty name asked for as a NEW one."""
+    """Why `name` cannot be the new name of a file or folder, or None when it can.
+
+    name_problem's rules, with an empty name asked for as a NEW one.
+    """
     if not isinstance(name, str) or not name:
         return "Enter a new name."
     return name_problem(name)
@@ -1599,10 +1601,9 @@ _CREATE_DONE = "__CREATE_DONE__"
 
 
 def create_refusal(user, reldir, name, kind, selfname=None):
-    """Why creating `name` (a "file" or "folder") in the folder `reldir` is refused before the host
-    is asked, else None.
+    """Why creating `name` in the folder `reldir` is refused before the host is asked, else None.
 
-    A kind that is neither, a folder outside the home or one that is not valid text, a name
+    `kind` is "file" or "folder". A kind that is neither, a folder outside the home or one that is not valid text, a name
     name_problem refuses, and a destination that is a protected path (by delete_path's rules:
     anything in lgsm/, or a reserved top-level name such as serverfiles or .ssh) or one the live
     console reads (_console_paths). The folder may be the home itself: that is where a game's own
