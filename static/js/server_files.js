@@ -773,9 +773,9 @@ function uploadEntries(list, base){
   var body=document.createElement('div');
   var p=document.createElement('div');
   p.className='small';
-  p.textContent=tf(list.length===1 ? 'Upload 1 file ({size}) into {dir}? Subfolders are recreated on the server.'
-                                     : 'Upload {n} files ({size}) into {dir}? Subfolders are recreated on the server.',
-                   {n: list.length, size: fmtSize(bytes), dir: base||'home'});
+  p.textContent=tfn(list.length, 'Upload 1 file ({size}) into {dir}? Subfolders are recreated on the server.',
+                            'Upload {n} files ({size}) into {dir}? Subfolders are recreated on the server.',
+                            {size: fmtSize(bytes), dir: base||'home'});
   body.appendChild(p);
   var ul=document.createElement('div');
   ul.className='font-monospace mt-2';
@@ -788,8 +788,8 @@ function uploadEntries(list, base){
   note.className='text-secondary mt-2';
   note.style.fontSize='.7rem';
   note.textContent=t('Files upload one at a time, so a large tree takes a while \u2014 leave the page open.')
-    + (oversize ? ' '+(oversize===1 ? t('1 file is over the 50 MB per-file limit and will be refused.')
-                                    : tf('{n} files are over the 50 MB per-file limit and will be refused.', {n: oversize})) : '');
+    + (oversize ? ' '+tfn(oversize, '1 file is over the 50 MB per-file limit and will be refused.',
+                                  '{n} files are over the 50 MB per-file limit and will be refused.') : '');
   body.appendChild(note);
   var lbl=document.createElement('label');
   lbl.className='d-flex align-items-center gap-2 mt-2 small';
@@ -800,7 +800,7 @@ function uploadEntries(list, base){
   body.appendChild(lbl);
   confirmDialog({
     title: names.length>1 ? 'Upload folders' : 'Upload folder',
-    icon:'folder-plus', confirmLabel:list.length===1 ? t('Upload 1 file') : tf('Upload {n} files', {n: list.length}),
+    icon:'folder-plus', confirmLabel:tfn(list.length, 'Upload 1 file', 'Upload {n} files'),
     bodyNode: body,
     onConfirm: function(){
       // `cb` is the CAPTURED element, not a document lookup. confirmDialog removes the overlay
@@ -1209,25 +1209,25 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
   function toArr(s){ return Array.from(s).sort(function(a,b){return a-b;}); }
   function joinList(arr,fmt){ arr=arr.map(fmt); if(arr.length<=1) return arr[0]||''; return tf('{list} and {last}', {list: arr.slice(0,-1).join(', '), last: arr[arr.length-1]}); }
   function contiguous(a){ for(var i=1;i<a.length;i++) if(a[i]!==a[i-1]+1) return false; return a.length>1; }
+  // Each clause a whole sentence-piece translated with its values in (tf). Built as English
+  // fragments, every reading of a schedule was English on a translated page.
+  var STEP_RE=new RegExp('^\\*/(\\d+)$'), NUM_RE=new RegExp('^\\d+$');
+  // The clause for the minute and hour fields, by their shape: '*' any, '1' one number, 's' a */n
+  // step (every hour only), 'L' a list or range.
+  var TIME={'**':'Every minute', 's*':'Every {n} minutes', '11':'At {time}', '1*':'At {n} minutes past every hour',
+            'L*':'At minutes {m} past every hour', '*1':'Every minute past hour {h}', '*L':'Every minute past hours {h}',
+            '1L':'At minute {m} past hours {h}', 'L1':'At minutes {m} past hour {h}', 'LL':'At minutes {m} past hours {h}'};
+  function _shape(r, step){ return r==='*' ? '*' : (NUM_RE.test(r) ? '1' : (step && STEP_RE.test(r) ? 's' : 'L')); }
+  function timeClause(mR, hR, sets){
+    var h=_shape(hR, false), m=_shape(mR, h==='*');
+    if(m+h==='1*' && +mR===0) return t('Every hour, on the hour');
+    return tf(TIME[m+h], {n: m==='s' ? STEP_RE.exec(mR)[1] : +mR, time: pad(+hR)+':'+pad(+mR),
+                          m: m==='1' ? String(+mR) : joinList(toArr(sets.min),String),
+                          h: h==='1' ? String(+hR) : joinList(toArr(sets.hour),String)});
+  }
   function describe(f,sets){
-    var mR=f[0],hR=f[1],domR=f[2],monR=f[3],dowR=f[4];
-    var mAll=mR==='*', hAll=hR==='*', mOne=/^\d+$/.test(mR), hOne=/^\d+$/.test(hR), stepM=/^\*\/(\d+)$/.exec(mR);
-    // Each clause a whole sentence-piece translated with its values in (tf). Built as English
-    // fragments, every reading of a schedule was English on a translated page.
-    var time;
-    if(mAll&&hAll) time=t('Every minute');
-    else if(stepM&&hAll) time=tf('Every {n} minutes', {n: stepM[1]});
-    else if(mOne&&hOne) time=tf('At {time}', {time: pad(+hR)+':'+pad(+mR)});
-    else if(mOne&&hAll) time=(+mR===0)?t('Every hour, on the hour'):tf('At {n} minutes past every hour', {n: +mR});
-    else {
-      var hrs=hAll ? null : (hOne ? String(+hR) : joinList(toArr(sets.hour),String));
-      var mins=mOne ? String(+mR) : joinList(toArr(sets.min),String);
-      if(mAll) time=hAll ? t('Every minute past every hour')
-                         : tf(hOne ? 'Every minute past hour {h}' : 'Every minute past hours {h}', {h: hrs});
-      else if(hAll) time=tf(mOne ? 'At minute {m} past every hour' : 'At minutes {m} past every hour', {m: mins});
-      else time=tf(mOne ? (hOne ? 'At minute {m} past hour {h}' : 'At minute {m} past hours {h}')
-                        : (hOne ? 'At minutes {m} past hour {h}' : 'At minutes {m} past hours {h}'), {m: mins, h: hrs});
-    }
+    var domR=f[2],monR=f[3],dowR=f[4];
+    var time=timeClause(f[0], f[1], sets);
     var q=[];
     if(domR!=='*') q.push(tf('on day-of-month {list}', {list: joinList(toArr(sets.dom),String)}));
     // Both day fields restricted: cron runs on EITHER ('or on'). One of them starting with '*'

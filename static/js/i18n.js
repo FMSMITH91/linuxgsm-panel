@@ -21,9 +21,8 @@ window.t = function(s){ return i18nLookup(s) || s; };
 // tfHtml is the innerHTML twin: the translated sentence and every value are escaped, except a value
 // given as {html: '…'} — markup the caller built, with its own values escaped (a bold name).
 function i18nEsc(s){
-  return String(s).replace(/[&<>"']/g, function(c){
-    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
-  });
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 function i18nFill(s, vals, html){
   return s.replace(/\{(\w+)\}/g, function(m, k){
@@ -35,6 +34,11 @@ function i18nFill(s, vals, html){
 }
 window.tf = function(s, vals){ return i18nFill(window.t(s), vals, false); };
 window.tfHtml = function(s, vals){ return i18nFill(i18nEsc(window.t(s)), vals, true); };
+// A count's sentence: its own catalog entry for one and for many ("Upload 1 file" / "Upload {n}
+// files"), the count put in after, with any other values.
+window.tfn = function(n, one, many, vals){
+  return window.tf(n === 1 ? one : many, Object.assign({n: n}, vals || {}));
+};
 (function(){
   // Every text node + title/placeholder/aria-label whose EXACT (whitespace-collapsed) text is a
   // catalog key gets swapped. Each node's ORIGINAL English is remembered (node.__i18nEn /

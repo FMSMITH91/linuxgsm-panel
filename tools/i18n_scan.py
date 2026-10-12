@@ -423,7 +423,7 @@ def is_js_ui_word(text, before):
 # A literal handed to t() (or a file's own wrapper for it, _discT) is a string the code itself says
 # a person reads, whatever its shape: lower-case ("player is connected to"), one word, or a branch
 # of a ternary inside the call. Matched as "an open t( call with no unbalanced bracket since".
-_JS_T_CALL = re.compile(r"""\b(?:t|_discT|tf|tfHtml)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
+_JS_T_CALL = re.compile(r"""\b(?:t|_discT|tf|tfHtml|tfn)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
 
 
 def is_js_t_arg(text, before):
@@ -562,11 +562,8 @@ def _js_run_claims(run, standalone, source):
     parts = [(joined, before)] if standalone and len(run) > 1 else \
         [(s[0], source[max(0, s[2] - 160):s[2]]) for s in run]
     out = [text for text, bef in parts if _js_claims(text, bef)]
-    for s in run:
-        out.extend(js_markup_texts(s[0]))
-    if standalone:
-        out.extend(_js_icon_tail(joined))
-    return out
+    out.extend(text for s in run for text in js_markup_texts(s[0]))
+    return out + _js_icon_tail(joined, standalone)
 
 
 # An icon, then words to the END of a literal with nothing spliced on: `'<i class="bi …"></i> Updates
@@ -576,9 +573,9 @@ def _js_run_claims(run, standalone, source):
 _JS_ICON_TAIL = re.compile(r"(?:</i>|<i\b[^<>]*></i>)([^<>]+)\Z")
 
 
-def _js_icon_tail(joined):
+def _js_icon_tail(joined, standalone=True):
     """The words after a trailing icon in a standalone run of literals, as one claimed text."""
-    m = _JS_ICON_TAIL.search(joined)
+    m = _JS_ICON_TAIL.search(joined) if standalone else None
     seg = re.sub(r"\s+", " ", html.unescape(m.group(1))).strip() if m else ""
     return [seg] if seg and _js_markup_claims(seg, "") and not _js_guarded_before(joined[:m.start()]) else []
 
@@ -740,11 +737,28 @@ def _js_splice_prose(seg):
     seg = re.sub(r"&\w+;", " ", seg)
     if re.search(r"[/=<>\"\[\]{};#\\(]$|[/=<>\"\[\]{};#\\]|^\s*[.&?-]", seg.strip()):
         return False                                  # a URL, a selector, an attribute, code
+    if re.fullmatch(r"\s*\w*_\w*\s*", seg):
+        return False                                  # an identifier: '__i18nA_' + attr
     words = seg.split()
     if words and all(_JS_CSS_WORDS.match(w) for w in words) and any("-" in w for w in words):
         return False                                  # 'btn text-wrap ' + cls
     return any(len(w) >= 2 and w.lower() not in _JS_UNITS
                for w in re.findall(r"[A-Za-z]*[a-z][A-Za-z]*", seg))
+
+
+def _js_ignored(run, lines):
+    """Whether any literal of a run sits on an `i18n-ignore` line."""
+    return any(JS_IGNORE in lines[s[1] - 1] for s in run if s[1] <= len(lines))
+
+
+def _js_run_splices(run, lead, tail, source):
+    """The sentence words at a run's `+` joins, unless the statement writes a class, style or id."""
+    stmt = source[max(0, run[0][2] - 300):run[0][2]].rsplit(";", 1)[-1]
+    if _JS_NOT_TEXT_SINK.search(stmt):
+        return []                                     # a class list, a style, an id: not text
+    joined = "".join(s[0] for s in run)
+    segs = [_js_edge_text(joined, side) for side, on in (("lead", lead), ("tail", tail)) if on]
+    return [seg.strip() for seg in segs if _js_splice_prose(seg)]
 
 
 def spliced_js(js_dir=JS_DIR):
@@ -755,16 +769,9 @@ def spliced_js(js_dir=JS_DIR):
             source = fh.read()
         lines = source.splitlines()
         for run, lead, tail in _js_splice_runs(source):
-            if not (lead or tail) or any(JS_IGNORE in lines[s[1] - 1] for s in run if s[1] <= len(lines)):
-                continue
-            stmt = source[max(0, run[0][2] - 300):run[0][2]].rsplit(";", 1)[-1]
-            if _JS_NOT_TEXT_SINK.search(stmt):
-                continue                              # a class list, a style, an id: not text
-            joined = "".join(s[0] for s in run)
-            for side, on in (("lead", lead), ("tail", tail)):
-                seg = _js_edge_text(joined, side) if on else ""
-                if _js_splice_prose(seg):
-                    found.append((os.path.basename(path), run[0][1], seg.strip()))
+            if (lead or tail) and not _js_ignored(run, lines):
+                found.extend((os.path.basename(path), run[0][1], seg)
+                             for seg in _js_run_splices(run, lead, tail, source))
     return sorted(set(found))
 
 
@@ -775,20 +782,19 @@ def spliced_js(js_dir=JS_DIR):
 _JS_INLINE_OPEN = re.compile(r"<(b|strong|em|u)\b[^>]*>\Z")
 
 
+def _js_emphasised(parts, at):
+    """Whether parts[at:at+3] is a bold/em element (open tag, text, close tag) holding prose."""
+    return bool(0 <= at and at + 2 < len(parts) and _JS_INLINE_OPEN.match(parts[at])
+                and _js_splice_prose(parts[at + 1]) and re.fullmatch(r"</(b|strong|em|u)>", parts[at + 2]))
+
+
 def _js_emphasis_splits(joined):
     """The prose pieces of one literal run that sit beside an emphasised piece of prose."""
-    parts, out = re.split(r"(<[^>]*>)", joined), []
-    for i, part in enumerate(parts):
-        if part.startswith("<") or not _js_splice_prose(part):
-            continue
-        # after a closing </b> whose element held prose, or before an opening <b> that does
-        before = i >= 3 and re.fullmatch(r"</(b|strong|em|u)>", parts[i - 1]) \
-            and _JS_INLINE_OPEN.match(parts[i - 3]) and _js_splice_prose(parts[i - 2])
-        after = i + 3 < len(parts) and _JS_INLINE_OPEN.match(parts[i + 1]) \
-            and _js_splice_prose(parts[i + 2]) and re.fullmatch(r"</(b|strong|em|u)>", parts[i + 3])
-        if before or after:
-            out.append(part.strip())
-    return out
+    parts = re.split(r"(<[^>]*>)", joined)
+    # after a closing </b> whose element held prose, or before an opening <b> that does
+    return [part.strip() for i, part in enumerate(parts)
+            if not part.startswith("<") and _js_splice_prose(part)
+            and (_js_emphasised(parts, i - 3) or _js_emphasised(parts, i + 1))]
 
 
 def emphasis_split_js(js_dir=JS_DIR):
