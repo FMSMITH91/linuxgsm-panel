@@ -524,6 +524,18 @@ def _host_blockers(remote):
 
 
 def _panel_host_blockers():
+    """The panel's own work in flight on its host, each marked `panel` for the reboot dialog.
+
+    The dialog shows a blocker's name as a name, never translated; `panel` tells it this one is
+    the phrase "the panel" (in the viewer's language), without matching the English words.
+    """
+    out = _r17a_panel_work()
+    for b in out:
+        b["panel"] = True
+    return out
+
+
+def _r17a_panel_work():
     out = []
     try:
         if so._update_in_progress():

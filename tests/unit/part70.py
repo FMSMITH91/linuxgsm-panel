@@ -381,3 +381,31 @@ check("reboot: a start held because a LinuxGSM update or backup is running for t
 _rw_es70 = _rw70.row_gave_up({"pending_since": 0}, 3600, True)
 check("reboot: ...and the rollback's give-up reason does not claim a reboot happened",
       _rw_es70[0] == "failed" and "called off" in _rw_es70[1], repr(_rw_es70))
+
+
+# ── A05 lead: the reboot dialog names the panel's own work in the viewer's language ──────────────
+with _patched():
+    _patch(_so70, "_update_in_progress", lambda: True)
+    _pb70 = _hr70._panel_host_blockers()
+with open(_os70.path.join(_ROOT70, "static", "js", "nags.js"), encoding="utf-8") as _fh70:
+    _nags70 = _fh70.read()
+_DOM70 = ("function El(tag){ this.tag = tag; this.attrs = {}; this.children = []; }\n"
+          "El.prototype.setAttribute = function(k, v){ this.attrs[k] = v; };\n"
+          "El.prototype.appendChild = function(c){ this.children.push(c); return c; };\n"
+          "El.prototype.replaceChild = function(n, o){ this.children[this.children.indexOf(o)] = n; return o; };\n"
+          "Object.defineProperty(El.prototype, 'firstChild', {get(){ return this.children[0]; }});\n"
+          "global.document = {createElement: t => new El(t), createTextNode: t => ({text: t})};\n")
+_bl70 = _node47(_DOM70 + "\n".join(_cut47(_nags70, h) for h in (
+    "function _rbEl", "function _rbName", "function _rbRow", "function _rbBlockersList"))
+    + "\nconst ul = _rbBlockersList({blockers: %s});\n" % _json70.dumps(
+        [dict(b, name=str(b["name"])) for b in _pb70] + [{"kind": "backup", "name": "p70-srv"}])
+    + "console.log(JSON.stringify(ul.children.map(li => [li.children[0].textContent, "
+      "'data-no-i18n' in li.children[0].attrs])));")
+if _bl70 is None:
+    skip("reboot dialog: the panel's own blocker is a translatable phrase", "no node")
+else:
+    check("reboot dialog: a blocker that is the panel's own work (an update, a restore, a full backup) is "
+          "named by the phrase \"the panel\", left to the page's translator (it was a name marked "
+          "data-no-i18n, English in every language); a server's name stays untranslated",
+          [b.get("panel") for b in _pb70] == [True]
+          and _bl70 == [["the panel", False], ["p70-srv", True]], repr((_pb70, _bl70)))
