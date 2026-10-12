@@ -263,9 +263,12 @@ def _types60(a_client, sid):
            for d, k in ((5, "file"), (["cfg"], "folder"), (None, "file"), ("cfg", True),
                         ("cfg", 1), ("cfg", "File"), ("cfg", "dir"), ("cfg", None),
                         ("cfg", ["file"]), ("cfg", {"file": 1}))]
+    want = ["Invalid path"] * 3 + ["Choose a file or a folder."] * 7
     check("create route: a folder that is not text, or a kind that is not exactly \"file\" or "
-          "\"folder\" (true, 1, \"File\", \"dir\", null, a list, an object), is refused (400)",
-          [c for c, _b in got] == [400] * len(got) and not _SHELLS60, repr(got))
+          "\"folder\" (true, 1, \"File\", \"dir\", null, a list, an object), is refused (400) "
+          "with its reason, before the host is asked anything — no account probe, no command",
+          [(c, b.get("message")) for c, b in got] == [(400, m) for m in want]
+          and (_PROBES60, _SHELLS60) == ([], []), repr((got, _PROBES60[:1])))
     rows, refused = _refusal_rows60(n_audit)
     check("create route: ...each is audited as a failed create, and nothing was made",
           len(rows) == len(got) and refused and _snapshot60() == before,
