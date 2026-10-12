@@ -1043,6 +1043,11 @@ def _r11b_rules_reach_root(rules, caller, names, uid):
     return reach
 
 
+# An Option_Spec word at the start of a command item (sudoers(5): Runas_Spec? Option_Spec*
+# Tag_Spec* Cmnd): TIMEOUT=, CWD=, CHROOT=, NOTBEFORE=, NOTAFTER=, ROLE=, TYPE=, …
+_R14B_OPTION_SPEC_RE = re.compile(r"[A-Z_]+=")
+
+
 def _r12b_may_retract_root_all(rest):
     """Whether a later rule may cover every command AS ROOT, and so take a NOPASSWD grant back.
 
@@ -1059,6 +1064,11 @@ def _r12b_may_retract_root_all(rest):
     Runas and only untagged items missed `NOPASSWD: /usr/bin/true, PASSWD: ALL` and
     `(nobody) NOPASSWD: ALL, (root) PASSWD: ALL`, both of which leave every root command asking
     a password — and answered "root-capable", which switches v_game_account off.
+
+    An item with an Option_Spec (`TIMEOUT=1h`, `CWD=*`, `NOTBEFORE=…`) before its tags is not
+    read, so it counts: sudoers(5) puts options between the Runas and the tags, and reading
+    `TIMEOUT=1h PASSWD: ALL` as a command named "TIMEOUT=1h PASSWD: ALL" let the earlier grant
+    stand while sudo asked a password for every root command.
     """
     m = re.fullmatch(r"(\S+)\s*=\s*(.*)", rest.strip())
     items = _r13b_cmnd_items(m.group(2)) if m else None
@@ -1069,6 +1079,8 @@ def _r12b_may_retract_root_all(rest):
         r = re.match(r"\(([^)]*)\)\s*", item)
         if r:
             runas, item = r.group(1), item[r.end():]
+        if _R14B_OPTION_SPEC_RE.match(item):
+            return True       # `TIMEOUT=1h PASSWD: ALL`: an Option_Spec before the tags, not read
         _tags, cmd = _r12b_cmd_tags(item)
         cmd = cmd.strip()
         if "(" in cmd or re.search(r"(?:^|\s):\s*[^\s=]+\s*=", cmd):
@@ -1113,9 +1125,15 @@ def _r12b_runas_may_be_root(runas):
     if runas is None:
         return True
     users = [u.strip() for u in runas.split(":")[0].split(",") if u.strip()]
-    return any(u in ("ALL", "root", "#0") or u.startswith(("!", "+", "%:"))
+    # `#<uid>` is read as a number, as sudo's sudo_strtoid reads it: `#00` is root too.
+    return any(u in ("ALL", "root") or _r14b_is_uid_zero(u) or u.startswith(("!", "+", "%:"))
                or _SUDOERS_ALIAS_NAME_RE.fullmatch(u)
                or (u.startswith("%") and _r13b_group_holds_root(u[1:])) for u in users)
+
+
+def _r14b_is_uid_zero(item):
+    """Whether a Runas item is `#<digits>` naming uid 0 (`#0`, `#00`)."""
+    return item.startswith("#") and item[1:].isdigit() and int(item[1:]) == 0
 
 
 def _r13b_group_holds_root(group):
@@ -1186,19 +1204,41 @@ def _rule_is_nopasswd_root_all(rest):
     `<hosts> = [(ALL|root[:...])] NOPASSWD: ... ALL` — every command, as root, no password.
 
     The host list must cover THIS host (`ALL`, or its name): a rule for another machine in a
-    shared sudoers grants nothing here. A Host_Alias is not followed, so it does not count."""
-    m = re.fullmatch(r"(\S+)\s*=\s*(?:\(([^)]*)\))?\s*(.*)", rest.strip())
+    shared sudoers grants nothing here. A Host_Alias is not followed, so it does not count.
+
+    Read item by item, as the take-back side is: a `(...)` Runas and the PASSWD/NOPASSWD tag carry
+    on to the items after them, and sudo's LAST matching item decides. Reading only the first Runas
+    and the leading tags counted `NOPASSWD: ALL, PASSWD: ALL`, `NOPASSWD: ALL, (root) PASSWD: ALL`
+    and `NOPASSWD: /bin/ls, PASSWD: /bin/x, ALL` as grants, though each leaves every root command
+    asking a password — the permissive direction, which switches v_game_account off. So the grant
+    is the last `ALL` item with Runas ALL/root and NOPASSWD in force, and the items after it must
+    not take it back. An item this does not read (an Option_Spec before its tags) is no grant."""
+    m = re.fullmatch(r"(\S+)\s*=\s*(.*)", rest.strip())
     if not m:
         return False
-    hosts, runas, cmd = m.group(1), m.group(2), m.group(3)
+    hosts, spec = m.group(1), m.group(2)
     if not _r12b_hosts_cover_here(hosts):
         return False
-    if runas is not None and runas.split(":")[0].strip() not in ("ALL", "root"):
+    items = _r13b_cmnd_items(spec)
+    if items is None:
         return False
-    tags, cmd = _r12b_cmd_tags(cmd)
-    # The LAST of PASSWD / NOPASSWD is the one in force: `NOPASSWD: PASSWD: ALL` asks a password.
-    pw_tags = [t for t in tags if t in ("PASSWD", "NOPASSWD")]
-    return bool(pw_tags) and pw_tags[-1] == "NOPASSWD" and "ALL" in [c.strip() for c in cmd.split(",")]
+    runas, pw, grant_at = None, None, None
+    for i, item in enumerate(items):
+        r = re.match(r"\(([^)]*)\)\s*", item)
+        if r:
+            runas, item = r.group(1), item[r.end():]
+        if _R14B_OPTION_SPEC_RE.match(item):
+            return False
+        tags, cmd = _r12b_cmd_tags(item)
+        # The LAST of PASSWD / NOPASSWD is the one in force: `NOPASSWD: PASSWD: ALL` asks a password.
+        pw = ([t for t in tags if t in ("PASSWD", "NOPASSWD")] or [pw])[-1]
+        if (cmd.strip() == "ALL" and pw == "NOPASSWD"
+                and (runas is None or runas.split(":")[0].strip() in ("ALL", "root"))):
+            grant_at = i
+    if grant_at is None:
+        return False
+    later = items[grant_at + 1:]
+    return not (later and _r12b_may_retract_root_all("%s = %s" % (hosts, ", ".join(later))))
 
 
 def _home_holds_a_panel(name):
