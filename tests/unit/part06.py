@@ -1514,7 +1514,7 @@ def _r14d_dotted_of(path):
 
 # To a fixed point: a part's aliases can be carried from a part that carried them in turn.
 _stub_carry, _stub_alias_of = {}, {}
-for _stub_round in range(8):
+for _ in range(8):  # at most 8 rounds: it stops at the first that changes nothing
     _stub_alias_of = {_f: _r14d_aliases(_t, _stub_carry) for _f, _t in _stub_trees.items()}
     _stub_next = {_r14d_dotted_of(_f): _al for _f, _al in _stub_alias_of.items() if _r14d_dotted_of(_f)}
     if _stub_next == _stub_carry:
