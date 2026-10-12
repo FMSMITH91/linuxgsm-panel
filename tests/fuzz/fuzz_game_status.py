@@ -46,6 +46,10 @@ def TestOneInput(data):
     ssh_manager._parse_valve_status(text)     # Source / GoldSrc `status`
     ssh_manager._parse_idtech3_status(text)   # Quake3 / Call of Duty `status`
     ssh_manager._parse_minecraft_list(text)   # Minecraft `list`
+    # ...and the entry production calls, whose completeness gate (_r13b_reply_complete) reads the
+    # same untrusted reply itself: its player-count line and table header, before any parser runs.
+    for eng in ("valve", "idtech3", "minecraft"):
+        ssh_manager._parse_player_reply(eng, text)
 
 
 def main():
