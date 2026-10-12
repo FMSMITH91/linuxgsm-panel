@@ -547,7 +547,8 @@ def _p35_announced():
         unset = UP._announced()
         store["panel_update_announced"] = _TIP35
         full = UP._announced()
-        _osu35._update_tick(None, {"update_available": False}, _TIP35)   # the writer: "" for none
+        _osu35._update_tick(None, {"update_available": False, "fetched": True, "behind": 0},
+                            _TIP35)   # the writer: "" for none
         written = (store.get("panel_update_announced"), UP._announced())
         store["panel_update_announced"] = "garbage"
         bad = UP._announced()
