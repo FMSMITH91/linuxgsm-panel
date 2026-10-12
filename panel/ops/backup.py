@@ -26,6 +26,7 @@ import urllib.parse
 
 # Imported for the restore's privileged step only. system_ops does not import
 # backup, so this direction is safe.
+from panel.core import i18n
 from panel.ops.system_ops import _helper_present, _is_system_service, _run_verb
 import time
 
@@ -687,7 +688,8 @@ _RESTORE_IDENT_COLUMNS = (("game_server", "short_name"), ("game_server", "game_t
 # it would protect nothing.
 _RESTORE_PORT_COLUMNS = (("game_server", "port"), ("game_server", "query_port"),
                          ("remote_server", "port"))
-_RESTORE_ROW_LABEL = {"game_server": "game server", "remote_server": "host"}
+# Sentences: a row's kind is named inside a refusal shown to the viewer, translated there.
+_RESTORE_ROW_LABEL = {"game_server": i18n.Sentence("game server"), "remote_server": i18n.Sentence("host")}
 
 
 def _restore_fernet(tar, names):
@@ -771,8 +773,10 @@ def _q_ident(name):
 # What _restore_shape can say about a database it will not vouch for. Fixed wording chosen here,
 # never text taken from the archive or from an exception: it reaches the browser, and a message
 # built from an exception is how internals leak (CodeQL py/stack-trace-exposure).
-_SHAPE_DAMAGED = "is damaged — SQLite's own integrity check does not pass"
-_SHAPE_OBJECTS = {"TRIGGER": "a trigger", "VIEW": "a view", "VIRTUAL": "a virtual table"}
+# A refusal's clauses are i18n.Sentences: put into "its database {problem}" and translated whole there.
+_SHAPE_DAMAGED = i18n.Sentence("is damaged — SQLite's own integrity check does not pass")
+_SHAPE_OBJECTS = {"TRIGGER": i18n.Sentence("a trigger"), "VIEW": i18n.Sentence("a view"),
+                  "VIRTUAL": i18n.Sentence("a virtual table")}
 
 
 def _schema_refusal(con):
@@ -790,8 +794,8 @@ def _schema_refusal(con):
     for (sql,) in con.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL"):
         kind = _ddl_kind(sql)
         if kind not in _RESTORE_DDL_KINDS:
-            return ("defines %s, which no version of the panel creates"
-                    % _SHAPE_OBJECTS.get(kind, "a schema object"))
+            return i18n.Sentence("defines {what}, which no version of the panel creates",
+                                 what=_SHAPE_OBJECTS.get(kind) or i18n.Sentence("a schema object"))
     return None
 
 
@@ -814,13 +818,13 @@ def _column_refusal(table, col, cols):
         # none is in models._migrate's ALTER TABLE map, so no backup any version of the panel
         # wrote lacks one. A table without it is not the panel's — and every query the restored
         # panel made against it would fail.
-        return ("has a %s table with no %s column, which every version of the panel has created"
-                % (table, col))
+        return i18n.Sentence("has a {table} table with no {column} column, which every version of the panel "
+                             "has created", table=table, column=col)
     if cols[col][1]:
         # A GENERATED column is recomputed from other columns whenever they change — and the
         # panel updates a game server's status on every poll.
-        return ("computes %s.%s from other columns, which no version of the panel does"
-                % (table, col))
+        return i18n.Sentence("computes {table}.{column} from other columns, which no version of the panel does",
+                             table=table, column=col)
     return None
 
 
@@ -968,17 +972,24 @@ def _restore_db_refusal(src):
         shutil.rmtree(tmpd, ignore_errors=True)
     if shape_problem:
         _log.warning("restore refused: the backup's panel.db %s", shape_problem)
-        return ("This backup was not restored: its database %s. Nothing on this panel was changed."
-                % shape_problem)
+        return i18n.Sentence("This backup was not restored: its database {problem}. Nothing on this panel was "
+                             "changed.", problem=shape_problem)
     if not bad:
         return ""
-    where = ", ".join("%s #%s (%s)" % (_RESTORE_ROW_LABEL.get(t, t), rid, col)
-                      for t, rid, col in bad[:5])
-    more = " and %d more" % (len(bad) - 5) if len(bad) > 5 else ""
-    return ("This backup was not restored: its database holds a value the panel will not put in a "
-            "command — %s%s. Every command for that row would be built from it. Nothing on this "
-            "panel was changed; restore a different backup, or correct that row in the archive's "
-            "panel.db first." % (where, more))
+    where = [i18n.Sentence("{kind} #{id} ({column})", kind=_RESTORE_ROW_LABEL.get(t, t), id=rid, column=col)
+             for t, rid, col in bad[:5]]
+    more = len(bad) - 5
+    # One whole sentence with and without the "and N more": that clause was spliced in.
+    if more > 0:
+        return i18n.Sentence(
+            "This backup was not restored: its database holds a value the panel will not put in a command "
+            "— {rows} and {more} more. Every command for that row would be built from it. Nothing on this "
+            "panel was changed; restore a different backup, or correct that row in the archive's panel.db "
+            "first.", rows=where, more=more)
+    return i18n.Sentence(
+        "This backup was not restored: its database holds a value the panel will not put in a command "
+        "— {rows}. Every command for that row would be built from it. Nothing on this panel was changed; "
+        "restore a different backup, or correct that row in the archive's panel.db first.", rows=where)
 
 
 def _safety_copy_passphrase(operator_passphrase=None):
@@ -1021,10 +1032,10 @@ def _restore_validated(src, name, skip_safety_backup=False, operator_passphrase=
     if not skip_safety_backup:
         ok, safety, _spp_typed = _take_safety_copy(operator_passphrase)
         if not ok:
-            return False, ("The pre-restore safety copy could not be written (%s). Restoring "
-                           "would overwrite panel.db, config.json, secret_key and cred_key with "
-                           "no way back — without cred_key every stored SSH credential becomes "
-                           "unreadable. Confirm again to restore without one." % safety)
+            return False, i18n.Sentence(
+                "The pre-restore safety copy could not be written ({why}). Restoring would overwrite panel.db, "
+                "config.json, secret_key and cred_key with no way back — without cred_key every stored SSH "
+                "credential becomes unreadable. Confirm again to restore without one.", why=safety)
 
     # A FIXED staging directory inside data/, not a fresh mkdtemp. The helper's restore verb takes
     # no path argument — root copying "whatever is in the directory you name" over the panel's keys
@@ -1116,7 +1127,7 @@ def _dispatch_restore(stage, name, safety, typed):
 
 
 def _restore_started_msg(name, safety, typed_passphrase=False):
-    """What the operator is told.
+    """What the operator is told (an i18n.Sentence, one whole sentence per case).
 
     It names the safety copy, because that archive IS their way back and it is the only place its
     name appears — the panel is about to restart.
@@ -1125,16 +1136,18 @@ def _restore_started_msg(name, safety, typed_passphrase=False):
         # The restore may replace the configured passphrase with the archive's own, so the
         # operator needs to know which one opens this copy: the one they had BEFORE it, or — when
         # that could not be decrypted here — the one they just typed.
-        return ("Restoring from %s — the panel will restart in a few seconds. Your previous data "
-                "was saved as %s, encrypted with %s." % (
-                    name, safety,
-                    "the passphrase you entered for this restore" if typed_passphrase else
-                    "the backup passphrase this panel had before the restore"))
+        if typed_passphrase:
+            return i18n.Sentence("Restoring from {name} — the panel will restart in a few seconds. Your "
+                                 "previous data was saved as {safety}, encrypted with the passphrase "
+                                 "you entered for this restore.", name=name, safety=safety)
+        return i18n.Sentence("Restoring from {name} — the panel will restart in a few seconds. Your "
+                             "previous data was saved as {safety}, encrypted with the backup passphrase "
+                             "this panel had before the restore.", name=name, safety=safety)
     if safety:
-        return ("Restoring from %s — the panel will restart in a few seconds. Your previous data "
-                "was saved as %s." % (name, safety))
-    return ("Restoring from %s — the panel will restart in a few seconds. NO pre-restore safety "
-            "copy was made." % name)
+        return i18n.Sentence("Restoring from {name} — the panel will restart in a few seconds. Your "
+                             "previous data was saved as {safety}.", name=name, safety=safety)
+    return i18n.Sentence("Restoring from {name} — the panel will restart in a few seconds. NO "
+                         "pre-restore safety copy was made.", name=name)
 
 
 def _legacy_restore_dispatch(stage, name, safety="", typed_passphrase=False):

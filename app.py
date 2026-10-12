@@ -2012,19 +2012,12 @@ def _new_user_language(cfg, known):
 
 
 def _current_lang():
-    """Active UI language: the logged-in user's saved preference, else the session choice, else en."""
-    lang = None
-    try:
-        if getattr(current_user, "is_authenticated", False):
-            lang = getattr(current_user, "language", None)
-    except Exception:
-        lang = None
-    if not lang:
-        try:
-            lang = session.get("lang")
-        except Exception:
-            lang = None
-    return i18n.normalize_lang(lang)
+    """Active UI language: the logged-in user's saved preference, else the session choice, else en.
+
+    One definition, in panel.core.i18n, so a route translating the message it sends back
+    (i18n.tr) asks exactly what the page's t() asks.
+    """
+    return i18n.request_lang()
 
 
 # Content hash per static file, computed once per process. Cheap enough to do lazily and it must
@@ -2375,12 +2368,13 @@ def _apply_mod_restart(gs, remote):
         if gs.restart_pending:              # clear any stale flag; nothing auto-restarts it now
             gs.restart_pending = False
             db.session.commit()
-        return "idle", "The server is stopped — the change will load when you next start it."
+        # Sentences: the caller joins this to its own sentence, each translated whole (i18n.tr).
+        return "idle", i18n.Sentence("The server is stopped — the change will load when you next start it.")
     # Running: a restart is needed to load the change, but we do NOT do it or queue it — the admin
     # decides. (We deliberately don't set restart_pending, so the empty-ticker won't restart it
     # either — no surprise restarts from installing a mod.)
-    return "needed", ("Restart the server to load the change — use Restart now when you're ready "
-                      "(nobody is disconnected until you do).")
+    return "needed", i18n.Sentence("Restart the server to load the change — use Restart now when you're "
+                                   "ready (nobody is disconnected until you do).")
 
 def _selected_remotes(server_ids):
     """Resolve submitted remote ids to RemoteServer rows, skipping anything
@@ -2469,14 +2463,14 @@ def _custom_cmd_form(cmd=None):
     # the failure mode is a validation rule that silently accepts more than the superadmin who
     # wrote it intended, for everyone allowed to run the command. Refuse instead of truncating.
     if len(arg_pattern) > 200:
-        return None, ("The argument validation pattern is too long (%d characters, limit 200). "
-                      "Shorten it — truncating it here could silently widen what it accepts."
-                      % len(arg_pattern))
+        return None, i18n.Sentence("The argument validation pattern is too long ({n} characters, limit 200). "
+                                   "Shorten it — truncating it here could silently widen what it accepts.",
+                                   n=len(arg_pattern))
     # The template is the command itself; a cut changes what runs (a lost closing quote, a lost
     # argument). Same reasoning, same answer.
     if len(template) > 500:
-        return None, ("The command template is too long (%d characters, limit 500)."
-                      % len(template))
+        return None, i18n.Sentence("The command template is too long ({n} characters, limit 500).",
+                                   n=len(template))
     return {"name": name[:80], "command_template": template,
             "argument_label": arg_label[:80], "argument_pattern": arg_pattern,
             "scope_type": scope_type, "scope_value": scope_value[:64],
@@ -2571,17 +2565,22 @@ def _refuse_on_panel_host(remote, what, why=None):
     half of that: a UI-only restriction on a destructive privileged action is not a
     restriction — the route still accepted a POST with the local host's id.
 
-    `why` replaces the reboot reason for an action that does not reboot anything (the Tailscale
-    migration and finalize), so the refusal does not state something untrue about it."""
+    `why` replaces the refusal for an action that does not reboot anything (the Tailscale migration
+    and finalize), so it does not state something untrue about it. Each is a WHOLE sentence with a
+    {what} slot, translated as one: it was two clauses spliced into a third, which no catalog key
+    could match. `what` is an i18n.Sentence (the action's name, translated in its turn)."""
     if not is_local_server(remote):
         return None
     _log.warning("refused %s aimed at the panel's own host (remote_id=%s)", what, remote.id)
     return jsonify({
         "success": False,
-        "message": ("%s prepares a REMOTE VPS and can't target the panel's own host — %s. Use the "
-                    "panel's own pages for updates, firewall and Tailscale."
-                    % (what, why or "it would reboot the panel mid-request")),
+        "message": i18n.tr(why or _PANEL_HOST_REBOOTS, what=what),
     }), 400
+
+
+_PANEL_HOST_REBOOTS = i18n.Sentence(
+    "{what} prepares a REMOTE VPS and can't target the panel's own host — it would reboot the panel "
+    "mid-request. Use the panel's own pages for updates, firewall and Tailscale.")
 
 # ── Scheduled tasks (cron) for the game user ──
 # Same privilege gate as the file editor: a cron entry runs an arbitrary command

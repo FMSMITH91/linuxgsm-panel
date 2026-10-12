@@ -15,7 +15,11 @@ decided by "servers.json sorts after common.json". A key living in exactly one s
 makes the merge order stop mattering, and tests/unit_test.py enforces it.
 """
 import json
+import re
 import threading
+
+from flask import has_request_context, session
+from flask_login import current_user
 
 from panel import REPO_ROOT as _ROOT   # translations/ is at the checkout root, not beside this file
 _DIR = _ROOT / "translations"
@@ -85,3 +89,107 @@ def translate(lang, s):
     if not s:
         return s
     return catalog(lang).get(s, s)
+
+
+# ── Sentences the server builds for the viewer (flash messages, JSON "message"/"error") ─────────
+# A message with a value in it ("Group 'x' created.") was built with an f-string or %, so what
+# reached the page was one finished English sentence no catalog key could ever match: the
+# browser's auto-translator only swaps EXACT catalog text, and es/fr users read English. The
+# sentence is now translated WHOLE, with named slots, and the values go in afterwards — the same
+# convention as the browser's window.tf ("{name}"), so a translation may move a value anywhere in
+# its sentence. Values are never translated, and they are put in as plain text: escaping stays
+# where it always was (Jinja's autoescape for a flash, the page's esc()/textContent for JSON).
+# Filled by a regex, not str.format, so a catalog value can never reach an attribute
+# ("{name.__class__}") or raise on a stray brace, and a value containing braces is not re-read.
+_SLOT = re.compile(r"\{(\w+)\}")
+
+
+def _said(value):
+    """A slot's value as text: a list or tuple is its items joined by ", "."""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
+
+def fill(s, **vals):
+    """Put each {slot}'s value into s; an unknown slot is left as written."""
+    return _SLOT.sub(lambda m: _said(vals[m.group(1)]) if m.group(1) in vals else m.group(0), s)
+
+
+def request_lang():
+    """The viewer's UI language: their saved preference, else the session's choice, else English.
+
+    Outside a request (a background worker) there is no viewer, so English.
+    """
+    if not has_request_context():
+        return DEFAULT_LANG
+    lang = None
+    try:
+        if getattr(current_user, "is_authenticated", False):
+            lang = getattr(current_user, "language", None)
+    except Exception:
+        lang = None
+    if not lang:
+        try:
+            lang = session.get("lang")
+        except Exception:
+            lang = None
+    return normalize_lang(lang)
+
+
+class Sentence(str):
+    """An English sentence that remembers how it was built, for text that is ALSO kept in English.
+
+    A refusal a helper words once is often both recorded (an audit row, a log line — read by admins,
+    in English, and compared by tests) and shown to the viewer. As a str it is that English sentence,
+    so every recorder keeps working unchanged; tr() reads the template and values it was built from
+    and shows the viewer the whole sentence in their language.
+    """
+
+    __slots__ = ("template", "vals")
+
+    def __new__(cls, template, **vals):
+        obj = super().__new__(cls, fill(template, **vals))
+        obj.template = template
+        obj.vals = vals
+        return obj
+
+
+class Sentences(str):
+    """Whole sentences said one after another: English joined by a space, each translated alone.
+
+    For a service answer that is a sentence plus notes (a firewall rule kept, a Funnel left on).
+    The notes were clauses appended to the sentence's English, so nothing matched a key; each part
+    here is a Sentence (or a fixed literal) of its own. Empty parts are dropped. `sep` joins them
+    (a space by default); any other separator ("; and ") is itself translated.
+    """
+
+    __slots__ = ("parts", "sep")
+
+    def __new__(cls, *parts, sep=" "):
+        parts = [p for p in parts if p]
+        obj = super().__new__(cls, sep.join(str(p) for p in parts))
+        obj.parts, obj.sep = parts, sep
+        return obj
+
+
+def tr(s, **vals):
+    """One whole sentence in the viewer's language, with its {slot} values put in.
+
+    `s` may be a Sentence (its own template and values are used) and a value may be one too — a
+    panel-worded label or clause, translated whole in its turn — or a list of them, each translated
+    and then joined. Any other value is put in as written.
+    """
+    if isinstance(s, Sentences):
+        return (tr(s.sep) if s.sep.strip() else s.sep).join(tr(p) for p in s.parts)
+    if isinstance(s, Sentence):
+        s, vals = s.template, dict(s.vals, **vals)
+    lang = request_lang()
+    vals = {k: [_tr_value(x) for x in v] if isinstance(v, (list, tuple)) else _tr_value(v)
+            for k, v in vals.items()}
+    return fill(translate(lang, s), **vals)
+
+
+def _tr_value(value):
+    """One slot value for tr(): a Sentence translated, anything else as it is."""
+    return tr(value) if isinstance(value, (Sentence, Sentences)) else value

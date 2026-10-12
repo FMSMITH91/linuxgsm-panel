@@ -13,6 +13,8 @@ app factory — so there is nothing here for app.py to own.
 """
 from flask import abort, current_app, flash, jsonify, make_response, redirect, request, url_for
 
+from panel.core import i18n
+
 
 def _json_body():
     """Return the request JSON coerced to a dict.
@@ -64,7 +66,7 @@ def _r13b_json_flag(body, key, default):
     v = _r12c_json_flag(body, key, default)
     if v is None:
         abort(make_response(jsonify({"success": False,
-                                     "message": "%s must be true or false." % key}), 400))
+                                     "message": i18n.tr("{key} must be true or false.", key=key)}), 400))
     return v
 
 
@@ -108,10 +110,12 @@ def _form_credential(message, endpoint, username, password, kind="password", **v
         return jsonify({"success": True, "message": message,
                         "credential": {"username": username, "password": password, "kind": kind}})
     if kind == "invite":
-        flash("%s %s — copy it now, it is not shown again." % (message, password), "success")
+        flash(i18n.tr("{message} {password} — copy it now, it is not shown again.",
+                      message=message, password=password), "success")
     else:
-        flash("%s Temporary password for %s: %s — copy it now, it is not shown again."
-              % (message, username, password), "success")
+        flash(i18n.tr("{message} Temporary password for {username}: {password} — copy it now, it is "
+                      "not shown again.", message=message, username=username, password=password),
+              "success")
     return redirect(url_for(endpoint, **values))
 
 

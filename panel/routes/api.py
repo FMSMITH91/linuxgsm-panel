@@ -29,6 +29,7 @@ import concurrent.futures
 import itertools
 import re
 import time
+from panel.core import i18n
 from panel.core.http import (_log_and_generic)
 from app import (_begin_install_reconcile, _cached_player_max, _cached_player_name,
     _end_install_reconcile, _install_changed_during_check, _log, resolve_free_port)
@@ -452,7 +453,9 @@ def _register_installs(app):
             pct = int(j["step"] / j["total"] * 100) if j.get("total") else 0
             return jsonify({
                 "status": j["status"], "step": j["step"], "total": j["total"], "percent": pct,
-                "step_name": j["step_name"], "message": j.get("message", ""),
+                # The job is written on a worker thread with no viewer: its words are kept as
+                # i18n.Sentences (English as a str) and translated here, for whoever is asking.
+                "step_name": i18n.tr(j["step_name"]), "message": i18n.tr(j.get("message", "")),
                 "warn": bool(j.get("warn")),   # done, but with a caveat (installed yet didn't start)
                 "log": j["log"][-100:], "elapsed": int(time.time() - j["started"]),
                 # installed flips True after the game files download (step 4), several steps before
@@ -684,7 +687,7 @@ def _install_row(sid, j, gs):
         "step": step,
         "total": total,
         "percent": max(0, min(100, int(step * 100 / total))) if total else 0,
-        "step_name": j.get("step_name") or "",
+        "step_name": i18n.tr(j.get("step_name") or ""),
         "elapsed": int(time.time() - (j.get("started") or time.time())),
     }
 
@@ -709,7 +712,7 @@ def _reconcile_lost_install(app, gs):
 def _install_being_checked(gs):
     """The install-status answer while the host is (or was just) being asked: keep polling."""
     return jsonify({"status": "running", "step": 0, "total": 8, "percent": 0,
-                    "step_name": "Checking whether the install finished…",
+                    "step_name": i18n.tr("Checking whether the install finished…"),
                     "message": "", "log": [], "elapsed": 0, "installed": bool(gs.installed)})
 
 
@@ -733,20 +736,20 @@ def _settle_lost_install(app, gs):
         db.session.commit()
         _notify_servers_changed(app)
         return jsonify({"status": "done", "step": 8, "total": 8, "percent": 100,
-                        "step_name": "Complete",
-                        "message": "Install finished — verified after the panel restarted.",
+                        "step_name": i18n.tr("Complete"),
+                        "message": i18n.tr("Install finished — verified after the panel restarted."),
                         "log": [], "elapsed": 0})
     if verdict is False:
         gs.status = "failed"
         db.session.commit()
         _notify_servers_changed(app)
         return jsonify({"status": "failed", "step": 0, "total": 8, "percent": 0,
-                        "step_name": "Interrupted",
-                        "message": "The panel restarted before this install finished, so it "
-                                   "didn't complete. Uninstall it, then install again.",
+                        "step_name": i18n.tr("Interrupted"),
+                        "message": i18n.tr("The panel restarted before this install finished, so it "
+                                           "didn't complete. Uninstall it, then install again."),
                         "log": [], "elapsed": 0})
     # Couldn't reach the host to check — report an interrupted-but-unknown state.
     return jsonify({"status": "interrupted", "step": 0, "total": 8, "percent": 0,
-                    "step_name": "Unknown", "log": [], "elapsed": 0,
-                    "message": "Install progress was lost (the panel may have restarted) and "
-                               "the server couldn't be reached to confirm. Try refreshing."})
+                    "step_name": i18n.tr("Unknown"), "log": [], "elapsed": 0,
+                    "message": i18n.tr("Install progress was lost (the panel may have restarted) and "
+                                       "the server couldn't be reached to confirm. Try refreshing.")})

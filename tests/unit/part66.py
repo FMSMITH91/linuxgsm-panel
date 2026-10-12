@@ -606,3 +606,201 @@ try:
     check("auto-block: ...7.0 is still stored (control)", len(_calls66) == 1, repr(_calls66))
 finally:
     _p9_restore_all()
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 9. Messages a route BUILDS (f-string, %, +) — translated whole, through i18n.tr (_r15e_)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A flash or a JSON "message" built from text and a value ("Group 'ops' created.") reached the page
+# as one finished English sentence the browser's translator (exact catalog text only) could never
+# match: about 140 of them, so es/fr viewers read English. i18n_scan.spliced_py finds every one.
+from panel.core import i18n as _i18n_core66  # noqa: E402
+from panel.services import host_reboot as _hr66  # noqa: E402
+
+_r15e_td = os.path.realpath(_tf66.mkdtemp(prefix="lgsm-unit-p66-r15e-"))
+try:
+    os.makedirs(os.path.join(_r15e_td, "panel", "routes"))
+    os.makedirs(os.path.join(_r15e_td, "panel", "services"))
+    with open(os.path.join(_r15e_td, "app.py"), "w") as _fh66:
+        _fh66.write("")
+    with open(os.path.join(_r15e_td, "panel", "routes", "r.py"), "w") as _fh66:
+        _fh66.write(
+            "def a(name):\n"
+            "    flash(f\"Group '{name}' created.\", 'success')\n"                    # 2 f-string
+            "def b(port):\n"
+            "    return jsonify({'message': 'Port %d closed.' % port})\n"             # 4 %
+            "def c(name):\n"
+            "    msg = 'Removed ' + name\n"
+            "    return _form_ok(msg, 'x')\n"                                         # 7 via a local
+            "def d(port):\n"
+            "    return 'Port %d is busy.' % port\n"
+            "def e(port):\n"
+            "    return _form_err(d(port), 'x')\n"                                    # 11 via a builder
+            "def wrap(message, port):\n"
+            "    return jsonify({'success': True, 'message': message})\n"
+            "def f(port):\n"
+            "    return wrap('Opened %d.' % port, port)\n"                            # 15 via a wrapper
+            "def g(name):\n"
+            "    return jsonify({'message': i18n.tr(\"Group '{name}' created.\", name=name)})\n"   # fine
+            "def h(name):\n"
+            "    return jsonify({'message': i18n.Sentence('Hi {name}.', name=name)})\n"  # 19 untranslated
+            "def i(port):\n"
+            "    return jsonify({'message': 'Port %d.' % port})  # i18n-ignore\n"     # marked: skipped
+            "def j(note):\n"
+            "    reply = {}\n"
+            "    reply['error'] = 'Failed: ' + note\n"                                # 24 subscript sink
+            "    return jsonify(reply)\n"
+            "def k(n):\n"
+            "    return jsonify({'message': n and BUSY % n})\n"                       # 27 a held template
+            # A service's (ok, message) — unpacked, through `return other(…)` and a conditional call.
+            "def l(ip):\n"
+            "    ok, msg = svc_plain(ip)\n"
+            "    return jsonify({'message': msg})\n"                                  # 30 unpacked
+            "def m(ip):\n"
+            "    ok, msg = svc_plain(ip)\n"
+            "    return jsonify({'message': i18n.tr(msg)})\n"                         # 33 tr() of plain English
+            "def n(ip):\n"
+            "    ok, msg = svc_said(ip)\n"
+            "    return jsonify({'message': msg})\n"                                  # 36 Sentence, untranslated
+            "def o(ip, x):\n"
+            "    ok, msg = svc_said(ip) if x else svc_relay(ip)\n"
+            "    return jsonify({'message': i18n.tr(msg)})\n"                         # fine: Sentences, translated
+            "def p(ip):\n"
+            "    ok, msg = svc_relay(ip)\n"
+            "    return jsonify({'message': msg})\n")                                 # 42 through return svc_said()
+    with open(os.path.join(_r15e_td, "panel", "services", "s.py"), "w") as _fh66:
+        _fh66.write(
+            "def pay(host):\n"
+            "    return {'message': i18n.Sentence('{host} is busy.', host=host)}\n"   # a payload: fine
+            "def bad(host):\n"
+            "    return {'message': '%s is busy.' % host}\n"                          # 4 still built
+            "def svc_plain(ip):\n"
+            "    return True, 'Blocked %s.' % ip\n"
+            "def svc_said(ip):\n"
+            "    return True, i18n.Sentence('Blocked {ip}.', ip=ip)\n"
+            "def svc_relay(ip):\n"
+            "    return svc_said(ip)\n")
+    _found66 = sorted((f.replace(os.sep, "/"), line) for f, line, _w in _i18n66.spliced_py(_r15e_td))
+    check("i18n gate: a flash or JSON message built with an f-string, %, + — directly, through a local, a "
+          "function that returns one, a wrapper that hands its argument on, a reply[\"error\"], or a "
+          "service's (ok, message) unpacked (also through `return other()` and a conditional call) — is "
+          "reported, as is i18n.tr() handed English built before it and an untranslated i18n.Sentence "
+          "in a route; i18n.tr of Sentences and a service's Sentence payload are not (both directions)",
+          _found66 == [("panel/routes/r.py", n) for n in (2, 4, 7, 11, 15, 19, 24, 27, 30, 33, 36, 42)]
+          + [("panel/services/s.py", 4)], repr(_found66))
+finally:
+    _shutil66.rmtree(_r15e_td, ignore_errors=True)
+
+_spliced66 = _i18n66.spliced_py()
+check("i18n gate: no route or service message in app.py or panel/ is built from text and values outside "
+      "i18n.tr (180 on the tree before these fixes; 33 were still there after the first, which did not "
+      "follow a service's (ok, message) answer)", _spliced66 == [], repr(_spliced66[:6]))
+_trgaps66 = [(_L66, _g66) for _L66 in ("es", "fr") for _g66 in _i18n66.tr_gaps_py(_L66)]
+check("i18n gate: every sentence handed to i18n.tr or i18n.Sentence is in the es and fr catalogs, with "
+      "the same {slots} in the translation", len(_i18n66.tr_keys_py()) >= 180 and not _trgaps66,
+      repr((len(_i18n66.tr_keys_py()), _trgaps66[:6])))
+
+# The helper itself: whole sentences, values put in as written, Sentences English until shown.
+_hello66 = _i18n_core66.Sentence("Group '{name}' created.", name="{x} <b>")
+_said66 = {}
+for _L66 in ("en", "es", "fr"):
+    with _p9.test_request_context("/"):
+        __import__("flask").session["lang"] = _L66
+        _said66[_L66] = (_i18n_core66.tr(_hello66),
+                         _i18n_core66.tr(_hr66._blocked_sentence([{"kind": "install", "name": "Rust"},
+                                                                   {"kind": "backup", "name": "CS2"}])))
+check("i18n.tr: a Sentence is shown whole in the viewer's language with its value put in as written "
+      "(braces are not read again, markup is not escaped here — the page does that), and a list of "
+      "Sentence phrases inside one is translated item by item",
+      _said66["es"] == ("Grupo '{x} <b>' creado.", "Ahora no: una instalación de Rust, una copia de "
+                        "seguridad de CS2 está en curso, y un reinicio lo interrumpiría.")
+      and _said66["fr"][0] == "Groupe « {x} <b> » créé."
+      and _said66["en"] == ("Group '{x} <b>' created.", "Not now: an install of Rust, a backup of CS2 is "
+                            "running, and a reboot would cut it off."), repr(_said66))
+check("i18n.Sentence: as a str it stays the English sentence, so an audit row, a log line or a chat bot "
+      "that records it reads English whatever the viewer's language",
+      str(_hello66) == "Group '{x} <b>' created." and "refused: " + _hello66 == "refused: Group '{x} <b>' created."
+      and _i18n_core66.fill("{a.__class__} {b}", a=1) == "{a.__class__} {b}", repr(str(_hello66)))
+
+# ...and through a real route, both answers: the fetch's JSON and the flash a plain submit renders.
+_grp66 = "R15e<b>"
+_got66 = {}
+try:
+    _lang66("es")
+    _c66 = _p9_client(P9_ADMIN)
+    _got66["json"] = _p9_json(_c66.post("/groups/add", data={"name": _grp66},
+                                        headers={"X-Requested-With": "XMLHttpRequest"}))
+    _got66["dup"] = _c66.post("/groups/add", data={"name": _grp66}, follow_redirects=True).get_data(as_text=True)
+finally:
+    _lang66("en")
+    with _p9.app_context():
+        from panel.db.models import Group as _Group66  # noqa: E402
+        for _g66 in _Group66.query.filter_by(name=_grp66).all():
+            _db66.session.delete(_g66)
+        _db66.session.commit()
+check("route message: creating a group in Spanish answers \"Grupo '…' creado.\" — the whole sentence "
+      "translated, the name put in as typed (it was \"Group 'x' created.\" in every language)",
+      _got66.get("json", {}).get("message") == "Grupo 'R15e<b>' creado.", repr(_got66.get("json")))
+check("route message: ...and the flash of a plain submit is Spanish with the name still escaped by the "
+      "page (no |safe, no Markup around the value)",
+      "El grupo &#39;R15e&lt;b&gt;&#39; ya existe." in _got66.get("dup", "")
+      and "R15e<b>" not in _got66.get("dup", ""), _re66.findall(r"[^\n]*ya existe[^\n]*", _got66.get("dup", ""))[:2])
+
+# A service's (ok, message): English as it is recorded, whole in the viewer's language where shown.
+from panel.ops import system_ops as _so66  # noqa: E402
+from panel.core.panel_state import _install_jobs as _ijobs66, _install_lock as _ilock66  # noqa: E402
+import time as _time66  # noqa: E402
+
+_ip66 = ".".join(["203", "0", "113", "5"])
+_svc66 = {}
+try:
+    _p9_patch(_so66, "_run_verb", lambda *a, **k: ("", "", 0))
+    _ok66, _msg66 = _so66.ufw_undeny_ip(_ip66)
+    for _L66 in ("en", "es", "fr"):
+        with _p9.test_request_context("/"):
+            __import__("flask").session["lang"] = _L66
+            _svc66[_L66] = _i18n_core66.tr(_msg66)
+            _svc66[_L66 + "-and"] = _i18n_core66.tr(_i18n_core66.Sentences(
+                _i18n_core66.Sentence("the swap file was not created"),
+                _i18n_core66.Sentence("the host did not answer"), sep="; and "))
+finally:
+    _p9_restore_all()
+check("service message: a firewall unblock answers an i18n.Sentence — English as a str for the audit "
+      "row, and whole in Spanish or French where a route shows it (it was \"Unblocked %s.\" % ip)",
+      _ok66 and str(_msg66) == "Unblocked %s." % _ip66
+      and _svc66.get("es") == "%s desbloqueada." % _ip66 and _svc66.get("fr") == "%s débloquée." % _ip66,
+      repr((_msg66, _svc66)))
+check("i18n.Sentences: clauses joined by a separator other than a space are joined by its translation "
+      "(\"; and \" was English inside every language's bootstrap answer)",
+      _svc66.get("es-and") == "no se creó el archivo de intercambio; y el host no respondió"
+      and _svc66.get("en-and") == "the swap file was not created; and the host did not answer",
+      repr(_svc66))
+
+# The install job is written on a worker thread with no viewer; install-status translates its words.
+_ijob66 = None
+_ist66 = {}
+try:
+    with _ilock66:
+        _ijob66 = _ijobs66.get(P9_GS)
+        _ijobs66[P9_GS] = {"status": "done", "step": 8, "total": 8, "step_name": "Complete",
+                           "message": _i18n_core66.Sentences(
+                               _i18n_core66.Sentence("{name} installed and started", name="r15e"),
+                               _i18n_core66.Sentence(
+                                   "Funnel stays on for the :443 listener, which still serves {apps}.",
+                                   apps=[_i18n_core66.Sentence("the app at {mount}", mount="/x")])),
+                           "log": [], "started": _time66.time(), "updated": _time66.time()}
+    _lang66("es")
+    _ist66 = _p9_json(_p9_client(P9_ADMIN).get("/api/server/%d/install-status" % P9_GS))
+finally:
+    _lang66("en")
+    with _ilock66:
+        if _ijob66 is None:
+            _ijobs66.pop(P9_GS, None)
+        else:
+            _ijobs66[P9_GS] = _ijob66
+check("install progress: the job's record (written with no viewer) is shown in the viewer's language — "
+      "each sentence whole, a list of phrases inside one translated item by item (the settled row "
+      "showed English under data-no-i18n in every language)",
+      _ist66.get("message") == ("r15e instalado e iniciado Funnel sigue activado para el puerto de "
+                                "escucha :443, que todavía sirve la aplicación en /x.")
+      and _ist66.get("step_name") == "Completado", repr(_ist66))

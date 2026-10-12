@@ -11,6 +11,7 @@ from panel.ops.ssh_manager import (content_box_users, discover_linuxgsm_servers,
                                   enrol_game_user, run_command)
 from panel.security.auth import (MANAGE_SERVERS, can_access_remote, get_remote, log_action,
     permission_required)
+from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (INSTANCE_NAME_RE)
 from app import (lgsm_name_to_game_type, load_game_list)
@@ -93,9 +94,10 @@ def register(app):
             # []. So when the list comes back empty, ask the host one question with a POSITIVE
             # answer before saying anything about it. Only on an empty scan, so a host that does
             # have servers pays nothing.
-            return jsonify({"error": "Couldn't read %s — the scan didn't run, so whether there are "
-                                     "LinuxGSM servers on it is unknown. Check the host is up and "
-                                     "reachable, then scan again." % remote.name}), 200
+            return jsonify({"error": i18n.tr(
+                "Couldn't read {host} — the scan didn't run, so whether there are LinuxGSM servers on "
+                "it is unknown. Check the host is up and reachable, then scan again.",
+                host=remote.name)}), 200
         existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
         games = {g["shortname"]: g["name"] for g in load_game_list()}
         out, content = _discovered_listing(found, existing, games)
@@ -138,10 +140,10 @@ def register(app):
         # imported — see privileged_accounts for the host's login turned into root that this is.
         refused = _privileged_selection(remote, items, discovered)
         if refused is None:
-            return jsonify({"success": False, "message": (
-                "Couldn't check the selected accounts on %s — the host did not answer, and the "
+            return jsonify({"success": False, "message": i18n.tr(
+                "Couldn't check the selected accounts on {host} — the host did not answer, and the "
                 "panel only imports an account it has confirmed is not an administrator or root "
-                "account. Nothing was imported; try again." % remote.name)}), 200
+                "account. Nothing was imported; try again.", host=remote.name)}), 200
         picked, skipped = _import_selection(remote_id, items, discovered)
         added, not_enrolled, unread = [], [], []
         if picked:
@@ -170,8 +172,10 @@ def _discover_import_outcome(remote, added, skipped, not_enrolled, refused, unre
            "not_enrolled": not_enrolled, "refused": refused, "unread": unread,
            "shared_ports": _shared_ports(remote.id, added)}
     if (refused or unread) and not added:
-        out["message"] = "Not imported: " + "; ".join(
-            "%s (%s)" % (r["user"], r["reason"]) for r in refused + unread) + "."
+        # The frame is translated whole; each "user (reason)" stays as the host and probe gave it,
+        # as the page's own per-row list shows it (data-no-i18n there).
+        out["message"] = i18n.tr("Not imported: {items}.", items="; ".join(
+            "%s (%s)" % (r["user"], r["reason"]) for r in refused + unread))
     return out
 
 

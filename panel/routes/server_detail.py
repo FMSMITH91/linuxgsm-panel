@@ -27,6 +27,7 @@ import concurrent.futures
 import functools
 import re
 import threading
+from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
                              _r13b_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
@@ -64,7 +65,7 @@ def _console_send_failure(rc, err):
         return "That server isn't running, so there's no console session to send to."
     lines = [ln.strip() for ln in (err or "").splitlines() if ln.strip()]
     if lines:
-        return "The panel could not run that on the host: %s" % lines[-1][:200]
+        return i18n.tr("The panel could not run that on the host: {why}", why=lines[-1][:200])
     return "The panel could not run that on the host, and it gave no reason."
 
 
@@ -168,11 +169,22 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
     _after_power_action(app, gs, remote, short_name, action, rc)
     if action in READONLY_ACTIONS:
         return True, f"{action}: {clean[:600] or 'no output'}"
+    # The outcomes are i18n.Sentences: English for the chat bots, which send them as they are, and
+    # translated whole by the routes that show them (_r15e_said).
     if rc == 0:
-        return True, f"'{action}' succeeded for '{name}'."
+        return True, i18n.Sentence("'{action}' succeeded for '{name}'.", action=action, name=name)
     # Surface WHY it failed — pull the most relevant LinuxGSM line.
-    reason = _action_failure_reason(clean)
-    return False, f"'{action}' failed for '{name}': {reason[:280] or 'unknown — check the console'}"
+    reason = _action_failure_reason(clean)[:280]
+    if not reason:
+        return False, i18n.Sentence("'{action}' failed for '{name}': unknown — check the console",
+                                    action=action, name=name)
+    return False, i18n.Sentence("'{action}' failed for '{name}': {reason}", action=action, name=name,
+                                reason=reason)
+
+
+def _r15e_said(msg):
+    """_run_action's message for the viewer: a Sentence translated whole, any other text as it is."""
+    return i18n.tr(msg)
 
 
 def _install_busy_reason(gs):
@@ -218,10 +230,15 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
     busy = _install_busy_reason(gs)
     if busy:
         # The single routes, the bulk worker and the chat bots all come through here.
-        return False, f"'{gs.name}' is {busy} — '{action}' was not run."
+        # One whole sentence per reason: the reason was spliced into a shared one.
+        if busy == "still installing":
+            return False, i18n.Sentence("'{name}' is still installing — '{action}' was not run.",
+                                        name=gs.name, action=action)
+        return False, i18n.Sentence("'{name}' is not installed — '{action}' was not run.",
+                                    name=gs.name, action=action)
     from panel.services import host_reboot as _hr
     if _hr.reboot_busy(remote.id):
-        return False, _hr.BUSY_MESSAGE % remote.display_name
+        return False, _hr.busy_message(remote.display_name)
     if action in ("start", "stop", "restart") and gs.reboot_restore:
         _hr.exclude_row(gs, actor, action, origin=origin)
     # A power action that is already a no-op is refused — see _noop_power_refusal.
@@ -235,13 +252,14 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
     if action in LONG_ACTIONS:
         _bg_action(app, gs, remote, action, on_done=on_done)
         log_action(actor, f"{action}_server", target=gs.name, actor=origin, server=gs)
-        return True, f"'{action}' started — watch the live console for progress."
+        return True, i18n.Sentence("'{action}' started — watch the live console for progress.",
+                                   action=action)
     if action in ("start", "stop", "restart"):
         # These block for ~8-17s (srcds Steam/VAC init on start, a graceful `quit` wait on stop,
         # plus LinuxGSM confirming the outcome). Run them in the background so the click returns
         # immediately and the status poll reflects the result, instead of hanging the button.
         _bg_power_action(app, gs, remote, action, actor, origin=origin, on_done=on_done)
-        return True, f"'{action}' issued — status updates in a few seconds."
+        return True, i18n.Sentence("'{action}' issued — status updates in a few seconds.", action=action)
     return _run_sync_action(app, gs, remote, action, actor, origin)
 
 
@@ -429,11 +447,20 @@ def _fan_out_ban(app, targets, origin_eng, steamid, target, msg):
         # Counts on BOTH sides, in a form that is grammatical at 0 and at 1. The
         # old sentence named only the successes, so a partial fan-out read as a
         # complete one and the servers that missed it were never mentioned.
-        return (msg + " ").strip() + (
-            " Other servers: %d of %d banned, %d could not be reached."
-            % (len(applied), len(targets), len(missed)))
-    return (msg + " ").strip() + " Also banned on %d other server%s." % (
-        len(applied), "" if len(applied) == 1 else "s")
+        return _r15e_then(msg, i18n.tr("Other servers: {applied} of {total} banned, {missed} could not "
+                                       "be reached.", applied=len(applied), total=len(targets),
+                                       missed=len(missed)))
+    return _r15e_then(msg, i18n.tr("Also banned on {n} other server." if len(applied) == 1 else
+                                   "Also banned on {n} other servers.", n=len(applied)))
+
+
+def _r15e_then(msg, sentence):
+    """The reply so far, then one more sentence — each translated whole, joined by a space.
+
+    `msg` is the server's own answer (the game's words, or a catalog sentence the page would
+    translate); the counts were spliced onto it in English.
+    """
+    return " ".join(s for s in (i18n.tr((msg or "").strip()), sentence) if s)
 
 
 def _record_global_ban(steamid, target, reason, msg):
@@ -445,7 +472,7 @@ def _record_global_ban(steamid, target, reason, msg):
         db.session.commit()
         log_action(current_user, "global_ban_add", target=_sid,
                    detail=reason or "via all-servers ban")
-        msg = (msg + " Added to the global ban list.").strip()
+        msg = _r15e_then(msg, i18n.tr("Added to the global ban list."))
     return msg
 
 
@@ -722,14 +749,14 @@ def _register_actions(app):
         gs = get_game(server_id)
         action = request.form.get("action", "")
         if action not in RUNNABLE_ACTIONS:
-            flash(f"Unknown or unsupported action: {action}", "danger")
+            flash(i18n.tr("Unknown or unsupported action: {action}", action=action), "danger")
             return redirect(url_for("server_detail", server_id=server_id))
         if not current_user.is_superadmin and not has_permission(current_user, _perm_for_action(action)):
-            flash(f"You don't have permission to run '{action}'.", "danger")
+            flash(i18n.tr("You don't have permission to run '{action}'.", action=action), "danger")
             return redirect(url_for("server_detail", server_id=server_id))
         try:
             ok, msg = _run_action(app, gs, gs.remote, action, current_user)
-            flash(msg, "info" if (action in LONG_ACTIONS or action in READONLY_ACTIONS) else ("success" if ok else "warning"))
+            flash(_r15e_said(msg), "info" if (action in LONG_ACTIONS or action in READONLY_ACTIONS) else ("success" if ok else "warning"))
         except Exception as e:
             log_action(current_user, f"{action}_server", target=gs.name, detail=str(e), success=False,
                        server=gs)
@@ -748,12 +775,13 @@ def _register_actions(app):
         data = _json_body()
         action = _json_str(data, "action")
         if action not in RUNNABLE_ACTIONS:
-            return jsonify({"success": False, "message": f"Unsupported action: {action}"}), 400
+            return jsonify({"success": False,
+                            "message": i18n.tr("Unsupported action: {action}", action=action)}), 400
         if not current_user.is_superadmin and not has_permission(current_user, _perm_for_action(action)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         try:
             ok, msg = _run_action(app, gs, gs.remote, action, current_user)
-            return jsonify({"success": ok, "message": msg})
+            return jsonify({"success": ok, "message": _r15e_said(msg)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
@@ -775,7 +803,8 @@ def _register_bulk_action(app):
         action = _json_str(data, "action")
         raw_ids = data.get("server_ids")
         if action not in RUNNABLE_ACTIONS:
-            return jsonify({"success": False, "message": f"Unsupported action: {action}"}), 400
+            return jsonify({"success": False,
+                            "message": i18n.tr("Unsupported action: {action}", action=action)}), 400
         if not isinstance(raw_ids, list) or not raw_ids:
             return jsonify({"success": False, "message": "No servers selected"}), 400
         if not current_user.is_superadmin and not has_permission(current_user, _perm_for_action(action)):
@@ -969,8 +998,9 @@ def _register_custom_commands(app):
                 # A bad STORED pattern must not become a bypass — fall back to the safe default.
                 pattern = re.compile(CUSTOM_ARG_DEFAULT_PATTERN)
             if not pattern.fullmatch(value):
-                return jsonify({"success": False,
-                                "message": "Invalid value for %s." % (cmd.argument_label or "argument")}), 400
+                return jsonify({"success": False, "message": (
+                    i18n.tr("Invalid value for {label}.", label=cmd.argument_label) if cmd.argument_label
+                    else i18n.tr("Invalid value for argument."))}), 400
             final = final.replace(CUSTOM_ARG_PLACEHOLDER, value)
         try:
             _, err, rc = send_console_command(gs.remote, gs.short_name, final,
@@ -980,7 +1010,7 @@ def _register_custom_commands(app):
             if rc != 0:
                 return jsonify({"success": False,
                                 "message": _console_send_failure(rc, err)}), 502
-            return jsonify({"success": True, "message": "Ran '%s'." % cmd.name})
+            return jsonify({"success": True, "message": i18n.tr("Ran '{name}'.", name=cmd.name)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("custom command failed")}), 500
 
@@ -1003,7 +1033,8 @@ def _register_when_empty(app):
         db.session.commit()
         log_action(current_user, "restart_when_empty", target=gs.name, success=True, server=gs)
         return jsonify({"success": True,
-                        "message": "Queued — %s will restart automatically once it's empty." % gs.name})
+                        "message": i18n.tr("Queued — {name} will restart automatically once it's empty.",
+                                           name=gs.name)})
 
     @app.route("/api/server/<int:server_id>/stop-when-empty", methods=["POST"])
     @login_required
@@ -1021,13 +1052,14 @@ def _register_when_empty(app):
         db.session.commit()
         log_action(current_user, "stop_when_empty", target=gs.name, success=True, server=gs)
         return jsonify({"success": True,
-                        "message": "Queued — %s will stop automatically once it's empty." % gs.name})
+                        "message": i18n.tr("Queued — {name} will stop automatically once it's empty.",
+                                           name=gs.name)})
 
 
 def _r12c_not_a_flag(value, name):
     """The 400 for a switch that was not a JSON boolean (_r12c_json_flag gave None), else None."""
     if value is None:
-        return jsonify({"success": False, "message": "%s must be true or false." % name}), 400
+        return jsonify({"success": False, "message": i18n.tr("{key} must be true or false.", key=name)}), 400
     return None
 
 
@@ -1040,7 +1072,8 @@ def _autostart_reboot_gate(gs, enabled):
     """
     from panel.services import host_reboot as _hr
     if _hr.reboot_busy(gs.remote_id):
-        return jsonify({"success": False, "message": _hr.BUSY_MESSAGE % gs.remote.display_name}), 409
+        return jsonify({"success": False,
+                        "message": i18n.tr(_hr.busy_message(gs.remote.display_name))}), 409
     if gs.reboot_restore:
         _hr.exclude_row(gs, current_user, "Autostart %s" % ("on" if enabled else "off"))
     return None
@@ -1197,8 +1230,8 @@ def _register_commands(app):
                 log_action(current_user, "refresh_commands", target=gs.name,
                            detail="host returned no commands — keeping the stored list",
                            success=False, server=gs)
-                flash(f"Couldn't read the command list for '{gs.name}' — the host returned "
-                      f"nothing, so the stored list is unchanged.", "warning")
+                flash(i18n.tr("Couldn't read the command list for '{name}' — the host returned nothing, "
+                              "so the stored list is unchanged.", name=gs.name), "warning")
                 return redirect(url_for("server_detail", server_id=gs.id))
             gs.set_commands(cmds)
             db.session.commit()
@@ -1210,12 +1243,12 @@ def _register_commands(app):
             # rationale — has logged since it was written.
             log_action(current_user, "refresh_commands", target=gs.name,
                        detail="%d commands" % len(cmds), success=True, server=gs)
-            flash(f"Loaded {len(cmds)} commands for '{gs.name}'.", "success")
+            flash(i18n.tr("Loaded {n} commands for '{name}'.", n=len(cmds), name=gs.name), "success")
         except Exception:
             _log.debug("command list refresh failed for %s", row_label(gs, "name"), exc_info=True)
             log_action(current_user, "refresh_commands", target=gs.name,
                        detail="could not read the command list", success=False, server=gs)
-            flash(f"Could not read the command list for '{gs.name}'.", "danger")
+            flash(i18n.tr("Could not read the command list for '{name}'.", name=gs.name), "danger")
         return redirect(url_for("server_detail", server_id=server_id))
 
     @app.route("/server/<int:server_id>/command", methods=["POST"])
@@ -1246,7 +1279,7 @@ def _register_commands(app):
             if rc != 0:
                 flash(_console_send_failure(rc, err), "warning")
                 return redirect(url_for("server_detail", server_id=server_id))
-            flash(f"Command sent: {cmd_text}", "success")
+            flash(i18n.tr("Command sent: {command}", command=cmd_text), "success")
 
         except Exception as e:
             log_action(current_user, "send_command", target=gs.name, detail=f"{cmd_text} - {e}", success=False,

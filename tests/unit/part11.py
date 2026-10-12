@@ -3313,6 +3313,7 @@ try:
                                           "unknown": [], "blockers": [], "running": 1,
                                           "probes": {1: {"session": 1}}},
         parse_mode=_real_hr.parse_mode,
+        shown=_real_hr.shown,           # the route translates the answer's message on its way out
         request_reboot=lambda remote, mode, actor, origin, delay=0: (
             _rv_calls.append(("reboot", remote.id, mode, origin)),
             (409, {"success": False, "error": "players_online", "needs_choice": True}))[1],

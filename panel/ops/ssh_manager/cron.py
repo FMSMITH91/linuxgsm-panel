@@ -8,7 +8,7 @@ import collections
 import re
 import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 import threading
-from panel.core import terminal
+from panel.core import i18n, terminal
 import time
 from panel.security import privileged as _priv
 from panel.ops.ssh_manager import (_core, files)  # noqa: E402,F401  (module objects: the
@@ -828,7 +828,7 @@ def _run_now_in_scope(server, user, core, jid):
         # of base64, or a job id longer than the verb's 64 hex characters (the crontab parser
         # accepts any length, so a hand-edited line can carry one). The reason is the validator's
         # own, which never echoes the value it refused.
-        return False, "This task can't be run from here: %s." % exc
+        return False, i18n.Sentence("This task can't be run from here: {why}.", why=exc)
     return _run_now_result(out, err, rc)
 
 

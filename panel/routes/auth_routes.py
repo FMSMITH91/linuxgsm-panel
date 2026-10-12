@@ -508,8 +508,7 @@ def _register_sign_out_everywhere(app):
         log_action(current_user, "revoke_sessions", target=user.username,
                    detail="signed out %d other session%s" % (n, plural))
         if n:
-            flash("Signed out of %d other session%s. This device is still signed in."
-                  % (n, plural), "success")
+            flash(_r15e_signed_out(n), "success")
         else:
             flash("No other sessions were signed in.", "info")
         return redirect(url_for("account"))
@@ -866,3 +865,14 @@ def _login_password_ok(attempt, user, password, remember):
         session["_2fa_remember"] = remember
         return render_template("login.html", two_factor=True)
     return _login_succeed(attempt, user, remember)
+
+
+def _r15e_signed_out(n):
+    """The "Signed out of N other session(s)." flash, in the viewer's language.
+
+    One sentence per count form, as the browser's tfn has: a spliced "s" is English's plural, not
+    Spanish's or French's.
+    """
+    if n == 1:
+        return i18n.tr("Signed out of {n} other session. This device is still signed in.", n=n)
+    return i18n.tr("Signed out of {n} other sessions. This device is still signed in.", n=n)

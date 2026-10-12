@@ -8,6 +8,7 @@ from panel.db.models import (CUSTOM_ARG_DEFAULT_PATTERN, CustomCommand, GlobalBa
 from panel.ops.ssh_manager import (_sanitize_steamid)
 from panel.security.auth import (log_action, superadmin_required)
 import threading
+from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok)
 from app import (_CUSTOM_CMD_ENGINES, _assign_command_groups, _custom_cmd_form,
     _fan_out_global_ban, _sync_global_bans, _valve_game_servers, load_game_list)
@@ -31,7 +32,7 @@ def register(app):
             flash("Enter a valid SteamID — e.g. STEAM_0:1:12345 or [U:1:24691].", "danger")
             return redirect(url_for("global_bans_page"))
         if GlobalBan.query.filter_by(steamid=sid).first():
-            flash("%s is already on the global ban list." % sid, "info")
+            flash(i18n.tr("{steamid} is already on the global ban list.", steamid=sid), "info")
             return redirect(url_for("global_bans_page"))
         gb = GlobalBan(steamid=sid, player_name=request.form.get("player_name", "").strip()[:80],
                        reason=request.form.get("reason", "").strip()[:200],
@@ -42,8 +43,8 @@ def register(app):
         threading.Thread(target=lambda: _fan_out_global_ban(app, sid, unban=False), daemon=True).start()
         # Not "Banned across all Source servers" — the fan-out has not run yet and a stopped or
         # unreachable server will not receive it. The audit log records what actually landed.
-        flash("Banning %s — applying it to every Source server now; see the audit log for the "
-              "result." % sid, "success")
+        flash(i18n.tr("Banning {steamid} — applying it to every Source server now; see the audit log for "
+                      "the result.", steamid=sid), "success")
         return redirect(url_for("global_bans_page"))
 
     @app.route("/global-bans/<int:ban_id>/delete", methods=["POST"])
@@ -56,8 +57,8 @@ def register(app):
         db.session.commit()
         log_action(current_user, "global_ban_remove", target=sid)
         threading.Thread(target=lambda: _fan_out_global_ban(app, sid, unban=True), daemon=True).start()
-        flash("Removed %s — lifting it on every Source server now; see the audit log for the "
-              "result." % sid, "success")
+        flash(i18n.tr("Removed {steamid} — lifting it on every Source server now; see the audit log for "
+                      "the result.", steamid=sid), "success")
         return redirect(url_for("global_bans_page"))
 
     @app.route("/global-bans/sync", methods=["POST"])
@@ -86,14 +87,14 @@ def register(app):
     def add_command():
         fields, err = _custom_cmd_form()
         if err:
-            return _form_err(err, "manage_commands")
+            return _form_err(i18n.tr(err), "manage_commands")
         cmd = CustomCommand(created_by=current_user.username, **fields)
         db.session.add(cmd)
         db.session.flush()          # get cmd.id before wiring the group associations
         _assign_command_groups(cmd)
         db.session.commit()
         log_action(current_user, "add_custom_command", target=cmd.name, detail=cmd.command_template[:120])
-        return _form_ok(f"Command '{cmd.name}' created.", "manage_commands")
+        return _form_ok(i18n.tr("Command '{name}' created.", name=cmd.name), "manage_commands")
 
     @app.route("/commands/<int:cmd_id>/edit", methods=["POST"])
     @login_required
@@ -102,13 +103,13 @@ def register(app):
         cmd = CustomCommand.query.get_or_404(cmd_id)
         fields, err = _custom_cmd_form(cmd)
         if err:
-            return _form_err(err, "manage_commands")
+            return _form_err(i18n.tr(err), "manage_commands")
         for k, v in fields.items():
             setattr(cmd, k, v)
         _assign_command_groups(cmd)
         db.session.commit()
         log_action(current_user, "edit_custom_command", target=cmd.name, detail=cmd.command_template[:120])
-        return _form_ok(f"Command '{cmd.name}' updated.", "manage_commands")
+        return _form_ok(i18n.tr("Command '{name}' updated.", name=cmd.name), "manage_commands")
 
     @app.route("/commands/<int:cmd_id>/delete", methods=["POST"])
     @login_required
@@ -120,4 +121,4 @@ def register(app):
         db.session.delete(cmd)
         db.session.commit()
         log_action(current_user, "delete_custom_command", target=name)
-        return _form_ok(f"Command '{name}' deleted.", "manage_commands")
+        return _form_ok(i18n.tr("Command '{name}' deleted.", name=name), "manage_commands")

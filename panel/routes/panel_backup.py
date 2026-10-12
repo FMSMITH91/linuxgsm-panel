@@ -19,6 +19,7 @@ import concurrent.futures
 import os
 import threading
 import time
+from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _r13b_json_flag)
 from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _json_int, _marked_backup, _record_full_clock,
@@ -374,7 +375,8 @@ def _r13c_settings_refusal(data):
     # per-server schedule gives (_BAD_FIELD).
     bad = _r13c_unreadable_numbers(data, ("keep_days", "full_interval_days", "full_keep"))
     if bad:
-        return jsonify({"success": False, "message": "Use a whole number for: %s." % ", ".join(bad)}), 400
+        return jsonify({"success": False,
+                        "message": i18n.tr("Use a whole number for: {fields}.", fields=", ".join(bad))}), 400
     return None
 
 
@@ -522,10 +524,12 @@ def _register_game_backup(app):
             return jsonify({"success": False, "message": _log_and_generic("could not start backup")}), 500
         log_action(current_user, "game_backup", target=gname, success=True, server=gs)
         return jsonify({"success": True, "running": True,
-                        "message": "Backing up " + gname + " — it'll appear below when done."
-                                   + ("" if keep_read else
-                                      " config.json could not be read, so no older backup within "
-                                      "the maximum retention (%d) will be pruned." % bk.MAX_FULL_KEEP)})
+                        # One whole sentence per case: the name and the retention note were spliced.
+                        "message": i18n.tr(
+                            "Backing up {name} — it'll appear below when done." if keep_read else
+                            "Backing up {name} — it'll appear below when done. config.json could not "
+                            "be read, so no older backup within the maximum retention ({keep}) will be "
+                            "pruned.", name=gname, keep=bk.MAX_FULL_KEEP)})
 
     def _start_backup_worker(server_id, gname, opts, born=_NO_BIRTH):
         def _worker():
@@ -780,7 +784,10 @@ def _register_panel_backups(app):
         try:
             ok, res = bk.create_backup("manual")
             log_action(current_user, "panel_backup_create", target=LOCAL_HOST_LABEL, detail=res if ok else "", success=ok)
-            return jsonify({"success": ok, "message": ("Backup created." if ok else res),
+            # `res` is the archive's NAME when ok (what makes create_backup a "built" answer) and
+            # one of its fixed refusals when not, so the refusal is a key (i18n-ignore below).
+            return jsonify({"success": ok, "message": (i18n.tr("Backup created.") if ok else
+                                                       i18n.tr(res)),  # i18n-ignore
                             "name": res if ok else ""})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("backup failed")}), 200
@@ -819,7 +826,7 @@ def _register_panel_backups(app):
         ok, msg = bk.restore_backup(name, passphrase=_b.get("passphrase") or None,
                                     skip_safety_backup=skip)
         log_action(current_user, "panel_backup_restore", target=name, success=ok)
-        return jsonify({"success": ok, "message": msg})
+        return jsonify({"success": ok, "message": i18n.tr(msg)})
 
     @app.route("/api/panel/backup/download/<path:name>")
     @login_required
@@ -851,9 +858,9 @@ def _register_panel_backups(app):
         # 400 into a 500.
         if _pp and len(_pp) < bk.MIN_PASSPHRASE_LEN:
             return jsonify({"success": False,
-                            "message": "Use at least %d characters — this is the only thing "
-                                       "protecting a backup that leaves the machine."
-                                       % bk.MIN_PASSPHRASE_LEN}), 400
+                            "message": i18n.tr("Use at least {n} characters — this is the only thing "
+                                               "protecting a backup that leaves the machine.",
+                                               n=bk.MIN_PASSPHRASE_LEN)}), 400
         refused = _r13c_settings_refusal(data)
         if refused:
             return refused
@@ -935,7 +942,7 @@ def _register_panel_host_os(app):
         from panel.services import host_reboot as _hr
         _busy = _hr.panel_host_busy()
         if _busy:
-            return jsonify({"success": False, "message": _busy}), 409
+            return jsonify({"success": False, "message": i18n.tr(_busy)}), 409
         success, msg = so.os_run_update()
         if success:
             log_action(current_user, "os_update_run", target=LOCAL_HOST_LABEL, detail=msg)
@@ -986,9 +993,9 @@ def _register_panel_host_os(app):
                 return jsonify({"success": False,
                                 "message": "The reboot delay must be a number of seconds (0-300)."}), 400
             code, body = _hr.request_reboot(_local, mode, current_user, "api", delay=secs)
-            return jsonify(body), code
+            return jsonify(_hr.shown(body)), code
         success, msg = so.server_reboot(delay)
         if success:
             log_action(current_user, "server_reboot", target=LOCAL_HOST_LABEL, detail=f"delay={delay}s")
-            return jsonify({"success": True, "message": msg})
-        return jsonify({"success": False, "message": msg}), 500
+            return jsonify({"success": True, "message": i18n.tr(msg)})
+        return jsonify({"success": False, "message": i18n.tr(msg)}), 500

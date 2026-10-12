@@ -150,8 +150,8 @@ def _register_notifications(app):
         log_action(current_user, "notifications_update", target="panel")
         flash("Notification settings saved.", "success")
         if rejected:
-            flash("These weren't saved as allowed users, because a user ID is digits only: %s"
-                  % ", ".join(rejected[:10]), "warning")
+            flash(i18n.tr("These weren't saved as allowed users, because a user ID is digits only: "
+                          "{ids}", ids=", ".join(rejected[:10])), "warning")
         return redirect(url_for("notifications_settings"))
 
     @app.route("/api/notifications/test", methods=["POST"])
@@ -224,7 +224,7 @@ def _register_user_edits(app):
         notifications.notify("account_change", "New user created",
                              "%s created the user '%s'%s."
                              % (current_user.username, username, " (SUPER ADMIN)" if is_superadmin else ""))
-        return _form_credential(f"User '{username}' created.", "manage_users",
+        return _form_credential(i18n.tr("User '{name}' created.", name=username), "manage_users",
                                 username=username, password=password)
 
     @app.route("/users/<int:user_id>/edit", methods=["POST"])
@@ -293,9 +293,9 @@ def _register_user_edits(app):
             notifications.notify("account_change", "Password reset",
                                  "%s reset the password for '%s'."
                                  % (current_user.username, user.username))
-            return _form_credential(f"User '{user.username}' updated.", "manage_users",
+            return _form_credential(i18n.tr("User '{name}' updated.", name=user.username), "manage_users",
                                     username=user.username, password=new_password)
-        return _form_ok(f"User '{user.username}' updated.", "manage_users")
+        return _form_ok(i18n.tr("User '{name}' updated.", name=user.username), "manage_users")
 
 
 def _register_invites(app):
@@ -479,7 +479,7 @@ def _register_user_delete(app):
         db.session.delete(user)
         db.session.commit()
         log_action(current_user, "delete_user", target=username)
-        return _form_ok(f"User '{username}' deleted.", "manage_users")
+        return _form_ok(i18n.tr("User '{name}' deleted.", name=username), "manage_users")
 
 
 def _edit_user_refusal(user, want_superadmin):

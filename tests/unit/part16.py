@@ -346,7 +346,7 @@ try:
     # 745379050 — a deleted server's console, served to and run on the next one
     # ════════════════════════════════════════════════════════════════════════════════════════
     _p9_patch(_ms16, "_stop_game_processes", lambda *a, **k: None)
-    _p9_patch(_ms16, "_close_game_firewall", lambda *a, **k: ("", False))
+    _p9_patch(_ms16, "_close_game_firewall", lambda *a, **k: ([], False))
     _p9_patch(_p9_sm, "run_privileged", lambda *a, **k: ("", "", 0))
     _p9_patch(_p9_bk, "remove_game_schedule", lambda sid: None)
     # The uninstall asks the host whether the account is root-capable before it deletes anything

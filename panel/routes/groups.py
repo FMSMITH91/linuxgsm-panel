@@ -10,6 +10,7 @@ from panel.security.auth import (ALL_PERMISSIONS, MANAGE_GROUPS, SUPER_ADMIN, _g
     get_user_servers, grantable_object_ids, log_action, permission_required)
 from panel.services import (notifications)
 from panel.core.clock import utcnow
+from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok)
 from panel.core.validation import group_name_problem
 from app import (_selected_game_servers, _selected_remotes)
@@ -95,7 +96,7 @@ def register(app):
 
         existing = Group.query.filter_by(name=name).first()
         if existing:
-            return _form_err(f"Group '{name}' already exists.", "manage_groups")
+            return _form_err(i18n.tr("Group '{name}' already exists.", name=name), "manage_groups")
 
         group = Group(name=name, description=description)
         group.set_permissions(_grantable_perms(request.form.getlist("permissions")))
@@ -113,15 +114,15 @@ def register(app):
         log_action(current_user, "add_group", target=name)
         notifications.notify("account_change", "Permission group created",
                              "%s created the group '%s'." % (current_user.username, name))
-        return _form_ok(f"Group '{name}' created.", "manage_groups")
+        return _form_ok(i18n.tr("Group '{name}' created.", name=name), "manage_groups")
 
     @app.route("/groups/<int:group_id>/edit", methods=["POST"])
     @login_required
     @permission_required(MANAGE_GROUPS)
     def edit_group(group_id):
         group = Group.query.get_or_404(group_id)
-        _refused = _refuse_unmanageable(group, "edit_group",
-                                        "only a superadmin can change it.")
+        _refused = _refuse_unmanageable(group, "edit_group", i18n.Sentence(
+            "That group, or someone in it, has access you don't hold — only a superadmin can change it."))
         if _refused is not None:
             return _refused
         new_name = (request.form.get("name") or group.name or "").strip() or group.name
@@ -129,7 +130,7 @@ def register(app):
         # commit — a 500 for what is just a typo. add_group has always checked this; the edit path
         # never did.
         if _rename_taken(group, new_name):
-            return _form_err(f"Group '{new_name}' already exists.", "manage_groups")
+            return _form_err(i18n.tr("Group '{name}' already exists.", name=new_name), "manage_groups")
         # Checked only when the name CHANGES, as a user rename is: a group stored before the check
         # existed can still have its permissions edited.
         _nerr = group_name_problem(new_name) if new_name != group.name else None
@@ -145,7 +146,7 @@ def register(app):
         log_action(current_user, "edit_group", target=group.name)
         notifications.notify("account_change", "Permission group changed",
                              "%s edited the group '%s' (permissions/access)." % (current_user.username, group.name))
-        return _form_ok(f"Group '{group.name}' updated.", "manage_groups")
+        return _form_ok(i18n.tr("Group '{name}' updated.", name=group.name), "manage_groups")
 
     @app.route("/groups/<int:group_id>/delete", methods=["POST"])
     @login_required
@@ -169,8 +170,8 @@ def register(app):
         # check this replaces compared permissions, hosts and servers and left out custom
         # commands, so a group made for a superadmin-authored `exec {}` was deletable by anyone
         # holding its permissions (Aikido 745378983).
-        _refused = _refuse_unmanageable(group, "delete_group",
-                                        "only a superadmin can delete it.")
+        _refused = _refuse_unmanageable(group, "delete_group", i18n.Sentence(
+            "That group, or someone in it, has access you don't hold — only a superadmin can delete it."))
         if _refused is not None:
             return _refused
         # The membership clear used to be a loop over group.users calling user.groups.remove(group)
@@ -192,7 +193,7 @@ def register(app):
         # subscribed to account_change saw a group created and edited and never saw it deleted.
         notifications.notify("account_change", "Permission group deleted",
                              "%s deleted the group '%s'." % (current_user.username, _gname))
-        return _form_ok(f"Group '{_gname}' deleted.", "manage_groups")
+        return _form_ok(i18n.tr("Group '{name}' deleted.", name=_gname), "manage_groups")
 
 
 def _manageable_group_ids(groups):
@@ -262,15 +263,18 @@ def _live_group_invites():
     return [inv for inv in live if inv.groups_wanted and not inv.grants_superadmin]
 
 
-def _refuse_unmanageable(group, action, why):
-    """Refuse (403, audited) when current_user may not edit or delete `group`; None when they may."""
+def _refuse_unmanageable(group, action, refusal):
+    """Refuse (403, audited) when current_user may not edit or delete `group`; None when they may.
+
+    `refusal` is the whole sentence (an i18n.Sentence): it was a shared opening with the action's
+    clause spliced on, which no catalog key could match.
+    """
     if group.id in _manageable_group_ids([group]):
         return None
     log_action(current_user, action, target=group.name, success=False,
                detail="refused: the group, a member of it, or a live invite naming it reaches "
                       "beyond the caller")
-    return _form_err("That group, or someone in it, has access you don't hold — " + why,
-                     "manage_groups", code=403)
+    return _form_err(i18n.tr(refusal), "manage_groups", code=403)
 
 
 # The largest id a row can have: SQLite's INTEGER is a signed 64-bit value.

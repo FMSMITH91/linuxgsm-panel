@@ -29,6 +29,7 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     get_host_remote, get_remote, has_permission, log_action, permission_required, server_access_required)
 import collections
 import threading
+from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
 from panel.routes._shared import (_json_int)
 from panel.core.validation import (NOT_AN_IP)
@@ -90,33 +91,26 @@ def _sync_ports_detail(opened, missed, refused=()):
 def _sync_ports_message(opened, missed, refused=()):
     """Word a port sync's result for the user: what opened, what did not, and what was refused.
 
-    Refused: the ports it would not open because another server, SSH or the panel has them.
+    Refused: the ports it would not open because another server, SSH or the panel has them. Each
+    sentence is translated whole, then they are joined (one string built in English matched no key).
     """
-    msg = (_sync_ports_plain_message(opened, missed) if (opened or missed or not refused)
-           else "No ports were opened.")
+    said = [_sync_ports_plain_message(opened, missed) if (opened or missed or not refused)
+            else i18n.tr("No ports were opened.")]
     if refused:
-        # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
-        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
-        msg += (" Not opened: %s — another game server on this host, SSH or the panel uses it."
-                % ", ".join(map(str, refused)))
-    return msg
+        said.append(i18n.tr("Not opened: {ports} — another game server on this host, SSH or the panel "
+                            "uses it.", ports=", ".join(map(str, refused))))
+    return " ".join(said)
 
 
 def _sync_ports_plain_message(opened, missed):
     """_sync_ports_message's wording for what the firewall took and did not take."""
     if not missed:
-        # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
-        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
-        return "Ports %s opened." % (", ".join(map(str, opened)) or "—")
+        return i18n.tr("Ports {ports} opened.", ports=", ".join(map(str, opened)) or "—")
     if opened:
-        # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
-        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
-        return ("Opened %s, but %s could not be opened — check the host's firewall."
-                % (", ".join(map(str, opened)), ", ".join(map(str, missed))))
-    # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
-    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
-    return ("No ports could be opened (%s) — the host's firewall did not accept the "
-            "rules." % ", ".join(map(str, missed)))
+        return i18n.tr("Opened {opened}, but {missed} could not be opened — check the host's firewall.",
+                       opened=", ".join(map(str, opened)), missed=", ".join(map(str, missed)))
+    return i18n.tr("No ports could be opened ({ports}) — the host's firewall did not accept the rules.",
+                   ports=", ".join(map(str, missed)))
 
 
 def register(app):
@@ -296,7 +290,7 @@ def _register_firewall_rules(app):
         a_port, a_proto = _fw_audit_rule(port, proto)
         log_action(current_user, "remote_port_open", target=f"{remote.name}:{a_port}/{a_proto}",
                    success=success, remote=remote)
-        return jsonify({"success": success, "message": msg})
+        return jsonify({"success": success, "message": i18n.tr(msg)})
 
     @app.route("/api/remote/<int:remote_id>/firewall/allow-from", methods=["POST"])
     @login_required
@@ -327,7 +321,7 @@ def _register_firewall_rules(app):
                    target=f"{remote.name}:{a_port}/{a_proto}",
                    detail="from %s" % _fw_audit_source(source),
                    success=success, remote=remote)
-        return jsonify({"success": success, "message": msg})
+        return jsonify({"success": success, "message": i18n.tr(msg)})
 
     @app.route("/api/remote/<int:remote_id>/firewall/limit", methods=["POST"])
     @login_required
@@ -353,7 +347,7 @@ def _register_firewall_rules(app):
         a_port, a_proto = _fw_audit_rule(port, proto)
         log_action(current_user, "remote_port_limit" if on else "remote_port_unlimit",
                    target=f"{remote.name}:{a_port}/{a_proto}", success=success, remote=remote)
-        return jsonify({"success": success, "message": msg})
+        return jsonify({"success": success, "message": i18n.tr(msg)})
 
     @app.route("/api/remote/<int:remote_id>/firewall/close", methods=["POST"])
     @login_required
@@ -369,7 +363,7 @@ def _register_firewall_rules(app):
         a_port, a_proto = _fw_audit_rule(port, proto)
         log_action(current_user, "remote_port_close", target=f"{remote.name}:{a_port}/{a_proto}",
                    success=success, remote=remote)
-        return jsonify({"success": success, "message": msg})
+        return jsonify({"success": success, "message": i18n.tr(msg)})
 
     @app.route("/api/remote/<int:remote_id>/firewall/delete-rule", methods=["POST"])
     @login_required
@@ -387,7 +381,7 @@ def _register_firewall_rules(app):
         log_action(current_user, "remote_ufw_delete_rule",
                    target=f"{remote.name}:#{_fw_audit_rule_number(num)}", success=success,
                    remote=remote)
-        return jsonify({"success": success, "message": msg})
+        return jsonify({"success": success, "message": i18n.tr(msg)})
 
 
 def _register_ssh_settings(app):
@@ -424,7 +418,7 @@ def _register_ssh_settings(app):
         success, msg = remote_set_public_ssh(remote, mode)
         log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success,
                    remote=remote)
-        return jsonify({"success": success, "message": msg})
+        return jsonify({"success": success, "message": i18n.tr(msg)})
 
 
 def _register_ssh_port(app):
@@ -474,7 +468,7 @@ def _register_ssh_port(app):
             lock.release()
         log_action(current_user, "change_ssh_port", target=remote.name,
                    detail=f"{old} -> {new_port}", success=ok, remote=remote)
-        return jsonify({"success": ok, "message": msg})
+        return jsonify({"success": ok, "message": i18n.tr(msg)})
 
 
 def _register_panel_port(app):
@@ -505,7 +499,8 @@ def _register_panel_port(app):
         if refusal is not None:
             return refusal
         if not nums:
-            return jsonify({"success": True, "message": f"Public port {port} is already closed."})
+            return jsonify({"success": True,
+                            "message": i18n.tr("Public port {port} is already closed.", port=port)})
         # Delete by rule NUMBER (reliable across any rule format), force=True since this is
         # the intentional guided close and Serve is already confirmed as the way in.
         # Each with the rule's KEY: highest-first keeps the numbers valid only against this loop's
@@ -519,8 +514,8 @@ def _register_panel_port(app):
         ok = _verify == _R15C_READ and not _left and not _left_shared
         log_action(current_user, "close_panel_port", target=str(port), success=ok, remote=remote)
         if not ok:
-            return jsonify({"success": False, "message": (
-                f"Couldn't remove every rule for port {port}; check the firewall page.")})
+            return jsonify({"success": False, "message": i18n.tr(
+                "Couldn't remove every rule for port {port}; check the firewall page.", port=port)})
         return jsonify({"success": True, "message": _r13c_closed_port_message(port)})
 
 
@@ -583,9 +578,9 @@ def _r14a_close_refusal(remote, port, shared, read):
             "UFW is not active on this host, so no firewall rule keeps the panel port closed — the "
             "panel is reachable on its public port.")})
     if read != _R15C_READ:
-        return jsonify({"success": False, "message": (
-            f"Couldn't read the firewall on this host, so port {port} can't be closed from "
-            f"here. Check the host is reachable and that UFW is installed, then try again.")})
+        return jsonify({"success": False, "message": i18n.tr(
+            "Couldn't read the firewall on this host, so port {port} can't be closed from here. Check "
+            "the host is reachable and that UFW is installed, then try again.", port=port)})
     if shared:
         log_action(current_user, "close_panel_port", target=str(port), success=False,
                    remote=remote, detail="opened by a multi-port rule: " + ", ".join(shared))
@@ -612,9 +607,10 @@ def _r15c_default_allow_refusal(remote, port):
 
 def _r14a_shared_rule_message(port, shared):
     """Why Close public panel port closed nothing: `shared` rules open the port among others."""
-    return (f"Port {port} is also opened by the firewall rule {', '.join(shared)}, which opens other "
-            f"ports too, so nothing was closed — removing it would close those as well. Take port "
-            f"{port} out of that rule on the Firewall page, then try again.")
+    return i18n.tr("Port {port} is also opened by the firewall rule {rules}, which opens other ports "
+                   "too, so nothing was closed — removing it would close those as well. Take port "
+                   "{port} out of that rule on the Firewall page, then try again.",
+                   port=port, rules=", ".join(shared))
 
 
 def _r13c_closed_port_message(port):
@@ -625,12 +621,13 @@ def _r13c_closed_port_message(port):
     """
     facts = ts.panel_funnel_facts(load_config())
     if facts["funnelled"]:
-        return (f"Public port {port} closed. Funnel is on for the panel's Tailscale Serve address, "
-                f"so the panel is still reachable from the internet through it.")
+        return i18n.tr("Public port {port} closed. Funnel is on for the panel's Tailscale Serve "
+                       "address, so the panel is still reachable from the internet through it.", port=port)
     if facts.get("unread"):
-        return (f"Public port {port} closed. Tailscale Serve could not be read, so whether Funnel "
-                f"still makes the panel reachable from the internet is not known.")
-    return f"Public port {port} closed — the panel is now reachable only over your tailnet."
+        return i18n.tr("Public port {port} closed. Tailscale Serve could not be read, so whether Funnel "
+                       "still makes the panel reachable from the internet is not known.", port=port)
+    return i18n.tr("Public port {port} closed — the panel is now reachable only over your tailnet.",
+                   port=port)
 
 
 def _rv_on_panel_host(gs):
@@ -690,13 +687,13 @@ def _register_game_ports(app):
         gs = GameServer.query.filter_by(remote_id=remote_id, port=port).first()
         if gs is None:
             return jsonify({"success": False,
-                            "message": "No game server on this host uses port %d — refusing to "
-                                       "open it." % port}), 400
+                            "message": i18n.tr("No game server on this host uses port {port} — "
+                                               "refusing to open it.", port=port)}), 400
         count, msg = remote_ufw_allow_game_port(remote, port, gs.short_name)
         success = count >= 1
         log_action(current_user, "game_port_open", target=f"{remote.name}:{port}", success=success,
                    remote=remote)
-        return jsonify({"success": success, "message": msg, "rules_added": count})
+        return jsonify({"success": success, "message": i18n.tr(msg), "rules_added": count})
 
     @app.route("/api/server/<int:server_id>/sync-ports", methods=["POST"])
     @login_required
@@ -887,7 +884,8 @@ def _register_os_update_checks(app):
     def api_remote_run_updates(remote_id):
         remote = get_host_remote(remote_id)
         if _hr.reboot_busy(remote.id):
-            return jsonify({"success": False, "message": _hr.BUSY_MESSAGE % remote.display_name}), 409
+            return jsonify({"success": False,
+                            "message": i18n.tr(_hr.busy_message(remote.display_name))}), 409
         success, msg = remote_os_run_updates(remote)
         log_action(current_user, "remote_os_update", target=remote.name, success=success,
                    remote=remote)
@@ -903,7 +901,8 @@ def _register_os_update_jobs(app):
         """Start a detached, watchable OS update; the popup polls .../os-update/status for live output."""
         remote = get_host_remote(remote_id)
         if _hr.reboot_busy(remote.id):
-            return jsonify({"success": False, "message": _hr.BUSY_MESSAGE % remote.display_name}), 409
+            return jsonify({"success": False,
+                            "message": i18n.tr(_hr.busy_message(remote.display_name))}), 409
         try:
             ok, msg = remote_os_update_start(remote)
             if ok:
@@ -1009,7 +1008,7 @@ def _register_reboot(app):
         if err:
             return jsonify({"success": False, "error": "bad_mode", "message": err}), 400
         code, body = _hr.request_reboot(remote, mode, current_user, "web")
-        return jsonify(body), code
+        return jsonify(_hr.shown(body)), code
 
     @app.route("/api/remote/<int:remote_id>/reboot-cancel", methods=["POST"])
     @login_required
@@ -1018,7 +1017,7 @@ def _register_reboot(app):
         """Cancel this host's pending wait, or a reboot that has not been sent yet."""
         remote = get_host_remote(remote_id)
         code, body = _hr.cancel(remote, current_user)
-        return jsonify(body), code
+        return jsonify(_hr.shown(body)), code
 
 
 def _register_host_pages(app):

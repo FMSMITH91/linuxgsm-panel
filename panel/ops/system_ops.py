@@ -7,7 +7,7 @@ import os
 import re
 import shlex
 import subprocess
-from panel.core import terminal
+from panel.core import i18n, terminal
 from panel.core.validation import canonical_ip, canonical_ip_or_network, ip_address_or_none
 import threading
 import time
@@ -603,7 +603,7 @@ def ufw_allow_tailscale(ts_interface=None):
     # so every call raised TypeError before reaching UFW — see the regression test in unit_test.py.
     out1, err1, rc1 = _run_verb("ufw-allow-iface", [ts_interface], timeout=15)
     if rc1 == 0:
-        return True, f"UFW rule added for interface '{ts_interface}'"
+        return True, i18n.Sentence("UFW rule added for interface '{iface}'", iface=ts_interface)
     return False, err1 or out1 or "Failed to add UFW rule"
 
 
@@ -864,7 +864,7 @@ def server_reboot(delay_seconds=5):
 
     thread = threading.Thread(target=_do_reboot, daemon=True)
     thread.start()
-    return True, f"Server will reboot in {delay} seconds."
+    return True, i18n.Sentence("Server will reboot in {n} seconds.", n=delay)
 
 
 # Host CPU% without shelling out to `top`. Measured: `top -bn1` was 208ms of /server-management's
@@ -1232,11 +1232,13 @@ def _ci_suite_expected(sha, runs):
 # _remote_ci_state, read by _compute_update_status straight after its call; both run under
 # _update_lock (panel_update_status), so one computation's reason is never another's.
 _ci_unknown_why = {"reason": ""}
-_CI_WHY_NO_SLUG = ("this panel's origin is not a github.com repository address it recognises, "
-                   "so its automated checks cannot be looked up")
-_CI_WHY_NOT_FOUND = ("GitHub did not show this repository's automated checks (a private "
-                     "repository cannot be checked without a token)")
-_CI_WHY_UNREACHABLE = "GitHub could not be reached to read its automated checks"
+# Sentences: a reason is put into a refusal shown to the viewer (_verified_branch_target), and
+# translated there in its turn; as a str it is the English the update status reports.
+_CI_WHY_NO_SLUG = i18n.Sentence("this panel's origin is not a github.com repository address it "
+                                "recognises, so its automated checks cannot be looked up")
+_CI_WHY_NOT_FOUND = i18n.Sentence("GitHub did not show this repository's automated checks (a private "
+                                  "repository cannot be checked without a token)")
+_CI_WHY_UNREACHABLE = i18n.Sentence("GitHub could not be reached to read its automated checks")
 
 
 def _remote_ci_state(sha):
@@ -1629,9 +1631,11 @@ def _compute_update_status():
     # and with neither, every read below fails and "0 behind" reads as up to date. Neither is.
     _, _, xrc = _git(["show-ref", "--verify", "--quiet", ref])
     if xrc != 0:
+        # Not shown (i18n-ignore below): with "git" True the update card shows only "Update available" or
+        # "You're up to date" (renderUpdate), never this message; it is for the API and the logs.
         return {"git": True, "fetched": False, "update_available": False,
                 "current_version": cur_ver, "current_sha": cur_sha.strip(), "branch": branch,
-                "message": "The update source has no branch '%s' to compare against." % branch}
+                "message": "The update source has no branch '%s' to compare against." % branch}  # i18n-ignore
     # FIRST-PARENT, here and in the walk below: the chain of first parents from the tip — each
     # commit of a push or rebase merge, and each merge commit — not everything the tip reaches, and
     # never what a merge brought in through its second parent. A pull request merged with a merge
@@ -1772,7 +1776,9 @@ def _compute_update_status():
                "changes": _runtime_changelog("HEAD.." + ref)[:10]}
         if unreadable:
             out["unverified_reason"] = unknown_why or _CI_WHY_UNREACHABLE
-            out["message"] = ("A newer version exists, but it couldn't be verified: %s. It will "
+            # Not shown (i18n-ignore): with "git" True the card says only "Update available" or
+            # "You're up to date" (renderUpdate); this is for the API and the logs.
+            out["message"] = ("A newer version exists, but it couldn't be verified: %s. It will "  # i18n-ignore
                               "be offered once its automated checks can be confirmed."
                               % out["unverified_reason"])
         return out
@@ -2218,8 +2224,8 @@ def _verified_branch_target(branch):
                       "+refs/heads/%s:%s" % (branch, ref)], timeout=45)
     _, _, xrc = _git(["show-ref", "--verify", "--quiet", ref])
     if frc != 0 or xrc != 0:
-        return "", ("Couldn't fetch '%s' from the update source, so there is no verified version "
-                    "to switch to." % branch)
+        return "", i18n.Sentence("Couldn't fetch '{branch}' from the update source, so there is no "
+                                 "verified version to switch to.", branch=branch)
     revs, _, _ = _git(["rev-list", "--first-parent", "-n", "25", ref])
     states = []
     for sha in [c for c in (revs or "").split() if c]:
@@ -2228,14 +2234,15 @@ def _verified_branch_target(branch):
         if st == "passing":
             return sha, ""
         if st == "unknown":
-            return "", ("Not switched: '%s' couldn't be verified — %s." %
-                        (branch, _ci_unknown_why["reason"] or _CI_WHY_UNREACHABLE))
+            return "", i18n.Sentence("Not switched: '{branch}' couldn't be verified — {why}.",
+                                     branch=branch, why=_ci_unknown_why["reason"] or _CI_WHY_UNREACHABLE)
         states.append(st)
     if "pending" in states:
-        return "", ("Not switched: no version of '%s' has finished its automated checks yet. Try "
-                    "again once they've passed (usually a few minutes)." % branch)
-    return "", ("Not switched: none of the recent versions of '%s' passed its automated checks."
-                % branch)
+        return "", i18n.Sentence("Not switched: no version of '{branch}' has finished its automated "
+                                 "checks yet. Try again once they've passed (usually a few minutes).",
+                                 branch=branch)
+    return "", i18n.Sentence("Not switched: none of the recent versions of '{branch}' passed its "
+                             "automated checks.", branch=branch)
 
 
 def panel_switch_branch(branch):
@@ -2252,7 +2259,7 @@ def panel_switch_branch(branch):
     out, _, rc = _git(["ls-remote", "--heads", "origin", "refs/heads/" + branch], timeout=20)
     if rc != 0 or ("refs/heads/" + branch) not in [
             ln.split("\t", 1)[-1].strip() for ln in (out or "").splitlines()]:
-        return False, "Branch '%s' doesn't exist on the remote." % branch
+        return False, i18n.Sentence("Branch '{branch}' doesn't exist on the remote.", branch=branch)
     # WHICH commit of that branch. The switch always launched with an empty target, and install.sh
     # resets an empty target to the branch's tip — so switching (back) to main installed main's
     # newest commit whether or not its checks had finished, or passed: the one path around the CI
@@ -2269,14 +2276,17 @@ def panel_switch_branch(branch):
             target, why = _verified_branch_target(branch)
         if not target:
             return False, why
-        msg = ("Switching to '%s' at %s, its newest version that passed its automated checks — the "
-               "panel is backing up, checking it out and verifying it restarts cleanly (auto-rollback "
-               "if it doesn't). This takes up to a minute." % (branch, target[:7]))
+        msg = i18n.Sentence(
+            "Switching to '{branch}' at {sha}, its newest version that passed its automated checks — "
+            "the panel is backing up, checking it out and verifying it restarts cleanly (auto-rollback "
+            "if it doesn't). This takes up to a minute.", branch=branch, sha=target[:7])
     else:
-        msg = ("Switching to '%s' — this installs that branch's newest commit AS IT IS: branches "
-               "other than %s are not checked by the panel's update gate, so it is unverified code, "
-               "for testing. The panel is backing up and verifying it restarts cleanly "
-               "(auto-rollback if it doesn't). This takes up to a minute." % (branch, _DEFAULT_BRANCH))
+        msg = i18n.Sentence(
+            "Switching to '{branch}' — this installs that branch's newest commit AS IT IS: branches "
+            "other than {default} are not checked by the panel's update gate, so it is unverified "
+            "code, for testing. The panel is backing up and verifying it restarts cleanly "
+            "(auto-rollback if it doesn't). This takes up to a minute.",
+            branch=branch, default=_DEFAULT_BRANCH)
     try:
         from panel.core import config as _cfg
         _previous = (_cfg.load_config().get("panel_branch") or "").strip()
@@ -2757,8 +2767,8 @@ def panel_repair(paths=None):
         _log.error("panel repair failed: %s", (err or "").strip())
         return False, "Repair failed — see the panel logs.", []
     _integrity_cache["data"] = None   # files changed on disk — next check must re-read
-    return True, ("Restored %d file(s) from the installed version. Restart the panel "
-                  "to load the corrected code." % len(checkout)), checkout
+    return True, i18n.Sentence("Restored {n} file(s) from the installed version. Restart the panel to "
+                               "load the corrected code.", n=len(checkout)), checkout
 
 
 def _apt_periodic_on(dump):
@@ -3301,27 +3311,27 @@ def _ufw_raise_shadowed_deny(ip, rule, run):
     which ufw refuses for IPv6 while IPv4 rules exist, and IPv6 was refused here for that reason
     after the verb stopped using it: the answer told the operator to run `ufw prepend` by hand.)"""
     if rule.get("action") != "DENY":
-        return False, ("%s already has a firewall rule of its own denying it, but the rule sits "
-                       "below rules that allow traffic, so it blocks nothing. The panel cannot "
-                       "move this one — put it above them on the host (`ufw prepend`)." % ip)
+        return False, i18n.Sentence("{ip} already has a firewall rule of its own denying it, but the rule sits "
+                                    "below rules that allow traffic, so it blocks nothing. The panel cannot move "
+                                    "this one — put it above them on the host (`ufw prepend`).", ip=ip)
     keep = re.sub(r"[^A-Za-z0-9 _.-]", "", rule.get("comment") or "")[:60].strip()
     if re.fullmatch(r"panel-[a-z-]+", keep):
         keep = ""       # stripping made it read as a panel tag, which the reconcile may release
     out, err, rc = run("ufw-delete-deny-ip", [ip])
     if rc != 0:
-        return False, ((out or err or "Could not move the existing deny rule for %s" % ip)
-                       .replace("\n", " ")[:200])
+        return False, ((out or err).replace("\n", " ")[:200] if (out or err) else
+                       i18n.Sentence("Could not move the existing deny rule for {ip}", ip=ip))
     # The second attempt is the put-back: an insert at the top is the only write of a deny the
     # helper has, so restoring the rule and retrying the move are the same command.
     for _attempt in range(2):
         out, err, rc = run("ufw-deny-ip", [ip, keep])
         if rc == 0:
-            return True, ("Moved the existing deny rule for %s to the top — it sat below rules "
-                          "that allow traffic, so it was blocking nothing." % ip)
+            return True, i18n.Sentence("Moved the existing deny rule for {ip} to the top — it sat below rules that "
+                                       "allow traffic, so it was blocking nothing.", ip=ip)
     _log.warning("ufw: the deny rule for %s was removed to move it and could not be put back", ip)
-    return False, (("The existing deny rule for %s was removed to move it above the allow rules, "
-                    "and could not be put back: " % ip)
-                   + (out or err or "unknown error").replace("\n", " ")[:160])
+    return False, i18n.Sentence("The existing deny rule for {ip} was removed to move it above the allow "
+                                "rules, and could not be put back: {why}", ip=ip,
+                                why=(out or err or "unknown error").replace("\n", " ")[:160])
 
 
 def _ufw_deny_with(ip, tag, existing, run, shadowed=None):
@@ -3344,16 +3354,16 @@ def _ufw_deny_with(ip, tag, existing, run, shadowed=None):
     not, and the only other delete is of the panel's own rule when it is re-tagged (auto-block →
     manual) — put back if the new one does not go in."""
     if existing is not None and _ufw_deny_tag_rank(existing) == 0:
-        return True, "%s is already blocked by an existing firewall rule (left as it is)." % ip
+        return True, i18n.Sentence("{ip} is already blocked by an existing firewall rule (left as it is).", ip=ip)
     if existing is None and shadowed:
         return _ufw_raise_shadowed_deny(ip, shadowed, run)
     if existing == tag:
-        return True, "%s is already blocked." % ip
+        return True, i18n.Sentence("{ip} is already blocked.", ip=ip)
     if existing:
         run("ufw-delete-deny-ip", [ip])
     out, err, rc = run("ufw-deny-ip", [ip, tag])
     if rc == 0:
-        return True, "Blocked %s (all ports)." % ip
+        return True, i18n.Sentence("Blocked {ip} (all ports).", ip=ip)
     if existing:
         run("ufw-deny-ip", [ip, existing])
     return False, ((out or err or "Block failed").replace("\n", " ")[:200])
@@ -3390,7 +3400,7 @@ def ufw_undeny_ip(ip):
     # succeeded, for a deny rule that is still in the firewall.
     out, err, rc = _run_verb("ufw-delete-deny-ip", [ip], timeout=15)
     if rc == 0:
-        return True, "Unblocked %s." % ip
+        return True, i18n.Sentence("Unblocked {ip}.", ip=ip)
     return False, ((out or err or "Unblock failed").replace("\n", " ")[:200])
 
 
@@ -3560,7 +3570,7 @@ def fail2ban_unban(jail, ip):
         return False, "Invalid IP address."
     out, err, rc = _run_verb("f2b-unban", [jail, ip], timeout=15)
     if rc == 0:
-        return True, "Unbanned %s from %s." % (ip, jail)
+        return True, i18n.Sentence("Unbanned {ip} from {jail}.", ip=ip, jail=jail)
     return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
 
 

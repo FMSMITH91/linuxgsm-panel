@@ -3,7 +3,7 @@ Also supports local execution for running on the panel's own machine."""
 import ipaddress as _ipaddress
 import re
 import socket
-from panel.core import clock, terminal
+from panel.core import clock, i18n, terminal
 import time
 import paramiko
 from panel.core.config import decrypt_secret
@@ -227,8 +227,12 @@ def pro_service(server, service, action):
     low = blob.lower()
     if rc == 0 or "is already enabled" in low or "is already disabled" in low \
             or "now enabled" in low or "updating package lists" in low:
-        return True, _pro_trim(blob) or f"{service} {action}d"
-    return False, _pro_trim(blob) or f"Could not {action} {service}"
+        return True, _pro_trim(blob) or (i18n.Sentence("{service} enabled", service=service)
+                                          if action == "enable" else
+                                          i18n.Sentence("{service} disabled", service=service))
+    return False, _pro_trim(blob) or (i18n.Sentence("Could not enable {service}", service=service)
+                                      if action == "enable" else
+                                      i18n.Sentence("Could not disable {service}", service=service))
 
 
 def pro_detach(server):
@@ -289,7 +293,7 @@ def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
         verb, vargs, label = "ufw-allow-proto-port", [proto, str(port), cmt], f"{port}/{proto}"
     out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
     if rc == 0:
-        return True, f"Port {label} opened on remote"
+        return True, i18n.Sentence("Port {port} opened on remote", port=label)
     return False, err or out or "Unknown error"
 
 
@@ -347,8 +351,9 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
         if refusal:
             return False, refusal
     if rc == 0:
-        return True, ("Port %s/%s open from %s" % (spec, proto, src) if allow
-                      else "Rule for %s/%s from %s removed" % (spec, proto, src))
+        return True, (i18n.Sentence("Port {spec}/{proto} open from {src}", spec=spec, proto=proto, src=src)
+                      if allow else
+                      i18n.Sentence("Rule for {spec}/{proto} from {src} removed", spec=spec, proto=proto, src=src))
     return False, err or out or "Unknown error"
 
 
@@ -446,18 +451,18 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
         # half of a game port the split below moved onto it. `ufw allow N/proto` rewrites the
         # LIMIT in place. Only when there IS one: otherwise this would open a closed port.
         if brc != 0:
-            return False, ("Could not read the firewall to find the rate limit on %s, so nothing "
-                           "was changed." % spec)
+            return False, i18n.Sentence("Could not read the firewall to find the rate limit on {spec}, so "
+                                        "nothing was changed.", spec=spec)
         # An inactive ufw lists NO rules, stored ones included, so the test below found none and
         # answered "has no rate limit to remove" about a host whose stored rules hold one.
         if not firewall._ufw_is_active(before):
-            return False, ("UFW is not active on this host, so its stored rules cannot be read "
-                           "here to find the rate limit on %s — nothing was changed." % spec)
+            return False, i18n.Sentence("UFW is not active on this host, so its stored rules cannot be read "
+                                        "here to find the rate limit on {spec} — nothing was changed.", spec=spec)
         if not any(r["to"] == spec and r["action"] == "LIMIT" for r in _ufw_public_rules(before)):
-            return False, "%s has no rate limit to remove." % spec
+            return False, i18n.Sentence("{spec} has no rate limit to remove.", spec=spec)
         out, err, rc = _core.run_privileged(server, "ufw-allow-port", [spec, ""], timeout=15)
         if rc == 0:
-            return True, "Rate limit removed from %s (it stays open)" % spec
+            return True, i18n.Sentence("Rate limit removed from {spec} (it stays open)", spec=spec)
         return False, err or out or "Unknown error"
     out, err, rc = _core.run_privileged(server, "ufw-limit-port", [spec], timeout=15)
     if rc != 0:
@@ -478,10 +483,10 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
             # which looked at the limited protocol only, answered "now rate limited". Now the bare
             # rule stays, and the read-back decides whether the limit is reached anyway.
             if o_rc != 0:
-                unsplit = (" The panel could not split it: re-opening %d/%s on its own failed (%s), "
-                           "so the rule opening both was left in place."
-                           % (port, other, (o_err or o_out or "exit %s" % o_rc)
-                              .replace("\n", " ").strip()[:120]))
+                unsplit = i18n.Sentence(
+                    "The panel could not split it: re-opening {port}/{proto} on its own failed ({why}), so the rule "
+                    "opening both was left in place.", port=port, proto=other,
+                    why=(o_err or o_out or "exit %s" % o_rc).replace("\n", " ").strip()[:120])
                 break
             _core.run_privileged(server, "ufw-delete-allow-port", [str(port)], timeout=15)
             split = True
@@ -492,25 +497,25 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     # bare rule split and all, came back as "could not be read back". Active or not, in any
     # locale, is _ufw_is_active's question, one line down.
     if arc != 0 or not (after or "").strip():
-        return False, ("The limit for %s was added, but the firewall could not be read back to "
-                       "confirm it is the rule connections meet first." % spec)
+        return False, i18n.Sentence("The limit for {spec} was added, but the firewall could not be read back "
+                                    "to confirm it is the rule connections meet first.", spec=spec)
     if not firewall._ufw_is_active(after):
-        return False, ("The limit for %s is stored, but UFW is not active on this host, so "
-                       "nothing is limited until it is enabled." % spec)
+        return False, i18n.Sentence("The limit for {spec} is stored, but UFW is not active on this host, so "
+                                    "nothing is limited until it is enabled.", spec=spec)
     first = _ufw_first_public_rule(after, port, proto)
     if first is None or first["action"] != "LIMIT":
-        return False, ("%s is still matched first by `%s`, so the limit is never reached — remove "
-                       "or narrow that rule.%s" % (spec, first["detail"] if first else "nothing",
-                                                   unsplit))
+        return False, i18n.Sentences(i18n.Sentence(
+            "{spec} is still matched first by `{rule}`, so the limit is never reached — remove or narrow that "
+            "rule.", spec=spec, rule=first["detail"] if first else "nothing"), unsplit)
     if split:
         # The split must not have closed what the bare rule kept open for the other protocol.
         o_was = _ufw_first_public_rule(before, port, other)
         o_now = _ufw_first_public_rule(after, port, other)
         if (o_was and o_was["action"] in ("ALLOW", "LIMIT")
                 and not (o_now and o_now["action"] in ("ALLOW", "LIMIT"))):
-            return False, ("%s is now rate limited, but %d/%s is no longer open — re-open it from "
-                           "the Firewall page." % (spec, port, other))
-    return True, "%s is now rate limited (6 connections per 30s per address)" % spec
+            return False, i18n.Sentence("{spec} is now rate limited, but {port}/{proto} is no longer open — "
+                                        "re-open it from the Firewall page.", spec=spec, port=port, proto=other)
+    return True, i18n.Sentence("{spec} is now rate limited (6 connections per 30s per address)", spec=spec)
 
 
 # `To` column of a port rule: a port or lo:hi range, optionally /tcp or /udp (none = both).
@@ -570,7 +575,8 @@ def remote_ufw_close_port(server, port, protocol=None, force=False):
     if refusal:
         return False, refusal
     if rc == 0:
-        return True, f"Port {port}{('/' + proto) if proto in ('tcp', 'udp') else ''} closed on remote"
+        return True, i18n.Sentence("Port {port} closed on remote",
+                                   port=("%s/%s" % (port, proto)) if proto in ("tcp", "udp") else port)
     return False, err or out or "Unknown error"
 
 
@@ -624,19 +630,19 @@ def _delete_rule_locked(server, n, force, expect_key):
                                exc_info=True)
             status = None
         if status is None or status.get("unreachable"):
-            return False, ("Couldn't read the firewall to check whether rule %d is the one "
-                           "keeping your access open, so this refuses rather than risk locking "
-                           "you out. Check the host is reachable and try again." % n)
+            return False, i18n.Sentence("Couldn't read the firewall to check whether rule {n} is the one keeping "
+                                        "your access open, so this refuses rather than risk locking you out. Check "
+                                        "the host is reachable and try again.", n=n)
         if not status.get("installed"):
             # A different answer, not the same failure: UFW genuinely is not here, so there is no
             # rule numbered anything and the delete would fail regardless. Say that rather than
             # send someone checking a connection that is fine.
-            return False, "UFW isn't installed on this host, so there's no rule %d to delete." % n
+            return False, i18n.Sentence("UFW isn't installed on this host, so there's no rule {n} to delete.", n=n)
         if expect_key is not None and not any(
                 g.get("key") == expect_key and n in g.get("nums", [])
                 for g in status.get("groups", [])):
-            return False, ("Rule %d is no longer the rule that was picked — the firewall changed "
-                           "since it was read, so nothing was removed. Refresh and try again." % n)
+            return False, i18n.Sentence("Rule {n} is no longer the rule that was picked — the firewall changed "
+                                        "since it was read, so nothing was removed. Refresh and try again.", n=n)
         for g in (status.get("groups", []) if not force else []):
             if n in g.get("nums", []) and g.get("protected"):
                 return False, g.get("protect_reason") or \
@@ -652,10 +658,10 @@ def _delete_rule_locked(server, n, force, expect_key):
         verb, args = "ufw-delete-num", [n]
         out, err, rc = _core.run_privileged(server, verb, args, timeout=15)
     if rc == 0:
-        return True, f"Rule {n} deleted"
+        return True, i18n.Sentence("Rule {n} deleted", n=n)
     if verb == "ufw-delete-num-if" and rc == _priv.UFW_RULE_MOVED:
-        return False, ("Rule %d changed on the host while it was being removed (someone else "
-                       "edited the firewall), so nothing was removed. Refresh and try again." % n)
+        return False, i18n.Sentence("Rule {n} changed on the host while it was being removed (someone else "
+                                    "edited the firewall), so nothing was removed. Refresh and try again.", n=n)
     return False, err or out or "Failed to delete rule"
 
 
@@ -707,7 +713,7 @@ def remote_ufw_allow_game_port(server, port, name="Game"):
     except (TypeError, ValueError):
         return 0, "Invalid port"
     opened, msg = remote_ufw_allow_game_ports(server, [port], name)
-    return (1 if port in opened else 0), f"Port {port}: {msg}"
+    return (1 if port in opened else 0), i18n.Sentence("Port {port}: {what}", port=port, what=msg)
 
 
 def _is_public_port_rule(g, port, protos=("BOTH",)):
@@ -1549,9 +1555,9 @@ def classify_install_failure(output):
             "binaries. The panel does that automatically on a retry."))
     m = re.search(r"is not supported on ([^\r\n(]{3,60})", text)
     if m:
-        return ("os_unsupported", (
-            "LinuxGSM does not support this game on %s. It caps this one at an older Ubuntu "
-            "release; the game picker marks those." % m.group(1).strip()))
+        return ("os_unsupported", i18n.Sentence(
+            "LinuxGSM does not support this game on {os}. It caps this one at an older Ubuntu release; the "
+            "game picker marks those.", os=m.group(1).strip()))
     return None
 
 
@@ -1924,13 +1930,16 @@ def _bootstrap_node(server):
 
 
 def _bsval_refusal(set_timezone, username):
-    """Why remote_bootstrap_vps must not start with these values, or None when it may."""
+    """Why remote_bootstrap_vps must not start with these values, or None when it may.
+
+    An i18n.Sentence: the worker records it in English, and the route shows it translated whole.
+    """
     if set_timezone:
         try:
             _priv.check_args("set-timezone", [set_timezone])
         except (_priv.VerbError, TypeError):
-            return ("Refused before any change: '%s' isn't a timezone name (use one like "
-                    "Etc/UTC or America/New_York)." % str(set_timezone)[:40])
+            return i18n.Sentence("Refused before any change: '{value}' isn't a timezone name (use one "
+                                 "like Etc/UTC or America/New_York).", value=str(set_timezone)[:40])
     if username:
         try:
             if not re.match(r"^[A-Za-z_][A-Za-z0-9._-]*\Z", username):
@@ -1940,8 +1949,9 @@ def _bsval_refusal(set_timezone, username):
             # call site of it outside create_game_user, which part05 gates against.
             _priv.check_args("user-lock-password", [username])
         except (_priv.VerbError, TypeError):
-            return ("Refused before any change: '%s' isn't a valid username (a letter or _, then "
-                    "letters, digits, . _ or -, at most 32 characters)." % str(username)[:40])
+            return i18n.Sentence("Refused before any change: '{value}' isn't a valid username (a letter "
+                                 "or _, then letters, digits, . _ or -, at most 32 characters).",
+                                 value=str(username)[:40])
     return None
 
 
@@ -1966,7 +1976,7 @@ def _r11a_step_failed(note, not_done, res, what):
     """
     if res[2] == 0:
         return False
-    msg = "%s (%s)" % (what, _r11a_why(res))
+    msg = i18n.Sentence("{what} ({why})", what=what, why=_r11a_why(res))
     not_done.append(msg)
     note("NOT DONE: %s." % msg)
     return True
@@ -2103,7 +2113,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         emit(f"Setting timezone to {set_timezone}")
         # set_timezone is user-supplied and runs as root — quote it against injection.
         _tz = _core.run_privileged(server, "set-timezone", [set_timezone], timeout=10)
-        _r11a_step_failed(note, not_done, _tz, "the timezone was not set to %s" % set_timezone)
+        _r11a_step_failed(note, not_done, _tz, i18n.Sentence("the timezone was not set to {tz}", tz=set_timezone))
 
     # ── 5. Configure UFW ──
     ufw_not_enabled = None
@@ -2126,8 +2136,8 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             _l_out, _l_err, _l_rc = _core.run_privileged(server, "ufw-limit-port", ["%s/tcp" % _sp],
                                                          timeout=15)
             if _l_rc != 0:
-                _l_why = "`ufw limit %s/tcp` failed (%s)" % (
-                    _sp, (_l_err or _l_out or "exit %s" % _l_rc).replace("\n", " ").strip()[:160])
+                _l_why = i18n.Sentence("`ufw limit {port}/tcp` failed ({why})", port=_sp,
+                                       why=(_l_err or _l_out or "exit %s" % _l_rc).replace("\n", " ").strip()[:160])
                 break
         if _l_rc == 0:
             # The same goes for `ufw allow OpenSSH` / a bare `ufw allow 22` already on the host:
@@ -2145,13 +2155,12 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             # Worded apart: a failed default with `ufw enable` at 0 leaves UFW ON, so "the
             # firewall was NOT enabled" was false there; what failed is the incoming policy.
             if _en[2] != 0:
-                ufw_enable_failed = ("the firewall was NOT enabled: `ufw enable` failed (%s)"
-                                     % _r11a_why(_en))
+                ufw_enable_failed = i18n.Sentence("the firewall was NOT enabled: `ufw enable` failed ({why})",
+                                                  why=_r11a_why(_en))
                 note("NOT DONE: %s — the firewall is not protecting this host." % ufw_enable_failed)
             elif _dd[2] != 0:
-                ufw_enable_failed = ("UFW is on, though its default incoming policy could not be set "
-                                     "to deny: `ufw default deny incoming` failed (%s)"
-                                     % _r11a_why(_dd))
+                ufw_enable_failed = i18n.Sentence("UFW is on, though its default incoming policy could not be set to "
+                                                  "deny: `ufw default deny incoming` failed ({why})", why=_r11a_why(_dd))
                 note("NOT DONE: %s — run `ufw status verbose` on the host to see the policy in "
                      "force." % ufw_enable_failed)
         else:
@@ -2213,7 +2222,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     if _swap_rc == 0 and _swap_txt.isdecimal():
         if _swap_txt == "0":
             _sw = _core.run_privileged(server, "create-swapfile", [], timeout=60, merge_stderr=False)
-            if not _r11a_step_failed(note, not_done, _sw, "the swap file was not created"):
+            if not _r11a_step_failed(note, not_done, _sw, i18n.Sentence("the swap file was not created")):
                 note("2G swap file created")
         else:
             note("Swap already present")
@@ -2251,20 +2260,21 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         elif "NOTEXISTS" in out:
             _cu_out, _cu_err, _cu_rc = _core.create_game_user(server, username, timeout=15)
             if _cu_rc != 0:
-                user_msg = "the account %s was not created (%s)" % (
-                    username, (_cu_err or _cu_out or "exit %s" % _cu_rc).replace("\n", " ").strip()[:160])
+                user_msg = i18n.Sentence("the account {user} was not created ({why})", user=username,
+                                         why=(_cu_err or _cu_out or "exit %s" % _cu_rc).replace("\n", " ").strip()[:160])
                 note("NOT DONE: %s; its password was not touched." % user_msg)
             else:
                 _lk_out, _lk_err, _lk_rc = _core.run_privileged(server, "user-lock-password",
                                                                 [username], timeout=10)
                 if _lk_rc != 0:
-                    user_msg = "the account %s was created but its login password could not be locked" % username
+                    user_msg = i18n.Sentence("the account {user} was created but its login password could not be locked",
+                                             user=username)
                     note("NOT DONE: %s." % user_msg)
                 else:
                     note(f"User {username} created (login password locked)")
         else:
-            user_msg = ("the account %s was not created: the host did not answer whether it "
-                        "already exists" % username)
+            user_msg = i18n.Sentence("the account {user} was not created: the host did not answer whether it "
+                                     "already exists", user=username)
             note("NOT DONE: %s." % user_msg)
 
     # ── 10. Configure fail2ban ──
@@ -2281,13 +2291,13 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         # SSH brute-force protection was configured.
         for _f2b_call, _f2b_what in (
                 (lambda: _core.write_root_file(server, "fail2ban-jail-local", jail_content,
-                                               timeout=15), "its jail could not be written"),
+                                               timeout=15), i18n.Sentence("its jail could not be written")),
                 (lambda: _core.run_privileged(server, "service-enable-now", ["fail2ban"],
-                                              timeout=20), "it could not be started"),
+                                              timeout=20), i18n.Sentence("it could not be started")),
                 (lambda: _core.run_privileged(server, "service-restart", ["fail2ban"],
-                                              timeout=20), "it could not be restarted")):
+                                              timeout=20), i18n.Sentence("it could not be restarted"))):
             if _r11a_step_failed(note, not_done, _f2b_call(),
-                                 "fail2ban is not protecting SSH: %s" % _f2b_what):
+                                 i18n.Sentence("fail2ban is not protecting SSH: {what}", what=_f2b_what)):
                 break
 
     # ── 11. Reboot ONLY if an update actually requires one, and NEVER out from under running game
@@ -2338,17 +2348,16 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             _rb_out, _rb_err, _rb_send_rc = _core.run_privileged(server, "reboot-delayed", [],
                                                                  timeout=15, merge_stderr=False)
             if _rb_send_rc != 0:
-                reboot_msg = ("the reboot a kernel/library update needs was not sent (%s) — reboot "
-                              "this host from its Power card" % (
-                                  (_rb_err or _rb_out or "exit %s" % _rb_send_rc)
-                                  .replace("\n", " ").strip()[:160]))
+                reboot_msg = i18n.Sentence("the reboot a kernel/library update needs was not sent ({why}) — reboot this "
+                                           "host from its Power card",
+                                           why=(_rb_err or _rb_out or "exit %s" % _rb_send_rc).replace("\n", " ").strip()[:160])
                 note("NOT DONE: %s." % reboot_msg, status="reboot-required")
             else:
                 _core.close_connection(server)
                 came_back = _wait_for_reboot(server, on_wait=lambda t: note(t, status="rebooting"))
                 if came_back == _RBWAIT_NEVER_DOWN:
-                    reboot_msg = ("the host never went down for the reboot a kernel/library update "
-                                  "needs — reboot it from its Power card")
+                    reboot_msg = i18n.Sentence("the host never went down for the reboot a kernel/library update needs — "
+                                               "reboot it from its Power card")
                     note("NOT DONE: %s." % reboot_msg, status="reboot-required")
                 elif not came_back:
                     return False, "Server was rebooted but did not come back online within the timeout.", "\n".join(log)
@@ -2358,33 +2367,37 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         note("Reboot check skipped — this is the panel's own host.")
 
     # The same reasoning for a firewall that was asked for and not switched on: a door left open.
-    ufw_msg = (("the firewall was NOT enabled: %s, and turning UFW on without a rule letting SSH "
-                "in would have locked this host out. Fix ufw on the host and run the bootstrap "
-                "again." % ufw_not_enabled) if ufw_not_enabled else
-               ("%s. Fix ufw on the host and run the bootstrap again." % ufw_enable_failed)
+    ufw_msg = (i18n.Sentence("the firewall was NOT enabled: {why}, and turning UFW on without a rule letting "
+                             "SSH in would have locked this host out. Fix ufw on the host and run the "
+                             "bootstrap again.", why=ufw_not_enabled) if ufw_not_enabled else
+               i18n.Sentence("{why}. Fix ufw on the host and run the bootstrap again.", why=ufw_enable_failed)
                if ufw_enable_failed else "")
     # Steps that were asked for and did not happen; each is "finished, but", never "complete".
-    ufw_msg = "; and ".join(m for m in [ufw_msg] + not_done + [user_msg, reboot_msg] if m)
+    # The clauses that did not happen, each a Sentence, joined by a translated "; and " (i18n.Sentences).
+    _undone = [m for m in [ufw_msg] + not_done + [user_msg, reboot_msg] if m]
+    ufw_msg = i18n.Sentences(*_undone, sep="; and ") if _undone else ""
     if hardening_failed:
         # Not "complete": the one step whose whole point is closing a door reported the door is
         # still open. The rest of the work did happen, and the message says both.
-        return False, ("Bootstrap finished, but the SSH hardening did not take effect: sshd "
-                       "still reports %s. Something sshd reads first overrides the edit — look "
-                       "in /etc/ssh/sshd_config.d (cloud images ship 50-cloud-init.conf)."
-                       % "; ".join("%s %s" % kv for kv in hardening_failed)
-                       + (" And " + ufw_msg if ufw_msg else "")), "\n".join(log)
+        return False, i18n.Sentences(i18n.Sentence(
+            "Bootstrap finished, but the SSH hardening did not take effect: sshd still reports {settings}. "
+            "Something sshd reads first overrides the edit — look in /etc/ssh/sshd_config.d (cloud images ship "
+            "50-cloud-init.conf).", settings="; ".join("%s %s" % kv for kv in hardening_failed)),
+            i18n.Sentence("And {rest}", rest=ufw_msg) if ufw_msg else ""), "\n".join(log)
     if ufw_msg:
-        return False, "Bootstrap finished, but " + ufw_msg, "\n".join(log)
+        return False, i18n.Sentence("Bootstrap finished, but {rest}", rest=ufw_msg), "\n".join(log)
     if progress:
         try:
             progress(total, total, "Bootstrap complete", "done")
         except Exception:
             _core._log.debug("remote_bootstrap_vps: ignored non-fatal error", exc_info=True)
     if hardening_unverified:
-        return True, (f"VPS bootstrap complete ({step}/{total} steps), but the SSH hardening could "
-                      "not be verified — sshd's effective configuration was unreadable. Check "
-                      "`sshd -T` on the host for passwordauthentication."), "\n".join(log)
-    return True, f"VPS bootstrap complete ({step}/{total} steps).", "\n".join(log)
+        return True, i18n.Sentence("VPS bootstrap complete ({step}/{total} steps), but the SSH hardening could "
+                                   "not be verified — sshd's effective configuration was unreadable. Check "
+                                   "`sshd -T` on the host for passwordauthentication.", step=step,
+                                   total=total), "\n".join(log)
+    return True, i18n.Sentence("VPS bootstrap complete ({step}/{total} steps).", step=step,
+                               total=total), "\n".join(log)
 
 
 # ─── Remote Tailscale Bootstrap ─────────────────────────────
@@ -2544,7 +2557,7 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
                                    advertise_routes or "-", tags or "-"], timeout=60)
     log.append(f"tailscale up: {out[-300:] if out else ''}")
     if rc != 0:
-        return False, f"Tailscale auth failed: {err or out[-200:]}", "\n".join(log)
+        return False, i18n.Sentence("Tailscale auth failed: {why}", why=err or out[-200:]), "\n".join(log)
 
     # 3. Enable UFW for Tailscale if UFW is active — or if we could not tell.
     #
@@ -2566,7 +2579,8 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
     log.append(f"Status: ip={status['tailscale_ip']} dns={status['dns_name']}")
 
     if status["running"]:
-        return True, f"Tailscale connected! IP: {status['tailscale_ip']} DNS: {status['dns_name']}", "\n".join(log)
+        return True, i18n.Sentence("Tailscale connected! IP: {ip} DNS: {dns}", ip=status['tailscale_ip'],
+                                   dns=status['dns_name']), "\n".join(log)
     else:
         return False, "Tailscale installed but not running after auth", "\n".join(log)
 
@@ -2857,7 +2871,7 @@ def remote_ufw_undeny_ip(server, ip):
     # happened on every remote host, while the panel-host path (already fixed) told the truth.
     out, err, rc = _core.run_privileged(server, "ufw-delete-deny-ip", [ip], timeout=15)
     if rc == 0:
-        return True, "Unblocked %s." % ip
+        return True, i18n.Sentence("Unblocked {ip}.", ip=ip)
     return False, ((out or err or "Unblock failed").replace("\n", " ")[:200])
 
 
@@ -2978,7 +2992,7 @@ def remote_fail2ban_unban(server, jail, ip):
         return False, "Invalid IP address."
     out, err, rc = _core.run_privileged(server, "f2b-unban", [jail, ip], timeout=20)
     if rc == 0:
-        return True, "Unbanned %s from %s." % (ip, jail)
+        return True, i18n.Sentence("Unbanned {ip} from {jail}.", ip=ip, jail=jail)
     return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
 
 
@@ -3116,14 +3130,14 @@ def _listener_not_sshd(fields, socket_mode):
     activation systemd holds sshd's listening socket: in ssh.socket's cgroup, or init.scope."""
     uid = next((f[4:] for f in fields if f.startswith("uid:")), None)
     if uid not in (None, "0"):
-        return "a socket owned by uid %s, not root" % uid
+        return i18n.Sentence("a socket owned by uid {uid}, not root", uid=uid)
     cgroup = next((f[7:] for f in fields if f.startswith("cgroup:")), "")
     unit = cgroup.rstrip("/").rsplit("/", 1)[-1]
     if unit in _SSHD_UNITS or (socket_mode and (unit in _SSHD_SOCKET_UNITS
                                                 or cgroup == "/init.scope")):
         return None
     if cgroup == "/init.scope" or cgroup.startswith("/system.slice/"):
-        return "held by %s, not sshd" % (unit or cgroup)
+        return i18n.Sentence("held by {owner}, not sshd", owner=unit or cgroup)
     return None            # no cgroup reported (cgroup v1, a container): root-owned is what we know
 
 
@@ -3141,7 +3155,7 @@ def _sshd_holds_port(server, port, bind_addr, socket_mode):
         out, rc = "", -1
     rows = _ss_listeners(out)
     if rc != 0 or not any(f.startswith("ino:") for _a, _p, fs in rows for f in fs):
-        return None, "the panel could not read which process holds it"
+        return None, i18n.Sentence("the panel could not read which process holds it")
     def _same_ip(ss_addr):
         # ss prints "[fd00::5]" and the canonical form; the operator may have typed "fd00:0::5".
         try:
@@ -3151,7 +3165,7 @@ def _sshd_holds_port(server, port, bind_addr, socket_mode):
             return False
     held = [fs for a, p, fs in rows if p == int(port) and (not bind_addr or _same_ip(a))]
     if not held:
-        return False, "nothing is listening there"
+        return False, i18n.Sentence("nothing is listening there")
     for fs in held:
         why = _listener_not_sshd(fs, socket_mode)
         if why:
@@ -3191,18 +3205,19 @@ def _point_f2b_sshd_at(server, ports):
         out, err, rc = _core.run_privileged(server, "f2b-status", [], timeout=10,
                                             merge_stderr=False)
         if rc == 127 or "not found" in ((out or "") + (err or "")).lower():
-            return "absent", "fail2ban is not installed on this host"
+            return "absent", i18n.Sentence("fail2ban is not installed on this host")
         portlist = ",".join(ports)
         # Hosts the panel prepared have a jail.local [sshd] port line; keep it in step.
         _core.run_privileged(server, "f2b-set-sshd-ports", [portlist], timeout=20,
                              merge_stderr=False)
         if _rc_of(_core.write_root_file(server, "fail2ban-panel-sshd",
                                         _f2b_sshd_dropin_body(ports), timeout=15)) != 0:
-            return "failed", ("its sshd drop-in could not be written"
-                              + ("; the panel-helper on this host may predate it, and re-running "
-                                 "install.sh updates it" if _core.is_local_server(server) else ""))
+            return "failed", (i18n.Sentence("its sshd drop-in could not be written; the panel-helper on this host "
+                                             "may predate it, and re-running install.sh updates it")
+                               if _core.is_local_server(server) else
+                               i18n.Sentence("its sshd drop-in could not be written"))
         if _rc_of(_core._f2b_reload(server)) != 0:
-            return "failed", "fail2ban did not reload"
+            return "failed", i18n.Sentence("fail2ban did not reload")
         deadline = time.time() + _F2B_JAIL_SETTLE_S
         while True:
             _o, _e, jrc = _core.run_privileged(server, "f2b-status-jail", ["sshd"], timeout=10,
@@ -3210,11 +3225,11 @@ def _point_f2b_sshd_at(server, ports):
             if jrc == 0:
                 return "updated", ""
             if time.time() >= deadline:
-                return "failed", "its sshd jail is not running"
+                return "failed", i18n.Sentence("its sshd jail is not running")
             time.sleep(1)
     except Exception:
         _core._log.warning("fail2ban sshd port update failed", exc_info=True)
-        return "failed", "the host did not answer"
+        return "failed", i18n.Sentence("the host did not answer")
 
 
 def _restart_ssh_listener(server, socket_mode):
@@ -3294,9 +3309,9 @@ def _open_ssh_port_rule(server, port, old_ports):
         if first is not None:
             if first["action"] in ("ALLOW", "LIMIT"):
                 return False, None
-            return False, ("Port %d/tcp is blocked by the firewall rule `%s`, so SSH moved there "
-                           "would be unreachable — remove or change that rule first. Nothing was "
-                           "changed." % (port, first["detail"]))
+            return False, i18n.Sentence("Port {port}/tcp is blocked by the firewall rule `{rule}`, so SSH moved "
+                                        "there would be unreachable — remove or change that rule first. Nothing was "
+                                        "changed.", port=port, rule=first["detail"])
         ok, _ = remote_ufw_open_port(server, port, "tcp", comment="SSH (panel)")
         return bool(ok and known), None
 
@@ -3349,10 +3364,10 @@ def change_ssh_port(server, new_port, bind_addr=""):
     # equivalent proxy, so here it is refused outright.
     if bind_addr:
         if ip_address_or_none(bind_addr).is_loopback:
-            return False, ("Binding SSH to %s would make it reachable only from the host "
-                           "itself — remote SSH would stop working, and binding is "
-                           "all-or-nothing so there is no fallback to revert to. Use the "
-                           "address you actually connect on." % bind_addr)
+            return False, i18n.Sentence("Binding SSH to {address} would make it reachable only from the host "
+                                        "itself — remote SSH would stop working, and binding is all-or-nothing so "
+                                        "there is no fallback to revert to. Use the address you actually connect "
+                                        "on.", address=bind_addr)
         # ...and on the panel's own host, an address the host does not HAVE. This used to be caught
         # for free: sshd could not bind a missing address, so it failed to start and the listening
         # check reverted. Under socket activation systemd creates the socket anyway, so something
@@ -3362,9 +3377,9 @@ def change_ssh_port(server, new_port, bind_addr=""):
         if _core.is_local_server(server):
             from panel.ops import system_ops as _so
             if not _so.host_has_ip(bind_addr):
-                return False, ("%s isn't an address on this host, so sshd could only bind it in "
-                               "name — SSH would answer nowhere. Use one of the host's own "
-                               "addresses." % bind_addr)
+                return False, i18n.Sentence("{address} isn't an address on this host, so sshd could only bind it in "
+                                            "name — SSH would answer nowhere. Use one of the host's own addresses.",
+                                            address=bind_addr)
 
     # Hoisted above old_ports (it used to be computed at step 2) because on a socket-activated
     # host it CHANGES WHAT old_ports MEANS. _sshd_current_ports runs `sshd -T`, i.e. sshd_config —
@@ -3387,7 +3402,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
         if _stored not in old_ports:
             old_ports = old_ports + [_stored]
     if not bind_addr and old_ports == [str(new_port)]:
-        return False, "SSH is already on port %d." % new_port
+        return False, i18n.Sentence("SSH is already on port {port}.", port=new_port)
 
     # Keep every current port plus the new one (new first).
     ports = []
@@ -3405,12 +3420,12 @@ def change_ssh_port(server, new_port, bind_addr=""):
         pre, _, pre_rc = _core.run_privileged(server, "listening-sockets", [], timeout=15,
                                               merge_stderr=False)
         if pre_rc != 0 or not (pre or "").strip():
-            return False, ("Could not list the ports this host listens on, so the panel can't tell "
-                           "whether %d is free — nothing was changed." % new_port)
+            return False, i18n.Sentence("Could not list the ports this host listens on, so the panel can't tell "
+                                        "whether {port} is free — nothing was changed.", port=new_port)
         if _port_has_listener(pre, new_port):
-            return False, ("Something on this host is already listening on port %d, so sshd could "
-                           "not take it and the panel could not tell sshd from that service "
-                           "afterwards. Pick a free port — nothing was changed." % new_port)
+            return False, i18n.Sentence("Something on this host is already listening on port {port}, so sshd "
+                                        "could not take it and the panel could not tell sshd from that service "
+                                        "afterwards. Pick a free port — nothing was changed.", port=new_port)
 
     # 1. Open the new port in the firewall FIRST (best-effort; a host without UFW just no-ops) —
     #    unless a rule for it is already there, and remember whether THIS step added one: that is
@@ -3472,7 +3487,8 @@ def change_ssh_port(server, new_port, bind_addr=""):
     tout, terr, trc = _core.run_privileged(server, "sshd-validate", [], timeout=15)
     terr = terr or tout
     if trc != 0:
-        return _revert("sshd rejected the new config — nothing changed. (%s)" % ((terr or "invalid")[:120]))
+        return _revert(i18n.Sentence("sshd rejected the new config — nothing changed. ({why})",
+                                     why=(terr or "invalid")[:120]))
 
     # 4. (fail2ban is repointed at step 7, once the move is VERIFIED: done here, before the restart,
     #    a reverted change left fail2ban banning on a port nothing serves.)
@@ -3484,9 +3500,9 @@ def change_ssh_port(server, new_port, bind_addr=""):
     #    fallback); a port-only change just confirms sshd bound the new port.
     if bind_addr and not _core.is_local_server(server):
         if not _tcp_reachable(server.host, new_port, timeout=8):
-            return _revert("After binding SSH to %s, the panel couldn't reach it on %s:%d — reverted. "
-                           "The bind address has to be the one the panel connects to."
-                           % (bind_addr, server.host, new_port))
+            return _revert(i18n.Sentence("After binding SSH to {address}, the panel couldn't reach it on "
+                                         "{host}:{port} — reverted. The bind address has to be the one the panel "
+                                         "connects to.", address=bind_addr, host=server.host, port=new_port))
     else:
         # Was `ss -lnt | grep -qE '[:.]<port>[[:space:]]' && echo OK || echo NO` — the new port
         # was interpolated into a regex running as root. Same match in Python.
@@ -3497,22 +3513,23 @@ def change_ssh_port(server, new_port, bind_addr=""):
             # somewhere useless, which is exactly the case this is here to catch.
             _a = re.escape("[%s]" % bind_addr if ":" in bind_addr else bind_addr)
             if not re.search(r"(?:^|\s)%s:%d\s" % (_a, new_port), out or "", re.M):
-                return _revert("sshd isn't listening on %s:%d — reverted. Your existing SSH still "
-                               "works." % (bind_addr, new_port))
+                return _revert(i18n.Sentence("sshd isn't listening on {address}:{port} — reverted. Your existing "
+                                             "SSH still works.", address=bind_addr, port=new_port))
         elif not _port_has_listener(out, new_port):
-            return _revert("sshd didn't come up on port %d — reverted. Your existing SSH still works." % new_port)
+            return _revert(i18n.Sentence("sshd didn't come up on port {port} — reverted. Your existing SSH still "
+                                         "works.", port=new_port))
 
     #    ...and that what answers there IS sshd. Both checks above are process-blind (`ss -lnt` and
     #    a TCP connect), so a local account that bound the port after step 0 passed them, the route
     #    repointed the panel at it, and the next connection offered it the stored credential.
     _holds, _why = _sshd_holds_port(server, new_port, bind_addr, socket_mode)
     if _holds is False:
-        return _revert("Port %d is not held by sshd (%s) — reverted. Your existing SSH still works."
-                       % (new_port, _why))
+        return _revert(i18n.Sentence("Port {port} is not held by sshd ({why}) — reverted. Your existing SSH "
+                                     "still works.", port=new_port, why=_why))
     _unchecked = ("" if _holds else
-                  " (The panel could not confirm that sshd itself holds port %d: %s — the "
-                  "panel-helper on this host may predate that check; re-running install.sh "
-                  "updates it.)" % (new_port, _why))
+                  i18n.Sentence("(The panel could not confirm that sshd itself holds port {port}: {why} — "
+                                "the panel-helper on this host may predate that check; re-running "
+                                "install.sh updates it.)", port=new_port, why=_why))
 
     # 7. Point fail2ban's sshd jail at the new + old ports so its bans cover the port now served.
     _f2b, _f2b_why = _point_f2b_sshd_at(server, ports)
@@ -3520,28 +3537,29 @@ def change_ssh_port(server, new_port, bind_addr=""):
     _core.run_privileged(server, _discard_verb, [], timeout=10,
                    merge_stderr=False)   # success — drop the snapshot
     if _f2b == "updated":
-        _done = "firewall + fail2ban updated"
+        _done = i18n.Sentence("firewall + fail2ban updated")
     elif _f2b == "absent":
-        _done = "firewall updated; %s, so nothing bans SSH brute force on any port" % _f2b_why
+        _done = i18n.Sentence("firewall updated; {why}, so nothing bans SSH brute force on any port",
+                              why=_f2b_why)
     else:
-        _done = ("firewall updated, but fail2ban was NOT: %s, so it may not be banning SSH brute "
-                 "force on port %d" % (_f2b_why, new_port))
+        _done = i18n.Sentence("firewall updated, but fail2ban was NOT: {why}, so it may not be banning SSH "
+                              "brute force on port {port}", why=_f2b_why, port=new_port)
     if bind_addr:
         # No fallback sentence here: ListenAddress is all-or-nothing (this function's own docstring
         # says so), so sshd is now on THIS address and nothing else. Telling the operator a previous
         # port is still available would be untrue exactly when it matters most.
-        return True, ("SSH now listens on %s:%d, and only there (%s). "
-                      "Confirm you can still reach it before closing anything.%s"
-                      % (bind_addr, new_port, _done, _unchecked))
+        return True, i18n.Sentences(i18n.Sentence(
+            "SSH now listens on {address}:{port}, and only there ({done}). Confirm you can still reach it "
+            "before closing anything.", address=bind_addr, port=new_port, done=_done), _unchecked)
     if _f2b == "failed":
         # Closing the old port is the advice that assumes fail2ban covers the new one.
-        return True, ("SSH now listens on port %d (%s). The previous port is still available as a "
-                      "fallback; fix fail2ban before relying on it for port %d.%s"
-                      % (new_port, _done, new_port, _unchecked))
-    return True, ("SSH now listens on port %d (%s). The previous port is "
-                  "still available as a fallback — once you've confirmed you can reach SSH on %d, "
-                  "close the old one from the Firewall page.%s"
-                  % (new_port, _done, new_port, _unchecked))
+        return True, i18n.Sentences(i18n.Sentence(
+            "SSH now listens on port {port} ({done}). The previous port is still available as a fallback; fix "
+            "fail2ban before relying on it for port {port}.", port=new_port, done=_done), _unchecked)
+    return True, i18n.Sentences(i18n.Sentence(
+        "SSH now listens on port {port} ({done}). The previous port is still available as a fallback — "
+        "once you've confirmed you can reach SSH on {port}, close the old one from the Firewall page.",
+        port=new_port, done=_done), _unchecked)
 
 
 # A ufw rule whose To column IS port 22 — the number (with or without /tcp) or the app profile.
@@ -3874,7 +3892,8 @@ def remote_set_public_ssh(server, mode):
             steps = steps[1:]
     for verb, vargs in steps:
         _core.run_privileged(server, verb, vargs, timeout=15)  # deletes of absent rules are harmless
-    labels = {"allow": "open (allow)", "limit": "rate-limited", "off": "disabled (tailnet-only)"}
+    labels = {"allow": i18n.Sentence("open (allow)"), "limit": i18n.Sentence("rate-limited"),
+              "off": i18n.Sentence("disabled (tailnet-only)")}
     # ASK THE HOST what it ended up with. This used to return True unconditionally, so on a host
     # with no ufw at all every verb failed and the operator still got "✓ Public SSH is now disabled
     # (tailnet-only)", an audit row saying the hardening succeeded, and port 22 open to the
@@ -3891,11 +3910,12 @@ def remote_set_public_ssh(server, mode):
         return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
                        "here — port 22 is governed by whatever else is in front of it.")
     if state.get("mode") != mode:
-        return False, ("Could not set public SSH to %s — the firewall still reports it as %s.%s"
-                       % (labels[mode], labels.get(state.get("mode"), state.get("mode")),
-                          (" The new 22/tcp rule was refused (%s), so no other SSH rule was "
-                           "removed." % gate_err) if gate_err else ""))
-    return True, f"Public SSH is now {labels[mode]}"
+        return False, i18n.Sentences(
+            i18n.Sentence("Could not set public SSH to {mode} — the firewall still reports it as {now}.",
+                          mode=labels[mode], now=labels.get(state.get("mode"), state.get("mode"))),
+            i18n.Sentence("The new 22/tcp rule was refused ({why}), so no other SSH rule was removed.",
+                          why=gate_err) if gate_err else "")
+    return True, i18n.Sentence("Public SSH is now {mode}", mode=labels[mode])
 
 
 def ssh_test_connection(host, port=22, username="root", auth_method="key", credential="",
@@ -3969,8 +3989,8 @@ def _ssh_test_tailscale(host, port, username):
     if "permission denied" in low:
         return False, "Tailscale SSH denied — check the tailnet ACL allows SSH to this node/user."
     if "timed out" in low or "timeout" in low:
-        return False, f"Timed out reaching {host} over Tailscale. Is the node online?"
-    return False, f"Tailscale SSH failed: {(err or out or 'unknown')[:150]}"
+        return False, i18n.Sentence("Timed out reaching {host} over Tailscale. Is the node online?", host=host)
+    return False, i18n.Sentence("Tailscale SSH failed: {why}", why=(err or out or "unknown")[:150])
 
 
 def _ssh_test_login(client, host, port, username, auth_method, credential):

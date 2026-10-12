@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from panel.core import i18n
 from panel.core.validation import ip_address_or_none
 from panel.security import privileged as _priv
 from panel.ops import system_ops as _so
@@ -532,8 +533,11 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     if ok:
         with _cache_lock:
             _cache["info"] = None
-        return True, "Tailscale Serve enabled" + (" (with Funnel)" if verb == "funnel" else "") + note
-    return False, f"Failed to configure Tailscale Serve: {err or 'Unknown error'}"
+        # Sentences: each part translated whole where it is shown (i18n.tr); the note was a clause
+        # appended to the English.
+        return True, i18n.Sentences(i18n.Sentence("Tailscale Serve enabled (with Funnel)") if verb == "funnel"
+                                    else i18n.Sentence("Tailscale Serve enabled"), note)
+    return False, i18n.Sentence("Failed to configure Tailscale Serve: {why}", why=err or "Unknown error")
 
 
 def _r12a_listener_funnel(serve_config, port):
@@ -564,16 +568,25 @@ def _r12a_serve_verb(port, mount, funnel, keep_shared_funnel):
     if keep_shared_funnel and _r12a_panel_on_443(info.serve_config, port, mount):
         _log.warning("Tailscale Serve: Funnel left as it is on the :443 listener it shares with %s",
                      names)
-        return ("funnel" if shared else "serve"), _r12a_kept_note(shared, names)
-    return None, _r12a_funnel_refusal(funnel, names)
+        return ("funnel" if shared else "serve"), _r12a_kept_note(shared, others)
+    return None, _r12a_funnel_refusal(funnel, others)
 
 
-def _r12a_kept_note(shared, names):
-    """What a boot re-point that left the shared listener's Funnel as it was appends to its answer."""
+def _r12a_kept_note(shared, others):
+    """What a boot re-point that left the shared listener's Funnel as it was says after its answer.
+
+    `others` are the other apps' mounts. A whole Sentence; the apps are named one phrase each.
+    """
     if shared:
-        return (" (Funnel left on: it is set per listener, and %s shares it, so the panel is "
-                "reachable from the internet too)" % names)
-    return " (Funnel left off: it is set per listener, and %s shares it)" % names
+        return i18n.Sentence("(Funnel left on: it is set per listener, and {apps} shares it, so the "
+                             "panel is reachable from the internet too)", apps=_r15e_apps(others))
+    return i18n.Sentence("(Funnel left off: it is set per listener, and {apps} shares it)",
+                         apps=_r15e_apps(others))
+
+
+def _r15e_apps(mounts):
+    """_r12a_apps_at for a sentence the viewer reads: each "the app at …" a phrase translated alone."""
+    return [i18n.Sentence("the app at {mount}", mount=m) for m in mounts]
 
 
 def _r12a_apps_at(mounts):
@@ -665,14 +678,16 @@ def _r12a_panel_on_443(serve_config, port, mount):
                and not r.get("svc") for r in panel_serve_routes(serve_config, port))
 
 
-def _r12a_funnel_refusal(funnel, names):
-    """Why a Serve write that would change another app's Funnel (`names`) was not made."""
+def _r12a_funnel_refusal(funnel, others):
+    """Why a Serve write that would change another app's Funnel (at mounts `others`) was not made."""
     if funnel:
-        return ("Funnel is set per listener, not per app: publishing the panel with Funnel here "
-                "would also put %s on the public internet. Nothing was changed." % names)
-    return ("Funnel is set per listener, not per app, and it is on for %s: publishing the panel "
-            "here without Funnel would take it off the public internet. Nothing was changed; turn "
-            "Funnel off for that app first, or publish the panel with Funnel." % names)
+        return i18n.Sentence("Funnel is set per listener, not per app: publishing the panel with Funnel "
+                             "here would also put {apps} on the public internet. Nothing was changed.",
+                             apps=_r15e_apps(others))
+    return i18n.Sentence("Funnel is set per listener, not per app, and it is on for {apps}: publishing "
+                         "the panel here without Funnel would take it off the public internet. Nothing "
+                         "was changed; turn Funnel off for that app first, or publish the panel with "
+                         "Funnel.", apps=_r15e_apps(others))
 
 
 def _apply_serve(verb, mount, backend_scheme, port):
@@ -1105,40 +1120,42 @@ def disable_tailscale_serve(mount, port):
         return False, msg
     with _cache_lock:
         _cache["info"] = None
-    return True, (("Tailscale Serve mapping removed" if len(ours) == 1
-                   else "Tailscale Serve mappings removed") + _r12a_funnel_kept_note(info, port)
-                  + on_svc)
+    return True, i18n.Sentences(i18n.Sentence("Tailscale Serve mapping removed.") if len(ours) == 1
+                                else i18n.Sentence("Tailscale Serve mappings removed."),
+                                _r12a_funnel_kept_note(info, port), on_svc)
 
 
 def _r14a_svc_note(routes):
-    """A note naming the Tailscale Services among `routes` that still publish the panel, else ""."""
+    """A sentence naming the Tailscale Services among `routes` that still publish the panel, else ""."""
     names = sorted({r["svc"] for r in routes if r.get("svc")})
     if not names:
         return ""
-    return ("; the panel is still published on the Tailscale Service %s, which the panel does not "
-            "manage (remove it with `tailscale serve --service=<name> ... off`)" % ", ".join(names))
+    return i18n.Sentence("The panel is still published on the Tailscale Service {names}, which the panel "
+                         "does not manage (remove it with `tailscale serve --service=<name> ... off`).",
+                         names=", ".join(names))
 
 
 def _r14a_nothing_at_mount(ours, mount, on_svc):
     """Disable's answer when nothing at `mount` proxies the panel; another app's is never touched."""
     if ours:
-        return False, ("The panel is published at %s, not at %s, so nothing was removed."
-                       % (ours[0]["mount"], mount))
+        return False, i18n.Sentence("The panel is published at {ours}, not at {mount}, so nothing was "
+                                    "removed.", ours=ours[0]["mount"], mount=mount)
     if on_svc:
-        return True, ("Tailscale Serve wasn't publishing the panel on this node, so there was "
-                      "nothing to remove" + on_svc)
+        return True, i18n.Sentences(i18n.Sentence("Tailscale Serve wasn't publishing the panel on this "
+                                                  "node, so there was nothing to remove."), on_svc)
     return True, "Tailscale Serve wasn't publishing the panel, so there was nothing to remove."
 
 
 def _r12a_funnel_kept_note(info, port):
-    """A note for Disable's answer when Funnel stays on for another app on :443, else "".
+    """A sentence for Disable's answer when Funnel stays on for another app on :443, else "".
 
     Funnel is per listener: it stays on while another app still holds a mount on :443, and that
     is the other app's setting to change, not the panel's. Said, so "off" is not assumed.
     """
     shared, others = _r12a_listener_funnel(info.serve_config, port)
     if shared and others:
-        return "; Funnel stays on for the :443 listener, which still serves %s" % _r12a_apps_at(others)
+        return i18n.Sentence("Funnel stays on for the :443 listener, which still serves {apps}.",
+                             apps=_r15e_apps(others))
     return ""
 
 
@@ -1149,13 +1166,14 @@ def _remove_serve_mappings(routes, port):
     """
     for r in routes:
         if _serve_port_flag(r["url"]) is None:
-            return False, "Couldn't tell which listener %s is on, so nothing was removed." % r["url"]
+            return False, i18n.Sentence("Couldn't tell which listener {url} is on, so nothing was removed.",
+                                        url=r["url"])
         state, err = remove_panel_route(r, port)
         if state == "unread":
             return False, ("Couldn't read this host's Tailscale Serve configuration, so not every "
                            "mapping was removed.")
         if state == "failed":
-            return False, f"Failed to remove: {err}"
+            return False, i18n.Sentence("Failed to remove: {why}", why=err)
     return True, ""
 
 
