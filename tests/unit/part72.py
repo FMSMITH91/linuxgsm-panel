@@ -250,7 +250,7 @@ try:
               _ES72["its game port is not set in its LinuxGSM config, and LinuxGSM's details did not answer, "
                     "so its port could not be read — try the import again"],
               "no se pudo usar su puerto: el puerto 22 es el SSH de este host o el propio panel; corrígelo en "
-              "la configuración del juego y luego impórtalo"]
+              + "la configuración del juego y luego impórtalo"]
           and _reasons72[0] in _out72.get("message", "") and "Not imported" not in _out72.get("message", ""),
           repr((_reasons72, _out72.get("message"))))
 finally:

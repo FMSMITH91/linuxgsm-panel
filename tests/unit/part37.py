@@ -1143,7 +1143,7 @@ def _f7_cleanups():
         # Review 1012b: a nested try that catches only PermissionError, or catches OSError and
         # raises it again, lets the failure reach the outer `pass`.
         "try:\n    try:\n        p.unlink()\n    except PermissionError as e:\n        log(e)\n"
-        "except OSError:\n    pass\n",
+        + "except OSError:\n    pass\n",
         "try:\n    try:\n        p.unlink()\n    except OSError:\n        raise\nexcept OSError:\n    pass\n"]
     # ...while a nested try that handles OSError itself (and says so) leaves the outer one nothing.
     _r16d_inner37 = ("try:\n    try:\n        p.unlink()\n    except OSError as e:\n        log(e)\n"
