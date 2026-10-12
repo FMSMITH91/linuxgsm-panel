@@ -17,6 +17,17 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **A Refresh list button for LinuxGSM's game list.** The install page's game list refreshes itself
   once a week. A superadmin can now press **Refresh list**, beside "All LinuxGSM games are
   supported", to fetch it straight away, for a game LinuxGSM has just added.
+- **New file and New folder in the file browser.** Two buttons beside Upload and Upload folder
+  make an empty file or folder in the folder the browser is showing. Each opens a name field at the
+  top of the list: Enter or Create makes it, Escape or Cancel closes it, and when the panel refuses,
+  the reason shows under the field so you can fix the name where you typed it. A new folder is
+  opened straight away, and a new file opens in the editor. The name follows Rename's rules: a
+  single name, no `/`, not `.` or `..`, at most 255 bytes, no control or text-direction characters
+  and no space at either end, sent as typed and never trimmed. Nothing is ever replaced: a name
+  already in the folder, even a broken symbolic link, is refused, including one that appears while
+  the panel is creating it. Protected LinuxGSM names and the live console's log folders are refused,
+  as is a folder reached through a symbolic link. The file or folder belongs to the game's account,
+  the same accounts are refused as for Delete and Rename, and every attempt is in the audit log.
 - **Rename a file or folder in the file browser.** Every row that can be deleted now has a Rename
   (pencil) control, at every width. It turns the row's name into a field holding the current name,
   with the part before the extension selected, so typing replaces `notes` and keeps `.txt`. Enter or

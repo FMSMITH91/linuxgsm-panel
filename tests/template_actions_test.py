@@ -5450,9 +5450,9 @@ const ENTRY = (name, dir) => ({name: name, is_dir: dir, size: dir ? 0 : 5, prote
 })().catch(e => console.log(JSON.stringify({error: String(e && e.stack || e)})));"""
 # The template's two create buttons: (data-action, data-args, label), in the order they appear.
 _cr_tpl = (TEMPLATES / "server_files.html").read_text(encoding="utf-8")
+_cr_re = r"<button[^>]*data-action=\"(startCreate)\"[^>]*data-args='([^']*)'[^>]*>(.*?)</button>"
 _cr_buttons = [(a, g, re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", t)).strip())
-               for a, g, t in re.findall(r"<button[^>]*data-action=\"(startCreate)\"[^>]*data-args='([^']*)'[^>]*>(.*?)</button>",
-                                         _cr_tpl, re.S)]
+               for a, g, t in re.findall(_cr_re, _cr_tpl, re.S)]
 check([b[2] for b in _cr_buttons] == ["New file", "New folder"]
       and [json.loads(b[1])[0] for b in _cr_buttons] == ["file", "folder"],
       "files page: the toolbar has New file and New folder, each opening its own kind",

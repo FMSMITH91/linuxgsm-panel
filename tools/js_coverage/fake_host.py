@@ -426,9 +426,32 @@ def _rename(command):
     return "__RENAME_DONE__"
 
 
+# The file browser's New file / New folder (ssh_manager.files.create_path): the folder and the
+# name, out of the shell-quoted script, as _rename reads them; a name already in the folder is
+# taken, otherwise the entry joins the tree (an empty one, for a folder), so the listing that
+# follows shows it.
+def _create(command):
+    try:
+        inner = shlex.split(command)[-1]
+        folder, name = (shlex.split(rx.search(inner).group(1))[0] for rx in _RN_PARTS[:2])
+    except (AttributeError, ValueError, IndexError):
+        return None
+    rel = folder.split("/", 3)[3] if folder.count("/") >= 3 else ""
+    is_dir = 'mkdir -- "$t"' in inner
+    with _lock:
+        entries = _TREE.setdefault(rel, [("f", 10, "readme.txt")])
+        if name in [e[2] for e in entries]:
+            return "__CREATE_TAKEN__"
+        entries.append(("d" if is_dir else "f", 0, name))
+        if is_dir:
+            _TREE[(rel + "/" if rel else "") + name] = []
+    return "__CREATE_DONE__"
+
+
 # (pattern, answer): answer is text, or a callable taking the command. First match wins.
 _TABLE = [
     (r'-n -T -- "\$t" "\$n"', _rename),
+    (r'mkdir -- "\$t"|set -o noclobber; : > "\$t"', _create),
     (r"LGSM_ACCT_PROBE_DONE", _account_probe),
     (r"tail -c \+\d+|printf B; tail -\d+|echo \"@\$1 \$2\"", _console),
     (r"stat -c '?%i %s'?", lambda c: "4242 %d" % len(_log_text().encode())),
