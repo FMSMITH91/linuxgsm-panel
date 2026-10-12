@@ -1254,6 +1254,12 @@ function _r13c_reshowPanelPushes(backlog, wiped, floor) {
   if (!wiped) return;
   var upTo = Number(floor) || 0;
   (backlog || []).forEach(function (r) { if (Number(r.t) > upTo) upTo = Number(r.t); });
+  // Nor any already shown since the wipe. The re-prime ends a catch-up still out (_primeAt ->
+  // _startResync -> _endResync), and that shows the panel pushes it held AFTER the wipe; one newer
+  // than this backlog was then put back here a second time — Clear pressed while the first
+  // window's catch-up was out showed the next [panel] line twice. Nothing else raises _lastPanelT
+  // between the wipe (which sets it back to the cut) and here but the backlog, already counted.
+  if (_lastPanelT > upTo) upTo = _lastPanelT;
   _r13c_panelPushes.forEach(function (d) {
     if (Number(d.ts) <= upTo) return;
     appendConsole(d.data, d.ts, false);

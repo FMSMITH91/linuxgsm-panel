@@ -383,3 +383,67 @@ if _out72t is not None:
     check("terminal: a host name's ESC/BEL/CSI never reach xterm in an error or close line (its text stays)",
           len(_w72) == 2 and all(not any(ord(c) < 32 or 0x7f <= ord(c) <= 0x9f for c in w) for w in _inner72)
           and "box[2J]0;pwned31m" in _inner72[0], repr(_out72t))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 7. The console: Clear while the first window's catch-up is still out, then the re-prime
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The re-prime after Clear ends the catch-up the first window asked for (_primeAt -> _startResync
+# -> _endResync), which shows the panel pushes it held — AFTER the wipe. A held push newer than the
+# backlog the poll read was then put back a second time by the reshow (_r13c_reshowPanelPushes):
+# the same [panel] line twice. refreshConsole, clearConsole, the priming catch-up and the backlog
+# helpers are cut from the real file; `shown` is what the console holds, in order.
+from unit.part47 import _cut47  # noqa: E402
+
+_SD72 = _read72(_JS72, "server_detail.js")
+_CON72 = (
+    "const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };\n"
+    "global.window = global; global.MOUNT = ''; global.serverId = 1; global.toast = () => 0;\n"
+    "global.setTimeout = () => 0; global.clearTimeout = () => 0;\n"
+    "var shown = [], _consoleLines = [], _consolePrimed = false, _consoleSig = null, _lastPanelT = 0;\n"
+    "var _returnOwed = false, _panelBacklogShown = false, _r13c_panelPushes = [], _R13C_PANEL_KEEP = 200;\n"
+    "var _r15c_clearedAt = null, _logAt = null, _resync = null, _resyncSeq = 0, _shownOnReturn = {};\n"
+    "var _primeOwed = false, _RESYNC_MAX_MS = 45000;\n"
+    "var consoleEl = {set innerHTML(v){ shown.length = 0; }};\n"
+    "var socket = {connected: true};\n"
+    "function _rebuildMark(){ return 0; } function _rebuildRestore(){} function updateTsNotice(){}\n"
+    "function _showTsOffNote(){} function stickConsole(){} function consoleAtBottom(){ return true; }\n"
+    "function _notePanelMarker(){} function _newConsoleRows(){ return []; }\n"
+    "function _resyncAsk(){} function _resyncGiveUp(){}\n"
+    "function _appendConsoleRows(rows){ (rows || []).forEach(r => shown.push(r.line)); }\n"
+    "function appendConsole(text){ shown.push(text); }\n"
+    "function _panelShownAt(t){ if (Number(t) > _lastPanelT) _lastPanelT = Number(t); }\n"
+    "function _renderPanelLines(rows){ rows.forEach(r => { shown.push(r.line); _panelShownAt(r.t); }); }\n"
+    + "".join(_cut47(_SD72, h) + "\n" for h in (
+        "function _r13c_notePanelPush(", "function _r13c_reshowPanelPushes(", "function refreshConsole(",
+        "function showPanelBacklog(", "function _newerPanelRows(", "function _panelLinesWiped(",
+        "function _r13c_primeWipesPushes(", "function clearConsole(", "function _primeAt(",
+        "function _primeCatchUp(", "function _startResync(", "function _endResync(",
+        "function _showPanelPush(", "function _resyncTake("))
+    + "var backlog = [], logN = 0;\n"
+    "global.fetch = () => { logN++; return Promise.resolve({ok: true, json: () => Promise.resolve(\n"
+    "  {lines: [{line: 'log' + logN}], panel_lines: backlog.slice(), at: [1, 1, logN]})}); };\n"
+    # a [panel] push as the socket handler takes it: held while a catch-up is out, else shown
+    "function push(ts, data){ const d = {panel: true, ts: ts, data: data}; if (_resyncTake(d)) return;\n"
+    "  appendConsole(d.data); _panelShownAt(d.ts); _r13c_notePanelPush(d); }\n")
+_out72c = _node72("console: Clear while the first catch-up is out, then the re-prime", _CON72 + (
+    "(async () => { const out = {};\n"
+    "  backlog = [{t: 100, line: '[panel] old'}]; refreshConsole(true); await settle();\n"
+    "  out.primed = shown.slice(); out.catching = !!_resync;\n"
+    # Clear, then an update's line pushed (held: the first window's catch-up is still out), written
+    # after the server read the backlog the re-prime brings
+    "  clearConsole(); push(110, '[panel] u1');\n"
+    "  refreshConsole(false); await settle(); out.after = shown.slice();\n"
+    # the same, with the backlog holding it
+    "  push(120, '[panel] u2'); backlog.push({t: 110, line: '[panel] u1'}, {t: 120, line: '[panel] u2'});\n"
+    "  clearConsole(); push(130, '[panel] u3'); backlog.push({t: 130, line: '[panel] u3'});\n"
+    "  refreshConsole(false); await settle(); out.inBacklog = shown.slice();\n"
+    "  console.log(JSON.stringify(out)); })();\n"))
+if _out72c is not None:
+    check("console: a [panel] line pushed after Clear, while the first window's catch-up was still out, "
+          "shows once after the re-prime (it was put back twice)",
+          _out72c.get("catching") is True and _out72c.get("after") == ["log2", "[panel] u1"], repr(_out72c))
+    # u2 came while the second window's catch-up was out, so it was held and never on the page when
+    # Clear was pressed: it is shown, as u3 is, and neither twice.
+    check("console: ...and with the re-prime's backlog holding them, each held line shows once (control)",
+          _out72c.get("inBacklog") == ["log3", "[panel] u2", "[panel] u3"], repr(_out72c))
