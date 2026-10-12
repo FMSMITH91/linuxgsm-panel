@@ -199,12 +199,30 @@ def _schema_line(res):
 
 
 # ── R60: volume and retention ────────────────────────────────────────────────────────────────────
+def _r17b_ip_ageing_fails(ip_days):
+    """True when the panel's own IP ageing raises on this many days.
+
+    anonymise_audit_ips takes `utcnow() - timedelta(days=…)`, which overflows from about 1e6 days
+    (before year 1), and app.py logs that and ages nothing. The report computed its own cutoff and
+    said "IPs reduced after N d" for it — and from about 1e12 days its own gmtime raised OSError
+    outside any guard, losing the whole Database section (review 1012b).
+    """
+    try:
+        _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None) - _dt.timedelta(days=ip_days)
+    except (OverflowError, OSError, ValueError, TypeError):
+        return True
+    return False
+
+
 def _census_queries(ip_days):
     q = {"metric_sample": ("SELECT COUNT(*), MIN(ts) FROM metric_sample", ()),
          "host_sample": ("SELECT COUNT(*), MIN(ts) FROM host_sample", ()),
          "audit_log": ("SELECT COUNT(*), MIN(timestamp) FROM audit_log", ())}
-    if ip_days and ip_days > 0:
-        q["audit_ips"] = (_IPS_SQL, (_sql_time(ip_days * _DAY),))
+    if ip_days and ip_days > 0 and not _r17b_ip_ageing_fails(ip_days):
+        try:
+            q["audit_ips"] = (_IPS_SQL, (_sql_time(ip_days * _DAY),))
+        except (OverflowError, OSError, ValueError):
+            pass    # no count of rows still holding an IP; _audit_ips_text says what it can
     return q
 
 
@@ -247,7 +265,10 @@ def _audit_ips_text(conf, ip_rows):
     """The audit line's IP-reduction part, with the count of older rows still holding an IP."""
     ip_days = conf[1]
     ips = ("IP reduction not known" if isinstance(conf, _R11bConfUnreadable)
-           else "IP reduction off" if not ip_days else "IPs reduced after %d d" % ip_days)
+           else "IP reduction off" if not ip_days or ip_days <= 0     # anonymise_audit_ips: <= 0 is off
+           else ("IP reduction off (audit_ip_retention_days is too large: the panel's IP ageing "
+                 "fails on it)") if _r17b_ip_ageing_fails(ip_days)
+           else "IPs reduced after %d d" % ip_days)
     if isinstance(ip_rows, list):
         ips += " (%d older rows not reduced)" % int(ip_rows[0][0] or 0)
     return ips

@@ -756,6 +756,18 @@ class GameServer(db.Model):
             return "update" in cmds
         return self.game_type not in _NO_UPDATE_GAMES
 
+    def connect_address(self, host):
+        """`host:port` as a game client reads it, or "" with no host.
+
+        An IPv6 host goes in brackets: `2001:db8::7334:27016` gives no way to tell where the
+        address ends and the port begins, so a player copying it, or a steam:// link, reached
+        nothing. A hostname or IPv4 address is written as it is.
+        """
+        if not host:
+            return ""
+        shown = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        return f"{shown}:{self.port}"
+
     def connect_uri(self, host):
         """One-click join URI for clients that support one, else "".
 
@@ -766,7 +778,7 @@ class GameServer(db.Model):
         for games with no scheme so the UI shows a copyable ip:port instead.
         """
         if host and self.game_type in STEAM_CONNECT_GAMES:
-            return f"steam://connect/{host}:{self.port}"
+            return f"steam://connect/{self.connect_address(host)}"
         return ""
 
     # Alias for compatibility
@@ -1730,7 +1742,7 @@ def optimize_database():
     except Exception:
         _log.exception("database optimize failed")
         return (False, "Database optimize failed — see the panel logs.",
-                {"before": before, "after": before, "freed": 0})
+                {"before": before, "after": before, "freed": 0, "vacuumed": False})
 
     after = _size()
     # Word this from what was OBSERVED, not from what was attempted. VACUUM rewrites the whole
@@ -1747,7 +1759,11 @@ def optimize_database():
     else:
         msg = ("Refreshed stats — VACUUM was deferred because the database was busy, and the "
                "WAL checkpoint returned no result to confirm it ran. Run it again in a moment.")
-    return True, msg, {"before": before, "after": after, "freed": max(0, before - after)}
+    # `vacuumed` goes to the page too: on success it printed "Optimized." whatever the message
+    # said, so a deferred VACUUM was reported as a compaction that ran. The page shows `msg` when
+    # it is False.
+    return True, msg, {"before": before, "after": after, "freed": max(0, before - after),
+                       "vacuumed": bool(vacuumed)}
 
 
 def _silent_remove(p):

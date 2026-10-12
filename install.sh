@@ -681,6 +681,8 @@ _post_update_scheme_hint() {
     if [[ "${ufw}" != "closed" ]]; then
         ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
             || hostname -I 2>/dev/null | awk '{print $1}')"
+        # An IPv6-only host's address goes in brackets, or the printed URL opens nothing.
+        [[ "${ip}" != *:* ]] || ip="[${ip}]"
         [[ "${ufw}" != "unknown" ]] || note="  ${YELLOW}(firewall state unknown — check 'sudo ufw status')${NC}"
         echo -e "  Directly: ${CYAN}https://${ip:-<your-ip>}:${port}${NC}${note}"
         echo -e "  ${YELLOW}Its built-in cert is self-signed, so the browser shows a one-time \"not private\"${NC}"

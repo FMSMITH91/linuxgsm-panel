@@ -35,6 +35,11 @@ _BLOCKER_OTHER = i18n.Sentence("work on {name}")
 # The panel's own blockers name it with a phrase, not a host label: the English "the panel" went
 # into the translated blocker phrase as written ("una actualización de the panel").
 PANEL_NAME = i18n.Sentence("the panel")
+# ...and are said whole: "the panel" slotted into "of {name}" read "una actualización de el panel"
+# and "une mise à jour de le panneau", where Spanish says "del" and French "du" (review 1012b).
+_PANEL_BLOCKER_WORDS = {"self_update": i18n.Sentence("an update of the panel"),
+                        "restore": i18n.Sentence("a restore of the panel"),
+                        "full_backup": i18n.Sentence("a full backup of the panel")}
 
 # A running job's phase as words. The raw token ("stopping", "arming") went into the translated
 # "{host} is already being rebooted ({phase})." as written.
@@ -58,17 +63,27 @@ def phase_words(phase):
 ROW_GIVE_UP = 3600     # a plan row its host answers for but that never resolves: reported failed
 
 
-def row_gave_up(d, now, after=ROW_GIVE_UP):
-    """None while an unresolved plan row may still resolve; ("failed", why) once `after` s have passed."""
+def row_gave_up(d, now, rollback=False, after=ROW_GIVE_UP):
+    """None while an unresolved plan row may still resolve; ("failed", why) once `after` s have passed.
+
+    The clock runs only while the row's host answers and nothing known holds it: host_reboot drops
+    `pending_since` while a rollback's host is silent and while a LinuxGSM command is in flight,
+    so it starts again from the next pass that has no such reason. `rollback`: the reboot never
+    happened, so the reason does not say "after the reboot".
+    """
     d.setdefault("pending_since", now)
     if now - d["pending_since"] < after:
         return None
+    if rollback:
+        return "failed", ("it could not be read or restored for an hour after the reboot was called "
+                          "off; check the server")
     return "failed", "it could not be read or restored for an hour after the reboot; check the server"
 
 
 def blocked_sentence(blockers):
     """Why a reboot may not run now: the work in flight, each piece named in a phrase of its own."""
-    what = [i18n.Sentence(_BLOCKER_WORDS.get(b["kind"], _BLOCKER_OTHER).template, name=b["name"])
+    what = [_PANEL_BLOCKER_WORDS[b["kind"]] if b["name"] == PANEL_NAME and b["kind"] in _PANEL_BLOCKER_WORDS
+            else i18n.Sentence(_BLOCKER_WORDS.get(b["kind"], _BLOCKER_OTHER).template, name=b["name"])
             for b in blockers[:4]]
     return i18n.Sentence("Not now: {what} is running, and a reboot would cut it off.", what=what)
 
@@ -77,3 +92,46 @@ def shown(body):
     """A reboot answer for the page: its message, warning and reason translated whole (i18n.tr)."""
     return dict(body, **{k: i18n.tr(body[k]) for k in ("message", "warning", "reason")
                          if isinstance(body.get(k), str)})
+
+
+def blocker(kind, name, detail=""):
+    """One piece of work a reboot would cut off: its kind, the name it is shown by, and a detail."""
+    return {"kind": kind, "name": name, "detail": detail}
+
+
+def panel_blocker(kind):
+    """A blocker that is the panel's own work, marked `panel` for the reboot dialog.
+
+    The dialog shows a blocker's name as a name, never translated; `panel` tells it this one is the
+    phrase "the panel" (in the viewer's language), without matching the English words.
+    """
+    return dict(blocker(kind, PANEL_NAME), panel=True)
+
+
+def hold_clock(recs, save, commit):
+    """Stop each pending row's give-up clock while its host is silent. -> True (the fast tick).
+
+    `save(gs, d)` each row changed, then `commit()`.
+
+    A rollback acts without asking whether the host answers, and row_gave_up is for a host that
+    answers but cannot resolve a row: through an outage longer than an hour every row was reported
+    failed and the plan cleared, so the monitor's locks stayed aside and nothing was started when
+    the host came back. row_gave_up starts the clock afresh on the next pass the host answers.
+    """
+    for gs, d in recs:
+        if d.get("restore") == "pending" and d.pop("pending_since", None) is not None:
+            save(gs, d)
+    commit()
+    return True
+
+
+def start_waits(d, detail):
+    """The row's step when its panel start must wait (`detail`, safe_start's reason): None, still pending.
+
+    "inflight" is a LinuxGSM update or backup running for the server, and a start never goes over
+    one: a known wait, however long the download takes, not a row that cannot resolve, so its
+    give-up clock starts again once nothing holds it.
+    """
+    if detail == "inflight":
+        d.pop("pending_since", None)
+    return None

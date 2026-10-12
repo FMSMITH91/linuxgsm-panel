@@ -112,13 +112,15 @@ function _fwRenderBlocks(blockGroups) {
   var blocksEl = document.getElementById('blocks-list');
   if (blocksEl) {
     if (blockGroups.length) {
-      var bh = '<table class="table table-sm table-hover mb-0 align-middle">'
+      // The same table as the template's (table-pin-actions, an address that may break), and its
+      // tooltip one translated sentence: "Unblock " + ip was English in every language.
+      var bh = '<table class="table table-sm table-hover mb-0 align-middle table-pin-actions">'
         + '<thead><tr><th>IP address</th><th>Source</th><th>Family</th><th></th></tr></thead><tbody>';
       blockGroups.forEach(function(g) {
-        bh += '<tr><td><code>' + esc(g.block_ip) + '</code></td>'
+        bh += '<tr><td><code class="text-break">' + esc(g.block_ip) + '</code></td>'
           + '<td>' + blockBadge(g.comment) + '</td>'
           + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
-          + '<td><button class="btn btn-outline-warning btn-sm py-0 px-1" title="Unblock ' + esc(g.block_ip) + '"'
+          + '<td><button class="btn btn-outline-warning btn-sm py-0 px-1" title="' + esc(tf('Unblock {ip}', {ip: g.block_ip})) + '"'
           + _da('unblockIp', [g.block_ip, '@self']) + '><i class="bi bi-x"></i></button></td></tr>';
       });
       bh += '</tbody></table>';

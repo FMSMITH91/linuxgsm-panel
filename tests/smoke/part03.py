@@ -2338,13 +2338,23 @@ with app.app_context():
     check("audit-ip: junk in config.json disables it and does not raise",
           _err_junk is None and _n_junk == 0, _err_junk or repr(_n_junk))
     # The brute-force counter reads a 300-SECOND window, so it can never see a reduced row.
-    # This is the check that says the privacy control cannot weaken login throttling.
-    _recent = _AL.query.filter(_AL.action == "login_failed",
-                               _AL.timestamp >= _now - _td(seconds=300)).count()
+    # This is the check that says the privacy control cannot weaken login throttling. It compares
+    # the window's ADDRESSES, over a row seeded into it: the row count it compared before could
+    # not change, since the reduction never deletes a row (review 1012b).
+    _thr_ip = ".".join(["198", "51", "100", "77"])     # TEST-NET-2, built so no address literal is added
+    _thr = _AL(username="throttled", action="login_failed", ip_address=_thr_ip,
+               timestamp=_now - _td(seconds=10))
+    db.session.add(_thr)
+    db.session.commit()
+
+    def _window_ips():
+        return sorted((_r.id, _r.ip_address) for _r in _AL.query.filter(
+            _AL.action == "login_failed", _AL.timestamp >= _now - _td(seconds=300)))
+    _recent = _window_ips()
     _anon(90)
     check("audit-ip: ...and the throttle's own window is untouched by it",
-          _AL.query.filter(_AL.action == "login_failed",
-                           _AL.timestamp >= _now - _td(seconds=300)).count() == _recent)
+          (_thr.id, _thr_ip) in _recent and _window_ips() == _recent,
+          repr((_recent[:4], _window_ips()[:4])))
     # An older version stored proxy-reported client addresses with an IPv6 zone id, and its
     # reduction of one whose low 64 bits were zero kept the zone's text ahead of the "/64". That
     # row then read as already reduced (it holds a '/'), so the text stayed for good. An aged

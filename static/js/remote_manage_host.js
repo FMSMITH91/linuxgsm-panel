@@ -573,7 +573,7 @@ function runDiagnostics(){
     if(badge){
       var s=d.summary||'fail';
       badge.className='badge '+(DIAG_BADGE[s]||DIAG_BADGE.fail);
-      badge.textContent = s==='ok' ? 'all healthy' : (s==='warn' ? tf('{n} warning(s)', {n: d.warn}) : tf('{n} problem(s)', {n: d.fail}));
+      badge.textContent = s==='ok' ? t('all healthy') : (s==='warn' ? tf('{n} warning(s)', {n: d.warn}) : tf('{n} problem(s)', {n: d.fail}));
     }
     if(msg) msg.textContent='';
     loadIntegrity();  // refresh the file list + repair button
@@ -681,7 +681,11 @@ function optimizeDb(){
     .then(function(r){return r.json();}).then(function(d){
       if(msg){
         msg.className='small';
-        if(d.success){
+        if(d.success && d.vacuumed===false){
+          // VACUUM was deferred (the database was busy): say so, in the server's own words,
+          // rather than "Optimized." for a compaction that did not run.
+          msg.innerHTML='<span><i class="bi bi-exclamation-triangle-fill"></i> '+escapeHtml(d.message||'')+'</span>';  // nosemgrep
+        } else if(d.success){
           var freed=d.freed||0;
           msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+  // nosemgrep
             (freed>0 ? tfHtml('Optimized — reclaimed {size}.', {size: fmtBytes(freed)}) : escapeHtml(t('Optimized.')))+'</span>';

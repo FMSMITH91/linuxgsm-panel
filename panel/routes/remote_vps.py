@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify, render_template, request, url_for)
 from flask_login import (current_user, login_required)
-from panel.core.config import (load_config)
+from panel.core.config import (_r15a_cfg_int, load_config)
 from panel.core.panel_state import (_os_update_seen)
 from panel.db.models import (GameServer, RemoteServer, db, row_label)
 from panel.ops import (system_ops as so, tailscale_integration as ts)
@@ -489,10 +489,9 @@ def _register_panel_port(app):
         if not cfg.get("tailscale_setup_done"):
             return jsonify({"success": False, "message": "Set up Tailscale Serve first — "
                             "otherwise closing the public port would lock you out of the panel."}), 400
-        try:
-            port = int(cfg.get("port", 5000))
-        except (TypeError, ValueError):
-            port = 5000
+        # _r15a_cfg_int, not int() under (TypeError, ValueError): a hand-edited `Infinity` raised
+        # OverflowError past that except.
+        port = _r15a_cfg_int(cfg.get("port", 5000), 5000)
 
         nums, shared, read = _r14a_panel_port_rules(remote, port)
         refusal = _r14a_close_refusal(remote, port, shared, read)

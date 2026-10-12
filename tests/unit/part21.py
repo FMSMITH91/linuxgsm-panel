@@ -646,13 +646,21 @@ def _c_ufw():
 
 def _c_route():
     # part12 has already run by now (it is earlier in _PARTS): importing it runs nothing again.
-    from unit.part12 import P9_ADMIN, _p9_client, _p9_json
+    from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9_client, _p9_json, _p9_trip
+    # part12's transport tripwire (review 1012b): the route stubs only the two readers it names, so
+    # a host call it gained on this path would run for real with the check green.
+    _trip_at = len(_P9_TRIPPED)
+    for _n21, _w21 in (("get_connection", "paramiko"), ("_run_via_ssh_cli", "ssh-cli"),
+                       ("_exec_local_shell", "local-shell"), ("_exec_local_argv", "local-argv")):
+        _p21(_core21, _n21, _p9_trip(_w21, exc=ConnectionError("refused by part21's tripwire")))
     _p21(_so21, "_run", lambda cmd, timeout=30, sudo=False, text=True: ("yes", "", 0))
     _p21(_so21, "_run_verb", _verb_by({"f2b-status": ("", "Failed to access socket path", 255)}))
     d = _p9_json(_p9_client(P9_ADMIN).get("/api/panel/security/bans"))
     eq("Security card route: /api/panel/security/bans says UNREADABLE for a stopped fail2ban, which "
        "the card renders as 'Could not read fail2ban'", d,
        {"installed": True, "jails": [], "unreadable": True})
+    check("Security card route: ...and nothing it drove reached a real transport",
+          len(_P9_TRIPPED) == _trip_at, repr(_P9_TRIPPED[_trip_at:][:4]))
 
 
 # ══ D. R25: privileged-call counters and the fresh helper check ═════════════════════════════════

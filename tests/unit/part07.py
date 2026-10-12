@@ -670,12 +670,67 @@ def _gh_call_problem(rel, n, fn):
             "given selfname= nor preceded by a check of it" % (rel, n.lineno, fn.name, _gh_callee(n)))
 
 
+def _r17d_unread_sudo_users(rel, tree, funcs, sites):
+    """G2 for each function that names sudo and a user option of sudo's, with no site or check in it.
+
+    The backstop that ends the class (review 1012b): each round, the data-flow reader learned the
+    list-building shapes it was shown, and missed the next (an annotated `a: list = [...]`,
+    `self.cmd += [...]`, a module list appended to in a function, `.insert(1, "-u")`). Whether a
+    function builds such an argv no longer depends on the reader following how; the reader only
+    names where. A sudo word in a module-level list the function names counts as its own.
+    """
+    module_vals = {_t.id: _n.value for _n in tree.body if isinstance(_n, _gh_ast.Assign)
+                   for _t in _n.targets if isinstance(_t, _gh_ast.Name)}
+    return ["G2 %s:%d %s(): names sudo and a user option, with no account check in it" % (rel, fn.lineno, fn.name)
+            for fn in funcs if _r17d_unread_unchecked(fn, sites)
+            and _r17d_names_sudo(fn, module_vals) and _r17d_has_sudo_user_flag(fn)]
+
+
+def _r17d_unread_unchecked(fn, sites):
+    """No site was found in `fn`, and it checks no account anywhere."""
+    return not any(fn.lineno <= s[0] <= fn.end_lineno for s in sites) and not _gh_validates_before(fn, fn.end_lineno)
+
+
+def _r17d_names_sudo(fn, module_vals):
+    """Does `fn` name sudo: itself, or in a module-level value it names?"""
+    words = [x for x in _gh_ast.walk(fn) if isinstance(x, (_gh_ast.Constant, _gh_ast.Name, _gh_ast.Attribute))]
+    words += [x for n in words if isinstance(n, _gh_ast.Name) and n.id in module_vals
+              for x in _gh_ast.walk(module_vals[n.id])]
+    return any(_gh_is_sudo_word(x) for x in words)
+
+
+_R17D_GROWERS = {"append", "insert", "extend"}
+
+
+def _r17d_has_sudo_user_flag(fn):
+    """Does `fn` hold `-u`/`--user` where it can be sudo's?
+
+    Not where another program's word comes first in the same list (`["systemd-run", "--user"]`),
+    and not inside a call's argument that is no list-grower (`jctl(["--user", "-u", unit])`):
+    those are systemd-run's and journalctl's options.
+    """
+    parent = {c: p for p in _gh_ast.walk(fn) for c in _gh_ast.iter_child_nodes(p)}
+    return any(_gh_is_user_flag(x) and _r17d_flag_can_be_sudos(x, parent) for x in _gh_ast.walk(fn))
+
+
+def _r17d_flag_can_be_sudos(flag, parent):
+    """_r17d_has_sudo_user_flag for one user-option literal."""
+    up = parent.get(flag)
+    if isinstance(up, (_gh_ast.List, _gh_ast.Tuple)):
+        if any(isinstance(e, _gh_ast.Constant) and isinstance(e.value, str) and not e.value.startswith("-")
+               and not _gh_is_sudo_word(e) for e in up.elts[:up.elts.index(flag)]):
+            return False
+        up = parent.get(up)
+    return not (isinstance(up, _gh_ast.Call) and getattr(up.func, "attr", None) not in _R17D_GROWERS)
+
+
 def _gh_scan(src, rel):
     """(problems, sites, helper_calls) for one module's source. `rel` is its repo-relative path."""
     tree = _gh_ast.parse(src)
     funcs = _gh_functions(tree)
     sites = _gh_sites(tree)
     problems = [p for s in sites for p in _gh_site_problems(rel, _gh_enclosing(funcs, s[0]), s)]
+    problems += _r17d_unread_sudo_users(rel, tree, funcs, sites)
     calls = _gh_runner_calls(tree, funcs)
     helper_calls = len([n for n, _fn in calls if _gh_callee(n) in _GH_HELPER_CALLS])
     problems += [p for p in (_gh_call_problem(rel, n, fn) for n, fn in calls) if p]
@@ -810,6 +865,15 @@ _gh_ctl = {
     "G2 an argv with no check": _gh_plant('def f(user):\n    return ["sudo", "-u", user, "cat"]\n'),
     "G2 an argv with a combined flag and no check": _gh_plant(
         'def f(user):\n    return ["sudo", "-nu", user, "cat"]\n'),
+    # Review 1012b: each of these was no site at all; the per-function backstop names them.
+    "G2 an annotated list grown by +=": _gh_plant(
+        'def f(user):\n    a: list = ["sudo"]\n    a += ["-u", user]\n    return a\n'),
+    "G2 an attribute list grown by +=": _gh_plant(
+        'def f(self, user):\n    self.cmd = ["sudo"]\n    self.cmd += ["-u", user]\n    return self.cmd\n'),
+    "G2 a module-level list appended to in a function": _gh_plant(
+        'A = ["sudo"]\ndef f(user):\n    A.append("-u")\n    A.append(user)\n    return A\n'),
+    "G2 an argv with -u inserted mid-list": _gh_plant(
+        'def f(user):\n    a = ["sudo", user]\n    a.insert(1, "-u")\n    return a\n'),
     "G3 script name dropped": _gh_plant(
         'def f(server, user, selfname):\n'
         '    return _core.shell_as_game_user(server, user, f"./{selfname} details")\n'),
@@ -850,6 +914,12 @@ _gh_good = {
         'def f(server, user, selfname):\n'
         '    if not _core.game_idents_ok(user, selfname):\n        return None\n'
         '    return _rewrite_crontab(server, user, "", [f"/home/{user}/{selfname}"])\n'),
+    # The backstop's own negatives: systemd-run's and journalctl's --user/-u, beside a sudo.
+    "systemd-run's --user beside a sudo launcher": _gh_plant(
+        'def f(root, p):\n    if root:\n        return ["sudo", "systemd-run", p]\n'
+        '    return ["systemd-run", "--user", p]\n'),
+    "journalctl's -u handed to a reader, beside a sudo": _gh_plant(
+        'def f(unit):\n    return jctl(["--user", "-u", unit]) or read(["sudo", "journalctl"])\n'),
     "a command of sudo's whose own -u is not sudo's": _gh_plant(
         'def f(unit):\n    return f"sudo journalctl -u {_quote(unit)} -n 5"\n'),
     "a comment or docstring mentioning it": _gh_plant(

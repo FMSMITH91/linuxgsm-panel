@@ -450,8 +450,7 @@ def safe_start(remote, ident):
 
 
 # ── The census: one predicate for the dialog, the gate, the waiter ──────────────────────────────
-def _blocker(kind, name, detail=""):
-    return {"kind": kind, "name": name, "detail": detail}
+_blocker = _rw.blocker
 
 
 def _row_blockers(rows):
@@ -527,14 +526,14 @@ def _panel_host_blockers():
     out = []
     try:
         if so._update_in_progress():
-            out.append(_blocker("self_update", _rw.PANEL_NAME))
+            out.append(_rw.panel_blocker("self_update"))
     except Exception:  # noqa: BLE001
         _log.debug("self-update state unreadable", exc_info=True)
     from panel.ops import backup as _bk
     if _bk._restore_lock.locked():
-        out.append(_blocker("restore", _rw.PANEL_NAME))
+        out.append(_rw.panel_blocker("restore"))
     if _full_backup_lock.locked():
-        out.append(_blocker("full_backup", _rw.PANEL_NAME))
+        out.append(_rw.panel_blocker("full_backup"))
     return out
 
 
@@ -1831,6 +1830,13 @@ def restore_host(remote, rows, now=None):
     if not recs:
         return False
     if any(d.get("act") == "now" for _gs, d in recs):
+        # A rollback acts without asking whether the host answers, and its rows' one-hour give-up
+        # (row_gave_up) is for a host that answers but cannot resolve a row. Through an outage
+        # longer than that, every row was reported failed and the plan cleared: the monitor's
+        # locks stayed aside and nothing was started when the host came back. So a silent host
+        # stops the clock, and the next tick it answers on acts as before.
+        if _sm.hosts.host_boot_identity(remote) is None:
+            return _rw.hold_clock(recs, _set_rr, db.session.commit)
         _act(remote, recs, now, rollback_=True)
         return True
     ident = _sm.hosts.host_boot_identity(remote)
@@ -1840,8 +1846,7 @@ def restore_host(remote, rows, now=None):
 
 
 def _records(rows):
-    recs = [(gs, rr(gs)) for gs in rows]
-    return [(gs, d) for gs, d in recs if d]
+    return [(gs, d) for gs, d in ((g, rr(g)) for g in rows) if d]
 
 
 def _by_boot(remote, recs, ident, now):
@@ -1923,7 +1928,7 @@ def _act(remote, recs, now, rollback_):
         if d.get("restore") != "pending":
             continue
         before = dict(d)
-        res = _act_one(remote, gs, d, now, rollback_) or _rw.row_gave_up(d, now)
+        res = _act_one(remote, gs, d, now, rollback_) or _rw.row_gave_up(d, now, rollback_)
         if res is not None:
             d["restore"], d["result"] = res
             # When this row was confirmed — after its probe or its start returned, which the tick's
@@ -2021,7 +2026,7 @@ def _act_panel(remote, gs, d, now, rollback_):
         return None
     outcome, detail = safe_start(remote, gs)
     if outcome == "wait":
-        return None
+        return _rw.start_waits(d, detail)
     if outcome in ("started", "running"):
         _after_start(remote, gs)
         # "running": it was up before the panel's start (the user's own @reboot, a unit): the

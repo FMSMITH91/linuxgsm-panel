@@ -171,9 +171,14 @@ def _discover_import_outcome(remote, added, skipped, not_enrolled, refused, unre
     out = {"success": bool(added), "added": added, "skipped": skipped,
            "not_enrolled": not_enrolled, "refused": refused, "unread": unread,
            "shared_ports": _shared_ports(remote.id, added)}
+    # Each reason is a sentence the panel wrote (an i18n.Sentence; only a host-supplied detail is a
+    # value in it), translated here: the page shows `unread`/`refused` rows under data-no-i18n, and
+    # spliced into the frame below no key could match them, so es/fr viewers read English. New
+    # dicts, so a caller's own (English) copy is left as it was.
+    out["refused"] = refused = [dict(r, reason=i18n.tr(r["reason"])) for r in refused]
+    out["unread"] = unread = [dict(r, reason=i18n.tr(r["reason"])) for r in unread]
     if (refused or unread) and not added:
-        # The frame is translated whole; each "user (reason)" stays as the host and probe gave it,
-        # as the page's own per-row list shows it (data-no-i18n there).
+        # The frame is translated whole; each "user (reason)" is the translated reason above.
         out["message"] = i18n.tr("Not imported: {items}.", items="; ".join(
             "%s (%s)" % (r["user"], r["reason"]) for r in refused + unread))
     return out
@@ -221,8 +226,8 @@ def _privileged_selection(remote, items, discovered):
     refused = []
     for user, why in verdict.items():
         discovered.pop(user, None)
-        refused.append({"user": user,
-                        "reason": "it is not a game account the panel may run as: %s" % why})
+        refused.append({"user": user, "reason": i18n.Sentence(
+            "it is not a game account the panel may run as: {detail}", detail=why)})
     return refused
 
 
@@ -395,21 +400,23 @@ def _import_ports(remote, picked):
 
 def _import_port_problem(port, answered, protected):
     """Why a server cannot be imported on `port` (None: no port was read), or None when it can."""
+    # Sentences, translated where the reply is built (_discover_import_outcome).
     if port is None and not answered:
-        return ("its game port is not set in its LinuxGSM config, and LinuxGSM's details did not "
-                "answer, so its port could not be read — try the import again")
+        return i18n.Sentence("its game port is not set in its LinuxGSM config, and LinuxGSM's details "
+                             "did not answer, so its port could not be read — try the import again")
     if port is None:
         # What was SEEN, not a guess at why: most games get a default config at install that
         # already sets the port (Minecraft's server.properties says 25565), so "never started" was
         # wrong for them, and starting such a server changes nothing.
-        return ("its game port is not set in its LinuxGSM config, and LinuxGSM's details reports "
-                "none either: the game's own config (the file details names under \"Change ports "
-                "by editing\") is missing or does not set the port. Set it there, then import it "
-                "again. A game that writes that file itself the first time it starts needs one "
-                "start with LinuxGSM first")
+        return i18n.Sentence(
+            "its game port is not set in its LinuxGSM config, and LinuxGSM's details reports none "
+            "either: the game's own config (the file details names under \"Change ports by "
+            "editing\") is missing or does not set the port. Set it there, then import it again. A "
+            "game that writes that file itself the first time it starts needs one start with "
+            "LinuxGSM first")
     why = _gp.port_refusal(port, protected)
-    return ("its port could not be used: %s — correct it in the game's config, then import it"
-            % why) if why else None
+    return i18n.Sentence("its port could not be used: {why} — correct it in the game's config, then "
+                         "import it", why=why) if why else None
 
 
 def _add_imported_rows(remote_id, ready):

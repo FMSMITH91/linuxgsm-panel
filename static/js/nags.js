@@ -89,12 +89,15 @@ function _rbPlanList(plan){
 function _rbBlockersList(players){
   var ul = _rbEl('ul', 'small mb-2 ps-3');
   ((players && players.blockers) || []).forEach(function(b){
-    ul.appendChild(_rbRow(b.name, {install: 'an install is running', backup: 'a backup is running',
+    // The panel's own work (b.panel) is named by a phrase, translated; anything else by its name.
+    var li = _rbRow(b.name, {install: 'an install is running', backup: 'a backup is running',
       action: 'a LinuxGSM action is running', content: 'a content install is running',
       maintenance: 'LinuxGSM maintenance is running', bootstrap: 'a bootstrap is running',
       dpkg: 'a package install is running', apt: 'a package install is running',
       self_update: 'a panel update is running', restore: 'a restore is running',
-      full_backup: 'a full backup is running'}[b.kind] || 'work is running'));
+      full_backup: 'a full backup is running'}[b.kind] || 'work is running');
+    if (b.panel) li.replaceChild(_rbEl('strong', null, 'the panel'), li.firstChild);
+    ul.appendChild(li);
   });
   return ul;
 }

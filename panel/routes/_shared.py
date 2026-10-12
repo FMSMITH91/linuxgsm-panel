@@ -1645,6 +1645,8 @@ def _json_int(value):
 # all read "under the limit". A check that passes gives its slot back.
 _REAUTH_FAILS = {}            # user id -> [time of each failed (or still in-flight) check]
 _REAUTH_LOCK = threading.Lock()
+# A console line refused for a control character (ssh_manager.console_has_control). Both senders.
+CONSOLE_CONTROL_MSG = "A console command can't contain control characters or line breaks."
 REAUTH_BLOCKED_MSG = ("Too many wrong passwords or codes for this account. Wait a few minutes and "
                       "try again.")
 
@@ -1981,8 +1983,8 @@ def _privileged_write_msg(user, why, reading=False):
     if reading:
         return i18n.Sentence(
             "Refused: the '{user}' account on this host can become root ({why}), so the panel does not "
-            "browse, open or download its files — they include that login's SSH keys and shell "
-            "history. It still reads the game's own LinuxGSM settings at their fixed paths. This "
+            "browse, open or download its files or list its scheduled tasks — its files include that "
+            "login's SSH keys and shell history. It still reads the game's own LinuxGSM settings at their fixed paths. This "
             "server was imported before the panel refused such accounts; remove it from the panel "
             "and run the game under a plain account.", user=user, why=why)
     return i18n.Sentence(

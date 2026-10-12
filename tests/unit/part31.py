@@ -42,6 +42,7 @@ import importlib.machinery as _mach31
 import importlib.util as _ilu31
 import json as _json31
 import os
+import shlex as _shlex31
 import shutil as _sh31
 import subprocess as _sp31  # nosec B404 - runs this suite's own probe scripts, argv lists only
 import sys as _sys31
@@ -622,17 +623,35 @@ def _job_argv_ok31(argv, unit, job, args):
 
 
 def _r16d_env_words31(head):
-    """(flag, value) for each --setenv/-E/--property/-p in `head`, joined to its value or not."""
+    """(flag, value) for each --setenv/-E/--property/-p in `head`, joined to its value or not.
+
+    A short option may come grouped behind others (`-qEPATH` is `-q -E PATH`, as getopt reads
+    it, review 1012b): a cluster is read letter by letter up to the first that takes a value.
+    """
     words = []
     for i, a in enumerate(head):
         nxt = head[i + 1] if i + 1 < len(head) else ""
-        for flag, joined in (("--setenv", "--setenv="), ("-E", "-E"), ("--property", "--property="),
-                             ("-p", "-p")):
+        for flag, joined in (("--setenv", "--setenv="), ("--property", "--property=")):
             if a == flag:
                 words.append((flag, nxt))
             elif a.startswith(joined):
                 words.append((flag, a[len(joined):]))
+        words += _r17d_short_cluster31(a, nxt)
     return words
+
+
+def _r17d_short_cluster31(a, nxt):
+    """(flag, value) for an -E or -p inside a short-option cluster `a` (`-qEPATH`), read as getopt does."""
+    if not a.startswith("-") or a.startswith("--"):
+        return []
+    for k, ch in enumerate(a[1:], 1):
+        if ch in _R17D_VALUED31:
+            return [("-" + ch, a[k + 1:] or nxt)] if ch in "Ep" else []
+    return []
+
+
+# systemd-run's short options that take a value: the rest of a cluster, or the next word, is it.
+_R17D_VALUED31 = "EpuHMC"
 
 
 def _r16d_env31(argv):
@@ -650,7 +669,13 @@ def _r16d_env31(argv):
         elif w.startswith("EnvironmentFile="):
             names.append("PATH")
         elif w.startswith("Environment="):
-            names += [_kv.split("=", 1)[0] for _kv in w[len("Environment="):].split()]
+            # Quoted as systemd unquotes it (`Environment="PATH=/x"`): split on spaces, the name
+            # read as `"PATH` (review 1012b).
+            try:
+                _kvs = _shlex31.split(w[len("Environment="):])
+            except ValueError:
+                _kvs = ["PATH"]         # unbalanced quoting: cannot be read, so counts as PATH
+            names += [_kv.split("=", 1)[0] for _kv in _kvs]
     return names
 
 
@@ -659,8 +684,9 @@ check("helper jobs: PATH is read in every way systemd-run takes it, and another 
       [("PATH" in _r16d_env31(["systemd-run"] + _o + ["--", "x"])) for _o in (
           ["--setenv=PATH"], ["-E", "PATH"], ["--setenv", "PATH"], ["-EPATH"], ["--setenv=PATH=/x"],
           ["-E", "PATH=/x"], ["-p", "Environment=A=1 PATH=/x"], ["--property=EnvironmentFile=/e"],
-          ["--setenv=SUDO_UID=999"], ["--setenv=MYPATH=1"], ["--", "--setenv=PATH"])]
-      == [True] * 8 + [False] * 3)
+          ["-p", 'Environment="PATH=/x"'], ["-qEPATH"], ["-qE", "PATH"],
+          ["--setenv=SUDO_UID=999"], ["--setenv=MYPATH=1"], ["--", "--setenv=PATH"], ["-quPATH"])]
+      == [True] * 11 + [False] * 4)
 
 
 def _check_jobs31():

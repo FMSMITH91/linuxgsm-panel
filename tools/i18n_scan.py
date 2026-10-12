@@ -1598,17 +1598,56 @@ def _r16c_assign_refs(n):
 
 
 def _r16c_item_sources(node, consts, binds):
-    """(texts, refs) one returned item or sink value can be: literals, and (callee, index) to follow."""
+    """(texts, refs) one returned item or sink value can be: literals, and (callee, index) to follow.
+
+    `binds` may hold, under _R17C_LOCAL_TEXTS, the literals each local was assigned (see
+    _r17c_local_texts). A call written straight into the value (`"message": helper()`, or
+    `helper()[1]`) is followed into what `helper` answers, as a local bound from it always was.
+    """
     if node is None:
         return [], []
     texts = list(_py_key_texts(node, consts))
+    if isinstance(node, ast.Name):
+        texts += binds.get(_R17C_LOCAL_TEXTS, {}).get(node.id, [])
     refs = list(binds.get(node.id, ())) if isinstance(node, ast.Name) else []
     refs += _r16c_subscript_refs(node, binds)
+    refs += _r17c_call_refs(node)
     for operand in _py_operands(node):
         t, r = _r16c_item_sources(operand, consts, binds)
         texts += t
         refs += r
     return texts, refs
+
+
+# A key _r16c_binds' table can never hold as a local's name (it is not an identifier): where the
+# literals each local was assigned are kept beside the locals bound from calls.
+_R17C_LOCAL_TEXTS = "<local texts>"
+
+
+def _r17c_local_texts(fn, consts):
+    """{local: [text]} for each local of one function assigned a literal.
+
+    Or a constant, or either branch of `a if c else b` / `a or b` of them. `msg = "Full backup
+    started…"` … `jsonify({"message": msg})`: a Name resolved only through module constants and
+    locals bound from CALLS, so a message held in a local assigned a literal was read by no gate,
+    and three of the full backup's answers had no es/fr entry.
+    """
+    out = {}
+    for n in _py_own_nodes(fn):
+        if isinstance(n, ast.Assign):
+            texts = _py_key_texts(n.value, consts)
+            for t in (t for t in n.targets if isinstance(t, ast.Name) and texts):
+                out.setdefault(t.id, []).extend(texts)
+    return out
+
+
+def _r17c_call_refs(node):
+    """[(callee, None)] for `f(…)`, [(callee, i)] for `f(…)[i]`: a call written into a sink."""
+    if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) \
+            and isinstance(node.slice.value, int) and _py_call_name(node.value):
+        return [(_py_call_name(node.value), node.slice.value)]
+    name = _py_call_name(node)
+    return [(name, None)] if name and name not in ("tr", "Sentence", "Sentences") else []
 
 
 def _r16c_subscript_refs(node, binds):
@@ -1629,7 +1668,7 @@ def _r16c_returns(trees):
     for rel, lines, tree in trees:
         consts = _py_module_consts(tree)
         for fn in _py_functions(tree):
-            binds = _r16c_binds(fn)
+            binds = dict(_r16c_binds(fn), **{_R17C_LOCAL_TEXTS: _r17c_local_texts(fn, consts)})
             for n in _py_own_nodes(fn):
                 if isinstance(n, ast.Return) and n.value is not None and not _py_ignored(lines, n):
                     _r16c_note_return(fn.name, n, (rel, consts, binds), direct, refs)
@@ -1676,9 +1715,13 @@ def _r16c_is_route(rel):
     return rel == "app.py" or rel.startswith("panel/routes/")
 
 
-def _r16c_answer_values(n, lines):
-    """The values one node hands the viewer: its sinks, and the first argument of a tr() call."""
-    values = list(_py_sink_values(n))
+def _r16c_answer_values(n, lines, wrappers=None):
+    """The values one node hands the viewer: its sinks, and the first argument of a tr() call.
+
+    Through `wrappers` (_py_wrappers): a literal a route hands `_changed` / `_refuse` / `fail`, which
+    pass it to a sink as it is, is an answer as much as one written into jsonify.
+    """
+    values = list(_py_sink_values(n, wrappers))
     if _py_call_name(n) == "tr" and n.args:
         values.append(n.args[0])
     return [v for v in values if not _py_ignored(lines, v)]
@@ -1688,7 +1731,26 @@ def _r16c_found(v, rel, scope, table):
     """[(text, file, line)] one value can be: written there, or followed into what it was handed."""
     consts, binds = scope
     texts, follow = _r16c_item_sources(v, consts, binds)
+    follow = list(follow) + _r17b_call_refs(v, binds)
     return [(t, rel, v.lineno) for t in texts] + [x for ref in follow for x in table.get(ref, ())]
+
+
+def _r17b_call_refs(v, binds):
+    """A value that is a CALL: what the callee returns, and what its bound arguments hold.
+
+    `flash(_console_send_failure(rc, err))` showed whatever that helper returned, and
+    `jsonify({"message": _r15e_said(msg)})` showed `msg` (a service's answer) through a helper that
+    tr()s it. Only a Name, a constant or a tuple item was followed, so four of server_detail's fixed
+    messages had no es/fr entry and no gate said so (review 1012b).
+    """
+    out = []
+    for call in [v] + _py_operands(v):
+        name = _py_call_name(call)
+        if not name or name in ("Sentence", "Sentences", "tr"):
+            continue
+        out.append((name, None))
+        out += [ref for a in call.args if isinstance(a, ast.Name) for ref in binds.get(a.id, ())]
+    return out
 
 
 def route_answer_keys(root=ROOT):
@@ -1699,12 +1761,13 @@ def route_answer_keys(root=ROOT):
     """
     trees = _py_trees(root)
     table = _r16c_returns(trees)
+    wrappers = _py_wrappers(trees)
     keys = {}
     for rel, lines, tree in (t for t in trees if _r16c_is_route(t[0])):
         consts = _py_module_consts(tree)
         for fn in [tree] + _py_functions(tree):
-            scope = (consts, _r16c_binds(fn))
-            for v in (v for n in _py_own_nodes(fn) for v in _r16c_answer_values(n, lines)):
+            scope = (consts, dict(_r16c_binds(fn), **{_R17C_LOCAL_TEXTS: _r17c_local_texts(fn, consts)}))
+            for v in (v for n in _py_own_nodes(fn) for v in _r16c_answer_values(n, lines, wrappers)):
                 for t, f, line in _r16c_found(v, rel, scope, table):
                     if _r16c_prose(t):
                         keys.setdefault(t, "%s:%d" % (f, line))
@@ -1758,15 +1821,65 @@ def _r16c_job_slot(t):
 
 
 def _r16c_step_walk(root):
-    """[(file, line, value node, consts, binds, lines)] for every job progress value in the tree."""
+    """[(file, line, value node, consts, binds, lines)] for every job progress value in the tree.
+
+    With the values a job writer is handed through a callback (_r17b_forwarded).
+    """
     out = []
-    for rel, lines, tree in _py_trees(root):
+    trees = _py_trees(root)
+    for rel, lines, tree in trees:
         consts = _py_module_consts(tree)
         for fn in [tree] + _py_functions(tree):
             binds = _r16c_binds(fn)
             out += [(rel, v.lineno, v, consts, binds, lines) for n in _py_own_nodes(fn)
                     for v in _r16c_step_values(n) if not _py_ignored(lines, v)]
-    return out
+    return out + _r17b_forwarded(trees)[0]
+
+
+# A job writer inside a callback: `install_gmod_content(…, on_progress=lambda m: _p(8, m))`. The
+# value is the lambda's parameter, bound to nothing here, so the walk above saw no text (it does
+# not enter a lambda at all), and every `on_progress("Installing %s content…" % label)` in the
+# callee was English for the whole download with both gates green (review 1012b). The callee's
+# calls of that keyword are the values; a callback whose keyword no call names is reported as built.
+def _r17b_lambda_writers(tree, lines):
+    """[(keyword, line)]: `kw=lambda …: writer(…, param)` calls in one module."""
+    kws = [k for call in ast.walk(tree) if isinstance(call, ast.Call) for k in call.keywords
+           if k.arg and isinstance(k.value, ast.Lambda)]
+    return [(kw.arg, line) for kw in kws for line in _r17b_param_writes(kw.value, lines)]
+
+
+def _r17b_param_writes(lam, lines):
+    """The lines where a lambda hands a job writer one of its own parameters as it is."""
+    params = {a.arg for a in lam.args.args}
+    return [v.lineno for n in ast.walk(lam.body) for v in _r16c_step_values(n)
+            if isinstance(v, ast.Name) and v.id in params and not _py_ignored(lines, v)]
+
+
+def _r17b_forwarded(trees):
+    """([step walk entries], [(file, line)] of callbacks no call feeds): see the note above."""
+    wanted = {}
+    for rel, lines, tree in trees:
+        for kw, line in _r17b_lambda_writers(tree, lines):
+            wanted.setdefault(kw, []).append((rel, line))
+    found, fed = [], set()
+    for rel, lines, tree in trees:
+        entries, names = _r17b_fed_calls(rel, lines, tree, wanted)
+        found += entries
+        fed |= names
+    return found, sorted(w for kw, ws in wanted.items() if kw not in fed for w in ws)
+
+
+def _r17b_fed_calls(rel, lines, tree, wanted):
+    """(step-walk entries for each `wanted` keyword's call arguments, the keywords called), one module."""
+    consts = _py_module_consts(tree)
+    out, names = [], set()
+    for fn in [tree] + _py_functions(tree):
+        calls = [n for n in _py_own_nodes(fn) if _py_call_name(n) in wanted and not _py_ignored(lines, n)]
+        binds = _r16c_binds(fn) if calls else {}
+        names |= {_py_call_name(n) for n in calls}
+        out += [(rel, a.lineno, a, consts, binds, lines) for n in calls for a in n.args]
+    return out, names
+
 
 
 def step_name_keys(root=ROOT):
@@ -1783,7 +1896,8 @@ def step_name_keys(root=ROOT):
 def step_names_built(root=ROOT):
     """[(file, line)]: a job's progress text built in plain English, which no key can match."""
     return sorted({(rel, line) for rel, line, v, _c, _b, _l in _r16c_step_walk(root)
-                   if any(_py_built(x, plain=True) for x in [v] + _py_operands(v))})
+                   if any(_py_built(x, plain=True) for x in [v] + _py_operands(v))}
+                  | set(_r17b_forwarded(_py_trees(root))[1]))
 
 
 # ── Python: fixed messages the viewer is shown ─────────────────────────────────────────────────
@@ -1819,15 +1933,37 @@ def _py_literal_nodes(node):
     return [n for v in _py_operands(node) if not isinstance(node, ast.BinOp) for n in _py_literal_nodes(v)]
 
 
-def _py_node_literals(n, wrappers, consts):
-    """The fixed message nodes one AST node shows: its sink values, and its (ok, message) return."""
+def _py_node_literals(n, wrappers, consts, local_nodes=None):
+    """The fixed message nodes one AST node shows: its sink values, and its (ok, message) return.
+
+    A Name resolves through module constants and, from `local_nodes` ({local: [literal node]}, see
+    _r17c_local_literal_nodes), through the function's locals assigned a literal.
+    """
     values = _py_sink_values(n, wrappers)
     if isinstance(n, ast.Return) and n.value is not None:
         values = values + _py_return_items(n.value)
+    names = _r17c_value_names(values)
     nodes = [lit for v in values for lit in _py_literal_nodes(v)]
     nodes += [ast.Constant(value=consts[v.id], lineno=v.lineno, end_lineno=v.lineno)
-              for v in values if isinstance(v, ast.Name) and v.id in consts]
+              for v in names if v.id in consts]
+    nodes += [lit for v in names for lit in (local_nodes or {}).get(v.id, ())]
     return nodes
+
+
+def _r17c_value_names(values):
+    """The Names among `values` and their `a or b` / `a if c else b` / `a + b` operands."""
+    return [n for v in values for n in [v] + list(_py_operands(v)) if isinstance(n, ast.Name)]
+
+
+def _r17c_local_literal_nodes(fn):
+    """{local: [str literal node]} for each local of one function (or module) assigned a literal."""
+    out = {}
+    for n in _py_own_nodes(fn):
+        if isinstance(n, ast.Assign):
+            lits = _py_literal_nodes(n.value)
+            for t in (t for t in n.targets if isinstance(t, ast.Name) and lits):
+                out.setdefault(t.id, []).extend(lits)
+    return out
 
 
 def shown_literals_py(root=ROOT):
@@ -1839,9 +1975,14 @@ def shown_literals_py(root=ROOT):
         if rel.replace(os.sep, "/").startswith(_PY_LITERAL_SKIP_DIRS):
             continue
         consts = _py_module_consts(tree)
-        for lit in (lit for n in ast.walk(tree) for lit in _py_node_literals(n, wrappers, consts)):
-            if _py_shown_literal(lit.value) and not _py_ignored(lines, lit):
-                found.setdefault(lit.value, "%s:%d" % (rel, lit.lineno))
+        # Function by function (each node once, under the function it belongs to), so a local
+        # assigned a literal is resolved where it was assigned and nowhere else.
+        for fn in [tree] + _py_functions(tree):
+            local_nodes = _r17c_local_literal_nodes(fn)
+            for lit in (lit for n in _py_own_nodes(fn)
+                        for lit in _py_node_literals(n, wrappers, consts, local_nodes)):
+                if _py_shown_literal(lit.value) and not _py_ignored(lines, lit):
+                    found.setdefault(lit.value, "%s:%d" % (rel, lit.lineno))
     return found
 
 

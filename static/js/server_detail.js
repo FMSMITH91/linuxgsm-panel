@@ -295,7 +295,7 @@ var _consolePaused = false;
 var _returnOwed = false;
 socket.on('connect', function() {
   if (wsStatus) {
-    wsStatus.textContent = '(connected)';
+    wsStatus.textContent = t('(connected)');
     wsStatus.className = 'text-success small ms-2';
   }
   // A socket that comes back while the console is set aside for a hidden tab does not rejoin:
@@ -347,7 +347,7 @@ socket.on('disconnect', function() { _endResync(); });
 
 socket.on('disconnect', function() {
   if (!wsStatus) return;
-  wsStatus.textContent = '(disconnected)';
+  wsStatus.textContent = t('(disconnected)');
   wsStatus.className = 'text-danger small ms-2';
 });
 
@@ -885,8 +885,14 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         if (!_returnOwed) _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now);
       }
       showPanelBacklog(panelLines);
-      // The priming wipe took any panel push already shown; put back those the backlog lacks.
-      _r13c_reshowPanelPushes(panelLines, reshow, floor);
+      // The priming wipe took any panel push already shown; put back those the backlog lacks —
+      // and not one shown again since the wipe. The re-prime ends a catch-up still out (_primeAt
+      // -> _startResync -> _endResync), which shows the panel pushes it held AFTER the wipe; one
+      // newer than this backlog was put back a second time: Clear pressed while the first window's
+      // catch-up was out showed the next [panel] line twice. Here, not in the reshow: on this path
+      // the wipe set _lastPanelT back to the cut (_panelLinesWiped), so it now holds only what was
+      // shown since. Load older's wipe does not reset it, so there it would hide its own pushes.
+      _r13c_reshowPanelPushes(panelLines, reshow, Math.max(floor, _lastPanelT));
       updateTsNotice();
       _showTsOffNote(data);
       if (stick) stickConsole();
@@ -1836,23 +1842,23 @@ function _setStatText(id, value) {
 // that failed as '–' / 'not read', never as zeros.
 function _showGameCpuTile(m, readable) {
   _setStatText('stat-gcpu', readable && m.game_cpu_percent!=null ? m.game_cpu_percent + '%' : '–');
-  _setStatText('stat-gcpu-sub', readable ? tf('of {n}-core server', {n: m.cores||1}) : 'not read');
+  _setStatText('stat-gcpu-sub', readable ? tf('of {n}-core server', {n: m.cores||1}) : t('not read'));
 }
 function _showGameRamTile(m, readable) {
   _setStatText('stat-gram', readable ? (m.game_ram_mb||0) + ' MB' : '–');
-  _setStatText('stat-gram-sub', !readable ? 'not read'
+  _setStatText('stat-gram-sub', !readable ? t('not read')
           : (m.game_ram_percent!=null? tf('{n}% of RAM', {n: m.game_ram_percent}) : tf('{n} procs', {n: m.game_procs||0})));
 }
 function _showGameUptimeTile(m, readable) {
-  _setStatText('stat-gup', !readable ? '–' : (m.game_procs ? fmtUptime(m.game_uptime_secs||0) : 'stopped'));
-  _setStatText('stat-gup-sub', !readable ? 'not read'
+  _setStatText('stat-gup', !readable ? '–' : (m.game_procs ? fmtUptime(m.game_uptime_secs||0) : t('stopped')));
+  _setStatText('stat-gup-sub', !readable ? t('not read')
           : (m.game_procs===1 ? t('1 process') : tf('{n} processes', {n: m.game_procs||0})));
 }
 function _showServerTile(m, readable) {
   _setStatText('stat-scpu', readable && m.cpu_percent!=null ? m.cpu_percent + '%' : '–');
   _setStatText('stat-server-sub', readable
           ? tf('RAM {ram}% · disk {disk}%', {ram: m.ram_percent||0, disk: m.disk_percent||0})
-          : 'The panel could not read this host');
+          : t('The panel could not read this host'));
 }
 // Advance the live chart by one reading, keeping the last 45.
 function _pushStatsPoint(m) {
@@ -2032,9 +2038,11 @@ function loadGmodContent(){
         + '<div class="d-flex flex-column gap-1 mb-2">' + rows + '</div>'
         + (running
             ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Working… (install/removal can take a while) '+_esc((d.job&&d.job.msg)||'')+'</div>'
-            : '<button class="btn btn-sm btn-primary" type="button" id="gmc-apply"><i class="bi bi-save"></i> Apply mounts</button>'
+            : '<div id="gmc-outcome-slot"></div>'
+              + '<button class="btn btn-sm btn-primary" type="button" id="gmc-apply"><i class="bi bi-save"></i> Apply mounts</button>'
               + ' <span class="text-secondary small ms-1">Restart the server afterwards to load changes.</span>');
       // Attach handlers programmatically — the strict CSP (no unsafe-inline) blocks inline onclick=.
+      _gmcOutcome(el.querySelector('#gmc-outcome-slot'), d.job);
       var _ap = el.querySelector('#gmc-apply');
       if(_ap) _ap.onclick = function(){ applyGmodContent(_ap); };
       el.querySelectorAll('[data-gmc-uninstall]').forEach(function(b){
@@ -2043,6 +2051,23 @@ function loadGmodContent(){
       if(running) setTimeout(loadGmodContent, 5000);
     })
     .catch(function(){ el.innerHTML = '<span class="text-danger">Could not load content status.</span>'; });
+}
+
+// A FINISHED content job's outcome, kept by the server for 15 minutes so the card can say it
+// (already in the viewer's language): red for an error, green for done. Only the running branch
+// read job.msg, so a failed install ended in silence and the operator restarted into ERROR textures.
+// Built as nodes, the message a text node: it can quote host output, and is never markup.
+function _gmcOutcome(slot, job){
+  if(!slot) return;
+  if(!job || !job.msg){ slot.remove(); return; }
+  var bad = job.status === 'error';
+  slot.id = 'gmc-outcome';
+  slot.className = 'small mb-2 text-break ' + (bad ? 'text-danger' : 'text-success');
+  slot.setAttribute('role', 'status');
+  var icon = document.createElement('i');
+  icon.className = 'bi bi-' + (bad ? 'exclamation-triangle' : 'check-circle');
+  slot.appendChild(icon);
+  slot.appendChild(document.createTextNode(' ' + job.msg));
 }
 
 function _gmcPost(bodyObj, okMsg){

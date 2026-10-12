@@ -2183,6 +2183,13 @@ class UnsafeGameAccount(ValueError):
 # already spells "could not run" — never an empty result, which is how a failed read has been
 # mistaken for a healthy one before.
 GAME_ACCOUNT_REFUSED = ("", "invalid account or script name", 1)
+# A console line holding a control character (below U+0020, or DEL). See send_console_command.
+CONSOLE_CONTROL_REFUSED = ("", "a console line cannot contain control characters or line breaks", 1)
+
+
+def console_has_control(text):
+    """True when `text` holds a character a terminal acts on rather than shows (C0 or DEL)."""
+    return any(ord(c) < 32 or ord(c) == 127 for c in text or "")
 
 
 def game_idents_ok(*names):
@@ -2727,6 +2734,14 @@ def send_console_command(server, user, command, timeout=20, selfname=None, mark=
     # line like `sv_cheats 0;` lost its ";" and Enter was run as a command of its own: nothing was
     # submitted. A trailing ";" goes as "\;", which tmux types as ";".
     typed = command[:-1] + "\\;" if command.endswith(";") else command
+    # -l types each character as its own key, and a key that IS a control byte reaches the pane's
+    # tty as one: U+0003 interrupted the game (^C), U+001A suspended it, U+001C quit it, and a
+    # newline submitted a second console line. -l closed the key NAMES, not the bytes. The custom
+    # command template has always refused these; a free-form line and a custom argument whose
+    # stored pattern lets them through now meet the same rule here, where every sender passes.
+    if console_has_control(command):
+        _log.warning("refusing a console line that holds a control character")
+        return CONSOLE_CONTROL_REFUSED
     inner = (_tmux_live_socket_sh(selfname) + pos
              + f'tmux -L "$SOCK" send-keys -t {selfname} -l -- {_quote(typed)} \\; '
                f'send-keys -t {selfname} Enter')

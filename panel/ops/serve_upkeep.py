@@ -109,7 +109,10 @@ def _remove_serve_leftovers(panel_port, mount, where, audit):
     if state == "failed":
         audit("%s: could not remove a Tailscale Serve route to the panel at a mount other than %s: "
               "%s" % (where, mount, err), False)
-        return "failed:" + _dr_process.serve_reason(err)
+        # remove_panel_route's own reasons by their template: serve_reason reads only tailscale's
+        # failure text, so these two said "(an unexpected error)" while the panel knew why.
+        return "failed:" + (_R17A_OWN_REASONS.get(getattr(err, "template", None))
+                            or _dr_process.serve_reason(err))
     if state == "removed":
         return "removed:" + ",".join(removed)
     return state
@@ -124,7 +127,10 @@ _R16A_LEFTOVER_WHY = {
     "permission": i18n.Sentence("permission denied"),
     "not-running": i18n.Sentence("Tailscale is not running"),
     "bad-mount": i18n.Sentence("not a usable mount point"),
+    "unnamed-mount": i18n.Sentence(ts.R17A_UNNAMED_MOUNT),
+    "listener-unread": i18n.Sentence(ts.R17A_LISTENER_UNREAD),
 }
+_R17A_OWN_REASONS = {ts.R17A_UNNAMED_MOUNT: "unnamed-mount", ts.R17A_LISTENER_UNREAD: "listener-unread"}
 
 
 def _r16a_leftover_why(token):

@@ -5,6 +5,7 @@ execution for running on the panel's own machine (see the package docstring for 
 resolve across its submodules).
 """
 import re
+from panel.core import i18n
 from panel.ops.ssh_manager import (_core)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
 # visible to every caller — see the package docstring.
@@ -299,7 +300,9 @@ def _install_content_game(server, content_user, g, on_progress):
     if lgsm is None:
         return "manual"   # mount-only (owned game): no LinuxGSM server — mounts only if present
     if on_progress:
-        on_progress("Installing %s content via LinuxGSM" % GMOD_CONTENT_GAMES[g][0])
+        # A Sentence: it becomes the install job's step name, which install-status translates
+        # whole — spliced English matched no key and stayed English for the whole download.
+        on_progress(i18n.Sentence("Installing {game} content via LinuxGSM", game=GMOD_CONTENT_GAMES[g][0]))
     # Fetch linuxgsm.sh once (shared), create the game's script, then auto-install its content.
     inner = (f"cd /home/{content_user} && "
              f"{{ [ -x linuxgsm.sh ] || {{ wget -q -O linuxgsm.sh https://linuxgsm.sh && chmod +x linuxgsm.sh; }}; }} && "
@@ -601,9 +604,9 @@ def _mount_users_error(gmod_user, content_user, games):
     own check is applied on top of _CU_NAME_RE.
     """
     if not (_CU_NAME_RE.match(gmod_user or "") and _core.game_idents_ok(gmod_user)):
-        return "invalid gmod user"
+        return i18n.Sentence("invalid gmod user")
     if games and not (_CU_NAME_RE.match(content_user or "") and _core.game_idents_ok(content_user)):
-        return "invalid content user"
+        return i18n.Sentence("invalid content user")
     return None
 
 
@@ -615,8 +618,8 @@ def _grant_content_read(server, gmod_user, content_user, games):
         # the lookup failed, and hand that to `usermod -aG` — joining whatever group happened
         # to share the name. Refusing costs a mount that cannot read the shared content, which
         # the caller reports; guessing costs a group membership nobody asked for.
-        return ("Couldn't read %s's group, so the content mount was not granted. "
-                "Check the account exists on this host." % content_user)
+        return i18n.Sentence("Couldn't read {user}'s group, so the content mount was not granted. "
+                             "Check the account exists on this host.", user=content_user)
     # Read access: add the GMod user to the content group, and make the content group-traversable
     # (home) + group-readable (each game tree). Every step is attempted; a failed usermod fails
     # the verb on both transports, and the chmods are best-effort on both (a missing game tree
@@ -630,9 +633,9 @@ def _grant_content_read(server, gmod_user, content_user, games):
                                         [content_user, group, gmod_user] + list(games), timeout=180,
                                         merge_stderr=False)
     if rc != 0:
-        return ("Couldn't give %s read access to %s's content, so nothing was mounted (%s)."
-                % (gmod_user, content_user,
-                   (err or out or "exit %s" % rc).replace("\n", " ").strip()[:160]))
+        return i18n.Sentence("Couldn't give {user} read access to {owner}'s content, so nothing was "
+                             "mounted ({why}).", user=gmod_user, owner=content_user,
+                             why=(err or out or "exit %s" % rc).replace("\n", " ").strip()[:160])
     return None
 
 
@@ -672,11 +675,14 @@ def gmod_mount_setup(server, gmod_user, content_user, games):
     bad = _write_mount_files(server, gmod_user, content_user, games)
     if bad:
         return False, bad
-    _msg = ("Unmounted all content" if not games else
-            "Mounted: " + ", ".join(GMOD_CONTENT_GAMES[g][0] for g in games))
+    # Whole Sentences, one per wording: the GMod Content card shows this to the viewer in their
+    # language, and a clause appended to the English matched no catalog key.
+    _labels = ", ".join(GMOD_CONTENT_GAMES[g][0] for g in games)
     if _mount_needs_restart(server, gmod_user):
-        _msg += " — restart the server to apply"
-    return True, _msg
+        return True, (i18n.Sentence("Mounted: {games} — restart the server to apply", games=_labels)
+                      if games else i18n.Sentence("Unmounted all content — restart the server to apply"))
+    return True, (i18n.Sentence("Mounted: {games}", games=_labels) if games
+                  else i18n.Sentence("Unmounted all content"))
 
 
 _MOUNT_LINE_RE = re.compile(r'"([a-z0-9_]+)"\s+"/')

@@ -1,0 +1,13 @@
+{
+  "Database optimized.": "Base de données optimisée.",
+  "Checkpointed the WAL and refreshed stats — VACUUM was deferred because the database was busy; run it again in a moment to compact.": "Le WAL a été consolidé et les statistiques actualisées ; VACUUM a été reporté car la base de données était occupée. Relancez-le dans un instant pour la compacter.",
+  "Refreshed stats, but the WAL could not be trimmed and VACUUM was deferred — the database was busy. Run it again in a moment.": "Les statistiques ont été actualisées, mais le WAL n'a pas pu être réduit et VACUUM a été reporté : la base de données était occupée. Relancez-le dans un instant.",
+  "Refreshed stats — VACUUM was deferred because the database was busy, and the WAL checkpoint returned no result to confirm it ran. Run it again in a moment.": "Les statistiques ont été actualisées ; VACUUM a été reporté car la base de données était occupée, et la consolidation du WAL n'a renvoyé aucun résultat confirmant qu'elle a eu lieu. Relancez-le dans un instant.",
+  "Internal server error": "Erreur interne du serveur",
+  "A tag name must start with a letter or number and use only letters, numbers, spaces, dots, hyphens or underscores (up to 32 characters).": "Le nom d'une étiquette doit commencer par une lettre ou un chiffre et n'utiliser que des lettres, des chiffres, des espaces, des points, des tirets ou des tirets bas (32 caractères au maximum).",
+  "Couldn't read how far behind the update source this panel is.": "Impossible de lire le retard de ce panneau par rapport à la source des mises à jour.",
+  "Couldn't read the versions of '{branch}', so there is no verified version to switch to.": "Impossible de lire les versions de « {branch} » : il n'y a donc aucune version vérifiée vers laquelle basculer.",
+  "[output truncated — more than {kb} KB/s. The command is still running; press Ctrl-C to stop it.]": "[sortie tronquée : plus de {kb} Ko/s. La commande est toujours en cours ; appuyez sur Ctrl-C pour l'arrêter.]",
+  "[{n} bytes of input were dropped — the program running here is not reading its input]": "[{n} octets saisis ont été ignorés : le programme en cours ici ne lit pas son entrée]",
+  "A console command can't contain control characters or line breaks.": "Une commande de console ne peut pas contenir de caractères de contrôle ni de sauts de ligne."
+}

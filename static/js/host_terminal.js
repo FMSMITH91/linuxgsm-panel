@@ -36,6 +36,15 @@ function _sizeFor(el) {
   return { cols: Math.max(20, Math.floor(w / cell.w)), rows: Math.max(5, Math.floor(h / cell.h)) };
 }
 
+// A panel message written INTO the terminal, as text and nothing else. A message can carry a host's
+// name ("Could not start a shell on {host}…"), and a name may hold any character but < > " ' `
+// \ and a newline (SAFE_LABEL_RE) — ESC included. Written raw, xterm acted on what followed it as
+// a control sequence: a delegate who may rename a host could clear the screen or draw a fake
+// prompt in the superadmin's terminal. C0 and C1 controls go; _status (textContent) needs no help.
+function _r17cTermText(s) {
+  return String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+}
+
 function _status(msg, kind) {
   var el = document.getElementById('term-status');
   if (!el) return;
@@ -131,7 +140,7 @@ function initTerminal() {
   sock.on('term_error', function (d) {
     var msg = _said(d, 'message', 'The terminal could not be opened.');
     _status(msg, 'bad');
-    term.write('\r\n\x1b[31m' + msg + '\x1b[0m\r\n');
+    term.write('\r\n\x1b[31m' + _r17cTermText(msg) + '\x1b[0m\r\n');
   });
 
   // `opened` is set once and never cleared. It used to be reset in both handlers below, which
@@ -142,7 +151,7 @@ function initTerminal() {
   sock.on('term_exit', function (d) {
     var why = _said(d, 'reason', 'the session ended');
     _status(tf('Session closed — {why}. Reload the page to start another.', {why: why}), 'warn');
-    term.write('\r\n\x1b[33m[' + why + ']\x1b[0m\r\n');
+    term.write('\r\n\x1b[33m[' + _r17cTermText(why) + ']\x1b[0m\r\n');
   });
 
   sock.on('disconnect', function () {

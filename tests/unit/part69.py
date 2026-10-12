@@ -14,15 +14,48 @@ _p9_patch and undone in the finally. Scripts in node on this part's own fixtures
 import json as _json69
 import os
 import pathlib as _pl69
+import types as _types69
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import P9_ADMIN, _p9, _p9_client, _p9_json, _p9_patch, _p9_restore_all
+from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_client, _p9_core, _p9_json, _p9_Over, _p9_patch,
+                         _p9_restore_all, _p9_so, _p9_trip)
 from unit.part47 import _cut47, _node47
 from panel.db.models import User as _User69, db as _db69
 from panel.ops import backup as _bk69, system_ops as _so69
 
 _JS69 = os.path.join(_root, "static", "js")
+
+
+from panel.ops import tailscale_integration as _ts69  # noqa: E402
+
+_TRIP69_START = len(_P9_TRIPPED)
+
+
+def _arm69():
+    """part12's transport tripwire, armed at the top of every block below that drives a route.
+
+    part12 disarmed its own when it ended, and each block stubs only the leaf it names: one more
+    host call on a passing path (paramiko to P9_HOST, a local shell on the panel host, as root on
+    CI's root leg) would have run for real with this part green (review 1012b; part68 does this).
+    Undone by each block's _p9_restore_all().
+    """
+    _p9_patch(_p9_core, "get_connection",
+              _p9_trip("paramiko", exc=ConnectionError("refused by part69's tripwire")))
+    for _n69, _w69 in (("_run_via_ssh_cli", "ssh-cli"), ("_exec_local_shell", "local-shell"),
+                       ("_exec_local_argv", "local-argv"), ("run_command", "run_command"),
+                       ("shell_as_game_user", "shell_as_game_user"), ("run_privileged", "run_privileged")):
+        _p9_patch(_p9_core, _n69, _p9_trip(_w69))
+    for _n69 in ("_run", "_run_verb", "_git"):
+        _p9_patch(_p9_so, _n69, _p9_trip("system_ops." + _n69))
+    _p9_patch(_ts69, "subprocess", _p9_Over(
+        _ts69.subprocess,
+        Popen=_p9_trip("tailscale.subprocess.Popen", exc=OSError("refused by part69's tripwire")),
+        run=_p9_trip("tailscale.subprocess.run", exc=OSError("refused by part69's tripwire"))))
+    # Page renders read Tailscale state for the nav: answered here, as part61's tripwire does.
+    _p9_patch(_ts69, "get_tailscale_info",
+              lambda force_refresh=False: _types69.SimpleNamespace(dns_name=None, serve_config={},
+                                                                   serve_unreadable=False))
 
 
 def _read69(*parts):
@@ -45,6 +78,12 @@ def _lang69(lang):
         _db69.session.commit()
 
 
+# The admin's language as the part found it (it may be None): put back after each block, not "en"
+# (review 1012b), so a later part reading it sees what it left.
+with _p9.app_context():
+    _LANG69_WAS = _db69.session.get(_User69, P9_ADMIN).language
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 1. Restore, in Spanish: the safety copy fails, and "Restore anyway" still opens
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -56,6 +95,7 @@ _PLAIN69 = "panel-backup-20260101-000000-manual.tar.gz"
 _ENC69 = _PLAIN69 + ".enc"
 _said69 = {}
 try:
+    _arm69()
     _p9_patch(_bk69, "_safe_path", lambda name: _pl69.Path("/nonexistent-r16c") / str(name))
     _p9_patch(_bk69, "_archive_members_refusal", lambda src: "")
     _p9_patch(_bk69, "_restore_db_refusal", lambda src: "")
@@ -82,7 +122,7 @@ try:
                                           json={"name": _ENC69, "passphrase": "x" * 12})),
         }
 finally:
-    _lang69("en")
+    _lang69(_LANG69_WAS)
     _p9_restore_all()
 
 _es69 = _said69.get("es", {})
@@ -256,7 +296,9 @@ from panel.ops.ssh_manager import firewall as _fwmod69, hosts as _hosts69  # noq
 from panel.routes import close_port22 as _cp69  # noqa: E402
 
 _es3 = {}
+_ijob_was69 = _ijobs69.get(P9_GS)
 try:
+    _arm69()
     _lang69("es")
     _c69 = _p9_client(P9_ADMIN)
     _p9_patch(_cp69, "_tailnet_ssh_state", lambda remote: (False, False, False))
@@ -282,8 +324,12 @@ try:
         _es3["note"] = [_i18n69.tr(n) for n in _noted69]
 finally:
     with _ilock69:
+        # Put back what was there (part66 does), not only pop: a job an earlier part left would
+        # be gone for the parts after.
         _ijobs69.pop(P9_GS, None)
-    _lang69("en")
+        if _ijob_was69 is not None:
+            _ijobs69[P9_GS] = _ijob_was69
+    _lang69(_LANG69_WAS)
     _p9_restore_all()
 check("close port 22 (es): the no-way-back refusal and the removed-rule answer are Spanish (both were "
       "English in every language)",
@@ -340,6 +386,7 @@ def _lo_state69(uid):
 
 _lo69 = {}
 try:
+    _arm69()
     for _case69, _fails69 in (("retry", 1), ("retry_rows_locked", 2)):
         _uid69 = _lo_user69("p69_" + _case69)
         _flaky69 = _FlakyRows69(_fails69)
@@ -356,6 +403,7 @@ finally:
             _US69.query.filter_by(user_id=_u69.id).delete()
             _db69.session.delete(_u69)
         _db69.session.commit()
+    _p9_restore_all()
 check("logout: when the first attempt fails, the retry's epoch bump (every device) clears every "
       "session row too, and says signed out",
       _lo69.get("retry") == ((0, 1), 2, True), repr(_lo69))
@@ -402,6 +450,8 @@ _prog69 = (_es69("Session closed — {why}. Reload the page to start another.", 
            "var sock = {on: (ev, fn) => { on[ev] = fn; }}, term = {write: s => wrote.push(s)};\n"
            "function _status(m){ status.push(m); }\n"
            + ("" if "function _said(" not in _HT69 else _cut47(_HT69, "function _said(") + "\n")
+           # the handlers write through it (review 1012b: a host name's control characters)
+           + ("" if "function _r17cTermText(" not in _HT69 else _cut47(_HT69, "function _r17cTermText(") + "\n")
            + _cut47(_HT69, "sock.on('term_exit'") + ");\n"
            + _cut47(_HT69, "sock.on('term_error'") + ");\n"
            "on.term_exit(P.idle); on.term_exit(P.exited); on.term_exit(P.none); on.term_error(P.many);\n"
@@ -423,6 +473,8 @@ if _got69 is not None:
 _sock69 = {}
 _exit69 = {}
 try:
+    _arm69()
+
     def _open69(sid, remote, is_local, **k):
         _exit69["sid"], _exit69["on_exit"] = sid, k.get("on_exit")
     _p9_patch(_ht69._ts, "open_session", _open69)
@@ -507,16 +559,19 @@ _prog69 = (_es69("{n} player is connected to {name}.", "{n} players are connecte
            "console.log(JSON.stringify(out));\n")
 _got69 = _node69(_name69, _prog69)
 if _got69 is not None:
+    # Each sentence inside the one <span> tfNodes hands back (review 1012b: so a live language switch
+    # can build it again).
     check("players dialog (es): \"3 jugadores están conectados a NAME.\" is one translated sentence, the "
           "count and the name escaped and guarded",
-          (_got69.get("three") or "").startswith('<strong data-no-i18n>3</strong> jugadores están conectados a '
-                                                 '<strong data-no-i18n>Mi&lt;Srv&gt;</strong>.')
-          and (_got69.get("one") or "").startswith('<strong data-no-i18n>1</strong> jugador está conectado a '),
+          (_got69.get("three") or "").startswith('<span><strong data-no-i18n>3</strong> jugadores están conectados a '
+                                                 '<strong data-no-i18n>Mi&lt;Srv&gt;</strong>.</span>')
+          and (_got69.get("one") or "").startswith('<span><strong data-no-i18n>1</strong> jugador está conectado a '),
           repr(_got69)[:900])
     check("backup players dialog (es): the counts and the server list sit in one translated sentence",
-          _got69.get("backup") == '<strong data-no-i18n>3</strong> jugadores están conectados a <strong '
+          _got69.get("backup") == '<span><strong data-no-i18n>3</strong> jugadores están conectados a <strong '
                                   'data-no-i18n>2</strong> servidores: <span data-no-i18n>A&lt;b&gt; (2), B (1)</span>.'
-          and (_got69.get("backup1") or "").startswith('<strong data-no-i18n>1</strong> jugador está conectado a '
+                                  '</span>'
+          and (_got69.get("backup1") or "").startswith('<span><strong data-no-i18n>1</strong> jugador está conectado a '
                                                        '<strong data-no-i18n>1</strong> servidor: '),
           repr(_got69)[:900])
     check("reboot banner (es): \"HOST necesita reiniciarse…\" is one sentence with the host in it, and the "
@@ -538,6 +593,7 @@ _grp69 = {"nums": [1], "protected": True, "protect_reason_key": _tmpl69,
           "action": "ALLOW IN", "key": "k1"}
 _prot69 = {}
 try:
+    _arm69()
     _lang69("es")
     _c69 = _p9_client(P9_ADMIN)
     _p9_patch(_fwmod69, "remote_ufw_status", lambda server: {"installed": True, "active": True,
@@ -548,7 +604,7 @@ try:
     _prot69["close"] = _p9_json(_c69.post("/api/remote/%d/firewall/close" % P9_HOST,
                                           json={"port": "5000", "protocol": "tcp"})).get("message")
 finally:
-    _lang69("en")
+    _lang69(_LANG69_WAS)
     _p9_restore_all()
 _want69 = _scan69.load_catalog("es").get(_tmpl69, "?").replace("{port}", "5000")
 check("firewall (es): deleting or closing a protected rule is refused in Spanish, with its port in it "
@@ -728,14 +784,47 @@ for _what_r16u, (_src_r16u, _head_r16u) in _pins_r16u.items():
     check("375px: the %s table pins its row buttons (table-pin-actions)" % _what_r16u,
           "table-pin-actions" in _tag_r16u, _tag_r16u or "table not found")
 _CSS_r16u = _read69(_root, "static", "css", "panel.css")
-_mob_r16u = _CSS_r16u.find("@media (width <= 767.98px)")
-_pinrule_r16u = _re_r16u.search(r"\.table-pin-actions\s*>\s*tbody\s*>\s*tr\s*>\s*:last-child\s*\{([^}]*)\}",
-                                _CSS_r16u[_mob_r16u:])
+_PIN_RULE_r16u = r"\.table-pin-actions\s*>\s*tbody\s*>\s*tr\s*>\s*:last-child\s*\{([^}]*)\}"
+
+
+def _r17d_media_bodies(css, head):
+    """The text inside each `<head> { ... }` block of `css` (comments out), by brace matching."""
+    css = _re_r16u.sub(r"/\*.*?\*/", "", css, flags=_re_r16u.S)
+    out, at = [], css.find(head)
+    while at >= 0:
+        open_at = css.find("{", at)
+        depth, k = 1, open_at + 1
+        while k < len(css) and depth:
+            depth += {"{": 1, "}": -1}.get(css[k], 0)
+            k += 1
+        out.append(css[open_at + 1:k - 1])
+        at = css.find(head, k)
+    return out
+
+
+def _r17d_pinned_on_phones(css):
+    """Is the pinned table's last cell position:sticky at right:0 INSIDE a phone-width block?
+
+    Searched from the block's head to the end of the file, a rule moved into the desktop block or
+    to top level after it passed (review 1012b).
+    """
+    for _body in _r17d_media_bodies(css, "@media (width <= 767.98px)"):
+        _rule = _re_r16u.search(_PIN_RULE_r16u, _body)
+        if (_rule and _re_r16u.search(r"position:\s*sticky", _rule.group(1))
+                and _re_r16u.search(r"right:\s*0", _rule.group(1))):
+            return True
+    return False
+
+
+_pinrule_r16u = _re_r16u.search(_PIN_RULE_r16u, _CSS_r16u)
+# The control: the same rule moved out of the phone block into a desktop-width one.
+_pin_moved_r16u = (_CSS_r16u.replace(_pinrule_r16u.group(0), "") + "\n@media (width >= 768px) {\n"
+                   + _pinrule_r16u.group(0) + "\n}\n") if _pinrule_r16u else ""
 check("375px: inside the phone-width block, a pinned table's last cell is position:sticky at right:0",
-      _mob_r16u >= 0 and _pinrule_r16u is not None
-      and _re_r16u.search(r"position:\s*sticky", _pinrule_r16u.group(1)) is not None
-      and _re_r16u.search(r"right:\s*0", _pinrule_r16u.group(1)) is not None,
-      _pinrule_r16u.group(0) if _pinrule_r16u else "no .table-pin-actions last-cell rule after the media query")
+      _r17d_pinned_on_phones(_CSS_r16u), repr(_pinrule_r16u.group(0)[:200] if _pinrule_r16u else None))
+check("375px: ...and the same rule moved into the desktop block is not read as the phone's (control)",
+      bool(_pin_moved_r16u) and not _r17d_pinned_on_phones(_pin_moved_r16u)
+      and _r17d_pinned_on_phones("@media (width <= 767.98px) {\n.x { a: b; }\n" + _pinrule_r16u.group(0) + "\n}"))
 # The dashboard's 120px name-column floor was written for every wrapped table and reached the
 # backups table's one-word Type column, which alone pushed it to 323px in a 309px box.
 check("375px: the dashboard's server-name width floor is scoped to the dashboard table, not every "
@@ -761,12 +850,16 @@ def _top_rules_r16u(pattern):
 
 _pt_r16u = _top_rules_r16u(r"(?<![\w-])\.page-title\s*\{([^}]*)\}")
 _ptk_r16u = _top_rules_r16u(r"\.page-title\s*>\s*\*\s*\{([^}]*)\}")
+# The wrap is scoped to a heading that carries a name (review 1012b, part72): on every heading it
+# left a long translated title's icon alone on its own line.
+_ptn_r16u = _top_rules_r16u(r"\.page-title:has\(>\s*\[data-no-i18n\]\)\s*\{([^}]*)\}")
 check("375px: a page heading wraps its label and name onto separate lines and breaks a long name "
       "inside the word (flex-wrap:wrap, overflow-wrap:anywhere, items min-width:0)",
-      _re_r16u.search(r"flex-wrap:\s*wrap", _pt_r16u) is not None
+      _re_r16u.search(r"flex-wrap:\s*wrap", _ptn_r16u) is not None
       and _re_r16u.search(r"overflow-wrap:\s*anywhere", _pt_r16u) is not None
       and _re_r16u.search(r"min-width:\s*0", _ptk_r16u) is not None,
-      "page-title: %r / children: %r" % (_pt_r16u.strip(), _ptk_r16u.strip()))
+      "page-title: %r / with a name: %r / children: %r" % (_pt_r16u.strip(), _ptn_r16u.strip(),
+                                                           _ptk_r16u.strip()))
 for _tpl_r16u in ("remote_firewall.html", "remote_manage.html"):
     _h1_r16u = _re_r16u.search(r'<h1 class="page-title[^"]*">(.*?)</h1>',
                                _read69(_root, "templates", _tpl_r16u), _re_r16u.S)
@@ -774,3 +867,6 @@ for _tpl_r16u in ("remote_firewall.html", "remote_manage.html"):
           % _tpl_r16u,
           _h1_r16u is not None and "<span data-no-i18n>{{ remote.display_name }}</span>" in _h1_r16u.group(1),
           _h1_r16u.group(1).strip()[:200] if _h1_r16u else "no page-title h1")
+
+check("part69: nothing it drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP69_START, repr(_P9_TRIPPED[_TRIP69_START:][:6]))

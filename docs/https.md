@@ -21,8 +21,8 @@ The relevant `data/config.json` settings:
 | `trusted_proxies` | Which peers count as that proxy — default `127.0.0.1` and `::1`; list yours if it is on another machine |
 | `trusted_proxy_users` | On loopback, the accounts the proxy may run as — default `www-data`, `nginx`, `http`, `caddy`, `cloudflared` (root and the panel's own account always count) |
 | `bind_host` | `127.0.0.1` when behind a proxy, `0.0.0.0` when facing clients directly |
-| `site_domain` | Your domain (turns on `Secure` cookies) |
-| `cookie_secure` | Force `Secure` cookies on/off regardless of the above |
+| `site_domain` | The name the panel is reached at: the self-signed cert's name, and an origin the live console accepts. It does not turn on `Secure` cookies |
+| `cookie_secure` | Force `Secure` cookies on/off (`true`/`false`). Unset, they are on when the panel is reached over HTTPS: `use_https`, Tailscale Serve, or `trust_proxy` |
 
 ---
 

@@ -22,7 +22,7 @@ from panel.ops import socket_hooks as _socket_hooks
 from panel.ops import terminal_session as _ts
 from panel.ops.ssh_manager import is_local_server
 from panel.routes._shared import _json_int
-from panel.security.auth import (USE_TERMINAL, _deny, get_remote, has_permission, log_action,
+from panel.security.auth import (USE_TERMINAL, _deny, _r17c_row_id, get_remote, has_permission, log_action,
     permission_required)
 
 # sid -> (remote_id, models.row_birth of that host). Labels audit rows, tears down on disconnect,
@@ -311,7 +311,9 @@ def _terminal_target(data):
     # _json_int: `{"remote_id": Infinity}` is valid JSON to Python, and int() of it raised
     # OverflowError; `true` is not an id, and int() read it as host 1. A payload that is not an
     # object at all is "no host named".
-    remote_id = _json_int(_term_payload(data).get("remote_id"))
+    # _r17c_row_id: an id past SQLite's range raised OverflowError at the lookup below (a
+    # superadmin passes the access check without one); it names no host.
+    remote_id = _r17c_row_id(_json_int(_term_payload(data).get("remote_id")))
     if remote_id is None:
         return None, None, "No host was named."
     # Per-host access, exactly as the page route checks it — a socket event is not covered by

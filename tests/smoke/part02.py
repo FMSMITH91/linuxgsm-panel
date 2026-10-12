@@ -1677,9 +1677,13 @@ check("MANAGE_REMOTES user: /remotes renders (200)",
 _nav_html = mrc.get("/account").get_data(as_text=True)
 check("sidebar: (control) a host admin's sidebar links the host they are granted",
       ("/remote/%d/manage" % remote_id) in _nav_html, "no granted-host link — the check below is vacuous")
+# By its name NOW: the edit_remote checks above renamed it, so its fixture name "smoke-host-2" was
+# absent whatever the sidebar listed (review 1012b).
+with app.app_context():
+    _nav_name2 = db.session.get(RemoteServer, remote2_id).name
 check("sidebar: ...and does not name a host they are not granted",
-      ("/remote/%d/manage" % remote2_id) not in _nav_html and "smoke-host-2" not in _nav_html,
-      "the Infrastructure sidebar lists an ungranted host")
+      ("/remote/%d/manage" % remote2_id) not in _nav_html and _nav_name2 not in _nav_html,
+      "the Infrastructure sidebar lists an ungranted host (%r)" % _nav_name2)
 # manage_remotes.html carries no is_local branch any more — six of them tested a flag that is
 # False for every row this route can hand it, including a "This Machine" badge and a "Runs
 # locally on this server" line no visitor was ever shown. That is only true while the route

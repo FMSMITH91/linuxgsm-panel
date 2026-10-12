@@ -11,7 +11,8 @@ from panel.db.models import (_NO_BIRTH, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_P
     still_held)
 from panel.ops.ssh_manager import (GAMEDIG_TYPE as GAMEDIG_TYPE_MAP, _resolve_from_console,
     _sanitize_steamid, game_engine, is_player_queryable, moderation_caps, player_count as
-    sm_player_count, player_list, send_console_command, set_autostart, set_daily_restart)
+    sm_player_count, player_list, send_console_command, set_autostart, set_daily_restart,
+    console_has_control)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
 # module would never be seen — attribute access resolves at call time and is stable
@@ -20,7 +21,7 @@ from panel.ops import ssh_manager as _sm
 from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIONS,
     RESTART_SERVER, SEND_COMMAND, VIEW_CONSOLE, _can_manage_files, _perm_for_action,
     allowed_custom_commands,
-    can_access_server, can_moderate_action, can_run_custom_command, get_game,
+    _r17c_row_id, can_access_server, can_moderate_action, can_run_custom_command, get_game,
     get_user_permissions, has_permission, log_action, server_access_required)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _mark_expected_offline)
 import concurrent.futures
@@ -31,8 +32,8 @@ from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
                              _r13b_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
-from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
-    _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons,
+from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail,
+    _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons,
     game_account_write_refusal)
 
 
@@ -62,12 +63,13 @@ def _console_send_failure(rc, err):
     `err` is the command's own stderr (never exception text — that stays in the log, per
     _log_and_generic), surfaced the way _run_action surfaces a LinuxGSM failure line.
     """
+    # tr() for all three, as the middle one always was: each is the route's answer as it stands.
     if rc == 3:
-        return "That server isn't running, so there's no console session to send to."
+        return i18n.tr("That server isn't running, so there's no console session to send to.")
     lines = [ln.strip() for ln in (err or "").splitlines() if ln.strip()]
     if lines:
         return i18n.tr("The panel could not run that on the host: {why}", why=lines[-1][:200])
-    return "The panel could not run that on the host, and it gave no reason."
+    return i18n.tr("The panel could not run that on the host, and it gave no reason.")
 
 
 def _fire_on_done(on_done, ok, detail, action, server_id):
@@ -109,14 +111,15 @@ def _noop_power_refusal(gs, remote, action):
     costs nothing), and the host decides whether to REFUSE. A stale "online" must never be
     what stops someone starting a server that has actually died. 'restart' is never guarded —
     it is correct from either state, and so is the way out if this ever refuses wrongly.
-    The message deliberately doesn't repeat the server's name: the two callers that show it
-    (both chat bots) already prefix every reply with it, and the background branch
-    doesn't name it either.
+    The message deliberately doesn't repeat the server's name: the chat bots prefix every reply
+    with it, and the background branch doesn't name it either. It is a whole Sentence, though:
+    the web page shows it too (_r15e_said translates it), and the lower-case fragment it was,
+    worded to follow the bots' prefix, matched no catalog key and read as English to every viewer.
     """
     if action == "start" and gs.status == "online" and _live_run_state(gs, remote):
-        return "already running. Use 'restart' if you want it bounced."
+        return i18n.Sentence("That server is already running. Use 'restart' if you want it bounced.")
     if action == "stop" and gs.status == "offline" and _live_run_state(gs, remote) is False:
-        return "already stopped."
+        return i18n.Sentence("That server is already stopped.")
     return None
 
 
@@ -297,8 +300,9 @@ def _bulk_server_ids(raw_ids):
     ids = []
     for sid in raw_ids[:100]:   # cap the batch — bounds the SSH fan-out per request
         # _json_int, not int(): `[Infinity]` raised OverflowError past `except (TypeError,
-        # ValueError)` (a 500), and 3.7 was quietly server 3.
-        n = _json_int(sid)
+        # ValueError)` (a 500), and 3.7 was quietly server 3. _r17c_row_id: an id past SQLite's
+        # range raised OverflowError at the lookup below; it is no server, so it is dropped.
+        n = _r17c_row_id(_json_int(sid))
         if n is not None:
             ids.append(n)
     return ids
@@ -1292,6 +1296,10 @@ def _register_commands(app):
         # Permission check
         if not current_user.is_superadmin and not has_permission(current_user, SEND_COMMAND):
             flash("You don't have permission to send commands.", "danger")
+            return redirect(url_for("server_detail", server_id=server_id))
+        # A control character is a keystroke to the pane (^C stopped the game), not console text.
+        if console_has_control(cmd_text):
+            flash(i18n.tr(CONSOLE_CONTROL_MSG), "warning")
             return redirect(url_for("server_detail", server_id=server_id))
 
         try:

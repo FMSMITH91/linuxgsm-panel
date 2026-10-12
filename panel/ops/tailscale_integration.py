@@ -1007,6 +1007,12 @@ def _fresh_panel_route(route, port):
     return False
 
 
+# Two of remove_panel_route's own reasons, by name: serve_upkeep records a failed leftover removal
+# as a reason class, and it told these apart from "an unexpected error" by their template.
+R17A_UNNAMED_MOUNT = "its mount is not one the panel can name on the command line"
+R17A_LISTENER_UNREAD = "the listener it is on could not be read"
+
+
 def remove_panel_route(route, port):
     """Remove ONE of the panel's own Serve routes; return (state, error text).
 
@@ -1038,9 +1044,9 @@ def remove_panel_route(route, port):
     try:
         args = serve_off_args(fresh["url"], fresh["mount"])
     except _priv.VerbError:
-        return "failed", i18n.Sentence("its mount is not one the panel can name on the command line")
+        return "failed", i18n.Sentence(R17A_UNNAMED_MOUNT)
     if args is None:
-        return "failed", i18n.Sentence("the listener it is on could not be read")
+        return "failed", i18n.Sentence(R17A_LISTENER_UNREAD)
     out, err, rc = _run_ts(args, timeout=10)
     with _cache_lock:
         _cache["info"] = None
@@ -1284,14 +1290,17 @@ def _serve_suggestion(port, route):
 def _tailnet_ip_suggestion(port, scheme):
     """suggest_best_bind's answer when Tailscale runs with no Serve route to the panel."""
     ts_ip = get_tailscale_ip(4)
+    # get_tailscale_ip falls back to the node's IPv6 address when it has no IPv4 one (a tailnet
+    # with IPv4 disabled), and a URL needs that one in brackets: http://fd7a:…::1:5000 opens nothing.
+    host = "[%s]" % ts_ip if ts_ip and ":" in ts_ip else ts_ip
     return {
         "method": "tailscale-direct",
         "bind_host": ts_ip or "0.0.0.0",  # nosec B104 - a suggestion shown to the operator, not a bind
         "port": port,
-        "url": f"{scheme}://{ts_ip}:{port}" if ts_ip else f"{scheme}://<tailscale-ip>:{port}",
+        "url": f"{scheme}://{host}:{port}" if ts_ip else f"{scheme}://<tailscale-ip>:{port}",
         "description": f"Bind to Tailscale IP {ts_ip} and access directly",
         "note": SUGGEST_TAILNET_IP,
-        "note_value": f"{scheme}://{ts_ip}:{port}" if ts_ip else "",
+        "note_value": f"{scheme}://{host}:{port}" if ts_ip else "",
     }
 
 

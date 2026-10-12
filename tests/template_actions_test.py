@@ -2069,9 +2069,9 @@ if _m:
           "!important")
     # The identity column needs a floor, or the table's auto layout leaves it at the 62px that
     # wrapped "CS2 Public" onto two lines even once the Actions column stopped covering it.
-    _idcol = re.search(r"\.table-responsive\s+\.table\.dash-srv-table\s+thead\s+th:nth-child\(2\)\s*,\s*"
-                       r"\.table-responsive\s+\.table\.dash-srv-table\s+tbody\s+td:nth-child\(2\)\s*\{(.*?)\}",
-                       _css, re.S)
+    # By its class (review 1012b): :nth-child(2) was the hidden Type column for a viewer with no
+    # checkbox column.
+    _idcol = re.search(r"\.table-responsive\s+\.table\.dash-srv-table\s+\.dash-col-name\s*\{(.*?)\}", _css, re.S)
     _idcode = re.sub(r"/\*.*?\*/", "", _idcol.group(1), flags=re.S) if _idcol else ""
     _idw = re.search(r"min-width:\s*(\d+)px", _idcode)
     check(_idw is not None and int(_idw.group(1)) >= 100,
@@ -4419,7 +4419,7 @@ _gsch = _js_code_only(_js_function_body(_bk_js2, "gameSchedule"))
 check("['3','Every 3 days']" in _gsch and "ivOpts.push([ivVal" in _gsch,
       "backups: ...and its interval list offers every value Files & Config does, plus the stored one",
       "a 3-day override renders as 'Default' beside a note saying 'Custom — every 3 days'")
-# The two buttons on a backup ROW read the listing too, and app.py's _find_game_backup iterates
+# The two buttons on a backup ROW read the listing too, and panel_backup.py's _find_game_backup iterates
 # it — None included. Both answered a 500 with a traceback in the panel log for a host that
 # simply did not answer.
 check("unreadable" in _between(_bk_py, "def api_panel_backup_game_delete", "def api_panel_backup_game_schedule"),

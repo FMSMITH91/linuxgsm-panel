@@ -1,9 +1,9 @@
 {
   "_README": [
-    "Error-level Codacy issues on main that are reviewed and accepted.",
+    "Error- and High-level Codacy issues on main that are reviewed and accepted.",
     "",
-    "The gate in .github/workflows/codacy-alerts.yml fails when main carries an Error-level",
-    "issue that is NOT listed here. Anything listed needs a reason, and the list is meant to",
+    "The gate in .github/workflows/codacy-alerts.yml fails when main carries an Error- or",
+    "High-level issue (codacy_open_errors.py's LEVELS) that is NOT listed here. Anything listed needs a reason, and the list is meant to",
     "shrink: this is the same contract as tests/html_sink_baseline.json.",
     "",
     "Match is on (filePath, patternId, lineText) with whitespace collapsed. The line NUMBER is",
