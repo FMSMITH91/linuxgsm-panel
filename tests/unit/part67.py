@@ -212,3 +212,310 @@ check("join button: every Valve-engine game is in STEAM_CONNECT_GAMES or named a
       "launch (dod, doi, hldms, nd and opfor are their own Steam apps and had no join button)",
       _split67 == ([], [], []) and {"dod", "doi", "hldms", "nd", "opfor"} <= _models67.STEAM_CONNECT_GAMES,
       repr(_split67))
+
+
+# ── A02: the daily prune keeps what the Backups page says it keeps ───────────────────────────────
+import time as _time67  # noqa: E402
+
+from panel.ops import backup as _bk67  # noqa: E402
+
+
+def _prune_bk67(keep):
+    """The daily archives prune_backups deletes with backup_keep_days `keep`: one 400 and one 10 days old."""
+    now = _time67.time()
+    rows = [{"name": "daily-400", "kind": "daily", "created": now - 400 * 86400},
+            {"name": "daily-10", "kind": "daily", "created": now - 10 * 86400},
+            {"name": "manual-900", "kind": "manual", "created": now - 900 * 86400}]
+    gone = []
+    with _patched():
+        _patch(_bk67, "load_config", lambda: {"backup_keep_days": keep})
+        _patch(_bk67, "list_backups", lambda: list(rows))
+        _patch(_bk67, "delete_backup", lambda name: (gone.append(name), (True, ""))[1])
+        _bk67.prune_backups()
+    return sorted(gone)
+
+
+_bkp67 = {"100000": _prune_bk67(100000), "30": _prune_bk67(30), "0": _prune_bk67(0)}
+check("backups: a hand-edited backup_keep_days of 100000 prunes at the 365 days the Backups page shows "
+      "(it kept every daily archive until the disk filled); 30 and 0 (read as 1) still prune at theirs (control)",
+      _bkp67 == {"100000": ["daily-400"], "30": ["daily-400"], "0": ["daily-10", "daily-400"]},
+      repr(_bkp67))
+
+
+def _queued67(v):
+    with _patched():
+        _patch(_bk67, "load_config", lambda: {"game_schedules": {"67": {"queued_at": v}}})
+        return _try67(_bk67.queued_since, 67)
+
+
+_q67 = {"true": _queued67(True), "Infinity": _queued67(float("inf")), "1700000000": _queued67(1700000000)}
+check("backups: a hand-edited `true` in a game schedule's queued_at is not queued at epoch 1 (a wait of "
+      "decades, reported as one); Infinity is 0 and a real time reads (control)",
+      _q67 == {"true": 0, "Infinity": 0, "1700000000": 1700000000}, repr(_q67))
+
+
+# ── i18n: what the viewer is shown in es and fr ─────────────────────────────────────────────────
+import importlib.util as _ilu67  # noqa: E402
+import json as _json67  # noqa: E402
+import shutil as _shutil67  # noqa: E402
+import tempfile as _tempfile67  # noqa: E402
+
+from unit.part12 import P9_ADMIN, _P9_CFG_PATH, _p9_client  # noqa: E402
+from panel.core import i18n as _i18n67  # noqa: E402
+
+_spec67 = _ilu67.spec_from_file_location("i18n_scan_p67", _os67.path.join(_ROOT67, "tools", "i18n_scan.py"))
+_scan67 = _ilu67.module_from_spec(_spec67)
+_spec67.loader.exec_module(_scan67)
+_CAT67 = {lg: _scan67.load_catalog(lg) for lg in ("es", "fr")}
+
+
+def _tr67(lang, s):
+    """i18n.tr(s) as a viewer whose session language is `lang` sees it."""
+    with _p9.test_request_context("/"):
+        __import__("flask").session["lang"] = lang
+        return _i18n67.tr(s)
+
+
+def _as67(lang):
+    """Set P9_ADMIN's saved language (the account's choice wins over the session's)."""
+    with _p9.app_context():
+        db.session.get(User, P9_ADMIN).language = lang
+        db.session.commit()
+
+
+_lit67 = {lg: _scan67.literal_gaps_py(lg) for lg in ("es", "fr")}
+_shown67 = _scan67.shown_literals_py()
+check("i18n: every fixed message a route or a service's (ok, message) answer shows the viewer is in the es "
+      "and fr catalogs (about 300 were English: the backup restore and passphrase refusals, Tailscale "
+      "Serve, the firewall refusals, the Notifications Test button, Cancel reboot, the 500 handler)",
+      len(_shown67) >= 300 and _lit67 == {"es": [], "fr": []},
+      repr((len(_shown67), _lit67["es"][:5], _lit67["fr"][:5])))
+check("i18n: ...and every tr()/Sentence() template, the new ones included, with the same {slots}",
+      _scan67.tr_gaps_py("es") == [] and _scan67.tr_gaps_py("fr") == [] and _scan67.spliced_py() == [],
+      repr((_scan67.tr_gaps_py("es")[:3], _scan67.spliced_py()[:3])))
+
+
+def _scan_tree67(source):
+    """(spliced_py, literal_gaps_py("es")) over a throwaway tree whose app.py is `source`."""
+    root = _tempfile67.mkdtemp(prefix="lgsm-p67-scan-")
+    try:
+        _os67.makedirs(_os67.path.join(root, "panel"))
+        with open(_os67.path.join(root, "app.py"), "w", encoding="utf-8") as fh:
+            fh.write(source)
+        return (_scan67.spliced_py(root),
+                [t for t, _w in _scan67.literal_gaps_py("es", root=root)])
+    finally:
+        _shutil67.rmtree(root, ignore_errors=True)
+
+
+_ifexp67 = _scan_tree67("def a(ok, d):\n"
+                        "    return (True, 'Sent.') if ok else (False, 'Telegram error: %s' % d)\n\n\n"
+                        "def b(ok, d):\n"
+                        "    ok2, m = a(ok, d)\n"
+                        "    return jsonify({'message': m})\n")
+check("i18n gate: a message built with % in either branch of `return (…) if ok else (…)` is found "
+      "(the IfExp was never split into its tuples, so the Test button's four answers passed unseen)",
+      bool(_ifexp67[0]), repr(_ifexp67))
+_fixed67 = _scan_tree67("def f(x):\n"
+                        "    if x:\n"
+                        "        return False, 'A refusal p67 never translated.'\n"
+                        "    return True, 'in_progress', 'ALREADY_DONE'\n\n\n"
+                        "def g():\n"
+                        "    return jsonify({'error': 'bad_mode', 'message': 'Another p67 sentence.'})\n")
+check("i18n gate: a fixed refusal a service returns, or a route answers, with no catalog entry is "
+      "found; a machine code is not",
+      sorted(_fixed67[1]) == ["A refusal p67 never translated.", "Another p67 sentence."], repr(_fixed67))
+
+
+# The Notifications page's Test button, as a Spanish admin presses it.
+from panel.services import notifications as _nt67  # noqa: E402
+
+try:
+    _as67("es")
+    with _patched():
+        _patch(_nt67, "send_telegram", lambda tok, chat, text: (False, "the chat ID is missing"))
+        _r67 = _p9_client(P9_ADMIN).post("/api/notifications/test", json={
+            "channel": "telegram", "token": "123456789:" + "A" * 35, "chat_id": "67"})
+        _nt_es67 = (_r67.get_json() or {}).get("message")
+finally:
+    _as67("en")
+check("notifications Test: a failed send reads in the viewer's language (\"Telegram error: the chat ID "
+      "is missing\" was English for es and fr)",
+      _nt_es67 == "Error de Telegram: falta el ID del chat", repr(_nt_es67))
+
+
+# The Update button, refused because the newest commit's checks could not be read.
+from unit.part14 import _w14_status, _W14  # noqa: E402
+from panel.ops import system_ops as _so67  # noqa: E402
+from panel.services import host_reboot as _hr67  # noqa: E402
+
+_unk67 = _w14_status({_W14[0]: "unknown", _W14[1]: "passing"}, reason=_so67._CI_WHY_NO_SLUG)[0]
+try:
+    _as67("fr")
+    with _patched():
+        _patch(_so67, "_is_git_checkout", lambda: True)
+        _patch(_so67, "panel_update_status", lambda force=False: _unk67)
+        _patch(_hr67, "panel_host_busy", lambda: None)
+        _up67 = (_p9_client(P9_ADMIN).post("/api/panel/update").get_json() or {}).get("message")
+finally:
+    _as67("en")
+_why_fr67 = _CAT67["fr"].get(_so67._CI_WHY_NO_SLUG.template)
+check("self-update: the Update button's \"couldn't be verified: <why>\" refusal reads in the viewer's "
+      "language, reason included (it was %-built English marked as never shown, and the route did not "
+      "translate)",
+      isinstance(_up67, str) and _up67.startswith("Une version plus récente existe")
+      and bool(_why_fr67) and _why_fr67 in _up67, repr(_up67))
+
+
+def _nobranch67():
+    def _git(args, timeout=45):
+        if args[0] == "show-ref":
+            return ("", "", 1)
+        return ("headabc", "", 0) if args[:2] == ["rev-parse", "--short"] else ("", "", 0)
+    with _patched():
+        _patch(_so67, "_git", _git)
+        _patch(_so67, "_is_git_checkout", lambda: True)
+        _patch(_so67, "panel_version", lambda: "2026.9.1")
+        _patch(_so67, "_tracked_branch", lambda: "p67")
+        return _so67._compute_update_status()
+
+
+_nb67 = _nobranch67()
+check("self-update: \"no branch to compare against\" is a Sentence the Update button translates",
+      _tr67("es", _nb67.get("message")) == "El origen de las actualizaciones no tiene una rama 'p67' con la "
+                                            "que comparar.", repr(_nb67.get("message")))
+
+
+# The firewall's protected-rule refusal, from both delete guards.
+_prot67 = _fwrun64(["22/tcp ALLOW IN Anywhere"], _smh67.remote_ufw_allow_from, _S67, "0.0.0.0/0", "22", "tcp",
+                   allow=False)[0]
+_ssh_tpl67 = _smh67.firewall.R14A_REASONS["ssh_port"]
+check("firewall: the protected-rule refusal reads in the viewer's language (the English protect_reason "
+      "matched no catalog key, though the group carries its template and values for exactly this)",
+      isinstance(_prot67, tuple) and _tr67("es", _prot67[1]) == _i18n67.fill(_CAT67["es"][_ssh_tpl67], ports="22")
+      and str(_prot67[1]) == _ssh_tpl67.format(ports="22"), repr(_prot67))
+_unr67 = _fwrun64(["22/tcp ALLOW IN Anywhere"], _smh67.remote_ufw_allow_from, _S67, "0.0.0.0/0", "22", "tcp",
+                  allow=False, status={"installed": False, "unreachable": True})[0]
+check("firewall: ...and so does \"couldn't read the firewall to check whether this rule…\"",
+      isinstance(_unr67, tuple) and _tr67("fr", _unr67[1]).startswith("Impossible de lire le pare-feu"),
+      repr(_unr67))
+
+
+# Tailscale Serve's leftover-route note, and remove_panel_route's own reasons.
+from panel.ops import serve_upkeep as _su67  # noqa: E402
+from panel.ops import tailscale_integration as _ts67  # noqa: E402
+from panel.security import privileged as _priv67  # noqa: E402
+
+_left67 = _tr67("es", _su67._leftover_note("failed:not-running"))
+check("serve: a leftover route that could not be removed says why in the viewer's language (the reason "
+      "class token, \"not-running\", went into the translated sentence as written)",
+      "Tailscale no está en marcha" in _left67 and "not-running" not in _left67, repr(_left67))
+
+
+def _rm_route67(fresh, off=None):
+    with _patched():
+        _patch(_ts67, "_fresh_panel_route", lambda route, port: fresh)
+        if off is not None:
+            _patch(_ts67, "serve_off_args", off)
+        return _ts67.remove_panel_route({}, 5000)
+
+
+def _verb_err67(url, mount):
+    raise _priv67.VerbError("p67")
+
+
+_rr67 = {"svc": _rm_route67({"svc": "svc:p67"}),
+         "mount": _rm_route67({"url": "https://x", "mount": "/x"}, _verb_err67),
+         "listener": _rm_route67({"url": "https://x", "mount": "/x"}, lambda url, mount: None)}
+_rr_es67 = {k: _tr67("es", v[1]) for k, v in _rr67.items()}
+check("serve: remove_panel_route's own reasons (a Tailscale Service route, an unnameable mount, an "
+      "unreadable listener) are Sentences the \"Failed to remove: {why}\" answer translates",
+      _rr_es67 == {"svc": "está en el Tailscale Service svc:p67, que el panel no gestiona",
+                   "mount": "su punto de montaje no es uno que el panel pueda indicar en la línea de comandos",
+                   "listener": "no se pudo leer el listener en el que está"}, repr(_rr_es67))
+
+
+# The pre-restore safety copy's reason, and create_backup's refusals inside it.
+def _safety67():
+    def _raise(p=None):
+        raise _bk67.PassphraseUnreadable("p67")
+    with _patched():
+        _patch(_bk67, "_safety_copy_passphrase", _raise)
+        return _bk67._take_safety_copy(None)
+
+
+_sf67 = _safety67()
+check("backups: the safety copy's \"passphrase could not be decrypted\" reason, and create_backup's "
+      "\"Backup failed\", are Sentences, so the translated refusal does not carry an English clause",
+      _sf67[0] is False and _tr67("fr", _sf67[1]).startswith("une phrase secrète de sauvegarde")
+      and _tr67("es", _bk67._R16A_BACKUP_FAILED) == "La copia de seguridad falló: consulta los registros del panel.",
+      repr(_sf67))
+
+
+# A reboot refused on the panel's own host, and one already running.
+from panel.services import reboot_words as _rw67  # noqa: E402
+
+with _patched():
+    _patch(_so67, "_update_in_progress", lambda: True)
+    _pb67 = _hr67._panel_host_blockers()
+_blk67 = _tr67("es", _rw67.blocked_sentence(_pb67))
+check("reboot: a panel-host blocker names the panel in the viewer's language (\"una actualización de the "
+      "panel\")",
+      "una actualización de el panel" in _blk67 and "the panel" not in _blk67, repr(_blk67))
+with _patched():
+    _patch(_hr67, "job_of", lambda rid: {"phase": "arming"})
+    _pc67 = _hr67._pending_conflict(NS(id=-67, name="p67-host", is_local=False, host="p67"))
+_pc_fr67 = _tr67("fr", _pc67.get("message"))
+check("reboot: \"already being rebooted ({phase})\" names the phase in words, translated (the raw token "
+      "\"arming\" went in as written); the payload keeps the token",
+      "sur le point de redémarrer" in _pc_fr67 and "arming" not in _pc_fr67 and _pc67.get("phase") == "arming",
+      repr((_pc_fr67, _pc67.get("phase"))))
+
+
+# A plan row whose account can never be read is reported failed after an hour, so the plan finishes.
+def _act67(times):
+    """_act over one 'none' row whose step never resolves, at each `now`; (row, plans finished)."""
+    gs = NS(id=-67, lgsm_name="p67srv", short_name="p67", name="p67")
+    d = {"restore": "pending", "owner": "none", "stop": "stopped"}
+    finished = []
+    with _patched():
+        _patch(_hr67, "_act_one", lambda remote, g, row, now, rb: None)
+        _patch(_hr67, "_set_rr", lambda g, row: None)
+        _patch(_hr67, "_finish", lambda remote, recs, now, rb: finished.append(now))
+        with _p9.app_context():
+            for now in times:
+                _hr67._act(NS(id=-67), [(gs, d)], now, False)
+    return d, finished
+
+
+_gu67 = _act67([1000, 1000 + 3599])
+_gu2_67 = _act67([1000, 1000 + 3600])
+check("reboot: a row that never resolves (its account cannot be read) is reported failed an hour on and "
+      "the plan finishes (it waited forever, and every later reboot of the host was refused)",
+      _gu67[0]["restore"] == "pending" and _gu67[1] == []
+      and _gu2_67[0]["restore"] == "failed" and _gu2_67[1] == [4600], repr((_gu67, _gu2_67)))
+
+
+# config.json's on/off settings: a hand-edited "false" is off.
+_CFGSNAP67 = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
+try:
+    with open(_P9_CFG_PATH, "w", encoding="utf-8") as _fh67:
+        _json67.dump({"trust_proxy": "false", "backup_enabled": "No", "reboot_restore_no_autostart": "false",
+                      "tailscale_use_funnel": 1, "use_https": "maybe", "setup_complete": True,
+                      "tailscale_setup_done": "TRUE"}, _fh67)
+    _fl67 = _cfg67.load_config()
+    _flags67 = {k: _fl67.get(k, "absent") for k in ("trust_proxy", "backup_enabled", "reboot_restore_no_autostart",
+                                                    "tailscale_use_funnel", "use_https", "setup_complete",
+                                                    "tailscale_setup_done")}
+    _rna67 = _hr67.restore_no_autostart()
+finally:
+    if _CFGSNAP67 is None:
+        _P9_CFG_PATH.unlink()
+    else:
+        _P9_CFG_PATH.write_bytes(_CFGSNAP67)
+check("config: a hand-edited \"false\" / \"No\" in an on/off setting is off (bool(\"false\") is True: "
+      "trust_proxy trusted X-Forwarded-For, a reboot restarted servers it was told to leave); 1 and "
+      "\"TRUE\" are on, a word it cannot read takes the default, a real bool is kept",
+      _flags67 == {"trust_proxy": False, "backup_enabled": False, "reboot_restore_no_autostart": False,
+                   "tailscale_use_funnel": True, "use_https": True, "setup_complete": True,
+                   "tailscale_setup_done": True} and _rna67 is False, repr((_flags67, _rna67)))

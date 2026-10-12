@@ -1295,7 +1295,13 @@ def _py_returns_built(fn, lines, builders):
 
 
 def _py_return_keys(name, value, assigned, builders):
-    """The _py_builders keys one `return value` of function `name` earns."""
+    """The _py_builders keys one `return value` of function `name` earns.
+
+    `return (a, b) if c else (d, e)` (or `x or y`) earns each branch's: the IfExp was read as one
+    item, never split into its tuples, so four Test-button answers built with % were not seen.
+    """
+    if isinstance(value, (ast.IfExp, ast.BoolOp)):
+        return [k for v in _py_operands(value) for k in _py_return_keys(name, v, assigned, builders)]
     items = list(enumerate(value.elts)) if isinstance(value, ast.Tuple) else [(None, value)]
     keys = [name if i is None else (name, i) for i, item in items
             if _py_fed_built(item, assigned, builders) is not None]
@@ -1503,6 +1509,66 @@ def tr_gaps_py(lang, root=ROOT, translation_dir=TRANSLATION_DIR):
         elif sorted(slot.findall(key)) != sorted(slot.findall(catalog[key])):
             gaps.append((key, "slots differ"))
     return gaps
+
+
+# ── Python: fixed messages the viewer is shown ─────────────────────────────────────────────────
+# tr_gaps_py reads only what is handed to tr()/Sentence(), and spliced_py only BUILT messages. A
+# fixed `jsonify({"message": "…"})`, a flash of a literal, or a service's `return False, "…"` that a
+# route hands on reaches the page as it is; the page (or the route's tr) can only swap it when the
+# catalog holds it, and nothing checked that it did: about 300 of them were English for es and fr
+# viewers. A machine code (`"error": "in_progress"`, "ALREADY_CONNECTED") is not a sentence, and the
+# debug report is English by design.
+_PY_CODE = re.compile(r"[a-z0-9_.-]*|[A-Z0-9_]+")
+_PY_LITERAL_SKIP_DIRS = ("panel/ops/debug_report/",)
+
+
+def _py_shown_literal(text):
+    """Whether a fixed message is prose a viewer reads, not a code or a blank."""
+    return bool(_HAS_LETTER.search(text)) and not _PY_CODE.fullmatch(text)
+
+
+def _py_return_literals(value):
+    """The str literals after the first item of `return <True|False>, …` (each branch of an IfExp)."""
+    if isinstance(value, (ast.IfExp, ast.BoolOp)):
+        return [n for v in _py_operands(value) for n in _py_return_literals(v)]
+    if not (isinstance(value, ast.Tuple) and len(value.elts) >= 2
+            and isinstance(value.elts[0], ast.Constant) and isinstance(value.elts[0].value, bool)):
+        return []
+    return [n for item in value.elts[1:] for n in _py_literal_nodes(item)]
+
+
+def _py_literal_nodes(node):
+    """The str literal nodes one expression can be: itself, or each branch of `a if c else b` / `a or b`."""
+    if _py_text(node):
+        return [node]
+    return [n for v in _py_operands(node) if not isinstance(node, ast.BinOp) for n in _py_literal_nodes(v)]
+
+
+def shown_literals_py(root=ROOT):
+    """{text: "file:line"} for every fixed message a sink or a service's (ok, message) answer shows."""
+    trees = _py_trees(root)
+    wrappers = _py_wrappers(trees)
+    found = {}
+    for rel, lines, tree in trees:
+        if rel.replace(os.sep, "/").startswith(_PY_LITERAL_SKIP_DIRS):
+            continue
+        consts = _py_module_consts(tree)
+        for n in ast.walk(tree):
+            nodes = [lit for v in _py_sink_values(n, wrappers) for lit in _py_literal_nodes(v)]
+            nodes += [ast.Constant(value=consts[v.id], lineno=v.lineno, end_lineno=v.lineno)
+                      for v in _py_sink_values(n, wrappers) if isinstance(v, ast.Name) and v.id in consts]
+            if isinstance(n, ast.Return) and n.value is not None:
+                nodes += _py_return_literals(n.value)
+            for lit in nodes:
+                if _py_shown_literal(lit.value) and not _py_ignored(lines, lit):
+                    found.setdefault(lit.value, "%s:%d" % (rel, lit.lineno))
+    return found
+
+
+def literal_gaps_py(lang, root=ROOT, translation_dir=TRANSLATION_DIR):
+    """[(text, "file:line")]: a fixed message for the viewer with no entry in `lang`'s catalog."""
+    catalog = load_catalog(lang, translation_dir)
+    return sorted((t, w) for t, w in shown_literals_py(root).items() if t not in catalog)
 
 
 def _main():

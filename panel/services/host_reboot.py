@@ -81,6 +81,7 @@ SETTLE_UPTIME_MAX = 300          # ...and is not "starting", or has been up this
 START_ATTEMPTS = 3
 START_RETRY_GAP = 60
 STALE_PLAN = 7 * 86400           # rows this old are cleared, with a notification
+ROW_GIVE_UP = 3600               # a row its host answers for but that never resolves: reported failed
 STALE_SENT = 86400               # a same-boot plan sent this long ago is a restored backup: cleared
 GRACE_AFTER_CLEAR = 0            # _expected_offline ts: the monitor's own 180 s window from now
 BOUNCE_BACKOFF = 600
@@ -527,14 +528,14 @@ def _panel_host_blockers():
     out = []
     try:
         if so._update_in_progress():
-            out.append(_blocker("self_update", "the panel"))
+            out.append(_blocker("self_update", _rw.PANEL_NAME))
     except Exception:  # noqa: BLE001
         _log.debug("self-update state unreadable", exc_info=True)
     from panel.ops import backup as _bk
     if _bk._restore_lock.locked():
-        out.append(_blocker("restore", "the panel"))
+        out.append(_blocker("restore", _rw.PANEL_NAME))
     if _full_backup_lock.locked():
-        out.append(_blocker("full_backup", "the panel"))
+        out.append(_blocker("full_backup", _rw.PANEL_NAME))
     return out
 
 
@@ -818,7 +819,7 @@ def _pending_conflict(remote):
     if job:
         return {"success": False, "error": "in_progress", "phase": job.get("phase"),
                 "message": i18n.Sentence("{host} is already being rebooted ({phase}).",
-                                         host=_host_label(remote), phase=job.get("phase"))}
+                                         host=_host_label(remote), phase=_rw.phase_words(job.get("phase")))}
     if plan_rows(remote.id):
         return {"success": False, "error": "in_progress", "phase": "restoring",
                 "message": i18n.Sentence("{host}'s last reboot is still bringing its servers back. Try "
@@ -1923,7 +1924,7 @@ def _act(remote, recs, now, rollback_):
         if d.get("restore") != "pending":
             continue
         before = dict(d)
-        res = _act_one(remote, gs, d, now, rollback_)
+        res = _act_one(remote, gs, d, now, rollback_) or _r16a_row_gave_up(d, now)
         if res is not None:
             d["restore"], d["result"] = res
             # When this row was confirmed — after its probe or its start returned, which the tick's
@@ -1934,6 +1935,20 @@ def _act(remote, recs, now, rollback_):
             db.session.commit()
     if all(d.get("restore") != "pending" for _gs, d in recs):
         _finish(remote, recs, now, rollback_)
+
+
+def _r16a_row_gave_up(d, now):
+    """None while an unresolved row may still resolve; ("failed", why) once ROW_GIVE_UP has passed.
+
+    A row whose account cannot be read (removed outside the panel, a name that fails
+    game_idents_ok) never resolves: every owner's step waits on a read that will not come, and
+    nothing aged it out while the host answered (STALE_PLAN is for a silent host). The plan never
+    finished, and _pending_conflict refused every later reboot of that host, silently.
+    """
+    d.setdefault("pending_since", now)
+    if now - d["pending_since"] < ROW_GIVE_UP:
+        return None
+    return "failed", "it could not be read or restored for an hour after the reboot; check the server"
 
 
 def _act_one(remote, gs, d, now, rollback_):

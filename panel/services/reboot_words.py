@@ -32,6 +32,24 @@ _BLOCKER_WORDS = {"install": i18n.Sentence("an install of {name}"),
 _BLOCKER_OTHER = i18n.Sentence("work on {name}")
 
 
+# The panel's own blockers name it with a phrase, not a host label: the English "the panel" went
+# into the translated blocker phrase as written ("una actualización de the panel").
+PANEL_NAME = i18n.Sentence("the panel")
+
+# A running job's phase as words. The raw token ("stopping", "arming") went into the translated
+# "{host} is already being rebooted ({phase})." as written.
+_PHASE_WORDS = {"preflight": i18n.Sentence("getting ready"),
+                "warning": i18n.Sentence("warning the players"),
+                "stopping": i18n.Sentence("stopping its game servers"),
+                "arming": i18n.Sentence("about to restart"),
+                "rebooting": i18n.Sentence("restarting")}
+
+
+def phase_words(phase):
+    """A reboot job's phase token as a translatable phrase ("in progress" for any other)."""
+    return _PHASE_WORDS.get(phase) or i18n.Sentence("in progress")
+
+
 def blocked_sentence(blockers):
     """Why a reboot may not run now: the work in flight, each piece named in a phrase of its own."""
     what = [i18n.Sentence(_BLOCKER_WORDS.get(b["kind"], _BLOCKER_OTHER).template, name=b["name"])

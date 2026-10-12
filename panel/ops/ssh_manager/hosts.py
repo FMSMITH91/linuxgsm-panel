@@ -413,6 +413,20 @@ def _r15a_spec_names(g, port, proto_label, src=None):
     return _r15a_src_key(g.get("scope")) == _r15a_src_key(src)
 
 
+def _r16a_protect_refusal(g):
+    """Why protected group `g` is not deleted, as a Sentence the route translates.
+
+    Built from the template and values the group carries for the Firewall page (protect_reason_key
+    and _params), so it is the same English as protect_reason; the English text alone matched no
+    catalog key, and both delete guards answered es and fr viewers in English.
+    """
+    key = g.get("protect_reason_key")
+    if key:
+        return i18n.Sentence(key, **dict(g.get("protect_reason_params") or {}))
+    return g.get("protect_reason") or i18n.Sentence("This rule protects your access to the host and can't be "
+                                                    "removed here.")
+
+
 def _r15a_guarded_spec_delete(server, verb, vargs, names):
     """Run a by-spec ufw delete only if no protected rule is among those it removes.
 
@@ -433,14 +447,12 @@ def _r15a_guarded_spec_delete(server, verb, vargs, names):
                                exc_info=True)
             status = None
         if status is None or status.get("unreachable"):
-            return (("Couldn't read the firewall to check whether this rule is the one keeping your "
-                     "access open, so this refuses rather than risk locking you out. Check the host "
-                     "is reachable and try again."), "", "", None)
+            return (i18n.Sentence("Couldn't read the firewall to check whether this rule is the one keeping "
+                                  "your access open, so this refuses rather than risk locking you out. "
+                                  "Check the host is reachable and try again."), "", "", None)
         for g in (status.get("groups", []) if status.get("installed") else []):
             if g.get("protected") and names(g):
-                return (g.get("protect_reason")
-                        or "This rule protects your access to the host and can't be removed here.",
-                        "", "", None)
+                return _r16a_protect_refusal(g), "", "", None
         out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
         return None, out, err, rc
 
@@ -672,8 +684,7 @@ def _delete_rule_locked(server, n, force, expect_key):
                                         "since it was read, so nothing was removed. Refresh and try again.", n=n)
         for g in (status.get("groups", []) if not force else []):
             if n in g.get("nums", []) and g.get("protected"):
-                return False, g.get("protect_reason") or \
-                    "This rule protects your access to the host and can't be removed here."
+                return False, _r16a_protect_refusal(g)
         verb, args = _delete_verb(n, status, expect_key)
     else:
         verb, args = "ufw-delete-num", [n]

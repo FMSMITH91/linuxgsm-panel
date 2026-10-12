@@ -78,7 +78,7 @@ if _dd_rebind:
 del _dd_defaults   # it still holds the original lock, and eventlet counts every one that survives
 
 with _w.catch_warnings():
-    _w.filterwarnings("ignore", message=r"\s*Eventlet is deprecated")
+    _w.filterwarnings("ignore", message=r"\s*Eventlet is deprecated")  # i18n-ignore: a warnings filter
     import eventlet
     eventlet.monkey_patch()
 

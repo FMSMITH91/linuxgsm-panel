@@ -157,6 +157,37 @@ def _r15a_cfg_int(value, default):
         return default
 
 
+# The on/off settings, read everywhere as `bool(cfg.get(k))` or `if cfg.get(k):`. config.json is
+# hand-editable and the README tells people to set `trust_proxy` there; a quoted "false" is a
+# non-empty string, so it read as ON (a panel trusting X-Forwarded-For from anyone, a reboot
+# restoring servers the operator said to leave stopped). load_config hands every reader a bool.
+_R16A_FLAG_KEYS = ("setup_complete", "use_https", "trust_proxy", "tailscale_auto_setup",
+                   "tailscale_use_funnel", "tailscale_setup_done", "backup_enabled",
+                   "reboot_restore_no_autostart")
+_R16A_FLAG_WORDS = {"true": True, "yes": True, "on": True, "1": True,
+                    "false": False, "no": False, "off": False, "0": False, "": False}
+
+
+def _r16a_flags(config):
+    """Make each on/off setting in `config` a bool, in place; one it cannot read takes its default.
+
+    A real bool is kept. "false"/"no"/"off"/"0" (any case) and 0 are False, their opposites True.
+    Anything else is as if unset: DEFAULT_CONFIG's value, or no key (the reader's own default).
+    """
+    for key in _R16A_FLAG_KEYS:
+        if key not in config or isinstance(config[key], bool):
+            continue
+        v = config[key]
+        word = v.strip().lower() if isinstance(v, str) else (str(v) if v in (0, 1) else None)
+        if word in _R16A_FLAG_WORDS:
+            config[key] = _R16A_FLAG_WORDS[word]
+        elif key in DEFAULT_CONFIG:
+            config[key] = DEFAULT_CONFIG[key]
+        else:
+            del config[key]
+    return config
+
+
 def load_config():
     config = dict(DEFAULT_CONFIG)
     try:
@@ -178,6 +209,7 @@ def load_config():
             _cfg_cache["data"] = loaded
             _cfg_cache["key"] = key
         config.update(copy.deepcopy(_cfg_cache["data"]))
+        _r16a_flags(config)
     except FileNotFoundError:
         _cfg_cache["key"] = None   # no config.json yet: defaults ARE the configuration
     except (json.JSONDecodeError, ValueError, OSError):
