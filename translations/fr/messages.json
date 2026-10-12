@@ -112,6 +112,7 @@
   "Discord rejected it — the webhook URL is wrong or was deleted.": "Discord l'a refusé — l'URL du webhook est incorrecte ou a été supprimée.",
   "Display name cleared.": "Nom d'affichage effacé.",
   "Display name updated.": "Nom d'affichage mis à jour.",
+  "Done.": "Terminé.",
   "Downloading LinuxGSM": "Téléchargement de LinuxGSM",
   "Downloading game server files (this can take a while)": "Téléchargement des fichiers du serveur de jeu (cela peut prendre un moment)",
   "Downloading game server files (this can take a while) — retry {n}": "Téléchargement des fichiers du serveur de jeu (cela peut prendre un moment) — nouvel essai {n}",

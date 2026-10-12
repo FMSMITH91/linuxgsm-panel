@@ -3230,8 +3230,9 @@ _CRON_DROP_AWK = (
     '{t=$0; gsub(/^[ \\t]+|[ \\t]+$/,"",t); if (t==w && !d) d=1; else print} '
     'END{exit (d ? 0 : 3)}\' '
 )
-# _rewrite_crontab's answer when `drop_line` matched no line: nothing was installed.
-CRON_DROP_GONE = "drop_line matched no line"
+# _rewrite_crontab's answer when `drop_line` matched no line: nothing was installed. A machine code,
+# not a sentence: every drop_line caller turns it into the viewer's message (cron._r16b_dropped).
+CRON_DROP_GONE = "drop_line_gone"
 
 
 def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line=None):
