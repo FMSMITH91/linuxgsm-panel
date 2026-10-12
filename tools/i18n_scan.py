@@ -507,6 +507,8 @@ def _js_markup_matches(text):
             out.append(found[0])
             floor = found[1]
     return out
+
+
 # Emphasis inside a sentence: "Attach this host to your <strong>free</strong> subscription". The
 # word is a fragment of prose spliced around it, not a label, so a lower-case one is not claimed.
 _JS_INLINE_TAGS = {"b", "strong", "i", "em", "u"}
@@ -755,9 +757,9 @@ def _untranslated_in(path, source, at, rhs):
 # nodes, attributes and markup are not text, and punctuation, units and CSS class lists around a
 # name ('“' + name + '”', n + ' MB', 'btn ' + cls) are not prose. `i18n-ignore` on a line exempts it.
 def _js_gap_is_plus(gap):
-    """Whether the source between two literals is one `+`, with blanks and comments around it.
+    r"""Whether the source between two literals is one `+`, with blanks and comments around it.
 
-    Scanned token by token, not by `(?:\\s|//[^\\n]*\\n|/\\*.*?\\*/)*\\+(…)*\\Z`, which can backtrack
+    Scanned token by token, not by `(?:\s|//[^\n]*\n|/\*.*?\*/)*\+(…)*\Z`, which can backtrack
     exponentially (SonarCloud S5852). A `//` comment must end in a newline, as the regex asked.
     """
     i, pluses = 0, 0
@@ -779,6 +781,8 @@ def _js_gap_is_plus(gap):
         else:
             return False
     return pluses == 1
+
+
 _JS_UNITS = {"ms", "px", "kb", "mb", "gb", "tb", "s", "m", "h", "d"}
 _JS_CSS_WORDS = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]*)*$")
 # The statement assigns a class, a style or an id, so its words are names, not text.
