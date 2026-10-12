@@ -349,7 +349,7 @@ _R14A_HOST_ONLY_IFACE_RE = re.compile(
 
 
 def _r14a_loopback_addr(column):
-    """Whether a To / From column's address is loopback (127.0.0.0/8, ::1), with or without a port."""
+    """Whether a To / From column's address is loopback (the v4 /8 or ::1), with or without a port."""
     words = str(column or "").split()
     addr = re.sub(r"/(?:tcp|udp)\Z", "", words[0], flags=re.I) if words else ""
     try:
@@ -363,7 +363,7 @@ def _r14a_host_only(g):
 
     On loopback or a local bridge (_R14A_HOST_ONLY_IFACE_RE), from a loopback source, or to a
     loopback destination: a packet from another machine can match none of them. A private source
-    range (`ufw allow from 192.168.1.0/24`) is still a way in: it is how a LAN admin keeps SSH.
+    range (`ufw allow from <LAN>/24`) is still a way in: it is how a LAN admin keeps SSH.
     """
     return (bool(_R14A_HOST_ONLY_IFACE_RE.match(str(g.get("iface") or "")))
             or _r14a_loopback_addr(g.get("src")) or _r14a_loopback_addr(g.get("port_num")))
