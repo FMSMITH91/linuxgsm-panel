@@ -36,7 +36,7 @@ import tempfile as _tf47
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import _p9, _p9_client, _p9_json
+from unit.part12 import _P9_TRIPPED, _p9, _p9_client, _p9_core, _p9_json, _p9_patch, _p9_restore_all, _p9_trip
 from panel.db.models import Invite, User, db
 from panel.security import auth as _auth47
 
@@ -315,7 +315,13 @@ def _invite_route47():
         db.session.add(u)
         db.session.commit()
         made["uid"] = u.id
+    _trip_at = len(_P9_TRIPPED)
     try:
+        # part12's transport tripwire (review 1012b): nothing here stubs a host call, so one the route
+        # gained would run for real with the check green.
+        for _n47, _w47 in (("get_connection", "paramiko"), ("_run_via_ssh_cli", "ssh-cli"),
+                           ("_exec_local_shell", "local-shell"), ("_exec_local_argv", "local-argv")):
+            _p9_patch(_p9_core, _n47, _p9_trip(_w47, exc=ConnectionError("refused by part47's tripwire")))
         c = _p9_client(made["uid"])
         r = c.post("/users/invite", data={"hours": "2", "note": "p47"},
                    headers={"X-Requested-With": "XMLHttpRequest"})
@@ -323,7 +329,10 @@ def _invite_route47():
         check("invite route: the link it mints comes back marked as an invite (credential.kind), so the page "
               "words it as one", r.status_code == 200 and cred.get("kind") == "invite"
               and "/invite/" in (cred.get("password") or ""), repr((r.status_code, cred)))
+        check("invite route: ...and nothing it drove reached a real transport", len(_P9_TRIPPED) == _trip_at,
+              repr(_P9_TRIPPED[_trip_at:][:4]))
     finally:
+        _p9_restore_all()
         with _p9.app_context():
             Invite.query.filter_by(created_by_id=made["uid"]).delete(synchronize_session=False)
             u = db.session.get(User, made["uid"])
