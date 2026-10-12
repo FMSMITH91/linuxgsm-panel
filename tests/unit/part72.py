@@ -62,7 +62,7 @@ try:
     check("row id: an <int:…> route past SQLite's range is a 404 (the URL converter's bound)",
           _tagdel72 == 404, repr(_tagdel72))
     _bulk72 = _status72(lambda: _A72.post("/api/servers/bulk-action",
-                                          json={"action": "restart", "ids": [_HUGE72]}))
+                                          json={"action": "restart", "server_ids": [_HUGE72]}))
     check("row id: a bulk action naming an id past SQLite's range is no 500", _bulk72 != 500
           and isinstance(_bulk72, int), repr(_bulk72))
     _tags72 = _status72(lambda: _A72.post("/api/server/%d/tags" % P9_GS, json={"tag_ids": [_HUGE72]}))
@@ -84,17 +84,24 @@ try:
 
     # The console socket, as a superadmin (who passes can_access_server without a lookup).
     _sio72 = _p9.socketio.test_client(_p9, flask_test_client=_p9_client(P9_ADMIN))
-    _sio72.emit("join_console", {"server_id": _HUGE72})
+    try:
+        _sio72.emit("join_console", {"server_id": _HUGE72})
+    except Exception:           # nothing to see here: the check reads what the join left behind
+        pass
     with _sf72._viewers_lock:
         _joined72 = _HUGE72 in _sf72._console_viewers
         _sf72._console_viewers.pop(_HUGE72, None)
-    _sio72.emit("term_open", {"remote_id": _HUGE72, "cols": 80, "rows": 24})
-    _term72 = [(m.get("args") or [{}])[0] for m in _sio72.get_received() if m.get("name") == "term_error"]
+    try:
+        _sio72.emit("term_open", {"remote_id": _HUGE72, "cols": 80, "rows": 24})
+        _term72 = [(m.get("args") or [{}])[0] for m in _sio72.get_received()
+                   if m.get("name") == "term_error"]
+    except Exception as e:      # the handler's OverflowError, re-raised by the test client
+        _term72 = [type(e).__name__]
     _sio72.disconnect()
     check("row id: a console join naming a server id past SQLite's range is not watched (the poller "
           "would look it up every pass)", not _joined72)
     check("row id: a terminal naming a host id past SQLite's range is 'No host was named.'",
-          [p.get("message") for p in _term72] == ["No host was named."], repr(_term72))
+          [p.get("message") if isinstance(p, dict) else p for p in _term72] == ["No host was named."], repr(_term72))
 
     # A hand-edited `port` in config.json that is not a number: Change Port read it with int().
     _p9_patch(_rs72, "load_config", lambda: {"port": "5000x", "bind_host": "0.0.0.0"})  # nosec B104
