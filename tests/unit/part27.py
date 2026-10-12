@@ -287,9 +287,12 @@ def _declared27(text, word):
 
 
 def _r14d_overrides27(text):
-    """Lines of `text` that suppress findings outside [[IgnoredVulns]]: osv-scanner also honours
-    [[PackageOverrides]] with `ignore = true` / `vulnerability.ignore = true` (its configuration
-    docs), which needs no id, no date and no reason — so this project refuses that form outright."""
+    """Lines of `text` that suppress findings outside [[IgnoredVulns]].
+
+    osv-scanner also honours [[PackageOverrides]] with `ignore = true` / `vulnerability.ignore =
+    true` (its configuration docs), which needs no id, no date and no reason, so this project
+    refuses that form outright.
+    """
     return [_l.strip() for _l in text.splitlines()
             if _re27.search(r"PackageOverrides|^\s*(?:vulnerability\s*\.\s*)?ignore\s*=",
                             _l.split("#", 1)[0])]

@@ -85,14 +85,22 @@ def _gh_text(node):
                        for v in node.values)
     if isinstance(node, _gh_ast.BinOp) and isinstance(node.op, _gh_ast.Add):
         return _gh_text(node.left) + _gh_text(node.right)
-    # `"-u%s" % user` and `"--user={}".format(user)`: the literal, each conversion a hole. Read as
-    # one hole, the flag in the literal was lost and a joined argv element was no site (1011d).
+    formatted = _gh_formatted_text(node)
+    return _gh_hole(node) if formatted is None else formatted
+
+
+def _gh_formatted_text(node):
+    """`"-u%s" % user` / `"--user={}".format(user)` as the literal with each conversion a hole.
+
+    Read as one hole, the flag in the literal was lost and a joined argv element was no site
+    (review 1011d). None for any other node.
+    """
     if _gh_is_str_percent(node):
         return _GH_PCT.sub(lambda m: "%" if m.group(2) == "%" else _GH_HOLE, node.left.value)
     if _gh_is_str_format(node) and isinstance(node.func.value.value, str):
         return re.sub(r"\{[^{}]*\}", _GH_HOLE,
                       node.func.value.value.replace("{{", "(").replace("}}", ")"))
-    return _gh_hole(node)
+    return None
 
 
 def _gh_trailing_text(node):
@@ -250,18 +258,24 @@ def _gh_argv_line(n, parent, grown):
         top = parent[top]
     elts = [e for part in _gh_ast.walk(top) if isinstance(part, (_gh_ast.List, _gh_ast.Tuple))
             for e in part.elts]
-    up, name = parent.get(top), None
-    if isinstance(up, _gh_ast.Call) and isinstance(up.func, _gh_ast.Attribute) \
-            and up.func.attr == "extend" and isinstance(up.func.value, _gh_ast.Name):
-        name = up.func.value.id
-    elif isinstance(up, _gh_ast.AugAssign) and isinstance(up.target, _gh_ast.Name):
-        name = up.target.id
+    up = parent.get(top)
+    name = _gh_grown_name(up)
     if name is not None:
         fn = up
         while fn is not None and not isinstance(fn, (_gh_ast.FunctionDef, _gh_ast.AsyncFunctionDef)):
             fn = parent.get(fn)
         elts = grown.get((fn, name), []) + elts
     return elts
+
+
+def _gh_grown_name(up):
+    """The list name `up` grows (`name += [...]`, `name.extend([...])`), or None."""
+    if isinstance(up, _gh_ast.Call) and isinstance(up.func, _gh_ast.Attribute) \
+            and up.func.attr == "extend" and isinstance(up.func.value, _gh_ast.Name):
+        return up.func.value.id
+    if isinstance(up, _gh_ast.AugAssign) and isinstance(up.target, _gh_ast.Name):
+        return up.target.id
+    return None
 
 
 def _gh_grown_lists(tree):
