@@ -4216,7 +4216,9 @@ check("blocks-inactive-note" in _fw_win_code and 'id="blocks-inactive-note"' in 
       "firewall: ...and the 'a block denies nothing while inactive' note follows the refresh",
       "the note is not toggled")
 # The × tooltip listed a group's UFW rule NUMBERS as "ports 3, 7".
-check("'rules ' + (g.nums|join(', '))" in _fw_tpl and "'ports ' + (g.nums" not in _fw_tpl,
+# A catalog key with the numbers formatted in (review 1011d: the welded English never translated).
+check("t('Remove this rule (rules %s)')|format(g.nums|join(', '))" in _fw_tpl and "(ports %s)" not in _fw_tpl
+      and "'ports ' + (g.nums" not in _fw_tpl,
       "firewall: the rule-delete tooltip calls rule numbers rules, not ports",
       "the × tooltip names ufw rule numbers as ports")
 
