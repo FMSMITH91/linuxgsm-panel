@@ -450,8 +450,7 @@ def safe_start(remote, ident):
 
 
 # ── The census: one predicate for the dialog, the gate, the waiter ──────────────────────────────
-def _blocker(kind, name, detail=""):
-    return {"kind": kind, "name": name, "detail": detail}
+_blocker = _rw.blocker
 
 
 def _row_blockers(rows):
@@ -1837,9 +1836,7 @@ def restore_host(remote, rows, now=None):
         # locks stayed aside and nothing was started when the host came back. So a silent host
         # stops the clock, and the next tick it answers on acts as before.
         if _sm.hosts.host_boot_identity(remote) is None:
-            _rw.hold_clock(recs, _set_rr)
-            db.session.commit()
-            return True
+            return _rw.hold_clock(recs, _set_rr, db.session.commit)
         _act(remote, recs, now, rollback_=True)
         return True
     ident = _sm.hosts.host_boot_identity(remote)
@@ -1849,8 +1846,7 @@ def restore_host(remote, rows, now=None):
 
 
 def _records(rows):
-    recs = [(gs, rr(gs)) for gs in rows]
-    return [(gs, d) for gs, d in recs if d]
+    return [(gs, d) for gs, d in ((g, rr(g)) for g in rows) if d]
 
 
 def _by_boot(remote, recs, ident, now):
@@ -2030,8 +2026,7 @@ def _act_panel(remote, gs, d, now, rollback_):
         return None
     outcome, detail = safe_start(remote, gs)
     if outcome == "wait":
-        _rw.start_waits(d, detail)
-        return None
+        return _rw.start_waits(d, detail)
     if outcome in ("started", "running"):
         _after_start(remote, gs)
         # "running": it was up before the panel's start (the user's own @reboot, a unit): the

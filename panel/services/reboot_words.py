@@ -88,17 +88,24 @@ def shown(body):
                          if isinstance(body.get(k), str)})
 
 
+def blocker(kind, name, detail=""):
+    """One piece of work a reboot would cut off: its kind, the name it is shown by, and a detail."""
+    return {"kind": kind, "name": name, "detail": detail}
+
+
 def panel_blocker(kind):
     """A blocker that is the panel's own work, marked `panel` for the reboot dialog.
 
     The dialog shows a blocker's name as a name, never translated; `panel` tells it this one is the
     phrase "the panel" (in the viewer's language), without matching the English words.
     """
-    return {"kind": kind, "name": PANEL_NAME, "detail": "", "panel": True}
+    return dict(blocker(kind, PANEL_NAME), panel=True)
 
 
-def hold_clock(recs, save):
-    """Stop each pending row's give-up clock while its host is silent; `save(gs, d)` each one changed.
+def hold_clock(recs, save, commit):
+    """Stop each pending row's give-up clock while its host is silent. -> True (the fast tick).
+
+    `save(gs, d)` each row changed, then `commit()`.
 
     A rollback acts without asking whether the host answers, and row_gave_up is for a host that
     answers but cannot resolve a row: through an outage longer than an hour every row was reported
@@ -108,10 +115,12 @@ def hold_clock(recs, save):
     for gs, d in recs:
         if d.get("restore") == "pending" and d.pop("pending_since", None) is not None:
             save(gs, d)
+    commit()
+    return True
 
 
 def start_waits(d, detail):
-    """Note on row `d` that its panel start must wait, for the reason safe_start gave (`detail`).
+    """The row's step when its panel start must wait (`detail`, safe_start's reason): None, still pending.
 
     "inflight" is a LinuxGSM update or backup running for the server, and a start never goes over
     one: a known wait, however long the download takes, not a row that cannot resolve, so its
@@ -119,3 +128,4 @@ def start_waits(d, detail):
     """
     if detail == "inflight":
         d.pop("pending_since", None)
+    return None
