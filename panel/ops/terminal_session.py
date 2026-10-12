@@ -44,6 +44,8 @@ import subprocess  # nosec B404 - the tailscale transport needs a real process u
 import threading
 import time
 
+from panel.core import i18n
+
 _log = logging.getLogger("panel.terminal")
 
 # One session's ceiling. A runaway `cat /dev/urandom` must not be able to drown the browser, the
@@ -580,7 +582,8 @@ def _idle_sweeper():
             with _sessions_lock:
                 stale = [s for s in _sessions.values() if now - s.last_input > _IDLE_TIMEOUT]
             for s in stale:
-                s.close("closed after %d minutes with no input" % (_IDLE_TIMEOUT // 60))
+                # A Sentence: the page shows the reason in the viewer's language (host_terminal).
+                s.close(i18n.Sentence("closed after {n} minutes with no input", n=_IDLE_TIMEOUT // 60))
         except Exception:  # nosec B110
             _log.debug("terminal idle sweep failed", exc_info=True)
         time.sleep(30)
@@ -603,12 +606,12 @@ def _register(sess, user_key):
                                 "to start another.")
         others = [s for s in _sessions.values() if s is not prior]
         if len(others) >= _MAX_SESSIONS_TOTAL:
-            raise TerminalError("Too many terminal sessions are open on this panel (%d). Close one "
-                                "and try again." % _MAX_SESSIONS_TOTAL)
+            raise TerminalError(i18n.Sentence("Too many terminal sessions are open on this panel ({n}). "
+                                              "Close one and try again.", n=_MAX_SESSIONS_TOTAL))
         mine = sum(1 for s in others if s.user_key == user_key)
         if mine >= _MAX_SESSIONS_PER_USER:
-            raise TerminalError("You already have %d terminals open. Close one and try again."
-                                % _MAX_SESSIONS_PER_USER)
+            raise TerminalError(i18n.Sentence("You already have {n} terminals open. Close one and try "
+                                              "again.", n=_MAX_SESSIONS_PER_USER))
         _sessions[sess.sid] = sess
 
 
@@ -647,7 +650,8 @@ def open_session(sid, server, is_local, user_key, on_output, on_exit, cols=80, r
     except Exception as e:
         sess.close("")
         _log.warning("terminal open failed for %s", label, exc_info=True)
-        raise TerminalError("Could not start a shell on %s (%s)." % (label, type(e).__name__))
+        raise TerminalError(i18n.Sentence("Could not start a shell on {host} ({error}).", host=label,
+                                          error=type(e).__name__))
     # The session is registered BEFORE its transport opens, and a paramiko connect can take the
     # whole ssh_timeout. A close in that window (the tab closing, term_close, a second term_open)
     # found nothing attached and tore nothing down; the opener then attached a client and a live
@@ -656,7 +660,7 @@ def open_session(sid, server, is_local, user_key, on_output, on_exit, cols=80, r
     # look again now that the transport exists, and release it here.
     if sess.closed:
         sess._teardown()
-        raise TerminalError("The terminal on %s closed while it was opening." % label)
+        raise TerminalError(i18n.Sentence("The terminal on {host} closed while it was opening.", host=label))
     return sess
 
 

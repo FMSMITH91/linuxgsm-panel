@@ -1233,8 +1233,9 @@ def _game_files_command(job, remote):
 def _download_game_files(job, remote, auto, attempt, last_out):
     """One download attempt of step 4, run again with any packages LinuxGSM names. -> last_out."""
     _p = job.p
-    _p(4, "Downloading game server files (this can take a while)"
-          + ("" if attempt == 0 else " — retry %d" % attempt))
+    # Whole sentences: install-status translates the step name for whoever asks.
+    _p(4, "Downloading game server files (this can take a while)" if attempt == 0 else
+          i18n.Sentence("Downloading game server files (this can take a while) — retry {n}", n=attempt))
     out, err, _ = _sm.run_command(remote, auto, timeout=1800, sudo=False)
     last_out = out or err or last_out
     missing = parse_missing_deps((out or "") + "\n" + (err or ""))
@@ -1884,7 +1885,8 @@ def _install_gmod_content(job, remote):
         start_step = 9
         labels = ", ".join(GMOD_CONTENT_GAMES[g][0]
                            for g in content_games if g in GMOD_CONTENT_GAMES)
-        _p(8, "Installing GMod content (%s)" % (labels or "content"))
+        _p(8, i18n.Sentence("Installing GMod content ({games})", games=labels) if labels
+           else "Installing GMod content")
         # Content is host-wide (one content user, one ~/serverfiles), so this takes the same
         # one-job-per-host claim every Content-card job takes. Without it a Content-tab uninstall
         # on another GMod server could `rm` what this step is downloading, or an Apply start a

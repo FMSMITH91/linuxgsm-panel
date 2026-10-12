@@ -364,12 +364,12 @@ function fbPlayersDialog(busy){
   head.appendChild(el('span', null, _discT('Players are online'))); card.appendChild(head);
   var body=el('div','card-body');
   var who=el('p','mb-2');
-  who.appendChild(data('strong', String(total))); who.appendChild(document.createTextNode(' '));
-  who.appendChild(el('span', null, _discT(total===1 ? 'player is connected to' : 'players are connected to')));
-  who.appendChild(document.createTextNode(' '));
-  who.appendChild(data('strong', String(busy.length))); who.appendChild(document.createTextNode(' '));
-  who.appendChild(el('span', null, _discT(busy.length===1 ? 'server:' : 'servers:'))); who.appendChild(document.createTextNode(' '));
-  who.appendChild(data('span', busy.map(function(b){ return b.name+' ('+b.players+')'; }).join(', ')+'.'));
+  // One whole sentence per count, the counts and the list as values — see server_actions.js's.
+  var sentence = total===1 ? (busy.length===1 ? '{n} player is connected to {count} server: {list}.' : '{n} player is connected to {count} servers: {list}.')
+                           : (busy.length===1 ? '{n} players are connected to {count} server: {list}.' : '{n} players are connected to {count} servers: {list}.');
+  tfNodes(sentence, {n: data('strong', String(total)), count: data('strong', String(busy.length)),
+                     list: data('span', busy.map(function(b){ return b.name+' ('+b.players+')'; }).join(', '))})
+    .forEach(function(node){ who.appendChild(node); });
   body.appendChild(who);
   body.appendChild(el('p','small text-secondary mb-3', _discT('A backup briefly stops each server — this is about the busy ones.')));
   var btns=el('div','d-flex flex-column gap-2');
@@ -567,13 +567,15 @@ function _bkRestore(name, passphrase, btn, encrypted, skipSafety){
     .catch(function(){ bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
 }
 // A restore refused for want of the archive's passphrase (asked only of an encrypted archive).
+// `needs` is the server's machine-readable answer (backup.restore_needs). The message is
+// translated, so matching its English words never fired for a Spanish or French viewer.
 function _bkRestoreWantsPassphrase(d, encrypted){
-  return !d.success && encrypted && /passphrase/i.test(d.message||'');
+  return !d.success && encrypted && d.needs === 'passphrase';
 }
 // A restore refused because the pre-restore safety copy could not be written, when the operator
 // has not already said to go ahead without one.
 function _bkRestoreWantsSkipSafety(d, skipSafety){
-  return !d.success && !skipSafety && /safety copy/i.test(d.message||'');
+  return !d.success && !skipSafety && d.needs === 'skip_safety';
 }
 // Any other answer: say it, and reload once a restore has gone through (the panel restarts).
 function _bkRestoreDone(d, btn){
@@ -608,7 +610,7 @@ function _bkAskPassphrase(name, btn){
           // refusal says "Confirm again to restore without one", but pressing Restore here re-posts
           // without skip_safety_backup and gets the same refusal for ever. Hand it to the same
           // dialog _bkRestore uses, carrying the passphrase that worked.
-          else if(/safety copy/i.test(d.message||'')){
+          else if(!d.success && d.needs === 'skip_safety'){
             api.close();
             _bkAskSkipSafety(name, val, btn, true, d.message||'');
           }

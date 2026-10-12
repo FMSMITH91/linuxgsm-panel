@@ -117,8 +117,19 @@ function initTerminal() {
     term.write(d.data);
   });
 
+  // The server sends its English AND the template and values it was built from (message_key /
+  // message_vals, reason_key / reason_vals): most of these come from a worker with no viewer, so
+  // the page puts them in the viewer's language here. t() of the English alone left the idle
+  // reason ("closed after 15 minutes…") English, and the reason went into the translated status
+  // sentence untranslated: "Sesión cerrada — the shell exited."
+  function _said(d, field, fallback) {
+    var en = d && d[field];
+    if (!en) return t(fallback);
+    return tf(d[field + '_key'] || en, d[field + '_vals'] || {});   // i18n-ignore: payload field names
+  }
+
   sock.on('term_error', function (d) {
-    var msg = (d && d.message) || 'The terminal could not be opened.';
+    var msg = _said(d, 'message', 'The terminal could not be opened.');
     _status(msg, 'bad');
     term.write('\r\n\x1b[31m' + msg + '\x1b[0m\r\n');
   });
@@ -129,8 +140,8 @@ function initTerminal() {
   // of the scrollback, while the status line was telling the operator to reload to get one. The
   // message and the behaviour now agree: one page, one session, and a reload to start another.
   sock.on('term_exit', function (d) {
-    var why = (d && d.reason) || 'the session ended';
-    _status(tf('Session closed — {why}. Reload the page to start another.', {why: (d && d.reason) || t('the session ended')}), 'warn');
+    var why = _said(d, 'reason', 'the session ended');
+    _status(tf('Session closed — {why}. Reload the page to start another.', {why: why}), 'warn');
     term.write('\r\n\x1b[33m[' + why + ']\x1b[0m\r\n');
   });
 

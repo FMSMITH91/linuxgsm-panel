@@ -417,8 +417,14 @@ def _node_run41():
     if not node:
         return None
     harness = os.path.join(_TMP41, "nags-harness.js")
+    # nags.js builds the banner's sentence with i18n.js's tfNodes (base.html loads i18n.js first):
+    # the harness gets that one function, and a t() that answers English.
+    with open(os.path.join(_ROOT41, "static", "js", "i18n.js"), encoding="utf-8") as fh:
+        i18n_src = fh.read()
+    start = i18n_src.index("window.tfNodes = function(")
+    tf_nodes = i18n_src[start:i18n_src.index("\n};\n", start) + 3]
     with open(harness, "w", encoding="utf-8") as fh:
-        fh.write(_NODE41)
+        fh.write(_NODE41.replace("vm.runInThisContext(", "global.t = s => s;\n" + tf_nodes + "\nvm.runInThisContext(", 1))
     r = _run41([node, harness, os.path.join(_ROOT41, "static", "js", "nags.js")], timeout=60)
     try:
         return _json41.loads((r.stdout or "").strip().splitlines()[-1])

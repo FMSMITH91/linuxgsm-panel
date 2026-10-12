@@ -492,6 +492,8 @@ _out53 = _node53(_name53, (
     "global.document = {createTextNode: t => ({text: t})};\n"
     "function _rbEl(tag, cls, text){ return mk(tag, cls, text); }\n"
     "function _rbHost(l){ return {text: l}; }\n"
+    # the banner's sentence is built with i18n.js's tfNodes (base.html loads i18n.js first)
+    "global.t = s => s;\n" + _cut47(_read53(_JS53, "i18n.js"), "window.tfNodes = function(") + "\n"
     "function _rbButton(text){ return {button: text}; }\n"
     + _NAGS53[_NAGS53.index("var _RB_PHASE"):_NAGS53.index("};", _NAGS53.index("var _RB_PHASE")) + 2] + "\n"
     + (_cut47(_NAGS53, "function _r11c_rbStateOnly(") if "function _r11c_rbStateOnly(" in _NAGS53 else "") + "\n"

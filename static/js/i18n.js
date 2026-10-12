@@ -34,6 +34,21 @@ function i18nFill(s, vals, html){
 }
 window.tf = function(s, vals){ return i18nFill(window.t(s), vals, false); };
 window.tfHtml = function(s, vals){ return i18nFill(i18nEsc(window.t(s)), vals, true); };
+// A sentence whose values are ELEMENTS (a bold, guarded name; a count): translated whole, then cut at
+// its {slots} into text nodes, each value's element put where the translation puts it. As nodes, so
+// nothing goes through innerHTML; a string value is a text node, a slot with no value stays as written.
+window.tfNodes = function(s, vals){
+  var out = [], text = window.t(s), re = /\{(\w+)\}/g, last = 0, m;
+  while ((m = re.exec(text)) !== null) {
+    if (!vals || !Object.prototype.hasOwnProperty.call(vals, m[1])) continue;
+    if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
+    var v = vals[m[1]];
+    out.push(v !== null && typeof v === 'object' ? v : document.createTextNode(String(v)));
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(document.createTextNode(text.slice(last)));
+  return out;
+};
 // A count's sentence: its own catalog entry for one and for many ("Upload 1 file" / "Upload {n}
 // files"), the count put in after, with any other values.
 window.tfn = function(n, one, many, vals){

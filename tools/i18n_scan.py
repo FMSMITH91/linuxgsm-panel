@@ -519,7 +519,7 @@ def is_js_ui_word(text, before):
 # A literal handed to t() (or a file's own wrapper for it, _discT) is a string the code itself says
 # a person reads, whatever its shape: lower-case ("player is connected to"), one word, or a branch
 # of a ternary inside the call. Matched as "an open t( call with no unbalanced bracket since".
-_JS_T_CALL = re.compile(r"""\b(?:t|_discT|tf|tfHtml|tfn)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
+_JS_T_CALL = re.compile(r"""\b(?:t|_discT|tf|tfHtml|tfn|tfNodes)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
 
 
 _R15C_QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
@@ -1200,7 +1200,8 @@ def _py_call_sinks(node, wrappers):
     out = [node.args[0]] if name in PY_SINK_CALLS and node.args else []
     out.extend(k.value for k in node.keywords if k.arg in PY_SINK_KEYS)
     for pos, param in wrappers.get(name, ()):
-        out.extend(node.args[pos:pos + 1])
+        if pos is not None:
+            out.extend(node.args[pos:pos + 1])
         out.extend(k.value for k in node.keywords if k.arg == param)
     return out
 
@@ -1271,7 +1272,16 @@ def _py_assignment_binds(n, assigned, builders):
     built = ((isinstance(n, ast.AugAssign) and isinstance(n.op, ast.Add))
              or _py_fed_built(n.value, assigned, builders) is not None)
     out = [(t.id, n.lineno) for t in targets if built and isinstance(t, ast.Name)]
-    return out + (_py_unpacked(n, builders) if isinstance(n, ast.Assign) else [])
+    if not isinstance(n, ast.Assign):
+        return out
+    return out + _r16c_held_items(n, builders) + _py_unpacked(n, builders)
+
+
+def _r16c_held_items(n, builders):
+    """`res = svc(…)` then `flash(res[1])`: [((res, 1), line)] for each built item of svc's answer."""
+    callee = _py_call_name(n.value)
+    items = [(k[1], where[1]) for k, where in builders.items() if isinstance(k, tuple) and k[0] == callee]
+    return [((t.id, i), line) for t in n.targets if isinstance(t, ast.Name) for i, line in items]
 
 
 def _py_functions(tree):
@@ -1341,14 +1351,25 @@ def _py_fed_built(value, assigned, builders):
     """
     if _py_built(value, getattr(builders, "plain", False)):
         return value.lineno
-    if isinstance(value, ast.Name) and value.id in assigned:
-        return assigned[value.id]
+    local = _r16c_local_key(value)
+    if local is not None and local in assigned:
+        return assigned[local]
     if _py_call_name(value) in builders:
         return builders[_py_call_name(value)]
     for operand in _py_operands(value):
         where = _py_fed_built(operand, assigned, builders)
         if where is not None:
             return where
+    return None
+
+
+def _r16c_local_key(value):
+    """The `assigned` key a value reads: a local's name, (name, i) for `name[i]`, else None."""
+    if isinstance(value, ast.Name):
+        return value.id
+    if (isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name)
+            and isinstance(value.slice, ast.Constant)):
+        return value.value.id, value.slice.value
     return None
 
 
@@ -1368,11 +1389,23 @@ def _py_own_nodes(fn):
 
 def _py_wrapped_params(fn, lines, wrappers):
     """{(position, parameter)} of `fn`'s parameters that it hands to a sink as they are."""
+    where = _r16c_param_positions(fn)
+    return {(where[v.id], v.id) for n in _py_own_nodes(fn) for v in _py_sink_values(n, wrappers)
+            if isinstance(v, ast.Name) and v.id in where and not _py_ignored(lines, v)}
+
+
+def _r16c_param_positions(fn):
+    """{parameter: position} for `fn`, after self/cls; a keyword-only one (`def f(*, text)`) is None.
+
+    A keyword-only parameter is passed by name only: _py_wrapped_params read positional ones alone,
+    so a message handed to `_reply(text=…)` was never a sink.
+    """
     params = [a.arg for a in fn.args.args]
     if params[:1] in (["self"], ["cls"]):
         params = params[1:]     # obj.method(a, …): `a` is the parameter after self
-    return {(params.index(v.id), v.id) for n in _py_own_nodes(fn) for v in _py_sink_values(n, wrappers)
-            if isinstance(v, ast.Name) and v.id in params and not _py_ignored(lines, v)}
+    where = {a.arg: None for a in fn.args.kwonlyargs}
+    where.update((p, i) for i, p in enumerate(params))
+    return where
 
 
 def _py_wrappers(trees):
@@ -1503,6 +1536,230 @@ def tr_gaps_py(lang, root=ROOT, translation_dir=TRANSLATION_DIR):
         elif sorted(slot.findall(key)) != sorted(slot.findall(catalog[key])):
             gaps.append((key, "slots differ"))
     return gaps
+
+
+# ── What a route ANSWERS, followed into the service that worded it (_r16c_) ─────────────────────
+# tr_keys_py collects only the literal FIRST ARGUMENT of tr()/Sentence(). A route that answers
+# jsonify({"message": msg}) with a module constant (close_port22's _NO_WAY_BACK), or with the
+# message of a service's (ok, message) — "Port 22 rule removed from UFW", or the lockout guard's
+# "Couldn't read the firewall…" two calls down in ssh_manager/hosts.py, whether or not the route
+# then calls tr(msg) — handed the viewer a sentence no gate read: 259 of them had no es/fr entry.
+# Here every literal a route's sink or tr() can be handed is a key: written there, a module
+# constant, or an item of a service's returned tuple, followed through locals unpacked from
+# another call and through `return other(…)`, to where it is written.
+def _r16c_prose(text):
+    """Whether a literal is a sentence for a person, not a code ("ALREADY_CONNECTED", "bad_mode")."""
+    return " " in text.strip() and bool(_HAS_LETTER.search(text)) and not text.startswith("\\")
+
+
+def _r16c_binds(fn):
+    """{local: [(callee, item index or None)]} for `a, b = f(…)` and `x = f(…)` in one function.
+
+    `f(…) if c else g(…)` and `f(…) or g(…)` bind from each call.
+    """
+    out = {}
+    for n in _py_own_nodes(fn):
+        if isinstance(n, ast.Assign) and len(n.targets) == 1:
+            for local, ref in _r16c_assign_refs(n):
+                out.setdefault(local, []).append(ref)
+    return out
+
+
+def _r16c_assign_refs(n):
+    """[(local, (callee, item index or None))] one single-target assignment binds."""
+    names = [c for c in (_py_call_name(v) for v in [n.value] + _py_operands(n.value)) if c]
+    t = n.targets[0]
+    pairs = list(enumerate(t.elts)) if isinstance(t, ast.Tuple) else [(None, t)]
+    return [(e.id, (c, i)) for i, e in pairs if isinstance(e, ast.Name) for c in names]
+
+
+def _r16c_item_sources(node, consts, binds):
+    """(texts, refs) one returned item or sink value can be: literals, and (callee, index) to follow."""
+    if node is None:
+        return [], []
+    texts = list(_py_key_texts(node, consts))
+    refs = list(binds.get(node.id, ())) if isinstance(node, ast.Name) else []
+    refs += _r16c_subscript_refs(node, binds)
+    for operand in _py_operands(node):
+        t, r = _r16c_item_sources(operand, consts, binds)
+        texts += t
+        refs += r
+    return texts, refs
+
+
+def _r16c_subscript_refs(node, binds):
+    """`why[1]`, where `why = f(…)`: [(f, 1)] — item 1 of what f answers."""
+    local = _r16c_local_key(node)
+    if not isinstance(local, tuple) or not isinstance(local[1], int):
+        return []
+    return [(c, local[1]) for c, i in binds.get(local[0], ()) if i is None]
+
+
+def _r16c_returns(trees):
+    """{(function, item index or None): set((text, file, line))}: the literals a function answers.
+
+    A tuple's items by index, a plain return as None; through locals bound from other calls and
+    `return other(…)`, repeated until nothing new is found.
+    """
+    direct, refs = {}, {}
+    for rel, lines, tree in trees:
+        consts = _py_module_consts(tree)
+        for fn in _py_functions(tree):
+            binds = _r16c_binds(fn)
+            for n in _py_own_nodes(fn):
+                if isinstance(n, ast.Return) and n.value is not None and not _py_ignored(lines, n):
+                    _r16c_note_return(fn.name, n, (rel, consts, binds), direct, refs)
+    return _r16c_resolve(direct, refs)
+
+
+def _r16c_note_return(name, n, where, direct, refs):
+    """Record one `return` of function `name` in _r16c_returns' direct and refs tables."""
+    rel, consts, binds = where
+    items = list(enumerate(n.value.elts)) if isinstance(n.value, ast.Tuple) else [(None, n.value)]
+    for i, item in items:
+        texts, follow = _r16c_item_sources(item, consts, binds)
+        direct.setdefault((name, i), set()).update((t, rel, n.lineno) for t in texts)
+        refs.setdefault((name, i), set()).update(follow)
+    callee = _py_call_name(n.value)
+    if callee:     # `return other(…)`: whatever other answers, item for item
+        refs.setdefault(("*", name), set()).add(callee)
+
+
+def _r16c_resolve(direct, refs):
+    """Return direct plus everything reachable through refs (see _r16c_returns), to a fixed point."""
+    table = {k: set(v) for k, v in direct.items()}
+    while True:
+        before = sum(len(v) for v in table.values())
+        for (name, i), follow in list(refs.items()):
+            _r16c_follow(table, name, i, follow)
+        if sum(len(v) for v in table.values()) == before:
+            return table
+
+
+def _r16c_follow(table, name, i, follow):
+    """One ref of _r16c_resolve: ("*", fn) takes every item of the callees it returns; else (callee, j)."""
+    if name == "*":
+        for (other, j), got in list(table.items()):
+            if other in follow:
+                table.setdefault((i, j), set()).update(got)
+        return
+    for callee, j in follow:
+        table.setdefault((name, i), set()).update(table.get((callee, j), ()))
+
+
+def _r16c_is_route(rel):
+    rel = rel.replace(os.sep, "/")
+    return rel == "app.py" or rel.startswith("panel/routes/")
+
+
+def _r16c_answer_values(n, lines):
+    """The values one node hands the viewer: its sinks, and the first argument of a tr() call."""
+    values = list(_py_sink_values(n))
+    if _py_call_name(n) == "tr" and n.args:
+        values.append(n.args[0])
+    return [v for v in values if not _py_ignored(lines, v)]
+
+
+def _r16c_found(v, rel, scope, table):
+    """[(text, file, line)] one value can be: written there, or followed into what it was handed."""
+    consts, binds = scope
+    texts, follow = _r16c_item_sources(v, consts, binds)
+    return [(t, rel, v.lineno) for t in texts] + [x for ref in follow for x in table.get(ref, ())]
+
+
+def route_answer_keys(root=ROOT):
+    """{key: "file:line"} for every sentence a route can hand the viewer as a message, or to tr().
+
+    Its sinks (flash, _form_*, a "message"/"error"/"warning" in a reply) and its tr() arguments:
+    a literal, a module constant, or a service's answer (see _r16c_returns). Codes are left out.
+    """
+    trees = _py_trees(root)
+    table = _r16c_returns(trees)
+    keys = {}
+    for rel, lines, tree in (t for t in trees if _r16c_is_route(t[0])):
+        consts = _py_module_consts(tree)
+        for fn in [tree] + _py_functions(tree):
+            scope = (consts, _r16c_binds(fn))
+            for v in (v for n in _py_own_nodes(fn) for v in _r16c_answer_values(n, lines)):
+                for t, f, line in _r16c_found(v, rel, scope, table):
+                    if _r16c_prose(t):
+                        keys.setdefault(t, "%s:%d" % (f, line))
+    return keys
+
+
+def route_answer_gaps(lang, root=ROOT, translation_dir=TRANSLATION_DIR):
+    """[(key, where)]: a sentence a route can answer (route_answer_keys) with no `lang` entry."""
+    catalog = load_catalog(lang, translation_dir)
+    return sorted((k, w) for k, w in route_answer_keys(root).items() if k not in catalog)
+
+
+# ── A job's progress text: written in English by a worker, translated when it is read (_r16c_) ──
+# An install or bootstrap worker runs with no viewer, so it stores its step names as they are and
+# install-status / bootstrap-status hand them to tr() for whoever asks. None of those names was a
+# key, and no gate read this path: tr() got a subscript (j["step_name"]), never a literal, so
+# every step of every install and bootstrap stayed English in Spanish and French. Every literal
+# handed to a job writer, or stored as a job's step_name or message, is a key here; one BUILT in
+# plain English (an f-string, %, +) is reported, because no key can ever match it.
+_R16C_STEP_WRITERS = ("progress", "p", "_p", "_set", "fail", "_fail", "emit", "note", "_end", "finish")
+_R16C_JOB_KEYS = ("step_name", "message")
+_R16C_LABEL = re.compile(r"^[A-Z][a-z]+(?:…|\.\.\.|\.)?$")
+
+
+def _r16c_step_values(n):
+    """The values one node hands a job as its progress text (see _R16C_STEP_WRITERS)."""
+    if isinstance(n, ast.Call) and _py_call_name(n) in _R16C_STEP_WRITERS:
+        return list(n.args)
+    if isinstance(n, ast.Dict):
+        return [v for k, v in zip(n.keys, n.values) if _r16c_is_step_key(k)]
+    if isinstance(n, ast.Assign):
+        return [v for t in n.targets for tt, v in _r16c_target_pairs(t, n.value) if _r16c_job_slot(tt)]
+    return []
+
+
+def _r16c_is_step_key(k):
+    """Whether a dict key is "step_name" (a job's dict literal: {"step_name": "Queued", …})."""
+    return _py_text(k) and k.value == "step_name"
+
+
+def _r16c_target_pairs(t, value):
+    """[(target, value)] of one assignment target: `a, b = x, y` pairs them up."""
+    if isinstance(t, ast.Tuple) and isinstance(value, ast.Tuple):
+        return list(zip(t.elts, value.elts))
+    return [(t, value)]
+
+
+def _r16c_job_slot(t):
+    """Whether an assignment target is a job's step_name or message (`job["step_name"]`)."""
+    return isinstance(t, ast.Subscript) and _py_text(t.slice) and t.slice.value in _R16C_JOB_KEYS
+
+
+def _r16c_step_walk(root):
+    """[(file, line, value node, consts, binds, lines)] for every job progress value in the tree."""
+    out = []
+    for rel, lines, tree in _py_trees(root):
+        consts = _py_module_consts(tree)
+        for fn in [tree] + _py_functions(tree):
+            binds = _r16c_binds(fn)
+            out += [(rel, v.lineno, v, consts, binds, lines) for n in _py_own_nodes(fn)
+                    for v in _r16c_step_values(n) if not _py_ignored(lines, v)]
+    return out
+
+
+def step_name_keys(root=ROOT):
+    """{key: "file:line"} for every literal a job's progress text can be (see _R16C_STEP_WRITERS)."""
+    table = _r16c_returns(_py_trees(root))
+    keys = {}
+    for rel, _line, v, consts, binds, _lines in _r16c_step_walk(root):
+        for t, f, ln in _r16c_found(v, rel, (consts, binds), table):
+            if _r16c_prose(t) or _R16C_LABEL.match(t):
+                keys.setdefault(t, "%s:%d" % (f, ln))
+    return keys
+
+
+def step_names_built(root=ROOT):
+    """[(file, line)]: a job's progress text built in plain English, which no key can match."""
+    return sorted({(rel, line) for rel, line, v, _c, _b, _l in _r16c_step_walk(root)
+                   if any(_py_built(x, plain=True) for x in [v] + _py_operands(v))})
 
 
 def _main():
