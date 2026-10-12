@@ -940,16 +940,13 @@ check("unicode: isdecimal() still accepts a non-ASCII DECIMAL digit, so nothing 
 # `item.startswith("#") and item[1:].isdigit()` — a "#" STRING before the call — was cut there and
 # never read. That is how the helper's `#<uid>` guard grew back unseen in the sweep that removed
 # every other one. A comment or a string that mentions the call is not one.
-import tokenize as _isd_tok                                                        # noqa: E402
-
-
+# Read as the AST's `.isdigit` attributes, called or not: the tokens read only `.isdigit` followed by
+# `(`, so `all(map(str.isdigit, parts))`, `filter(str.isdigit, s)` and `f = s.isdigit; f()` ahead
+# of an int() passed (review 1012a). A comment or a string holds no Attribute node.
 def _isdigit_calls(text):
-    """Line numbers of every `.isdigit(` call in Python source `text`."""
-    toks = [t for t in _isd_tok.generate_tokens(iter(text.splitlines(True)).__next__)
-            if t.type not in (_isd_tok.COMMENT, _isd_tok.NL, _isd_tok.NEWLINE)]
-    return [b.start[0] for a, b, c in zip(toks, toks[1:], toks[2:])
-            if a.string == "." and b.type == _isd_tok.NAME and b.string == "isdigit"
-            and c.string == "("]
+    """Line numbers of every `.isdigit` use, called or passed, in Python source `text`."""
+    return sorted(_n.lineno for _n in _ast_scan.walk(_ast_scan.parse(text))
+                  if isinstance(_n, _ast_scan.Attribute) and _n.attr == "isdigit")
 
 
 check("unicode: the .isdigit() sweep reads a call that follows a \"#\" string on its line, and "
@@ -972,11 +969,11 @@ for _fp2 in _isdigit_files:
 check("unicode: no module uses .isdigit() — isdecimal() is the one that matches int()",
       _isdigit_read >= 100 and not _isdigit_users,
       "%d files read; %s" % (_isdigit_read, ", ".join(_isdigit_users[:4])))
-_isd_ctl = [_n.lineno for _n in _ast_scan.walk(_ast_scan.parse(
-    'def f(item):\n    return item.startswith("#") and item[1:].isdigit()\n# x.isdigit() in a comment\n'))
-    if isinstance(_n, _ast_scan.Attribute) and _n.attr == "isdigit"]
-check("unicode: ...an .isdigit() after a '#' inside a string is found, one in a comment is not (control)",
-      _isd_ctl == [2], repr(_isd_ctl))
+_isd_ctl = _isdigit_calls(
+    'ok = all(map(str.isdigit, parts))\nd = "".join(filter(str.isdigit, s))\n'
+    'f = s.isdigit\nn = int(s) if f() else 0\ny = "str.isdigit"  # str.isdigit\n')
+check("unicode: ...and so is one passed rather than called: map(str.isdigit, …), filter(str.isdigit, …) "
+      "and a bound `f = s.isdigit` (control)", _isd_ctl == [1, 2, 3], repr(_isd_ctl))
 
 # The crashing input itself, replayed.
 from panel.ops import system_ops as _so_top
@@ -1450,9 +1447,15 @@ def _module_toplevel_names(path):
 # Every module of this repository a test can alias, not just the three at the root (review 1011d):
 # `from panel.ops import system_ops as _so` and `import panel.x as y` were never recorded, and
 # tests/unit/ — where most stubs live — was never read, so ~1,600 assignments went unexamined.
-# A package's attributes are its own top-level names plus its submodules.
+# A package's attributes are its own top-level names plus its submodules. The privileged helper has
+# no .py name, so it is named here by its path (part05's `_helper`, part12's `_pbh`, part31's `mod`).
+_R16D_HELPER_MOD = "tools/panel-helper"
+
+
 def _r14d_modfile(dotted):
     """The file of repository module `dotted` (a package's __init__.py), or None."""
+    if dotted == _R16D_HELPER_MOD:
+        return _helper_path
     _p = os.path.join(_root, *dotted.split("."))
     if os.path.isfile(os.path.join(_p, "__init__.py")):
         return os.path.join(_p, "__init__.py")
@@ -1521,16 +1524,67 @@ def _r14d_sys_modules_alias(node):
     return {_t.id: _key.value for _t in node.targets if isinstance(_t, _ast_scan.Name)}
 
 
+def _r16d_import_module_alias(node):
+    """{name: dotted module} for `name = <…>.import_module("mod")` on a repository module, else {}.
+
+    `_mon6 = _il6.import_module("panel.services.monitoring")` and part10's
+    `__import__("importlib").import_module(…)`: ten such bindings under tests/ were read as no
+    alias at all (review 1012a), so every stub through them went unchecked.
+    """
+    _v = getattr(node, "value", None)
+    if not (isinstance(node, _ast_scan.Assign) and isinstance(_v, _ast_scan.Call)
+            and getattr(_v.func, "attr", getattr(_v.func, "id", "")) == "import_module"
+            and _v.args and isinstance(_v.args[0], _ast_scan.Constant)
+            and isinstance(_v.args[0].value, str) and _r14d_modfile(_v.args[0].value)):
+        return {}
+    return {_t.id: _v.args[0].value for _t in node.targets if isinstance(_t, _ast_scan.Name)}
+
+
+def _r16d_names_helper(node):
+    """Does `node` (a spec-building call's argument) name the privileged helper's file?"""
+    return any((isinstance(_x, _ast_scan.Name) and _x.id == "_helper_path")
+               or (isinstance(_x, _ast_scan.Constant) and isinstance(_x.value, str)
+                   and _x.value.endswith("panel-helper"))
+               for _x in _ast_scan.walk(node))
+
+
+def _r16d_helper_aliases(tree):
+    """{name: the helper} for each `name = module_from_spec(spec)` whose spec loads tools/panel-helper."""
+    _specs, out = set(), {}
+    _assigns = [_n for _n in _ast_scan.walk(tree)
+                if isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Call)]
+    for _n in _assigns:
+        if (getattr(_n.value.func, "attr", "").startswith("spec_from_")
+                and any(_r16d_names_helper(_a) for _a in _n.value.args)):
+            _specs |= {_t.id for _t in _n.targets if isinstance(_t, _ast_scan.Name)}
+    for _n in _assigns:
+        if (getattr(_n.value.func, "attr", getattr(_n.value.func, "id", "")) == "module_from_spec"
+                and _n.value.args and getattr(_n.value.args[0], "id", None) in _specs):
+            out.update({_t.id: _R16D_HELPER_MOD for _t in _n.targets if isinstance(_t, _ast_scan.Name)})
+    return out
+
+
 def _r14d_aliases(tree, carried):
     """{name: dotted module} for each module-level name `tree` binds to a repository module.
 
     `carried` is {"unit.part12": {name: module}, ...}: a part that imports an earlier part's alias
-    (`from unit.part12 import _p9_core`) stubs through it.
+    (`from unit.part12 import _p9_core`) stubs through it. A name copied from an alias
+    (`_H = _sm_hosts`) is one too, followed to a fixed point.
     """
-    alias = {}
+    alias = _r16d_helper_aliases(tree)
+    _copies = []
     for _n in _ast_scan.walk(tree):
         alias.update(_r14d_import_aliases(_n, carried))
         alias.update(_r14d_sys_modules_alias(_n))
+        alias.update(_r16d_import_module_alias(_n))
+        if isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Name):
+            _copies.append(_n)
+    for _ in range(4):  # a copy of a copy: at most 4 rounds, stopping at the first that adds nothing
+        _added = {_t.id: alias[_n.value.id] for _n in _copies if _n.value.id in alias
+                  for _t in _n.targets if isinstance(_t, _ast_scan.Name) and _t.id not in alias}
+        if not _added:
+            break
+        alias.update(_added)
     return alias
 
 
@@ -1641,7 +1695,20 @@ check("every stub is installed on a module that actually defines the name",
       _stub_seen >= 1000 and _stub_nested >= 100 and not _stub_bad,
       "%d stub assignments read (%d nested or by setattr); %s"
       % (_stub_seen, _stub_nested, "; ".join(sorted(set(_stub_bad))[:4])))
-_r15d_nest_ctl_al = {"_m": "panel.services.monitoring"}
+# The aliases are READ, not handed in: a hand-written map proved the resolver and never the reader.
+_r15d_nest_ctl_al = _r14d_aliases(_ast_scan.parse(
+    "import importlib as _il\n_m = _il.import_module('panel.services.monitoring')\n"
+    "_x = __import__('importlib').import_module('panel.ops.system_ops')\n_H = _x\n_I = _H\n"
+    "_s = _ilu.spec_from_loader('ph', _machinery.SourceFileLoader('ph', _helper_path))\n"
+    "_ph = _ilu.module_from_spec(_s)\n_nm = _il.import_module('json')\n"), {})
+check("stub gate: an import_module() binding, a copy of an alias (and of a copy) and a module "
+      "loaded from tools/panel-helper are all read as aliases (control)",
+      _r15d_nest_ctl_al == {"_m": "panel.services.monitoring", "_x": "panel.ops.system_ops",
+                            "_H": "panel.ops.system_ops", "_I": "panel.ops.system_ops",
+                            "_ph": _R16D_HELPER_MOD}
+      and "VERBS" in _r14d_stub_names(_R16D_HELPER_MOD)
+      and "no_such_fn_xyz" not in _r14d_stub_names(_R16D_HELPER_MOD),
+      repr(_r15d_nest_ctl_al))
 _r15d_nest_ctl = [_r15d_stub_target(_n, _r15d_nest_ctl_al) for _n in _ast_scan.walk(_ast_scan.parse(
     "_m.so.ufw_deny_ipx = 1\nsetattr(_m.so, 'run_comandx', 1)\n_m.so.ufw_deny_ip = 1\n"))]
 _r15d_nest_ctl = [_t for _t in _r15d_nest_ctl if _t]
