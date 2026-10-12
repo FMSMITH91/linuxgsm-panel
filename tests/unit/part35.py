@@ -679,12 +679,18 @@ def _call_name35(node):
 
 
 def _first_sleep35(body):
-    """The delay node of a body's first statement when it is a sleep (or a while whose is)."""
-    stmt = body[0] if body else None
-    if isinstance(stmt, _ast35.While) and stmt.body:
-        stmt = stmt.body[0]
-    if _call_name35(stmt) == "sleep":
-        return stmt.value.args[0] if stmt.value.args else None
+    """The delay node of the sleep a body starts with (or a while whose body does), or None.
+
+    "Starts with" past any plain assignments and imports ahead of it (review 1011d): the first
+    statement alone was read, so `last = None; time.sleep(30)` slept before its first pass unseen.
+    """
+    for stmt in body:
+        if isinstance(stmt, _ast35.While) and stmt.body:
+            return _first_sleep35(stmt.body[:1])
+        if _call_name35(stmt) == "sleep":
+            return stmt.value.args[0] if stmt.value.args else None
+        if not isinstance(stmt, (_ast35.Assign, _ast35.AnnAssign, _ast35.Import, _ast35.ImportFrom)):
+            return None
     return None
 
 
@@ -733,6 +739,11 @@ def _p35_loops_gate():
           "and the delay it records is the one it sleeps (all nine: host_reboot's restore loop "
           "is the ninth)",
           not bad and recorded == 9, repr((bad, recorded)))
+    _ctl = [_loop_first_pass35(_ast35.parse(_c).body[0])[1] for _c in (
+        "def f():\n    last = None\n    time.sleep(30)\n    while True:\n        beat()\n",
+        "def f():\n    while True:\n        time.sleep(5)\n        beat()\n")]
+    check("loops: ...a sleep after setup assignments, or first in the loop, is read as a sleep "
+          "before the first pass (control)", all(_ctl), repr(_ctl))
 
 
 # ── 7. trust_proxy off: a refused loopback account is counted, the believed basis named ────────
