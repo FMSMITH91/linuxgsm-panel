@@ -402,6 +402,8 @@ _prog69 = (_es69("Session closed — {why}. Reload the page to start another.", 
            "var sock = {on: (ev, fn) => { on[ev] = fn; }}, term = {write: s => wrote.push(s)};\n"
            "function _status(m){ status.push(m); }\n"
            + ("" if "function _said(" not in _HT69 else _cut47(_HT69, "function _said(") + "\n")
+           # the handlers write through it (review 1012b: a host name's control characters)
+           + ("" if "function _r17cTermText(" not in _HT69 else _cut47(_HT69, "function _r17cTermText(") + "\n")
            + _cut47(_HT69, "sock.on('term_exit'") + ");\n"
            + _cut47(_HT69, "sock.on('term_error'") + ");\n"
            "on.term_exit(P.idle); on.term_exit(P.exited); on.term_exit(P.none); on.term_error(P.many);\n"

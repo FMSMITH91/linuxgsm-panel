@@ -18,7 +18,8 @@ from unit.part01 import check, skip
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_GS, P9_VIEWER, _p9, _p9_client, _p9_json, _p9_patch,
                          _p9_restore_all)
-from unit.part47 import _node47
+from unit.part47 import _cut47, _node47
+from panel.db.models import RemoteServer as _RS72, User as _U72, db as _db72
 from panel.security import auth as _auth72
 from panel.routes import remote_security as _rs72, server_files as _sf72
 
@@ -74,7 +75,6 @@ try:
     check("row id: an install naming a host id past SQLite's range is get_remote's 404", _add72 == 404,
           repr(_add72))
     with _p9.app_context():
-        from panel.db.models import User as _U72, db as _db72
         _viewer72 = _db72.session.get(_U72, P9_VIEWER)
         try:
             _cas72 = _auth72.can_access_server(_viewer72, _HUGE72)
@@ -106,7 +106,7 @@ try:
           [p.get("message") if isinstance(p, dict) else p for p in _term72] == ["No host was named."], repr(_term72))
 
     # A hand-edited `port` in config.json that is not a number: Change Port read it with int().
-    _p9_patch(_rs72, "load_config", lambda: {"port": "5000x", "bind_host": "0.0.0.0"})  # nosec B104
+    _p9_patch(_rs72, "load_config", lambda: {"port": "5000x"})
     _cp72 = _status72(lambda: _A72.post("/api/panel/change-port", json={"port": 1}))
     check("change port: a hand-edited non-numeric panel port is a refusal, not a 500", _cp72 == 400,
           repr(_cp72))
@@ -184,15 +184,14 @@ from flask_login import login_user as _login72  # noqa: E402
 from types import SimpleNamespace as _NS72  # noqa: E402
 from panel.core import i18n as _i18n72, http as _http72  # noqa: E402
 from panel.core.panel_state import _full_backup_lock as _fbl72  # noqa: E402
-from panel.db.models import User as _U72b, RemoteServer as _RS72, db as _db72b  # noqa: E402
 from panel.routes import (discover as _disc72, panel_backup as _pb72, server_detail as _sd72,  # noqa: E402
                           ubuntu_pro as _up72)
 
 
 def _lang72(lang):
     with _p9.app_context():
-        _db72b.session.get(_U72b, P9_ADMIN).language = lang
-        _db72b.session.commit()
+        _db72.session.get(_U72, P9_ADMIN).language = lang
+        _db72.session.commit()
 
 
 _ES72 = _scan72.load_catalog("es")
@@ -230,10 +229,10 @@ try:
 
     # Helpers that word a route's answer, in a Spanish viewer's request.
     with _p9.app_context(), _p9.test_request_context("/"):
-        _login72(_db72b.session.get(_U72b, P9_ADMIN))
+        _login72(_db72.session.get(_U72, P9_ADMIN))
         _gen72 = _http72._log_and_generic("p72: a stand-in failure")
         _cs72 = (_sd72._console_send_failure(3, ""), _sd72._console_send_failure(1, ""))
-        _host72 = _db72b.session.get(_RS72, _H72)
+        _host72 = _db72.session.get(_RS72, _H72)
         _out72 = _disc72._discover_import_outcome(
             _host72, [], [], [],
             [{"user": "acct", "reason": _i18n72.Sentence(
@@ -394,7 +393,6 @@ if _out72t is not None:
 # backlog the poll read was then put back a second time by the reshow (_r13c_reshowPanelPushes):
 # the same [panel] line twice. refreshConsole, clearConsole, the priming catch-up and the backlog
 # helpers are cut from the real file; `shown` is what the console holds, in order.
-from unit.part47 import _cut47  # noqa: E402
 
 _SD72 = _read72(_JS72, "server_detail.js")
 _CON72 = (
