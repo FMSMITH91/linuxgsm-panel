@@ -272,7 +272,7 @@ function fbSummary(){
             :(days===14?'By default, each server is backed up once every 2 weeks.':'By default, each server is backed up once a month.')));
   var s='<i class="bi bi-info-circle"></i> '+tfHtml(every)+' '
     +(keep===1 ? tfHtml('The newest backup is kept per server; older ones are deleted automatically.')
-               : tfHtml('The {n} newest backups are kept per server; older ones are deleted automatically.', {n: {html: '<strong>'+Number(keep)+'</strong>'}}))
+               : tfHtml('The {n} newest backups are kept per server; older ones are deleted automatically.', {n: {html: '<strong>'+escapeHtml(String(keep))+'</strong>'}}))
     +' '+tfHtml('(Override per server below.)');
   var multi = !!window._bkMultiHost;
   if(cycle>0 && !multi){ s+=' '+(free>0
@@ -294,7 +294,7 @@ function fbSummary(){
     }
     var recKeep=Math.max(1, Math.floor(free*0.4/cycle));
     if(recKeep<keep){
-      parts.push('<span class="text-secondary"><i class="bi bi-lightbulb"></i> '+tfHtml('Recommended: keep ≤ {n} at ~{size} per run (leaves comfortable headroom).', {n: {html: '<strong>'+Number(recKeep)+'</strong>'}, size: fmt(cycle)})+'</span>');
+      parts.push('<span class="text-secondary"><i class="bi bi-lightbulb"></i> '+tfHtml('Recommended: keep ≤ {n} at ~{size} per run (leaves comfortable headroom).', {n: {html: '<strong>'+escapeHtml(String(recKeep))+'</strong>'}, size: fmt(cycle)})+'</span>');
     }
   } else if(cycle===0){
     parts.push('<span class="text-secondary">Run a backup once and this will estimate the space each cycle uses and recommend a safe “keep”.</span>');

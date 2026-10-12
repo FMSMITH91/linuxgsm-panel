@@ -792,6 +792,8 @@ window.UPro = (function(){
       + '<input type="text" id="upro-token" class="form-control" placeholder="Ubuntu Pro token (e.g. C1a…)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">'
       + '<button class="btn btn-success"' + _da('_uproAttach') + '><i class="bi bi-shield-check"></i> Attach</button></div>';
   }
+  // The dashboard link, markup tfHtml puts into "Get a token at {link}." as it is.
+  var UPRO_LINK = {html: '<a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>'};
   function render(d){
     if(!EL) return;
     // "could not read" before "not attached". The route used to answer a failed read as
@@ -816,7 +818,7 @@ window.UPro = (function(){
       EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2"><span class="badge bg-secondary">Not attached</span></div>'
         // Whole sentences: the bold words split them into fragments no catalog key matched.
         + '<p class="small text-secondary mb-2">' + escapeHtml(t('Ubuntu Pro is free for personal use (up to 5 machines) and adds ~10 years of security updates (ESM) plus kernel Livepatch.'))
-        + ' ' + tfHtml('Get a token at {link}.', {link: {html: '<a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>'}})
+        + ' ' + tfHtml('Get a token at {link}.', {link: UPRO_LINK})
         + ' ' + escapeHtml(t('The client will be installed automatically when you attach.')) + '</p>'
         + attachForm() + '<div id="upro-msg" class="small mt-2"></div>';
       return;
@@ -825,7 +827,7 @@ window.UPro = (function(){
       // nosemgrep - static literal; attachForm() is fixed markup too.
       EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2"><span class="badge bg-secondary">Not attached</span></div>'
         + '<p class="small text-secondary mb-2">' + escapeHtml(t('Attach this host to your free Ubuntu Pro subscription for ~10 years of security updates (ESM) and kernel Livepatch.'))
-        + ' ' + tfHtml('Get a token at {link}.', {link: {html: '<a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>'}}) + '</p>'
+        + ' ' + tfHtml('Get a token at {link}.', {link: UPRO_LINK}) + '</p>'
         + attachForm() + '<div id="upro-msg" class="small mt-2"></div>';
       return;
     }

@@ -204,6 +204,8 @@ function _switchToTailscale(){
 }
 // ── System specs (static — fetched once) ──
 function specEsc(s){ return window.escapeHtml(s); }
+// window.t when the page has it (i18n.js); the label as it is otherwise.
+function _r14c_tr(s){ return typeof window.t === 'function' ? window.t(s) : s; }
 function renderSpecs(d, el){
   if(!el) return;
   if(!d || d.error){ el.innerHTML = '<div class="col-12 text-danger small">'+(d&&d.error ? tfHtml('Specs unavailable: {why}', {why: d.error}) : escapeHtml(t('Specs unavailable')))+'</div>'; return; }  // nosemgrep
@@ -447,7 +449,7 @@ function watchPanelRestart(beforeBoot, msg, doneLabel, before, targetBranch){
     if(l && l.lines) renderPuLog(l.lines);
     var outcome=panelRestartOutcome(before, s, targetBranch, l && l.lines);
     if(outcome==='moved'){
-      msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+tfHtml('{done} — reloading…', {done: t(doneLabel||'Done')})+'</span>';  // nosemgrep
+      msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+tfHtml('{done} — reloading…', {done: _r14c_tr(doneLabel||'Done')})+'</span>';  // nosemgrep
       setTimeout(function(){ location.reload(); }, 2500);
     } else if(outcome==='unknown'){
       msg.innerHTML='<span class="text-warning"><i class="bi bi-question-circle"></i> '+escapeHtml('The panel restarted, but its new version could not be read — reloading to check.')+'</span>';  // nosemgrep

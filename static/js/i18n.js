@@ -22,7 +22,7 @@ window.t = function(s){ return i18nLookup(s) || s; };
 // given as {html: '…'} — markup the caller built, with its own values escaped (a bold name).
 function i18nEsc(s){
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    .replace(/\x22/g, '&quot;').replace(/\x27/g, '&#39;');   // \x22 \x27: no quote in a regex literal
 }
 function i18nFill(s, vals, html){
   return s.replace(/\{(\w+)\}/g, function(m, k){

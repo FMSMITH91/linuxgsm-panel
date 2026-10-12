@@ -1182,8 +1182,11 @@ check(not _raw_body,
 # API and markup fragments composed a few lines above, which this cannot follow — so they are
 # recorded in tests/html_sink_baseline.json by the NAMES they interpolate. A new unescaped value
 # is a new name, and fails. Shrinking the baseline is always welcome; growing it needs a reason.
-_ESCAPERS = ("escapeHtml", "_esc", "esc", "e")
-_SINK = re.compile(r"(\.innerHTML|\.outerHTML)\s*=\s*|insertAdjacentHTML\s*\(")
+# tfHtml (i18n.js) escapes the translated sentence and every value — except one given as
+# {html: …}, markup its caller built. So tfHtml counts as an escaper, and each {html: …} value is a
+# sink of its own below: its parts must be escaped exactly as an innerHTML's would.
+_ESCAPERS = ("escapeHtml", "_esc", "esc", "e", "tfHtml")
+_SINK = re.compile(r"(\.innerHTML|\.outerHTML)\s*=\s*|insertAdjacentHTML\s*\(|[{,]\s*html\s*:\s*")
 
 
 def _js_expr_at(src, i):
@@ -2284,7 +2287,7 @@ else:
     def _sfa_conn(n, p):
         if n.get("type") == "ConditionalExpression":
             _vals = sorted(str((x or {}).get("raw")) for x in (n.get("consequent"), n.get("alternate")))
-            if _vals == ["'and on '", "'or on '"]:
+            if _vals == ["'and on {days}'", "'or on {days}'"]:
                 _names = []
                 _sfa_walk(n.get("test") or {}, lambda m, q: _names.append((m.get("property") or {}).get("name"))
                           if m.get("type") == "MemberExpression" else None)
@@ -2906,7 +2909,8 @@ else:
     # The walker swaps a text node that EXACTLY matches a key, so a player named "Admin" showed as
     # "Administrador" in the list and in the ban confirmation, while the ban targeted "Admin".
     _pn_row = re.search(r"'(<tr><td[^']*)'\s*\+\s*escapeHtml\(p\.name\)", _sd_js)
-    _pn_ban = re.search(r"'Ban (<strong[^']*)'\s*\+\s*_esc\(name\)", _sd_js)
+    _pn_ban = re.search(r"tfHtml\('Ban \{player\} from \{server\}\?', \{player: \{html: '(<strong[^']*)'\s*\+\s*_esc\(name\)",
+                        _sd_js)
     check(_pn_row is not None and _pn_ban is not None,
           "server page: the player-name cell and the ban confirmation were found",
           "row=%s ban=%s — the check below would examine nothing" % (bool(_pn_row), bool(_pn_ban)))
@@ -3288,12 +3292,12 @@ check("after.current_sha !== before.current_sha ? 'moved' : 'unchanged'" in _pro
       "panelRestartOutcome no longer compares the version before and after")
 _wpr_moved = _js_block_after(_wpr, "if(outcome==='moved'){") or ""
 check("panelRestartOutcome(before, s, targetBranch" in _wpr
-      and "escapeHtml(doneLabel" in _wpr_moved and _wpr.count("doneLabel") == 1,
+      and "_r14c_tr(doneLabel" in _wpr_moved and _wpr.count("doneLabel") == 1,
       "js: ...and 'Update complete' / 'Switched to' is printed only on that outcome",
       "the done label is printed outside the outcome==='moved' branch, i.e. on any restart")
 # Positive control: both flows hand the watcher what it compares against.
 check("watchPanelRestart(beforeBoot, msg, 'Update complete', before, '')" in _rh
-      and "watchPanelRestart(beforeBoot, msg, 'Switched to '+branch, before, branch)" in _rh,
+      and "watchPanelRestart(beforeBoot, msg, tf('Switched to {branch}', {branch: branch}), before, branch)" in _rh,
       "js: the update and branch-switch flows pass their pre-restart status to the watcher",
       "a caller does not pass `before` (and the target branch), so every outcome reads 'unknown'")
 
@@ -3466,7 +3470,8 @@ check(len(_upd_cur) == 1 and "d.current_version" in _upd_cur[0] and "d.current_s
       and "'v'+" not in _upd_cur[0],
       "js: the update card's header is the running version beside its commit, with no 'v'",
       repr(_upd_cur))
-_upd_offer = [ln for ln in _upd.splitlines() if "Update available:" in ln]
+# The STATEMENT, not the line: the offer is a tfHtml sentence now, its version a value on the next.
+_upd_offer = [_st for _st in _upd.split(";") if "Update available:" in _st]
 check(len(_upd_offer) == 1 and "d.remote_version" in _upd_offer[0] and "d.remote_sha" in _upd_offer[0]
       and "<strong>v'" not in _upd_offer[0],
       "js: ...and its offer is the target's version beside the target's commit",
@@ -4788,6 +4793,9 @@ function load(file){
     clearInterval(id){ t.cleared.push(id); delete t.live[id]; },
     setTimeout(){ return 0; }, clearTimeout(){}, pollWhenVisible(){ return 0; },
     escapeHtml: s => String(s), toast(){}, confirmDialog(){},
+    // i18n.js's tf/tfHtml (not `t`: that name is this harness's timer table)
+    tf: (s, v) => s.replace(/\{(\w+)\}/g, (m, k) => (v && k in v) ? String(v[k]) : m),
+    tfHtml: (s, v) => s.replace(/\{(\w+)\}/g, (m, k) => (v && k in v) ? (v[k] && v[k].html !== undefined ? v[k].html : String(v[k])) : m),
     location:{reload(){ ctx.reloaded = true; }},
     respond: () => ({ok:true, json:() => ({})}),
     fetch(url){ fetched.push(String(url)); try { return Promise.resolve(ctx.respond(String(url))); }
