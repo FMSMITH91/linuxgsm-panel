@@ -1,6 +1,6 @@
 """Part 5 of the unit suite. Imported for its side effects."""
 import subprocess as _sub
-from unit.part01 import (N, NS, _modfiles, _modsrc, _root, _sm_core, _sm_files, _sm_firewall, _ufw_raises, _ufw_raises_fnf, _ufw_raises_verb, check, eq, skip, json, os, sm, sys)  # noqa: F401,E402
+from unit.part01 import (N, NS, _modsrc, _root, _sm_core, _sm_files, _sm_firewall, _ufw_raises, _ufw_raises_fnf, _ufw_raises_verb, check, eq, skip, json, os, sm, sys)  # noqa: F401,E402
 from unit.part02 import (_time)  # noqa: F401,E402
 from unit.part03 import (_io)  # noqa: F401,E402
 from unit.part04 import (_SELF, _pl, _re)  # noqa: F401,E402

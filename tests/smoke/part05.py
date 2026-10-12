@@ -2362,8 +2362,6 @@ check("log stamps: the page does not offer to TURN ON LinuxGSM's stamping",
 check("log stamps: ...but it does offer the way back OFF",
       "disableLogTimestamps" in _sd_html,
       "no way to turn it off — anyone who enabled it is stuck with a frozen console")
-_sd_js_src = open(os.path.join(_repo_root, "static", "js", "server_detail.js"),
-                  encoding="utf-8").read()
 # Judged per request, not by one spelling anywhere in the file: `enabled: !0` or a variable passed
 # the old literal search, and an unrelated `enabled: true` failed it. Every fetch of the endpoint
 # in any script must send the literal body `{ enabled: false }`, and nothing else in its call.
