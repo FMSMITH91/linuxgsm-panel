@@ -551,6 +551,13 @@ def _js_whole_claim(joined, before):
     return None
 
 
+def _js_claim_parts(run, standalone, source):
+    """(text, source before it) to judge: judged whole when nothing is spliced in; part by part otherwise."""
+    if standalone and len(run) > 1:
+        return [("".join(s[0] for s in run), source[max(0, run[0][2] - 160):run[0][2]])]
+    return [(s[0], source[max(0, s[2] - 160):s[2]]) for s in run]
+
+
 def _js_run_claims(run, standalone, source):
     """The user-visible texts one run of literals (from _js_literal_runs) makes, as a list."""
     before = source[max(0, run[0][2] - 160):run[0][2]]
@@ -558,10 +565,7 @@ def _js_run_claims(run, standalone, source):
     whole = _js_whole_claim(joined, before) if standalone else None
     if whole:
         return [whole]
-    # Judged whole when nothing is spliced in; part by part otherwise, as before.
-    parts = [(joined, before)] if standalone and len(run) > 1 else \
-        [(s[0], source[max(0, s[2] - 160):s[2]]) for s in run]
-    out = [text for text, bef in parts if _js_claims(text, bef)]
+    out = [text for text, bef in _js_claim_parts(run, standalone, source) if _js_claims(text, bef)]
     out.extend(text for s in run for text in js_markup_texts(s[0]))
     return out + _js_icon_tail(joined, standalone)
 
