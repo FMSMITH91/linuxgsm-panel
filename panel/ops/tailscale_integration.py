@@ -316,7 +316,7 @@ def _serve_url_line(line):
 # The kind and what it serves are optional: a handler of a kind the CLI cannot describe (a
 # Redirect, which only `serve set-raw` writes) prints as a bare `|-- <mount>`, and skipping it made
 # a mount another app holds read as free. Such a route has type "" and target "".
-_SERVE_ROUTE_RE = re.compile(r"\|--\s+(\S+)(?:\s+(proxy|path|text)\s+(.+))?\Z")
+_SERVE_ROUTE_KINDS = ("proxy", "path", "text")
 
 
 def _parse_serve_status(text):
@@ -367,11 +367,19 @@ def _parse_serve_status(text):
 
 
 def _r14a_serve_route(line):
-    """One `|-- <mount> [<kind> <what>]` line as {mount, type, target}, else None."""
-    m = _SERVE_ROUTE_RE.match(line)
-    if not m:
+    """One `|-- <mount> [<kind> <what>]` line as {mount, type, target}, else None.
+
+    Read by splitting, not by one regular expression: `\\S+` beside an optional group backtracked
+    super-linearly on a long line (Sonar S8786). `line` is already stripped by the caller.
+    """
+    if not line.startswith("|--") or not line[3:4].isspace():
         return None
-    return {"mount": m.group(1), "type": m.group(2) or "", "target": (m.group(3) or "").strip()}
+    parts = line[3:].split(None, 2)
+    if len(parts) == 1:
+        return {"mount": parts[0], "type": "", "target": ""}
+    if len(parts) == 3 and parts[1] in _SERVE_ROUTE_KINDS:
+        return {"mount": parts[0], "type": parts[1], "target": parts[2].strip()}
+    return None
 
 
 def _append_service(services, url, funnel, routes, svc=""):
