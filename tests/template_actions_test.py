@@ -2319,8 +2319,9 @@ check(bool(_da) and "confirmDialog" in _da and "'restart'" in _da and "'stop'" i
 check("_runAction" in _dash and _dash.count("function _runAction(") == 1,
       "dashboard: the unconfirmed request path is reachable only through doAction",
       "_runAction is missing or duplicated")
-_bulk_start = _dash.find("function bulkAction(")
-_bulk = _dash[_bulk_start:] if _bulk_start != -1 else ""
+# The function's own body, not the file's tail from it: the tail held whatever followed bulkAction,
+# so a confirmDialog written after it would have satisfied this check (review 1011d).
+_bulk = _js_function_body(_dash, "bulkAction") or ""
 check("action === 'restart'" in _bulk and "confirmDialog" in _bulk,
       "dashboard: bulk restart confirms too (bulk stop always did)",
       "bulk restart no longer joins stop/update in the confirm branch")
@@ -3995,11 +3996,11 @@ check("_actionFn(el.getAttribute('data-action'))" in _pj_fire and "window[" not 
 # parseable JSON ({success:false}, status 500), so a save that failed removed the banner and said
 # "You won't be reminded again" — and the reminder was back on the next page load.
 _otp_src = (ROOT / "static" / "js" / "otp_nag.js").read_text(encoding="utf-8")
-_otp_fn = _otp_src[_otp_src.index("function dismissOtpNagForever"):]
+_otp_fn = _js_function_body(_otp_src, "dismissOtpNagForever") or ""   # its body, not the file's tail
 check("/account/2fa/dismiss-nag" in _otp_fn,
       "otp nag: (control) the dismiss handler is where this check is looking", "sliced the wrong text")
 check(re.search(r"\.success\)\)\s*throw", _otp_fn) is not None
-      and _otp_fn.index(".success") < _otp_fn.index("hideOtpNag(false)"),
+      and -1 < _otp_fn.find(".success") < _otp_fn.find("hideOtpNag(false)"),
       "otp nag: the banner is removed and success announced only when the reply says success",
       "any parseable reply — including {success:false} — is reported as saved")
 
@@ -5221,7 +5222,9 @@ const ENTRY = (name, dir, prot) => ({name: name, is_dir: dir, size: dir ? 0 : 5,
 })().catch(e => console.log(JSON.stringify({error: String(e && e.stack || e)})));"""
 _sfr_src = (STATIC_JS / "server_files.js").read_text(encoding="utf-8")
 _sfr_at = _sfr_src.find("var _fileList = document.getElementById('file-list');")
-_sfr_list = _js_code_only(_sfr_src[_sfr_at:]) if _sfr_at >= 0 else ""   # "" fails the checks below
+# The listener's own block, not the file's tail from it ("" fails the checks below).
+_sfr_list = _js_code_only(_js_block_after(_sfr_src, "var _fileList = document.getElementById('file-list');")
+                          or "") if _sfr_at >= 0 else ""
 if _node:
     with _tf_ta.NamedTemporaryFile("w", suffix=".js", delete=False) as _rh:
         _rh.write(_RENAME_HARNESS)
