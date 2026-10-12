@@ -369,7 +369,7 @@ def _parse_serve_status(text):
 def _r14a_serve_route(line):
     """One `|-- <mount> [<kind> <what>]` line as {mount, type, target}, else None.
 
-    Read by splitting, not by one regular expression: `\\S+` beside an optional group backtracked
+    Read by splitting, not by one regular expression: a non-space run beside an optional group backtracked
     super-linearly on a long line (Sonar S8786). `line` is already stripped by the caller.
     """
     if not line.startswith("|--") or not line[3:4].isspace():

@@ -122,7 +122,7 @@ for _attr, _fns in _WATCHED.items():
 # part60 (New file / New folder in the file browser) drives part12's app in a real bash over a
 # throwaway home, as part40 does for rename; imports part01, 12 and 40.
 # part61 (review 1011d: system_ops, Tailscale Serve, ssh-core and notify fixes) drives part12's app
-# for two routes; imports part01, 02, 12 and 20.
+# for two routes; imports part01, 02, 12, 20 and 47.
 # part62 (the fourth 2026-10-11 review: game files, debug report, helper, routes) drives part12's
 # app in a real bash with stand-in tools; imports part01, 05 and 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
