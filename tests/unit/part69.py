@@ -451,3 +451,74 @@ check("terminal: term_exit and term_error carry the template and values with the
       and {"message": "You already have 3 terminals open. Close one and try again.",
            "message_key": "You already have {n} terminals open. Close one and try again.",
            "message_vals": {"n": "3"}} in _sock69.get("term_error", []), repr(_sock69)[:900])
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 6. "N players are connected to NAME." and "HOST needs to reboot…" are whole sentences
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Built from fragments around the count and the name ("players are connected to", "needs to
+# reboot to finish applying system updates."), the translator had pieces with nothing to place,
+# and a language that puts the name or the count elsewhere could not be written. #423 made its
+# sibling in manage_remotes one template; these three are too. Each is driven in Spanish, on a
+# stand-in DOM, and what reached the page read back.
+_FAKEDOM69 = (
+    "function El(tag){ this.tagName = String(tag).toUpperCase(); this.children = []; this.attrs = {};\n"
+    "  this.style = {}; this._html = null; this.textContent = ''; this.className = ''; }\n"
+    "El.prototype.appendChild = function(c){ this.children.push(c); return c; };\n"
+    "El.prototype.insertBefore = function(c){ this.children.unshift(c); return c; };\n"
+    "El.prototype.setAttribute = function(k, v){ this.attrs[k] = v; };\n"
+    "El.prototype.addEventListener = function(){}; El.prototype.remove = function(){};\n"
+    "El.prototype.querySelector = function(){ return null; }; El.prototype.querySelectorAll = function(){ return []; };\n"
+    "Object.defineProperty(El.prototype, 'innerHTML', {set(v){ this._html = v; this.children = []; },\n"
+    "  get(){ return this._html; }});\n"
+    "Object.defineProperty(El.prototype, 'outerHTML', {get(){ var a = Object.keys(this.attrs).map(k => ' ' + k\n"
+    "  + (this.attrs[k] ? '=\"' + this.attrs[k] + '\"' : '')).join(''); var tg = this.tagName.toLowerCase();\n"
+    "  return '<' + tg + a + '>' + escapeHtml(this.textContent) + '</' + tg + '>'; }});\n"
+    "function Txt(s){ this.text = s; }\n"
+    "global.document.createElement = t => new El(t); global.document.createTextNode = s => new Txt(s);\n"
+    "global.document.body = new El('body');\n"
+    "function said(e){ if (e instanceof Txt) return e.text; if (e._html !== null) return e._html;\n"
+    "  return e.children.length ? e.children.map(said).join('') : e.textContent; }\n")
+_name69 = "players / reboot sentences in Spanish"
+_SA69, _NG69 = _read69(_JS69, "server_actions.js"), _read69(_JS69, "nags.js")
+_prog69 = (_es69("{n} player is connected to {name}.", "{n} players are connected to {name}.",
+                 "{n} players are connected to {count} servers: {list}.",
+                 "{n} player is connected to {count} server: {list}.",
+                 "{host} needs to reboot to finish applying system updates.", "the panel host")
+           + "window.escapeHtml = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');\n"
+           + _FAKEDOM69
+           + "var SERVER_NAME = 'Mi<Srv>', MOUNT = '', serverId = 1; function _esc(s){ return escapeHtml(s); }\n"
+           + _cut47(_SA69, "function _r12c_el(") + "\n" + _cut47(_SA69, "function actionPlayersDialog(") + "\n"
+           + _cut47(_BK69, "function _discT(") + "\n" + _cut47(_BK69, "function fbPlayersDialog(") + "\n"
+           + "".join(_cut47(_NG69, h) + "\n" for h in ("function _rbEl(", "function _rbName(", "function _rbHost("))
+           + _cut47(_NG69, "window.rebootNagRender = function(") + "\n"
+           "function _rbButton(){ return new El('button'); }\nwindow.LOCAL_HOST_ID = 7;\n"
+           "function whoOf(){ var ov = document.body.children.pop(); var body = ov.children[0].children[1];\n"
+           "  return said(body.children[0]); }\n"
+           "var out = {};\n"
+           "actionPlayersDialog('stop', 3, null); out.three = whoOf();\n"
+           "actionPlayersDialog('stop', 1, null); out.one = whoOf();\n"
+           "fbPlayersDialog([{name: 'A<b>', players: 2}, {name: 'B', players: 1}]); out.backup = whoOf();\n"
+           "fbPlayersDialog([{name: 'C', players: 1}]); out.backup1 = whoOf();\n"
+           "var nag = new El('div'); rebootNagRender(nag, 5, 'vps<1>', {packages: []}); out.nag = said(nag.children[1]);\n"
+           "var nag2 = new El('div'); rebootNagRender(nag2, 6, t('the panel host'), {packages: []}); out.nag2 = said(nag2.children[1]);\n"
+           "console.log(JSON.stringify(out));\n")
+_got69 = _node69(_name69, _prog69)
+if _got69 is not None:
+    check("players dialog (es): \"3 jugadores están conectados a NAME.\" is one translated sentence, the "
+          "count and the name escaped and guarded",
+          (_got69.get("three") or "").startswith('<strong data-no-i18n>3</strong> jugadores están conectados a '
+                                                 '<strong data-no-i18n>Mi&lt;Srv&gt;</strong>.')
+          and (_got69.get("one") or "").startswith('<strong data-no-i18n>1</strong> jugador está conectado a '),
+          repr(_got69)[:900])
+    check("backup players dialog (es): the counts and the server list sit in one translated sentence",
+          _got69.get("backup") == '<strong data-no-i18n>3</strong> jugadores están conectados a <strong '
+                                  'data-no-i18n>2</strong> servidores: <span data-no-i18n>A&lt;b&gt; (2), B (1)</span>.'
+          and (_got69.get("backup1") or "").startswith('<strong data-no-i18n>1</strong> jugador está conectado a '
+                                                       '<strong data-no-i18n>1</strong> servidor: '),
+          repr(_got69)[:900])
+    check("reboot banner (es): \"HOST necesita reiniciarse…\" is one sentence with the host in it, and the "
+          "panel host handed over already translated is written as the phrase the page translates",
+          "<strong data-no-i18n>vps&lt;1&gt;</strong> necesita reiniciarse para terminar de aplicar" in (_got69.get("nag") or "")
+          and "<strong>the panel host</strong> necesita reiniciarse" in (_got69.get("nag2") or ""),
+          repr(_got69)[:900])

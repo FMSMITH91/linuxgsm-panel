@@ -335,5 +335,12 @@
   "unknown log": "registro desconocido",
   "weekly gamedig check scheduled (re-installs it from the pinned lockfile if it breaks)": "comprobación semanal de gamedig programada (lo reinstala desde el lockfile fijado si se rompe)",
   "when_empty must be true or false": "when_empty debe ser true o false",
-  "write failed": "error de escritura"
+  "write failed": "error de escritura",
+  "{host} needs to reboot to finish applying system updates.": "{host} necesita reiniciarse para terminar de aplicar las actualizaciones del sistema.",
+  "{n} player is connected to {count} server: {list}.": "{n} jugador está conectado a {count} servidor: {list}.",
+  "{n} player is connected to {count} servers: {list}.": "{n} jugador está conectado a {count} servidores: {list}.",
+  "{n} player is connected to {name}.": "{n} jugador está conectado a {name}.",
+  "{n} players are connected to {count} server: {list}.": "{n} jugadores están conectados a {count} servidor: {list}.",
+  "{n} players are connected to {count} servers: {list}.": "{n} jugadores están conectados a {count} servidores: {list}.",
+  "{n} players are connected to {name}.": "{n} jugadores están conectados a {name}."
 }

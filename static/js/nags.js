@@ -22,7 +22,11 @@ function _rbName(text){            // a host or server name: never handed to the
   var e = _rbEl('strong', null, text); e.setAttribute('data-no-i18n', ''); return e;
 }
 function _rbHost(label){           // the panel's own host is called by a phrase, translated; any other by its name
-  return label === 'the panel host' ? _rbEl('strong', null, label) : _rbName(label);
+  // The palette hands the phrase over already translated (t('the panel host')): matched in either
+  // language and written as the English, so the page's translator says it — and says it again in
+  // the new language on a live switch, which a guarded name never would.
+  var phrase = label === 'the panel host' || (window.t && label === window.t('the panel host'));
+  return phrase ? _rbEl('strong', null, 'the panel host') : _rbName(label);
 }
 function _rbRow(name, word){       // "<name> — <word>", the word translatable on its own
   var li = _rbEl('li');
@@ -353,9 +357,13 @@ window.rebootNagRender = function(el, hostId, label, d){
     acts.appendChild(_rbButton('Cancel', 'btn-sm btn-outline-secondary', function(){ window.rebootCancel(hostId); }));
   } else {
     text.appendChild(_rbEl('strong', null, 'Reboot needed'));
-    text.appendChild(document.createTextNode(' — ')); text.appendChild(_rbHost(label));
-    text.appendChild(document.createTextNode(' '));
-    text.appendChild(_rbEl('span', null, 'needs to reboot to finish applying system updates.'));
+    text.appendChild(document.createTextNode(' — '));
+    // One whole sentence with the host as a value: the host is its subject, and split off it the
+    // predicate was a fragment no language could place the name around.
+    var why = _rbEl('span');
+    why.innerHTML = tfHtml('{host} needs to reboot to finish applying system updates.',
+      {host: {html: _rbHost(label).outerHTML}});  // nosemgrep - _rbHost's text is set by textContent: escaped
+    text.appendChild(why);
     if (d.packages && d.packages.length) {
       var pk = _rbEl('span', 'text-secondary', ' (' + d.packages.slice(0,6).join(', ') + (d.packages.length>6?', …':'') + ')');
       pk.style.fontSize = '.8rem'; pk.setAttribute('data-no-i18n', '');
