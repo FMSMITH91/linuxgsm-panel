@@ -85,10 +85,11 @@ try:
 
     # The console socket, as a superadmin (who passes can_access_server without a lookup).
     _sio72 = _p9.socketio.test_client(_p9, flask_test_client=_p9_client(P9_ADMIN))
+    _joinerr72 = None
     try:
         _sio72.emit("join_console", {"server_id": _HUGE72})
-    except Exception:           # nothing to see here: the check reads what the join left behind
-        pass
+    except Exception as e:      # the check reads what the join left behind; the raise is its detail
+        _joinerr72 = type(e).__name__
     with _sf72._viewers_lock:
         _joined72 = _HUGE72 in _sf72._console_viewers
         _sf72._console_viewers.pop(_HUGE72, None)
@@ -100,7 +101,7 @@ try:
         _term72 = [type(e).__name__]
     _sio72.disconnect()
     check("row id: a console join naming a server id past SQLite's range is not watched (the poller "
-          "would look it up every pass)", not _joined72)
+          "would look it up every pass)", not _joined72, repr(_joinerr72))
     check("row id: a terminal naming a host id past SQLite's range is 'No host was named.'",
           [p.get("message") if isinstance(p, dict) else p for p in _term72] == ["No host was named."], repr(_term72))
 
@@ -218,7 +219,7 @@ try:
     _p9_patch(_up72, "pro_attach", lambda remote, token: (True, "Attached to Ubuntu Pro."))
     _p9_patch(_up72, "pro_detach", lambda remote: (True, "Detached from Ubuntu Pro."))
     _p9_patch(_up72, "_pro_status_cached", lambda remote, force=False: None)
-    _att72 = _p9_json(_A72.post("/api/remote/%d/pro-attach" % _H72, json={"token": "x"})).get("message")
+    _att72 = _p9_json(_A72.post("/api/remote/%d/pro-attach" % _H72, json=dict(token=os.urandom(4).hex()))).get("message")
     _det72 = _p9_json(_A72.post("/api/remote/%d/pro-detach" % _H72)).get("message")
     check("es: Ubuntu Pro attach and detach answer in Spanish",
           (_att72, _det72) == (_ES72["Attached to Ubuntu Pro."], _ES72["Detached from Ubuntu Pro."]),

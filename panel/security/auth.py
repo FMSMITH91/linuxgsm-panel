@@ -33,6 +33,13 @@ def _r17c_row_id(n):
     return n if 0 < n <= R17C_MAX_ROW_ID else None
 
 
+def _r17c_get(model, ident):
+    """db.session.get, with an int past SQLite's range read as no row rather than raising."""
+    if isinstance(ident, int) and _r17c_row_id(ident) is None:
+        return None
+    return db.session.get(model, ident)
+
+
 login_manager = LoginManager()
 login_manager.login_view = "login"
 login_manager.login_message = "Please log in to access this page."
@@ -439,10 +446,8 @@ def can_access_server(user, game_server_id):
     """
     if user.is_superadmin:
         return True
-    # An int past SQLite's range is no server — and binding it would raise (see _r17c_row_id).
-    if isinstance(game_server_id, int) and _r17c_row_id(game_server_id) is None:
-        return False
-    gs = db.session.get(GameServer, game_server_id)
+    # _r17c_get: an int past SQLite's range is no server — binding it raised OverflowError.
+    gs = _r17c_get(GameServer, game_server_id)
     if not gs:
         return False
     for group in _groups_with_grants(user):

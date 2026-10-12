@@ -125,14 +125,14 @@ window.tfn = function(n, one, many, vals){
     if (node.nodeType !== 1) return;
     if (SKIP[node.tagName] || node.hasAttribute('data-no-i18n')) return;
     for (var i = 0; i < ATTRS.length; i++) tAttr(node, ATTRS[i]);
-    // A tfNodes sentence: built again from its English in this language (once per language), then
-    // only its value elements are walked — its text pieces ARE the translation.
-    if (typeof node.__i18nRender === 'function'){
-      if (node.__i18nLang !== window.LANG) node.__i18nRender();
-      for (var e = node.firstChild; e; e = e.nextSibling) if (e.nodeType === 1) walk(e);
-      return;
-    }
+    if (typeof node.__i18nRender === 'function'){ walkSentence(node); return; }
     for (var c = node.firstChild; c; c = c.nextSibling) walk(c);
+  }
+  // A tfNodes sentence: built again from its English in this language (once per language), then
+  // only its value elements are walked — its text pieces ARE the translation.
+  function walkSentence(node){
+    if (node.__i18nLang !== window.LANG) node.__i18nRender();
+    for (var e = node.firstChild; e; e = e.nextSibling) if (e.nodeType === 1) walk(e);
   }
   function run(root){ try { walk(root || document.body); } catch(e){} }
   function startObserver(){

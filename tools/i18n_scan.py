@@ -1625,12 +1625,12 @@ _R17C_LOCAL_TEXTS = "<local texts>"
 
 
 def _r17c_local_texts(fn, consts):
-    """{local: [text]} for each local of one function assigned a literal (or a constant, or either
-    branch of `a if c else b` / `a or b` of them).
+    """{local: [text]} for each local of one function assigned a literal.
 
-    `msg = "Full backup started…"` … `jsonify({"message": msg})`: a Name resolved only through module
-    constants and locals bound from CALLS, so a message held in a local assigned a literal was read
-    by no gate, and three of the full backup's answers had no es/fr entry.
+    Or a constant, or either branch of `a if c else b` / `a or b` of them. `msg = "Full backup
+    started…"` … `jsonify({"message": msg})`: a Name resolved only through module constants and
+    locals bound from CALLS, so a message held in a local assigned a literal was read by no gate,
+    and three of the full backup's answers had no es/fr entry.
     """
     out = {}
     for n in _py_own_nodes(fn):
@@ -1872,12 +1872,17 @@ def _py_node_literals(n, wrappers, consts, local_nodes=None):
     values = _py_sink_values(n, wrappers)
     if isinstance(n, ast.Return) and n.value is not None:
         values = values + _py_return_items(n.value)
-    names = [v for v in values for v in [v] + list(_py_operands(v)) if isinstance(v, ast.Name)]
+    names = _r17c_value_names(values)
     nodes = [lit for v in values for lit in _py_literal_nodes(v)]
     nodes += [ast.Constant(value=consts[v.id], lineno=v.lineno, end_lineno=v.lineno)
               for v in names if v.id in consts]
     nodes += [lit for v in names for lit in (local_nodes or {}).get(v.id, ())]
     return nodes
+
+
+def _r17c_value_names(values):
+    """The Names among `values` and their `a or b` / `a if c else b` / `a + b` operands."""
+    return [n for v in values for n in [v] + list(_py_operands(v)) if isinstance(n, ast.Name)]
 
 
 def _r17c_local_literal_nodes(fn):
