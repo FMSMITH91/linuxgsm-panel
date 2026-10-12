@@ -109,7 +109,7 @@ def wait_max_hours():
     """How long 'reboot when everyone has left' waits before it gives up; 0 waits for ever."""
     try:
         v = int(load_config().get(_SETTING_WAIT_HOURS, DEFAULT_WAIT_HOURS))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):   # OverflowError: a hand-edited `Infinity`
         return DEFAULT_WAIT_HOURS
     return max(0, min(v, 24 * 30))
 
