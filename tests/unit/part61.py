@@ -288,7 +288,7 @@ finally:
 
 # ── follow-up 1: Close public panel port reads the panel port the way the Network card does ─────
 from unit.part12 import P9_LOCAL  # noqa: E402
-from panel.ops.ssh_manager import firewall as _fw61  # noqa: E402
+from panel.ops.ssh_manager import firewall as _fwm61  # noqa: E402
 from panel.routes import remote_vps as _rv61  # noqa: E402
 
 _DST61 = ".".join(["203", "0", "113", "61"])     # a documentation address (TEST-NET-3)
@@ -314,7 +314,7 @@ def _close61(row):
     rows, deleted = [row], []
 
     def _status(remote):
-        return {"installed": True, "groups": _fw61._group_ufw_rules(
+        return {"installed": True, "groups": _fwm61._group_ufw_rules(
             [{"num": str(i + 1), "detail": d} for i, d in enumerate(rows)])}
 
     def _delete(remote, num, force=False, expect_key=None):
@@ -334,8 +334,8 @@ try:
                              tailscale_use_funnel=False))
     _scope61, _route61, _card61 = {}, {}, {}
     for _row61, _want61 in _PORT_ROWS61.items():
-        _g61 = _fw61._group_ufw_rules([{"num": "1", "detail": _row61}])[0]
-        _scope61[_row61] = _fw61._r14a_panel_port_scope(_g61, 5000)
+        _g61 = _fwm61._group_ufw_rules([{"num": "1", "detail": _row61}])[0]
+        _scope61[_row61] = _fwm61._r14a_panel_port_scope(_g61, 5000)
         _body61, _del61 = _close61(_row61)
         _msg61 = _body61.get("message", "")
         _route61[_row61] = ("closed" if _del61 and _body61.get("success") else
@@ -476,9 +476,9 @@ def _page61(text, panel_port, sshd=47122):
         _patch(_smc61, "is_local_server", lambda s: True)
         _patch(_smh61, "_sshd_current_ports", lambda s: [str(sshd)])
         _patch(_smh61, "_tailscale_conn_state", lambda s: (False, False))
-        _patch(_fw61, "_config_unreadable", lambda: False)
+        _patch(_fwm61, "_config_unreadable", lambda: False)
         _patch(_pcfg61, "load_config", lambda: {"port": panel_port, "tailscale_setup_done": True})
-        st = _fw61.remote_ufw_status(NS(port=sshd))
+        st = _fwm61.remote_ufw_status(NS(port=sshd))
     return {g["port_label"]: g for g in st.get("groups", [])}
 
 
@@ -554,13 +554,13 @@ _ph61 = _re61.compile(r"\{(\w+)\}")
 _miss61 = {}
 for _lang61 in ("es", "fr"):
     _c61 = _cat61(_lang61)
-    _miss61[_lang61] = [k for k, v in _fw61.R14A_REASONS.items()
+    _miss61[_lang61] = [k for k, v in _fwm61.R14A_REASONS.items()
                         if v not in _c61 or sorted(_ph61.findall(_c61[v])) != sorted(_ph61.findall(v))
                         or _c61[v] == v]
 check("protect reason: every reason template the Firewall page can show is in the es and fr catalogs, "
       "translated, with the same placeholders", _miss61 == {"es": [], "fr": []}, repr(_miss61))
 _g61 = _page61(_real61_text("s6c-only"), 47150)["47150/tcp"]
-_es61 = _fw61.r14a_reason_text(_g61, lambda s: _i18n61.translate("es", s))
+_es61 = _fwm61.r14a_reason_text(_g61, lambda s: _i18n61.translate("es", s))
 check("protect reason: the API's sentence is the English one, and the page's text for es is the Spanish "
       "template with the port in it",
       _g61["protect_reason"].startswith("Port 47150 is where this panel's own web interface listens")
@@ -598,7 +598,7 @@ with open(_os61.path.join(_ROOT61, "static", "js", "remote_firewall.js"), encodi
 _cat_es61 = _cat61("es")
 _js61 = _node47("const I18N = %s; const t = s => (Object.prototype.hasOwnProperty.call(I18N, s) ? I18N[s] : s);\n"
                 "%s\nconsole.log(JSON.stringify([_fwReason(%s), _fwReason({protect_reason: 'plain'})]));"
-                % (_json61.dumps({k: v for k, v in _cat_es61.items() if k in _fw61.R14A_REASONS.values()}),
+                % (_json61.dumps({k: v for k, v in _cat_es61.items() if k in _fwm61.R14A_REASONS.values()}),
                    _cut47(_jsrc61, "function _fwReason"), _json61.dumps(_g61)))
 _JSNAME61 = ("protect reason: the page's JS (_fwReason, used on every refresh and in the delete refusal) "
              "renders the translated template with the port, and falls back to the English sentence")

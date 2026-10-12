@@ -1917,7 +1917,7 @@ def _r14b_refused(detail, reason, limit=250):
     shown = _audit_safe(detail, limit)
     if len(shown) > room:
         shown = shown[:room - 1] + "…"
-    return "refused: %s: %s" % (shown, reason)
+    return "refused: " + shown + ": " + reason
 
 
 def _rename_refused(gs, rel, new_name, why):
