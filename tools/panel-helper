@@ -1074,11 +1074,7 @@ def _r12b_may_retract_root_all(rest):
     items = _r13b_cmnd_items(m.group(2)) if m else None
     if items is None:
         return True
-    runas = None
-    for item in items:
-        r = re.match(r"\(([^)]*)\)\s*", item)
-        if r:
-            runas, item = r.group(1), item[r.end():]
+    for runas, item in _r14b_runas_items(items):
         if _R14B_OPTION_SPEC_RE.match(item):
             return True       # `TIMEOUT=1h PASSWD: ALL`: an Option_Spec before the tags, not read
         _tags, cmd = _r12b_cmd_tags(item)
@@ -1088,6 +1084,19 @@ def _r12b_may_retract_root_all(rest):
         if (cmd == "ALL" or _SUDOERS_ALIAS_NAME_RE.fullmatch(cmd)) and _r12b_runas_may_be_root(runas):
             return True
     return False
+
+
+def _r14b_runas_items(items):
+    """Each item of a Cmnd_Spec_List as (the Runas in force for it, the item after its Runas).
+
+    A `(...)` carries on to the items after it; None is no Runas given yet (root, the default).
+    """
+    runas = None
+    for item in items:
+        r = re.match(r"\(([^)]*)\)\s*", item)
+        if r:
+            runas, item = r.group(1), item[r.end():]
+        yield runas, item
 
 
 def _r13b_cmnd_items(spec):
@@ -1214,31 +1223,34 @@ def _rule_is_nopasswd_root_all(rest):
     is the last `ALL` item with Runas ALL/root and NOPASSWD in force, and the items after it must
     not take it back. An item this does not read (an Option_Spec before its tags) is no grant."""
     m = re.fullmatch(r"(\S+)\s*=\s*(.*)", rest.strip())
-    if not m:
+    if not m or not _r12b_hosts_cover_here(m.group(1)):
         return False
-    hosts, spec = m.group(1), m.group(2)
-    if not _r12b_hosts_cover_here(hosts):
+    items = _r13b_cmnd_items(m.group(2))
+    grant_at = _r14b_last_grant_item(items) if items is not None else None
+    if grant_at is None:
         return False
-    items = _r13b_cmnd_items(spec)
-    if items is None:
-        return False
-    runas, pw, grant_at = None, None, None
-    for i, item in enumerate(items):
-        r = re.match(r"\(([^)]*)\)\s*", item)
-        if r:
-            runas, item = r.group(1), item[r.end():]
+    later = items[grant_at + 1:]
+    return not (later and _r12b_may_retract_root_all("%s = %s" % (m.group(1), ", ".join(later))))
+
+
+def _r14b_last_grant_item(items):
+    """Index of the last item that is `ALL`, Runas ALL/root, with NOPASSWD in force; else None.
+
+    The PASSWD/NOPASSWD tag carries on to the items after it, as the Runas does. None too when an
+    item has an Option_Spec before its tags: its tags are not read, so what the items after it
+    inherit is not known.
+    """
+    pw, grant_at = None, None
+    for i, (runas, item) in enumerate(_r14b_runas_items(items)):
         if _R14B_OPTION_SPEC_RE.match(item):
-            return False
+            return None
         tags, cmd = _r12b_cmd_tags(item)
         # The LAST of PASSWD / NOPASSWD is the one in force: `NOPASSWD: PASSWD: ALL` asks a password.
         pw = ([t for t in tags if t in ("PASSWD", "NOPASSWD")] or [pw])[-1]
         if (cmd.strip() == "ALL" and pw == "NOPASSWD"
                 and (runas is None or runas.split(":")[0].strip() in ("ALL", "root"))):
             grant_at = i
-    if grant_at is None:
-        return False
-    later = items[grant_at + 1:]
-    return not (later and _r12b_may_retract_root_all("%s = %s" % (hosts, ", ".join(later))))
+    return grant_at
 
 
 def _home_holds_a_panel(name):

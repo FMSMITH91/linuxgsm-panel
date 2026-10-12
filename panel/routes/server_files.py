@@ -1903,7 +1903,7 @@ def _failed_detail(detail, ok, reason):
 
 
 def _r14b_refused(detail, reason, limit=250):
-    """"refused: <detail>: <reason>" in `limit` characters, the fixed reason always whole.
+    """The row text `refused: <detail>: <reason>` in `limit` characters, the reason always whole.
 
     The detail is the user's path, and it came first under one 250-character cut: a deep path, or
     a short one in another script (each character escaped to six), cut the reason off with no
