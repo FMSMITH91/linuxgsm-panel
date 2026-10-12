@@ -402,6 +402,8 @@ _prog69 = (_es69("Session closed — {why}. Reload the page to start another.", 
            "var sock = {on: (ev, fn) => { on[ev] = fn; }}, term = {write: s => wrote.push(s)};\n"
            "function _status(m){ status.push(m); }\n"
            + ("" if "function _said(" not in _HT69 else _cut47(_HT69, "function _said(") + "\n")
+           # the handlers write through it (review 1012b: a host name's control characters)
+           + ("" if "function _r17cTermText(" not in _HT69 else _cut47(_HT69, "function _r17cTermText(") + "\n")
            + _cut47(_HT69, "sock.on('term_exit'") + ");\n"
            + _cut47(_HT69, "sock.on('term_error'") + ");\n"
            "on.term_exit(P.idle); on.term_exit(P.exited); on.term_exit(P.none); on.term_error(P.many);\n"
@@ -507,16 +509,19 @@ _prog69 = (_es69("{n} player is connected to {name}.", "{n} players are connecte
            "console.log(JSON.stringify(out));\n")
 _got69 = _node69(_name69, _prog69)
 if _got69 is not None:
+    # Each sentence inside the one <span> tfNodes hands back (review 1012b: so a live language switch
+    # can build it again).
     check("players dialog (es): \"3 jugadores están conectados a NAME.\" is one translated sentence, the "
           "count and the name escaped and guarded",
-          (_got69.get("three") or "").startswith('<strong data-no-i18n>3</strong> jugadores están conectados a '
-                                                 '<strong data-no-i18n>Mi&lt;Srv&gt;</strong>.')
-          and (_got69.get("one") or "").startswith('<strong data-no-i18n>1</strong> jugador está conectado a '),
+          (_got69.get("three") or "").startswith('<span><strong data-no-i18n>3</strong> jugadores están conectados a '
+                                                 '<strong data-no-i18n>Mi&lt;Srv&gt;</strong>.</span>')
+          and (_got69.get("one") or "").startswith('<span><strong data-no-i18n>1</strong> jugador está conectado a '),
           repr(_got69)[:900])
     check("backup players dialog (es): the counts and the server list sit in one translated sentence",
-          _got69.get("backup") == '<strong data-no-i18n>3</strong> jugadores están conectados a <strong '
+          _got69.get("backup") == '<span><strong data-no-i18n>3</strong> jugadores están conectados a <strong '
                                   'data-no-i18n>2</strong> servidores: <span data-no-i18n>A&lt;b&gt; (2), B (1)</span>.'
-          and (_got69.get("backup1") or "").startswith('<strong data-no-i18n>1</strong> jugador está conectado a '
+                                  '</span>'
+          and (_got69.get("backup1") or "").startswith('<span><strong data-no-i18n>1</strong> jugador está conectado a '
                                                        '<strong data-no-i18n>1</strong> servidor: '),
           repr(_got69)[:900])
     check("reboot banner (es): \"HOST necesita reiniciarse…\" is one sentence with the host in it, and the "
@@ -761,12 +766,16 @@ def _top_rules_r16u(pattern):
 
 _pt_r16u = _top_rules_r16u(r"(?<![\w-])\.page-title\s*\{([^}]*)\}")
 _ptk_r16u = _top_rules_r16u(r"\.page-title\s*>\s*\*\s*\{([^}]*)\}")
+# The wrap is scoped to a heading that carries a name (review 1012b, part72): on every heading it
+# left a long translated title's icon alone on its own line.
+_ptn_r16u = _top_rules_r16u(r"\.page-title:has\(>\s*\[data-no-i18n\]\)\s*\{([^}]*)\}")
 check("375px: a page heading wraps its label and name onto separate lines and breaks a long name "
       "inside the word (flex-wrap:wrap, overflow-wrap:anywhere, items min-width:0)",
-      _re_r16u.search(r"flex-wrap:\s*wrap", _pt_r16u) is not None
+      _re_r16u.search(r"flex-wrap:\s*wrap", _ptn_r16u) is not None
       and _re_r16u.search(r"overflow-wrap:\s*anywhere", _pt_r16u) is not None
       and _re_r16u.search(r"min-width:\s*0", _ptk_r16u) is not None,
-      "page-title: %r / children: %r" % (_pt_r16u.strip(), _ptk_r16u.strip()))
+      "page-title: %r / with a name: %r / children: %r" % (_pt_r16u.strip(), _ptn_r16u.strip(),
+                                                           _ptk_r16u.strip()))
 for _tpl_r16u in ("remote_firewall.html", "remote_manage.html"):
     _h1_r16u = _re_r16u.search(r'<h1 class="page-title[^"]*">(.*?)</h1>',
                                _read69(_root, "templates", _tpl_r16u), _re_r16u.S)

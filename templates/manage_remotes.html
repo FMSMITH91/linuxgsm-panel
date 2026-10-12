@@ -242,7 +242,8 @@
             </div>
           </div>
           <div class="col-md-1 d-flex align-items-end">
-            <button type="submit" class="btn btn-primary btn-sm w-100">
+            {# An icon alone has no name: a screen reader said only "button". #}
+            <button type="submit" class="btn btn-primary btn-sm w-100" title="Save changes" aria-label="Save changes">
               <i class="bi bi-check"></i>
             </button>
           </div>

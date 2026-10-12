@@ -489,7 +489,8 @@ _out53 = _node53(_name53, (
     "global.window = global;\n"
     "function mk(tag, cls, text){ return {tag, cls, text, children: [], style: {},\n"
     "  appendChild(c){ this.children.push(c); }, setAttribute(){} }; }\n"
-    "global.document = {createTextNode: t => ({text: t})};\n"
+    # createElement: tfNodes hands its sentence back inside one <span> (i18n.js, review 1012b)
+    "global.document = {createTextNode: t => ({text: t}), createElement: t => mk(t)};\n"
     "function _rbEl(tag, cls, text){ return mk(tag, cls, text); }\n"
     "function _rbHost(l){ return {text: l}; }\n"
     # the banner's sentence is built with i18n.js's tfNodes (base.html loads i18n.js first)

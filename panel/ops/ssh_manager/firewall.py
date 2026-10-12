@@ -249,7 +249,7 @@ def _panel_web_port(server, ts_running=None):
         return None  # served via Tailscale, and the tailnet is actually up
     try:
         return int(cfg.get("port", 5000))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):    # OverflowError: a hand-edited `Infinity`
         # Not a fallback port: a non-numeric `port` never reached socketio.run(), so there is no
         # listening panel for this to be about. Answer with the same default the boot path would
         # have read rather than a literal that can drift away from it.

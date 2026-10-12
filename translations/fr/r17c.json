@@ -1,0 +1,23 @@
+{
+  "Backing up all servers now — those with players are briefly stopped (players disconnected).": "Sauvegarde de tous les serveurs en cours : ceux qui ont des joueurs sont brièvement arrêtés (joueurs déconnectés).",
+  "Backing up empty servers now; any with players will back up automatically once they're empty.": "Sauvegarde des serveurs vides en cours ; ceux qui ont des joueurs seront sauvegardés automatiquement une fois vides.",
+  "Bedrock servers have no ban command — remove the player from the server's allowlist instead.": "Les serveurs Bedrock n'ont pas de commande de bannissement : retirez plutôt le joueur de la liste d'autorisation du serveur.",
+  "Checkpointed the WAL and refreshed stats — VACUUM was deferred because the database was busy; run it again in a moment to compact.": "Checkpoint du WAL effectué et statistiques actualisées ; VACUUM a été reporté car la base de données était occupée. Relancez-le dans un instant pour la compacter.",
+  "Database optimized.": "Base de données optimisée.",
+  "Full backup started — this can take a while for large servers.": "Sauvegarde complète lancée : cela peut prendre un moment pour les gros serveurs.",
+  "Internal server error": "Erreur interne du serveur",
+  "Refreshed stats — VACUUM was deferred because the database was busy, and the WAL checkpoint returned no result to confirm it ran. Run it again in a moment.": "Statistiques actualisées ; VACUUM a été reporté car la base de données était occupée, et le checkpoint du WAL n'a renvoyé aucun résultat confirmant son exécution. Relancez-le dans un instant.",
+  "Refreshed stats, but the WAL could not be trimmed and VACUUM was deferred — the database was busy. Run it again in a moment.": "Statistiques actualisées, mais le WAL n'a pas pu être réduit et VACUUM a été reporté : la base de données était occupée. Relancez-le dans un instant.",
+  "That server isn't running, so there's no console session to send to.": "Ce serveur ne tourne pas, il n'y a donc aucune session de console à qui envoyer.",
+  "The panel could not run that on the host, and it gave no reason.": "Le panneau n'a pas pu exécuter cela sur l'hôte, et aucune raison n'a été donnée.",
+  "This game's console has no command that bans a player by slot — kick them, and ban their address in the server's own config.": "La console de ce jeu n'a pas de commande pour bannir un joueur par son emplacement : expulsez-le, et bannissez son adresse dans la configuration propre du serveur.",
+  "Unblock {ip}": "Débloquer {ip}",
+  "Unmounted all content": "Tout le contenu a été démonté",
+  "fail2ban is now protecting the panel login — 5 failed logins from an IP in 10 minutes get it banned for an hour.": "fail2ban protège désormais la connexion au panneau : 5 échecs de connexion depuis une IP en 10 minutes la font bannir pendant une heure.",
+  "it is not a game account the panel may run as: {detail}": "ce n'est pas un compte de jeu sous lequel le panneau peut s'exécuter : {detail}",
+  "its game port is not set in its LinuxGSM config, and LinuxGSM's details did not answer, so its port could not be read — try the import again": "son port de jeu n'est pas défini dans sa configuration LinuxGSM, et details de LinuxGSM n'a pas répondu, son port n'a donc pas pu être lu ; réessayez l'importation",
+  "its game port is not set in its LinuxGSM config, and LinuxGSM's details reports none either: the game's own config (the file details names under \"Change ports by editing\") is missing or does not set the port. Set it there, then import it again. A game that writes that file itself the first time it starts needs one start with LinuxGSM first": "son port de jeu n'est pas défini dans sa configuration LinuxGSM, et details de LinuxGSM n'en indique aucun non plus : la configuration propre du jeu (le fichier que details nomme sous « Change ports by editing ») est absente ou ne définit pas le port. Définissez-le là, puis importez-le à nouveau. Un jeu qui écrit ce fichier lui-même à son premier démarrage doit d'abord être démarré une fois avec LinuxGSM",
+  "its port could not be used: {why} — correct it in the game's config, then import it": "son port n'a pas pu être utilisé : {why} ; corrigez-le dans la configuration du jeu, puis importez-le",
+  "port {port} is this host's SSH or the panel itself": "le port {port} est le SSH de cet hôte ou le panneau lui-même",
+  "{port} is not a port": "{port} n'est pas un port"
+}

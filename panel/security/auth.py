@@ -18,6 +18,28 @@ from flask_login import LoginManager, current_user
 
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
 
+# The largest id SQLite can bind (a signed 64-bit INTEGER). A larger Python int is not "no such
+# row" to the driver: binding it raises OverflowError, which every lookup below let straight through
+# as a bare 500 — `/api/free-port?remote_id=99999999999999999999`, a bulk action's `ids`, a tag set's
+# `tag_ids`. groups._MAX_ROW_ID bounds the group form's ids the same way; app.py's int URL converter
+# bounds every `<int:…>` route with this.
+R17C_MAX_ROW_ID = 2 ** 63 - 1
+
+
+def _r17c_row_id(n):
+    """`n` when it is an int a row id can be (1..R17C_MAX_ROW_ID), else None. A bool is not an id."""
+    if isinstance(n, bool) or not isinstance(n, int):
+        return None
+    return n if 0 < n <= R17C_MAX_ROW_ID else None
+
+
+def _r17c_get(model, ident):
+    """db.session.get, with an int past SQLite's range read as no row rather than raising."""
+    if isinstance(ident, int) and _r17c_row_id(ident) is None:
+        return None
+    return db.session.get(model, ident)
+
+
 login_manager = LoginManager()
 login_manager.login_view = "login"
 login_manager.login_message = "Please log in to access this page."
@@ -424,7 +446,8 @@ def can_access_server(user, game_server_id):
     """
     if user.is_superadmin:
         return True
-    gs = db.session.get(GameServer, game_server_id)
+    # _r17c_get: an int past SQLite's range is no server — binding it raised OverflowError.
+    gs = _r17c_get(GameServer, game_server_id)
     if not gs:
         return False
     for group in _groups_with_grants(user):
@@ -1818,6 +1841,10 @@ def get_remote(remote_id):
     the same per-host scoping game servers get. Superadmin sees all. Every remote-scoped route goes
     through here, so a direct API call to another remote's id is a 403.
     """
+    # An int past SQLite's range is no host: 404, as any other id with no row, not the
+    # OverflowError binding it raises (see _r17c_row_id).
+    if isinstance(remote_id, int) and _r17c_row_id(remote_id) is None:
+        abort(404)
     r = RemoteServer.query.get_or_404(remote_id)
     if not can_access_remote(current_user, remote_id):
         abort(403)
@@ -1846,6 +1873,9 @@ def get_host_remote(remote_id):
 def get_game(server_id):
     # db.get_or_404, not Model.query.get_or_404: the Query.get* family is the legacy API and is
     # deprecated in Flask-SQLAlchemy 3.1 / SQLAlchemy 2.0. Same behaviour, same 404.
+    # An int past SQLite's range is a 404 too, not the OverflowError binding it raises.
+    if isinstance(server_id, int) and _r17c_row_id(server_id) is None:
+        abort(404)
     return db.get_or_404(GameServer, server_id)
 
 

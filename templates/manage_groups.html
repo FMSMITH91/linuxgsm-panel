@@ -184,9 +184,12 @@
             {# No `for`: this heads a GROUP of checkboxes, not a single control. It used to point
                at manage-groups-name-new — the Add Group modal's Name box — so clicking it moved
                focus into a hidden dialog. #}
-            <span class="form-label fw-bold d-block">Permissions</span>
+            <span class="form-label fw-bold d-block" id="edit-perms-label-{{ group.id }}">Permissions</span>
             {{ role_presets() }}
-            <div style="max-height: 300px; overflow-y: auto;">
+            {# A named group, as the Add modal's list is: a screen reader announces the heading
+               when it enters the boxes. #}
+            <div style="max-height: 300px; overflow-y: auto;" role="group"
+                 aria-labelledby="edit-perms-label-{{ group.id }}">
               {% for perm_key, perm_desc in all_perms.items() %}
               {# Disabled where this admin cannot grant it. _grantable_perms drops a requested
                  permission they don't hold and PRESERVES one the group already has, so an

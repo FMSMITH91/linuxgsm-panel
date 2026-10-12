@@ -885,8 +885,14 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         if (!_returnOwed) _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now);
       }
       showPanelBacklog(panelLines);
-      // The priming wipe took any panel push already shown; put back those the backlog lacks.
-      _r13c_reshowPanelPushes(panelLines, reshow, floor);
+      // The priming wipe took any panel push already shown; put back those the backlog lacks —
+      // and not one shown again since the wipe. The re-prime ends a catch-up still out (_primeAt
+      // -> _startResync -> _endResync), which shows the panel pushes it held AFTER the wipe; one
+      // newer than this backlog was put back a second time: Clear pressed while the first window's
+      // catch-up was out showed the next [panel] line twice. Here, not in the reshow: on this path
+      // the wipe set _lastPanelT back to the cut (_panelLinesWiped), so it now holds only what was
+      // shown since. Load older's wipe does not reset it, so there it would hide its own pushes.
+      _r13c_reshowPanelPushes(panelLines, reshow, Math.max(floor, _lastPanelT));
       updateTsNotice();
       _showTsOffNote(data);
       if (stick) stickConsole();

@@ -468,7 +468,8 @@ def _register_full_backup(app):
                    detail="mode=%s%s" % (mode or "default", "" if started else " (refused: already running)"),
                    success=bool(started))
         if not started:
-            return jsonify({"success": True, "running": True, "message": "A full backup is already running."})
+            return jsonify({"success": True, "running": True,
+                            "message": i18n.tr("A full backup is already running.")})
         if defer:
             msg = ("Backing up empty servers now; any with players will back up automatically once "
                    "they're empty.")
@@ -476,7 +477,9 @@ def _register_full_backup(app):
             msg = "Backing up all servers now — those with players are briefly stopped (players disconnected)."
         else:
             msg = "Full backup started — this can take a while for large servers."
-        return jsonify({"success": True, "running": True, "message": msg})
+        # tr(): the page shows this behind a "✓ ", and every answer here reached es/fr viewers in
+        # English (review 1012b).
+        return jsonify({"success": True, "running": True, "message": i18n.tr(msg)})
 
 
 def _register_game_backup(app):
@@ -492,7 +495,7 @@ def _register_game_backup(app):
         """
         gs = get_game(server_id)
         if not gs.installed or not gs.remote_id:
-            return jsonify({"success": False, "message": "Server is not installed."}), 400
+            return jsonify({"success": False, "message": i18n.tr("Server is not installed.")}), 400
         # `force` = the admin already saw the "players online" prompt and chose to back up anyway
         # (which will disconnect them). Default off, so a normal click never kicks players.
         # A JSON boolean or a 400: bool("false") is True, so `{"force": "false"}` backed up over
@@ -501,10 +504,11 @@ def _register_game_backup(app):
         if _button_backup_running(server_id):
             # The maintenance menu's Backup is archiving it now, outside the lock below; a second
             # run would take that backup's lock for an orphan and archive the same files again.
-            return jsonify({"success": False, "message": "This server is already being backed up "
-                            "from its page — wait for that to finish."}), 200
+            return jsonify({"success": False, "message": i18n.tr(
+                "This server is already being backed up from its page — wait for that to finish.")}), 200
         if not _full_backup_lock.acquire(blocking=False):
-            return jsonify({"success": False, "message": "A backup is already running — try again in a moment."}), 200
+            return jsonify({"success": False,
+                            "message": i18n.tr("A backup is already running — try again in a moment.")}), 200
         # From here the lock is HELD; the worker's finally releases it. But if we fail to even hand
         # off to the worker (config read throws, thread can't start), release it ourselves — a leaked
         # lock would wedge ALL backups until a panel restart.
@@ -596,14 +600,14 @@ def _register_game_backup_files(app):
             log_action(current_user, "game_backup_delete", target=gs.name,
                        detail="refused: could not read the host's backup listing (%s)"
                               % str(name)[:120], success=False, server=gs)
-            return jsonify({"success": False, "message": _BK_UNREADABLE}), 200
+            return jsonify({"success": False, "message": i18n.tr(_BK_UNREADABLE)}), 200
         if not match:
-            return jsonify({"success": False, "message": "Backup not found."}), 404
+            return jsonify({"success": False, "message": i18n.tr("Backup not found.")}), 404
         try:
             ok = delete_game_backup(gs.remote, gs.short_name, match["name"])
             log_action(current_user, "game_backup_delete", target=gs.name,
                        detail=match["name"], success=ok, server=gs)
-            return jsonify({"success": ok, "message": ("Deleted." if ok else "Delete failed.")})
+            return jsonify({"success": ok, "message": i18n.tr("Deleted." if ok else "Delete failed.")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("game backup delete failed")}), 200
 
@@ -801,7 +805,7 @@ def _register_panel_backups(app):
         name = _json_str(_json_body(), "name")
         ok, msg = bk.delete_backup(name)
         log_action(current_user, "panel_backup_delete", target=name, success=ok)
-        return jsonify({"success": ok, "message": msg})
+        return jsonify({"success": ok, "message": i18n.tr(msg)})
 
     @app.route("/api/panel/backup/restore", methods=["POST"])
     @login_required

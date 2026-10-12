@@ -23,7 +23,7 @@ from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAM
 from panel.ops import ssh_manager as _sm
 from panel.ops import socket_hooks as _socket_hooks
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
-    can_access_remote, can_access_server, get_game, has_permission, log_action,
+    _r17c_row_id, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
     superadmin_required)
 from panel.services import (lgsm_data)
@@ -2680,7 +2680,9 @@ def _register_console_viewers(socketio):
         server_id = _json_int(data.get("server_id")) if isinstance(data, dict) else None
         if server_id is None:
             return
-        if server_id <= 0:
+        # Past SQLite's range too: a superadmin passes can_access_server without a lookup, and the
+        # poller's lookup of that id raised OverflowError on every pass.
+        if _r17c_row_id(server_id) is None:
             return
         # Enforce the SAME access control as the HTTP console routes: the socket must
         # belong to a logged-in user who has access to this specific server AND holds

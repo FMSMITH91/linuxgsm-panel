@@ -52,7 +52,7 @@ def _register_pro_changes(app):
         if ok:
             _pro_status_cached(remote, force=True)   # state changed → refresh the stored status
         log_action(current_user, "pro_attach", target=remote.name, success=ok, remote=remote)
-        return jsonify({"success": ok, "message": msg})
+        return jsonify({"success": ok, "message": i18n.tr(msg)})
 
     @app.route("/api/remote/<int:remote_id>/pro-service", methods=["POST"])
     @login_required
@@ -91,7 +91,7 @@ def _register_pro_changes(app):
         if ok:
             _pro_status_cached(remote, force=True)   # detached → refresh the stored status
         log_action(current_user, "pro_detach", target=remote.name, success=ok, remote=remote)
-        return jsonify({"success": ok, "message": msg})
+        return jsonify({"success": ok, "message": i18n.tr(msg)})
 
 
 def _register_live_metrics(app):
