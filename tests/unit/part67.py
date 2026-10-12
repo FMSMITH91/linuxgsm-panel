@@ -198,3 +198,17 @@ finally:
         db.session.commit()
     for _k67 in [k for k in _ar67._LOGIN_FAILS if _IP67 in str(k)]:
         _ar67._LOGIN_FAILS.pop(_k67, None)
+
+
+# ── A01: every Valve-engine game either gets the steam://connect join button or is named as a mod ─
+from panel.db import models as _models67  # noqa: E402
+from panel.ops.ssh_manager import game as _game67  # noqa: E402
+
+_valve67 = set(_game67._ENG_VALVE)
+_split67 = (sorted(_valve67 - _models67.STEAM_CONNECT_GAMES - _models67._STEAM_CONNECT_UNSURE),
+            sorted(_models67.STEAM_CONNECT_GAMES & _models67._STEAM_CONNECT_UNSURE),
+            sorted(_models67._STEAM_CONNECT_UNSURE - _valve67))
+check("join button: every Valve-engine game is in STEAM_CONNECT_GAMES or named as a mod Steam may not "
+      "launch (dod, doi, hldms, nd and opfor are their own Steam apps and had no join button)",
+      _split67 == ([], [], []) and {"dod", "doi", "hldms", "nd", "opfor"} <= _models67.STEAM_CONNECT_GAMES,
+      repr(_split67))
