@@ -67,18 +67,22 @@
     <div class="card mb-3">
       <div class="card-header"><i class="bi bi-plus-circle"></i> Open a Port</div>
       <div class="card-body">
+        {# Port and protocol share a row and the comment takes its own. As one row of 4/3/5 the
+           protocol select was 66px at 375px and ~100px in the desktop column, so "Both (TCP+UDP)"
+           showed as "Both (TC" in English and "Les deu" in French, and the comment placeholder
+           was cut too. #}
         <div class="row g-2">
-          <div class="col-4">
+          <div class="col-5">
             <input type="number" id="new-port" class="form-control form-control-sm" placeholder="Port" aria-label="Port" min="1" max="65535">
           </div>
-          <div class="col-3">
+          <div class="col-7">
             <select id="new-proto" class="form-select form-select-sm" aria-label="Protocol">
               <option value="both" selected>Both (TCP+UDP)</option>
               <option value="tcp">TCP</option>
               <option value="udp">UDP</option>
             </select>
           </div>
-          <div class="col-5">
+          <div class="col-12">
             <input type="text" id="new-comment" class="form-control form-control-sm" placeholder="Comment (optional)" aria-label="Comment (optional)">
           </div>
           <div class="col-12 mt-1">
@@ -99,15 +103,17 @@
           the whole internet — an admin port that only you should reach, or a game port only your
           LAN should. A range works too (27015:27020).</p>
         <div class="row g-2">
-          <div class="col-6">
+          {# Below 576px the source takes the whole row: at col-6 it is 149px, which cuts the
+             translated placeholder. Desktop keeps 6/3/3. #}
+          <div class="col-12 col-sm-6">
             <input type="text" id="src-cidr" class="form-control form-control-sm"
-                   placeholder="1.2.3.4 or 10.0.0.0/8" aria-labelledby="fw-restrict-title" data-no-i18n>
+                   placeholder="1.2.3.4 or 10.0.0.0/8" aria-labelledby="fw-restrict-title">
           </div>
-          <div class="col-3">
+          <div class="col-6 col-sm-3">
             <input type="text" id="src-port" class="form-control form-control-sm"
                    placeholder="Port" aria-label="Port">
           </div>
-          <div class="col-3">
+          <div class="col-6 col-sm-3">
             <select id="src-proto" class="form-select form-select-sm" aria-label="Protocol">
               <option value="tcp" selected>TCP</option>
               <option value="udp">UDP</option>
@@ -202,7 +208,7 @@
       <div class="card-body p-0">
         <div id="rules-list" style="max-height: 500px; overflow: auto;">
           {% if open_groups %}
-          <table class="table table-sm table-hover mb-0 align-middle">
+          <table class="table table-sm table-hover mb-0 align-middle table-pin-actions">
             <thead>
               <tr>
                 <th>Port</th>

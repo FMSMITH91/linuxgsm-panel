@@ -56,7 +56,7 @@ function bkRenderGames(fg, d){
   (d.games||[]).forEach(function(g){
     var rows=bkGameRows(g);
     var table = rows
-      ? '<div class="table-responsive mt-1"><table class="table table-sm align-middle mb-0" style="font-size:.8rem;">'
+      ? '<div class="table-responsive mt-1"><table class="table table-sm align-middle mb-0 table-pin-actions" style="font-size:.8rem;">'
         + '<thead><tr><th>Backup file</th><th>Size</th><th class="text-end">Actions</th></tr></thead>'
         + '<tbody>'+rows+'</tbody></table></div>'
       // "no backups yet" and "the host did not answer" are different facts, and only one of
@@ -628,7 +628,9 @@ function bkShowEncState(on){
   // Never repopulated from the server — it is never sent there. Cleared so a saved passphrase is
   // not left sitting in a form field for the next person at this screen.
   if(box) box.value='';
-  if(box) box.placeholder = on ? 'Set a new passphrase to replace the current one'
+  // A placeholder cannot wrap, so it has to fit the box: at 375px the field holds ~267px, and
+  // "Set a new passphrase to replace the current one" needed 293px in English (more in es/fr).
+  if(box) box.placeholder = on ? 'Enter a new passphrase to change it'
                                : 'Passphrase — at least 12 characters';
 }
 function saveBackupPassphrase(btn){

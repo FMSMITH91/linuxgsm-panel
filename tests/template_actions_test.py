@@ -2069,8 +2069,8 @@ if _m:
           "!important")
     # The identity column needs a floor, or the table's auto layout leaves it at the 62px that
     # wrapped "CS2 Public" onto two lines even once the Actions column stopped covering it.
-    _idcol = re.search(r"\.table-responsive\s+\.table\s+thead\s+th:nth-child\(2\)\s*,\s*"
-                       r"\.table-responsive\s+\.table\s+tbody\s+td:nth-child\(2\)\s*\{(.*?)\}",
+    _idcol = re.search(r"\.table-responsive\s+\.table\.dash-srv-table\s+thead\s+th:nth-child\(2\)\s*,\s*"
+                       r"\.table-responsive\s+\.table\.dash-srv-table\s+tbody\s+td:nth-child\(2\)\s*\{(.*?)\}",
                        _css, re.S)
     _idcode = re.sub(r"/\*.*?\*/", "", _idcol.group(1), flags=re.S) if _idcol else ""
     _idw = re.search(r"min-width:\s*(\d+)px", _idcode)
