@@ -194,15 +194,18 @@ class _Walker(HTMLParser):
         in_pre = "pre" in inner
         if not in_pre and (self._skip_tag != "data-no-i18n" or set(inner) & SKIP_TAGS):
             return                # code, a script, a style: never prose
-        for run in data.split(_SPLIT):
-            for part in re.sub(r"\s+", " ", run).split(_DYNAMIC):
-                part = part.strip()
-                words = part.split()
-                if _JS_CODEY.search(part) or not re.search(r"[a-z]{3}", part):
-                    continue
-                if (in_pre and len(words) >= 4 and part[-1:] in ".!?") \
-                        or (not in_pre and len(words) >= 3):
-                    self.dynamic.setdefault(part, set()).add("pre" if in_pre else "guarded")
+        for part in re.split("[%s%s]" % (_SPLIT, _DYNAMIC), re.sub(r"\s+", " ", data)):
+            part = part.strip()
+            if _is_skipped_prose(part, in_pre):
+                self.dynamic.setdefault(part, set()).add("pre" if in_pre else "guarded")
+
+
+def _is_skipped_prose(part, in_pre):
+    """A sentence in a <pre> (four words, ending like one), or three words under a guard."""
+    if _JS_CODEY.search(part) or not re.search(r"[a-z]{3}", part):
+        return False
+    words = len(part.split())
+    return words >= 4 and part[-1:] in ".!?" if in_pre else words >= 3
 
 
 # A quoted literal inside a {{ }} expression: `{{ 'Regenerate token' if t else 'Generate token' }}`,
@@ -236,7 +239,7 @@ def _is_expr_prose(text):
 
 
 def _jinja_literal(raw):
-    """A Jinja string literal's text, its escapes (\\uXXXX, \\', \\") decoded as Jinja decodes them."""
+    r"""A Jinja string literal's text, its escapes (\uXXXX, \', \") decoded as Jinja decodes them."""
     return re.sub(r"\\(u[0-9a-fA-F]{4}|.)",
                   lambda m: chr(int(m.group(1)[1:], 16)) if len(m.group(1)) == 5 else m.group(1), raw)
 
@@ -476,14 +479,19 @@ def js_markup_texts(text):
     """
     out = []
     for m in _JS_MARKUP_TEXT.finditer(text):
-        tag, attrs = (m.group(1) or "").lower(), (m.group(2) or "") + (m.group(3) or "")
-        if tag in SKIP_TAGS or m.group(5).lower() in SKIP_TAGS or "data-no-i18n" in attrs \
-                or _js_guarded_before(text[:m.start()]):
+        if _js_markup_skipped(m, text):
             continue              # the walker skips these, so nothing in them is asked for
         seg = re.sub(r"\s+", " ", html.unescape(m.group(4))).strip()
-        if seg and _js_markup_claims(seg, tag or m.group(5).lower()):
+        if seg and _js_markup_claims(seg, (m.group(1) or m.group(5)).lower()):
             out.append(seg)
     return out
+
+
+def _js_markup_skipped(m, text):
+    """Whether a _JS_MARKUP_TEXT match sits where the walker never looks (code, pre, a guard)."""
+    attrs = (m.group(2) or "") + (m.group(3) or "")
+    return bool((m.group(1) or "").lower() in SKIP_TAGS or m.group(5).lower() in SKIP_TAGS
+                or "data-no-i18n" in attrs or _js_guarded_before(text[:m.start()]))
 
 
 # A value the code writes into the page as ONE text node, whatever its shape: a confirm dialog's

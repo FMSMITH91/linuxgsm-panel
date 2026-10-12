@@ -482,7 +482,9 @@ from panel.ops import tailscale_integration as _tsi63  # noqa: E402
 from panel.ops import terminal_session as _ts63  # noqa: E402
 from panel.security.auth import ALL_PERMISSIONS as _PERMS63  # noqa: E402
 from panel.services.notifications import EVENTS as _EVENTS63  # noqa: E402
-_route63 = ([m[0] for m in _EVENTS63.values()] + list(_PERMS63.values()) + [_tsi63.SUGGEST_SERVE, _tsi63.SUGGEST_TAILNET_IP, _tsi63.SUGGEST_NOT_LINKED, _tsi63.SUGGEST_NO_TAILSCALE]
+_route63 = ([m[0] for m in _EVENTS63.values()] + list(_PERMS63.values())
+            + [_tsi63.SUGGEST_SERVE, _tsi63.SUGGEST_TAILNET_IP, _tsi63.SUGGEST_NOT_LINKED,
+               _tsi63.SUGGEST_NO_TAILSCALE]
             + [_ts63.SUDO_HINT_PER_USER, _ts63.SUDO_HINT_SYSTEM])
 _rmiss63 = {lang: [k for k in _route63 if k not in cat] for lang, cat in (("es", _ES63), ("fr", _FR63))}
 check("i18n: every alert-event label, permission name, Tailscale suggestion and sudo hint is in both "
