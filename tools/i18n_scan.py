@@ -423,14 +423,21 @@ def is_js_ui_word(text, before):
 # A literal handed to t() (or a file's own wrapper for it, _discT) is a string the code itself says
 # a person reads, whatever its shape: lower-case ("player is connected to"), one word, or a branch
 # of a ternary inside the call. Matched as "an open t( call with no unbalanced bracket since".
-_JS_T_CALL = re.compile(r"""\b(?:t|_discT)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
+_JS_T_CALL = re.compile(r"""\b(?:t|_discT|tf|tfHtml)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
 
 
 def is_js_t_arg(text, before):
     """Is this literal an argument of t() / _discT(), given the source just `before` it?"""
     # Not the right-hand side of a comparison: t(action === 'stop' ? … : …) chooses by 'stop'.
-    return bool(re.search(r"[A-Za-z]{2}", text) and not _JS_CODEY.search(text)
-                and not re.search(r"[=!]==?\s*$", before) and _JS_T_CALL.search(before))
+    m = _JS_T_CALL.search(before)
+    # Nor a VALUE of tf()/tfHtml(): `{dir: base || 'home'}` goes in untranslated, after the sentence.
+    if m and m.group(0).startswith("tf") and "{" in m.group(0):
+        return False
+    # A tf() template is a sentence by construction: its {placeholders}, a "/" or a "=" are words
+    # there ("{used} / {total} used", "Blank = use the default"); only markup or code is refused.
+    codey = re.compile(r"[<>{}$\\]") if m and m.group(0).startswith("tf") else _JS_CODEY
+    return bool(re.search(r"[A-Za-z]{2}", text) and not codey.search(re.sub(r"#?\{\w+\}", "", text))
+                and not re.search(r"[=!]==?\s*$", before) and m)
 
 
 # An innerHTML-built literal: the text of a WHOLE element inside it (`<th>Mods</th>`, an icon then
@@ -654,6 +661,133 @@ def _untranslated_in(path, source, at, rhs):
         if _js_claims(text, before) or (_JS_LOWER_LABEL.match(text) and " " in text):
             found.append((os.path.basename(path), source.count("\n", 0, at + s0) + 1, text))
     return found
+
+
+# ── A sentence spliced around a value ─────────────────────────────────────────────────────────
+# `toast(n + ' uploaded to ' + dir)`, `bodyText: 'Remove ' + id + ' from this server?'`: the words
+# reach the page welded to the value, as ONE text node no catalog key can match, so the sentence is
+# English in every language, and translating the pieces would keep English's word order. Such a
+# sentence is a catalog template with placeholders, filled after translation: tf('{n} uploaded to
+# {dir}', {n: n, dir: dir}) (tfHtml for an innerHTML sink, which escapes every value). Reported here:
+# a literal joined by `+` to something that is not a literal, whose text at that join is words.
+# Only the text node at the join counts: a literal's whole elements (`<th>Name</th>`) are their own
+# nodes, attributes and markup are not text, and punctuation, units and CSS class lists around a
+# name ('“' + name + '”', n + ' MB', 'btn ' + cls) are not prose. `i18n-ignore` on a line exempts it.
+_JS_GAP = re.compile(r"(?:\s|//[^\n]*\n|/\*.*?\*/)*\+(?:\s|//[^\n]*\n|/\*.*?\*/)*\Z", re.S)
+_JS_UNITS = {"ms", "px", "kb", "mb", "gb", "tb", "s", "m", "h", "d"}
+_JS_CSS_WORDS = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]*)*$")
+# The statement assigns a class, a style or an id, so its words are names, not text.
+_JS_NOT_TEXT_SINK = re.compile(r"(?:\bclassName|\.style(?:\.\w+)?|\.id|\bclassList\.\w+\(|"
+                               r"setAttribute\(\s*['\"](?:class|id|style|data-[\w-]+)['\"]\s*,)\s*[+]?=?[^=;]*$")
+
+
+def _js_splice_runs(source):
+    """The literals of a JS file as `'…' + '…'` runs, comments allowed in a join: [(spans, lead, tail)].
+
+    `lead`/`tail`: the run is joined by `+` to something that is not a literal before/after it.
+    """
+    runs = []
+    for span in _js_string_spans(source):
+        if runs and _JS_GAP.match(source[runs[-1][-1][3]:span[2]] + "\n") \
+                and "+" in source[runs[-1][-1][3]:span[2]]:
+            runs[-1].append(span)
+        else:
+            runs.append([span])
+    out = []
+    for run in runs:
+        lead = re.search(r"\+(?:\s|//[^\n]*\n)*\Z", source[max(0, run[0][2] - 200):run[0][2]])
+        tail = re.match(r"(?:\s|//[^\n]*\n)*\+", source[run[-1][3]:run[-1][3] + 200])
+        out.append((run, bool(lead), bool(tail)))
+    return out
+
+
+_JS_INLINE_EDGE = r"(?:b|strong|em|u|span|code)"
+
+
+def _js_edge_text(joined, side):
+    """The text node at one end of a joined run: before its first tag, or after its last.
+
+    Past an inline element's own tags: in 'Ban <strong>' + name + '</strong> from <strong>' the
+    value sits inside <strong>, and " from " is still a piece of the sentence around it.
+    """
+    if side == "lead":
+        joined = re.sub(r"\A(?:</%s>)+" % _JS_INLINE_EDGE, "", joined)
+        seg = joined.split("<", 1)[0]
+        return "" if ">" in seg else seg              # starts inside an opening tag: not text
+    joined = re.sub(r"(?:<%s\b[^<>]*>)+\Z" % _JS_INLINE_EDGE, "", joined)
+    seg = joined.rsplit(">", 1)[-1]
+    return "" if "<" in seg else seg                  # ends inside a tag: not text
+
+
+def _js_splice_prose(seg):
+    """Whether the text at a join reads as words, not punctuation, a unit or a class list."""
+    seg = re.sub(r"&\w+;", " ", seg)
+    if re.search(r"[/=<>\"\[\]{};#\\(]$|[/=<>\"\[\]{};#\\]|^\s*[.&?-]", seg.strip()):
+        return False                                  # a URL, a selector, an attribute, code
+    words = seg.split()
+    if words and all(_JS_CSS_WORDS.match(w) for w in words) and any("-" in w for w in words):
+        return False                                  # 'btn text-wrap ' + cls
+    return any(len(w) >= 2 and w.lower() not in _JS_UNITS
+               for w in re.findall(r"[A-Za-z]*[a-z][A-Za-z]*", seg))
+
+
+def spliced_js(js_dir=JS_DIR):
+    """[(file, line, text)]: sentence words joined by `+` to a value in a script."""
+    found = []
+    for path in sorted(glob.glob(os.path.join(js_dir, "*.js"))):
+        with open(path, encoding="utf-8") as fh:
+            source = fh.read()
+        lines = source.splitlines()
+        for run, lead, tail in _js_splice_runs(source):
+            if not (lead or tail) or any(JS_IGNORE in lines[s[1] - 1] for s in run if s[1] <= len(lines)):
+                continue
+            stmt = source[max(0, run[0][2] - 300):run[0][2]].rsplit(";", 1)[-1]
+            if _JS_NOT_TEXT_SINK.search(stmt):
+                continue                              # a class list, a style, an id: not text
+            joined = "".join(s[0] for s in run)
+            for side, on in (("lead", lead), ("tail", tail)):
+                seg = _js_edge_text(joined, side) if on else ""
+                if _js_splice_prose(seg):
+                    found.append((os.path.basename(path), run[0][1], seg.strip()))
+    return sorted(set(found))
+
+
+# A sentence split by emphasis: 'Click <strong>Repair database</strong> — it rebuilds…'. Each piece
+# reaches the walker as its own node ("Click", "— it rebuilds…"), keys no translation can be written
+# for, in English's order. Reported: prose OUTSIDE a bold/em element whose own text is prose, right
+# beside it. ('<strong>1.</strong> Open this link' is a step number, not a split sentence.)
+_JS_INLINE_OPEN = re.compile(r"<(b|strong|em|u)\b[^>]*>\Z")
+
+
+def _js_emphasis_splits(joined):
+    """The prose pieces of one literal run that sit beside an emphasised piece of prose."""
+    parts, out = re.split(r"(<[^>]*>)", joined), []
+    for i, part in enumerate(parts):
+        if part.startswith("<") or not _js_splice_prose(part):
+            continue
+        # after a closing </b> whose element held prose, or before an opening <b> that does
+        before = i >= 3 and re.fullmatch(r"</(b|strong|em|u)>", parts[i - 1]) \
+            and _JS_INLINE_OPEN.match(parts[i - 3]) and _js_splice_prose(parts[i - 2])
+        after = i + 3 < len(parts) and _JS_INLINE_OPEN.match(parts[i + 1]) \
+            and _js_splice_prose(parts[i + 2]) and re.fullmatch(r"</(b|strong|em|u)>", parts[i + 3])
+        if before or after:
+            out.append(part.strip())
+    return out
+
+
+def emphasis_split_js(js_dir=JS_DIR):
+    """[(file, line, text)]: sentence pieces split around bold or emphasised words in a script."""
+    found = []
+    for path in sorted(glob.glob(os.path.join(js_dir, "*.js"))):
+        with open(path, encoding="utf-8") as fh:
+            source = fh.read()
+        lines = source.splitlines()
+        for run, _lead, _tail in _js_splice_runs(source):
+            if any(JS_IGNORE in lines[s[1] - 1] for s in run if s[1] <= len(lines)):
+                continue
+            for text in _js_emphasis_splits("".join(s[0] for s in run)):
+                found.append((os.path.basename(path), run[0][1], text))
+    return sorted(set(found))
 
 
 def missing_js(lang="es", js_dir=JS_DIR, translation_dir=TRANSLATION_DIR):

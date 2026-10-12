@@ -176,6 +176,8 @@ def _ts_install47():
     src = _read47(_JS47, "manage_remotes.js")
     prog = (_SETTLE47 + "let pending = [], posts = 0, removed = 0, inserted = 0, auth = null;\n"
             "global.MOUNT = ''; global.escapeHtml = s => String(s);\n"
+            "global.tf = global.tfHtml = (s, v) => s.replace(/\\{(\\w+)\\}/g, (m, k) =>   // i18n.js's\n"
+            "  (v && k in v) ? (v[k] && v[k].html !== undefined ? v[k].html : String(v[k])) : m);\n"
             "const logEl = {innerHTML: '', insertAdjacentHTML: () => { inserted++; auth = {remove: () => { removed++; auth = null; }}; }};\n"
             "global.document = {getElementById: id => id === 'install-log' ? logEl : (id === 'ts-install-auth' ? auth : null)};\n"
             "global.fetch = () => { posts++; return new Promise(res => pending.push(res)); };\n"

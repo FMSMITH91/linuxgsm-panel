@@ -445,5 +445,15 @@
   "A super admin account is being brute-forced": "Un compte super administrateur subit une attaque par force brute",
   "A user is created or a group's permissions change": "Un utilisateur est créé ou les permissions d'un groupe changent",
   "fail2ban bans an IP on the panel login": "fail2ban bannit une IP sur la connexion du panel",
-  "A burst of fail2ban bans (attack wave)": "Une rafale de bannissements fail2ban (vague d'attaques)"
+  "A burst of fail2ban bans (attack wave)": "Une rafale de bannissements fail2ban (vague d'attaques)",
+  "active {when}": "actif {when}",
+  "expires {date}": "expire le {date}",
+  "Enabling {name}… this can take a moment.": "Activation de {name}… cela peut prendre un moment.",
+  "Disabling {name}… this can take a moment.": "Désactivation de {name}… cela peut prendre un moment.",
+  "{action} issued for {name}": "{action} envoyé à {name}",
+  "{action} done": "{action} terminé",
+  "Copied {text}": "Copié {text}",
+  "Copied {text} — paste it in your game to join": "Copié {text} — collez-le dans votre jeu pour rejoindre",
+  "Error: {why}": "Erreur : {why}",
+  "Last checked {when}": "Dernière vérification {when}"
 }

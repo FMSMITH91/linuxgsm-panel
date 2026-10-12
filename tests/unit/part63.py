@@ -491,9 +491,9 @@ check("i18n: every alert-event label, permission name, Tailscale suggestion and 
       "catalogs (all 39 event and permission labels were English on /notifications and /groups)",
       not _rmiss63["es"] and not _rmiss63["fr"], repr({k: v[:4] for k, v in _rmiss63.items()}))
 _pct63 = sorted((lang, k) for lang, cat in (("es", _ES63), ("fr", _FR63)) for k, v in cat.items()
-                if _re63.findall(r"%[sd%]", k) != _re63.findall(r"%[sd%]", v))
-check("i18n: every translation keeps its key's %s placeholders (a |format or a % on one that lost them "
-      "is a 500)", not _pct63, repr(_pct63[:6]))
+                if sorted(_re63.findall(r"%[sd%]|\{\w+\}", k)) != sorted(_re63.findall(r"%[sd%]|\{\w+\}", v)))
+check("i18n: every translation keeps its key's %s and {name} placeholders (a |format or a % on one that "
+      "lost them is a 500; a tf() one shows the value nowhere)", not _pct63, repr(_pct63[:6]))
 _sd_note63 = _tsi63._direct_suggestion(5000, "https", _tsi63.SUGGEST_NO_TAILSCALE)
 check("tailscale page: a suggestion's sentence and its address are separate fields, the sentence a "
       "catalog key (the page showed the f-string, English in every language)",
@@ -536,3 +536,90 @@ check("i18n: the dashboard's row controls are labelled in the viewer's language,
 check("i18n: ...and /users' delete confirm is the translated sentence (it was English with the name "
       "inside)", "¿Eliminar el usuario “" in _users63 and "Delete user “" not in _users63,
       repr(_users63.count("data-confirm=")))
+
+
+# ── sentences spliced around a value, and split by bold words, in the scripts ──────────────────
+_td63 = os.path.realpath(_tf63.mkdtemp(prefix="lgsm-unit-p63-splice-"))
+try:
+    with open(os.path.join(_td63, "a.js"), "w", encoding="utf-8") as _fh63:
+        _fh63.write(
+            "toast('Uninstalling ' + name + '…', 'info');\n"
+            "st.textContent = n + ' uploaded to ' + dir;\n"
+            "confirmDialog({bodyText: 'Remove ' + id + ' from this server?'});\n"
+            "el.innerHTML = '<span class=\"x\">Panel restarting on ' + esc(a) + '</span>';\n"
+            "b = 'Ban <strong data-no-i18n>' + n + '</strong> from <strong data-no-i18n>' + s + '</strong>?';\n"
+            "h = '<input title=\"Blank = default. Between ' + lo + ' and ' + hi + '.\">';\n"
+            "w.innerHTML = 'Stopped waiting. Once you have approved '  // a comment in the join\n"
+            "  + 'this machine:';\n"
+            "q = '<p>Click <strong>Repair database</strong> — it rebuilds the data.</p>';\n")
+    with open(os.path.join(_td63, "b.js"), "w", encoding="utf-8") as _fh63:
+        _fh63.write(
+            "el.textContent = '“' + name + '”';\n"
+            "cell.textContent = n + ' MB';\n"
+            "var b = _rbEl('button', 'btn text-wrap ' + cls, text);\n"
+            "badge.className = 'badge ' + kind;\n"
+            "fetch('/api/remote/' + id + '/delete');\n"
+            "x = 'reboot restart power ' + name;   // i18n-ignore: search keywords\n"
+            "m.innerHTML = tfHtml('Connected! IP: {ip}', {ip: {html: '<code>' + esc(ip) + '</code>'}});\n"
+            "s = '<strong>1.</strong> Open this link and approve the machine:';\n"
+            "t1 = tf('{used} / {total} used', {used: a, total: b || 'home'});\n")
+    _sp63_hits = _i18n63.spliced_js(_td63)
+    _em63_hits = _i18n63.emphasis_split_js(_td63)
+    _claim63 = set(_i18n63.scan_js(_td63))
+finally:
+    _shutil63.rmtree(_td63, ignore_errors=True)
+_sp63_a = sorted(_t for _f, _l, _t in _sp63_hits if _f == "a.js")
+check("i18n scan (JS): words joined by + to a value are reported — a toast, a textContent, a confirm body, "
+      "an innerHTML text node, a title attribute, past an inline element around the value, across a "
+      "comment in the join (the two literals on either side of it are one sentence, not reported)",
+      _sp63_a == sorted(["Uninstalling", "uploaded to", "Remove", "from this server?", "Panel restarting on",
+                         "Ban", "from", "and"]), repr(_sp63_hits))
+check("i18n scan (JS): ...a sentence split around bold words is reported too",
+      [_t for _f, _l, _t in _em63_hits] == ["Click", "— it rebuilds the data."], repr(_em63_hits))
+check("i18n scan (JS): ...and nothing around a name that is not a sentence: quotes, a unit, a class list, a "
+      "class name, a URL, an i18n-ignore line, a tfHtml value, a step number in bold (control)",
+      not [_h for _h in _sp63_hits + _em63_hits if _h[0] == "b.js"], repr(_sp63_hits + _em63_hits))
+check("i18n scan (JS): a tf() template is asked for with its {placeholders} and \"/\", and its values are "
+      "not ('home' goes in untranslated)",
+      "{used} / {total} used" in _claim63 and "Connected! IP: {ip}" in _claim63 and "home" not in _claim63,
+      repr(sorted(_claim63)))
+check("i18n: no script splices a sentence around a value, or splits one around bold words",
+      not _i18n63.spliced_js() and not _i18n63.emphasis_split_js(),
+      repr((_i18n63.spliced_js()[:6], _i18n63.emphasis_split_js()[:6])))
+
+# ── tf / tfHtml: translated first, then the values, which are never translated ─────────────────
+_name63 = "i18n: tf and tfHtml"
+_out63 = _node63(_name63, (
+    "global.window = global;\nglobal.document = {readyState: 'complete', body: null};\n"
+    "window.I18N = {'{n} uploaded to {dir}': '{n} subidos a {dir}', 'Online': 'En línea',\n"
+    "               'Ban {name}?': '¿Banear a {name}?'};\nwindow.LANG = 'en';\n"
+    + _read63(_JS63, "i18n.js") + "\n"
+    "console.log(JSON.stringify([\n"
+    "  tf('{n} uploaded to {dir}', {n: 3, dir: 'Online'}),\n"
+    "  tf('Not in the catalog {x}', {x: '<b>'}),\n"
+    "  tfHtml('{n} uploaded to {dir}', {n: 3, dir: '<img src=x>'}),\n"
+    "  tfHtml('Ban {name}?', {name: {html: '<strong>Bob</strong>'}}),\n"
+    "  tf('{a} and {missing}', {a: '{missing}'})]));\n"))
+if _out63 is not None:
+    check("i18n: tf translates the whole sentence, then puts the values in untranslated (a folder called "
+          "Online stays Online); tfHtml escapes the values, except one given as {html}",
+          _out63 == ["3 subidos a Online", "Not in the catalog <b>", "3 subidos a &lt;img src=x&gt;",
+                     "¿Banear a <strong>Bob</strong>?", "{missing} and {missing}"], repr(_out63))
+
+# ── one rewritten site, run: the upload summary in Spanish ──────────────────────────────────────
+_name63 = "file browser: the upload summary in Spanish"
+_rep63 = _cut47(_cut47(_SF63, "function _doUpload("), "function report(")
+_out63 = _node63(_name63, (
+    "global.window = global;\nglobal.document = {readyState: 'complete', body: null};\n"
+    # Only the report's own keys: the whole catalog is past the argument-length limit of `node -e`.
+    "window.I18N = " + _json63.dumps({_k: _ES63.get(_k, "?") for _k in (
+        "{n} uploaded to {dir}", "{n} already existed — re-drop to replace", "{n} failed")})
+    + ";\nwindow.LANG = 'es';\n" + _read63(_JS63, "i18n.js") + "\n"
+    "var st = {}, total = 5, failed = 1, clashed = 1, base = 'cfg', curDir = 'cfg', _uploadChecked = true;\n"
+    "function browse(){}\nglobal.setTimeout = function(){};\n" + _rep63 + "\nreport();\n"
+    "console.log(JSON.stringify(st.textContent));\n"))
+if _out63 is not None:
+    check("file browser: the upload summary reads as Spanish sentences with the counts and the folder in "
+          "them (it was \"3 uploaded to cfg, 1 already existed…\" in English)",
+          _out63 == "✓ 3 subidos a cfg, 1 ya existían — vuelve a soltarlos para reemplazarlos, 1 fallaron",
+          repr(_out63))

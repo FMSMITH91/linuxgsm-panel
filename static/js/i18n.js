@@ -14,6 +14,27 @@ function i18nLookup(key){
   return (typeof c[key] === 'string') ? c[key] : undefined;
 }
 window.t = function(s){ return i18nLookup(s) || s; };
+// A sentence with a value in it ("{n} uploaded to {dir}") is translated WHOLE, then the values go in.
+// Spliced together first ('' + n + ' uploaded to ' + dir), it reached the page as one text node no
+// catalog key could match, so it was English in every language; translated piece by piece, the
+// word order was English's. Values are never translated (a server called "Online" stays "Online").
+// tfHtml is the innerHTML twin: the translated sentence and every value are escaped, except a value
+// given as {html: '…'} — markup the caller built, with its own values escaped (a bold name).
+function i18nEsc(s){
+  return String(s).replace(/[&<>"']/g, function(c){
+    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+  });
+}
+function i18nFill(s, vals, html){
+  return s.replace(/\{(\w+)\}/g, function(m, k){
+    if (!vals || !Object.prototype.hasOwnProperty.call(vals, k)) return m;
+    var v = vals[k];
+    if (!html) return String(v);
+    return (v !== null && typeof v === 'object' && 'html' in v) ? String(v.html) : i18nEsc(v);
+  });
+}
+window.tf = function(s, vals){ return i18nFill(window.t(s), vals, false); };
+window.tfHtml = function(s, vals){ return i18nFill(i18nEsc(window.t(s)), vals, true); };
 (function(){
   // Every text node + title/placeholder/aria-label whose EXACT (whitespace-collapsed) text is a
   // catalog key gets swapped. Each node's ORIGINAL English is remembered (node.__i18nEn /

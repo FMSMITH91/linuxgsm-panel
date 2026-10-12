@@ -399,7 +399,7 @@ function _span(text, ws){
   var s=document.createElement('span'); s.textContent=text; if(ws) s.style.whiteSpace=ws; return s;
 }
 function deletePath(path, isDir){
-  confirmDialog({title:'Delete '+(isDir?'directory':'file'), icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
+  confirmDialog({title:isDir?'Delete directory':'Delete file', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
     bodyNode:_pathBody(isDir?'Delete this directory and everything in it?':'Delete this file?', path),
     onConfirm:function(){
       fetch(MOUNT+'/api/server/'+serverId+'/delete-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
@@ -638,10 +638,12 @@ function _cmpLine(label, sizeText, whenText, muted){
 function _conflictNode(conflicts, otherCount, base){
   var wrap=document.createElement('div');
   var intro=document.createElement('p'); intro.className='mb-2 small';
+  // Whole sentences, translated before the count and the folder go in (tf): spliced, each was one
+  // text node no catalog key matched.
   intro.textContent = (conflicts.length===1
-      ? 'This file already exists in \u201c'+(base||'home')+'\u201d.'
-      : conflicts.length+' of these files already exist in \u201c'+(base||'home')+'\u201d.')
-    + ' Tick the ones to replace \u2014 anything unticked is skipped.';
+      ? tf('This file already exists in \u201c{dir}\u201d.', {dir: base||'home'})
+      : tf('{n} of these files already exist in \u201c{dir}\u201d.', {n: conflicts.length, dir: base||'home'}))
+    + ' ' + t('Tick the ones to replace \u2014 anything unticked is skipped.');
   wrap.appendChild(intro);
   conflicts.forEach(function(c, idx){
     var box=document.createElement('div'); box.className='border rounded px-2 py-1 mb-2';
@@ -670,8 +672,9 @@ function _conflictNode(conflicts, otherCount, base){
   });
   if(otherCount>0){
     var foot=document.createElement('div'); foot.className='small text-secondary';
-    foot.textContent=otherCount+' other file'+(otherCount===1?'':'s')+' in this drop '
-      +(otherCount===1?'does':'do')+' not clash and will upload either way.';
+    foot.textContent=otherCount===1
+      ? t('1 other file in this drop does not clash and will upload either way.')
+      : tf('{n} other files in this drop do not clash and will upload either way.', {n: otherCount});
     wrap.appendChild(foot);
   }
   return wrap;
@@ -770,21 +773,23 @@ function uploadEntries(list, base){
   var body=document.createElement('div');
   var p=document.createElement('div');
   p.className='small';
-  p.textContent='Upload '+list.length+' file'+(list.length===1?'':'s')+' ('+fmtSize(bytes)+') into '
-    +(base||'home')+'? Subfolders are recreated on the server.';
+  p.textContent=tf(list.length===1 ? 'Upload 1 file ({size}) into {dir}? Subfolders are recreated on the server.'
+                                     : 'Upload {n} files ({size}) into {dir}? Subfolders are recreated on the server.',
+                   {n: list.length, size: fmtSize(bytes), dir: base||'home'});
   body.appendChild(p);
   var ul=document.createElement('div');
   ul.className='font-monospace mt-2';
   ul.style.fontSize='.72rem';
   ul.textContent = names.slice(0,8).map(function(n){ return n+'/'; }).join('\n')
-    + (names.length>8 ? '\n\u2026and '+(names.length-8)+' more' : '');
+    + (names.length>8 ? '\n'+tf('\u2026and {n} more', {n: names.length-8}) : '');
   ul.style.whiteSpace='pre-wrap';
   body.appendChild(ul);
   var note=document.createElement('div');
   note.className='text-secondary mt-2';
   note.style.fontSize='.7rem';
-  note.textContent='Files upload one at a time, so a large tree takes a while \u2014 leave the page open.'
-    + (oversize ? ' '+oversize+' file'+(oversize===1?'':'s')+' are over the 50 MB per-file limit and will be refused.' : '');
+  note.textContent=t('Files upload one at a time, so a large tree takes a while \u2014 leave the page open.')
+    + (oversize ? ' '+(oversize===1 ? t('1 file is over the 50 MB per-file limit and will be refused.')
+                                    : tf('{n} files are over the 50 MB per-file limit and will be refused.', {n: oversize})) : '');
   body.appendChild(note);
   var lbl=document.createElement('label');
   lbl.className='d-flex align-items-center gap-2 mt-2 small';
@@ -795,7 +800,7 @@ function uploadEntries(list, base){
   body.appendChild(lbl);
   confirmDialog({
     title: names.length>1 ? 'Upload folders' : 'Upload folder',
-    icon:'folder-plus', confirmLabel:'Upload '+list.length+' file'+(list.length===1?'':'s'),
+    icon:'folder-plus', confirmLabel:list.length===1 ? t('Upload 1 file') : tf('Upload {n} files', {n: list.length}),
     bodyNode: body,
     onConfirm: function(){
       // `cb` is the CAPTURED element, not a document lookup. confirmDialog removes the overlay
@@ -831,7 +836,7 @@ function uploadFiles(files, base){
   if(base === undefined) base = curDir;   // captured now: see uploadEntries
   var st=document.getElementById('upload-status');
   var arr=Array.prototype.slice.call(files);
-  st.textContent='Checking '+arr.length+' file(s)\u2026'; st.className='small mt-2 text-secondary';
+  st.textContent=tf('Checking {n} file(s)\u2026', {n: arr.length}); st.className='small mt-2 text-secondary';
   fetch(MOUNT+'/api/server/'+serverId+'/upload-check',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({path:base, names:arr.map(function(f){ return f.name; })})
@@ -900,9 +905,11 @@ function _doUpload(entries, ovw, base){
   function report(){
     var okCount=total-failed-clashed;
     var bits=[];
-    if(okCount) bits.push('\u2713 '+okCount+' uploaded to '+(base||'home'));
-    if(clashed) bits.push(clashed+' already existed'+(_uploadChecked?'':' (the host could not be checked first)')+' \u2014 re-drop to replace');
-    if(failed) bits.push(failed+' failed');
+    if(okCount) bits.push('\u2713 '+tf('{n} uploaded to {dir}', {n: okCount, dir: base||'home'}));
+    if(clashed) bits.push(tf(_uploadChecked ? '{n} already existed \u2014 re-drop to replace'
+                                            : '{n} already existed (the host could not be checked first) \u2014 re-drop to replace',
+                             {n: clashed}));
+    if(failed) bits.push(tf('{n} failed', {n: failed}));
     st.textContent=bits.join(', ');
     st.className='small mt-2 '+((failed||clashed)?'text-warning':'text-success');
     browse(curDir); setTimeout(function(){ st.textContent=''; },8000);
@@ -927,8 +934,8 @@ function _doUpload(entries, ovw, base){
           .catch(()=>{failed++;})
           .finally(function(){
             active--; done++;
-            st.textContent = many ? ('Uploading '+done+' of '+total+'\u2026')
-                                  : ('Uploading '+e.file.name+'\u2026');
+            st.textContent = many ? tf('Uploading {done} of {total}\u2026', {done: done, total: total})
+                                  : tf('Uploading {name}\u2026', {name: e.file.name});
             st.className='small mt-2 text-secondary';
             pump();
           })
@@ -936,7 +943,8 @@ function _doUpload(entries, ovw, base){
       })(entries[next]);
     }
   }
-  st.textContent = many ? ('Uploading 0 of '+total+'\u2026') : ('Uploading '+entries[0].file.name+'\u2026');
+  st.textContent = many ? tf('Uploading {done} of {total}\u2026', {done: 0, total: total})
+                        : tf('Uploading {name}\u2026', {name: entries[0].file.name});
   st.className='small mt-2 text-secondary';
   pump();
 }
@@ -1047,10 +1055,10 @@ function cronMsg(text, cls){ var m=document.getElementById('cron-msg'); m.textCo
 // "3m ago" / "2h ago" / "5d ago" from an epoch (seconds).
 function timeAgo(epoch){
   var s = Math.max(0, Math.floor(Date.now()/1000 - epoch));
-  if(s < 60) return s+'s ago';
-  if(s < 3600) return Math.floor(s/60)+'m ago';
-  if(s < 86400) return Math.floor(s/3600)+'h ago';
-  return Math.floor(s/86400)+'d ago';
+  if(s < 60) return tf('{n}s ago', {n: s});
+  if(s < 3600) return tf('{n}m ago', {n: Math.floor(s/60)});
+  if(s < 86400) return tf('{n}h ago', {n: Math.floor(s/3600)});
+  return tf('{n}d ago', {n: Math.floor(s/86400)});
 }
 // Last-run cell. Wrapped jobs report an exit status → OK/Failed badge + the error under a
 // failure. A managed or legacy job that has not run since the panel re-wrapped it (which
@@ -1133,7 +1141,7 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
     document.getElementById('cron-sched').focus();
   } else if(ev.target.closest('[data-cron-del]')){
     confirmDialog({title:'Delete scheduled task', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
-      bodyText:'Delete this scheduled task?\n\n'+row.getAttribute('data-sched')+'  '+row.getAttribute('data-cmd'),
+      bodyText:tf('Delete this scheduled task?\n\n{task}', {task: row.getAttribute('data-sched')+'  '+row.getAttribute('data-cmd')}),
       onConfirm:function(){
         fetch(MOUNT+'/api/server/'+serverId+'/cron/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({raw:row.getAttribute('data-raw')})})
           .then(r=>r.json()).then(d=>{ if(d.success){ cronMsg('✓ Task deleted','text-success'); loadCron(); } else cronMsg('✗ '+(d.message||'Delete failed'),'text-danger'); })
@@ -1141,7 +1149,7 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
       }});
   } else if(ev.target.closest('[data-cron-run]')){
     var btn=ev.target.closest('[data-cron-run]'); btn.disabled=true;
-    cronMsg('Running '+row.getAttribute('data-cmd')+'…','text-secondary');
+    cronMsg(tf('Running {cmd}…', {cmd: row.getAttribute('data-cmd')}),'text-secondary');
     fetch(MOUNT+'/api/server/'+serverId+'/cron/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({raw:row.getAttribute('data-raw')})})
       .then(r=>r.json()).then(d=>{
         cronMsg((d.success?'✓ ':'✗ ')+(d.message||'Done'), d.success?'text-success':'text-danger');
@@ -1155,8 +1163,10 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
 
 // ── Live cron explainer (crontab.guru-style: translate + preview next runs) ──
 (function(){
-  var DOW=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  var MON=['','January','February','March','April','May','June','July','August','September','October','November','December'];
+  // Day and month names in the viewer's language, from the browser (2024-01-07 was a Sunday).
+  var _lang=(window.LANG||'en');
+  var DOW=[0,1,2,3,4,5,6].map(function(i){ return new Date(2024,0,7+i).toLocaleDateString(_lang,{weekday:'long'}); });
+  var MON=[''].concat([0,1,2,3,4,5,6,7,8,9,10,11].map(function(i){ return new Date(2024,i,1).toLocaleDateString(_lang,{month:'long'}); }));
   var NM_DOW={sun:0,mon:1,tue:2,wed:3,thu:4,fri:5,sat:6};
   var NM_MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
   var SHORT={'@yearly':'0 0 1 1 *','@annually':'0 0 1 1 *','@monthly':'0 0 1 * *','@weekly':'0 0 * * 0','@daily':'0 0 * * *','@midnight':'0 0 * * *','@hourly':'0 * * * *'};
@@ -1197,26 +1207,37 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
   }
   function pad(n){ return (n<10?'0':'')+n; }
   function toArr(s){ return Array.from(s).sort(function(a,b){return a-b;}); }
-  function joinList(arr,fmt){ arr=arr.map(fmt); if(arr.length<=1) return arr[0]||''; return arr.slice(0,-1).join(', ')+' and '+arr[arr.length-1]; }
+  function joinList(arr,fmt){ arr=arr.map(fmt); if(arr.length<=1) return arr[0]||''; return tf('{list} and {last}', {list: arr.slice(0,-1).join(', '), last: arr[arr.length-1]}); }
   function contiguous(a){ for(var i=1;i<a.length;i++) if(a[i]!==a[i-1]+1) return false; return a.length>1; }
   function describe(f,sets){
     var mR=f[0],hR=f[1],domR=f[2],monR=f[3],dowR=f[4];
     var mAll=mR==='*', hAll=hR==='*', mOne=/^\d+$/.test(mR), hOne=/^\d+$/.test(hR), stepM=/^\*\/(\d+)$/.exec(mR);
+    // Each clause a whole sentence-piece translated with its values in (tf). Built as English
+    // fragments, every reading of a schedule was English on a translated page.
     var time;
-    if(mAll&&hAll) time='Every minute';
-    else if(stepM&&hAll) time='Every '+stepM[1]+' minutes';
-    else if(mOne&&hOne) time='At '+pad(+hR)+':'+pad(+mR);
-    else if(mOne&&hAll) time=(+mR===0)?'Every hour, on the hour':'At '+(+mR)+' minutes past every hour';
+    if(mAll&&hAll) time=t('Every minute');
+    else if(stepM&&hAll) time=tf('Every {n} minutes', {n: stepM[1]});
+    else if(mOne&&hOne) time=tf('At {time}', {time: pad(+hR)+':'+pad(+mR)});
+    else if(mOne&&hAll) time=(+mR===0)?t('Every hour, on the hour'):tf('At {n} minutes past every hour', {n: +mR});
     else {
-      var mp=hAll?'past every hour':'past '+(hOne?('hour '+(+hR)):('hours '+joinList(toArr(sets.hour),String)));
-      time=(mAll?'Every minute':'At '+(mOne?('minute '+(+mR)):('minutes '+joinList(toArr(sets.min),String))))+' '+mp;
+      var hrs=hAll ? null : (hOne ? String(+hR) : joinList(toArr(sets.hour),String));
+      var mins=mOne ? String(+mR) : joinList(toArr(sets.min),String);
+      if(mAll) time=hAll ? t('Every minute past every hour')
+                         : tf(hOne ? 'Every minute past hour {h}' : 'Every minute past hours {h}', {h: hrs});
+      else if(hAll) time=tf(mOne ? 'At minute {m} past every hour' : 'At minutes {m} past every hour', {m: mins});
+      else time=tf(mOne ? (hOne ? 'At minute {m} past hour {h}' : 'At minute {m} past hours {h}')
+                        : (hOne ? 'At minutes {m} past hour {h}' : 'At minutes {m} past hours {h}'), {m: mins, h: hrs});
     }
     var q=[];
-    if(domR!=='*') q.push('on day-of-month '+joinList(toArr(sets.dom),String));
+    if(domR!=='*') q.push(tf('on day-of-month {list}', {list: joinList(toArr(sets.dom),String)}));
     // Both day fields restricted: cron runs on EITHER ('or on'). One of them starting with '*'
     // ('*/2'): on days matching both ('and on') — the same rule nextRuns applies.
-    if(dowR!=='*'){ var dw=toArr(sets.dow); q.push((domR!=='*'?((sets.domStar||sets.dowStar)?'and on ':'or on '):'on ')+(contiguous(dw)?DOW[dw[0]]+'–'+DOW[dw[dw.length-1]]:joinList(dw,function(x){return DOW[x];}))); }
-    if(monR!=='*') q.push('in '+joinList(toArr(sets.mon),function(x){return MON[x];}));
+    if(dowR!=='*'){
+      var dw=toArr(sets.dow);
+      var days=contiguous(dw)?DOW[dw[0]]+'–'+DOW[dw[dw.length-1]]:joinList(dw,function(x){return DOW[x];});
+      q.push(tf(domR!=='*'?((sets.domStar||sets.dowStar)?'and on {days}':'or on {days}'):'on {days}', {days: days}));
+    }
+    if(monR!=='*') q.push(tf('in {months}', {months: joinList(toArr(sets.mon),function(x){return MON[x];})}));
     return time+(q.length?' '+q.join(' '):'');
   }
   function analyze(expr){
@@ -1224,13 +1245,16 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
     if(expr==='') return {empty:true};
     if(expr.charAt(0)==='@'){
       var k=expr.toLowerCase();
-      if(k==='@reboot') return {ok:true,text:'Runs once, at server boot.',reboot:true};
-      if(SHORT[k]) expr=SHORT[k]; else return {error:'Unknown shortcut "'+expr+'".'};
+      if(k==='@reboot') return {ok:true,text:t('Runs once, at server boot.'),reboot:true};
+      if(SHORT[k]) expr=SHORT[k]; else return {error:tf('Unknown shortcut "{name}".', {name: expr})};
     }
     var f=expr.split(' ');
-    if(f.length!==5) return {error:'Needs 5 fields (min hour day month weekday) or an @shortcut.'};
+    if(f.length!==5) return {error:t('Needs 5 fields (min hour day month weekday) or an @shortcut.')};
     var sets={min:parseField(f[0],0,59),hour:parseField(f[1],0,23),dom:parseField(f[2],1,31),mon:parseField(f[3],1,12,NM_MON),dow:parseField(f[4],0,7,NM_DOW)};
-    for(var kk in sets){ if(!sets[kk]||!sets[kk].size) return {error:'Invalid or out-of-range '+kk+' field.'}; }
+    var FIELD={min:'Invalid or out-of-range minute field.', hour:'Invalid or out-of-range hour field.',
+               dom:'Invalid or out-of-range day-of-month field.', mon:'Invalid or out-of-range month field.',
+               dow:'Invalid or out-of-range weekday field.'};
+    for(var kk in sets){ if(!sets[kk]||!sets[kk].size) return {error:t(FIELD[kk])}; }
     // cron sets DOM_STAR/DOW_STAR when the field STARTS with '*', so '*/2' counts as unrestricted
     // for the day rule below (AND), not as a restriction (OR).
     sets.domStar=f[2].charAt(0)==='*'; sets.dowStar=f[4].charAt(0)==='*';
@@ -1256,7 +1280,7 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
     el.className='text-info'; el.textContent='“'+r.text+'”';
     if(r.reboot){ nx.textContent='Runs at each boot — no fixed clock time.'; return; }
     var runs=nextRuns(r.sets,3);
-    nx.textContent = runs.length ? ('Next: '+runs.map(fmtWhen).join('  ·  ')+'   (your browser’s time — the server may use a different zone)') : 'No upcoming runs within a year.';
+    nx.textContent = runs.length ? tf('Next: {runs}   (your browser’s time — the server may use a different zone)', {runs: runs.map(fmtWhen).join('  ·  ')}) : 'No upcoming runs within a year.';
   };
 })();
 var _el_cron_sched = document.getElementById('cron-sched');
@@ -1376,14 +1400,15 @@ function loadMods(force){
       : '<span class="text-secondary small">None available.</span>';
     var n=inst.length;
     document.getElementById('mods-count').textContent =
-      n ? (n+' installed · '+merged.length+' available') : (merged.length+' available');
+      n ? tf('{n} installed · {m} available', {n: n, m: merged.length}) : tf('{m} available', {m: merged.length});
     body.style.display='';
   }).catch(function(){ load.innerHTML='<span class="text-danger">Could not load mods.</span>'; });
 }
 function modAction(which, id, btn){
   var run = function(){
     var orig=btn.innerHTML; btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
-    modsMsg((which==='install'?'Installing ':'Removing ')+id+'… this can take a moment.','text-secondary');
+    modsMsg(tf(which==='install' ? 'Installing {mod}… this can take a moment.' : 'Removing {mod}… this can take a moment.',
+               {mod: id}), 'text-secondary');
     fetch(MOUNT+'/api/server/'+serverId+'/mods',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:which,mod:id})})
       .then(r=>r.json()).then(function(d){
         modsMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
@@ -1400,7 +1425,7 @@ function modAction(which, id, btn){
   };
   if(which==='remove'){
     confirmDialog({title:'Remove mod', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Remove',
-      bodyText:'Remove '+id+' from this server?', onConfirm:run});
+      bodyText:tf('Remove {mod} from this server?', {mod: id}), onConfirm:run});
   } else { run(); }
 }
 function modRestartNow(btn){
@@ -1453,15 +1478,17 @@ function _bkRenderDisk(d, sc){
   var keepEff=sc.keep, est=d.est_backup||0, disk=d.disk||{free:0,total:0}, parts=[];
   if(disk.total){
     var usedPct=Math.round((disk.total-disk.free)/disk.total*100);
-    parts.push('<i class="bi bi-hdd"></i> '+bkFmt(disk.free)+' free of '+bkFmt(disk.total)+' ('+usedPct+'% used)');
+    parts.push('<i class="bi bi-hdd"></i> '+tfHtml('{free} free of {total} ({pct}% used)',
+                                                    {free: bkFmt(disk.free), total: bkFmt(disk.total), pct: usedPct}));
     if(est){
       var proj=est*keepEff;
-      if(proj>disk.free) parts.push('<span class="text-danger">~'+bkFmt(proj)+' needed to keep '+keepEff+', not enough space</span>');
-      else if(proj>disk.free*0.5) parts.push('<span class="text-warning">~'+bkFmt(proj)+' to keep '+keepEff+'</span>');
+      if(proj>disk.free) parts.push('<span class="text-danger">'+tfHtml('~{size} needed to keep {n}, not enough space', {size: bkFmt(proj), n: keepEff})+'</span>');
+      else if(proj>disk.free*0.5) parts.push('<span class="text-warning">'+tfHtml('~{size} to keep {n}', {size: bkFmt(proj), n: keepEff})+'</span>');
     }
   }
-  var defTxt=(_bkDefault.interval_days>0)?('every '+_bkDefault.interval_days+'d, keep '+_bkDefault.keep):'off';
-  parts.push('<span class="text-secondary">Panel default: '+defTxt+'</span>');
+  parts.push('<span class="text-secondary">'+(_bkDefault.interval_days>0
+    ? tfHtml('Panel default: every {days}d, keep {n}', {days: _bkDefault.interval_days, n: _bkDefault.keep})
+    : tfHtml('Panel default: off'))+'</span>');
   var dk=document.getElementById('bk-disk'); if(dk) dk.innerHTML=parts.join(' &middot; ');  // nosemgrep
 }
 // Live status of any in-flight/last backup. No status at all reads as an empty line.
@@ -1519,7 +1546,7 @@ function renderBackups(d){
   function showSchedule(sc){
     var iv=document.getElementById('bk-interval'), kp=document.getElementById('bk-keep');
     if(iv && document.activeElement!==iv) _bkShow(iv, 'interval', sc.interval_set ? String(sc.interval_days) : 'default',
-                                                  'Every '+sc.interval_days+' days');
+                                                  tf('Every {n} days', {n: sc.interval_days}));
     if(kp && document.activeElement!==kp) _bkShow(kp, 'keep', sc.keep_set ? String(sc.keep) : 'default', String(sc.keep));
   }
   if(!d || d.error) return;
@@ -1575,7 +1602,7 @@ function backupNow(force){
 function deleteBk(btn){
   var name = btn.getAttribute('data-name') || '';
   confirmDialog({title:'Delete backup', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
-    bodyText:'Delete this backup?\n\n'+name,
+    bodyText:tf('Delete this backup?\n\n{name}', {name: name}),
     onConfirm:function(){
       btn.disabled=true;
       fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},

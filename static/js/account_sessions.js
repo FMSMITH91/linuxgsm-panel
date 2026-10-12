@@ -10,9 +10,9 @@
     if(!iso) return '';
     var s = (Date.now() - new Date(iso).getTime())/1000;
     if(s < 60) return 'just now';
-    if(s < 3600) return Math.floor(s/60)+' min ago';
-    if(s < 86400) return Math.floor(s/3600)+' h ago';
-    return Math.floor(s/86400)+' d ago';
+    if(s < 3600) return tf('{n}m ago', {n: Math.floor(s/60)});
+    if(s < 86400) return tf('{n}h ago', {n: Math.floor(s/3600)});
+    return tf('{n}d ago', {n: Math.floor(s/86400)});
   }
   function row(s){
     var wrap = document.createElement('div');
@@ -27,7 +27,7 @@
     }
     var sub = document.createElement('div'); sub.className = 'text-secondary text-truncate';
     sub.style.fontSize = '.72rem';
-    sub.textContent = (s.ip ? s.ip + ' · ' : '') + 'active ' + rel(s.last_seen);
+    sub.textContent = (s.ip ? s.ip + ' · ' : '') + tf('active {when}', {when: rel(s.last_seen)});
     left.appendChild(top); left.appendChild(sub); wrap.appendChild(left);
     if(!s.current){
       var btn = document.createElement('button'); btn.type = 'button';
