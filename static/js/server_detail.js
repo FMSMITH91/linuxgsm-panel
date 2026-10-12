@@ -1513,6 +1513,11 @@ function clearConsole() {
   _consoleLines = [];
   _consoleSig = null;      // so the next poll repaints rather than deciding nothing changed
   _consolePrimed = false;  // and repaints with a full window, not just what arrived since
+  // Whatever panel lines were on the page are cleared, so none older is to be replayed. Left false
+  // (an empty backlog at load, then an update's lines pushed and Clear pressed), the re-prime took
+  // _lastPanelT back to 0 and rendered the whole backlog, and the reshow put back every kept push:
+  // the output the viewer had just cleared came back on the next poll.
+  _panelBacklogShown = true;
 }
 
 function sendCommand(ev) {  // NOSONAR - the constant false is the data-action preventDefault contract (panel.js fire)
@@ -2087,7 +2092,13 @@ window.hidePanel = function(btn){
   var panel = btn.closest('[data-panel]');
   if (!panel) return;
   var key = panel.getAttribute('data-panel');
-  var label = (panel.querySelector('.card-header') || {}).textContent || key;
+  // The card's title from the page's own table (server_detail.html DETAIL_LABELS): a whole text node
+  // the translator knows. The header's raw text was "controls" for the card that has none, and
+  // "Players (3)" with the count welded on.
+  var labels = {};
+  try { labels = JSON.parse((document.getElementById('detail-console') || {}).getAttribute('data-labels') || '{}'); }
+  catch (e) { labels = {}; }
+  var label = labels[key] || (panel.querySelector('.card-header') || {}).textContent || key;
   var bar = document.getElementById('detail-console-hidden');
   if (!bar){
     bar = document.createElement('div');

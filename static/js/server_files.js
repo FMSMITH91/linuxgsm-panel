@@ -210,10 +210,13 @@ function mkRow(opts){
 // (with A's names turned into delete paths) under folder B's breadcrumb. `want` is this call's own
 // path, and a response that is no longer the latest request is dropped.
 var _browseSeq = 0;
+var _browseWant = '';   // the folder the latest browse() asked for: where the user is going
 function browse(path){
   var want = path||'', seq = ++_browseSeq;
+  _browseWant = want;
   fetch(MOUNT+'/api/server/'+serverId+'/browse?path='+encodeURIComponent(want)).then(r=>r.json()).then(d=>{
     if(seq !== _browseSeq) return;   // a later browse() owns the list now
+    var keep = _r14c_openEditors(want);
     _renaming = null;                // the row being renamed is about to be rebuilt
     _creating = null;                // ...and so is the create field at the top of it
     var l=document.getElementById('file-list'); l.innerHTML='';
@@ -241,7 +244,28 @@ function browse(path){
     }
     // Re-highlight the open file if it's in this directory.
     if(curFile){ var open=l.querySelector('[data-path="'+CSS.escape(curFile)+'"]'); if(open) open.classList.add('active'); }
+    _r14c_restoreEditors(keep, l);
   }).catch(()=>{});
+}
+// A refresh of the SAME folder (an upload finishing, a delete) keeps an open create or rename field
+// and what was typed in it. Rebuilding the list dropped both with no message, half-typed name and
+// all. Moving to another folder still closes them, as it always did.
+function _r14c_openEditors(want){
+  if(want !== curDir) return null;
+  var a=document.activeElement;
+  return {create:_creating, rename:_renaming,
+          focus:(_creating && a===_creating.input) || (_renaming && a===_renaming.input) ? a : null};
+}
+function _r14c_restoreEditors(keep, list){
+  if(!keep) return;
+  if(keep.create){ list.insertBefore(keep.create.box, list.firstChild); _creating=keep.create; }
+  var r=keep.rename;
+  var row=r && list.querySelector('[data-path="'+CSS.escape(r.path)+'"]');
+  if(row){
+    var box=r.input.closest('.fb-rename');
+    if(box){ row.classList.add('fb-renaming'); row.appendChild(box); r.row=row; _renaming=r; }
+  }
+  if(keep.focus && keep.focus.isConnected) keep.focus.focus();
 }
 // Only the LATEST open is shown, as browse() keeps only its latest listing: two quick clicks whose
 // answers came back out of order left the second row highlighted over the first file's text.
@@ -549,13 +573,20 @@ function _createFailed(r, msg){
   r.err.textContent=_tr(msg); r.err.style.display='';
   r.input.focus();
 }
-// Opened only while the field is still the open one: a user who browsed elsewhere meanwhile is
-// told it was made, and is not pulled back to it.
+// Opened only while the field is still the open one AND the user is not on the way to another
+// folder: one who clicked another folder meanwhile is told it was made, and is not pulled back to
+// it (the field stayed "open" until that folder's listing arrived, so the open field alone let this
+// browse() take the newer turn and drop the folder the user picked). One who cancelled the field
+// and is still in its folder gets that folder refreshed in place, or the toast names a file the
+// list does not show.
 function _created(r, want){
-  var path=r.dir ? r.dir+'/'+want : want, mine=_creating===r;
-  if(mine){ _creating=null; r.box.remove(); }
+  var path=r.dir ? r.dir+'/'+want : want, here=_browseWant===r.dir, mine=_creating===r && here;
+  if(_creating===r){ _creating=null; r.box.remove(); }
   if(window.toast) toast(_tr(r.kind==='folder' ? 'Folder created' : 'File created'),'success');
-  if(!mine) return;
+  if(!mine){
+    if(here && curDir===r.dir) browse(curDir);
+    return;
+  }
   if(r.kind==='folder'){ browse(path); return; }
   browse(r.dir);
   openFile(path);
