@@ -77,7 +77,11 @@ def valid_timezone(name):
     filesystem-backed lookup on a browser-reachable path, and the value that can be stored and
     rendered is held to a known charset and length.
     """
-    name = (name or "").strip()
+    # A JSON `5`, `true` or `[1]` from the browser has no .strip(): it raised AttributeError, and
+    # the daily-restart route answered 500 instead of "unknown zone".
+    if not isinstance(name, str):
+        return ""
+    name = name.strip()
     if not name or len(name) > 64 or not _re.match(r"^[A-Za-z0-9+_/-]+\Z", name) or ".." in name:
         return ""
     try:

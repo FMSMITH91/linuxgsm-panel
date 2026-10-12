@@ -1320,7 +1320,9 @@ def anonymise_audit_ips(days):
     # privacy control that fails quietly is worse than one that is off, because nobody looks.
     try:
         days = int(days)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):   # OverflowError: a hand-edited `Infinity`
+        # (A JSON `true` is left as int 1 here on purpose: it only ages IPs sooner, where refusing
+        # it would turn the privacy control off.)
         _log.warning("audit_ip_retention_days is not a number (%r); IP ageing is disabled", days)
         return 0
     if days <= 0:

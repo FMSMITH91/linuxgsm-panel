@@ -108,7 +108,7 @@ from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, authori
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     encrypt_secret, is_encrypted, harden_data_permissions, read_setup_token, remove_setup_token,
-    autoblock_host_ids, _r13a_cfg_text)
+    autoblock_host_ids, _r13a_cfg_text, _r15a_cfg_int)
 from panel.services import notifications
 # The two chat bots. They import nothing from app.py — every dependency they have comes from
 # the module that owns it — so unlike panel.routes.* this needs no lazy import to break a cycle.
@@ -1498,6 +1498,29 @@ def _adopt_game_processes():
         _log.debug("moving game processes out of the panel's cgroup failed", exc_info=True)
 
 
+def _r16a_prune_audit(cfg):
+    """Delete audit rows older than config's audit_log_retention_days; -> rows deleted.
+
+    _r15a_cfg_int, not int(): a hand-edited `true` is int 1, and that deleted every audit row older
+    than a day at each start (then VACUUMed them away). Anything but a number reads as unset, off.
+    """
+    days = _r15a_cfg_int(cfg.get("audit_log_retention_days", 0), 0)
+    if days <= 0:
+        return 0
+    from panel.db.models import AuditLog
+    cutoff = utcnow() - timedelta(days=days)
+    deleted = AuditLog.query.filter(AuditLog.timestamp < cutoff).delete()
+    if deleted:
+        db.session.commit()
+        # A plain DELETE leaves the freed pages in the file. After a
+        # meaningful prune, reclaim the space + refresh stats so enabling
+        # retention actually shrinks the DB (cheap on a small file).
+        if deleted >= 100:
+            from panel.db.models import optimize_database
+            optimize_database()
+    return deleted
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
@@ -1900,19 +1923,7 @@ def create_app():
     # positive number to prune older entries on startup so the table can't grow forever.
     with app.app_context():
         try:
-            days = int(cfg.get("audit_log_retention_days", 0) or 0)
-            if days > 0:
-                from panel.db.models import AuditLog
-                cutoff = utcnow() - timedelta(days=days)
-                deleted = AuditLog.query.filter(AuditLog.timestamp < cutoff).delete()
-                if deleted:
-                    db.session.commit()
-                    # A plain DELETE leaves the freed pages in the file. After a
-                    # meaningful prune, reclaim the space + refresh stats so enabling
-                    # retention actually shrinks the DB (cheap on a small file).
-                    if deleted >= 100:
-                        from panel.db.models import optimize_database
-                        optimize_database()
+            _r16a_prune_audit(cfg)
         except Exception:
             db.session.rollback()
 

@@ -1059,8 +1059,9 @@ def _ssh_connect_timeout():
     and the two disagreed.
     """
     try:
-        from panel.core.config import load_config
-        return max(1, min(int(load_config().get("ssh_timeout", 10)), 120))
+        from panel.core.config import load_config, _r15a_cfg_int
+        # Not int(): a hand-edited `true` is 1, a one-second timeout on every SSH call.
+        return max(1, min(_r15a_cfg_int(load_config().get("ssh_timeout", 10), 10), 120))
     except Exception:
         return 10
 

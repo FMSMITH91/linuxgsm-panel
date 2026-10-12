@@ -74,6 +74,10 @@ def _db_path():
 
 
 def _int_cfg(c, key, default):
+    # A JSON `true` is not a number of days: create_app reads it as unset (_r15a_cfg_int), so the
+    # report must not print it as "1 day" while nothing is pruned.
+    if isinstance(c.get(key, default), bool):
+        return None
     try:
         return int(c.get(key, default) or 0)
     except (TypeError, ValueError, OverflowError):   # OverflowError: a hand-edited `Infinity`
