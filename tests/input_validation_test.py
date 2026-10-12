@@ -653,14 +653,23 @@ def _r16d_int_or_port_sites(text):
 
 
 def _r16d_lands_in(node, parent):
-    """The names a call's value is stored under: its assignment's targets, its keyword, its dict key."""
+    """The names a call's value is stored under: its assignment's targets, its keyword, its dict key.
+
+    Climbed through every expression around it, up to its statement: the climb stopped at the first
+    enclosing call, so `game_port = max(1, _int_or(...))` and `cfg["game_port"] = str(_int_or(...))`
+    (this codebase's own idiom, `max(1, min(_int_or(...), 168))`) were tied to no name (review 1012b).
+    Each keyword, dict key and `:=` target passed on the way counts.
+    """
     import ast
-    up, child = parent.get(node), node
-    while up is not None and not isinstance(up, (ast.stmt, ast.Call)):
+    up, child, said = parent.get(node), node, []
+    while up is not None and not isinstance(up, ast.stmt):
+        if isinstance(up, ast.keyword):
+            said.append(up.arg or "")
+        elif isinstance(up, ast.NamedExpr):
+            said.append(_r16d_name_of(up.target))
+        said += _r16d_dict_keys_of(up, child)
         up, child = parent.get(up), up
-    said = [_r16d_name_of(x) for t in _r16d_targets(up) for x in ast.walk(t)]
-    said += [k.arg or "" for k in getattr(up, "keywords", None) or [] if k is child]
-    return said + _r16d_dict_keys_of(parent.get(node), node)
+    return said + [_r16d_name_of(x) for t in _r16d_targets(up) for x in ast.walk(t)]
 
 
 def _r16d_targets(stmt):
@@ -704,10 +713,19 @@ def _check_no_port_parsed_with_int_or():
         'd = {"port": _int_or(f.get("p"), 1)}\n'
         'n = _int_or(f.get("port"), 0)\n'
         'keep = _int_or(f.get("keep"), 7)\n'
-        'save(keep=_int_or(f.get("k"), 1), port=2)\n')
+        'save(keep=_int_or(f.get("k"), 1), port=2)\n'
+        # Review 1012b: wrapped in another call, which the climb stopped at.
+        'cfg["game_port"] = str(_int_or(f.get("g"), 1))\n'
+        'p = max(1, _int_or(f.get("rcon_port"), 0))\n'
+        'q = max(1, _int_or(f.get("x"), 0))\n'
+        'save(port=max(1, _int_or(f.get("y"), 0)))\n'
+        'if (game_port := _int_or(f.get("z"), 0)):\n    pass\n'
+        'keep = max(1, _int_or(f.get("keep"), 7))\n'
+        'hours = max(1, min(_int_or(f.get("session_lifetime_hours"), 8), 168))\n')
     check("the _int_or port scan reads where a value lands: a port target, attribute, subscript key, "
-          "keyword or dict key, or a port in the call, and not a count beside one (control)",
-          [ln for ln, _src in _ctl] == [1, 2, 3, 4, 5, 6], repr(_ctl))
+          "keyword or dict key, or a port in the call, through any call wrapped around it, and not a "
+          "count beside one (control)",
+          [ln for ln, _src in _ctl] == [1, 2, 3, 4, 5, 6, 9, 10, 12, 13], repr(_ctl))
     # ...and a positive control, because the scan matches a hardcoded NAME. Rename _int_or and
     # every `node.func.id == "_int_or"` stops matching: the loop runs zero times and the gate
     # reports clean. Proven by renaming it to _intOr across 13 call sites in 4 files — 142/142,

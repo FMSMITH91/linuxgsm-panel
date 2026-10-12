@@ -1054,10 +1054,22 @@ def _r16d_is_removal37(callee):
 _R16D_FIELDS37 = ("body", "orelse", "finalbody")
 
 
+# What catches EVERY OSError. Not _WIDE37, whose PermissionError belongs to "does this handler
+# swallow a delete failure": a nested try that catches only PermissionError still lets EBUSY,
+# EROFS and IsADirectoryError out to the outer handler (review 1012b).
+_R17D_ALL_OSERROR37 = ("OSError", "IOError", "EnvironmentError", "Exception", "BaseException")
+
+
 def _r16d_fields37(stmt):
-    """The blocks of `stmt` a failure reaches an outer try from: a try's body only if it lets OSError out."""
+    """The blocks of `stmt` a failure reaches an outer try from: a try's body only if it lets OSError out.
+
+    A nested try keeps every OSError in only when one of its handlers catches all of them and
+    does not raise again (`except OSError: raise` lets everything out).
+    """
     if isinstance(stmt, _ast37.Try) and any(
-            _h.type is None or _re37.search(r"\b(?:%s)\b" % "|".join(_WIDE37), _ast37.unparse(_h.type))
+            (_h.type is None or _re37.search(r"\b(?:%s)\b" % "|".join(_R17D_ALL_OSERROR37),
+                                             _ast37.unparse(_h.type)))
+            and not any(isinstance(_r, _ast37.Raise) for _b in _h.body for _r in _ast37.walk(_b))
             for _h in stmt.handlers):
         return _R16D_FIELDS37[1:]
     return _R16D_FIELDS37
@@ -1127,7 +1139,12 @@ def _f7_cleanups():
         # Review 1012a: a nested try that lets OSError through, an assigned and a bare-name removal.
         "try:\n    try:\n        p.unlink()\n    except FileNotFoundError:\n        pass\nexcept OSError:\n    pass\n",
         "try:\n    _ = os.remove(p)\nexcept OSError:\n    pass\n",
-        "from os import unlink\ntry:\n    unlink(p)\nexcept OSError:\n    pass\n"]
+        "from os import unlink\ntry:\n    unlink(p)\nexcept OSError:\n    pass\n",
+        # Review 1012b: a nested try that catches only PermissionError, or catches OSError and
+        # raises it again, lets the failure reach the outer `pass`.
+        "try:\n    try:\n        p.unlink()\n    except PermissionError as e:\n        log(e)\n"
+        "except OSError:\n    pass\n",
+        "try:\n    try:\n        p.unlink()\n    except OSError:\n        raise\nexcept OSError:\n    pass\n"]
     # ...while a nested try that handles OSError itself (and says so) leaves the outer one nothing.
     _r16d_inner37 = ("try:\n    try:\n        p.unlink()\n    except OSError as e:\n        log(e)\n"
                      "except OSError:\n    pass\n")

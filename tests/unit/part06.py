@@ -1586,7 +1586,41 @@ def _r14d_aliases(tree, carried):
         alias.update(_r14d_import_aliases(_n, carried))
         alias.update(_r14d_sys_modules_alias(_n))
         alias.update(_r16d_import_module_alias(_n))
-    return _r16d_follow_copies(tree, alias)
+    return _r17d_follow_factories(tree, _r16d_follow_copies(tree, alias))
+
+
+def _r17d_follow_factories(tree, alias):
+    """`alias` plus each name bound from a function that returns one (`_dbo = _sandboxed_helper()`).
+
+    A helper loaded inside a factory and handed back was no alias: part06's eleven stores through
+    `_dbo` (SYSTEM_PYTHON, _drop_to, ...) went unread, so a helper rename left them creating new
+    attributes while the real ones ran (review 1012b).
+    """
+    for _ in range(4):  # at most 4 rounds, stopping at the first that adds nothing
+        _added = _r17d_factory_binds(tree, _r17d_factories(tree, alias), alias)
+        if not _added:
+            break
+        alias.update(_added)
+        alias = _r16d_follow_copies(tree, alias)
+    return alias
+
+
+def _r17d_factories(tree, alias):
+    """{function name: module} for each function that returns a name `alias` maps."""
+    return {_f.name: alias[_r.value.id] for _f in _ast_scan.walk(tree)
+            if isinstance(_f, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef))
+            for _r in _ast_scan.walk(_f) if _r17d_returns_alias(_r, alias)}
+
+
+def _r17d_returns_alias(node, alias):
+    return isinstance(node, _ast_scan.Return) and isinstance(node.value, _ast_scan.Name) and node.value.id in alias
+
+
+def _r17d_factory_binds(tree, makes, alias):
+    """{name: module} for each `name = factory(...)` not already an alias."""
+    return {_t: makes[_v.func.id] for _v, _ts in _r16d_call_assigns(tree)
+            if isinstance(_v.func, _ast_scan.Name) and _v.func.id in makes
+            for _t in _ts if _t not in alias}
 
 
 def _r16d_name_copies(tree):
@@ -1719,12 +1753,14 @@ _r15d_nest_ctl_al = _r14d_aliases(_ast_scan.parse(
     "import importlib as _il\n_m = _il.import_module('panel.services.monitoring')\n"
     "_x = __import__('importlib').import_module('panel.ops.system_ops')\n_H = _x\n_I = _H\n"
     "_s = _ilu.spec_from_loader('ph', _machinery.SourceFileLoader('ph', _helper_path))\n"
-    "_ph = _ilu.module_from_spec(_s)\n_nm = _il.import_module('json')\n"), {})
-check("stub gate: an import_module() binding, a copy of an alias (and of a copy) and a module "
-      "loaded from tools/panel-helper are all read as aliases (control)",
+    "_ph = _ilu.module_from_spec(_s)\n_nm = _il.import_module('json')\n"
+    "def _mk():\n    _s2 = _ilu.spec_from_file_location('ph', _helper_path)\n"
+    "    _m2 = _ilu.module_from_spec(_s2)\n    return _m2\n_dbo = _mk()\n"), {})
+check("stub gate: an import_module() binding, a copy of an alias (and of a copy), a module "
+      "loaded from tools/panel-helper and one a factory returns are all read as aliases (control)",
       _r15d_nest_ctl_al == {"_m": "panel.services.monitoring", "_x": "panel.ops.system_ops",
                             "_H": "panel.ops.system_ops", "_I": "panel.ops.system_ops",
-                            "_ph": _R16D_HELPER_MOD}
+                            "_ph": _R16D_HELPER_MOD, "_m2": _R16D_HELPER_MOD, "_dbo": _R16D_HELPER_MOD}
       and "VERBS" in _r14d_stub_names(_R16D_HELPER_MOD)
       and "no_such_fn_xyz" not in _r14d_stub_names(_R16D_HELPER_MOD),
       repr(_r15d_nest_ctl_al))

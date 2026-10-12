@@ -42,7 +42,10 @@ jobs:
     # 30 had left 155 s. It was sized when the root step measured 169-186 s; the unit suite, run
     # twice here, has grown with each review's parts since (on the 24.04 image 652f166c's unit run
     # took 43 s more than its parent's; locally its three new parts were 10 s of a 13 s rise, and
-    # part66's i18n scan 6 s of those, since cut to under 2 s).
+    # part66's i18n scan 6 s of those, since cut to under 2 s). Two commits later (f896aeae and
+    # dfd5499c, #424's three new unit parts) the legs took 1681-1776 s.
+    # Legs measured, fastest to slowest: 1221-1776 s. tests/unit/part26 holds this limit to clear
+    # the slowest by that whole spread, the variation the same code showed between runners.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -230,7 +233,10 @@ jobs:
     runs-on: ubuntu-latest
     # 30. Measured on main's nine push runs of 2026-10-10 to 2026-10-12: 982-1162 s (16.4-19.4
     # min), the "Measure" step 961-1136 s of it (652f166c: unit 441 s, smoke 630 s). 20 had left
-    # 38 s, and a timed-out run here is a failed required check like a red one.
+    # 38 s, and a timed-out run here is a failed required check like a red one. On f896aeae and
+    # dfd5499c it took 1226 and 1215 s.
+    # Runs measured, fastest to slowest: 982-1226 s. tests/unit/part26 holds this limit to clear
+    # the slowest by that whole spread.
     timeout-minutes: 30
     permissions:
       contents: read
