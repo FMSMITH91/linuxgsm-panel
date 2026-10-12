@@ -633,6 +633,38 @@ def _check_tailscale_mount():
           [k.get("mount") for k in _ts_calls] == ["/lgsm"], repr(_ts_calls))
 
 
+def _r16d_int_or_port_sites(text):
+    """[(line, text)] of each _int_or call in Python source `text` that parses a port.
+
+    By the call's own text, AND by where its value lands: the comment always said the assignment
+    target decides, but only the call was read, so `game_port = _int_or(f.get("gp"), 27015)` passed
+    (review 1012a). A target name, an attribute, a keyword argument or a dict key with "port" in it.
+    """
+    import ast
+    tree = ast.parse(text)
+    parent = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+    out = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) == "_int_or"):
+            continue
+        said = [ast.get_source_segment(text, node) or ""]
+        up, child = parent.get(node), node
+        while up is not None and not isinstance(up, ast.stmt) and not isinstance(up, ast.Call):
+            up, child = parent.get(up), up
+        if isinstance(up, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            for t in (up.targets if isinstance(up, ast.Assign) else [up.target]):
+                said += [getattr(x, "id", "") or getattr(x, "attr", "") for x in ast.walk(t)]
+                said += [x.value for x in ast.walk(t) if isinstance(x, ast.Constant) and isinstance(x.value, str)]
+        if isinstance(up, ast.Call):
+            said += [k.arg or "" for k in up.keywords if k is child]
+        if isinstance(parent.get(node), ast.Dict):
+            said += [k.value for k, v in zip(parent[node].keys, parent[node].values) if v is node
+                     and isinstance(k, ast.Constant) and isinstance(k.value, str)]
+        if any("port" in str(w).lower() for w in said):
+            out.append((node.lineno, said[0][:70]))
+    return sorted(out)
+
+
 def _check_no_port_parsed_with_int_or():
     """No port is parsed with _int_or, the parser without a range."""
     # ── Structural: a port field must go through the bounded parser ──────────────────────────
@@ -644,14 +676,22 @@ def _check_no_port_parsed_with_int_or():
     offenders = []
     _int_or_sites = 0
     for py in sorted((_root / "panel").rglob("*.py")) + [_root / "app.py"]:
-        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
-            if not (isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) == "_int_or"):
-                continue
-            _int_or_sites += 1
-            # The assignment target's name is what says whether this is a port.
-            src = ast.get_source_segment(py.read_text(encoding="utf-8"), node) or ""
-            if "port" in src.lower():
-                offenders.append("%s:%d  %s" % (py.relative_to(_root), node.lineno, src[:70]))
+        _text = py.read_text(encoding="utf-8")
+        _int_or_sites += sum(1 for node in ast.walk(ast.parse(_text)) if isinstance(node, ast.Call)
+                             and getattr(node.func, "id", getattr(node.func, "attr", "")) == "_int_or")
+        offenders += ["%s:%d  %s" % (py.relative_to(_root), ln, src) for ln, src in _r16d_int_or_port_sites(_text)]
+    _ctl = _r16d_int_or_port_sites(
+        'game_port = _int_or(f.get("gp"), 27015)\n'
+        'cfg["query_port"] = _int_or(f.get("q"), 0)\n'
+        'self.rcon_port = _int_or(f.get("r"), 0)\n'
+        'save(port=_int_or(f.get("p"), 1))\n'
+        'd = {"port": _int_or(f.get("p"), 1)}\n'
+        'n = _int_or(f.get("port"), 0)\n'
+        'keep = _int_or(f.get("keep"), 7)\n'
+        'save(keep=_int_or(f.get("k"), 1), port=2)\n')
+    check("the _int_or port scan reads where a value lands: a port target, attribute, subscript key, "
+          "keyword or dict key, or a port in the call, and not a count beside one (control)",
+          [ln for ln, _src in _ctl] == [1, 2, 3, 4, 5, 6], repr(_ctl))
     # ...and a positive control, because the scan matches a hardcoded NAME. Rename _int_or and
     # every `node.func.id == "_int_or"` stops matching: the loop runs zero times and the gate
     # reports clean. Proven by renaming it to _intOr across 13 call sites in 4 files — 142/142,

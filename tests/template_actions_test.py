@@ -1186,7 +1186,9 @@ check(not _raw_body,
 # {html: …}, markup its caller built. So tfHtml counts as an escaper, and each {html: …} value is a
 # sink of its own below: its parts must be escaped exactly as an innerHTML's would.
 _ESCAPERS = ("escapeHtml", "_esc", "esc", "e", "tfHtml")
-_SINK = re.compile(r"(\.innerHTML|\.outerHTML)\s*=\s*|insertAdjacentHTML\s*\(|[{,]\s*html\s*:\s*")
+# tfHtml's raw-markup value under any spelling of its key: `html:`, `'html':` or `"html":` (i18n.js
+# tests `'html' in v`, so all three are the same key; only the bare one was read, review 1012a).
+_SINK = re.compile(r"(\.innerHTML|\.outerHTML)\s*=\s*|insertAdjacentHTML\s*\(|[{,]\s*['\"]?html['\"]?\s*:\s*")
 
 
 def _js_expr_at(src, i):
@@ -1341,6 +1343,9 @@ def _sink_bound_names(src, helpers):
     # a raw value accumulated into it reached innerHTML unseen (review 1011e).
     for m in re.finditer(r"[{,]\s*['\"]?html['\"]?\s*:\s*([A-Za-z_$][\w$]*)\s*[,}]", src):
         names.add(m.group(1))
+    # ...and the shorthand `{html}`, which hands it the variable named html (review 1012a).
+    if re.search(r"[{,]\s*html\s*[,}]", src):
+        names.add("html")
     return names
 
 
@@ -1511,6 +1516,13 @@ _r15d_sink_ctl = {
     "innerHTML = buf": _r15d_sink_sigs(
         "function zz(x, el) {\n  var buf = '';\n  buf += '<b>' + x.name + '</b>';\n"
         "  el.innerHTML = buf;\n}\n"),
+    "{'html': raw}": _r15d_sink_sigs(
+        "function zz(x, el) {\n  el.innerHTML = tfHtml('Hi {v}', {v: {'html': '<b>' + x.name + '</b>'}});\n}\n"),
+    '{"html": raw}': _r15d_sink_sigs(
+        "function zz(x, el) {\n  el.innerHTML = tfHtml('Hi {v}', {v: {\"html\": '<b>' + x.name + '</b>'}});\n}\n"),
+    "{html} shorthand": _r15d_sink_sigs(
+        "function zz(x, el) {\n  var html = '';\n  html += '<b>' + x.name + '</b>';\n"
+        "  el.innerHTML = tfHtml('Hi {v}', {v: {html}});\n}\n"),
 }
 check(all("x.name" in _v for _v in _r15d_sink_ctl.values()),
       "static/js: ...a markup buffer handed to tfHtml's {html: …} is traced like one assigned to "
