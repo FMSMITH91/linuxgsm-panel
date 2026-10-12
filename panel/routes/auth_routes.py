@@ -26,7 +26,7 @@ from panel.routes._shared import (REAUTH_BLOCKED_MSG, reauth_password, reauth_re
 
 
 def _r16c_bump_epoch_everywhere(user):
-    """logout's retry: bump `user`'s auth_epoch (every device signed out) and clear their rows.
+    """Logout's retry: bump `user`'s auth_epoch (every device signed out) and clear their rows.
 
     The bump signs out every device, so every UserSession row goes too — left, they listed as live
     sessions, with Revoke buttons, on the account page until they idled out (the legacy-cookie

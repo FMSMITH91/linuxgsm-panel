@@ -1272,11 +1272,16 @@ def _py_assignment_binds(n, assigned, builders):
     built = ((isinstance(n, ast.AugAssign) and isinstance(n.op, ast.Add))
              or _py_fed_built(n.value, assigned, builders) is not None)
     out = [(t.id, n.lineno) for t in targets if built and isinstance(t, ast.Name)]
-    # `res = svc(…)` then `flash(res[1])`: (res, 1) is bound when svc's item 1 is built (_r16c_).
-    callee = _py_call_name(n.value) if isinstance(n, ast.Assign) else None
-    out += [((t.id, k[1]), builders[k][1]) for t in targets if isinstance(t, ast.Name)
-            for k in builders if isinstance(k, tuple) and k[0] == callee]
-    return out + (_py_unpacked(n, builders) if isinstance(n, ast.Assign) else [])
+    if not isinstance(n, ast.Assign):
+        return out
+    return out + _r16c_held_items(n, builders) + _py_unpacked(n, builders)
+
+
+def _r16c_held_items(n, builders):
+    """`res = svc(…)` then `flash(res[1])`: [((res, 1), line)] for each built item of svc's answer."""
+    callee = _py_call_name(n.value)
+    items = [(k[1], where[1]) for k, where in builders.items() if isinstance(k, tuple) and k[0] == callee]
+    return [((t.id, i), line) for t in n.targets if isinstance(t, ast.Name) for i, line in items]
 
 
 def _py_functions(tree):
@@ -1346,17 +1351,25 @@ def _py_fed_built(value, assigned, builders):
     """
     if _py_built(value, getattr(builders, "plain", False)):
         return value.lineno
-    if isinstance(value, ast.Name) and value.id in assigned:
-        return assigned[value.id]
-    if (isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name)
-            and isinstance(value.slice, ast.Constant) and (value.value.id, value.slice.value) in assigned):
-        return assigned[(value.value.id, value.slice.value)]
+    local = _r16c_local_key(value)
+    if local is not None and local in assigned:
+        return assigned[local]
     if _py_call_name(value) in builders:
         return builders[_py_call_name(value)]
     for operand in _py_operands(value):
         where = _py_fed_built(operand, assigned, builders)
         if where is not None:
             return where
+    return None
+
+
+def _r16c_local_key(value):
+    """The `assigned` key a value reads: a local's name, (name, i) for `name[i]`, else None."""
+    if isinstance(value, ast.Name):
+        return value.id
+    if (isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name)
+            and isinstance(value.slice, ast.Constant)):
+        return value.value.id, value.slice.value
     return None
 
 
@@ -1376,14 +1389,23 @@ def _py_own_nodes(fn):
 
 def _py_wrapped_params(fn, lines, wrappers):
     """{(position, parameter)} of `fn`'s parameters that it hands to a sink as they are."""
+    where = _r16c_param_positions(fn)
+    return {(where[v.id], v.id) for n in _py_own_nodes(fn) for v in _py_sink_values(n, wrappers)
+            if isinstance(v, ast.Name) and v.id in where and not _py_ignored(lines, v)}
+
+
+def _r16c_param_positions(fn):
+    """{parameter: position} for `fn`, after self/cls; a keyword-only one (`def f(*, text)`) is None.
+
+    A keyword-only parameter is passed by name only: _py_wrapped_params read positional ones alone,
+    so a message handed to `_reply(text=…)` was never a sink.
+    """
     params = [a.arg for a in fn.args.args]
     if params[:1] in (["self"], ["cls"]):
         params = params[1:]     # obj.method(a, …): `a` is the parameter after self
-    # A keyword-only parameter (`def _reply(*, message)`) is passed by name only: position None.
-    kwonly = [a.arg for a in fn.args.kwonlyargs]
-    return {(params.index(v.id) if v.id in params else None, v.id)
-            for n in _py_own_nodes(fn) for v in _py_sink_values(n, wrappers)
-            if isinstance(v, ast.Name) and (v.id in params or v.id in kwonly) and not _py_ignored(lines, v)}
+    where = {a.arg: None for a in fn.args.kwonlyargs}
+    where.update((p, i) for i, p in enumerate(params))
+    return where
 
 
 def _py_wrappers(trees):
@@ -1537,15 +1559,18 @@ def _r16c_binds(fn):
     """
     out = {}
     for n in _py_own_nodes(fn):
-        if not (isinstance(n, ast.Assign) and len(n.targets) == 1):
-            continue
-        names = [c for c in (_py_call_name(v) for v in [n.value] + _py_operands(n.value)) if c]
-        t = n.targets[0]
-        pairs = ([(e, i) for i, e in enumerate(t.elts)] if isinstance(t, ast.Tuple) else [(t, None)])
-        for e, i in pairs:
-            if isinstance(e, ast.Name):
-                out.setdefault(e.id, []).extend((c, i) for c in names)
+        if isinstance(n, ast.Assign) and len(n.targets) == 1:
+            for local, ref in _r16c_assign_refs(n):
+                out.setdefault(local, []).append(ref)
     return out
+
+
+def _r16c_assign_refs(n):
+    """[(local, (callee, item index or None))] one single-target assignment binds."""
+    names = [c for c in (_py_call_name(v) for v in [n.value] + _py_operands(n.value)) if c]
+    t = n.targets[0]
+    pairs = list(enumerate(t.elts)) if isinstance(t, ast.Tuple) else [(None, t)]
+    return [(e.id, (c, i)) for i, e in pairs if isinstance(e, ast.Name) for c in names]
 
 
 def _r16c_item_sources(node, consts, binds):
@@ -1554,15 +1579,20 @@ def _r16c_item_sources(node, consts, binds):
         return [], []
     texts = list(_py_key_texts(node, consts))
     refs = list(binds.get(node.id, ())) if isinstance(node, ast.Name) else []
-    # `why[1]`, where `why = f(…)`: item 1 of what f answers.
-    if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
-            and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, int)):
-        refs += [(c, node.slice.value) for c, i in binds.get(node.value.id, ()) if i is None]
+    refs += _r16c_subscript_refs(node, binds)
     for operand in _py_operands(node):
         t, r = _r16c_item_sources(operand, consts, binds)
         texts += t
         refs += r
     return texts, refs
+
+
+def _r16c_subscript_refs(node, binds):
+    """`why[1]`, where `why = f(…)`: [(f, 1)] — item 1 of what f answers."""
+    local = _r16c_local_key(node)
+    if not isinstance(local, tuple) or not isinstance(local[1], int):
+        return []
+    return [(c, local[1]) for c, i in binds.get(local[0], ()) if i is None]
 
 
 def _r16c_returns(trees):
@@ -1577,40 +1607,64 @@ def _r16c_returns(trees):
         for fn in _py_functions(tree):
             binds = _r16c_binds(fn)
             for n in _py_own_nodes(fn):
-                if not isinstance(n, ast.Return) or n.value is None or _py_ignored(lines, n):
-                    continue
-                items = (list(enumerate(n.value.elts)) if isinstance(n.value, ast.Tuple)
-                         else [(None, n.value)])
-                for i, item in items:
-                    texts, follow = _r16c_item_sources(item, consts, binds)
-                    direct.setdefault((fn.name, i), set()).update((t, rel, n.lineno) for t in texts)
-                    refs.setdefault((fn.name, i), set()).update(follow)
-                callee = _py_call_name(n.value)
-                if callee:     # `return other(…)`: whatever other answers, item for item
-                    refs.setdefault(("*", fn.name), set()).add(callee)
+                if isinstance(n, ast.Return) and n.value is not None and not _py_ignored(lines, n):
+                    _r16c_note_return(fn.name, n, (rel, consts, binds), direct, refs)
     return _r16c_resolve(direct, refs)
 
 
+def _r16c_note_return(name, n, where, direct, refs):
+    """Record one `return` of function `name` in _r16c_returns' direct and refs tables."""
+    rel, consts, binds = where
+    items = list(enumerate(n.value.elts)) if isinstance(n.value, ast.Tuple) else [(None, n.value)]
+    for i, item in items:
+        texts, follow = _r16c_item_sources(item, consts, binds)
+        direct.setdefault((name, i), set()).update((t, rel, n.lineno) for t in texts)
+        refs.setdefault((name, i), set()).update(follow)
+    callee = _py_call_name(n.value)
+    if callee:     # `return other(…)`: whatever other answers, item for item
+        refs.setdefault(("*", name), set()).add(callee)
+
+
 def _r16c_resolve(direct, refs):
-    """direct + everything reachable through refs (see _r16c_returns), to a fixed point."""
+    """Return direct plus everything reachable through refs (see _r16c_returns), to a fixed point."""
     table = {k: set(v) for k, v in direct.items()}
     while True:
         before = sum(len(v) for v in table.values())
         for (name, i), follow in list(refs.items()):
-            if name == "*":
-                for (other, j), got in list(table.items()):
-                    if other in follow:
-                        table.setdefault((i, j), set()).update(got)
-                continue
-            for callee, j in follow:
-                table.setdefault((name, i), set()).update(table.get((callee, j), ()))
+            _r16c_follow(table, name, i, follow)
         if sum(len(v) for v in table.values()) == before:
             return table
+
+
+def _r16c_follow(table, name, i, follow):
+    """One ref of _r16c_resolve: ("*", fn) takes every item of the callees it returns; else (callee, j)."""
+    if name == "*":
+        for (other, j), got in list(table.items()):
+            if other in follow:
+                table.setdefault((i, j), set()).update(got)
+        return
+    for callee, j in follow:
+        table.setdefault((name, i), set()).update(table.get((callee, j), ()))
 
 
 def _r16c_is_route(rel):
     rel = rel.replace(os.sep, "/")
     return rel == "app.py" or rel.startswith("panel/routes/")
+
+
+def _r16c_answer_values(n, lines):
+    """The values one node hands the viewer: its sinks, and the first argument of a tr() call."""
+    values = list(_py_sink_values(n))
+    if _py_call_name(n) == "tr" and n.args:
+        values.append(n.args[0])
+    return [v for v in values if not _py_ignored(lines, v)]
+
+
+def _r16c_found(v, rel, scope, table):
+    """[(text, file, line)] one value can be: written there, or followed into what it was handed."""
+    consts, binds = scope
+    texts, follow = _r16c_item_sources(v, consts, binds)
+    return [(t, rel, v.lineno) for t in texts] + [x for ref in follow for x in table.get(ref, ())]
 
 
 def route_answer_keys(root=ROOT):
@@ -1622,25 +1676,14 @@ def route_answer_keys(root=ROOT):
     trees = _py_trees(root)
     table = _r16c_returns(trees)
     keys = {}
-    for rel, lines, tree in trees:
-        if not _r16c_is_route(rel):
-            continue
+    for rel, lines, tree in (t for t in trees if _r16c_is_route(t[0])):
         consts = _py_module_consts(tree)
         for fn in [tree] + _py_functions(tree):
-            binds = _r16c_binds(fn)
-            for n in _py_own_nodes(fn):
-                values = list(_py_sink_values(n))
-                if _py_call_name(n) == "tr" and n.args:
-                    values.append(n.args[0])
-                for v in values:
-                    if _py_ignored(lines, v):
-                        continue
-                    texts, follow = _r16c_item_sources(v, consts, binds)
-                    found = [(t, rel, v.lineno) for t in texts]
-                    found += [x for ref in follow for x in table.get(ref, ())]
-                    for t, f, line in found:
-                        if _r16c_prose(t):
-                            keys.setdefault(t, "%s:%d" % (f, line))
+            scope = (consts, _r16c_binds(fn))
+            for v in (v for n in _py_own_nodes(fn) for v in _r16c_answer_values(n, lines)):
+                for t, f, line in _r16c_found(v, rel, scope, table):
+                    if _r16c_prose(t):
+                        keys.setdefault(t, "%s:%d" % (f, line))
     return keys
 
 
@@ -1667,16 +1710,27 @@ def _r16c_step_values(n):
     if isinstance(n, ast.Call) and _py_call_name(n) in _R16C_STEP_WRITERS:
         return list(n.args)
     if isinstance(n, ast.Dict):
-        return [v for k, v in zip(n.keys, n.values) if _py_text(k) and k.value == "step_name"]
+        return [v for k, v in zip(n.keys, n.values) if _r16c_is_step_key(k)]
     if isinstance(n, ast.Assign):
-        out = []
-        for t in n.targets:
-            pairs = (list(zip(t.elts, n.value.elts)) if isinstance(t, ast.Tuple) and isinstance(n.value, ast.Tuple)
-                     else [(t, n.value)])
-            out += [v for tt, v in pairs if isinstance(tt, ast.Subscript) and _py_text(tt.slice)
-                    and tt.slice.value in _R16C_JOB_KEYS]
-        return out
+        return [v for t in n.targets for tt, v in _r16c_target_pairs(t, n.value) if _r16c_job_slot(tt)]
     return []
+
+
+def _r16c_is_step_key(k):
+    """Whether a dict key is "step_name" (a job's dict literal: {"step_name": "Queued", …})."""
+    return _py_text(k) and k.value == "step_name"
+
+
+def _r16c_target_pairs(t, value):
+    """[(target, value)] of one assignment target: `a, b = x, y` pairs them up."""
+    if isinstance(t, ast.Tuple) and isinstance(value, ast.Tuple):
+        return list(zip(t.elts, value.elts))
+    return [(t, value)]
+
+
+def _r16c_job_slot(t):
+    """Whether an assignment target is a job's step_name or message (`job["step_name"]`)."""
+    return isinstance(t, ast.Subscript) and _py_text(t.slice) and t.slice.value in _R16C_JOB_KEYS
 
 
 def _r16c_step_walk(root):
@@ -1695,10 +1749,8 @@ def step_name_keys(root=ROOT):
     """{key: "file:line"} for every literal a job's progress text can be (see _R16C_STEP_WRITERS)."""
     table = _r16c_returns(_py_trees(root))
     keys = {}
-    for rel, line, v, consts, binds, _lines in _r16c_step_walk(root):
-        texts, follow = _r16c_item_sources(v, consts, binds)
-        found = [(t, rel, line) for t in texts] + [x for ref in follow for x in table.get(ref, ())]
-        for t, f, ln in found:
+    for rel, _line, v, consts, binds, _lines in _r16c_step_walk(root):
+        for t, f, ln in _r16c_found(v, rel, (consts, binds), table):
             if _r16c_prose(t) or _R16C_LABEL.match(t):
                 keys.setdefault(t, "%s:%d" % (f, ln))
     return keys
@@ -1706,8 +1758,6 @@ def step_name_keys(root=ROOT):
 
 def step_names_built(root=ROOT):
     """[(file, line)]: a job's progress text built in plain English, which no key can match."""
-    plain = _PyBuilders()
-    plain.plain = True
     return sorted({(rel, line) for rel, line, v, _c, _b, _l in _r16c_step_walk(root)
                    if any(_py_built(x, plain=True) for x in [v] + _py_operands(v))})
 

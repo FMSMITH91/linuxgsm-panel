@@ -44,13 +44,13 @@ _ACCESS_RECHECK_SECONDS = 10.0
 _sid_owner = {}
 
 def _r16c_said(field, text):
-    """A socket payload's text: the English under `field`, and the template and values the page
-    translates it from (`<field>_key`, `<field>_vals`).
+    """Build a socket payload's text: the English, and the template and values it was built from.
 
-    Most of these are sent from a worker (the idle sweeper, a shell that exited, the revocation
-    sweep) with no request and so no viewer's language, and the page put the English into its own
-    translated sentence ("Sesión cerrada — the shell exited."). The page fills the template's
-    translation with the values instead, as the firewall page does with a rule's protect reason.
+    `field` holds the English; `<field>_key` and `<field>_vals` the template and values. Most of
+    these are sent from a worker (the idle sweeper, a shell that exited, the revocation sweep) with
+    no request and so no viewer's language, and the page put the English into its own translated
+    sentence ("Sesión cerrada — the shell exited."). The page fills the template's translation with
+    the values instead, as the firewall page does with a rule's protect reason.
     """
     vals = getattr(text, "vals", None) or {}
     return {field: str(text or ""), field + "_key": getattr(text, "template", None) or str(text or ""),

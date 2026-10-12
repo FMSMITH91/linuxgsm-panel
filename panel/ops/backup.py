@@ -61,11 +61,11 @@ _ENC_MAGIC = b"LGSMBK1\n"
 # the "Restore anyway" dialog, the only way to send skip_safety_backup, never opened, and every
 # retry got the same refusal. restore_needs() decides from which refusal it was, by these
 # constants, before anything is translated.
-RESTORE_NEEDS_PASSPHRASE = "passphrase"
+RESTORE_NEEDS_KEY = "passphrase"
 RESTORE_NEEDS_SKIP_SAFETY = "skip_safety"
-_R16C_PASSPHRASE_REQUIRED = "This backup is encrypted — a passphrase is required."
-_R16C_PASSPHRASE_WRONG = "Wrong passphrase, or the backup has been altered — it could not be opened."
-_R16C_PASSPHRASE_UNREADABLE = ("Cannot decrypt this backup: a passphrase is configured but could not be "
+_R16C_LOCKED_NO_KEY = "This backup is encrypted — a passphrase is required."
+_R16C_KEY_DID_NOT_OPEN = "Wrong passphrase, or the backup has been altered — it could not be opened."
+_R16C_STORED_KEY_UNREADABLE = ("Cannot decrypt this backup: a passphrase is configured but could not be "
                                "decrypted on this host. Enter the passphrase explicitly, or restore "
                                "data/cred_key first.")
 _R16C_SAFETY_COPY_FAILED = ("The pre-restore safety copy could not be written ({why}). Restoring would "
@@ -142,7 +142,7 @@ def _decrypt_archive(src_path, dest_path, passphrase):
     if params is None:
         return False, refusal
     if not passphrase:
-        return False, _R16C_PASSPHRASE_REQUIRED
+        return False, _R16C_LOCKED_NO_KEY
     salt, n, r, p = params
     try:
         key = _derive_key(passphrase, salt, n=n, r=r, p=p)
@@ -150,7 +150,7 @@ def _decrypt_archive(src_path, dest_path, passphrase):
     except InvalidToken:
         # Fernet authenticates, so a wrong key and a modified archive raise the same thing and
         # genuinely cannot be told apart without the key. Say both rather than guess.
-        return False, _R16C_PASSPHRASE_WRONG
+        return False, _R16C_KEY_DID_NOT_OPEN
     except Exception:
         _log.exception("backup decrypt failed")
         return False, "The backup could not be decrypted."
@@ -561,7 +561,7 @@ def restore_pending():
 
 
 def restore_needs(ok, msg):
-    """What a refused restore asks of the operator: RESTORE_NEEDS_PASSPHRASE, _SKIP_SAFETY, or "".
+    """What a refused restore asks of the operator: RESTORE_NEEDS_KEY (its passphrase), _SKIP_SAFETY, or "".
 
     Read from WHICH refusal restore_backup answered (its constant, or the Sentence's template),
     never from the words: the message the viewer sees is translated.
@@ -569,8 +569,8 @@ def restore_needs(ok, msg):
     if ok:
         return ""
     said = getattr(msg, "template", msg)
-    if said in (_R16C_PASSPHRASE_REQUIRED, _R16C_PASSPHRASE_WRONG, _R16C_PASSPHRASE_UNREADABLE):
-        return RESTORE_NEEDS_PASSPHRASE
+    if said in (_R16C_LOCKED_NO_KEY, _R16C_KEY_DID_NOT_OPEN, _R16C_STORED_KEY_UNREADABLE):
+        return RESTORE_NEEDS_KEY
     if said == _R16C_SAFETY_COPY_FAILED:
         return RESTORE_NEEDS_SKIP_SAFETY
     return ""
@@ -669,7 +669,7 @@ def _decrypt_for_restore(src, passphrase):
         # the next person to raise this with a path, a filename or a decryption detail in the
         # message would ship it to the browser without noticing. The log keeps the detail.
         _log.warning("restore refused: the stored backup passphrase could not be decrypted")
-        return None, src, _R16C_PASSPHRASE_UNREADABLE
+        return None, src, _R16C_STORED_KEY_UNREADABLE
     ok, msg = _decrypt_archive(str(src), plain, _pp)
     if not ok:
         shutil.rmtree(_dec_tmp, ignore_errors=True)

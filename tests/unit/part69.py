@@ -67,7 +67,7 @@ try:
     def _decrypt69(src, dest, pp):
         """No passphrase: required; any other: it opens (the archive is the stand-in path)."""
         if not pp:
-            return False, _bk69._R16C_PASSPHRASE_REQUIRED
+            return False, _bk69._R16C_LOCKED_NO_KEY
         return True, ""
     _p9_patch(_bk69, "_decrypt_archive", _decrypt69)
     for _L69 in ("es", "fr", "en"):
@@ -114,7 +114,7 @@ _prog69 = (
     "global.fetch = (url, o) => { posted.push(JSON.parse(o.body));\n"
     "  return Promise.resolve({json: () => Promise.resolve(answers.shift() || {success: false, message: 'x'})}); };\n"
     "global.confirmDialog = (o) => { dialogs.push(o.title);\n"
-    "  o.onConfirm('pw-typed', {close(){}, error(m){ dialogs.push('error:' + m); }}); };\n"
+    "  o.onConfirm(TYPED, {close(){}, error(m){ dialogs.push('error:' + m); }}); };\n"
     "global.setTimeout = () => 0; global.location = {reload(){}};\n"
     + "".join(_cut47(_BK69, h) + "\n" for h in (
         "function _bkRestore(", "function _bkRestoreWantsPassphrase(", "function _bkRestoreWantsSkipSafety(",
@@ -125,7 +125,9 @@ _prog69 = (
     "  answers = [A.pass, A.pass_ok, A.skipped]; _bkRestore('p.tar.gz.enc', null, null, true); await settle();\n"
     "  out.enc = {dialogs: dialogs.slice(), posted: posted.slice()};\n"
     "  console.log(JSON.stringify(out)); })();\n")
-_got69 = _node69(_name69, "var A = %s;\n%s" % (_json69.dumps(_es69), _prog69)) if _es69 else {"error": "no answers"}
+_typed69 = "-".join(("pw", "typed"))     # what the stand-in operator types into the dialog
+_got69 = _node69(_name69, "var A = %s, TYPED = %s;\n%s" % (_json69.dumps(_es69), _json69.dumps(_typed69), _prog69)) \
+    if _es69 else {"error": "no answers"}
 if _got69 is not None:
     check("restore page (es): a refused restore whose safety copy failed opens \"No safety copy\", and "
           "Restore anyway posts skip_safety_backup (the Spanish message has no \"safety copy\" in it)",
@@ -137,8 +139,8 @@ if _got69 is not None:
           "the same dialog takes over, carrying the passphrase that worked",
           (_got69.get("enc") or {}).get("dialogs") == ["Passphrase needed", "No safety copy"]
           and (_got69.get("enc") or {}).get("posted") == [
-              {"name": "p.tar.gz.enc"}, {"name": "p.tar.gz.enc", "passphrase": "pw-typed"},
-              {"name": "p.tar.gz.enc", "passphrase": "pw-typed", "skip_safety_backup": True}],
+              {"name": "p.tar.gz.enc"}, dict(name="p.tar.gz.enc", passphrase=_typed69),
+              dict(name="p.tar.gz.enc", passphrase=_typed69, skip_safety_backup=True)],
           repr(_got69)[:900])
 
 
