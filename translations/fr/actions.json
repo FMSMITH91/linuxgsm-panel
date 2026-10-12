@@ -98,6 +98,7 @@
   "Not imported:": "Non importé :",
   "Not in its LinuxGSM config: read from LinuxGSM when imported": "Absent de sa configuration LinuxGSM : lu depuis LinuxGSM à l'importation",
   "Incorrect password.": "Mot de passe incorrect.",
+  "Too many wrong passwords or codes for this account. Wait a few minutes and try again.": "Trop de mots de passe ou de codes erronés pour ce compte. Attendez quelques minutes et réessayez.",
   "Install and enable automatic security updates (unattended-upgrades)? This changes the system update settings.": "Installer et activer les mises à jour de sécurité automatiques (unattended-upgrades) ? Cela modifie les réglages de mise à jour du système.",
   "Install status unknown": "État d'installation inconnu",
   "Installing updates… (watch the popup)": "Installation des mises à jour… (surveillez la fenêtre)",
