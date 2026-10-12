@@ -596,6 +596,20 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A fourth full review on 2026-10-12: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Player lists.** Quake III, Return to Castle Wolfenstein and Jedi Academy (OpenJK) servers
+    now show who is online, read from each engine's own status table. Quake III 1.32 and
+    Enemy Territory no longer drop players with spaces in their names.
+  - **Firewall page.** A rule that opens the panel's port as part of a list or range is shown as
+    the panel's rule and protected, like the panel card and Close port already treat it. Close port
+    refuses a rule shared with other ports instead of deleting it. Lock-out reasons describe ranges
+    correctly and are shown in the viewer's language.
+  - **Pages.** Sentences that contain a name or a number (upload results, confirmations, schedule
+    explanations and many more) are now translated as whole sentences for Spanish and French
+    viewers, with names left as typed. Alert names, permission names and more tooltips are
+    translated too.
+  - **Audit log.** Characters the audit page cannot show are escaped in every row.
 - **A third full review on 2026-10-11: fixes.** Every item below has a check that fails without
   its fix.
   - **Backups.** A scheduled backup no longer deletes a good archive because LinuxGSM printed a
@@ -1961,6 +1975,16 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **A fourth full review on 2026-10-12: security.** Every item below has a check that fails without
+  its fix.
+  - **SSH lockout guard.** A rule that only lets the server reach itself (loopback, Docker bridges,
+    `127.0.0.1`), a UDP-only rule, or a rule with a comment no longer counts as another way in, so
+    the only public SSH rule stays protected. Rules are read in the order the firewall applies them,
+    so a DENY above an ALLOW is honoured. Proven against a real firewall, which was left as it was.
+  - **File browser.** The new file and folder actions, rename and delete pass only the validated
+    LinuxGSM script name to the host.
+  - **The debug report** no longer prints secrets nested inside JSON text, nor sudo arguments in the
+    last case that still leaked them.
 - **A third full review on 2026-10-11: security.** Every item below has a check that fails without
   its fix.
   - **Tailscale Serve.** File shares and text pages served by Tailscale were not read, so turning
