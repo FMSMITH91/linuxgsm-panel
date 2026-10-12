@@ -280,7 +280,7 @@ def _first_label(value):
         return ""
     except ValueError:
         label = value.split(".", 1)[0]
-        return "" if label.isdigit() else label
+        return "" if label.isdecimal() else label
 
 
 def _read_server_names(st):
@@ -330,7 +330,7 @@ def _os_accounts():
     import pwd
     names = [pwd.getpwuid(os.getuid()).pw_name]
     for parts in _etc_rows(ETC_PASSWD):
-        if len(parts) > 2 and parts[2].isdigit() and 1000 <= int(parts[2]) < 65534:
+        if len(parts) > 2 and parts[2].isdecimal() and 1000 <= int(parts[2]) < 65534:
             names.append(parts[0])
     for parts in _etc_rows(ETC_GROUP):
         if len(parts) > 3 and parts[0] == "lgsmpanel-games":
@@ -659,7 +659,7 @@ def _ip_class(ip):
 def _v4(raw):
     """An IPv4 address written with zero-padded octets ('081.002.013.077'), or None."""
     parts = raw.split(".")
-    if len(parts) != 4 or not all(p.isdigit() and int(p) <= 255 for p in parts):
+    if len(parts) != 4 or not all(p.isdecimal() and int(p) <= 255 for p in parts):
         return None
     return ipaddress.ip_address(".".join(str(int(p)) for p in parts))
 

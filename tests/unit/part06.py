@@ -932,19 +932,25 @@ check("unicode: int() rejects it, so isdecimal() is the guard that matches int()
 check("unicode: isdecimal() still accepts a non-ASCII DECIMAL digit, so nothing legitimate is lost",
       "٥".isdecimal() and int("٥") == 5)
 
-# No module may guard an int() with isdigit() again.
-_isdigit_users = []
-for _f in ("app.py", "auth.py", "manage.py", "models.py", "system_ops.py", "ssh_manager.py",
-           "panel/services/notifications.py", "backup.py", "db_maintenance.py",
-           "tailscale_integration.py", "config.py", "i18n.py", "privileged.py", "clock.py"):
-    # _modpath, not a root join with an exists() skip: when these modules moved under panel/
-    # the old form silently matched nothing and still reported green.
-    for _fp2 in _modfiles(_f):
-     for _i, _line in enumerate(open(_fp2, encoding="utf-8"), 1):
+# No module may guard an int() with isdigit() again. EVERY module: this read a fixed list of 14,
+# and 13 sites had grown back outside it (routes, the debug report, the root helper — whose
+# `#<gid>` sudoers parse raised on "#¹"). Every panel module, the root scripts, tools/*.py and the
+# extensionless helper, as the `$`-anchor sweep reads them.
+_isdigit_users, _isdigit_read = [], 0
+_isdigit_files = (sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True))
+                  + sorted(glob.glob(os.path.join(_root, "*.py")))
+                  + sorted(glob.glob(os.path.join(_root, "tools", "**", "*.py"), recursive=True))
+                  + [os.path.join(_root, "tools", "panel-helper")])
+for _fp2 in _isdigit_files:
+    if "node_modules" in _fp2:
+        continue
+    _isdigit_read += 1
+    for _i, _line in enumerate(open(_fp2, encoding="utf-8"), 1):
         if ".isdigit()" in _line.split("#", 1)[0]:
-            _isdigit_users.append("%s:%d" % (_f, _i))
+            _isdigit_users.append("%s:%d" % (os.path.relpath(_fp2, _root), _i))
 check("unicode: no module uses .isdigit() — isdecimal() is the one that matches int()",
-      not _isdigit_users, ", ".join(_isdigit_users[:4]))
+      _isdigit_read >= 100 and not _isdigit_users,
+      "%d files read; %s" % (_isdigit_read, ", ".join(_isdigit_users[:4])))
 
 # The crashing input itself, replayed.
 from panel.ops import system_ops as _so_top
@@ -1400,39 +1406,95 @@ def _module_toplevel_names(path):
 #
 # READS of a missing attribute already fail loudly with AttributeError. Assignments do not, so
 # those are what this checks.
-_stub_mods = {}
-for _f in sorted(os.listdir(_root)):
-    if _f.endswith(".py"):
-        _stub_mods[_f[:-3]] = _module_toplevel_names(os.path.join(_root, _f))
-_stub_bad = []
-# The smoke suite's parts run as one narrative: a module alias bound in one part (`import app as
-# _appmod`) is imported by the parts after it, so its aliases carry forward, in run order.
-_stub_smoke_alias = {}
-for _f in sorted(glob.glob(os.path.join(_root, "tests", "*.py"))
-                 + glob.glob(os.path.join(_root, "tests", "smoke", "*.py"))   # the smoke suite's checks
-                 + glob.glob(os.path.join(_root, "tools", "*.py"))):
-    _src = open(_f, encoding="utf-8").read()
-    try:
-        _tree = _ast_scan.parse(_src)
-    except SyntaxError:
-        continue
-    _stub_in_smoke = os.sep + os.path.join("tests", "smoke", "part") in _f
-    _alias = dict(_stub_smoke_alias) if _stub_in_smoke else {}
-    for _n in _ast_scan.walk(_tree):
+# Every module of this repository a test can alias, not just the three at the root (review 1011d):
+# `from panel.ops import system_ops as _so` and `import panel.x as y` were never recorded, and
+# tests/unit/ — where most stubs live — was never read, so ~1,600 assignments went unexamined.
+# A package's attributes are its own top-level names plus its submodules.
+def _r14d_modfile(dotted):
+    """The file of repository module `dotted` (a package's __init__.py), or None."""
+    _p = os.path.join(_root, *dotted.split("."))
+    if os.path.isfile(os.path.join(_p, "__init__.py")):
+        return os.path.join(_p, "__init__.py")
+    return _p + ".py" if os.path.isfile(_p + ".py") else None
+
+
+_stub_names_cache = {}
+
+
+def _r14d_stub_names(dotted):
+    if dotted not in _stub_names_cache:
+        _mf = _r14d_modfile(dotted)
+        _names = _module_toplevel_names(_mf)
+        if _mf.endswith("__init__.py"):
+            _pkg = os.path.dirname(_mf)
+            _names |= {_e[:-3] if _e.endswith(".py") else _e for _e in os.listdir(_pkg)
+                       if _e.endswith(".py") or os.path.isfile(os.path.join(_pkg, _e, "__init__.py"))}
+        _stub_names_cache[dotted] = _names
+    return _stub_names_cache[dotted]
+
+
+def _r14d_aliases(tree, carried):
+    """{name: dotted module} for each module-level name `tree` binds to a repository module.
+
+    `carried` is {"unit.part12": {name: module}, ...}: a part that imports an earlier part's alias
+    (`from unit.part12 import _p9_core`) stubs through it.
+    """
+    alias = {}
+    for _n in _ast_scan.walk(tree):
         if isinstance(_n, _ast_scan.Import):
             for _a in _n.names:
-                _base = _a.name.split(".")[0]
-                if _base in _stub_mods:
-                    _alias[_a.asname or _base] = _base
+                # `import panel.x` binds `panel`, not the submodule; only `as` names it.
+                if (_a.asname or "." not in _a.name) and _r14d_modfile(_a.name):
+                    alias[_a.asname or _a.name] = _a.name
+        elif isinstance(_n, _ast_scan.ImportFrom) and _n.module and not _n.level:
+            for _a in _n.names:
+                if _n.module in carried:
+                    if _a.name in carried[_n.module]:
+                        alias[_a.asname or _a.name] = carried[_n.module][_a.name]
+                elif _r14d_modfile(_n.module + "." + _a.name):
+                    alias[_a.asname or _a.name] = _n.module + "." + _a.name
         elif isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Subscript):
             if (getattr(getattr(_n.value, "value", None), "attr", "") == "modules"
                     and isinstance(_n.value.slice, _ast_scan.Constant)
-                    and _n.value.slice.value in _stub_mods):
+                    and isinstance(_n.value.slice.value, str) and _r14d_modfile(_n.value.slice.value)):
                 for _t in _n.targets:
                     if isinstance(_t, _ast_scan.Name):
-                        _alias[_t.id] = _n.value.slice.value
-    if _stub_in_smoke:
-        _stub_smoke_alias.update(_alias)
+                        _alias_mod = _n.value.slice.value
+                        alias[_t.id] = _alias_mod
+    return alias
+
+
+_stub_files = sorted(glob.glob(os.path.join(_root, "tests", "*.py"))
+                     + glob.glob(os.path.join(_root, "tests", "smoke", "*.py"))   # the smoke suite
+                     + glob.glob(os.path.join(_root, "tests", "unit", "*.py"))    # and this one
+                     + glob.glob(os.path.join(_root, "tools", "*.py")))
+_stub_trees = {}
+for _f in _stub_files:
+    try:
+        with open(_f, encoding="utf-8") as _stub_fh:
+            _stub_trees[_f] = _ast_scan.parse(_stub_fh.read())
+    except SyntaxError:
+        continue
+
+
+def _r14d_dotted_of(path):
+    """`unit.part12` / `smoke.part01` for a part file, else None."""
+    _rel = os.path.relpath(path, os.path.join(_root, "tests"))
+    return _rel[:-3].replace(os.sep, ".") if _rel.startswith(("unit" + os.sep, "smoke" + os.sep)) else None
+
+
+# To a fixed point: a part's aliases can be carried from a part that carried them in turn.
+_stub_carry, _stub_alias_of = {}, {}
+for _stub_round in range(8):
+    _stub_alias_of = {_f: _r14d_aliases(_t, _stub_carry) for _f, _t in _stub_trees.items()}
+    _stub_next = {_r14d_dotted_of(_f): _al for _f, _al in _stub_alias_of.items() if _r14d_dotted_of(_f)}
+    if _stub_next == _stub_carry:
+        break
+    _stub_carry = _stub_next
+_stub_bad, _stub_seen = [], 0
+_stub_builtins = set(dir(__import__("builtins")))
+for _f, _tree in _stub_trees.items():
+    _alias = _stub_alias_of[_f]
     for _n in _ast_scan.walk(_tree):
         if not (isinstance(_n, _ast_scan.Attribute) and isinstance(_n.ctx, _ast_scan.Store)):
             continue
@@ -1445,11 +1507,30 @@ for _f in sorted(glob.glob(os.path.join(_root, "tests", "*.py"))
         # read back with getattr(..., None). That is the one legitimate case.
         if _n.attr == "_real_subprocess":
             continue
-        if _n.attr not in _stub_mods[_mod]:
+        _stub_seen += 1
+        # A builtin planted as a module global (`SO.open = fake`) does take effect: the module's
+        # globals are searched before builtins. That is a stub of a name the module uses.
+        if _n.attr in _stub_builtins:
+            continue
+        if _n.attr not in _r14d_stub_names(_mod):
             _stub_bad.append("%s:%d %s.%s (%s has no such name)"
                              % (os.path.basename(_f), _n.lineno, _n.value.id, _n.attr, _mod))
 check("every stub is installed on a module that actually defines the name",
-      not _stub_bad, "; ".join(sorted(set(_stub_bad))[:4]))
+      _stub_seen >= 1000 and not _stub_bad,
+      "%d stub assignments read; %s" % (_stub_seen, "; ".join(sorted(set(_stub_bad))[:4])))
+_stub_ctl_tree = _ast_scan.parse(
+    "from panel.ops import system_ops as _zz\nimport panel.ops.ssh_manager._core as _cc\n"
+    "from unit.part12 import _p9_core\n")
+_stub_ctl_al = _r14d_aliases(_stub_ctl_tree, {"unit.part12": {"_p9_core": "panel.ops.ssh_manager._core"}})
+check("stub gate: a `from panel… import mod`, an `import … as`, and a part's carried alias are all "
+      "read, and a misspelled stub through each is named (control)",
+      _stub_ctl_al == {"_zz": "panel.ops.system_ops", "_cc": "panel.ops.ssh_manager._core",
+                       "_p9_core": "panel.ops.ssh_manager._core"}
+      and "no_such_fn_xyz" not in _r14d_stub_names("panel.ops.system_ops")
+      and "run_comand" not in _r14d_stub_names("panel.ops.ssh_manager._core")
+      and {"run_command", "_core"} <= (_r14d_stub_names("panel.ops.ssh_manager._core")
+                                       | _r14d_stub_names("panel.ops.ssh_manager")),
+      repr(_stub_ctl_al))
 # The reader the gate stands on, against a module with a name in each place one can be bound.
 _tn_dir = _tempfile.mkdtemp(prefix="toplevel-names-")
 try:
@@ -7297,19 +7378,20 @@ check("probes: a negative sentinel is always paired with its positive one",
 # Two gates, because either alone can be worked around: the reporter must use the tuple form, and
 # no check() call may hand it something that is obviously not a string.
 import ast as _rep_ast
-_REPORTER_SUITES = ["tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
-                    "tests/template_actions_test.py", "tests/input_validation_test.py",
-                    "tests/manage_test.py", "tests/setup_wizard_test.py"]
+# Every suite on disk, globbed: the hand-kept list of seven left out perf_budget_test.py, which CI
+# runs and whose printer had exactly the fragile form (review 1011d).
+_REPORTER_SUITES = sorted("tests/" + os.path.basename(_p)
+                          for _p in glob.glob(os.path.join(_root, "tests", "*_test.py")))
 _rep_fragile, _rep_seen = [], 0
 for _f in _REPORTER_SUITES:
     _src = open(os.path.join(_root, _f), encoding="utf-8").read()
     _rep_seen += 1
-    # the safe forms: "% (detail,)" or an explicit str()/repr() around it
-    if ('"   [%s]" % detail' in _src and '"   [%s]" % (detail,)' not in _src
-            and '% str(detail)' not in _src):
+    # the safe forms: "% (detail,)" or an explicit str()/repr() around it — neither is `% detail`
+    if re.search(r"\[%s\]\"\s*%\s*detail\b", _src):
         _rep_fragile.append(_f)
-check("suites: the result printer was actually read", _rep_seen == len(_REPORTER_SUITES),
-      "read %d of %d" % (_rep_seen, len(_REPORTER_SUITES)))
+check("suites: the result printer was actually read",
+      _rep_seen == len(_REPORTER_SUITES) >= 9 and "tests/perf_budget_test.py" in _REPORTER_SUITES,
+      "read %d of %r" % (_rep_seen, _REPORTER_SUITES))
 check("suites: no result printer raises on a non-string detail",
       not _rep_fragile,
       "a FAILING check in these prints a TypeError instead of its name: %s" % ", ".join(_rep_fragile))

@@ -3200,9 +3200,10 @@ def _r13d_run_redirected(cmd, real_dir, anchored, timeout=30):
 
 
 def _r14d_sshd_anchored(rendering):
-    """Every sshd_config the rendering names is a whole SSHD_CONFIG path the redirect replaces: one
-    built in the shell (`e=/etc; "$e/ssh/sshd_config"`) is not, and would edit the host's file."""
-    return 0 < rendering.count(_priv.SSHD_CONFIG) == rendering.count("sshd_config")
+    """Every sshd_config PATH the rendering names is a whole SSHD_CONFIG the redirect replaces: one
+    built in the shell (`e=/etc; "$e/ssh/sshd_config"`) is not, and would edit the host's file.
+    (`sshd_config[.]d` in the Include grep is a pattern, not a path: no slash before it.)"""
+    return 0 < rendering.count(_priv.SSHD_CONFIG) == rendering.count("/sshd_config")
 
 
 def _gd_render(verb, args):
@@ -3295,7 +3296,10 @@ try:
     try:
         _gdr_fx2 = _priv.remote_command("gamedig-install", [])
         _r2 = _r13d_run_redirected(_gdr_fx2.replace(_gdr_anchor, "d=%s" % _gd_q(_gdr_dest)),
-                                   _priv.GAMEDIG_DIR, _gdr_fx2.count(_gdr_anchor) == 1, timeout=60)
+                                   _priv.GAMEDIG_DIR,
+                                   # a refusal that writes nothing has no destination to redirect
+                                   _gdr_fx2.count(_gdr_anchor) == 1 or not _re.search(
+                                       r"\b(?:mkdir|mv|cp|tee|chmod|base64)\b", _gdr_fx2), timeout=60)
         _gdr_why = "rc=%d %r" % (_r2.returncode, _r2.stdout[-200:])
     except Exception as _e:        # reported by name below, not left to end the part
         _r2, _gdr_why = None, "remote_command raised %r" % _e

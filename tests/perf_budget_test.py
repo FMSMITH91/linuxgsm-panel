@@ -487,7 +487,8 @@ finally:
     for ok, name, detail in results:
         line = ("PASS" if ok else "FAIL") + "  " + name
         if detail and not ok:
-            line += "   [%s]" % detail
+            line += "   [%s]" % (detail,)   # (detail,) not detail: a multi-element TUPLE detail made
+                                                # this raise, for a FAILING check only, taking the tally
         print(line)
     print("\n%d / %d checks passed" % (passed, len(results)))
     cleanup()
