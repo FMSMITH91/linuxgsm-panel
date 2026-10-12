@@ -1045,6 +1045,24 @@ def _autostart_reboot_gate(gs, enabled):
     return None
 
 
+def _r14b_daily_host_time(body, gs, viewer_tz, host_tz):
+    """The daily restart's (hour, minute) on the host's clock for this request; None for a bad time.
+
+    No time given (the plain on/off toggle) keeps whatever is already set, so flicking the switch
+    off and on again cannot silently move the schedule to a default. A time that is given must BE
+    one: "5pm" or "17:60" parsed to the 05:00 default and moved the schedule there, answering
+    success.
+    """
+    if body.get("time") in (None, ""):
+        return clock.parse_hhmm(gs.daily_restart_at)
+    want = clock.parse_hhmm(body.get("time"), default=None)
+    if want is None:
+        return None
+    # Entered in the viewer's zone -> stored in the host's. With either zone unknown this is a
+    # no-op, which leaves the time where the operator put it rather than shifting it by a guess.
+    return clock.convert_wall_time(want[0], want[1], viewer_tz, host_tz)
+
+
 def _register_schedules(app):
     """Autostart, the daily restart schedule and the one-shot 'tell me when it's empty' flag."""
     @app.route("/api/server/<int:server_id>/autostart", methods=["POST"])
@@ -1100,16 +1118,10 @@ def _register_schedules(app):
         viewer_tz = clock.valid_timezone(body.get("tz"))
         host_tz = _host_timezone_cached(gs.remote)
         try:
-            # No time given (the plain on/off toggle) keeps whatever is already set, so flicking
-            # the switch off and on again cannot silently move the schedule to a default.
-            if body.get("time"):
-                want_h, want_m = clock.parse_hhmm(body.get("time"))
-                # Entered in the viewer's zone -> stored in the host's. With either zone unknown
-                # this is a no-op, which leaves the time where the operator put it rather than
-                # shifting it by a guess.
-                host_h, host_m = clock.convert_wall_time(want_h, want_m, viewer_tz, host_tz)
-            else:
-                host_h, host_m = clock.parse_hhmm(gs.daily_restart_at)
+            at = _r14b_daily_host_time(body, gs, viewer_tz, host_tz)
+            if at is None:
+                return jsonify({"success": False, "message": "time must be HH:MM."}), 400
+            host_h, host_m = at
             ok, detail = set_daily_restart(gs.remote, gs.short_name, gs.lgsm_name,
                                            gs.game_type, gs.port, enabled,
                                            hour=host_h, minute=host_m)

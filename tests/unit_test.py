@@ -123,13 +123,15 @@ for _attr, _fns in _WATCHED.items():
 # throwaway home, as part40 does for rename; imports part01, 12 and 40.
 # part61 (review 1011d: system_ops, Tailscale Serve, ssh-core and notify fixes) drives part12's app
 # for two routes; imports part01, 02, 12 and 20.
+# part62 (the fourth 2026-10-11 review: game files, debug report, helper, routes) drives part12's
+# app in a real bash with stand-in tools; imports part01, 05 and 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
           "part28", "part29", "part30", "part31", "part32", "part33", "part34", "part35", "part36", "part37",
           "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
           "part50", "part51", "part52", "part53", "part54", "part55", "part56", "part57", "part58",
-          "part59", "part60", "part61", "part15")
+          "part59", "part60", "part61", "part62", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

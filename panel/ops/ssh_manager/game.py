@@ -99,8 +99,14 @@ def capture_console(server, user, selfname=None, lines=180, since=None):
     and nothing above it — the reply to that send, never an older one. The row's number is
     history_size + cursor_y; tmux keeps it until its history is full, and then drops
     history_limit/10 rows at once (grid_collect_history), which shows as a history_size that went
-    DOWN. Counting a drop that did not happen, or missing a second one, only starts the capture
-    later, inside what is new: a reply cut short reads as unknown, never as an old table.
+    DOWN, and the start moves up by that many rows. A history that went down is counted as that
+    collect ONLY when one was possible — the history at the mark was already within
+    history_limit/10 of the limit. Otherwise something else shrank it: a resize reflows the pane
+    and resets the history (grid_reflow), as when an admin attaches `./<script> console` from a
+    terminal of another size. Subtracting then started the capture ABOVE the mark, in rows from
+    before the send, and the parsers took the previous table as current. That is unknown (rc 4),
+    as an unreadable pane is. Missing a second collect only starts the capture later, inside what
+    is new: a reply cut short reads as unknown, never as an old table.
     """
     selfname = selfname or user
     if since is not None:
@@ -108,7 +114,8 @@ def capture_console(server, user, selfname=None, lines=180, since=None):
         start = (f'set -- $(tmux -L "$SOCK" display -p -t {selfname} "#{{history_size}} #{{history_limit}}"); '
                  '[ -n "$2" ] || exit 4; '
                  f's=$(( {hs} + {cy} - $1 )); '
-                 f'if [ "$1" -lt {hs} ]; then t=$(( $2 / 10 )); [ "$t" -ge 1 ] || t=1; s=$(( s - t )); fi; ')
+                 f'if [ "$1" -lt {hs} ]; then t=$(( $2 / 10 )); [ "$t" -ge 1 ] || t=1; '
+                 f'[ {hs} -gt $(( $2 - t )) ] || exit 4; s=$(( s - t )); fi; ')
         inner = (_core._tmux_live_socket_sh(selfname) + start
                  + f'tmux -L "$SOCK" capture-pane -p -J -t {selfname} -S "$s"')
     else:
@@ -120,6 +127,19 @@ def capture_console(server, user, selfname=None, lines=180, since=None):
 # negation, to tell the column header from a row: both carry the word "uniqueid" when a player
 # picks the right name, and only one of them starts with a number.
 _VALVE_ROW_RE = re.compile(r'\s*#\s*\d+\s+"([^"]*)"')
+# The `status` table's header by its own shape: Source's "# userid name uniqueid connected …" and
+# GoldSrc's "#      name userid uniqueid frag time …" (tabs in ReHLDS's other layout). "uniqueid"
+# anywhere on a line that is not a row also took a player's chat line (`Bob : uniqueid`) printed
+# after the table, and the rows after it were none. Longer than a player name may be (31), so no
+# line starting with a name can be one.
+_R14B_VALVE_HEADER_RE = re.compile(
+    r"\s*#\s+(?:userid\s+name\s+uniqueid\s+connected|name\s+userid\s+uniqueid\s+frag\s+time)\b",
+    re.I)
+
+
+def _r14b_valve_header(ln):
+    """Whether `ln` is a valve `status` table header (_R14B_VALVE_HEADER_RE)."""
+    return _R14B_VALVE_HEADER_RE.match(ln) is not None
 
 
 def _parse_valve_status(text):
@@ -148,7 +168,7 @@ def _parse_valve_status(text):
     lines = (text or "").splitlines()
     start = 0
     for i, ln in enumerate(lines):
-        if "uniqueid" in ln.lower() and not _VALVE_ROW_RE.match(ln):
+        if _r14b_valve_header(ln):
             start = i + 1
     players, seen = [], set()
     for ln in lines[start:]:
@@ -170,20 +190,44 @@ def _parse_valve_status(text):
     return players
 
 
-def _idtech3_table_start(lines):
-    """Index of the first row after the LAST 'num…score…ping' header (0 when there is none)."""
-    start = 0
+# The `status` header by its own shape, from the start of the line. Two families:
+#   "num score ping [guid] name lastmsg address …" — Quake III 1.32 (id's code/server/sv_ccmds.c
+#     SV_Status_f), ET:Legacy (src/server/sv_ccmds.c, adds lastConnectTime), CoD (adds guid);
+#   "cl score ping name address rate" — ioquake3 (code/server/sv_ccmds.c SV_Status_f), iortcw
+#     (MP/code/server/sv_ccmds.c) and OpenJK (codemp/server/sv_ccmds.cpp). This family was never
+#     recognised ("num" was required), so q3, rtcw and jamp player lists were always unknown.
+# Matched as a substring test ("num", "score" and "ping" anywhere, not a row), a player's chat
+# line `say: Bob: num score ping`, which a dedicated server echoes to its console after the real
+# table, became the LAST header: the rows after it were none, and a full server read as
+# confirmed-empty (the Players card, the bots' /players, and Kick/Ban finding nobody). Chat and
+# every other log line start with their own tag or a name, never with these words, and the shape
+# is longer than a player name may be.
+_R14B_IDT3_HEADER_RE = re.compile(r"\s*num\s+score\s+ping\s+(?:guid\s+)?name\s+lastmsg\s+address\b",
+                                  re.I)
+_R14B_IDT3_CL_HEADER_RE = re.compile(r"\s*cl\s+score\s+ping\s+name\s+address\s+rate\b", re.I)
+
+
+def _r14b_idt3_table(lines):
+    """(index of the first row after the LAST status header, that header's column names).
+
+    (0, None) when there is no header.
+    """
+    start, cols = 0, None
     for i, ln in enumerate(lines):
-        low = ln.lower()
         # ...and the header is a line that is NOT a player row. Every row begins with the slot
-        # number and the header begins with the word "num", so the leading character separates
-        # them. Without that, a player called "numscoreping" — twelve characters, well inside a
-        # CoD name limit — made their own row the header: last in the table it returned an empty
-        # list, mid-table it dropped them and everyone above them, and either way the slot numbers
-        # moderation needs came back None for the whole server.
-        if "num" in low and "score" in low and "ping" in low and not re.match(r"\s*\d", ln):
-            start = i + 1
-    return start
+        # number and the header begins with the word "num" (or "cl"), so the anchored shape
+        # separates them. Without that, a player called "numscoreping" — twelve characters, well
+        # inside a CoD name limit — made their own row the header: last in the table it returned
+        # an empty list, mid-table it dropped them and everyone above them, and either way the
+        # slot numbers moderation needs came back None for the whole server.
+        if _R14B_IDT3_HEADER_RE.match(ln) or _R14B_IDT3_CL_HEADER_RE.match(ln):
+            start, cols = i + 1, ln.lower().split()
+    return start, cols
+
+
+def _idtech3_table_start(lines):
+    """Index of the first row after the LAST status header (0 when there is none)."""
+    return _r14b_idt3_table(lines)[0]
 
 
 # An idTech3 `status` row: "num score ping guid name … lastmsg address …". The name may hold
@@ -192,7 +236,12 @@ def _idtech3_table_start(lines):
 # of blanks in the row at each character it grew by: quadratic in a row's blanks. The row is now
 # read in the same order the pattern read it — each run of blanks is tried ONCE, as the gap in
 # front of the lastmsg column — so the answers are the pattern's, in linear time.
-_IDT3_ROW_HEAD_RE = re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+(\S+)(\s+)")
+# The ping column holds a number, or the client's state while it is not yet in the game:
+# CNCT/ZMBI (Quake III 1.32, ET:Legacy, CoD; ET:Legacy's DEMO too), CON/ZMB (ioquake3, iortcw,
+# OpenJK). A row with a state word was not read at all. (The row-with-address pattern below
+# and _R14B_IDT3_HEAD_FIELDS_RE spell the alternation out: part06's anchor gate reads a pattern
+# only when it is one literal.)
+_IDT3_ROW_HEAD_RE = re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+|CNCT|ZMBI|DEMO|CON|ZMB)\s+(\S+)(\s+)")
 _IDT3_ADDR_RE = re.compile(r"\d+\s+\d{1,3}(?:\.\d{1,3}){3}:\d+")
 _BLANKS_RE = re.compile(r"\s+")
 # The fallback for rows with no address column: num score ping guid name(rest). The name starts on
@@ -232,17 +281,44 @@ def _match_idtech3_row(ln):
     return row
 
 
+def _r14b_idt3_row_by_columns(ln, cols):
+    """(num, score, ping, "", name) for a row of a table with no guid column, else None.
+
+    Those engines print the name padded, then the columns the header names after "name": ioq3,
+    iortcw and OpenJK `^7<address> <rate>` (OpenJK right-aligns the address); Quake III 1.32
+    `^7<lastmsg> <address> <qport> <rate>`; ET:Legacy the same plus lastConnectTime. So the row is
+    read from the RIGHT, exactly as many fields as the header has after "name", and the name is
+    what is left after the slot, score and ping: a name may hold spaces and digits. The colour
+    codes go first, so the engine's own `^7` before the address is not part of either. Every
+    field but the address must be a number, which a chat or log line does not end in.
+    """
+    tail_cols = cols[cols.index("name") + 1:]
+    parts = _strip_q3_colors(ln).rsplit(None, len(tail_cols))
+    head = parts[0].split(None, 3) if len(parts) == len(tail_cols) + 1 else []
+    if len(head) != 4 or not _R14B_IDT3_HEAD_FIELDS_RE.fullmatch(" ".join(head[:3])):
+        return None
+    if not all(_R14B_INT_RE.fullmatch(v) for c, v in zip(tail_cols, parts[1:]) if c != "address"):
+        return None
+    return head[0], head[1], head[2], "", head[3]
+
+
+_R14B_IDT3_HEAD_FIELDS_RE = re.compile(r"[0-9]+ -?[0-9]+ (?:[0-9]+|CNCT|ZMBI|DEMO|CON|ZMB)")
+_R14B_INT_RE = re.compile(r"-?[0-9]+")
+
+
 def _parse_idtech3_status(text):
     """Parse a Quake3/CoD `status` reply into [{name, num, guid, steamid, score, time}].
 
-    Rows are 'num score ping guid name … address …'; the name can contain spaces + ^-colour codes.
-    Only the most recent table (rows after the last 'num…score…ping' header) is kept.
+    Rows are 'num score ping guid name … address …' (CoD), or the guid-less layouts read by
+    _r14b_idt3_row_by_columns; the name can contain spaces + ^-colour codes. Only the most recent
+    table (rows after the last status header) is kept.
     """
     lines = (text or "").splitlines()
-    start = _idtech3_table_start(lines)
+    start, cols = _r14b_idt3_table(lines)
+    by_columns = cols is not None and "guid" not in cols
     players, seen = [], set()
     for ln in lines[start:]:
-        row = _match_idtech3_row(ln)
+        row = _r14b_idt3_row_by_columns(ln, cols) if by_columns else _match_idtech3_row(ln)
         if not row:
             continue
         num = _int_or_none(row[0])
@@ -354,7 +430,7 @@ def _send_and_capture(server, user, eng, selfname):
         #
         # And only what the pane printed AFTER the send. A send that worked with a reply slower
         # than 0.8s (a map change, a load spike) left the capture holding the previous `status`
-        # table — the background poller sends one every pass — and the parsers take the LAST
+        # table — the Players card's or a ban's own earlier send — and the parsers take the LAST
         # table, so that one was returned as current: players who had left, and a Ban by name
         # resolved to whoever held that name before. The send prints where the pane stood just
         # before it typed (mark=True), and the capture starts there: no reply yet is no table,
@@ -395,7 +471,7 @@ def _r13b_reply_complete(eng, out):
         return _idtech3_table_start(lines) > 0
     head = None
     for i, ln in enumerate(lines):
-        if "uniqueid" in ln.lower() and not _VALVE_ROW_RE.match(ln):
+        if _r14b_valve_header(ln):
             head = i
     if head is None:
         return False
@@ -489,9 +565,10 @@ def console_status(server, user, game_type, selfname=None):
     """One console `status`/`list` capture → (players, name), from a SINGLE round-trip.
 
     The parsed player list AND the server's advertised in-game name (the valve/idTech3 `hostname:`
-    line). Used by the background poller so a server gamedig can't query (e.g. no GSLT) isn't hit
-    with two separate `status` sends per pass — which would spam the very console an admin is
-    watching.
+    line). For monitoring._server_slots(allow_console=True), so a server gamedig can't query (e.g.
+    no GSLT) isn't hit with two separate `status` sends per read — which would spam the very
+    console an admin is watching. No background poll passes allow_console=True: the pollers never
+    type into a console.
 
     Returns (None, None) for a non-console game or on failure — NOT ([], None). An empty list is
     "confirmed empty", and this returned it for a send that never arrived, a capture that failed

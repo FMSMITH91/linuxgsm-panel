@@ -1651,10 +1651,34 @@ def _session_binding_ok(bind_unbound=True):
 _AUDIT_DETAIL_MAX = 8192
 
 
-def _audit_cut(value, limit, marker=""):
-    """`value` as text, cut to `limit` characters (then `marker` appended) when longer."""
+def _audit_cut(value, limit, marker="", visible=False):
+    """`value` as text, cut to `limit` characters (then `marker` appended) when longer.
+
+    visible=True (the target and the detail): what a reader could not see is written escaped
+    first (_r14b_audit_visible), cut before escaping too so a huge body is never walked whole. The
+    username is left as it is: the brute-force alert counts a super admin's failures by matching
+    it exactly.
+    """
     text = "" if value is None else str(value)
-    return text if len(text) <= limit else text[:limit] + marker
+    longer = len(text) > limit
+    if visible:
+        text = _r14b_audit_visible(text[:limit])
+        longer = longer or len(text) > limit
+    return text[:limit] + marker if longer else text
+
+
+def _r14b_audit_visible(text):
+    """`text` with each character the audit page could not show written as its escape.
+
+    A newline and a tab stay. Callers that put request text in a row (an uploaded file's name, a
+    saved or downloaded path, a cron schedule) wrote it raw, so a U+202E in a file name reordered
+    the row on the audit page (`\u202egnp.sh` read as `hs.png`), and a lone surrogate could not be
+    stored as UTF-8 at all. The file routes escape their own names (_audit_safe, which this leaves
+    as it is: a backslash is printable); this is the floor for every other caller.
+    """
+    if text.isprintable():
+        return text
+    return "".join(c if c.isprintable() or c in "\n\t" else ascii(c)[1:-1] for c in text)
 
 
 def log_action(user, action, target="", detail="", success=True, actor=None, server=None,
@@ -1678,8 +1702,8 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
         user_id=user.id if user else None,
         username=_audit_cut(actor if actor else (user.username if user else "system"), 80),
         action=_audit_cut(action, 128),
-        target=_audit_cut(target, 255),
-        detail=_audit_cut(detail, _AUDIT_DETAIL_MAX, "…[truncated]"),
+        target=_audit_cut(target, 255, visible=True),
+        detail=_audit_cut(detail, _AUDIT_DETAIL_MAX, "…[truncated]", visible=True),
         ip_address=client_ip(),
         success=success,
         game_server_id=_audit_ref(GameServer, server),

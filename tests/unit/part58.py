@@ -171,14 +171,15 @@ def _capture_since58():
                         '  *" capture-pane "*) while [ $# -gt 0 ]; do [ "$1" = -S ] && echo "S=$2"; shift; done;;\n'
                         'esac\n')
         got = {}
-        for tag, disp in (("grew", "1210 2000"), ("trimmed", "1090 2000"), ("unread", "")):
+        for tag, disp in (("grew", "1210 2000"), ("trimmed", "1090 1300"), ("unread", "")):
             os.environ["TMUX58_DISPLAY"] = disp
             out, _e, rc = _CAPTURE58(None, _USER58, selfname="gmod58srv", since=(1200, 17))
             got[tag] = (out.strip(), rc)
         check("capture since the send: the row it marked, counted from the pane's history now "
-              "(10 rows scrolled in: -S 7), less tmux's 200-row trim when the history went down "
-              "(-S -73), and no capture at all when the pane could not be read",
-              got == {"grew": ("S=7", 0), "trimmed": ("S=-73", 0), "unread": ("", 4)}, repr(got))
+              "(10 rows scrolled in: -S 7), less tmux's 130-row trim when the history went down "
+              "from within a trim of its limit (-S -3), and no capture at all when the pane could "
+              "not be read",
+              got == {"grew": ("S=7", 0), "trimmed": ("S=-3", 0), "unread": ("", 4)}, repr(got))
         os.environ.pop("TMUX58_DISPLAY", None)        # the stand-in now fills tmux's own format
         out, _e, rc = _SEND58(None, _USER58, "status", selfname="gmod58srv", mark=True)
         check("send with mark: prints where the pane stood, in the same round trip as the send",
