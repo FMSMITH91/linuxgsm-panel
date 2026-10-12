@@ -35,6 +35,11 @@ _BLOCKER_OTHER = i18n.Sentence("work on {name}")
 # The panel's own blockers name it with a phrase, not a host label: the English "the panel" went
 # into the translated blocker phrase as written ("una actualización de the panel").
 PANEL_NAME = i18n.Sentence("the panel")
+# ...and are said whole: "the panel" slotted into "of {name}" read "una actualización de el panel"
+# and "une mise à jour de le panneau", where Spanish says "del" and French "du" (review 1012b).
+_PANEL_BLOCKER_WORDS = {"self_update": i18n.Sentence("an update of the panel"),
+                        "restore": i18n.Sentence("a restore of the panel"),
+                        "full_backup": i18n.Sentence("a full backup of the panel")}
 
 # A running job's phase as words. The raw token ("stopping", "arming") went into the translated
 # "{host} is already being rebooted ({phase})." as written.
@@ -68,7 +73,8 @@ def row_gave_up(d, now, after=ROW_GIVE_UP):
 
 def blocked_sentence(blockers):
     """Why a reboot may not run now: the work in flight, each piece named in a phrase of its own."""
-    what = [i18n.Sentence(_BLOCKER_WORDS.get(b["kind"], _BLOCKER_OTHER).template, name=b["name"])
+    what = [_PANEL_BLOCKER_WORDS[b["kind"]] if b["name"] == PANEL_NAME and b["kind"] in _PANEL_BLOCKER_WORDS
+            else i18n.Sentence(_BLOCKER_WORDS.get(b["kind"], _BLOCKER_OTHER).template, name=b["name"])
             for b in blockers[:4]]
     return i18n.Sentence("Not now: {what} is running, and a reboot would cut it off.", what=what)
 

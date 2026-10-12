@@ -92,8 +92,14 @@ check("firewall: the guard's source key is ufw's own stored form (normalize_addr
 import datetime as _dt67  # noqa: E402
 
 import app as _app67  # noqa: E402
-from unit.part12 import _p9  # noqa: E402
+from unit.part12 import _P9_TRIPPED, _p9  # noqa: E402
 from unit.part20 import _patch, _patched  # noqa: E402
+from unit.part61 import _r15d_arm61  # noqa: E402
+
+# part12's transport tripwire, re-armed in every block below that drives a route (review 1012b):
+# part12 disarmed its own when it ended, and each block stubs only the leaf it names, so one more
+# host call on a passing path would have run for real with this part green.
+_TRIP67_START = len(_P9_TRIPPED)
 from panel.core import config as _cfg67  # noqa: E402
 from panel.db.models import AuditLog, db  # noqa: E402
 from panel.ops.debug_report import data as _drd67  # noqa: E402
@@ -184,6 +190,7 @@ try:
                             display_name="Long", is_superadmin=True, is_active=True))
         db.session.commit()
     with _patched():
+        _r15d_arm61()
         _patch(_ar67, "_maybe_alert_admin_bruteforce", _bf67)
         _patch(_bl67, "refresh_soon", lambda delay=3.0: None)
         _p9.test_client().post("/login", data={"username": _LONG67, "password": _os67.urandom(8).hex()},
@@ -283,6 +290,12 @@ def _as67(lang):
         db.session.commit()
 
 
+# The admin's language as the part found it (it may be None): put back after each block, not "en"
+# (review 1012b), so a later part reading it sees what it left.
+with _p9.app_context():
+    _LANG67_WAS = db.session.get(User, P9_ADMIN).language
+
+
 _lit67 = {lg: _scan67.literal_gaps_py(lg) for lg in ("es", "fr")}
 _shown67 = _scan67.shown_literals_py()
 check("i18n: every fixed message a route or a service's (ok, message) answer shows the viewer is in the es "
@@ -333,12 +346,13 @@ from panel.services import notifications as _nt67  # noqa: E402
 try:
     _as67("es")
     with _patched():
+        _r15d_arm61()
         _patch(_nt67, "send_telegram", lambda tok, chat, text: (False, "the chat ID is missing"))
         _r67 = _p9_client(P9_ADMIN).post("/api/notifications/test", json={
             "channel": "telegram", "token": "123456789:" + "A" * 35, "chat_id": "67"})
         _nt_es67 = (_r67.get_json() or {}).get("message")
 finally:
-    _as67("en")
+    _as67(_LANG67_WAS)
 check("notifications Test: a failed send reads in the viewer's language (\"Telegram error: the chat ID "
       "is missing\" was English for es and fr)",
       _nt_es67 == "Error de Telegram: falta el ID del chat", repr(_nt_es67))
@@ -353,12 +367,13 @@ _unk67 = _w14_status({_W14[0]: "unknown", _W14[1]: "passing"}, reason=_so67._CI_
 try:
     _as67("fr")
     with _patched():
+        _r15d_arm61()
         _patch(_so67, "_is_git_checkout", lambda: True)
         _patch(_so67, "panel_update_status", lambda force=False: _unk67)
         _patch(_hr67, "panel_host_busy", lambda: None)
         _up67 = (_p9_client(P9_ADMIN).post("/api/panel/update").get_json() or {}).get("message")
 finally:
-    _as67("en")
+    _as67(_LANG67_WAS)
 _why_fr67 = _CAT67["fr"].get(_so67._CI_WHY_NO_SLUG.template)
 check("self-update: the Update button's \"couldn't be verified: <why>\" refusal reads in the viewer's "
       "language, reason included (it was %-built English marked as never shown, and the route did not "
@@ -472,8 +487,24 @@ with _patched():
     _pb67 = _hr67._panel_host_blockers()
 _blk67 = _tr67("es", _rw67.blocked_sentence(_pb67))
 check("reboot: a panel-host blocker names the panel in the viewer's language (\"una actualización de the "
-      "panel\")",
-      "una actualización de el panel" in _blk67 and "the panel" not in _blk67, repr(_blk67))
+      "panel\"), in grammatical Spanish (\"de el panel\" is \"del panel\", review 1012b)",
+      "una actualización del panel" in _blk67 and "the panel" not in _blk67 and "de el " not in _blk67,
+      repr(_blk67))
+# All three panel blockers, in French too: "de le panneau" is "du panneau".
+with _patched():
+    _patch(_so67, "_update_in_progress", lambda: True)
+    _patch(_hr67, "_full_backup_lock", NS(locked=lambda: True))
+    _patch(_bk67, "_restore_lock", NS(locked=lambda: True))
+    _pb3_67 = _hr67._panel_host_blockers()
+_blk3_67 = {lg: _tr67(lg, _rw67.blocked_sentence(_pb3_67)) for lg in ("es", "fr")}
+check("reboot: ...each of the panel's three blockers reads whole in es and fr (del panel / du panneau)",
+      len(_pb3_67) == 3
+      and all(w in _blk3_67["es"] for w in ("una actualización del panel", "una restauración del panel",
+                                            "una copia de seguridad completa del panel"))
+      and all(w in _blk3_67["fr"] for w in ("une mise à jour du panneau", "une restauration du panneau",
+                                            "une sauvegarde complète du panneau"))
+      and not any(w in _blk3_67["es"] + _blk3_67["fr"] for w in ("de el ", "de le ", "the panel")),
+      repr(_blk3_67))
 with _patched():
     _patch(_hr67, "job_of", lambda rid: {"phase": "arming"})
     _pc67 = _hr67._pending_conflict(NS(id=-67, name="p67-host", is_local=False, host="p67"))
@@ -636,10 +667,11 @@ try:
                        ("safety", _i18n67.Sentence(_bk67._R16C_SAFETY_COPY_FAILED, why=_bk67._R16A_BACKUP_FAILED)),
                        ("other", "No such backup.")):
         with _patched():
+            _r15d_arm61()
             _patch(_bk67, "restore_backup", lambda name, passphrase=None, skip_safety_backup=False, _m=_m67: (False, _m))
             _rst67[_k67] = _p9_client(P9_ADMIN).post("/api/panel/backup/restore", json={"name": "p67.tar.gz"}).get_json()
 finally:
-    _as67("en")
+    _as67(_LANG67_WAS)
 with open(_os67.path.join(_ROOT67, "static", "js", "remote_manage_backups.js"), encoding="utf-8") as _fh67:
     _bkjs67 = _fh67.read()
 _wants67 = _node47(_cut47(_bkjs67, "function _bkRestoreWantsPassphrase") + "\n"
@@ -659,3 +691,6 @@ else:
           and "passphrase" not in (_rst67["need"]["message"] + _rst67["wrong"]["message"]).lower()
           and "safety copy" not in _rst67["safety"]["message"],
           repr((_wants67, _rst67)))
+
+check("part67: nothing it drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP67_START, repr(_P9_TRIPPED[_TRIP67_START:][:6]))
