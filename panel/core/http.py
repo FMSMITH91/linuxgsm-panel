@@ -134,7 +134,8 @@ def _log_and_generic(context):
     Admins read the detail in the panel logs.
     """
     current_app.logger.exception(context)
-    return "Internal server error"
+    # tr(): 76 routes answer this as their message, and it reached es/fr viewers in English.
+    return i18n.tr("Internal server error")
 
 
 def _unreachable(context):

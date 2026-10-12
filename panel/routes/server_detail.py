@@ -62,12 +62,13 @@ def _console_send_failure(rc, err):
     `err` is the command's own stderr (never exception text — that stays in the log, per
     _log_and_generic), surfaced the way _run_action surfaces a LinuxGSM failure line.
     """
+    # tr() for all three, as the middle one always was: each is the route's answer as it stands.
     if rc == 3:
-        return "That server isn't running, so there's no console session to send to."
+        return i18n.tr("That server isn't running, so there's no console session to send to.")
     lines = [ln.strip() for ln in (err or "").splitlines() if ln.strip()]
     if lines:
         return i18n.tr("The panel could not run that on the host: {why}", why=lines[-1][:200])
-    return "The panel could not run that on the host, and it gave no reason."
+    return i18n.tr("The panel could not run that on the host, and it gave no reason.")
 
 
 def _fire_on_done(on_done, ok, detail, action, server_id):

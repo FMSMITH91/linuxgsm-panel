@@ -37,17 +37,28 @@ window.tfHtml = function(s, vals){ return i18nFill(i18nEsc(window.t(s)), vals, t
 // A sentence whose values are ELEMENTS (a bold, guarded name; a count): translated whole, then cut at
 // its {slots} into text nodes, each value's element put where the translation puts it. As nodes, so
 // nothing goes through innerHTML; a string value is a text node, a slot with no value stays as written.
+// The nodes come inside one <span> that can build them again: its text pieces are the translation's,
+// cut up, and no piece is a key, so the walker could not say them again in another language — a
+// live switch left "the panel host necesita reiniciarse…". setLang's walk calls the span's
+// __i18nRender instead. Returned as a one-node list, so a caller appends what it gets as it did.
 window.tfNodes = function(s, vals){
-  var out = [], text = window.t(s), re = /\{(\w+)\}/g, last = 0;
-  for (var m = re.exec(text); m !== null; m = re.exec(text)) {
-    if (!vals || !Object.prototype.hasOwnProperty.call(vals, m[1])) continue;
-    if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
-    var v = vals[m[1]];
-    out.push(v !== null && typeof v === 'object' ? v : document.createTextNode(String(v)));
-    last = re.lastIndex;
-  }
-  if (last < text.length) out.push(document.createTextNode(text.slice(last)));
-  return out;
+  var span = document.createElement('span');
+  span.__i18nRender = function(){
+    var out = [], text = window.t(s), re = /\{(\w+)\}/g, last = 0;
+    for (var m = re.exec(text); m !== null; m = re.exec(text)) {
+      if (!vals || !Object.prototype.hasOwnProperty.call(vals, m[1])) continue;
+      if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
+      var v = vals[m[1]];
+      out.push(v !== null && typeof v === 'object' ? v : document.createTextNode(String(v)));
+      last = re.lastIndex;
+    }
+    if (last < text.length) out.push(document.createTextNode(text.slice(last)));
+    span.textContent = '';
+    for (var i = 0; i < out.length; i++) span.appendChild(out[i]);
+    span.__i18nLang = window.LANG;
+  };
+  span.__i18nRender();
+  return [span];
 };
 // A count's sentence: its own catalog entry for one and for many ("Upload 1 file" / "Upload {n}
 // files"), the count put in after, with any other values.
@@ -73,6 +84,11 @@ window.tfn = function(n, one, many, vals){
     var key = en.replace(/\s+/g, ' ').trim();
     if (!key) return;
     var v = i18nLookup(key);
+    // A status mark in front of a message ('✓ ' + d.message, at some thirty sites) made one text
+    // node whose whole text no key matched, so a message the catalog held stayed English. The mark
+    // is kept and the rest looked up, when the whole text is not a key of its own ("✓ Saved" is).
+    var mark = (v === undefined) ? /^([✓✗] )(.+)$/.exec(key) : null;
+    if (mark && i18nLookup(mark[2]) !== undefined) v = mark[1] + i18nLookup(mark[2]);
     // keep leading/trailing whitespace (inline layout, e.g. the gap after an icon). Measured with
     // trim, not /\s*$/: as written, that unanchored search may start at every blank of a run and
     // read the run to its end from each (whether it does is up to the engine's optimiser; trim's
@@ -109,6 +125,13 @@ window.tfn = function(n, one, many, vals){
     if (node.nodeType !== 1) return;
     if (SKIP[node.tagName] || node.hasAttribute('data-no-i18n')) return;
     for (var i = 0; i < ATTRS.length; i++) tAttr(node, ATTRS[i]);
+    // A tfNodes sentence: built again from its English in this language (once per language), then
+    // only its value elements are walked — its text pieces ARE the translation.
+    if (typeof node.__i18nRender === 'function'){
+      if (node.__i18nLang !== window.LANG) node.__i18nRender();
+      for (var e = node.firstChild; e; e = e.nextSibling) if (e.nodeType === 1) walk(e);
+      return;
+    }
     for (var c = node.firstChild; c; c = c.nextSibling) walk(c);
   }
   function run(root){ try { walk(root || document.body); } catch(e){} }

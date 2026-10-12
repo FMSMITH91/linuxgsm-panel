@@ -17,6 +17,7 @@ import concurrent.futures
 import functools
 import logging
 
+from panel.core import i18n
 from panel.db.models import GameServer, RemoteServer, db, row_label
 from panel.ops import ssh_manager as _sm
 from panel.security.auth import log_action
@@ -84,10 +85,12 @@ def port_refusal(port, protected):
     config the game account (and anyone with Manage Servers, through the file manager) can write,
     and "port 22" makes the monitor read that server as up for as long as SSH is.
     """
+    # Sentences: the import answers this to the viewer (discover's _import_port_problem), and the
+    # log lines that also record it read the same English.
     if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
-        return "%s is not a port" % (port,)
+        return i18n.Sentence("{port} is not a port", port=str(port))
     if port in protected:
-        return "port %d is this host's SSH or the panel itself" % port
+        return i18n.Sentence("port {port} is this host's SSH or the panel itself", port=port)
     return None
 
 
