@@ -1660,9 +1660,11 @@ def _audit_cut(value, limit, marker="", visible=False):
     it exactly.
     """
     text = "" if value is None else str(value)
+    longer = len(text) > limit
     if visible:
         text = _r14b_audit_visible(text[:limit])
-    return text if len(text) <= limit else text[:limit] + marker
+        longer = longer or len(text) > limit
+    return text[:limit] + marker if longer else text
 
 
 def _r14b_audit_visible(text):

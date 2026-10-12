@@ -386,6 +386,17 @@ def _audit_floor62(client, sid):
     check("audit: every row writes what the audit page could not show as an escape (a request's "
           "cron schedule, here), and a lone surrogate is stored, not a failed commit",
           rows and _RLO62 not in rows[0][0] and "\\u202ex\\ud800" in rows[0][0], repr(rows))
+    wide = []
+    with _p9.app_context(), _p9.test_request_context("/"):
+        for detail in (_RLO62 * 2000, "y" * 10000):
+            _auth62.log_action(None, "p62_wide", detail=detail, server=None)
+            wide.append(AuditLog.query.filter_by(action="p62_wide").order_by(
+                AuditLog.id.desc()).first().detail)
+        AuditLog.query.filter_by(action="p62_wide").delete()
+        db.session.commit()
+    check("audit: a detail over the cap, before escaping or only once escaped, is cut and marked",
+          all(w.endswith("…[truncated]") and len(w) <= _auth62._AUDIT_DETAIL_MAX + 12
+              and _RLO62 not in w for w in wide), repr([(len(w), w[-20:]) for w in wide]))
 
 
 try:
