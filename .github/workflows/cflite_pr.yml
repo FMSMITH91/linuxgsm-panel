@@ -69,6 +69,8 @@ jobs:
               # harnesses run through (part29 holds this list to what they load).
               'panel/core/validation.py'
               'panel/core/clock.py'
+              # The last module every harness pre-loads (part29 counts the pre-load too).
+              'panel/core/config.py'
               'panel/security/privileged.py'
               'panel/db/models.py'
               'panel/ops/__init__.py'

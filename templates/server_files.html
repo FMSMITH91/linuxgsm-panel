@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ server.name }} — Files & Config{% endblock %}
+{% block title %}{{ t('%s — Files & Config')|format(server.name) }}{% endblock %}
 {% block content %}
 
 <style>

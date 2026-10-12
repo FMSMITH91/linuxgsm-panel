@@ -8,7 +8,7 @@ from flask_login import (current_user, login_required)
 from panel.core.clock import (utcnow)
 from panel.core.panel_state import (_install_jobs, _install_lock)
 from panel.db.models import (GameServer, HostSample, MetricSample, db, rows_still_held,
-    still_held)
+    row_label, still_held)
 from panel.db.prefs import (_apply_user_server_order, _effective_prefs)
 from panel.ops.ssh_manager import (_remote_listening_ports, get_server_status)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
@@ -391,7 +391,7 @@ def _register_server_stats(app):
             # this is the only one that flowed request text straight to a log sink. A gate that
             # cries wolf is how a real alert gets waved through, so break the flow rather than
             # dismiss the alert.
-            _log.debug("game version read failed for server %s", gs.id, exc_info=True)
+            _log.debug("game version read failed for server %s", row_label(gs, "id"), exc_info=True)
             info = {"reported": "", "build": "", "appid": "", "updated": None, "label": ""}
         return jsonify({"supports_update": gs.supports_update, **info})
 

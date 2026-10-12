@@ -103,7 +103,7 @@ from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException
 
 from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, authorize_after_body,
-    client_ip, configure_proxy_trust, get_user_permissions, init_auth, log_action,
+    audit_username, client_ip, configure_proxy_trust, get_user_permissions, init_auth, log_action,
     strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
@@ -136,7 +136,7 @@ from panel.core.panel_state import (_install_jobs, _install_lock,
     _last_sample_prune, _monitor_state, _os_update_seen, _player_counts)
 from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupState, User, db,
     init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, RowReplaced, claim_row,
-    row_birth, still_held)
+    row_birth, row_label, still_held)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, list_game_backups, game_engine as
     sm_game_engine, set_game_priority_bulk, game_users_off_priority, lgsm_get_values,
@@ -321,14 +321,18 @@ _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 # reserve the whole block so two of them can't overlap. Anything not listed defaults to 1. This is
 # only a hint for STOPPED servers — resolve_free_port also unions in the host's live listening
 # ports, so a running server's real footprint is always respected regardless of this table.
+#
+# Keyed by LinuxGSM shortname (held to tests/unit/lgsm_shortnames.txt). "valheim" and "7d2d" were
+# keys and match no LinuxGSM game, and Unturned was keyed "unturned" where LinuxGSM's is "unt", so
+# its block was never reserved.
 _PORT_SPAN = {
     "rust": 2,                       # game 28015 + query 28016
-    "valheim": 3, "vh": 3,           # 2456–2458
-    "sdtd": 3, "7d2d": 3,            # 26900–26902 (game + query)
+    "vh": 3,                         # 2456–2458
+    "sdtd": 3,                       # 26900–26902 (game + query)
     "arma3": 5,                      # 2302 + steam query/voice 2303–2306
     "ark": 2,                        # 7777 game + 7778 raw
     "squad": 2,                      # game 7787 + query 7788
-    "unturned": 2,                   # game 27015 + steam query 27016
+    "unt": 2,                        # game 27015 + steam query 27016
 }
 
 
@@ -675,7 +679,8 @@ def _node_tools_cron_pass(app):
             try:
                 ensure_node_tools_cron(r)
             except Exception:
-                _log.debug("node-tools cron ensure failed for %s", r.name, exc_info=True)
+                _log.debug("node-tools cron ensure failed for %s", row_label(r, "name"),
+                           exc_info=True)
         for gs in GameServer.query.all():
             if not _still_in_db(gs) or gs.remote is None:
                 continue
@@ -683,7 +688,7 @@ def _node_tools_cron_pass(app):
                 _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
                                                   game_type=gs.game_type, port=gs.port)
             except Exception:
-                _log.debug("cron upgrade failed for %s", gs.name, exc_info=True)
+                _log.debug("cron upgrade failed for %s", row_label(gs, "name"), exc_info=True)
 
 
 def _node_tools_cron_watch(app):
@@ -850,7 +855,8 @@ def _apply_whitelist_to_remotes(app, unban_ip=None):
             try:
                 remote_set_fail2ban_ignoreip(remote, wl, unban_ip=unban_ip)
             except Exception:
-                _log.debug("remote fail2ban ignoreip failed for remote %s", remote.id, exc_info=True)
+                _log.debug("remote fail2ban ignoreip failed for remote %s", row_label(remote, "id"),
+                           exc_info=True)
 
 
 def _apply_whitelist_everywhere(app, unban_ip=None):
@@ -1384,7 +1390,7 @@ def _maybe_alert_admin_bruteforce(who, ip, now):
             return
         since = utcnow() - timedelta(seconds=LOGIN_WINDOW)
         fails = AuditLog.query.filter(AuditLog.action == "login_failed",
-                                      AuditLog.username == who,
+                                      AuditLog.username == audit_username(who),
                                       AuditLog.timestamp >= since).count()
         if fails < _ADMIN_BF_THRESHOLD:
             return
@@ -2489,7 +2495,9 @@ def _maybe_set_threshold(body):
     """If the request carries a 'threshold', validate + persist it. Returns the effective value."""
     # A JSON boolean is ignored as "many" is: int(True) is 1, and a threshold of 1 had every
     # auto-block host deny an address for a single failed attempt.
-    if body.get("threshold") is not None and not isinstance(body.get("threshold"), bool):
+    # Nor a fraction: int(2.5) is 2, a threshold nobody asked for.
+    _th = body.get("threshold")
+    if _th is not None and not isinstance(_th, bool) and not (isinstance(_th, float) and not _th.is_integer()):
         try:
             val = max(1, min(int(body.get("threshold")), 100000))
             update_config(lambda cfg: cfg.update({"autoblock_threshold": val}))

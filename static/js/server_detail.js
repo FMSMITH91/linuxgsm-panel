@@ -690,6 +690,11 @@ var _panelBacklogShown = false;
 // backlog, or a Load older rebuild put it there. A backlog row at or before it is already shown.
 var _lastPanelT = 0;
 
+// Where the last Clear cut the panel lines: the newest one shown when it was pressed (_lastPanelT
+// then), or null with no Clear since the console was last primed. The re-prime Clear leads to
+// shows only the panel lines after it (_panelLinesWiped, _r13c_reshowPanelPushes).
+var _r15c_clearedAt = null;
+
 function _panelShownAt(t) {
   if (Number(t) > _lastPanelT) _lastPanelT = Number(t);
 }
@@ -699,8 +704,22 @@ function _panelShownAt(t) {
 // line's time, it rendered nothing older — an update opened mid-way lost its start. Only while that
 // backlog is still to be shown: a re-prime after Clear does not show it again, and the lines the
 // viewer cleared must not come back with a later return either.
+//
+// After Clear the backlog is shown again, from where Clear cut it (_r15c_clearedAt): the viewer
+// cleared the panel lines that were on the page then, not the ones pushed since. Not shown again
+// (#422 set _panelBacklogShown in Clear), an update's lines pushed after Clear were wiped by this
+// re-prime and never came back; a return's catch-up reads on from _lastPanelT, so it starts there too.
+// Returns the cut it applied (0 for none), for the reshow; the cut is used up by this re-prime.
 function _panelLinesWiped() {
+  var cut = _r15c_clearedAt;
+  _r15c_clearedAt = null;
+  if (cut !== null) {
+    _lastPanelT = cut;
+    _panelBacklogShown = false;
+    return cut;
+  }
   if (!_panelBacklogShown) _lastPanelT = 0;
+  return 0;
 }
 
 function _newerPanelRows(rows) {
@@ -817,7 +836,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
       _consoleSig = sig;
       // Whether this answer primes the console on a page whose backlog is still to be shown: its
       // wipe then takes panel pushes off the page that only _r13c_reshowPanelPushes brings back.
-      var reshow = false;
+      var reshow = false, floor = 0;
       if (!_consolePrimed && lines.length) {
         reshow = _r13c_primeWipesPushes();
         // FIRST poll after page load, and it actually returned something. The page was
@@ -834,7 +853,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
         _consolePrimed = true;
         _consoleLines = [];
         consoleEl.innerHTML = '';
-        _panelLinesWiped();
+        floor = _panelLinesWiped();
         // The priming window is history, so it gets NO arrival time — but a row that carries
         // LinuxGSM's own stamp keeps it, which is the whole point: that one is a real time for a
         // line written long before the panel looked.
@@ -867,7 +886,7 @@ function refreshConsole(forceScroll, wantLines, catchUp) {
       }
       showPanelBacklog(panelLines);
       // The priming wipe took any panel push already shown; put back those the backlog lacks.
-      _r13c_reshowPanelPushes(panelLines, reshow);
+      _r13c_reshowPanelPushes(panelLines, reshow, floor);
       updateTsNotice();
       _showTsOffNote(data);
       if (stick) stickConsole();
@@ -1219,18 +1238,21 @@ function _r13c_notePanelPush(d) {
   if (_r13c_panelPushes.length > _R13C_PANEL_KEEP) _r13c_panelPushes.shift();
 }
 
-// A priming wipe takes shown panel pushes off a page whose backlog is still to be shown. Not after
-// Clear (the backlog was shown: the viewer cleared those lines), nor while a return's catch-up is
-// owed (it reads the backlog itself).
+// A priming wipe takes shown panel pushes off a page whose backlog is still to be shown, or that was
+// Cleared: what was pushed after Clear is on the page and the wipe takes it too (the reshow's
+// `floor` keeps the cleared ones off). Not while a return's catch-up is owed (it reads the backlog
+// itself).
 function _r13c_primeWipesPushes() {
-  return !_panelBacklogShown && !_returnOwed;
+  return (!_panelBacklogShown || _r15c_clearedAt !== null) && !_returnOwed;
 }
 
-// `backlog`: the panel rows the rebuild rendered; `wiped`: whether its wipe took pushes off the page. By their newest time, not _lastPanelT: Load older
-// does not reset that on its wipe, so every wiped push read as already shown.
-function _r13c_reshowPanelPushes(backlog, wiped) {
+// `backlog`: the panel rows the rebuild rendered; `wiped`: whether its wipe took pushes off the page;
+// `floor`: where a Clear cut them, so a push at or before it stays cleared. By the backlog's newest
+// time, not _lastPanelT: Load older does not reset that on its wipe, so every wiped push read as
+// already shown.
+function _r13c_reshowPanelPushes(backlog, wiped, floor) {
   if (!wiped) return;
-  var upTo = 0;
+  var upTo = Number(floor) || 0;
   (backlog || []).forEach(function (r) { if (Number(r.t) > upTo) upTo = Number(r.t); });
   _r13c_panelPushes.forEach(function (d) {
     if (Number(d.ts) <= upTo) return;
@@ -1513,11 +1535,13 @@ function clearConsole() {
   _consoleLines = [];
   _consoleSig = null;      // so the next poll repaints rather than deciding nothing changed
   _consolePrimed = false;  // and repaints with a full window, not just what arrived since
-  // Whatever panel lines were on the page are cleared, so none older is to be replayed. Left false
-  // (an empty backlog at load, then an update's lines pushed and Clear pressed), the re-prime took
-  // _lastPanelT back to 0 and rendered the whole backlog, and the reshow put back every kept push:
-  // the output the viewer had just cleared came back on the next poll.
-  _panelBacklogShown = true;
+  // Whatever panel lines were on the page are cleared, so none up to the newest of them is to be
+  // replayed. With no cut (an empty backlog at load, then an update's lines pushed and Clear
+  // pressed) the re-prime took _lastPanelT back to 0 and rendered the whole backlog, and the reshow
+  // put back every kept push: the output the viewer had just cleared came back on the next poll.
+  // A cut, not "the backlog is shown": that wiped the lines pushed AFTER Clear for good
+  // (_panelLinesWiped).
+  _r15c_clearedAt = _lastPanelT;
 }
 
 function sendCommand(ev) {  // NOSONAR - the constant false is the data-action preventDefault contract (panel.js fire)

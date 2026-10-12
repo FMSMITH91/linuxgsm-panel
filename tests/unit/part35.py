@@ -687,12 +687,22 @@ def _first_sleep35(body):
     """
     for stmt in body:
         if isinstance(stmt, _ast35.While) and stmt.body:
-            return _first_sleep35(stmt.body[:1])
+            # The whole while body under the same rule, not its first statement alone: `while
+            # True: now = x; time.sleep(30)` read as no sleep before the first pass (review 1011e).
+            return _first_sleep35(stmt.body)
         if _call_name35(stmt) == "sleep":
             return stmt.value.args[0] if stmt.value.args else None
         if not isinstance(stmt, (_ast35.Assign, _ast35.AnnAssign, _ast35.Import, _ast35.ImportFrom)):
             return None
     return None
+
+
+_r15d_fs_ctl35 = [_first_sleep35(_ast35.parse(_src35).body) is not None for _src35 in (
+    "while True:\n    now = x\n    time.sleep(30)\n",
+    "import time\nlast = None\nwhile True:\n    time.sleep(5)\n",
+    "while True:\n    work()\n    time.sleep(30)\n")]
+check("beating loops: a sleep after setup assignments heads a while body too, and one after real "
+      "work does not (control)", _r15d_fs_ctl35 == [True, True, False], repr(_r15d_fs_ctl35))
 
 
 def _loop_first_pass35(fn_node):

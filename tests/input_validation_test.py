@@ -645,7 +645,7 @@ def _check_no_port_parsed_with_int_or():
     _int_or_sites = 0
     for py in sorted((_root / "panel").rglob("*.py")) + [_root / "app.py"]:
         for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
-            if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "_int_or"):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) == "_int_or"):
                 continue
             _int_or_sites += 1
             # The assignment target's name is what says whether this is a port.

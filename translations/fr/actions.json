@@ -73,7 +73,7 @@
   "Empty alert cancelled": "Alerte « serveur vide » annulée",
   "Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.": "Activer Tailscale SSH ? Cela réauthentifie Tailscale avec la prise en charge SSH activée.",
   "Enter SSH password": "Saisissez le mot de passe SSH",
-  "Enter a number of attempts (1 or more)": "Saisissez un nombre de tentatives (1 ou plus)",
+  "Enter a number of attempts from 1 to 100000": "Saisissez un nombre de tentatives de 1 à 100000",
   "The auto-block settings are still loading. Save again once they show.": "Les réglages du blocage automatique sont encore en cours de chargement. Enregistrez à nouveau une fois qu’ils s’affichent.",
   "Enter a port between 1 and 65535.": "Saisissez un port entre 1 et 65535.",
   "Enter an IP or CIDR first": "Saisissez d'abord une IP ou un CIDR",
@@ -336,5 +336,6 @@
   "Invalid or out-of-range day-of-month field.": "Champ jour du mois invalide ou hors limites.",
   "Invalid or out-of-range month field.": "Champ mois invalide ou hors limites.",
   "Invalid or out-of-range weekday field.": "Champ jour de la semaine invalide ou hors limites.",
-  "Next: {runs}   (your browser’s time — the server may use a different zone)": "Prochaines : {runs}   (heure de votre navigateur — le serveur peut utiliser un autre fuseau)"
+  "Next: {runs}   (your browser’s time — the server may use a different zone)": "Prochaines : {runs}   (heure de votre navigateur — le serveur peut utiliser un autre fuseau)",
+  "UFW's default policy on this host allows incoming connections, so the panel port stays reachable whatever its own rule says. Set it to deny (ufw default deny incoming), then try again.": "La politique par défaut d'UFW sur cet hôte autorise les connexions entrantes, donc le port du panneau reste accessible quelle que soit sa propre règle. Passez-la à « deny » (ufw default deny incoming), puis réessayez."
 }

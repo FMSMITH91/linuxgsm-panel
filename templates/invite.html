@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{% if invalid %}Invite not valid{% else %}Create your account{% endif %}{% endblock %}
+{% block title %}{% if invalid %}{{ t('Invite not valid') }}{% else %}{{ t('Create your account') }}{% endif %}{% endblock %}
 {% block content %}
 {# Shaped like the login and force-password cards: this is a signed-OUT page, there is no sidebar
    to sit beside, and it is the first thing a new person ever sees of the panel. #}

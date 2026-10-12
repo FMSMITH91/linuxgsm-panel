@@ -20,18 +20,44 @@ from panel.ops.ssh_manager import (_core, cron, files, portscan)  # noqa: E402,F
 # GoldSrc share the SAME console syntax (`status`, `kick "<name>"`, `banid`, `say`) and both print
 # SteamIDs in `status`, so they're one "valve" family here. Anything not classified has no console
 # moderation — its player list still shows via gamedig where available, just with no kick/ban/say.
+# Keyed by LinuxGSM's own shortnames (lgsm/data/serverlist.csv; the unit suite holds every key to
+# tests/unit/lgsm_shortnames.txt). "hl2mp", "insurgency", "gesource", "ship", "bm", "og" and "ag"
+# were here and match no LinuxGSM game. Five games of the family were missing, so they had no
+# console player list and no Kick, Ban or Say; each runs a binary a mapped game already runs:
+#   * bb, opfor, ts, vs: Valve's HLDS (appid 90, `hlds_run -game <mod>`), the same engine as cs and
+#     ahl. `status`, `kick`, `say`, `banid` and `writeid` are ENGINE commands there (ReHLDS
+#     host_cmd.cpp / sv_main.cpp register them), so the mod's game DLL does not change them;
+#   * zmr: Source SDK Base 2013 Dedicated Server (appid 244310), as sfc; its game DLL keeps the
+#     SDK's `say` (zm-reborn/zmr-game mp/src/game/server/client.cpp).
+# Games of these engines that ship their OWN engine build (sven, bd, dab, ahl2, bmdm, cc, em, ios,
+# pvkii, bs, dys, jbep3, mcv, tf2c) are left out: nothing primary shows their console keeps these
+# commands and this `status` layout, and a guessed command answers "Done." while nothing happened.
 _ENG_VALVE = frozenset({
     # Source
-    "gmod", "css", "cs2", "csgo", "tf2", "hl2dm", "hl2mp", "dods", "l4d", "l4d2",
-    "ins", "insurgency", "nmrih", "zps", "fof", "gesource", "bb2", "ship", "doi", "nd", "bm",
+    "gmod", "css", "cs2", "csgo", "tf2", "hl2dm", "hldms", "dods", "l4d", "l4d2",
+    "ins", "nmrih", "zps", "fof", "bb2", "doi", "nd", "sfc", "zmr",
     # GoldSrc
-    "cs", "cscz", "tfc", "dmc", "ns", "ricochet", "hldm", "hldms", "ahl", "sfc", "dod", "og", "ag",
+    "cs", "cscz", "tfc", "dmc", "ns", "ricochet", "hldm", "ahl", "dod",
+    "bb", "opfor", "ts", "vs",
 })
-_ENG_IDTECH3 = frozenset({           # Quake3 / idTech3 — `status` gives slot numbers, kick/ban by slot
-    "cod", "coduo", "cod2", "cod4", "codwaw", "q3", "quakelive", "et", "etl", "rtcw", "wet", "jamp",
+# Quake3 / idTech3 — `status` gives slot numbers, kick/ban by slot. Keyed by LinuxGSM's own
+# shortnames (lgsm/data/serverlist.csv): "quakelive", "et" and "jamp" were here and match no
+# LinuxGSM game, while Jedi Knight II's "jk2" was missing, so its servers had no moderation.
+# jk2server runs JK2MV (`jk2mvded`), whose src/server/sv_ccmds.cpp registers `status` and
+# `clientkick` and no ban; `say` is the game module's (g_svcmds.c ConsoleCommand). Quake Live
+# ("ql", `qzeroded`) is closed source: neither its `status` layout nor a kick by slot is
+# published anywhere primary, and a guessed command answers "Done." while the player stays on,
+# so it is left to gamedig's view-only list.
+_ENG_IDTECH3 = frozenset({
+    "cod", "coduo", "cod2", "cod4", "codwaw", "q3", "etl", "rtcw", "wet", "jk2",
 })
-_ENG_MINECRAFT = frozenset({         # Minecraft — `list` gives names, kick/ban by name
-    "mc", "pmc", "spigot", "paper", "bukkit", "forge", "fabric", "purpur", "mcbe", "mcb", "pocketmine",
+# Minecraft — `list` gives names, kick/ban by name. LinuxGSM's Minecraft games are mc (vanilla
+# Java), pmc (PaperMC) and mcb (Bedrock). "spigot", "paper", "bukkit", "forge", "fabric",
+# "purpur", "mcbe" and "pocketmine" were here and match no LinuxGSM game. Its two proxies are left
+# out: Velocity (vpmc) has no `list`, `kick`, `ban` or `say` at all (docs.papermc.io/velocity/
+# built-in-commands), and Waterfall (wmc) has BungeeCord's `glist`/`alert` and no `ban` or `say`.
+_ENG_MINECRAFT = frozenset({
+    "mc", "pmc", "mcb",
 })
 
 
@@ -107,12 +133,19 @@ def capture_console(server, user, selfname=None, lines=180, since=None):
     before the send, and the parsers took the previous table as current. That is unknown (rc 4),
     as an unreadable pane is. Missing a second collect only starts the capture later, inside what
     is new: a reply cut short reads as unknown, never as an old table.
+
+    A reflow need not shrink the history, though. Narrowing the pane rewraps every line longer
+    than the new width, so the history GROWS, and the mark's row moves down by the rows the
+    rewrap added — the capture still started above it, and the test above never ran. So the mark
+    carries the pane's width too (since=(history_size, cursor_y, pane_width)), and a capture at
+    any other width is unknown (rc 4), whichever way the pane was resized.
     """
     selfname = selfname or user
     if since is not None:
-        hs, cy = int(since[0]), int(since[1])
-        start = (f'set -- $(tmux -L "$SOCK" display -p -t {selfname} "#{{history_size}} #{{history_limit}}"); '
-                 '[ -n "$2" ] || exit 4; '
+        hs, cy, width = int(since[0]), int(since[1]), int(since[2])
+        start = (f'set -- $(tmux -L "$SOCK" display -p -t {selfname} '
+                 '"#{history_size} #{history_limit} #{pane_width}"); '
+                 f'[ -n "$3" ] && [ "$3" -eq {width} ] || exit 4; '
                  f's=$(( {hs} + {cy} - $1 )); '
                  f'if [ "$1" -lt {hs} ]; then t=$(( $2 / 10 )); [ "$t" -ge 1 ] || t=1; '
                  f'[ {hs} -gt $(( $2 - t )) ] || exit 4; s=$(( s - t )); fi; ')
@@ -192,18 +225,23 @@ def _parse_valve_status(text):
 
 # The `status` header by its own shape, from the start of the line. Two families:
 #   "num score ping [guid] name lastmsg address …" — Quake III 1.32 (id's code/server/sv_ccmds.c
-#     SV_Status_f), ET:Legacy (src/server/sv_ccmds.c, adds lastConnectTime), CoD (adds guid);
+#     SV_Status_f), ET:Legacy (src/server/sv_ccmds.c, adds lastConnectTime), CoD (adds guid), and
+#     CoD4X 1.8 — LinuxGSM's cod4server (`cod4x18_dedrun`) — which prints "playerid steamid" where
+#     CoD prints "guid" (src/sv_cmds.c SV_Status_f, unless sv_legacymode). Without it no CoD4 table
+#     had a header, so every Call of Duty 4 console player list read as unknown;
 #   "cl score ping name address rate" — ioquake3 (code/server/sv_ccmds.c SV_Status_f), iortcw
 #     (MP/code/server/sv_ccmds.c) and OpenJK (codemp/server/sv_ccmds.cpp). This family was never
-#     recognised ("num" was required), so q3, rtcw and jamp player lists were always unknown.
+#     recognised ("num" was required), so q3 and rtcw player lists were always unknown.
+#   JK2MV (LinuxGSM's jk2server, src/server/sv_ccmds.cpp SV_Status_f) prints Quake III 1.32's
+#     "num score ping name lastmsg address qport rate", the name cut to 15 visible characters.
 # Matched as a substring test ("num", "score" and "ping" anywhere, not a row), a player's chat
 # line `say: Bob: num score ping`, which a dedicated server echoes to its console after the real
 # table, became the LAST header: the rows after it were none, and a full server read as
 # confirmed-empty (the Players card, the bots' /players, and Kick/Ban finding nobody). Chat and
 # every other log line start with their own tag or a name, never with these words, and the shape
 # is longer than a player name may be.
-_R14B_IDT3_HEADER_RE = re.compile(r"\s*num\s+score\s+ping\s+(?:guid\s+)?name\s+lastmsg\s+address\b",
-                                  re.I)
+_R14B_IDT3_HEADER_RE = re.compile(
+    r"\s*num\s+score\s+ping\s+(?:guid\s+|playerid\s+steamid\s+)?name\s+lastmsg\s+address\b", re.I)
 _R14B_IDT3_CL_HEADER_RE = re.compile(r"\s*cl\s+score\s+ping\s+name\s+address\s+rate\b", re.I)
 
 
@@ -237,11 +275,11 @@ def _idtech3_table_start(lines):
 # read in the same order the pattern read it — each run of blanks is tried ONCE, as the gap in
 # front of the lastmsg column — so the answers are the pattern's, in linear time.
 # The ping column holds a number, or the client's state while it is not yet in the game:
-# CNCT/ZMBI (Quake III 1.32, ET:Legacy, CoD; ET:Legacy's DEMO too), CON/ZMB (ioquake3, iortcw,
-# OpenJK). A row with a state word was not read at all. (The row-with-address pattern below
-# and _R14B_IDT3_HEAD_FIELDS_RE spell the alternation out: part06's anchor gate reads a pattern
-# only when it is one literal.)
-_IDT3_ROW_HEAD_RE = re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+|CNCT|ZMBI|DEMO|CON|ZMB)\s+(\S+)(\s+)")
+# CNCT/ZMBI (Quake III 1.32, ET:Legacy, CoD; ET:Legacy's DEMO too; CoD4X's PRIM, a client that
+# has loaded but not yet entered), CON/ZMB (ioquake3, iortcw, OpenJK). A row with a state word
+# was not read at all. (The row-with-address pattern below and _R14B_IDT3_HEAD_FIELDS_RE spell
+# the alternation out: part06's anchor gate reads a pattern only when it is one literal.)
+_IDT3_ROW_HEAD_RE = re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+|CNCT|ZMBI|PRIM|DEMO|CON|ZMB)\s+(\S+)(\s+)")
 _IDT3_ADDR_RE = re.compile(r"\d+\s+\d{1,3}(?:\.\d{1,3}){3}:\d+")
 _BLANKS_RE = re.compile(r"\s+")
 # The fallback for rows with no address column: num score ping guid name(rest). The name starts on
@@ -282,27 +320,33 @@ def _match_idtech3_row(ln):
 
 
 def _r14b_idt3_row_by_columns(ln, cols):
-    """(num, score, ping, "", name) for a row of a table with no guid column, else None.
+    """(num, score, ping, id, name) for a row of a table with no guid column, else None.
 
     Those engines print the name padded, then the columns the header names after "name": ioq3,
     iortcw and OpenJK `^7<address> <rate>` (OpenJK right-aligns the address); Quake III 1.32
     `^7<lastmsg> <address> <qport> <rate>`; ET:Legacy the same plus lastConnectTime. So the row is
     read from the RIGHT, exactly as many fields as the header has after "name", and the name is
-    what is left after the slot, score and ping: a name may hold spaces and digits. The colour
-    codes go first, so the engine's own `^7` before the address is not part of either. Every
-    field but the address must be a number, which a chat or log line does not end in.
+    what is left after the columns the header has BEFORE it: a name may hold spaces and digits.
+    The colour codes go first, so the engine's own `^7` before the address is not part of either.
+    Every field but the address must be a number, which a chat or log line does not end in.
+
+    CoD4X prints two id columns between the ping and the name ("playerid steamid"). A fixed four
+    fields made the playerid the name's first word; the head is split into as many fields as the
+    header has up to "name", the name is the last of them, and `id` is the playerid (the column
+    the CoD guid table's reader took as the guid), "" when there is none.
     """
-    tail_cols = cols[cols.index("name") + 1:]
+    n_head = cols.index("name") + 1
+    tail_cols = cols[n_head:]
     parts = _strip_q3_colors(ln).rsplit(None, len(tail_cols))
-    head = parts[0].split(None, 3) if len(parts) == len(tail_cols) + 1 else []
-    if len(head) != 4 or not _R14B_IDT3_HEAD_FIELDS_RE.fullmatch(" ".join(head[:3])):
+    head = parts[0].split(None, n_head - 1) if len(parts) == len(tail_cols) + 1 else []
+    if len(head) != n_head or not _R14B_IDT3_HEAD_FIELDS_RE.fullmatch(" ".join(head[:3])):
         return None
     if not all(_R14B_INT_RE.fullmatch(v) for c, v in zip(tail_cols, parts[1:]) if c != "address"):
         return None
-    return head[0], head[1], head[2], "", head[3]
+    return head[0], head[1], head[2], (head[3] if n_head > 4 else ""), head[-1]
 
 
-_R14B_IDT3_HEAD_FIELDS_RE = re.compile(r"[0-9]+ -?[0-9]+ (?:[0-9]+|CNCT|ZMBI|DEMO|CON|ZMB)")
+_R14B_IDT3_HEAD_FIELDS_RE = re.compile(r"[0-9]+ -?[0-9]+ (?:[0-9]+|CNCT|ZMBI|PRIM|DEMO|CON|ZMB)")
 _R14B_INT_RE = re.compile(r"-?[0-9]+")
 
 
@@ -406,8 +450,9 @@ def _send_rc(result):
     return result[2] if isinstance(result, tuple) and len(result) >= 3 else 1
 
 
-# What send_console_command(mark=True) prints before it types: the pane's history_size, cursor_y.
-_R13B_PANE_MARK_RE = re.compile(r"^PANE_MARK (\d{1,9}) (\d{1,6})(?:\n|\Z)", re.M)
+# What send_console_command(mark=True) prints before it types: the pane's history_size, cursor_y
+# and pane_width.
+_R13B_PANE_MARK_RE = re.compile(r"^PANE_MARK (\d{1,9}) (\d{1,6}) (\d{1,6})(?:\n|\Z)", re.M)
 
 
 def _send_and_capture(server, user, eng, selfname):
@@ -444,7 +489,8 @@ def _send_and_capture(server, user, eng, selfname):
             return None
         time.sleep(0.8)   # let the server print its reply into the pane before we capture it
         out, _, rc = capture_console(server, user, selfname=selfname,
-                                     since=(int(mark.group(1)), int(mark.group(2))))
+                                     since=(int(mark.group(1)), int(mark.group(2)),
+                                            int(mark.group(3))))
     except Exception:
         return None
     return out, rc
@@ -750,9 +796,39 @@ def is_player_queryable(game_type, query_type=None):
 
 
 # Bedrock Dedicated Server's console has NO `ban` command. Banning on Bedrock is the allowlist
-# (`allowlist add/remove`, renamed from `whitelist` in 1.18.10); `/ban` is Java-only. PocketMine
-# does implement `ban`, so it is deliberately not in here.
-_MC_NO_BAN = frozenset({"mcbe", "mcb"})
+# (`allowlist add/remove`, renamed from `whitelist` in 1.18.10); `/ban` is Java-only. LinuxGSM's
+# Bedrock game is "mcb"; "mcbe" was here too and matches no LinuxGSM game.
+_MC_NO_BAN = frozenset({"mcb"})
+
+# The idTech3 ban, per game, for the slot `status` printed; a game not here has no console command
+# that bans one connected player by slot, and its Ban is refused (_mod_unsupported_reason).
+# `banclient <slot>` was sent to all of them, and it bans only on the CoD engines (stock CoD and
+# CoD4X register banClient, which writes the ban and drops the player). Elsewhere it did nothing:
+#   * Quake III 1.32 (LinuxGSM's q3server runs id's q3ded), ioquake3 and iortcw: SV_BanNum_f only
+#     sends `banUser <ip>` to id's authorize server — the player is not dropped, and no ban list
+#     is written;
+#   * JK2MV (LinuxGSM's jk2server) registers no ban at all; the game's `addip` takes an address
+#     mask, not a slot;
+#   * Enemy Territory / ET:Legacy: the engine has none, and the game's own `ban` takes a NAME
+#     (ET:Legacy falls back to a name match when the slot is empty — another player).
+# tmux send-keys exited 0 regardless, so the panel answered "Done." and wrote a success row while
+# the player stayed on. iortcw (LinuxGSM's rtcwserver, `iowolfded`) keeps ioq3's address ban
+# list: `banaddr <clientnum>` bans that client's address and writes serverbans.dat
+# (SV_AddBanToList), but does not drop them, so the kick follows. It refuses an empty slot
+# ("Playernum N does not exist") rather than resolve it to someone else.
+_R15B_IDT3_BAN = {
+    "cod": "banclient {n}", "coduo": "banclient {n}", "cod2": "banclient {n}",
+    "cod4": "banclient {n}", "codwaw": "banclient {n}",
+    "rtcw": "banaddr {n}; kicknum {n}",
+}
+
+
+def _r15b_can_ban(game_type):
+    """Whether this game's console has a ban command the panel sends (see _R15B_IDT3_BAN)."""
+    gt = (game_type or "").lower()
+    if gt in _MC_NO_BAN:
+        return False
+    return game_engine(gt) != "idtech3" or gt in _R15B_IDT3_BAN
 
 
 def moderation_caps(game_type):
@@ -761,13 +837,14 @@ def moderation_caps(game_type):
     Driven by the engine family, so every game of a family is covered. Non-console games get
     nothing (view-only).
 
-    `ban` is dropped for Bedrock: _ENG_MINECRAFT covers mcbe/mcb alongside the Java families, so
+    `ban` is dropped for Bedrock: _ENG_MINECRAFT covers mcb alongside the Java families, so
     this answered ban=True for a console with no ban command, the detail page rendered the button,
     and sending `ban <name>` into the pane got "Unknown command" while tmux send-keys exited 0 —
-    "Done.", a success audit row, and the griefer still connected.
+    "Done.", a success audit row, and the griefer still connected. The same for the idTech3
+    games whose console cannot ban by slot (_R15B_IDT3_BAN).
     """
     if game_engine(game_type):      # valve, idtech3 and minecraft all support kick + say
-        return {"kick": True, "ban": (game_type or "").lower() not in _MC_NO_BAN, "say": True}
+        return {"kick": True, "ban": _r15b_can_ban(game_type), "say": True}
     return {"kick": False, "ban": False, "say": False}
 
 
@@ -827,6 +904,9 @@ def _mod_unsupported_reason(game_type, eng, action):
     if action == "ban" and eng == "minecraft" and (game_type or "").lower() in _MC_NO_BAN:
         return ("Bedrock servers have no ban command — remove the player from the "
                 "server's allowlist instead.")
+    if action == "ban" and eng == "idtech3":
+        return ("This game's console has no command that bans a player by slot — kick them, "
+                "and ban their address in the server's own config.")
     return "That action isn't supported for this game."
 
 
@@ -860,15 +940,23 @@ def _mod_valve_cmd(action, target, steamid, resolve):
     return "banid 0 %s kick; writeid" % sid, None
 
 
-def _mod_idtech3_cmd(action, num, resolve):
-    """(console command, None) for an idTech3 kick or ban by slot number, or (None, why)."""
+def _mod_idtech3_cmd(action, num, resolve, game_type=""):
+    """(console command, None) for an idTech3 kick or ban by slot number, or (None, why).
+
+    The ban is the game's own (_R15B_IDT3_BAN); moderate() has already refused a game with none.
+    """
     slot = _sanitize_slotnum(num)
     if slot is None:     # list came from gamedig (no slot number) — resolve it on the console now
         p = resolve()
         slot = _sanitize_slotnum(p.get("num")) if p else None
     if slot is None:
         return None, "Couldn't find that player on the server."
-    return "%s %d" % ("clientkick" if action == "kick" else "banclient", slot), None
+    if action == "kick":
+        return "clientkick %d" % slot, None
+    ban = _R15B_IDT3_BAN.get((game_type or "").lower())
+    if ban is None:
+        return None, _mod_unsupported_reason(game_type, "idtech3", action)
+    return ban.format(n=slot), None
 
 
 def _mod_minecraft_cmd(action, target):
@@ -878,11 +966,11 @@ def _mod_minecraft_cmd(action, target):
         return None, "No player selected."
     # `kick <player> [reason]` — the name and the reason are separated by a SPACE, and
     # _MOD_BAD_CHARS does not strip one. That is right for Source and idTech3, whose consoles
-    # separate on ';' and newline only, and wrong here: _ENG_MINECRAFT covers mcbe/mcb/
-    # pocketmine, Bedrock gamertags may contain spaces, and a gamedig-sourced list carries the
+    # separate on ';' and newline only, and wrong here: _ENG_MINECRAFT covers mcb (Bedrock),
+    # whose gamertags may contain spaces, and a gamedig-sourced list carries the
     # raw name (only _parse_minecraft_list sanitises, and that is the console path). So a
     # player named "<someone else> griefing" sends the admin's kick to that someone else.
-    # There is no quoting that is correct across Java, Bedrock and PocketMine, so this refuses
+    # There is no quoting that is correct across Java and Bedrock, so this refuses
     # rather than guessing — a misdirected ban is worse than a button that says why it stopped.
     if re.search(r"\s", nm):
         return None, ("That player's name contains a space, which this game's console reads "
@@ -917,7 +1005,7 @@ def moderate(server, user, game_type, action, target="", message="", selfname=No
     elif eng == "valve":
         cmd, why = _mod_valve_cmd(action, target, steamid, resolve)
     elif eng == "idtech3":
-        cmd, why = _mod_idtech3_cmd(action, num, resolve)
+        cmd, why = _mod_idtech3_cmd(action, num, resolve, game_type)
     elif eng == "minecraft":
         cmd, why = _mod_minecraft_cmd(action, target)
     else:
@@ -1042,7 +1130,7 @@ def _backup_players_online(server, user, game_type, port, query_type):
     query_type, like every other player/version read in this file (_gamedig_player_list,
     _queried_version, is_player_queryable) and like the on-screen count in server_detail.
     This one call — the only one that decides whether to disconnect people — dropped it, so
-    player_count resolved the gamedig type from the 26-entry built-in map ALONE. A game the
+    player_count resolved the gamedig type from the built-in map ALONE. A game the
     map does not cover (Project Zomboid, ARK, Mordhau, Killing Floor) whose operator set the
     per-server override precisely so the panel could query it resolved to "", answered None,
     and the rule above reads None as empty — so the hourly ticker ran LinuxGSM's `backup`,

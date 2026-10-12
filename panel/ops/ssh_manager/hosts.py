@@ -335,14 +335,82 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
         return False, "Port must be a number or a range like 27015:27020"
     if allow:
         cmt = re.sub(r"[^A-Za-z0-9 _.-]", "", comment or "")[:60]
-        verb, vargs = "ufw-allow-from-port", [src, spec, proto, cmt]
+        out, err, rc = _core.run_privileged(server, "ufw-allow-from-port", [src, spec, proto, cmt],
+                                            timeout=15)
     else:
-        verb, vargs = "ufw-delete-allow-from-port", [src, spec, proto]
-    out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
+        # The delete removes the rule by its spec, so it goes past the lockout guard the Firewall
+        # page's x (remote_ufw_delete_rule) answers to: "SSH from my home IP" — this function's own
+        # example — is the host's only SSH rule exactly when it matters, and Remove deleted it.
+        refusal, out, err, rc = _r15a_guarded_spec_delete(
+            server, "ufw-delete-allow-from-port", [src, spec, proto],
+            lambda g: _r15a_spec_names(g, spec, proto.upper(), src))
+        if refusal:
+            return False, refusal
     if rc == 0:
         return True, ("Port %s/%s open from %s" % (spec, proto, src) if allow
                       else "Rule for %s/%s from %s removed" % (spec, proto, src))
     return False, err or out or "Unknown error"
+
+
+def _r15a_src_key(text):
+    """A rule's source as ipaddress spells it, so `203.0.113.5` and `203.0.113.5/32` compare equal."""
+    s = str(text or "").strip()
+    try:
+        return str(_ipaddress.ip_interface(s))
+    except ValueError:
+        return s.lower()
+
+
+def _r15a_spec_names(g, port, proto_label, src=None):
+    """Would a by-spec `ufw delete allow ...` remove group `g`?
+
+    An inbound ALLOW on no interface, for `port` with `proto_label` (BOTH for a bare rule), from
+    anywhere — or from `src` when one is named. The port is the To column's last word, so a rule
+    scoped to a destination address still matches: a refusal it did not need is the safe side of
+    this test, a protected rule it missed is not.
+    """
+    if g.get("is_iface") or g.get("action") != "ALLOW" or g.get("direction", "IN") != "IN":
+        return False
+    if g.get("proto_label") != proto_label:
+        return False
+    words = str(g.get("port_num", "")).split()
+    if not words or words[-1] != str(port):
+        return False
+    if src is None:
+        return g.get("scope") == "Any address"
+    return _r15a_src_key(g.get("scope")) == _r15a_src_key(src)
+
+
+def _r15a_guarded_spec_delete(server, verb, vargs, names):
+    """Run a by-spec ufw delete only if no protected rule is among those it removes.
+
+    -> (refusal or None, out, err, rc); `names` None runs the delete unguarded (a caller's force).
+    The same guard remote_ufw_delete_rule applies by number,
+    held under the host's ufw_lock from the read to the delete: a firewall that cannot be read
+    refuses ("I could not check" is not "it is safe"), and a protected rule the spec names is
+    refused with its own reason. A host without UFW goes on to the delete, which answers for itself.
+    """
+    if names is None:
+        out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
+        return None, out, err, rc
+    with _core.ufw_lock(server):
+        try:
+            status = firewall.remote_ufw_status(server)
+        except Exception:
+            _core._log.warning("ufw delete: the safety check could not read the firewall",
+                               exc_info=True)
+            status = None
+        if status is None or status.get("unreachable"):
+            return (("Couldn't read the firewall to check whether this rule is the one keeping your "
+                     "access open, so this refuses rather than risk locking you out. Check the host "
+                     "is reachable and try again."), "", "", None)
+        for g in (status.get("groups", []) if status.get("installed") else []):
+            if g.get("protected") and names(g):
+                return (g.get("protect_reason")
+                        or "This rule protects your access to the host and can't be removed here.",
+                        "", "", None)
+        out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
+        return None, out, err, rc
 
 
 def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
@@ -478,9 +546,14 @@ def _ufw_first_public_rule(status_out, port, proto):
     return None
 
 
-def remote_ufw_close_port(server, port, protocol=None):
+def remote_ufw_close_port(server, port, protocol=None, force=False):
     """Close a port on the remote server via UFW. With protocol=None (or 'both'/'any'),
-    deletes the bare `allow <port>` rule (both protocols); otherwise the proto-specific rule."""
+    deletes the bare `allow <port>` rule (both protocols); otherwise the proto-specific rule.
+
+    Unless force=True, refuses when the rule it would remove is protected (the host's only SSH
+    rule, the panel's own web port), as remote_ufw_delete_rule does: `POST /firewall/close` for 22
+    deleted the rule the Firewall page's x refuses. force=True is for the panel's own moves, which
+    close a port they opened themselves or one the config no longer names."""
     try:
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
@@ -489,10 +562,13 @@ def remote_ufw_close_port(server, port, protocol=None):
     if proto is None:
         return False, "Invalid protocol"
     if proto in ("tcp", "udp"):
-        verb, vargs = "ufw-delete-allow-proto-port", [proto, str(port)]
+        verb, vargs, label = "ufw-delete-allow-proto-port", [proto, str(port)], proto.upper()
     else:
-        verb, vargs = "ufw-delete-allow-port", [str(port)]
-    out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
+        verb, vargs, label = "ufw-delete-allow-port", [str(port)], "BOTH"
+    refusal, out, err, rc = _r15a_guarded_spec_delete(
+        server, verb, vargs, None if force else (lambda g: _r15a_spec_names(g, port, label)))
+    if refusal:
+        return False, refusal
     if rc == 0:
         return True, f"Port {port}{('/' + proto) if proto in ('tcp', 'udp') else ''} closed on remote"
     return False, err or out or "Unknown error"
@@ -2537,7 +2613,7 @@ def remote_migrate_to_tailscale(server, new_auth_method="tailscale"):
 
     # Verified: the tailnet really is a way in. NOW the public door can close.
     try:
-        remote_ufw_close_port_22(server)
+        _r15c_delete_port_22(server)
     except Exception:
         _core._log.debug("Non-fatal — might already be removed", exc_info=True)
 
@@ -2568,7 +2644,28 @@ def remote_tailscale_finalize(server):
 
 
 def remote_ufw_close_port_22(server):
-    """Remove port 22/tcp UFW rule (safe if Tailscale SSH is active)."""
+    """Remove port 22/tcp UFW rule (safe if Tailscale SSH is active).
+
+    Only on a firewall that is on: with UFW inactive (or unread) this answered "Port 22 rule removed
+    from UFW", true of the stored rules, while nothing filtered port 22 and it stayed open.
+    remote_set_public_ssh refuses the same state with the same words.
+    """
+    state = remote_public_ssh_status(server)
+    if state.get("unreachable"):
+        return False, ("Could not read this host's firewall, so port 22 was not closed — check the "
+                       "host and try again.")
+    if not state.get("active"):
+        return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
+                       "here — port 22 is governed by whatever else is in front of it.")
+    return _r15c_delete_port_22(server)
+
+
+def _r15c_delete_port_22(server):
+    """Delete the 22/tcp allow, unchecked.
+
+    The Tailscale migration's last step, which has proved its own way back in and removes the stored
+    rule whether or not UFW is on.
+    """
     out, err, rc = _core.run_privileged(server, "ufw-delete-allow-port", ["22/tcp"], timeout=15)
     if rc == 0:
         return True, "Port 22 rule removed from UFW"
@@ -3366,7 +3463,8 @@ def change_ssh_port(server, new_port, bind_addr=""):
         # message says "sshd rejected the new config — nothing changed". Best-effort, like the
         # open: a host without UFW no-ops either way. ONLY a rule step 1 added (see there).
         if _ufw_added:
-            remote_ufw_close_port(server, new_port, "tcp")
+            # force: the rule step 1 added, for a port sshd may already be listening on.
+            remote_ufw_close_port(server, new_port, "tcp", force=True)
         _restart_ssh_listener(server, socket_mode)
         return False, msg
 
@@ -3473,9 +3571,11 @@ def remote_public_ssh_status(server, panel_port=None):
     # That is the most dangerous direction for this particular sentence: it is the reassurance an
     # operator acts on before closing port 22 or walking away from a host whose SSH may in fact be
     # wide open. `unreachable` is the flag the sibling already established for it.
-    out, err, rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=12)
-    _txt = (out or "") + (err or "")
-    if rc == 127 or "not found" in _txt or "not installed" in _txt:
+    out, _err, rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=12)
+    # rc 127 alone, as remote_ufw_status reads it: a missing ufw is 127 from every transport, and
+    # a text test read the whole listing, rule comments included — "plex not installed yet" or a
+    # game server named "map not found" made an active firewall read as no UFW at all.
+    if rc == 127:
         # ufw is ABSENT, which is a reading and not a failure to read — but it is still not
         # "off". `off` in this function means "no rule, so tailnet-only", and with no firewall at
         # all nothing governs port 22, so that label would point the wrong way.
@@ -3535,7 +3635,8 @@ def _r14a_holds_port_open(line, port):
     p = firewall._parse_ufw_rule(line)
     if not p["action"]:
         return False
-    p["port_num"] = firewall._split_ufw_proto(firewall._ufw_port_label(p))[0]
+    p["port_num"], p["proto_label"] = firewall._split_ufw_proto(firewall._ufw_port_label(p))
+    p["src"] = p["from"]        # the display group's names, which the UDP and host-only tests read
     return bool(firewall._r14a_panel_port_scope(p, port))
 
 

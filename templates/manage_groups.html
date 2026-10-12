@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Groups & Permissions{% endblock %}
+{% block title %}{{ t('Groups & Permissions') }}{% endblock %}
 
 {% macro game_server_access(all_remotes, all_servers, selected_ids, idprefix, any_hosts=False) %}
 {# No `for`: this heads a LIST of per-server checkboxes, not one control. It used to point at

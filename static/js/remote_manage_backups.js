@@ -412,14 +412,17 @@ function _backupOneGame(id,btn,force){
     [600,3000,8000,20000,40000,70000,120000].forEach(function(ms){ setTimeout(loadBackups, ms); });
   }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(window.toast) toast('✗ Could not start backup — connection error','danger'); resetBtn(); });
 }
+// Markup, not text: every caller writes it with innerHTML, so it is built with tfHtml, which escapes
+// the translated sentence and every value. tf() is safe today only because each value is a number
+// or a catalog string; one that ever became text would have been markup.
 function schedNote(sc){
   var iv=sc.interval_days, kp=sc.keep;
   var custom=sc.interval_set||sc.keep_set;
-  if(iv<=0) return t(custom ? 'Custom — no automatic backups.' : 'Using default — no automatic backups.');
+  if(iv<=0) return tfHtml(custom ? 'Custom — no automatic backups.' : 'Using default — no automatic backups.');
   var every=(iv===1?t('daily'):(iv===7?t('weekly'):(iv===14?t('every 2 weeks'):(iv===30?t('monthly'):tf('every {n} days', {n: iv})))));
   var next='';
   if(sc.last){ var d=Math.round((sc.last+iv*86400-Date.now()/1000)/86400); next=d<=0?t('due now'):tf('in ~{n}d', {n: d}); }
-  return tf(custom ? (next ? 'Custom — {every}, keep {n} · next {next}.' : 'Custom — {every}, keep {n}.')
+  return tfHtml(custom ? (next ? 'Custom — {every}, keep {n} · next {next}.' : 'Custom — {every}, keep {n}.')
                    : (next ? 'Using default — {every}, keep {n} · next {next}.' : 'Using default — {every}, keep {n}.'),
             {every: every, n: kp, next: next});
 }

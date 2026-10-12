@@ -19,7 +19,7 @@ from panel.core.validation import (NOT_AN_IP, unzoned_ip_or_network)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
     _game_backup_status, register_remote_state, register_server_state)
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, claim_row, db, row_birth,
-    still_held)
+    row_label, still_held)
 from panel.ops import (backup as bk)
 from panel.ops.ssh_manager import (get_server_status, mod_restart_decision, player_count as
     sm_player_count, remote_bootstrap_vps, remote_public_ip, run_game_backup)
@@ -837,7 +837,8 @@ def _run_queued_action(app, gs):
                    server=gs)
     except Exception:
         db.session.rollback()
-        app.logger.warning("could not audit the queued %s of %s", act, gs.name, exc_info=True)
+        app.logger.warning("could not audit the queued %s of %s", act, row_label(gs, "name"),
+                           exc_info=True)
     if not retry or give_up:
         _queued_action_failures.pop(gs.id, None)
         gs.restart_pending = gs.stop_pending = False

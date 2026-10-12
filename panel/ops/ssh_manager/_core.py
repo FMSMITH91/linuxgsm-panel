@@ -2694,9 +2694,9 @@ def send_console_command(server, user, command, timeout=20, selfname=None, mark=
     that don't expose LinuxGSM's own `send` subcommand. Returns rc 3 with
     NO_SESSION when the server isn't running (no tmux session to send to).
 
-    mark=True prints `PANE_MARK <history_size> <cursor_y>` first, in the same round trip: where
-    the pane stood just before the command was typed, so a capture can read only what came after
-    (game.capture_console's `since`).
+    mark=True prints `PANE_MARK <history_size> <cursor_y> <pane_width>` first, in the same round
+    trip: where the pane stood just before the command was typed, so a capture can read only what
+    came after (game.capture_console's `since`), and the width that row number holds for.
     """
     selfname = selfname or user
     # The same guard run_as_game_user applies, for the same reason it gives at length: the model's
@@ -2711,10 +2711,14 @@ def send_console_command(server, user, command, timeout=20, selfname=None, mark=
     if not game_idents_ok(user, selfname):
         _log.warning("refusing to send to an unsafe account/script name")
         return GAME_ACCOUNT_REFUSED
-    pos = (f'tmux -L "$SOCK" display -p -t {selfname} "PANE_MARK #{{history_size}} #{{cursor_y}}" && '
+    pos = (f'tmux -L "$SOCK" display -p -t {selfname} '
+           '"PANE_MARK #{history_size} #{cursor_y} #{pane_width}" && '
            if mark else '')
+    # `--` before the text: tmux parses its arguments as flags until one does not start with "-",
+    # so a console command like `-R` or `-X ...` was taken as send-keys' own option (a reset, an
+    # "unknown flag" error) and never typed into the console.
     inner = (_tmux_live_socket_sh(selfname) + pos
-             + f'tmux -L "$SOCK" send-keys -t {selfname} {_quote(command)} Enter')
+             + f'tmux -L "$SOCK" send-keys -t {selfname} -- {_quote(command)} Enter')
     return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
 
 
@@ -3381,20 +3385,24 @@ def install_game_cron(server, user, selfname=None, supported=None):
 # query, and "minecraftpe" was no id at all: nine game types fell back to LinuxGSM's own query for
 # player counts, and their daily restart-when-empty check could never see an empty server. A unit
 # check holds every value to the pinned version's list (tests/unit/gamedig_game_ids.txt).
+#
+# Every KEY is a LinuxGSM shortname (held to tests/unit/lgsm_shortnames.txt). "left4dead2",
+# "insurgency", "valheim", "7d2d", "mcbe" and "mumble" were keys and match no LinuxGSM game, and
+# Velocity was keyed "vmc" where LinuxGSM's shortname is "vpmc", so a Velocity proxy got no query.
 GAMEDIG_TYPE = {
     "gmod": "garrysmod", "cs": "counterstrike16", "css": "css", "cs2": "counterstrike2",
     "tf2": "teamfortress2",
-    "hl2dm": "hl2d", "dods": "dods", "left4dead2": "l4d2", "l4d2": "l4d2",
-    "insurgency": "insurgency", "ins": "insurgency", "rust": "rust",
-    "valheim": "valheim", "vh": "valheim",
-    "sdtd": "sdtd", "7d2d": "sdtd",
+    "hl2dm": "hl2d", "dods": "dods", "l4d2": "l4d2",
+    "ins": "insurgency", "rust": "rust",
+    "vh": "valheim",
+    "sdtd": "sdtd",
     # Minecraft: Java editions (vanilla + Paper/Velocity/Waterfall, which answer Server List Ping)
     # use "minecraft"; Bedrock uses "mbe" (gamedig 5's "Minecraft: Bedrock Edition"). This is what
     # yields count AND max-players (Minecraft keeps max in server.properties, not the LinuxGSM
     # config, so the config-fallback can't see it).
-    "mc": "minecraft", "pmc": "minecraft", "vmc": "minecraft", "wmc": "minecraft",
-    "mcb": "mbe", "mcbe": "mbe",
-    "squad": "squad", "arma3": "arma3", "mumble": "mumble",
+    "mc": "minecraft", "pmc": "minecraft", "vpmc": "minecraft", "wmc": "minecraft",
+    "mcb": "mbe",
+    "squad": "squad", "arma3": "arma3",
     # Call of Duty family — gamedig CAN query these, so the player count (restart/backup guards +
     # daily-restart-when-empty) works for them too. Call of Duty 4 is "cod4mw" in gamedig 5.
     "cod": "cod", "coduo": "coduo", "cod2": "cod2", "cod4": "cod4mw", "codwaw": "codwaw",

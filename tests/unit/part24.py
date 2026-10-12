@@ -20,6 +20,7 @@ import glob as _glob24
 import json as _json24
 import os
 import re as _re24
+import shutil as _shutil24
 import sqlite3 as _sql24
 import subprocess as _sp24  # nosec B404 - for TimeoutExpired only; nothing is run
 import tempfile as _tf24
@@ -431,3 +432,7 @@ finally:
     _ts24._cache.update(_TS_CACHE24)
     _db24._cache.clear()
     _db24._cache.update(_DB_CACHE24)
+    # The throwaway databases (audit rows with addresses in counts.db) go with the part: left,
+    # every run added one more lgsm-unit-p24-* dir to /tmp (review 1011e).
+    _shutil24.rmtree(_TMP24, ignore_errors=True)
+check("contract checks: the part's temp dir is removed", not os.path.exists(_TMP24), _TMP24)

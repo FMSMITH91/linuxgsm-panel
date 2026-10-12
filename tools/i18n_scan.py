@@ -65,13 +65,102 @@ _HAS_LETTER = re.compile(r"[A-Za-z]")
 def _resolve_jinja(src):
     """Turn template source into markup carrying _SPLIT / _DYNAMIC where Jinja tags were."""
     src = re.sub(r"\{#.*?#\}", "", src, flags=re.S)
-    # The title block renders into <head><title>, and the runtime walker only ever walks
-    # document.body — so nothing in it is translatable and reporting it would be reporting a gap
-    # no catalog entry could close.
-    src = re.sub(r"\{%\s*block title\s*%\}.*?\{%\s*endblock\s*%\}", "", src, flags=re.S)
+    # The title block renders into <head><title>, which the runtime walker never reads (it walks
+    # document.body), so its text is translated on the server or not at all: through t() there,
+    # which _expression_labels claims. Literal words left in it are reported (_r15c_title_words).
+    src = re.sub(_R15C_TITLE_BLOCK, "", src, flags=re.S)
+    # An if/elif/else/endif ends no text node in the rendered page: `{% if a %}Super Admin{% else
+    # %}Standard{% endif %} · Account` is ONE node per branch, branch and neighbours together. Read
+    # as a split, each half was found in the catalog and the welded whole, which the walker looks
+    # up, was never asked for (review 1011e: three such nodes stayed English). Marked apart here;
+    # handle_data rebuilds each branch's node where it can, and splits as before where it cannot.
+    src = re.sub(r"\{%-?\s*if\b.*?%\}", _R15C_IF, src, flags=re.S)
+    src = re.sub(r"\{%-?\s*elif\b.*?-?%\}", _R15C_ELIF, src, flags=re.S)
+    src = re.sub(r"\{%-?\s*else\s*-?%\}", _R15C_ELSE, src, flags=re.S)
+    src = re.sub(r"\{%-?\s*endif\s*-?%\}", _R15C_ENDIF, src, flags=re.S)
     src = re.sub(r"\{%.*?%\}", _SPLIT, src, flags=re.S)
     src = re.sub(r"\{\{.*?\}\}", _DYNAMIC, src, flags=re.S)
     return src
+
+
+_R15C_IF, _R15C_ELIF, _R15C_ELSE, _R15C_ENDIF = "\x03", "\x06", "\x04", "\x05"
+_R15C_BRANCH_MARKS = _R15C_IF + _R15C_ELIF + _R15C_ELSE + _R15C_ENDIF
+
+
+def _r15c_as_splits(text):
+    """`text` with every if/else/endif mark read as the plain split it was before."""
+    return re.sub("[%s]" % _R15C_BRANCH_MARKS, _SPLIT, text)
+
+
+def _r15c_branch_nodes(run):
+    """The text nodes one run renders, one per way through the {% if %}s in it (nested ones too).
+
+    None when the run holds no if, or marks this cannot pair (an element inside a branch puts its
+    tags in different text runs): the marks are then read as splits, as before.
+    """
+    if not any(c in run for c in _R15C_BRANCH_MARKS):
+        return None
+    tokens = re.split("([%s])" % _R15C_BRANCH_MARKS, run)
+    try:
+        variants, _end = _r15c_expand(tokens, 0, False)
+    except ValueError:
+        return None
+    return variants
+
+
+_R15C_MAX_NODES = 64
+
+
+def _r15c_if_branches(tokens, i):
+    """(every text one {% if %}…{% endif %} starting after tokens[i-1] renders, the index past it)."""
+    branches, has_else = [], False
+    while True:
+        got, i = _r15c_expand(tokens, i, True)
+        branches.extend(got)
+        if tokens[i] == _R15C_ENDIF:
+            break
+        has_else = has_else or tokens[i] == _R15C_ELSE
+        i += 1                                        # past an elif/else: the next branch
+    # With an else one branch always renders; without one, none may.
+    return branches + ([] if has_else else [""]), i + 1
+
+
+def _r15c_expand(tokens, i, inside):
+    """(every text tokens[i:] renders up to a closing mark, where it stopped). ValueError: unpaired."""
+    out = [""]
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in (_R15C_ELIF, _R15C_ELSE, _R15C_ENDIF):
+            if not inside:
+                raise ValueError(tok)
+            return out, i
+        if tok == _R15C_IF:
+            branches, i = _r15c_if_branches(tokens, i + 1)
+            out = [o + b for o in out for b in branches]
+            if len(out) > _R15C_MAX_NODES:
+                raise ValueError("too many ways through")
+            continue
+        out = [o + tok for o in out]
+        i += 1
+    if inside:
+        raise ValueError("unclosed if")
+    return out, i
+
+
+_R15C_TITLE_BLOCK = r"\{%\s*block title\s*%\}(.*?)\{%\s*endblock\s*%\}"
+
+
+def _r15c_title_words(source):
+    """The literal words of a template's title block: English in every tab, whatever the language.
+
+    The block used to be dropped as "a gap no catalog entry could close", and every page's tab
+    title stayed English; t() is in every template's context, so it can be closed there.
+    """
+    out = []
+    for m in re.finditer(_R15C_TITLE_BLOCK, re.sub(r"\{#.*?#\}", "", source, flags=re.S), re.S):
+        bare = re.sub(r"\{%.*?%\}|\{\{.*?\}\}", _SPLIT, m.group(1), flags=re.S)
+        out.extend(part.strip() for part in bare.split(_SPLIT) if is_translatable(part))
+    return out
 
 
 def is_translatable(text):
@@ -144,7 +233,7 @@ class _Walker(HTMLParser):
             # left") reach the browser as one value no catalog key can equal. Those were skipped,
             # so the gate passed while every such label stayed English; reported as unreachable
             # now, as text runs are.
-            for branch in html.unescape(value).split(_SPLIT):
+            for branch in _r15c_as_splits(html.unescape(value)).split(_SPLIT):
                 branch = re.sub(r"\s+", " ", branch).strip()
                 if _DYNAMIC not in branch:
                     if is_translatable(branch):
@@ -167,9 +256,13 @@ class _Walker(HTMLParser):
 
     def handle_data(self, data):
         if self._skip_at is not None:
-            self._skipped_prose(data)
+            self._skipped_prose(_r15c_as_splits(data))
             return
+        runs = []
         for run in data.split(_SPLIT):
+            nodes = _r15c_branch_nodes(run)
+            runs.extend(nodes if nodes is not None else _r15c_as_splits(run).split(_SPLIT))
+        for run in runs:
             collapsed = re.sub(r"\s+", " ", run.replace(_DYNAMIC, "\x00")).strip()
             if not is_translatable(collapsed):
                 continue
@@ -279,6 +372,8 @@ def scan_template(path):
     walker.close()
     for text in _expression_labels(source):
         walker.strings.setdefault(text, set()).add("expr")
+    for text in _r15c_title_words(source):
+        walker.dynamic.setdefault(text, set()).add("title")
     return walker.strings, walker.dynamic
 
 
@@ -426,12 +521,19 @@ def is_js_ui_word(text, before):
 _JS_T_CALL = re.compile(r"""\b(?:t|_discT|tf|tfHtml|tfn)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
 
 
+_R15C_QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
+
+
 def is_js_t_arg(text, before):
     """Is this literal an argument of t() / _discT(), given the source just `before` it?"""
     # Not the right-hand side of a comparison: t(action === 'stop' ? … : …) chooses by 'stop'.
     m = _JS_T_CALL.search(before)
     # Nor a VALUE of tf()/tfHtml(): `{dir: base || 'home'}` goes in untranslated, after the sentence.
-    if m and m.group(0).startswith("tf") and "{" in m.group(0):
+    # Judged on the call with its quoted literals taken out: a template's own {placeholder} is no
+    # values object, and read as one it left every template after it unclaimed (tfn's plural, the
+    # second branch of a ternary), so a new sentence there passed the gate with no translation.
+    call = _R15C_QUOTED.sub("", m.group(0)) if m else ""
+    if call.startswith("tf") and "{" in call:
         return False
     # A tf() template is a sentence by construction: its {placeholders}, a "/" or a "=" are words
     # there ("{used} / {total} used", "Blank = use the default"); only markup or code is refused.
@@ -617,16 +719,21 @@ def _js_whole_claim(joined, before):
     return None
 
 
+# How far back a literal's t()/tf() call is looked for. 160 characters lost the call of a plural
+# whose singular before it was longer than that (tfn(n, '<a long sentence>', '<its plural>', …)).
+_R15C_LOOKBACK = 600
+
+
 def _js_claim_parts(run, standalone, source):
     """(text, source before it) to judge: judged whole when nothing is spliced in; part by part otherwise."""
     if standalone and len(run) > 1:
-        return [("".join(s[0] for s in run), source[max(0, run[0][2] - 160):run[0][2]])]
-    return [(s[0], source[max(0, s[2] - 160):s[2]]) for s in run]
+        return [("".join(s[0] for s in run), source[max(0, run[0][2] - _R15C_LOOKBACK):run[0][2]])]
+    return [(s[0], source[max(0, s[2] - _R15C_LOOKBACK):s[2]]) for s in run]
 
 
 def _js_run_claims(run, standalone, source):
     """The user-visible texts one run of literals (from _js_literal_runs) makes, as a list."""
-    before = source[max(0, run[0][2] - 160):run[0][2]]
+    before = source[max(0, run[0][2] - _R15C_LOOKBACK):run[0][2]]
     joined = "".join(s[0] for s in run)
     whole = _js_whole_claim(joined, before) if standalone else None
     if whole:
@@ -803,10 +910,54 @@ def _js_splice_runs(source):
             runs.append([span])
     out = []
     for run in runs:
-        lead = re.search(r"\+(?:\s|//[^\n]*\n)*\Z", source[max(0, run[0][2] - 200):run[0][2]])
-        tail = re.match(r"(?:\s|//[^\n]*\n)*\+", source[run[-1][3]:run[-1][3] + 200])
-        out.append((run, bool(lead), bool(tail)))
+        before = source[max(0, run[0][2] - 200):run[0][2]]
+        after = source[run[-1][3]:run[-1][3] + 200]
+        out.append((run, _r15c_plus_before(before), _r15c_plus_after(after)))
     return out
+
+
+def _r15c_skip_blank(text, i):
+    """Index of the first character at or after `i` that is not a blank or inside a comment.
+
+    `/* */` as well as `//`, as the joins inside a run (_js_gap_is_plus) take them: the edges of a
+    run took only `//`, so `n + /* count */ ' items left'` was never reported as a splice.
+    len(text) when the rest is all blanks and comments; -1 inside an unclosed comment.
+    """
+    while i < len(text):
+        if text[i].isspace():
+            i += 1
+        elif text.startswith("//", i):
+            nl = text.find("\n", i)
+            if nl < 0:
+                return -1
+            i = nl + 1
+        elif text.startswith("/*", i):
+            close = text.find("*/", i + 2)
+            if close < 0:
+                return -1
+            i = close + 2
+        else:
+            return i
+    return i
+
+
+def _r15c_plus_after(text):
+    """Whether `text` (what follows a run) starts with a `+`, past blanks and comments."""
+    i = _r15c_skip_blank(text, 0)
+    return 0 <= i < len(text) and text[i] == "+"
+
+
+def _r15c_plus_before(text):
+    """Whether `text` (what precedes a run) ends with a `+` and then only blanks and comments.
+
+    Tried at each `+` from the right, so a `+` inside a trailing comment is not taken for the join.
+    """
+    i = text.rfind("+")
+    while i >= 0:
+        if _r15c_skip_blank(text + "\n", i + 1) == len(text) + 1:
+            return True
+        i = text.rfind("+", 0, i)
+    return False
 
 
 _JS_INLINE_EDGE = r"(?:b|strong|em|u|span|code)"
@@ -821,10 +972,30 @@ def _js_edge_text(joined, side):
     if side == "lead":
         joined = re.sub(r"\A(?:</%s>)+" % _JS_INLINE_EDGE, "", joined)
         seg = joined.split("<", 1)[0]
-        return "" if ">" in seg else seg              # starts inside an opening tag: not text
+        if ">" in seg:
+            return ""                                 # starts inside an opening tag: not text
+        return seg if seg.strip() else _r15c_span_at_edge(joined, side)
     joined = re.sub(r"(?:<%s\b[^<>]*>)+\Z" % _JS_INLINE_EDGE, "", joined)
     seg = joined.rsplit(">", 1)[-1]
-    return "" if "<" in seg else seg                  # ends inside a tag: not text
+    if "<" in seg:
+        return ""                                     # ends inside a tag: not text
+    return seg if seg.strip() else _r15c_span_at_edge(joined, side)
+
+
+# A bare <span> of prose with only blanks between it and the join: '<span>Tailscale is not installed
+# on</span> <strong>' + name + '</strong>.' The text node at the join is the blank, so the edge read
+# above found nothing, yet the span holds the sentence's first half and no catalog key can be
+# written for the whole of it (review 1011e). An attributed span (`<span class="badge">`) is a label
+# of its own, not half a sentence; so is one word beside a count ('3 <span>banned</span>'), which is
+# split from its number on purpose so the word is a node the walker can translate.
+_R15C_SPAN_TAIL = re.compile(r"<span>([^<>]*)</span>\s*\Z")
+_R15C_SPAN_LEAD = re.compile(r"\A\s*<span>([^<>]*)</span>")
+
+
+def _r15c_span_at_edge(joined, side):
+    """The text of a bare <span> that sits, past blanks only, at the join's end of `joined`."""
+    m = (_R15C_SPAN_LEAD.match(joined) if side == "lead" else _R15C_SPAN_TAIL.search(joined))
+    return m.group(1) if m and len(m.group(1).split()) > 1 else ""
 
 
 def _js_splice_prose(seg):
@@ -879,7 +1050,22 @@ def spliced_js(js_dir=JS_DIR):
             if (lead or tail) and not _js_ignored(run, lines):
                 found.extend((os.path.basename(path), run[0][1], seg)
                              for seg in _js_run_splices(run, lead, tail, source))
+            if not _js_ignored(run, lines):
+                found.extend((os.path.basename(path), s[1], seg)
+                             for s in run for seg in _r15c_template_splices(s, source))
     return sorted(set(found))
+
+
+def _r15c_template_splices(span, source):
+    """The prose around each `${…}` of a backtick literal: the same splice as `+`, spelled otherwise.
+
+    `Saved ${n} files` reaches the page as one node no key can match, and none of the checks above
+    could see it: the literal holds `$` and `{`, so it was never claimed, and nothing is joined by `+`.
+    """
+    text, _line, start, _end = span
+    if source[start:start + 1] != "`" or "${" not in text:
+        return []
+    return [seg.strip() for seg in re.split(r"\$\{[^{}]*\}", text) if _js_splice_prose(seg)]
 
 
 # A sentence split by emphasis: 'Click <strong>Repair database</strong> — it rebuilds…'. Each piece

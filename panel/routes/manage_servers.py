@@ -7,7 +7,7 @@ from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.panel_state import (_install_jobs, _install_lock, forget_rows)
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, RowReplaced, claim_row,
-    db, row_birth, same_row)
+    db, row_birth, row_label, same_row)
 from panel.ops import (backup as bk)
 from panel.services import (lgsm_data)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
@@ -603,40 +603,49 @@ def _server_name_refusal(server_name):
     return None
 
 
+# Best-effort default port per game for the install form. This is only a pre-install HINT — after
+# install the panel reads LinuxGSM's real port(s) via `details` and opens every one, so an imperfect
+# default self-corrects. static/js/manage_servers.js PORTS is the same table for the form.
+#
+# Keyed by LinuxGSM shortname (held to tests/unit/lgsm_shortnames.txt). "insurgency", "gesource",
+# "spigot", "paper", "bukkit", "mcbe", "7d2d", "valheim", "projectzomboid", "tshock", "mumble" and
+# "openttd" were keys and match no LinuxGSM game; Unturned, Factorio, Avorion, Mordhau and Xonotic
+# were keyed by their full names where LinuxGSM's are unt, fctr, av, mh and xnt; and "vs" carried
+# Vintage Story's 42420, while LinuxGSM's vs is Vampire Slayer (GoldSrc, port 27015) and Vintage
+# Story is "vints".
+_R15F_KNOWN_PORTS = {
+    # Source engine — default 27015
+    "gmod": 27015, "cs": 27015, "css": 27015, "cs2": 27015, "csgo": 27015,
+    "tf2": 27015, "hl2dm": 27015, "hldm": 27015, "hldms": 27015, "dods": 27015,
+    "ins": 27015, "nmrih": 27015, "l4d": 27015, "l4d2": 27015,
+    "zps": 27015, "fof": 27015, "cscz": 27015, "tfc": 27015,
+    "ns": 27015, "ricochet": 27015, "dmc": 27015, "sfc": 27015, "bb2": 27015, "vs": 27015,
+    "unt": 27015, "bt": 27015,
+    # Call of Duty — 28960
+    "cod": 28960, "coduo": 28960, "cod2": 28960, "cod4": 28960, "codwaw": 28960,
+    # Minecraft family
+    "mc": 25565, "pmc": 25565, "mcb": 19132,
+    # Survival / sandbox
+    "rust": 28015, "sdtd": 26900, "vh": 2456,
+    "ark": 7777, "pz": 16261, "terraria": 7777,
+    "fctr": 34197, "av": 27000, "eco": 3000, "vints": 42420,
+    # Mil-sim / shooters
+    "arma3": 2302, "squad": 7787, "mh": 7777, "kf": 7707, "kf2": 7777,
+    "q2": 27910, "q3": 27960, "ql": 27960, "wet": 27960, "etl": 27960, "rtcw": 27960,
+    "jk2": 27960,
+    "xnt": 26000, "ut99": 7777, "ut2k4": 7777,
+    # Voice / misc
+    "ts3": 9987, "samp": 7777, "mta": 22003,
+}
+
+
 def _desired_install_port(game_type, port):
     """The port the install asks for: the form's, or the game's usual one in place of 27015.
 
     -> None when it is out of range, which the route refuses.
     """
-    # Best-effort default port per game for the install form. This is only a
-    # pre-install HINT — after install the panel reads LinuxGSM's real port(s)
-    # via `details` and opens every one, so an imperfect default self-corrects.
-    KNOWN_PORTS = {
-        # Source engine — default 27015
-        "gmod": 27015, "cs": 27015, "css": 27015, "cs2": 27015, "csgo": 27015,
-        "tf2": 27015, "hl2dm": 27015, "hldm": 27015, "hldms": 27015, "dods": 27015,
-        "ins": 27015, "insurgency": 27015, "nmrih": 27015, "l4d": 27015, "l4d2": 27015,
-        "zps": 27015, "fof": 27015, "gesource": 27015, "cscz": 27015, "tfc": 27015,
-        "ns": 27015, "ricochet": 27015, "dmc": 27015, "sfc": 27015, "bb2": 27015,
-        "unturned": 27015, "bt": 27015,
-        # Call of Duty — 28960
-        "cod": 28960, "coduo": 28960, "cod2": 28960, "cod4": 28960, "codwaw": 28960,
-        # Minecraft family
-        "mc": 25565, "pmc": 25565, "spigot": 25565, "paper": 25565, "bukkit": 25565,
-        "mcbe": 19132, "mcb": 19132,
-        # Survival / sandbox
-        "rust": 28015, "sdtd": 26900, "7d2d": 26900, "valheim": 2456, "vh": 2456,
-        "ark": 7777, "pz": 16261, "projectzomboid": 16261, "terraria": 7777,
-        "tshock": 7777, "factorio": 34197, "avorion": 27000, "eco": 3000, "vs": 42420,
-        # Mil-sim / shooters
-        "arma3": 2302, "squad": 7787, "mordhau": 7777, "kf": 7707, "kf2": 7777,
-        "q2": 27910, "q3": 27960, "ql": 27960, "et": 27960, "etl": 27960, "rtcw": 27960,
-        "xonotic": 26000, "ut99": 7777, "ut2k4": 7777,
-        # Voice / misc
-        "mumble": 64738, "ts3": 9987, "samp": 7777, "mta": 22003, "openttd": 3979,
-    }
     if not port or port == "27015":
-        port = str(KNOWN_PORTS.get(game_type, 27015))
+        port = str(_R15F_KNOWN_PORTS.get(game_type, 27015))
     # _port_or, not int(): a port has a RANGE, and `int(port)` carried none — so 0, -5 and
     # 99999 all reached the row below, the firewall verbs that take it, and the LinuxGSM
     # config written from it. A typo is corrected to the game's default; nothing out of range
@@ -670,7 +679,7 @@ def _pick_install_port(remote, remote_id, desired_port, game_type):
             final_port, port_changed = resolve_free_port(remote, remote_id, desired_port,
                                                          game_type)
     except (ConnectionError, OSError):
-        _log.warning("install: host %s unreachable while picking a port", remote.name)
+        _log.warning("install: host %s unreachable while picking a port", row_label(remote, "name"))
         return None, False, _form_err("Can't reach %s right now, so the panel can't check which ports "
                                       "are free. Check the host is up and try again." % remote.name,
                                       "manage_servers")
@@ -1470,9 +1479,15 @@ def _record_autostart(gs, on):
         db.session.commit()
 
 
+# The Minecraft games whose server stops at eula.txt on first start: vanilla Java (mc) and PaperMC
+# (pmc). Keyed by LinuxGSM shortname; "mcbe", "spigot" and "paper" were here and match no LinuxGSM
+# game (Bedrock is "mcb", and bedrock_server has no eula.txt).
+_R15F_EULA_GAMES = ("mc", "pmc")
+
+
 def _accept_game_eulas(remote, short_name, gs):
     """Accept the EULA of the games that stop at a prompt on first start: Minecraft and SCP:SL."""
-    if gs.game_type in ("mc", "mcbe", "pmc", "spigot", "paper"):
+    if gs.game_type in _R15F_EULA_GAMES:
         try:
             _sm.run_command(remote, _sm.game_user_cmd(
                 short_name, f"echo 'eula=true' > /home/{short_name}/serverfiles/eula.txt 2>/dev/null; true"),

@@ -26,7 +26,7 @@ eq("port-span: cod is single-port", _port_span("cod"), 1)
 eq("port-span: source game is single-port", _port_span("gmod"), 1)
 eq("port-span: unknown game defaults to 1", _port_span("totally-made-up"), 1)
 eq("port-span: rust reserves 2", _port_span("rust"), 2)
-eq("port-span: valheim reserves 3", _port_span("valheim"), 3)
+eq("port-span: valheim (vh) reserves 3", _port_span("vh"), 3)
 eq("port-span: case-insensitive", _port_span("RUST"), 2)
 
 
@@ -47,8 +47,8 @@ eq("port-pack: cod then coduo pack tightly",
    _pack(["cod", "coduo"], {"cod": 28960, "coduo": 28960}), [28960, 28961])
 eq("port-pack: 2 rust servers keep a 2-port block each",
    _pack(["rust", "rust"], {"rust": 28015}), [28015, 28017])
-eq("port-pack: 2 valheim servers keep a 3-port block each",
-   _pack(["valheim", "valheim"], {"valheim": 2456}), [2456, 2459])
+eq("port-pack: 2 valheim (vh) servers keep a 3-port block each",
+   _pack(["vh", "vh"], {"vh": 2456}), [2456, 2459])
 eq("port-block: a live listening port is skipped",
    _first_free_block(28960, 1, {28960, 28961}), 28962)
 # NO FREE BLOCK -> None, never a best guess. It used to return the last candidate it tried after
@@ -4235,12 +4235,12 @@ finally:
 # RunSSH off, or a tailnet ACL that refuses SSH to this node/user, the panel closed the only door
 # and discarded the key, with no way back from the UI.
 _mig_saved = (_sm_hosts.remote_check_tailscale, _sm_hosts._tailscale_conn_state,
-              _sm_hosts.ssh_test_connection, _sm_hosts.remote_ufw_close_port_22)
+              _sm_hosts.ssh_test_connection, _sm_hosts._r15c_delete_port_22)
 try:
     _mig_closed = []
     _sm_hosts.remote_check_tailscale = lambda s: {
         "running": True, "dns_name": "host.tail1234.ts.net", "tailscale_ip": "100.64.0.9"}
-    _sm_hosts.remote_ufw_close_port_22 = lambda s: (_mig_closed.append(getattr(s, "id", "?")),
+    _sm_hosts._r15c_delete_port_22 = lambda s: (_mig_closed.append(getattr(s, "id", "?")),
                                                     (True, "Port 22 rule removed from UFW"))[1]
     _mig_srv = NS(); _mig_srv.id, _mig_srv.host, _mig_srv.username = 7001, "203.0.113.9", "root"
 
@@ -4276,7 +4276,7 @@ try:
           "closed %s" % (_mig_closed,))
 finally:
     (_sm_hosts.remote_check_tailscale, _sm_hosts._tailscale_conn_state,
-     _sm_hosts.ssh_test_connection, _sm_hosts.remote_ufw_close_port_22) = _mig_saved
+     _sm_hosts.ssh_test_connection, _sm_hosts._r15c_delete_port_22) = _mig_saved
 
 # It used to call _tailscale_conn_state()[0], which collapses "Tailscale is not running" and "the
 # probe did not run" into the same False, and whose command (`… || echo '{}'`) always exits 0 so the

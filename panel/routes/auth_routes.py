@@ -86,6 +86,10 @@ def _register_sign_in(app):
                 UserSession.query.filter_by(sid=sid, user_id=current_user.id).delete()
             else:
                 current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
+                # The bump signed out every device, so clear every row too: left, they listed as
+                # live sessions on the account page until they idled out.
+                from panel.db.models import UserSession
+                UserSession.query.filter_by(user_id=current_user.id).delete()
             db.session.commit()
             revoked = True
         except Exception:

@@ -1336,6 +1336,11 @@ def _sink_bound_names(src, helpers):
     for fn in helpers:
         for m in re.finditer(r"\b%s\s*\(\s*([A-Za-z_$][\w$]*)\s*\)" % re.escape(fn), src):
             names.add(m.group(1))
+    # A buffer handed to tfHtml's `{html: …}`: the scan strips the whole tfHtml call as an escaper,
+    # and each `{html: …}` value is a sink of its own, so a bare-name one was traced by nothing and
+    # a raw value accumulated into it reached innerHTML unseen (review 1011e).
+    for m in re.finditer(r"[{,]\s*['\"]?html['\"]?\s*:\s*([A-Za-z_$][\w$]*)\s*[,}]", src):
+        names.add(m.group(1))
     return names
 
 
@@ -1446,11 +1451,16 @@ def _safe_locals(src):
     return safe
 
 
-for _p in sorted((ROOT / "static" / "js").glob("*.js")):
-    _src = _p.read_text(encoding="utf-8")
-    _bound = _sink_bound_names(_src, _html_sink_helpers(_src))
+def _r15d_sink_sigs(_src):
+    """The unescaped-value signatures one script's HTML sinks hold (Cases A and B below)."""
     _helpers = _safe_markup_helpers(_src)
     _safe = _safe_locals(_src)
+    return _r15d_case_a(_src, _helpers, _safe) | _r15d_case_b(_src, _helpers, _safe)
+
+
+def _r15d_case_a(_src, _helpers, _safe):
+    """Case A of the scan: markup handed straight to a sink helper."""
+    _sigs = set()
     # Case A: the markup is passed straight to a sink helper as an EXPRESSION, not via a
     # variable — `setModalBody('<p>Old host: <code>' + data.old_host + '</code>' + …)`. The bare-name
     # scan above cannot see this one, and it is where two of the four shipped values lived.
@@ -1463,8 +1473,14 @@ for _p in sorted((ROOT / "static" / "js").glob("*.js")):
             _dyn = sorted({d for pat in _ADJACENT for d in re.findall(pat, _clean)}
                           - set(_safe) - _PANEL_GLOBALS)
             if _dyn:
-                _found.setdefault(_p.name, set()).add(",".join(_dyn))
+                _sigs.add(",".join(_dyn))
+    return _sigs
 
+
+def _r15d_case_b(_src, _helpers, _safe):
+    """Case B of the scan: markup accumulated into a buffer that reaches a sink."""
+    _sigs = set()
+    _bound = _sink_bound_names(_src, _html_sink_helpers(_src))
     # Case B: the markup is accumulated into a variable that later reaches a sink.
     for _m in _ACCUM_MARKUP.finditer(_src):
         _name = _m.group(1)
@@ -1477,7 +1493,28 @@ for _p in sorted((ROOT / "static" / "js").glob("*.js")):
         _dyn = sorted({d for pat in _pats for d in re.findall(pat, _clean)}
                       - set(_safe) - _PANEL_GLOBALS)
         if _dyn:
-            _found.setdefault(_p.name, set()).add(",".join(_dyn))
+            _sigs.add(",".join(_dyn))
+    return _sigs
+
+
+for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+    _sigs_p = _r15d_sink_sigs(_p.read_text(encoding="utf-8"))
+    if _sigs_p:
+        _found.setdefault(_p.name, set()).update(_sigs_p)
+
+# The {html: buf} shape, planted (control): a raw value accumulated into a buffer that reaches
+# innerHTML only through tfHtml's {html: …} is named, as it is when the buffer is assigned directly.
+_r15d_sink_ctl = {
+    "{html: buf}": _r15d_sink_sigs(
+        "function zz(x, el) {\n  var buf = '';\n  buf += '<b>' + x.name + '</b>';\n"
+        "  el.innerHTML = tfHtml('Hello {v}', {v: {html: buf}});\n}\n"),
+    "innerHTML = buf": _r15d_sink_sigs(
+        "function zz(x, el) {\n  var buf = '';\n  buf += '<b>' + x.name + '</b>';\n"
+        "  el.innerHTML = buf;\n}\n"),
+}
+check(all("x.name" in _v for _v in _r15d_sink_ctl.values()),
+      "static/js: ...a markup buffer handed to tfHtml's {html: …} is traced like one assigned to "
+      "innerHTML (control)", repr(_r15d_sink_ctl))
 
 _baseline = json.loads((ROOT / "tests" / "html_sink_baseline.json").read_text(encoding="utf-8"))
 _new = sorted("%s: %s" % (f, sig) for f, sigs in _found.items()

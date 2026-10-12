@@ -9,7 +9,7 @@
   function rel(iso){
     if(!iso) return '';
     var s = (Date.now() - new Date(iso).getTime())/1000;
-    if(s < 60) return 'just now';
+    if(s < 60) return t('just now');   // a tf value is never translated: the caller's sentence takes it as is
     if(s < 3600) return tf('{n}m ago', {n: Math.floor(s/60)});
     if(s < 86400) return tf('{n}h ago', {n: Math.floor(s/3600)});
     return tf('{n}d ago', {n: Math.floor(s/86400)});

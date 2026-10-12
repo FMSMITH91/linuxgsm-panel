@@ -936,6 +936,27 @@ check("unicode: isdecimal() still accepts a non-ASCII DECIMAL digit, so nothing 
 # and 13 sites had grown back outside it (routes, the debug report, the root helper — whose
 # `#<gid>` sudoers parse raised on "#¹"). Every panel module, the root scripts, tools/*.py and the
 # extensionless helper, as the `$`-anchor sweep reads them.
+# Read by TOKENS, not by `line.split("#")`: that took the first "#" on a line for a comment, so
+# `item.startswith("#") and item[1:].isdigit()` — a "#" STRING before the call — was cut there and
+# never read. That is how the helper's `#<uid>` guard grew back unseen in the sweep that removed
+# every other one. A comment or a string that mentions the call is not one.
+import tokenize as _isd_tok                                                        # noqa: E402
+
+
+def _isdigit_calls(text):
+    """Line numbers of every `.isdigit(` call in Python source `text`."""
+    toks = [t for t in _isd_tok.generate_tokens(iter(text.splitlines(True)).__next__)
+            if t.type not in (_isd_tok.COMMENT, _isd_tok.NL, _isd_tok.NEWLINE)]
+    return [b.start[0] for a, b, c in zip(toks, toks[1:], toks[2:])
+            if a.string == "." and b.type == _isd_tok.NAME and b.string == "isdigit"
+            and c.string == "("]
+
+
+check("unicode: the .isdigit() sweep reads a call that follows a \"#\" string on its line, and "
+      "not one that is only named in a comment or a string",
+      _isdigit_calls('ok = item.startswith("#") and item[1:].isdigit()\n'
+                     'x = 1  # never s.isdigit()\ny = ".isdigit()"\n') == [1],
+      repr(_isdigit_calls('ok = item.startswith("#") and item[1:].isdigit()\n')))
 _isdigit_users, _isdigit_read = [], 0
 _isdigit_files = (sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True))
                   + sorted(glob.glob(os.path.join(_root, "*.py")))
@@ -945,12 +966,17 @@ for _fp2 in _isdigit_files:
     if "node_modules" in _fp2:
         continue
     _isdigit_read += 1
-    for _i, _line in enumerate(open(_fp2, encoding="utf-8"), 1):
-        if ".isdigit()" in _line.split("#", 1)[0]:
+    with open(_fp2, encoding="utf-8") as _isd_fh:
+        for _i in _isdigit_calls(_isd_fh.read()):
             _isdigit_users.append("%s:%d" % (os.path.relpath(_fp2, _root), _i))
 check("unicode: no module uses .isdigit() — isdecimal() is the one that matches int()",
       _isdigit_read >= 100 and not _isdigit_users,
       "%d files read; %s" % (_isdigit_read, ", ".join(_isdigit_users[:4])))
+_isd_ctl = [_n.lineno for _n in _ast_scan.walk(_ast_scan.parse(
+    'def f(item):\n    return item.startswith("#") and item[1:].isdigit()\n# x.isdigit() in a comment\n'))
+    if isinstance(_n, _ast_scan.Attribute) and _n.attr == "isdigit"]
+check("unicode: ...an .isdigit() after a '#' inside a string is found, one in a comment is not (control)",
+      _isd_ctl == [2], repr(_isd_ctl))
 
 # The crashing input itself, replayed.
 from panel.ops import system_ops as _so_top
@@ -974,10 +1000,12 @@ except Exception as _e:
 # raised. A new escalation written as a shell string fails this test instead of going unnoticed.
 import ast as _ast
 
-_ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py",
-                     "panel/services/notifications.py", "backup.py", "db_maintenance.py",
-                     "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 2, "_sudo_sh": 0}   # measured at the time of writing; lower only
+# EVERY panel module and root script, not a hand-kept list: a list of nine names missed
+# host_reboot's escalation probe (#399) for a release, so the "tight" ceiling and SECURITY.md both
+# stated 2 while there were 3 (review 1011e) — the same fixed-list shape the isdigit gate dropped.
+_ESCALATION_PATHS = (sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True))
+                     + sorted(glob.glob(os.path.join(_root, "*.py"))))
+_CEILING = {"sudo=True": 3, "_sudo_sh": 0}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
     """True when this escalation is NOT a call site composing a shell string.
@@ -1005,8 +1033,10 @@ def _is_dispatch(call):
 
 
 _census = {"sudo=True": 0, "_sudo_sh": 0}
-for _f in _ESCALATION_FILES:
-    _tree = _ast.parse("\n".join(open(_p, encoding="utf-8").read() for _p in _modfiles(_f)))
+_census_sites = []
+for _f in _ESCALATION_PATHS:
+    with open(_f, encoding="utf-8") as _esc_fh:
+        _tree = _ast.parse(_esc_fh.read())
     for _n in _ast.walk(_tree):
         if not isinstance(_n, _ast.Call):
             continue
@@ -1016,6 +1046,11 @@ for _f in _ESCALATION_FILES:
             if (_k.arg == "sudo" and isinstance(_k.value, _ast.Constant)
                     and _k.value.value is True and not _is_dispatch(_n)):
                 _census["sudo=True"] += 1
+                _census_sites.append("%s:%d" % (os.path.relpath(_f, _root), _n.lineno))
+check("escalation census: it reads every panel module and root script",
+      len(_ESCALATION_PATHS) >= 100 and any(_p.endswith(os.path.join("services", "host_reboot.py"))
+                                           for _p in _ESCALATION_PATHS),
+      "%d files" % len(_ESCALATION_PATHS))
 
 # The exclusion above could go over-broad and quietly shrink the number the ratchet guards — a
 # _is_dispatch() that returned True for everything would report zero remaining work and still pass.
@@ -1024,8 +1059,9 @@ for _f in _ESCALATION_FILES:
 # _run_verb in system_ops), plus two for write_content_cron, whose destination is per-user and so
 # cannot live in WRITE_TARGETS. Raise this only when the verb layer genuinely gains another one.
 _excluded = 0
-for _f in _ESCALATION_FILES:
-    _tree = _ast.parse("\n".join(open(_p, encoding="utf-8").read() for _p in _modfiles(_f)))
+for _f in _ESCALATION_PATHS:
+    with open(_f, encoding="utf-8") as _esc_fh:
+        _tree = _ast.parse(_esc_fh.read())
     for _n in _ast.walk(_tree):
         if not isinstance(_n, _ast.Call):
             continue
@@ -1039,7 +1075,8 @@ check("escalation census: the exclusion covers exactly the 6 known transports",
 for _kind, _limit in _CEILING.items():
     check("escalation census: %s sites <= %d (currently %d) — ratchet, never raise"
           % (_kind, _limit, _census[_kind]),
-          _census[_kind] <= _limit, "found %d" % _census[_kind])
+          _census[_kind] <= _limit, "found %d%s" % (
+              _census[_kind], (": " + ", ".join(_census_sites)) if _kind == "sudo=True" else ""))
     # ...and the ceiling must be TIGHT. A `<=` bound cannot notice itself being raised — mutation
     # -testing this gate showed exactly that: changing 3 to 9 broke nothing, so the "never raise"
     # half was a comment, not a check. Requiring equality makes converting a site a two-line edit
@@ -1047,8 +1084,9 @@ for _kind, _limit in _CEILING.items():
     # rather than something that quietly fits under the slack.
     check("escalation census: the %s ceiling is tight — lower it when a site converts" % _kind,
           _limit == _census[_kind],
-          "ceiling %d but %d site(s) found — set _CEILING[%r] = %d"
-          % (_limit, _census[_kind], _kind, _census[_kind]))
+          "ceiling %d but %d site(s) found — set _CEILING[%r] = %d (%s)"
+          % (_limit, _census[_kind], _kind, _census[_kind],
+             ", ".join(_census_sites) if _kind == "sudo=True" else ""))
 
 # tailscale-serve is the only verb whose upstream URL is ASSEMBLED on the far side rather than
 # handed in. These prove a caller cannot aim Tailscale Serve at anything but loopback on this box —
@@ -1157,7 +1195,10 @@ try:
         with open(_cfgp, "w", encoding="utf-8") as _fh:
             _fh.write("db_path=%s\n" % _bad)
         _helper.PANEL_CONF = _cfgp
-        check("helper: db-repair refuses db_path %r" % _bad,
+        # Named by the path's shape, not the temp dir: a name holding a mkdtemp path differs from run
+        # to run, which made it read as "ran only as root" in ci.yml's root step (review 1011e).
+        check("helper: db-repair refuses db_path %r"
+              % (_bad if not os.path.isabs(_bad) else "<tmp>/" + os.path.basename(_bad)),
               _helper.do_panel_db_repair([], None) == 1)
 
     # With a real database configured but NO root-owned db_maintenance beside the helper, it must
@@ -1520,33 +1561,99 @@ for _ in range(8):  # at most 8 rounds: it stops at the first that changes nothi
     if _stub_next == _stub_carry:
         break
     _stub_carry = _stub_next
-_stub_bad, _stub_seen = [], 0
+_r15d_mod_aliases_cache = {}
+
+
+def _r15d_attr_module(dotted, attr):
+    """The repository module `dotted.attr` names, else None.
+
+    A submodule, or a module `dotted` imports under that name (`from panel.ops import system_ops
+    as so`).
+    """
+    if _r14d_modfile(dotted + "." + attr):
+        return dotted + "." + attr
+    if dotted not in _r15d_mod_aliases_cache:
+        with open(_r14d_modfile(dotted), encoding="utf-8") as _am_fh:
+            _r15d_mod_aliases_cache[dotted] = _r14d_aliases(_ast_scan.parse(_am_fh.read()), {})
+    return _r15d_mod_aliases_cache[dotted].get(attr)
+
+
+def _r15d_stub_store(node):
+    """(the object, the name) a stub store or `setattr(x, "lit", …)` sets, else (None, None)."""
+    if isinstance(node, _ast_scan.Attribute) and isinstance(node.ctx, _ast_scan.Store):
+        return node.value, node.attr
+    _args = getattr(node, "args", None) or []
+    if (isinstance(node, _ast_scan.Call) and getattr(node.func, "id", "") == "setattr"
+            and len(_args) >= 2 and isinstance(getattr(_args[1], "value", None), str)):
+        return _args[0], _args[1].value
+    return None, None
+
+
+def _r15d_stub_target(node, alias):
+    """(module, name, text) a stub store or `setattr(x, "lit", …)` lands on, else None.
+
+    A nested target (`_mon6.so.ufw_deny_ip = fake`) is followed through each module's own import
+    bindings: a gate that read only `alias.name` skipped 113 of these (review 1011e), so renaming
+    system_ops.ufw_deny_ip left that stub creating a new attribute while the real writer ran.
+    """
+    _obj, _name = _r15d_stub_store(node)
+    if _obj is None:
+        return None
+    _chain = []
+    while isinstance(_obj, _ast_scan.Attribute):
+        _chain.insert(0, _obj.attr)
+        _obj = _obj.value
+    if not isinstance(_obj, _ast_scan.Name) or _obj.id not in alias:
+        return None
+    _mod = alias[_obj.id]
+    for _a in _chain:
+        _mod = _r15d_attr_module(_mod, _a)
+        if _mod is None:
+            return None        # a non-module object (a stand-in, a class): not a module stub
+    return _mod, _name, ".".join([_obj.id] + _chain + [_name])
+
+
+_stub_bad, _stub_seen, _stub_nested = [], 0, 0
 _stub_builtins = set(dir(__import__("builtins")))
 for _f, _tree in _stub_trees.items():
     _alias = _stub_alias_of[_f]
     for _n in _ast_scan.walk(_tree):
-        if not (isinstance(_n, _ast_scan.Attribute) and isinstance(_n.ctx, _ast_scan.Store)):
+        _tgt = _r15d_stub_target(_n, _alias)
+        if _tgt is None:
             continue
-        if not isinstance(_n.value, _ast_scan.Name):
+        _mod, _attr, _text = _tgt
+        if _attr.startswith("__"):
             continue
-        _mod = _alias.get(_n.value.id)
-        if not _mod or _n.attr.startswith("__"):
-            continue
+        _stub_nested += _text.count(".") > 1 or isinstance(_n, _ast_scan.Call)
         # nosudo_runner plants _real_subprocess as a MARKER the module is meant not to have; it is
         # read back with getattr(..., None). That is the one legitimate case.
-        if _n.attr == "_real_subprocess":
+        if _attr == "_real_subprocess":
             continue
         _stub_seen += 1
         # A builtin planted as a module global (`SO.open = fake`) does take effect: the module's
         # globals are searched before builtins. That is a stub of a name the module uses.
-        if _n.attr in _stub_builtins:
+        if _attr in _stub_builtins:
             continue
-        if _n.attr not in _r14d_stub_names(_mod):
-            _stub_bad.append("%s:%d %s.%s (%s has no such name)"
-                             % (os.path.basename(_f), _n.lineno, _n.value.id, _n.attr, _mod))
+        if _attr not in _r14d_stub_names(_mod):
+            _stub_bad.append("%s:%d %s (%s has no such name)"
+                             % (os.path.basename(_f), _n.lineno, _text, _mod))
 check("every stub is installed on a module that actually defines the name",
-      _stub_seen >= 1000 and not _stub_bad,
-      "%d stub assignments read; %s" % (_stub_seen, "; ".join(sorted(set(_stub_bad))[:4])))
+      _stub_seen >= 1000 and _stub_nested >= 100 and not _stub_bad,
+      "%d stub assignments read (%d nested or by setattr); %s"
+      % (_stub_seen, _stub_nested, "; ".join(sorted(set(_stub_bad))[:4])))
+_r15d_nest_ctl_al = {"_m": "panel.services.monitoring"}
+_r15d_nest_ctl = [_r15d_stub_target(_n, _r15d_nest_ctl_al) for _n in _ast_scan.walk(_ast_scan.parse(
+    "_m.so.ufw_deny_ipx = 1\nsetattr(_m.so, 'run_comandx', 1)\n_m.so.ufw_deny_ip = 1\n"))]
+_r15d_nest_ctl = [_t for _t in _r15d_nest_ctl if _t]
+check("stub gate: a nested `alias.mod.name` store and a setattr(…, \"name\") are resolved to the "
+      "module they land on, and a misspelling through each is named (control)",
+      [(_m, _a) for _m, _a, _ in _r15d_nest_ctl] == [("panel.ops.system_ops", "ufw_deny_ipx"),
+                                                    ("panel.ops.system_ops", "run_comandx"),
+                                                    ("panel.ops.system_ops", "ufw_deny_ip")]
+      and "ufw_deny_ipx" not in _r14d_stub_names("panel.ops.system_ops")
+      and "run_comandx" not in _r14d_stub_names("panel.ops.system_ops")
+      and "ufw_deny_ip" in _r14d_stub_names("panel.ops.system_ops"),
+      repr(_r15d_nest_ctl))
 _stub_ctl_tree = _ast_scan.parse(
     "from panel.ops import system_ops as _zz\nimport panel.ops.ssh_manager._core as _cc\n"
     "from unit.part12 import _p9_core\n")
@@ -1576,6 +1683,54 @@ check("stub gate: a name bound in a top-level try or if is a module name (app.py
       _tn_names >= set("PABCDEFGH") and "fn" in _tn_names, repr(sorted(_tn_names)))
 check("stub gate: ...and a name bound inside a function is not", "INNER" not in _tn_names,
       repr(sorted(_tn_names)))
+
+# A stub helper that saves the original into a dict keyed by (module, name) has to keep the FIRST
+# value it saw. `saved[(mod, name)] = getattr(mod, name)` re-saves on every call, so a name stubbed
+# twice records the first STUB as "the original", and the restore leaves that stub in place for
+# the rest of the run: smoke part06 left run_command a canned sudo refusal that way (review 1011e).
+def _r15d_is_getattr(node):
+    return isinstance(node, _ast_scan.Call) and getattr(node.func, "id", "") == "getattr"
+
+
+def _r15d_resave_target(node):
+    """The dict name `D[...] = getattr(...)` saves into, else None."""
+    if not (isinstance(node, _ast_scan.Assign) and _r15d_is_getattr(node.value)):
+        return None
+    return next((_t.value.id for _t in node.targets if isinstance(_t, _ast_scan.Subscript)
+                 and isinstance(_t.value, _ast_scan.Name)), None)
+
+
+def _r15d_resaving_helpers(tree):
+    """[(line, dict name)] for each `D[...] = getattr(...)` inside a function, and a count.
+
+    The count is how many `D.setdefault(..., getattr(...))` saves the tree holds.
+    """
+    bad, good = [], 0
+    for _fn in _ast_scan.walk(tree):
+        if not isinstance(_fn, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef)):
+            continue
+        for _n in _ast_scan.walk(_fn):
+            _d = _r15d_resave_target(_n)
+            if _d is not None:
+                bad.append((_n.lineno, _d))
+            good += (isinstance(_n, _ast_scan.Call) and getattr(_n.func, "attr", "") == "setdefault"
+                     and any(_r15d_is_getattr(_a) for _a in _n.args))
+    return bad, good
+
+
+_r15d_resave_bad, _r15d_resave_good = [], 0
+for _f, _tree in _stub_trees.items():
+    _b, _g = _r15d_resaving_helpers(_tree)
+    _r15d_resave_good += _g
+    _r15d_resave_bad += ["%s:%d %s" % (os.path.relpath(_f, _root), _l, _d) for _l, _d in _b]
+check("stub helpers: a (module, name)-keyed save keeps the first value, not the last stub",
+      _r15d_resave_good >= 9 and not _r15d_resave_bad,
+      "%d setdefault saves; re-saving: %s" % (_r15d_resave_good, _r15d_resave_bad))
+_r15d_resave_ctl = _r15d_resaving_helpers(_ast_scan.parse(
+    "S = {}\ndef st(mod, name, fn):\n    S[(mod, name)] = getattr(mod, name)\n    setattr(mod, name, fn)\n"
+    "def ok(mod, name, fn):\n    S.setdefault((mod, name), getattr(mod, name))\n"))
+check("stub helpers: ...a re-saving helper is named, and a setdefault one is not (control)",
+      _r15d_resave_ctl == ([(3, "S")], 1), repr(_r15d_resave_ctl))
 
 # ── The installer must not build a SECOND panel beside an existing one ────────────────────────
 # IS_UPDATE asks "is there an app.py and a unit file where I am about to install?" — but where that
@@ -4795,6 +4950,18 @@ _invis_re = re.compile("[\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069]")
 _invis_ext = (".py", ".js", ".html", ".css", ".scss", ".sh", ".md", ".yml", ".yaml", ".json",
               ".txt", ".toml", ".cfg", ".in", ".service", ".conf")
 _invis_hits = []
+
+
+def _r15d_invis_in(text):
+    """[(line, codepoint)] for each line holding one.
+
+    Split on newlines, not with splitlines(): that splits AT U+2028/U+2029 and drops them, so the
+    two line separators this names could never be found.
+    """
+    return [(_ln, ord(_m.group())) for _ln, _line in enumerate(text.split("\n"), 1)
+            for _m in [_invis_re.search(_line)] if _m]
+
+
 for _dp, _dns, _fns in os.walk(_root):
     _dns[:] = [_d for _d in _dns if _d not in (".git", ".claude", ".venv", "venv", "node_modules",
                                                "data", "__pycache__", "vendor")]
@@ -4807,13 +4974,13 @@ for _dp, _dns, _fns in os.walk(_root):
             _ftext = open(_fp, encoding="utf-8").read()
         except (OSError, UnicodeDecodeError):
             continue
-        for _ln, _line in enumerate(_ftext.splitlines(), 1):
-            _m = _invis_re.search(_line)
-            if _m:
-                _invis_hits.append("%s:%d U+%04X" % (os.path.relpath(_fp, _root), _ln,
-                                                     ord(_m.group())))
+        _invis_hits += ["%s:%d U+%04X" % (os.path.relpath(_fp, _root), _ln, _cp)
+                        for _ln, _cp in _r15d_invis_in(_ftext)]
 check("source: no literal bidi control, zero-width or line-separator character (use an escape)",
       not _invis_hits, "; ".join(_invis_hits[:5]))
+_r15d_invis_ctl = _r15d_invis_in("a = 1\n" + "x = 'y\u2028z'\n" + "b = '\u2029'\n" + "c = 1\n")
+check("source: ...a literal U+2028 or U+2029 inside a line is found (control)",
+      _r15d_invis_ctl == [(2, 0x2028), (3, 0x2029)], repr(_r15d_invis_ctl))
 # ...and the errors[] guard: a file bandit cannot PARSE contributes zero results and exits 0, so
 # without this the module holding the privilege boundary could be reported clean for not being
 # read at all. Proven by execution with a syntax error injected into system_ops.py.
@@ -4858,7 +5025,8 @@ try:
         with open(_rst_cfg, "w", encoding="utf-8") as _fh:
             _fh.write("data_dir=%s\n" % _bad)
         _helper.PANEL_CONF = _rst_cfg
-        check("helper: restore refuses data_dir %r" % _bad,
+        check("helper: restore refuses data_dir %r"   # the temp dir out of the name, as for db_path
+              % (_bad if not os.path.isabs(_bad) else "<tmp>/" + os.path.basename(_bad)),
               _helper.do_panel_restore([], None) == 1)
 
     # A real data_dir but nothing staged must refuse too — otherwise a stray call would stop the
@@ -5539,7 +5707,8 @@ try:
             os.environ, PATH=_cc_bin + os.pathsep + os.environ["PATH"], CC_LOG=_log,
             CODACY_PROJECT_TOKEN=token, HEAD_SHA=sha, HEAD_BRANCH=branch, WR_EVENT=event,
             REPORT_DIR=_art, JS_REPORT_DIR=_jsart, RUNNER_TEMP=_rt, VERSION="0", SHA256="0" * 64,
-            CC_REPORTER=_cc_fake, CC_FAIL_LANG=fail_lang))
+            CC_REPORTER=_cc_fake, CC_FAIL_LANG=fail_lang,
+            TMPDIR=_d))   # the step's `cd "$(mktemp -d)"` lands here, not in /tmp for good
 
         def _read(path):
             return open(path).read() if os.path.exists(path) else ""
@@ -7551,8 +7720,11 @@ for _py in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursiv
             continue
         _lits = _literal_names(_fn)
         for _c in _sh_ast.walk(_fn):
-            if (isinstance(_c, _sh_ast.Call) and isinstance(_c.func, _sh_ast.Name)
-                    and _c.func.id in _SHELL_RUNNERS and _c.args):
+            # By name OR attribute (`so._run(...)`): a call spelled through a module alias was
+            # skipped, not judged (review 1011e).
+            if (isinstance(_c, _sh_ast.Call)
+                    and getattr(_c.func, "id", getattr(_c.func, "attr", None)) in _SHELL_RUNNERS
+                    and _c.args):
                 _shell_seen += 1
                 if not _shell_part_ok(_c.args[0], _lits):
                     _shell_bad.append("%s:%d in %s()" % (os.path.basename(_py), _c.lineno, _fn.name))
@@ -8449,7 +8621,7 @@ _pl_o_send, _pl_o_cap = _sm_game._core.send_console_command, _sm_game.capture_co
 try:
     # The send prints where the pane stood (mark=True); _send_and_capture needs it to read only
     # the reply that came after.
-    _sm_game._core.send_console_command = lambda *a, **k: ("PANE_MARK 0 0\n", "", 0)
+    _sm_game._core.send_console_command = lambda *a, **k: ("PANE_MARK 0 0 80\n", "", 0)
     _sm_game.capture_console = lambda *a, **k: ("NO_SESSION", "", 3)
     check("players: a stopped server reads as UNKNOWN, not as empty",
           _sm_game.console_player_list(None, "u", "cod", selfname="codserver") is None)
@@ -8481,7 +8653,7 @@ try:
     check("players: ...and console_status says unknown too, rather than ([], None)",
           _stale_cs == (None, None), str(_stale_cs))
     # Positive control: with the send accepted, the very same pane still parses.
-    _sm_game._core.send_console_command = lambda *a, **k: ("PANE_MARK 0 0\n", "", 0)
+    _sm_game._core.send_console_command = lambda *a, **k: ("PANE_MARK 0 0 80\n", "", 0)
     _live = _sm_game.console_player_list(None, "u", "gmod", selfname="gmodserver")
     check("players: ...while a delivered `status` still parses that table",
           [p["name"] for p in (_live or [])] == ["Ghost"], str(_live))
@@ -11207,9 +11379,10 @@ check("terminal: a handshake that never completes says so, instead of 'Connectin
       "wrong path is a page that claims it is connecting and never stops")
 
 # ── a message must not send the reader to a file that is not there ────────────────────────────
-# PERMISSION_DESCRIPTIONS[USE_TERMINAL] read "powerful — see SECURITY.md", and SECURITY.md does
-# not exist in this repo — so the one permission whose consequences most need explaining pointed
-# an admin at nothing. Written by me, in the commit that added the permission.
+# PERMISSION_DESCRIPTIONS[USE_TERMINAL] read "powerful — see SECURITY.md", and no SECURITY.md was
+# where the reader would look — so the one permission whose consequences most need explaining
+# pointed an admin at nothing. Written by me, in the commit that added the permission. (It lives
+# in .github/ now, one of the places GitHub reads a security policy from, so that counts too.)
 #
 # Scanned across the strings the panel SHOWS, not just that table: a docs pointer is only worth
 # printing if it resolves.
@@ -11221,7 +11394,7 @@ for _pyf6 in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recurs
             continue                      # a comment is for a reader of the source, not a user
         for _m6 in re.finditer(r"""["']([^"']*?\b([A-Z][A-Za-z0-9_-]*\.md)\b[^"']*)["']""", _line6):
             _fname6 = _m6.group(2)
-            if not os.path.exists(os.path.join(_root, _fname6)):
+            if not any(os.path.exists(os.path.join(_root, _d6, _fname6)) for _d6 in ("", ".github", "docs")):
                 _doc_refs6.append("%s:%d -> %s" % (_rel6, _lineno6, _fname6))
 check("docs: no user-facing string points at a file that does not exist",
       not _doc_refs6,

@@ -29,7 +29,7 @@ _r12d_bad_from = len(_r12d_shape_bad)
 
 
 def _su_stub(mod, name, fn):
-    _su_saved[(mod, name)] = getattr(mod, name)
+    _su_saved.setdefault((mod, name), getattr(mod, name))
     setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 
@@ -83,7 +83,7 @@ _cf_saved, _cf_calls, _cf_cron = {}, [], _R12dCrontab()
 
 
 def _cf_stub(mod, name, fn):
-    _cf_saved[(mod, name)] = getattr(mod, name)
+    _cf_saved.setdefault((mod, name), getattr(mod, name))
     setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 
@@ -181,7 +181,7 @@ _ur_saved, _ur_calls, _ur_cron = {}, [], _R12dCrontab()
 
 
 def _ur_stub(mod, name, fn):
-    _ur_saved[(mod, name)] = getattr(mod, name)
+    _ur_saved.setdefault((mod, name), getattr(mod, name))
     setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 
@@ -283,7 +283,7 @@ _pu_saved, _pu_state, _pu_cron = {}, {"started": False}, _R12dCrontab()
 
 
 def _pu_stub(mod, name, fn):
-    _pu_saved[(mod, name)] = getattr(mod, name)
+    _pu_saved.setdefault((mod, name), getattr(mod, name))
     setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 
@@ -370,7 +370,7 @@ _lv_saved, _lv_cmds = {}, []
 
 
 def _lv_stub(mod, name, fn):
-    _lv_saved[(mod, name)] = getattr(mod, name)
+    _lv_saved.setdefault((mod, name), getattr(mod, name))
     setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 

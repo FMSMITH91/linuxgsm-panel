@@ -559,14 +559,26 @@ def ufw_allows_iface_in(rules, iface):
     return False
 
 
+# A protocol ufw prints on a rule that cannot carry TCP, so never sshd or the panel: udp, and the
+# six ufw names that take no port (ufw's util.portless_protocols: a GRE or 6in4 tunnel, IPsec,
+# keepalived's VRRP). ufw prints a source-only rule's protocol after its From column ("<ip>/gre").
+_R15A_NOT_TCP_RE = re.compile(r"/(?:udp|esp|ah|gre|vrrp|ipv6|igmp)\Z", re.IGNORECASE)
+
+
+def _r15a_not_tcp(column):
+    """Whether a To / From column ends in a protocol that cannot carry TCP (_R15A_NOT_TCP_RE)."""
+    return bool(_R15A_NOT_TCP_RE.search(str(column or "").strip()))
+
+
 def _r14a_allows_all(r):
-    """Whether a whole-interface rule `r` is an ALLOW/LIMIT for every protocol, not UDP alone.
+    """Whether a whole-interface rule `r` is an ALLOW/LIMIT that carries TCP, not UDP alone.
 
     ufw prints a source-only rule's protocol on the From side (`ufw allow in on tailscale0 from
     <net> proto udp` is To "Anywhere on tailscale0", From "<net>/udp"), and that one carries no SSH.
+    Nor does `... proto gre` (or esp, ah, vrrp, ipv6, igmp): only `/udp` was tested, so a tunnel's
+    allow on tailscale0 read as letting everything in and unlocked the tailnet-only lockdown.
     """
-    return (r.get("action") in ("ALLOW", "LIMIT")
-            and not (r.get("from") or "").strip().lower().endswith("/udp"))
+    return r.get("action") in ("ALLOW", "LIMIT") and not _r15a_not_tcp(r.get("from"))
 
 
 def ufw_allow_tailscale(ts_interface=None):

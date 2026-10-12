@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ remote.display_name }} — Terminal{% endblock %}
+{% block title %}{{ t('%s — Terminal')|format(remote.display_name) }}{% endblock %}
 
 {% block head %}
 <link rel="stylesheet" href="{{ asset_url('vendor/xterm/xterm.min.css') }}">

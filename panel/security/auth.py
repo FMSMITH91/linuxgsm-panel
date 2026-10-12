@@ -1654,17 +1654,34 @@ _AUDIT_DETAIL_MAX = 8192
 def _audit_cut(value, limit, marker="", visible=False):
     """`value` as text, cut to `limit` characters (then `marker` appended) when longer.
 
-    visible=True (the target and the detail): what a reader could not see is written escaped
-    first (_r14b_audit_visible), cut before escaping too so a huge body is never walked whole. The
-    username is left as it is: the brute-force alert counts a super admin's failures by matching
-    it exactly.
+    visible=True (every text column a reader sees): what a reader could not see is written
+    escaped first (_r14b_audit_visible), cut before escaping too so a huge body is never walked
+    whole.
     """
     text = "" if value is None else str(value)
     longer = len(text) > limit
-    if visible:
-        text = _r14b_audit_visible(text[:limit])
-        longer = longer or len(text) > limit
-    return text[:limit] + marker if longer else text
+    if not visible:
+        return text[:limit] + marker if longer else text
+    shown = _r14b_audit_visible(text[:limit])
+    if not longer and len(shown) <= limit:
+        return shown
+    return _r15b_cut_whole_escapes(text[:limit], limit) + marker
+
+
+def _r15b_cut_whole_escapes(text, limit):
+    """`text` written as _r14b_audit_visible does, cut to `limit` characters between escapes.
+
+    The escaped text was cut at `limit` as it stood, so a cut could fall inside an escape and the
+    row ended in a cut escape (a backslash, `u20`) — neither the character nor its escape.
+    """
+    out, n = [], 0
+    for c in text:
+        piece = _r14b_audit_visible(c)
+        if n + len(piece) > limit:
+            break
+        out.append(piece)
+        n += len(piece)
+    return "".join(out)
 
 
 def _r14b_audit_visible(text):
@@ -1679,6 +1696,18 @@ def _r14b_audit_visible(text):
     if text.isprintable():
         return text
     return "".join(c if c.isprintable() or c in "\n\t" else ascii(c)[1:-1] for c in text)
+
+
+def audit_username(name):
+    """`name` as an audit row's User column holds it: cut to the column, and escaped.
+
+    The column an unauthenticated visitor writes — a failed or throttled sign-in records the
+    ATTEMPTED username — so a U+202E there reordered the User column on the audit page, the
+    spoof the target and detail are escaped against. The brute-force alert counts a super admin's
+    failures by this column, and matches it through here too; a name username_problem accepted
+    has nothing to escape, so the stored text is the name itself.
+    """
+    return _audit_cut(name, 80, visible=True)
 
 
 def log_action(user, action, target="", detail="", success=True, actor=None, server=None,
@@ -1700,7 +1729,7 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
     """
     entry = AuditLog(
         user_id=user.id if user else None,
-        username=_audit_cut(actor if actor else (user.username if user else "system"), 80),
+        username=audit_username(actor if actor else (user.username if user else "system")),
         action=_audit_cut(action, 128),
         target=_audit_cut(target, 255, visible=True),
         detail=_audit_cut(detail, _AUDIT_DETAIL_MAX, "…[truncated]", visible=True),

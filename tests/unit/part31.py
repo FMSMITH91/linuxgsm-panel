@@ -617,7 +617,9 @@ def _job_argv_ok31(argv, unit, job, args):
     return (argv[:4] == ["/usr/bin/systemd-run", "--unit=" + unit, "--collect", "--quiet"]
             and tail == ["--", os.path.realpath(_helper_path), "--job", job] + args
             and "--setenv=SUDO_UID=999" in argv and "--setenv=SUDO_USER=lgsmpanel" in argv
-            and not any(a.startswith("--setenv=PATH") for a in argv))
+            # PATH in the job's environment, however it is spelled before `--`: `--setenv=PATH`,
+            # `--setenv PATH=`, `-E PATH=` (review 1011e: only the first was read).
+            and not any("PATH=" in a for a in (argv[:argv.index("--")] if "--" in argv else argv)))
 
 
 def _check_jobs31():

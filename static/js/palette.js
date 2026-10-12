@@ -422,19 +422,17 @@ var PALETTE_HOST_SECTIONS = [
   // Stop and restart disconnect whoever is playing. The buttons on the page ask first, and a
   // search box must not be the one place where a keystroke skips that — Enter is easy to hit on
   // a row you did not mean to land on. Start is not destructive and runs straight away.
+  // The question is one template with the name put in (tfHtml escapes everything else): built as
+  // verb, name and "?" nodes, Spanish lost its opening "¿" and French its space before "?".
   function _actionBody(action, name) {
     var wrap = document.createElement('span');
-    var verb = document.createElement('span');
-    verb.textContent = ACTION_LABEL[action];
-    var who = document.createElement('strong');
-    who.setAttribute('data-no-i18n', '');
-    who.textContent = name;
+    var ask = document.createElement('span');
+    ask.innerHTML = window.tfHtml('{action} {name}?', {action: _tr(ACTION_LABEL[action]),  // nosemgrep
+      name: {html: '<strong data-no-i18n>' + escapeHtml(name) + '</strong>'}});
     var warn = document.createElement('span');
     warn.textContent = 'Anyone playing will be disconnected.';
-    wrap.appendChild(verb);
+    wrap.appendChild(ask);
     wrap.appendChild(document.createTextNode(' '));
-    wrap.appendChild(who);
-    wrap.appendChild(document.createTextNode('? '));
     wrap.appendChild(warn);
     return wrap;
   }

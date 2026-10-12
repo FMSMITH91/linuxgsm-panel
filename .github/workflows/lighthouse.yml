@@ -1,7 +1,8 @@
 name: Lighthouse
 
-# Boot a throwaway panel and run Lighthouse against the login page (same base.html as
-# every page, so it catches CSS/layout-shift regressions). CLS, the accessibility and
+# Boot a throwaway panel, sign in (tools/lhci-login.js) and run Lighthouse over the pages
+# .github/lighthouserc.json lists: the dashboard, a server, install, remotes, users, groups,
+# logs and account, not only the login page. CLS, the accessibility and
 # best-practices scores and redirects FAIL the check (.github/lighthouserc.json); only the
 # performance score is a warning (it wobbles run-to-run). It is a required check, and a red
 # result on main holds the deploy (deploy.yml's verify) and the panel's update offer like any

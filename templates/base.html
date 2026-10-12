@@ -13,7 +13,7 @@
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     };
   </script>
-  <title>{{ site_title }} - {% block title %}Dashboard{% endblock %}</title>
+  <title>{{ site_title }} - {% block title %}{{ t('Dashboard') }}{% endblock %}</title>
   <!-- Inline emoji favicon — avoids the automatic /favicon.ico request 404ing (a console
        error Lighthouse counts against Best Practices) without shipping a separate file. -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%AE%3C/text%3E%3C/svg%3E">
@@ -176,7 +176,7 @@
       <div class="sidebar-user-avatar"><i class="bi bi-person"></i></div>
       <div class="sidebar-user-info">
         <strong data-no-i18n>{{ current_user.display_name or current_user.username }}</strong>
-        <span>{% if current_user.is_superadmin %}Super Admin{% else %}Standard{% endif %} · <i class="bi bi-person-circle"></i> Account</span>
+        <span><span>{% if current_user.is_superadmin %}Super Admin{% else %}Standard{% endif %}</span> · <i class="bi bi-person-circle"></i> Account</span>
       </div>
     </a>
     <form method="POST" action="{{ url_for('logout') }}" class="d-grid">

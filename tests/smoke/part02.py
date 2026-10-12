@@ -2829,14 +2829,16 @@ try:
     # and the row it belongs to is deleted a few lines down. SQLite then hands that freed id
     # to the next INSERT — the install-job block's row — and this worker, still running, wrote
     # its SSH failure onto it. See _install_seam_closed.
-    with _install_seam_closed("content-capture"):
-        _add = c.post("/servers/add", data={
-            "remote_id": str(_cg_remote_id), "game_type": "gmod",
-            "server_name": "cgcapture", "port": "28980",
-            "content_games": ["cstrike", "tf"],
-        }, follow_redirects=True)
-    _appmod_cg._remote_listening_ports = _cg_rlp
-    _cg_msmod.host_account_state = _cg_has
+    try:
+        with _install_seam_closed("content-capture"):
+            _add = c.post("/servers/add", data={
+                "remote_id": str(_cg_remote_id), "game_type": "gmod",
+                "server_name": "cgcapture", "port": "28980",
+                "content_games": ["cstrike", "tf"],
+            }, follow_redirects=True)
+    finally:   # put back even if the client raised: later checks would scan a canned port set
+        _appmod_cg._remote_listening_ports = _cg_rlp
+        _cg_msmod.host_account_state = _cg_has
     with app.app_context():
         _new = GameServer.query.filter_by(short_name="cgcapture").first()
         _captured = (_new.content_games or "") if _new is not None else "<no row>"
@@ -3159,7 +3161,7 @@ def _ij_priv(server, verb, args=(), *a, **k):
 
 
 def _ij_stub(mod, name, fn):
-    _ij_saved[(mod, name)] = getattr(mod, name)
+    _ij_saved.setdefault((mod, name), getattr(mod, name))
     setattr(mod, name, _r12d_shaped(getattr(mod, name), fn, name))
 
 

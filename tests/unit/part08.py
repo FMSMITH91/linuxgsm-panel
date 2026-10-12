@@ -725,8 +725,13 @@ _rv_thr = []
 _rv_saved = (_sm_core.run_privileged, _sm_hosts.firewall.remote_ufw_status)
 
 
+_rv_reached = []   # the racer got as far as asking for ufw_lock
+
+
 def _rv_priv2(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
     if _sm_core._ufw_mutating(verb):
+        if verb == "ufw-deny-ip":
+            _rv_reached.append(verb)
         with _sm_core.ufw_lock(server):
             _rv_order.append(verb)
     else:
@@ -743,6 +748,13 @@ def _rv_status(server):
     # Give it the time to reach the lock and block. A sleep, not t.join(0.3): once eventlet has
     # patched threading (the suite runs it both ways), a join that times out RAISES
     # eventlet.timeout.Timeout instead of returning — on Python 3.14 that ended the whole run.
+    # First wait until it has ASKED for the lock (review 1011e): with only a fixed sleep, a loaded
+    # runner that had not scheduled the racer yet produced the expected order whatever the lock
+    # did, so a regression could pass. Then the 0.3 s in which a lock not held lets it through.
+    _rv_until = _rv_time.monotonic() + 5
+    while not _rv_reached and _rv_time.monotonic() < _rv_until:
+        _rv_time.sleep(0.01)
+    _rv_order.append("racer asked" if _rv_reached else "racer never asked")
     _rv_time.sleep(0.3)
     _rv_order.append("read")
     return {"installed": True, "enabled": True,
@@ -764,7 +776,7 @@ finally:
             pass
     _sm_core.run_privileged, _sm_hosts.firewall.remote_ufw_status = _rv_saved
 check("remote_ufw_delete_rule: an insert racing the guard lands AFTER the delete, never between",
-      _rv_del[0] is True and _rv_order == ["read", "ufw-delete-num", "ufw-deny-ip"],
+      _rv_del[0] is True and _rv_order == ["racer asked", "read", "ufw-delete-num", "ufw-deny-ip"],
       repr((_rv_del, _rv_order)))
 check("remote_ufw_delete_rule: ...and the racing insert finished (ufw_lock was released)",
       not any(_t.is_alive() for _t in _rv_thr), "%d still waiting" % sum(

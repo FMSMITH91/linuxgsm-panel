@@ -7,7 +7,7 @@ from flask_login import (current_user, login_required)
 from flask_socketio import (SocketIO, emit, join_room, leave_room)
 from panel.core import (terminal)
 from panel.core import runtime_stats
-from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth,
+from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, db, row_birth, row_label,
     taken_by_another)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAME_EXISTS,
     RENAME_UNCONFIRMED, UPLOAD_EXISTS, add_cron_job, browse_dir, delete_path, detect_content_user, ensure_content_user,
@@ -1520,7 +1520,7 @@ def _console_place_read(gs, server_id, since):
     try:
         got = _catchup_read(gs, None, since)
     except Exception:
-        _log.debug("console place read for server %s failed", gs.id, exc_info=True)
+        _log.debug("console place read for server %s failed", row_label(gs, "id"), exc_info=True)
     if got is None:
         return {"readable": False, "lines": [], "now": time.time(),
                 "panel_lines": list(_console_backlog.get(server_id, []))}
@@ -1902,21 +1902,23 @@ def _failed_detail(detail, ok, reason):
     return _r14b_refused(detail, reason)
 
 
-def _r14b_refused(detail, reason, limit=250):
-    """The row text `refused: <detail>: <reason>` in `limit` characters, the reason always whole.
+def _r14b_refused(detail, reason, path_room=200):
+    """The row text `refused: <detail>: <reason>`, the reason always whole.
 
     The detail is the user's path, and it came first under one 250-character cut: a deep path, or
     a short one in another script (each character escaped to six), cut the reason off with no
-    marker — the WHY the row exists to keep. The path is cut instead, and ends in "…" when it is.
-    An empty detail gives "refused: <reason>".
+    marker — the WHY the row exists to keep. The path is cut instead, to `path_room` characters
+    ending in "…" when it is. The reason is NOT cut: it is text the panel wrote, and the account
+    refusals run past 300 characters. Cutting it to 250 and giving the path what was left of 250
+    left the path one character — "…" — so the row of a refused save named no file at all, and
+    its reason stopped mid-sentence. An empty detail gives "refused: <reason>".
     """
-    reason = _audit_safe(reason, limit)
+    reason = _audit_safe(reason)
     if not detail:
-        return ("refused: " + reason)[:limit]
-    room = max(limit - len("refused: : ") - len(reason), 1)
-    shown = _audit_safe(detail, limit)
-    if len(shown) > room:
-        shown = shown[:room - 1] + "…"
+        return "refused: " + reason
+    shown = _audit_safe(detail, path_room + 1)
+    if len(shown) > path_room:
+        shown = shown[:path_room - 1] + "…"
     return ": ".join(("refused", shown, reason))
 
 
@@ -2217,13 +2219,17 @@ def _register_cron_jobs(app):
         refused = _write_refused(gs, "cron_add")
         if refused is not None:
             return refused
+        # Every field through _json_str. Read raw, a number or a dict was a 500 inside the writer
+        # with no audit row, and a list `raw` matched no line: delete answered "Deleted" having
+        # deleted nothing, and update appended its line beside the old one. A non-text value is
+        # now "" and gets the writer's own refusal.
+        schedule, command = _json_str(data, "schedule"), _json_str(data, "command")
         try:
-            ok, msg = add_cron_job(gs.remote, gs.short_name, data.get("schedule"),
-                                   data.get("command"), gs.lgsm_name)
+            ok, msg = add_cron_job(gs.remote, gs.short_name, schedule, command, gs.lgsm_name)
             if ok:
                 _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
             log_action(current_user, "cron_add", target=gs.name, success=ok,
-                       detail=(data.get("schedule") or "")[:120], server=gs)
+                       detail=schedule[:120], server=gs)
             return jsonify({"success": ok, "message": msg or ("Added" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("add_cron_job failed")}), 500
@@ -2239,11 +2245,12 @@ def _register_cron_jobs(app):
         refused = _write_refused(gs, "cron_update")
         if refused is not None:
             return refused
+        schedule = _json_str(data, "schedule")      # as cron_add reads them
         try:
-            ok, msg = update_cron_job(gs.remote, gs.short_name, data.get("raw") or "",
-                                      data.get("schedule"), data.get("command"), gs.lgsm_name)
+            ok, msg = update_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
+                                      schedule, _json_str(data, "command"), gs.lgsm_name)
             log_action(current_user, "cron_update", target=gs.name, success=ok,
-                       detail=(data.get("schedule") or "")[:120], server=gs)
+                       detail=schedule[:120], server=gs)
             return jsonify({"success": ok, "message": msg or ("Updated" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
@@ -2263,7 +2270,8 @@ def _register_cron_actions(app):
         if refused is not None:
             return refused
         try:
-            ok, msg = _sm.delete_cron_job(gs.remote, gs.short_name, data.get("raw") or "", gs.lgsm_name)
+            ok, msg = _sm.delete_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
+                                          gs.lgsm_name)
             if ok:
                 # The card's own help text promises that deleting `monitor` turns Autostart off.
                 _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
@@ -2280,7 +2288,7 @@ def _register_cron_actions(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
-        raw = _json_body().get("raw") or ""
+        raw = _json_str(_json_body(), "raw")        # as cron_add reads its fields
         refused = _write_refused(gs, "cron_run_now")
         if refused is not None:
             return refused

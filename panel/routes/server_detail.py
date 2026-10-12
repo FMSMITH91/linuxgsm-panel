@@ -7,7 +7,8 @@ from flask_login import (current_user, login_required)
 from panel.core import (clock, terminal)
 from panel.core.panel_state import (_cron_restart_pending, _install_jobs, _install_lock)
 from panel.db.models import (_NO_BIRTH, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER,
-    CustomCommand, GameServer, GlobalBan, RemoteServer, User, claim_row, db, row_birth, still_held)
+    CustomCommand, GameServer, GlobalBan, RemoteServer, User, claim_row, db, row_birth, row_label,
+    still_held)
 from panel.ops.ssh_manager import (GAMEDIG_TYPE as GAMEDIG_TYPE_MAP, _resolve_from_console,
     _sanitize_steamid, game_engine, is_player_queryable, moderation_caps, player_count as
     sm_player_count, player_list, send_console_command, set_autostart, set_daily_restart)
@@ -321,7 +322,7 @@ def _ensure_bans_persist(server):
     try:
         _sm.ensure_persistent_bans(server.remote, server.short_name, server.lgsm_name)
     except Exception:
-        _log.debug("ensure_persistent_bans failed for %s", server.name, exc_info=True)
+        _log.debug("ensure_persistent_bans failed for %s", row_label(server, "name"), exc_info=True)
 
 
 def _moderate_here(gs, action, target, message, steamid, num):
@@ -387,7 +388,7 @@ def _ban_one_other(app, origin_eng, steamid, target, item):
             try:
                 _sm.ensure_persistent_bans(o.remote, o.short_name, o.lgsm_name)
             except Exception:
-                _log.debug("ensure_persistent_bans failed for %s", o.name,
+                _log.debug("ensure_persistent_bans failed for %s", row_label(o, "name"),
                            exc_info=True)
             kw = {"steamid": steamid} if origin_eng == "valve" else {"target": target}
             ok2, _m = _sm.moderate(o.remote, o.short_name, o.game_type, "ban",
@@ -550,7 +551,7 @@ def _restart_after_mods_update(app, gs, remote, action, rc):
             _apply_mod_restart(gs, remote)
         except Exception:
             app.logger.warning("post mods-update restart of %s failed",
-                               gs.name, exc_info=True)
+                               row_label(gs, "name"), exc_info=True)
 
 
 def _bg_action(app, gs, remote, action, on_done=None):
@@ -585,7 +586,7 @@ def _bg_action(app, gs, remote, action, on_done=None):
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                 gs = claim_row(GameServer, server_id, born)
                 log_action(None, f"{action}_complete", target=gs.name if gs else short_name,
-                           success=(rc == 0), detail=(out or err or "")[-300:], server=gs)
+                           success=(rc == 0), detail=detail[-300:], server=gs)
                 # An update/validate/fastdl can restart the server (port cycles) — drop the
                 # cached port scan so the dashboard shows the real state on its next poll.
                 _sm._invalidate_port_scan(remote_id)
@@ -1211,7 +1212,7 @@ def _register_commands(app):
                        detail="%d commands" % len(cmds), success=True, server=gs)
             flash(f"Loaded {len(cmds)} commands for '{gs.name}'.", "success")
         except Exception:
-            _log.debug("command list refresh failed for %s", gs.name, exc_info=True)
+            _log.debug("command list refresh failed for %s", row_label(gs, "name"), exc_info=True)
             log_action(current_user, "refresh_commands", target=gs.name,
                        detail="could not read the command list", success=False, server=gs)
             flash(f"Could not read the command list for '{gs.name}'.", "danger")

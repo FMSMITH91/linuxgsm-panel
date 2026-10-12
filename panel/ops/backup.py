@@ -30,7 +30,8 @@ from panel.ops.system_ops import _helper_present, _is_system_service, _run_verb
 import time
 
 from panel.core.config import (DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE,
-                    load_config, update_config, encrypt_secret, decrypt_secret, is_unreadable)
+                    load_config, update_config, encrypt_secret, decrypt_secret, is_unreadable,
+                    _r15a_cfg_int)
 
 _log = logging.getLogger("panel.backup")
 
@@ -467,10 +468,8 @@ def prune_backups(keep_days=None):
     Manual/pre-restore backups are kept — the user made those deliberately.
     """
     if keep_days is None:
-        try:
-            keep_days = int(load_config().get("backup_keep_days", DEFAULT_KEEP_DAYS))
-        except (TypeError, ValueError):
-            keep_days = DEFAULT_KEEP_DAYS
+        keep_days = _r15a_cfg_int(load_config().get("backup_keep_days", DEFAULT_KEEP_DAYS),
+                                  DEFAULT_KEEP_DAYS)
     cutoff = time.time() - max(1, keep_days) * 86400
     removed = 0
     for b in list_backups():
@@ -1193,10 +1192,7 @@ def _sh(s):
 
 def get_settings():
     cfg = load_config()
-    try:
-        keep = int(cfg.get("backup_keep_days", DEFAULT_KEEP_DAYS))
-    except (TypeError, ValueError):
-        keep = DEFAULT_KEEP_DAYS
+    keep = _r15a_cfg_int(cfg.get("backup_keep_days", DEFAULT_KEEP_DAYS), DEFAULT_KEEP_DAYS)
     return {"enabled": bool(cfg.get("backup_enabled", True)),
             "keep_days": max(MIN_KEEP_DAYS, min(MAX_KEEP_DAYS, keep)),
             # Whether one is set — NEVER the passphrase itself. It is the only thing standing
@@ -1238,10 +1234,7 @@ def full_settings_from(cfg):
     only writer. The automatic schedule keeps one clock per server (game_schedules, below).
     """
     def _int(k, d):
-        try:
-            return int(cfg.get(k, d))
-        except (TypeError, ValueError):
-            return d
+        return _r15a_cfg_int(cfg.get(k, d), d)
     return {
         "interval_days": max(0, min(MAX_INTERVAL_DAYS,
                                     _int("full_backup_interval_days", DEFAULT_FULL_INTERVAL))),
@@ -1305,10 +1298,9 @@ def game_schedule_from(cfg, sid, defaults=None):
     has_iv, has_keep = "interval_days" in entry, "keep" in entry
 
     def _clamp(v, lo, hi, dflt):
-        try:
-            return max(lo, min(hi, int(v)))
-        except (TypeError, ValueError, OverflowError):
-            return dflt
+        # _r15a_cfg_int, so a hand-edited `true` is not read as 1 (a one-day interval, one archive).
+        v = _r15a_cfg_int(v, None)
+        return dflt if v is None else max(lo, min(hi, v))
     return {
         "interval_days": (_clamp(entry["interval_days"], 0, MAX_INTERVAL_DAYS, d["interval_days"])
                           if has_iv else d["interval_days"]),

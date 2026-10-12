@@ -40,12 +40,12 @@ import time
 import uuid
 
 from panel.core import runtime_stats
-from panel.core.config import load_config
+from panel.core.config import _r15a_cfg_int, load_config
 from panel.core.panel_state import (_action_output, _expected_offline, _full_backup_lock,
                                     _host_reboots, _hr_lock, _install_jobs, _install_lock,
                                     _monitor_state, _reboot_awaiting, _reboot_when_empty, _rwe_lock,
                                     register_remote_state)
-from panel.db.models import AuditLog, GameServer, RemoteServer, db
+from panel.db.models import AuditLog, GameServer, RemoteServer, db, row_label
 from panel.ops import ssh_manager as _sm
 from panel.ops import system_ops as so
 from panel.security.auth import log_action
@@ -107,10 +107,9 @@ _last_result = register_remote_state({})
 # ── Settings ────────────────────────────────────────────────────────────────────────────────────
 def wait_max_hours():
     """How long 'reboot when everyone has left' waits before it gives up; 0 waits for ever."""
-    try:
-        v = int(load_config().get(_SETTING_WAIT_HOURS, DEFAULT_WAIT_HOURS))
-    except (TypeError, ValueError, OverflowError):   # OverflowError: a hand-edited `Infinity`
-        return DEFAULT_WAIT_HOURS
+    # _r15a_cfg_int: a hand-edited `Infinity` (OverflowError) or `true` (a one-hour wait) reads as
+    # the default.
+    v = _r15a_cfg_int(load_config().get(_SETTING_WAIT_HOURS, DEFAULT_WAIT_HOURS), DEFAULT_WAIT_HOURS)
     return max(0, min(v, 24 * 30))
 
 
@@ -1334,7 +1333,7 @@ class _Job:
                 _sm.moderate(self.remote, gs.short_name, gs.game_type, "say", message=text_for(gs),
                              selfname=gs.lgsm_name)
             except Exception:  # noqa: BLE001 - a warning that failed must never stop the job
-                _log.debug("in-game warning failed for %s", gs.id, exc_info=True)
+                _log.debug("in-game warning failed for %s", row_label(gs, "id"), exc_info=True)
 
     def _comes_back(self, census):
         """{server id: True} for the servers this reboot brings back, as the plan will decide it."""
@@ -1946,8 +1945,13 @@ def _act_one(remote, gs, d, now, rollback_):
         return _act_monitor(remote, gs, d, now, rollback_)
     if owner == "panel":
         return _act_panel(remote, gs, d, now, rollback_)
-    # 'none': stopped, and its lock (moved aside) dropped, as an operator's stop drops it.
-    put_locks_back(remote, gs.short_name, [(gs.lgsm_name, "none")])
+    # 'none': stopped, and its lock (moved aside) dropped, as an operator's stop drops it. Only once
+    # the drop is confirmed, as _act_kept and _act_unarmed wait for theirs: the shell can time out
+    # on a host still settling after its boot, and the row was reported "done, stopped" with the
+    # aside file left — which the host's NEXT panel reboot (_rearm_leftover) put back as a live
+    # monitoring lock, so LinuxGSM's monitor started a server whose queued stop had been honoured.
+    if gs.lgsm_name not in put_locks_back(remote, gs.short_name, [(gs.lgsm_name, "none")]):
+        return None
     if rollback_ and d.get("queued") is False:
         # The reboot it was to stay stopped through never happened, so it is put back as it was:
         # running. Only a queued stop stays stopped (it was due). A plan recorded before "queued"
@@ -2057,7 +2061,7 @@ def _after_start(remote, gs):
         _sm.set_game_priority(remote, gs.short_name)
     except Exception:  # noqa: BLE001 - bookkeeping; the server is running
         db.session.rollback()
-        _log.debug("after-start bookkeeping failed for %s", gs.id, exc_info=True)
+        _log.debug("after-start bookkeeping failed for %s", row_label(gs, "id"), exc_info=True)
 
 
 def _after_plan(gs, d, rollback_):

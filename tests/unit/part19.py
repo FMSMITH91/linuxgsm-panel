@@ -1049,9 +1049,14 @@ with open(os.path.join(_rn_root, ".github", "workflows", "security.yml"), encodi
 _gl_full = _gl_src.split('echo "Scanning the full history of ${GITHUB_SHA}"', 1)[-1].split("fi\n", 1)[0]
 # Commands only: the comments above them mention --log-opts too.
 _gl_code = "\n".join(_l for _l in _gl_src.splitlines() if not _l.lstrip().startswith("#"))
+# Every gitleaks run, however its subcommand is spelled, each read as one command with its
+# continuation lines: counting `gitleaks git --config` and `--log-opts "` apart, a fourth scan
+# written `gitleaks detect …` was counted by neither and passed (review 1011e).
+_r15d_gl_cmds = [_c for _c in _sg_re.sub(r"\\\n\s*", " ", _gl_code).splitlines()
+                 if _sg_re.search(r"(?:^|[\s/])gitleaks\s+(?!version\b)[a-z]+\b", _c)]
 check("gitleaks: the non-PR scan is the full history of the commit judged (--log-opts GITHUB_SHA), "
       "and no gitleaks scan in the workflow runs without --log-opts (that walks every branch)",
       'Scanning the full history of ${GITHUB_SHA}' in _gl_src
       and '--log-opts "${GITHUB_SHA}"' in _gl_full and "--exit-code 1" in _gl_full
-      and _gl_code.count("gitleaks git --config") == 3
-      and _gl_code.count('--log-opts "') == 3, _gl_full[:400])
+      and len(_r15d_gl_cmds) == 3 and all('--log-opts "' in _c for _c in _r15d_gl_cmds),
+      repr((_gl_full[:300], _r15d_gl_cmds)))

@@ -1124,6 +1124,10 @@ def _r14d_arm_net36():
               _p9_trip("paramiko", exc=ConnectionError("refused by part36's tripwire")))
     _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
     _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+    # ...and the local transports, as this part's other armed blocks do (review 1011e): a guard or
+    # probe handed the panel host would otherwise run its command on this machine unseen.
+    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
+    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

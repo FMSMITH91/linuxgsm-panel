@@ -596,9 +596,37 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A fifth full review on 2026-10-12: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Console.** Panel lines that arrive after you press Clear no longer vanish at the next 30-second
+    refresh, and the lines Clear removed still stay gone. A console command that starts with `-`
+    (such as `-version`) is now typed into the game instead of being refused by tmux. After the
+    console window is resized narrower, the panel no longer shows rows from before the command as
+    its output.
+  - **Player lists and moderation.** Call of Duty 4 (CoD4X) servers show who is online. Ban is
+    offered only for games whose console can ban by slot: on Quake III, Enemy Territory and
+    ET: Legacy, Ban was answered "Done." while the player stayed on, and it is now refused with the
+    reason. Jedi Knight II servers now get a player list, Kick and Say, and five more Valve games
+    (Brainbread, Opposing Force, The Specialists, Vampire Slayer, Zombie Master: Reborn) get the
+    Valve player tools. Game tables held 45 names that match no LinuxGSM game; they are removed or
+    corrected, so Vampire Slayer and Vintage Story now get their own default ports.
+  - **Firewall.** Close public panel port says why it cannot act when UFW is off or lets everything
+    in by default, instead of reporting the port as already closed. A UDP-only or loopback rule no
+    longer counts as holding the panel port open. Proven against a real firewall, which was left as
+    it was.
+  - **Languages.** About 130 more messages that contain a name or a number (confirmations, refusals,
+    host and reboot notices) are translated as whole sentences for Spanish and French viewers, and so
+    are page titles, the Tailscale status line and Discord connection problems. In French,
+    "Controls" no longer reads the same as "Commands".
+  - **Robustness.** A host or game server deleted while a background pass is running no longer
+    breaks that pass. A hand-edited number in the settings no longer breaks the Settings page or a
+    backup. Resetting a user's password signs out their other sessions.
+  - **Tests and CI.** Several checks that could not fail now can, and the CI root run requires each
+    root-only check to have actually run.
+
 - **A fourth full review on 2026-10-12: fixes.** Every item below has a check that fails without
   its fix.
-  - **Player lists.** Quake III, Return to Castle Wolfenstein and Jedi Academy (OpenJK) servers
+  - **Player lists.** Quake III and Return to Castle Wolfenstein servers
     now show who is online, read from each engine's own status table. Quake III 1.32 and
     Enemy Territory no longer drop players with spaces in their names.
   - **Firewall page.** A rule that opens the panel's port as part of a list or range is shown as
@@ -1975,12 +2003,22 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **A fifth full review on 2026-10-12: security.** Every item below has a check that fails without
+  its fix.
+  - **SSH lockout guard.** Removing an allowed address or closing a port now goes through the same
+    guard as deleting a rule, so neither can remove the only public way in to SSH. Multicast,
+    broadcast and portless rules no longer count as another way in. Proven against a real firewall,
+    which was left as it was.
+  - **Audit log.** The user name column and LinuxGSM's colour codes in completion rows are escaped,
+    and an escape is never cut in half.
+  - **The debug report** no longer prints part of a doas command's arguments.
 - **A fourth full review on 2026-10-12: security.** Every item below has a check that fails without
   its fix.
   - **SSH lockout guard.** A rule that only lets the server reach itself (loopback, Docker bridges,
-    `127.0.0.1`), a UDP-only rule, or a rule with a comment no longer counts as another way in, so
-    the only public SSH rule stays protected. Rules are read in the order the firewall applies them,
-    so a DENY above an ALLOW is honoured. Proven against a real firewall, which was left as it was.
+    `127.0.0.1`) or a UDP-only rule, with or without a comment, no longer counts as another way
+    in, so the only public SSH rule stays protected. Rules are read in the order the firewall
+    applies them, so a DENY above an ALLOW is honoured. Proven against a real firewall, which was
+    left as it was.
   - **File browser.** The new file and folder actions, rename and delete pass only the validated
     LinuxGSM script name to the host.
   - **The debug report** no longer prints secrets nested inside JSON text, nor sudo arguments in the

@@ -850,6 +850,12 @@ def add_cron_job(server, user, schedule, command, selfname=None):
     return _core._rewrite_crontab(server, user, "", [f"{schedule} {wrapped}"])
 
 
+# An update or delete names no line. The rewrite drops the line matching `raw`, and a blank one
+# matches no task: delete answered "Deleted" having removed nothing, update added its line beside
+# the old one — two schedules — and answered "Updated".
+_R15B_NO_TASK = "No scheduled task selected."
+
+
 def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
     """Replace an existing user cron entry (matched exactly by `old_raw`) with a new schedule+command.
 
@@ -857,6 +863,8 @@ def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
     """
     selfname = selfname or user
     old_raw = old_raw or ""
+    if not old_raw.strip():
+        return False, _R15B_NO_TASK
     if _cron_line_managed(old_raw, user, selfname):
         return False, "That entry is managed by the panel — use its own toggle to change it."
     ok, msg, _line = _validate_cron(schedule, command)
@@ -881,6 +889,8 @@ def delete_cron_job(server, user, old_raw, selfname=None):
     """
     selfname = selfname or user
     old_raw = old_raw or ""
+    if not old_raw.strip():
+        return False, _R15B_NO_TASK
     if _cron_line_managed(old_raw, user, selfname):
         return False, "That entry is managed by the panel — use its own toggle to change it."
     return _core._rewrite_crontab(server, user, "", [], drop_line=old_raw)
@@ -1592,7 +1602,7 @@ def player_slots_batch(server, user, targets):
 def player_count_via_lgsm_query(server, user, selfname, fallback_port=None, cached=False):
     """Player count using the game's OWN LinuxGSM query settings.
 
-    This covers games the panel's 26-entry gamedig map doesn't. Reads querymode/querytype/queryport
+    This covers games the panel's built-in gamedig map doesn't. Reads querymode/querytype/queryport
     from the merged LinuxGSM config and, when LinuxGSM queries the game with gamedig (querymode 2),
     runs gamedig with LinuxGSM's own type. `fallback_port` (the port the panel already knows) is
     used when the query port isn't in the LinuxGSM .cfg — e.g. Minecraft keeps it in

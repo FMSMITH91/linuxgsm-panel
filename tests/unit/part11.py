@@ -765,12 +765,18 @@ try:
         _w.verbs_called()),
        ((True, "Port 27015:27020/udp open from 10.0.0.0/24"),
         [("ufw-allow-from-port", ["10.0.0.0/24", "27015:27020", "udp", "lan"])]))
-    _w = _wire(verbs={"ufw-delete-allow-from-port": ("Could not delete non-existent rule", "", 1)})
+    # A by-spec delete reads the firewall first (the lockout guard, review 1011e): an active ufw
+    # with no rules protects nothing, so the delete goes ahead.
+    _NO_RULES = ("Status: active\n\n     To                         Action      From\n"
+                 "     --                         ------      ----\n", "", 0)
+    _w = _wire(verbs={"ufw-delete-allow-from-port": ("Could not delete non-existent rule", "", 1),
+                      "ufw-status": _NO_RULES})
     eq("ufw allow-from: allow=False removes the rule with the delete verb, and a failure says why",
-       (_H.remote_ufw_allow_from(_p8_srv(), "203.0.113.9", 22, allow=False), _w.verbs_called()),
+       (_H.remote_ufw_allow_from(_p8_srv(), "203.0.113.9", 22, allow=False),
+        _w.verbs_called("ufw-delete-allow-from-port")),
        ((False, "Could not delete non-existent rule"),
         [("ufw-delete-allow-from-port", ["203.0.113.9", "22", "tcp"])]))
-    _wire()
+    _wire(verbs={"ufw-status": _NO_RULES})
     eq("ufw allow-from: a removed rule is reported as removed",
        _H.remote_ufw_allow_from(_p8_srv(), "203.0.113.9", 22, allow=False),
        (True, "Rule for 22/tcp from 203.0.113.9 removed"))
@@ -863,16 +869,20 @@ try:
        (_H.remote_ufw_close_port(_p8_srv(), 22, "sctp"), _w.calls), ((False, "Invalid protocol"), []))
     eq("ufw close: invalid port refused", _H.remote_ufw_close_port(_p8_srv(), "22 && id"),
        (False, "Invalid port"))
+    _w = _wire(verbs={"ufw-status": _NO_RULES})
     eq("ufw close: one protocol deletes the proto rule",
-       (_H.remote_ufw_close_port(_p8_srv(), 22, "tcp"), _w.verbs_called()),
+       (_H.remote_ufw_close_port(_p8_srv(), 22, "tcp"), _w.verbs_called("ufw-delete-allow-proto-port")),
        ((True, "Port 22/tcp closed on remote"), [("ufw-delete-allow-proto-port", ["tcp", "22"])]))
-    _wire(verbs={"ufw-delete-allow-port": ("Could not delete non-existent rule", "", 1)})
+    _wire(verbs={"ufw-delete-allow-port": ("Could not delete non-existent rule", "", 1),
+                 "ufw-status": _NO_RULES})
     eq("ufw close: a failed bare delete is reported", _H.remote_ufw_close_port(_p8_srv(), 27015),
        (False, "Could not delete non-existent rule"))
-    _wire(verbs={"ufw-delete-allow-port": ("", "", 0)})
+    # On an active firewall (the close reads it first: an inactive UFW filters nothing).
+    _active11 = ("Status: active\n\nTo  Action  From\n--  ------  ----\n22/tcp  ALLOW  Anywhere\n", "", 0)
+    _wire(verbs={"ufw-delete-allow-port": ("", "", 0), "ufw-status": _active11})
     eq("ufw close port 22: removes the 22/tcp allow", _H.remote_ufw_close_port_22(_p8_srv()),
        (True, "Port 22 rule removed from UFW"))
-    _wire(verbs={"ufw-delete-allow-port": ("", "", 1)})
+    _wire(verbs={"ufw-delete-allow-port": ("", "", 1), "ufw-status": _active11})
     eq("ufw close port 22: a silent failure still says it failed",
        _H.remote_ufw_close_port_22(_p8_srv()), (False, "Failed to remove port 22"))
     # ── a game server's firewall cleanup takes only ITS rules (Aikido 745379215) ──────────────
@@ -3140,8 +3150,11 @@ try:
     _r.port = 22
 
     # ── close the panel's public port ──────────────────────────────────────────────────────────
+    # The default-policy read is a privileged `ufw status verbose` of its own: never the real one.
+    _rdai11 = _sm_firewall.remote_ufw_default_allows_in
+    _sm_firewall.remote_ufw_default_allows_in = lambda remote: False
     _rv.load_config = lambda: {"tailscale_setup_done": True, "port": 5000}
-    _rv.remote_ufw_status = lambda remote: {"installed": True, "groups": [
+    _rv.remote_ufw_status = lambda remote: {"installed": True, "enabled": True, "groups": [
         {"port_num": "5001", "nums": [4], "key": "k", "action": "ALLOW"}]}
     _st, _body = _rv_json(_rv_client.post("/api/remote/%d/close-panel-port" % _r.id))
     eq("close panel port: a remote is refused (it only applies to the panel host)",
@@ -3152,11 +3165,12 @@ try:
     check("close panel port: refused until Tailscale Serve is set up (the lockout guard)",
           _st == 400 and "Set up Tailscale Serve first" in _body["message"], repr(_body))
     _rv.load_config = lambda: {"tailscale_setup_done": True, "port": "not-a-port"}
-    _rv.remote_ufw_status = lambda remote: {"installed": True, "groups": [
+    _rv.remote_ufw_status = lambda remote: {"installed": True, "enabled": True, "groups": [
         {"port_num": "5001", "nums": [4], "key": "k", "action": "ALLOW"}]}
     _st, _body = _rv_json(_rv_client.post("/api/remote/%d/close-panel-port" % _loc.id))
     eq("close panel port: an unparseable configured port means 5000; no rule for it is 'already "
        "closed'", (_st, _body), (200, {"success": True, "message": "Public port 5000 is already closed."}))
+    _sm_firewall.remote_ufw_default_allows_in = _rdai11
 
     # ── one game server's port ─────────────────────────────────────────────────────────────────
     _gp = []

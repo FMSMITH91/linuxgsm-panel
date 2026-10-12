@@ -1142,7 +1142,7 @@ def _r12b_runas_may_be_root(runas):
 
 def _r14b_is_uid_zero(item):
     """Whether a Runas item is `#<digits>` naming uid 0 (`#0`, `#00`)."""
-    return item.startswith("#") and item[1:].isdigit() and int(item[1:]) == 0
+    return item.startswith("#") and item[1:].isdecimal() and int(item[1:]) == 0
 
 
 def _r13b_group_holds_root(group):

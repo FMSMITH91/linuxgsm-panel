@@ -965,9 +965,14 @@ def _section_panel_stop39():
           "command under it ends (a SIGKILL to sudo's group reached sudo alone and orphaned it)",
           all((res == ("", "Command timed out", -1), left == {})), repr((res, round(took, 2), left)))
     res, took, left, _d = _shell_stop39("d-slow-relay", ("--flat",), relay_delay=0.6, chain=True)
+    # ...having run at all: `left` reads only the pid files that exist, so a tree whose sudo or
+    # child never started (Python slow to start on a loaded box) read as "nothing left" and passed
+    # having tested nothing. section C's _helper_tree39 waits for its tree for this reason.
+    _started39 = sorted(_pids39(_d, ("sudo", "child")))
     check("D panel: ...and it waits for the GROUP, not just the shell it started: a sudo slow to "
           "relay is not SIGKILLed the moment the shell above it exits",
-          left == {}, repr((res, round(took, 2), left)))
+          all((res == ("", "Command timed out", -1), _started39 == ["child", "sudo"], left == {})),
+          repr((res, round(took, 2), _started39, left)))
     res, took, left, _d = _shell_stop39("d-ignore", ("--flat", "--ignore-term"), via_sudo=False)
     check("D panel: a process of its own that ignores SIGTERM still gets SIGKILL, and the answer "
           "comes within the timeout plus the two graces",

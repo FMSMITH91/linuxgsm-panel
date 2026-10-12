@@ -646,11 +646,13 @@ class RemoteServer(db.Model):
 # URI — Source and GoldSrc engine servers. Clicking such a link launches the game
 # and joins the server directly. Games without a reliable URI scheme (CoD,
 # Minecraft, Rust, ARK, …) are intentionally absent so callers fall back to a
-# plain copyable ip:port instead of offering a button that would do nothing.
+# plain copyable ip:port instead of offering a button that would do nothing. Every key is a
+# LinuxGSM shortname (held to tests/unit/lgsm_shortnames.txt): "insurgency" and "gesource" were
+# here and match no LinuxGSM game.
 STEAM_CONNECT_GAMES = frozenset({
     # Source engine
     "gmod", "css", "cs2", "csgo", "tf2", "hl2dm", "dods", "l4d", "l4d2",
-    "ins", "insurgency", "nmrih", "zps", "fof", "gesource", "bb2",
+    "ins", "nmrih", "zps", "fof", "bb2",
     # GoldSrc engine
     "cs", "cscz", "tfc", "dmc", "ns", "ricochet", "hldm", "ahl",
 })

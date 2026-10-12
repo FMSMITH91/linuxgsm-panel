@@ -139,6 +139,24 @@ def _r13a_cfg_text(cfg, key, default=""):
     return value if isinstance(value, str) else default
 
 
+def _r15a_cfg_int(value, default):
+    """A number setting read from config.json, as an int; `default` when it is not one.
+
+    The same hand-edit class as _r13a_cfg_text, for numbers. Python's json reads `Infinity` and
+    `1e400` as float('inf'), and int() of that raises OverflowError, which an
+    `except (TypeError, ValueError)` lets through: the Backups page, the Settings page and the
+    auto-block pass each answered 500 or stopped for good. A JSON boolean is refused too: int(True)
+    is 1, so a hand-edited `true` read as a one-attempt auto-block threshold or a one-day backup
+    retention. The panel only ever writes a number there, so anything else reads as unset.
+    """
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def load_config():
     config = dict(DEFAULT_CONFIG)
     try:

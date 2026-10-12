@@ -1060,9 +1060,10 @@ try:
     check("scheduled backup: ...and the status map holds nothing for it",
           _bk218 not in _p9_state._game_backup_status,
           repr(_p9_state._game_backup_status.get(_bk218)))
+    # Nothing at all, not "every row unattributed": the replaced-row path returns before any audit
+    # write, so all() over the empty list passed whatever happened (review 1011e).
     check("scheduled backup: its failure is not audited under that server",
-          all(a.game_server_id is None for a in _sa18r), repr([(a.target, a.game_server_id)
-                                                              for a in _sa18r]))
+          _sa18r == [], repr([(a.target, a.game_server_id) for a in _sa18r]))
     check("scheduled backup: the server after it is still backed up (control)",
           _bkruns18 == ["bktwo", "bkthree"], repr(_bkruns18))
 

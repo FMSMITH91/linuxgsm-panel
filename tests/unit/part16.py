@@ -722,14 +722,13 @@ finally:
             db.engine.dispose()
     except Exception:  # nosec B110 - best-effort cleanup of a throwaway database
         pass
-    try:
-        if _CFG16_SNAPSHOT is None:
-            if _P9_CFG_PATH.exists():
-                _P9_CFG_PATH.unlink()
-        else:
-            _P9_CFG_PATH.write_bytes(_CFG16_SNAPSHOT)
-    except OSError:  # nosec B110 - best-effort cleanup of the runner's throwaway config
-        pass
+    # Not swallowed (review 1011e): a config.json this cannot remove or restore is left for the
+    # parts after it to read, so the failure is raised and the run says where.
+    if _CFG16_SNAPSHOT is None:
+        if _P9_CFG_PATH.exists():
+            _P9_CFG_PATH.unlink()
+    else:
+        _P9_CFG_PATH.write_bytes(_CFG16_SNAPSHOT)
 
 check("part16: its two tables are given AUTOINCREMENT back by the panel's own migration",
       _reuse16_back == ["remote_server", "game_server"], repr(_reuse16_back))
@@ -1570,9 +1569,10 @@ for _mode16 in ("eventlet", "threads"):
 # mostly the check's own gc.collect() between them -- six of 0.36-0.44s over 1.9M objects here --
 # and it failed a correct tree at 2.35s on GitHub's 26.04 runner (PR #385), while its 1.5s bound
 # passed that mutation at 1.45s.
-_rv16_held = _rv16_held_hub(_rv16_beat["gaps"], _RV16["eventlet"]["runs"])
+_rv16_held_gap = _rv16_held_hub(_rv16_beat["gaps"], _RV16["eventlet"]["runs"])
 check("run_verb (eventlet): the rest of the panel kept running through every wait",
-      _rv16_held < 0.5, "the longest gap between heartbeats inside a call was %.2fs" % _rv16_held)
+      _rv16_held_gap < 0.5,   # its own name: it rebound the _rv16_held FUNCTION to a float (review 1011e)
+      "the longest gap between heartbeats inside a call was %.2fs" % _rv16_held_gap)
 
 
 # ── the capped reader itself: eventlet's green read answers "" (a str) for a closed descriptor ──

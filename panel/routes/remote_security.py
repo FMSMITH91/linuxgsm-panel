@@ -413,12 +413,14 @@ def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
                 fw_note = (f" Firewall: opened {new_port}." if _fw_ok
                            else f" FIREWALL NOT UPDATED — port {new_port} may be blocked ({_fw_msg}).")
             else:
-                _fw_ok, _fw_msg = remote_ufw_close_port(local, new_port, "tcp")
+                # force: the panel's own move (the config already names new_port, so the guard
+                # would read this as the panel's web-port rule and refuse to close it).
+                _fw_ok, _fw_msg = remote_ufw_close_port(local, new_port, "tcp", force=True)
                 fw_note = (f" Firewall: {new_port} kept tailnet-only." if _fw_ok
                            else f" Firewall rule for {new_port} could not be removed ({_fw_msg}).")
             fw_ok = bool(_fw_ok)
             if new_port != cur_port:
-                _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp")
+                _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp", force=True)
                 fw_note += (f" Removed the old rule for {cur_port}." if _old_ok
                             else f" The old rule for {cur_port} is still there ({_old_msg}).")
                 fw_ok = fw_ok and bool(_old_ok)

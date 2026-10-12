@@ -17,7 +17,7 @@ import concurrent.futures
 import functools
 import logging
 
-from panel.db.models import GameServer, RemoteServer, db
+from panel.db.models import GameServer, RemoteServer, db, row_label
 from panel.ops import ssh_manager as _sm
 from panel.security.auth import log_action
 from panel.services import monitoring as _mon
@@ -221,7 +221,8 @@ def _reconcile_rows(host, moving, rules):
             moves.append(_reconcile_row(host, row, reading, rules))
         except Exception:  # noqa: BLE001 - one row never stops the rest of its host
             db.session.rollback()
-            _log.warning("%s: the port re-read at startup failed", row.name, exc_info=True)
+            _log.warning("%s: the port re-read at startup failed", row_label(row, "name"),
+                         exc_info=True)
     return [m for m in moves if m]
 
 
@@ -338,7 +339,7 @@ def _cron_follows(remote, row, port):
         changed = _sm.upgrade_managed_cron_tracking(remote, row.short_name, row.lgsm_name,
                                                     game_type=row.game_type, port=port)
     except Exception:  # noqa: BLE001 - the move stands; the daily pass rewrites the line
-        _log.warning("%s: its cron could not be pointed at port %s", row.name, port,
+        _log.warning("%s: its cron could not be pointed at port %s", row_label(row, "name"), port,
                      exc_info=True)
         return "its restart-when-empty check could not be updated"
     return "its restart-when-empty check now asks port %s" % port if changed else ""
@@ -370,7 +371,7 @@ def _close_own_rule(host, row, now, rules):
             return 0
         return _sm.remote_ufw_close_game_port(host.remote, old, row.short_name)[0]
     except Exception:  # noqa: BLE001 - the move stands; the rule is left as it was
-        _log.warning("%s: its firewall rule on %s could not be closed", row.name, old,
+        _log.warning("%s: its firewall rule on %s could not be closed", row_label(row, "name"), old,
                      exc_info=True)
         return 0
 

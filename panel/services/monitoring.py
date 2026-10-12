@@ -25,7 +25,7 @@ import time
 from panel.services import notifications
 from panel.ops import system_ops as so
 from panel.core.clock import utcnow
-from panel.core.config import load_config
+from panel.core.config import _r15a_cfg_int, load_config
 from panel.core.validation import ip_address_or_none, ip_network_or_none, unzoned_ip_or_network
 from panel.db.models import (GameServer, HostSample, MetricSample, RemoteServer, db,
     row_label, rows_still_held)
@@ -1331,10 +1331,10 @@ _AUTOBLOCK_DEFAULT_THRESHOLD = 20
 
 
 def _autoblock_threshold():
-    try:
-        return max(1, min(int(load_config().get("autoblock_threshold", _AUTOBLOCK_DEFAULT_THRESHOLD)), 100000))
-    except (TypeError, ValueError):
-        return _AUTOBLOCK_DEFAULT_THRESHOLD
+    # _r15a_cfg_int: a hand-edited `Infinity` raised OverflowError out of the Settings page, both
+    # Security cards and the auto-block pass, and a `true` read as a one-attempt threshold.
+    return max(1, min(_r15a_cfg_int(load_config().get("autoblock_threshold", _AUTOBLOCK_DEFAULT_THRESHOLD),
+                                    _AUTOBLOCK_DEFAULT_THRESHOLD), 100000))
 
 
 def _whitelist_networks():

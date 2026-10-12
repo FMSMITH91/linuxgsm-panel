@@ -21,7 +21,7 @@ import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _r13b_json_flag)
 from panel.core.validation import (_attachment_header)
-from panel.routes._shared import (_button_backup_running, _marked_backup, _record_full_clock,
+from panel.routes._shared import (_button_backup_running, _json_int, _marked_backup, _record_full_clock,
     _record_game_clock)
 
 
@@ -359,13 +359,9 @@ _BAD_FIELD = object()
 
 def _r13c_whole_number(v):
     """Whether bk.set_settings/set_full_settings can read `v` as a whole number."""
-    if isinstance(v, bool):   # an int to Python; a switch sent into a number box is not a number
-        return False
-    try:
-        int(v)
-    except (TypeError, ValueError, OverflowError):
-        return False
-    return True
+    # _json_int: a bool is refused (an int to Python; a switch sent into a number box is not a
+    # number), and so is a fraction, which int() truncated: {"full_keep": 2.5} stored 2.
+    return _json_int(v) is not None
 
 
 def _r13c_settings_refusal(data):
@@ -669,15 +665,13 @@ def _register_game_backup_settings(app):
             # A switch sent into a number box is not a number, as _r13c_whole_number says for the
             # global fields: int(True) is 1, so {"keep": true} kept one archive, and
             # {"interval": false} was 0, which game_backup_due reads as "off".
-            if isinstance(v, bool):
-                return _BAD_FIELD
-            try:
-                return int(v)   # OverflowError guards against JSON infinity (e.g. 1e400)
-            except (TypeError, ValueError, OverflowError):
-                # Refused, not None: None CLEARS the override, so "7 days" mistyped as "7d" (or a
-                # number the client sent as anything else) silently reset the server to the
-                # global schedule.
-                return _BAD_FIELD
+            # _json_int refuses that, JSON infinity (1e400) and a fraction, which int() truncated:
+            # {"keep": 2.5} kept two archives, a number nobody sent.
+            n = _json_int(v)
+            # Refused, not None: None CLEARS the override, so "7 days" mistyped as "7d" (or a
+            # number the client sent as anything else) silently reset the server to the global
+            # schedule.
+            return _BAD_FIELD if n is None else n
         # Absent means "not this one", which is a different request from "clear it". Both pages
         # posted both fields on a change to either, and a select that had no option for the stored
         # value turned an interval change into a silent reset of retention.

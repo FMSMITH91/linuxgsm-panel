@@ -330,13 +330,17 @@ def _is_ssh_rule(g, pn, inbound, ts_iface, ssh_ports):
 
 
 def _r14a_udp_only(g):
-    """Whether rule `g` admits UDP alone, which sshd never reads.
+    """Whether rule `g` admits only a protocol that cannot carry TCP, which sshd never reads.
 
     The protocol is printed beside the To column for a port rule, and beside the From column for a
     source-only one (ufw's get_status: `ufw allow from <ip> proto udp` is To "Anywhere", From
-    "<ip>/udp"). Reading only the To column counted that one as every port, sshd's included.
+    "<ip>/udp"). Reading only the To column counted that one as every port, sshd's included. Not
+    only udp: ufw's portless protocols print the same way (`ufw allow proto gre from <peer>` is From
+    "<peer>/gre"), and a GRE, 6in4 or IPsec peer's allow made the host's only `22/tcp` deletable
+    (system_ops._r15a_not_tcp, the test the tailscale0 reading shares).
     """
-    return g.get("proto_label") == "UDP" or str(g.get("src") or "").lower().endswith("/udp")
+    from panel.ops import system_ops as _so
+    return g.get("proto_label") == "UDP" or _so._r15a_not_tcp(g.get("src"))
 
 
 # Interfaces that carry only this machine's own traffic or the NAT of its containers and VMs:
@@ -383,10 +387,14 @@ def _r13a_every_port(g, pn):
     if last.lower() == "anywhere":
         return True
     try:
-        ipaddress.ip_network(last, strict=False)
+        net = ipaddress.ip_network(last, strict=False)
     except ValueError:
         return False
-    return True
+    # A multicast or the limited-broadcast destination (`ufw allow to 224.0.0.251`, mDNS) takes no
+    # TCP, so it never reaches sshd or the panel: counted as every port, it was "another way in"
+    # beside the host's only public 22/tcp, which then had an ordinary delete x.
+    _limited_broadcast = net.version == 4 and net.num_addresses == 1 and int(net.network_address) == 2 ** 32 - 1
+    return not (net.is_multicast or _limited_broadcast)
 
 
 def _r12a_names_port(pn, ports):
@@ -425,6 +433,12 @@ def _r14a_panel_port_scope(rule, port):
     """
     pn = str(rule.get("port_num", ""))
     if not _r14a_public_allow_in(rule) or not _r12a_names_port(pn, {int(port)}):
+        return ""
+    # The panel's web port is TCP, and a rule only this machine can match is no way in: the SSH
+    # readers above skip both (_is_ssh_rule). Counted, a game's `5000:5010/udp` made Close public
+    # panel port refuse with "take port 5000 out of that rule", `5000/udp` was force-deleted as
+    # the panel's rule, and the Firewall page protected either as the panel's way in.
+    if _r14a_udp_only(rule) or _r14a_host_only(rule):
         return ""
     words = pn.split()
     items = (words[-1] if words else "").split(",")
@@ -823,6 +837,25 @@ _SUDO_REFUSED_RE = re.compile(
 # between the two every way before failing, which is quadratic. The groups are the ones
 # `\s*(.*)$` gave.
 _UFW_NUMBERED_RE = re.compile(r"^\s*\[\s*(\d+)\]\s*((?:\S.*)?)$")
+
+
+_R15C_DEFAULT_IN_RE = re.compile(r"^Default:\s*([a-z]+)\s*\(incoming\)", re.M | re.I)
+
+
+def remote_ufw_default_allows_in(server):
+    """True only when `ufw status verbose` SAYS the default incoming policy is allow.
+
+    With that policy a port with no rule is open, so deleting the panel port's own rule closes
+    nothing. False for deny/reject, and for a read that failed or a line it cannot find (a
+    translated ufw prints its own words): only positive evidence answers True, so a host this
+    cannot read is not refused what it was allowed before.
+    """
+    try:
+        out, _err, rc = _core.run_privileged(server, "ufw-status", ["verbose"], timeout=15, sudo=None)
+    except Exception:
+        return False
+    m = _R15C_DEFAULT_IN_RE.search(out or "") if rc == 0 else None
+    return bool(m) and m.group(1).lower() == "allow"
 
 
 def remote_ufw_status(server):

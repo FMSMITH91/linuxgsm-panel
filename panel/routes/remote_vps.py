@@ -6,7 +6,7 @@ from flask import (jsonify, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.config import (load_config)
 from panel.core.panel_state import (_os_update_seen)
-from panel.db.models import (GameServer, RemoteServer, db)
+from panel.db.models import (GameServer, RemoteServer, db, row_label)
 from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_game_ports,
     host_specs, remote_os_run_updates, remote_os_update_start, remote_os_update_status,
@@ -159,7 +159,8 @@ def _register_firewall_view(app):
             # host up and enforced access, so this is the integer primary key off the row rather
             # than request input reaching a log sink (py/log-injection). Same shape as the other
             # id-logging sites in panel/routes/_shared.py.
-            _log.info("remote firewall page: remote %s unreachable", remote.id, exc_info=True)
+            _log.info("remote firewall page: remote %s unreachable", row_label(remote, "id"),
+                      exc_info=True)
             status = {"installed": False, "enabled": False, "rules": [], "groups": [],
                       "unreachable": True}
         games = GameServer.query.filter_by(remote_id=remote_id).all()
@@ -289,7 +290,9 @@ def _register_firewall_rules(app):
         proto = _fw_proto_arg(data.get("protocol", "tcp"))
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
-        success, msg = remote_ufw_open_port(remote, port, proto, data.get("comment", ""))
+        # _json_str: a number or a list here raised TypeError in the comment's filter — a 500,
+        # and no audit row.
+        success, msg = remote_ufw_open_port(remote, port, proto, _json_str(data, "comment"))
         a_port, a_proto = _fw_audit_rule(port, proto)
         log_action(current_user, "remote_port_open", target=f"{remote.name}:{a_port}/{a_proto}",
                    success=success, remote=remote)
@@ -317,7 +320,7 @@ def _register_firewall_rules(app):
         if not source or not port:
             return jsonify({"success": False, "message": "Source and port required"}), 400
         success, msg = remote_ufw_allow_from(remote, source, port, proto,
-                                             data.get("comment", ""), allow=on)
+                                             _json_str(data, "comment"), allow=on)
         # The rule as it was sent, never the request's text (an IPv6 zone id parsed).
         a_port, a_proto = _fw_audit_rule(port, proto, ranges=True)
         log_action(current_user, "remote_port_allow_from" if on else "remote_port_allow_from_remove",
@@ -497,8 +500,8 @@ def _register_panel_port(app):
         except (TypeError, ValueError):
             port = 5000
 
-        nums, shared, read_ok = _r14a_panel_port_rules(remote, port)
-        refusal = _r14a_close_refusal(remote, port, shared, read_ok)
+        nums, shared, read = _r14a_panel_port_rules(remote, port)
+        refusal = _r14a_close_refusal(remote, port, shared, read)
         if refusal is not None:
             return refusal
         if not nums:
@@ -511,9 +514,9 @@ def _register_panel_port(app):
         # (an attacker's deny, a game port). A moved number is refused; the verify read reports it.
         for n, key in nums:
             remote_ufw_delete_rule(remote, n, force=True, expect_key=key)
-        _left, _left_shared, _verify_ok = _r14a_panel_port_rules(remote, port)
+        _left, _left_shared, _verify = _r14a_panel_port_rules(remote, port)
         # A verify read that FAILED cannot say the port is closed either.
-        ok = _verify_ok and not _left and not _left_shared
+        ok = _verify == _R15C_READ and not _left and not _left_shared
         log_action(current_user, "close_panel_port", target=str(port), success=ok, remote=remote)
         if not ok:
             return jsonify({"success": False, "message": (
@@ -521,8 +524,17 @@ def _register_panel_port(app):
         return jsonify({"success": True, "message": _r13c_closed_port_message(port)})
 
 
+# How _r14a_panel_port_rules read the firewall: read, not read, or read and not filtering anything.
+_R15C_READ, _R15C_UNREAD, _R15C_INACTIVE = "read", "unread", "inactive"
+
+
 def _r14a_panel_port_rules(remote, port):
-    """([(rule number, rule key)], [shared rule labels], read_ok). Unread is NOT empty."""
+    """([(rule number, rule key)], [shared rule labels], how it was read). Unread is NOT empty.
+
+    The third is _R15C_READ, _R15C_UNREAD, or _R15C_INACTIVE: UFW installed and not enabled, so
+    `ufw status numbered` lists no rule and nothing filters the port. Read as "no rules", Close
+    answered "Public port N is already closed." with the port open to the internet.
+    """
     st = remote_ufw_status(remote)
     # remote_ufw_status answers {"installed": False, ..., "groups": []} when ufw is
     # missing, and adds "unreachable": True when the command failed or printed no
@@ -535,7 +547,9 @@ def _r14a_panel_port_rules(remote, port):
     # SSH cannot be controlled from here", after an earlier version of THAT produced "an
     # audit row saying the hardening succeeded, and port 22 open to the internet".
     if st.get("unreachable") or not st.get("installed"):
-        return [], [], False
+        return [], [], _R15C_UNREAD
+    if not st.get("enabled"):
+        return [], [], _R15C_INACTIVE
     nums, shared = [], []
     for g in st.get("groups", []):
         # ...and only rules that actually HOLD THE PORT OPEN: inbound ALLOW/LIMIT on no
@@ -550,12 +564,25 @@ def _r14a_panel_port_rules(remote, port):
             nums.extend((n, g.get("key")) for n in g.get("nums", []))
         elif scope:
             shared.append(str(g.get("port_label") or g.get("port_num")))
-    return sorted(set(nums), reverse=True), shared, True   # highest first: numbers stay valid
+    return sorted(set(nums), reverse=True), shared, _R15C_READ   # highest first: numbers stay valid
 
 
-def _r14a_close_refusal(remote, port, shared, read_ok):
-    """Close public panel port's answer when it must close nothing, else None."""
-    if not read_ok:
+def _r14a_close_refusal(remote, port, shared, read):
+    """Close public panel port's answer when it must close nothing, else None.
+
+    Nothing is also what it must close when UFW lets every port in by default
+    (_r15c_default_allow_refusal), so that refusal is the last asked.
+    """
+    if read == _R15C_INACTIVE:
+        # The page's own tooltip for this state, word for word (remote_manage_host.js), which
+        # disables the button; a direct call, or a status read that failed and left it enabled,
+        # reaches here. remote_set_public_ssh refuses the same state for port 22.
+        log_action(current_user, "close_panel_port", target=str(port), success=False,
+                   remote=remote, detail="ufw is not active")
+        return jsonify({"success": False, "message": (
+            "UFW is not active on this host, so no firewall rule keeps the panel port closed — the "
+            "panel is reachable on its public port.")})
+    if read != _R15C_READ:
         return jsonify({"success": False, "message": (
             f"Couldn't read the firewall on this host, so port {port} can't be closed from "
             f"here. Check the host is reachable and that UFW is installed, then try again.")})
@@ -563,7 +590,24 @@ def _r14a_close_refusal(remote, port, shared, read_ok):
         log_action(current_user, "close_panel_port", target=str(port), success=False,
                    remote=remote, detail="opened by a multi-port rule: " + ", ".join(shared))
         return jsonify({"success": False, "message": _r14a_shared_rule_message(port, shared)})
-    return None
+    return _r15c_default_allow_refusal(remote, port)
+
+
+def _r15c_default_allow_refusal(remote, port):
+    """The answer when UFW lets every port in by default, so no rule removed here closes the port.
+
+    `ufw default allow incoming` with a `5000/tcp` allow: the rule was deleted and the route said
+    "closed — reachable only over your tailnet", or with no rule "already closed", while the port
+    stayed open to the internet. `ufw status numbered` does not print the policy; verbose does.
+    """
+    if not _fw_rules.remote_ufw_default_allows_in(remote):
+        return None
+    log_action(current_user, "close_panel_port", target=str(port), success=False, remote=remote,
+               detail="ufw default incoming policy is allow")
+    return jsonify({"success": False, "message": (
+        "UFW's default policy on this host allows incoming connections, so the panel port stays "
+        "reachable whatever its own rule says. Set it to deny (ufw default deny incoming), then try "
+        "again.")})
 
 
 def _r14a_shared_rule_message(port, shared):

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Custom Commands{% endblock %}
+{% block title %}{{ t('Custom Commands') }}{% endblock %}
 
 {% macro scope_select(cmd, idp) %}
 {# A command scoped to a game the current list does not hold — LinuxGSM dropped or renamed it, or
