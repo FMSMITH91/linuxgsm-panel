@@ -1051,13 +1051,16 @@ def _r16d_is_removal37(callee):
             and not callee.endswith("session.remove"))      # SQLAlchemy's, no file
 
 
+_R16D_FIELDS37 = ("body", "orelse", "finalbody")
+
+
 def _r16d_fields37(stmt):
     """The blocks of `stmt` a failure reaches an outer try from: a try's body only if it lets OSError out."""
     if isinstance(stmt, _ast37.Try) and any(
             _h.type is None or _re37.search(r"\b(?:%s)\b" % "|".join(_WIDE37), _ast37.unparse(_h.type))
             for _h in stmt.handlers):
-        return ("orelse", "finalbody")
-    return ("body", "orelse", "finalbody")
+        return _R16D_FIELDS37[1:]
+    return _R16D_FIELDS37
 
 
 def _r15d_stmts37(stmt):

@@ -2702,6 +2702,12 @@ _sv_restart = _am.so.restart_panel
 from panel.routes import remote_security as _rs_mod
 _sv_wl = _rs_mod._security_whitelist
 _cp_port = None     # read inside; a load_config() that raised first has nothing to put back
+
+
+def _cp_put_port_back(cfg):
+    """Restore the panel's saved port (the change-port check below moves it)."""
+    cfg.update({"port": _cp_port})
+
 try:
     _am.so.ensure_panel_fail2ban = lambda log, port, ignore=None: (
         _f2b_calls.append((port, list(ignore) if ignore is not None else None)), (True, "ok"))[1]
@@ -2747,7 +2753,7 @@ finally:
     # that fails leaves every later check on the wrong port, so it must stop the suite, loudly.
     # Unread, it was a NameError here that replaced whatever had gone wrong above it.
     if _cp_port is not None:
-        _am.update_config(lambda cfg: cfg.update({"port": _cp_port}))
+        _am.update_config(_cp_put_port_back)
 
 # ── change-port: a panel bound to the host's own public/LAN address keeps its port OPEN ──
 # Only the wildcard counted as public, so binding to the host's public IP deleted the allow

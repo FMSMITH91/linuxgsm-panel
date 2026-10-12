@@ -166,7 +166,7 @@ for _attr, _fns in _WATCHED.items():
 # (part05's secret rendering puts a stand-in first), so a shell is not judged from outside: it runs
 # under bash with `tailscale` and `which` as functions that make the same call at the moment of use.
 # Imported here, before any part, so its handle is wrapped before anything can call it.
-from panel.ops import tailscale_integration as _ts_live  # noqa: E402,F401
+importlib.import_module("panel.ops.tailscale_integration")
 
 _R15D_SYSTEM_DIRS = ("/usr/", "/bin/", "/sbin/", "/opt/", "/snap/", "/nix/")
 _r15d_ts_refused = []
@@ -424,7 +424,7 @@ for _part in _PARTS:
     _path_before = list(sys.path)
     # Again before each part: part05 reinstalls nosudo_runner's shim over every module's subprocess,
     # and that replaced this answer for the rest of the run.
-    _r16d_ts_unloaded = _r16d_wrap_ts_handles()
+    _r16d_wrap_ts_handles()
     importlib.import_module("unit." + _part)
     _hub_after.append((_part, _hub_leftovers()))
     if (tempfile.mkdtemp is not _r15d_tracked_mkdtemp or tempfile.mkstemp is not _r15d_tracked_mkstemp
@@ -610,7 +610,7 @@ try:
                 if b"stand-in" in (_out or b""):
                     _r16d_ts_let.append("%s.%s %r" % (type(_w).__name__, _how, _args[0]))
             except FileNotFoundError:
-                pass
+                pass    # no such program on this machine: nothing ran, so nothing got through
     # Not a tailscale command: the grep's pattern and an echo's word are text, and run.
     _r16d_ts_text = _r16d_ts_wraps[1].run(  # nosec B604 - a fixed command, through the wrapper under test
         "echo tailscale | grep -c tailscale", shell=True, env=_r16d_ts_env, capture_output=True,

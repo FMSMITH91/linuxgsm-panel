@@ -662,7 +662,7 @@ STEAM_CONNECT_GAMES = frozenset({
 # Valve-engine MODS with no Steam app of their own: the server reports Half-Life's or the SDK's
 # app id, so whether steam://connect lands in the mod is not something the panel can promise.
 # Kept apart deliberately; the unit suite holds every Valve-engine game to one set or the other.
-_STEAM_CONNECT_UNSURE = frozenset({"bb", "sfc", "ts", "vs", "zmr"})
+STEAM_CONNECT_UNSURE = frozenset({"bb", "sfc", "ts", "vs", "zmr"})
 
 # LinuxGSM game_types with NO `update` command (not SteamCMD-based — LinuxGSM omits update from
 # their menu). Used to hide the Update action even before a server's command list is fetched.

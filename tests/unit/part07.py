@@ -392,6 +392,11 @@ class _GhGrown(dict):
         super().__init__()
         self.at = {}
 
+    def __eq__(self, other):
+        return dict.__eq__(self, other) and getattr(other, "at", None) == self.at
+
+    __hash__ = None             # a dict: unhashable, as before
+
 
 def _gh_grown_lists(tree):
     """{(function or None, name): every element a list name is given there, in source order}.
