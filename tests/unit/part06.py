@@ -1433,6 +1433,36 @@ def _r14d_stub_names(dotted):
     return _stub_names_cache[dotted]
 
 
+def _r14d_import_aliases(node, carried):
+    """{name: dotted module} one Import / ImportFrom statement binds to a repository module."""
+    alias = {}
+    if isinstance(node, _ast_scan.Import):
+        for _a in node.names:
+            # `import panel.x` binds `panel`, not the submodule; only `as` names it.
+            if (_a.asname or "." not in _a.name) and _r14d_modfile(_a.name):
+                alias[_a.asname or _a.name] = _a.name
+    elif isinstance(node, _ast_scan.ImportFrom) and node.module and not node.level:
+        for _a in node.names:
+            if node.module in carried:
+                if _a.name in carried[node.module]:
+                    alias[_a.asname or _a.name] = carried[node.module][_a.name]
+            elif _r14d_modfile(node.module + "." + _a.name):
+                alias[_a.asname or _a.name] = node.module + "." + _a.name
+    return alias
+
+
+def _r14d_sys_modules_alias(node):
+    """{name: dotted module} for `name = sys.modules["mod"]` on a repository module, else {}."""
+    if not (isinstance(node, _ast_scan.Assign) and isinstance(node.value, _ast_scan.Subscript)):
+        return {}
+    _key = node.value.slice
+    if not (getattr(getattr(node.value, "value", None), "attr", "") == "modules"
+            and isinstance(_key, _ast_scan.Constant) and isinstance(_key.value, str)
+            and _r14d_modfile(_key.value)):
+        return {}
+    return {_t.id: _key.value for _t in node.targets if isinstance(_t, _ast_scan.Name)}
+
+
 def _r14d_aliases(tree, carried):
     """{name: dotted module} for each module-level name `tree` binds to a repository module.
 
@@ -1441,26 +1471,8 @@ def _r14d_aliases(tree, carried):
     """
     alias = {}
     for _n in _ast_scan.walk(tree):
-        if isinstance(_n, _ast_scan.Import):
-            for _a in _n.names:
-                # `import panel.x` binds `panel`, not the submodule; only `as` names it.
-                if (_a.asname or "." not in _a.name) and _r14d_modfile(_a.name):
-                    alias[_a.asname or _a.name] = _a.name
-        elif isinstance(_n, _ast_scan.ImportFrom) and _n.module and not _n.level:
-            for _a in _n.names:
-                if _n.module in carried:
-                    if _a.name in carried[_n.module]:
-                        alias[_a.asname or _a.name] = carried[_n.module][_a.name]
-                elif _r14d_modfile(_n.module + "." + _a.name):
-                    alias[_a.asname or _a.name] = _n.module + "." + _a.name
-        elif isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Subscript):
-            if (getattr(getattr(_n.value, "value", None), "attr", "") == "modules"
-                    and isinstance(_n.value.slice, _ast_scan.Constant)
-                    and isinstance(_n.value.slice.value, str) and _r14d_modfile(_n.value.slice.value)):
-                for _t in _n.targets:
-                    if isinstance(_t, _ast_scan.Name):
-                        _alias_mod = _n.value.slice.value
-                        alias[_t.id] = _alias_mod
+        alias.update(_r14d_import_aliases(_n, carried))
+        alias.update(_r14d_sys_modules_alias(_n))
     return alias
 
 

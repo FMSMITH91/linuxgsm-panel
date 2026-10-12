@@ -990,7 +990,34 @@ check("no module calls the datetime UTC helpers that are scheduled for removal",
 # register_routes, which the import probe below never calls — passed both checks. A filter with
 # no category ("ignore" everything) silences deprecations too; one inside `with
 # warnings.catch_warnings():` is scoped to that block (manage.py's app import) and is fine.
-import ast as _dw_ast  # noqa: E402
+_dw_ast = _smg_ast
+
+
+def _r14d_call_name(node):
+    """The called name of a Call node (`warnings.x(...)` or `x(...)`), else ""."""
+    if not isinstance(node, _dw_ast.Call):
+        return ""
+    return getattr(node.func, "attr", getattr(node.func, "id", ""))
+
+
+def _r14d_is_catch_warnings(node):
+    """Is `node` a `with ...catch_warnings():` block?"""
+    return isinstance(node, (_dw_ast.With, _dw_ast.AsyncWith)) and any(
+        _r14d_call_name(_it.context_expr) == "catch_warnings" for _it in node.items)
+
+
+def _r14d_ignores_deprecations(call):
+    """Does filterwarnings/simplefilter `call` ignore DeprecationWarnings with no module/message?"""
+    _fn = _r14d_call_name(call)
+    _kw = {_k.arg: _k.value for _k in call.keywords}
+    # category is positional 3rd in filterwarnings(action, message, category), 2nd in
+    # simplefilter(action, category)
+    _ci = 2 if _fn == "filterwarnings" else 1
+    _cat = _kw.get("category", call.args[_ci] if len(call.args) > _ci else None)
+    _act = call.args[0] if call.args else _kw.get("action")
+    return (isinstance(_act, _dw_ast.Constant) and _act.value == "ignore"
+            and "module" not in _kw and "message" not in _kw
+            and (_cat is None or "DeprecationWarning" in _dw_ast.dump(_cat)))
 
 
 def _r14d_blanket_filters(tree):
@@ -998,24 +1025,10 @@ def _r14d_blanket_filters(tree):
     out = []
 
     def _walk(node, scoped):
-        if isinstance(node, (_dw_ast.With, _dw_ast.AsyncWith)) and any(
-                isinstance(_it.context_expr, _dw_ast.Call)
-                and getattr(_it.context_expr.func, "attr", getattr(_it.context_expr.func, "id", ""))
-                == "catch_warnings" for _it in node.items):
-            scoped = True
-        _fn = getattr(node.func, "attr", getattr(node.func, "id", "")) \
-            if isinstance(node, _dw_ast.Call) else ""
-        if _fn in ("filterwarnings", "simplefilter") and not scoped:
-            _kw = {_k.arg: _k.value for _k in node.keywords}
-            # category is positional 3rd in filterwarnings(action, message, category), 2nd in
-            # simplefilter(action, category)
-            _ci = 2 if _fn == "filterwarnings" else 1
-            _cat = _kw.get("category", node.args[_ci] if len(node.args) > _ci else None)
-            _act = node.args[0] if node.args else _kw.get("action")
-            if (isinstance(_act, _dw_ast.Constant) and _act.value == "ignore"
-                    and "module" not in _kw and "message" not in _kw
-                    and (_cat is None or "DeprecationWarning" in _dw_ast.dump(_cat))):
-                out.append(node.lineno)
+        scoped = scoped or _r14d_is_catch_warnings(node)
+        if (not scoped and _r14d_call_name(node) in ("filterwarnings", "simplefilter")
+                and _r14d_ignores_deprecations(node)):
+            out.append(node.lineno)
         for _ch in _dw_ast.iter_child_nodes(node):
             _walk(_ch, scoped)
     _walk(tree, False)
@@ -3200,9 +3213,11 @@ def _r13d_run_redirected(cmd, real_dir, anchored, timeout=30):
 
 
 def _r14d_sshd_anchored(rendering):
-    """Every sshd_config PATH the rendering names is a whole SSHD_CONFIG the redirect replaces: one
-    built in the shell (`e=/etc; "$e/ssh/sshd_config"`) is not, and would edit the host's file.
-    (`sshd_config[.]d` in the Include grep is a pattern, not a path: no slash before it.)"""
+    """Is every sshd_config PATH the rendering names a whole SSHD_CONFIG the redirect replaces?
+
+    One built in the shell (`e=/etc; "$e/ssh/sshd_config"`) is not, and would edit the host's
+    file. (`sshd_config[.]d` in the Include grep is a pattern, not a path: no slash before it.)
+    """
     return 0 < rendering.count(_priv.SSHD_CONFIG) == rendering.count("/sshd_config")
 
 
