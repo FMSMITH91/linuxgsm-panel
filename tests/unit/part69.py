@@ -522,3 +522,34 @@ if _got69 is not None:
           "<strong data-no-i18n>vps&lt;1&gt;</strong> necesita reiniciarse para terminar de aplicar" in (_got69.get("nag") or "")
           and "<strong>the panel host</strong> necesita reiniciarse" in (_got69.get("nag2") or ""),
           repr(_got69)[:900])
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 7. A protected rule's refusal, from /firewall/close and /firewall/delete-rule, in Spanish
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Both handed tr() the protect reason with its ports already filled in — never a key — so the
+# refusal was English while the Firewall page showed the same reason translated.
+_tmpl69 = _fwmod69.R14A_REASONS["panel_only"]
+_grp69 = {"nums": [1], "protected": True, "protect_reason_key": _tmpl69,
+          "protect_reason_params": {"port": "5000"}, "protect_reason": _tmpl69.format(port="5000"),
+          "port_num": "5000", "port_label": "5000", "scope": "Any address", "proto": "tcp",
+          "action": "ALLOW IN", "key": "k1"}
+_prot69 = {}
+try:
+    _lang69("es")
+    _c69 = _p9_client(P9_ADMIN)
+    _p9_patch(_fwmod69, "remote_ufw_status", lambda server: {"installed": True, "active": True,
+                                                              "groups": [dict(_grp69)]})
+    _p9_patch(_hosts69, "_r15a_spec_names", lambda g, port, label: True)
+    _prot69["delete"] = _p9_json(_c69.post("/api/remote/%d/firewall/delete-rule" % P9_HOST,
+                                           json={"num": 1})).get("message")
+    _prot69["close"] = _p9_json(_c69.post("/api/remote/%d/firewall/close" % P9_HOST,
+                                          json={"port": "5000", "protocol": "tcp"})).get("message")
+finally:
+    _lang69("en")
+    _p9_restore_all()
+_want69 = _scan69.load_catalog("es").get(_tmpl69, "?").replace("{port}", "5000")
+check("firewall (es): deleting or closing a protected rule is refused in Spanish, with its port in it "
+      "(the reason was handed to tr() with the port already filled in, so it stayed English)",
+      _prot69.get("delete") == _want69 and _prot69.get("close") == _want69 and "5000" in _want69,
+      repr((_prot69, _want69)))

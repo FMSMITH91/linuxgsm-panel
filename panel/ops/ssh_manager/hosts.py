@@ -411,9 +411,7 @@ def _r15a_guarded_spec_delete(server, verb, vargs, names):
                      "is reachable and try again."), "", "", None)
         for g in (status.get("groups", []) if status.get("installed") else []):
             if g.get("protected") and names(g):
-                return (g.get("protect_reason")
-                        or "This rule protects your access to the host and can't be removed here.",
-                        "", "", None)
+                return _r16c_protect_refusal(g), "", "", None
         out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
         return None, out, err, rc
 
@@ -551,6 +549,20 @@ def _ufw_first_public_rule(status_out, port, proto):
     return None
 
 
+def _r16c_protect_refusal(g):
+    """The refusal to delete protected rule `g`: its protect reason, as a Sentence the route translates.
+
+    The group carries the reason's fixed template and values (firewall.R14A_REASONS) beside the
+    English. Handed back as that English, the route's i18n.tr() looked up a sentence with the
+    ports already in it — never a key — so a Spanish or French viewer read the refusal in English
+    while the Firewall page showed the same reason translated. As a str it is the same English.
+    """
+    key = g.get("protect_reason_key")
+    if key:
+        return i18n.Sentence(key, **dict(g.get("protect_reason_params") or {}))
+    return g.get("protect_reason") or "This rule protects your access to the host and can't be removed here."
+
+
 def remote_ufw_close_port(server, port, protocol=None, force=False):
     """Close a port on the remote server via UFW. With protocol=None (or 'both'/'any'),
     deletes the bare `allow <port>` rule (both protocols); otherwise the proto-specific rule.
@@ -645,8 +657,7 @@ def _delete_rule_locked(server, n, force, expect_key):
                                         "since it was read, so nothing was removed. Refresh and try again.", n=n)
         for g in (status.get("groups", []) if not force else []):
             if n in g.get("nums", []) and g.get("protected"):
-                return False, g.get("protect_reason") or \
-                    "This rule protects your access to the host and can't be removed here."
+                return False, _r16c_protect_refusal(g)
         verb, args = _delete_verb(n, status, expect_key)
     else:
         verb, args = "ufw-delete-num", [n]
