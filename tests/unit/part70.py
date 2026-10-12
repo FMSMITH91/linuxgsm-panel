@@ -33,7 +33,6 @@ from panel.core import config as _cfg70
 from panel.core import http as _http70
 from panel.core import i18n as _i18n70
 from panel.db import models as _models70
-from panel.db.models import User, db
 from panel.ops import serve_upkeep as _su70
 from panel.ops import system_ops as _so70
 from panel.ops import tailscale_integration as _ts70
@@ -66,8 +65,8 @@ _CAT70 = {lg: _cat70(lg) for lg in ("es", "fr")}
 def _as70(lang):
     """Set P9_ADMIN's saved language (the account's choice wins over the session's)."""
     with _p9.app_context():
-        db.session.get(User, P9_ADMIN).language = lang
-        db.session.commit()
+        _models70.db.session.get(_models70.User, P9_ADMIN).language = lang
+        _models70.db.session.commit()
 
 
 def _tr70(lang, s):
