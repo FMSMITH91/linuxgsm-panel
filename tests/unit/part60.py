@@ -553,7 +553,7 @@ def _failing_transports60():
 def _transports60(a_client):
     """Every transport's failure is the same fixed answer, audited, with none of its own text."""
     _reset60()
-    hosts = (("paramiko", _host60("p60-key", "192.0.2.161")),
+    hosts = (("paramiko", _host60("p60-key", "p60-key.example")),
              ("tailscale", _host60("p60-ts", "box.ts.net", auth_method="tailscale")),
              ("local", _host60("p60-local", "127.0.0.1", auth_method="local", is_local=True)))
     sids = {name: _server60(rid, _USER60, 27610 + i) for i, (name, rid) in enumerate(hosts)}
@@ -596,7 +596,7 @@ def _crash60(a_client, sid):
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_SRV60 = NS(id=96001, host="192.0.2.160", is_local=False, auth_method="key")
+_SRV60 = NS(id=96001, host="p60-host.example", is_local=False, auth_method="key")
 _REAL_CREATE60 = _files60.create_path
 
 
@@ -635,7 +635,7 @@ def _cleanup60():
 
 try:
     _arm60()
-    _H60 = _host60("p60-host", "192.0.2.160")
+    _H60 = _host60("p60-host", "p60-host.example")
     _S60 = _server60(_H60, _USER60, 27600)
     _ADMIN60, _VIEWER60 = _users60(_H60)
     _A60, _V60 = _p9_client(_ADMIN60), _p9_client(_VIEWER60)

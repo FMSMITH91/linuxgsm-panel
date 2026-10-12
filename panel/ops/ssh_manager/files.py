@@ -1594,6 +1594,10 @@ CREATE_RESERVED = "That name is reserved for LinuxGSM or the game's account — 
 CREATE_CONSOLE = ("The live console uses this path — creating something there could stop the "
                   "console until the server restarts. Choose another name.")
 CREATE_NO_DIR = "That folder is no longer there. Reload the file browser."
+CREATE_LINKED = ("Refusing to create through a symbolic link: open the folder it points to and "
+                 "create it there.")
+CREATE_HOST_REFUSED = ("The host refused to create it — the folder may belong to another account. "
+                       "Nothing was created.")
 _CREATE_LINKED = "__CREATE_LINKED__"
 _CREATE_TAKEN = "__CREATE_TAKEN__"
 _CREATE_FAIL = "__CREATE_FAIL__"
@@ -1676,11 +1680,9 @@ _CREATE_OUTCOMES = (
     (_OUTSIDE_HOME, CREATE_REFUSED),
     (_PROTECTED_MARK, CREATE_RESERVED),
     (_RENAME_CONSOLE_MARK, CREATE_CONSOLE),
-    (_CREATE_LINKED, "Refusing to create through a symbolic link: open the folder it points to "
-                     "and create it there."),
+    (_CREATE_LINKED, CREATE_LINKED),
     (_CREATE_TAKEN, CREATE_EXISTS),
-    (_CREATE_FAIL, "The host refused to create it — the folder may belong to another account. "
-                   "Nothing was created."),
+    (_CREATE_FAIL, CREATE_HOST_REFUSED),
 )
 
 
