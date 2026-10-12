@@ -622,3 +622,39 @@ check("firewall: an uninstall's notes (still open, UFW inactive, firewall unread
       len(_notes_fr67) == 3 and _notes_fr67[0].startswith("Toujours ouvertes")
       and _notes_fr67[1].startswith("UFW n'est pas actif") and _notes_fr67[2].startswith("Le pare-feu n'a pas pu"),
       repr(_notes_fr67))
+
+
+# ── A backup restore refused in es or fr still opens the passphrase and "restore anyway" dialogs ──
+from unit.part01 import skip  # noqa: E402
+from unit.part47 import _cut47, _node47  # noqa: E402
+import panel.routes.panel_backup as _pbr67  # noqa: E402,F401  (the route reads bk through its module)
+
+_rst67 = {}
+try:
+    _as67("es")
+    for _k67, _m67 in (("need", _bk67.NEEDS_PASSPHRASE), ("wrong", _bk67.WRONG_PASSPHRASE),
+                       ("safety", _i18n67.Sentence(_bk67.SAFETY_COPY_FAILED, why=_bk67._R16A_BACKUP_FAILED)),
+                       ("other", "No such backup.")):
+        with _patched():
+            _patch(_bk67, "restore_backup", lambda name, passphrase=None, skip_safety_backup=False, _m=_m67: (False, _m))
+            _rst67[_k67] = _p9_client(P9_ADMIN).post("/api/panel/backup/restore", json={"name": "p67.tar.gz"}).get_json()
+finally:
+    _as67("en")
+with open(_os67.path.join(_ROOT67, "static", "js", "remote_manage_backups.js"), encoding="utf-8") as _fh67:
+    _bkjs67 = _fh67.read()
+_wants67 = _node47(_cut47(_bkjs67, "function _bkRestoreWantsPassphrase") + "\n"
+                   + _cut47(_bkjs67, "function _bkRestoreWantsSkipSafety") + "\n"
+                   + "const R = %s;\n" % _json67.dumps(_rst67)
+                   + "const out = {}; for (const k in R) out[k] = [_bkRestoreWantsPassphrase(R[k], true), "
+                     "_bkRestoreWantsSkipSafety(R[k], false)];\nconsole.log(JSON.stringify(out));")
+if _wants67 is None:
+    skip("backups: a Spanish admin's refused restore opens the passphrase / restore-anyway dialog", "no node")
+else:
+    check("backups: a Spanish admin's restore refused for a passphrase, or for a safety copy that could not "
+          "be written, opens the dialog that answers it (the page matched /passphrase/ and /safety copy/ "
+          "in the now-translated message, so neither opened); any other refusal opens neither",
+          _wants67 == {"need": [True, False], "wrong": [True, False], "safety": [False, True],
+                       "other": [False, False]}
+          and "passphrase" not in (_rst67["need"]["message"] + _rst67["wrong"]["message"]).lower()
+          and "safety copy" not in _rst67["safety"]["message"],
+          repr((_wants67, _rst67)))

@@ -826,7 +826,8 @@ def _register_panel_backups(app):
         ok, msg = bk.restore_backup(name, passphrase=_b.get("passphrase") or None,
                                     skip_safety_backup=skip)
         log_action(current_user, "panel_backup_restore", target=name, success=ok)
-        return jsonify({"success": ok, "message": i18n.tr(msg)})
+        # `code` says which refusal this is, for the page to act on: the message is translated.
+        return jsonify({"success": ok, "message": i18n.tr(msg), "code": "" if ok else bk.restore_code(msg)})
 
     @app.route("/api/panel/backup/download/<path:name>")
     @login_required
