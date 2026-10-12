@@ -1477,15 +1477,23 @@ _CR_REACHED = "REAL crontab reached:"
 #    `env crontab`, which skip a shell function and look the name up on PATH;
 #  * a crontab named by PATH (`/usr/bin/crontab`) is neither, so a pipeline holding one is refused
 #    before it runs.
+# And what looks crontab up on a PATH of its own skips all three (review 1011d): `env -i crontab`,
+# `sudo crontab` (secure_path replaces ours — and CI runs unit as root, where sudo succeeds),
+# `PATH=/usr/bin command crontab`. So the escalation and environment commands are stood in for on
+# PATH too, as reboot41 does for the power commands, and a PATH reassigned in the pipeline is
+# refused as text. The stand-ins name the marker file literally, not through $CR_MARK, so one
+# reached with the environment emptied (`exec -c crontab`, `env -i …`) still records itself.
 _CR_MARK = os.path.join(_cr_sb, "crontab-reached")
 _CR_SHADOW = 'crontab() { echo "$*" >> "$CR_MARK"; return 97; }; '
 _CR_BIN = os.path.join(_cr_sb, "bin")
 os.makedirs(_CR_BIN, exist_ok=True)
-with open(os.path.join(_CR_BIN, "crontab"), "w", encoding="utf-8") as _cr_fh:
-    _cr_fh.write('#!/bin/sh\necho "$*" >> "$CR_MARK"\nexit 97\n')
-# nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this part runs itself
-os.chmod(os.path.join(_CR_BIN, "crontab"), 0o700)  # nosec B103 - a test stand-in in a private temp dir
-_CR_BY_PATH = re.compile(r"/crontab(?![\w.-])")
+for _cr_name in ("crontab", "sudo", "doas", "su", "env", "run0", "pkexec"):
+    with open(os.path.join(_CR_BIN, _cr_name), "w", encoding="utf-8") as _cr_fh:
+        _cr_fh.write('#!/bin/sh\necho "%s $*" >> %s\nexit 97\n'
+                     % (_cr_name, _cr_shlex.quote(_CR_MARK)))
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this part runs itself
+    os.chmod(os.path.join(_CR_BIN, _cr_name), 0o700)  # nosec B103 - a test stand-in in a private temp dir
+_CR_BY_PATH = re.compile(r"/(?:crontab|sudo|doas|su|env|run0|pkexec)(?![\w.-])|\bPATH=")
 
 
 def _cr_drive(fn, *a, **kw):
@@ -1543,7 +1551,8 @@ def _cr_drive(fn, *a, **kw):
 def _cr_guarded_run(pipeline):
     """Run `pipeline` with every crontab stood in for: the CompletedProcess, or why it was refused."""
     if _CR_BY_PATH.search(pipeline):
-        return "a crontab named by path is left in the pipeline, not run: %r" % pipeline[:160]
+        return ("a crontab or escalation named by path, or a PATH of its own, is left in the "
+                "pipeline, not run: %r" % pipeline[:160])
     if os.path.exists(_CR_MARK):
         os.remove(_CR_MARK)
     _env = dict(os.environ, CR_MARK=_CR_MARK, PATH=_CR_BIN + os.pathsep + os.environ.get("PATH", ""))
@@ -1558,15 +1567,21 @@ def _cr_guarded_run(pipeline):
 
 # The guard's own controls: each way a leftover crontab call can be written is refused, and a
 # pipeline with none in it runs. The first two were missed when the shadow reported on stderr;
-# the next three skip a shell function; the last bypasses PATH.
+# the next three skip a shell function; the sixth bypasses PATH; the rest look crontab up on a
+# PATH of their own or run it with the environment emptied.
 _cr_ctl = {}
 # All READS (-l): if the guard ever regressed, a control must not be what deletes a crontab.
 for _cr_form in ('E2=$(crontab -l 2>&1) || true', 'crontab -l 2>/dev/null; true',
                  'command crontab -l >/dev/null; true', '(exec crontab -l >/dev/null); true',
-                 'env crontab -l >/dev/null; true', '/usr/bin/crontab -l >/dev/null; true'):
+                 'env crontab -l >/dev/null; true', '/usr/bin/crontab -l >/dev/null; true',
+                 'env -i crontab -l >/dev/null; true',
+                 'env -i PATH=/usr/bin:/bin crontab -l >/dev/null; true',
+                 'PATH=/usr/bin:/bin command crontab -l >/dev/null; true',
+                 'sudo -n crontab -l >/dev/null; true', '(exec -c crontab -l >/dev/null); true',
+                 'E2=$(sudo -n -u root crontab -l 2>&1) || true'):
     _cr_ctl[_cr_form] = _cr_guarded_run(_cr_form)
 check("cron drive: a leftover crontab call is refused however it is written (captured, discarded, "
-      "command/exec/env, by path)",
+      "command/exec/env, by path, sudo, env -i, its own PATH)",
       all(isinstance(v, str) for v in _cr_ctl.values()),
       repr({k: v for k, v in _cr_ctl.items() if not isinstance(v, str)}))
 _cr_ok = _cr_guarded_run('echo fine')

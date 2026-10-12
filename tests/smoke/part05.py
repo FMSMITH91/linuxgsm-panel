@@ -2364,9 +2364,24 @@ check("log stamps: ...but it does offer the way back OFF",
       "no way to turn it off — anyone who enabled it is stuck with a frozen console")
 _sd_js_src = open(os.path.join(_repo_root, "static", "js", "server_detail.js"),
                   encoding="utf-8").read()
+# Judged per request, not by one spelling anywhere in the file: `enabled: !0` or a variable passed
+# the old literal search, and an unrelated `enabled: true` failed it. Every fetch of the endpoint
+# in any script must send the literal body `{ enabled: false }`, and nothing else in its call.
+import glob as _lt_glob  # pylint: disable=reimported
+_lt_bad, _lt_seen = [], 0
+for _lt_js in sorted(_lt_glob.glob(os.path.join(_repo_root, "static", "js", "*.js"))):
+    _lt_src = open(_lt_js, encoding="utf-8").read()
+    _lt_at = _lt_src.find("/log-timestamps'")
+    while _lt_at != -1:
+        _lt_seen += 1
+        _lt_call = _lt_src[_lt_at:_lt_src.find("})", _lt_at) + 2]
+        if "method: 'POST'" in _lt_call and (
+                _lt_call.count("enabled") != 1 or "JSON.stringify({ enabled: false })" not in _lt_call):
+            _lt_bad.append("%s: %s" % (os.path.basename(_lt_js), " ".join(_lt_call.split())[:90]))
+        _lt_at = _lt_src.find("/log-timestamps'", _lt_at + 1)
 check("log stamps: and no JS path enables it either",
-      "enabled: true" not in _sd_js_src.replace(" ", "").replace("enabled:true", "enabled: true"),
-      "some JS still POSTs enabled:true to the log-timestamps endpoint")
+      _lt_seen >= 1 and not _lt_bad,
+      "requests seen: %d; not a literal enabled:false: %s" % (_lt_seen, _lt_bad))
 
 # ── The Update button and the bulk endpoint must agree about who HAS an update ──────────
 # They didn't. GameServer.supports_update knows the Call of Duty family is not SteamCMD-based
@@ -2730,16 +2745,18 @@ with app.app_context():
 # Both controls sit in ONE form in manage_users.html, so this is a single ordinary submit.
 # Driven against a throwaway sole-superadmin so the suite's own fixtures stay intact.
 with app.app_context():
+    # The ids parked HERE, read before parking: read afterwards as "every inactive superadmin",
+    # the restore below would also reactivate one that some earlier check had deactivated.
+    _parked = []
     for _u in User.query.filter(User.is_superadmin.is_(True), User.is_active.is_(True)).all():
         _u.is_active = False            # park the real ones so `sole` really is sole
+        _parked.append(_u.id)
     _sole = User(username="smoke_sole", display_name="Sole",
                  password_hash=auth.hash_password("Str0ng!passw0rd"),
                  is_superadmin=True, is_active=True)
     db.session.add(_sole)
     db.session.commit()
     _sole_id = _sole.id
-    _parked = [u.id for u in User.query.filter(User.is_superadmin.is_(True),
-                                               User.is_active.is_(False)).all()]
 _sc = client_as(_sole_id)
 # No "reset_password" alongside it any more: resetting your OWN password from this form is
 # refused outright (see the self-reset checks), so that refusal would answer first and this
