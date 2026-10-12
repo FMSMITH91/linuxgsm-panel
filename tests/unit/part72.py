@@ -350,3 +350,36 @@ check("375px: the rate-limit row gives its port the whole row below 576px (the �
       "in French and Spanish)",
       'class="col-12 col-sm-6"' in _lim72 and 'class="col-6 col-sm-3"' in _lim72
       and 'class="col-6 col-sm-3 d-flex gap-1"' in _lim72, _lim72[-300:])
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 6. The terminal writes a panel message as text, never as control sequences
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A host's name may hold ESC (SAFE_LABEL_RE refuses only < > " ' ` \ and newlines), and a refusal
+# such as "Could not start a shell on {host}…" was written into xterm as it was.
+_out72t = _node72("terminal: a host name's control characters are not written into xterm", (
+    "global.window = global; global.REMOTE_ID = 1; const writes = [], on = {}; global.addEventListener = () => 0;\n"
+    "global.t = s => s; global.tf = (s, v) => s.replace(/\\{(\\w+)\\}/g, (m, k) => k in v ? String(v[k]) : m);\n"
+    "global.document = { getElementById: id => (id === 'terminal' ? {clientWidth: 800, clientHeight: 400} : null),\n"
+    "  querySelector: () => null, addEventListener(){} };\n"
+    "global.getComputedStyle = () => ({paddingLeft: '0', paddingRight: '0', paddingTop: '0', paddingBottom: '0'});\n"
+    "window.getComputedStyle = global.getComputedStyle;\n"
+    "global.Terminal = function(){ this.cols = 80; this.rows = 24; };\n"
+    "Terminal.prototype = {open(){}, resize(c, r){ this.cols = c; this.rows = r; }, focus(){}, onData(){},\n"
+    "  write(s){ writes.push(s); }};\n"
+    "global.io = () => ({on: (ev, fn) => { on[ev] = fn; }, emit(){}});\n"
+    "require('vm').runInThisContext(%s);\n"
+    "initTerminal();\n"
+    "const evil = 'box\\u001b[2J\\u001b]0;pwned\\u0007\\u009b31m';\n"
+    "on.term_error({message: 'x', message_key: 'Could not start a shell on {host} ({error}).',\n"
+    "               message_vals: {host: evil, error: 'OSError'}});\n"
+    "on.term_exit({reason: evil});\n"
+    "console.log(JSON.stringify({writes}));\n") % _json72.dumps(_read72(_JS72, "host_terminal.js")))
+if _out72t is not None:
+    _w72 = _out72t.get("writes") or []
+    # Each write keeps the page's own colour codes (ESC [31m … ESC [0m) and nothing else.
+    _inner72 = [w.replace("\x1b[31m", "").replace("\x1b[33m", "").replace("\x1b[0m", "").strip("\r\n")
+                for w in _w72]
+    check("terminal: a host name's ESC/BEL/CSI never reach xterm in an error or close line (its text stays)",
+          len(_w72) == 2 and all(not any(ord(c) < 32 or 0x7f <= ord(c) <= 0x9f for c in w) for w in _inner72)
+          and "box[2J]0;pwned31m" in _inner72[0], repr(_out72t))
