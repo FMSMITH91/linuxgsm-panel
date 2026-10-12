@@ -5400,6 +5400,7 @@ const ENTRY = (name, dir) => ({name: name, is_dir: dir, size: dir ? 0 : 5, prote
   out.blank = {sent: posts().length, err: err() && err().textContent, shown: !!err() && err().style.display === ''};
   S.reply = {success: false, conflict: true, message: 'TAKEN-MESSAGE'};
   if (field()) { field().value = 'notes.txt'; key(field(), 'Enter'); }
+  doc.activeElement = doc.body;   // a browser takes focus off a field that is disabled
   await flush();
   out.refused = {body: lastBody(), err: err() && err().textContent,
                  shown: !!err() && err().style.display === '', open: !!box(),
@@ -5437,7 +5438,7 @@ const ENTRY = (name, dir) => ({name: name, is_dir: dir, size: dir ? 0 : 5, prote
   // browse() rebuilds the list without the field, and the editor it held is let go.
   newFile.click();
   c.browse(''); await flush();
-  out.browse_clears = {open: !!box(), held: c._creating};
+  out.browse_clears = {open: !!box(), held: c._creating !== null};
   // In Spanish, with the real i18n.js: the field's label and its buttons are translated.
   const c2 = boot({'New file name': 'Nombre del nuevo archivo', 'Create': 'Crear', 'Cancel': 'Cancelar'});
   await flush();
@@ -5508,7 +5509,7 @@ if _node and _cr_buttons:
                                 "toast": ["Folder created", "success"]},
           "js (node): a created folder is made in the folder shown, and then opened",
           repr(_cn.get("folder")))
-    check(_cn.get("browse_clears") == {"open": False, "held": None},
+    check(_cn.get("browse_clears") == {"open": False, "held": False},
           "js (node): browse() rebuilds the list without the field and lets it go",
           repr(_cn.get("browse_clears")))
     check(_cn.get("i18n") == {"label": "Nombre del nuevo archivo", "buttons": ["Crear", "Cancelar"]},
