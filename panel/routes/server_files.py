@@ -14,7 +14,7 @@ from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, RENAM
     gmod_current_mounts, gmod_mount_setup, install_gmod_content, lgsm_game_config,
     lgsm_get_values, lgsm_read_config, lgsm_write_config, mods_action, mods_available,
     mods_installed, path_disk_free, read_file, run_cron_job_now, send_console_command,
-    stat_path, stat_upload_targets, stream_path, uninstall_gmod_content, update_cron_job,
+    console_has_control, stat_path, stat_upload_targets, stream_path, uninstall_gmod_content, update_cron_job,
     upload_file, write_file)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
@@ -40,7 +40,7 @@ from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_
     load_game_list)
 from panel.core.panel_state import (_console_backlog, _console_offsets, _console_partial,
     register_server_state)
-from panel.routes._shared import (_console_rows, _drain_action_output,
+from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _drain_action_output,
     _host_timezone_cached, _json_int, _server_action_buttons, game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
@@ -2589,6 +2589,10 @@ def _register_send_command(app):
 
         if not current_user.is_superadmin and not has_permission(current_user, SEND_COMMAND):
             return jsonify({"error": "Permission denied"}), 403
+        # Refused before the send, in words of its own: send_console_command refuses it too, and its
+        # rc would read here as "Console (tmux) not accessible".
+        if console_has_control(cmd_text):
+            return jsonify({"error": i18n.tr(CONSOLE_CONTROL_MSG)}), 400
 
         try:
             _, _, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10, selfname=gs.lgsm_name)

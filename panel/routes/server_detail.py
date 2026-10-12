@@ -11,7 +11,8 @@ from panel.db.models import (_NO_BIRTH, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_P
     still_held)
 from panel.ops.ssh_manager import (GAMEDIG_TYPE as GAMEDIG_TYPE_MAP, _resolve_from_console,
     _sanitize_steamid, game_engine, is_player_queryable, moderation_caps, player_count as
-    sm_player_count, player_list, send_console_command, set_autostart, set_daily_restart)
+    sm_player_count, player_list, send_console_command, set_autostart, set_daily_restart,
+    console_has_control)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
 # module would never be seen — attribute access resolves at call time and is stable
@@ -31,8 +32,8 @@ from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
                              _r13b_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
-from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
-    _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons,
+from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail,
+    _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons,
     game_account_write_refusal)
 
 
@@ -1292,6 +1293,10 @@ def _register_commands(app):
         # Permission check
         if not current_user.is_superadmin and not has_permission(current_user, SEND_COMMAND):
             flash("You don't have permission to send commands.", "danger")
+            return redirect(url_for("server_detail", server_id=server_id))
+        # A control character is a keystroke to the pane (^C stopped the game), not console text.
+        if console_has_control(cmd_text):
+            flash(i18n.tr(CONSOLE_CONTROL_MSG), "warning")
             return redirect(url_for("server_detail", server_id=server_id))
 
         try:

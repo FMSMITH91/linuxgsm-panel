@@ -1645,6 +1645,8 @@ def _json_int(value):
 # all read "under the limit". A check that passes gives its slot back.
 _REAUTH_FAILS = {}            # user id -> [time of each failed (or still in-flight) check]
 _REAUTH_LOCK = threading.Lock()
+# A console line refused for a control character (ssh_manager.console_has_control). Both senders.
+CONSOLE_CONTROL_MSG = "A console command can't contain control characters or line breaks."
 REAUTH_BLOCKED_MSG = ("Too many wrong passwords or codes for this account. Wait a few minutes and "
                       "try again.")
 
