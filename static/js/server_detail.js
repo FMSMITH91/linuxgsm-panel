@@ -167,8 +167,8 @@ function banScopeDialog(btn, name, steamid, num){
   if(window._plEngine!=='valve' && window._plEngine!=='minecraft'){
     confirmDialog({
       title: 'Ban player', icon: 'slash-circle', confirmLabel: 'Ban', confirmClass: 'btn-danger',
-      body: 'Ban <strong data-no-i18n>' + _esc(name) + '</strong> from <strong data-no-i18n>'
-            + _esc(SERVER_NAME) + '</strong>?',
+      body: tfHtml('Ban {player} from {server}?', {player: {html: '<strong data-no-i18n>' + _esc(name) + '</strong>'},
+                                                    server: {html: '<strong data-no-i18n>' + _esc(SERVER_NAME) + '</strong>'}}),
       onConfirm: function(){ _doModerate(btn,'ban',name,steamid,num,'this'); }
     });
     return;
@@ -176,9 +176,9 @@ function banScopeDialog(btn, name, steamid, num){
   var ov=document.createElement('div');
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
   ov.innerHTML='<div class="card" style="max-width:440px;width:100%;">'  // nosemgrep
-    +'<div class="card-header"><i class="bi bi-slash-circle"></i> Ban '+escapeHtml(name)+'</div>'
-    +'<div class="card-body"><p class="small text-secondary mb-2">Ban just on this server, or on '
-    +'<strong>all your servers</strong> that can match this player (same SteamID / name)?</p>'
+    +'<div class="card-header"><i class="bi bi-slash-circle"></i> '+tfHtml('Ban {name}', {name: {html: '<span data-no-i18n>'+escapeHtml(name)+'</span>'}})+'</div>'
+    +'<div class="card-body"><p class="small text-secondary mb-2">'
+    +escapeHtml(t('Ban just on this server, or on all your servers that can match this player (same SteamID / name)?'))+'</p>'
     +'<input type="text" id="ban-reason" class="form-control form-control-sm mb-3" maxlength="200" '
     +'placeholder="Reason (optional) — saved with an all-servers ban">'
     +'<div class="d-grid gap-2">'
@@ -986,7 +986,7 @@ function loadMoreConsole(btn) {
       _r13c_reshowPanelPushes(backlog, true);
       _consoleSig = null;   // let the next poll re-evaluate against the new buffer
       _r11c_resyncFrom(data.at);
-      if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
+      if (window.toast) toast(tf('Loaded {n} lines from the log', {n: older.length}), 'success');
     })
     .catch(function(){ if (window.toast) toast('Could not load more console output', 'danger'); })
     .finally(function(){ if (btn) { btn.disabled = false; btn.innerHTML = orig; } })  // nosemgrep
@@ -1513,6 +1513,11 @@ function clearConsole() {
   _consoleLines = [];
   _consoleSig = null;      // so the next poll repaints rather than deciding nothing changed
   _consolePrimed = false;  // and repaints with a full window, not just what arrived since
+  // Whatever panel lines were on the page are cleared, so none older is to be replayed. Left false
+  // (an empty backlog at load, then an update's lines pushed and Clear pressed), the re-prime took
+  // _lastPanelT back to 0 and rendered the whole backlog, and the reshow put back every kept push:
+  // the output the viewer had just cleared came back on the next poll.
+  _panelBacklogShown = true;
 }
 
 function sendCommand(ev) {  // NOSONAR - the constant false is the data-action preventDefault contract (panel.js fire)
@@ -1691,12 +1696,12 @@ var connectAddr = '';
 function copyConnect() {
   var addr = connectAddr || (document.getElementById('connect-addr') || {}).textContent || '';
   addr = addr.trim();
-  if (addr && addr !== 'resolving…' && addr !== 'unknown') window.copyText(addr, 'Copied ' + addr);
+  if (addr && addr !== 'resolving…' && addr !== 'unknown') window.copyText(addr, tf('Copied {text}', {text: addr}));
 }
 
 document.addEventListener('click', function(ev){
   var el = ev.target.closest('.copy-addr'); if(!el) return;
-  window.copyText(el.getAttribute('data-copy'), 'Copied ' + el.getAttribute('data-copy'));
+  window.copyText(el.getAttribute('data-copy'), tf('Copied {text}', {text: el.getAttribute('data-copy')}));
 });
 
 function fmtGB(b) { return (b / (1024 * 1024 * 1024)).toFixed(1) + ' GB'; }
@@ -1807,22 +1812,22 @@ function _setStatText(id, value) {
 // that failed as '–' / 'not read', never as zeros.
 function _showGameCpuTile(m, readable) {
   _setStatText('stat-gcpu', readable && m.game_cpu_percent!=null ? m.game_cpu_percent + '%' : '–');
-  _setStatText('stat-gcpu-sub', readable ? 'of ' + (m.cores||1) + '-core server' : 'not read');
+  _setStatText('stat-gcpu-sub', readable ? tf('of {n}-core server', {n: m.cores||1}) : 'not read');
 }
 function _showGameRamTile(m, readable) {
   _setStatText('stat-gram', readable ? (m.game_ram_mb||0) + ' MB' : '–');
   _setStatText('stat-gram-sub', !readable ? 'not read'
-          : (m.game_ram_percent!=null? m.game_ram_percent+'% of RAM' : (m.game_procs||0)+' procs'));
+          : (m.game_ram_percent!=null? tf('{n}% of RAM', {n: m.game_ram_percent}) : tf('{n} procs', {n: m.game_procs||0})));
 }
 function _showGameUptimeTile(m, readable) {
   _setStatText('stat-gup', !readable ? '–' : (m.game_procs ? fmtUptime(m.game_uptime_secs||0) : 'stopped'));
   _setStatText('stat-gup-sub', !readable ? 'not read'
-          : (m.game_procs||0) + ' process' + ((m.game_procs===1)?'':'es'));
+          : (m.game_procs===1 ? t('1 process') : tf('{n} processes', {n: m.game_procs||0})));
 }
 function _showServerTile(m, readable) {
   _setStatText('stat-scpu', readable && m.cpu_percent!=null ? m.cpu_percent + '%' : '–');
   _setStatText('stat-server-sub', readable
-          ? 'RAM ' + (m.ram_percent||0) + '% · disk ' + (m.disk_percent||0) + '%'
+          ? tf('RAM {ram}% · disk {disk}%', {ram: m.ram_percent||0, disk: m.disk_percent||0})
           : 'The panel could not read this host');
 }
 // Advance the live chart by one reading, keeping the last 45.
@@ -1970,7 +1975,7 @@ function loadGmodContent(){
           act = '<button class="btn btn-link btn-sm p-0 text-danger" style="font-size:.72rem;" type="button" '
             + 'data-gmc-uninstall="'+_esc(g.key)+'" data-gmc-label="'+_esc(g.label)+'"'+(running?' disabled':'')+'>Uninstall</button>';
         } else if (g.downloadable) {
-          status = '<span class="text-secondary">installs '+_esc(g.size||'')+'</span>';
+          status = '<span class="text-secondary">'+tfHtml('installs {size}', {size: g.size||''})+'</span>';
         } else {
           status = '<span class="text-warning">not on host</span>';
         }
@@ -1986,16 +1991,19 @@ function loadGmodContent(){
       }).join('');
       function _gb(b){ return (b/1073741824).toFixed(b >= 10.7e9 ? 0 : 1) + ' GB'; }   // bytes -> GB  // NOPMD
       var disk = (d.disk_free != null && d.disk_total != null)
-        ? '<div class="small mb-2"><i class="bi bi-hdd"></i> Host disk: '
-          + '<b class="'+(d.disk_free < 5368709120 ? 'text-danger' : 'text-success')+'">'+_gb(d.disk_free)+' free</b>'  // NOPMD
-          + ' <span class="text-secondary">of '+_gb(d.disk_total)+'</span></div>'
+        ? '<div class="small mb-2"><i class="bi bi-hdd"></i> '
+          + tfHtml('Host disk: {free} of {total}', {
+              free: {html: '<b class="'+(d.disk_free < 5368709120 ? 'text-danger' : 'text-success')+'">'+tfHtml('{size} free', {size: _gb(d.disk_free)})+'</b>'},  // NOPMD
+              total: {html: '<span class="text-secondary">'+escapeHtml(_gb(d.disk_total))+'</span>'}})
+          + '</div>'
         : '';
       el.innerHTML =  // nosemgrep
         '<div class="mb-2 text-secondary" style="font-size:.78rem;">'
-        + '<b>Tick a game</b> to mount it on <b>this</b> server (enable/disable per server) — a game not '
+        // One catalog sentence, without the bold words that split it into fragments.
+        + escapeHtml(t('Tick a game to mount it on this server (enable/disable per server) — a game not '
         + 'yet on the host is installed via LinuxGSM when you Apply, and kept current by a weekly update. '
-        + '<b>Uninstall</b> removes the content from the host, freeing disk for <i>every</i> GMod server '
-        + 'here. Restart the server to load mount changes.</div>'
+        + 'Uninstall removes the content from the host, freeing disk for every GMod server '
+        + 'here. Restart the server to load mount changes.'))+'</div>'
         + disk
         + '<div class="d-flex flex-column gap-1 mb-2">' + rows + '</div>'
         + (running
@@ -2035,8 +2043,8 @@ function applyGmodContent(btn){
 
 function uninstallGmodContent(key, label){
   window.confirmDialog({
-    title:'Uninstall '+label+' content', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Uninstall',
-    bodyText:'Remove '+label+' content from this host?\n\nThis frees disk but removes it for EVERY GMod server on the host. You can re-install it later from any GMod server.',
+    title:tf('Uninstall {game} content', {game: label}), icon:'trash', confirmClass:'btn-danger', confirmLabel:'Uninstall',
+    bodyText:tf('Remove {game} content from this host?\n\nThis frees disk but removes it for EVERY GMod server on the host. You can re-install it later from any GMod server.', {game: label}),
     onConfirm:function(){ _gmcPost({action:'uninstall', games:[key]}, 'Removing…'); }
   });
 }
@@ -2087,7 +2095,13 @@ window.hidePanel = function(btn){
   var panel = btn.closest('[data-panel]');
   if (!panel) return;
   var key = panel.getAttribute('data-panel');
-  var label = (panel.querySelector('.card-header') || {}).textContent || key;
+  // The card's title from the page's own table (server_detail.html DETAIL_LABELS): a whole text node
+  // the translator knows. The header's raw text was "controls" for the card that has none, and
+  // "Players (3)" with the count welded on.
+  var labels = {};
+  try { labels = JSON.parse((document.getElementById('detail-console') || {}).getAttribute('data-labels') || '{}'); }
+  catch (e) { labels = {}; }
+  var label = labels[key] || (panel.querySelector('.card-header') || {}).textContent || key;
   var bar = document.getElementById('detail-console-hidden');
   if (!bar){
     bar = document.createElement('div');

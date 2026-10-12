@@ -202,8 +202,8 @@
       {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- PANEL_REPO_URL, a constant, and a git commit id #}
       {% if panel_repo_url %}<a id="panel-commit" href="{{ panel_repo_url }}/commit/{{ panel_commit }}"
          target="_blank" rel="noopener noreferrer" class="text-decoration-none" style="color:inherit;"
-         title="Running git commit ({{ panel_commit }}) — open it on GitHub">· {{ panel_commit }}</a>{% else %}
-      <span id="panel-commit" title="Running git commit ({{ panel_commit }})">· {{ panel_commit }}</span>{% endif %}{% endif %}
+         title="{{ t('Running git commit (%s) — open it on GitHub')|format(panel_commit) }}">· {{ panel_commit }}</a>{% else %}
+      <span id="panel-commit" title="{{ t('Running git commit (%s)')|format(panel_commit) }}">· {{ panel_commit }}</span>{% endif %}{% endif %}
       <span id="update-badge"></span>
     </div>
   </div>

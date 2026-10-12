@@ -45,9 +45,10 @@ document.addEventListener('click', function(e){
   var short = form.getAttribute('data-server-short') || '';
   confirmDialog({
     title:'Uninstall server', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Uninstall',
-    body:'Uninstall <strong data-no-i18n>'+escapeHtml(name)+'</strong>? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone.',
+    body:tfHtml('Uninstall {name}? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone.',
+                {name: {html: '<strong data-no-i18n>'+escapeHtml(name)+'</strong>'}}),
     requireText: short,
-    requireLabel:'Type the server’s username ('+short+') to confirm:',
+    requireLabel:tf('Type the server’s username ({user}) to confirm:', {user: short}),
     // form.submit() is a NATIVE post: no fetch wrapper, so no X-CSRFToken header, so the hidden
     // field is the only token there is — and this list is re-rendered by refreshSection after an
     // import, which brings back the server's markup without it. Belt as well as braces: panel.js
@@ -229,9 +230,9 @@ window.stopPolling = function(id){
 window.agoText = function(epoch){
   var s = Math.max(0, Math.floor(Date.now()/1000 - epoch));
   if(s < 60) return 'just now';
-  if(s < 3600) return Math.floor(s/60)+'m ago';
-  if(s < 86400) return Math.floor(s/3600)+'h ago';
-  return Math.floor(s/86400)+'d ago';
+  if(s < 3600) return tf('{n}m ago', {n: Math.floor(s/60)});
+  if(s < 86400) return tf('{n}h ago', {n: Math.floor(s/3600)});
+  return tf('{n}d ago', {n: Math.floor(s/86400)});
 };
 
 // Render server timestamps (stored UTC, emitted as <span class="localtime" data-utc="…Z">)
@@ -776,7 +777,7 @@ document.addEventListener('click', function(ev){
   var addr = j.getAttribute('data-addr');
   if(!addr) return;
   ev.preventDefault();
-  if(window.copyText) window.copyText(addr, 'Copied ' + addr + ' — paste it in your game to join');
+  if(window.copyText) window.copyText(addr, tf('Copied {text} — paste it in your game to join', {text: addr}));
 });
 
 // ── Ubuntu Pro widget (shared by the Panel Server & Remote Manage pages) ──
@@ -791,6 +792,8 @@ window.UPro = (function(){
       + '<input type="text" id="upro-token" class="form-control" placeholder="Ubuntu Pro token (e.g. C1a…)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">'
       + '<button class="btn btn-success"' + _da('_uproAttach') + '><i class="bi bi-shield-check"></i> Attach</button></div>';
   }
+  // The dashboard link, markup tfHtml puts into "Get a token at {link}." as it is.
+  var UPRO_LINK = {html: '<a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>'};
   function render(d){
     if(!EL) return;
     // "could not read" before "not attached". The route used to answer a failed read as
@@ -813,14 +816,18 @@ window.UPro = (function(){
     if(!d || d.installed === false){
       // nosemgrep - static literal; attachForm() is fixed markup too.
       EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2"><span class="badge bg-secondary">Not attached</span></div>'
-        + '<p class="small text-secondary mb-2">Ubuntu Pro is <strong>free for personal use</strong> (up to 5 machines) and adds ~10 years of security updates (ESM) plus kernel <strong>Livepatch</strong>. Get a token at <a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>. The client will be installed automatically when you attach.</p>'
+        // Whole sentences: the bold words split them into fragments no catalog key matched.
+        + '<p class="small text-secondary mb-2">' + escapeHtml(t('Ubuntu Pro is free for personal use (up to 5 machines) and adds ~10 years of security updates (ESM) plus kernel Livepatch.'))
+        + ' ' + tfHtml('Get a token at {link}.', {link: UPRO_LINK})
+        + ' ' + escapeHtml(t('The client will be installed automatically when you attach.')) + '</p>'
         + attachForm() + '<div id="upro-msg" class="small mt-2"></div>';
       return;
     }
     if(!d.attached){
       // nosemgrep - static literal; attachForm() is fixed markup too.
       EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2"><span class="badge bg-secondary">Not attached</span></div>'
-        + '<p class="small text-secondary mb-2">Attach this host to your <strong>free</strong> Ubuntu Pro subscription for ~10 years of security updates (ESM) and kernel <strong>Livepatch</strong>. Get a token at <a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>.</p>'
+        + '<p class="small text-secondary mb-2">' + escapeHtml(t('Attach this host to your free Ubuntu Pro subscription for ~10 years of security updates (ESM) and kernel Livepatch.'))
+        + ' ' + tfHtml('Get a token at {link}.', {link: UPRO_LINK}) + '</p>'
         + attachForm() + '<div id="upro-msg" class="small mt-2"></div>';
       return;
     }
@@ -831,7 +838,7 @@ window.UPro = (function(){
     var head = '<div class="d-flex align-items-center gap-2 mb-2 flex-wrap"><span class="badge bg-success">Attached</span>'
       + (d.contract ? '<span class="small text-secondary">'+e(d.contract)+'</span>' : '')
       + (d.account ? '<span class="small text-secondary">· '+e(d.account)+'</span>' : '')
-      + (d.expires ? '<span class="small text-secondary">· expires '+e(d.expires.slice(0,10))+'</span>' : '') + '</div>';
+      + (d.expires ? '<span class="small text-secondary">· '+tfHtml('expires {date}', {date: d.expires.slice(0,10)})+'</span>' : '') + '</div>';
     var rows = '';
     (d.services||[]).forEach(function(s){
       var en = s.status === 'enabled';
@@ -883,7 +890,7 @@ window.UPro = (function(){
         .catch(function(){ msg('✗ Request failed', 'danger'); });
     },
     service: function(name, action){
-      msg((action==='enable'?'Enabling ':'Disabling ')+name+'… this can take a moment.', 'info');
+      msg(tf(action==='enable' ? 'Enabling {name}… this can take a moment.' : 'Disabling {name}… this can take a moment.', {name: name}), 'info');
       fetch(MOUNT + '/api/remote/' + HOST + '/pro-service', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({service:name, action:action})})
         .then(function(r){ return r.json(); }).then(function(d){ msg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'success':'danger'); setTimeout(refresh, 800); })
         .catch(function(){ msg('✗ Request failed', 'danger'); });

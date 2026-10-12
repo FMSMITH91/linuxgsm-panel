@@ -97,7 +97,7 @@
       {% if group_manageable and not group.is_default %}
       <form method="POST" action="{{ url_for('delete_group', group_id=group.id) }}" style="display:inline;"
             class="ajax-form" data-ajax-refresh="#groups-list"
-            data-confirm="Delete group “{{ group.name }}”? Members lose the access it grants."
+            data-confirm="{{ t('Delete group “%s”? Members lose the access it grants.')|format(group.name) }}"
             data-confirm-title="Delete Group" data-confirm-class="btn-danger"
             data-confirm-label="Delete" data-confirm-icon="trash">
         <button type="submit" class="btn btn-outline-danger btn-sm">

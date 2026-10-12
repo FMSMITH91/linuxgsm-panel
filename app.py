@@ -2487,7 +2487,9 @@ def _assign_command_groups(cmd):
 # ── Security tab (panel host): fail2ban bans, recent security events, raw logs ──
 def _maybe_set_threshold(body):
     """If the request carries a 'threshold', validate + persist it. Returns the effective value."""
-    if body.get("threshold") is not None:
+    # A JSON boolean is ignored as "many" is: int(True) is 1, and a threshold of 1 had every
+    # auto-block host deny an address for a single failed attempt.
+    if body.get("threshold") is not None and not isinstance(body.get("threshold"), bool):
         try:
             val = max(1, min(int(body.get("threshold")), 100000))
             update_config(lambda cfg: cfg.update({"autoblock_threshold": val}))

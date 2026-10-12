@@ -14,8 +14,13 @@
 #
 #   ./tools/smoke-local.sh                     # tests/smoke_test.py
 #   ./tools/smoke-local.sh tests/rbac_test.py
+#   ./tools/smoke-local.sh tests/url_map_test.py --update    # rewrites tests/url_map_baseline.json
+#
+# Arguments after the suite go to the suite (and to nosudo_runner, which takes --allow-egress). They
+# used to be dropped, so the url_map docstring's own regeneration command ran the comparison instead.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+REPO="$PWD"
 SUITE="${1:-tests/smoke_test.py}"
 PY="$(cd "$(dirname "${PYTHON:-./.venv/bin/python}")" && pwd)/$(basename "${PYTHON:-./.venv/bin/python}")"
 [[ -x "$PY" ]] || { echo "no interpreter at $PY (set PYTHON=)" >&2; exit 1; }
@@ -32,12 +37,20 @@ cd "$WORK"
 # run into a silent pass that tested nothing. That has already happened once (the runner used to
 # import `manage`, which builds the DB on import). Make it loud instead.
 set -o pipefail
-"$PY" tools/nosudo_runner.py "$SUITE" 2>&1 | tee "$WORK/.run.log"
+"$PY" tools/nosudo_runner.py "$SUITE" "${@:2}" 2>&1 | tee "$WORK/.run.log"
 rc=$?
 if grep -q "^SKIP:" "$WORK/.run.log"; then
     echo "" >&2
     echo "ERROR: the suite SKIPPED — it never ran. Something created data/ in the throwaway tree" >&2
     echo "       before the suite's own guard. Nothing above was verified." >&2
     exit 1
+fi
+# The suite ran in the throwaway tree, which the trap deletes: a baseline it rewrote has to be
+# brought back, or --update rewrites a file nobody ever sees.
+update=0
+for a in "${@:2}"; do if [[ "$a" == "--update" ]]; then update=1; fi; done
+if [[ "$rc" -eq 0 && "$update" -eq 1 && "${SUITE#./}" == "tests/url_map_test.py" ]]; then
+    cp -- "$WORK/tests/url_map_baseline.json" "$REPO/tests/url_map_baseline.json"
+    echo "== copied tests/url_map_baseline.json back into $REPO — read the diff =="
 fi
 exit "$rc"

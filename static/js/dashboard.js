@@ -334,7 +334,7 @@ function refreshMetrics(){
       Array.prototype.forEach.call(document.querySelectorAll('[id^="host-metrics-"]'), function(el){
         var rid = el.id.substring('host-metrics-'.length), h = hosts[rid];
         el.textContent = (h && h.metrics)
-          ? ('CPU ' + h.cpu + '% · RAM ' + h.ram_pct + '% · Disk ' + h.disk_pct + '%')
+          ? tf('CPU {cpu}% · RAM {ram}% · Disk {disk}%', {cpu: h.cpu, ram: h.ram_pct, disk: h.disk_pct})
           : '';
         if(h && h.metrics && (h.local || summary === null)) summary = h;
         paintHostReach(rid, h);
@@ -605,26 +605,29 @@ function _actionRow(id) {
   var row = document.querySelector('tr[data-server-id="' + id + '"]');
   var n = row ? Number.parseInt(row.getAttribute('data-players'), 10) : Number.NaN;
   return {
-    name: (row && row.getAttribute('data-name')) || ('server #' + id),
+    name: (row && row.getAttribute('data-name')) || tf('server #{id}', {id: id}),
     players: (Number.isFinite(n) && n >= 0) ? n : null      // null = not known, so do not claim either way
   };
 }
 function _playerNote(n) {
   if (n === null) return '';                          // unknown: say nothing rather than guess
-  if (!n) return ' Nobody is connected right now.';
-  return ' ' + n + ' player' + (n === 1 ? '' : 's') + ' connected right now — they will be disconnected.';
+  if (!n) return ' ' + t('Nobody is connected right now.');
+  return ' ' + (n === 1 ? t('1 player connected right now — they will be disconnected.')
+                        : tf('{n} players connected right now — they will be disconnected.', {n: n}));
 }
 function doAction(id, action, btn) {
   if (action === 'restart' || action === 'stop') {
     var info = _actionRow(id);
     confirmDialog({
-      title: titleCase(action) + ' server',
+      // Whole sentences per action (translated, then the name goes in): titleCase(action) + ' server'
+      // was one node no catalog key matched.
+      title: action === 'stop' ? 'Stop server' : 'Restart server',
       icon: action === 'stop' ? 'stop-fill' : 'arrow-repeat',
       confirmClass: action === 'stop' ? 'btn-danger' : 'btn-warning',
       confirmLabel: titleCase(action),
       // bodyText, not body: it is set with textContent, so a server named with an apostrophe or a
       // stray < is shown literally and cannot reach the markup.
-      bodyText: titleCase(action) + ' "' + info.name + '"?' + _playerNote(info.players),
+      bodyText: tf(action === 'stop' ? 'Stop "{name}"?' : 'Restart "{name}"?', {name: info.name}) + _playerNote(info.players),
       onConfirm: function () { _runAction(id, action, btn); }
     });
     return;
@@ -640,7 +643,7 @@ function _runAction(id, action, btn) {
   })
   .then(r => r.json())
   .then(d => {
-    toast(d.message || (d.success ? ('Server ' + action + ' issued') : 'Action failed'), d.success ? 'success' : 'danger');
+    toast(d.message || (d.success ? tf('Server {action} issued', {action: action}) : 'Action failed'), d.success ? 'success' : 'danger');
     setTimeout(refreshStatus, 1500);
   })
   .catch(() => toast('Action failed', 'danger'))
@@ -713,8 +716,9 @@ function bulkAction(action) {
       .then(r => r.json())
       .then(d => {
         var nq = (d.queued || []).length, skip = (d.skipped || []).length + skippedNoUpdate;
-        var extra = skip ? ' (' + skip + ' skipped)' : '';
-        if (nq) toast(titleCase(action) + ' started on ' + nq + ' server' + (nq === 1 ? '' : 's') + extra, 'success');
+        var extra = skip ? ' ' + tf('({n} skipped)', {n: skip}) : '';
+        if (nq) toast(tf(nq === 1 ? '{action} started on 1 server' : '{action} started on {n} servers',
+                         {action: t(titleCase(action)), n: nq}) + extra, 'success');
         else toast((d.message || 'Nothing to do') + extra, 'warning');
         clearSelection();
         setTimeout(refreshStatus, 1500);
@@ -728,11 +732,11 @@ function bulkAction(action) {
   if (action === 'stop' || action === 'update' || action === 'restart') {
     var note = _bulkPlayersNote(action, checks);
     confirmDialog({
-      title: titleCase(action) + ' ' + ids.length + ' server' + (ids.length === 1 ? '' : 's'),
+      title: tf(ids.length === 1 ? '{action} 1 server' : '{action} {n} servers', {action: t(titleCase(action)), n: ids.length}),
       icon: 'exclamation-triangle',
       confirmClass: action === 'stop' ? 'btn-danger' : 'btn-warning',
       confirmLabel: titleCase(action),
-      bodyText: 'Run "' + action + '" on ' + ids.length + ' server' + (ids.length === 1 ? '' : 's') + '?' + note,
+      bodyText: tf(ids.length === 1 ? 'Run "{action}" on 1 server?' : 'Run "{action}" on {n} servers?', {action: action, n: ids.length}) + note,
       onConfirm: run
     });
   } else {
@@ -751,7 +755,8 @@ function _bulkPlayersNote(action, checks) {
   }).filter(function (n) { return n !== null; });
   var online = known.reduce(function (a, n) { return a + n; }, 0);
   return (action === 'update' || !known.length || !online) ? ''
-    : ' ' + online + ' player' + (online === 1 ? '' : 's') + ' connected across them will be disconnected.';
+    : ' ' + (online === 1 ? t('1 player connected across them will be disconnected.')
+                          : tf('{n} players connected across them will be disconnected.', {n: online}));
 }
 
 // Keep the bar's count in sync as individual boxes are toggled.

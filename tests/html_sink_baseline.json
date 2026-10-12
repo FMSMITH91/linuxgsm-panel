@@ -24,37 +24,34 @@
   ],
   "panel.js": [
     "_da,head,rows",
+    "attachForm",
     "icon",
     "inputHtml,opts.body"
   ],
   "remote_manage.js": [
     "Number,_da,body,head,j.banned_ips.map,j.currently_banned,return",
     "_da,return",
-    "d.rc",
     "head,rows",
     "i",
     "rows"
   ],
   "remote_manage_backups.js": [
     "_da,rows",
-    "bkFmtBytes,dk.free,dk.total,pct",
     "n"
   ],
   "remote_manage_host.js": [
     "d",
-    "d.behind",
     "d.current_sha",
-    "d.new_bind,window.escapeHtml",
     "d.success",
     "d.success,window.escapeHtml",
-    "fmtBytes,freed",
-    "location.port",
+    "freed",
     "window.escapeHtml"
   ],
   "server_actions.js": [
     "ok"
   ],
   "server_detail.js": [
+    "d.disk_free",
     "disk,rows,running"
   ],
   "server_files.js": [
@@ -66,9 +63,8 @@
     "_da"
   ],
   "tailscale.js": [
-    "Number,data.latency_ms,safeHost",
     "_da",
-    "safeHost,tsHint"
+    "data.latency_ms"
   ],
   "update_badge.js": [
     "window.MOUNT"

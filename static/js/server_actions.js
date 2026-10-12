@@ -6,7 +6,7 @@ function _esc(s){ return window.escapeHtml(s); }
 // show it in a dismissible panel, not a toast that disappears before you see it.
 function _reportActionResult(action, d, showOutput) {
   if (showOutput) showActionOutput(action, d.message || (d.success ? 'Done — no output' : 'Failed'), d.success);
-  else toast(d.message || (action + ' done'), d.success ? 'success' : 'danger');
+  else toast(d.message || tf('{action} done', {action: action}), d.success ? 'success' : 'danger');
 }
 
 // A start, stop or restart that went through supersedes one queued for "when empty".
@@ -73,10 +73,12 @@ function serverAction(action, btn, confirmFirst, showOutput) {
   // Restart AND stop get a player check first — warn, and offer "when empty".
   if (action === 'restart' || action === 'stop') { actionWithPlayerCheck(action, btn); return; }
   if (confirmFirst) {
-    var body = _esc(_cap(action)) + ' <strong data-no-i18n>' + _esc(SERVER_NAME) + '</strong>?';
+    // Translated whole, the server's name put in after (tfHtml): spliced around the bold name, the
+    // question was pieces no catalog key matched.
+    var srv = {html: '<strong data-no-i18n>' + _esc(SERVER_NAME) + '</strong>'};
+    var body = tfHtml('{action} {name}?', {action: t(_cap(action)), name: srv});
     if (action === 'fastdl') {
-      body = 'Generate FastDL files for <strong data-no-i18n>' + _esc(SERVER_NAME) + '</strong>? '
-           + 'This overwrites the existing FastDL directory and can take a while.';
+      body = tfHtml('Generate FastDL files for {name}? This overwrites the existing FastDL directory and can take a while.', {name: srv});
     }
     confirmDialog({ title: _cap(action), body: body, confirmLabel: _cap(action),
                     onConfirm: function(){ _doServerAction(action, btn, showOutput); } });

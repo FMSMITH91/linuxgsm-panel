@@ -236,9 +236,20 @@ def _update_tick(app, st, last):
             _remember_announced_update(key)
             return key
         return last
+    # Cleared only on a reading that the panel is NOT behind by anything it runs: nothing to
+    # fetch, or only docs/CI/test commits (_no_runtime_update). A failed fetch, checks that could
+    # not be read, or an update in progress also say update_available False, and clearing on them
+    # re-sent "Panel update available" for the same commit on the next good check.
+    if not _r14c_not_behind(st):
+        return last
     if last:
         _remember_announced_update("")   # up to date — let a future update announce again
     return ""
+
+
+def _r14c_not_behind(st):
+    """Whether an update status positively says nothing the panel runs is waiting."""
+    return bool(st.get("fetched")) and (st.get("behind") == 0 or bool(st.get("docs_only")))
 
 
 def _announce_key(st):

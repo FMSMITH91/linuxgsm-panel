@@ -718,7 +718,8 @@ try:
                              _rv2osu._announced_update())
         eq("update check: a different commit is still announced (control)",
            _rv2_sent, ["abc1234def", "fff0000aaa"])
-        _rv2osu._update_tick(None, {"update_available": False}, _rv2osu._announced_update())
+        _rv2osu._update_tick(None, {"update_available": False, "fetched": True, "behind": 0},
+                             _rv2osu._announced_update())
         _rv2osu._update_tick(None, _rv2st, _rv2osu._announced_update())
         eq("update check: once up to date, a later update is announced again, restart or not",
            _rv2_sent, ["abc1234def", "fff0000aaa", "abc1234def"])

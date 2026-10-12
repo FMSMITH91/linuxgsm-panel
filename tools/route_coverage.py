@@ -137,7 +137,11 @@ def _report(work, cov_path):
     shutil.rmtree(os.path.join(work, "data"), ignore_errors=True)
     with open(cov_path, encoding="utf-8") as fh:
         cov_files = json.load(fh).get("files", {})
-    from app import create_app                                       # noqa: E402
+    # Only the URL map is read, so no background workers: started, they ran outside
+    # nosudo_runner after every suite had finished, free to reach a real `sudo -n` probe (counted
+    # by pam_faillock) before the process exited.
+    from app import NO_WORKERS_ENV, create_app                       # noqa: E402
+    os.environ[NO_WORKERS_ENV] = "1"
     app = create_app()
     cold, total = [], 0
     for rule in app.url_map.iter_rules():

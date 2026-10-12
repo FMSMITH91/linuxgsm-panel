@@ -1,7 +1,7 @@
 // Click a connect address to copy the full ip:port.
 document.addEventListener('click', function(ev){
   var el = ev.target.closest('.copy-addr'); if(!el) return;
-  if(window.copyText) window.copyText(el.getAttribute('data-copy'), 'Copied ' + el.getAttribute('data-copy'));
+  if(window.copyText) window.copyText(el.getAttribute('data-copy'), tf('Copied {text}', {text: el.getAttribute('data-copy')}));
 });
 
 // Auto-populate a sensible default port when the game changes. This is only a
@@ -109,9 +109,12 @@ function filterGamesForHost() {
       opt.disabled = bad;
       if (bad) {
         hidden++;
-        if (opt.textContent.indexOf('needs ') === -1) {
+        // Marked on the option, not found by its English: the note is translated (tf) now, and the
+        // option is data-no-i18n (a game's name), so the page's translator never reaches it.
+        if (!opt.hasAttribute('data-needs-note')) {
+          opt.setAttribute('data-needs-note', '');
           opt.textContent = _withoutParenNote(opt.textContent)
-            + ' (needs ' + gameOs.replace('-', ' ') + ')';
+            + ' ' + tf('(needs {os})', {os: gameOs.replace('-', ' ')});
         }
         // Do not leave a disabled game SELECTED — the form would post it.
         if (sel.value === opt.value) sel.value = '';
@@ -168,7 +171,7 @@ function suggestFreePort() {
           || (document.getElementById('game-type-select') || {}).value !== game) return;
       if (d.changed) {
         portEl.value = d.port;
-        hint.textContent = 'Port ' + desired + ' is in use — using free port ' + d.port + '.';   // textContent: never treat the port value as HTML
+        hint.textContent = tf('Port {port} is in use — using free port {free}.', {port: desired, free: d.port});   // textContent: never treat the port value as HTML
       }
     })
     .catch(function(){});
@@ -288,10 +291,10 @@ document.addEventListener('click', function(e){
   var short = b.getAttribute('data-server-short') || '';
   confirmDialog({
     title: 'Uninstall server', icon: 'trash', confirmLabel: 'Uninstall', confirmClass: 'btn-danger',
-    body: 'Uninstall <strong data-no-i18n>' + escapeHtml(name) + '</strong>? This permanently deletes the server, '
-        + 'all its files, AND every backup it has — this cannot be undone.',
+    body: tfHtml('Uninstall {name}? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone.',
+                 {name: {html: '<strong data-no-i18n>' + escapeHtml(name) + '</strong>'}}),
     requireText: short,
-    requireLabel: 'Type the server’s username (' + short + ') to confirm:',
+    requireLabel: tf('Type the server’s username ({user}) to confirm:', {user: short}),
     onConfirm: function(){ doUninstall(b.getAttribute('data-server-id'), name, b); }
   });
 });
@@ -317,7 +320,7 @@ function doUninstall(id, name, btn){
     });
   }
   setRowDisabled(true);
-  if (window.toast) toast('Uninstalling ' + name + '…', 'info');
+  if (window.toast) toast(tf('Uninstalling {name}…', {name: name}), 'info');
   fetch(MOUNT + '/servers/' + id + '/delete', { method: 'POST' })  // nosemgrep
     .then(function(r){ return r.json(); })
     .then(function(d){
@@ -343,7 +346,7 @@ function msrvAction(id, action, btn){
     body: JSON.stringify({action: action})})
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if(window.toast) toast(d.message || (d.success ? ('Server ' + action + ' issued') : 'Action failed'), d.success ? 'success' : 'danger');
+      if(window.toast) toast(d.message || (d.success ? tf('Server {action} issued', {action: action}) : 'Action failed'), d.success ? 'success' : 'danger');
       setTimeout(reconcileServerList, 1500);
     })
     .catch(function(){ if(window.toast) toast('Action failed', 'danger'); })
@@ -482,7 +485,7 @@ function refreshGameList(btn){
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d && d.success && d.games) {
-        if (window.toast) toast('Loaded ' + d.games + ' games from LinuxGSM', 'success');
+        if (window.toast) toast(tf('Loaded {n} games from LinuxGSM', {n: d.games}), 'success');
         // The game column only, not the page: a reload discarded the host and name already chosen.
         // The new list is then greyed for the chosen host again, as choosing it did.
         // The button is put back before the swap: a swap replaces it (it lives in #game-col), but

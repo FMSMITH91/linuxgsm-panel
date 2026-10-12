@@ -17,7 +17,7 @@ function tsRender(s){
       tsCont.innerHTML='<i class="bi bi-arrow-right"></i> Continue';
       tsCont.className='btn btn-primary w-100';
     } else {
-      tsBox.innerHTML='<div class="alert alert-info py-2 small mb-2"><i class="bi bi-check-circle"></i> Connected to your tailnet as <code>'+tsEsc(s.dns_name)+'</code>.</div>'  // nosemgrep - literals plus a tsEsc-wrapped dns_name
+      tsBox.innerHTML='<div class="alert alert-info py-2 small mb-2"><i class="bi bi-check-circle"></i> '+tfHtml('Connected to your tailnet as {name}.', {name: {html: '<code>'+tsEsc(s.dns_name)+'</code>'}})+'</div>'  // nosemgrep - tfHtml plus a tsEsc-wrapped dns_name
         + '<button type="button" class="btn btn-success w-100" id="ts-serve"><i class="bi bi-lock-fill"></i> Enable private HTTPS (Tailscale Serve)</button>'
         + '<div id="ts-msg" class="small mt-2"></div>';
       document.getElementById('ts-serve').onclick=tsDoServe;
@@ -51,7 +51,7 @@ function tsDoInstall(){
   var b=document.getElementById('ts-install'); b.disabled=true;
   tsOut().innerHTML='<i class="bi bi-arrow-repeat"></i> Installing Tailscale… (up to a minute)';
   tsApi('install',{method:'POST'}).then(function(d){
-    if(!d.success){ tsOut().innerHTML='<span class="text-danger">Install failed: '+tsEsc((d.log||'').slice(-200))+'</span>'; b.disabled=false; return; }  // nosemgrep - the log tail is tsEsc-wrapped
+    if(!d.success){ tsOut().innerHTML='<span class="text-danger">'+tfHtml('Install failed: {log}', {log: (d.log||'').slice(-200)})+'</span>'; b.disabled=false; return; }  // nosemgrep - tfHtml escapes the log tail
     tsOut().innerHTML='<span class="text-success">Installed.</span> Starting…';
     tsDoUp();
   }).catch(function(){ tsOut().innerHTML='<span class="text-danger">Install request failed.</span>'; b.disabled=false; });

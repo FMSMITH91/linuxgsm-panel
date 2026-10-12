@@ -30,6 +30,7 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
 import collections
 import threading
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
+from panel.routes._shared import (_json_int)
 from panel.core.validation import (NOT_AN_IP)
 from panel.security import privileged as _priv
 from panel.services import host_reboot as _hr
@@ -438,9 +439,10 @@ def _register_ssh_port(app):
             return jsonify({"success": False, "message": "You don't have access to that host."}), 403
         remote = get_host_remote(remote_id)
         body = _json_body()
-        try:
-            new_port = int(body.get("port"))
-        except (TypeError, ValueError, OverflowError):     # OverflowError: {"port": Infinity}
+        # _json_int, not int(): int() raised OverflowError on {"port": Infinity}, truncated 22.9
+        # to 22, and read {"port": true} as port 1.
+        new_port = _json_int(body.get("port"))
+        if new_port is None:
             return jsonify({"success": False, "message": "Enter a valid port number."}), 400
         if not (1 <= new_port <= 65535):
             return jsonify({"success": False, "message": "Port must be between 1 and 65535."}), 400

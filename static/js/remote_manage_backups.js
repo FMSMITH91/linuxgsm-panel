@@ -13,7 +13,7 @@ function bkApplyLimits(lim){
   if(!lim) return;
   [['bk-keep', lim.keep_days], ['fb-keep', lim.full_keep]].forEach(function(pair){
     var el=document.getElementById(pair[0]), b=pair[1];
-    if(el && b){ el.min=String(b.min); el.max=String(b.max); el.title='Between '+b.min+' and '+b.max+'.'; }
+    if(el && b){ el.min=String(b.min); el.max=String(b.max); el.title=tf('Between {min} and {max}.', {min: b.min, max: b.max}); }
   });
   window._bkLimits=lim;
 }
@@ -24,7 +24,7 @@ function bkReconcile(id, saved){
   if(!el || saved===undefined || saved===null) return '';
   var typed=el.value.trim();
   el.value=String(saved);
-  return (typed!=='' && String(saved)!==typed) ? (' — ' + typed + ' is out of range, kept ' + saved) : '';
+  return (typed!=='' && String(saved)!==typed) ? (' — ' + tf('{typed} is out of range, kept {saved}', {typed: typed, saved: saved})) : '';
 }
 function loadBackups(){
   if(!document.getElementById('bk-tbody')) return;   // the Backups card is a superadmin's (see loadIntegrity)
@@ -138,8 +138,9 @@ function bkRenderDisk(){
       fdk.innerHTML='<i class="bi bi-hdd"></i> Your servers are on more than one host — free disk is shown per server below.';
     } else if(dk.total>0){
       var pct=Math.round((dk.total-dk.free)/dk.total*100);
-      fdk.innerHTML='<i class="bi bi-hdd"></i> Disk: <strong>'+bkFmtBytes(dk.free)+'</strong> free of '+bkFmtBytes(dk.total)  // nosemgrep
-        +' ('+pct+'% used). Game backups currently use '+bkFmtBytes(dk.backup_bytes||0)+'.';
+      fdk.innerHTML='<i class="bi bi-hdd"></i> '+tfHtml('Disk: {free} free of {total} ({pct}% used). Game backups currently use {used}.',  // nosemgrep
+        {free: {html: '<strong>'+escapeHtml(bkFmtBytes(dk.free))+'</strong>'}, total: bkFmtBytes(dk.total), pct: pct,
+         used: bkFmtBytes(dk.backup_bytes||0)});
     } else { fdk.textContent=''; }
   }
 }
@@ -222,12 +223,12 @@ function bkGameStatus(g, st){
 function bkGameDisk(g){
   var dkHtml = '';
   if(g.disk && g.disk.total>0){
-    dkHtml = '<div class="small text-secondary"><i class="bi bi-hdd"></i> '+escapeHtml(g.host||'host')+': '+bkFmtBytes(g.disk.free)+' free';
+    dkHtml = '<div class="small text-secondary"><i class="bi bi-hdd"></i> '+tfHtml('{host}: {free} free', {host: {html: '<span data-no-i18n>'+escapeHtml(g.host||'host')+'</span>'}, free: bkFmtBytes(g.disk.free)});
     var eb=g.est_backup||0, keep=(g.schedule&&g.schedule.keep)||2;
     if(eb>0){
       var proj=eb*keep;
-      if(proj>g.disk.free) dkHtml += ' <span class="text-danger">— ~'+bkFmtBytes(proj)+' needed for '+keep+' backups, not enough space!</span>';
-      else if(proj>g.disk.free*0.5) dkHtml += ' <span class="text-warning">— ~'+bkFmtBytes(proj)+' for '+keep+' backups (over half free)</span>';
+      if(proj>g.disk.free) dkHtml += ' <span class="text-danger">'+tfHtml('— ~{size} needed for {n} backups, not enough space!', {size: bkFmtBytes(proj), n: keep})+'</span>';
+      else if(proj>g.disk.free*0.5) dkHtml += ' <span class="text-warning">'+tfHtml('— ~{size} for {n} backups (over half free)', {size: bkFmtBytes(proj), n: keep})+'</span>';
     }
     dkHtml += '</div>';
   }
@@ -258,19 +259,25 @@ function fbSummary(){
   var parts=[];
 
   if(!on){
-    parts.push('<i class="bi bi-info-circle"></i> Automatic backups are <strong>off</strong> — nothing runs on a schedule. '
-      +'Use “Back up game servers now” for a one-off; '+(keep===1?'only the latest backup':'the '+keep+' most recent backups')
-      +' per server '+(keep===1?'is':'are')+' kept.');
+    // Whole sentences with the number put in after translation (tfHtml): built from pieces around
+    // the count and the bold words, every one was English on a translated page.
+    parts.push('<i class="bi bi-info-circle"></i> '+(keep===1
+      ? tfHtml('Automatic backups are off — nothing runs on a schedule. Use “Back up game servers now” for a one-off; only the latest backup per server is kept.')
+      : tfHtml('Automatic backups are off — nothing runs on a schedule. Use “Back up game servers now” for a one-off; the {n} most recent backups per server are kept.', {n: keep})));
     el.innerHTML=parts.join('<br>'); return;  // nosemgrep
   }
 
   var days=Number.parseInt(document.getElementById('fb-interval').value,10)||7;
-  var every=(days===1?'every day':(days===7?'once a week':(days===14?'once every 2 weeks':'once a month')));
-  var s='<i class="bi bi-info-circle"></i> By default, each server is backed up <strong>'+every+'</strong>. '
-    +'The <strong>'+keep+'</strong> newest '+(keep===1?'backup is':'backups are')+' kept per server; older ones are deleted automatically. '
-    +'(Override per server below.)';
+  var every=(days===1?'By default, each server is backed up every day.':(days===7?'By default, each server is backed up once a week.'
+            :(days===14?'By default, each server is backed up once every 2 weeks.':'By default, each server is backed up once a month.')));
+  var s='<i class="bi bi-info-circle"></i> '+tfHtml(every)+' '
+    +(keep===1 ? tfHtml('The newest backup is kept per server; older ones are deleted automatically.')
+               : tfHtml('The {n} newest backups are kept per server; older ones are deleted automatically.', {n: {html: '<strong>'+escapeHtml(String(keep))+'</strong>'}}))
+    +' '+tfHtml('(Override per server below.)');
   var multi = !!window._bkMultiHost;
-  if(cycle>0 && !multi){ s+=' At the current size that\'s up to <strong>'+fmt(projected)+'</strong> of backups'+(free>0?' ('+fmt(free)+' free now)':'')+'.'; }
+  if(cycle>0 && !multi){ s+=' '+(free>0
+      ? tfHtml('At the current size that\'s up to {size} of backups ({free} free now).', {size: {html: '<strong>'+escapeHtml(fmt(projected))+'</strong>'}, free: fmt(free)})
+      : tfHtml('At the current size that\'s up to {size} of backups.', {size: {html: '<strong>'+escapeHtml(fmt(projected))+'</strong>'}})); }
   parts.push(s);
 
   if(days===1){
@@ -281,13 +288,13 @@ function fbSummary(){
   }
   if(cycle>0 && free>0 && !multi){
     if(projected>free){
-      parts.push('<span class="text-danger"><i class="bi bi-exclamation-octagon"></i> This needs more than your free disk ('+fmt(free)+') — backups will fail once it fills up.</span>');
+      parts.push('<span class="text-danger"><i class="bi bi-exclamation-octagon"></i> '+tfHtml('This needs more than your free disk ({free}) — backups will fail once it fills up.', {free: fmt(free)})+'</span>');
     } else if(projected>free*0.5){
       parts.push('<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> This would use over half your free disk.</span>');
     }
     var recKeep=Math.max(1, Math.floor(free*0.4/cycle));
     if(recKeep<keep){
-      parts.push('<span class="text-secondary"><i class="bi bi-lightbulb"></i> Recommended: keep ≤ <strong>'+recKeep+'</strong> at ~'+fmt(cycle)+' per run (leaves comfortable headroom).</span>');
+      parts.push('<span class="text-secondary"><i class="bi bi-lightbulb"></i> '+tfHtml('Recommended: keep ≤ {n} at ~{size} per run (leaves comfortable headroom).', {n: {html: '<strong>'+escapeHtml(String(recKeep))+'</strong>'}, size: fmt(cycle)})+'</span>');
     }
   } else if(cycle===0){
     parts.push('<span class="text-secondary">Run a backup once and this will estimate the space each cycle uses and recommend a safe “keep”.</span>');
@@ -313,7 +320,7 @@ function saveBackupSettings(){
     .then(r=>r.json()).then(function(d){
       var note = bkReconcile('bk-keep', (d.settings||{}).keep_days)
                + bkReconcile('fb-keep', (d.full||{}).keep);
-      bkMsg('✓ Saved'+note, note?'text-warning':'text-success');
+      bkMsg(t('✓ Saved')+note, note?'text-warning':'text-success');
       fbSummary();   // the disk projection is a function of "keep" — recompute from the SAVED value
       bkRefreshDefaultNotes(d.full);   // ...and so is every row that inherits it
     }).catch(function(){ bkMsg('✗ Could not save','text-danger'); });
@@ -407,12 +414,14 @@ function _backupOneGame(id,btn,force){
 }
 function schedNote(sc){
   var iv=sc.interval_days, kp=sc.keep;
-  var base=(sc.interval_set||sc.keep_set) ? 'Custom — ' : 'Using default — ';
-  if(iv<=0) return base+'no automatic backups.';
-  var every=(iv===1?'daily':(iv===7?'weekly':(iv===14?'every 2 weeks':(iv===30?'monthly':'every '+iv+' days'))));
-  var nextTxt='';
-  if(sc.last){ var d=Math.round((sc.last+iv*86400-Date.now()/1000)/86400); nextTxt=' · next '+(d<=0?'due now':'in ~'+d+'d'); }
-  return base+every+', keep '+kp+nextTxt+'.';
+  var custom=sc.interval_set||sc.keep_set;
+  if(iv<=0) return t(custom ? 'Custom — no automatic backups.' : 'Using default — no automatic backups.');
+  var every=(iv===1?t('daily'):(iv===7?t('weekly'):(iv===14?t('every 2 weeks'):(iv===30?t('monthly'):tf('every {n} days', {n: iv})))));
+  var next='';
+  if(sc.last){ var d=Math.round((sc.last+iv*86400-Date.now()/1000)/86400); next=d<=0?t('due now'):tf('in ~{n}d', {n: d}); }
+  return tf(custom ? (next ? 'Custom — {every}, keep {n} · next {next}.' : 'Custom — {every}, keep {n}.')
+                   : (next ? 'Using default — {every}, keep {n} · next {next}.' : 'Using default — {every}, keep {n}.'),
+            {every: every, n: kp, next: next});
 }
 function gameSchedule(g){
   var sc=g.schedule||{interval_days:0,keep:2,interval_set:false,keep_set:false,last:0};
@@ -428,7 +437,7 @@ function gameSchedule(g){
   // "Default" — beside a note saying "Custom — every 3 days", and the next save posted that.
   var ivOpts=[['default','Default'],['0','Off'],['1','Daily'],['3','Every 3 days'],['7','Weekly'],
               ['14','Every 2 weeks'],['30','Monthly']];
-  if(!ivOpts.some(function(o){ return o[0]===ivVal; })) ivOpts.push([ivVal, 'Every '+Number(sc.interval_days)+' days']);
+  if(!ivOpts.some(function(o){ return o[0]===ivVal; })) ivOpts.push([ivVal, tf('Every {n} days', {n: Number(sc.interval_days)})]);
   var ivSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsi-'+g.id+'"' + _da('setGameSchedule', [g.id], 'change') + '>'
     +ivOpts.map(function(o){ return opt(escapeHtml(o[0]), o[1], ivVal); }).join('')+'</select>';
   // Typed, not picked — the same change as the two global boxes above. A <select> could carry a
@@ -437,7 +446,7 @@ function gameSchedule(g){
   var kpLim=(window._bkLimits&&window._bkLimits.full_keep)||{min:1,max:30};
   var kpSel='<input type="number" class="form-control form-control-sm py-0 d-inline-block"'
     +' style="width:5.5rem;" min="'+kpLim.min+'" max="'+kpLim.max+'" step="1" inputmode="numeric"'
-    +' placeholder="Default" title="Blank = use the default above. Between '+kpLim.min+' and '+kpLim.max+'."'
+    +' placeholder="Default" title="'+tfHtml('Blank = use the default above. Between {min} and {max}.', {min: kpLim.min, max: kpLim.max})+'"'
     +' value="'+(sc.keep_set?escapeHtml(String(sc.keep)):'')+'" id="gsk-'+g.id+'"'
     + _da('setGameSchedule', [g.id], 'change') + '>';
   return '<div class="d-flex align-items-center gap-2 flex-wrap small my-1">'
@@ -484,9 +493,9 @@ function setGameSchedule(id){
         // an override that was cleared has to empty the box rather than leave the old text sitting
         // in it looking like it still applies.
         var saved=d.schedule.keep_set?String(d.schedule.keep):'';
-        var note=(kp!=='' && d.schedule.keep_set && saved!==kp) ? (' — '+kp+' is out of range, kept '+saved) : '';
+        var note=(kp!=='' && d.schedule.keep_set && saved!==kp) ? (' — '+tf('{typed} is out of range, kept {saved}', {typed: kp, saved: saved})) : '';
         kpEl.value=saved;
-        bkMsg('✓ Schedule saved'+note, note?'text-warning':'text-success');
+        bkMsg(t('✓ Schedule saved')+note, note?'text-warning':'text-success');
       } else {
         bkMsg('✗ Save failed','text-danger');
       }
@@ -495,7 +504,7 @@ function setGameSchedule(id){
 function deleteGameBackup(btn){
   var name=btn.getAttribute('data-name'), gid=btn.getAttribute('data-gid');
   confirmDialog({title:'Delete backup', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
-    bodyText:'Delete this game-server backup?\n\n'+name,
+    bodyText:tf('Delete this game-server backup?\n\n{name}', {name: name}),
     onConfirm:function(){
       btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
       bkMsg('Deleting…','text-secondary');
@@ -509,7 +518,7 @@ function deleteGameBackup(btn){
 }
 function deleteBackup(name,btn){
   confirmDialog({title:'Delete backup', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
-    bodyText:'Delete this backup?\n\n'+name,
+    bodyText:tf('Delete this backup?\n\n{name}', {name: name}),
     onConfirm:function(){
       if(btn) btn.disabled=true;
       fetch(MOUNT+'/api/panel/backup/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
@@ -519,7 +528,7 @@ function deleteBackup(name,btn){
 }
 function restoreBackup(name,encrypted,btn){
   confirmDialog({title:'Restore backup', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore',
-    bodyText:'Restore this backup?\n\n'+name+'\n\nThis OVERWRITES the panel\'s current database, settings and keys, then restarts the panel. A pre-restore safety backup is taken first.',
+    bodyText:tf('Restore this backup?\n\n{name}\n\nThis OVERWRITES the panel\'s current database, settings and keys, then restarts the panel. A pre-restore safety backup is taken first.', {name: name}),
     onConfirm:function(){
       if(btn) btn.disabled=true;
       bkMsg('Restoring…','text-secondary');

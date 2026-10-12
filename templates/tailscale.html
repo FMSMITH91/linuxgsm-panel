@@ -209,7 +209,10 @@
         <div class="bg-dark p-3 rounded-3 mb-2">
           <strong class="d-block small text-secondary mb-1">Method</strong>
           <span class="badge bg-info text-dark text-uppercase mb-2">{{ suggestion.method }}</span>
-          <p class="small mb-1">{{ suggestion.description }}</p>
+          {# The sentence and the address as separate nodes: spliced together (description), the
+             sentence was one text node no catalog key could match. #}
+          <p class="small mb-1"><span>{{ suggestion.note or suggestion.description }}</span>{% if suggestion.note_value %}
+            <code>{{ suggestion.note_value }}</code>{% endif %}</p>
           {% if suggestion.url %}
           {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- built by tailscale_integration on a fixed http(s):// scheme #}
           <a href="{{ suggestion.url }}" target="_blank" class="small">

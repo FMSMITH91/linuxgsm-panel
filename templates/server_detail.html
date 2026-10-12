@@ -347,9 +347,16 @@
 {% if custom_commands %}{% set panel_keys = panel_keys + ['commands'] %}{% endif %}
 {% if server.game_type == 'gmod' and (current_user.is_superadmin or has_permission('manage_servers')) %}{% set panel_keys = panel_keys + ['content'] %}{% endif %}
 {% set detail_visible, detail_hidden = panel_layout('detail_console', panel_keys) %}
+{# The name a hidden panel's chip shows: its card's title. `key|capitalize` printed "Content" for
+   the Game Content card and "Controls" (no catalog entry) for the other, and the live chip
+   (hidePanel) read the card header's raw text, "controls" for the card that has none. One table,
+   handed to the page script as data-labels. #}
+{% set DETAIL_LABELS = {'controls': 'Controls', 'console': 'Live Console', 'players': 'Players',
+                        'commands': 'Commands', 'content': 'Game Content'} %}
 {# data-declared, not a variable read in {% block scripts %}: Jinja blocks have separate
    scopes, so panel_keys is not visible there. #}
-<div id="detail-console" data-region="detail_console" data-declared='{{ panel_keys|tojson }}'>
+<div id="detail-console" data-region="detail_console" data-declared='{{ panel_keys|tojson }}'
+     data-labels='{{ DETAIL_LABELS|tojson }}'>
   {% for key in detail_visible %}
   {% if key == 'controls' %}{{ panel_controls() }}
   {% elif key == 'console' %}{{ panel_console() }}
@@ -365,7 +372,7 @@
   {% for key in detail_hidden %}
   <button type="button" class="btn btn-sm btn-outline-secondary" data-action="showDetailPanel"
           data-args='["detail_console","{{ key }}","@self"]' title="Show this panel again">
-    <i class="bi bi-eye"></i> {{ key|capitalize }}
+    <i class="bi bi-eye"></i> <span>{{ DETAIL_LABELS[key] }}</span>
   </button>
   {% endfor %}
 </div>

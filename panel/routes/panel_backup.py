@@ -666,6 +666,11 @@ def _register_game_backup_settings(app):
             # to clear an override resting on an exception nobody wrote down.
             if v is None or v == "default" or (isinstance(v, str) and not v.strip()):
                 return None
+            # A switch sent into a number box is not a number, as _r13c_whole_number says for the
+            # global fields: int(True) is 1, so {"keep": true} kept one archive, and
+            # {"interval": false} was 0, which game_backup_due reads as "off".
+            if isinstance(v, bool):
+                return _BAD_FIELD
             try:
                 return int(v)   # OverflowError guards against JSON infinity (e.g. 1e400)
             except (TypeError, ValueError, OverflowError):
@@ -966,7 +971,8 @@ def _register_panel_host_os(app):
         data = _json_body()
         delay = data.get("delay", 5)
         # OverflowError is the one server_reboot's clamp does not catch: `{"delay": Infinity}`.
-        if isinstance(delay, float) and not delay.is_integer():
+        # A JSON boolean is not a delay either: int(False) is 0, a reboot with no wait.
+        if isinstance(delay, bool) or (isinstance(delay, float) and not delay.is_integer()):
             return jsonify({"success": False,
                             "message": "The reboot delay must be a number of seconds (0-300)."}), 400
         mode, err = _hr.parse_mode(data)

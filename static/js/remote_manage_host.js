@@ -130,8 +130,8 @@ function changePanelBinding(){
   }
   var pretty = bind + ':' + p;
   confirmDialog({title:'Change panel binding', icon:'hdd-network', confirmClass:'btn-warning', confirmLabel:'Change binding',
-    bodyText:'Change the panel binding to '+pretty+'?\n\nThe panel will briefly restart to apply it. '
-      +'Make sure you can still reach it afterward (over Tailscale, or on the new address/port).',
+    bodyText:tf('Change the panel binding to {bind}?\n\nThe panel will briefly restart to apply it. '
+      +'Make sure you can still reach it afterward (over Tailscale, or on the new address/port).', {bind: pretty}),
     onConfirm:function(){ _changePanelBinding(p, bind); }});
 }
 function _changePanelBinding(p, bind){
@@ -150,13 +150,14 @@ function _changePanelBinding(p, bind){
       } else {
         target = location.href;                       // only the bind changed; same URL
       }
-      m.innerHTML='<span class="text-success">Panel restarting on '+(window.escapeHtml?escapeHtml(d.new_bind):d.new_bind)+':'+escapeHtml(d.new_port)+'… reconnecting shortly.</span>';  // nosemgrep
+      m.innerHTML='<span class="text-success">'+tfHtml('Panel restarting on {addr}… reconnecting shortly.', {addr: d.new_bind+':'+d.new_port})+'</span>';  // nosemgrep
       setTimeout(function(){ location.href=target; }, 7000);   // give the service time to rebind
     })
     .catch(function(){
       // The restart may cut the connection before the response arrives.
-      m.innerHTML='<span class="text-warning">The panel is restarting — reconnect in a moment'
-        + (location.port ? ' on the new address/port' : '') + '.</span>';
+      m.innerHTML='<span class="text-warning">'+escapeHtml(location.port
+        ? t('The panel is restarting — reconnect in a moment on the new address/port.')
+        : t('The panel is restarting — reconnect in a moment.'))+'</span>';
     });
 }
 function changeSshPort(){
@@ -165,11 +166,14 @@ function changeSshPort(){
   if(!(p>=1 && p<=65535)){ if(window.toast) toast('Enter a port between 1 and 65535.','warning'); return; }
   var bindEl=document.getElementById('ssh-bind-input');
   var bind=bindEl ? (bindEl.value||'').trim() : '';
-  var bindNote = bind ? (' and bind it to '+bind+' (the panel will roll back if it can\'t reach the host there)') : '';
+
   confirmDialog({title:'Change SSH port', icon:'door-closed', confirmClass:'btn-primary', confirmLabel:'Change SSH port',
-    bodyText:'Move SSH to port '+p+bindNote+'?\n\nLockout-safe: the current binding stays in place as a fallback, and the '
+    bodyText:tf(bind
+        ? 'Move SSH to port {port} and bind it to {bind} (the panel will roll back if it can\'t reach the host there)?'
+        : 'Move SSH to port {port}?', {port: p, bind: bind})
+      +'\n\n'+tf('Lockout-safe: the current binding stays in place as a fallback, and the '
       +'firewall and fail2ban are updated to the new port. Once you\'ve confirmed you can reach SSH on '
-      +p+', close the old port from the Firewall page.',
+      +'{port}, close the old port from the Firewall page.', {port: p}),
     onConfirm:function(){
       var m=document.getElementById('ssh-port-msg');
       // One move at a time: the server refuses an overlapping one (409), and a second click while
@@ -200,9 +204,11 @@ function _switchToTailscale(){
 }
 // ── System specs (static — fetched once) ──
 function specEsc(s){ return window.escapeHtml(s); }
+// window.t when the page has it (i18n.js); the label as it is otherwise.
+function _r14c_tr(s){ return typeof window.t === 'function' ? window.t(s) : s; }
 function renderSpecs(d, el){
   if(!el) return;
-  if(!d || d.error){ el.innerHTML = '<div class="col-12 text-danger small">Specs unavailable'+(d&&d.error?': '+specEsc(d.error):'')+'</div>'; return; }  // nosemgrep
+  if(!d || d.error){ el.innerHTML = '<div class="col-12 text-danger small">'+(d&&d.error ? tfHtml('Specs unavailable: {why}', {why: d.error}) : escapeHtml(t('Specs unavailable')))+'</div>'; return; }  // nosemgrep
   function tile(label, val, cls){
     if(!val) return '';
     return '<div class="'+(cls||'col-6 col-md-3')+'"><div class="stat-tile h-100"><div class="stat-label">'+label+'</div>'
@@ -282,7 +288,10 @@ function renderUpdate(d){
   var cur=document.getElementById('pu-current'); if(cur) cur.textContent=(d.current_version||'?')+(d.current_sha?' · '+d.current_sha:'');
   if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+escapeHtml(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
   if(d.update_available){
-    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>'+escapeHtml((d.remote_version||'?')+(d.remote_sha?' · '+d.remote_sha:''))+'</strong> ('+escapeHtml(String(d.behind))+' commit'+(d.behind===1?'':'s')+' behind).</span>';  // nosemgrep
+    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> '+tfHtml(d.behind===1
+        ? 'Update available: {version} ({n} commit behind).' : 'Update available: {version} ({n} commits behind).',
+        {version: {html: '<strong data-no-i18n>'+escapeHtml((d.remote_version||'?')+(d.remote_sha?' · '+d.remote_sha:''))+'</strong>'},
+         n: d.behind})+'</span>';  // nosemgrep
     btn.style.display='';
     var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
     // Each changelog line is "<short sha> <subject>". Link the sha to the commit so the entry can
@@ -322,7 +331,8 @@ function renderUpdate(d){
     // or "You're up to date". No reason line in either: not "being verified", not "couldn't be
     // verified", not "couldn't reach the update source", not "docs, tests or tooling". Each was
     // added back after the rule was set; the server's reasons stay in the API response.
-    st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> You\'re up to date'+(d.current_sha?' ('+escapeHtml(d.current_sha)+')':'')+'.</span>';  // nosemgrep
+    st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+(d.current_sha
+        ? tfHtml('You\'re up to date ({sha}).', {sha: d.current_sha}) : escapeHtml(t('You\'re up to date.')))+'</span>';  // nosemgrep
     btn.style.display='none'; changes.style.display='none';
   }
 }
@@ -439,7 +449,7 @@ function watchPanelRestart(beforeBoot, msg, doneLabel, before, targetBranch){
     if(l && l.lines) renderPuLog(l.lines);
     var outcome=panelRestartOutcome(before, s, targetBranch, l && l.lines);
     if(outcome==='moved'){
-      msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+escapeHtml(doneLabel||'Done')+' — reloading…</span>';  // nosemgrep
+      msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+tfHtml('{done} — reloading…', {done: _r14c_tr(doneLabel||'Done')})+'</span>';  // nosemgrep
       setTimeout(function(){ location.reload(); }, 2500);
     } else if(outcome==='unknown'){
       msg.innerHTML='<span class="text-warning"><i class="bi bi-question-circle"></i> '+escapeHtml('The panel restarted, but its new version could not be read — reloading to check.')+'</span>';  // nosemgrep
@@ -511,10 +521,11 @@ function switchPanelBranch(){
     // Says which of the two it will install. main goes to its newest version that passed its
     // automated checks (the server refuses if none has); any other branch installs its newest commit
     // as it is — the panel's update gate does not check it — which this used to say only in passing.
-    bodyText:'Switch the panel to branch "'+branch+'"?\n\nIt backs up, checks out that branch and restarts. If it fails to boot it rolls back automatically.\n\n'
+    bodyText:tf('Switch the panel to branch "{branch}"?\n\nIt backs up, checks out that branch and restarts. If it fails to boot it rolls back automatically.', {branch: branch})
+      +'\n\n'
       +(branch==='main'
-        ? 'It installs the newest version of main that has passed its automated checks.'
-        : 'UNVERIFIED: this installs the newest commit on "'+branch+'" as it is — branches other than main are not checked by the panel\'s update gate. Use it for testing.'),
+        ? t('It installs the newest version of main that has passed its automated checks.')
+        : tf('UNVERIFIED: this installs the newest commit on "{branch}" as it is — branches other than main are not checked by the panel\'s update gate. Use it for testing.', {branch: branch})),
     onConfirm:function(){
       btn.disabled=true; if(logWrap) logWrap.style.display='';
       if(body) body.innerHTML='<span class="text-secondary">Starting…</span>';
@@ -524,7 +535,7 @@ function switchPanelBranch(){
         fetch(MOUNT+'/api/panel/switch-branch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:branch})})
           .then(function(r){return r.json();}).then(function(d){
             if(!d.success){ msg.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Switch failed'):(d.message||'Switch failed'))+'</span>'; btn.disabled=false; return; }  // nosemgrep
-            watchPanelRestart(beforeBoot, msg, 'Switched to '+branch, before, branch);
+            watchPanelRestart(beforeBoot, msg, tf('Switched to {branch}', {branch: branch}), before, branch);
           }).catch(function(){ msg.innerHTML='<span class="text-danger">Switch request failed.</span>'; btn.disabled=false; });
       }).catch(function(){ msg.innerHTML='<span class="text-danger">Couldn\'t read the current version.</span>'; btn.disabled=false; });
     }});
@@ -562,7 +573,7 @@ function runDiagnostics(){
     if(badge){
       var s=d.summary||'fail';
       badge.className='badge '+(DIAG_BADGE[s]||DIAG_BADGE.fail);
-      badge.textContent = s==='ok' ? 'all healthy' : (s==='warn' ? (d.warn+' warning(s)') : (d.fail+' problem(s)'));
+      badge.textContent = s==='ok' ? 'all healthy' : (s==='warn' ? tf('{n} warning(s)', {n: d.warn}) : tf('{n} problem(s)', {n: d.fail}));
     }
     if(msg) msg.textContent='';
     loadIntegrity();  // refresh the file list + repair button
@@ -658,8 +669,8 @@ function loadDbStats(){
   fetch(MOUNT+'/api/panel/db-stats').then(function(r){return r.json();}).then(function(d){
     var el=document.getElementById('diag-db-stats'); if(!el) return;
     if(d.error){ el.textContent='Could not read database stats.'; return; }
-    el.textContent='Size '+fmtBytes(d.size)+' · WAL '+fmtBytes(d.wal_size)+
-      ' · audit rows '+(d.audit_rows==null?'?':d.audit_rows);
+    el.textContent=tf('Size {size} · WAL {wal} · audit rows {rows}',
+                      {size: fmtBytes(d.size), wal: fmtBytes(d.wal_size), rows: d.audit_rows==null?'?':d.audit_rows});
   }).catch(function(){});
 }
 function optimizeDb(){
@@ -672,8 +683,8 @@ function optimizeDb(){
         msg.className='small';
         if(d.success){
           var freed=d.freed||0;
-          msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> Optimized'+  // nosemgrep
-            (freed>0?(' — reclaimed '+fmtBytes(freed)):'')+'.</span>';
+          msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+  // nosemgrep
+            (freed>0 ? tfHtml('Optimized — reclaimed {size}.', {size: fmtBytes(freed)}) : escapeHtml(t('Optimized.')))+'</span>';
         } else {
           msg.innerHTML='<span class="text-danger">'+escapeHtml(d.message||'Optimize failed.')+'</span>';  // nosemgrep
         }
@@ -694,8 +705,8 @@ function checkDbHealth(){
       out.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> Database is healthy — integrity check passed.</span>';
       if(rbtn) rbtn.style.display='none';
     } else if(d.healthy===false){
-      out.innerHTML='<span class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> Integrity check flagged a problem: '+escapeHtml(d.detail||'')+'.</span>'+  // nosemgrep
-        '<div class="text-secondary" style="font-size:.7rem;">Click <strong>Repair database</strong> — it rebuilds the readable data, or restores the last healthy backup; your data is copied aside first, never deleted. The panel briefly restarts.</div>';
+      out.innerHTML='<span class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> '+tfHtml('Integrity check flagged a problem: {detail}.', {detail: d.detail||''})+'</span>'+  // nosemgrep
+        '<div class="text-secondary" style="font-size:.7rem;">'+tfHtml('Click {button} — it rebuilds the readable data, or restores the last healthy backup; your data is copied aside first, never deleted. The panel briefly restarts.', {button: {html: '<strong>'+escapeHtml(t('Repair database'))+'</strong>'}})+'</div>';
       if(rbtn) rbtn.style.display='';
     } else {
       out.innerHTML='<span class="text-warning">Could not run the health check right now.</span>';

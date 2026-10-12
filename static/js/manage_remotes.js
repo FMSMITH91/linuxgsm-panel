@@ -131,7 +131,9 @@ function toggleCreds(select) {
   if (select.value === 'password') {
     group.style.display = '';
     label.textContent = 'Password';
-    input.placeholder = 'Enter SSH password';
+    // t(): the field carries data-no-i18n (its value is a path or a password, never translated), so
+    // the translator never reaches the placeholder this writes.
+    input.placeholder = t('Enter SSH password');
     input.value = '';
     input.type = 'password';
     input.autocomplete = 'new-password';
@@ -157,7 +159,7 @@ function toggleEditCreds(select, id) {
     input.value = '';
   } else {
     group.style.display = '';
-    input.placeholder = 'Key path or password';
+    input.placeholder = t('Key path or password');   // t(): see toggleCreds
   }
 }
 
@@ -165,8 +167,8 @@ function toggleEditCreds(select, id) {
 
 function checkTailscale(remoteId, name) {
   var safe = escapeHtml(name);   // name comes from a data-attribute; escape at every HTML sink
-  var html = '<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> Checking Tailscale status on ' + safe + '...</div>';
-  showModal('Tailscale Setup: ' + safe, html);
+  var html = '<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> ' + tfHtml('Checking Tailscale status on {name}...', {name: name}) + '</div>';
+  showModal(tfHtml('Tailscale Setup: {name}', {name: name}), html);
 
   fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-check')  // nosemgrep
     .then(r => r.json())
@@ -174,7 +176,7 @@ function checkTailscale(remoteId, name) {
       if (data.success) {
         renderTailscaleStatus(remoteId, name, data);
       } else {
-        setModalBody('<div class="text-danger">Error: ' + escapeHtml(data.error || 'Unknown') + '</div>');  // nosemgrep
+        setModalBody('<div class="text-danger">' + tfHtml('Error: {why}', {why: data.error || t('Unknown')}) + '</div>');  // nosemgrep
       }
     })
     .catch(function() {
@@ -195,7 +197,9 @@ function renderTailscaleStatus(remoteId, name, status) {
     // so "not installed" — with an Install button — would be a guess stated as a reading.
     html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> ' + escapeHtml("Couldn't read Tailscale's state on this host — it did not answer. Try again once it is reachable.") + '</div>';  // nosemgrep
   } else if (installed && running) {
-    html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> Tailscale is <strong>installed</strong> and <strong>running</strong> on ' + safe + '.</div>';
+    // Each sentence a whole node, the host's name apart: with the state words bolded inside it, the
+    // sentence reached the translator as fragments ("Tailscale is", "and", "on") no key matched.
+    html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> <span>Tailscale is installed and running on</span> <strong data-no-i18n>' + safe + '</strong>.</div>';
     // escapeHtml: tailscale_ip and dns_name are parsed out of `tailscale status --json` run on
     // the REMOTE host, so a compromised or hostile host picks these bytes. They land in innerHTML
     // via setModalBody below.
@@ -203,10 +207,10 @@ function renderTailscaleStatus(remoteId, name, status) {
     if (status.dns_name) html += '<p class="small mb-1"><strong>DNS:</strong> <code>' + escapeHtml(status.dns_name) + '</code></p>';
     html += '<hr>' + _tsMigrateOffer(remoteId);
   } else if (installed) {
-    html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> Tailscale is <strong>installed</strong> but <strong>not running</strong>.</div>';
+    html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> <span>Tailscale is installed but not running.</span></div>';
     html += renderAuthKeyForm(remoteId, name);
   } else {
-    html += '<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> Tailscale is <strong>not installed</strong> on ' + safe + '.</div>';
+    html += '<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> <span>Tailscale is not installed on</span> <strong data-no-i18n>' + safe + '</strong>.</div>';
     html += '<button class="btn btn-primary btn-sm mb-2" data-install-ts data-ts-remote="' + Number(remoteId) + '" data-ts-name="' + safe + '"><i class="bi bi-download"></i> Install Tailscale</button>';
     html += '<div id="install-log" class="small mt-2"></div>';
   }
@@ -290,14 +294,14 @@ function tailscaleUp(remoteId) {
               var ufwText = f.ufw_allowed === true
                 ? 'UFW now allows the tailscale0 interface.'
                 : 'UFW was not changed: it is inactive, not installed, or could not be read or updated.';
-              if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: <code>' + escapeHtml(ip) + '</code>'  // nosemgrep
+              if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + tfHtml('Connected! IP: {ip}', {ip: {html: '<code>' + escapeHtml(ip) + '</code>'}})  // nosemgrep
                 + '<br><span class="small">' + escapeHtml(ufwText) + '</span></span>'
                 + '<div class="mt-2">' + _tsMigrateOffer(remoteId) + '</div>';
             })
             // escapeHtml here too: the success path above escapes this exact value, and it is the
             // remote host's `tailscale status --json` output either way — a finalize failure does
             // not make it any more trustworthy.
-            .catch(function(){ if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: ' + escapeHtml(s.tailscale_ip || '') + '</span>'; });  // nosemgrep
+            .catch(function(){ if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + tfHtml('Connected! IP: {ip}', {ip: s.tailscale_ip || ''}) + '</span>'; });  // nosemgrep
         }
       }).catch(function(){});
     }, 4000);
@@ -316,7 +320,7 @@ function installTailscale(remoteId, name, btn) {
     btn.disabled = true;
   }
   var logEl = document.getElementById('install-log');
-  logEl.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Installing Tailscale on ' + escapeHtml(name) + '...</span>';  // nosemgrep
+  logEl.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> ' + tfHtml('Installing Tailscale on {name}...', {name: name}) + '</span>';  // nosemgrep
 
   fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-install', {method: 'POST'})  // nosemgrep
     .then(r => r.json())
@@ -397,10 +401,10 @@ function _migrateToTailscale(remoteId) {
       if (data.success) {
         setModalBody('<div class="text-success"><i class="bi bi-check-circle"></i> ' + escapeHtml(data.message) + '</div>'
           // Same provenance as renderTailscaleStatus: the addresses come back from the remote.
-          + '<p class="small mt-2">Old host: <code>' + escapeHtml(data.old_host || '') + '</code><br>'
-          + 'New host: <code>' + escapeHtml(data.new_host || '') + '</code><br>'
-          + (data.tailscale_ip ? 'Tailscale IP: <code>' + escapeHtml(data.tailscale_ip) + '</code><br>' : '')
-          + (data.dns_name ? 'DNS: <code>' + escapeHtml(data.dns_name) + '</code>' : '')
+          + '<p class="small mt-2">' + tfHtml('Old host: {host}', {host: {html: '<code>' + escapeHtml(data.old_host || '') + '</code>'}}) + '<br>'
+          + tfHtml('New host: {host}', {host: {html: '<code>' + escapeHtml(data.new_host || '') + '</code>'}}) + '<br>'
+          + (data.tailscale_ip ? tfHtml('Tailscale IP: {ip}', {ip: {html: '<code>' + escapeHtml(data.tailscale_ip) + '</code>'}}) + '<br>' : '')
+          + (data.dns_name ? tfHtml('DNS: {name}', {name: {html: '<code>' + escapeHtml(data.dns_name) + '</code>'}}) : '')
           + '</p>'
           + '<div class="d-flex gap-2 mt-2">'
           + '<button class="btn btn-primary btn-sm"' + _da('refreshRemotesAndClose') + '><i class="bi bi-check-lg"></i> Done</button>'
@@ -471,7 +475,7 @@ function showBootstrap(remoteId, name) {
       + '</div>'
     + '<pre id="bootstrap-log" class="small mt-2" style="max-height:260px;overflow-y:auto;font-size:.7rem;display:none;background:#0d1117;padding:8px;border-radius:4px;"></pre>';
 
-  showModal('Prepare & Secure: ' + escapeHtml(name), html);   // name from a data-attribute
+  showModal(tfHtml('Prepare & Secure: {name}', {name: name}), html);   // name from a data-attribute, escaped by tfHtml
 }
 
 var _bootstrapPoll = null;
@@ -572,7 +576,7 @@ function pollBootstrap(remoteId, btn) {
         }
         pctEl.textContent = (s.total ? (s.step + '/' + s.total) : '') + '  ' + s.percent + '%';
         barEl.style.width = s.percent + '%';
-        elEl.textContent = 'Elapsed: ' + s.elapsed + 's';
+        elEl.textContent = tf('Elapsed: {n}s', {n: s.elapsed});
         if (s.log && s.log.length) {
           logEl.textContent = s.log.join('\n');
           logEl.scrollTop = logEl.scrollHeight;
@@ -645,7 +649,8 @@ function removeRemote(btn){
     // Its own line, one literal, so the whole sentence is one catalog entry. A block <span>, not a
     // <p>: confirmDialog puts the body inside a <p> already, and a <p> in a <p> is closed early by
     // the parser, leaving a stray empty paragraph behind the text.
-    body: 'Delete <strong data-no-i18n>' + escapeHtml(name) + '</strong>? This removes it and all of its game servers from the panel.'
+    body: tfHtml('Delete {name}? This removes it and all of its game servers from the panel.',
+                 {name: {html: '<strong data-no-i18n>' + escapeHtml(name) + '</strong>'}})
       + '<span class="d-block small text-muted mt-2">'
       + 'Nothing on the host itself is changed: its game servers keep running, and the gamedig tool and weekly cron the panel installed there stay. The README’s “Removing a host” section says how to remove them.'
       + '</span>',

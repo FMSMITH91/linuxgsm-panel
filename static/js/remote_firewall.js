@@ -182,12 +182,13 @@ function blockIp() {
       resultEl.innerHTML = '<span class="text-danger">❌ ' + esc(data.message) + '</span>';  // nosemgrep
     }
   })
-  .catch(function() { resultEl.innerHTML = '<span class="text-danger">❌ Request failed</span>'; });
+  // The words in an element of their own: "❌ Request failed" as one node matched no catalog key.
+  .catch(function() { resultEl.innerHTML = '<span class="text-danger">❌ <span>Request failed</span></span>'; });
 }
 
 function unblockIp(ip, btn) {
   confirmDialog({title: 'Unblock IP', icon: 'shield-check', confirmClass: 'btn-warning', confirmLabel: 'Unblock',
-    bodyText: 'Remove the firewall block on ' + ip + '?',
+    bodyText: tf('Remove the firewall block on {ip}?', {ip: ip}),
     onConfirm: function() {
       if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
       fetch(MOUNT + '/api/remote/' + remoteId + '/security/block', {
@@ -263,7 +264,7 @@ function _restrictPost(path, body, busy) {
     if (data.success) refreshFirewall();
   })
   .catch(function () {
-    out.innerHTML = '<span class="text-danger">❌ Request failed.</span>';           // nosemgrep
+    out.innerHTML = '<span class="text-danger">❌ <span>Request failed.</span></span>';   // nosemgrep
   });
 }
 
@@ -312,7 +313,7 @@ function unlimitPort() {
 // is gone, or has become protected, is not deleted at all.
 function deleteGroup(nums, btn, warn, reason, key) {
   if (!nums || !nums.length) return;
-  var msg = warn ? ((reason || 'This may affect your access.') + '\n\nRemove this rule anyway?')
+  var msg = warn ? ((reason || t('This may affect your access.')) + '\n\n' + t('Remove this rule anyway?'))
                  : 'Remove this firewall rule?';
   function _say(text) { if (window.toast) toast(text, 'danger'); }
   confirmDialog({title:'Remove firewall rule', icon:'shield-exclamation',

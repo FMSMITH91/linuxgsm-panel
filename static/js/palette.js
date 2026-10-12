@@ -282,7 +282,7 @@ var PALETTE_HOST_SECTIONS = [
         label: t('Reboot') + ' ' + name + '…',
         reboot: hostId, rname: name, rlocal: isLocal ? '1' : '',
         icon: 'bi bi-power'
-      }, 'reboot restart power ' + name, 'actions', order);
+      }, 'reboot restart power ' + name, 'actions', order);   // i18n-ignore: search keywords, never shown
     }
     available.forEach(function (p, hi) {
       var href = pathOf(p.href);
@@ -450,7 +450,7 @@ var PALETTE_HOST_SECTIONS = [
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (window.toast) {
-            window.toast(d.message || (d.success ? (ACTION_LABEL[action] + ' issued for ' + name)
+            window.toast(d.message || (d.success ? window.tf('{action} issued for {name}', {action: _tr(ACTION_LABEL[action]), name: name})
                                                  : 'Action failed'),
                          d.success ? 'success' : 'danger');
           }

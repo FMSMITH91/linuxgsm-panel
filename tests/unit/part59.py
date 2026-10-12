@@ -581,7 +581,9 @@ try:
     (_d59 / "auth.log").write_text("x\n")
     _pbns59 = {"_CFG_BACKUP": None, "DATA_DIR": _d59, "DB_PATH": _d59 / "panel.db", "SECRET_FILE": _d59 / "s",
                "CRED_KEY_FILE": _d59 / "k", "CONFIG_FILE": _d59 / "config.json", "AUTH_LOG": _d59 / "auth.log",
-               "_PREEXISTING": set(), "sys": _sys59, "print": print}
+               "_PREEXISTING": set(), "sys": _sys59, "print": print,
+               # Its backups directory, which this run did not create (part63 holds that branch).
+               "BACKUP_DIR": _d59 / "backups", "_BACKUPS_PREEXISTED": True, "shutil": _shutil59}
     # nosemgrep: python.lang.security.audit.exec-detected.exec-detected -- this repo's own tool's cleanup, on a temp dir
     exec(compile(_ast59.Module(body=_pbdefs59, type_ignores=[]), _pbf59, "exec"), _pbns59)  # nosec B102 - this repo's own tool  # pylint: disable=exec-used
     _pbns59["cleanup"]()

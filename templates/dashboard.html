@@ -162,11 +162,11 @@
         <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
               title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
         <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
-                title="Move left" aria-label="Move {{ TILE_LABELS[key] }} left"><i class="bi bi-arrow-left"></i></button>
+                title="Move left" aria-label="{{ t('Move %s left')|format(t(TILE_LABELS[key])) }}"><i class="bi bi-arrow-left"></i></button>
         <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
-                title="Move right" aria-label="Move {{ TILE_LABELS[key] }} right"><i class="bi bi-arrow-right"></i></button>
+                title="Move right" aria-label="{{ t('Move %s right')|format(t(TILE_LABELS[key])) }}"><i class="bi bi-arrow-right"></i></button>
         <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
-                title="Hide this panel" aria-label="Hide {{ TILE_LABELS[key] }}"><i class="bi bi-eye-slash"></i></button>
+                title="Hide this panel" aria-label="{{ t('Hide %s')|format(t(TILE_LABELS[key])) }}"><i class="bi bi-eye-slash"></i></button>
       </span>
       {{ TILES[key]() }}
     </div>
@@ -206,9 +206,9 @@
         <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
               title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
         <button type="button" class="btn btn-outline-secondary" data-action="moveHostCard" data-args='[-1,"@self"]'
-                title="Move this host up" aria-label="Move {{ remote.display_name }} up"><i class="bi bi-arrow-up"></i></button>
+                title="Move this host up" aria-label="{{ t('Move %s up')|format(remote.display_name) }}"><i class="bi bi-arrow-up"></i></button>
         <button type="button" class="btn btn-outline-secondary" data-action="moveHostCard" data-args='[1,"@self"]'
-                title="Move this host down" aria-label="Move {{ remote.display_name }} down"><i class="bi bi-arrow-down"></i></button>
+                title="Move this host down" aria-label="{{ t('Move %s down')|format(remote.display_name) }}"><i class="bi bi-arrow-down"></i></button>
       </span>
       <span class="text-secondary small d-none d-md-inline" id="host-metrics-{{ remote.id }}"></span>
       {# "Offline" already means "this game server is stopped" three columns to the right, in the
@@ -304,7 +304,7 @@
         <tbody>
           {% for srv in remote_servers %}
           <tr data-server-id="{{ srv.id }}" data-name="{{ srv.name }}" data-type="{{ srv.game_display or srv.game_type }}" data-status="{{ srv.status }}" data-players="{{ player_counts.get(srv.id) if player_counts.get(srv.id) is not none else -1 }}">
-            {% if can_bulk %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
+            {% if can_bulk %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="{{ t('Select %s')|format(srv.name) }}"></td>{% endif %}
             <td>
               {# data-no-i18n on all three, for the same reason the tag chips below already carry it:
                  these are USER-AUTHORED names, and the walker translates any text node whose exact
@@ -353,10 +353,10 @@
             </td>
             {% set busy = (not srv.installed) or srv.status in ('installing', 'configuring') %}
             <td class="text-end text-nowrap col-actions">
-              {% if can_start %}<button class="btn btn-outline-success btn-sm srv-ctl" title="Start" aria-label="Start {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "start", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-play-fill"></i></button>{% endif %}
-              {% if can_restart %}<button class="btn btn-outline-warning btn-sm srv-ctl" title="Restart" aria-label="Restart {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "restart", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-arrow-repeat"></i></button>{% endif %}
-              {% if can_stop %}<button class="btn btn-outline-danger btn-sm srv-ctl" title="Stop" aria-label="Stop {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "stop", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-stop-fill"></i></button>{% endif %}
-              <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm srv-console{% if busy %} disabled{% endif %}" title="Console &amp; stats" aria-label="Console &amp; stats for {{ srv.name }}"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}>
+              {% if can_start %}<button class="btn btn-outline-success btn-sm srv-ctl" title="Start" aria-label="{{ t('Start %s')|format(srv.name) }}" data-action="doAction" data-args='[{{ srv.id }}, "start", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-play-fill"></i></button>{% endif %}
+              {% if can_restart %}<button class="btn btn-outline-warning btn-sm srv-ctl" title="Restart" aria-label="{{ t('Restart %s')|format(srv.name) }}" data-action="doAction" data-args='[{{ srv.id }}, "restart", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-arrow-repeat"></i></button>{% endif %}
+              {% if can_stop %}<button class="btn btn-outline-danger btn-sm srv-ctl" title="Stop" aria-label="{{ t('Stop %s')|format(srv.name) }}" data-action="doAction" data-args='[{{ srv.id }}, "stop", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-stop-fill"></i></button>{% endif %}
+              <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm srv-console{% if busy %} disabled{% endif %}" title="Console &amp; stats" aria-label="{{ t('Console & stats for %s')|format(srv.name) }}"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}>
                 <i class="bi bi-terminal-fill"></i>
               </a>
               {# Files & Config and the tag button came from /servers/manage when it folded into
@@ -381,14 +381,14 @@
               <a href="{{ url_for('server_files', server_id=srv.id) }}"
                  class="btn btn-outline-secondary btn-sm srv-files{% if files_busy %} disabled{% endif %}"
                  title="Edit config &amp; browse/upload files"
-                 aria-label="Files and config for {{ srv.name }}"{% if files_busy %} tabindex="-1" aria-disabled="true"{% endif %}>
+                 aria-label="{{ t('Files and config for %s')|format(srv.name) }}"{% if files_busy %} tabindex="-1" aria-disabled="true"{% endif %}>
                 <i class="bi bi-folder2-open"></i>
               </a>
               {% endif %}
               {% if can_edit_tags %}
               <button type="button" class="btn btn-outline-secondary btn-sm" data-action="editServerTags"
                       data-args='[{{ srv.id }}, "@self"]' title="Choose which tags this server carries"
-                      aria-label="Edit tags for {{ srv.name }}"><i class="bi bi-tags"></i></button>
+                      aria-label="{{ t('Edit tags for %s')|format(srv.name) }}"><i class="bi bi-tags"></i></button>
               {% endif %}
               {% if can_uninstall %}
               {# Uninstall was reachable only from Remote Servers -> a host -> the Overview tab ->
@@ -401,18 +401,18 @@
                     data-server-short="{{ srv.short_name }}">
                 <button type="button" class="btn btn-outline-danger btn-sm uninstall-trigger"
                         title="Uninstall — deletes the server, its files and its backups"
-                        aria-label="Uninstall {{ srv.name }}"><i class="bi bi-trash"></i></button>
+                        aria-label="{{ t('Uninstall %s')|format(srv.name) }}"><i class="bi bi-trash"></i></button>
               </form>
               {% endif %}
               {# Same buttons-not-drag reasoning as the host cards, and doubly so here: these rows sit
                  inside a horizontally scrolling .table-responsive wrapper. #}
-              <span class="btn-group btn-group-sm srv-move ms-1" role="group" aria-label="Reorder {{ srv.name }}">
+              <span class="btn-group btn-group-sm srv-move ms-1" role="group" aria-label="{{ t('Reorder %s')|format(srv.name) }}">
                 <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
                       title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
                 <button type="button" class="btn btn-outline-secondary" data-action="moveServerRow" data-args='[-1,"@self"]'
-                        title="Move this server up" aria-label="Move {{ srv.name }} up"><i class="bi bi-arrow-up"></i></button>
+                        title="Move this server up" aria-label="{{ t('Move %s up')|format(srv.name) }}"><i class="bi bi-arrow-up"></i></button>
                 <button type="button" class="btn btn-outline-secondary" data-action="moveServerRow" data-args='[1,"@self"]'
-                        title="Move this server down" aria-label="Move {{ srv.name }} down"><i class="bi bi-arrow-down"></i></button>
+                        title="Move this server down" aria-label="{{ t('Move %s down')|format(srv.name) }}"><i class="bi bi-arrow-down"></i></button>
               </span>
             </td>
           </tr>
