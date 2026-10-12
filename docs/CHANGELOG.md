@@ -596,6 +596,27 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A seventh full review on 2026-10-12: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Garry's Mod content.** The Content card now shows how an install or uninstall ended: its
+    message stayed hidden once the job stopped running, so a failure showed nothing.
+  - **Console.** A line holding a control character (a pasted Ctrl-C, Ctrl-Z or line break) is
+    refused instead of reaching the game, where it interrupted or suspended the server. After Clear,
+    a panel line could appear twice; it now appears once.
+  - **Phones.** The file editor's header, the blocked-IP table's Unblock button, the dashboard's
+    server names and the French rate-limit row fit a 375-pixel screen.
+  - **Languages.** Ubuntu Pro, full-backup, import and database-optimise answers, the GMod install
+    progress, "Internal server error" and the ✓/✗ results are translated for Spanish and French
+    viewers, and the translation checks now follow messages passed through helpers.
+  - **Robustness.** Optimise database no longer says "Optimized" when the database was busy and the
+    compaction was put off. A hand-edited panel port no longer breaks Change Port, and an id too
+    large for the database is refused instead of failing. After a reboot is called off, a server
+    is no longer given up on while its host is silent or a LinuxGSM update is holding its start;
+    the hour's wait counts from when the host answers. An IPv6 address is
+    bracketed in the links the panel and installer print.
+  - **Tests.** Seventeen checks that could pass without testing what they named now can fail.
+
+
 - **Phones (375 px wide).** Pop-up messages use the screen's width: they were squeezed into a
   188-pixel column, and a long Spanish refusal covered the page header. The firewall rules, backups,
   users and game-server tables fit the screen with their delete buttons in reach. Long host and
@@ -2031,14 +2052,22 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **A seventh full review on 2026-10-12: security.** Every item below has a check that fails
+  without its fix.
+  - **Host terminal.** A host's label can no longer carry terminal escape sequences into the web
+    terminal.
+  - **HTTPS cookies.** The secure-cookie setting is read the same way however it was written in the
+    settings file.
+
 - **A sixth full review on 2026-10-12: security.** Every item below has a check that fails without
   its fix.
   - **SSH lockout guard.** Removing an "Allow from source" rule could still delete the only way in to
     SSH or the panel when the source was written in another form than the firewall's (`0.0.0.0/0`,
     `::/0`, a network such as `/24`, or an address with or without `/32`). The guard now compares
     sources the way the firewall does. Proven against a real firewall, which was left as it was.
-  - **Root helper.** The restart-flag check no longer follows a symbolic link, and the scheduled
-    restart job runs only inside its own system unit.
+  - **Root helper.** The restart-flag check no longer follows a symbolic link, and its update,
+    restore, database-repair and OS-update jobs run only inside their own system unit, never in one
+    the panel's account started.
   - **Accounts that can become root.** The panel no longer lists such an account's scheduled tasks,
     and its refusal says exactly what the panel still reads.
 - **A fifth full review on 2026-10-12: security.** Every item below has a check that fails without
