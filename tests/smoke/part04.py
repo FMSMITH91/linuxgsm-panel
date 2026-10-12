@@ -2040,7 +2040,7 @@ _ntp_up, _ntp_hosts = [], []
 _sv_ntp = (_sm_cron.upgrade_managed_cron_tracking, _ntp_app.ensure_node_tools_cron)
 
 
-def _ntp_upgrade(remote, user, selfname=None, game_type=None, port=None):
+def _ntp_upgrade(remote, user, selfname=None, game_type=None, port=None, query_type=None):
     _ntp_up.append((str(getattr(remote, "id", None)), str(user), str(selfname), str(game_type),
                     str(port)))
     if len(_ntp_up) == 1:
@@ -2114,7 +2114,7 @@ def _ntd_ensure(r):
     return True
 
 
-def _ntd_upgrade(remote, user, selfname=None, game_type=None, port=None):
+def _ntd_upgrade(remote, user, selfname=None, game_type=None, port=None, query_type=None):
     _ntd_up.append(str(user))
     if user in _ntd_gids and "game" not in _ntd_gone:
         _ntd_gone["game"] = [_n for _n in _ntd_gids if _n != user][0]
@@ -2173,7 +2173,7 @@ with app.app_context():
     _rt_want = [(_g.short_name, _g.lgsm_name, _g.game_type, _g.port)]
 try:
     _sm_cron.upgrade_managed_cron_tracking = (
-        lambda remote, user, selfname=None, game_type=None, port=None:
+        lambda remote, user, selfname=None, game_type=None, port=None, query_type=None:
         _rt_up.append((user, selfname, game_type, port)) and False)
     _sm_cron.list_cron_jobs = lambda *a, **k: []
     _rt_resp = c.get("/api/server/%d/cron" % gs_id)
