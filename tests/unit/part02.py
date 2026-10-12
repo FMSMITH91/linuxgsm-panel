@@ -3844,6 +3844,17 @@ def _r16d_flash_texts(arg, consts):
     return None
 
 
+def _r17d_flash_message(call):
+    """A flash call's message node: its first argument, or `message=`; None when it has neither.
+
+    `flash(message=...)` has no positional argument, and the walk below read only `_c.args`, so
+    such a call was skipped, its sentence checked by nobody (review 1012b).
+    """
+    if call.args:
+        return call.args[0]
+    return next((_k.value for _k in call.keywords if _k.arg == "message"), None)
+
+
 # The names the route reads: its own module's and those it imports from _shared.
 _atg_consts = _r16d_module_strs(("panel", "routes", "_shared.py"),
                                 ("panel", "routes", "auth_routes.py"))
@@ -3855,8 +3866,9 @@ for _n in _totp_ast.walk(_atg_mint_src):
         continue
     for _c in _totp_ast.walk(_n):
         if (isinstance(_c, _totp_ast.Call)
-                and getattr(_c.func, "id", getattr(_c.func, "attr", None)) == "flash" and _c.args):
-            _t = _r16d_flash_texts(_c.args[0], _atg_consts)
+                and getattr(_c.func, "id", getattr(_c.func, "attr", None)) == "flash"):
+            _t = (None if _r17d_flash_message(_c) is None
+                  else _r16d_flash_texts(_r17d_flash_message(_c), _atg_consts))
             if _t is None:
                 _atg_unread.append("line %d" % _c.lineno)
             else:
@@ -3869,6 +3881,11 @@ check("api token: the resolver reads a constant and both arms of a choice, and n
       _r16d_flash_texts(_totp_ast.parse('x if c else "b"', mode="eval").body, {"x": "a"}) == ["a", "b"]
       and _r16d_flash_texts(_totp_ast.parse("tr(x)", mode="eval").body, {"x": "a"}) is None
       and _r16d_flash_texts(_totp_ast.parse("y", mode="eval").body, {"x": "a"}) is None)
+check("api token: ...a flash(message=...) is read by its keyword, and one with no message is named "
+      "(control)",
+      _r16d_flash_texts(_r17d_flash_message(_totp_ast.parse('flash(message="m", category="e")', mode="eval")
+                                             .body), {}) == ["m"]
+      and _r17d_flash_message(_totp_ast.parse('flash(category="e")', mode="eval").body) is None)
 # A floor, not an inventory: "every sentence found is translated" is satisfied by finding none,
 # which is exactly what a renamed route or a flash built from a variable would produce.
 check("api token: the mint's refusal sentences were found to check",

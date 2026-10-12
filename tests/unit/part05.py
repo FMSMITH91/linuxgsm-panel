@@ -1078,9 +1078,20 @@ def _r16d_names_a_deprecation_base(cat):
 def _r14d_blanket_filters(tree):
     """Lines of filterwarnings/simplefilter calls that ignore deprecations outside catch_warnings."""
     out = []
-    _aliases = {_t.id: _a.value for _a in getattr(tree, "body", [])
-                if isinstance(_a, _dw_ast.Assign) and isinstance(_a.value, (_dw_ast.Name, _dw_ast.Attribute))
-                for _t in _a.targets if isinstance(_t, _dw_ast.Name)}
+    # Every binding anywhere, not only module-level plain ones: a function-local or annotated
+    # `BaseWarning: type = Warning` read as an unknown class and passed (review 1012b). A name bound
+    # more than once stands for ALL its values (a tuple of them), so a later rebinding cannot hide
+    # the one in effect at the call.
+    _bound = {}
+    for _a in _dw_ast.walk(tree):
+        _ts = (_a.targets if isinstance(_a, _dw_ast.Assign)
+               else [_a.target] if isinstance(_a, _dw_ast.AnnAssign) and _a.value is not None else [])
+        if isinstance(getattr(_a, "value", None), (_dw_ast.Name, _dw_ast.Attribute)):
+            for _t in _ts:
+                if isinstance(_t, _dw_ast.Name):
+                    _bound.setdefault(_t.id, []).append(_a.value)
+    _aliases = {_k: _v[0] if len(_v) == 1 else _dw_ast.Tuple(elts=_v, ctx=_dw_ast.Load())
+                for _k, _v in _bound.items()}
 
     def _walk(node, scoped):
         scoped = scoped or _r14d_is_catch_warnings(node)
@@ -1125,7 +1136,11 @@ _dw_ctl = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", message=".*", category=DeprecationWarning)',
     'import warnings\nwarnings.filterwarnings("ignore", module="", category=DeprecationWarning)',
     'import warnings\nwarnings.filterwarnings("ignore", "", DeprecationWarning, ".*")',
-    'import warnings\nBaseWarning = Warning\nwarnings.simplefilter("ignore", BaseWarning)')}
+    'import warnings\nBaseWarning = Warning\nwarnings.simplefilter("ignore", BaseWarning)',
+    # Review 1012b: an alias bound in a function, annotated, or rebound later.
+    'import warnings\ndef f():\n    BaseWarning = Warning\n    warnings.simplefilter("ignore", BaseWarning)',
+    'import warnings\nBaseWarning: type = Warning\nwarnings.simplefilter("ignore", BaseWarning)',
+    'import warnings\nBaseWarning = Warning\nwarnings.simplefilter("ignore", BaseWarning)\nBaseWarning = UserWarning')}
 _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", message="x", category=DeprecationWarning)',
     'import warnings\nwith warnings.catch_warnings():\n    warnings.simplefilter("ignore")',
@@ -5113,28 +5128,100 @@ check("audit: every logged action names a target (or is listed as having none)",
 
 # Every walk of the whole checkout in the suites leaves .claude out: in a dev checkout it holds other
 # branches' worktrees, and three walks read them as this tree's code (review 1012a).
-def _r16d_unpruned_walks(text):
-    """Line numbers of a `for … in os.walk(<checkout root>):` whose next six lines never name .claude.
+def _r17d_root_names(tree, depth):
+    """Names bound in `tree` to the checkout root, whatever they are called.
+
+    `depth`: how many dirname()s of the file's own path reach the root (3 for tests/unit/partNN).
+    A root is one of the suites' conventional root names (each one a root wherever it is bound:
+    part01's `_root`, smoke's `_repo_root`, `unit.REPO_ROOT`, the per-part `_ROOTnn`), REPO_ROOT
+    imported under another name, a dirname chain of __file__ that long, or a name assigned from
+    another root (through abspath/realpath/normpath), followed to a fixed point.
+    """
+    def _fn(call):
+        return getattr(call.func, "attr", getattr(call.func, "id", None))
+
+    def _file_depth(e):
+        if isinstance(e, _smg_ast.Name) and e.id == "__file__":
+            return 0
+        if isinstance(e, _smg_ast.Call) and e.args and _fn(e) in ("abspath", "realpath", "normpath"):
+            return _file_depth(e.args[0])
+        if isinstance(e, _smg_ast.Call) and e.args and _fn(e) == "dirname":
+            _d = _file_depth(e.args[0])
+            return None if _d is None else _d + 1
+        return None
+
+    roots = {"REPO_ROOT"} | {_a.asname or _a.name for _n in _smg_ast.walk(tree)
+                             if isinstance(_n, _smg_ast.ImportFrom) and _n.module == "unit"
+                             for _a in _n.names if _a.name == "REPO_ROOT"}
+
+    def is_root(e):
+        if isinstance(e, _smg_ast.Name):
+            return e.id in roots or bool(_re.fullmatch(r"_root|_repo_root|REPO_ROOT|_UNIT_ROOT|_ROOT\w*", e.id))
+        if isinstance(e, _smg_ast.Call) and e.args and _fn(e) in ("abspath", "realpath", "normpath"):
+            return is_root(e.args[0])
+        return _file_depth(e) == depth
+    _grew = True
+    while _grew:
+        _grew = False
+        for _n in _smg_ast.walk(tree):
+            if isinstance(_n, _smg_ast.Assign) and is_root(_n.value):
+                for _t in _n.targets:
+                    if isinstance(_t, _smg_ast.Name) and _t.id not in roots:
+                        roots.add(_t.id)
+                        _grew = True
+    return is_root
+
+
+def _r16d_unpruned_walks(text, depth=3):
+    """Line numbers of an `os.walk(<checkout root>)` whose next six lines never name .claude.
 
     Named directly, or through a skip set the file defines with .claude in it (part27's
-    _LOCK_SKIP27, part50's _skip_at50).
+    _LOCK_SKIP27, part50's _skip_at50). Found by AST, by what the walked name is bound to: a fixed
+    list of root names, matched only as `for … in os.walk(<name>):`, missed part19's
+    `os.walk(_rn_root)`, a walk given keyword arguments, and one inside a comprehension (review
+    1012b).
     """
     lines = text.splitlines()
     sets = {_m.group(1) for _m in _re.finditer(r"(?m)^(\w+)\s*=.*\.claude", text)}
-    return [_i + 1 for _i, _ln in enumerate(lines)
-            if _re.match(r"\s*for .+ in os\.walk\((?:_root|_repo_root|_ROOT\w*|REPO_ROOT)\):", _ln)
-            and ".claude" not in "\n".join(lines[_i:_i + 7])
-            and not any(_re.search(r"\b%s\b" % _n, "\n".join(lines[_i:_i + 7])) for _n in sets)]
+    tree = _smg_ast.parse(text)
+    is_root = _r17d_root_names(tree, depth)
+    out = []
+    for _c in _smg_ast.walk(tree):
+        if (isinstance(_c, _smg_ast.Call) and getattr(_c.func, "attr", None) == "walk"
+                and getattr(_c.func.value, "id", None) == "os" and _c.args and is_root(_c.args[0])):
+            _win = "\n".join(lines[_c.lineno - 1:_c.lineno + 6])
+            if ".claude" not in _win and not any(_re.search(r"\b%s\b" % _n, _win) for _n in sets):
+                out.append(_c.lineno)
+    return sorted(set(out))
 
 
 _r16d_walks = []
+_r17d_walks_read = 0
 for _r16d_f in sorted(_smg_glob.glob(os.path.join(_root, "tests", "**", "*.py"), recursive=True)):
     with open(_r16d_f, encoding="utf-8") as _r16d_fh:
-        _r16d_walks += ["%s:%d" % (os.path.relpath(_r16d_f, _root), _n)
-                        for _n in _r16d_unpruned_walks(_r16d_fh.read())]
+        _r17d_src = _r16d_fh.read()
+    _r17d_depth = os.path.relpath(_r16d_f, _root).count(os.sep) + 1   # dirname()s from the file to the root
+    _r17d_walks_read += len(_r16d_unpruned_walks(_r17d_src.replace(".claude", "._none_"), _r17d_depth))
+    _r16d_walks += ["%s:%d" % (os.path.relpath(_r16d_f, _root), _n)
+                    for _n in _r16d_unpruned_walks(_r17d_src, _r17d_depth)]
+_r17d_walk_ctl = {
+    "_root": "_root = 1\nfor d, s, f in os.walk(_root):\n    pass\n",
+    "_rn_root (part19's)": ("_rn_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath("
+                            "__file__))))\nfor d, s, f in os.walk(_rn_root):\n    pass\n"),
+    "keyword arguments": "from unit import REPO_ROOT as _R\nfor d, s, f in os.walk(_R, topdown=True):\n    pass\n",
+    "a comprehension": "from unit import REPO_ROOT\nx = [f for d, s, f in os.walk(REPO_ROOT)]\n",
+    "a copy of a root": "from unit import REPO_ROOT\ntop = REPO_ROOT\nfor d, s, f in os.walk(top):\n    pass\n",
+}
+_r17d_walk_ctl = {_k: _r16d_unpruned_walks(_v) != [] for _k, _v in _r17d_walk_ctl.items()}
+_r17d_walk_ctl["a subtree (not the root)"] = _r16d_unpruned_walks(
+    "from unit import REPO_ROOT\nfor d, s, f in os.walk(os.path.join(REPO_ROOT, 'panel')):\n    pass\n") == []
+_r17d_walk_ctl["two dirnames from tests/unit (tests/, not the root)"] = _r16d_unpruned_walks(
+    "t = os.path.dirname(os.path.dirname(__file__))\nfor d, s, f in os.walk(t):\n    pass\n") == []
 check("suites: every walk of the whole checkout leaves .claude (other worktrees) out",
-      not _r16d_walks and _r16d_unpruned_walks("for d, s, f in os.walk(_root):\n    pass\n") == [1],
-      repr(_r16d_walks))
+      not _r16d_walks and _r17d_walks_read >= 8, "%d walks read; %r" % (_r17d_walks_read, _r16d_walks))
+check("suites: ...a walk is found by what its root name is bound to, with keywords, in a "
+      "comprehension, and through a copy; a subtree is not one (controls)",
+      all(_r17d_walk_ctl.values()), repr(_r17d_walk_ctl))
 
 # ── passwords are not capped at bcrypt's 72 bytes ─────────────────────────────────────────────
 # bcrypt takes at most 72 BYTES. That produced two failures, neither of them visible to the person
