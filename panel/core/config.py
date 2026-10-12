@@ -161,9 +161,13 @@ def _r15a_cfg_int(value, default):
 # hand-editable and the README tells people to set `trust_proxy` there; a quoted "false" is a
 # non-empty string, so it read as ON (a panel trusting X-Forwarded-For from anyone, a reboot
 # restoring servers the operator said to leave stopped). load_config hands every reader a bool.
+# cookie_secure is the one docs/https.md tells operators to set by hand: a quoted "false" reached
+# Flask as a string, Werkzeug wrote `Secure=false`, and a browser treats ANY Secure attribute as
+# Secure, so a plain-HTTP panel looped back to /login. It has no DEFAULT_CONFIG entry on purpose:
+# an unreadable value is dropped and create_app falls back to the computed _https_ready answer.
 _R16A_FLAG_KEYS = ("setup_complete", "use_https", "trust_proxy", "tailscale_auto_setup",
                    "tailscale_use_funnel", "tailscale_setup_done", "backup_enabled",
-                   "reboot_restore_no_autostart")
+                   "reboot_restore_no_autostart", "cookie_secure")
 _R16A_FLAG_WORDS = {"true": True, "yes": True, "on": True, "1": True,
                     "false": False, "no": False, "off": False, "0": False, "": False}
 
@@ -171,14 +175,15 @@ _R16A_FLAG_WORDS = {"true": True, "yes": True, "on": True, "1": True,
 def _r16a_flags(config):
     """Make each on/off setting in `config` a bool, in place; one it cannot read takes its default.
 
-    A real bool is kept. "false"/"no"/"off"/"0" (any case) and 0 are False, their opposites True.
+    A real bool is kept. "false"/"no"/"off"/"0" (any case) and 0 (or 0.0) are False, their
+    opposites True. int() first: str(0.0) is "0.0", no word, so a hand-written 0.0 took the default.
     Anything else is as if unset: DEFAULT_CONFIG's value, or no key (the reader's own default).
     """
     for key in _R16A_FLAG_KEYS:
         if key not in config or isinstance(config[key], bool):
             continue
         v = config[key]
-        word = v.strip().lower() if isinstance(v, str) else (str(v) if v in (0, 1) else None)
+        word = v.strip().lower() if isinstance(v, str) else (str(int(v)) if v in (0, 1) else None)
         if word in _R16A_FLAG_WORDS:
             config[key] = _R16A_FLAG_WORDS[word]
         elif key in DEFAULT_CONFIG:
