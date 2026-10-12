@@ -599,3 +599,26 @@ check("console send: a line that is exactly a tmux key name (C-c, Escape, 0x3) i
       "not sent as that key (an interrupt of the game); a line ending in \";\" keeps it and is still "
       "submitted (tmux took the \";\" as its own command separator); Enter follows as the key",
       _con67 == {c: [("send-keys", ["-l"], [c]), ("send-keys", [], ["Enter"])] for c in _CON67}, repr(_con67))
+
+
+# ── A03 lead: the firewall cleanup's notes and the game-port opener's answer translate whole ─────
+from unit.part02 import protect as _protect67  # noqa: E402
+
+_gp67 = _fwrun64(["22/tcp ALLOW IN Anywhere"], _smh67.remote_ufw_allow_game_port, _S67, 27067, "p67")[0]
+_gp_es67 = _tr67("es", _gp67[1]) if isinstance(_gp67, tuple) else _gp67
+check("firewall: opening a game port answers \"Port {port}: {what}\" with {what} in the viewer's language "
+      "(\"opened 1 port(s): …\" was %-built English inside the translated sentence)",
+      _gp_es67 == "Puerto 27067: 1 puerto(s) abierto(s): 27067", repr(_gp_es67))
+_fwg67 = _protect67(NS(port=22), ["22/tcp ALLOW IN Anywhere", "27067 ALLOW IN Anywhere # p67",
+                                  "27068 ALLOW IN Anywhere # p67"], sshd_ports=(22,))
+_mine67 = [g for g in _fwg67 if g.get("comment") == "p67"]
+_st67 = {"installed": True, "enabled": True, "groups": _fwg67}
+_notes67 = (_smh67._still_there(_st67, lambda g: g in _mine67)
+            + _smh67._still_there(dict(_st67, enabled=False), lambda g: False)
+            + _smh67._still_there({"unreachable": True}, lambda g: False))
+_notes_fr67 = [_tr67("fr", n) for n in _notes67]
+check("firewall: an uninstall's notes (still open, UFW inactive, firewall unread) read in the viewer's "
+      "language (the \"Still open …: %s\" note was %-built English)",
+      len(_notes_fr67) == 3 and _notes_fr67[0].startswith("Toujours ouvertes")
+      and _notes_fr67[1].startswith("UFW n'est pas actif") and _notes_fr67[2].startswith("Le pare-feu n'a pas pu"),
+      repr(_notes_fr67))

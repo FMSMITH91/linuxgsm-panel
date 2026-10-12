@@ -897,8 +897,12 @@ def remote_ufw_allow_game_ports(server, ports, name="Game"):
         if is_open:
             opened.append(p)
         left_to += [r for r in rules if r not in left_to]
-    return opened, (f"opened {len(opened)} port(s): {', '.join(map(str, opened)) or 'none'}"
-                    + (f"; left to an existing rule: {', '.join(left_to)}" if left_to else ""))
+    # A Sentence: remote_ufw_allow_game_port shows it as the {what} of "Port {port}: {what}".
+    shown = ", ".join(map(str, opened)) or i18n.Sentence("none")
+    if left_to:
+        return opened, i18n.Sentence("opened {n} port(s): {ports}; left to an existing rule: {rules}",
+                                     n=len(opened), ports=shown, rules=", ".join(left_to))
+    return opened, i18n.Sentence("opened {n} port(s): {ports}", n=len(opened), ports=shown)
 
 
 # How many times a cleanup tries one rule, each against a fresh read. ufw numbers are positions and
@@ -944,8 +948,10 @@ def _next_pick(status, pick, refused):
 
 # A cleanup that could not read the firewall knows nothing about what it left. Shared with the
 # uninstall route, which says the same when the cleanup raised.
-UFW_UNREAD_NOTE = ("The firewall could not be read, so this server's rules may still be open — "
-                   "check the host's Firewall page.")
+# The notes below are Sentences: the uninstall answer translates each one whole (_r15e_uninstalled),
+# and %-built English matched no catalog key, so es and fr viewers read them in English.
+UFW_UNREAD_NOTE = i18n.Sentence("The firewall could not be read, so this server's rules may still be open — "
+                                "check the host's Firewall page.")
 
 
 def _still_there(status, pick):
@@ -956,13 +962,16 @@ def _still_there(status, pick):
         return []
     if not status.get("enabled"):
         # An inactive ufw lists no rules, stored ones included: nothing here could be seen or removed.
-        return ["UFW is not active on this host, so its stored rules cannot be listed, and any this "
-                "server had are still stored — they apply again if UFW is enabled."]
+        return [i18n.Sentence("UFW is not active on this host, so its stored rules cannot be listed, and any "
+                              "this server had are still stored — they apply again if UFW is enabled.")]
     stuck = [_rule_label(g) for g in status.get("groups", []) if pick(g)]
     if not stuck:
         return []
-    return ["Still open, as it could not be removed: %s — remove %s from the host's Firewall "
-            "page." % (", ".join(stuck), "it" if len(stuck) == 1 else "them")]
+    if len(stuck) == 1:
+        return [i18n.Sentence("Still open, as it could not be removed: {rules} — remove it from the host's "
+                              "Firewall page.", rules=stuck[0])]
+    return [i18n.Sentence("Still open, as it could not be removed: {rules} — remove them from the host's "
+                          "Firewall page.", rules=", ".join(stuck))]
 
 
 def _left_on_purpose(status, comment, removable, protected):
@@ -970,9 +979,9 @@ def _left_on_purpose(status, comment, removable, protected):
     kept = [g for g in status.get("groups", [])
             if g.get("comment") == comment and not removable(g)]
     on_host = [g for g in kept if _is_panel_allow(g) and _port_of(g) in protected]
-    return (_naming("Left in place, as the panel does not make rules like these",
-                    [g for g in kept if g not in on_host])
-            + _naming("Left in place on SSH's or the panel's own port", on_host))
+    not_ours = [g for g in kept if g not in on_host]
+    return (([i18n.Sentence(_R16A_NOT_OURS, rules=_naming(not_ours))] if not_ours else [])
+            + ([i18n.Sentence(_R16A_ON_HOST_PORT, rules=_naming(on_host))] if on_host else []))
 
 
 def _rule_port_words(g):
@@ -1036,7 +1045,9 @@ def _left_on_own_ports(status, ports, protected, taken):
     labels = list(dict.fromkeys(map(_unnamed_rule_label, stray)))
     if not labels:
         return []
-    return ["Left in place on its port%s: %s." % ("s" if len(ports) > 1 else "", ", ".join(labels))]
+    if len(ports) > 1:
+        return [i18n.Sentence("Left in place on its ports: {rules}.", rules=", ".join(labels))]
+    return [i18n.Sentence("Left in place on its port: {rules}.", rules=", ".join(labels))]
 
 
 def _port_of(g):
@@ -1044,9 +1055,13 @@ def _port_of(g):
     return int(str(g["port_num"]).strip())
 
 
-def _naming(lead, groups):
-    """["<lead>: <each rule>."], or [] when there are none."""
-    return ["%s: %s." % (lead, ", ".join(map(_rule_label, groups)))] if groups else []
+_R16A_NOT_OURS = "Left in place, as the panel does not make rules like these: {rules}."
+_R16A_ON_HOST_PORT = "Left in place on SSH's or the panel's own port: {rules}."
+
+
+def _naming(groups):
+    """Each rule of `groups`, labelled, as one list for a {rules} slot."""
+    return ", ".join(map(_rule_label, groups))
 
 
 def _with_notes(message, notes):
