@@ -2400,11 +2400,24 @@ def _r15d_lt_call(src, at):
     return src[at:k]
 
 
-def _r16d_lt_callee(src, at):
-    """The name called with the argument list `at` sits in (`fetch`, `api`), or ""."""
+def _r16d_lt_callee(src, at, quote=None):
+    """The name called with the argument list `at` sits in (`fetch`, `api`), or "".
+
+    `quote`: the quote of the string `at` sits inside. The scan starts at that string's opening
+    quote and skips every earlier string whole, so a bracket inside one (`')'`) is not counted as
+    code (review 1012b: the scan read strings as code and could name the wrong callee).
+    """
     depth, k = 0, at - 1
+    if quote:
+        while k >= 0 and not (src[k] == quote and (k == 0 or src[k - 1] != "\\")):
+            k -= 1
+        k -= 1
     while k >= 0:
-        if src[k] in ")]}":
+        if src[k] in "'\"`":
+            _q, k = src[k], k - 1
+            while k >= 0 and not (src[k] == _q and (k == 0 or src[k - 1] != "\\")):
+                k -= 1
+        elif src[k] in ")]}":
             depth += 1
         elif src[k] in "([{":
             if depth == 0:
@@ -2420,20 +2433,22 @@ def _r16d_lt_callee(src, at):
 def _r15d_lt_judge(src):
     """(requests seen, [the ones that may enable stamping]).
 
-    Judged POSITIVELY (review 1012a): a request passes only when it sends no body and no POST (a
-    GET), or when its body is the literal `JSON.stringify({enabled: false})`. Looking for a bad
-    `enabled` passed a body held in a variable, read from a window holding no `enabled` at all. A
-    URL that is a helper's only argument (`postJSON(api('/log-timestamps'), {enabled: true})`) has
-    no options in its window, so it cannot be judged and fails, unless the call is a bare fetch.
+    Judged POSITIVELY, on what the call itself shows: a request passes only when it is a bare
+    `fetch(<url>)` (a GET: the window is the closing paren alone), or when its next argument is
+    an inline object literal whose one body is the literal `JSON.stringify({enabled: false})`,
+    with no spread that could replace it. Anything else cannot be judged and fails. Looking for
+    a bad `enabled` (review 1012a), then for the words `body`/`post` (review 1012b), each passed
+    a request whose options were held elsewhere: `fetch(url, opts)`, or `postJSON(url, {...})`,
+    whose helper sends the POST outside the window.
     """
     seen, bad = 0, []
     for _m in _LT_URL.finditer(src):
         seen += 1
         _call = _lt_re.sub(r"\s+", "", _r15d_lt_call(src, _m.end())).replace('"', "'").replace("`", "'")
-        _get = "body" not in _call and "post" not in _call.lower()
-        _off = "body:JSON.stringify({enabled:false})" in _call and _call.count("body") == 1
-        _alone = "," not in _call and _r16d_lt_callee(src, _m.start()).split(".")[-1] != "fetch"
-        if _alone or not (_get or _off):
+        _get = _call == ")" and _r16d_lt_callee(src, _m.start(), src[_m.end() - 1]).split(".")[-1] == "fetch"
+        _off = (_call.startswith(",{") and "body:JSON.stringify({enabled:false})" in _call
+                and _call.count("body") == 1 and "..." not in _call)
+        if not (_get or _off):
             bad.append(_call[:90])
     return seen, bad
 
@@ -2458,6 +2473,12 @@ _lt_ctl = {_k: _r15d_lt_judge(_v)[1] != [] for _k, _v in {
     "the body in a variable": "const p = {enabled: true}; " + _LT_HEAD + "method: 'POST', body: JSON.stringify(p) })",
     "the URL inside a helper": "postJSON(api('/log-timestamps'), {enabled: true})",
     "a query string": "fetch(MOUNT + '/log-timestamps?x=1', {method: 'POST', body: JSON.stringify({enabled: true})})",
+    # Review 1012b: each of these passed, the options or the POST outside the window.
+    "the options in a variable": ("const o = {method: 'POST', body: JSON.stringify({enabled: true})}; "
+                                  "fetch(MOUNT + '/api/server/' + id + '/log-timestamps', o)"),
+    "a helper given the URL first": "postJSON(MOUNT + '/api/server/' + id + '/log-timestamps', {enabled: true})",
+    "a spread after the body": _LT_HEAD + "body: JSON.stringify({ enabled: false }), ...o })",
+    "a helper's GET-shaped call, 'fetch(' in a string before the URL": "postIt('fetch(' + '/log-timestamps')",
 }.items()}
 _lt_ok = {_k: _r15d_lt_judge(_v) for _k, _v in {
     "enabled: false": _LT_HEAD + "method: 'POST', body: JSON.stringify({ enabled: false }) })",
