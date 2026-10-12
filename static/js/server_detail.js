@@ -2032,7 +2032,15 @@ function loadGmodContent(){
         + '<div class="d-flex flex-column gap-1 mb-2">' + rows + '</div>'
         + (running
             ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Working… (install/removal can take a while) '+_esc((d.job&&d.job.msg)||'')+'</div>'
-            : '<button class="btn btn-sm btn-primary" type="button" id="gmc-apply"><i class="bi bi-save"></i> Apply mounts</button>'
+            // A FINISHED job's outcome, kept by the server for 15 minutes so the card can say it
+            // (already in the viewer's language). Only the running branch read job.msg, so a
+            // failed install ended in silence and the operator restarted into ERROR textures.
+            : ((d.job && d.job.msg)
+                ? '<div class="small mb-2 text-break ' + (d.job.status === 'error' ? 'text-danger' : 'text-success')
+                  + '" role="status" id="gmc-outcome"><i class="bi bi-' + (d.job.status === 'error' ? 'exclamation-triangle' : 'check-circle')
+                  + '"></i> ' + _esc(d.job.msg) + '</div>'
+                : '')
+              + '<button class="btn btn-sm btn-primary" type="button" id="gmc-apply"><i class="bi bi-save"></i> Apply mounts</button>'
               + ' <span class="text-secondary small ms-1">Restart the server afterwards to load changes.</span>');
       // Attach handlers programmatically — the strict CSP (no unsafe-inline) blocks inline onclick=.
       var _ap = el.querySelector('#gmc-apply');
