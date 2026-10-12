@@ -1855,6 +1855,7 @@ def step_names_built(root=ROOT):
                    if any(_py_built(x, plain=True) for x in [v] + _py_operands(v))}
                   | set(_r17b_forwarded(_py_trees(root))[1]))
 
+
 # ── Python: fixed messages the viewer is shown ─────────────────────────────────────────────────
 # tr_gaps_py reads only what is handed to tr()/Sentence(), and spliced_py only BUILT messages. A
 # fixed `jsonify({"message": "…"})`, a flash of a literal, or a service's `return False, "…"` that a

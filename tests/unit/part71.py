@@ -210,8 +210,10 @@ def _gmod_outcomes71(client, gid):
 
 # ── the card itself: the page's loadGmodContent, run in node on each answer ─────────────────────
 def _card71(answer):
-    """What loadGmodContent draws for one status answer — its markup, and the outcome slot as the
-    nodes _gmcOutcome put in it — or None without node."""
+    """What loadGmodContent draws for one status answer; None without node.
+
+    Its markup, and the outcome slot as the nodes _gmcOutcome put in it.
+    """
     src = open(os.path.join(_root, "static", "js", "server_detail.js"), encoding="utf-8").read()
     prog = ("const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r)); };\n"
             "const slot = {id: 'gmc-outcome-slot', className: '', removed: false, attrs: {}, kids: [],\n"
