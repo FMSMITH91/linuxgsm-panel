@@ -277,8 +277,10 @@ def _cron_stale_route68(client, sid, gone):
 
 # ── A04: JK2MV's `status` and names over 15 characters ───────────────────────────────────────
 def _jk2mv68(rows, notrunc):
-    """JK2MV's SV_Status_f reply ("%3i %5i %4i %s^7%s %7i %21s %5i %5i"): without `notrunc` each
-    name is cut to 15 characters (these have no colour codes) and padded to 15."""
+    """JK2MV's SV_Status_f reply ("%3i %5i %4i %s^7%s %7i %21s %5i %5i").
+
+    Without `notrunc` each name is cut to 15 characters (these have no colour codes) and padded.
+    """
     out = ("map: ffa_bespin\n"
            "num score ping name            lastmsg address               qport rate\n"
            "--- ----- ---- --------------- ------- --------------------- ----- -----\n")
@@ -469,9 +471,11 @@ def _holders_translated68():
     gs = NS(id=1, port=27015, game_type="csgo", name="a")
     rows = [gs, NS(id=2, port=27115, game_type="csgo", name="rust1")]
     job = NS(withheld={27200}, listening_read=True)
+
     def slot(value):
         """`value` as the slot of a sentence: tr() translates it there only when it is a Sentence."""
         return _i18n68.tr(_i18n68.Sentence("{v}", v=value))
+
     with _p9.test_request_context():
         _session68["lang"] = "es"
         held = _p9_ms.withheld_game_ports(rows, gs, {22})
