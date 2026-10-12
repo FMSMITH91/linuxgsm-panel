@@ -73,7 +73,7 @@ function loadSecurityTopIps(){
 }
 function blockOffender(ip, btn){
   confirmDialog({title:'Block IP', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Block (all ports)',
-    bodyText:'Firewall-block '+ip+' on ALL ports (UFW)? It won\'t be able to reach SSH, the panel, or any game server on this host until you unblock it.',
+    bodyText:tf('Firewall-block {ip} on ALL ports (UFW)? It won\'t be able to reach SSH, the panel, or any game server on this host until you unblock it.', {ip: ip}),
     onConfirm:function(){
       if(btn) btn.disabled=true;
       fetch(secBase()+'/block',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip})})
@@ -91,6 +91,13 @@ function toggleAutoblock(cb){
   var on=!!(cb&&cb.checked);
   fetch(secBase()+'/autoblock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})})
     .then(function(r){return r.json();}).then(function(d){
+      // A refusal is JSON too ({"success": false} from a denial, or "No local host record."): it
+      // was toasted as done, with the switch left where the click put it.
+      if(!d || !d.success){
+        if(window.toast) toast((d && d.message) || 'Couldn\'t change auto-block','danger');
+        if(cb) cb.checked=!on;
+        return;
+      }
       if(window.toast) toast(on?'Auto-block on — applying now…':'Auto-block off', on?'success':'info');
       setTimeout(loadSecurityTopIps, on?2500:300);   // give the immediate reconcile a moment
     }).catch(function(){ if(window.toast) toast('Couldn\'t change auto-block','danger'); if(cb) cb.checked=!on; });
@@ -116,9 +123,10 @@ function saveThreshold(btn){
 function thresholdSaveToast(d, asked){
   if(!d || !d.success) return [(d && d.message) || 'Couldn\'t save the threshold', 'danger'];
   var t = Number(d.threshold);
-  if(t !== asked) return ['Threshold unchanged at '+t+'+ attempts / 7 days — it applies to every host, so only a superadmin can change it.', 'warning'];
-  if(!d.enabled) return ['Threshold saved at '+t+'+ attempts / 7 days — auto-block is off for this host.', 'info'];
-  return ['Threshold saved — auto-blocking IPs with '+t+'+ attempts / 7 days.', 'success'];
+  // window.tf: `t` is the threshold in here.
+  if(t !== asked) return [window.tf('Threshold unchanged at {n}+ attempts / 7 days — it applies to every host, so only a superadmin can change it.', {n: t}), 'warning'];
+  if(!d.enabled) return [window.tf('Threshold saved at {n}+ attempts / 7 days — auto-block is off for this host.', {n: t}), 'info'];
+  return [window.tf('Threshold saved — auto-blocking IPs with {n}+ attempts / 7 days.', {n: t}), 'success'];
 }
 function renderWhitelist(list){
   var el=document.getElementById('sec-wl-list'); if(!el) return;
@@ -138,7 +146,7 @@ function addWhitelist(btn){
     .then(function(r){return r.json();}).then(function(d){
       if(btn) btn.disabled=false;
       if(d.success){ if(inp) inp.value=''; renderWhitelist(d.whitelist||[]);
-        if(window.toast) toast(d.added+' whitelisted — it won\'t be banned or blocked.', 'success'); loadSecurityTopIps(); }
+        if(window.toast) toast(tf('{ip} whitelisted — it won\'t be banned or blocked.', {ip: d.added}), 'success'); loadSecurityTopIps(); }
       else if(window.toast){ toast(d.message||'Could not add it','danger'); }
     }).catch(function(){ if(btn) btn.disabled=false; if(window.toast) toast('Could not add it','danger'); });
 }
@@ -150,7 +158,7 @@ function removeWhitelist(ip){
       // every ban and auto-block on every host.
       if(!d || !d.success){ if(window.toast) toast((d && d.message)||'Could not remove it','danger'); return; }
       if('whitelist' in d) renderWhitelist(d.whitelist||[]);
-      if(window.toast) toast((d.removed||ip)+' removed from the whitelist','info');
+      if(window.toast) toast(tf('{ip} removed from the whitelist', {ip: d.removed||ip}),'info');
     }).catch(function(){ if(window.toast) toast('Could not remove it','danger'); });
 }
 function loadSecurityBans(){
@@ -221,17 +229,17 @@ function loadSecurityEvents(){
 function loadSecurityLog(which, jail){
   var el=document.getElementById('sec-log'); if(!el) return;
   var hdr=document.getElementById('sec-log-title');
-  if(hdr) hdr.textContent = (which==='fail2ban' && jail) ? ('fail2ban activity — '+jail) : '';
-  el.textContent='Loading…';
+  if(hdr) hdr.textContent = (which==='fail2ban' && jail) ? tf('fail2ban activity — {jail}', {jail: jail}) : '';
+  el.textContent=t('Loading…');   // t(): the translator skips this <pre>
   var url=secBase()+'/log?which='+encodeURIComponent(which);
   if(jail) url += '&jail='+encodeURIComponent(jail);
   fetch(url).then(function(r){return r.json();}).then(function(d){  // nosemgrep
     // A read that FAILED answers {text:"", error:...}; "(log is empty)" there told an admin an
     // unreachable host had no SSH or ban activity, on the card that exists to show attacks.
-    if(!d || d.error){ el.textContent='Could not read the log.'; return; }
-    el.textContent=d.text||'(log is empty)'; el.scrollTop=el.scrollHeight;   // textContent: raw log is never HTML
+    if(!d || d.error){ el.textContent=t('Could not read the log.'); return; }
+    el.textContent=d.text||t('(log is empty)'); el.scrollTop=el.scrollHeight;   // textContent: raw log is never HTML
     if(el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'nearest'});
-  }).catch(function(){ el.textContent='Could not read the log.'; });
+  }).catch(function(){ el.textContent=t('Could not read the log.'); });
 }
 
 // "update available" badge links to #updates, so a hash pointing at a card opens its tab and
@@ -297,7 +305,7 @@ function loadSecurityLog(which, jail){
 // Click a game server's connect address to copy the full ip:port.
 document.addEventListener('click', function(ev){
   var el = ev.target.closest('.copy-addr'); if(!el) return;
-  if(window.copyText) window.copyText(el.getAttribute('data-copy'), 'Copied ' + el.getAttribute('data-copy'));
+  if(window.copyText) window.copyText(el.getAttribute('data-copy'), tf('Copied {text}', {text: el.getAttribute('data-copy')}));
 });
 function barColor(p){ if(p>=85) return '#f85149'; if(p>=60) return '#d29922'; return '#3fb950'; }
 function fmtGB(b){ return (b/1073741824).toFixed(1)+' GB'; }  // NOPMD
@@ -307,7 +315,7 @@ function buildCores(n){
   var w = document.getElementById('cpu-cores'); w.innerHTML='';
   for(var i=0;i<n;i++){
     var r=document.createElement('div'); r.className='core-row';
-    r.innerHTML='<span class="core-label">cpu'+i+'</span>'  // nosemgrep
+    r.innerHTML='<span class="core-label">cpu'+i+'</span>'  // nosemgrep - i18n-ignore: a core's name, as the kernel names it
       +'<span class="core-track"><span class="core-fill" id="core-fill-'+i+'"></span></span>'
       +'<span class="core-val" id="core-val-'+i+'">0%</span>';
     w.appendChild(r);
@@ -323,8 +331,8 @@ function pollLive(){
     var stale = document.getElementById('live-stale');
     if(d.error){
       if(stale){ stale.textContent = d.unreachable
-        ? 'Live figures are paused — the host did not answer. The numbers below are the last reading.'
-        : 'Live figures are paused — the last read failed.'; stale.style.display=''; }
+        ? t('Live figures are paused — the host did not answer. The numbers below are the last reading.')
+        : t('Live figures are paused — the last read failed.'); stale.style.display=''; }
       return;
     }
     if(stale){ stale.textContent=''; stale.style.display='none'; }
@@ -353,17 +361,17 @@ function _livePaintMemory(d){
   var rp=d.ram_percent||0;
   document.getElementById('ram-val').textContent=rp;
   var rb=document.getElementById('ram-bar'); rb.style.width=rp+'%'; rb.style.backgroundColor=barColor(rp);
-  document.getElementById('ram-detail').textContent=fmtGB(d.ram_used||0)+' / '+fmtGB(d.ram_total||0)+' used';
+  document.getElementById('ram-detail').textContent=tf('{used} / {total} used', {used: fmtGB(d.ram_used||0), total: fmtGB(d.ram_total||0)});
   var sp=d.swap_percent||0;
   document.getElementById('swap-val').textContent=sp;
   var sb=document.getElementById('swap-bar'); sb.style.width=sp+'%'; sb.style.backgroundColor=barColor(sp);
-  document.getElementById('swap-detail').textContent=d.swap_total?(fmtGB(d.swap_used||0)+' / '+fmtGB(d.swap_total)+' used'):'No swap configured';
+  document.getElementById('swap-detail').textContent=d.swap_total?tf('{used} / {total} used', {used: fmtGB(d.swap_used||0), total: fmtGB(d.swap_total)}):'No swap configured';
 }
 function _livePaintDisk(d){
   var dp=d.disk_percent||0;
   document.getElementById('disk-val').textContent=dp;
   var db=document.getElementById('disk-bar'); db.style.width=dp+'%'; db.style.backgroundColor=barColor(dp);
-  document.getElementById('disk-detail').textContent=d.disk_total?(fmtGB(d.disk_used||0)+' / '+fmtGB(d.disk_total)+' used'):'—';
+  document.getElementById('disk-detail').textContent=d.disk_total?tf('{used} / {total} used', {used: fmtGB(d.disk_used||0), total: fmtGB(d.disk_total)}):'—';
 }
 function isSecurityPkg(p){ return ((p.suite||'').indexOf('-security') >= 0); }
 // Render one check result into the OS Updates card. `note` is the provenance line — a forced check
@@ -439,7 +447,7 @@ function checkUpdates(){
         setInstallUpdatesState('unknown');
         return;
       }
-      renderUpdates(d, 'Last checked '+window.agoText(d.at));
+      renderUpdates(d, tf('Last checked {when}', {when: window.agoText(d.at)}));
     }).catch(function(){});
 })();
 var _osuTimer=null, _osuStale=0, _osuMiss=0;
@@ -526,7 +534,7 @@ function _osuShowDone(d, spin, stEl){
   var ok=(d.rc===0);
   if(stEl){ stEl.className='small mb-2 '+(ok?'text-success':'text-danger');
     stEl.innerHTML=ok?'<i class="bi bi-check-circle-fill"></i> Updates installed.'  // nosemgrep
-                     :'<i class="bi bi-x-circle-fill"></i> Finished with errors (exit '+d.rc+') — see the log above.'; }
+                     :'<i class="bi bi-x-circle-fill"></i> '+tfHtml('Finished with errors (exit {rc}) — see the log above.', {rc: d.rc}); }
   var info=document.getElementById('update-info');
   if(info) info.innerHTML=ok?'<span class="text-success"><i class="bi bi-check-circle"></i> Updates installed — re-checking…</span>'
                             :'<span class="text-danger">Update finished with errors — see the popup.</span>';

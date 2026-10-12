@@ -366,8 +366,10 @@ def _ntfy_url(server, topic):
     carrying a path, query, credentials or a non-https scheme yields None rather than a request. A
     trailing slash on the server is tolerated because operators type it.
     """
-    topic = (topic or "").strip()
-    server = (server or "").strip().rstrip("/") or NTFY_DEFAULT_SERVER
+    # str(): the alert path passes the saved values straight through, and a numeric topic (a hand
+    # edit) raised here, inside _deliver_alerts' catch-all, so every ntfy alert stopped unseen.
+    topic = str(topic or "").strip()
+    server = str(server or "").strip().rstrip("/") or NTFY_DEFAULT_SERVER
     if not _NTFY_TOPIC_RE.match(topic):
         return None
     url = "%s/%s" % (server, topic)
@@ -1125,8 +1127,12 @@ def notify(event_key, title, body=""):
 
 
 def _form_or_saved(value, saved, key, default=""):
-    """Return the value typed into the form, else `saved[key]` (read only then), else `default`."""
-    return (value or "").strip() or (saved.get(key) or default)
+    """Return the value typed into the form, else `saved[key]` (read only then), else `default`.
+
+    Always text. A saved id can be a JSON NUMBER (`"chat_id": 123456789` from a hand edit or a
+    restore), and every caller .strip()s what this returns: the Test button answered a bare 500.
+    """
+    return (value or "").strip() or str(saved.get(key) or default)
 
 
 def _form_or_saved_secret(value, saved, key):

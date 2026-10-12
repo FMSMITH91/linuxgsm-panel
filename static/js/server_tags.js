@@ -177,12 +177,23 @@
         cb.id = 'tagcb-' + tag.id; cb.value = tag.id; cb.checked = !!have[tag.id];
         var lab = document.createElement('label');
         lab.className = 'form-check-label'; lab.setAttribute('for', cb.id);
-        lab.setAttribute('data-no-i18n', '');
-        lab.textContent = tag.name + (tag.notify ? '' : ' (alerts muted)');
+        // The guard on the tag's name alone: on the whole label it kept " (alerts muted)" English.
+        var nm = document.createElement('span');
+        nm.setAttribute('data-no-i18n', ''); nm.textContent = tag.name;
+        lab.appendChild(nm);
+        if (!tag.notify) {
+          var muted = document.createElement('span');
+          muted.className = 'text-secondary'; muted.textContent = t('(alerts muted)');
+          lab.appendChild(document.createTextNode(' ')); lab.appendChild(muted);
+        }
         line.appendChild(cb); line.appendChild(lab);
         body.appendChild(line);
       });
-      confirmDialog({title: 'Tags for ' + (nameCell ? nameCell.textContent : 'this server'),
+      // Translated before the name goes in: the dialog's title is one text node, so "Tags for X"
+      // could never match a catalog key.
+      // A function, not the name, as the replacement: a "$&" in a server's name is a pattern to replace().
+      var who = nameCell ? nameCell.textContent : t('this server');
+      confirmDialog({title: t('Tags for %s').replace('%s', function(){ return who; }),
         icon: 'tags', confirmClass: 'btn-primary', confirmLabel: 'Save tags', bodyNode: body,
         onConfirm: function(){
           var ids = Array.prototype.slice.call(body.querySelectorAll('input:checked'))

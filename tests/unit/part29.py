@@ -305,6 +305,10 @@ def _producer_bad(name, text, job):
     m = _re29.search(r"^    if: (.*)$", jt, _re29.M)
     cond = m.group(1) if m else ""
     bad = ["%s: runs for pull requests" % name] if "pull_request" in on else []
+    # An unread `on:` block (no `permissions:` after it, or none at all) cannot show a
+    # pull_request trigger: named, not read as "no triggers" (review 1011d).
+    if not on.strip():
+        bad.append("%s: its on: block (ended by a top-level permissions:) could not be read" % name)
     main_only = ("github.ref == 'refs/heads/main'" in cond
                  or on.strip() == "on:\n  push:\n    branches: [ main ]")
     if "github.repository == 'FMSMITH91/linuxgsm-panel'" not in cond or not main_only:

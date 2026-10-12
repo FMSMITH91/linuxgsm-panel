@@ -239,7 +239,10 @@ _orig_rc = _sm_core.run_command
 # (`if ports is None: continue`) — no status flips, no _apply_status_flips, so the per-server write
 # this budget guards was never inside the count, and the install-status check further down could
 # not fail. Each _qcount poll alternates whether the first five game ports listen, so every
-# measured poll flips five servers per host one way or the other.
+# SUPERADMIN /api/servers poll measured below flips five servers per host one way or the other —
+# that budget is the one holding the per-server write. Only /api/servers scans and flips: the
+# `/`, metrics and os-updates polls never do, and the non-superadmin /api/servers poll sees only
+# remote #1, whose servers (27015, 27099) are never in the framed answer, so it flips nothing.
 _scan_r13d = {"up": False}
 
 
@@ -350,22 +353,35 @@ try:
     # status. The port scan (stubbed: a framed answer with 27099 not listening) finds nothing for a
     # still-installing server, so the old code flipped "installing" -> "offline" — which made the
     # progress row vanish and show "Not installed" the moment you navigated back to the page.
+    # Two rows, one per half of the guard (`not gs.installed or gs.status in (...)`): step 4 of the
+    # install job commits installed=True, status="configuring" and steps 5-8 run for minutes after
+    # it, so an installed=False row alone holds with the status half deleted — and that half is the
+    # one protecting a real install from step 4 on. 27098 is not in the framed answer either.
     with app.app_context():
         _rid = RemoteServer.query.first().id
         _inst = GameServer(remote_id=_rid, name="inst-cs", short_name="instcs",
                            game_type="gmod", port=27099, installed=False, status="installing")
-        db.session.add(_inst)
+        _conf = GameServer(remote_id=_rid, name="conf-cs", short_name="confcs",
+                           game_type="gmod", port=27098, installed=True, status="configuring")
+        db.session.add_all([_inst, _conf])
         db.session.commit()
-        _inst_id = _inst.id
+        _inst_id, _conf_id = _inst.id, _conf.id
     _sm_mod._port_scan_cache.clear()
     c.get("/api/servers")   # the poll that reconcileServerList / the dashboard fires
     with app.app_context():
         _after_status = db.session.get(GameServer, _inst_id).status
+        _conf_after = db.session.get(GameServer, _conf_id).status
+        # The configuring row is this check's alone: an installed=True row left behind would be
+        # counted by every later monitor and dashboard check.
+        db.session.delete(db.session.get(GameServer, _conf_id))
+        db.session.commit()
     # Setup: the host was scanned (a failed scan skips the host, and the guard below with it).
     check("install: (setup) the poll really scanned the installing server's host",
           _rid in _sm_mod._port_scan_cache, repr(sorted(_sm_mod._port_scan_cache)))
     check("install: /api/servers poll does NOT clobber an installing server's status",
           _after_status == "installing", "status became %r after the poll" % _after_status)
+    check("install: /api/servers poll does NOT clobber a configuring (installed=True) server's status",
+          _conf_after == "configuring", "status became %r after the poll" % _conf_after)
 finally:
     _sa_event.remove(_engine, "after_cursor_execute", _count_query)
     _sm_core.run_command = _orig_rc
@@ -1752,9 +1768,17 @@ try:
         return 16
     _monmod._server_slots = _slots_probe
     _monmod._server_max_config = _max_probe
+    # Every server the pass reads asks exactly one of the two (an offline one its max, the rest
+    # their slots), so the count is the number of rows the pass selects — `>= 1` held for a pass
+    # that queried one server and dropped the rest.
+    with app.app_context():
+        _pp_want = GameServer.query.filter(
+            GameServer.installed.is_(True),
+            GameServer.status.notin_(("installing", "configuring"))).count()
     _monmod._refresh_player_counts(app)
     check("player poll: every installed server is still queried",
-          len(_held) >= 1, "workers ran: %d" % len(_held))
+          _pp_want >= 2 and len(_held) == _pp_want,
+          "workers ran: %d, servers to query: %d" % (len(_held), _pp_want))
     check("player poll: no DB connection is held while the network call runs",
           _held and max(_held) <= 2, "peak checked-out during the call: %s" % (max(_held) if _held else "n/a"))
 finally:

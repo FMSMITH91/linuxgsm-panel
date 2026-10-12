@@ -59,7 +59,7 @@ function wireTsButtons(){
       tsInstallBtn.disabled = true;
       tsInstallOut.innerHTML = '<i class="bi bi-arrow-repeat"></i> Installing Tailscale on the panel host… (up to a minute)';
       fetch(MOUNT + '/api/tailscale/install', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
-        if(!d.success){ tsInstallOut.innerHTML = '<span class="text-danger">Install failed: ' + tsEsc((d.log || '').slice(-200)) + '</span>'; tsInstallBtn.disabled = false; return; }  // nosemgrep - the log tail is tsEsc-wrapped
+        if(!d.success){ tsInstallOut.innerHTML = '<span class="text-danger">' + tfHtml('Install failed: {log}', {log: (d.log || '').slice(-200)}) + '</span>'; tsInstallBtn.disabled = false; return; }  // nosemgrep - tfHtml escapes the log tail
         tsInstallOut.innerHTML = '<span class="text-success">Installed.</span> Starting…';
         tsUp(tsInstallOut, tsInstallBtn);
       }).catch(function(){ tsInstallOut.innerHTML = '<span class="text-danger">Install request failed.</span>'; tsInstallBtn.disabled = false; });
@@ -95,15 +95,14 @@ function checkPeer() {
   })
   .then(r => r.json())
   .then(data => {
-    // host comes from a text field — escape it before it goes into innerHTML (DOM XSS).
-    var safeHost = escapeHtml(host);
     if (data.reachable) {
-      resultEl.innerHTML = '<span class="text-success">✓ ' + safeHost + ' is reachable'  // nosemgrep - safeHost is escapeHtml output and the latency is a Number()
-        + (data.latency_ms ? ' (' + Number(data.latency_ms) + 'ms)' : '')
-        + '</span>';
+      // tfHtml escapes the host (a text field) and the latency; the sentence is translated whole.
+      resultEl.innerHTML = '<span class="text-success">✓ ' + (data.latency_ms
+        ? tfHtml('{host} is reachable ({ms}ms)', {host: host, ms: Number(data.latency_ms)})
+        : tfHtml('{host} is reachable', {host: host})) + '</span>';  // nosemgrep - tfHtml escapes every value
     } else {
-      var tsHint = data.is_tailscale_ip ? ' (Tailscale IP)' : '';
-      resultEl.innerHTML = '<span class="text-danger">✗ ' + safeHost + tsHint + ' is not responding</span>';  // nosemgrep - safeHost is escapeHtml output and tsHint is one of two literals
+      resultEl.innerHTML = '<span class="text-danger">✗ ' + tfHtml(data.is_tailscale_ip ? '{host} (Tailscale IP) is not responding'
+                                                                 : '{host} is not responding', {host: host}) + '</span>';  // nosemgrep - tfHtml escapes the host
     }
   })
   .catch(function() {

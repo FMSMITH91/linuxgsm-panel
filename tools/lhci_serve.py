@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import atexit
+import shutil
 import signal
 
 from panel.core.config import (CONFIG_FILE, CRED_KEY_FILE, DATA_DIR, DB_PATH, SECRET_FILE,
@@ -38,6 +39,10 @@ if DB_PATH.exists():
 _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE, AUTH_LOG, SETUP_TOKEN_FILE)
                 if p.exists()}
 _CONFIG_SNAPSHOT = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
+# The backup directory as a whole: the panel's backup ticker writes a daily archive into it two
+# minutes after boot (backup_enabled is turned off below, but a directory this run made still goes).
+BACKUP_DIR = DATA_DIR / "backups"
+_BACKUPS_PREEXISTED = BACKUP_DIR.exists()
 
 
 @atexit.register
@@ -66,6 +71,8 @@ def _cleanup():
             # every path here was created by THIS process (anything pre-existing is skipped above).
             print("lhci_serve: could NOT remove %s (%s)" % (_p, exc.__class__.__name__),
                   file=sys.stderr)
+    if not _BACKUPS_PREEXISTED and BACKUP_DIR.is_dir():
+        shutil.rmtree(BACKUP_DIR, ignore_errors=True)
 
 
 # SIGTERM is how this is stopped — the Lighthouse workflow runs it in the background and ends it with
@@ -87,6 +94,11 @@ cfg["setup_complete"] = True
 # eight times. A real browser does not change its User-Agent mid-session; this harness does, and
 # what it audits is layout and accessibility, not session binding.
 cfg["session_protection"] = "basic"
+# Off, because the backup ticker's daily archive (two minutes after boot) holds this panel.db, its
+# secret_key and cred_key, in plaintext: left in data/backups, a panel later booted from this data
+# dir listed it as a real backup whose restore installs the superadmin whose password is above,
+# and it suppressed that panel's own first daily. _cleanup restores config.json, so this goes too.
+cfg["backup_enabled"] = False
 save_config(cfg)
 
 from app import create_app
@@ -104,7 +116,11 @@ with app.app_context():
     # Seed a host + game server so the dashboard renders a full server card (status
     # badge, Start/Restart/Stop + Console controls) — that's the UI Lighthouse audits.
     if not RemoteServer.query.first():
-        r = RemoteServer(name="lhci-host", host="127.0.0.1", port=22,
+        # Port 1, where nothing answers: a key host with a blank key path signs in with the
+        # account's own ~/.ssh keys, so on a developer machine running sshd the panel's workers
+        # dialled root@127.0.0.1:22 with the developer's keys. Refused at once, the card renders
+        # as an unreachable host, as it did on a runner with no sshd.
+        r = RemoteServer(name="lhci-host", host="127.0.0.1", port=1,
                          username="root", auth_method="key", auth_credential="")
         db.session.add(r)
         db.session.flush()

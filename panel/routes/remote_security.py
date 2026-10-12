@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
-from panel.core.config import (load_config, save_config)
+from panel.core.config import (_r13a_cfg_text, load_config, save_config)
 from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top_ips,
@@ -244,8 +244,10 @@ def _register_panel_binding(app):
         cfg = load_config()
         cur_port = int(cfg.get("port", 5000))
         # nosec B104 - not a bind: the stored value, defaulted for a config written
-        # before bind_host existed. The operator chooses it; this only reads it back.
-        cur_bind = (cfg.get("bind_host") or "0.0.0.0").strip()  # nosec B104
+        # before bind_host existed. The operator chooses it; this only reads it back. A non-string
+        # (a hand edit) reads as unset, as the boot reads it (_r13a_cfg_text): .strip() on it made
+        # this form answer a bare 500.
+        cur_bind = (_r13a_cfg_text(cfg, "bind_host") or "0.0.0.0").strip()  # nosec B104
         new_port = _port_or(data.get("port"), None, lo=MIN_UNPRIVILEGED_PORT)
         new_bind = _r11c_canonical_bind(str(data.get("bind_host") or cur_bind).strip())
 

@@ -22,12 +22,15 @@ from panel.ops import ssh_manager as _sm
 # The firewall verbs' own port and protocol parse, read by the audit rows (_fw_audit_rule). The
 # module, not its functions: a stub on hosts is seen, and one of `_sm` above is not in the way.
 from panel.ops.ssh_manager import hosts as _fw_hosts
+# Which rules hold the panel's port open: the test the Network card reads too.
+from panel.ops.ssh_manager import firewall as _fw_rules
 from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     accessible_remote_ids, can_access_remote, get_game,
     get_host_remote, get_remote, has_permission, log_action, permission_required, server_access_required)
 import collections
 import threading
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
+from panel.routes._shared import (_json_int)
 from panel.core.validation import (NOT_AN_IP)
 from panel.security import privileged as _priv
 from panel.services import host_reboot as _hr
@@ -160,7 +163,9 @@ def _register_firewall_view(app):
             status = {"installed": False, "enabled": False, "rules": [], "groups": [],
                       "unreachable": True}
         games = GameServer.query.filter_by(remote_id=remote_id).all()
-        return render_template("remote_firewall.html", remote=remote, status=status, games=games)
+        # fw_reason: a protected rule's reason in the viewer's language (firewall.r14a_reason_text).
+        return render_template("remote_firewall.html", remote=remote, status=status, games=games,
+                               fw_reason=_fw_rules.r14a_reason_text)
 
     @app.route("/api/remote/<int:remote_id>/firewall")
     @login_required
@@ -434,9 +439,10 @@ def _register_ssh_port(app):
             return jsonify({"success": False, "message": "You don't have access to that host."}), 403
         remote = get_host_remote(remote_id)
         body = _json_body()
-        try:
-            new_port = int(body.get("port"))
-        except (TypeError, ValueError, OverflowError):     # OverflowError: {"port": Infinity}
+        # _json_int, not int(): int() raised OverflowError on {"port": Infinity}, truncated 22.9
+        # to 22, and read {"port": true} as port 1.
+        new_port = _json_int(body.get("port"))
+        if new_port is None:
             return jsonify({"success": False, "message": "Enter a valid port number."}), 400
         if not (1 <= new_port <= 65535):
             return jsonify({"success": False, "message": "Port must be between 1 and 65535."}), 400
@@ -491,37 +497,10 @@ def _register_panel_port(app):
         except (TypeError, ValueError):
             port = 5000
 
-        def _panel_port_rule_nums():
-            """([(rule number, rule key)], read_ok). An unread firewall is NOT an empty one."""
-            st = remote_ufw_status(remote)
-            # remote_ufw_status answers {"installed": False, ..., "groups": []} when ufw is
-            # missing, and adds "unreachable": True when the command failed or printed no
-            # "Status:" line — its own docstring says it does that so a down remote is not shown
-            # as an installed firewall with no rules. Reading only .get("groups") threw that away:
-            # a host that never answered produced nums == [], which this route reported as
-            # "already closed" with success=True and no audit row, while the panel was still
-            # listening on 0.0.0.0. The sibling hardening path already refuses an unverifiable
-            # firewall — remote_set_public_ssh returns "UFW is not active on this host, so public
-            # SSH cannot be controlled from here", after an earlier version of THAT produced "an
-            # audit row saying the hardening succeeded, and port 22 open to the internet".
-            if st.get("unreachable") or not st.get("installed"):
-                return [], False
-            nums = []
-            for g in st.get("groups", []):
-                # ...and only rules that actually HOLD THE PORT OPEN. The action test matches the
-                # is_panel classifier in firewall.py; without it a DENY on this port was collected
-                # and force-deleted as though it were letting traffic in.
-                if (not g.get("is_iface") and str(g.get("port_num", "")) == str(port)
-                        and g.get("action", "ALLOW") in ("ALLOW", "LIMIT")
-                        and (g.get("direction") or "IN") == "IN"):   # a FWD rule is no way in
-                    nums.extend((n, g.get("key")) for n in g.get("nums", []))
-            return sorted(set(nums), reverse=True), True   # highest first so numbering stays valid
-
-        nums, read_ok = _panel_port_rule_nums()
-        if not read_ok:
-            return jsonify({"success": False, "message": (
-                f"Couldn't read the firewall on this host, so port {port} can't be closed from "
-                f"here. Check the host is reachable and that UFW is installed, then try again.")})
+        nums, shared, read_ok = _r14a_panel_port_rules(remote, port)
+        refusal = _r14a_close_refusal(remote, port, shared, read_ok)
+        if refusal is not None:
+            return refusal
         if not nums:
             return jsonify({"success": True, "message": f"Public port {port} is already closed."})
         # Delete by rule NUMBER (reliable across any rule format), force=True since this is
@@ -532,14 +511,66 @@ def _register_panel_port(app):
         # (an attacker's deny, a game port). A moved number is refused; the verify read reports it.
         for n, key in nums:
             remote_ufw_delete_rule(remote, n, force=True, expect_key=key)
-        _left, _verify_ok = _panel_port_rule_nums()
+        _left, _left_shared, _verify_ok = _r14a_panel_port_rules(remote, port)
         # A verify read that FAILED cannot say the port is closed either.
-        ok = _verify_ok and not _left
+        ok = _verify_ok and not _left and not _left_shared
         log_action(current_user, "close_panel_port", target=str(port), success=ok, remote=remote)
         if not ok:
             return jsonify({"success": False, "message": (
                 f"Couldn't remove every rule for port {port}; check the firewall page.")})
         return jsonify({"success": True, "message": _r13c_closed_port_message(port)})
+
+
+def _r14a_panel_port_rules(remote, port):
+    """([(rule number, rule key)], [shared rule labels], read_ok). Unread is NOT empty."""
+    st = remote_ufw_status(remote)
+    # remote_ufw_status answers {"installed": False, ..., "groups": []} when ufw is
+    # missing, and adds "unreachable": True when the command failed or printed no
+    # "Status:" line — its own docstring says it does that so a down remote is not shown
+    # as an installed firewall with no rules. Reading only .get("groups") threw that away:
+    # a host that never answered produced nums == [], which this route reported as
+    # "already closed" with success=True and no audit row, while the panel was still
+    # listening on 0.0.0.0. The sibling hardening path already refuses an unverifiable
+    # firewall — remote_set_public_ssh returns "UFW is not active on this host, so public
+    # SSH cannot be controlled from here", after an earlier version of THAT produced "an
+    # audit row saying the hardening succeeded, and port 22 open to the internet".
+    if st.get("unreachable") or not st.get("installed"):
+        return [], [], False
+    nums, shared = [], []
+    for g in st.get("groups", []):
+        # ...and only rules that actually HOLD THE PORT OPEN: inbound ALLOW/LIMIT on no
+        # interface (a DENY on this port was once collected and force-deleted as though it
+        # were letting traffic in; a FWD rule is no way in). The test is the Network card's
+        # (_r14a_panel_port_scope), so the two never disagree: this matched the port
+        # EXACTLY, so `80,443,5000/tcp` or a range spanning it read "already closed" here
+        # while the card said open. A rule that opens other ports too is not deleted — that
+        # would close those services — but named, and nothing is closed.
+        scope = _fw_rules._r14a_panel_port_scope(g, port)
+        if scope == "only":
+            nums.extend((n, g.get("key")) for n in g.get("nums", []))
+        elif scope:
+            shared.append(str(g.get("port_label") or g.get("port_num")))
+    return sorted(set(nums), reverse=True), shared, True   # highest first: numbers stay valid
+
+
+def _r14a_close_refusal(remote, port, shared, read_ok):
+    """Close public panel port's answer when it must close nothing, else None."""
+    if not read_ok:
+        return jsonify({"success": False, "message": (
+            f"Couldn't read the firewall on this host, so port {port} can't be closed from "
+            f"here. Check the host is reachable and that UFW is installed, then try again.")})
+    if shared:
+        log_action(current_user, "close_panel_port", target=str(port), success=False,
+                   remote=remote, detail="opened by a multi-port rule: " + ", ".join(shared))
+        return jsonify({"success": False, "message": _r14a_shared_rule_message(port, shared)})
+    return None
+
+
+def _r14a_shared_rule_message(port, shared):
+    """Why Close public panel port closed nothing: `shared` rules open the port among others."""
+    return (f"Port {port} is also opened by the firewall rule {', '.join(shared)}, which opens other "
+            f"ports too, so nothing was closed — removing it would close those as well. Take port "
+            f"{port} out of that rule on the Firewall page, then try again.")
 
 
 def _r13c_closed_port_message(port):

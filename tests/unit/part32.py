@@ -964,6 +964,9 @@ def _p32_install_ufw():
     # A fake ufw and sudo on PATH: the reader runs `timeout … [sudo -n] ufw status`.
     _exe("ufw", 'printf "%b" "${FAKE_UFW_OUT:-}"\n')
     _exe("sudo", 'echo "$*" >> "${FAKE_SUDO_LOG}"\n[ "$1" = "-n" ] && shift\nexec "$@"\n')
+    # And `id` answering a non-root uid, so the `sudo -n` branch is the one run as root too: CI runs
+    # unit as root, where `os.geteuid() == 0 or …` passed this half without reading anything.
+    _exe("id", 'echo 1000\n')
     sudo_log = os.path.join(_TMP32, "sudo.log")
     fn = "set -euo pipefail\n" + _sh_fn(_INS32, "ufw_port_state") + '\nufw_port_state 5000\n'
     states = [_bash(fn, env={"FAKE_UFW_OUT": out, "FAKE_SUDO_LOG": sudo_log}).stdout.strip()
@@ -978,12 +981,12 @@ def _p32_install_ufw():
     if os.path.exists(sudo_log):
         with open(sudo_log, encoding="utf-8") as fh:
             sudo_calls = fh.read()
-    for name in ("ufw", "sudo"):
+    for name in ("ufw", "sudo", "id"):
         os.unlink(os.path.join(_BIN32, name))
     check("install hint: UFW reads open / closed (a tailscale0-only rule is not public) / inactive / "
           "unknown — and closed for a rule from one range only (Tailscale's) or a DENY, open for a LIMIT "
           "from Anywhere — and a non-root run asks `sudo -n`, never a prompt",
-          (states, os.geteuid() == 0 or sudo_calls.count("-n ufw status") == 7)
+          (states, sudo_calls.count("-n ufw status") == 7)
           == (["open", "closed", "inactive", "unknown", "closed", "closed", "open"], True),
           repr((states, sudo_calls)))
 

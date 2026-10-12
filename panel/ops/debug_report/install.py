@@ -37,7 +37,7 @@ def _groups():
     with open(ETC_GROUP, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             parts = line.split(":")
-            if len(parts) >= 3 and parts[0] in wanted and parts[2].isdigit() \
+            if len(parts) >= 3 and parts[0] in wanted and parts[2].isdecimal() \
                     and int(parts[2]) in mine:
                 out.append(parts[0])
     return sorted(out)

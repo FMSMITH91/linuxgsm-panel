@@ -21,6 +21,7 @@ from panel.db.models import RemoteServer, claim_row, row_birth
 from panel.ops import socket_hooks as _socket_hooks
 from panel.ops import terminal_session as _ts
 from panel.ops.ssh_manager import is_local_server
+from panel.routes._shared import _json_int
 from panel.security.auth import (USE_TERMINAL, _deny, get_remote, has_permission, log_action,
     permission_required)
 
@@ -216,8 +217,17 @@ def _register_terminal_page(app):
         if not may_shell_on(current_user, remote):
             return _deny(LOCAL_HOST_REFUSAL, 403)
         return render_template("terminal.html", remote=remote,
-                               sudo_note=_ts.sudo_hint(remote, bool(remote.is_local)),
+                               sudo_note=_ts.sudo_hint(remote, bool(remote.is_local),
+                                                       tr=_r14c_translator()),
                                local_user=_ts.panel_account())
+
+
+def _r14c_translator():
+    """The viewer's language as a one-string translator, as templates' t() is."""
+    from app import _current_lang
+    from panel.core import i18n
+    lang = _current_lang()
+    return lambda s: i18n.translate(lang, s)
 
 
 def _register_terminal_open(app, socketio):
@@ -272,10 +282,9 @@ def _term_dim(data, key, default):
     The session's own parse catches TypeError/ValueError and not the OverflowError that
     int(float("inf")) raises — `{"cols": Infinity}` is valid JSON to Python.
     """
-    try:
-        return int(_term_payload(data).get(key, default))
-    except (TypeError, ValueError, OverflowError):
-        return default
+    # _json_int: a bool is not a size (int(True) is a one-column terminal), nor is 80.5.
+    n = _json_int(_term_payload(data).get(key, default))
+    return default if n is None else n
 
 
 def _terminal_target(data):
@@ -285,11 +294,11 @@ def _terminal_target(data):
     """
     if not _may_use_terminal():
         return None, None, "You don't have permission to open a terminal."
-    # OverflowError too: `{"remote_id": Infinity}` is valid JSON to Python, and int() of it
-    # raised straight past this. A payload that is not an object at all is "no host named".
-    try:
-        remote_id = int(_term_payload(data).get("remote_id"))
-    except (TypeError, ValueError, OverflowError):
+    # _json_int: `{"remote_id": Infinity}` is valid JSON to Python, and int() of it raised
+    # OverflowError; `true` is not an id, and int() read it as host 1. A payload that is not an
+    # object at all is "no host named".
+    remote_id = _json_int(_term_payload(data).get("remote_id"))
+    if remote_id is None:
         return None, None, "No host was named."
     # Per-host access, exactly as the page route checks it — a socket event is not covered by
     # the route's decorators and must ask again.

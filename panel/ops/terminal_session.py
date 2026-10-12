@@ -108,8 +108,26 @@ def panel_account():
         return ""
 
 
-def sudo_hint(server, is_local):
+# The two hints, as catalog keys (translations/*/servers.json). The account's name is put in AFTER
+# the sentence is translated: spliced in first, the page showed one text node no catalog key could
+# match, under a data-no-i18n that the name made necessary, so the hint was English in every language.
+SUDO_HINT_PER_USER = (
+    "This shell runs as %s — your own account, because this panel is installed per-user rather "
+    "than as a system service. It has exactly the sudo %s has, and on a typical cloud image that is "
+    "full root with no password prompt. Anyone you give the terminal permission to gets the same.")
+SUDO_HINT_SYSTEM = (
+    "This shell runs as %s. If `sudo` refuses rather than asking for a password, that account has "
+    "no general sudo entry — the panel's grant covers only its privileged helper. To allow it, "
+    "re-run the installer as root with PANEL_TERMINAL_SUDO=1 and give %s a password; sudo will then "
+    "prompt for it every time. Note that you would be typing that password into a terminal the "
+    "panel renders.")
+
+
+def sudo_hint(server, is_local, tr=None):
     """What to tell the operator about sudo BEFORE they try it, or "" when there is nothing to say.
+
+    `tr` translates the sentence before the account's name goes in (the route passes the viewer's
+    language); without it the English is returned.
 
     A root/system install runs the panel as a dedicated service account created with
     `useradd --system`: no password (the shadow field is `!`) and a sudoers entry naming exactly
@@ -140,16 +158,8 @@ def sudo_hint(server, is_local):
     # prompts, it just works. Reported from a live panel: `sudo apt full-upgrade` ran to completion
     # under a banner explaining how to enable sudo.
     from panel.ops.system_ops import _is_system_service
-    if not _is_system_service():
-        return ("This shell runs as %s — your own account, because this panel is installed "
-                "per-user rather than as a system service. It has exactly the sudo %s has, and on "
-                "a typical cloud image that is full root with no password prompt. Anyone you give "
-                "the terminal permission to gets the same." % (user, user))
-    return ("This shell runs as %s. If `sudo` refuses rather than asking for a password, that "
-            "account has no general sudo entry — the panel's grant covers only its privileged "
-            "helper. To allow it, re-run the installer as root with PANEL_TERMINAL_SUDO=1 and "
-            "give %s a password; sudo will then prompt for it every time. Note that you would be "
-            "typing that password into a terminal the panel renders." % (user, user))
+    text = SUDO_HINT_SYSTEM if _is_system_service() else SUDO_HINT_PER_USER
+    return (tr or (lambda s: s))(text) % (user, user)
 
 
 def _drain_input(sess, fd):

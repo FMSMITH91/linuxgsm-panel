@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import secrets
+import shutil
 import statistics
 import sys
 import time
@@ -75,6 +76,10 @@ _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE, AUTH_LOG,
 # The benchmark has to flip setup_complete to boot past the wizard, which rewrites config.json.
 # Keep a verbatim copy of a pre-existing one and put it back on the way out.
 _CFG_BACKUP = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
+# create_app starts the backup ticker, whose daily archive (two minutes in) holds the throwaway DB,
+# secret_key and cred_key. mark_setup_complete turns backups off; a directory this run made goes.
+BACKUP_DIR = DATA_DIR / "backups"
+_BACKUPS_PREEXISTED = BACKUP_DIR.exists()
 
 from panel.core.config import load_config, save_config  # noqa: E402
 
@@ -93,6 +98,9 @@ def mark_setup_complete():
     """
     cfg = load_config()
     cfg["setup_complete"] = True
+    # No daily backup of the throwaway panel into data/backups (see BACKUP_DIR): one left there was
+    # listed by the next panel booted from this data dir, and suppressed its own first daily.
+    cfg["backup_enabled"] = False
     save_config(cfg)
 
 
@@ -389,6 +397,8 @@ def cleanup():
             # Not fatal, but not silent either: a leftover DB makes the NEXT run refuse to start,
             # and hunting that is worse than one line of output now.
             print("warning: could not remove %s (%s)" % (p, exc), file=sys.stderr)
+    if not _BACKUPS_PREEXISTED and BACKUP_DIR.is_dir():
+        shutil.rmtree(BACKUP_DIR, ignore_errors=True)
 
 
 PATHS = [

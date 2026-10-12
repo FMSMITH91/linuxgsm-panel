@@ -208,6 +208,18 @@ def _serve_remove_route(port, data):
         if state == "unread" else "Failed to remove: %s" % err)}), 500
 
 
+def _r14a_not_removable(route, cfg):
+    """Why `route` is not one Remove may take down, or "" when it is."""
+    if route.get("svc"):
+        # A Tailscale Service's route: the panel's `off` has no --service, so it would name the
+        # node's own :443 at that mount — another app's route there (ts.remove_panel_route).
+        return ("That route is on the Tailscale Service %s, which the panel does not manage, so "
+                "nothing was removed." % route["svc"])
+    if ts.is_managed_route(route, cfg):
+        return "That is the route the panel is published at. Use Disable to stop publishing it."
+    return ""
+
+
 def _leftover_route(port, url, raw_mount):
     """(the route to remove, None), or (None, the response that refuses it) — read from the host."""
     try:
@@ -224,9 +236,9 @@ def _leftover_route(port, url, raw_mount):
         return None, (jsonify({"success": False, "message": "No route to the panel is at %s on "
                                "that listener any more." % mount}), 404)
     cfg = load_config()
-    if ts.is_managed_route(route, cfg):
-        return None, (jsonify({"success": False, "message": "That is the route the panel is "
-                               "published at. Use Disable to stop publishing it."}), 400)
+    why = _r14a_not_removable(route, cfg)
+    if why:
+        return None, (jsonify({"success": False, "message": why}), 400)
     # The LAST route to a panel bound to localhost is the only way in: the same lock-out Disable
     # refuses (_disable_would_strand_panel), reached through the other button.
     stranded = _disable_would_strand_panel(cfg) if len(ours) == 1 else ""
@@ -259,7 +271,9 @@ def _register_tailscale_setup(app):
         # ...and the ones among them the panel does not manage (ts.is_managed_route): each gets
         # its own Remove. Disable was the only control, and it cleared tailscale_mount, so a page
         # in use at /lgsm rebuilt every link for "/" the moment it next loaded.
-        panel_leftovers = [r for r in panel_routes if not ts.is_managed_route(r, cfg)]
+        # Not a Tailscale Service's route: the panel cannot remove one (ts.remove_panel_route).
+        panel_leftovers = [r for r in panel_routes
+                           if not ts.is_managed_route(r, cfg) and not r.get("svc")]
         # The other apps whose Funnel the panel's :443 route shares against its own setting:
         # Funnel is per listener, so the panel is public then, and the page says so. Superadmins
         # only, like every other Serve mapping on the host (_sees_panel_host_tailnet): the note

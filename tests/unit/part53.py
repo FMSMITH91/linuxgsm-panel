@@ -619,6 +619,8 @@ _name53 = "install page: Refresh list keeps the form"
 _MS53 = _read53(_JS53, "manage_servers.js")
 _out53 = _node53(_name53, _SETTLE53 + (
     "global.window = global; global.MOUNT = ''; global.toast = () => 0; let reloads = 0; const swaps = [];\n"
+    "global.tf = global.tfHtml = (s, v) => s.replace(/\\{(\\w+)\\}/g, (m, k) =>   // i18n.js's\n"
+    "  (v && k in v) ? (v[k] && v[k].html !== undefined ? v[k].html : String(v[k])) : m);\n"
     "global.location = {reload: () => reloads++}; global.setTimeout = fn => fn();\n"
     "global.refreshSection = (sel, after) => swaps.push([sel, after]);\n"
     "global.fetch = () => Promise.resolve({json: () => Promise.resolve({success: true, games: 141})});\n"

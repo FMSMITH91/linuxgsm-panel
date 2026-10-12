@@ -90,19 +90,19 @@ for _attr, _fns in _WATCHED.items():
 # threads left running, and that look has to come after every part that could have started one.
 # part19 comes right after part18, whose app, client and row helpers it imports. part20 (the debug
 # report) builds its own app and imports only part01. part21 to part23 are the debug report's other
-# sections; part21 imports part12 for one route check. part24 runs the cross-builder contracts as
+# sections; part21 imports part01 and part12, the latter for one route check. part24 runs the cross-builder contracts as
 # real producer-consumer pairs. part29 reads the CI workflows, and imports only part01 and part06;
-# part30 reads them too (the review's fuzz and CodeQL-trigger fixes), importing part01, part05 and part29.
+# part30 reads them too (the review's fuzz and CodeQL-trigger fixes), importing part01, 05, 06 and 29.
 # part40 (renaming in the file browser) drives routes on part12's app, importing part01 and part12.
 # part42 (zizmor and Harden-Runner) reads the workflows as text, importing part01, 03, 05, 06, 29 and 30.
-# part43 (the port an import stores) drives the import route on part12's app, importing part01, 05, 12.
+# part43 (the port an import stores) drives the import route on part12's app, importing part01 and 12.
 # part44 (system_ops and debug-report fixes from the 2026-10-08 review) imports part01, 02, 10 and 20.
 # part47 (small page behaviours from the 2026-10-08 review, run in node) imports part01, 05 and 12.
 # part49 (raw-cfg logtimestamp and failed-backup partial archives) drives part12's app; imports part01, 12.
 # part50 (documentation-only pull requests skip the heavy checks) reads the workflows and runs
 # .github/scripts/pr_scope.py; imports part01, 05 and 29.
 # part51 (review 1011: the recovery CLI's workers, system_ops, ssh core and reboot fixes) imports
-# part01, 05 and 20.
+# part01, 02, 05 and 20.
 # part52 (fixes from the 2026-10-11 review: game files, debug report, helper, routes) drives part12's
 # app in a real bash over a throwaway home; imports part01, 05 and 12.
 # part53 (the 2026-10-11 review's routes, installer, tools and page fixes) drives part12's app and
@@ -114,20 +114,26 @@ for _attr, _fns in _WATCHED.items():
 # part56 (the 2026-10-11 second review's routes, tools and page fixes) drives part12's app and runs
 # node on its own fixtures; imports part01, 05, 12 and 47.
 # part57 (review 1011c: core, system_ops, ssh-core and reboot fixes) drives part12's app; imports
-# part01, 12 and 20.
+# part01, 02, 12 and 20.
 # part58 (the third 2026-10-11 review: game files, bots, debug report, helper, routes) drives
 # part12's app in a real bash over a throwaway home, with stand-in tools; imports part01, 05, 12.
 # part59 (the 2026-10-11 third review's routes, tools and page fixes) drives part12's app and runs
-# node on its own fixtures; imports part01, 05, 12 and 47.
+# node on its own fixtures; imports part01, 05, 12, 47 and 56 (the js_coverage module part56 holds).
 # part60 (New file / New folder in the file browser) drives part12's app in a real bash over a
 # throwaway home, as part40 does for rename; imports part01, 12 and 40.
+# part61 (review 1011d: system_ops, Tailscale Serve, ssh-core and notify fixes) drives part12's app
+# for two routes; imports part01, 02, 12, 20 and 47.
+# part62 (the fourth 2026-10-11 review: game files, debug report, helper, routes) drives part12's
+# app in a real bash with stand-in tools; imports part01, 05 and 12.
+# part63 (the fourth 2026-10-11 review's routes, tools, page and i18n fixes, builder C) drives
+# part12's app and runs node and bash on its own fixtures; imports part01, 05, 12 and 47.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
           "part28", "part29", "part30", "part31", "part32", "part33", "part34", "part35", "part36", "part37",
           "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
           "part50", "part51", "part52", "part53", "part54", "part55", "part56", "part57", "part58",
-          "part59", "part60", "part15")
+          "part59", "part60", "part61", "part62", "part63", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -191,6 +197,50 @@ from unit.part01 import check, results, hub_leaks, hub_swept  # noqa: E402
 # and part56 each put it back and say so; this names any part, present or future, that does not.
 check("unit suite: no part leaves sys.path changed for the parts after it",
       not _path_moved, "; ".join("%s: %s" % _pm for _pm in _path_moved))
+
+
+# ── the ordering notes above _PARTS name what each part imports ─────────────────────────────────
+# They are the stated contract for where a part may move: a part imported out of order runs
+# inside the importing part's import, silently. Corrected by hand twice (part54, then part30, 43,
+# 51 and 57), so now read: every note that lists a part's imports must list exactly its
+# `from unit.partNN import` lines.
+def _r14d_noted_imports(text):
+    """{part: set of two-digit numbers its note says it imports}, from the comment block's text."""
+    import re as _re
+    flat = " ".join(_ln.lstrip("#").strip() for _ln in text.splitlines())
+    # A note starts at a part named at a sentence (or clause) start; "part12's app" mid-sentence
+    # is not one.
+    out = {}
+    for _seg in _re.split(r"(?:^|(?<=[.;])\s+)(?=part\d\d\b)", flat):
+        _m = _re.match(r"(part\d\d)\b", _seg)
+        _l = _re.search(r"\bimport(?:s|ing)\s+(?:only\s+)?(part\d\d(?:(?:\s*,\s*|\s+and\s+|,\s+and\s+)"
+                        r"(?:part)?\d\d)*)", _seg)
+        if _m and _l:
+            out[_m.group(1)] = set(_re.findall(r"\d\d", _l.group(1)))
+    return out
+
+
+def _r14d_real_imports(part):
+    import ast as _ast
+    with open(os.path.join(_root, "tests", "unit", part + ".py"), encoding="utf-8") as _fh:
+        _tree = _ast.parse(_fh.read())
+    return {_n.module[len("unit.part"):] for _n in _ast.walk(_tree)
+            if isinstance(_n, _ast.ImportFrom) and (_n.module or "").startswith("unit.part")}
+
+
+with open(os.path.abspath(__file__), encoding="utf-8") as _fh_r14d:
+    _src_r14d = _fh_r14d.read()
+_notes_r14d = _r14d_noted_imports(
+    _src_r14d[_src_r14d.index("# The parts, in order:"):_src_r14d.index("\n_PARTS = (")])
+_wrong_r14d = sorted("%s: note says %s, imports %s" % (_p, sorted(_n), sorted(_r14d_real_imports(_p)))
+                     for _p, _n in _notes_r14d.items() if _n != _r14d_real_imports(_p))
+check("unit suite: every ordering note that lists a part's imports lists exactly them",
+      len(_notes_r14d) >= 20 and not _wrong_r14d,
+      "%d notes read; %s" % (len(_notes_r14d), _wrong_r14d))
+_ctl_r14d = _r14d_noted_imports("# part57 (x: y) drives part12's app; imports\n# part01, 12 and 20.\n"
+                                "# part19 comes after part18. part20 builds and imports only part01.")
+check("unit suite: ...the note reader takes a list across lines, and not a part named mid-sentence "
+      "(control)", _ctl_r14d == {"part57": {"01", "12", "20"}, "part20": {"01"}}, repr(_ctl_r14d))
 
 _hub_first_after = {}      # each leftover once, with the part it first outlived
 for _part, _left in _hub_after:

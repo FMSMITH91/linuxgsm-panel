@@ -313,7 +313,10 @@ def _serve_url_line(line):
     return (line[:cut], line[cut:]) if cut > 0 else None
 
 
-_SERVE_ROUTE_RE = re.compile(r"\|--\s+(\S+)\s+(proxy|path|text)\s+(.+)")
+# The kind and what it serves are optional: a handler of a kind the CLI cannot describe (a
+# Redirect, which only `serve set-raw` writes) prints as a bare `|-- <mount>`, and skipping it made
+# a mount another app holds read as free. Such a route has type "" and target "".
+_SERVE_ROUTE_KINDS = ("proxy", "path", "text")
 
 
 def _parse_serve_status(text):
@@ -351,13 +354,9 @@ def _parse_serve_status(text):
         # `tailscale serve <dir>` shares) or `text` (upstream serveHandlerDesc). Only proxy routes
         # were kept, so a file share on the panel's listener was invisible: the panel's Serve write
         # flipped its Funnel (Funnel is per listener) and the wizard published over its mount.
-        route_match = _SERVE_ROUTE_RE.match(stripped)
-        if route_match and current_url:
-            current_routes.append({
-                "mount": route_match.group(1),
-                "type": route_match.group(2),
-                "target": route_match.group(3).strip(),
-            })
+        route = _r14a_serve_route(stripped)
+        if route and current_url:
+            current_routes.append(route)
         # There used to be a "funnel anywhere in the line" fallback here. It could never see the
         # URL line (that `continue`s above), and the "# Funnel on:" header comes before any URL, so
         # all it could ever match was a ROUTE — a mount or backend with "funnel" in its name.
@@ -365,6 +364,22 @@ def _parse_serve_status(text):
     _append_service(result["services"], current_url, current_funnel, current_routes, current_svc)
 
     return result
+
+
+def _r14a_serve_route(line):
+    """One `|-- <mount> [<kind> <what>]` line as {mount, type, target}, else None.
+
+    Read by splitting, not by one regular expression: a non-space run beside an optional group backtracked
+    super-linearly on a long line (Sonar S8786). `line` is already stripped by the caller.
+    """
+    if not line.startswith("|--") or not line[3:4].isspace():
+        return None
+    parts = line[3:].split(None, 2)
+    if len(parts) == 1:
+        return {"mount": parts[0], "type": "", "target": ""}
+    if len(parts) == 3 and parts[1] in _SERVE_ROUTE_KINDS:
+        return {"mount": parts[0], "type": parts[1], "target": parts[2].strip()}
+    return None
 
 
 def _append_service(services, url, funnel, routes, svc=""):
@@ -895,10 +910,11 @@ def is_managed_route(route, cfg):
     re-point keeps only that one on the scheme the panel serves. Every other route to the panel's
     port was made some other way, and nothing re-points it, so it answers 502 after the next flip
     of the panel's own scheme. With Serve not set up, no route is managed. The mount is compared
-    exactly as the panel writes it (managed_mount): a trailing-slash twin is another route.
+    exactly as the panel writes it (managed_mount): a trailing-slash twin is another route. A
+    Tailscale Service's listener ("svc") is never the node's own :443, whatever its port reads.
     """
     want = managed_mount(cfg.get("tailscale_mount"))
-    return (bool(cfg.get("tailscale_setup_done")) and want is not None
+    return (bool(cfg.get("tailscale_setup_done")) and want is not None and not route.get("svc")
             and _serve_port_flag(route.get("url")) == "--https=443"
             and route.get("mount") == want)
 
@@ -949,13 +965,16 @@ def stale_panel_routes(serve_config, port, mount):
     made by hand, on purpose, and is left alone. Only routes to loopback on the panel's `port`
     (panel_serve_routes): another app's route is never one of these. "Other" is exact
     (managed_mount): a "/lgsm/" beside the "/lgsm" just written is stale, and the one Serve would
-    answer /lgsm/* with. Nothing when `mount` is not one the panel can write.
+    answer /lgsm/* with. Nothing when `mount` is not one the panel can write. Not a route on a
+    Tailscale Service's listener ("svc"): that is not the node's :443, and the panel cannot remove
+    one (remove_panel_route).
     """
     want = managed_mount(mount)
     if want is None:
         return []
     return [r for r in panel_serve_routes(serve_config, port)
-            if _serve_port_flag(r["url"]) == "--https=443" and r["mount"] != want]
+            if _serve_port_flag(r["url"]) == "--https=443" and r["mount"] != want
+            and not r.get("svc")]
 
 
 def _fresh_panel_route(route, port):
@@ -985,12 +1004,20 @@ def remove_panel_route(route, port):
 
     There is no root fallback. The helper's only Serve verb publishes (serve/funnel); a host where
     the operator setting did not take answers "failed" here, and the caller has to say so.
+
+    A route on a Tailscale Service's listener ("svc") answers "failed" and runs nothing. The
+    removal grammar has no --service here, so its `off` named the NODE's own :443 at that mount:
+    it took down whatever app the node served there (Grafana at "/", say), audited as the panel's
+    route, and left the Service route in place to fail the same way at every boot.
     """
     fresh = _fresh_panel_route(route, port)
     if fresh is None:
         return "unread", ""
     if fresh is False:
         return "gone", ""
+    if fresh.get("svc"):
+        return "failed", ("it is on the Tailscale Service %s, which the panel does not manage"
+                          % fresh["svc"])
     try:
         args = serve_off_args(fresh["url"], fresh["mount"])
     except _priv.VerbError:
@@ -1062,13 +1089,14 @@ def disable_tailscale_serve(mount, port):
     if info.serve_unreadable:
         return False, ("Couldn't read this host's Tailscale Serve configuration, so nothing was "
                        "removed.")
-    ours = panel_serve_routes(info.serve_config, port)
+    routes = panel_serve_routes(info.serve_config, port)
+    # The node's own routes only. One on a Tailscale Service's listener cannot be removed by the
+    # panel (remove_panel_route), and its `off` used to land on the node's :443 instead; it is
+    # named in the answer, so "removed" is not read as "no longer published".
+    ours = [r for r in routes if not r.get("svc")]
+    on_svc = _r14a_svc_note(routes)
     if not any(r["mount"] == mount for r in ours):
-        # Nothing at `mount` proxies the panel. Another app's mapping there is never touched.
-        if ours:
-            return False, ("The panel is published at %s, not at %s, so nothing was removed."
-                           % (ours[0]["mount"], mount))
-        return True, "Tailscale Serve wasn't publishing the panel, so there was nothing to remove."
+        return _r14a_nothing_at_mount(ours, mount, on_svc)
     # The panel user has to be the Tailscale operator to change Serve config — the same step the
     # enable path takes first.
     ensure_operator()
@@ -1077,8 +1105,29 @@ def disable_tailscale_serve(mount, port):
         return False, msg
     with _cache_lock:
         _cache["info"] = None
-    return True, ("Tailscale Serve mapping removed" if len(ours) == 1
-                  else "Tailscale Serve mappings removed") + _r12a_funnel_kept_note(info, port)
+    return True, (("Tailscale Serve mapping removed" if len(ours) == 1
+                   else "Tailscale Serve mappings removed") + _r12a_funnel_kept_note(info, port)
+                  + on_svc)
+
+
+def _r14a_svc_note(routes):
+    """A note naming the Tailscale Services among `routes` that still publish the panel, else ""."""
+    names = sorted({r["svc"] for r in routes if r.get("svc")})
+    if not names:
+        return ""
+    return ("; the panel is still published on the Tailscale Service %s, which the panel does not "
+            "manage (remove it with `tailscale serve --service=<name> ... off`)" % ", ".join(names))
+
+
+def _r14a_nothing_at_mount(ours, mount, on_svc):
+    """Disable's answer when nothing at `mount` proxies the panel; another app's is never touched."""
+    if ours:
+        return False, ("The panel is published at %s, not at %s, so nothing was removed."
+                       % (ours[0]["mount"], mount))
+    if on_svc:
+        return True, ("Tailscale Serve wasn't publishing the panel on this node, so there was "
+                      "nothing to remove" + on_svc)
+    return True, "Tailscale Serve wasn't publishing the panel, so there was nothing to remove."
 
 
 def _r12a_funnel_kept_note(info, port):
@@ -1154,6 +1203,8 @@ def suggest_best_bind(port=5000, scheme="http", mount=None):
       - bind_host: recommended bind address
       - url: URL the user can reach it at
       - description: human-readable explanation
+      - note, note_value: the same as a catalog-key sentence and the address it names (the SUGGEST_*
+        constants), which the page shows as separate nodes so the sentence can be translated
     """
     info = get_tailscale_info()
     scheme = "https" if scheme == "https" else "http"
@@ -1175,11 +1226,20 @@ def suggest_best_bind(port=5000, scheme="http", mount=None):
     elif info.installed and info.backend_state == "NeedsLogin":
         # Installed but never authorized — the recommendation is to finish linking, not to
         # open the panel to all interfaces.
-        return _direct_suggestion(
-            port, scheme, ("Tailscale is installed but not linked yet. Link this machine above "
-                           "to reach the panel privately over your tailnet."))
+        return _direct_suggestion(port, scheme, SUGGEST_NOT_LINKED)
     else:
-        return _direct_suggestion(port, scheme, "No Tailscale detected. Bind to all interfaces.")
+        return _direct_suggestion(port, scheme, SUGGEST_NO_TAILSCALE)
+
+
+# What the Tailscale page says about each suggestion: `note`, a catalog key the page's translator
+# swaps whole, then `note_value` (the address, verbatim) in an element of its own. `description`
+# stays for the API; it is the same sentence with the value spliced in, which is why the page could
+# not show it: one text node no catalog key matches, so it was English in every language.
+SUGGEST_SERVE = "Bind to localhost and expose the panel through Tailscale Serve at:"
+SUGGEST_TAILNET_IP = "Bind to this machine's Tailscale IP and open the panel directly at:"
+SUGGEST_NOT_LINKED = ("Tailscale is installed but not linked yet. Link this machine above to reach "
+                      "the panel privately over your tailnet.")
+SUGGEST_NO_TAILSCALE = "No Tailscale detected. Bind to all interfaces."
 
 
 def _suggested_route(serve_config, port, mount, ours):
@@ -1197,6 +1257,7 @@ def _serve_suggestion(port, route):
         "port": port,
         "url": url,
         "description": f"Bind to localhost and expose via Tailscale Serve at {url}",
+        "note": SUGGEST_SERVE, "note_value": url,
     }
 
 
@@ -1209,6 +1270,8 @@ def _tailnet_ip_suggestion(port, scheme):
         "port": port,
         "url": f"{scheme}://{ts_ip}:{port}" if ts_ip else f"{scheme}://<tailscale-ip>:{port}",
         "description": f"Bind to Tailscale IP {ts_ip} and access directly",
+        "note": SUGGEST_TAILNET_IP,
+        "note_value": f"{scheme}://{ts_ip}:{port}" if ts_ip else "",
     }
 
 
@@ -1220,4 +1283,5 @@ def _direct_suggestion(port, scheme, description):
         "port": port,
         "url": f"{scheme}://<your-server-ip>:{port}",
         "description": description,
+        "note": description, "note_value": "",
     }

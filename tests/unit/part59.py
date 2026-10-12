@@ -24,9 +24,10 @@ from types import SimpleNamespace as _NS59
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (_p9, P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _p9_cfg, _p9_client, _p9_json,
-                         _p9_patch, _p9_restore_all, _p9_so)
+from unit.part12 import (_p9, P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _p9_cfg, _p9_client,
+                         _p9_core, _p9_json, _p9_patch, _p9_restore_all, _p9_so, _p9_trip)
 from unit.part47 import _cut47, _node47
+from unit.part56 import _flows56
 from panel.db.models import GameServer as _GS59, db as _db59
 from panel.ops import backup as _bk59
 from panel.ops import system_ops as _so59
@@ -63,8 +64,27 @@ def _rec59(log, name, result):
     return lambda *a, **k: (log.append((name, a, k)) or result)
 
 
+def _r14d_arm59():
+    """part12's transport tripwire, as part53 and part56 arm it (review 1011d).
+
+    part12 disarmed its own when it ended, and every check below stubs only the leaf it names: a
+    route that reached one more host call ran it for real — paramiko to the fixture host, or a local
+    shell on P9_LOCAL, as root on CI's root leg — and this part still passed.
+    """
+    _p9_patch(_p9_core, "get_connection",
+              _p9_trip("paramiko", exc=ConnectionError("refused by part59's tripwire")))
+    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
+    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
+    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
+    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+    _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
+
+
+_TRIP59_START = len(_P9_TRIPPED)
 _A59 = _p9_client(P9_ADMIN)
 try:
+    _r14d_arm59()
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # 1. routes
     # ════════════════════════════════════════════════════════════════════════════════════════════
@@ -283,6 +303,7 @@ finally:
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _A59 = _p9_client(P9_ADMIN)
 try:
+    _r14d_arm59()
     # ── /tailscale: another app's Serve mount is shown to superadmins only ──────────────────────
     _p9_patch(_ts59, "get_tailscale_info",
               lambda *a, **k: _ts59.TailscaleInfo(installed=True, running=True, funnel_enabled=True))
@@ -299,6 +320,8 @@ try:
           _tsp59[True] == (200, True), repr(_tsp59))
 finally:
     _p9_restore_all()
+check("part59: nothing its routes drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP59_START, repr(_P9_TRIPPED[_TRIP59_START:][:6]))
 
 _RM59 = _read59(_TPL59, "remote_manage.html")
 _ctl59 = _RM59.index('data-mtab-btn="controls"')
@@ -307,12 +330,14 @@ check("host page: the Host Controls pill renders only when one of its cards can 
       "{% if _host_ctl or has_permission('manage_servers') %}" in _RM59[_RM59.rfind("{%", 0, _ctl59) - 3:_ctl59],
       _RM59[max(0, _ctl59 - 300):_ctl59])
 _unk59 = _RM59.find('data-funnel="unknown"')
+_unr59 = _RM59.find("{% elif funnel_facts and funnel_facts.unread %}")
+# The marker AFTER the branch it closes: one found earlier in the file made the slice empty, and
+# "tailnet-only not in ''" passed (review 1011d).
 check("host page: with Serve unread, the Panel Server card has its own branch — no \"tailnet-only\" "
       "button text, and the close button marked unknown",
-      "{% elif funnel_facts and funnel_facts.unread %}" in _RM59 and _unk59 > 0
-      and "tailnet-only" not in _re59.sub(r"\{#.*?#\}", "", _RM59[_RM59.index(
-          "{% elif funnel_facts and funnel_facts.unread %}"):_unk59], flags=_re59.S),
-      "no unread branch")
+      0 < _unr59 < _unk59
+      and "tailnet-only" not in _re59.sub(r"\{#.*?#\}", "", _RM59[_unr59:_unk59], flags=_re59.S),
+      "branch at %d, unknown marker at %d" % (_unr59, _unk59))
 _ACC59 = _read59(_TPL59, "account.html")
 _SDT59 = _read59(_TPL59, "server_detail.html")
 _ccarg59 = _SDT59[_SDT59.index('class="form-control cc-arg"'):]
@@ -556,7 +581,9 @@ try:
     (_d59 / "auth.log").write_text("x\n")
     _pbns59 = {"_CFG_BACKUP": None, "DATA_DIR": _d59, "DB_PATH": _d59 / "panel.db", "SECRET_FILE": _d59 / "s",
                "CRED_KEY_FILE": _d59 / "k", "CONFIG_FILE": _d59 / "config.json", "AUTH_LOG": _d59 / "auth.log",
-               "_PREEXISTING": set(), "sys": _sys59, "print": print}
+               "_PREEXISTING": set(), "sys": _sys59, "print": print,
+               # Its backups directory, which this run did not create (part63 holds that branch).
+               "BACKUP_DIR": _d59 / "backups", "_BACKUPS_PREEXISTED": True, "shutil": _shutil59}
     # nosemgrep: python.lang.security.audit.exec-detected.exec-detected -- this repo's own tool's cleanup, on a temp dir
     exec(compile(_ast59.Module(body=_pbdefs59, type_ignores=[]), _pbf59, "exec"), _pbns59)  # nosec B102 - this repo's own tool  # pylint: disable=exec-used
     _pbns59["cleanup"]()
@@ -572,11 +599,14 @@ check("perf_bench: the imports after the setup_complete flip restore config.json
       len(_pbtry59) == 1 and "_r13c_restore_config" in _ast59.dump(_pbtry59[0].handlers[0]), "no guarded import")
 
 # ── js_coverage: the 375px flow's metrics reset cannot replace its own failed check ─────────────
-_flows59 = _sys59.modules.get("flows")
-_cdp59 = _sys59.modules.get("cdp")
-if _flows59 is None or _cdp59 is None:
-    skip("js coverage: the 375px flow's metrics reset", "part56 did not leave the js_coverage modules loaded")
-else:
+# The flows module part56 loaded and kept — not sys.modules["flows"], which part56 deletes (and
+# checks it did), so reading it there skipped this on every run, CI included (review 1011d).
+# flows.CDPError is cdp's class (`from cdp import CDPError`), the one _rename_phone catches.
+_flows59 = _flows56
+_cdp59 = _NS59(CDPError=getattr(_flows59, "CDPError", None))
+check("js coverage: (setup) part56's flows module, and the CDPError class it catches, are in hand",
+      _flows59 is not None and isinstance(_cdp59.CDPError, type), repr(_flows59))
+if _flows59 is not None and isinstance(_cdp59.CDPError, type):
     class _PhoneDrv59:
         """The fit answer is `fit`; clearing the metrics override raises a CDPError."""
 

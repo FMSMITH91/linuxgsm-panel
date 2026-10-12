@@ -70,7 +70,7 @@
             {% if may_admin %}
             <button class="btn btn-outline-secondary btn-sm"
                     data-action="openEditUser" data-args='[{{ user.id }}]'
-                    aria-label="Edit {{ user.username }}" title="Edit {{ user.username }}">
+                    aria-label="{{ t('Edit %s')|format(user.username) }}" title="{{ t('Edit %s')|format(user.username) }}">
               <i class="bi bi-pencil"></i>
             </button>
             {% endif %}
@@ -79,11 +79,11 @@
                   and not (user.is_superadmin and users|selectattr('is_superadmin', 'equalto', true)|list|length == 1) %}
             <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" style="display:inline;"
                   class="ajax-form" data-ajax-refresh="#users-list"
-                  data-confirm="Delete user “{{ user.username }}”? This can't be undone."
+                  data-confirm="{{ t('Delete user “%s”? This can\'t be undone.')|format(user.username) }}"
                   data-confirm-title="Delete User" data-confirm-class="btn-danger"
                   data-confirm-label="Delete" data-confirm-icon="trash">
               <button type="submit" class="btn btn-outline-danger btn-sm"
-                      aria-label="Delete {{ user.username }}" title="Delete {{ user.username }}">
+                      aria-label="{{ t('Delete %s')|format(user.username) }}" title="{{ t('Delete %s')|format(user.username) }}">
                 <i class="bi bi-trash"></i>
               </button>
             </form>

@@ -68,14 +68,16 @@
      therefore passed even when it was present. Text a test has to find should not contain a
      character the renderer rewrites. #}
   {% if local_user %}
-  <span data-no-i18n>This is a real shell on this host, running as
+  {# The guard is on the names alone (<code> is skipped by the translator anyway): on the whole
+     sentence it kept the panel's own words English in every language. #}
+  <span><span>This is a real shell on this host, running as</span>
     <code>{{ local_user }}</code>.</span>
   {% else %}
   <span>This is a real shell on this host, running as the account the panel runs under.</span>
   {% endif %}
   {% else %}
-  <span data-no-i18n>This is a real shell on {{ remote.display_name }}, running as
-    <code>{{ remote.username or 'root' }}</code> — the account the panel connects with.</span>
+  <span><span>This is a real shell on</span> <span data-no-i18n>{{ remote.display_name }}</span><span>, running as</span>
+    <code>{{ remote.username or 'root' }}</code> <span>— the account the panel connects with.</span></span>
   {% endif %}
   {# "Nothing typed here is recorded" was the panel's half only. The shell is an ordinary
      interactive one (a login shell under a pty, or ssh's invoke_shell), so it writes its own

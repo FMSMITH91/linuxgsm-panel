@@ -1417,7 +1417,7 @@ def _drain_action_to_end(app, remote, server_id, entry):
     head, _, body = (out or "").partition("\n")
     size, _, how = head.strip().partition(" ")
     # The size line first is the sign the read ran: a failed or timed-out transport answers "".
-    if not size.isdigit() or how not in ("A", "W", "C") or not body.strip():
+    if not size.isdecimal() or how not in ("A", "W", "C") or not body.strip():
         return
     # render_colour, as the drain does: LinuxGSM's colour kept, every other escape gone.
     text = terminal.render_colour(body)

@@ -114,6 +114,10 @@ def _new_ufw_group(p, key):
         # page re-finds a group by this before deleting rather than trusting a number
         # read when the table was drawn.
         "key": _json.dumps(list(key)),
+        # The From column as ufw printed it. `scope` drops it for an interface rule, and a
+        # source-only rule carries its protocol HERE (`ufw allow from <ip> proto udp` prints To
+        # "Anywhere", From "<ip>/udp"), so the way-in tests below read it from this.
+        "src": p["from"],
     }
 
 
@@ -317,9 +321,52 @@ def _is_ssh_rule(g, pn, inbound, ts_iface, ssh_ports):
     _named_ssh = bool(words) and words[-1].lower() in _SSH_APP_PROFILES and 22 in ssh_ports
     # sshd is TCP only: a UDP rule naming its port (`1:1024/udp`, `22/udp`) is no way in, and
     # counted as one it marked the host's only real `22/tcp` rule "another way in exists".
+    # Nor is a rule that admits only this machine itself (_r14a_host_only): `ufw allow in on lo`
+    # and a docker0 rule are on most hosts, and once an all-ports rule counted, either one made
+    # the host's only public `22/tcp` deletable.
     return (g.get("action") in ("ALLOW", "LIMIT") and inbound and not ts_iface
-            and g.get("proto_label") != "UDP"
+            and not _r14a_udp_only(g) and not _r14a_host_only(g)
             and (_r12a_names_port(pn, ssh_ports) or _named_ssh or _r13a_every_port(g, pn)))
+
+
+def _r14a_udp_only(g):
+    """Whether rule `g` admits UDP alone, which sshd never reads.
+
+    The protocol is printed beside the To column for a port rule, and beside the From column for a
+    source-only one (ufw's get_status: `ufw allow from <ip> proto udp` is To "Anywhere", From
+    "<ip>/udp"). Reading only the To column counted that one as every port, sshd's included.
+    """
+    return g.get("proto_label") == "UDP" or str(g.get("src") or "").lower().endswith("/udp")
+
+
+# Interfaces that carry only this machine's own traffic or the NAT of its containers and VMs:
+# loopback, and the bridges and veth ends Docker, libvirt, LXC/LXD, Podman and CNI create. Nothing
+# from another machine arrives on one. A bridge the admin named (br0) is NOT here: on a KVM host it
+# is commonly the public uplink itself, and Docker's own user networks are "br-<hex id>".
+_R14A_HOST_ONLY_IFACE_RE = re.compile(
+    r"(?:lo|docker\d*|docker_gwbridge|br-[0-9a-f]{12}|virbr\d+|veth\w+|lxcbr\d+|lxdbr\d+"
+    r"|cni\d+|podman\d+)\Z")
+
+
+def _r14a_loopback_addr(column):
+    """Whether a To / From column's address is loopback (the v4 /8 or ::1), with or without a port."""
+    words = str(column or "").split()
+    addr = re.sub(r"/(?:tcp|udp)\Z", "", words[0], flags=re.I) if words else ""
+    try:
+        return ipaddress.ip_network(addr, strict=False).is_loopback
+    except ValueError:
+        return False
+
+
+def _r14a_host_only(g):
+    """Whether rule `g` admits only this machine itself, so it is no way in from anywhere else.
+
+    On loopback or a local bridge (_R14A_HOST_ONLY_IFACE_RE), from a loopback source, or to a
+    loopback destination: a packet from another machine can match none of them. A private source
+    range (`ufw allow from <LAN>/24`) is still a way in: it is how a LAN admin keeps SSH.
+    """
+    return (bool(_R14A_HOST_ONLY_IFACE_RE.match(str(g.get("iface") or "")))
+            or _r14a_loopback_addr(g.get("src")) or _r14a_loopback_addr(g.get("port_num")))
 
 
 def _r13a_every_port(g, pn):
@@ -358,6 +405,33 @@ def _r12a_names_port(pn, ports):
     return False
 
 
+def _r14a_public_allow_in(rule):
+    """Whether `rule` is an inbound ALLOW/LIMIT on no interface (a display group or a parsed row)."""
+    return (not (rule.get("iface") or rule.get("is_iface"))
+            and rule.get("action", "ALLOW") in ("ALLOW", "LIMIT")
+            and (rule.get("direction") or "IN") == "IN")
+
+
+def _r14a_panel_port_scope(rule, port):
+    """How rule `rule` holds `port` open to the public: "only", "shared" or "" (it does not).
+
+    `rule` is a display group, or a parsed row with its `port_num` added: inbound ALLOW/LIMIT on no
+    interface, whose To column names `port` (_r12a_names_port: alone, after an address, in a list or
+    a range). "only" when that port is all it opens; "shared" when the list or range opens others too
+    (`80,443,5000/tcp`, `5000:5010/tcp`). The Network card (hosts.remote_public_ssh_status) and
+    Close public panel port (remote_vps) both read it, so the card never calls open a port the close
+    route calls already closed. The From column is not read: a rule from one address still leaves
+    the port listening to it.
+    """
+    pn = str(rule.get("port_num", ""))
+    if not _r14a_public_allow_in(rule) or not _r12a_names_port(pn, {int(port)}):
+        return ""
+    words = pn.split()
+    items = (words[-1] if words else "").split(",")
+    m = hosts._UFW_PORT_ITEM_RE.match(items[0]) if len(items) == 1 else None
+    return "only" if m and int(m.group(1)) == int(m.group(2) or m.group(1)) else "shared"
+
+
 def _classify_access_rule(g, ssh_ports):
     """Set is_ssh / is_tailscale / is_access on one group: is it a way into the host."""
     pn = str(g.get("port_num", ""))
@@ -380,10 +454,94 @@ def _classify_access_rule(g, ssh_ports):
     g["is_access"] = g["is_ssh"] or g["is_tailscale"]
 
 
+def _r14a_admits(g, port):
+    """Whether rule `g` matches TCP traffic to `port` (named alone, in a list or range, or every port)."""
+    pn = str(g.get("port_num", ""))
+    words = pn.split()
+    named = bool(words) and words[-1].lower() in _SSH_APP_PROFILES and port == 22
+    return not _r14a_udp_only(g) and (named or _r12a_names_port(pn, {port}) or _r13a_every_port(g, pn))
+
+
+def _r14a_net(word):
+    """The network a To / From address word names (its /tcp or /udp suffix dropped), else None."""
+    try:
+        return ipaddress.ip_network(re.sub(r"/(?:tcp|udp)\Z", "", word, flags=re.I), strict=False)
+    except ValueError:
+        return None
+
+
+def _r14a_src_covers(deny_src, allow_src):
+    """Whether every source a rule's From column `allow_src` admits is inside `deny_src`'s.
+
+    "Anywhere" covers all. A network covers an address or network inside it, of the same family.
+    A From with a source PORT matches only that port, so it covers only the very same column. An
+    auto-block DENY from one attacker covers nothing an ALLOW from Anywhere admits.
+    """
+    d, a = str(deny_src or "Anywhere").split(), str(allow_src or "Anywhere").split()
+    if len(d) > 1 or len(a) > 1:
+        return d == a
+    dn, an = _r14a_src_net(d), _r14a_src_net(a)
+    if dn == "any":
+        return True
+    nets = (ipaddress.IPv4Network, ipaddress.IPv6Network)
+    return (isinstance(dn, nets) and isinstance(an, nets) and an.version == dn.version
+            and an.subnet_of(dn))
+
+
+def _r14a_src_net(words):
+    """A one-word From column as "any" (Anywhere), its network, or None when it is neither."""
+    word = re.sub(r"/(?:tcp|udp)\Z", "", words[0], flags=re.I) if words else "Anywhere"
+    return "any" if word.lower() == "anywhere" else _r14a_net(word)
+
+
+def _r14a_dest_addr(g):
+    """The destination address a rule's To column names ("<addr> 22" -> <addr>), else ""."""
+    words = str(g.get("port_num", "")).split()
+    return words[0] if words and _r14a_net(words[0]) is not None else ""
+
+
+def _r14a_deny_covers(deny, allow, port):
+    """Whether DENY/REJECT group `deny` blocks every packet ALLOW group `allow` admits on `port`."""
+    return ((deny.get("direction") or "IN") == "IN"
+            and (not deny.get("iface") or deny.get("iface") == allow.get("iface"))
+            and _r14a_admits(deny, port)
+            and _r14a_dest_addr(deny) in ("", _r14a_dest_addr(allow))
+            and _r14a_src_covers(deny.get("src"), allow.get("src")))
+
+
+def _r14a_mark_live_ssh(groups, ssh_ports):
+    """Set ssh_live on each group: an SSH rule UFW actually lets act, read in UFW's order.
+
+    UFW takes the first rule a packet matches (a group's place is its lowest number). An SSH ALLOW
+    is live when, for at least one sshd port it admits, no DENY/REJECT above it blocks every packet
+    it would let in. `22/tcp DENY IN Anywhere` above `22/tcp ALLOW IN Anywhere` leaves no way in, yet
+    counted as one beside another rule it made that rule deletable. A DENY from one address (the
+    hourly auto-block inserts those at 1) shadows nothing an ALLOW from Anywhere admits.
+    """
+    order = sorted((g for g in groups if g.get("nums")), key=lambda g: min(g["nums"]))
+    for g in groups:
+        g["ssh_live"] = bool(g.get("is_ssh"))   # a group with no number has no place to read
+    for i, g in enumerate(order):
+        if g.get("is_ssh"):
+            g["ssh_live"] = _r14a_live(g, [d for d in order[:i] if d.get("action") in ("DENY", "REJECT")],
+                                       ssh_ports)
+
+
+def _r14a_live(g, denies, ssh_ports):
+    """Whether SSH ALLOW `g` admits some sshd port that none of `denies` (the rules above it) blocks."""
+    return any(_r14a_admits(g, p) and not any(_r14a_deny_covers(d, g, p) for d in denies)
+               for p in ssh_ports)
+
+
 def _r11a_reaches_ssh(g, pn, ssh_ports):
-    """Whether interface rule `g` covers sshd: every port on it, or one of `ssh_ports` over TCP."""
-    return g.get("port_label") == "All ports" or (g.get("proto_label") != "UDP"
-                                                  and _r12a_names_port(pn, ssh_ports))
+    """Whether interface rule `g` covers sshd: every port on it, or one of `ssh_ports` over TCP.
+
+    Every port in any spelling (_r13a_every_port), not only the "All ports" label: `ufw allow in on
+    tailscale0 proto tcp` prints To "Anywhere/tcp", and `... to <addr>` an address alone, so a
+    tailnet-only host's one way in got an ordinary delete × with no warning. UDP alone, in either
+    column (_r14a_udp_only), never reaches sshd.
+    """
+    return not _r14a_udp_only(g) and (_r12a_names_port(pn, ssh_ports) or _r13a_every_port(g, pn))
 
 
 def _r11a_tailnet_ssh_iface(g, ssh_ports):
@@ -426,38 +584,112 @@ def _is_panel_rule(g, panel_port):
     only route to the panel UI deletable; an `ALLOW OUT` rule on that port was conversely
     treated AS the panel rule and made undeletable.
     """
-    # IN only: a forwarded (FWD) rule for the port is not the panel's way in. The port stays a
-    # bare one: each panel rule is protected outright (there is no "another way" count), so a
-    # game range that happens to span the panel port must not become undeletable.
-    return (panel_port is not None and not g.get("is_iface")
-            and g.get("action") in ("ALLOW", "LIMIT")
-            and (g.get("direction") or "IN") == "IN"
-            and str(g.get("port_num", "")).isdecimal()
-            and int(g["port_num"]) == panel_port)
+    # IN only: a forwarded (FWD) rule for the port is not the panel's way in. And the port in any
+    # spelling (_r14a_panel_port_scope, the test the Network card and Close public panel port
+    # read): this took only a bare `5000`, so `80,443,5000/tcp` or a range spanning the port —
+    # while it was the only way into the UI — had an ordinary delete × here, and the card and the
+    # close route said it held the port open. Deleting such a rule does close the panel's port, so
+    # it is protected like the port's own rule; the reason says it opens other ports too.
+    return panel_port is not None and bool(_r14a_panel_port_scope(g, panel_port))
+
+
+def _r14a_ports_word(g):
+    """The port part of a rule's To column: `22` of "<addr> 22", `47100:47199`, `22,80`."""
+    words = str(g.get("port_num", "")).split()
+    return words[-1] if words else ""
+
+
+# Every protect_reason the Firewall page can show, as a fixed English template. The group carries
+# the template (protect_reason_key) and its values (protect_reason_params) beside the English text,
+# so the page renders it in the viewer's language: the catalogs translate the template, and the
+# values (ports, never words) go in after. protect_reason itself, and every API refusal built from
+# it, stays the English sentence it always was. The unit suite holds each one to both catalogs.
+_R14A_SSH_TAIL = (" the SSH port used to reach this host, and there's no working Tailscale route to "
+                  "fall back on — removing it would lock you out. Enable Tailscale SSH, or connect "
+                  "Tailscale and allow the tailscale0 interface, first.")
+_R14A_PANEL_TAIL = (" where this panel's own web interface listens, and it isn't reachable over "
+                    "Tailscale — removing it would lock you out of the panel. Set up Tailscale first "
+                    "if you want to close it.")
+R14A_REASONS = {
+    "panel_only": "Port {port} is" + _R14A_PANEL_TAIL,
+    "panel_shared": "This rule opens ports {ports}, including port {port}," + _R14A_PANEL_TAIL,
+    "ssh_every": "This rule lets every port in, including" + _R14A_SSH_TAIL,
+    "ssh_profile": "The {ports} profile opens" + _R14A_SSH_TAIL,
+    "ssh_ports": "This rule opens ports {ports}, including" + _R14A_SSH_TAIL,
+    "ssh_port": "Port {ports} is" + _R14A_SSH_TAIL,
+    "ts_serve": ("This Tailscale interface rule keeps the panel reachable over your tailnet "
+                 "(Tailscale Serve). With the firewall's default-deny, removing it would drop "
+                 "inbound tailnet traffic and lock you out of the panel — so it can't be "
+                 "deleted here."),
+    "ts_last": ("This is the Tailscale interface rule and currently the only way in — removing it "
+                "would lock you out. Open your SSH port (or enable Tailscale SSH) first."),
+    "warn": ("This keeps you connected (SSH or Tailscale). Another way in exists so it can be "
+             "removed, but make sure you won't lock yourself out."),
+}
+
+
+def _r14a_set_reason(g, which, **params):
+    """Set protect_reason (English), and the template + values the page translates it from."""
+    template = R14A_REASONS[which]
+    g["protect_reason_params"] = {k: str(v) for k, v in params.items()}
+    g["protect_reason_key"] = template
+    g["protect_reason"] = template.format_map(g["protect_reason_params"])
+
+
+def r14a_reason_text(g, translate=None):
+    """`g`'s protect_reason in the viewer's language.
+
+    `translate` (the template's `t`) is applied to its template, then its values go in. The English
+    text when there is no template, or when a translation's placeholders do not match its values.
+    """
+    key = g.get("protect_reason_key")
+    if not key or translate is None:
+        return g.get("protect_reason", "")
+    try:
+        return str(translate(key)).format_map(dict(g.get("protect_reason_params") or {}))
+    except (KeyError, IndexError, ValueError):
+        return g.get("protect_reason", "")
+
+
+def _r14a_ssh_reason(g):
+    """Which SSH lock-out reason names what `g` opens: the port, a range or list, a profile, all.
+
+    "Port 47100:47199 is the SSH port" called a range the SSH port; "Port <addr> 22 is" read the
+    address as part of the port.
+    """
+    if _r13a_every_port(g, g.get("port_num", "")):
+        return "ssh_every"
+    ports = _r14a_ports_word(g)
+    if ports.lower() in _SSH_APP_PROFILES:
+        return "ssh_profile"
+    return "ssh_ports" if ("," in ports or ":" in ports) else "ssh_port"
+
+
+def _r14a_protect_panel(g, panel_port):
+    """Protect the rule holding the panel's public port open: with no Tailscale route, the only way in.
+
+    A list or range that holds it open says it opens other ports too.
+    """
+    g["protected"] = True
+    _r14a_set_reason(g, "panel_only" if _r14a_panel_port_scope(g, panel_port) == "only"
+                     else "panel_shared", port=panel_port, ports=_r14a_ports_word(g))
 
 
 def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_ok):
     """Set protected / warn / protect_reason on one group of an ENABLED firewall."""
     if g["is_panel"]:
-        # No Tailscale route, so this public port is the only way into the panel.
-        g["protected"] = True
-        g["protect_reason"] = (
-            "Port %d is where this panel's own web interface listens, and it isn't reachable "
-            "over Tailscale — removing it would lock you out of the panel. Set up Tailscale "
-            "first if you want to close it." % panel_port)
+        _r14a_protect_panel(g, panel_port)
         return
     if not g["is_access"]:
         return
     if g["is_ssh"]:
         # Deleting this SSH rule is safe only if another way in remains: another SSH rule,
         # Tailscale SSH, or regular SSH over a running tailnet (Tailscale isn't affected).
-        other_way = (ssh_count > 1) or ts_ssh_ok or ts_iface_ok
-        reason_last = (
-            "%s the SSH port used to reach this host, and there's no working Tailscale "
-            "route to fall back on — removing it would lock you out. Enable Tailscale SSH, or "
-            "connect Tailscale and allow the tailscale0 interface, first."
-            % ("This rule lets every port in, including" if _r13a_every_port(g, g["port_num"])
-               else "Port %s is" % g["port_num"]))
+        # `ssh_count` counts only the SSH rules UFW lets act (_r14a_mark_live_ssh); this one is
+        # "another" way only to the others. A rule a DENY above it shadows is no way in itself, and
+        # it stays protected while nothing else is (in doubt, protect).
+        other_way = (ssh_count - int(bool(g.get("ssh_live"))) > 0) or ts_ssh_ok or ts_iface_ok
+        reason_last = _r14a_ssh_reason(g)
     else:  # is_tailscale — deleting it drops regular SSH over the tailnet; Tailscale SSH is unaffected
         if served_over_ts:
             # This is the panel host and its UI is published over Tailscale Serve, so this
@@ -466,24 +698,12 @@ def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_
             # to Serve and locks you out of the panel, and an available SSH path doesn't save
             # the UI. Protect it outright (blocks the UI's × and any direct delete API call).
             g["protected"] = True
-            g["protect_reason"] = (
-                "This Tailscale interface rule keeps the panel reachable over your tailnet "
-                "(Tailscale Serve). With the firewall's default-deny, removing it would drop "
-                "inbound tailnet traffic and lock you out of the panel — so it can't be "
-                "deleted here.")
+            _r14a_set_reason(g, "ts_serve")
             return
         other_way = (ssh_count > 0) or ts_ssh_ok
-        reason_last = (
-            "This is the Tailscale interface rule and currently the only way in — removing it "
-            "would lock you out. Open your SSH port (or enable Tailscale SSH) first.")
-    if not other_way:
-        g["protected"] = True
-        g["protect_reason"] = reason_last
-    else:
-        g["warn"] = True
-        g["protect_reason"] = (
-            "This keeps you connected (SSH or Tailscale). Another way in exists so it can be "
-            "removed, but make sure you won't lock yourself out.")
+        reason_last = "ts_last"
+    g["protected" if not other_way else "warn"] = True
+    _r14a_set_reason(g, reason_last if not other_way else "warn", ports=_r14a_ports_word(g))
 
 
 def _live_tailscale_state(server, enabled, groups):
@@ -534,7 +754,10 @@ def _annotate_firewall_protection(server, enabled, groups):
     for g in groups:
         _classify_access_rule(g, ssh_ports)
 
-    ssh_count = sum(1 for g in groups if g.get("is_ssh"))
+    # An SSH rule counts only where UFW lets it act: a DENY/REJECT above it for the same traffic
+    # wins (first match), as the tailnet side already reads it (_r11a_tailnet_ssh_open).
+    _r14a_mark_live_ssh(groups, ssh_ports)
+    ssh_count = sum(1 for g in groups if g.get("ssh_live"))
 
     ts_running, ts_ssh_enabled = _live_tailscale_state(server, enabled, groups)
 
@@ -547,6 +770,8 @@ def _annotate_firewall_protection(server, enabled, groups):
         g["protected"] = False
         g["warn"] = False
         g["protect_reason"] = ""
+        g["protect_reason_key"] = ""
+        g["protect_reason_params"] = {}
         g["is_panel"] = _is_panel_rule(g, panel_port)
         if not enabled:
             continue

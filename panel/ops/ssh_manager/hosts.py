@@ -3493,7 +3493,6 @@ def remote_public_ssh_status(server, panel_port=None):
     mode = "off"
     first_found = False
     panel_open = False
-    port_re = re.compile(r"\b%d\b" % int(panel_port)) if panel_port else None
     for line in (out or "").splitlines():
         low = line.lower()
         # ANCHORED to the To column, which is what `ufw status` prints first. `"22/tcp" in low`
@@ -3514,16 +3513,30 @@ def remote_public_ssh_status(server, panel_port=None):
                     and _p["from"].lower() == "anywhere" and _p["action"]):
                 first_found = True
                 mode = {"LIMIT": "limit", "ALLOW": "allow"}.get(_p["action"], "off")
-        # A public ALLOW rule for the panel port (ignore IPv6 duplicates and the
-        # tailscale0 interface rule, which isn't the *public* port).
-        if (port_re and "allow" in low and " (v6)" not in low
-                and "tailscale" not in low and port_re.search(line)):
+        # A rule that holds the panel port open to the public, read the way the close route
+        # (remote_vps _panel_port_rule_nums) reads it: inbound ALLOW *or LIMIT*, on no interface.
+        # This was `"allow" in low`, so a rate-limited port (`ufw limit 5000/tcp`, which
+        # firewall._is_panel_rule calls "an ordinary thing to do") read as closed, and the card
+        # disabled "Close public panel port" saying the panel was tailnet-only while the port was
+        # open to the internet. An IPv6-only rule is open too, and a comment that happens to say
+        # "tailscale" is no interface.
+        # (Parsed, not searched for the number first: a range `4000:6000` never contains "5000".)
+        if panel_port and _r14a_holds_port_open(line, panel_port):
             panel_open = True
     res = {"active": active, "mode": mode}
     if panel_port:
         res["panel_port"] = int(panel_port)
         res["panel_port_open"] = panel_open
     return res
+
+
+def _r14a_holds_port_open(line, port):
+    """Whether one `ufw status` row lets the public in on `port` (firewall._r14a_panel_port_scope)."""
+    p = firewall._parse_ufw_rule(line)
+    if not p["action"]:
+        return False
+    p["port_num"] = firewall._split_ufw_proto(firewall._ufw_port_label(p))[0]
+    return bool(firewall._r14a_panel_port_scope(p, port))
 
 
 def _tailscale_conn_state(server):
@@ -3638,7 +3651,7 @@ def _tsiface_ufw_rules(status_out):
     from panel.ops import system_ops as _so
     rules = []
     for line in (status_out or "").splitlines():
-        rule = _so._ufw_rule_split(line.strip())
+        rule = _so._r14a_ufw_row(line.strip())   # the comment out of `from`
         if rule:
             rules.append(rule)
     return rules

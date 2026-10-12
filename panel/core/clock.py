@@ -54,9 +54,12 @@ _HHMM_RE = _re.compile(r"^([01]?[0-9]|2[0-3]):([0-5][0-9])\Z")
 def parse_hhmm(value, default=(5, 0)):
     """Parse "HH:MM" into (hour, minute), or return `default` for anything that is not one.
 
-    Never raises: this parses a value that reached us from a form.
+    Never raises: this parses a value that reached us from a form. A value that is not a string
+    (a JSON number) is not one: `(5 or "").strip()` raised AttributeError.
     """
-    m = _HHMM_RE.match((value or "").strip())
+    if not isinstance(value, str):
+        return default
+    m = _HHMM_RE.match(value.strip())
     return (int(m.group(1)), int(m.group(2))) if m else default
 
 

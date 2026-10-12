@@ -1043,6 +1043,11 @@ def _r11b_rules_reach_root(rules, caller, names, uid):
     return reach
 
 
+# An Option_Spec word at the start of a command item (sudoers(5): Runas_Spec? Option_Spec*
+# Tag_Spec* Cmnd): TIMEOUT=, CWD=, CHROOT=, NOTBEFORE=, NOTAFTER=, ROLE=, TYPE=, …
+_R14B_OPTION_SPEC_RE = re.compile(r"[A-Z_]+=")
+
+
 def _r12b_may_retract_root_all(rest):
     """Whether a later rule may cover every command AS ROOT, and so take a NOPASSWD grant back.
 
@@ -1059,16 +1064,19 @@ def _r12b_may_retract_root_all(rest):
     Runas and only untagged items missed `NOPASSWD: /usr/bin/true, PASSWD: ALL` and
     `(nobody) NOPASSWD: ALL, (root) PASSWD: ALL`, both of which leave every root command asking
     a password — and answered "root-capable", which switches v_game_account off.
+
+    An item with an Option_Spec (`TIMEOUT=1h`, `CWD=*`, `NOTBEFORE=…`) before its tags is not
+    read, so it counts: sudoers(5) puts options between the Runas and the tags, and reading
+    `TIMEOUT=1h PASSWD: ALL` as a command named "TIMEOUT=1h PASSWD: ALL" let the earlier grant
+    stand while sudo asked a password for every root command.
     """
     m = re.fullmatch(r"(\S+)\s*=\s*(.*)", rest.strip())
     items = _r13b_cmnd_items(m.group(2)) if m else None
     if items is None:
         return True
-    runas = None
-    for item in items:
-        r = re.match(r"\(([^)]*)\)\s*", item)
-        if r:
-            runas, item = r.group(1), item[r.end():]
+    for runas, item in _r14b_runas_items(items):
+        if _R14B_OPTION_SPEC_RE.match(item):
+            return True       # `TIMEOUT=1h PASSWD: ALL`: an Option_Spec before the tags, not read
         _tags, cmd = _r12b_cmd_tags(item)
         cmd = cmd.strip()
         if "(" in cmd or re.search(r"(?:^|\s):\s*[^\s=]+\s*=", cmd):
@@ -1076,6 +1084,19 @@ def _r12b_may_retract_root_all(rest):
         if (cmd == "ALL" or _SUDOERS_ALIAS_NAME_RE.fullmatch(cmd)) and _r12b_runas_may_be_root(runas):
             return True
     return False
+
+
+def _r14b_runas_items(items):
+    """Each item of a Cmnd_Spec_List as (the Runas in force for it, the item after its Runas).
+
+    A `(...)` carries on to the items after it; None is no Runas given yet (root, the default).
+    """
+    runas = None
+    for item in items:
+        r = re.match(r"\(([^)]*)\)\s*", item)
+        if r:
+            runas, item = r.group(1), item[r.end():]
+        yield runas, item
 
 
 def _r13b_cmnd_items(spec):
@@ -1113,9 +1134,15 @@ def _r12b_runas_may_be_root(runas):
     if runas is None:
         return True
     users = [u.strip() for u in runas.split(":")[0].split(",") if u.strip()]
-    return any(u in ("ALL", "root", "#0") or u.startswith(("!", "+", "%:"))
+    # `#<uid>` is read as a number, as sudo's sudo_strtoid reads it: `#00` is root too.
+    return any(u in ("ALL", "root") or _r14b_is_uid_zero(u) or u.startswith(("!", "+", "%:"))
                or _SUDOERS_ALIAS_NAME_RE.fullmatch(u)
                or (u.startswith("%") and _r13b_group_holds_root(u[1:])) for u in users)
+
+
+def _r14b_is_uid_zero(item):
+    """Whether a Runas item is `#<digits>` naming uid 0 (`#0`, `#00`)."""
+    return item.startswith("#") and item[1:].isdigit() and int(item[1:]) == 0
 
 
 def _r13b_group_holds_root(group):
@@ -1126,7 +1153,7 @@ def _r13b_group_holds_root(group):
     try:
         root_gid = pwd.getpwnam("root").pw_gid
         if group.startswith("#"):
-            if not group[1:].isdigit():
+            if not group[1:].isdecimal():
                 return True
             gid = int(group[1:])
             if gid == root_gid:
@@ -1178,7 +1205,7 @@ def _r11b_item_names_caller(item, caller, names, uid):
         return True
     if item.startswith("%") and not item.startswith(("%:", "%#")) and item[1:] in names:
         return True
-    return item.startswith("#") and item[1:].isdigit() and int(item[1:]) == uid
+    return item.startswith("#") and item[1:].isdecimal() and int(item[1:]) == uid
 
 
 def _rule_is_nopasswd_root_all(rest):
@@ -1186,19 +1213,44 @@ def _rule_is_nopasswd_root_all(rest):
     `<hosts> = [(ALL|root[:...])] NOPASSWD: ... ALL` — every command, as root, no password.
 
     The host list must cover THIS host (`ALL`, or its name): a rule for another machine in a
-    shared sudoers grants nothing here. A Host_Alias is not followed, so it does not count."""
-    m = re.fullmatch(r"(\S+)\s*=\s*(?:\(([^)]*)\))?\s*(.*)", rest.strip())
-    if not m:
+    shared sudoers grants nothing here. A Host_Alias is not followed, so it does not count.
+
+    Read item by item, as the take-back side is: a `(...)` Runas and the PASSWD/NOPASSWD tag carry
+    on to the items after them, and sudo's LAST matching item decides. Reading only the first Runas
+    and the leading tags counted `NOPASSWD: ALL, PASSWD: ALL`, `NOPASSWD: ALL, (root) PASSWD: ALL`
+    and `NOPASSWD: /bin/ls, PASSWD: /bin/x, ALL` as grants, though each leaves every root command
+    asking a password — the permissive direction, which switches v_game_account off. So the grant
+    is the last `ALL` item with Runas ALL/root and NOPASSWD in force, and the items after it must
+    not take it back. An item this does not read (an Option_Spec before its tags) is no grant."""
+    m = re.fullmatch(r"(\S+)\s*=\s*(.*)", rest.strip())
+    if not m or not _r12b_hosts_cover_here(m.group(1)):
         return False
-    hosts, runas, cmd = m.group(1), m.group(2), m.group(3)
-    if not _r12b_hosts_cover_here(hosts):
+    items = _r13b_cmnd_items(m.group(2))
+    grant_at = _r14b_last_grant_item(items) if items is not None else None
+    if grant_at is None:
         return False
-    if runas is not None and runas.split(":")[0].strip() not in ("ALL", "root"):
-        return False
-    tags, cmd = _r12b_cmd_tags(cmd)
-    # The LAST of PASSWD / NOPASSWD is the one in force: `NOPASSWD: PASSWD: ALL` asks a password.
-    pw_tags = [t for t in tags if t in ("PASSWD", "NOPASSWD")]
-    return bool(pw_tags) and pw_tags[-1] == "NOPASSWD" and "ALL" in [c.strip() for c in cmd.split(",")]
+    later = items[grant_at + 1:]
+    return not (later and _r12b_may_retract_root_all("%s = %s" % (m.group(1), ", ".join(later))))
+
+
+def _r14b_last_grant_item(items):
+    """Index of the last item that is `ALL`, Runas ALL/root, with NOPASSWD in force; else None.
+
+    The PASSWD/NOPASSWD tag carries on to the items after it, as the Runas does. None too when an
+    item has an Option_Spec before its tags: its tags are not read, so what the items after it
+    inherit is not known.
+    """
+    pw, grant_at = None, None
+    for i, (runas, item) in enumerate(_r14b_runas_items(items)):
+        if _R14B_OPTION_SPEC_RE.match(item):
+            return None
+        tags, cmd = _r12b_cmd_tags(item)
+        # The LAST of PASSWD / NOPASSWD is the one in force: `NOPASSWD: PASSWD: ALL` asks a password.
+        pw = ([t for t in tags if t in ("PASSWD", "NOPASSWD")] or [pw])[-1]
+        if (cmd.strip() == "ALL" and pw == "NOPASSWD"
+                and (runas is None or runas.split(":")[0].strip() in ("ALL", "root"))):
+            grant_at = i
+    return grant_at
 
 
 def _home_holds_a_panel(name):
@@ -1520,7 +1572,7 @@ def _login_defs():
         with open(LOGIN_DEFS, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 words = line.split()
-                if len(words) >= 2 and words[0] in out and words[1].isdigit():
+                if len(words) >= 2 and words[0] in out and words[1].isdecimal():
                     out[words[0]] = int(words[1])
     except OSError:
         pass                          # no login.defs: useradd itself falls back to the same values
@@ -1987,13 +2039,13 @@ def _sudoers_matching_rules(lines, user, names, uid, gids):
         if item == "ALL" or item == user:
             return True
         if item.startswith("%#"):
-            return item[2:].isdigit() and int(item[2:]) in gids
+            return item[2:].isdecimal() and int(item[2:]) in gids
         if item.startswith("%:") or item.startswith("+") or '"' in item or "\\" in item:
             return True                  # a non-Unix group, a netgroup, a quoted name: unknown
         if item.startswith("%"):
             return item[1:] in names
         if item.startswith("#"):
-            return item[1:].isdigit() and uid is not None and int(item[1:]) == uid
+            return item[1:].isdecimal() and uid is not None and int(item[1:]) == uid
         if _SUDOERS_ALIAS_NAME_RE.fullmatch(item):
             if item not in aliases:
                 return True              # an alias defined nowhere this can see
@@ -5775,7 +5827,7 @@ def descendants(root):
     """
     kids = {}
     for name in os.listdir("/proc"):
-        if name.isdigit():
+        if name.isdecimal():
             ppid = _ppid_of(int(name))
             if ppid is not None:
                 kids.setdefault(ppid, []).append(int(name))

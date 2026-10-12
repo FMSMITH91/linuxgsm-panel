@@ -631,6 +631,10 @@ _bk7_names = ("BACKUP_DIR", "DATA_DIR", "DB_PATH", "CONFIG_FILE", "SECRET_FILE",
               "_safe_path", "_service_restart_launcher", "os", "tempfile", "decrypt_secret", "time",
               "_is_system_service")
 _bk7_saved = {k: getattr(_bk7, k) for k in _bk7_names}
+# A successful restore stamps this module dict with the time (restore_pending's grace window), and
+# the names above are rebound, not this dict's contents: left set, for 120 s every later stage in
+# backup.DATA_DIR reads as a pending restore and _launch_installer refuses (review 1011d).
+_bk7_dispatched = dict(_bk7._r12a_restore_dispatched)
 _b7 = _p7_pl.Path(_p7_tf.mkdtemp(prefix="p7-bk-"))
 _b7_cfg = {}
 
@@ -1157,7 +1161,10 @@ try:
 finally:
     for _k in _bk7_names:
         setattr(_bk7, _k, _bk7_saved[_k])
+    _bk7._r12a_restore_dispatched.update(_bk7_dispatched)
     _p7_sh.rmtree(str(_b7), ignore_errors=True)
+check("backup: the restore-dispatch stamp is put back for the parts after this one",
+      _bk7._r12a_restore_dispatched == _bk7_dispatched, repr(_bk7._r12a_restore_dispatched))
 
 
 # ══ panel/routes/panel_backup.py ═════════════════════════════════════════════════════════════════

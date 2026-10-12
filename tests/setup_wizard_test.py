@@ -663,8 +663,11 @@ def _check_setup_rows_one_writer():
     import inspect as _inspect
     _others = [f for f in _ast.parse(_inspect.getsource(_rh)).body
                if getattr(f, "name", None) != "_setup_log"]
+    # By name OR attribute: an `auth.log_action(...)` was invisible to an `.id`-only read (rbac's
+    # audit gate reads both).
     _outside = [n.lineno for f in _others for n in _ast.walk(f)
-                if getattr(getattr(n, "func", None), "id", None) == "log_action"]
+                if isinstance(n, _ast.Call) and "log_action" in (
+                    getattr(n.func, "id", None), getattr(n.func, "attr", None))]
     check("audit: every row the wizard writes goes through _setup_log, which names the account",
           _outside == [] and hasattr(_rh, "_setup_log"),
           "log_action called directly at route_helpers.py lines %r" % (_outside,))

@@ -9,7 +9,7 @@ document.getElementById('auth-method').addEventListener('change', function() {
   if (this.value === 'password') {
     field.style.display = '';
     label.textContent = 'SSH Password';
-    input.placeholder = 'Enter SSH password';
+    input.placeholder = t('Enter SSH password');   // t(): a placeholder a script writes is not re-read
     input.value = '';
     input.type = 'password';
     input.autocomplete = 'new-password';

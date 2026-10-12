@@ -1,6 +1,6 @@
 """Part 5 of the unit suite. Imported for its side effects."""
 import subprocess as _sub
-from unit.part01 import (N, NS, _modfiles, _modsrc, _root, _sm_core, _sm_files, _sm_firewall, _ufw_raises, _ufw_raises_fnf, _ufw_raises_verb, check, eq, skip, json, os, sm, sys)  # noqa: F401,E402
+from unit.part01 import (N, NS, _modsrc, _root, _sm_core, _sm_files, _sm_firewall, _ufw_raises, _ufw_raises_fnf, _ufw_raises_verb, check, eq, skip, json, os, sm, sys)  # noqa: F401,E402
 from unit.part02 import (_time)  # noqa: F401,E402
 from unit.part03 import (_io)  # noqa: F401,E402
 from unit.part04 import (_SELF, _pl, _re)  # noqa: F401,E402
@@ -985,15 +985,83 @@ check("no module calls the datetime UTC helpers that are scheduled for removal",
 
 # Source gate: no unscoped DeprecationWarning suppression anywhere. `module=` or `message=` is fine;
 # a bare category filter silences the whole process.
-_blanket = []
-for _f in ("app.py", "auth.py", "models.py", "ssh_manager.py", "system_ops.py", "panel/services/notifications.py"):
-    for _fp1 in _modfiles(_f):
-     for _i, _line in enumerate(open(_fp1, encoding="utf-8"), 1):
-        if "filterwarnings" in _line and "DeprecationWarning" in _line \
-                and "module=" not in _line and "message=" not in _line and not _line.lstrip().startswith("#"):
-            _blanket.append("%s:%d" % (_f, _i))
+# EVERY module of the panel and its tools, read as code: this read six named files, so a filter
+# added under panel/routes/ — where most of the panel now lives, imported lazily by
+# register_routes, which the import probe below never calls — passed both checks. A filter with
+# no category ("ignore" everything) silences deprecations too; one inside `with
+# warnings.catch_warnings():` is scoped to that block (manage.py's app import) and is fine.
+_dw_ast = _smg_ast
+
+
+def _r14d_call_name(node):
+    """The called name of a Call node (`warnings.x(...)` or `x(...)`), else ""."""
+    if not isinstance(node, _dw_ast.Call):
+        return ""
+    return getattr(node.func, "attr", getattr(node.func, "id", ""))
+
+
+def _r14d_is_catch_warnings(node):
+    """Is `node` a `with ...catch_warnings():` block?"""
+    return isinstance(node, (_dw_ast.With, _dw_ast.AsyncWith)) and any(
+        _r14d_call_name(_it.context_expr) == "catch_warnings" for _it in node.items)
+
+
+def _r14d_ignores_deprecations(call):
+    """Does filterwarnings/simplefilter `call` ignore DeprecationWarnings with no module/message?"""
+    _fn = _r14d_call_name(call)
+    _kw = {_k.arg: _k.value for _k in call.keywords}
+    # category is positional 3rd in filterwarnings(action, message, category), 2nd in
+    # simplefilter(action, category)
+    _ci = 2 if _fn == "filterwarnings" else 1
+    _cat = _kw.get("category", call.args[_ci] if len(call.args) > _ci else None)
+    _act = call.args[0] if call.args else _kw.get("action")
+    return (isinstance(_act, _dw_ast.Constant) and _act.value == "ignore"
+            and "module" not in _kw and "message" not in _kw
+            and (_cat is None or "DeprecationWarning" in _dw_ast.dump(_cat)))
+
+
+def _r14d_blanket_filters(tree):
+    """Lines of filterwarnings/simplefilter calls that ignore deprecations outside catch_warnings."""
+    out = []
+
+    def _walk(node, scoped):
+        scoped = scoped or _r14d_is_catch_warnings(node)
+        if (not scoped and _r14d_call_name(node) in ("filterwarnings", "simplefilter")
+                and _r14d_ignores_deprecations(node)):
+            out.append(node.lineno)
+        for _ch in _dw_ast.iter_child_nodes(node):
+            _walk(_ch, scoped)
+    _walk(tree, False)
+    return out
+
+
+_blanket, _dw_read = [], 0
+for _dirpath, _dirnames, _files in os.walk(_root):
+    _dirnames[:] = [d for d in _dirnames if d not in {
+        ".git", ".venv", "venv", "__pycache__", "node_modules", "data", "tests", ".claude"}]
+    for _f in _files:
+        if _f.endswith(".py"):
+            _fp1 = os.path.join(_dirpath, _f)
+            with open(_fp1, encoding="utf-8") as _dw_fh:
+                _dw_tree = _dw_ast.parse(_dw_fh.read())
+            _dw_read += 1
+            _blanket += ["%s:%d" % (os.path.relpath(_fp1, _root), _n)
+                         for _n in _r14d_blanket_filters(_dw_tree)]
 check("no module installs a process-wide DeprecationWarning filter",
-      not _blanket, ", ".join(_blanket))
+      _dw_read >= 100 and not _blanket, "%d files read; %s" % (_dw_read, ", ".join(_blanket)))
+_dw_ctl = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
+    'import warnings\nwarnings.filterwarnings("ignore", category=DeprecationWarning)',
+    'import warnings as w\nw.filterwarnings(\n    "ignore",\n    category=DeprecationWarning)',
+    'import warnings\nwarnings.simplefilter("ignore", DeprecationWarning)',
+    'import warnings\nwarnings.simplefilter("ignore")',
+    'from warnings import filterwarnings\nfilterwarnings("ignore", "", DeprecationWarning)')}
+_dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
+    'import warnings\nwarnings.filterwarnings("ignore", message="x", category=DeprecationWarning)',
+    'import warnings\nwith warnings.catch_warnings():\n    warnings.simplefilter("ignore")',
+    'import warnings\nwarnings.filterwarnings("ignore", category=UserWarning)',
+    'import warnings\nwarnings.simplefilter("default", DeprecationWarning)')}
+check("...the filter gate names each blanket spelling, and passes the scoped ones (controls)",
+      all(_dw_ctl.values()) and not any(_dw_ok.values()), repr((_dw_ctl, _dw_ok)))
 
 # Behavioural proof, not just a grep: with the operator asking for DeprecationWarnings on the command
 # line, importing app must leave them audible. This is the check that actually failed before the fix.
@@ -1751,11 +1819,18 @@ for _c in _ast.walk(_ms_ast):
     if not (isinstance(_c, _ast.Call)
             and getattr(_c.func, "id", "") == "remote_ufw_allow_game_ports"):
         continue
-    _open_calls += 1
     _arg = _c.args[1] if len(_c.args) > 1 else None
     _opened = getattr(_arg, "id", None)
     if _opened is None:
-        continue          # a literal list is not derived from the re-read config
+        # A literal list of constants is not derived from the re-read config. Anything else the
+        # gate cannot judge (`extra + [p]`, `cfg.ports`, a keyword argument) is named, not skipped
+        # — and only a call it judged counts toward the floor below.
+        if not (isinstance(_arg, (_ast.List, _ast.Tuple))
+                and all(isinstance(_e, _ast.Constant) for _e in _arg.elts)):
+            _unguarded.append("line %d opens %s, which this gate cannot judge (not a bare name)"
+                              % (_c.lineno, _ast.dump(_arg)[:60] if _arg else "no port argument"))
+        continue
+    _open_calls += 1
     _levels = _enclosing_bodies(_c)
     if not _levels:
         _unguarded.append("line %d: could not place the call" % _c.lineno)
@@ -1771,7 +1846,7 @@ for _c in _ast.walk(_ms_ast):
                           % (_c.lineno, _opened))
 
 check("install: the firewall opens are AST-visible at all", _open_calls >= 2,
-      "found %d remote_ufw_allow_game_ports calls" % _open_calls)
+      "judged %d remote_ufw_allow_game_ports calls" % _open_calls)
 check("install: no firewall open ignores the port the panel refused to adopt",
       not _unguarded, "; ".join(_unguarded))
 
@@ -3113,7 +3188,7 @@ for _f in _gd_npm_files:
                 continue
             for _m in _GD_NPM_RE.finditer(_l):
                 _gd_npm_seen.append((os.path.relpath(_f, _UNIT_ROOT), _m.group(1)))
-def _r13d_run_redirected(cmd, real_dir, timeout=30):
+def _r13d_run_redirected(cmd, real_dir, anchored, timeout=30):
     """Run `cmd` in bash ONLY when no path under `real_dir` is left in it; else refuse (rc -1).
 
     These drives point a root-capable rendering at a temp dir by replacing its destination's text.
@@ -3121,11 +3196,29 @@ def _r13d_run_redirected(cmd, real_dir, timeout=30):
     REAL path: as root on CI's root leg, and on any box the suite is run on as root, that wrote
     fixture bytes over the installed gamedig and ran a stand-in script there, or `sed -i`'d the
     host's sshd_config. The checks that follow then fail by name on the refusal's output.
+
+    `anchored` is the caller's word that the ORIGINAL rendering named its destination exactly as
+    the replace expects (review 1011d): a rendering that built the path in the shell
+    (`h=/usr/local/lib/linuxgsm-panel; d="$h/gamedig"`) leaves no full path for the replace to
+    match and none for the substring test above to see, and would run against the real one.
     """
+    if not anchored:
+        return _sp.CompletedProcess(["bash", "-c"], -1, "",
+                                    "not run: the rendering does not name %s the way the redirect "
+                                    "expects" % real_dir)
     if real_dir in cmd:
         return _sp.CompletedProcess(["bash", "-c"], -1, "",
                                     "not run: %s is still in the rendering" % real_dir)
     return _sp.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=timeout)
+
+
+def _r14d_sshd_anchored(rendering):
+    """Is every sshd_config PATH the rendering names a whole SSHD_CONFIG the redirect replaces?
+
+    One built in the shell (`e=/etc; "$e/ssh/sshd_config"`) is not, and would edit the host's
+    file. (`sshd_config[.]d` in the Include grep is a pattern, not a path: no slash before it.)
+    """
+    return 0 < rendering.count(_priv.SSHD_CONFIG) == rendering.count("/sshd_config")
 
 
 def _gd_render(verb, args):
@@ -3190,7 +3283,7 @@ try:
     _gdr_anchor = "d=%s" % _gd_q(_priv.GAMEDIG_DIR)
     _gdr_fx_n = _gdr_fx.count(_gdr_anchor)
     _gdr_fx = _gdr_fx.replace(_gdr_anchor, "d=%s" % _gd_q(_gdr_dest))
-    _r = _r13d_run_redirected(_gdr_fx, _priv.GAMEDIG_DIR, timeout=60)
+    _r = _r13d_run_redirected(_gdr_fx, _priv.GAMEDIG_DIR, _gdr_fx_n == 1, timeout=60)
     _gdr_got = {}
     for _n in _gdr_bytes:
         try:
@@ -3218,7 +3311,10 @@ try:
     try:
         _gdr_fx2 = _priv.remote_command("gamedig-install", [])
         _r2 = _r13d_run_redirected(_gdr_fx2.replace(_gdr_anchor, "d=%s" % _gd_q(_gdr_dest)),
-                                   _priv.GAMEDIG_DIR, timeout=60)
+                                   _priv.GAMEDIG_DIR,
+                                   # a refusal that writes nothing has no destination to redirect
+                                   _gdr_fx2.count(_gdr_anchor) == 1 or not _re.search(
+                                       r"\b(?:mkdir|mv|cp|tee|chmod|base64)\b", _gdr_fx2), timeout=60)
         _gdr_why = "rc=%d %r" % (_r2.returncode, _r2.stdout[-200:])
     except Exception as _e:        # reported by name below, not left to end the part
         _r2, _gdr_why = None, "remote_command raised %r" % _e
@@ -4220,7 +4316,7 @@ try:
         with open(_f, "w", encoding="utf-8") as _fh:
             _fh.write(_body)
         _r = _r13d_run_redirected(_sd_cmd.replace(_priv.SSHD_CONFIG, _f),
-                                  os.path.dirname(_priv.SSHD_CONFIG))
+                                  os.path.dirname(_priv.SSHD_CONFIG), _r14d_sshd_anchored(_sd_cmd))
         _after = open(_f, encoding="utf-8").read()
         if _r.returncode != 0 or _want not in _after or (_unwanted and _unwanted in _after):
             _sd_bad.append("%s: rc=%d -> %r" % (_name, _r.returncode, _after))
@@ -4260,7 +4356,9 @@ try:
         _fh.write("Include /etc/ssh/sshd_config.d/*.conf\n#PasswordAuthentication yes\nPort 22\n")
     with open(_dr_f, "w", encoding="utf-8") as _fh:
         _fh.write(_dr_prior)
-    _dr_r = _r13d_run_redirected(_dr_cmd, os.path.dirname(_priv.SSHD_CONFIG))
+    _dr_r = _r13d_run_redirected(_dr_cmd, os.path.dirname(_priv.SSHD_CONFIG),
+                                 _r14d_sshd_anchored(_priv.remote_command(
+                                     "sshd-set-directive", ["PasswordAuthentication", "no"])))
     _dr_remote = open(_dr_f, encoding="utf-8").read()
     # The helper, on a module copy whose drop-in path is a second temp file with the same content.
     _spec_dr = _ilu.spec_from_loader("ph_dropin", _machinery.SourceFileLoader("ph_dropin", _helper_path))
@@ -4294,7 +4392,9 @@ try:
                 .replace(_priv.SSHD_HARDENING_DROPIN, os.path.join(_dr_d2, "00-x.conf"))
                 .replace(os.path.dirname(_priv.SSHD_HARDENING_DROPIN), _dr_d2)
                 .replace(_priv.SSHD_CONFIG, _dr_cfg2))
-    _dr_r2 = _r13d_run_redirected(_dr_cmd2, os.path.dirname(_priv.SSHD_CONFIG))
+    _dr_r2 = _r13d_run_redirected(_dr_cmd2, os.path.dirname(_priv.SSHD_CONFIG),
+                                  _r14d_sshd_anchored(_priv.remote_command(
+                                      "sshd-set-directive", ["PasswordAuthentication", "no"])))
     check("privileged: ...and a host with no Include gets no drop-in, only the sshd_config edit",
           _dr_r2.returncode == 0 and not os.path.exists(_dr_d2)
           and "PasswordAuthentication no" in open(_dr_cfg2, encoding="utf-8").read(),
@@ -5881,16 +5981,19 @@ try:
     # content-grant-read: the content account's primary group is what the GMod account joins, so
     # a root-equivalent one is refused, as privileged.py's _NEVER_A_CONTENT_GROUP already does.
     _ga_ran = []
-    _ga_sub = _helper.subprocess
+    _ga_sub, _ga_home = _helper.subprocess, _helper.HOME_ROOT
     try:
         _helper.subprocess = NS(run=lambda *a, **k: (_ga_ran.append(a[0]), NS(returncode=0))[1])
         _helper.grp = NS(getgrgid=lambda g: NS(gr_name="docker", gr_gid=g, gr_mem=[]))
+        # The temp dir, not /home: a regressed refusal goes on into the chmod walk, which as root
+        # (CI's root leg) would `g+rX` a real /home/cssserver/serverfiles/cstrike if one existed.
+        _helper.HOME_ROOT = _ga_dir
         try:
             _ga_rc = _helper.do_content_grant_read(["cssserver", "docker", "cssserver", "cstrike"], "")
         except Exception as _e:        # got past the refusal and into the chmod walk
             _ga_rc = repr(_e)
     finally:
-        _helper.subprocess = _ga_sub
+        _helper.subprocess, _helper.HOME_ROOT = _ga_sub, _ga_home
     check("helper content-grant-read: a root-equivalent primary group is refused before usermod",
           _ga_rc == 2 and not _ga_ran, "rc=%s ran=%s" % (_ga_rc, _ga_ran))
 finally:
@@ -6278,8 +6381,10 @@ try:
           any(x[0] == "read_as" and x[1] == "ubuntu" and "linuxgsm.sh" in x[2] for x in _acct_sent),
           repr(_acct_sent))
     _r = _acct_case(False, id="EXISTS", script="", script_rc=1)
-    check("install account: a FAILED script probe deletes nothing (kept as it is)",
-          _r[0] is True and not _acct_destroyed(), "%r %r" % (_r, _acct_sent))
+    check("install account: a FAILED script probe deletes nothing, and the install stops there "
+          "(retryable) rather than going on into an account nobody looked at",
+          _r[0] is False and _r[2] is True and not _acct_destroyed()
+          and not any(x[0] == "create" for x in _acct_sent), "%r %r" % (_r, _acct_sent))
     _r = _acct_case(False, id="EXISTS", script="EXISTS")
     check("install account: an account WITH linuxgsm.sh is kept, not rebuilt",
           _r[0] is True and not _acct_destroyed() and not any(x[0] == "create" for x in _acct_sent),

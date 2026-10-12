@@ -105,15 +105,15 @@ function initTerminal() {
   // claims a connection once something has actually arrived. On a reachable host the shell's
   // prompt lands in milliseconds and this is indistinguishable from before.
   sock.on('term_ready', function (d) {
-    hostLabel = (d && d.host) || 'the host';
+    hostLabel = (d && d.host) || t('the host');
     sawOutput = false;
-    _status('Opening a session on ' + hostLabel + '…');
+    _status(tf('Opening a session on {host}…', {host: hostLabel}));
     term.focus();
   });
 
   sock.on('term_output', function (d) {
     if (!(d && d.data)) return;
-    if (!sawOutput) { sawOutput = true; _status('Connected to ' + hostLabel + '.', 'ok'); }
+    if (!sawOutput) { sawOutput = true; _status(tf('Connected to {host}.', {host: hostLabel}), 'ok'); }
     term.write(d.data);
   });
 
@@ -130,7 +130,7 @@ function initTerminal() {
   // message and the behaviour now agree: one page, one session, and a reload to start another.
   sock.on('term_exit', function (d) {
     var why = (d && d.reason) || 'the session ended';
-    _status('Session closed — ' + why + '. Reload the page to start another.', 'warn');
+    _status(tf('Session closed — {why}. Reload the page to start another.', {why: (d && d.reason) || t('the session ended')}), 'warn');
     term.write('\r\n\x1b[33m[' + why + ']\x1b[0m\r\n');
   });
 

@@ -645,15 +645,21 @@ def _refused_account60(a_client, rid):
     """A root-capable game account is refused exactly as delete-path and rename-path refuse it."""
     _reset60()
     sid = _server60(rid, "adminacct", 27601)
+    # Counted from here: _last60() alone read a create_folder refusal an EARLIER section wrote, of
+    # the same shape, so this passed with no audit row at all (review 1011d).
+    n0 = len(_audits60())
     code, body = _post60(a_client, sid, "cfg", "z.cfg", "folder")
     d = a_client.post("/api/server/%d/delete-path" % sid, json={"path": "cfg/a.cfg"})
     check("create route: a game account that can become root is refused (409), saying why, as "
           "delete-path refuses it", code == 409 and "can become root" in (body.get("message") or "")
           and _p9_json(d).get("message") == body.get("message"), repr((code, body)))
-    row = _last60()
-    check("create route: ...nothing is sent to the host, and the refusal is audited",
-          not _SHELLS60 and (row.action, row.success) == ("create_folder", False)
-          and row.detail.startswith("refused: "), repr((_SHELLS60[:1], row)))
+    new = _audits60()[n0:]
+    row = new[0] if len(new) == 1 else NS(action=None, success=None, detail="", gsid=None)
+    check("create route: ...nothing is sent to the host, and the refusal is audited — one new row, "
+          "on this server, saying why",
+          not _SHELLS60 and (row.action, row.success, row.gsid) == ("create_folder", False, sid)
+          and row.detail.startswith("refused: ") and "can become root" in row.detail,
+          repr((_SHELLS60[:1], new)))
 
 
 def _failing_transports60():
