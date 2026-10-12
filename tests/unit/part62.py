@@ -123,8 +123,8 @@ def _rows62(sid, action):
 _COD62 = ('status\nmap: mp_crash\n'
           'num score ping guid                             name            lastmsg address       qport rate\n'
           '--- ----- ---- -------------------------------- --------------- ------- ------------- ----- ----\n'
-          '  0     5   45 1100001aaaaaaaaaaaaaaaaaaaaaaaaa ^1Alice^7             0 5.6.7.8:28960 12345 25000\n'
-          '  1     0   67 1100001bbbbbbbbbbbbbbbbbbbbbbbbb Bob Smith            50 9.9.9.9:28961 54321 25000\n')
+          '  0     5   45 1100001aaaaaaaaaaaaaaaaaaaaaaaaa ^1Alice^7             0 203.0.113.5:28960 12345 25000\n'
+          '  1     0   67 1100001bbbbbbbbbbbbbbbbbbbbbbbbb Bob Smith            50 203.0.113.9:28961 54321 25000\n')
 
 
 def _idt3_chat62():
@@ -204,17 +204,16 @@ def _capture_shrink62():
 # ── A06: privilege tools' refusals in the debug report ──────────────────────────────────────────
 def _priv_refusals62():
     sfx = " [USER=root] [TTY=/dev/pts/0] [CWD=/home/bob] [COMMAND=/usr/bin/mysql -u root -pS3cret%s]"
-    lines = ["Oct 11 10:00:00 h pkexec[9]: bob: Error executing command as another user: "
-             "Not authorized" + sfx % "A",
-             "Oct 11 10:00:00 h pkexec[9]: bob: Error executing command as another user: "
-             "Request dismissed" + sfx % "B",
-             "Oct 11 10:00:00 h pkexec[9]: bob: The value for the SHELL variable was not found the "
-             "/etc/shells file" + sfx % "C",
-             "Oct 11 10:00:00 h doas[9]: command not permitted for bob: mysql -pS3cretD",
-             "Oct 11 10:00:00 h doas[9]: command not permitted for bob: grep 'authentication "
-             "failure' -pS3cretF",
-             "Oct 11 10:00:00 h pkexec[2]: bob: Executing command [USER=root] [TTY=pts/0] [CWD=/"
-             + "d" * 1500 + "] [COMMAND=/usr/bin/mysql -pS3cretG]"]
+    pk = "Oct 11 10:00:00 h pkexec[9]: bob: "
+    refused = pk + "Error executing command as another user: "
+    doas = "Oct 11 10:00:00 h doas[9]: command not permitted for bob: "
+    lines = [refused + "Not authorized" + sfx % "A",
+             refused + "Request dismissed" + sfx % "B",
+             pk + "The value for the SHELL variable was not found the /etc/shells file" + sfx % "C",
+             doas + "mysql -pS3cretD",
+             doas + "grep 'authentication failure' -pS3cretF",
+             pk + "Executing command [USER=root] [TTY=pts/0] [CWD=/" + "d" * 1500
+             + "] [COMMAND=/usr/bin/mysql -pS3cretG]"]
     kept, _v, _s = _logs62._split_priv(lines)
     text = "\n".join(kept)
     check("debug report: pkexec's refusal lines (Not authorized, Request dismissed, the env "
@@ -222,8 +221,8 @@ def _priv_refusals62():
           "pkexec line with a long CWD are kept without their argv",
           len(kept) == 6 and "S3cret" not in text and text.count("(command not shown)") == 6
           and "Not authorized" in text and "Request dismissed" in text, repr(kept))
-    cont = ["Oct 11 10:00:00 h sudo[5]:      bob : (command continued) grep 'authentication "
-            "failure' /var/log/auth.log; mysql -pS3cretE"]
+    cont = ["Oct 11 10:00:00 h sudo[5]:      bob : (command continued) grep 'authentication failure' "
+            + "/var/log/auth.log; mysql -pS3cretE"]
     kept, _v, _s = _logs62._split_priv(cont)
     check("debug report: a sudo \"(command continued)\" line is dropped even when its argv holds "
           "a refusal phrase", kept == [], repr(kept))
