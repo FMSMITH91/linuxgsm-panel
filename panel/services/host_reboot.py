@@ -81,7 +81,6 @@ SETTLE_UPTIME_MAX = 300          # ...and is not "starting", or has been up this
 START_ATTEMPTS = 3
 START_RETRY_GAP = 60
 STALE_PLAN = 7 * 86400           # rows this old are cleared, with a notification
-ROW_GIVE_UP = 3600               # a row its host answers for but that never resolves: reported failed
 STALE_SENT = 86400               # a same-boot plan sent this long ago is a restored backup: cleared
 GRACE_AFTER_CLEAR = 0            # _expected_offline ts: the monitor's own 180 s window from now
 BOUNCE_BACKOFF = 600
@@ -1924,7 +1923,7 @@ def _act(remote, recs, now, rollback_):
         if d.get("restore") != "pending":
             continue
         before = dict(d)
-        res = _act_one(remote, gs, d, now, rollback_) or _rw.row_gave_up(d, now, ROW_GIVE_UP)
+        res = _act_one(remote, gs, d, now, rollback_) or _rw.row_gave_up(d, now)
         if res is not None:
             d["restore"], d["result"] = res
             # When this row was confirmed — after its probe or its start returned, which the tick's

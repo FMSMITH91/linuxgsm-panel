@@ -55,7 +55,10 @@ def phase_words(phase):
 # while the host answered (STALE_PLAN is for a silent host). The plan never finished, and
 # _pending_conflict refused every later reboot of that host, silently. Here, beside the other
 # words of a reboot, so host_reboot stays within the size the code-quality gate allows.
-def row_gave_up(d, now, after):
+ROW_GIVE_UP = 3600     # a plan row its host answers for but that never resolves: reported failed
+
+
+def row_gave_up(d, now, after=ROW_GIVE_UP):
     """None while an unresolved plan row may still resolve; ("failed", why) once `after` s have passed."""
     d.setdefault("pending_since", now)
     if now - d["pending_since"] < after:
