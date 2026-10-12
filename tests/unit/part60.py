@@ -455,6 +455,39 @@ def _symlinks60(a_client, sid):
           == (_files60.CREATE_RESERVED, None), repr((code, body)))
 
 
+def _host_refusal_audits60(a_client, sid):
+    """A refusal the HOST decided is audited with its reason, as a pre-host refusal is.
+
+    Each answer is a fixed text, and the audit row carries the same text after "refused: <path>: ":
+    the row said only the path before, so a symlinked or missing folder read like any failure.
+    None of the host's own output (its stderr) is ever in the row.
+    """
+    f = _files60
+    cases = (("lnk", "z.cfg", "file", "", f.CREATE_LINKED),
+             ("esc", "y", "folder", "", f.CREATE_REFUSED),
+             ("lg", "x.cfg", "file", "", f.CREATE_RESERVED),
+             ("nodir", "x.cfg", "file", "", f.CREATE_NO_DIR),
+             ("disk", "logs", "folder", "log", f.CREATE_CONSOLE),
+             ("cfg", "ro", "folder", "echo %s >&2; mkdir(){ return 1; }; " % _LEAK60,
+              f.CREATE_HOST_REFUSED))
+    bad = []
+    for d, name, kind, setup, want in cases:
+        _reset60("" if setup == "log" else setup)
+        if setup == "log":
+            os.makedirs(os.path.join(_HOME60, "disk"))
+            os.symlink("disk/logs", os.path.join(_HOME60, "log"))
+        code, body = _post60(a_client, sid, d, name, kind)
+        row = _last60()
+        got = (code, body.get("message"), row.success, row.detail)
+        if got != (200, want, False, "refused: %s/%s: %s" % (d, name, want)):
+            bad.append(repr(got)[:160])
+    _PRELUDE60["text"] = ""
+    check("create route: a refusal the host decided (a symlinked folder, a link out of the home, "
+          "lgsm/ reached through a link, a missing folder, the console's path resolved, a mkdir "
+          "the host refused) is audited as 'refused: <path>: <reason>', the reason the user saw "
+          "and none of the host's own output", not bad, "; ".join(bad[:3]))
+
+
 def _gone60(a_client, sid):
     """A folder that is not there — or is a file — says so, rather than 'the host did not answer'."""
     _reset60()
@@ -653,6 +686,7 @@ try:
     _race60()
     _symlinks60(_A60, _S60)
     _gone60(_A60, _S60)
+    _host_refusal_audits60(_A60, _S60)
     _builder_wall60()
     _names60()
     _catalog60()

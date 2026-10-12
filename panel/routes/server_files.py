@@ -1959,6 +1959,24 @@ def _create_refused(gs, action, rel, name, why):
     return jsonify({"success": False, "message": why}), 400
 
 
+def _create_audit_detail(rel, name, ok, msg):
+    """The audit row's detail for a create the host was asked to make.
+
+    A refusal the host decided (a symlinked or missing folder, a link out of the home, a reserved
+    or console path once resolved, a create the host refused) is written as a pre-host refusal is,
+    "refused: <path>: <reason>": `msg` is always one of create_path's fixed texts, never the host's
+    own output. A taken name and an unanswered host keep their short suffixes.
+    """
+    target = _create_target(rel, name)
+    if ok:
+        return _audit_safe(target)
+    if msg == _sm.CREATE_EXISTS:
+        return _audit_safe(target) + " (name taken)"
+    if msg == _sm.CREATE_UNCONFIRMED:
+        return _audit_safe(target) + " (unconfirmed)"
+    return _audit_safe("refused: %s: %s" % (target, msg), 250)
+
+
 def _create_answer(gs, action, rel, name, kind):
     """Create on the host and audit it, once every refusal has passed (see _rename_answer)."""
     try:
@@ -1966,16 +1984,12 @@ def _create_answer(gs, action, rel, name, kind):
     except ConnectionError:
         _log.warning("create-path: the host did not answer", exc_info=True)
         ok, msg = False, _sm.CREATE_UNCONFIRMED
-    detail = _audit_safe(_create_target(rel, name))
+    log_action(current_user, action, target=gs.name, detail=_create_audit_detail(rel, name, ok, msg),
+               success=ok, server=gs)
     if msg == _sm.CREATE_EXISTS:
-        log_action(current_user, action, target=gs.name, detail=detail + " (name taken)",
-                   success=False, server=gs)
         return jsonify({"success": False, "conflict": True,
                         "message": "Something with that name already exists in this folder. "
                                    "Nothing was created — choose another name."}), 409
-    log_action(current_user, action, target=gs.name,
-               detail=detail + ("" if ok or msg != _sm.CREATE_UNCONFIRMED else " (unconfirmed)"),
-               success=ok, server=gs)
     return jsonify({"success": ok, "message": msg})
 
 
