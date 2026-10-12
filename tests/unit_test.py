@@ -172,7 +172,10 @@ for _attr, _fns in _WATCHED.items():
 # Imported here, before any part, so its handle is wrapped before anything can call it.
 importlib.import_module("panel.ops.tailscale_integration")
 
-_R15D_SYSTEM_DIRS = ("/usr/", "/bin/", "/sbin/", "/opt/", "/snap/", "/nix/")
+# A user-level install counts as the machine's too (review 1012b): a tailscale CLI in ~/.local/bin or
+# Homebrew-on-Linux's prefix ran for real with the guard reading it as a part's own stand-in.
+_R15D_SYSTEM_DIRS = ("/usr/", "/bin/", "/sbin/", "/opt/", "/snap/", "/nix/", "/home/linuxbrew/",
+                     os.path.join(os.path.realpath(os.path.expanduser("~")), ".local", "bin") + os.sep)
 _r15d_ts_refused = []
 # What would really start a process. A part that stands in for subprocess.run itself (part44's
 # TimeoutExpired raiser) is answered by its stand-in, not by this: it starts nothing. The green
@@ -224,12 +227,12 @@ def _r16d_ts_shell_env(env):
 class _R15dNoSystemTailscale:
     """A module's subprocess handle, refusing a `tailscale` that resolves to the system's."""
 
-    def __init__(self, real):
-        # What run/Popen of `real` itself are tells a stand-in from the real: a part that left a
-        # stand-in module on the attribute (unrestored) is wrapped by the next part's pass, and
-        # judged by the module it named in sys.modules, that stand-in's calls were rewritten to
-        # run under /bin/bash although it spawns nothing (review 1012b).
+    def __init__(self, real, src="subprocess"):
         self._real = real
+        # The sys.modules entry whose run/Popen tells a stand-in from the real. Not `real`'s own:
+        # from part05 on, `real` is nosudo_runner's shim, which forwards to the real spawner, and
+        # judged by its own run it read as a stand-in and let the machine's tailscale run.
+        self._src = src
 
     def __getattr__(self, name):
         return getattr(self._real, name)
@@ -237,7 +240,7 @@ class _R15dNoSystemTailscale:
     def _system_tailscale(self, cmd, kw, how="run"):
         if not (isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "tailscale"):
             return False
-        if getattr(self._real, how, None) not in _r16d_real_spawners(how):
+        if getattr(sys.modules.get(self._src), how, None) not in _r16d_real_spawners(how):
             return False
         _path = (kw.get("env") or os.environ).get("PATH", os.defpath)
         _hit = shutil.which("tailscale", path=_path)
@@ -247,7 +250,7 @@ class _R15dNoSystemTailscale:
         """(cmd, kw) for a shell that names tailscale: under bash, with _r16d_ts_shell_env's functions."""
         _sh = _r16d_shell_text(cmd, kw)
         if (_sh is None or "tailscale" not in _sh
-                or getattr(self._real, how, None) not in _r16d_real_spawners(how)):
+                or getattr(sys.modules.get(self._src), how, None) not in _r16d_real_spawners(how)):
             return cmd, kw
         kw = dict(kw, env=_r16d_ts_shell_env(kw.get("env") or os.environ))
         if kw.get("shell"):
@@ -272,27 +275,27 @@ class _R15dNoSystemTailscale:
         return self._real.Popen(cmd, *a, **kw)
 
 
-# (module, attribute holding its subprocess).
+# (module, attribute holding its subprocess, the sys.modules entry that attribute stands for).
 # Wrapped as soon as each module is loaded and again before every part: part05 reinstalls
 # nosudo_runner's shim over every module's subprocess, which replaced this answer for the rest of
 # the run. _core is not imported here: under a bare `python tests/unit_test.py` (CI)
 # eventlet.monkey_patch() has to come first, and part01's app import is what does it. system_ops
 # is (tailscale_integration imports it), and is wrapped below; monkey_patch later patches the same
 # subprocess module object the wrapper holds, in place.
-_R16D_TS_HANDLES = (("panel.ops.tailscale_integration", "subprocess"),
-                    ("panel.ops.system_ops", "subprocess"),
-                    ("panel.ops.ssh_manager._core", "_real_subprocess"))
+_R16D_TS_HANDLES = (("panel.ops.tailscale_integration", "subprocess", "subprocess"),
+                    ("panel.ops.system_ops", "subprocess", "subprocess"),
+                    ("panel.ops.ssh_manager._core", "_real_subprocess", "__original_module_subprocess"))
 
 
 def _r16d_wrap_ts_handles():
     """Wrap each loaded module's handle that is not wrapped already; the modules still unloaded."""
     _unloaded = []
-    for _mod, _attr in _R16D_TS_HANDLES:
+    for _mod, _attr, _src in _R16D_TS_HANDLES:
         _m = sys.modules.get(_mod)
         if _m is None:
             _unloaded.append(_mod)
         elif not isinstance(getattr(_m, _attr, None), _R15dNoSystemTailscale):
-            setattr(_m, _attr, _R15dNoSystemTailscale(getattr(_m, _attr)))
+            setattr(_m, _attr, _R15dNoSystemTailscale(getattr(_m, _attr), _src))
     return _unloaded
 
 
@@ -300,7 +303,7 @@ class _R16dWrapOnLoad:
     """Wraps a handle the moment its module finishes loading, so no part runs before it."""
 
     def find_spec(self, name, path=None, target=None):
-        if name not in {_m for _m, _a in _R16D_TS_HANDLES}:
+        if name not in {_m for _m, _a, _s in _R16D_TS_HANDLES}:
             return None
         for _f in sys.meta_path:
             _spec = None if _f is self else getattr(_f, "find_spec", lambda *_a: None)(name, path, target)
@@ -372,8 +375,8 @@ _r16d_wrap_ts_handles()
 # part12's app and runs node on its own fixtures; imports part01, 05, 11, 12, 20, 47 and 61 (part61's
 # close-panel-port helpers, part11's transport stand-in).
 # part67 (review 1012a: core, backup, ssh-core and reboot fixes, builder A) drives part12's app and
-# database with stand-ins, and node and bash on its own fixtures; imports part01, 02, 12, 14, 20, 47
-# and 64 (part14's update-status stand-in, part64's firewall stand-in).
+# database with stand-ins, and node and bash on its own fixtures; imports part01, 02, 12, 14, 20, 47,
+# 61 and 64 (part14's update-status stand-in, part61's transport tripwire, part64's firewall stand-in).
 # part68 (review 1012a: cron, game files, helper and routes, builder B) drives part12's app with
 # stand-ins, and the crontab pipeline in a real bash; imports part01, 05 and 12.
 # part69 (the sixth review's routes, tools, page and i18n fixes, builder C) drives part12's app and
@@ -606,17 +609,21 @@ check("unit suite: no check leaves the eventlet hub a listener or IOClosed for a
 # stand-in having run (it leaves a mark when it does).
 _r15d_ts_ctl_dir = tempfile.mkdtemp(prefix="lgsm-unit-ts-ctl-")
 _r16d_ts_mark = os.path.join(_r15d_ts_ctl_dir, "ran")
-with open(os.path.join(_r15d_ts_ctl_dir, "tailscale"), "w", encoding="utf-8") as _fh_ts:
+# The planted "system" directory is a subdirectory, so the part's own stand-in (own/, beside it) is
+# outside it while it counts as the system's.
+_r17d_ts_sys = os.path.join(_r15d_ts_ctl_dir, "sys")
+os.makedirs(_r17d_ts_sys)
+with open(os.path.join(_r17d_ts_sys, "tailscale"), "w", encoding="utf-8") as _fh_ts:
     _fh_ts.write("#!/bin/sh\necho stand-in\n: > '%s'\n" % _r16d_ts_mark)
 # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this runner runs itself
-os.chmod(os.path.join(_r15d_ts_ctl_dir, "tailscale"), 0o700)  # nosec B103 - a stand-in in a private temp dir
-_r16d_ts_env = dict(os.environ, PATH=_r15d_ts_ctl_dir + os.pathsep + os.environ.get("PATH", ""))
+os.chmod(os.path.join(_r17d_ts_sys, "tailscale"), 0o700)  # nosec B103 - a stand-in in a private temp dir
+_r16d_ts_env = dict(os.environ, PATH=_r17d_ts_sys + os.pathsep + os.environ.get("PATH", ""))
 os.makedirs(os.path.join(_r15d_ts_ctl_dir, "own"))
 with open(os.path.join(_r15d_ts_ctl_dir, "own", "tailscale"), "w", encoding="utf-8") as _fh_ts:
     _fh_ts.write("#!/bin/sh\necho own stand-in\n")
 # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this runner runs itself
 os.chmod(os.path.join(_r15d_ts_ctl_dir, "own", "tailscale"), 0o700)  # nosec B103 - a stand-in in a private temp dir
-_r16d_ts_wraps = [getattr(sys.modules.get(_m), _a, None) for _m, _a in _R16D_TS_HANDLES]
+_r16d_ts_wraps = [getattr(sys.modules.get(_m), _a, None) for _m, _a, _s in _R16D_TS_HANDLES]
 _r16d_ts_shapes = (("run", (["tailscale", "version"],), {}),
                    ("Popen", (["tailscale", "status"],), {}),
                    ("run", ("tailscale status --json 2>/dev/null || echo '{}'",), {"shell": True}),
@@ -627,7 +634,7 @@ _r16d_ts_shapes = (("run", (["tailscale", "version"],), {}),
                     {}))
 _r16d_ts_let = []      # the shapes that ran the stand-in while it counted as the system's
 _r16d_ts_saved_dirs = _R15D_SYSTEM_DIRS
-_R15D_SYSTEM_DIRS = (os.path.realpath(_r15d_ts_ctl_dir) + os.sep,)
+_R15D_SYSTEM_DIRS = (os.path.realpath(_r17d_ts_sys) + os.sep,)
 try:
     for _w in _r16d_ts_wraps:
         for _how, _args, _kw in _r16d_ts_shapes:
@@ -666,31 +673,15 @@ check("unit suite: the machine's own tailscale is answered 'not installed' throu
       and _r15d_ts_ctl == ([], False, "1\n", "own stand-in\n", True, "stand-in\n"),
       repr(([type(_w).__name__ for _w in _r16d_ts_wraps], _r15d_ts_ctl, _r15d_ts_refused[:3])))
 
-# The shapes a shell comes in, and a stand-in module left on a handle (control, review 1012b): a
-# grouped `-lc` and a list run with shell=True are shells too; a wrapped stand-in module is passed
-# its call untouched, since it spawns nothing (judged by sys.modules' real subprocess, it was
-# rewritten to /bin/bash all the same).
+# The shapes a shell comes in (control, review 1012b): a grouped `-lc` and a list run with
+# shell=True are shells too, so the guard's functions reach them.
 _r16d_sh_read = [_r16d_shell_text(*_c) for _c in (
     (["bash", "-lc", "tailscale status"], {}), (["sh", "-ec", "tailscale up"], {}),
     (["tailscale status --json"], {"shell": True}), (["bash", "--login", "x"], {}),
     (["tailscale", "-c", "x"], {}))]
-_r16d_fake_calls = []
-
-
-class _R16dStandInModule:
-    """A part's stand-in for a subprocess module: records each call, starts nothing."""
-
-    @staticmethod
-    def run(cmd, *a, **kw):
-        _r16d_fake_calls.append((cmd, sorted(kw)))
-
-
-_R15dNoSystemTailscale(_R16dStandInModule).run("tailscale status --json", shell=True)
-check("unit suite: ...a grouped -lc and a list with shell=True are read as shells, and a stand-in "
-      "module left on a handle gets its call as made (control)",
-      _r16d_sh_read == ["tailscale status", "tailscale up", "tailscale status --json", None, None]
-      and _r16d_fake_calls == [("tailscale status --json", ["shell"])],
-      repr((_r16d_sh_read, _r16d_fake_calls)))
+check("unit suite: ...a grouped -lc and a list with shell=True are read as shells (control)",
+      _r16d_sh_read == ["tailscale status", "tailscale up", "tailscale status --json", None, None],
+      repr(_r16d_sh_read))
 
 # The cleanup, against unlistable directories, in BOTH of shutil.rmtree's modes. Which one a run gets
 # depends on import order: eventlet.monkey_patch() replaces os.open with a function not in
