@@ -671,8 +671,7 @@ def _gh_call_problem(rel, n, fn):
 
 
 def _r17d_unread_sudo_users(rel, tree, funcs, sites):
-    """G2 for each function holding a sudo word AND a user-option literal of sudo's, with no site
-    found in it and no account check anywhere in it.
+    """G2 for each function that names sudo and a user option of sudo's, with no site or check in it.
 
     The backstop that ends the class (review 1012b): each round, the data-flow reader learned the
     list-building shapes it was shown, and missed the next (an annotated `a: list = [...]`,
@@ -682,17 +681,19 @@ def _r17d_unread_sudo_users(rel, tree, funcs, sites):
     """
     module_vals = {_t.id: _n.value for _n in tree.body if isinstance(_n, _gh_ast.Assign)
                    for _t in _n.targets if isinstance(_t, _gh_ast.Name)}
-    out = []
-    for fn in funcs:
-        if any(fn.lineno <= s[0] <= fn.end_lineno for s in sites) or _gh_validates_before(fn, fn.end_lineno):
-            continue
-        _words = [x for x in _gh_ast.walk(fn) if isinstance(x, (_gh_ast.Constant, _gh_ast.Name, _gh_ast.Attribute))]
-        _words += [x for n in _words if isinstance(n, _gh_ast.Name) and n.id in module_vals
-                   for x in _gh_ast.walk(module_vals[n.id])]
-        if any(_gh_is_sudo_word(x) for x in _words) and _r17d_has_sudo_user_flag(fn):
-            out.append("G2 %s:%d %s(): names sudo and a user option, with no account check in it"
-                       % (rel, fn.lineno, fn.name))
-    return out
+    return ["G2 %s:%d %s(): names sudo and a user option, with no account check in it" % (rel, fn.lineno, fn.name)
+            for fn in funcs
+            if not any(fn.lineno <= s[0] <= fn.end_lineno for s in sites)
+            and not _gh_validates_before(fn, fn.end_lineno)
+            and _r17d_names_sudo(fn, module_vals) and _r17d_has_sudo_user_flag(fn)]
+
+
+def _r17d_names_sudo(fn, module_vals):
+    """Does `fn` name sudo: itself, or in a module-level value it names?"""
+    words = [x for x in _gh_ast.walk(fn) if isinstance(x, (_gh_ast.Constant, _gh_ast.Name, _gh_ast.Attribute))]
+    words += [x for n in words if isinstance(n, _gh_ast.Name) and n.id in module_vals
+              for x in _gh_ast.walk(module_vals[n.id])]
+    return any(_gh_is_sudo_word(x) for x in words)
 
 
 _R17D_GROWERS = {"append", "insert", "extend"}
@@ -706,20 +707,18 @@ def _r17d_has_sudo_user_flag(fn):
     those are systemd-run's and journalctl's options.
     """
     parent = {c: p for p in _gh_ast.walk(fn) for c in _gh_ast.iter_child_nodes(p)}
-    for x in _gh_ast.walk(fn):
-        if not _gh_is_user_flag(x):
-            continue
-        up = parent.get(x)
-        if isinstance(up, (_gh_ast.List, _gh_ast.Tuple)):
-            _before = up.elts[:up.elts.index(x)]
-            if any(isinstance(e, _gh_ast.Constant) and isinstance(e.value, str) and not e.value.startswith("-")
-                   and not _gh_is_sudo_word(e) for e in _before):
-                continue
-            up = parent.get(up)
-        if isinstance(up, _gh_ast.Call) and getattr(up.func, "attr", None) not in _R17D_GROWERS:
-            continue
-        return True
-    return False
+    return any(_gh_is_user_flag(x) and _r17d_flag_can_be_sudos(x, parent) for x in _gh_ast.walk(fn))
+
+
+def _r17d_flag_can_be_sudos(flag, parent):
+    """_r17d_has_sudo_user_flag for one user-option literal."""
+    up = parent.get(flag)
+    if isinstance(up, (_gh_ast.List, _gh_ast.Tuple)):
+        if any(isinstance(e, _gh_ast.Constant) and isinstance(e.value, str) and not e.value.startswith("-")
+               and not _gh_is_sudo_word(e) for e in up.elts[:up.elts.index(flag)]):
+            return False
+        up = parent.get(up)
+    return not (isinstance(up, _gh_ast.Call) and getattr(up.func, "attr", None) not in _R17D_GROWERS)
 
 
 def _gh_scan(src, rel):

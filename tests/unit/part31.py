@@ -636,13 +636,18 @@ def _r16d_env_words31(head):
                 words.append((flag, nxt))
             elif a.startswith(joined):
                 words.append((flag, a[len(joined):]))
-        if a.startswith("-") and not a.startswith("--"):
-            for k, ch in enumerate(a[1:], 1):
-                if ch in "Ep":
-                    words.append(("-" + ch, a[k + 1:] or nxt))
-                if ch in _R17D_VALUED31:
-                    break
+        words += _r17d_short_cluster31(a, nxt)
     return words
+
+
+def _r17d_short_cluster31(a, nxt):
+    """(flag, value) for an -E or -p inside a short-option cluster `a` (`-qEPATH`), read as getopt does."""
+    if not a.startswith("-") or a.startswith("--"):
+        return []
+    for k, ch in enumerate(a[1:], 1):
+        if ch in _R17D_VALUED31:
+            return [("-" + ch, a[k + 1:] or nxt)] if ch in "Ep" else []
+    return []
 
 
 # systemd-run's short options that take a value: the rest of a cluster, or the next word, is it.

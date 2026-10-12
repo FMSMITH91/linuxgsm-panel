@@ -195,16 +195,19 @@ def _r16d_real_spawners(how):
 
 def _r16d_shell_text(cmd, kw):
     """The shell source `cmd` runs, or None when it is not a shell command."""
-    if isinstance(cmd, str) and kw.get("shell"):
-        return cmd
-    # A list with shell=True runs its first item as the script (review 1012b: it was not read).
-    if isinstance(cmd, (list, tuple)) and cmd and isinstance(cmd[0], str) and kw.get("shell"):
-        return cmd[0]
-    # `-c` grouped with other one-letter options (`bash -lc`, `sh -ec`) is still -c.
-    if (isinstance(cmd, (list, tuple)) and len(cmd) >= 3 and isinstance(cmd[2], str)
-            and os.path.basename(str(cmd[0])) in ("sh", "bash", "dash")
-            and isinstance(cmd[1], str) and re.fullmatch(r"-[a-z]*c[a-z]*", cmd[1])):
-        return cmd[2]
+    if kw.get("shell"):
+        # A list with shell=True runs its first item as the script (review 1012b: it was not read).
+        _first = cmd[0] if isinstance(cmd, (list, tuple)) and cmd else cmd
+        return _first if isinstance(_first, str) else None
+    return _r17d_dash_c_script(cmd) if isinstance(cmd, (list, tuple)) else None
+
+
+def _r17d_dash_c_script(argv):
+    """The script of `[sh|bash|dash, -c, script]`; -c grouped with other letters (`bash -lc`) too."""
+    if (len(argv) >= 3 and isinstance(argv[1], str) and isinstance(argv[2], str)
+            and os.path.basename(str(argv[0])) in ("sh", "bash", "dash")
+            and re.fullmatch(r"-[a-z]*c[a-z]*", argv[1])):
+        return argv[2]
     return None
 
 
@@ -477,7 +480,7 @@ check("unit suite: no part leaves sys.path changed for the parts after it",
 # `from unit.partNN import` lines.
 def _r14d_noted_imports(text):
     """{part: set of two-digit numbers its note says it imports}, from the comment block's text."""
-    import re as _re
+    _re = re
     flat = " ".join(_ln.lstrip("#").strip() for _ln in text.splitlines())
     # A note starts at a part named at a sentence (or clause) start; "part12's app" mid-sentence
     # is not one.
@@ -539,13 +542,21 @@ def _r16d_unit_imports(module):
         return set()
     with open(_path, encoding="utf-8") as _fh:
         _tree = _ast.parse(_fh.read())
-    _mods = {_n.module for _n in _ast.walk(_tree) if isinstance(_n, _ast.ImportFrom) and _n.module}
-    _mods |= {_a.name for _n in _ast.walk(_tree) if isinstance(_n, _ast.Import) for _a in _n.names}
-    # `from unit import idreuse_support` (part16, part18) names the module after `import`: it was
-    # not followed, so a part import added to such a shared module went unseen (review 1012b).
-    _mods |= {"unit." + _a.name for _n in _ast.walk(_tree)
-              if isinstance(_n, _ast.ImportFrom) and _n.module == "unit" for _a in _n.names}
-    return {_m for _m in _mods if _m.startswith("unit.")}
+    return {_m for _n in _ast.walk(_tree) for _m in _r17d_imported_modules(_n) if _m.startswith("unit.")}
+
+
+def _r17d_imported_modules(node):
+    """The modules an import statement names (none for any other node).
+
+    `from unit import idreuse_support` (part16, part18) names the module after `import`: it was not
+    followed, so a part import added to such a shared module went unseen (review 1012b).
+    """
+    import ast as _ast
+    if isinstance(node, _ast.Import):
+        return [_a.name for _a in node.names]
+    if not isinstance(node, _ast.ImportFrom) or not node.module:
+        return []
+    return [node.module] + (["unit." + _a.name for _a in node.names] if node.module == "unit" else [])
 
 
 def _r16d_parts_reached(module, seen=None):
