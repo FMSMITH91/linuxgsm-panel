@@ -627,7 +627,6 @@ check("firewall: an uninstall's notes (still open, UFW inactive, firewall unread
 # ── A backup restore refused in es or fr still opens the passphrase and "restore anyway" dialogs ──
 from unit.part01 import skip  # noqa: E402
 from unit.part47 import _cut47, _node47  # noqa: E402
-import panel.routes.panel_backup as _pbr67  # noqa: E402,F401  (the route reads bk through its module)
 
 _rst67 = {}
 try:
