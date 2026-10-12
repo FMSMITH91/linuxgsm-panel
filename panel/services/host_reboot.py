@@ -1831,12 +1831,31 @@ def restore_host(remote, rows, now=None):
     if not recs:
         return False
     if any(d.get("act") == "now" for _gs, d in recs):
+        # A rollback acts without asking whether the host answers, and its rows' one-hour give-up
+        # (row_gave_up) is for a host that answers but cannot resolve a row. Through an outage
+        # longer than that, every row was reported failed and the plan cleared: the monitor's
+        # locks stayed aside and nothing was started when the host came back. So a silent host
+        # stops the clock, and the next tick it answers on acts as before.
+        if _sm.hosts.host_boot_identity(remote) is None:
+            _r17a_hold_clock(recs)
+            return True
         _act(remote, recs, now, rollback_=True)
         return True
     ident = _sm.hosts.host_boot_identity(remote)
     if ident is None:
         return _host_silent(remote, recs, recs[0][1], now)
     return _by_boot(remote, recs, ident, now)
+
+
+def _r17a_hold_clock(recs):
+    """Stop each pending row's give-up clock (row_gave_up starts it afresh on its next pass)."""
+    changed = False
+    for gs, d in recs:
+        if d.get("restore") == "pending" and d.pop("pending_since", None) is not None:
+            _set_rr(gs, d)
+            changed = True
+    if changed:
+        db.session.commit()
 
 
 def _records(rows):
@@ -1923,7 +1942,7 @@ def _act(remote, recs, now, rollback_):
         if d.get("restore") != "pending":
             continue
         before = dict(d)
-        res = _act_one(remote, gs, d, now, rollback_) or _rw.row_gave_up(d, now)
+        res = _act_one(remote, gs, d, now, rollback_) or _rw.row_gave_up(d, now, rollback_)
         if res is not None:
             d["restore"], d["result"] = res
             # When this row was confirmed — after its probe or its start returned, which the tick's
@@ -2021,6 +2040,11 @@ def _act_panel(remote, gs, d, now, rollback_):
         return None
     outcome, detail = safe_start(remote, gs)
     if outcome == "wait":
+        if detail == "inflight":
+            # A LinuxGSM update or backup is running for it, and a start never goes over one: a
+            # known wait, however long the download takes, not a row that cannot resolve. The
+            # give-up clock starts again once nothing holds it (see row_gave_up).
+            d.pop("pending_since", None)
         return None
     if outcome in ("started", "running"):
         _after_start(remote, gs)

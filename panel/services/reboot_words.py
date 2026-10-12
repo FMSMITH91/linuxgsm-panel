@@ -58,11 +58,20 @@ def phase_words(phase):
 ROW_GIVE_UP = 3600     # a plan row its host answers for but that never resolves: reported failed
 
 
-def row_gave_up(d, now, after=ROW_GIVE_UP):
-    """None while an unresolved plan row may still resolve; ("failed", why) once `after` s have passed."""
+def row_gave_up(d, now, rollback=False, after=ROW_GIVE_UP):
+    """None while an unresolved plan row may still resolve; ("failed", why) once `after` s have passed.
+
+    The clock runs only while the row's host answers and nothing known holds it: host_reboot drops
+    `pending_since` while a rollback's host is silent and while a LinuxGSM command is in flight,
+    so it starts again from the next pass that has no such reason. `rollback`: the reboot never
+    happened, so the reason does not say "after the reboot".
+    """
     d.setdefault("pending_since", now)
     if now - d["pending_since"] < after:
         return None
+    if rollback:
+        return "failed", ("it could not be read or restored for an hour after the reboot was called "
+                          "off; check the server")
     return "failed", "it could not be read or restored for an hour after the reboot; check the server"
 
 
