@@ -73,10 +73,11 @@ def _db_path():
     return str(cfg.DB_PATH)
 
 
-def _int_cfg(c, key, default):
-    # A JSON `true` is not a number of days: create_app reads it as unset (_r15a_cfg_int), so the
-    # report must not print it as "1 day" while nothing is pruned.
-    if isinstance(c.get(key, default), bool):
+def _int_cfg(c, key, default, bool_is_int=False):
+    # A JSON `true` is not a number of days: create_app reads the audit retention as unset
+    # (_r15a_cfg_int), so the report must not print it as "1 day" while nothing is pruned. The IP
+    # ageing reads `true` as 1 (anonymise_audit_ips keeps it, as the stricter setting): bool_is_int.
+    if isinstance(c.get(key, default), bool) and not bool_is_int:
         return None
     try:
         return int(c.get(key, default) or 0)
@@ -325,7 +326,7 @@ def _retention_conf():
     c = cfg.load_config()
     if cfg.is_unreadable(c):
         raise ValueError("config.json unreadable")
-    return (_int_cfg(c, "audit_log_retention_days", 0), _int_cfg(c, "audit_ip_retention_days", 90))
+    return (_int_cfg(c, "audit_log_retention_days", 0), _int_cfg(c, "audit_ip_retention_days", 90, bool_is_int=True))
 
 
 def _volume_lines(got, conf, res):
