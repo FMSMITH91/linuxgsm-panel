@@ -4413,28 +4413,34 @@ _AX_SERVER_HELPERS = {"_write_refused", "_read_refused", "_create_refused", "_cr
 _ax_passed = []
 for _f in sorted(pathlib.Path(_ROOT, "panel").rglob("*.py")):
     _tree = ast.parse(_f.read_text(encoding="utf-8"))
-    for _fd in ast.walk(_tree):
-        if not isinstance(_fd, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    # Each call once, in the function it is IN: the routes are nested in register(app), and walking
+    # every function's subtree read each call twice (once as register's), so the floor below
+    # counted about half the sites it claimed (review 1012a).
+    _up = {_c: _p for _p in ast.walk(_tree) for _c in ast.iter_child_nodes(_p)}
+    for _n in ast.walk(_tree):
+        if not (isinstance(_n, ast.Call)
+                and getattr(_n.func, "id", getattr(_n.func, "attr", None)) in _AX_SERVER_HELPERS):
             continue
-        for _n in ast.walk(_fd):
-            if not (isinstance(_n, ast.Call)
-                    and getattr(_n.func, "id", getattr(_n.func, "attr", None)) in _AX_SERVER_HELPERS):
-                continue
-            _arg = _n.args[1] if len(_n.args) > 1 else {k.arg: k.value for k in _n.keywords}.get("action")
-            _shapes = _ax_shapes(_arg)
-            if _shapes == [None] and isinstance(_arg, ast.Name):
-                _shapes = [_sh for _a in ast.walk(_fd) if isinstance(_a, ast.Assign)
-                           and any(getattr(_t, "id", None) == _arg.id for _t in _a.targets)
-                           for _sh in _ax_shapes(_a.value)] or [None]
-            _where = "%s:%d" % (_f.relative_to(_ROOT), _n.lineno)
-            for _shape in _shapes:
-                _ax_passed.append(_shape)
-                if _shape is None:
-                    _ax_bad.append("%s: an action this gate cannot read, passed to %s"
-                                   % (_where, getattr(_n.func, "id", getattr(_n.func, "attr", ""))))
-                elif _shape not in _ax_srv[1] and not any(_l.match(_shape) for _l in _ax_srv[0]):
-                    _ax_bad.append("%s: %r passed to a server-row helper, which "
-                                   "models.AUDIT_SERVER_ACTIONS does not list" % (_where, _shape))
+        _fd = _up.get(_n)
+        while _fd is not None and not isinstance(_fd, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _fd = _up.get(_fd)
+        if _fd is None:
+            continue
+        _arg = _n.args[1] if len(_n.args) > 1 else {k.arg: k.value for k in _n.keywords}.get("action")
+        _shapes = _ax_shapes(_arg)
+        if _shapes == [None] and isinstance(_arg, ast.Name):
+            _shapes = [_sh for _a in ast.walk(_fd) if isinstance(_a, ast.Assign)
+                       and any(getattr(_t, "id", None) == _arg.id for _t in _a.targets)
+                       for _sh in _ax_shapes(_a.value)] or [None]
+        _where = "%s:%d" % (_f.relative_to(_ROOT), _n.lineno)
+        for _shape in _shapes:
+            _ax_passed.append(_shape)
+            if _shape is None:
+                _ax_bad.append("%s: an action this gate cannot read, passed to %s"
+                               % (_where, getattr(_n.func, "id", getattr(_n.func, "attr", ""))))
+            elif _shape not in _ax_srv[1] and not any(_l.match(_shape) for _l in _ax_srv[0]):
+                _ax_bad.append("%s: %r passed to a server-row helper, which "
+                               "models.AUDIT_SERVER_ACTIONS does not list" % (_where, _shape))
 check("audit ids: the actions passed to the server-row helpers were read (positive control)",
       len(_ax_passed) >= 13, "%d read: %r" % (len(_ax_passed), sorted(set(map(str, _ax_passed)))))
 check("audit ids: the scan found the server and host rows to check (positive control)",

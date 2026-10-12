@@ -2375,7 +2375,9 @@ check("log stamps: ...but it does offer the way back OFF",
 # be `enabled:false`; a GET sends none and passes.
 import glob as _lt_glob  # pylint: disable=reimported
 import re as _lt_re  # pylint: disable=reimported
-_LT_URL = _lt_re.compile(r"/log-timestamps['\"`]")
+# Any request to the endpoint, a query string or fragment after it included (review 1012a: the URL
+# had to end at a quote, so `/log-timestamps?x=1` was no request at all).
+_LT_URL = _lt_re.compile(r"/log-timestamps\b[^'\"`]*['\"`]")
 
 
 def _r15d_lt_call(src, at):
@@ -2398,13 +2400,40 @@ def _r15d_lt_call(src, at):
     return src[at:k]
 
 
+def _r16d_lt_callee(src, at):
+    """The name called with the argument list `at` sits in (`fetch`, `api`), or ""."""
+    depth, k = 0, at - 1
+    while k >= 0:
+        if src[k] in ")]}":
+            depth += 1
+        elif src[k] in "([{":
+            if depth == 0:
+                if src[k] != "(":
+                    return ""
+                _m = _lt_re.search(r"([\w$.]+)\s*$", src[:k])
+                return _m.group(1) if _m else ""
+            depth -= 1
+        k -= 1
+    return ""
+
+
 def _r15d_lt_judge(src):
-    """(requests seen, [the ones that may enable stamping])."""
+    """(requests seen, [the ones that may enable stamping]).
+
+    Judged POSITIVELY (review 1012a): a request passes only when it sends no body and no POST (a
+    GET), or when its body is the literal `JSON.stringify({enabled: false})`. Looking for a bad
+    `enabled` passed a body held in a variable, read from a window holding no `enabled` at all. A
+    URL that is a helper's only argument (`postJSON(api('/log-timestamps'), {enabled: true})`) has
+    no options in its window, so it cannot be judged and fails, unless the call is a bare fetch.
+    """
     seen, bad = 0, []
     for _m in _LT_URL.finditer(src):
         seen += 1
         _call = _lt_re.sub(r"\s+", "", _r15d_lt_call(src, _m.end())).replace('"', "'").replace("`", "'")
-        if any(_e != "enabled:false" for _e in _lt_re.findall(r"enabled[^,}]*", _call)):
+        _get = "body" not in _call and "post" not in _call.lower()
+        _off = "body:JSON.stringify({enabled:false})" in _call and _call.count("body") == 1
+        _alone = "," not in _call and _r16d_lt_callee(src, _m.start()).split(".")[-1] != "fetch"
+        if _alone or not (_get or _off):
             bad.append(_call[:90])
     return seen, bad
 
@@ -2425,10 +2454,16 @@ _lt_ctl = {_k: _r15d_lt_judge(_v)[1] != [] for _k, _v in {
     "body before method": _LT_HEAD + "body: JSON.stringify({ enabled: true }), method: 'POST' })",
     "a double-quoted URL": 'fetch(MOUNT + "/log-timestamps", {method: "POST", body: JSON.stringify({enabled: !0})})',
     "a template literal": "fetch(`${MOUNT}/api/server/${id}/log-timestamps`, {method: 'POST', body: JSON.stringify({enabled})})",
+    # Review 1012a: each of these passed.
+    "the body in a variable": "const p = {enabled: true}; " + _LT_HEAD + "method: 'POST', body: JSON.stringify(p) })",
+    "the URL inside a helper": "postJSON(api('/log-timestamps'), {enabled: true})",
+    "a query string": "fetch(MOUNT + '/log-timestamps?x=1', {method: 'POST', body: JSON.stringify({enabled: true})})",
 }.items()}
 _lt_ok = {_k: _r15d_lt_judge(_v) for _k, _v in {
     "enabled: false": _LT_HEAD + "method: 'POST', body: JSON.stringify({ enabled: false }) })",
     "a GET": "fetch(MOUNT + '/api/server/' + id + '/log-timestamps').then(r => r.json())",
+    "the page's own request": (_LT_HEAD + "\n  method: 'POST', headers: {'Content-Type': 'application/json'},\n"
+                               "  body: JSON.stringify({ enabled: false })\n})"),
 }.items()}
 check("log stamps: ...the gate names each spelling that enables it, and passes `enabled: false` and a "
       "GET (controls)",
@@ -2741,7 +2776,7 @@ for _d, _, _fs in os.walk(_repo_root):
     # matching substrings of the absolute path skipped everything when the checkout itself lived
     # under a "/data" or "venv" directory, and ".git" also took ".github" with it.
     _parts = os.path.relpath(_d, _repo_root).split(os.sep)
-    if (_parts[0] in (".git", ".venv", "venv", "node_modules", "data") or "__pycache__" in _parts
+    if (_parts[0] in (".git", ".claude", ".venv", "venv", "node_modules", "data") or "__pycache__" in _parts
             or _parts[:2] == ["tests", "smoke"]):
         continue
     for _f in _fs:

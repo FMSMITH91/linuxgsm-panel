@@ -33,11 +33,17 @@ jobs:
   checks:
     name: checks (${{ matrix.os }} · py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    # 30, not 20: before the root step below the slowest leg (22.04) took 971-1003 s in the last 15
-    # green runs, and the root step runs the unit suite once more (169-186 s of the job log), which
-    # left about a minute under 20. A timed-out leg is a failed required check, and on main a
-    # failure the panel's update gate and deploy.yml read. The root step prints its own duration.
-    timeout-minutes: 30
+    # 45. A timed-out leg is a failed required check, and on main a failure the panel's update gate
+    # and deploy.yml read, so the limit has to clear the slowest leg with room for a slow runner.
+    # Measured on main's nine push runs of 2026-10-10 to 2026-10-12 (162cb447 to 652f166c): a leg
+    # took 1221-1645 s (20.4-27.4 min); "Run all checks" 928-1177 s and the root step 265-447 s
+    # (it prints its own duration: 426, 442 and 447 s on 652f166c's legs). The SAME code's 22.04 leg
+    # took 1645 s on one runner and 1312 s on the next, so a single run varies by more than 5 min.
+    # 30 had left 155 s. It was sized when the root step measured 169-186 s; the unit suite, run
+    # twice here, has grown with each review's parts since (on the 24.04 image 652f166c's unit run
+    # took 43 s more than its parent's; locally its three new parts were 10 s of a 13 s rise, and
+    # part66's i18n scan 6 s of those, since cut to under 2 s).
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: read   # the scope step lists the pull request's files
@@ -222,7 +228,10 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30. Measured on main's nine push runs of 2026-10-10 to 2026-10-12: 982-1162 s (16.4-19.4
+    # min), the "Measure" step 961-1136 s of it (652f166c: unit 441 s, smoke 630 s). 20 had left
+    # 38 s, and a timed-out run here is a failed required check like a red one.
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: read   # the scope step lists the pull request's files

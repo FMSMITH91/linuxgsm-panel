@@ -188,10 +188,12 @@ def _cf1_imports(preload, tmp):
 # `with atheris.instrument_imports():`, and anything loaded outside panel/ and the standard library
 # is named. A timeout-only target is a harness that fails this.
 _HARNESS_PROBE29 = """import importlib, json, sys
+start = set(sys.modules)
 for d in %r:
     importlib.import_module(d)
 before = set(sys.modules)
 exec(%r)
+print(json.dumps(sorted(before - start)))
 print(json.dumps(sorted(set(sys.modules) - before)))
 """
 
@@ -222,15 +224,23 @@ def _scope_globs29(wf):
     return _re29.findall(r"^\s+'([^']+)'\s*$", txt[at:txt.find("\n            )", at)], _re29.M)
 
 
-def _harness_loads29(path, tmp):
-    """(the modules a harness's instrumented imports load after its pre-load, or None; why not)."""
+def _harness_loads29(path, tmp, pre=None):
+    """(the modules a harness's instrumented imports load after its pre-load, or None; why not).
+
+    `pre`, a set, is given every module the pre-load itself loaded: a panel module it pulls in by
+    import (panel.core.config's `from panel import REPO_ROOT`) is bundled and run as much as one
+    it names, and only the named ones counted (review 1012a).
+    """
     preload, code = _harness_instrumented29(path)
     if not code:
         return None, "no import inside instrument_imports() found"
     r = _run29([_sys29.executable, "-W", "ignore", "-c", _HARNESS_PROBE29 % (preload, code)],
                cwd=tmp, env=dict(os.environ, PYTHONPATH=_ROOT29))
     try:
-        return _json29.loads(r.stdout.strip().splitlines()[-1]), ""
+        _lines = r.stdout.strip().splitlines()
+        if pre is not None:
+            pre |= set(_json29.loads(_lines[-2]))
+        return _json29.loads(_lines[-1]), ""
     except (ValueError, IndexError):
         return None, "probe failed: " + (r.stdout[-200:] + r.stderr[-400:])
 
@@ -247,10 +257,11 @@ def _foreign_note29(modules):
 
 
 def _cf1_every_harness(tmp):
-    bad, read, fuzzed = {}, [], set()
+    bad, read, fuzzed, preloaded = {}, [], set(), set()
     for p in sorted(_glob29.glob(os.path.join(_ROOT29, "tests", "fuzz", "fuzz_*.py"))):
         name = os.path.basename(p)
-        new, why = _harness_loads29(p, tmp)
+        _pre = set()
+        new, why = _harness_loads29(p, tmp, _pre)
         if new is None:
             bad[name] = why
             continue
@@ -259,13 +270,18 @@ def _cf1_every_harness(tmp):
         # ...and the panel modules its pre-load imports. Loaded before instrumentation, but a change
         # to one still changes what the harness runs (or breaks its bundle): panel.core.config is
         # the last entry of every pre-load, and so was in neither job's scope (review 1011e).
-        fuzzed |= _panel_files29(_harness_lists().get(name, ()))
+        fuzzed |= _panel_files29(_harness_lists().get(name, ())) | _panel_files29(_pre)
+        preloaded |= _panel_files29(_pre)
         if _foreign_note29(new):
             bad[name] = _foreign_note29(new)
     check("fuzz harnesses: EVERY harness's instrumented imports load only panel modules and the "
           "standard library after its own pre-load (no target spends its fuzz time instrumenting "
           "eventlet and timing out)",
           not bad and len(read) >= 6, repr(bad or read))
+    check("fuzz harnesses: ...and what a pre-load imports counts as fuzzed too (panel/__init__.py and "
+          "panel/core/__init__.py, which panel.core.config's own import loads)",
+          {os.path.join("panel", "__init__.py"), os.path.join("panel", "core", "__init__.py")} <= preloaded
+          and preloaded <= fuzzed, repr(sorted(preloaded)))
     _cf1_scopes(fuzzed)
 
 

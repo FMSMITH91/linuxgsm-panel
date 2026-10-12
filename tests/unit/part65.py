@@ -42,6 +42,7 @@ from panel.ops.ssh_manager import _core as _core65
 from panel.ops.ssh_manager import cron as _cron65
 from panel.ops.ssh_manager import game as _game65
 from panel.routes import manage_servers as _ms65
+from panel.services import host_reboot as _hr65
 from panel.security import auth as _auth65
 import app as _app65
 
@@ -482,7 +483,130 @@ def _r15f_tables65():
         "manage_servers._R15F_KNOWN_PORTS": _ms65._R15F_KNOWN_PORTS,
         "manage_servers._R15F_EULA_GAMES": _ms65._R15F_EULA_GAMES,
         "app._PORT_SPAN": _app65._PORT_SPAN, "manage_servers.js PORTS": _r15f_js_ports65(),
+        "host_reboot._TELNET_STOP_GAMES": _hr65._TELNET_STOP_GAMES,
     }
+
+
+def _r16d_literal_keys65(value):
+    """The string keys (dict) or items (set, tuple, list, or frozenset(...) of one) of a literal."""
+    import ast as _ast
+    if (isinstance(value, _ast.Call) and getattr(value.func, "id", "") in ("frozenset", "set", "tuple",
+                                                                             "list", "dict")
+            and value.args):
+        return _r16d_literal_keys65(value.args[0])
+    _elts = (value.keys if isinstance(value, _ast.Dict)
+             else value.elts if isinstance(value, (_ast.Set, _ast.Tuple, _ast.List)) else [])
+    return [_e.value for _e in _elts if isinstance(_e, _ast.Constant) and isinstance(_e.value, str)]
+
+
+def _r16d_names_game_type65(node, held=("game_type",)):
+    """Does expression `node` read a game_type (`gs.game_type`, `e["game_type"]`, or a name in `held`)?"""
+    import ast as _ast
+    return any((isinstance(_x, _ast.Attribute) and _x.attr == "game_type")
+               or (isinstance(_x, _ast.Name) and _x.id in held)
+               or (isinstance(_x, _ast.Constant) and _x.value == "game_type") for _x in _ast.walk(node))
+
+
+def _r16d_held65(nodes):
+    """The names that hold a game_type in one scope: game_type, and locals assigned from one."""
+    import ast as _ast
+    held = {"game_type"}
+    for _ in range(3):  # a copy of a copy: three rounds, stopping at the first that adds nothing
+        _more = {_t.id for _n in nodes if isinstance(_n, _ast.Assign) and _r16d_names_game_type65(_n.value, held)
+                 for _t in _n.targets if isinstance(_t, _ast.Name)}
+        if _more <= held:
+            break
+        held |= _more
+    return held
+
+
+def _r16d_looked_up65(node, held):
+    """The table names one node looks a game_type up in: `x in T`, `T.get(x)` or `T[x]`."""
+    import ast as _ast
+    if isinstance(node, _ast.Compare) and any(isinstance(_o, (_ast.In, _ast.NotIn)) for _o in node.ops):
+        _pairs = [(_c, node.left) for _c in node.comparators]
+    else:
+        _pairs = [_r16d_table_key65(node)]
+    return {_t.id for _t, _k in _pairs if isinstance(_t, _ast.Name) and _r16d_names_game_type65(_k, held)}
+
+
+def _r16d_table_key65(node):
+    """(table, key) of `T.get(key, …)` or `T[key]`, else (None, None)."""
+    import ast as _ast
+    if isinstance(node, _ast.Call) and getattr(node.func, "attr", "") == "get" and node.args:
+        return getattr(node.func, "value", None), node.args[0]
+    if isinstance(node, _ast.Subscript):
+        return node.value, node.slice
+    return None, None
+
+
+def _r16d_game_type_lookups65(nodes):
+    """The names `nodes` (one scope's) look a game_type up in, a local assigned one included."""
+    held = _r16d_held65(nodes)
+    return {_t for _n in nodes for _t in _r16d_looked_up65(_n, held)}
+
+
+def _r16d_scopes65(tree):
+    """Each scope's own nodes: the module's (outside its defs and classes), then each function's."""
+    import ast as _ast
+    _defs = (_ast.FunctionDef, _ast.AsyncFunctionDef)
+    yield [_x for _st in tree.body if not isinstance(_st, _defs + (_ast.ClassDef,)) for _x in _ast.walk(_st)]
+    for _f in (_f for _f in _ast.walk(tree) if isinstance(_f, _defs)):
+        yield list(_ast.walk(_f))
+
+
+def _r16d_game_tables65(source):
+    """{NAME: keys} for each module-level literal `source` looks a game_type up in.
+
+    Found by USE, not listed: `<game_type> in NAME`, `NAME.get(<game_type>…)` and
+    `NAME[<game_type>]`. The hand list above missed host_reboot._TELNET_STOP_GAMES (review 1012a),
+    so a dead key there (7dtd for sdtd) would have cut 7 Days to Die's reboot save at 180 s.
+    A local holding a game_type counts too (`gt = (game_type or "").lower()`, then
+    `gt in _ENG_VALVE`), within its own function.
+    """
+    import ast as _ast
+    tree = _ast.parse(source)
+    tables = {_t.id: _r16d_literal_keys65(_n.value) for _n in tree.body
+              if isinstance(_n, (_ast.Assign, _ast.AnnAssign)) and _n.value is not None
+              for _t in (_n.targets if isinstance(_n, _ast.Assign) else [_n.target]) if isinstance(_t, _ast.Name)}
+    used = set().union(*(_r16d_game_type_lookups65(_nodes) for _nodes in _r16d_scopes65(tree)))
+    return {_k: tables[_k] for _k in used if tables.get(_k)}
+
+
+def _r16d_found_tables65():
+    """{"<file>:<NAME>": keys} over app.py and every panel module."""
+    found = {}
+    _files = [os.path.join(_ROOT65, "app.py")] + sorted(
+        os.path.join(_d, _f) for _d, _s, _fs in os.walk(os.path.join(_ROOT65, "panel"))
+        for _f in _fs if _f.endswith(".py"))
+    for _path in _files:
+        with open(_path, encoding="utf-8") as fh:
+            for _name, _keys in _r16d_game_tables65(fh.read()).items():
+                found["%s:%s" % (os.path.relpath(_path, _ROOT65), _name)] = _keys
+    return found
+
+
+_R16D_MUST_FIND65 = {"panel/ops/ssh_manager/game.py:_ENG_VALVE", "app.py:_PORT_SPAN",
+                     "panel/services/host_reboot.py:_TELNET_STOP_GAMES", "panel/ops/ssh_manager/game.py:_MC_NO_BAN"}
+
+
+def _r16d_check_tables65(names):
+    """Every listed and every found game_type table holds only shortnames; the finder's control."""
+    tables, found = _r15f_tables65(), _r16d_found_tables65()
+    dead = {t: sorted(set(keys) - names) for t, keys in list(tables.items()) + list(found.items())
+            if set(keys) - names}
+    check("game tables: every key of every table keyed by game_type is a LinuxGSM shortname — a key "
+          "that is none (hl2mp, spigot, mcbe, vmc, unturned, ...) can never match a server; the tables "
+          "are the listed ones and every module-level one a game_type is looked up in",
+          not dead and len(tables) == 13 and len(found) >= 12 and _R16D_MUST_FIND65 <= set(found),
+          repr((dead, sorted(found))))
+    _ctl = _r16d_game_tables65(
+        'A = frozenset(("7dtd", "sm"))\nB = {"at": 1, "data": 2}\nC: dict = {"gmod": 1}\nD = ("x",)\n'
+        'def f(e, gs, game_type):\n    t = 600 if e["game_type"] in A else 180\n'
+        '    return C.get(gs.game_type), B["data"], D[0], game_type not in D\n')
+    check("game tables: ...a table is found by how a game_type is looked up in it, and its dead key "
+          "named; a dict read by another key is not one (control)",
+          sorted(_ctl) == ["A", "C", "D"] and set(_ctl["A"]) - names == {"7dtd"}, repr(_ctl))
 
 
 def _r15f_game_keys65():
@@ -490,11 +614,7 @@ def _r15f_game_keys65():
     check("game tables: the committed LinuxGSM shortname list is read (142 games at its commit, "
           "and the ones these tables key on are in it)",
           len(names) == 142 and {"gmod", "mcb", "vpmc", "zmr", "unt"} <= names, repr(len(names)))
-    tables = _r15f_tables65()
-    dead = {t: sorted(set(keys) - names) for t, keys in tables.items() if set(keys) - names}
-    check("game tables: every key of every table keyed by game_type is a LinuxGSM shortname — a key "
-          "that is none (hl2mp, spigot, mcbe, vmc, unturned, ...) can never match a server",
-          not dead and len(tables) == 12, repr(dead))
+    _r16d_check_tables65(names)
     js = _r15f_js_ports65()
     check("game tables: the install form's JS PORTS is the same table as the route's default ports",
           js == _ms65._R15F_KNOWN_PORTS,
@@ -502,7 +622,7 @@ def _r15f_game_keys65():
     check("game tables: LinuxGSM's vs is Vampire Slayer (GoldSrc, 27015) and Vintage Story is vints "
           "(42420); Velocity's gamedig type is keyed vpmc; Unturned's port block is keyed unt",
           (js.get("vs"), js.get("vints"), _app65._port_span("unt")) == (27015, 42420, 2)
-          and "vpmc" in tables["_core.GAMEDIG_TYPE"],
+          and "vpmc" in _core65.GAMEDIG_TYPE,
           repr((js.get("vs"), js.get("vints"), _app65._port_span("unt"))))
 
 

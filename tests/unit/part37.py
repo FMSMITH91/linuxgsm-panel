@@ -1035,20 +1035,43 @@ def _is_removal_try37(node):
     # ...and one nested in an `if`, `with` or loop of that body too (review 1011e): `try: if
     # p.exists(): p.unlink()` under `except OSError: pass` swallowed it the same way. A nested
     # function or try is its own scope, judged on its own.
+    # Review 1012a: a removal assigned (`_ = os.remove(p)`) or called by a bare name (`from os import
+    # unlink`) counts too, and so does one in a nested try whose own handlers let OSError through
+    # (it reaches this try's).
     if not isinstance(node, _ast37.Try):
         return False
-    return any(isinstance(_st, _ast37.Expr) and isinstance(_st.value, _ast37.Call)
-               and _callee37(_st.value.func).endswith((".unlink", ".remove"))
-               and not _callee37(_st.value.func).endswith("session.remove")   # SQLAlchemy's, no file
+    return any(isinstance(_st, (_ast37.Expr, _ast37.Assign)) and isinstance(_st.value, _ast37.Call)
+               and _r16d_is_removal37(_callee37(_st.value.func))
                for _top in node.body for _st in _r15d_stmts37(_top))
 
 
+def _r16d_is_removal37(callee):
+    """Is dotted name `callee` a file removal: `<x>.unlink`, `<x>.remove`, or a bare unlink/remove?"""
+    return ((callee.endswith((".unlink", ".remove")) or callee in ("unlink", "remove"))
+            and not callee.endswith("session.remove"))      # SQLAlchemy's, no file
+
+
+def _r16d_fields37(stmt):
+    """The blocks of `stmt` a failure reaches an outer try from: a try's body only if it lets OSError out."""
+    if isinstance(stmt, _ast37.Try) and any(
+            _h.type is None or _re37.search(r"\b(?:%s)\b" % "|".join(_WIDE37), _ast37.unparse(_h.type))
+            for _h in stmt.handlers):
+        return ("orelse", "finalbody")
+    return ("body", "orelse", "finalbody")
+
+
 def _r15d_stmts37(stmt):
-    """`stmt` and every statement nested in its blocks, stopping at a nested def, class or try."""
+    """`stmt` and every statement nested in its blocks, stopping at a nested def or class.
+
+    A nested try is followed into its handlers, else and finally, and into its body only when none
+    of its handlers catches OSError: what that body raises then reaches the outer try.
+    """
     out = [stmt]
-    if isinstance(stmt, (_ast37.FunctionDef, _ast37.AsyncFunctionDef, _ast37.ClassDef, _ast37.Try)):
+    if isinstance(stmt, (_ast37.FunctionDef, _ast37.AsyncFunctionDef, _ast37.ClassDef)):
         return out
-    for _field in ("body", "orelse", "finalbody"):
+    for _ch in (_c for _h in getattr(stmt, "handlers", None) or [] for _c in _h.body):
+        out += _r15d_stmts37(_ch)
+    for _field in _r16d_fields37(stmt):
         for _ch in getattr(stmt, _field, None) or []:
             if isinstance(_ch, _ast37.stmt):
                 out += _r15d_stmts37(_ch)
@@ -1097,7 +1120,14 @@ def _f7_cleanups():
         "def f():\n    try:\n        p.unlink()\n    except OSError:\n        return\n",
         # Nested in the try body's blocks (review 1011e).
         "try:\n    if p.exists():\n        p.unlink()\nexcept OSError:\n    pass\n",
-        "try:\n    with lock:\n        for x in y:\n            os.remove(x)\nexcept Exception:\n    pass\n"]
+        "try:\n    with lock:\n        for x in y:\n            os.remove(x)\nexcept Exception:\n    pass\n",
+        # Review 1012a: a nested try that lets OSError through, an assigned and a bare-name removal.
+        "try:\n    try:\n        p.unlink()\n    except FileNotFoundError:\n        pass\nexcept OSError:\n    pass\n",
+        "try:\n    _ = os.remove(p)\nexcept OSError:\n    pass\n",
+        "from os import unlink\ntry:\n    unlink(p)\nexcept OSError:\n    pass\n"]
+    # ...while a nested try that handles OSError itself (and says so) leaves the outer one nothing.
+    _r16d_inner37 = ("try:\n    try:\n        p.unlink()\n    except OSError as e:\n        log(e)\n"
+                     "except OSError:\n    pass\n")
     gone = "try:\n    p.unlink()\nexcept FileNotFoundError:\n    pass\n"
     _r15d_session37 = ("try:\n    with app.app_context():\n        db.session.remove()\n"
                        "except Exception:\n    pass\n")
@@ -1105,7 +1135,8 @@ def _f7_cleanups():
           "every DB-owning suite SKIP and exit 0, with nothing said) — OSError, Exception or bare",
           not bad and all(len(_swallowed_removals37(_ast37.parse(p_))) == 1 for p_ in probes)
           and _swallowed_removals37(_ast37.parse(gone)) == []
-          and _swallowed_removals37(_ast37.parse(_r15d_session37)) == [], "; ".join(bad))
+          and _swallowed_removals37(_ast37.parse(_r15d_session37)) == []
+          and _swallowed_removals37(_ast37.parse(_r16d_inner37)) == [], "; ".join(bad))
 
 
 def _exits_in_finally37(node):

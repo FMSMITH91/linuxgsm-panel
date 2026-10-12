@@ -1285,8 +1285,16 @@ def _r16c_held_items(n, builders):
 
 
 def _py_functions(tree):
-    """Every function defined in a module, nested ones included."""
-    return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    """Every function defined in a module, nested ones included.
+
+    Kept on the tree: the builder and wrapper tables are found by passes repeated to a fixed point,
+    and walking every module afresh on each pass was most of the unit suite's i18n gate (about 6 s
+    of part66's 9, measured 2026-10-12). A parsed tree is never changed here, so the list holds.
+    """
+    fns = getattr(tree, "_py_fns", None)
+    if fns is None:
+        fns = tree._py_fns = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    return fns
 
 
 def _py_returns_built(fn, lines, builders):
@@ -1378,13 +1386,18 @@ def _py_own_nodes(fn):
 
     A route registrar defines its routes as nested functions: walking it whole mixed every route's
     locals into one table, so a `msg` built in one route was "found" feeding another's answer.
+    Kept on the node, as _py_functions keeps its list: each pass to a fixed point reads it again.
     """
-    stack = list(ast.iter_child_nodes(fn))
-    while stack:
-        node = stack.pop()
-        yield node
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
-            stack.extend(ast.iter_child_nodes(node))
+    own = getattr(fn, "_py_own", None)
+    if own is None:
+        own, stack = [], list(ast.iter_child_nodes(fn))
+        while stack:
+            node = stack.pop()
+            own.append(node)
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                stack.extend(ast.iter_child_nodes(node))
+        fn._py_own = own
+    return own
 
 
 def _py_wrapped_params(fn, lines, wrappers):
