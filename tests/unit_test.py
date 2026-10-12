@@ -23,6 +23,7 @@ import functools
 import glob
 import importlib
 import os
+import re
 import sys
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -70,7 +71,10 @@ def _r15d_tracked_mkdtemp(*a, **k):
 @functools.wraps(_r15d_mkstemp)
 def _r15d_tracked_mkstemp(*a, **k):
     _fd, _p = _r15d_mkstemp(*a, **k)
-    _r15d_made_tmp.append(_p)
+    # mkstemp makes its file through _mkstemp_inner, which is tracked below and has recorded it
+    # already: recorded once, so the "N of M left" count is of paths, not of records.
+    if not _r15d_made_tmp or _r15d_made_tmp[-1] != _p:
+        _r15d_made_tmp.append(_p)
     return _fd, _p
 
 
@@ -190,8 +194,13 @@ def _r16d_shell_text(cmd, kw):
     """The shell source `cmd` runs, or None when it is not a shell command."""
     if isinstance(cmd, str) and kw.get("shell"):
         return cmd
+    # A list with shell=True runs its first item as the script (review 1012b: it was not read).
+    if isinstance(cmd, (list, tuple)) and cmd and isinstance(cmd[0], str) and kw.get("shell"):
+        return cmd[0]
+    # `-c` grouped with other one-letter options (`bash -lc`, `sh -ec`) is still -c.
     if (isinstance(cmd, (list, tuple)) and len(cmd) >= 3 and isinstance(cmd[2], str)
-            and os.path.basename(str(cmd[0])) in ("sh", "bash", "dash") and cmd[1] == "-c"):
+            and os.path.basename(str(cmd[0])) in ("sh", "bash", "dash")
+            and isinstance(cmd[1], str) and re.fullmatch(r"-[a-z]*c[a-z]*", cmd[1])):
         return cmd[2]
     return None
 
@@ -215,9 +224,12 @@ def _r16d_ts_shell_env(env):
 class _R15dNoSystemTailscale:
     """A module's subprocess handle, refusing a `tailscale` that resolves to the system's."""
 
-    def __init__(self, real, src="subprocess"):
+    def __init__(self, real):
+        # What run/Popen of `real` itself are tells a stand-in from the real: a part that left a
+        # stand-in module on the attribute (unrestored) is wrapped by the next part's pass, and
+        # judged by the module it named in sys.modules, that stand-in's calls were rewritten to
+        # run under /bin/bash although it spawns nothing (review 1012b).
         self._real = real
-        self._src = src     # the sys.modules entry whose run/Popen tells a stand-in from the real
 
     def __getattr__(self, name):
         return getattr(self._real, name)
@@ -225,7 +237,7 @@ class _R15dNoSystemTailscale:
     def _system_tailscale(self, cmd, kw, how="run"):
         if not (isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "tailscale"):
             return False
-        if getattr(sys.modules.get(self._src), how, None) not in _r16d_real_spawners(how):
+        if getattr(self._real, how, None) not in _r16d_real_spawners(how):
             return False
         _path = (kw.get("env") or os.environ).get("PATH", os.defpath)
         _hit = shutil.which("tailscale", path=_path)
@@ -235,10 +247,10 @@ class _R15dNoSystemTailscale:
         """(cmd, kw) for a shell that names tailscale: under bash, with _r16d_ts_shell_env's functions."""
         _sh = _r16d_shell_text(cmd, kw)
         if (_sh is None or "tailscale" not in _sh
-                or getattr(sys.modules.get(self._src), how, None) not in _r16d_real_spawners(how)):
+                or getattr(self._real, how, None) not in _r16d_real_spawners(how)):
             return cmd, kw
         kw = dict(kw, env=_r16d_ts_shell_env(kw.get("env") or os.environ))
-        if isinstance(cmd, str):
+        if kw.get("shell"):
             kw["executable"] = "/bin/bash"      # only bash reads exported functions; dash does not
         elif os.path.basename(str(cmd[0])) != "bash":
             cmd = ["/bin/bash"] + list(cmd[1:])
@@ -260,25 +272,27 @@ class _R15dNoSystemTailscale:
         return self._real.Popen(cmd, *a, **kw)
 
 
-# (module, attribute holding its subprocess, the sys.modules entry that attribute stands for).
+# (module, attribute holding its subprocess).
 # Wrapped as soon as each module is loaded and again before every part: part05 reinstalls
 # nosudo_runner's shim over every module's subprocess, which replaced this answer for the rest of
-# the run. system_ops and _core are not imported here: under a bare `python tests/unit_test.py`
-# (CI) eventlet.monkey_patch() has to come first, and part01's app import is what does it.
-_R16D_TS_HANDLES = (("panel.ops.tailscale_integration", "subprocess", "subprocess"),
-                    ("panel.ops.system_ops", "subprocess", "subprocess"),
-                    ("panel.ops.ssh_manager._core", "_real_subprocess", "__original_module_subprocess"))
+# the run. _core is not imported here: under a bare `python tests/unit_test.py` (CI)
+# eventlet.monkey_patch() has to come first, and part01's app import is what does it. system_ops
+# is (tailscale_integration imports it), and is wrapped below; monkey_patch later patches the same
+# subprocess module object the wrapper holds, in place.
+_R16D_TS_HANDLES = (("panel.ops.tailscale_integration", "subprocess"),
+                    ("panel.ops.system_ops", "subprocess"),
+                    ("panel.ops.ssh_manager._core", "_real_subprocess"))
 
 
 def _r16d_wrap_ts_handles():
     """Wrap each loaded module's handle that is not wrapped already; the modules still unloaded."""
     _unloaded = []
-    for _mod, _attr, _src in _R16D_TS_HANDLES:
+    for _mod, _attr in _R16D_TS_HANDLES:
         _m = sys.modules.get(_mod)
         if _m is None:
             _unloaded.append(_mod)
         elif not isinstance(getattr(_m, _attr, None), _R15dNoSystemTailscale):
-            setattr(_m, _attr, _R15dNoSystemTailscale(getattr(_m, _attr), _src))
+            setattr(_m, _attr, _R15dNoSystemTailscale(getattr(_m, _attr)))
     return _unloaded
 
 
@@ -286,7 +300,7 @@ class _R16dWrapOnLoad:
     """Wraps a handle the moment its module finishes loading, so no part runs before it."""
 
     def find_spec(self, name, path=None, target=None):
-        if name not in {_m for _m, _a, _s in _R16D_TS_HANDLES}:
+        if name not in {_m for _m, _a in _R16D_TS_HANDLES}:
             return None
         for _f in sys.meta_path:
             _spec = None if _f is self else getattr(_f, "find_spec", lambda *_a: None)(name, path, target)
@@ -441,6 +455,9 @@ for _part in _PARTS:
               if os.path.realpath(_p).startswith(os.path.join(os.path.realpath(_root), "tools"))]
     if set(sys.path) != set(_path_before) or _ahead:
         _path_moved.append((_part, sorted(set(sys.path) ^ set(_path_before)) or _ahead))
+# Counted HERE, before the controls below make temp dirs of their own: the tailscale control's dir
+# was recorded after the loop, so "no part's path was recorded" could never be true (review 1012b).
+_r16d_tmp_parts_made = len(_r15d_made_tmp) - _r16d_tmp_runner_made
 from unit.part01 import check, results, hub_leaks, hub_swept  # noqa: E402
 
 # A part that leaves a directory on sys.path (tools/, tools/js_coverage) hands every later import of
@@ -521,6 +538,10 @@ def _r16d_unit_imports(module):
         _tree = _ast.parse(_fh.read())
     _mods = {_n.module for _n in _ast.walk(_tree) if isinstance(_n, _ast.ImportFrom) and _n.module}
     _mods |= {_a.name for _n in _ast.walk(_tree) if isinstance(_n, _ast.Import) for _a in _n.names}
+    # `from unit import idreuse_support` (part16, part18) names the module after `import`: it was
+    # not followed, so a part import added to such a shared module went unseen (review 1012b).
+    _mods |= {"unit." + _a.name for _n in _ast.walk(_tree)
+              if isinstance(_n, _ast.ImportFrom) and _n.module == "unit" for _a in _n.names}
     return {_m for _m in _mods if _m.startswith("unit.")}
 
 
@@ -547,6 +568,9 @@ check("unit suite: ...the order check follows imports through shared modules: un
       "no part, and reaches part01 and part20 through unit.reboot41_fixtures (control)",
       {"01", "20"} <= _r16d_parts_reached("unit.reboot41_d"),
       repr(sorted(_r16d_parts_reached("unit.reboot41_d"))))
+check("unit suite: ...and through `from unit import <module>`: part16 reaches unit.idreuse_support "
+      "that way (control)", "unit.idreuse_support" in _r16d_unit_imports("unit.part16"),
+      repr(sorted(_r16d_unit_imports("unit.part16"))))
 _r15d_imports_read = sum(len(_r14d_real_imports(_p)) for _p in _PARTS)
 check("unit suite: no part imports a part that runs at or after it in _PARTS",
       _r15d_imports_read >= 100 and not _r15d_backward,
@@ -592,12 +616,15 @@ with open(os.path.join(_r15d_ts_ctl_dir, "own", "tailscale"), "w", encoding="utf
     _fh_ts.write("#!/bin/sh\necho own stand-in\n")
 # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this runner runs itself
 os.chmod(os.path.join(_r15d_ts_ctl_dir, "own", "tailscale"), 0o700)  # nosec B103 - a stand-in in a private temp dir
-_r16d_ts_wraps = [getattr(sys.modules.get(_m), _a, None) for _m, _a, _s in _R16D_TS_HANDLES]
+_r16d_ts_wraps = [getattr(sys.modules.get(_m), _a, None) for _m, _a in _R16D_TS_HANDLES]
 _r16d_ts_shapes = (("run", (["tailscale", "version"],), {}),
                    ("Popen", (["tailscale", "status"],), {}),
                    ("run", ("tailscale status --json 2>/dev/null || echo '{}'",), {"shell": True}),
                    ("run", ("tailscale set --ssh 2>&1",), {"shell": True}),
-                   ("Popen", (["/bin/bash", "-c", "which tailscale && tailscale version"],), {}))
+                   # WHICH-FOUND: `which` letting the stand-in's path through is a let-through
+                   # too (the stand-in's path has no "stand-in" in it, review 1012b).
+                   ("Popen", (["/bin/bash", "-c", "which tailscale && echo WHICH-FOUND; tailscale version"],),
+                    {}))
 _r16d_ts_let = []      # the shapes that ran the stand-in while it counted as the system's
 _r16d_ts_saved_dirs = _R15D_SYSTEM_DIRS
 _R15D_SYSTEM_DIRS = (os.path.realpath(_r15d_ts_ctl_dir) + os.sep,)
@@ -607,7 +634,7 @@ try:
             try:
                 _p = getattr(_w, _how)(*_args, env=_r16d_ts_env, stdout=-1, stderr=-1, **_kw)
                 _out = (_p.communicate(timeout=10) if _how == "Popen" else (_p.stdout, _p.stderr))[0]
-                if b"stand-in" in (_out or b""):
+                if b"stand-in" in (_out or b"") or b"WHICH-FOUND" in (_out or b""):
                     _r16d_ts_let.append("%s.%s %r" % (type(_w).__name__, _how, _args[0]))
             except FileNotFoundError:
                 pass    # no such program on this machine: nothing ran, so nothing got through
@@ -615,12 +642,15 @@ try:
     _r16d_ts_text = _r16d_ts_wraps[1].run(  # nosec B604 - a fixed command, through the wrapper under test
         "echo tailscale | grep -c tailscale", shell=True, env=_r16d_ts_env, capture_output=True,
         text=True).stdout
+    # A shell that puts its own stand-in first on PATH still runs it (part05's secret rendering):
+    # the shell is judged by the PATH it calls tailscale with, not the one it was started with.
+    # Started inside the planted window, on a PATH whose first tailscale is the planted "system"
+    # one, so a judge of the starting PATH refuses it here on any machine (outside, CI's PATH
+    # resolved no tailscale at all and such a judge passed, review 1012b).
+    _r16d_ts_own = _r16d_ts_wraps[2].run(["/bin/bash", "-c", "export PATH=%s:\"$PATH\"; tailscale" % (
+        os.path.join(_r15d_ts_ctl_dir, "own"))], env=_r16d_ts_env, capture_output=True, text=True).stdout
 finally:
     _R15D_SYSTEM_DIRS = _r16d_ts_saved_dirs
-# A shell that puts its own stand-in first on PATH still runs it (part05's secret rendering): the
-# shell is judged by the PATH it calls tailscale with, not the one it was started with.
-_r16d_ts_own = _r16d_ts_wraps[2].run(["/bin/bash", "-c", "export PATH=%s:\"$PATH\"; tailscale" % (
-    os.path.join(_r15d_ts_ctl_dir, "own"))], env=dict(os.environ), capture_output=True, text=True).stdout
 _r16d_ts_ran_refused = os.path.exists(_r16d_ts_mark)
 # The green Popen counts as a real spawner: compared with the pre-patch class alone, every Popen
 # passed from part01 on in CI's bare run (here, under smoke-local, eventlet was patched first and
@@ -636,6 +666,32 @@ check("unit suite: the machine's own tailscale is answered 'not installed' throu
       and _r15d_ts_ctl == ([], False, "1\n", "own stand-in\n", True, "stand-in\n"),
       repr(([type(_w).__name__ for _w in _r16d_ts_wraps], _r15d_ts_ctl, _r15d_ts_refused[:3])))
 
+# The shapes a shell comes in, and a stand-in module left on a handle (control, review 1012b): a
+# grouped `-lc` and a list run with shell=True are shells too; a wrapped stand-in module is passed
+# its call untouched, since it spawns nothing (judged by sys.modules' real subprocess, it was
+# rewritten to /bin/bash all the same).
+_r16d_sh_read = [_r16d_shell_text(*_c) for _c in (
+    (["bash", "-lc", "tailscale status"], {}), (["sh", "-ec", "tailscale up"], {}),
+    (["tailscale status --json"], {"shell": True}), (["bash", "--login", "x"], {}),
+    (["tailscale", "-c", "x"], {}))]
+_r16d_fake_calls = []
+
+
+class _R16dStandInModule:
+    """A part's stand-in for a subprocess module: records each call, starts nothing."""
+
+    @staticmethod
+    def run(cmd, *a, **kw):
+        _r16d_fake_calls.append((cmd, sorted(kw)))
+
+
+_R15dNoSystemTailscale(_R16dStandInModule).run("tailscale status --json", shell=True)
+check("unit suite: ...a grouped -lc and a list with shell=True are read as shells, and a stand-in "
+      "module left on a handle gets its call as made (control)",
+      _r16d_sh_read == ["tailscale status", "tailscale up", "tailscale status --json", None, None]
+      and _r16d_fake_calls == [("tailscale status --json", ["shell"])],
+      repr((_r16d_sh_read, _r16d_fake_calls)))
+
 # The cleanup, against unlistable directories, in BOTH of shutil.rmtree's modes. Which one a run gets
 # depends on import order: eventlet.monkey_patch() replaces os.open with a function not in
 # os.supports_dir_fd, so shutil imported AFTER it (under tools/smoke-local.sh, whose runner patches
@@ -643,18 +699,43 @@ check("unit suite: the machine's own tailscale is answered 'not installed' throu
 # BEFORE it (CI's bare run) it removes by descriptor, cannot open that directory, and leaves it.
 # part06's TMPDIR stand-in failed the leak gate on all three CI legs and never on a local run for
 # exactly that reason (review 1012a). Both modes are driven here, so a local run sees CI's.
+# Python 3.14 picks the mode once, at import, into shutil._rmtree_impl, and never reads
+# _use_fd_functions again: flipping the flag alone ran one mode twice (review 1012b). So the
+# implementation is swapped too where there is one, and each mode's own function records that it
+# ran, so a toggle that changes nothing fails by name.
 _r16d_rm_modes = {}
+_r16d_rm_ran = []
+_r16d_rm_fns = {True: "_rmtree_safe_fd", False: "_rmtree_unsafe"}
+
+
+def _r16d_rm_recorder(fd, fn):
+    @functools.wraps(fn)
+    def _rec(*a, **k):
+        _r16d_rm_ran.append(fd)
+        return fn(*a, **k)
+    return _rec
+
+
 for _r16d_fd in (True, False):
     _r16d_rm = _r15d_mkdtemp(prefix="lgsm-unit-rm-ctl-")     # not recorded: removed here, or named
     os.makedirs(os.path.join(_r16d_rm, "sub", "deeper"))
     os.chmod(os.path.join(_r16d_rm, "sub"), 0o200)
     os.chmod(_r16d_rm, 0o200)
     _r16d_fd_was = getattr(shutil, "_use_fd_functions", None)
+    _r16d_saved_fns = {_n: getattr(shutil, _n) for _n in ("_rmtree_impl", *_r16d_rm_fns.values())
+                       if hasattr(shutil, _n)}
     shutil._use_fd_functions = _r16d_fd
+    for _r16d_k, _r16d_n in _r16d_rm_fns.items():
+        setattr(shutil, _r16d_n, _r16d_rm_recorder(_r16d_k, _r16d_saved_fns[_r16d_n]))
+    if "_rmtree_impl" in _r16d_saved_fns:
+        shutil._rmtree_impl = getattr(shutil, _r16d_rm_fns[_r16d_fd])
+    del _r16d_rm_ran[:]
     try:
-        _r16d_rm_modes[_r16d_fd] = _r16d_remove_paths([_r16d_rm])
+        _r16d_rm_modes[_r16d_fd] = (_r16d_remove_paths([_r16d_rm]), sorted(set(_r16d_rm_ran)))
     finally:
         shutil._use_fd_functions = _r16d_fd_was
+        for _r16d_n, _r16d_f in _r16d_saved_fns.items():
+            setattr(shutil, _r16d_n, _r16d_f)
         if os.path.lexists(_r16d_rm):
             # 0o700 is owner-only, on this check's own temp dir, so rmtree can enter it.
             # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
@@ -666,7 +747,7 @@ for _r16d_fd in (True, False):
             shutil.rmtree(_r16d_rm)
 check("unit suite: the temp cleanup removes a directory it cannot list, and one inside it, whether "
       "shutil removes by descriptor (CI's bare run) or by path (a run under tools/smoke-local.sh)",
-      _r16d_rm_modes == {True: [], False: []} and hasattr(shutil, "_use_fd_functions"),
+      _r16d_rm_modes == {True: ([], [True]), False: ([], [False])},
       repr(_r16d_rm_modes))
 
 check("suites: no unit check reads or writes the machine's own config.json or keys",
@@ -719,14 +800,15 @@ if skipped:
 shutil.rmtree(_RUN_DATA, ignore_errors=True)
 _r15d_left = _r15d_remove_made_tmp()
 # After the tally, so it is printed on its own; it fails the run like any check would.
-# The parts' own paths, not the runner's: the runner makes two before any part runs, so "some were
-# recorded" could not tell tracking that the parts went around from tracking that worked.
-if len(_r15d_made_tmp) <= _r16d_tmp_runner_made or _r15d_left or _r16d_tmp_swapped:
+# The parts' own paths, not the runner's: the runner makes one before any part runs and more after
+# the last, so "some were recorded" could not tell tracking that the parts went around from tracking
+# that worked; the count taken right after the part loop can.
+if _r16d_tmp_parts_made <= 0 or _r15d_left or _r16d_tmp_swapped:
     print("\nFAIL  unit suite: every temp dir and file the parts made is removed at the end   [%s]"
           % ("tempfile.mkdtemp/mkstemp was swapped back by %s, so what came after went unrecorded"
              % _r16d_tmp_swapped if _r16d_tmp_swapped
              else "no part's mkdtemp()/mkstemp() was recorded: the tracking is not installed"
-             if len(_r15d_made_tmp) <= _r16d_tmp_runner_made
+             if _r16d_tmp_parts_made <= 0
              else "%d of %d left: %s" % (len(_r15d_left), len(_r15d_made_tmp), _r15d_left[:5])))
     failed += 1
 sys.exit(0 if results and failed == 0 else 1)
