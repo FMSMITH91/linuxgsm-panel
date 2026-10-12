@@ -476,3 +476,87 @@ _MR72 = _read72(_root, "templates", "manage_remotes.html")
 _sub72 = _re72.search(r'<button type="submit" class="btn btn-primary btn-sm w-100"([^>]*)>\s*<i class="bi bi-check">', _MR72)
 check("a11y: the host edit form's icon-only submit has a name", _sub72 is not None
       and 'aria-label="Save changes"' in _sub72.group(1), _sub72.group(0) if _sub72 else "no such button")
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 9. The server page's Connect row at 375px, and literal English written straight into the page
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Measured in a browser: with a Join button the row (label, address pill, Join) could not wrap, so
+# /server/<id> was 399px wide in Spanish and 381px in English, Join past the screen's edge.
+_SDT72 = _read72(_root, "templates", "server_detail.html")
+_conn72 = _re72.search(r'<div class="([^"]*)">\s*<span class="text-secondary small">Connect:</span>', _SDT72)
+_pill72 = _re72.search(r"\.connect-pill\s*\{([^}]*)\}", _CSS72)
+_addr72 = _re72.search(r"\.connect-pill\s+#connect-addr\s*\{([^}]*)\}", _CSS72)
+check("375px: the server page's Connect row wraps, its pill fits the row and a long address breaks "
+      "(Join ran past a phone's edge, the page 399px wide in Spanish)",
+      _conn72 is not None and "flex-wrap" in _conn72.group(1).split()
+      and _pill72 is not None and _re72.search(r"max-width:\s*100%", _pill72.group(1)) is not None
+      and _addr72 is not None and _re72.search(r"overflow-wrap:\s*anywhere", _addr72.group(1)) is not None,
+      (_conn72.group(0) if _conn72 else "no Connect row") + " | " + (_pill72.group(1) if _pill72 else "no pill rule"))
+
+# The stat tiles' sub-lines read 'not read' and the uptime tile 'stopped' in English for every
+# viewer: plain literals, and no catalog key the page translator could match. Run the real tile
+# functions on a read that failed and on a stopped game, with the real t() and each catalog.
+_tiles72 = "".join(_cut47(_SD72, h) + "\n" for h in (
+    "function _setStatText(", "function _showGameCpuTile(", "function _showGameRamTile(",
+    "function _showGameUptimeTile(", "function _showServerTile("))
+for _lang72 in ("es", "fr"):
+    _cat72 = _scan72.load_catalog(_lang72)
+    # Only the keys these functions' text could name: the whole catalog is past node's argv limit.
+    _sub72 = {k: v for k, v in _cat72.items() if ("'%s'" % k) in _tiles72}
+    _outt72 = _node72("stat tiles: a failed read and a stopped game in " + _lang72, _DOM72 + (
+        "window.LANG = %s; window.I18N = %s;\n"
+        "require('vm').runInThisContext(%s);\n"
+        "const els = {}; document.getElementById = id => els[id] || (els[id] = document.createElement('span'));\n"
+        "window.fmtUptime = s => s + 's';\n"
+        "require('vm').runInThisContext(%s);\n"
+        "const fail = {}, stop = {};\n"
+        "[_showGameCpuTile, _showGameRamTile, _showGameUptimeTile, _showServerTile].forEach(f => f({}, false));\n"
+        "Object.keys(els).forEach(k => { fail[k] = els[k].textContent; });\n"
+        "_showGameUptimeTile({game_procs: 0}, true); stop.gup = els['stat-gup'].textContent;\n"
+        "console.log(JSON.stringify({fail: fail, stop: stop}));\n"
+    ) % (_json72.dumps(_lang72), _json72.dumps(_sub72), _json72.dumps(_I18N72), _json72.dumps(_tiles72)))
+    if _outt72 is not None:
+        _f72 = _outt72.get("fail", {})
+        check("i18n: the stat tiles say 'not read' and 'stopped' in " + _lang72 + " (English for every viewer)",
+              _cat72.get("not read") and _cat72.get("stopped")
+              and [_f72.get(k) for k in ("stat-gcpu-sub", "stat-gram-sub", "stat-gup-sub")] == [_cat72["not read"]] * 3
+              and _f72.get("stat-server-sub") == _cat72.get("The panel could not read this host")
+              and _outt72.get("stop", {}).get("gup") == _cat72["stopped"], _outt72)
+
+# The whole class, every script: a literal written straight into a text sink (textContent,
+# innerText, a stat tile, a title/placeholder/aria-label, a text node) reaches the page as one text
+# node the translator matches by its EXACT text, so it is English unless that text is a catalog key
+# (a ✓/✗ mark in front is looked past, as i18n.js does). Literals handed to t()/tf() are the catalog
+# gate's (part06). Left out on purpose: values that are not words to translate.
+_SINK72 = _re72.compile(r"(?:\.textContent\s*\+?=|\.innerText\s*=|\.title\s*=|\.placeholder\s*="
+                        r"|setAttribute\(\s*'(?:title|aria-label|placeholder)'\s*,|createTextNode\("
+                        r"|_setStatText\([^,;]*,)([^;]*)$")
+_NOTWORDS72 = {
+    " MB": "a unit after a number, as on every other size the panel shows",
+    "home": "a directory's name, under data-no-i18n (server_files.js)",
+    "~/.ssh/id_rsa": "a path, as a placeholder",
+}
+_raw72 = []
+for _fn72 in sorted(os.listdir(_JS72)):
+    if not _fn72.endswith(".js"):
+        continue
+    _src72 = _read72(_JS72, _fn72)
+    for _txt72, _ln72, _st72, _end72 in _scan72._js_string_spans(_src72):
+        _bef72 = _src72[max(0, _st72 - 300):_st72]
+        _sm72 = _SINK72.search(_bef72)
+        _key72 = _re72.sub(r"\s+", " ", _txt72).strip()
+        _lend72 = _src72.find("\n", _st72)
+        if (not _sm72 or "\n\n" in _sm72.group(1) or not _re72.search(r"[A-Za-z]{2}", _txt72)
+                or _txt72.startswith("data-") or _txt72 in _NOTWORDS72
+                or _scan72.is_js_t_arg(_txt72, _bef72) or _re72.search(r"[=!]==?\s*$", _bef72)
+                or _scan72.JS_IGNORE in _src72[_src72.rfind("\n", 0, _st72) + 1:_lend72 if _lend72 >= 0 else None]):
+            continue
+        _raw72.append(("%s:%d" % (_fn72, _ln72), _key72))
+for _lang72 in ("es", "fr"):
+    _cat72 = _scan72.load_catalog(_lang72)
+    _gap72 = [(at, k) for at, k in _raw72
+              if k not in _cat72 and _re72.sub(r"^[✓✗] ", "", k) not in _cat72]
+    check("i18n: no script writes literal English into the page that the %s catalog cannot match "
+          "(the stat tiles' 'not read', the console's '(connected)', the diagnostics badge)" % _lang72,
+          len(_raw72) > 10 and not _gap72, "%d of %d: %s" % (len(_gap72), len(_raw72), _gap72[:12]))

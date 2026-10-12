@@ -373,7 +373,7 @@ window.confirmDialog = function(opts){
   var api = {
     close: close,
     // nosemgrep - okHtml is this button's OWN markup, captured above; the message uses textContent.
-    error: function(m){ if(errEl){ errEl.textContent = m || 'Incorrect.'; errEl.style.display=''; } okBtn.disabled=false; okBtn.innerHTML=okHtml; if(input){ input.value=''; input.focus(); } },
+    error: function(m){ if(errEl){ errEl.textContent = m || (window.t ? t('Incorrect.') : 'Incorrect.'); errEl.style.display=''; } okBtn.disabled=false; okBtn.innerHTML=okHtml; if(input){ input.value=''; input.focus(); } },
     busy: function(){ okBtn.disabled=true; okBtn.innerHTML='<span class="spinner-border spinner-border-sm"></span>'; }
   };
   _cdGateConfirm(opts, input, okBtn, errEl);

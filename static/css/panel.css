@@ -814,9 +814,25 @@
     }
 
     .connect-pill {
-      display: inline-flex; align-items: center; gap: .4rem;
-      background: #0d1420; border: 1px solid var(--border);
-      border-radius: 999px; padding: .25rem .75rem; font-family: monospace;
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
+      background: #0d1420;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: .25rem .75rem;
+      font-family: monospace;
+
+      /* Never wider than its row: a long address (a host name, an IPv6 address) breaks inside
+         the pill instead of pushing Join off a phone's screen. The row itself wraps
+         (server_detail.html), so Join drops to the next line rather than past the edge. */
+      max-width: 100%;
+      min-width: 0;
+    }
+
+    .connect-pill #connect-addr {
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     /* ── PER-CORE CPU BARS + Live-Resources bars ── */

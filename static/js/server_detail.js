@@ -295,7 +295,7 @@ var _consolePaused = false;
 var _returnOwed = false;
 socket.on('connect', function() {
   if (wsStatus) {
-    wsStatus.textContent = '(connected)';
+    wsStatus.textContent = t('(connected)');
     wsStatus.className = 'text-success small ms-2';
   }
   // A socket that comes back while the console is set aside for a hidden tab does not rejoin:
@@ -347,7 +347,7 @@ socket.on('disconnect', function() { _endResync(); });
 
 socket.on('disconnect', function() {
   if (!wsStatus) return;
-  wsStatus.textContent = '(disconnected)';
+  wsStatus.textContent = t('(disconnected)');
   wsStatus.className = 'text-danger small ms-2';
 });
 
@@ -1842,23 +1842,23 @@ function _setStatText(id, value) {
 // that failed as '–' / 'not read', never as zeros.
 function _showGameCpuTile(m, readable) {
   _setStatText('stat-gcpu', readable && m.game_cpu_percent!=null ? m.game_cpu_percent + '%' : '–');
-  _setStatText('stat-gcpu-sub', readable ? tf('of {n}-core server', {n: m.cores||1}) : 'not read');
+  _setStatText('stat-gcpu-sub', readable ? tf('of {n}-core server', {n: m.cores||1}) : t('not read'));
 }
 function _showGameRamTile(m, readable) {
   _setStatText('stat-gram', readable ? (m.game_ram_mb||0) + ' MB' : '–');
-  _setStatText('stat-gram-sub', !readable ? 'not read'
+  _setStatText('stat-gram-sub', !readable ? t('not read')
           : (m.game_ram_percent!=null? tf('{n}% of RAM', {n: m.game_ram_percent}) : tf('{n} procs', {n: m.game_procs||0})));
 }
 function _showGameUptimeTile(m, readable) {
-  _setStatText('stat-gup', !readable ? '–' : (m.game_procs ? fmtUptime(m.game_uptime_secs||0) : 'stopped'));
-  _setStatText('stat-gup-sub', !readable ? 'not read'
+  _setStatText('stat-gup', !readable ? '–' : (m.game_procs ? fmtUptime(m.game_uptime_secs||0) : t('stopped')));
+  _setStatText('stat-gup-sub', !readable ? t('not read')
           : (m.game_procs===1 ? t('1 process') : tf('{n} processes', {n: m.game_procs||0})));
 }
 function _showServerTile(m, readable) {
   _setStatText('stat-scpu', readable && m.cpu_percent!=null ? m.cpu_percent + '%' : '–');
   _setStatText('stat-server-sub', readable
           ? tf('RAM {ram}% · disk {disk}%', {ram: m.ram_percent||0, disk: m.disk_percent||0})
-          : 'The panel could not read this host');
+          : t('The panel could not read this host'));
 }
 // Advance the live chart by one reading, keeping the last 45.
 function _pushStatsPoint(m) {
