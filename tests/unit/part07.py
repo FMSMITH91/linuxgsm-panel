@@ -446,7 +446,13 @@ def _gh_runner_calls(tree, funcs):
 def _gh_call_problem(rel, n, fn):
     """The G3 problem of runner call `n` in `fn`, or None: its body names the script, unpassed."""
     tainted = _gh_tainted(fn)
-    if not _gh_interpolates_self(fn, tainted):
+    # ...or the runner's own text argument names it anywhere inside, through a helper call too
+    # (review 1011d): `_protected_resolved(user, ap, selfname, inner)` writes the name into the
+    # command, and a call reads as "a new value" to _gh_carries, so delete/rename/create-path
+    # ran a loaded row's lgsm_name unchecked with this gate green.
+    _first_text = 1 if _gh_callee(n) in ("game_user_cmd", "game_user_exec_cmd") else 2
+    in_arg = any(_gh_names_script(a, tainted) for a in n.args[_first_text:])
+    if not (in_arg or _gh_interpolates_self(fn, tainted)):
         return None
     passes_self = _gh_callee(n) in _GH_TEXT_RUNNERS and any(k.arg == "selfname" for k in n.keywords)
     if passes_self or _gh_validates_before(fn, n.lineno, tainted):
@@ -577,6 +583,9 @@ _gh_ctl = {
     "G3 game_type straight into the text": _gh_plant(
         'def f(gs):\n'
         '    return _core.shell_as_game_user(gs.remote, gs.short_name, "./%sserver x" % gs.game_type)\n'),
+    "G3 the name handed to a helper that builds the runner's text": _gh_plant(
+        'def f(server, user, selfname, ap, inner):\n'
+        '    return _core.shell_as_game_user(server, user, _protected_resolved(user, ap, selfname, inner))\n'),
     "G3 through a string method and .format()": _gh_plant(
         'def f(server, user, gs):\n'
         '    name = (gs.lgsm_name or "").strip()\n'

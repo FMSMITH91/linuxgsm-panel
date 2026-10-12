@@ -1326,7 +1326,7 @@ def delete_path(server, user, relpath, selfname=None):
     # stale link) could not be deleted at all — "Refusing to delete this path" for a file the
     # account owns, although only the link was ever going to be touched.
     out, e, rc = _core.shell_as_game_user(
-        server, user, _protected_resolved(user, ap, selfname, inner), timeout=30)
+        server, user, _protected_resolved(user, ap, selfname, inner), timeout=30, selfname=selfname)
     return _files_delete_outcome(out, e, rc)
 
 
@@ -1573,7 +1573,7 @@ def rename_path(server, user, relpath, new_name, selfname=None):
     ap = _safe_abspath(user, relpath)
     inner = _rename_inner(ap, new_name, user, selfname)
     out, e, rc = _core.shell_as_game_user(
-        server, user, _protected_resolved(user, ap, selfname, inner), timeout=30)
+        server, user, _protected_resolved(user, ap, selfname, inner), timeout=30, selfname=selfname)
     return _rename_outcome(out, e, rc)
 
 
@@ -1702,8 +1702,10 @@ def create_path(server, user, reldir, name, kind, selfname=None):
         return False, refusal
     dest = _pp.join(_safe_abspath(user, reldir), name)
     inner = _create_inner(dest, kind, user, selfname)
+    # selfname=: the script name is written into this command (the protected names, the console
+    # path), so the builder checks it — a loaded row's lgsm_name went in unchecked (review 1011d).
     out, e, rc = _core.shell_as_game_user(
-        server, user, _protected_resolved(user, dest, selfname, inner), timeout=30)
+        server, user, _protected_resolved(user, dest, selfname, inner), timeout=30, selfname=selfname)
     return _create_outcome(out, e, rc)
 
 
