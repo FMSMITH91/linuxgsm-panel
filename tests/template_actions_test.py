@@ -1259,9 +1259,9 @@ def _escapers_in(src):
     return tuple(sorted(names))
 
 
-_found = {}
-for _p in sorted((ROOT / "static" / "js").glob("*.js")):
-    _src = _p.read_text(encoding="utf-8")
+def _r16d_direct_sigs(_src):
+    """The unescaped-value signatures of the expressions sitting directly at one script's sinks."""
+    _sigs = set()
     for _m in _SINK.finditer(_src):
         _expr = _js_expr_at(_src, _m.end())
         # Drop comments first: a trailing "// nosemgrep" would otherwise read as an interpolation.
@@ -1278,7 +1278,15 @@ for _p in sorted((ROOT / "static" / "js").glob("*.js")):
         _dyn = sorted(set(re.findall(r"\+\s*\(*\s*([A-Za-z_$][\w$.]*)", _bare)
                           + re.findall(r"([A-Za-z_$][\w$.]*)\s*\)*\s*\+", _bare)))
         if _dyn:
-            _found.setdefault(_p.name, set()).add(",".join(_dyn))
+            _sigs.add(",".join(_dyn))
+    return _sigs
+
+
+_found = {}
+for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+    _sigs_d = _r16d_direct_sigs(_p.read_text(encoding="utf-8"))
+    if _sigs_d:
+        _found.setdefault(_p.name, set()).update(_sigs_d)
 
 # ── 0d-ii. ...including markup ACCUMULATED into a variable first ───────────────────────────────
 # The scan above only reads the expression sitting directly at a sink. That is a real blind spot,
@@ -1516,9 +1524,9 @@ _r15d_sink_ctl = {
     "innerHTML = buf": _r15d_sink_sigs(
         "function zz(x, el) {\n  var buf = '';\n  buf += '<b>' + x.name + '</b>';\n"
         "  el.innerHTML = buf;\n}\n"),
-    "{'html': raw}": _r15d_sink_sigs(
+    "{'html': raw}": _r16d_direct_sigs(
         "function zz(x, el) {\n  el.innerHTML = tfHtml('Hi {v}', {v: {'html': '<b>' + x.name + '</b>'}});\n}\n"),
-    '{"html": raw}': _r15d_sink_sigs(
+    '{"html": raw}': _r16d_direct_sigs(
         "function zz(x, el) {\n  el.innerHTML = tfHtml('Hi {v}', {v: {\"html\": '<b>' + x.name + '</b>'}});\n}\n"),
     "{html} shorthand": _r15d_sink_sigs(
         "function zz(x, el) {\n  var html = '';\n  html += '<b>' + x.name + '</b>';\n"
