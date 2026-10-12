@@ -267,6 +267,33 @@ check("code-scanning gates: ...and the main gate's wait fits inside its job's ti
       0 < _m_poll26[0] * _m_poll26[1] and _m_poll26[0] * _m_poll26[1] + 120 <= _timeout26(_m_job26) * 60
       and _m_poll26[2], repr((_m_poll26[:2], _timeout26(_m_job26))))
 
+# ── ci.yml's two long jobs: the limit clears what was measured ─────────────────────────────────
+# Raised from 30 and 20 minutes after their runs came within 155 s and 38 s of them (review 1012a),
+# and nothing held them there: lowered again, every suite stayed green until a slow runner timed out
+# a required check on main, which holds the deploy and every panel's update (review 1012b). Each
+# job's comment states the range its runs were measured in; the limit must clear the slowest by
+# the whole spread, the variation the same code showed from one runner to the next.
+def _r17d_ci_limit26(text, job):
+    """(timeout seconds, fastest, slowest) for a job of ci.yml, read from its raw text and comment."""
+    m = re.search(r"^  %s:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)" % re.escape(job), text, re.M | re.S)
+    body = m.group(1) if m else ""
+    lim = re.search(r"^    timeout-minutes: (\d+)\s*$", body, re.M)
+    rng = re.search(r"measured, fastest to slowest: (\d+)-(\d+) s\.", " ".join(
+        ln.strip().lstrip("#").strip() for ln in body.splitlines()))
+    return (int(lim.group(1)) * 60 if lim else 0,) + ((int(rng.group(1)), int(rng.group(2))) if rng else (0, 0))
+
+
+_ci26 = _wf14("ci.yml")
+_lim26 = {_j: _r17d_ci_limit26(_ci26, _j) for _j in ("checks", "coverage")}
+check("ci.yml: the checks and coverage jobs' limits clear the slowest measured run by the measured "
+      "spread (they had come within 155 s and 38 s of it)",
+      all(_f > 0 and _s >= _f and _t >= _s + (_s - _f) for _t, _f, _s in _lim26.values()), repr(_lim26))
+check("ci.yml: ...and the old 30- and 20-minute limits would fail it (control)",
+      _lim26["checks"][1] > 0 and _lim26["coverage"][1] > 0
+      and 30 * 60 < 2 * _lim26["checks"][2] - _lim26["checks"][1]
+      and 20 * 60 < 2 * _lim26["coverage"][2] - _lim26["coverage"][1], repr(_lim26))
+
+
 _sb26 = _tf26.mkdtemp(prefix="csa26-")
 try:
     _bin26 = os.path.join(_sb26, "bin")
