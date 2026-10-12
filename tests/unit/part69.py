@@ -360,3 +360,94 @@ check("logout: when the first attempt fails, the retry's epoch bump (every devic
 check("logout: ...and when the rows cannot be cleared either, the epoch bump is still committed (the "
       "revocation is never lost to the cleanup)",
       _lo69.get("retry_rows_locked") == ((2, 1), 2, True), repr(_lo69))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 5. The terminal's closing reason, in Spanish
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# term_exit's reason (and term_error's message) come from a worker with no viewer — the idle
+# sweeper, a shell that exited — and the page put that English into its translated sentence:
+# "Sesión cerrada — the shell exited." The server now sends the template and values too
+# (host_terminal._r16c_said), and the page translates them.
+from panel.routes import host_terminal as _ht69  # noqa: E402
+from panel.ops import terminal_session as _tsx69  # noqa: E402
+
+_ES69 = _scan69.load_catalog("es")
+
+
+def _es69(*keys):
+    """i18n.js in node with only `keys` of the Spanish catalog (the whole one is past `node -e`'s limit)."""
+    return ("global.window = global;\nglobal.document = {readyState: 'complete', body: null};\n"
+            "window.I18N = " + _json69.dumps({_k: _ES69[_k] for _k in keys if _k in _ES69}) + ";\n"
+            "window.LANG = 'es';\n" + _read69(_JS69, "i18n.js") + "\n")
+
+
+try:
+    _idle69 = _i18n69.Sentence("closed after {n} minutes with no input", n=_tsx69._IDLE_TIMEOUT // 60)
+    _many69 = _tsx69.TerminalError(_i18n69.Sentence("You already have {n} terminals open. Close one and "
+                                                     "try again.", n=3))
+    _pay69 = {"idle": _ht69._r16c_said("reason", _idle69), "exited": _ht69._r16c_said("reason", "the shell exited"),
+              "none": {}, "many": _ht69._r16c_said("message", _many69.args[0])}
+except Exception as _e69:     # a missing helper is a failed check below, not a crashed part
+    _pay69 = {"error": repr(_e69)}
+_HT69 = _read69(_JS69, "host_terminal.js")
+_name69 = "terminal (es): the closing reason and an open refusal"
+_prog69 = (_es69("Session closed — {why}. Reload the page to start another.", "the session ended",
+                 "the shell exited", "closed after {n} minutes with no input",
+                 "You already have {n} terminals open. Close one and try again.",
+                 "The terminal could not be opened.")
+           + "var P = " + _json69.dumps(_pay69) + ", status = [], wrote = [], on = {};\n"
+           "var sock = {on: (ev, fn) => { on[ev] = fn; }}, term = {write: s => wrote.push(s)};\n"
+           "function _status(m){ status.push(m); }\n"
+           + ("" if "function _said(" not in _HT69 else _cut47(_HT69, "function _said(") + "\n")
+           + _cut47(_HT69, "sock.on('term_exit'") + ");\n"
+           + _cut47(_HT69, "sock.on('term_error'") + ");\n"
+           "on.term_exit(P.idle); on.term_exit(P.exited); on.term_exit(P.none); on.term_error(P.many);\n"
+           "console.log(JSON.stringify({status: status, wrote: wrote}));\n")
+_got69 = _node69(_name69, _prog69)
+if _got69 is not None:
+    check("terminal (es): the closing reason is Spanish inside the Spanish sentence — the idle timeout with "
+          "its minutes, a shell that exited, and no reason at all — on the status line and in the terminal",
+          (_got69.get("status") or [])[:3] == [
+              "Sesión cerrada — cerrada tras 15 minutos sin entrada. Recarga la página para iniciar otra.",
+              "Sesión cerrada — la shell terminó. Recarga la página para iniciar otra.",
+              "Sesión cerrada — " + _ES69.get("the session ended", "?") + ". Recarga la página para iniciar otra."]
+          and "[la shell terminó]" in "".join(_got69.get("wrote") or []), repr(_got69)[:900])
+    check("terminal (es): a refusal to open (a built sentence with a count) is Spanish too",
+          (_got69.get("status") or [None] * 4)[3:] == ["Ya tienes 3 terminales abiertas. Cierra una e inténtalo de nuevo."],
+          repr(_got69)[:900])
+
+# ...and the server half, through the real socket handler: what term_exit and term_error carry.
+_sock69 = {}
+_exit69 = {}
+try:
+    def _open69(sid, remote, is_local, **k):
+        _exit69["sid"], _exit69["on_exit"] = sid, k.get("on_exit")
+    _p9_patch(_ht69._ts, "open_session", _open69)
+    _sio69 = _p9.socketio.test_client(_p9, flask_test_client=_p9_client(P9_ADMIN))
+    _sio69.emit("term_open", {"remote_id": P9_HOST, "cols": 80, "rows": 24})
+    if _exit69.get("on_exit"):
+        _exit69["on_exit"](_exit69["sid"], _idle69)        # the idle sweeper's close, as it calls it
+
+    def _refuse69(sid, remote, is_local, **k):
+        raise _tsx69.TerminalError(_i18n69.Sentence("You already have {n} terminals open. Close one and "
+                                                    "try again.", n=3))
+    _p9_patch(_ht69._ts, "open_session", _refuse69)
+    _sio69.emit("term_open", {"remote_id": P9_HOST, "cols": 80, "rows": 24})
+    for _ev69 in _sio69.get_received():
+        if _ev69["name"] in ("term_exit", "term_error"):
+            _sock69.setdefault(_ev69["name"], []).append((_ev69["args"] or [{}])[0])
+    _sio69.disconnect()
+finally:
+    _p9_restore_all()
+    with _ht69._sid_lock:
+        for _s69 in [_exit69.get("sid")]:
+            _ht69._sid_host.pop(_s69, None)
+            _ht69._sid_owner.pop(_s69, None)
+check("terminal: term_exit and term_error carry the template and values with the English (an idle close, "
+      "a refusal with a count), so the page can say them in the viewer's language",
+      {"reason": "closed after 15 minutes with no input", "reason_key": "closed after {n} minutes with no input",
+       "reason_vals": {"n": "15"}} in _sock69.get("term_exit", [])
+      and {"message": "You already have 3 terminals open. Close one and try again.",
+           "message_key": "You already have {n} terminals open. Close one and try again.",
+           "message_vals": {"n": "3"}} in _sock69.get("term_error", []), repr(_sock69)[:900])
