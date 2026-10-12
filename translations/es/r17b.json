@@ -4,7 +4,6 @@
   "Couldn't give {user} read access to {owner}'s content, so nothing was mounted ({why}).": "No se pudo dar a {user} acceso de lectura al contenido de {owner}, así que no se montó nada ({why}).",
   "Couldn't read {user}'s group, so the content mount was not granted. Check the account exists on this host.": "No se pudo leer el grupo de {user}, así que no se concedió el montaje del contenido. Comprueba que la cuenta existe en este host.",
   "Installing {game} content via LinuxGSM": "Instalando el contenido de {game} con LinuxGSM",
-  "Internal server error": "Error interno del servidor",
   "Mounted: {games}": "Montado: {games}",
   "Mounted: {games} — restart the server to apply": "Montado: {games}. Reinicia el servidor para aplicarlo",
   "No content storage could be prepared on the host.": "No se pudo preparar el almacenamiento de contenido en el host.",
