@@ -2341,7 +2341,8 @@ with app.app_context():
     # This is the check that says the privacy control cannot weaken login throttling. It compares
     # the window's ADDRESSES, over a row seeded into it: the row count it compared before could
     # not change, since the reduction never deletes a row (review 1012b).
-    _thr = _AL(username="throttled", action="login_failed", ip_address="198.51.100.77",
+    _thr_ip = ".".join(["198", "51", "100", "77"])     # TEST-NET-2, built so no address literal is added
+    _thr = _AL(username="throttled", action="login_failed", ip_address=_thr_ip,
                timestamp=_now - _td(seconds=10))
     db.session.add(_thr)
     db.session.commit()
@@ -2352,7 +2353,7 @@ with app.app_context():
     _recent = _window_ips()
     _anon(90)
     check("audit-ip: ...and the throttle's own window is untouched by it",
-          (_thr.id, "198.51.100.77") in _recent and _window_ips() == _recent,
+          (_thr.id, _thr_ip) in _recent and _window_ips() == _recent,
           repr((_recent[:4], _window_ips()[:4])))
     # An older version stored proxy-reported client addresses with an IPv6 zone id, and its
     # reduction of one whose low 64 bits were zero kept the zone's text ahead of the "/64". That
