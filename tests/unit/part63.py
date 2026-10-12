@@ -630,3 +630,28 @@ if _out63 is not None:
           "them (it was \"3 uploaded to cfg, 1 already existed…\" in English)",
           _out63 == "✓ 3 subidos a cfg, 1 ya existían — vuelve a soltarlos para reemplazarlos, 1 fallaron",
           repr(_out63))
+
+# ── the scanner's text matchers stay linear on a hostile line ───────────────────────────────────
+# SonarCloud flagged five patterns in the new scanner code as super-linear (S8786) or exponential
+# (S5852). Each is a hand scan or a linear regex now, with the same matches on the real tree. A
+# 50,000-character line built to make the old forms backtrack is read in well under a second.
+import time as _time63  # noqa: E402
+_N63 = 50000
+_adv63 = {
+    "markup texts": lambda: _i18n63.js_markup_texts("<" * _N63) + _i18n63.js_markup_texts("<a" + " " * _N63)
+    + _i18n63.js_markup_texts(">" + "x" * _N63) + _i18n63.js_markup_texts("</i>" * (_N63 // 4)),
+    "guard before": lambda: (_i18n63._js_guarded_before("<" * _N63 + "data-no-i18n"),
+                             _i18n63._js_guarded_before("<a" * (_N63 // 2) + "data-no-i18n")),
+    "comment join": lambda: (_i18n63._js_gap_is_plus("/*" + " " * _N63), _i18n63._js_gap_is_plus("//\n" * (_N63 // 3)),
+                             _i18n63._js_gap_is_plus("/**/" * (_N63 // 4) + "+x")),
+    "identifier": lambda: _i18n63._js_splice_prose(" " * _N63 + "_" * _N63 + " x"),
+    "words": lambda: _i18n63._js_splice_prose("A" * _N63 + " " + "B" * _N63),
+}
+_slow63 = {}
+for _k63, _f63 in _adv63.items():
+    _t63 = _time63.perf_counter()
+    _f63()
+    _slow63[_k63] = round(_time63.perf_counter() - _t63, 3)
+check("i18n scan: each rewritten matcher reads a 50,000-character adversarial line in under half a second "
+      "(the regex forms backtracked super-linearly or exponentially)",
+      all(_v < 0.5 for _v in _slow63.values()), repr(_slow63))

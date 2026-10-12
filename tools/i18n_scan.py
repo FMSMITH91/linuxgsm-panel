@@ -446,7 +446,64 @@ def is_js_t_arg(text, before):
 # is how a dialog built as one innerHTML string stayed English for every viewer (review 2026-10-11,
 # the players dialog; 117 such strings had no entry). Only an element's whole text counts: prose at
 # a literal's edge is spliced to a value and no catalog key can match it.
-_JS_MARKUP_TEXT = re.compile(r"(?:<(?!/)([a-zA-Z0-9]*)([^<>]*)>|</i>|^([^<>]*)>)([^<>]+)</([a-zA-Z0-9]+)>")
+# Scanned by hand (_js_markup_matches), not by one regex: the regex form of it,
+#   (?:<(?!/)([a-zA-Z0-9]*)([^<>]*)>|</i>|^([^<>]*)>)([^<>]+)</([a-zA-Z0-9]+)>
+# backtracks super-linearly on a long run with no closing tag (SonarCloud S8786). Same matches.
+_JS_CLOSE_TAG = re.compile(r"</[a-zA-Z0-9]+>")
+_JS_ALNUM_RUN = re.compile(r"[a-zA-Z0-9]*")
+
+
+class _MarkupMatch:
+    """One opener + text + closing tag, shaped like the re.Match the regex above returned."""
+
+    def __init__(self, at, groups):
+        self._at, self._groups = at, groups
+
+    def start(self):
+        """Where the opener begins."""
+        return self._at
+
+    def group(self, i):
+        """Groups 1-5: opener tag name, opener attributes, attributes before a leading `>`, text, closing name."""
+        return self._groups[i - 1]
+
+
+def _js_markup_opener(text, at):
+    """(end, groups 1-3) of an opener at `at`: `<tag …>`, `</i>`, or (at 0) the tail of a tag `…>`; else None."""
+    if at == 0 and text[:1] != "<":
+        gt = text.find(">")
+        return (gt + 1, (None, None, text[:gt])) if gt >= 0 and "<" not in text[:gt] else None
+    if text.startswith("</i>", at):
+        return at + 4, (None, None, None)
+    if text[at + 1:at + 2] == "/":
+        return None
+    gt = text.find(">", at + 1)
+    if gt < 0 or "<" in text[at + 1:gt]:
+        return None
+    inner = text[at + 1:gt]
+    name = _JS_ALNUM_RUN.match(inner).group(0)
+    return gt + 1, (name, inner[len(name):], None)
+
+
+def _js_markup_matches(text):
+    """Every element's whole text in `text`, left to right and not overlapping, as re.finditer would."""
+    starts = [0] + [i for i, c in enumerate(text) if c == "<" and i > 0]
+    out, floor = [], 0
+    for at in starts:
+        if at < floor:
+            continue
+        opened = _js_markup_opener(text, at)
+        if opened is None:
+            continue
+        end, (g1, g2, g3) = opened
+        lt = text.find("<", end)
+        body = text[end:lt] if lt >= 0 else ""
+        close = _JS_CLOSE_TAG.match(text, lt) if lt >= 0 else None
+        if not body or ">" in body or close is None:
+            continue
+        out.append(_MarkupMatch(at, (g1, g2, g3, body, close.group(0)[2:-1])))
+        floor = close.end()
+    return out
 # Emphasis inside a sentence: "Attach this host to your <strong>free</strong> subscription". The
 # word is a fragment of prose spliced around it, not a label, so a lower-case one is not claimed.
 _JS_INLINE_TAGS = {"b", "strong", "i", "em", "u"}
@@ -473,8 +530,12 @@ def _js_guarded_before(prefix):
     at = prefix.rfind("data-no-i18n")
     if at < 0:
         return False
-    opened = re.search(r"<([a-zA-Z0-9]+)[^<>]*$", prefix[:at])
-    return bool(opened) and ("</%s>" % opened.group(1).lower()) not in prefix[at:].lower()
+    # The last `<` before the guard, opening a tag still open there (no `>` after it). By hand, not
+    # `<([a-zA-Z0-9]+)[^<>]*$`, which backtracks super-linearly on a long run of `<` (S8786).
+    head = prefix[:at]
+    lt = head.rfind("<")
+    name = _JS_ALNUM_RUN.match(head, lt + 1).group(0) if lt >= 0 and ">" not in head[lt:] else ""
+    return bool(name) and ("</%s>" % name.lower()) not in prefix[at:].lower()
 
 
 def js_markup_texts(text):
@@ -485,7 +546,7 @@ def js_markup_texts(text):
     element's whole text, and the opening tag being in the previous literal hid it.
     """
     out = []
-    for m in _JS_MARKUP_TEXT.finditer(text):
+    for m in _js_markup_matches(text):
         if _js_markup_skipped(m, text):
             continue              # the walker skips these, so nothing in them is asked for
         seg = re.sub(r"\s+", " ", html.unescape(m.group(4))).strip()
@@ -495,7 +556,7 @@ def js_markup_texts(text):
 
 
 def _js_markup_skipped(m, text):
-    """Whether a _JS_MARKUP_TEXT match sits where the walker never looks (code, pre, a guard)."""
+    """Whether a _js_markup_matches match sits where the walker never looks (code, pre, a guard)."""
     attrs = (m.group(2) or "") + (m.group(3) or "")
     return bool((m.group(1) or "").lower() in SKIP_TAGS or m.group(5).lower() in SKIP_TAGS
                 or "data-no-i18n" in attrs or _js_guarded_before(text[:m.start()]))
@@ -690,7 +751,31 @@ def _untranslated_in(path, source, at, rhs):
 # Only the text node at the join counts: a literal's whole elements (`<th>Name</th>`) are their own
 # nodes, attributes and markup are not text, and punctuation, units and CSS class lists around a
 # name ('“' + name + '”', n + ' MB', 'btn ' + cls) are not prose. `i18n-ignore` on a line exempts it.
-_JS_GAP = re.compile(r"(?:\s|//[^\n]*\n|/\*.*?\*/)*\+(?:\s|//[^\n]*\n|/\*.*?\*/)*\Z", re.S)
+def _js_gap_is_plus(gap):
+    """Whether the source between two literals is one `+`, with blanks and comments around it.
+
+    Scanned token by token, not by `(?:\\s|//[^\\n]*\\n|/\\*.*?\\*/)*\\+(…)*\\Z`, which can backtrack
+    exponentially (SonarCloud S5852). A `//` comment must end in a newline, as the regex asked.
+    """
+    i, pluses = 0, 0
+    while i < len(gap):
+        if gap[i].isspace():
+            i += 1
+        elif gap.startswith("//", i):
+            nl = gap.find("\n", i)
+            if nl < 0:
+                return False
+            i = nl + 1
+        elif gap.startswith("/*", i):
+            close = gap.find("*/", i + 2)
+            if close < 0:
+                return False
+            i = close + 2
+        elif gap[i] == "+":
+            pluses, i = pluses + 1, i + 1
+        else:
+            return False
+    return pluses == 1
 _JS_UNITS = {"ms", "px", "kb", "mb", "gb", "tb", "s", "m", "h", "d"}
 _JS_CSS_WORDS = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]*)*$")
 # The statement assigns a class, a style or an id, so its words are names, not text.
@@ -705,8 +790,7 @@ def _js_splice_runs(source):
     """
     runs = []
     for span in _js_string_spans(source):
-        if runs and _JS_GAP.match(source[runs[-1][-1][3]:span[2]] + "\n") \
-                and "+" in source[runs[-1][-1][3]:span[2]]:
+        if runs and _js_gap_is_plus(source[runs[-1][-1][3]:span[2]] + "\n"):
             runs[-1].append(span)
         else:
             runs.append([span])
@@ -741,13 +825,15 @@ def _js_splice_prose(seg):
     seg = re.sub(r"&\w+;", " ", seg)
     if re.search(r"[/=<>\"\[\]{};#\\(]$|[/=<>\"\[\]{};#\\]|^\s*[.&?-]", seg.strip()):
         return False                                  # a URL, a selector, an attribute, code
-    if re.fullmatch(r"\s*\w*_\w*\s*", seg):
+    if "_" in seg and re.fullmatch(r"\w+", seg.strip()):
         return False                                  # an identifier: '__i18nA_' + attr
     words = seg.split()
     if words and all(_JS_CSS_WORDS.match(w) for w in words) and any("-" in w for w in words):
         return False                                  # 'btn text-wrap ' + cls
-    return any(len(w) >= 2 and w.lower() not in _JS_UNITS
-               for w in re.findall(r"[A-Za-z]*[a-z][A-Za-z]*", seg))
+    # Every run of letters with a lower-case one in it (a plain run, then a test: the one-regex
+    # form `[A-Za-z]*[a-z][A-Za-z]*` backtracks super-linearly on a long upper-case run, S8786).
+    return any(len(w) >= 2 and w.lower() not in _JS_UNITS and w != w.upper()
+               for w in re.findall(r"[A-Za-z]+", seg))
 
 
 def _js_ignored(run, lines):
