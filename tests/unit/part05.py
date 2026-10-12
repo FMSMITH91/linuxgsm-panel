@@ -5128,8 +5128,11 @@ check("audit: every logged action names a target (or is listed as having none)",
 
 # Every walk of the whole checkout in the suites leaves .claude out: in a dev checkout it holds other
 # branches' worktrees, and three walks read them as this tree's code (review 1012a).
+import functools as _functools05  # noqa: E402
+
+
 def _r17d_root_names(tree, depth):
-    """Names bound in `tree` to the checkout root, whatever they are called.
+    """Names bound in `tree` to the checkout root, whatever they are called (a predicate on a node).
 
     `depth`: how many dirname()s of the file's own path reach the root (3 for tests/unit/partNN).
     A root is one of the suites' conventional root names (each one a root wherever it is bound:
@@ -5137,39 +5140,49 @@ def _r17d_root_names(tree, depth):
     imported under another name, a dirname chain of __file__ that long, or a name assigned from
     another root (through abspath/realpath/normpath), followed to a fixed point.
     """
-    def _fn(call):
-        return getattr(call.func, "attr", getattr(call.func, "id", None))
-
-    def _file_depth(e):
-        if isinstance(e, _smg_ast.Name) and e.id == "__file__":
-            return 0
-        if isinstance(e, _smg_ast.Call) and e.args and _fn(e) in ("abspath", "realpath", "normpath"):
-            return _file_depth(e.args[0])
-        if isinstance(e, _smg_ast.Call) and e.args and _fn(e) == "dirname":
-            _d = _file_depth(e.args[0])
-            return None if _d is None else _d + 1
-        return None
-
-    roots = {"REPO_ROOT"} | {_a.asname or _a.name for _n in _smg_ast.walk(tree)
-                             if isinstance(_n, _smg_ast.ImportFrom) and _n.module == "unit"
-                             for _a in _n.names if _a.name == "REPO_ROOT"}
-
-    def is_root(e):
-        if isinstance(e, _smg_ast.Name):
-            return e.id in roots or bool(_re.fullmatch(r"_root|_repo_root|REPO_ROOT|_UNIT_ROOT|_ROOT\w*", e.id))
-        if isinstance(e, _smg_ast.Call) and e.args and _fn(e) in ("abspath", "realpath", "normpath"):
-            return is_root(e.args[0])
-        return _file_depth(e) == depth
+    roots = {_a.asname or _a.name for _n in _smg_ast.walk(tree)
+             if isinstance(_n, _smg_ast.ImportFrom) and _n.module == "unit"
+             for _a in _n.names if _a.name == "REPO_ROOT"}
+    is_root = _functools05.partial(_r17d_is_root, roots=roots, depth=depth)
+    _assigns = [_n for _n in _smg_ast.walk(tree) if isinstance(_n, _smg_ast.Assign)]
     _grew = True
     while _grew:
-        _grew = False
-        for _n in _smg_ast.walk(tree):
-            if isinstance(_n, _smg_ast.Assign) and is_root(_n.value):
-                for _t in _n.targets:
-                    if isinstance(_t, _smg_ast.Name) and _t.id not in roots:
-                        roots.add(_t.id)
-                        _grew = True
+        _new = {_t.id for _n in _assigns if is_root(_n.value) for _t in _n.targets
+                if isinstance(_t, _smg_ast.Name)} - roots
+        roots |= _new
+        _grew = bool(_new)
     return is_root
+
+
+def _r17d_call_name(call):
+    return getattr(call.func, "attr", getattr(call.func, "id", None))
+
+
+def _r17d_file_depth(e):
+    """How many dirname()s of __file__ `e` is (through abspath/realpath/normpath), or None."""
+    if isinstance(e, _smg_ast.Name) and e.id == "__file__":
+        return 0
+    if not (isinstance(e, _smg_ast.Call) and e.args):
+        return None
+    _in = _r17d_file_depth(e.args[0])
+    if _in is None or _r17d_call_name(e) not in ("abspath", "realpath", "normpath", "dirname"):
+        return None
+    return _in + (_r17d_call_name(e) == "dirname")
+
+
+def _r17d_is_root(e, roots, depth):
+    """Is expression `e` the checkout root, given the names `roots` bound to it?"""
+    if isinstance(e, _smg_ast.Name):
+        return e.id in roots or bool(_re.fullmatch(r"_root|_repo_root|REPO_ROOT|_UNIT_ROOT|_ROOT\w*", e.id))
+    if isinstance(e, _smg_ast.Call) and e.args and _r17d_call_name(e) in ("abspath", "realpath", "normpath"):
+        return _r17d_is_root(e.args[0], roots, depth)
+    return _r17d_file_depth(e) == depth
+
+
+def _r17d_walk_of_root(node, is_root):
+    """Is `node` an `os.walk(<root>, ...)` call?"""
+    return (isinstance(node, _smg_ast.Call) and getattr(node.func, "attr", None) == "walk"
+            and getattr(node.func.value, "id", None) == "os" and bool(node.args) and is_root(node.args[0]))
 
 
 def _r16d_unpruned_walks(text, depth=3):
@@ -5185,14 +5198,10 @@ def _r16d_unpruned_walks(text, depth=3):
     sets = {_m.group(1) for _m in _re.finditer(r"(?m)^(\w+)\s*=.*\.claude", text)}
     tree = _smg_ast.parse(text)
     is_root = _r17d_root_names(tree, depth)
-    out = []
-    for _c in _smg_ast.walk(tree):
-        if (isinstance(_c, _smg_ast.Call) and getattr(_c.func, "attr", None) == "walk"
-                and getattr(_c.func.value, "id", None) == "os" and _c.args and is_root(_c.args[0])):
-            _win = "\n".join(lines[_c.lineno - 1:_c.lineno + 6])
-            if ".claude" not in _win and not any(_re.search(r"\b%s\b" % _n, _win) for _n in sets):
-                out.append(_c.lineno)
-    return sorted(set(out))
+    _wins = {_c.lineno: "\n".join(lines[_c.lineno - 1:_c.lineno + 6])
+             for _c in _smg_ast.walk(tree) if _r17d_walk_of_root(_c, is_root)}
+    return sorted(_ln for _ln, _win in _wins.items()
+                  if ".claude" not in _win and not any(_re.search(r"\b%s\b" % _n, _win) for _n in sets))
 
 
 _r16d_walks = []

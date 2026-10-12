@@ -682,10 +682,13 @@ def _r17d_unread_sudo_users(rel, tree, funcs, sites):
     module_vals = {_t.id: _n.value for _n in tree.body if isinstance(_n, _gh_ast.Assign)
                    for _t in _n.targets if isinstance(_t, _gh_ast.Name)}
     return ["G2 %s:%d %s(): names sudo and a user option, with no account check in it" % (rel, fn.lineno, fn.name)
-            for fn in funcs
-            if not any(fn.lineno <= s[0] <= fn.end_lineno for s in sites)
-            and not _gh_validates_before(fn, fn.end_lineno)
+            for fn in funcs if _r17d_unread_unchecked(fn, sites)
             and _r17d_names_sudo(fn, module_vals) and _r17d_has_sudo_user_flag(fn)]
+
+
+def _r17d_unread_unchecked(fn, sites):
+    """No site was found in `fn`, and it checks no account anywhere."""
+    return not any(fn.lineno <= s[0] <= fn.end_lineno for s in sites) and not _gh_validates_before(fn, fn.end_lineno)
 
 
 def _r17d_names_sudo(fn, module_vals):

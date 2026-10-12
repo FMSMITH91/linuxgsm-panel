@@ -2407,27 +2407,32 @@ def _r16d_lt_callee(src, at, quote=None):
     quote and skips every earlier string whole, so a bracket inside one (`')'`) is not counted as
     code (review 1012b: the scan read strings as code and could name the wrong callee).
     """
-    depth, k = 0, at - 1
-    if quote:
-        while k >= 0 and not (src[k] == quote and (k == 0 or src[k - 1] != "\\")):
-            k -= 1
-        k -= 1
+    depth, k = 0, (_r17d_lt_back_past(src, at - 1, quote) if quote else at - 1)
     while k >= 0:
-        if src[k] in "'\"`":
-            _q, k = src[k], k - 1
-            while k >= 0 and not (src[k] == _q and (k == 0 or src[k - 1] != "\\")):
-                k -= 1
-        elif src[k] in ")]}":
-            depth += 1
-        elif src[k] in "([{":
-            if depth == 0:
-                if src[k] != "(":
-                    return ""
-                _m = _lt_re.search(r"([\w$.]+)\s*$", src[:k])
-                return _m.group(1) if _m else ""
-            depth -= 1
+        ch = src[k]
+        if ch in "'\"`":
+            k = _r17d_lt_back_past(src, k - 1, ch)
+            continue
+        if ch in "([{" and depth == 0:
+            return _r17d_lt_name_before(src, k)
+        depth += (ch in ")]}") - (ch in "([{")
         k -= 1
     return ""
+
+
+def _r17d_lt_back_past(src, k, quote):
+    """Scanning back from `k`, the index just before the unescaped `quote` that opens the string."""
+    while k >= 0 and not (src[k] == quote and (k == 0 or src[k - 1] != "\\")):
+        k -= 1
+    return k - 1
+
+
+def _r17d_lt_name_before(src, k):
+    """The name called with the bracket at `k`, or "" when it is no call's `(`."""
+    if src[k] != "(":
+        return ""
+    _m = _lt_re.search(r"([\w$.]+)\s*$", src[:k])
+    return _m.group(1) if _m else ""
 
 
 def _r15d_lt_judge(src):

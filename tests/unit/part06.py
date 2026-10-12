@@ -1597,19 +1597,30 @@ def _r17d_follow_factories(tree, alias):
     attributes while the real ones ran (review 1012b).
     """
     for _ in range(4):  # at most 4 rounds, stopping at the first that adds nothing
-        _makes = {_f.name: alias[_r.value.id] for _f in _ast_scan.walk(tree)
-                  if isinstance(_f, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef))
-                  for _r in _ast_scan.walk(_f)
-                  if isinstance(_r, _ast_scan.Return) and isinstance(_r.value, _ast_scan.Name)
-                  and _r.value.id in alias}
-        _added = {_t: _makes[_v.func.id] for _v, _ts in _r16d_call_assigns(tree)
-                  if isinstance(_v.func, _ast_scan.Name) and _v.func.id in _makes
-                  for _t in _ts if _t not in alias}
+        _added = _r17d_factory_binds(tree, _r17d_factories(tree, alias), alias)
         if not _added:
             break
         alias.update(_added)
         alias = _r16d_follow_copies(tree, alias)
     return alias
+
+
+def _r17d_factories(tree, alias):
+    """{function name: module} for each function that returns a name `alias` maps."""
+    return {_f.name: alias[_r.value.id] for _f in _ast_scan.walk(tree)
+            if isinstance(_f, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef))
+            for _r in _ast_scan.walk(_f) if _r17d_returns_alias(_r, alias)}
+
+
+def _r17d_returns_alias(node, alias):
+    return isinstance(node, _ast_scan.Return) and isinstance(node.value, _ast_scan.Name) and node.value.id in alias
+
+
+def _r17d_factory_binds(tree, makes, alias):
+    """{name: module} for each `name = factory(...)` not already an alias."""
+    return {_t: makes[_v.func.id] for _v, _ts in _r16d_call_assigns(tree)
+            if isinstance(_v.func, _ast_scan.Name) and _v.func.id in makes
+            for _t in _ts if _t not in alias}
 
 
 def _r16d_name_copies(tree):
