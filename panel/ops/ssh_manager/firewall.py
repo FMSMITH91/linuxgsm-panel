@@ -405,6 +405,13 @@ def _r12a_names_port(pn, ports):
     return False
 
 
+def _r14a_public_allow_in(rule):
+    """Whether `rule` is an inbound ALLOW/LIMIT on no interface (a display group or a parsed row)."""
+    return (not (rule.get("iface") or rule.get("is_iface"))
+            and rule.get("action", "ALLOW") in ("ALLOW", "LIMIT")
+            and (rule.get("direction") or "IN") == "IN")
+
+
 def _r14a_panel_port_scope(rule, port):
     """How rule `rule` holds `port` open to the public: "only", "shared" or "" (it does not).
 
@@ -416,11 +423,8 @@ def _r14a_panel_port_scope(rule, port):
     route calls already closed. The From column is not read: a rule from one address still leaves
     the port listening to it.
     """
-    if (rule.get("iface") or rule.get("is_iface") or rule.get("action", "ALLOW") not in ("ALLOW", "LIMIT")
-            or (rule.get("direction") or "IN") != "IN"):
-        return ""
     pn = str(rule.get("port_num", ""))
-    if not _r12a_names_port(pn, {int(port)}):
+    if not _r14a_public_allow_in(rule) or not _r12a_names_port(pn, {int(port)}):
         return ""
     words = pn.split()
     items = (words[-1] if words else "").split(",")
@@ -491,7 +495,7 @@ def _r14a_src_net(words):
 
 
 def _r14a_dest_addr(g):
-    """The destination address a rule's To column names ("203.0.113.5 22" -> it), else ""."""
+    """The destination address a rule's To column names ("<addr> 22" -> <addr>), else ""."""
     words = str(g.get("port_num", "")).split()
     return words[0] if words and _r14a_net(words[0]) is not None else ""
 
@@ -518,11 +522,15 @@ def _r14a_mark_live_ssh(groups, ssh_ports):
     for g in groups:
         g["ssh_live"] = bool(g.get("is_ssh"))   # a group with no number has no place to read
     for i, g in enumerate(order):
-        if not g.get("is_ssh"):
-            continue
-        denies = [d for d in order[:i] if d.get("action") in ("DENY", "REJECT")]
-        g["ssh_live"] = any(_r14a_admits(g, p) and not any(_r14a_deny_covers(d, g, p) for d in denies)
-                            for p in ssh_ports)
+        if g.get("is_ssh"):
+            g["ssh_live"] = _r14a_live(g, [d for d in order[:i] if d.get("action") in ("DENY", "REJECT")],
+                                       ssh_ports)
+
+
+def _r14a_live(g, denies, ssh_ports):
+    """Whether SSH ALLOW `g` admits some sshd port that none of `denies` (the rules above it) blocks."""
+    return any(_r14a_admits(g, p) and not any(_r14a_deny_covers(d, g, p) for d in denies)
+               for p in ssh_ports)
 
 
 def _r11a_reaches_ssh(g, pn, ssh_ports):
@@ -604,7 +612,7 @@ def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_
         # `ssh_count` counts only the SSH rules UFW lets act (_r14a_mark_live_ssh); this one is
         # "another" way only to the others. A rule a DENY above it shadows is no way in itself, and
         # it stays protected while nothing else is (in doubt, protect).
-        other_way = (ssh_count - (1 if g.get("ssh_live") else 0) > 0) or ts_ssh_ok or ts_iface_ok
+        other_way = (ssh_count - int(bool(g.get("ssh_live"))) > 0) or ts_ssh_ok or ts_iface_ok
         reason_last = (
             "%s the SSH port used to reach this host, and there's no working Tailscale "
             "route to fall back on — removing it would lock you out. Enable Tailscale SSH, or "
