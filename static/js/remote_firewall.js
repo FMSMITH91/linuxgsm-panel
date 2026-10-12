@@ -170,7 +170,8 @@ function blockIp() {
       resultEl.innerHTML = '<span class="text-danger">❌ ' + esc(data.message) + '</span>';  // nosemgrep
     }
   })
-  .catch(function() { resultEl.innerHTML = '<span class="text-danger">❌ Request failed</span>'; });
+  // The words in an element of their own: "❌ Request failed" as one node matched no catalog key.
+  .catch(function() { resultEl.innerHTML = '<span class="text-danger">❌ <span>Request failed</span></span>'; });
 }
 
 function unblockIp(ip, btn) {
@@ -251,7 +252,7 @@ function _restrictPost(path, body, busy) {
     if (data.success) refreshFirewall();
   })
   .catch(function () {
-    out.innerHTML = '<span class="text-danger">❌ Request failed.</span>';           // nosemgrep
+    out.innerHTML = '<span class="text-danger">❌ <span>Request failed.</span></span>';   // nosemgrep
   });
 }
 

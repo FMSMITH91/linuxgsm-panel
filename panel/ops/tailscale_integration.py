@@ -1154,6 +1154,8 @@ def suggest_best_bind(port=5000, scheme="http", mount=None):
       - bind_host: recommended bind address
       - url: URL the user can reach it at
       - description: human-readable explanation
+      - note, note_value: the same as a catalog-key sentence and the address it names (the SUGGEST_*
+        constants), which the page shows as separate nodes so the sentence can be translated
     """
     info = get_tailscale_info()
     scheme = "https" if scheme == "https" else "http"
@@ -1175,11 +1177,20 @@ def suggest_best_bind(port=5000, scheme="http", mount=None):
     elif info.installed and info.backend_state == "NeedsLogin":
         # Installed but never authorized — the recommendation is to finish linking, not to
         # open the panel to all interfaces.
-        return _direct_suggestion(
-            port, scheme, ("Tailscale is installed but not linked yet. Link this machine above "
-                           "to reach the panel privately over your tailnet."))
+        return _direct_suggestion(port, scheme, SUGGEST_NOT_LINKED)
     else:
-        return _direct_suggestion(port, scheme, "No Tailscale detected. Bind to all interfaces.")
+        return _direct_suggestion(port, scheme, SUGGEST_NO_TAILSCALE)
+
+
+# What the Tailscale page says about each suggestion: `note`, a catalog key the page's translator
+# swaps whole, then `note_value` (the address, verbatim) in an element of its own. `description`
+# stays for the API; it is the same sentence with the value spliced in, which is why the page could
+# not show it: one text node no catalog key matches, so it was English in every language.
+SUGGEST_SERVE = "Bind to localhost and expose the panel through Tailscale Serve at:"
+SUGGEST_TAILNET_IP = "Bind to this machine's Tailscale IP and open the panel directly at:"
+SUGGEST_NOT_LINKED = ("Tailscale is installed but not linked yet. Link this machine above to reach "
+                      "the panel privately over your tailnet.")
+SUGGEST_NO_TAILSCALE = "No Tailscale detected. Bind to all interfaces."
 
 
 def _suggested_route(serve_config, port, mount, ours):
@@ -1197,6 +1208,7 @@ def _serve_suggestion(port, route):
         "port": port,
         "url": url,
         "description": f"Bind to localhost and expose via Tailscale Serve at {url}",
+        "note": SUGGEST_SERVE, "note_value": url,
     }
 
 
@@ -1209,6 +1221,8 @@ def _tailnet_ip_suggestion(port, scheme):
         "port": port,
         "url": f"{scheme}://{ts_ip}:{port}" if ts_ip else f"{scheme}://<tailscale-ip>:{port}",
         "description": f"Bind to Tailscale IP {ts_ip} and access directly",
+        "note": SUGGEST_TAILNET_IP,
+        "note_value": f"{scheme}://{ts_ip}:{port}" if ts_ip else "",
     }
 
 
@@ -1220,4 +1234,5 @@ def _direct_suggestion(port, scheme, description):
         "port": port,
         "url": f"{scheme}://<your-server-ip>:{port}",
         "description": description,
+        "note": description, "note_value": "",
     }

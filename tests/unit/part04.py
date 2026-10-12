@@ -2432,8 +2432,9 @@ check("tools: ...a string with no catalog entry is reported with every template 
 _i18n4_dyn = _tl_printed(_i18n4._print_dynamic,
                          {"entries": {"z.html": {"text"}}, "In catalog": {"a.html": {"text"}}},
                          {"In catalog": "En el catálogo"})
-check("tools: ...a welded {{ }} string is reported, unless the catalog already has it",
-      _i18n4_dyn == ["  DYNAMIC  [z.html] 'entries'"], repr(_i18n4_dyn))
+# In the catalog or not: the node it is welded into stays English either way (part63).
+check("tools: ...a welded {{ }} string is reported, in the catalog or not",
+      _i18n4_dyn == ["  DYNAMIC  [a.html] 'In catalog'", "  DYNAMIC  [z.html] 'entries'"], repr(_i18n4_dyn))
 
 # The Codacy gate: which issues are unreviewed, the table, the stale list, and main()'s verdict.
 _cg4 = _tl_load(".github/scripts/codacy_open_errors.py", "codacy_gate_p4")

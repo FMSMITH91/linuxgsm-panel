@@ -49,6 +49,10 @@ TRANSLATION_DIR = os.path.join(ROOT, "translations")
 SKIP_TAGS = {"script", "style", "textarea", "code", "pre", "noscript"}
 # base.html's ATTRS list.
 I18N_ATTRS = ("title", "placeholder", "aria-label")
+# A form's confirm dialog (panel.js): each value is written into the dialog with textContent, so it
+# reaches the walker as ONE text node, wherever the form sits. Not read at all before, so neither a
+# missing entry nor a name spliced into the sentence ("Delete user “{{ name }}”?") was reported.
+CONFIRM_ATTRS = ("data-confirm", "data-confirm-title", "data-confirm-label")
 
 # Sentinels chosen from the C0 range: they cannot occur in template source, so they survive the
 # HTML parse without colliding with real content.
@@ -103,6 +107,7 @@ class _Walker(HTMLParser):
         # contract is that it mirrors the runtime's rules exactly.
         self._open = []           # names of every currently-open non-void element
         self._skip_at = None      # len(self._open) when the innermost skip began; None = not skipping
+        self._skip_tag = None     # the element that began it: a SKIP_TAGS name, or "data-no-i18n"
 
     # Void elements never close, so they must not push onto the skip stack.
     _VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -117,21 +122,38 @@ class _Walker(HTMLParser):
         # the runtime never even looks at.
         if self._skip_at is None and not skips:
             self._collect_attrs(attr_map)
+        # Read in a guarded region too: the dialog is built elsewhere, outside the guard.
+        self._collect_attrs(attr_map, CONFIRM_ATTRS)
         if tag in self._VOID:
             return                # never closes, so it opens no region
         self._open.append(tag)
         if skips and self._skip_at is None:
             self._skip_at = len(self._open)   # the depth this skip region starts at
+            self._skip_tag = tag if tag in SKIP_TAGS else "data-no-i18n"
 
-    def _collect_attrs(self, attr_map):
+    def _collect_attrs(self, attr_map, names=I18N_ATTRS):
         """Record the element's translatable attributes (title, placeholder...) as "@name"."""
-        for name in I18N_ATTRS:
+        for name in names:
             value = attr_map.get(name)
-            if value is None or _DYNAMIC in value or _SPLIT in value:
-                continue   # server-side t() already handled it, or it is per-request text
-            value = html.unescape(value).strip()
-            if is_translatable(value):
-                self.strings.setdefault(value, set()).add("@" + name)
+            if value is None:
+                continue
+            # A {% if %} splits the value into branches, each a whole value, as it splits a text
+            # run. A branch holding a {{ }} is per-request text: an attribute made of the
+            # expression alone is the expression's business (a t() call, or a literal
+            # _expression_labels asks for), but static words welded to one ("Move {{ label }}
+            # left") reach the browser as one value no catalog key can equal. Those were skipped,
+            # so the gate passed while every such label stayed English; reported as unreachable
+            # now, as text runs are.
+            for branch in html.unescape(value).split(_SPLIT):
+                branch = re.sub(r"\s+", " ", branch).strip()
+                if _DYNAMIC not in branch:
+                    if is_translatable(branch):
+                        self.strings.setdefault(branch, set()).add("@" + name)
+                    continue
+                for part in branch.split(_DYNAMIC):
+                    part = part.strip()
+                    if is_translatable(part):
+                        self.dynamic.setdefault(part, set()).add("@" + name)
 
     def handle_endtag(self, tag):
         if tag in self._VOID or tag not in self._open:
@@ -141,10 +163,11 @@ class _Walker(HTMLParser):
         while self._open and self._open.pop() != tag:
             pass
         if self._skip_at is not None and len(self._open) < self._skip_at:
-            self._skip_at = None              # left the element that opened the skip
+            self._skip_at = self._skip_tag = None     # left the element that opened the skip
 
     def handle_data(self, data):
         if self._skip_at is not None:
+            self._skipped_prose(data)
             return
         for run in data.split(_SPLIT):
             collapsed = re.sub(r"\s+", " ", run.replace(_DYNAMIC, "\x00")).strip()
@@ -160,11 +183,33 @@ class _Walker(HTMLParser):
                 self.strings.setdefault(collapsed, set()).add("text")
 
 
+    # The walker never reads a skipped region, so prose there is English in every language, and the
+    # gate mirrored the skip and said nothing: a guard put on a whole sentence to keep the name
+    # inside it verbatim ("This is a real shell on {{ host }}, running as …") hid the panel's own
+    # words, and a placeholder written inside a <pre> ("Pick a log above, …") was never asked for.
+    # Reported as unreachable. A guard belongs on the name alone; a <pre>'s placeholder in a
+    # sibling element.
+    def _skipped_prose(self, data):
+        inner = self._open[self._skip_at - 1:]
+        in_pre = "pre" in inner
+        if not in_pre and (self._skip_tag != "data-no-i18n" or set(inner) & SKIP_TAGS):
+            return                # code, a script, a style: never prose
+        for run in data.split(_SPLIT):
+            for part in re.sub(r"\s+", " ", run).split(_DYNAMIC):
+                part = part.strip()
+                words = part.split()
+                if _JS_CODEY.search(part) or not re.search(r"[a-z]{3}", part):
+                    continue
+                if (in_pre and len(words) >= 4 and part[-1:] in ".!?") \
+                        or (not in_pre and len(words) >= 3):
+                    self.dynamic.setdefault(part, set()).add("pre" if in_pre else "guarded")
+
+
 # A quoted literal inside a {{ }} expression: `{{ 'Regenerate token' if t else 'Generate token' }}`,
 # a macro's label argument (`sort_th('target', 'Target')`). It renders as the whole text of its
 # node as often as not, and _resolve_jinja turned it into _DYNAMIC, so it was never asked for:
 # those labels showed in English on translated pages while the gate passed.
-_EXPR_LITERAL = re.compile(r"'([^'\\\n]*)'|\"([^\"\\\n]*)\"")
+_EXPR_LITERAL = re.compile(r"'((?:[^'\\\n]|\\.)*)'|\"((?:[^\"\\\n]|\\.)*)\"")
 # A URL builder's arguments are endpoint and parameter names, never text a person reads.
 _URL_CALL = re.compile(r"\b(?:url_for|asset_url)\([^()]*\)")
 
@@ -175,14 +220,49 @@ def _is_expr_label(text):
                 and "%" not in text and text == text.strip())
 
 
+def _is_expr_prose(text):
+    """Does a lower-case literal read as words a person reads ('this host', '•••• (leave blank…')?
+
+    _is_expr_label asks for a capital, so a fallback like `display_host or 'this host'` and a
+    placeholder like 'the bot token from the Developer Portal' were never asked for. Two words or
+    more, after any leading symbols, none of them shaped like a CSS class or an identifier (a
+    hyphen, an underscore, a digit): `'btn btn-sm'` is markup, not prose.
+    """
+    core = re.sub(r"^[^A-Za-z]+", "", text)
+    words = core.split()
+    return bool(len(words) >= 2 and re.search(r"[a-z]{3}", core) and not _JS_CODEY.search(text)
+                and "%" not in text and text == text.strip()
+                and not any(re.search(r"[-_0-9]", w) for w in words))
+
+
+def _jinja_literal(raw):
+    """A Jinja string literal's text, its escapes (\\uXXXX, \\', \\") decoded as Jinja decodes them."""
+    return re.sub(r"\\(u[0-9a-fA-F]{4}|.)",
+                  lambda m: chr(int(m.group(1)[1:], 16)) if len(m.group(1)) == 5 else m.group(1), raw)
+
+
+# A t() call's argument is a catalog key by definition, whatever its shape: "Move %s up" has a %,
+# and _is_expr_label refused it, so a format key with no entry rendered English (and its |format
+# is where a translation that lost the %s would raise). Matched as "an open t( call".
+_EXPR_T_CALL = re.compile(r"""\bt\(\s*$""")
+
+
 def _expression_labels(source):
-    """Every label-like quoted literal inside the {{ }} expressions of template `source`."""
+    """Every label-like quoted literal inside the {{ }} expressions (and {% set %}s) of `source`."""
     source = re.sub(r"\{#.*?#\}", "", source, flags=re.S)
+    # {% set NAME = {'key': 'Label'} %}: a lookup table rendered through {{ NAME[key] }}, so its
+    # labels are what the page shows (the dashboard's tile names, the server page's panels).
+    exprs = re.findall(r"\{\{(.*?)\}\}", source, flags=re.S) \
+        + re.findall(r"\{%-?\s*set\b(.*?)%\}", source, flags=re.S)
     out = set()
-    for expr in re.findall(r"\{\{(.*?)\}\}", source, flags=re.S):
-        for m in _EXPR_LITERAL.finditer(_URL_CALL.sub("", expr)):
-            text = m.group(1) if m.group(1) is not None else m.group(2)
-            if _is_expr_label(text):
+    for expr in exprs:
+        expr = _URL_CALL.sub("", expr)
+        for m in _EXPR_LITERAL.finditer(expr):
+            text = _jinja_literal(m.group(1) if m.group(1) is not None else m.group(2))
+            if _EXPR_T_CALL.search(expr[:m.start()]) and _HAS_LETTER.search(text):
+                out.add(text)
+            elif _is_expr_label(text) or (_is_expr_prose(text)
+                                          and not re.search(r"(?:[=!]=|\bin)\s*$", expr[:m.start()])):
                 out.add(text)
     return out
 
@@ -356,15 +436,52 @@ def is_js_t_arg(text, before):
 # is how a dialog built as one innerHTML string stayed English for every viewer (review 2026-10-11,
 # the players dialog; 117 such strings had no entry). Only an element's whole text counts: prose at
 # a literal's edge is spliced to a value and no catalog key can match it.
-_JS_MARKUP_TEXT = re.compile(r"(?:<(?!/)[^<>]*>|</i>)([^<>]+)</[a-zA-Z0-9]+>")
+_JS_MARKUP_TEXT = re.compile(r"(?:<(?!/)([a-zA-Z0-9]*)([^<>]*)>|</i>|^([^<>]*)>)([^<>]+)</([a-zA-Z0-9]+)>")
+# Emphasis inside a sentence: "Attach this host to your <strong>free</strong> subscription". The
+# word is a fragment of prose spliced around it, not a label, so a lower-case one is not claimed.
+_JS_INLINE_TAGS = {"b", "strong", "i", "em", "u"}
+# A whole element's text in lower case: a badge ("banned now"), a link ("view log"), a button
+# ("unblock"), a note ("(empty folder)"). is_js_ui_text and _JS_UI_WORD both want a capital, so a
+# lower-case label inside markup was never asked for. Words only: letters, spaces, an apostrophe or a closing full stop,
+# and two letters at least ("fail2ban isn't installed on this host." has a digit in a word, which
+# is a name, and is allowed inside one).
+_JS_LOWER_LABEL = re.compile(r"^\(?[a-z][a-z0-9']*(?: [a-z0-9'][a-z0-9'.]*)*[.…]?\)?$")
+
+
+def _js_markup_claims(seg, tag):
+    """Whether one element's whole text reads as a label, ignoring a leading emoji or symbol."""
+    core = re.sub(r"^[^A-Za-z(]+", "", seg)   # "❌ Request failed": the shape is the words'
+    if not core or not re.search(r"[A-Za-z]{2}", core):
+        return False
+    return bool(is_js_ui_text(core) or _JS_UI_WORD.match(core)
+                or (tag not in _JS_INLINE_TAGS and _JS_LOWER_LABEL.match(core)
+                    and not _JS_CODEY.search(core)))
+
+
+def _js_guarded_before(prefix):
+    """Whether `prefix` (a literal up to an element's text) leaves a data-no-i18n element open."""
+    at = prefix.rfind("data-no-i18n")
+    if at < 0:
+        return False
+    opened = re.search(r"<([a-zA-Z0-9]+)[^<>]*$", prefix[:at])
+    return bool(opened) and ("</%s>" % opened.group(1).lower()) not in prefix[at:].lower()
 
 
 def js_markup_texts(text):
-    """The user-visible whole-element texts inside an innerHTML-built literal."""
+    """The user-visible whole-element texts inside an innerHTML-built literal.
+
+    Also a literal that STARTS inside an opening tag, after a splice:
+    `'<a href="#"' + _da('x') + '>Advanced: use a pre-auth key instead</a>'` — the label is the
+    element's whole text, and the opening tag being in the previous literal hid it.
+    """
     out = []
     for m in _JS_MARKUP_TEXT.finditer(text):
-        seg = re.sub(r"\s+", " ", html.unescape(m.group(1))).strip()
-        if seg and (is_js_ui_text(seg) or _JS_UI_WORD.match(seg)):
+        tag, attrs = (m.group(1) or "").lower(), (m.group(2) or "") + (m.group(3) or "")
+        if tag in SKIP_TAGS or m.group(5).lower() in SKIP_TAGS or "data-no-i18n" in attrs \
+                or _js_guarded_before(text[:m.start()]):
+            continue              # the walker skips these, so nothing in them is asked for
+        seg = re.sub(r"\s+", " ", html.unescape(m.group(4))).strip()
+        if seg and _js_markup_claims(seg, tag or m.group(5).lower()):
             out.append(seg)
     return out
 
@@ -451,6 +568,86 @@ def scan_js(js_dir=JS_DIR):
     return found
 
 
+# ── Text a script writes where the translator never looks ─────────────────────────────────────
+# A script that writes panel text into an element the translator skips — one carrying data-no-i18n
+# (guarded for a name or a path it holds at other times), or a <pre> — has it shown in English in
+# every language, catalog entry or not: "Enter SSH password" into the credential field, the stale
+# notice into #live-stale, "Could not read the log." into the security log's <pre>. Nothing above
+# can see it, because the literal is fine and only its DESTINATION is wrong. Such a write goes
+# through t() (or the element loses its guard). Read from the templates (an element's id or name)
+# and the scripts (a variable bound to it, or one that sets data-no-i18n itself).
+class _GuardedIds(HTMLParser):
+    """The id and name of every template element the translator skips."""
+
+    def __init__(self):
+        HTMLParser.__init__(self, convert_charrefs=True)
+        self.ids, self.names = set(), set()
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag in SKIP_TAGS or "data-no-i18n" in a:
+            for key, into in (("id", self.ids), ("name", self.names)):
+                v = a.get(key) or ""
+                if v and _DYNAMIC not in v and _SPLIT not in v:
+                    into.add(v)
+
+
+_JS_WRITE = r"\.(?:textContent|innerText|placeholder|title)\s*=(?!=)"
+
+
+def _guarded_vars(source, ids, names):
+    """{variable: [index of its binding]} for script variables bound to a skipped element.
+
+    By name as well as id: the credential field is reached as `[name="credential"]`. A name some
+    other template's element shares without a guard still counts (a write through t() is right for
+    either), which is the conservative side of a guess.
+    """
+    out = {}
+    for m in re.finditer(r"\b(?:var|let|const)\s+(\w+)\s*=\s*([^;]*)", source):
+        rhs = m.group(2)
+        hit = any(("'%s'" % i) in rhs or ('"%s"' % i) in rhs or ("#%s'" % i) in rhs for i in ids) \
+            or any(('name="%s"' % n) in rhs or ("name='%s'" % n) in rhs for n in names)
+        if hit:
+            out.setdefault(m.group(1), []).append(m.start())
+    for m in re.finditer(r"\b(\w+)\.setAttribute\(\s*['\"]data-no-i18n['\"]", source):
+        out.setdefault(m.group(1), []).append(m.start())
+    return out
+
+
+def guarded_writes(js_dir=JS_DIR, template_dir=TEMPLATE_DIR):
+    """[(file, line, text)]: UI text written, not through t(), into an element the translator skips."""
+    guard = _GuardedIds()
+    for path in sorted(glob.glob(os.path.join(template_dir, "*.html"))):
+        with open(path, encoding="utf-8") as fh:
+            guard.feed(_resolve_jinja(fh.read()))
+    out = []
+    for path in sorted(glob.glob(os.path.join(js_dir, "*.js"))):
+        with open(path, encoding="utf-8") as fh:
+            source = fh.read()
+        for var, starts in _guarded_vars(source, guard.ids, guard.names).items():
+            for start in starts:
+                # The binding's own neighbourhood: a short name (`el`) is rebound elsewhere.
+                window = source[start:start + 2500]
+                for w in re.finditer(r"\b%s%s([^;]*)" % (re.escape(var), _JS_WRITE), window):
+                    out.extend(_untranslated_in(path, source, start + w.start(1), w.group(1)))
+    return sorted(set(out))
+
+
+def _untranslated_in(path, source, at, rhs):
+    """The UI-text literals of one assignment's right-hand side that no t() wraps."""
+    found = []
+    spans = _js_string_spans(rhs)
+    # `window.t ? window.t('x') : 'x'`: the bare one is the fallback for a page without i18n.js.
+    wrapped = {text for text, _l, s0, _e in spans if re.search(r"\bt\(\s*$", rhs[:s0])}
+    for text, _line, s0, _e in spans:
+        before, text = rhs[:s0], text.strip()   # " (alerts muted)", spliced on after a name
+        if text in wrapped:
+            continue
+        if _js_claims(text, before) or (_JS_LOWER_LABEL.match(text) and " " in text):
+            found.append((os.path.basename(path), source.count("\n", 0, at + s0) + 1, text))
+    return found
+
+
 def missing_js(lang="es", js_dir=JS_DIR, translation_dir=TRANSLATION_DIR):
     """{string: {filename}} for JS user-visible text with no entry in `lang`'s catalog."""
     catalog = load_catalog(lang, translation_dir)
@@ -505,10 +702,15 @@ def _print_missing(gaps):
 
 
 def _print_dynamic(dynamic, catalog):
-    """One DYNAMIC line per string welded to a {{ }} that no catalog entry can reach."""
+    """One DYNAMIC line per string welded to a {{ }}, where no catalog entry can reach it.
+
+    Every one, in the catalog or not. One that is in it was skipped as "translated elsewhere as a
+    standalone node; here it is just inert" — but inert is the defect: the node it sits in stays
+    English ("root@host:22 · Auth: key" passed the gate because "· Auth:" was a key). `catalog` is
+    kept for callers; it no longer decides anything.
+    """
+    del catalog
     for text, where in sorted(dynamic.items(), key=lambda kv: sorted(kv[1])[0]):
-        if text in catalog:
-            continue   # translated elsewhere as a standalone node; here it is just inert
         print("  DYNAMIC  [%s] %r" % (",".join(sorted(where))[:40], text[:100]))
 
 

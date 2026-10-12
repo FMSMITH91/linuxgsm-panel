@@ -131,7 +131,9 @@ function toggleCreds(select) {
   if (select.value === 'password') {
     group.style.display = '';
     label.textContent = 'Password';
-    input.placeholder = 'Enter SSH password';
+    // t(): the field carries data-no-i18n (its value is a path or a password, never translated), so
+    // the translator never reaches the placeholder this writes.
+    input.placeholder = t('Enter SSH password');
     input.value = '';
     input.type = 'password';
     input.autocomplete = 'new-password';
@@ -157,7 +159,7 @@ function toggleEditCreds(select, id) {
     input.value = '';
   } else {
     group.style.display = '';
-    input.placeholder = 'Key path or password';
+    input.placeholder = t('Key path or password');   // t(): see toggleCreds
   }
 }
 
@@ -195,7 +197,9 @@ function renderTailscaleStatus(remoteId, name, status) {
     // so "not installed" — with an Install button — would be a guess stated as a reading.
     html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> ' + escapeHtml("Couldn't read Tailscale's state on this host — it did not answer. Try again once it is reachable.") + '</div>';  // nosemgrep
   } else if (installed && running) {
-    html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> Tailscale is <strong>installed</strong> and <strong>running</strong> on ' + safe + '.</div>';
+    // Each sentence a whole node, the host's name apart: with the state words bolded inside it, the
+    // sentence reached the translator as fragments ("Tailscale is", "and", "on") no key matched.
+    html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> <span>Tailscale is installed and running on</span> <strong data-no-i18n>' + safe + '</strong>.</div>';
     // escapeHtml: tailscale_ip and dns_name are parsed out of `tailscale status --json` run on
     // the REMOTE host, so a compromised or hostile host picks these bytes. They land in innerHTML
     // via setModalBody below.
@@ -203,10 +207,10 @@ function renderTailscaleStatus(remoteId, name, status) {
     if (status.dns_name) html += '<p class="small mb-1"><strong>DNS:</strong> <code>' + escapeHtml(status.dns_name) + '</code></p>';
     html += '<hr>' + _tsMigrateOffer(remoteId);
   } else if (installed) {
-    html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> Tailscale is <strong>installed</strong> but <strong>not running</strong>.</div>';
+    html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> <span>Tailscale is installed but not running.</span></div>';
     html += renderAuthKeyForm(remoteId, name);
   } else {
-    html += '<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> Tailscale is <strong>not installed</strong> on ' + safe + '.</div>';
+    html += '<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> <span>Tailscale is not installed on</span> <strong data-no-i18n>' + safe + '</strong>.</div>';
     html += '<button class="btn btn-primary btn-sm mb-2" data-install-ts data-ts-remote="' + Number(remoteId) + '" data-ts-name="' + safe + '"><i class="bi bi-download"></i> Install Tailscale</button>';
     html += '<div id="install-log" class="small mt-2"></div>';
   }

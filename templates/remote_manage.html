@@ -23,7 +23,7 @@
       {% if remote.is_local %}<span class="badge bg-secondary ms-1" style="font-size:.6rem;vertical-align:middle;font-weight:600;">this panel</span>{% endif %}
     </h1>
     <span class="text-secondary small">
-      {% if remote.is_local %}{{ remote.display_host or 'this host' }}{% else %}{{ remote.username }}@{{ remote.host }}:{{ remote.port }} &middot; Auth: {{ remote.auth_method }}{% endif %}
+      {% if remote.is_local %}{{ remote.display_host or t('this host') }}{% else %}{{ remote.username }}@{{ remote.host }}:{{ remote.port }} &middot; <span>Auth:</span> {{ remote.auth_method }}{% endif %}
       {% if remote.games %}&middot; {{ remote.games|length }} {% if remote.games|length == 1 %}<span>game server</span>{% else %}<span>game servers</span>{% endif %}{% endif %}
     </span>
   </div>
@@ -84,7 +84,7 @@
     {# Shown only when a live read fails. Without it the card keeps the last good numbers on
        screen with a "realtime" dot beside them, which is a stale reading presented as a live
        one — the same failure the install-progress poller carries a note about. #}
-    <div class="small text-warning mb-2" id="live-stale" style="display:none;" data-no-i18n></div>
+    <div class="small text-warning mb-2" id="live-stale" style="display:none;"></div>
     <!-- CPU (overall + per-core) — full width on top -->
     <div class="mb-4">
       <div class="d-flex justify-content-between align-items-baseline mb-1">
@@ -200,7 +200,9 @@
         {% if remote.is_local %}
         <p class="small text-secondary">A shell on this host, as the panel's own account.</p>
         {% else %}
-        <p class="small text-secondary" data-no-i18n>A shell on this host, as
+        {# Only the account is verbatim: <code> is skipped by the translator anyway. The guard used
+           to sit on the whole sentence, which kept the panel's own words English. #}
+        <p class="small text-secondary"><span>A shell on this host, as</span>
           <code>{{ remote.username or 'root' }}</code>.</p>
         {% endif %}
         <a href="{{ url_for('host_terminal', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary">
@@ -634,7 +636,9 @@
       <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["ssh"]'><i class="bi bi-terminal"></i> SSH auth log</button>
     </div>
     <div id="sec-log-title" class="small text-secondary mb-1" style="min-height:1rem;"></div>
-    <pre id="sec-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:340px;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;">Pick a log above, or "view log" on a jail above, to see its recent lines.</pre>
+    {# Translated here and in loadSecurityLog: the page's translator skips a <pre>, so its
+       placeholder and status lines were English in every language. #}
+    <pre id="sec-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:340px;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;">{{ t('Pick a log above, or "view log" on a jail above, to see its recent lines.') }}</pre>
   </div>
 </div>
 {% endif %}

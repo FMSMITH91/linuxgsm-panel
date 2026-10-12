@@ -91,6 +91,13 @@ function toggleAutoblock(cb){
   var on=!!(cb&&cb.checked);
   fetch(secBase()+'/autoblock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})})
     .then(function(r){return r.json();}).then(function(d){
+      // A refusal is JSON too ({"success": false} from a denial, or "No local host record."): it
+      // was toasted as done, with the switch left where the click put it.
+      if(!d || !d.success){
+        if(window.toast) toast((d && d.message) || 'Couldn\'t change auto-block','danger');
+        if(cb) cb.checked=!on;
+        return;
+      }
       if(window.toast) toast(on?'Auto-block on — applying now…':'Auto-block off', on?'success':'info');
       setTimeout(loadSecurityTopIps, on?2500:300);   // give the immediate reconcile a moment
     }).catch(function(){ if(window.toast) toast('Couldn\'t change auto-block','danger'); if(cb) cb.checked=!on; });
@@ -222,16 +229,16 @@ function loadSecurityLog(which, jail){
   var el=document.getElementById('sec-log'); if(!el) return;
   var hdr=document.getElementById('sec-log-title');
   if(hdr) hdr.textContent = (which==='fail2ban' && jail) ? ('fail2ban activity — '+jail) : '';
-  el.textContent='Loading…';
+  el.textContent=t('Loading…');   // t(): the translator skips this <pre>
   var url=secBase()+'/log?which='+encodeURIComponent(which);
   if(jail) url += '&jail='+encodeURIComponent(jail);
   fetch(url).then(function(r){return r.json();}).then(function(d){  // nosemgrep
     // A read that FAILED answers {text:"", error:...}; "(log is empty)" there told an admin an
     // unreachable host had no SSH or ban activity, on the card that exists to show attacks.
-    if(!d || d.error){ el.textContent='Could not read the log.'; return; }
-    el.textContent=d.text||'(log is empty)'; el.scrollTop=el.scrollHeight;   // textContent: raw log is never HTML
+    if(!d || d.error){ el.textContent=t('Could not read the log.'); return; }
+    el.textContent=d.text||t('(log is empty)'); el.scrollTop=el.scrollHeight;   // textContent: raw log is never HTML
     if(el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'nearest'});
-  }).catch(function(){ el.textContent='Could not read the log.'; });
+  }).catch(function(){ el.textContent=t('Could not read the log.'); });
 }
 
 // "update available" badge links to #updates, so a hash pointing at a card opens its tab and
@@ -323,8 +330,8 @@ function pollLive(){
     var stale = document.getElementById('live-stale');
     if(d.error){
       if(stale){ stale.textContent = d.unreachable
-        ? 'Live figures are paused — the host did not answer. The numbers below are the last reading.'
-        : 'Live figures are paused — the last read failed.'; stale.style.display=''; }
+        ? t('Live figures are paused — the host did not answer. The numbers below are the last reading.')
+        : t('Live figures are paused — the last read failed.'); stale.style.display=''; }
       return;
     }
     if(stale){ stale.textContent=''; stale.style.display='none'; }
