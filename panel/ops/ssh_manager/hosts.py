@@ -981,8 +981,8 @@ def _left_on_purpose(status, comment, removable, protected):
     kept = [g for g in status.get("groups", [])
             if g.get("comment") == comment and not removable(g)]
     on_host = [g for g in kept if _is_panel_allow(g) and _port_of(g) in protected]
-    return (_naming(_R16A_NOT_OURS, [g for g in kept if g not in on_host])
-            + _naming(_R16A_ON_HOST_PORT, on_host))
+    return (_naming(i18n.Sentence(_R16A_NOT_OURS), [g for g in kept if g not in on_host])
+            + _naming(i18n.Sentence(_R16A_ON_HOST_PORT), on_host))
 
 
 def _rule_port_words(g):
@@ -1060,17 +1060,13 @@ _R16A_NOT_OURS = "Left in place, as the panel does not make rules like these: {r
 _R16A_ON_HOST_PORT = "Left in place on SSH's or the panel's own port: {rules}."
 
 
-def _naming(template, groups):
-    """[`template` (one of the two above) naming each rule of `groups`], or [] when there are none.
+def _naming(lead, groups):
+    """[`lead` (a Sentence of one of the two above) naming each rule of `groups`], or [] when none.
 
-    The template is one of two module constants, so tools/i18n_scan holds both to the catalogs
-    (_R16A_NAMING_KEYS hands them to Sentence by name).
+    The caller hands the module constant to Sentence by name, so tools/i18n_scan holds it to the
+    catalogs; a template passed on as a plain parameter is one the gate cannot read.
     """
-    return [i18n.Sentence(template, rules=", ".join(map(_rule_label, groups)))] if groups else []
-
-
-# For the catalog gate, which reads a literal or a module constant handed to Sentence().
-_R16A_NAMING_KEYS = (i18n.Sentence(_R16A_NOT_OURS), i18n.Sentence(_R16A_ON_HOST_PORT))
+    return [i18n.Sentence(lead.template, rules=", ".join(map(_rule_label, groups)))] if groups else []
 
 
 def _with_notes(message, notes):

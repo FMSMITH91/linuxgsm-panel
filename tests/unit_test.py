@@ -234,8 +234,8 @@ _ts_live.subprocess = _R15dNoSystemTailscale(_ts_live.subprocess)
 # part12's app and runs node on its own fixtures; imports part01, 05, 11, 12, 20, 47 and 61 (part61's
 # close-panel-port helpers, part11's transport stand-in).
 # part67 (review 1012a: core, backup, ssh-core and reboot fixes, builder A) drives part12's app and
-# database with stand-ins; imports part01, 02, 12, 14, 20 and 64 (part14's update-status stand-in, part64's
-# firewall stand-in).
+# database with stand-ins, and node and bash on its own fixtures; imports part01, 02, 12, 14, 20, 47
+# and 64 (part14's update-status stand-in, part64's firewall stand-in).
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
