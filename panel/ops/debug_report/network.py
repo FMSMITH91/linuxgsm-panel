@@ -546,7 +546,7 @@ def ufw_classify(out, err, rc):
     failed = _ufw_failed(out, err, rc)
     if failed is not None:
         return failed
-    rows = [so._ufw_rule_split(line.strip()) for line in out.splitlines()]
+    rows = [so._r14a_ufw_row(line.strip()) for line in out.splitlines()]   # comment out of `from`
     shadowed = {}
     blocks = so._ufw_deny_sources(out, shadowed)
     m = re.search(r"Default:\s*([a-z]+)\s*\(incoming\)", out)

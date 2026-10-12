@@ -235,13 +235,13 @@
                 <td style="width:40px;">
                   {% if g.protected %}
                   <button class="btn btn-outline-secondary btn-sm py-0 px-1" disabled
-                          title="{{ g.protect_reason }}">
+                          title="{{ fw_reason(g, t) }}">
                     <i class="bi bi-lock-fill"></i>
                   </button>
                   {% else %}
                   <button class="btn btn-outline-danger btn-sm py-0 px-1"
                           title="Remove this rule ({{ 'rules ' + (g.nums|join(', ')) if g.nums|length > 1 else 'rule ' + (g.nums[0]|string) }})"
-                          data-action="deleteGroup" data-args='[{{ g.nums|tojson }}, "@self", {{ g.warn|tojson }}, {{ g.protect_reason|tojson }}, {{ g.key|tojson }}]'>
+                          data-action="deleteGroup" data-args='[{{ g.nums|tojson }}, "@self", {{ g.warn|tojson }}, {{ fw_reason(g, t)|tojson }}, {{ g.key|tojson }}]'>
                     <i class="bi bi-x"></i>
                   </button>
                   {% endif %}

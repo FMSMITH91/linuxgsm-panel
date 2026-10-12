@@ -471,16 +471,18 @@ def ufw_status():
         # field and EVERY rule whose To column is not numeric was dropped entirely: the
         # tailscale0 allow, app profiles like OpenSSH, and every `panel-block` DENY. Split on the
         # ACTION instead, which is the one column with a fixed vocabulary.
-        rule = _ufw_rule_split(line)
-        if not rule:
+        raw = _ufw_rule_split(line)
+        if not raw:
             continue
         # Words, not a regex: `\s*\(v6\)` backtracks quadratically over a long run of spaces.
-        key = tuple(" ".join(w for w in rule[k].split() if w != "(v6)")
+        # The twin test reads the row as printed, comment and all (a v6 row whose comment differs
+        # is kept, as it always was); the rule listed has the comment off its source.
+        key = tuple(" ".join(w for w in raw[k].split() if w != "(v6)")
                     for k in ("to", "action", "direction", "from"))
-        if key in seen and "(v6)" in rule["to"]:
+        if key in seen and "(v6)" in raw["to"]:
             continue
         seen.add(key)
-        rules.append(rule)
+        rules.append(_r14a_ufw_row(line))
 
     return {"enabled": enabled, "status_text": status_text, "rules": rules}
 
@@ -510,6 +512,21 @@ def _ufw_rule_split(line):
             return {"to": line[:gap.start()].strip(), "action": m.group(1),
                     "direction": m.group(2), "from": line[m.end():].strip()}
     return None
+
+
+def _r14a_ufw_row(line):
+    """_ufw_rule_split's row, with ufw's trailing `# comment` taken off `from` (no reader wants it).
+
+    _ufw_rule_split keeps everything after the action as `from`, the comment included, so a test
+    on the source read the comment: `Anywhere on lo  ALLOW IN  <net>/udp  # tag` did not
+    end in "/udp", and ufw_allows_iface_in counted that UDP-only rule as letting everything in.
+    Every reader of ufw rows goes through this; _ufw_rule_split itself stays the pattern it
+    replaced (the unit suite holds it to that).
+    """
+    rule = _ufw_rule_split(line)
+    if rule:
+        rule["from"] = rule["from"].partition("#")[0].strip()
+    return rule
 
 
 def ufw_allows_iface_in(rules, iface):
