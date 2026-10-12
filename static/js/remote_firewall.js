@@ -1,3 +1,15 @@
+// A protected rule's reason in the viewer's language. The server sends the English sentence AND the
+// fixed template it was built from with its values (firewall.R14A_REASONS): the catalog translates
+// the template, then the values (ports) go in. One pass, so a value is never read as a placeholder.
+function _fwReason(g) {
+  if (!g || !g.protect_reason_key) return (g && g.protect_reason) || '';
+  var p = g.protect_reason_params || {};
+  var out = t(g.protect_reason_key).replace(/\{(\w+)\}/g, function(m, k) {
+    return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m;
+  });
+  return /\{\w+\}/.test(out) ? (g.protect_reason || out) : out;
+}
+
 function refreshFirewall() {
   fetch(MOUNT + '/api/remote/' + remoteId + '/firewall')
     .then(r => r.json())
@@ -72,8 +84,8 @@ function _fwRenderRules(listEl, openGroups) {
         + '<td class="small text-secondary">' + scope + '</td>'
         + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
         + '<td>' + (g.protected
-            ? '<button class="btn btn-outline-secondary btn-sm py-0 px-1" disabled title="' + esc(g.protect_reason) + '"><i class="bi bi-lock-fill"></i></button>'
-            : '<button class="btn btn-outline-danger btn-sm py-0 px-1"' + _da('deleteGroup', [g.nums, '@self', !!g.warn, (g.protect_reason || ''), (g.key || '')]) + '><i class="bi bi-x"></i></button>')
+            ? '<button class="btn btn-outline-secondary btn-sm py-0 px-1" disabled title="' + esc(_fwReason(g)) + '"><i class="bi bi-lock-fill"></i></button>'
+            : '<button class="btn btn-outline-danger btn-sm py-0 px-1"' + _da('deleteGroup', [g.nums, '@self', !!g.warn, _fwReason(g), (g.key || '')]) + '><i class="bi bi-x"></i></button>')
         + '</td></tr>';
     });
     html += '</tbody></table>';
@@ -321,7 +333,7 @@ function deleteGroup(nums, btn, warn, reason, key) {
           if (first) _say('That rule is no longer in the firewall — the list has been refreshed.');
           refreshFirewall(); return null;
         }
-        if (g.protected) { _say(g.protect_reason || 'This rule protects your access to the host and can\'t be removed here.'); refreshFirewall(); return null; }
+        if (g.protected) { _say(_fwReason(g) || 'This rule protects your access to the host and can\'t be removed here.'); refreshFirewall(); return null; }
         return g;
       }
       (function next() {

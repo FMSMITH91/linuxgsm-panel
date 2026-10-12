@@ -162,7 +162,9 @@ def _register_firewall_view(app):
             status = {"installed": False, "enabled": False, "rules": [], "groups": [],
                       "unreachable": True}
         games = GameServer.query.filter_by(remote_id=remote_id).all()
-        return render_template("remote_firewall.html", remote=remote, status=status, games=games)
+        # fw_reason: a protected rule's reason in the viewer's language (firewall.r14a_reason_text).
+        return render_template("remote_firewall.html", remote=remote, status=status, games=games,
+                               fw_reason=_fw_rules.r14a_reason_text)
 
     @app.route("/api/remote/<int:remote_id>/firewall")
     @login_required

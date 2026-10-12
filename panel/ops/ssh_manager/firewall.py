@@ -599,38 +599,78 @@ def _r14a_ports_word(g):
     return words[-1] if words else ""
 
 
-def _r14a_ssh_subject(g):
-    """How an SSH rule's lock-out reason names what it opens: the port, a range or list, or all.
+# Every protect_reason the Firewall page can show, as a fixed English template. The group carries
+# the template (protect_reason_key) and its values (protect_reason_params) beside the English text,
+# so the page renders it in the viewer's language: the catalogs translate the template, and the
+# values (ports, never words) go in after. protect_reason itself, and every API refusal built from
+# it, stays the English sentence it always was. The unit suite holds each one to both catalogs.
+_R14A_SSH_TAIL = (" the SSH port used to reach this host, and there's no working Tailscale route to "
+                  "fall back on — removing it would lock you out. Enable Tailscale SSH, or connect "
+                  "Tailscale and allow the tailscale0 interface, first.")
+_R14A_PANEL_TAIL = (" where this panel's own web interface listens, and it isn't reachable over "
+                    "Tailscale — removing it would lock you out of the panel. Set up Tailscale first "
+                    "if you want to close it.")
+R14A_REASONS = {
+    "panel_only": "Port {port} is" + _R14A_PANEL_TAIL,
+    "panel_shared": "This rule opens ports {ports}, including port {port}," + _R14A_PANEL_TAIL,
+    "ssh_every": "This rule lets every port in, including" + _R14A_SSH_TAIL,
+    "ssh_profile": "The {ports} profile opens" + _R14A_SSH_TAIL,
+    "ssh_ports": "This rule opens ports {ports}, including" + _R14A_SSH_TAIL,
+    "ssh_port": "Port {ports} is" + _R14A_SSH_TAIL,
+    "ts_serve": ("This Tailscale interface rule keeps the panel reachable over your tailnet "
+                 "(Tailscale Serve). With the firewall's default-deny, removing it would drop "
+                 "inbound tailnet traffic and lock you out of the panel — so it can't be "
+                 "deleted here."),
+    "ts_last": ("This is the Tailscale interface rule and currently the only way in — removing it "
+                "would lock you out. Open your SSH port (or enable Tailscale SSH) first."),
+    "warn": ("This keeps you connected (SSH or Tailscale). Another way in exists so it can be "
+             "removed, but make sure you won't lock yourself out."),
+}
+
+
+def _r14a_set_reason(g, which, **params):
+    """Set protect_reason (English), and the template + values the page translates it from."""
+    template = R14A_REASONS[which]
+    g["protect_reason_params"] = {k: str(v) for k, v in params.items()}
+    g["protect_reason_key"] = template
+    g["protect_reason"] = template.format_map(g["protect_reason_params"])
+
+
+def r14a_reason_text(g, translate=None):
+    """`g`'s protect_reason in the viewer's language: `translate` (the template's `t`) applied to
+    its template, then its values. The English text when there is no template, or when a
+    translation's placeholders do not match its values."""
+    key = g.get("protect_reason_key")
+    if not key or translate is None:
+        return g.get("protect_reason", "")
+    try:
+        return str(translate(key)).format_map(dict(g.get("protect_reason_params") or {}))
+    except (KeyError, IndexError, ValueError):
+        return g.get("protect_reason", "")
+
+
+def _r14a_ssh_reason(g):
+    """Which SSH lock-out reason names what `g` opens: the port, a range or list, a profile, all.
 
     "Port 47100:47199 is the SSH port" called a range the SSH port; "Port <addr> 22 is" read the
     address as part of the port.
     """
     if _r13a_every_port(g, g.get("port_num", "")):
-        return "This rule lets every port in, including"
+        return "ssh_every"
     ports = _r14a_ports_word(g)
     if ports.lower() in _SSH_APP_PROFILES:
-        return "The %s profile opens" % ports
-    if "," in ports or ":" in ports:
-        return "This rule opens ports %s, including" % ports
-    return "Port %s is" % ports
-
-
-def _r14a_panel_reason(g, panel_port):
-    """Why the rule holding the panel's port open is protected: its own rule, or one of several."""
-    tail = ("and it isn't reachable over Tailscale — removing it would lock you out of the panel. "
-            "Set up Tailscale first if you want to close it.")
-    if _r14a_panel_port_scope(g, panel_port) == "only":
-        return "Port %d is where this panel's own web interface listens, %s" % (panel_port, tail)
-    return ("This rule opens ports %s, including port %d, where this panel's own web interface "
-            "listens, %s" % (_r14a_ports_word(g), panel_port, tail))
+        return "ssh_profile"
+    return "ssh_ports" if ("," in ports or ":" in ports) else "ssh_port"
 
 
 def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_ok):
     """Set protected / warn / protect_reason on one group of an ENABLED firewall."""
     if g["is_panel"]:
-        # No Tailscale route, so this public port is the only way into the panel.
+        # No Tailscale route, so this public port is the only way into the panel. A list or range
+        # that holds it open says it opens other ports too.
         g["protected"] = True
-        g["protect_reason"] = _r14a_panel_reason(g, panel_port)
+        _r14a_set_reason(g, "panel_only" if _r14a_panel_port_scope(g, panel_port) == "only"
+                         else "panel_shared", port=panel_port, ports=_r14a_ports_word(g))
         return
     if not g["is_access"]:
         return
@@ -641,10 +681,7 @@ def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_
         # "another" way only to the others. A rule a DENY above it shadows is no way in itself, and
         # it stays protected while nothing else is (in doubt, protect).
         other_way = (ssh_count - int(bool(g.get("ssh_live"))) > 0) or ts_ssh_ok or ts_iface_ok
-        reason_last = (
-            "%s the SSH port used to reach this host, and there's no working Tailscale "
-            "route to fall back on — removing it would lock you out. Enable Tailscale SSH, or "
-            "connect Tailscale and allow the tailscale0 interface, first." % _r14a_ssh_subject(g))
+        reason_last = _r14a_ssh_reason(g)
     else:  # is_tailscale — deleting it drops regular SSH over the tailnet; Tailscale SSH is unaffected
         if served_over_ts:
             # This is the panel host and its UI is published over Tailscale Serve, so this
@@ -653,24 +690,12 @@ def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_
             # to Serve and locks you out of the panel, and an available SSH path doesn't save
             # the UI. Protect it outright (blocks the UI's × and any direct delete API call).
             g["protected"] = True
-            g["protect_reason"] = (
-                "This Tailscale interface rule keeps the panel reachable over your tailnet "
-                "(Tailscale Serve). With the firewall's default-deny, removing it would drop "
-                "inbound tailnet traffic and lock you out of the panel — so it can't be "
-                "deleted here.")
+            _r14a_set_reason(g, "ts_serve")
             return
         other_way = (ssh_count > 0) or ts_ssh_ok
-        reason_last = (
-            "This is the Tailscale interface rule and currently the only way in — removing it "
-            "would lock you out. Open your SSH port (or enable Tailscale SSH) first.")
-    if not other_way:
-        g["protected"] = True
-        g["protect_reason"] = reason_last
-    else:
-        g["warn"] = True
-        g["protect_reason"] = (
-            "This keeps you connected (SSH or Tailscale). Another way in exists so it can be "
-            "removed, but make sure you won't lock yourself out.")
+        reason_last = "ts_last"
+    g["protected" if not other_way else "warn"] = True
+    _r14a_set_reason(g, reason_last if not other_way else "warn", ports=_r14a_ports_word(g))
 
 
 def _live_tailscale_state(server, enabled, groups):
@@ -737,6 +762,8 @@ def _annotate_firewall_protection(server, enabled, groups):
         g["protected"] = False
         g["warn"] = False
         g["protect_reason"] = ""
+        g["protect_reason_key"] = ""
+        g["protect_reason_params"] = {}
         g["is_panel"] = _is_panel_rule(g, panel_port)
         if not enabled:
             continue
