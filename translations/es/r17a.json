@@ -1,0 +1,13 @@
+{
+  "Database optimized.": "Base de datos optimizada.",
+  "Checkpointed the WAL and refreshed stats — VACUUM was deferred because the database was busy; run it again in a moment to compact.": "Se consolidó el WAL y se actualizaron las estadísticas; VACUUM se aplazó porque la base de datos estaba ocupada. Vuelve a ejecutarlo en un momento para compactarla.",
+  "Refreshed stats, but the WAL could not be trimmed and VACUUM was deferred — the database was busy. Run it again in a moment.": "Se actualizaron las estadísticas, pero no se pudo recortar el WAL y VACUUM se aplazó: la base de datos estaba ocupada. Vuelve a ejecutarlo en un momento.",
+  "Refreshed stats — VACUUM was deferred because the database was busy, and the WAL checkpoint returned no result to confirm it ran. Run it again in a moment.": "Se actualizaron las estadísticas; VACUUM se aplazó porque la base de datos estaba ocupada, y la consolidación del WAL no devolvió ningún resultado que confirme que se ejecutó. Vuelve a ejecutarlo en un momento.",
+  "Internal server error": "Error interno del servidor",
+  "A tag name must start with a letter or number and use only letters, numbers, spaces, dots, hyphens or underscores (up to 32 characters).": "El nombre de una etiqueta debe empezar por una letra o un número y usar solo letras, números, espacios, puntos, guiones o guiones bajos (hasta 32 caracteres).",
+  "Couldn't read how far behind the update source this panel is.": "No se pudo leer cuánto va por detrás este panel respecto al origen de las actualizaciones.",
+  "Couldn't read the versions of '{branch}', so there is no verified version to switch to.": "No se pudieron leer las versiones de '{branch}', así que no hay ninguna versión verificada a la que cambiar.",
+  "[output truncated — more than {kb} KB/s. The command is still running; press Ctrl-C to stop it.]": "[salida truncada: más de {kb} KB/s. El comando sigue en ejecución; pulsa Ctrl-C para detenerlo.]",
+  "[{n} bytes of input were dropped — the program running here is not reading its input]": "[se descartaron {n} bytes de entrada: el programa que se ejecuta aquí no está leyendo su entrada]",
+  "A console command can't contain control characters or line breaks.": "Un comando de consola no puede contener caracteres de control ni saltos de línea."
+}
