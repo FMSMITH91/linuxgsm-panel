@@ -202,8 +202,10 @@ check("privacy: a tag or group named after a word of the report's own (public, p
 
 # ── journal: the unprivileged plain read is a forward window ────────────────────────────────────
 def _plain44(argv):
-    """Whether `argv` is the plain read: its two field matches LAST, after every option (review
-    1012b moved them there; before the options, POSIXLY_CORRECT reads the options as matches)."""
+    """Whether `argv` is the plain read: its two field matches LAST, after every option.
+
+    Review 1012b moved them there; before the options, POSIXLY_CORRECT reads the options as matches.
+    """
     return (len(argv) > 2 and argv[-2].startswith("_SYSTEMD_USER_UNIT=")
             and argv[-1].startswith("_UID=") and argv[1].startswith("-"))
 
