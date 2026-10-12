@@ -1435,20 +1435,21 @@ def _r14d_stub_names(dotted):
 
 def _r14d_import_aliases(node, carried):
     """{name: dotted module} one Import / ImportFrom statement binds to a repository module."""
-    alias = {}
     if isinstance(node, _ast_scan.Import):
-        for _a in node.names:
-            # `import panel.x` binds `panel`, not the submodule; only `as` names it.
-            if (_a.asname or "." not in _a.name) and _r14d_modfile(_a.name):
-                alias[_a.asname or _a.name] = _a.name
-    elif isinstance(node, _ast_scan.ImportFrom) and node.module and not node.level:
-        for _a in node.names:
-            if node.module in carried:
-                if _a.name in carried[node.module]:
-                    alias[_a.asname or _a.name] = carried[node.module][_a.name]
-            elif _r14d_modfile(node.module + "." + _a.name):
-                alias[_a.asname or _a.name] = node.module + "." + _a.name
-    return alias
+        # `import panel.x` binds `panel`, not the submodule; only `as` names it.
+        return {(_a.asname or _a.name): _a.name for _a in node.names
+                if (_a.asname or "." not in _a.name) and _r14d_modfile(_a.name)}
+    if isinstance(node, _ast_scan.ImportFrom) and node.module and not node.level:
+        return {(_a.asname or _a.name): _r14d_from_target(node.module, _a.name, carried)
+                for _a in node.names if _r14d_from_target(node.module, _a.name, carried)}
+    return {}
+
+
+def _r14d_from_target(module, name, carried):
+    """The repository module `from module import name` binds, or None."""
+    if module in carried:
+        return carried[module].get(name)
+    return module + "." + name if _r14d_modfile(module + "." + name) else None
 
 
 def _r14d_sys_modules_alias(node):
