@@ -37,9 +37,8 @@ from types import SimpleNamespace as _NS53
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_cfg,
-                         _p9_client, _p9_core, _p9_json, _p9_patch, _p9_restore_all, _p9_so,
-                         _p9_trip)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg,
+                         _p9_client, _p9_json, _p9_patch, _p9_restore_all, _p9_so)
 from unit.part47 import _cut47, _node47
 from panel.db.models import AuditLog, CustomCommand, Group, RemoteServer, User, db
 from panel.ops import backup as _bk53
@@ -84,14 +83,7 @@ _A53 = _p9_client(P9_ADMIN)
 # this part still passed. Re-armed, as parts 40, 43, 49 and 52 do, and closed with a check below.
 _TRIP53_START = len(_P9_TRIPPED)
 try:
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part53's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
-    _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
+    _p9_arm(who="part53")
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # 1. routes
     # ════════════════════════════════════════════════════════════════════════════════════════════

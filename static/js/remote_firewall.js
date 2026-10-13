@@ -241,8 +241,10 @@ function openPort() {
   // host or an expired session (a non-JSON body makes r.json() reject) left "⟳ Opening..." on
   // screen forever with no way to tell whether the rule had been created.
   .catch(function () {
-    resultEl.innerHTML = '<span class="text-danger">❌ The request failed — the host may be '
-      + 'unreachable, or your session may have expired. Refresh and check the rules.</span>';
+    // The words in their own span: the page's translator looks up a whole text node, and its
+    // mark handling covers ✓/✗ only, so "❌ The request…" as one node matched no key.
+    resultEl.innerHTML = '<span class="text-danger">❌ <span>The request failed — the host may be '
+      + 'unreachable, or your session may have expired. Refresh and check the rules.</span></span>';
   });
 }
 
@@ -280,12 +282,12 @@ function _sourceArgs(allow) {
 
 function allowFromSource() {
   var a = _sourceArgs(true);
-  if (a) _restrictPost('/firewall/allow-from', a, 'Adding...');
+  if (a) _restrictPost('/firewall/allow-from', a, t('Adding…'));
 }
 
 function removeAllowFromSource() {
   var a = _sourceArgs(false);
-  if (a) _restrictPost('/firewall/allow-from', a, 'Removing...');
+  if (a) _restrictPost('/firewall/allow-from', a, t('Removing…'));
 }
 
 function _limitArgs(on) {
@@ -296,12 +298,12 @@ function _limitArgs(on) {
 
 function limitPort() {
   var a = _limitArgs(true);
-  if (a) _restrictPost('/firewall/limit', a, 'Applying...');
+  if (a) _restrictPost('/firewall/limit', a, t('Applying…'));
 }
 
 function unlimitPort() {
   var a = _limitArgs(false);
-  if (a) _restrictPost('/firewall/limit', a, 'Removing...');
+  if (a) _restrictPost('/firewall/limit', a, t('Removing…'));
 }
 
 // Delete a whole rule group (its IPv4 + IPv6 entries).

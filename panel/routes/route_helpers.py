@@ -6,7 +6,7 @@ from flask import (current_app, flash, jsonify, redirect, render_template, reque
 from flask_login import (current_user)
 from panel.core import i18n
 from panel.core.clock import (utcnow)
-from panel.core.config import (_r13a_cfg_text, encrypt_secret, load_config, remove_setup_token, save_config)
+from panel.core.config import (_r13a_cfg_text, encrypt_secret, load_config, remove_setup_token, set_config_keys)
 from panel.db.models import (Group, RemoteServer, SetupState, User, db)
 from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.ops.ssh_manager import (ssh_test_connection)
@@ -246,12 +246,14 @@ def _register_setup_tailscale(app):
             return jsonify({"success": False, "message": i18n.tr(msg)})
         left = _remove_serve_leftovers(port, mount, "setup wizard", _wizard_audit)
         info = ts.get_tailscale_info(force_refresh=True)
-        cfg["tailscale_setup_done"] = True
-        cfg["tailscale_mount"] = mount
-        cfg["bind_host"] = "127.0.0.1"   # Serve proxies to localhost; go tailnet-only
+        # Only the keys this step sets, onto the file as it is now: `cfg` was read before the
+        # tailscale commands above, which yield, and saving it whole reverted what was written
+        # meanwhile (config.set_config_keys).
+        _ts_keys = {"tailscale_setup_done": True, "tailscale_mount": mount,
+                    "bind_host": "127.0.0.1"}   # Serve proxies to localhost; go tailnet-only
         if info.dns_name and not cfg.get("site_domain"):
-            cfg["site_domain"] = info.dns_name
-        save_config(cfg)
+            _ts_keys["site_domain"] = info.dns_name
+        set_config_keys(cfg, **_ts_keys)
         return jsonify({"success": True, "message": with_leftover_note(msg, left),
                         "url": _wizard_serve_url(info, cfg)})
 
@@ -363,9 +365,8 @@ def _setup_welcome(state, data, cfg):
         flash(i18n.tr("Pick a port between {lo} and {hi}.", lo=MIN_UNPRIVILEGED_PORT, hi=MAX_PORT),
               "danger")
         return redirect("/setup")
-    cfg["site_title"] = request.form.get("site_title", "LinuxGSM Panel")
-    cfg["site_domain"] = request.form.get("site_domain", "")
-    cfg["port"] = _wiz_port
+    _site_title = request.form.get("site_title", "LinuxGSM Panel")
+    _site_domain = request.form.get("site_domain", "")
     # The bind address is VALIDATED here for the same reason the port above it is,
     # and the comment that used to sit here made the same mistake the port's once
     # did: it said "api_panel_change_port validates whatever they choose". That is a
@@ -384,8 +385,8 @@ def _setup_welcome(state, data, cfg):
     if _bind_err:
         flash(i18n.tr(_bind_err), "danger")
         return redirect("/setup")
-    cfg["bind_host"] = _wiz_bind
-    save_config(cfg)
+    set_config_keys(cfg, site_title=_site_title, site_domain=_site_domain, port=_wiz_port,
+                    bind_host=_wiz_bind)
     data["site_configured"] = True
     _advance(state, "admin_user")
     state.data = json.dumps(data)
@@ -561,8 +562,9 @@ def _finish_setup(state, data, cfg):
     state.step = "complete"
     state.complete = True
     state.data = json.dumps(data)
-    cfg["setup_complete"] = True
-    save_config(cfg)  # Save FIRST, before Tailscale attempt
+    # Save FIRST, before Tailscale attempt — and only this key: `cfg` was read when the request
+    # began, before the optional host add above ran its SSH test, which yields.
+    set_config_keys(cfg, setup_complete=True)
     # Auto-configure Tailscale Serve if available
     if cfg.get("tailscale_auto_setup", True):
         try:
@@ -694,6 +696,4 @@ def _record_auto_serve(cfg, mount, ok, msg):
                detail="at the end of setup: port %s, mount %s: %s"
                       % (cfg.get("port", 5000), mount, msg))
     if ok:
-        cfg["tailscale_mount"] = mount
-        cfg["tailscale_setup_done"] = True
-        save_config(cfg)
+        set_config_keys(cfg, tailscale_mount=mount, tailscale_setup_done=True)

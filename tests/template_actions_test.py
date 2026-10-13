@@ -1339,7 +1339,11 @@ def _html_sink_helpers(src):
 def _sink_bound_names(src, helpers):
     """Identifiers handed to an HTML sink as a bare name — the ones worth tracing back."""
     names = set()
-    for m in re.finditer(r"\.(?:inner|outer)HTML\s*=\s*([A-Za-z_$][\w$]*)\s*;", src):
+    # The name is the whole right-hand side, or the left operand of `||` / `?`: the statement may end
+    # without a `;` (ASI) or fall back to a placeholder (`el.innerHTML = html || '<i>none</i>'`), and
+    # only `x.innerHTML = name;` was traced, so markup `+=`-built into either reached the sink unseen
+    # (review 1012c).
+    for m in re.finditer(r"\.(?:inner|outer)HTML\s*=\s*([A-Za-z_$][\w$]*)\s*(?=;|\|\||\?|//|$)", src, re.M):
         names.add(m.group(1))
     for m in re.finditer(r"insertAdjacentHTML\s*\([^,]+,\s*([A-Za-z_$][\w$]*)\s*\)", src):
         names.add(m.group(1))
@@ -1531,10 +1535,17 @@ _r15d_sink_ctl = {
     "{html} shorthand": _r15d_sink_sigs(
         "function zz(x, el) {\n  var html = '';\n  html += '<b>' + x.name + '</b>';\n"
         "  el.innerHTML = tfHtml('Hi {v}', {v: {html}});\n}\n"),
+    # Review 1012c: a sink statement with no `;`, and the `|| '<placeholder>'` fallback.
+    "innerHTML = buf (no ;)": _r15d_sink_sigs(
+        "function zz(x, el) {\n  var buf = '';\n  buf += '<b>' + x.name + '</b>';\n"
+        "  el.innerHTML = buf\n}\n"),
+    "innerHTML = buf || placeholder": _r15d_sink_sigs(
+        "function zz(x, el) {\n  var buf = '';\n  buf += '<b>' + x.name + '</b>';\n"
+        "  el.innerHTML = buf || '<i>none</i>';\n}\n"),
 }
 check(all("x.name" in _v for _v in _r15d_sink_ctl.values()),
-      "static/js: ...a markup buffer handed to tfHtml's {html: …} is traced like one assigned to "
-      "innerHTML (control)", repr(_r15d_sink_ctl))
+      "static/js: ...a markup buffer handed to tfHtml's {html: …}, or assigned to innerHTML with no `;` "
+      "or behind a `||` fallback, is traced like one assigned to innerHTML (control)", repr(_r15d_sink_ctl))
 
 _baseline = json.loads((ROOT / "tests" / "html_sink_baseline.json").read_text(encoding="utf-8"))
 _new = sorted("%s: %s" % (f, sig) for f, sigs in _found.items()
@@ -3535,7 +3546,8 @@ check(len(_upd_offer) == 1 and "d.remote_version" in _upd_offer[0] and "d.remote
       "js: ...and its offer is the target's version beside the target's commit",
       repr(_upd_offer))
 _badge_js = (ROOT / "static" / "js" / "update_badge.js").read_text(encoding="utf-8")
-_badge_title = [ln for ln in _badge_js.splitlines() if "'title=\"Version '" in ln]
+# The tooltip is one tf() sentence now (translated, the version filled in after), on its own line.
+_badge_title = [ln for ln in _badge_js.splitlines() if "tf('Version {v} is available" in ln]
 check(len(_badge_title) == 1 and "d.remote_version" in _badge_title[0]
       and "d.remote_sha" in _badge_title[0],
       "js: the sidebar's update pill names the offered version with its commit",

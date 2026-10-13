@@ -1402,15 +1402,17 @@ def _stmt_names(node):
 
 # A module attribute bound inside a top-level try or if is as real as one bound outside it:
 # app.py's PANEL_COMMIT is set in a try/except, and a stub of it read as a stub of nothing.
-_BLOCK_STMTS = (_ast_scan.Try, _ast_scan.If) + ((_ast_scan.TryStar,) if hasattr(_ast_scan, "TryStar")
-                                                else ())
+# A top-level `with` too (review 1012c): a fuzz harness imports its target inside
+# `with atheris.instrument_imports():`, and its name read as never bound.
+_BLOCK_STMTS = (_ast_scan.Try, _ast_scan.If, _ast_scan.With) + (
+    (_ast_scan.TryStar,) if hasattr(_ast_scan, "TryStar") else ())
 
 
 def _body_names(body, out):
     """Add to `out` every name the statements in `body` bind, descending into try and if blocks."""
     for _n in body:
         if isinstance(_n, _BLOCK_STMTS):
-            for _blk in [_n.body, _n.orelse, getattr(_n, "finalbody", [])] + [
+            for _blk in [_n.body, getattr(_n, "orelse", []), getattr(_n, "finalbody", [])] + [
                     _h.body for _h in getattr(_n, "handlers", [])]:
                 _body_names(_blk, out)
         else:
@@ -1453,9 +1455,15 @@ _R16D_HELPER_MOD = "tools/panel-helper"
 
 
 def _r14d_modfile(dotted):
-    """The file of repository module `dotted` (a package's __init__.py), or None."""
+    """The file of repository module `dotted` (a package's __init__.py), or None.
+
+    A script loaded by its path has no dotted name; it is keyed `path:<repo-relative file>`.
+    """
     if dotted == _R16D_HELPER_MOD:
         return _helper_path
+    if dotted.startswith(_R18D_PATH_KEY):
+        _pf = os.path.join(_root, *dotted[len(_R18D_PATH_KEY):].split("/"))
+        return _pf if os.path.isfile(_pf) else None
     _p = os.path.join(_root, *dotted.split("."))
     if os.path.isfile(os.path.join(_p, "__init__.py")):
         return os.path.join(_p, "__init__.py")
@@ -1574,14 +1582,183 @@ def _r16d_loads_helper(call):
             and any(_r16d_names_helper(_a) for _a in call.args))
 
 
-def _r14d_aliases(tree, carried):
+# ── A repository script loaded by its path (review 1012c) ──────────────────────────────────────
+# Only tools/panel-helper was read this way, so a stub through a module loaded from
+# .github/scripts/x.py or tools/x.py (part26's CSA.read_rows, part06's _cd.ACCEPTED_FILE, part28's
+# _cg28 through its _load28 factory) set a new attribute after a rename while the real one ran.
+# The path is worked out from the source: literals, os.path.join, +, a name bound to one, a
+# dirname chain of __file__, the suites' root names, and a loader's parameter at its call site.
+_R18D_PATH_KEY = "path:"
+_R18D_ROOT_NAME = re.compile(r"_root|_repo_root|REPO_ROOT|ROOT|_UNIT_ROOT|_ROOT\w*|_R\d+")
+
+
+def _r18d_eval_path(e, env, here):
+    """The repo-relative path expression `e` builds ("" for the root itself), or None.
+
+    `env` is {name: value} for the names bound so far; `here` is the file's own repo-relative path.
+    """
+    if isinstance(e, _ast_scan.Constant) and isinstance(e.value, str):
+        return e.value
+    if isinstance(e, _ast_scan.Name):
+        return _r18d_eval_name(e.id, env, here)
+    if isinstance(e, _ast_scan.BinOp) and isinstance(e.op, _ast_scan.Add):
+        _l, _r = _r18d_eval_path(e.left, env, here), _r18d_eval_path(e.right, env, here)
+        return None if None in (_l, _r) else _l + _r
+    if isinstance(e, _ast_scan.Starred):
+        return _r18d_eval_starred(e, env, here)
+    return _r18d_eval_call(e, env, here) if isinstance(e, _ast_scan.Call) else None
+
+
+def _r18d_eval_name(name, env, here):
+    """A name's path: one bound earlier, the file's own (__file__), "" for a root name, else None."""
+    if name in env:
+        return env[name]
+    if name == "__file__":
+        return here
+    return "" if _R18D_ROOT_NAME.fullmatch(name) else None
+
+
+def _r18d_eval_starred(e, env, here):
+    """`*rel.split("/")` inside a join: the path `rel` holds."""
+    if isinstance(e.value, _ast_scan.Call) and getattr(e.value.func, "attr", None) == "split":
+        return _r18d_eval_path(e.value.func.value, env, here)     # join(root, *rel.split("/"))
+    return None
+
+
+def _r18d_path_join(parts):
+    return "/".join(_p.strip("/") for _p in parts if _p) if parts else None
+
+
+def _r18d_path_dirname(parts):
+    if len(parts) != 1:
+        return None
+    return parts[0].rsplit("/", 1)[0] if "/" in parts[0] else ""
+
+
+def _r18d_path_same(parts):
+    return parts[0] if len(parts) == 1 else None
+
+
+# The calls a path is built with, by name, each given its arguments' paths.
+_R18D_PATH_CALLS = dict({"join": _r18d_path_join, "dirname": _r18d_path_dirname},
+                        **dict.fromkeys(("abspath", "realpath", "normpath", "str", "fspath", "Path"),
+                                        _r18d_path_same))
+
+
+def _r18d_eval_call(e, env, here):
+    """The path a call (os.path.join, dirname, abspath, str, Path, ...) builds, or None."""
+    _parts = [_r18d_eval_path(_a, env, here) for _a in e.args]
+    if None in _parts or e.keywords:
+        return None
+    _how = _R18D_PATH_CALLS.get(getattr(e.func, "attr", getattr(e.func, "id", None)))
+    return _how(_parts) if _how else None
+
+
+def _r18d_scope_assigns(scope):
+    """The `x = …` statements of one scope (module or function), in source order, not nested ones."""
+    out, todo = [], list(_ast_scan.iter_child_nodes(scope))
+    while todo:
+        _n = todo.pop()
+        if isinstance(_n, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef, _ast_scan.ClassDef,
+                           _ast_scan.Lambda)):
+            continue
+        if isinstance(_n, _ast_scan.Assign):
+            out.append(_n)
+        todo.extend(_ast_scan.iter_child_nodes(_n))
+    return sorted(out, key=lambda _n: (_n.lineno, _n.col_offset))
+
+
+def _r18d_spec_path(call, env, here):
+    """The path a spec_from_file_location / spec_from_loader(SourceFileLoader) call names, or None."""
+    _fn = getattr(call.func, "attr", getattr(call.func, "id", ""))
+    if _fn == "spec_from_file_location" and len(call.args) >= 2:
+        return _r18d_eval_path(call.args[1], env, here)
+    _ld = call.args[1] if _fn == "spec_from_loader" and len(call.args) >= 2 else None
+    if (isinstance(_ld, _ast_scan.Call) and getattr(_ld.func, "attr", getattr(_ld.func, "id", ""))
+            == "SourceFileLoader" and len(_ld.args) >= 2):
+        return _r18d_eval_path(_ld.args[1], env, here)
+    return None
+
+
+def _r18d_scope_loads(assigns, env, here, factories):
+    """{name: repo-relative file} for each module one scope loads by path.
+
+    A load is `name = module_from_spec(spec)`, or `name = loader(…)` of a factory in `factories`.
+    `env` gains every other name's path value.
+    """
+    specs, loads = {}, {}
+    for _a in assigns:
+        _names, _got = _r18d_assign_load(_a, specs, env, here, factories)
+        if _got is not None:
+            loads.update(dict.fromkeys(_names, _got))
+    return loads
+
+
+def _r18d_assign_load(assign, specs, env, here, factories):
+    """(the names `assign` binds, the file it loads or None); a spec or a path value is recorded."""
+    _names = [_t.id for _t in assign.targets if isinstance(_t, _ast_scan.Name)]
+    _v = assign.value
+    _fn = getattr(_v.func, "attr", getattr(_v.func, "id", None)) if isinstance(_v, _ast_scan.Call) else None
+    if _fn in ("spec_from_file_location", "spec_from_loader"):
+        specs.update(dict.fromkeys(_names, _r18d_spec_path(_v, env, here)))
+        return _names, None
+    if _fn == "module_from_spec" and _v.args and getattr(_v.args[0], "id", None) in specs:
+        return _names, specs[_v.args[0].id]
+    if _fn in factories and isinstance(_v.func, _ast_scan.Name):
+        return _names, _r18d_factory_load(factories[_fn], _v, env, here, factories)
+    env.update(dict.fromkeys(_names, _r18d_eval_path(_v, env, here)))
+    return _names, None
+
+
+def _r18d_factory_load(fn, call, env, here, factories):
+    """The file a loader function `fn` returns when called as `call`, its parameters bound."""
+    _params = [_a.arg for _a in fn.args.args]
+    _env = dict(env)
+    _env.update({_p: _r18d_eval_path(_x, env, here) for _p, _x in zip(_params, call.args)})
+    _env.update({_k.arg: _r18d_eval_path(_k.value, env, here) for _k in call.keywords if _k.arg})
+    _loads = _r18d_scope_loads(_r18d_scope_assigns(fn), _env, here, {})
+    _ret = [_r.value.id for _r in _ast_scan.walk(fn)
+            if isinstance(_r, _ast_scan.Return) and isinstance(_r.value, _ast_scan.Name)]
+    return next((_loads[_n] for _n in _ret if _n in _loads), None)
+
+
+def _r18d_path_aliases(tree, here):
+    """{name: `path:<file>` (or the helper)} for each module loaded from a repository file by path."""
+    funcs = [_f for _f in _ast_scan.walk(tree) if isinstance(_f, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef))]
+    factories = {_f.name: _f for _f in funcs if _r18d_loads_a_spec(_f)}
+    env = {}
+    loads = _r18d_scope_loads(_r18d_scope_assigns(tree), env, here, factories)
+    for _f in funcs:
+        loads.update(_r18d_scope_loads(_r18d_scope_assigns(_f), dict(env), here, factories))
+    out = {_name: _r18d_path_alias_of((_rel or "").strip("/")) for _name, _rel in loads.items()}
+    return {_k: _v for _k, _v in out.items() if _v}
+
+
+def _r18d_loads_a_spec(fn):
+    """Does the function call module_from_spec (a loader factory)?"""
+    return any(getattr(_c.func, "attr", getattr(_c.func, "id", "")) == "module_from_spec"
+               for _c in _ast_scan.walk(fn) if isinstance(_c, _ast_scan.Call))
+
+
+def _r18d_path_alias_of(rel):
+    """The alias key for a module loaded from repo file `rel`: the helper, a `path:` key, or None."""
+    if rel == "tools/panel-helper":
+        return _R16D_HELPER_MOD
+    if rel.endswith(".py") and os.path.isfile(os.path.join(_root, *rel.split("/"))):
+        return _R18D_PATH_KEY + rel
+    return None
+
+
+def _r14d_aliases(tree, carried, path=None):
     """{name: dotted module} for each module-level name `tree` binds to a repository module.
 
     `carried` is {"unit.part12": {name: module}, ...}: a part that imports an earlier part's alias
     (`from unit.part12 import _p9_core`) stubs through it. A name copied from an alias
-    (`_H = _sm_hosts`) is one too, followed to a fixed point.
+    (`_H = _sm_hosts`) is one too, followed to a fixed point. `path` is the file `tree` was read
+    from, for a module it loads by a path built from its own __file__.
     """
-    alias = _r16d_helper_aliases(tree)
+    alias = _r18d_path_aliases(tree, os.path.relpath(path, _root).replace(os.sep, "/") if path else None)
+    alias.update(_r16d_helper_aliases(tree))
     for _n in _ast_scan.walk(tree):
         alias.update(_r14d_import_aliases(_n, carried))
         alias.update(_r14d_sys_modules_alias(_n))
@@ -1663,7 +1840,7 @@ def _r14d_dotted_of(path):
 # To a fixed point: a part's aliases can be carried from a part that carried them in turn.
 _stub_carry, _stub_alias_of = {}, {}
 for _ in range(8):  # at most 8 rounds: it stops at the first that changes nothing
-    _stub_alias_of = {_f: _r14d_aliases(_t, _stub_carry) for _f, _t in _stub_trees.items()}
+    _stub_alias_of = {_f: _r14d_aliases(_t, _stub_carry, _f) for _f, _t in _stub_trees.items()}
     _stub_next = {_r14d_dotted_of(_f): _al for _f, _al in _stub_alias_of.items() if _r14d_dotted_of(_f)}
     if _stub_next == _stub_carry:
         break
@@ -1764,6 +1941,31 @@ check("stub gate: an import_module() binding, a copy of an alias (and of a copy)
       and "VERBS" in _r14d_stub_names(_R16D_HELPER_MOD)
       and "no_such_fn_xyz" not in _r14d_stub_names(_R16D_HELPER_MOD),
       repr(_r15d_nest_ctl_al))
+# A script loaded by path, directly, through a name bound to its path, and through a loader
+# function given the path as an argument (review 1012c: none was an alias).
+_r18d_path_ctl_al = _r14d_aliases(_ast_scan.parse(
+    "_P = os.path.join(_root, '.github', 'scripts', 'code_scanning_analyses.py')\n"
+    "_s = _ilu.spec_from_file_location('csa', _P)\nCSA = _ilu.module_from_spec(_s)\n"
+    "_R9 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))\n"
+    "def _ld(rel, name):\n    spec = _ilu.spec_from_file_location(name, os.path.join(_R9, *rel.split('/')))\n"
+    "    mod = _ilu.module_from_spec(spec)\n    return mod\n"
+    "_cg = _ld('.github/scripts/codacy_open_errors.py', 'cg')\n"
+    "_J = os.path.join(_root, 'tools', 'js_coverage')\n"
+    "def _jl(name):\n    s = _ilu.spec_from_file_location(name, os.path.join(_J, name + '.py'))\n"
+    "    m = _ilu.module_from_spec(s)\n    return m\n_run = _jl('run')\n_tmp = _jl('no_such_script')\n"),
+    {}, os.path.join(_root, "tests", "unit", "part99.py"))
+_r18d_path_ctl = [_t[:2] for _n in _ast_scan.walk(_ast_scan.parse("CSA.read_rowsZZ = 1\nCSA.read_rows = 1\n"))
+                  for _t in [_r15d_stub_target(_n, _r18d_path_ctl_al)] if _t]
+check("stub gate: a repository script loaded by its path is an alias, directly, through a name and "
+      "through a loader given the path; a misspelled stub through one is named (control)",
+      _r18d_path_ctl_al == {"CSA": "path:.github/scripts/code_scanning_analyses.py",
+                            "_cg": "path:.github/scripts/codacy_open_errors.py",
+                            "_run": "path:tools/js_coverage/run.py"}
+      and sorted(_r18d_path_ctl) == [("path:.github/scripts/code_scanning_analyses.py", "read_rows"),
+                                     ("path:.github/scripts/code_scanning_analyses.py", "read_rowsZZ")]
+      and "read_rows" in _r14d_stub_names("path:.github/scripts/code_scanning_analyses.py")
+      and "read_rowsZZ" not in _r14d_stub_names("path:.github/scripts/code_scanning_analyses.py"),
+      repr((_r18d_path_ctl_al, _r18d_path_ctl)))
 _r15d_nest_ctl = [_r15d_stub_target(_n, _r15d_nest_ctl_al) for _n in _ast_scan.walk(_ast_scan.parse(
     "_m.so.ufw_deny_ipx = 1\nsetattr(_m.so, 'run_comandx', 1)\n_m.so.ufw_deny_ip = 1\n"))]
 _r15d_nest_ctl = [_t for _t in _r15d_nest_ctl if _t]
@@ -1797,12 +1999,13 @@ try:
                      "try:\n    C = 1\nexcept Exception:\n    D = 1\nelse:\n    E = 1\n"
                      "finally:\n    F = 1\n"
                      "if P:\n    G = 1\nelse:\n    H = 1\n"
+                     "with P:\n    import json as W\n"
                      "def fn():\n    INNER = 1\n")
     _tn_names = _module_toplevel_names(os.path.join(_tn_dir, "m.py"))
 finally:
     _shutil.rmtree(_tn_dir, ignore_errors=True)
-check("stub gate: a name bound in a top-level try or if is a module name (app.py's PANEL_COMMIT)",
-      _tn_names >= set("PABCDEFGH") and "fn" in _tn_names, repr(sorted(_tn_names)))
+check("stub gate: a name bound in a top-level try, if or with is a module name (app.py's PANEL_COMMIT)",
+      _tn_names >= set("PABCDEFGHW") and "fn" in _tn_names, repr(sorted(_tn_names)))
 check("stub gate: ...and a name bound inside a function is not", "INNER" not in _tn_names,
       repr(sorted(_tn_names)))
 

@@ -180,6 +180,29 @@ _lizard28 = _types28.ModuleType("lizard")
 _lizard28.analyze_file = _types28.SimpleNamespace(
     analyze_source_code=lambda name, code: _types28.SimpleNamespace(function_list=[], nloc=0))
 _cx28 = _load28(".github/scripts/complexity_gate.py", "complexity_gate_p28", {"lizard": _lizard28})
+
+
+def _r18d_pylint28(rc, out):
+    """pylint_violations over a pylint that exits `rc` printing `out`: its answer, or the error's name."""
+    _real = _cx28.subprocess
+    _cx28.subprocess = _types28.SimpleNamespace(
+        run=lambda *a, **k: _types28.SimpleNamespace(returncode=rc, stdout=out, stderr="p28"))
+    try:
+        return _cx28.pylint_violations("m.py", "X = 1\n")
+    except RuntimeError as e:
+        return type(e).__name__
+    finally:
+        _cx28.subprocess = _real
+
+
+_W28 = "m.py:3:0: W0404: Reimport 'os' (imported line 1) (reimported)\n"
+check("complexity gate: a pylint that could not analyse the file (fatal, exit bit 1) or was misused "
+      "(bit 32) stops the gate; it printed no violations and the file read as clean (review 1012c)",
+      _r18d_pylint28(1, "") == "RuntimeError" and _r18d_pylint28(32, "") == "RuntimeError"
+      and _r18d_pylint28(4 | 1, _W28) == "RuntimeError"
+      and [v[1] for v in _r18d_pylint28(4, _W28)] == [3] and _r18d_pylint28(0, "") == [],
+      repr([_r18d_pylint28(c, _W28) for c in (0, 1, 4, 32)]))
+
 _GIT28 = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
               GIT_COMMITTER_EMAIL="t@t", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 

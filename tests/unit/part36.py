@@ -56,7 +56,7 @@ import sqlalchemy as _sa36
 
 from unit import REPO_ROOT as _ROOT36
 from unit.part01 import check, skip
-from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_app, _p9_audit, _p9_client, _p9_core,
+from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_app, _p9_audit, _p9_client, _p9_core,
                          _p9_json, _p9_patch, _p9_restore_all, _p9_row, _p9_sm, _p9_so, _p9_trip)
 from panel.db.models import GameServer, RemoteServer, db
 from panel.ops.ssh_manager import cron as _cron36
@@ -1134,13 +1134,7 @@ def _r14d_arm_net36():
 _saved36_emit = _p9.socketio.emit
 try:
     # part12's tripwire, again: nothing below may reach a host or run a command on this machine.
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part36's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+    _p9_arm(who="part36")
     _p9_patch(_p9.socketio, "emit", lambda *a, **k: None)
 
     _probe_in_bash36()

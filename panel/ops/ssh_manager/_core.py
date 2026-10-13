@@ -1640,7 +1640,12 @@ def ssh_destination(user, host):
 
 def _ssh_port_arg(server):
     """The `-p` value: an int, never stored text. Raises ValueError."""
-    return str(int(getattr(server, "port", None) or 22))
+    try:
+        return str(int(getattr(server, "port", None) or 22))
+    except OverflowError:
+        # A port stored as REAL infinity: the ValueError every caller is written for, not an
+        # OverflowError past their except.
+        raise ValueError("not a port number") from None
 
 
 def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):

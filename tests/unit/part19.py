@@ -25,8 +25,8 @@ import pyotp as _pyotp18
 from unit.part01 import _r13d_window, check
 from unit.part01 import skip as _skip18
 from unit.part05 import _helper as _helper18, _priv as _priv18
-from unit.part12 import (_p9, _p9_app, _p9_client, _p9_core, _p9_json, _p9_patch, _p9_restore_all,
-                         _p9_sm, _p9_so, _p9_trip)
+from unit.part12 import (_p9, _p9_arm, _p9_app, _p9_client, _p9_core, _p9_json, _p9_patch, _p9_restore_all,
+                         _p9_sm)
 from unit.part18 import (_A18, _XHR18, _audits18, _ctx18, _forget_sids18, _host18, _mine18,
                          _server18)
 from panel.core.config import decrypt_secret as _decrypt18
@@ -484,13 +484,7 @@ from unit.part12 import _P9_TRIPPED as _P9_TRIPPED19  # noqa: E402
 _TRIP19_START = len(_P9_TRIPPED19)
 try:
     # part12's tripwire, re-armed for this block as part18 arms it: nothing below may reach a host.
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part18's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+    _p9_arm(who="part19")
     _p9_patch(_p9.socketio, "emit", lambda event, data=None, **k: None)
     _p18b_enrol()
     _p18b_write_gate()

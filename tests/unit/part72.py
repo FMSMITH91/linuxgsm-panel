@@ -16,8 +16,8 @@ import os
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, P9_VIEWER, _p9, _p9_client, _p9_json, _p9_patch,
-                         _p9_restore_all)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json,
+                         _p9_patch, _p9_restore_all, _p9_so)
 from unit.part47 import _cut47, _node47
 from panel.db.models import RemoteServer as _RS72, User as _U72, db as _db72
 from panel.security import auth as _auth72
@@ -54,7 +54,12 @@ def _status72(call):
 # OverflowError binding a number past 2**63-1 — so every lookup of such an id was a bare 500 with
 # a traceback, and a superadmin's console join of one left the poller raising on every pass.
 _HUGE72 = 10 ** 20
+# part12's transport tripwire, armed at the top of each route block below (review 1012c: none was
+# armed, so a route that gained a host call ran it for real with every check green); the part ends
+# by checking nothing it drove reached one.
+_TRIP72_START = len(_P9_TRIPPED)
 try:
+    _p9_arm(who="part72")
     _A72 = _p9_client(P9_ADMIN)
     check("row id: /api/free-port with a remote_id past SQLite's range is 'no suggestion'",
           _p9_json(_A72.get("/api/free-port?remote_id=%d&game=csgo&desired=27015" % _HUGE72))
@@ -107,6 +112,13 @@ try:
 
     # A hand-edited `port` in config.json that is not a number: Change Port read it with int().
     _p9_patch(_rs72, "load_config", lambda: {"port": "5000x"})
+    # part53's change-port stand-ins: a refusal that came too late would otherwise reach the host.
+    _p9_patch(_p9_so, "host_has_ip", lambda ip: True)
+    _p9_patch(_p9_so, "port_in_use", lambda port: False)
+    _p9_patch(_p9_so, "restart_panel", lambda: (True, "scheduled"))
+    _p9_patch(_p9_so, "ensure_panel_fail2ban", lambda *a, **k: (True, "jail updated"))
+    _p9_patch(_rs72, "remote_ufw_open_port", lambda *a, **k: (True, "ok"))
+    _p9_patch(_rs72, "remote_ufw_close_port", lambda *a, **k: (True, "ok"))
     _cp72 = _status72(lambda: _A72.post("/api/panel/change-port", json={"port": 1}))
     check("change port: a hand-edited non-numeric panel port is a refusal, not a 500", _cp72 == 400,
           repr(_cp72))
@@ -195,7 +207,10 @@ def _lang72(lang):
 
 
 _ES72 = _scan72.load_catalog("es")
+with _p9.app_context():
+    _LANG72_WAS = _db72.session.get(_U72, P9_ADMIN).language
 try:
+    _p9_arm(who="part72")
     _lang72("es")
     _A72 = _p9_client(P9_ADMIN)
     # The full backup: already running (the lock held), and started (the thread stood in for).
@@ -254,7 +269,7 @@ try:
           and _reasons72[0] in _out72.get("message", "") and "Not imported" not in _out72.get("message", ""),
           repr((_reasons72, _out72.get("message"))))
 finally:
-    _lang72("en")
+    _lang72(_LANG72_WAS)
     _p9_restore_all()
 
 
@@ -330,20 +345,55 @@ import re as _re72  # noqa: E402
 
 _CSS72 = _re72.sub(r"/\*.*?\*/", "", _read72(_root, "static", "css", "panel.css"), flags=_re72.S)
 _DASH72 = _read72(_root, "templates", "dashboard.html")
+from unit.part69 import _r17d_media_bodies  # noqa: E402
+
+_PHONE72 = "@media (width <= 767.98px)"
+
+
+def _r18d_name_floor72(css):
+    """Is the Server column's 120px floor set inside the phone block (where it was measured)?"""
+    return any(_re72.search(r"\.dash-srv-table\s+\.dash-col-name\s*\{[^}]*min-width:\s*120px", _b)
+               for _b in _r17d_media_bodies(css, _PHONE72))
+
+
+def _r18d_unscoped_wraps72(css):
+    """The selectors of every rule, at any depth, that sets flex-wrap on a bare `.page-title`.
+
+    Only the first `.page-title {` rule was read (review 1012c): a `flex-wrap: wrap` put back into
+    the phone block's own rule wrapped every heading at exactly the 375px width it was measured at.
+    A selector list naming .page-title counts too; the `:has(> [data-no-i18n])` rule is the scoped one.
+    """
+    return [_sel.strip() for _sel, _body in _re72.findall(r"([^{}]+)\{([^{}]*)\}", css)
+            if "flex-wrap" in _body
+            and any(_re72.search(r"(?<![\w-])\.page-title$", _one.strip()) for _one in _sel.split(","))]
+
+
 # A viewer with no start/stop/restart/update has no checkbox column: :nth-child(2) was Type.
 check("375px: the dashboard's server-name floor is on the Server column by class, not by position "
-      "(no checkbox column for a view-only viewer moved it onto the hidden Type column)",
+      "(no checkbox column for a view-only viewer moved it onto the hidden Type column), in the phone block",
       _re72.search(r"dash-srv-table[^{]*:nth-child", _CSS72) is None
-      and _re72.search(r"\.dash-srv-table\s+\.dash-col-name\s*\{[^}]*min-width:\s*120px", _CSS72) is not None
+      and _r18d_name_floor72(_CSS72)
       and _re72.search(r'<th class="[^"]*\bdash-col-name\b[^"]*" data-sortkey="name"', _DASH72) is not None
       and _re72.search(r'\{% endif %\}\s*<td class="dash-col-name">', _DASH72) is not None,
       "the name column's floor or its class is missing")
-_ptbase72 = _re72.search(r"(?<![\w-])\.page-title\s*\{([^}]*)\}", _CSS72)
+_ptbad72 = _r18d_unscoped_wraps72(_CSS72)
 check("375px: a page heading wraps its flex row only when it carries a name (a long translated title "
-      "kept its icon beside it)",
-      _ptbase72 is not None and "flex-wrap" not in _ptbase72.group(1)
+      "kept its icon beside it), in every .page-title rule, the phone block's included",
+      _re72.search(r"(?<![\w-])\.page-title\s*\{", _CSS72) is not None and _ptbad72 == []
       and _re72.search(r"\.page-title:has\(>\s*\[data-no-i18n\]\)\s*\{\s*flex-wrap:\s*wrap", _CSS72) is not None,
-      _ptbase72.group(1).strip() if _ptbase72 else "no .page-title rule")
+      repr(_ptbad72))
+# Controls: the wrap put back into the phone block's rule, or on a selector list, is named; the
+# floor moved out of the phone block is not the phone's floor.
+_ptctl72 = _CSS72.replace(_PHONE72 + " {", _PHONE72 + " {\n.page-title { flex-wrap: wrap; }", 1)
+_flctl72 = _re72.sub(r"(\.dash-srv-table\s+\.dash-col-name\s*\{[^}]*)min-width:\s*120px", r"\1min-width: 0",
+                     _CSS72) + "\n.dash-srv-table .dash-col-name { min-width: 120px; }\n"
+check("375px: ...a flex-wrap in the phone block's .page-title rule or in a selector list naming it is "
+      "named, and a name floor outside the phone block is not counted (control)",
+      _r18d_unscoped_wraps72(_ptctl72) == [".page-title"]
+      and _r18d_unscoped_wraps72(".x, .page-title { flex-wrap: wrap }") == [".x, .page-title"]
+      and _r18d_unscoped_wraps72(".page-title:has(> [data-no-i18n]) { flex-wrap: wrap }") == []
+      and not _r18d_name_floor72(_flctl72),
+      repr((_r18d_unscoped_wraps72(_ptctl72), _r18d_name_floor72(_flctl72))))
 _fw72 = _read72(_root, "templates", "remote_firewall.html")
 _lim72 = _fw72[_fw72.index('id="limit-port"') - 400:_fw72.index('data-action="unlimitPort"')]
 check("375px: the rate-limit row gives its port the whole row below 576px (the × ran past the card "
@@ -576,3 +626,6 @@ check("connect address: an IPv6 host is bracketed in the address and the steam:/
                   "203.0.113.10": ("203.0.113.10:27016", "steam://connect/203.0.113.10:27016"),
                   "play.example.org": ("play.example.org:27016", "steam://connect/play.example.org:27016"),
                   "": ("", "")}, repr(_addr72))
+
+check("part72: nothing its routes drove reached a real transport (part12's tripwire, armed in each)",
+      len(_P9_TRIPPED) == _TRIP72_START, repr(_P9_TRIPPED[_TRIP72_START:][:6]))

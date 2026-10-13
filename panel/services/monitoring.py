@@ -793,6 +793,11 @@ def _host_restart_flags(remote):
 
     A verb now, and it reports failure: rc != 0 is None, not set(). See
     tools/panel-helper:do_restart_flags.
+
+    A home the read could not look in comes back as `?<name>` in the set (both forms print it so),
+    and _monitor_server leaves only that account's banner as it was. The verb used to exit 1 for
+    one such home, and this returned None for the whole host: every banner on it froze, and the
+    unstamped read made the host "due" on every sweep.
     """
     try:
         out, _, rc = run_privileged(remote, "restart-flags", [], timeout=10, merge_stderr=False)
@@ -808,7 +813,7 @@ def _host_restart_flags(remote):
             parts = ln.split("/")
             if len(parts) > 2:
                 names.add(parts[2])
-        elif ln:                             # the helper prints bare user names
+        elif ln:                             # the helper prints bare user names, `?<name>` unread
             names.add(ln)
     return names
 
@@ -1090,8 +1095,9 @@ def _monitor_server(remote, gs, probe, ports):
     # None means "could not look", and that must not be written as "no restart pending"
     # — the badge would simply go out, which is indistinguishable from the cron having
     # run. Leaving the previous value keeps the last thing actually measured.
+    # The same for one account whose home the read could not look in (`?<name>`).
     _rf = probe.get("restart_flagged")
-    if _rf is not None:
+    if _rf is not None and "?" + gs.short_name not in _rf:
         _cron_restart_pending[gs.id] = gs.short_name in _rf
     prev_up = _monitor_state["servers"].get(gs.id)
     # State is tracked either way — only the ALERT is muted by a tag, so a server that goes

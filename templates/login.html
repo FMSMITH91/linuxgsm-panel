@@ -8,9 +8,10 @@
       <div class="card-body p-4">
         <div class="text-center mb-4">
           <span style="font-size: 3rem;">🎮</span>
-          <h3 class="mt-2">{{ site_title }}</h3>
+          <h3 class="mt-2" data-no-i18n>{{ site_title }}</h3>
           <p class="text-secondary small">
-            {% if two_factor %}Enter the code from your authenticator app{% else %}{{ login_tagline or 'Sign in to manage your game servers' }}{% endif %}
+            {# An admin's own title and tagline are shown as written; only the default is translated. #}
+            {% if two_factor %}Enter the code from your authenticator app{% elif login_tagline %}<span data-no-i18n>{{ login_tagline }}</span>{% else %}Sign in to manage your game servers{% endif %}
           </p>
         </div>
         {% if two_factor %}

@@ -22,8 +22,8 @@ import types as _types61
 
 from unit.part01 import check, skip
 from unit.part02 import protect as _protect61
-from unit.part12 import (P9_ADMIN, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_cfg, _p9_client, _p9_core,
-                         _p9_json, _p9_Over, _p9_so, _p9_trip)
+from unit.part12 import (P9_ADMIN, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg, _p9_client,
+                         _p9_json, _p9_so)
 from unit.part20 import _patch, _patched
 
 from panel.ops import system_ops as _so61  # noqa: E402
@@ -47,19 +47,7 @@ def _r15d_arm61():
     through `tailscale`, the real CLI on a box that has it (part12 stubbed it for that reason), so
     that is answered here and its subprocess is tripwired too.
     """
-    _patch(_p9_core, "get_connection",
-           _p9_trip("paramiko", exc=ConnectionError("refused by part61's tripwire")))
-    for _n61, _w61 in (("_run_via_ssh_cli", "ssh-cli"), ("_exec_local_shell", "local-shell"),
-                       ("_exec_local_argv", "local-argv")):
-        _patch(_p9_core, _n61, _p9_trip(_w61))
-    for _n61 in ("_run", "_run_verb", "_git"):
-        _patch(_p9_so, _n61, _p9_trip("system_ops." + _n61))
-    _patch(_ts61, "subprocess", _p9_Over(
-        _ts61.subprocess,
-        Popen=_p9_trip("tailscale.subprocess.Popen", exc=OSError("refused by part61's tripwire")),
-        run=_p9_trip("tailscale.subprocess.run", exc=OSError("refused by part61's tripwire"))))
-    _patch(_ts61, "get_tailscale_info",
-           lambda force_refresh=False: NS(dns_name=None, serve_config={}, serve_unreadable=False))
+    _p9_arm(_patch, "part61")
 
 
 # Addresses built from their parts, so no address literal is added: loopback, a documentation

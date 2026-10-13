@@ -193,3 +193,72 @@ def tr(s, **vals):
 def _tr_value(value):
     """One slot value for tr(): a Sentence translated, anything else as it is."""
     return tr(value) if isinstance(value, (Sentence, Sentences)) else value
+
+
+# ── A Sentence kept in the database, translated when it is shown ─────────────────────────────────
+# A worker thread has no viewer, so what it records for later (a failed install's reason on its
+# row) was stored as finished English and every es/fr viewer read English. Storing how the sentence
+# was built instead — its template and values, as JSON — lets the page translate it for whoever
+# looks, while the English column beside it stays what admins, logs and the debug report read.
+# A value that is not a Sentence (a host's own words) is kept as written and never translated.
+_RECORD_DEPTH = 6        # deeper than any sentence the panel builds; a hand-made record past it is refused
+_RECORD_TEXT_MAX = 2000  # a host's raw tail is already cut to 300; anything longer is cut, not refused
+
+
+def sentence_record(s, _depth=0):
+    """`s` (a Sentence, Sentences, list or plain value) as plain JSON-able data for sentence_restored."""
+    if _depth > _RECORD_DEPTH:
+        return str(s)[:_RECORD_TEXT_MAX]
+    if isinstance(s, Sentences):
+        return {"parts": [sentence_record(p, _depth + 1) for p in s.parts], "sep": s.sep}
+    if isinstance(s, Sentence):
+        return {"t": s.template, "v": {k: sentence_record(v, _depth + 1) for k, v in s.vals.items()}}
+    if isinstance(s, (list, tuple)):
+        return [sentence_record(x, _depth + 1) for x in s]
+    if isinstance(s, (int, float)) and not isinstance(s, bool):
+        return s
+    return str(s)[:_RECORD_TEXT_MAX]
+
+
+def _restored_all(items, depth):
+    """sentence_restored() of each of `items`, or None when any one of them could not be restored."""
+    out = [sentence_restored(x, depth) for x in items]
+    return None if any(x is None for x in out) else out
+
+
+def _restored_parts(data, depth):
+    """The Sentences a {"parts", "sep"} record holds, or None."""
+    if not (isinstance(data["parts"], list) and isinstance(data["sep"], str)):
+        return None
+    parts = _restored_all(data["parts"], depth)
+    return None if parts is None else Sentences(*parts, sep=data["sep"])
+
+
+def _restored_sentence(data, depth):
+    """The Sentence a {"t", "v"} record holds, or None."""
+    if not (isinstance(data["t"], str) and isinstance(data["v"], dict)):
+        return None
+    # A slot name is a keyword to Sentence(), so it must be one — and not one of __new__'s own.
+    if not all(isinstance(k, str) and k.isidentifier() and k not in ("cls", "template") for k in data["v"]):
+        return None
+    vals = dict(zip(data["v"], _restored_all(data["v"].values(), depth) or ()))
+    return None if len(vals) != len(data["v"]) else Sentence(data["t"], **vals)
+
+
+def sentence_restored(data, _depth=0):
+    """The Sentence sentence_record() wrote, or None for anything it could not have written.
+
+    Read from a database column, so it is checked rather than trusted: a restored or hand-edited
+    panel.db can hold anything, and the caller then shows its English column instead.
+    """
+    if _depth > _RECORD_DEPTH:
+        return None
+    if isinstance(data, str) or (isinstance(data, (int, float)) and not isinstance(data, bool)):
+        return data
+    if isinstance(data, list):
+        return _restored_all(data, _depth + 1)
+    if isinstance(data, dict) and set(data) == {"parts", "sep"}:
+        return _restored_parts(data, _depth + 1)
+    if isinstance(data, dict) and set(data) == {"t", "v"}:
+        return _restored_sentence(data, _depth + 1)
+    return None

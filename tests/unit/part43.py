@@ -50,8 +50,8 @@ from types import SimpleNamespace as _NS43
 
 from unit import REPO_ROOT as _ROOT43
 from unit.part01 import check, skip
-from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_app, _p9_client, _p9_core,
-                         _p9_json, _p9_patch, _p9_restore_all, _p9_sm, _p9_so, _p9_trip)
+from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_arm, _p9_app, _p9_client, _p9_core,
+                         _p9_json, _p9_patch, _p9_restore_all, _p9_sm, _p9_so)
 from panel.core.panel_state import forget_rows
 from panel.db.models import AuditLog, GameServer, RemoteServer, db
 from panel.routes import discover as _disc43
@@ -311,13 +311,7 @@ def _privileged43(server, verb, args=(), **_k):
 
 def _arm43():
     """part12's tripwire again, and the host's answers from the fixture home."""
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part43's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+    _p9_arm(who="part43")
     _p9_patch(_p9_core, "run_command", _scan_in43("sh"))
     _p9_patch(_p9_core, "run_as_game_user", _run_as43)
     _p9_patch(_p9_core, "run_privileged", _privileged43)
@@ -1065,13 +1059,7 @@ class _Rv43Stop(BaseException):
 
 
 def _rv43_arm():
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part43's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
+    _p9_arm(who="part43")
     _p9_patch(_ts43, "get_tailscale_info", lambda force_refresh=False: _NS43(dns_name=None))
     _p9_patch(_notif43, "notify", lambda key, title, body="": None)
     _p9_patch(_p9.socketio, "emit", lambda *a, **k: None)

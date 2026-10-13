@@ -605,7 +605,7 @@ def host_player_state(remote, probes=None):
     blockers += [_blocker("maintenance", gs.name) for gs in running if probes[gs.id].get("maint")]
     busy, unk2 = _count_players(running, _mon._batched_slots(running) if running else {})
     unknown += unk2
-    return {"state": _state_word(blockers, busy, unknown),
+    return {"state": _rw.state_word(blockers, busy, unknown),
             "total": sum(b["players"] for b in busy), "running": len(running),
             "busy": busy, "unknown": unknown, "blockers": blockers, "probes": probes}
 
@@ -622,14 +622,6 @@ def _unread_rows(installed, probes):
 
 def _session_of(probes, gs):
     return (probes.get(gs.id) or {}).get("session")
-
-
-def _state_word(blockers, busy, unknown):
-    if blockers:
-        return "blocked"
-    if busy:
-        return "busy"
-    return "unknown" if unknown else "idle"
 
 
 # ── Preflight and preview ───────────────────────────────────────────────────────────────────────
@@ -1835,7 +1827,11 @@ def restore_host(remote, rows, now=None):
         # longer than that, every row was reported failed and the plan cleared: the monitor's
         # locks stayed aside and nothing was started when the host came back. So a silent host
         # stops the clock, and the next tick it answers on acts as before.
+        # But not for ever: a host silent for STALE_PLAN has its plan dropped, as _host_silent drops
+        # any other plan's (it kept the 15 s tick, an SSH timeout each, on a host gone for good).
         if _sm.hosts.host_boot_identity(remote) is None:
+            if now - (recs[0][1].get("at") or now) > STALE_PLAN:
+                return _host_silent(remote, recs, recs[0][1], now)
             return _rw.hold_clock(recs, _set_rr, db.session.commit)
         _act(remote, recs, now, rollback_=True)
         return True
@@ -2026,7 +2022,7 @@ def _act_panel(remote, gs, d, now, rollback_):
         return None
     outcome, detail = safe_start(remote, gs)
     if outcome == "wait":
-        return _rw.start_waits(d, detail)
+        return _rw.start_waits(d, detail, now, rollback_)
     if outcome in ("started", "running"):
         _after_start(remote, gs)
         # "running": it was up before the panel's start (the user's own @reboot, a unit): the

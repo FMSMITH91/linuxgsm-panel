@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
-from panel.core.config import (_r13a_cfg_text, _r15a_cfg_int, load_config, save_config)
+from panel.core.config import (_r13a_cfg_text, _r15a_cfg_int, load_config, set_config_keys)
 from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top_ips,
@@ -265,9 +265,9 @@ def _register_panel_binding(app):
             return jsonify({"success": False, "message": "That's already the panel's binding."}), 400
 
         # ── Save the new binding ──
-        cfg["port"] = new_port
-        cfg["bind_host"] = new_bind
-        save_config(cfg)
+        # Only these two keys, onto the file as it is now: the checks above ran `ss` and `ip`,
+        # which yield, and a whole-dict save_config(cfg) reverted any write made meanwhile.
+        set_config_keys(cfg, port=new_port, bind_host=new_bind)
 
         fw_notes, fw_ok = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port)
         f2b_ok, f2b_msg = _follow_binding_in_fail2ban(app, new_port, cur_port)
@@ -282,7 +282,7 @@ def _register_panel_binding(app):
         # SQLite lock for longer than that would die with the process. The restart's own outcome
         # is therefore a row of its own, below.
         log_action(current_user, "panel_change_binding", target=LOCAL_HOST_LABEL,
-                   detail=f"{cur_bind}:{cur_port} -> {new_bind}:{new_port}; "
+                   detail=f"{_r18a_bracketed(cur_bind)}:{cur_port} -> {_r18a_bracketed(new_bind)}:{new_port}; "
                           f"firewall: {' '.join(fw_notes) or 'n/a'}; fail2ban: {f2b_msg}",
                    success=fw_ok and f2b_ok)
         ok, restart_msg = so.restart_panel()
@@ -297,7 +297,12 @@ def _register_panel_binding(app):
                         "served_over_tailscale": bool(cfg.get("tailscale_setup_done")),
                         "message": _r15e_with_notes(i18n.Sentence(
                             "Panel binding to {address}:{port}. Restarting…",
-                            address=new_bind, port=new_port), fw_notes)})
+                            address=_r18a_bracketed(new_bind), port=new_port), fw_notes)})
+
+
+def _r18a_bracketed(host):
+    """`host` as it reads before a `:port`: an IPv6 address in brackets (`:::5000` names nothing)."""
+    return "[%s]" % host if ":" in (host or "") and not host.startswith("[") else host
 
 
 def _r15e_with_notes(head, notes):

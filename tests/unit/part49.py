@@ -29,8 +29,8 @@ import time as _time49
 from types import SimpleNamespace as NS
 
 from unit.part01 import check
-from unit.part12 import (_P9_TRIPPED, _p9, _p9_client, _p9_core, _p9_json, _p9_patch,
-                         _p9_restore_all, _p9_so, _p9_trip)
+from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_patch,
+                         _p9_restore_all, _p9_trip)
 from panel.db.models import GameServer, RemoteServer, User, db
 from panel.ops.ssh_manager import cron as _cron49
 from panel.ops.ssh_manager import files as _files49
@@ -460,14 +460,8 @@ def _verify_good49():
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _arm49():
     """part12's tripwire: nothing below may reach a host or run a command on this machine."""
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part49's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _p9_arm(who="part49")
     _p9_patch(_p9_core, "run_command", _p9_trip("run_command"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
     _p9_patch(_p9_core, "shell_as_game_user", _bash49)
     _p9_patch(_sh49, "privileged_accounts", lambda remote, users: {})
 

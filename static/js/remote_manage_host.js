@@ -118,6 +118,11 @@ function onBindSelect(){
   var wrap=document.getElementById('panel-bind-custom-wrap');
   if(sel && wrap) wrap.style.display = (sel.value === '__custom__') ? '' : 'none';
 }
+// `host` as it reads before a `:port`: an IPv6 address in brackets (`:::5000` names no address).
+function _r18aBracket(host){
+  var h=String(host||'');
+  return (h.indexOf(':')>=0 && h.charAt(0)!=='[') ? '['+h+']' : h;
+}
 function changePanelBinding(){
   var pinp=document.getElementById('panel-port-input'); if(!pinp) return;
   var p=Number.parseInt(pinp.value,10);
@@ -128,7 +133,7 @@ function changePanelBinding(){
     bind = (document.getElementById('panel-bind-custom').value || '').trim();
     if(!bind){ if(window.toast) toast('Enter the IP address to bind to.','warning'); return; }
   }
-  var pretty = bind + ':' + p;
+  var pretty = _r18aBracket(bind) + ':' + p;     // an IPv6 bind in brackets: `:::5000` names no address
   confirmDialog({title:'Change panel binding', icon:'hdd-network', confirmClass:'btn-warning', confirmLabel:'Change binding',
     bodyText:tf('Change the panel binding to {bind}?\n\nThe panel will briefly restart to apply it. '
       +'Make sure you can still reach it afterward (over Tailscale, or on the new address/port).', {bind: pretty}),
@@ -150,7 +155,8 @@ function _changePanelBinding(p, bind){
       } else {
         target = location.href;                       // only the bind changed; same URL
       }
-      m.innerHTML='<span class="text-success">'+tfHtml('Panel restarting on {addr}… reconnecting shortly.', {addr: d.new_bind+':'+d.new_port})+'</span>';  // nosemgrep
+      var shownBind = _r18aBracket(d.new_bind);    // as the reply's message: `:::5000` names no address
+      m.innerHTML='<span class="text-success">'+tfHtml('Panel restarting on {addr}… reconnecting shortly.', {addr: shownBind+':'+d.new_port})+'</span>';  // nosemgrep
       setTimeout(function(){ location.href=target; }, 7000);   // give the service time to rebind
     })
     .catch(function(){

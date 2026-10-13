@@ -39,9 +39,8 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check, skip
 from unit.part05 import _helper, _root
-from unit.part12 import (_P9_TRIPPED, _P9Thread, _p9, _p9_client, _p9_core, _p9_drain, _p9_json,
-                         _p9_patch, _p9_restore_all, _p9_sd, _p9_sf, _p9_sh, _p9_so,
-                         _p9_threading, _p9_trip)
+from unit.part12 import (_P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_client, _p9_core, _p9_drain, _p9_json,
+                         _p9_patch, _p9_restore_all, _p9_sd, _p9_sf, _p9_sh, _p9_threading, _p9_trip)
 from unit.part47 import _cut47, _node47
 from flask import session as _session71
 from panel.core import i18n as _i18n71
@@ -61,16 +60,10 @@ _spec71.loader.exec_module(_scan71)
 
 
 def _arm71():
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part71's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _p9_arm(who="part71")
     _p9_patch(_p9_core, "run_command", _p9_trip("run_command"))
     _p9_patch(_p9_core, "shell_as_game_user", _p9_trip("shell_as_game_user"))
     _p9_patch(_p9_core, "run_privileged", _p9_trip("run_privileged"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
 
 
 def _setup71():
@@ -342,9 +335,11 @@ def _wide_names71():
           "Quake III and JK2MV's 1.02 colour mode read one) finds its console row — the console kept "
           "\"^aBob\" and the Kick found no one",
           got["one"] == 0, repr(got))
+    # "exact" was a control that a `^1` match wins; the 1012c review showed it is the same ambiguity
+    # ("^1Bob" and "^aBob" are one "Bob" on screen), so it resolves to no one now (part74).
     check("moderation (idTech3): ...but not when two players differ only in such codes (they are one "
-          "row on screen; the first could be the wrong player), and a `^1` match still wins (controls)",
-          got["two"] is None and got["exact"] == 0, repr(got))
+          "row on screen; the first could be the wrong player), a `^1` code included",
+          got["two"] is None and got["exact"] is None, repr(got))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -415,10 +410,11 @@ def _restart_flags71():
     with _ctx71.redirect_stdout(out), _ctx71.redirect_stderr(err):
         rc = _helper.do_restart_flags([], None)
     _helper.os.lstat = real_lstat
-    check("helper restart-flags: a home it could not look in makes the verb exit non-zero (the panel "
-          "reads that as \"could not look\"), not a confident \"no flag\" with exit 0 — and the homes "
-          "it could read are still listed",
-          rc == 1 and out.getvalue().split() == ["flagged"] and "locked" in err.getvalue(),
+    # Since review 1012c the unread home is named on stdout (`?locked`) with exit 0, so the panel
+    # keeps only that account's banner (part74); it is still never a confident "no flag".
+    check("helper restart-flags: a home it could not look in is reported as unread, not a confident "
+          "\"no flag\" — and the homes it could read are still listed",
+          rc == 0 and out.getvalue().split() == ["flagged", "?locked"] and "locked" in err.getvalue(),
           repr((rc, out.getvalue(), err.getvalue())))
 
 

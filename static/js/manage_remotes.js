@@ -234,7 +234,7 @@ function renderAuthKeyForm(remoteId, name) {
     // Fallback: pre-auth key
     + '<div class="mt-3"><a href="#" class="small text-secondary"' + _da('_showTsKeyAdv') + '>Advanced: use a pre-auth key instead</a></div>'
     + '<div id="ts-key-adv" style="display:none;" class="mt-2">'
-    + '<label class="form-label small">Auth Key (from <a href="https://login.tailscale.com/admin/keys" target="_blank">Tailscale admin</a>)</label>'
+    + '<label class="form-label small"><span>Auth Key</span> (<a href="https://login.tailscale.com/admin/keys" target="_blank">Tailscale admin</a>)</label>'
     + '<input type="text" id="ts-auth-key" class="form-control form-control-sm mb-2" placeholder="tskey-auth-...">'
     + '<button class="btn btn-outline-success btn-sm"' + _da('bootstrapTailscale', [remoteId]) + '><i class="bi bi-key"></i> Connect with key</button>'
     + '</div>'

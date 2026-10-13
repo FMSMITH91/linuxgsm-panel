@@ -334,16 +334,28 @@ function pollLive(){
     // of a reading nobody took.
     var stale = document.getElementById('live-stale');
     if(d.error){
+      if(d.unreachable) _r18cPaintHostBadge(false);
       if(stale){ stale.textContent = d.unreachable
         ? t('Live figures are paused — the host did not answer. The numbers below are the last reading.')
         : t('Live figures are paused — the last read failed.'); stale.style.display=''; }
       return;
     }
     if(stale){ stale.textContent=''; stale.style.display='none'; }
+    _r18cPaintHostBadge(true);
     _livePaintCpu(d);
     _livePaintMemory(d);
     _livePaintDisk(d);
   }).catch(function(){});
+}
+// The header's reachability badge, from what this page's own live read just found. Rendered once,
+// it kept saying "Reachable" for as long as the page stayed open on a host that had since died.
+// English, as the template renders it: the page's translator swaps the text node and the title.
+function _r18cPaintHostBadge(up){
+  var b = document.getElementById('remote-status');
+  if(!b) return;
+  b.className = 'badge ' + (up ? 'bg-success' : 'bg-danger');
+  b.textContent = up ? 'Reachable' : 'Unreachable';
+  b.setAttribute('title', up ? 'The panel can reach this host over SSH' : 'The panel cannot reach this host over SSH');
 }
 // One /live reading onto the card, for pollLive: the CPU and its cores, RAM and swap, the disk.
 function _livePaintCpu(d){
@@ -396,7 +408,7 @@ function renderUpdates(d, note){
                      : escapeHtml(p.version||'');
     return '<div style="font-family:monospace;font-size:.72rem;line-height:1.5;">'
          + '<span class="'+(isSecurityPkg(p)?'text-danger':'text-info')+'">'
-         + escapeHtml(p.name)+'</span> '+ver+'</div>';
+         + escapeHtml(p.label||p.name)+'</span> '+ver+'</div>';   // label: "libx11-6 (i386)" beside its amd64 row
   }).join('') + '</div>';
   el.innerHTML=head+rows;   // nosemgrep — head/rows are composed above from escapeHtml()'d values
   // ...and the button follows the count. Offering "Install updates" on a host the panel has just

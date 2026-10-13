@@ -25,8 +25,8 @@ from types import SimpleNamespace as _NS56
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_CFG_PATH, _P9_TRIPPED, _p9_cfg, _p9_client,
-                         _p9_core, _p9_json, _p9_patch, _p9_restore_all, _p9_so, _p9_trip)
+from unit.part12 import (_p9_arm, P9_ADMIN, P9_GS, P9_HOST, _P9_CFG_PATH, _P9_TRIPPED, _p9_cfg, _p9_client,
+                         _p9_json, _p9_patch, _p9_restore_all, _p9_so)
 from unit.part47 import _cut47, _node47
 from panel.ops import backup as _bk56
 from panel.routes import remote_bootstrap as _rb56
@@ -58,14 +58,7 @@ _A56 = _p9_client(P9_ADMIN)
 # does, and closed with a check below.
 _TRIP56_START = len(_P9_TRIPPED)
 try:
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part56's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
-    _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
+    _p9_arm(who="part56")
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # 1. routes
     # ════════════════════════════════════════════════════════════════════════════════════════════
@@ -225,7 +218,7 @@ check("install.sh: an OUTBOUND rule on the port is not a rule for reaching the p
 check("install.sh: ...a udp range, or a range that misses the port, is still no rule for it (control)",
       _fw56["udp range"] == (True, "OPEN=1 RULED=0") and _fw56["range elsewhere"] == (True, "OPEN=1 RULED=0"),
       repr(_fw56))
-_pub56 = _INS56[_INS56.index('PUBLIC_IP="$('):_INS56.index("hostname -I", _INS56.index('PUBLIC_IP="$('))]
+_pub56 = _INS56[_INS56.index('PUBLIC_IP="$('):_INS56.index("host_addr_fallback)", _INS56.index('PUBLIC_IP="$('))]
 check("install.sh: the public address printed beside the IPv4 firewall verdict is fetched over IPv4 "
       "(ifconfig.me answers IPv6 to an IPv6 connection)",
       _pub56.count("curl ") == 2 and _pub56.count("curl -4 ") == 2, _pub56)

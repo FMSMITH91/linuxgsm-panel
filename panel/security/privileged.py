@@ -1423,6 +1423,25 @@ def _ufw_delete_num_if_remote(a):
             % (a[0], shlex.quote(a[1]), a[0], a[0], UFW_RULE_MOVED))
 
 
+# The remote form of restart-flags, with the helper's contract (do_restart_flags): each flagged
+# home's flag path, `?<name>` for a home root cannot look in, and a non-zero exit only when /home
+# itself cannot be listed. It was `ls -1d /home/*/.restart-pending 2>/dev/null || true`: the
+# glob's last component is literal, so bash lstats each candidate, an EACCES home (NFS
+# root_squash, FUSE without allow_root) simply dropped out of the expansion, and `|| true` made
+# that a confident "no flag" with rc 0 — written over the server's banner. A flag that is not
+# there in a home the shell can enter (cd needs the same search permission lstat does) is absent;
+# a home it cannot enter is unread. `-L` as well as `-e`: a dangling link is a flag, as the
+# helper's lstat answers it. Names are held to the helper's alphabet, which also drops the glob's
+# own unexpanded `*/` when /home is empty.
+_R18B_RESTART_FLAGS_REMOTE = (
+    "cd %s && ls -A >/dev/null || exit 1; "
+    "for d in */; do n=${d%%/}; case $n in ''|*[!A-Za-z0-9._-]*) continue;; esac; "
+    "f=%s/$n/.restart-pending; "
+    "if [ -e \"$f\" ] || [ -L \"$f\" ]; then printf '%%s\\n' \"$f\"; "
+    "elif ! (cd -- \"$n\") 2>/dev/null; then printf '?%%s\\n' \"$n\"; fi; "
+    "done" % (HOME_ROOT, HOME_ROOT))
+
+
 # The remote renderings of the SECRET_STDIN verbs, naming the mktemp file "$f" that holds the secret.
 _SECRET_REMOTE = {
     "pro-attach": lambda a: "pro attach --attach-config \"$f\"",
@@ -1626,7 +1645,7 @@ _REMOTE_ACTIONS = {
         "runuser -u %s -- cat %s 2>/dev/null || true"
         % (shlex.quote(a[0]), shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"))),
     "content-grant-read": _content_grant_remote,
-    "restart-flags": lambda a: "ls -1d /home/*/.restart-pending 2>/dev/null || true",
+    "restart-flags": lambda a: _R18B_RESTART_FLAGS_REMOTE,
     "ufw-delete-num-if": _ufw_delete_num_if_remote,
     "nodesource-setup": _nodesource_setup_remote,
     "gamedig-install": _gamedig_install_remote,

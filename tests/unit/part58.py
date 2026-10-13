@@ -33,7 +33,7 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check
 from unit.part05 import _helper
-from unit.part12 import (_P9_TRIPPED, _p9, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch,
+from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch,
                          _p9_restore_all, _p9_sd, _p9_sf, _p9_so, _p9_trip, _p9_ts)
 from panel.db.models import GameServer, RemoteServer, User, db
 from panel.ops.debug_report import _base as _base58
@@ -78,14 +78,8 @@ def _tool58(name, body):
 
 
 def _arm58():
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part58's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _p9_arm(who="part58")
     _p9_patch(_p9_core, "run_command", _p9_trip("run_command"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
     _p9_patch(_p9_core, "shell_as_game_user", _bash58)
 
 
@@ -331,9 +325,14 @@ def _localized_continued58():
           repr(kept))
     old = {k: os.environ.get(k) for k in ("LANG", "LC_ALL", "LANGUAGE")}
     os.environ.update(LANG="fr_FR.UTF-8", LC_ALL="fr_FR.UTF-8", LANGUAGE="fr")
+    # The one deliberate local run: a bash that only echoes its locale. The tripwire armed above
+    # replaces system_ops.subprocess, so the real one is put back for this call alone.
+    _armed58 = _p9_so.subprocess
+    _p9_so.subprocess = _sp58
     try:
         out, _e, _rc = _p9_so._debug_run(["bash", "-c", 'echo "$LC_ALL $LANG ${LANGUAGE-unset}"'])
     finally:
+        _p9_so.subprocess = _armed58
         for k, v in old.items():
             if v is None:
                 os.environ.pop(k, None)

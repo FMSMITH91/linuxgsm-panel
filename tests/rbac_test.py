@@ -1240,6 +1240,71 @@ def _check_vps_prep_refuses_panel_host():
           not _trapped[_trapped_at:], "reached: %r" % (_trapped[_trapped_at:],))
 
 
+# Every host-level view, by file: the 11 probes above drive the shared refusal, but the other
+# host-level routes were held by nothing (review 1012c): swapping close-panel-port's
+# get_host_remote for get_remote let a delegate close the panel's public port with every suite
+# green, and the <remote_id> structural gate accepts either guard. Listed by hand so a view that
+# stops calling it is named, and a new view that starts calling it must be added here.
+_HOST_LEVEL_VIEWS = {
+    "close_port22.py": {"api_remote_close_port_22"},
+    "remote_security.py": {"api_remote_security_bans", "api_remote_security_top_ips",
+                           "api_remote_security_block", "api_remote_security_autoblock",
+                           "api_remote_security_unban", "api_remote_security_log"},
+    "remote_tailscale.py": {"api_remote_tailscale_check"},
+    "remote_vps.py": {"remote_firewall", "api_remote_firewall", "api_remote_firewall_open",
+                      "api_remote_firewall_allow_from", "api_remote_firewall_limit",
+                      "api_remote_firewall_close", "api_remote_firewall_delete_rule",
+                      "api_remote_ssh_status", "api_remote_ssh_mode", "api_remote_ssh_port",
+                      "api_remote_close_panel_port", "api_remote_game_port_open",
+                      "api_remote_check_updates", "api_remote_run_updates", "api_remote_os_update_start",
+                      "api_remote_reboot_plan", "api_remote_reboot", "api_remote_reboot_cancel"},
+    "remotes.py": {"edit_remote", "delete_remote"},
+    "ubuntu_pro.py": {"api_remote_pro_status", "api_remote_pro_attach", "api_remote_pro_service",
+                      "api_remote_pro_detach"},
+}
+
+
+def _host_guarded_views(src):
+    """Names of the routed views in `src` that call get_host_remote."""
+    return {_n.name for _n in ast.walk(ast.parse(src))
+            if isinstance(_n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and any(_r18d_called(_d) == "route" for _d in _n.decorator_list)
+            and any(_r18d_called(_c) == "get_host_remote" for _c in ast.walk(_n))}
+
+
+def _r18d_called(node):
+    """The name a call node calls (`f(…)` or `x.f(…)`), or None for anything else."""
+    if not isinstance(node, ast.Call):
+        return None
+    return getattr(node.func, "attr", getattr(node.func, "id", None))
+
+
+def _check_host_level_views_keep_their_guard():
+    """Every host-level view calls get_host_remote, and every view that calls it is listed."""
+    _found, _src = {}, {}
+    for _f in sorted(os.listdir(os.path.join(_ROOT, "panel", "routes"))):
+        if _f.endswith(".py"):
+            with open(os.path.join(_ROOT, "panel", "routes", _f), encoding="utf-8") as _fh:
+                _src[_f] = _fh.read()
+            _g = _host_guarded_views(_src[_f])
+            if _g:
+                _found[_f] = _g
+    _lost = sorted("%s:%s" % (_f, _v) for _f, _vs in _HOST_LEVEL_VIEWS.items()
+                   for _v in _vs - _found.get(_f, set()))
+    _new = sorted("%s:%s" % (_f, _v) for _f, _vs in _found.items()
+                  for _v in _vs - _HOST_LEVEL_VIEWS.get(_f, set()))
+    check("panel-host grant: every host-level view (firewall, sshd, OS updates, reboot, fail2ban, "
+          "Pro, close-panel-port, edit/delete) refuses a delegate through get_host_remote",
+          not _lost and not _new, "no longer calling it: %r / calling it but unlisted: %r" % (_lost, _new))
+    # Control: close-panel-port's guard swapped for get_remote is named.
+    _swapped = _src["remote_vps.py"].replace(
+        "remote = get_host_remote(remote_id)", "remote = get_remote(remote_id)")
+    check("panel-host grant: ...a view whose get_host_remote became get_remote is named (control)",
+          "api_remote_close_panel_port" not in _host_guarded_views(_swapped)
+          and "api_remote_close_panel_port" in _host_guarded_views(_src["remote_vps.py"]),
+          "the scan does not tell the two guards apart")
+
+
 def _check_host_routes_refuse_delegated_panel_host():
     """A delegated MANAGE_REMOTES grant covering the panel host does not reach its host controls."""
     # The /api/remote/<id>/… firewall, sshd, OS-update, reboot, fail2ban and Ubuntu Pro routes were
@@ -3780,6 +3845,7 @@ try:
     _check_vps_prep_refuses_panel_host()
     _check_tailscale_migrate_refuses_panel_host()
     _check_host_routes_refuse_delegated_panel_host()
+    _check_host_level_views_keep_their_guard()
     _check_vps_prep_allows_a_remote_host()
     _check_rename_idor()
     _check_create_idor()

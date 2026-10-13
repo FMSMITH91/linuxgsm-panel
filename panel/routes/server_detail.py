@@ -996,6 +996,40 @@ def _register_moderation(app):
             return jsonify({"success": False, "message": _log_and_generic("moderation failed")}), 500
 
 
+def _r18a_custom_line(cmd):
+    """(the console line custom command `cmd` runs, None), or (None, why) when it is refused.
+
+    The posted {} value is validated against the command's pattern before substitution, and the
+    finished line must hold no control character. Apart from the route so it stays within the
+    complexity the code-quality gate allows.
+    """
+    final = cmd.command_template or ""
+    if cmd.has_argument:
+        value = _json_str(_json_body(), "value")
+        # COMPILE first, MATCH second. These used to be one try block: `raise ValueError` for a
+        # value that did not match was caught by the same `except (re.error, ValueError)` as a
+        # broken stored pattern, so every rejected value fell through to the lenient default and
+        # a command restricted to `^(easy|normal|hard)$` accepted `9999` and `rm-rf`. The
+        # shell-injection half of the guard still held (the default charset has no
+        # metacharacters); the AUTHORIZATION half — "this mod may change the map, but only to
+        # these three" — did nothing at all. Driven through the real route to confirm it.
+        try:
+            pattern = re.compile(cmd.effective_pattern())
+        except re.error:
+            # A bad STORED pattern must not become a bypass — fall back to the safe default.
+            pattern = re.compile(CUSTOM_ARG_DEFAULT_PATTERN)
+        if not pattern.fullmatch(value):
+            return None, (i18n.tr("Invalid value for {label}.", label=cmd.argument_label)
+                          if cmd.argument_label else i18n.tr("Invalid value for argument."))
+        final = final.replace(CUSTOM_ARG_PLACEHOLDER, value)
+    # Refused before the send, as the two console senders do: a permissive stored pattern
+    # (`.+`) lets U+0003 through, and send_console_command's own refusal (rc 1) read here as a
+    # 502 "could not run that on the host", with the reason in English, and a failed run audited.
+    if console_has_control(final):
+        return None, i18n.tr(CONSOLE_CONTROL_MSG)
+    return final, None
+
+
 def _register_custom_commands(app):
     """Running a superadmin-defined custom command on one server."""
     @app.route("/api/server/<int:server_id>/custom-command/<int:cmd_id>", methods=["POST"])
@@ -1012,26 +1046,9 @@ def _register_custom_commands(app):
         cmd = db.session.get(CustomCommand, cmd_id)
         if not cmd or not can_run_custom_command(current_user, cmd, gs):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        final = cmd.command_template or ""
-        if cmd.has_argument:
-            value = _json_str(_json_body(), "value")
-            # COMPILE first, MATCH second. These used to be one try block: `raise ValueError` for a
-            # value that did not match was caught by the same `except (re.error, ValueError)` as a
-            # broken stored pattern, so every rejected value fell through to the lenient default and
-            # a command restricted to `^(easy|normal|hard)$` accepted `9999` and `rm-rf`. The
-            # shell-injection half of the guard still held (the default charset has no
-            # metacharacters); the AUTHORIZATION half — "this mod may change the map, but only to
-            # these three" — did nothing at all. Driven through the real route to confirm it.
-            try:
-                pattern = re.compile(cmd.effective_pattern())
-            except re.error:
-                # A bad STORED pattern must not become a bypass — fall back to the safe default.
-                pattern = re.compile(CUSTOM_ARG_DEFAULT_PATTERN)
-            if not pattern.fullmatch(value):
-                return jsonify({"success": False, "message": (
-                    i18n.tr("Invalid value for {label}.", label=cmd.argument_label) if cmd.argument_label
-                    else i18n.tr("Invalid value for argument."))}), 400
-            final = final.replace(CUSTOM_ARG_PLACEHOLDER, value)
+        final, refused = _r18a_custom_line(cmd)
+        if refused:
+            return jsonify({"success": False, "message": refused}), 400
         try:
             _, err, rc = send_console_command(gs.remote, gs.short_name, final,
                                               timeout=10, selfname=gs.lgsm_name)

@@ -40,7 +40,7 @@ statements, and PyInstaller's own SQLAlchemy hook bundles every `sqlalchemy.dial
 
 | workflow | when | what it keeps |
 |---|---|---|
-| `cflite_batch.yml` | nightly | fuzzes every target for 15 min and keeps the corpus (`cifuzz-corpus-<target>`) |
+| `cflite_batch.yml` | nightly | fuzzes every target, 15 min in all (about 2.5 min each), and keeps the corpus (`cifuzz-corpus-<target>`) |
 | `cflite_cron.yml` | weekly | prunes that corpus; reports fuzzing coverage (`cifuzz-coverage-latest`) |
 | `cflite_build.yml` | each push to main | the build of that commit (`cifuzz-build-address-<commit>`) |
 

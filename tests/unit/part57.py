@@ -14,7 +14,8 @@ network, sudo, a real host or the checkout's data/.
 import types as _types57
 
 from unit.part01 import check
-from unit.part12 import _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_cfg, _p9_Over, _p9_trip
+from unit.part10 import _Over as _p9_Over
+from unit.part12 import _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_cfg, _p9_trip
 from unit.part20 import _patch, _patched
 
 import app as _app57  # noqa: E402

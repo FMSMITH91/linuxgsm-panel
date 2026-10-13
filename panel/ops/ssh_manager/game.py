@@ -875,33 +875,57 @@ def _mod_sanitize(s, maxlen=64):
     return str(s or "").translate(_MOD_BAD_CHARS).strip()[:maxlen]
 
 
+# What moderate() answers for a player name holding a control character (C0, or DEL), which
+# send_console_command refuses to type: it is a keystroke to the pane, not text. Refused rather than
+# stripped: "\x07Bob" stripped is "Bob", and kick "Bob" kicks whoever else is called that. It read as
+# "Console not reachable — is the server running?" about a server that was running.
+R18A_NAME_CONTROL = ("That player's name contains a control character, which can't be typed into the "
+                     "console — kick or ban them from the server console directly.")
+
+
+def _r18a_name_refusal(name):
+    """R18A_NAME_CONTROL when `name` holds a character send_console_command refuses, else None."""
+    return R18A_NAME_CONTROL if _core.console_has_control(name) else None
+
+
 def _resolve_from_console(server, user, game_type, name, selfname):
     """Find a player by name in the game's console list and return their {name, num, steamid, …}.
 
     Used to resolve the kick/ban identifier (slot number / SteamID) when the list on screen came
-    from gamedig, which doesn't carry those ids. Matches on the colour-code-stripped name; returns
-    None if not found. Only runs when someone actually clicks kick/ban — no continuous polling.
+    from gamedig, which doesn't carry those ids. Returns the one listed player the name can mean,
+    or None when it is no one, or more than one (the first of them could be the wrong player).
+    Only runs when someone actually clicks kick/ban — no continuous polling.
     """
-    want = _strip_q3_colors(name or "").strip()
-    if not want:
+    if not (name or "").strip():
         return None
     listed = console_player_list(server, user, game_type, selfname=selfname) or []
-    for p in listed:
-        if _strip_q3_colors(p.get("name") or "").strip() == want:
-            return p
-    # The name on screen came from gamedig, which strips `^` and ANY character after it (its
-    # quake3 protocol: /\^(X.{6}|.)/), as id's Quake III 1.32 and JK2MV's 1.02 colour mode read a
-    # colour code. The console keeps "^aBob" while gamedig shows "Bob", so a Kick on that row found
-    # no one. Matched the wider way only when exactly one player does: two names that differ only
-    # in such codes are one row on screen, and kicking the first of them could be the wrong player.
-    return _r17b_wide_match(listed, name)
+    if game_engine(game_type) == "idtech3":
+        hits = _r18b_idt3_matches(listed, name)
+    else:
+        # Source/GoldSrc: gamedig's valve protocol shows the name exactly as the console does (it
+        # strips nothing), so only the same name is the same player. Colour-stripping here made a
+        # departed "Bob" resolve to a connected "^1Bob" (or, with gamedig's wider stripping,
+        # "^_^ Bob"), and a ban by name then banned THAT player's SteamID, fleet-wide with scope
+        # "all".
+        want = name.strip()
+        hits = [p for p in listed if (p.get("name") or "").strip() == want]
+    return hits[0] if len(hits) == 1 else None
 
 
-def _r17b_wide_match(listed, name):
-    """The one listed player whose name matches `name` with gamedig's stripping, or None."""
-    key = _r17b_wide_strip(name)
-    wide = [p for p in listed if key and _r17b_wide_strip(p.get("name")) == key]
-    return wide[0] if len(wide) == 1 else None
+def _r18b_idt3_matches(listed, name):
+    r"""The listed idTech3 players `name` can mean (the console list is already `^digit`-stripped).
+
+    A name that still holds a `^` code came from the console list itself, so only the same name
+    matches. Otherwise it may be gamedig's, which strips `^` and ANY character after it (its quake3
+    protocol: /\^(X.{6}|.)/), as id's Quake III 1.32 and JK2MV's 1.02 colour mode read a colour
+    code: the console keeps "^aBob" while gamedig shows "Bob", so every console name that strips
+    to "Bob" is a candidate. "Bob", "^1Bob" and "^aBob" are all one "Bob" on screen, and taking the
+    exact one first sent a Kick or an rtcw address ban aimed at "^aBob" to the plain "Bob".
+    """
+    want = _strip_q3_colors(name).strip()
+    if want != _r17b_wide_strip(want):
+        return [p for p in listed if _strip_q3_colors(p.get("name") or "").strip() == want]
+    return [p for p in listed if want and _r17b_wide_strip(p.get("name")) == want]
 
 
 _MOD_IDENT_KEYS = ("steamid", "num")
@@ -942,7 +966,9 @@ def _mod_unsupported_reason(game_type, eng, action):
 
 def _mod_say_cmd(message):
     """(console command, None) for an announcement, or (None, why) when there is nothing to say."""
-    msg = _mod_sanitize(message, 200)
+    # An announcement's control characters are dropped, not refused: they are no part of what is
+    # said, and send_console_command would refuse the whole line ("Console not reachable").
+    msg = "".join(c for c in _mod_sanitize(message, 200) if not _core.console_has_control(c)).strip()
     if not msg:
         return None, "Nothing to announce."
     return "say %s" % msg, None
@@ -958,6 +984,8 @@ def _mod_valve_cmd(action, target, steamid, resolve):
         nm = _mod_sanitize(target, 64)
         if not nm:
             return None, "No player selected."
+        if _r18a_name_refusal(nm):
+            return None, R18A_NAME_CONTROL
         return 'kick "%s"' % nm, None
     sid = _sanitize_steamid(steamid)
     if not sid:      # list came from gamedig (no SteamID) — resolve it on the console now
@@ -994,6 +1022,8 @@ def _mod_minecraft_cmd(action, target):
     nm = _mod_sanitize(target, 64)
     if not nm:
         return None, "No player selected."
+    if _r18a_name_refusal(nm):
+        return None, R18A_NAME_CONTROL
     # `kick <player> [reason]` — the name and the reason are separated by a SPACE, and
     # _MOD_BAD_CHARS does not strip one. That is right for Source and idTech3, whose consoles
     # separate on ';' and newline only, and wrong here: _ENG_MINECRAFT covers mcb (Bedrock),
@@ -1051,6 +1081,13 @@ def _r16b_send_moderation(server, user, cmd, selfname, game_type, action):
 
     A ban pair whose ban can be refused is read back for that refusal (_r16b_ban_checked).
     """
+    # _mod_sanitize drops only the characters that split a console line, so an ESC in an
+    # announcement or a control byte in a player's name reached send_console_command, which refuses
+    # the line, and its rc read here as "Console not reachable — is the server running?". The
+    # builders now drop (_mod_say_cmd) or refuse (_r18a_name_refusal) them; this is the backstop
+    # for a line a builder added later lets one through.
+    if _core.console_has_control(cmd):
+        return False, i18n.Sentence("A console command can't contain control characters or line breaks.")
     if action == "ban" and (game_type or "").lower() in _R16B_BAN_REFUSED:
         return _r16b_ban_checked(server, user, cmd, selfname, game_type)
     out = _core.send_console_command(server, user, cmd, timeout=15, selfname=selfname)

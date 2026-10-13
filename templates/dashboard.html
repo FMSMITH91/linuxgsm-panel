@@ -246,7 +246,9 @@
         <div class="flex-grow-1 small">
           <strong data-no-i18n>{{ srv.name }}</strong> <span>— this install failed.</span>
           {% if srv.install_error %}
-          <div class="mt-1" data-no-i18n>{{ srv.install_error }}</div>
+          {# Translated here for this viewer (the install ran with none); data-no-i18n so the
+             host's own words inside it are never looked up in the catalog. #}
+          <div class="mt-1" data-no-i18n>{{ srv.install_error_shown() }}</div>
           {% else %}
           <div class="mt-1">No reason was recorded — most likely a panel restart interrupted it.
             Trying again is the quickest way to find out.</div>
@@ -335,7 +337,7 @@
               </span>
               <span class="text-secondary d-none" id="map-{{ srv.id }}" style="font-size:.72rem;" title="Current map"></span>
             </td>
-            <td class="d-none d-md-table-cell">{{ srv.game_display or srv.game_type }}</td>
+            <td class="d-none d-md-table-cell" data-no-i18n>{{ srv.game_display or srv.game_type }}</td>
             <td id="status-{{ srv.id }}" data-status="{{ srv.status }}">
               <span class="status-dot status-{{ srv.status if srv.status in ['online','offline'] else 'unknown' }}"></span>
               {{ srv.status|title }}

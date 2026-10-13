@@ -37,7 +37,8 @@
       {% if rebind_pending and not restarting %}
       <div class="alert alert-warning text-start small" id="rebind-notice">
         <div class="fw-semibold mb-1">Until it restarts, the panel still answers on its public address:</div>
-        <div class="mb-2"><code>{{ running_bind }}:{{ panel_port }}</code></div>
+        {# An IPv6 bind in brackets, as app.py's boot line prints it: `:::5000` names no address. #}
+        <div class="mb-2"><code>{% if ':' in running_bind and not running_bind.startswith('[') %}[{{ running_bind }}]{% else %}{{ running_bind }}{% endif %}:{{ panel_port }}</code></div>
         <div class="mb-2">From the next restart (Restart now, an update or a reboot) it listens on this machine only. Anything else then reaches it only through Tailscale Serve or your reverse proxy — a device that is not on your tailnet can no longer open it.</div>
         <form method="POST" action="{{ url_for('setup_restart') }}" class="mb-0">
           <button type="submit" class="btn btn-sm btn-warning">

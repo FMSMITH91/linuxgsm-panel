@@ -24,8 +24,8 @@ from types import SimpleNamespace as _NS59
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (_p9, P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _p9_cfg, _p9_client,
-                         _p9_core, _p9_json, _p9_patch, _p9_restore_all, _p9_so, _p9_trip)
+from unit.part12 import (_p9, _p9_arm, P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _p9_cfg,
+                         _p9_client, _p9_json, _p9_patch, _p9_restore_all, _p9_so)
 from unit.part47 import _cut47, _node47
 from unit.part56 import _flows56
 from panel.db.models import GameServer as _GS59, db as _db59
@@ -71,14 +71,7 @@ def _r14d_arm59():
     route that reached one more host call ran it for real — paramiko to the fixture host, or a local
     shell on P9_LOCAL, as root on CI's root leg — and this part still passed.
     """
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part59's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
-    _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
+    _p9_arm(who="part59")
 
 
 _TRIP59_START = len(_P9_TRIPPED)
