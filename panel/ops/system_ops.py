@@ -710,7 +710,7 @@ def tailscale_ssh_disable():
 # ─── OS Updates ───────────────────────────────────────────────
 
 def parse_upgradable(out):
-    """Parse `apt list --upgradable` output into [{name, version, from, suite}], sorted by name.
+    """Parse `apt list --upgradable` output into [{name, version, from, suite, arch, label}].
 
     Each line looks like 'pkg/repo 1.2.3 amd64 [upgradable from: 1.2.2]' — we pull the package name,
     the NEW version, the currently-installed version (so the UI can show 'name  old → new'), and the
@@ -738,9 +738,38 @@ def parse_upgradable(out):
         if "upgradable from:" in line:
             old_ver = line.split("upgradable from:", 1)[1].strip().rstrip("]").strip()
         pkgs.append({"name": name, "version": parts[1] if len(parts) > 1 else "",
-                     "from": old_ver, "suite": suite})
-    pkgs.sort(key=lambda p: p["name"])
+                     "from": old_ver, "suite": suite,
+                     "arch": _r18a_arch(parts)})
+    # Name, then architecture: a package upgradable for two architectures (amd64 and the i386
+    # build SteamCMD's 32-bit libraries need) is two lines of apt's output and two upgrades, and
+    # read as the same row twice on the OS Updates card with the arch dropped.
+    pkgs.sort(key=lambda p: (p["name"], p["arch"]))
+    _r18a_label_arch(pkgs)
     return pkgs
+
+
+def _r18a_arch(parts):
+    """The architecture field of one `apt list --upgradable` line split on whitespace, or ""."""
+    return parts[2] if len(parts) > 2 and not parts[2].startswith("[") else ""
+
+
+# An architecture no host LinuxGSM supports is native to: it is 64-bit only, and i386 is the
+# foreign architecture the panel's bootstrap adds for SteamCMD's 32-bit libraries.
+_R18A_FOREIGN_ARCH = ("i386",)
+
+
+def _r18a_label_arch(pkgs):
+    """Give each upgradable entry its `label`: the name, with "(arch)" when it says which one.
+
+    The arch is named when the same name is listed for more than one architecture, or when it is
+    a foreign one (_R18A_FOREIGN_ARCH): "libx11-6" and "libx11-6 (i386)", not "libx11-6" twice.
+    """
+    archs = {}
+    for p in pkgs:
+        archs.setdefault(p["name"], set()).add(p["arch"])
+    for p in pkgs:
+        shown = p["arch"] and (len(archs[p["name"]]) > 1 or p["arch"] in _R18A_FOREIGN_ARCH)
+        p["label"] = "%s (%s)" % (p["name"], p["arch"]) if shown else p["name"]
 
 
 def os_update_available(refresh=True):
@@ -1681,7 +1710,11 @@ def _compute_update_status():
     # show a permanent "verifying" and never apply. Offer the branch tip directly instead —
     # the snapshot + health-check + auto-rollback still guards against a branch that won't boot.
     if branch != _DEFAULT_BRANCH:
-        rem_full, _, _ = _git(["rev-parse", ref])
+        rem_full, _, frc = _git(["rev-parse", ref])
+        # Read like the count above: an unread tip is not one to offer (target_sha was "", and
+        # the Update button answered "Couldn't tell which commit to update to").
+        if frc != 0:
+            return _r17a_unread_status(cur_ver, cur_sha, branch)
         # Nothing the panel runs changed: not an update, on a test branch either (see
         # _no_runtime_update). Judged on the diff, which fails safe: unreadable reads as a change.
         if not _update_touches_runtime(ref):
@@ -1732,6 +1765,11 @@ def _compute_update_status():
     # would install, so those are passed over. A checkout NOT on the branch (a local commit) is
     # reset to whatever it is given, as install.sh does, so nothing is filtered for it.
     _, _, on_branch_rc = _git(["merge-base", "--is-ancestor", "HEAD", ref])
+    # 0 is on the branch and 1 is not; anything else (a timeout, a git error) is neither. It read
+    # as "not on the branch", which turns the filter below off, so a commit that does not contain
+    # HEAD could be offered and the installer would hold it.
+    if on_branch_rc not in (0, 1):
+        return _r17a_unread_status(cur_ver, cur_sha, branch)
 
     def _contains_head(sha):
         if on_branch_rc != 0:
@@ -3835,7 +3873,10 @@ def ensure_panel_host_whitelist(ignore_ips):
         return True, "no whitelist to apply"
     if _write_root_file(_F2B_PANEL_WHITELIST, want)[2] != 0:
         return False, "could not write the fail2ban whitelist"
-    _run_verb("f2b-reload", [], timeout=45)
+    # Read, as the remote twin (hosts.remote_set_fail2ban_ignoreip) now reads its reload: a reload
+    # that failed answered "applied to every jail" while fail2ban went on with the old ignoreip.
+    if _run_verb("f2b-reload", [], timeout=45)[2] != 0:
+        return False, "the whitelist was written but fail2ban did not reload"
     return True, "fail2ban whitelist applied to every jail"
 
 

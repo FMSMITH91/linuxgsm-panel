@@ -103,7 +103,7 @@
             </span>
         </h2>
         <span class="text-secondary small">
-          <code>{{ remote.username }}@{{ remote.host }}:{{ remote.port }}</code>
+          <code>{{ remote.login_address }}</code>
           &middot; Auth:
           {% if remote.auth_method == 'tailscale' %}
             <span class="badge bg-success" title="Auth is handled by your tailnet — no SSH credential is stored in the panel, and SSH doesn't need to be exposed to the public internet.">

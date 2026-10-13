@@ -93,7 +93,7 @@ function saveConfig(ev){
   msg.textContent='Saving…'; msg.className='small ms-2 text-secondary';
   fetch(MOUNT+'/api/server/'+serverId+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:settings})})
     .then(r=>r.json()).then(d=>{
-      msg.textContent = d.success?'✓ '+_tr('Saved — restart the server to apply.'):'✗ '+(d.message||'Failed');
+      msg.textContent = d.success?'✓ Saved — restart the server to apply.':'✗ '+(d.message||'Failed');
       msg.className='small ms-2 '+(d.success?'text-success':'text-danger');
       if(d.success){
         // Mark saved values as the new baseline (preserves accordion state), and show the "set"
@@ -107,7 +107,7 @@ function saveConfig(ev){
         // The settings write changed the instance .cfg — refresh the Raw tab so it isn't stale.
         refreshRawConfig();
       }
-    }).catch(()=>{ msg.textContent='✗ '+_tr('Save failed'); msg.className='small ms-2 text-danger'; });
+    }).catch(()=>{ msg.textContent='✗ Save failed'; msg.className='small ms-2 text-danger'; });
   return false;
 }
 // Re-read just the raw instance cfg and update the Raw tab, WITHOUT re-rendering the settings
@@ -138,7 +138,7 @@ function saveGameCfg(){
   if(!gameCfgRel) return;
   var msg=document.getElementById('game-msg'); msg.textContent='Saving…'; msg.className='small ms-2 text-secondary';
   fetch(MOUNT+'/api/server/'+serverId+'/file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:gameCfgRel,content:document.getElementById('game-cfg').value})})
-    .then(r=>r.json()).then(d=>{ msg.textContent=d.success?'✓ '+_tr('Saved — restart to apply.'):'✗ '+(d.message||'Failed'); msg.className='small ms-2 '+(d.success?'text-success':'text-danger'); })
+    .then(r=>r.json()).then(d=>{ msg.textContent=d.success?'✓ Saved — restart to apply.':'✗ '+(d.message||'Failed'); msg.className='small ms-2 '+(d.success?'text-success':'text-danger'); })
     .catch(()=>{ msg.textContent='✗ Failed'; msg.className='small ms-2 text-danger'; });
 }
 function saveRaw(){
@@ -189,7 +189,7 @@ function mkRow(opts){
     dl.innerHTML='<i class="bi bi-download"></i>';
     right.appendChild(dl);
   }
-  if(opts.protected){ var lk=document.createElement('span'); lk.className='text-secondary'; lk.title=_tr('Protected — required by LinuxGSM/the game'); lk.innerHTML='<i class="bi bi-shield-lock"></i>'; right.appendChild(lk); }
+  if(opts.protected){ var lk=document.createElement('span'); lk.className='text-secondary'; lk.title='Protected — required by LinuxGSM/the game'; lk.innerHTML='<i class="bi bi-shield-lock"></i>'; right.appendChild(lk); }
   else if(opts.deletable){
     // Rename sits between Download and Delete, on every row the panel would let you delete: the
     // same rule protects a path from both, because renaming lgsm/ away breaks the server exactly as
@@ -1295,7 +1295,9 @@ if (_el_cron_presets) _el_cron_presets.addEventListener('click', function(ev){
 updateCronExplain();
 
 loadConfig();
-browse('');
+// The page has no file browser for a failed install (nothing was downloaded to browse). Asked
+// anyway, the listing cost an SSH round trip per page load, and its answer had no list to fill.
+if (document.getElementById('file-list')) browse('');
 loadCron();
 
 // ── Alerts & notifications ──

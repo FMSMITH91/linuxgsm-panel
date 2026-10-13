@@ -1,0 +1,6 @@
+{
+  "That player's name contains a control character, which can't be typed into the console — kick or ban them from the server console directly.": "Le nom de ce joueur contient un caractère de contrôle, qui ne peut pas être saisi dans la console ; expulsez-le ou bannissez-le directement depuis la console du serveur.",
+  "the whitelist drop-in could not be written": "le fichier drop-in de la liste blanche n'a pas pu être écrit",
+  "automatic security updates were not enabled": "les mises à jour de sécurité automatiques n'ont pas été activées",
+  "the whitelist was written but fail2ban did not reload": "la liste blanche a été écrite, mais fail2ban ne s'est pas rechargé"
+}

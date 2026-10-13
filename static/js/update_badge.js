@@ -9,9 +9,12 @@
       .then(function(r){ return r.json(); })
       .then(function(d){
         if (d && d.update_available) {
-          badge.innerHTML = ' <a href="' + window.MOUNT + '/server-management#updates" '  // nosemgrep - MOUNT is server-rendered panel config and the version is escapeHtml output
+          // One sentence with the version filled in AFTER translation: spliced around it, no
+          // catalog key could match the attribute, and the tooltip stayed English.
+          var tip = tf('Version {v} is available — click to update', {v: (d.remote_version||'') + (d.remote_sha ? ' (' + d.remote_sha + ')' : '')});
+          badge.innerHTML = ' <a href="' + window.MOUNT + '/server-management#updates" '  // nosemgrep - MOUNT is server-rendered panel config and the tooltip is escapeHtml output
             + 'style="color:#d29922;text-decoration:none;font-weight:600;" '
-            + 'title="Version ' + escapeHtml((d.remote_version||'') + (d.remote_sha ? ' (' + d.remote_sha + ')' : '')) + ' is available — click to update">'
+            + 'title="' + escapeHtml(tip) + '">'
             + '<i class="bi bi-arrow-up-circle-fill"></i> update</a>';
         } else if (d && d.update_available === false) {
           badge.innerHTML = '';   // definitively up to date (e.g. after updating) — clear the pill

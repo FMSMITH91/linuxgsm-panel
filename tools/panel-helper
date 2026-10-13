@@ -4807,14 +4807,19 @@ def do_restart_flags(args, content):
     the account's own, so `ln -s /root/.ssh/id_ed25519 ~/.restart-pending` made exists() -- a stat
     by root, through the link -- answer whether a path the panel user cannot see exists: the
     existence oracle _probe_as was written to close. It also disagreed with the remote form,
-    `ls -1d`, which lists a dangling link.
+    which lists a dangling link.
+
+    A home root cannot look in prints as `?<name>` (a name never holds '?'), and the verb still
+    exits 0: /home WAS read, and the panel leaves only that account's banner as it was. A non-zero
+    exit made the caller drop the whole answer, so one colleague's NFS root_squash home froze the
+    banner of every server on the host, and the failed read was never stamped, so the host was
+    re-read every sweep instead of every 600 s. Only a /home that cannot be listed is a failure.
     """
     try:
         homes = sorted(os.listdir(HOME_ROOT))
     except OSError as exc:
         sys.stderr.write("cannot list /home: %s\n" % exc)
         return 1
-    unread = 0
     for name in homes:
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
             continue
@@ -4827,13 +4832,13 @@ def do_restart_flags(args, content):
         except (FileNotFoundError, NotADirectoryError):
             continue
         except OSError as exc:
-            # One unreadable home must not lose the others. The caller distinguishes "none
-            # pending" from "could not look" by this verb's EXIT CODE, not by empty output.
+            # One unreadable home must not lose the others, nor be read as "no flag": it is
+            # named as unread, and the caller keeps what it last measured for that account only.
             sys.stderr.write("cannot look in %s: %s\n" % (name, exc.strerror or exc))
-            unread += 1
+            print("?" + name)
             continue
         print(name)
-    return 1 if unread else 0
+    return 0
 
 
 def do_lgsm_command(args, content):

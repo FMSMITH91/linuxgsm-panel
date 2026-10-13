@@ -141,7 +141,7 @@ from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupSta
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, game_engine as
     sm_game_engine, set_game_priority_bulk, game_users_off_priority, lgsm_get_values,
-    remote_set_fail2ban_ignoreip,
+    remote_set_fail2ban_ignoreip, F2B_NOT_INSTALLED,
     ensure_node_tools_cron, ensure_persistent_bans)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
@@ -855,7 +855,12 @@ def _apply_whitelist_to_remotes(app, unban_ip=None):
         wl = list(_cfg.get("security_whitelist", []) or [])
         for remote in RemoteServer.query.filter_by(is_local=False).all():
             try:
-                remote_set_fail2ban_ignoreip(remote, wl, unban_ip=unban_ip)
+                ok, why = remote_set_fail2ban_ignoreip(remote, wl, unban_ip=unban_ip)
+                # Named when it did not take: the answer was dropped, so a host whose fail2ban
+                # kept banning a whitelisted address left no trace. No fail2ban is not a failure.
+                if not ok and why != F2B_NOT_INSTALLED:
+                    _log.warning("the fail2ban whitelist did not reach remote %s: %s",
+                                 row_label(remote, "id"), why)
             except Exception:
                 _log.debug("remote fail2ban ignoreip failed for remote %s", row_label(remote, "id"),
                            exc_info=True)
@@ -1743,8 +1748,11 @@ def create_app():
         _ep = next((n for n in app.view_functions
                     if _rule is not None and n == _rule.endpoint), "?")
         _log.exception("unhandled error serving %s", _ep)
+        # In the viewer's language (request_lang never raises). Pages write it after a mark
+        # ("❌ " + message), which the page's translator does not look past, so English sent here
+        # stayed English for every es/fr viewer.
         return jsonify({"success": False,
-                        "message": "Something went wrong — see the panel log."}), 500
+                        "message": i18n.tr("Something went wrong — see the panel log.")}), 500
 
     # Cap the total request body so an oversized upload can't be spooled to disk / read into memory
     # before the per-file size check runs. Werkzeug already bounds in-memory form fields, but NOT

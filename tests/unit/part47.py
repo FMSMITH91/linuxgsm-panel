@@ -36,7 +36,7 @@ import tempfile as _tf47
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import _P9_TRIPPED, _p9, _p9_client, _p9_core, _p9_json, _p9_patch, _p9_restore_all, _p9_trip
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_restore_all
 from panel.db.models import Invite, User, db
 from panel.security import auth as _auth47
 
@@ -318,10 +318,9 @@ def _invite_route47():
     _trip_at = len(_P9_TRIPPED)
     try:
         # part12's transport tripwire (review 1012b): nothing here stubs a host call, so one the route
-        # gained would run for real with the check green.
-        for _n47, _w47 in (("get_connection", "paramiko"), ("_run_via_ssh_cli", "ssh-cli"),
-                           ("_exec_local_shell", "local-shell"), ("_exec_local_argv", "local-argv")):
-            _p9_patch(_p9_core, _n47, _p9_trip(_w47, exc=ConnectionError("refused by part47's tripwire")))
+        # gained would run for real with the check green. Its whole set (review 1012c: only
+        # ssh_manager's four transports were armed, not system_ops' or a module's own Popen).
+        _p9_arm(who="part47")
         c = _p9_client(made["uid"])
         r = c.post("/users/invite", data={"hours": "2", "note": "p47"},
                    headers={"X-Requested-With": "XMLHttpRequest"})

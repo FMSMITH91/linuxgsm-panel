@@ -2534,14 +2534,24 @@ check("update button: ...while a SteamCMD game's bar still does",
       "Update vanished for a game that supports it")
 # The two paths agree now, which is the actual property. Asked via the endpoint that reads
 # the model, so a regression in either implementation shows up as a disagreement.
-_su_bulk = (c.post("/api/servers/bulk-action",
-                   json={"action": "update", "server_ids": [_su_cod_id, gs_id]}).get_json()
-            or {})
+# The dispatch is recorded, not run (review 1012c): a queued `update` starts a worker that
+# outlives this block and opens a real SSH connection to the fixture host, landing in the next
+# block's stubs. Only the queued/skipped split is under test here.
+import panel.routes.server_detail as _r18d_su_sd
+_r18d_su_was = _r18d_su_sd._bg_bulk_action
+_r18d_su_disp = []
+_r18d_su_sd._bg_bulk_action = lambda _a, sid, *_r, **_k: _r18d_su_disp.append(sid)
+try:
+    _su_bulk = (c.post("/api/servers/bulk-action",
+                       json={"action": "update", "server_ids": [_su_cod_id, gs_id]}).get_json()
+                or {})
+finally:
+    _r18d_su_sd._bg_bulk_action = _r18d_su_was
 _su_skipped = [x.get("server_id") for x in _su_bulk.get("skipped", [])]
 _su_queued = [x.get("server_id") for x in _su_bulk.get("queued", [])]
 check("update button: the bulk endpoint skips the same server the bar hides it for",
-      _su_cod_id in _su_skipped and gs_id in _su_queued,
-      "skipped=%s queued=%s" % (_su_skipped, _su_queued))
+      _su_cod_id in _su_skipped and gs_id in _su_queued and _r18d_su_disp == [gs_id],
+      "skipped=%s queued=%s dispatched=%s" % (_su_skipped, _su_queued, _r18d_su_disp))
 with app.app_context():
     db.session.delete(db.session.get(GameServer, _su_cod_id))
     db.session.commit()

@@ -837,7 +837,7 @@ def _r16b_named_tokens(text, st):
             if _so._SAFE_FRAME_PATH_RE.match(m.group(2))]
     out, at = [], 0
     for a, b in (m.span() for m in _so._LONG_TOKEN_RE.finditer(masked)):
-        if _r17b_holds_name(a, b, spans, safe):
+        if _r17b_holds_name(a, b, spans, safe) and not _r18b_name_led(a, b, spans, text):
             st.hit("redact:token", text[a:b])
             out += [text[at:a], "[redacted]"]
             at = b
@@ -858,6 +858,21 @@ def _r17b_holds_name(a, b, spans, safe):
     """Whether the token at [a, b) holds a name's span and is not inside a safe frame path."""
     return (any(a <= x and y <= b for x, y in spans)
             and not any(x <= a and b <= y for x, y in safe))
+
+
+def _r18b_name_led(a, b, spans, text):
+    """Whether the token at [a, b) is a name, or a name and then a `/` path: nothing to redact here.
+
+    Masked, a name is a run of token characters, so a 28+-character FQDN or MagicDNS name was a
+    long token on its own, and a URL path after one joined it ("myhost.tail4a2b3c.ts.net/lgsm/
+    server/12"): either printed as [redacted], and the report no longer said which host a line was
+    about. The leak this pass closes is a secret the name SPLITS into two short halves; a token that
+    starts with the name has one other part, the path, and the long-token rule still reads that on
+    its own once the name is its token. A name with a run glued on before it, or after it by '-',
+    '_' or '+', is still redacted whole, and so is a path holding another name, which could split one.
+    """
+    inside = [(x, y) for x, y in spans if a <= x and y <= b]
+    return len(inside) == 1 and inside[0][0] == a and (inside[0][1] == b or text[inside[0][1]] == "/")
 
 
 def _names_pass(text, st, only=None):

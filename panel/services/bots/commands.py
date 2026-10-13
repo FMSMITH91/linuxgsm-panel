@@ -235,7 +235,9 @@ def _connect_text(app, arg):
             return ("%s — no public address known for its host yet. Open the panel once so it can "
                     "resolve one." % gs.name)
         uri = gs.connect_uri(host)
-        return "%s\n%s:%s%s" % (gs.name, host, gs.port, ("\n" + uri) if uri else "")
+        # connect_address brackets an IPv6 host ("[2001:db8::5]:27015"), as the web page and the
+        # API print it: unbracketed, nobody can tell where the address ends and the port begins.
+        return "%s\n%s%s" % (gs.name, gs.connect_address(host), ("\n" + uri) if uri else "")
 
 
 def _hosts_text(app):

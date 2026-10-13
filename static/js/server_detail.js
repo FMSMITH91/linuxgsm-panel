@@ -1724,9 +1724,11 @@ function toggleNotifyEmpty(el) {
 var connectAddr = '';
 
 function copyConnect() {
-  var addr = connectAddr || (document.getElementById('connect-addr') || {}).textContent || '';
-  addr = addr.trim();
-  if (addr && addr !== 'resolving…' && addr !== 'unknown') window.copyText(addr, tf('Copied {text}', {text: addr}));
+  // From the address /stats answered, never from the pill's text: until it answers (and when there
+  // is none) the pill shows a placeholder the i18n walker has translated, so comparing that text to
+  // 'resolving…'/'unknown' let an es/fr viewer copy "resolviendo…" as the address.
+  var addr = (connectAddr || '').trim();
+  if (addr) window.copyText(addr, tf('Copied {text}', {text: addr}));
 }
 
 document.addEventListener('click', function(ev){

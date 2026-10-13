@@ -4,6 +4,7 @@ import logging
 import re
 import time
 import bcrypt
+from panel.core import i18n
 from panel.core.clock import utcnow
 from panel.core.validation import unzoned_ip_address_or_none, unzoned_ip_or_network
 from flask_login import UserMixin
@@ -557,6 +558,17 @@ class RemoteServer(db.Model):
         return self.host
 
     @property
+    def login_address(self):
+        """`user@host:port`, the SSH login shown on the host's pages.
+
+        An IPv6 host goes in brackets, as GameServer.connect_address writes one:
+        `ubuntu@2001:db8::5:22` gives no way to tell where the address ends and the port begins.
+        """
+        host = self.host or ""
+        shown = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        return f"{self.username}@{shown}:{self.port}"
+
+    @property
     def connect_host(self):
         """The PUBLIC address to hand players for a game connect string.
 
@@ -693,6 +705,11 @@ class GameServer(db.Model):
     # earlier version listed "no Linux build for this platform" here; that diagnosis was wrong —
     # it is a SteamCMD bug the install now works around itself. See INSTALL_FAILURE_FINAL.)
     install_error = db.Column(db.Text, default="")
+    # ...and how that reason was built (i18n.sentence_record, as JSON), so the page can show it in
+    # the VIEWER's language: the install runs on a worker with no viewer, so install_error is
+    # English — which admins, logs and the debug report read, and which every es/fr viewer was
+    # shown too. NULL on a row failed before this column existed: that row shows its English.
+    install_error_i18n = db.Column(db.Text, nullable=True)
     install_retryable = db.Column(db.Boolean, default=True)
     # The mounted-content games picked when a GMod server was requested, comma-separated. Stored
     # because it arrives on the install FORM and nowhere else: a retry re-ran the job without it,
@@ -755,6 +772,30 @@ class GameServer(db.Model):
         if cmds:
             return "update" in cmds
         return self.game_type not in _NO_UPDATE_GAMES
+
+    def install_error_sentence(self):
+        """Why the last install failed, as an i18n.Sentence when its build was recorded; else the English.
+
+        The recorded build is used only while it still says exactly what install_error says, so a
+        reason written by anything that set install_error alone (an older panel, a hand edit) is
+        never replaced by a stale one. "" when no failure is recorded.
+        """
+        english = self.install_error or ""
+        if not english or not self.install_error_i18n:
+            return english
+        try:
+            built = i18n.sentence_restored(json.loads(self.install_error_i18n))
+        except (TypeError, ValueError, RecursionError):
+            built = None
+        return built if built is not None and str(built)[:1000] == english else english
+
+    def install_error_shown(self):
+        """install_error in the viewer's language (a host's own words inside it stay as written).
+
+        A row with no recorded build is shown exactly as it was written.
+        """
+        said = self.install_error_sentence()
+        return i18n.tr(said) if isinstance(said, (i18n.Sentence, i18n.Sentences)) else said
 
     def connect_address(self, host):
         """`host:port` as a game client reads it, or "" with no host.
@@ -1437,6 +1478,8 @@ _LIGHT_MIGRATIONS = {
     # rather than withholding it from a row whose cause nobody can name any more.
     ("game_server", "install_error"):
         "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
+    # NULL on upgrade: a reason recorded before this column shows as the English it was written in.
+    ("game_server", "install_error_i18n"): "ALTER TABLE game_server ADD COLUMN install_error_i18n TEXT",
     ("game_server", "install_retryable"):
         "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
     ("game_server", "content_games"):

@@ -679,11 +679,27 @@ def _r17d_unread_sudo_users(rel, tree, funcs, sites):
     function builds such an argv no longer depends on the reader following how; the reader only
     names where. A sudo word in a module-level list the function names counts as its own.
     """
-    module_vals = {_t.id: _n.value for _n in tree.body if isinstance(_n, _gh_ast.Assign)
-                   for _t in _n.targets if isinstance(_t, _gh_ast.Name)}
+    module_vals = _r18d_module_values(tree)
     return ["G2 %s:%d %s(): names sudo and a user option, with no account check in it" % (rel, fn.lineno, fn.name)
             for fn in funcs if _r17d_unread_unchecked(fn, sites)
             and _r17d_names_sudo(fn, module_vals) and _r17d_has_sudo_user_flag(fn)]
+
+
+def _r18d_module_values(tree):
+    """{name: value} of each module-level `name = value`, annotated ones included.
+
+    `BASE: list = ["sudo", "-n"]` was not read (review 1012c).
+    """
+    return {_t.id: _n.value for _n in tree.body if _r18d_assigned(_n) for _t in _r18d_assigned(_n)}
+
+
+def _r18d_assigned(node):
+    """The plain names an Assign, or an AnnAssign with a value, binds ([] for anything else)."""
+    if isinstance(node, _gh_ast.Assign):
+        return [_t for _t in node.targets if isinstance(_t, _gh_ast.Name)]
+    if isinstance(node, _gh_ast.AnnAssign) and node.value is not None and isinstance(node.target, _gh_ast.Name):
+        return [node.target]
+    return []
 
 
 def _r17d_unread_unchecked(fn, sites):
@@ -710,18 +726,39 @@ def _r17d_has_sudo_user_flag(fn):
     those are systemd-run's and journalctl's options.
     """
     parent = {c: p for p in _gh_ast.walk(fn) for c in _gh_ast.iter_child_nodes(p)}
-    return any(_gh_is_user_flag(x) and _r17d_flag_can_be_sudos(x, parent) for x in _gh_ast.walk(fn))
+    # The flag joined to the account (`"--user=" + user`, `"-u%s" % user`) is one too (review
+    # 1012c): only a bare `-u`/`--user` literal was read here, though the site reader takes both.
+    return any((_gh_is_user_flag(x) or _gh_is_joined_user(x)) and _r17d_flag_can_be_sudos(x, parent)
+               for x in _gh_ast.walk(fn))
+
+
+# A short option of sudo's that takes the next word as its value (`-g games`): that word is not
+# another program's (review 1012c), as _GH_OPTS already reads it in text.
+_R18D_SUDO_VALUE_OPT = re.compile(r"-[A-Za-z]*[CDghpRrTtU]")
 
 
 def _r17d_flag_can_be_sudos(flag, parent):
     """_r17d_has_sudo_user_flag for one user-option literal."""
     up = parent.get(flag)
     if isinstance(up, (_gh_ast.List, _gh_ast.Tuple)):
-        if any(isinstance(e, _gh_ast.Constant) and isinstance(e.value, str) and not e.value.startswith("-")
-               and not _gh_is_sudo_word(e) for e in up.elts[:up.elts.index(flag)]):
+        if _r18d_other_program_first(up.elts[:up.elts.index(flag)]):
             return False
         up = parent.get(up)
     return not (isinstance(up, _gh_ast.Call) and getattr(up.func, "attr", None) not in _R17D_GROWERS)
+
+
+def _r18d_other_program_first(before):
+    """Do the list's words before the flag name a program other than sudo (an option's value aside)?"""
+    _value_next = False
+    for e in before:
+        _word = e.value if isinstance(e, _gh_ast.Constant) and isinstance(e.value, str) else None
+        if _value_next:
+            _value_next = False
+            continue
+        if _word is not None and not _word.startswith("-") and not _gh_is_sudo_word(e):
+            return True
+        _value_next = _word is not None and _R18D_SUDO_VALUE_OPT.fullmatch(_word) is not None
+    return False
 
 
 def _gh_scan(src, rel):
@@ -874,6 +911,17 @@ _gh_ctl = {
         'A = ["sudo"]\ndef f(user):\n    A.append("-u")\n    A.append(user)\n    return A\n'),
     "G2 an argv with -u inserted mid-list": _gh_plant(
         'def f(user):\n    a = ["sudo", user]\n    a.insert(1, "-u")\n    return a\n'),
+    # Review 1012c: each of these still slipped past the backstop.
+    "G2 an annotated list grown by a joined --user=": _gh_plant(
+        'def f(user):\n    a: list = ["sudo"]\n    a += ["--user=" + user]\n    return a\n'),
+    "G2 an annotated list grown by a joined -u%s": _gh_plant(
+        'def f(user):\n    a: list = ["sudo"]\n    a += ["-u%s" % user]\n    return a\n'),
+    "G2 an attribute list grown by a joined --user=%s": _gh_plant(
+        'def f(self, user):\n    self.cmd = ["sudo"]\n    self.cmd += ["--user=%s" % user]\n    return self.cmd\n'),
+    "G2 a -g value before -u in a grown list": _gh_plant(
+        'def f(user):\n    a: list = ["sudo"]\n    a += ["-g", "games", "-u", user]\n    return a\n'),
+    "G2 an annotated module-level list in the + chain": _gh_plant(
+        'BASE: list = ["sudo", "-n"]\ndef f(user):\n    return BASE + ["-u", user]\n'),
     "G3 script name dropped": _gh_plant(
         'def f(server, user, selfname):\n'
         '    return _core.shell_as_game_user(server, user, f"./{selfname} details")\n'),

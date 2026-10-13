@@ -308,6 +308,51 @@ def _p9_json(resp):
     return resp.get_json(silent=True) or {}
 
 
+def _p9_arm(patch=None, who="part12"):
+    """Arm the transport tripwire: every way a check could reach a host, recorded in _P9_TRIPPED.
+
+    ONE set, used by part12 and by every later part that drives its app (review 1012c): each of
+    those parts armed its own copy, and four of them armed only ssh_manager's four transports, so a
+    route that gained a system_ops command, a tailscale call or a module's own Popen ran it for
+    real with the part's "nothing reached a real transport" check green. `patch` is the caller's
+    patcher (part20's _patch inside a _patched() block, or _p9_patch, undone by _p9_restore_all);
+    `who` names the part in the refusal text.
+    """
+    from unit.part10 import _Over
+    from panel.ops import terminal_session as _term
+    from panel.ops.ssh_manager import cron as _cron, files as _files, hosts as _hosts
+    patch = _p9_patch if patch is None else patch
+    _no = "refused by %s's tripwire" % who
+    patch(_p9_core, "get_connection", _p9_trip("paramiko", exc=ConnectionError(_no)))
+    # _run_local too: part05's no-sudo shim replaces it for the whole run, so a panel-host command
+    # never reached _exec_local_shell under it, and the part's own check read clean while only the
+    # suite-wide shim refused it (found integrating review 1012c: an unstubbed ufw open on the
+    # panel host named no part).
+    for _n, _w in (("_run_via_ssh_cli", "ssh-cli"), ("_run_local", "local"),
+                   ("_exec_local_shell", "local-shell"), ("_exec_local_argv", "local-argv")):
+        patch(_p9_core, _n, _p9_trip(_w))
+    for _n in ("_run", "_run_verb", "_git"):
+        patch(_p9_so, _n, _p9_trip("system_ops." + _n))
+    # ...and the exec paths that do not go through those: ssh_test_connection builds its own
+    # paramiko.SSHClient, files.stream_path and the cron reader start `ssh` with their own Popen,
+    # and tailscale_integration runs `tailscale`/`ping` with subprocess.run. Each module's handle is
+    # replaced (only that module sees it), so a check that reaches one is named, not dialled.
+    patch(_hosts, "paramiko", _Over(_hosts.paramiko, SSHClient=_p9_trip(
+        "hosts.paramiko.SSHClient", exc=ConnectionError(_no))))
+    # system_ops and the web terminal too: _launch_installer, restart_panel, _helper_probe_run and
+    # the repair path call system_ops.subprocess directly (past _run/_run_verb above), and the
+    # terminal starts its shells with its own Popen.
+    for _m, _tn in ((_files, "files"), (_cron, "cron"), (_p9_ts, "tailscale"),
+                    (_p9_so, "system_ops"), (_term, "terminal_session")):
+        patch(_m, "subprocess", _Over(
+            _m.subprocess,
+            Popen=_p9_trip(_tn + ".subprocess.Popen", exc=OSError(_no)),
+            run=_p9_trip(_tn + ".subprocess.run", exc=OSError(_no))))
+    # Rendering reads Tailscale state for the nav; that is a host command, answered here.
+    patch(_p9_ts, "get_tailscale_info",
+          lambda force_refresh=False: NS(dns_name=None, serve_config={}, serve_unreadable=False))
+
+
 try:
     for _m in _p9_saved_threading:
         _m.threading = _p9_threading(_P9Thread)
@@ -318,34 +363,7 @@ try:
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), setup_complete=True))
 
     # The transports. Everything above them is stubbed per check; these catch what is not.
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part12's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
-    _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
-    # ...and the exec paths that do not go through those: ssh_test_connection builds its own
-    # paramiko.SSHClient, files.stream_path and the cron reader start `ssh` with their own Popen,
-    # and tailscale_integration runs `tailscale`/`ping` with subprocess.run. Each module's handle is
-    # replaced (only that module sees it), so a check that reaches one is named, not dialled.
-    from unit.part10 import _Over as _p9_Over                                   # noqa: E402
-    from panel.ops.ssh_manager import cron as _p9_cron, files as _p9_files     # noqa: E402
-    from panel.ops.ssh_manager import hosts as _p9_hosts                         # noqa: E402
-    _p9_patch(_p9_hosts, "paramiko", _p9_Over(_p9_hosts.paramiko, SSHClient=_p9_trip(
-        "hosts.paramiko.SSHClient", exc=ConnectionError("refused by part12's tripwire"))))
-    # system_ops and the web terminal too: _launch_installer, restart_panel, _helper_probe_run and
-    # the repair path call system_ops.subprocess directly (past _run/_run_verb above), and the
-    # terminal starts its shells with its own Popen. Every route here stubs the function first, so
-    # nothing reaches these today; the final check's "every host call" is only true if they count.
-    from panel.ops import terminal_session as _p9_term                         # noqa: E402
-    for _p9_tm, _p9_tn in ((_p9_files, "files"), (_p9_cron, "cron"), (_p9_ts, "tailscale"),
-                           (_p9_so, "system_ops"), (_p9_term, "terminal_session")):
-        _p9_patch(_p9_tm, "subprocess", _p9_Over(
-            _p9_tm.subprocess,
-            Popen=_p9_trip(_p9_tn + ".subprocess.Popen", exc=OSError("refused by part12's tripwire")),
-            run=_p9_trip(_p9_tn + ".subprocess.run", exc=OSError("refused by part12's tripwire"))))
+    _p9_arm()
     # shell_as_game_user, sending through the PACKAGE's run_command: the checks below stub that
     # name on the package, and the routes' game-account shell reads went through it until
     # GHSA-hh39-76g3-wxcx moved them onto shell_as_game_user, whose own run_command is _core's.

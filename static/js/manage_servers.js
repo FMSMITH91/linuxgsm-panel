@@ -112,13 +112,19 @@ function filterGamesForHost() {
         hidden++;
         // Marked on the option, not found by its English: the note is translated (tf) now, and the
         // option is data-no-i18n (a game's name), so the page's translator never reaches it.
+        // The mark holds the option's own text, put back when another host allows the game.
         if (!opt.hasAttribute('data-needs-note')) {
-          opt.setAttribute('data-needs-note', '');
+          opt.setAttribute('data-needs-note', opt.textContent);
           opt.textContent = _withoutParenNote(opt.textContent)
             + ' ' + tf('(needs {os})', {os: gameOs.replace('-', ' ')});
         }
         // Do not leave a disabled game SELECTED — the form would post it.
         if (sel.value === opt.value) sel.value = '';
+      } else if (opt.hasAttribute('data-needs-note')) {
+        // Re-enabled for this host: the "(needs …)" explained a greyed-out option, and kept on an
+        // enabled one it read as a reason this host could not install the game.
+        opt.textContent = opt.getAttribute('data-needs-note');
+        opt.removeAttribute('data-needs-note');
       }
     });
     // The GMod content option follows the game actually selected now: a deselect above, or a

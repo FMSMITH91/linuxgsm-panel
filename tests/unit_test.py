@@ -173,9 +173,13 @@ for _attr, _fns in _WATCHED.items():
 importlib.import_module("panel.ops.tailscale_integration")
 
 # A user-level install counts as the machine's too (review 1012b): a tailscale CLI in ~/.local/bin or
-# Homebrew-on-Linux's prefix ran for real with the guard reading it as a part's own stand-in.
-_R15D_SYSTEM_DIRS = ("/usr/", "/bin/", "/sbin/", "/opt/", "/snap/", "/nix/", "/home/linuxbrew/",
-                     os.path.join(os.path.realpath(os.path.expanduser("~")), ".local", "bin") + os.sep)
+# Homebrew-on-Linux's prefix ran for real with the guard reading it as a part's own stand-in. Both
+# spellings of the home directory are listed, since a found path is judged before it is resolved
+# too (review 1012c), and Homebrew's per-user prefix with them.
+_R15D_SYSTEM_DIRS = ("/usr/", "/bin/", "/sbin/", "/opt/", "/snap/", "/nix/", "/home/linuxbrew/") + tuple(
+    sorted({os.path.join(_h, _d) + os.sep for _h in (os.path.expanduser("~"),
+                                                    os.path.realpath(os.path.expanduser("~")))
+            for _d in (os.path.join(".local", "bin"), ".linuxbrew")}))
 _r15d_ts_refused = []
 # What would really start a process. A part that stands in for subprocess.run itself (part44's
 # TimeoutExpired raiser) is answered by its stand-in, not by this: it starts nothing. The green
@@ -204,11 +208,53 @@ def _r16d_shell_text(cmd, kw):
 
 def _r17d_dash_c_script(argv):
     """The script of `[sh|bash|dash, -c, script]`; -c grouped with other letters (`bash -lc`) too."""
-    if (len(argv) >= 3 and isinstance(argv[1], str) and isinstance(argv[2], str)
-            and os.path.basename(str(argv[0])) in ("sh", "bash", "dash")
-            and re.fullmatch(r"-[a-z]*c[a-z]*", argv[1])):
-        return argv[2]
-    return None
+    return _r18d_dash_c(argv)[1]
+
+
+def _r18d_dash_c(argv):
+    """(index of the shell word, its -c script) for an argv that runs a shell script, else (None, None).
+
+    -c was read only as argv[1] (review 1012c): `bash -e -c s`, `bash -o pipefail -c s` and
+    `env bash -c s` ran their script with no guard. Options are read as the shell reads them: the
+    script is the first word that is not an option, -o/-O and --rcfile/--init-file take a value,
+    and an `env` that only sets variables passes the environment (and so the functions) through.
+    """
+    _i = _r18d_shell_word(argv)
+    if _i is None:
+        return None, None
+    _c, _j = _r18d_shell_opts(argv, _i + 1)
+    if _c and _j < len(argv) and isinstance(argv[_j], str):
+        return _i, argv[_j]
+    return None, None
+
+
+def _r18d_shell_word(argv):
+    """Index of the shell word: argv[0], or the word after an `env` that only sets variables."""
+    _i = 0
+    if argv and os.path.basename(str(argv[0])) == "env":
+        _i = 1
+        while _i < len(argv) and isinstance(argv[_i], str) and re.fullmatch(r"[A-Za-z_]\w*=.*", argv[_i], re.S):
+            _i += 1
+    if _i >= len(argv) or os.path.basename(str(argv[_i])) not in ("sh", "bash", "dash"):
+        return None
+    return _i
+
+
+def _r18d_shell_opts(argv, _j):
+    """(whether -c was given, index of the first operand) for the shell options from argv[_j]."""
+    _c = False
+    while _j < len(argv) and isinstance(argv[_j], str):
+        _a = argv[_j]
+        if _a in ("-", "--"):
+            return _c, _j + 1
+        if _a.startswith("--"):
+            _j += 2 if _a in ("--rcfile", "--init-file") else 1
+        elif re.fullmatch(r"[-+][A-Za-z]+", _a):
+            _c = _c or (_a[0] == "-" and "c" in _a)
+            _j += 2 if re.search("[oO]", _a) else 1
+        else:
+            break
+    return _c, _j
 
 
 def _r16d_ts_shell_env(env):
@@ -218,13 +264,30 @@ def _r16d_ts_shell_env(env):
     directory is "command not found" (127) and `which tailscale` finds nothing, anything else runs.
     """
     _sys = "|".join('"%s"*' % _d for _d in _R15D_SYSTEM_DIRS)
-    _is_sys = ('_r16d_p=$(type -P tailscale); _r16d_p=$(readlink -f "$_r16d_p" 2>/dev/null); '
-               'case "$_r16d_p" in "") false;; %s) true;; *) false;; esac' % _sys)
+    # The found path is judged as found AND as resolved: a ~/.local/bin/tailscale linking to an
+    # unpacked build elsewhere in $HOME resolved outside every system dir and ran (review 1012c).
+    _is_sys = ('_r16d_p=$(type -P tailscale); _r16d_q=$(readlink -f "$_r16d_p" 2>/dev/null); '
+               'case "$_r16d_p" in "") false;; %s) true;; *) case "$_r16d_q" in %s) true;; '
+               '*) false;; esac;; esac' % (_sys, _sys))
     return dict(env, **{
         "BASH_FUNC_tailscale%%": "() { if %s; then echo 'tailscale: command not found' >&2; return 127; "
                                  "fi; command tailscale \"$@\"; }" % _is_sys,
         "BASH_FUNC_which%%": '() { if [ "$*" = tailscale ] && { %s; }; then return 1; fi; '
                              'command which "$@"; }' % _is_sys})
+
+
+def _r18d_ts_program(cmd, kw):
+    """The program word of a run that starts `tailscale` without a shell, else None.
+
+    A bare string without a shell is a program name on POSIX, and an argv may name the binary by
+    its path: both ran unjudged (review 1012c).
+    """
+    if isinstance(cmd, str) and not kw.get("shell"):
+        cmd = [cmd]
+    if (isinstance(cmd, (list, tuple)) and cmd and isinstance(cmd[0], str)
+            and os.path.basename(cmd[0]) == "tailscale"):
+        return cmd[0]
+    return None
 
 
 class _R15dNoSystemTailscale:
@@ -241,13 +304,15 @@ class _R15dNoSystemTailscale:
         return getattr(self._real, name)
 
     def _system_tailscale(self, cmd, kw, how="run"):
-        if not (isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "tailscale"):
-            return False
-        if getattr(sys.modules.get(self._src), how, None) not in _r16d_real_spawners(how):
+        _prog = _r18d_ts_program(cmd, kw)
+        if _prog is None or getattr(sys.modules.get(self._src), how, None) not in _r16d_real_spawners(how):
             return False
         _path = (kw.get("env") or os.environ).get("PATH", os.defpath)
-        _hit = shutil.which("tailscale", path=_path)
-        return _hit is not None and os.path.realpath(_hit).startswith(_R15D_SYSTEM_DIRS)
+        _hit = _prog if os.sep in _prog else shutil.which("tailscale", path=_path)
+        # Judged as found and as resolved: a user-level link into $HOME resolved outside every
+        # system dir and read as a part's own stand-in (review 1012c).
+        return _hit is not None and (os.path.abspath(_hit).startswith(_R15D_SYSTEM_DIRS)
+                                     or os.path.realpath(_hit).startswith(_R15D_SYSTEM_DIRS))
 
     def _guard_shell(self, cmd, kw, how):
         """(cmd, kw) for a shell that names tailscale: under bash, with _r16d_ts_shell_env's functions."""
@@ -258,8 +323,10 @@ class _R15dNoSystemTailscale:
         kw = dict(kw, env=_r16d_ts_shell_env(kw.get("env") or os.environ))
         if kw.get("shell"):
             kw["executable"] = "/bin/bash"      # only bash reads exported functions; dash does not
-        elif os.path.basename(str(cmd[0])) != "bash":
-            cmd = ["/bin/bash"] + list(cmd[1:])
+        else:
+            _i = _r18d_dash_c(cmd)[0]           # the shell word, after an `env VAR=x` prefix
+            if os.path.basename(str(cmd[_i])) != "bash":
+                cmd = list(cmd[:_i]) + ["/bin/bash"] + list(cmd[_i + 1:])
         return cmd, kw
 
     def run(self, cmd, *a, **kw):
@@ -356,7 +423,7 @@ _r16d_wrap_ts_handles()
 # part56 (the 2026-10-11 second review's routes, tools and page fixes) drives part12's app and runs
 # node on its own fixtures; imports part01, 05, 12 and 47.
 # part57 (review 1011c: core, system_ops, ssh-core and reboot fixes) drives part12's app; imports
-# part01, 02, 12 and 20.
+# part01, 02, 10, 12 and 20.
 # part58 (the third 2026-10-11 review: game files, bots, debug report, helper, routes) drives
 # part12's app in a real bash over a throwaway home, with stand-in tools; imports part01, 05, 12.
 # part59 (the 2026-10-11 third review's routes, tools and page fixes) drives part12's app and runs
@@ -389,7 +456,13 @@ _r16d_wrap_ts_handles()
 # part71 (review 1012b: game files, debug report, helper and routes, builder B) drives part12's app
 # with stand-ins, and node on the GMod Content card; imports part01, 05, 12 and 47.
 # part72 (the seventh review's routes, tools, page and i18n fixes, builder C) drives part12's app
-# and runs node on its own fixtures; imports part01, 05, 12 and 47.
+# and runs node on its own fixtures; imports part01, 05, 12, 47 and 69 (part69's @media reader).
+# part73 (review 1012c: core, backup, ssh-core and reboot fixes, builder A) drives part12's app and
+# database with stand-ins, and node on its own fixtures; imports part01, 12, 20, 47 and 51.
+# part74 (review 1012c: game files, debug report, helper and routes, builder B) drives part12's app
+# with stand-ins, and the remote restart-flags form in a real bash; imports part01, 05 and 12.
+# part75 (the eighth review's routes, tools, page and i18n fixes, builder C) drives part12's app
+# and runs node on its own fixtures; imports part01, 05, 12, 16 and 47.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -397,7 +470,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
           "part50", "part51", "part52", "part53", "part54", "part55", "part56", "part57", "part58",
           "part59", "part60", "part61", "part62", "part63", "part64", "part65", "part66",
-          "part67", "part68", "part69", "part70", "part71", "part72", "part15")
+          "part67", "part68", "part69", "part70", "part71", "part72", "part73", "part74",
+          "part75", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -506,12 +580,41 @@ def _r14d_noted_imports(text):
     return out
 
 
-def _r14d_real_imports(part):
+def _r17d_imported_modules(node):
+    """The modules an import statement names (none for any other node).
+
+    `from unit import idreuse_support` (part16, part18) names the module after `import`: it was not
+    followed, so a part import added to such a shared module went unseen (review 1012b).
+    """
     import ast as _ast
+    if isinstance(node, _ast.Import):
+        return [_a.name for _a in node.names]
+    if not isinstance(node, _ast.ImportFrom):
+        return []
+    # Relative, from inside tests/unit: `from .part01 import x` and `from . import part01` name
+    # unit.* modules (review 1012c: they were read as top-level, or not at all).
+    _mod = ("unit" + ("." + node.module if node.module else "")) if node.level == 1 else node.module
+    if not _mod:
+        return []
+    return [_mod] + (["unit." + _a.name for _a in node.names] if _mod == "unit" else [])
+
+
+def _r14d_real_imports(part):
     with open(os.path.join(_root, "tests", "unit", part + ".py"), encoding="utf-8") as _fh:
-        _tree = _ast.parse(_fh.read())
-    return {_n.module[len("unit.part"):] for _n in _ast.walk(_tree)
-            if isinstance(_n, _ast.ImportFrom) and (_n.module or "").startswith("unit.part")}
+        return _r18d_parts_imported(_fh.read())
+
+
+def _r18d_parts_imported(text):
+    """{two-digit part number} a part's source imports directly, in any spelling.
+
+    Only `from unit.partNN import` was read (review 1012c): `from unit import part05` and a
+    relative `from .part01 import x`, both of which the order check below follows or should, could
+    be left out of a note with this check green.
+    """
+    import ast as _ast
+    return {_m[len("unit.part"):] for _n in _ast.walk(_ast.parse(text))
+            for _m in _r17d_imported_modules(_n)
+            if _m.startswith("unit.part") and _m[len("unit.part"):].isdecimal()}
 
 
 with open(os.path.abspath(__file__), encoding="utf-8") as _fh_r14d:
@@ -533,6 +636,11 @@ _ctl2_r14d = _r14d_noted_imports("# part70 (x) imports parts 01 and 12. part71 c
 check("unit suite: ...and a note listing imports in a wording it cannot read is named, not dropped "
       "(control)", sorted(_ctl2_r14d) == ["part70", "part72", "part73"]
       and all(next(iter(_v)).startswith("unreadable") for _v in _ctl2_r14d.values()), repr(_ctl2_r14d))
+_ctl3_r18d = _r18d_parts_imported("from unit.part12 import a\nfrom unit import part05, idreuse_support\n"
+                                  "from .part01 import b\nfrom . import part20\nimport unit.part30\n"
+                                  "from unit.part61_ufw import c\n")
+check("unit suite: ...a part's imports are read in every spelling: from unit import partNN, relative, "
+      "and import unit.partNN (control)", _ctl3_r18d == {"12", "05", "01", "20", "30"}, repr(_ctl3_r18d))
 
 # ...and the imports are held to the ORDER, which is what the notes are for: "nothing imports
 # backwards, so the import order below IS the execution order" was stated, never checked. A part
@@ -549,20 +657,6 @@ def _r16d_unit_imports(module):
     with open(_path, encoding="utf-8") as _fh:
         _tree = _ast.parse(_fh.read())
     return {_m for _n in _ast.walk(_tree) for _m in _r17d_imported_modules(_n) if _m.startswith("unit.")}
-
-
-def _r17d_imported_modules(node):
-    """The modules an import statement names (none for any other node).
-
-    `from unit import idreuse_support` (part16, part18) names the module after `import`: it was not
-    followed, so a part import added to such a shared module went unseen (review 1012b).
-    """
-    import ast as _ast
-    if isinstance(node, _ast.Import):
-        return [_a.name for _a in node.names]
-    if not isinstance(node, _ast.ImportFrom) or not node.module:
-        return []
-    return [node.module] + (["unit." + _a.name for _a in node.names] if node.module == "unit" else [])
 
 
 def _r16d_parts_reached(module, seen=None):
@@ -635,6 +729,14 @@ with open(os.path.join(_r17d_ts_sys, "tailscale"), "w", encoding="utf-8") as _fh
 # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this runner runs itself
 os.chmod(os.path.join(_r17d_ts_sys, "tailscale"), 0o700)  # nosec B103 - a stand-in in a private temp dir
 _r16d_ts_env = dict(os.environ, PATH=_r17d_ts_sys + os.pathsep + os.environ.get("PATH", ""))
+# A second planted "system" directory whose tailscale is a LINK to a copy of the script in tgt/,
+# outside both: the user-level install that resolves out of every system dir (review 1012c).
+_r18d_ts_sysl = os.path.join(_r15d_ts_ctl_dir, "sysl")
+os.makedirs(_r18d_ts_sysl)
+os.makedirs(os.path.join(_r15d_ts_ctl_dir, "tgt"))
+shutil.copy(os.path.join(_r17d_ts_sys, "tailscale"), os.path.join(_r15d_ts_ctl_dir, "tgt", "tailscale"))
+os.symlink(os.path.join(_r15d_ts_ctl_dir, "tgt", "tailscale"), os.path.join(_r18d_ts_sysl, "tailscale"))
+_r18d_ts_envl = dict(os.environ, PATH=_r18d_ts_sysl + os.pathsep + os.environ.get("PATH", ""))
 os.makedirs(os.path.join(_r15d_ts_ctl_dir, "own"))
 with open(os.path.join(_r15d_ts_ctl_dir, "own", "tailscale"), "w", encoding="utf-8") as _fh_ts:
     _fh_ts.write("#!/bin/sh\necho own stand-in\n")
@@ -648,20 +750,29 @@ _r16d_ts_shapes = (("run", (["tailscale", "version"],), {}),
                    # WHICH-FOUND: `which` letting the stand-in's path through is a let-through
                    # too (the stand-in's path has no "stand-in" in it, review 1012b).
                    ("Popen", (["/bin/bash", "-c", "which tailscale && echo WHICH-FOUND; tailscale version"],),
-                    {}))
+                    {}),
+                   # An option before -c, an `env` prefix, a bare string with no shell and the
+                   # binary named by its path ran unjudged (review 1012c).
+                   ("run", (["/bin/bash", "-e", "-c", "tailscale version"],), {}),
+                   ("run", (["/usr/bin/env", "X=1", "sh", "-o", "errexit", "-c", "tailscale version"],), {}),
+                   ("run", ("tailscale",), {}),
+                   ("run", ([os.path.join(_r18d_ts_sysl, "tailscale"), "version"],), {}))
 _r16d_ts_let = []      # the shapes that ran the stand-in while it counted as the system's
 _r16d_ts_saved_dirs = _R15D_SYSTEM_DIRS
-_R15D_SYSTEM_DIRS = (os.path.realpath(_r17d_ts_sys) + os.sep,)
+# The link's own directory counts as a system one; the script it points at (in tgt/) is outside it.
+_R15D_SYSTEM_DIRS = (os.path.realpath(_r17d_ts_sys) + os.sep, _r18d_ts_sysl + os.sep)
 try:
     for _w in _r16d_ts_wraps:
         for _how, _args, _kw in _r16d_ts_shapes:
-            try:
-                _p = getattr(_w, _how)(*_args, env=_r16d_ts_env, stdout=-1, stderr=-1, **_kw)
-                _out = (_p.communicate(timeout=10) if _how == "Popen" else (_p.stdout, _p.stderr))[0]
-                if b"stand-in" in (_out or b"") or b"WHICH-FOUND" in (_out or b""):
-                    _r16d_ts_let.append("%s.%s %r" % (type(_w).__name__, _how, _args[0]))
-            except FileNotFoundError:
-                pass    # no such program on this machine: nothing ran, so nothing got through
+            for _r18d_env in (_r16d_ts_env, _r18d_ts_envl):
+                try:
+                    _p = getattr(_w, _how)(*_args, env=_r18d_env, stdout=-1, stderr=-1, **_kw)
+                    _out = (_p.communicate(timeout=10) if _how == "Popen" else (_p.stdout, _p.stderr))[0]
+                    if b"stand-in" in (_out or b"") or b"WHICH-FOUND" in (_out or b""):
+                        _r16d_ts_let.append("%s.%s %r %s" % (type(_w).__name__, _how, _args[0],
+                                                             "link" if _r18d_env is _r18d_ts_envl else ""))
+                except FileNotFoundError:
+                    pass    # no such program on this machine: nothing ran, so nothing got through
     # Not a tailscale command: the grep's pattern and an echo's word are text, and run.
     _r16d_ts_text = _r16d_ts_wraps[1].run(  # nosec B604 - a fixed command, through the wrapper under test
         "echo tailscale | grep -c tailscale", shell=True, env=_r16d_ts_env, capture_output=True,
@@ -695,9 +806,16 @@ check("unit suite: the machine's own tailscale is answered 'not installed' throu
 _r16d_sh_read = [_r16d_shell_text(*_c) for _c in (
     (["bash", "-lc", "tailscale status"], {}), (["sh", "-ec", "tailscale up"], {}),
     (["tailscale status --json"], {"shell": True}), (["bash", "--login", "x"], {}),
-    (["tailscale", "-c", "x"], {}))]
-check("unit suite: ...a grouped -lc and a list with shell=True are read as shells (control)",
-      _r16d_sh_read == ["tailscale status", "tailscale up", "tailscale status --json", None, None],
+    (["tailscale", "-c", "x"], {}),
+    # Options before -c, and an `env` that only sets variables (review 1012c); -o's value is not
+    # a -c, and an `env` with options of its own is not read.
+    (["bash", "-o", "pipefail", "-c", "a"], {}), (["sh", "--norc", "-e", "-c", "b"], {}),
+    (["/usr/bin/env", "X=1", "bash", "-c", "c"], {}), (["bash", "-o", "c", "x"], {}),
+    (["bash", "--rcfile", "-c", "x"], {}))]
+check("unit suite: ...a grouped -lc, a list with shell=True and options before -c are read as shells "
+      "(control)",
+      _r16d_sh_read == ["tailscale status", "tailscale up", "tailscale status --json", None, None,
+                        "a", "b", "c", None, None],
       repr(_r16d_sh_read))
 
 # The cleanup, against unlistable directories, in BOTH of shutil.rmtree's modes. Which one a run gets

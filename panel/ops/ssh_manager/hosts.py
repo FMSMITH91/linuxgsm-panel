@@ -2161,13 +2161,16 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         'APT::Periodic::AutocleanInterval "7";\n'
         'APT::Periodic::Download-Upgradeable-Packages "1";\n'
     )
-    _core.write_root_file(server, "apt-auto-upgrades", au_conf, timeout=30)
-    _core.run_privileged(server, "service-enable-now", ["unattended-upgrades"], timeout=30)
+    _au = _core.write_root_file(server, "apt-auto-upgrades", au_conf, timeout=30)
+    if _au[2] == 0:
+        _au = _core.run_privileged(server, "service-enable-now", ["unattended-upgrades"], timeout=30)
 
     # Steps that ran and FAILED, by their exit codes: each is "finished, but", never "complete".
     # The timezone, swap and fail2ban steps discarded their tuples and logged success — a typo'd
     # timezone, a full disk, a fail2ban that never installed all read "VPS bootstrap complete".
+    # So did automatic security updates (above): neither the config write nor the enable was read.
     not_done = []
+    _r11a_step_failed(note, not_done, _au, i18n.Sentence("automatic security updates were not enabled"))
 
     # ── 4. Set timezone ──
     if set_timezone:
@@ -2603,11 +2606,16 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
 
     # 1. Enable IP forwarding for subnet routing
     if advertise_routes:
-        _core.write_root_file(server, "sysctl-tailscale",
-                        "net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n",
-                        timeout=15)
-        _core.run_privileged(server, "sysctl-reload", ["tailscale"], timeout=15)
-        log.append("IP forwarding enabled")
+        _fw = _core.write_root_file(server, "sysctl-tailscale",
+                                    "net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n",
+                                    timeout=15)
+        if _fw[2] == 0:
+            _fw = _core.run_privileged(server, "sysctl-reload", ["tailscale"], timeout=15)
+        # Read, not assumed: a write or reload that failed was logged "IP forwarding enabled", and
+        # the advertised routes then carried nothing with no word of why.
+        log.append("IP forwarding enabled" if _fw[2] == 0
+                   else "IP forwarding was NOT enabled (%s): the advertised routes will not carry "
+                        "traffic" % _r11a_why(_fw))
 
     # 2. Build the up command. auth_key / advertise_routes / tags are user-supplied and run
     # in a root shell, so every one is shell-quoted to prevent command injection.
@@ -3068,6 +3076,8 @@ def _f2b_dropin_ignoreip_body(ignore_ips):
     return f2b_whitelist_dropin_body(ignore_ips)
 
 
+# remote_set_fail2ban_ignoreip's answer for a host with no fail2ban: nothing to apply, not a failure.
+F2B_NOT_INSTALLED = "fail2ban not installed on this host"
 
 
 def remote_set_fail2ban_ignoreip(server, ignore_ips, unban_ip=None):
@@ -3079,10 +3089,16 @@ def remote_set_fail2ban_ignoreip(server, ignore_ips, unban_ip=None):
     jails_out, jails_err, jails_rc = _core.run_privileged(server, "f2b-status", [], timeout=10,
                                                     merge_stderr=False)
     if jails_rc == 127 or "not found" in (jails_out + jails_err).lower():
-        return False, "fail2ban not installed on this host"
-    _core.write_root_file(server, "fail2ban-panel-whitelist",
-                    _f2b_dropin_ignoreip_body(ignore_ips), timeout=15)
-    _core._f2b_reload(server)
+        return False, F2B_NOT_INSTALLED
+    # Both steps' rc, as _point_f2b_sshd_at reads them. They were statements: a write or reload
+    # that failed (on the tailscale and local transports a timeout RETURNS rc -1, it does not
+    # raise) still answered True, and that host's fail2ban went on banning the whitelisted address
+    # with nothing anywhere saying the whitelist never reached it.
+    if _rc_of(_core.write_root_file(server, "fail2ban-panel-whitelist",
+                                    _f2b_dropin_ignoreip_body(ignore_ips), timeout=15)) != 0:
+        return False, i18n.Sentence("the whitelist drop-in could not be written")
+    if _rc_of(_core._f2b_reload(server)) != 0:
+        return False, i18n.Sentence("fail2ban did not reload")
     # ignoreip only stops FUTURE bans; lift a current ban across every jail so a just-whitelisted
     # admin isn't left banned until it expires. `$J` is a jail name from fail2ban's own output.
     if unban_ip and _valid_ip(unban_ip):

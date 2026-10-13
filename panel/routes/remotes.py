@@ -485,6 +485,13 @@ def _add_remote_target_error(is_local, host, auth_method):
 
 def _add_local_remote(name, lgsm_user):
     """Add the panel's own machine as a host; nothing to connect to or test."""
+    # Only once. Every panel-host lookup is filter_by(is_local=True).first(), so a second row
+    # would be a host no page reaches, and which of the two "the panel host" means would rest on
+    # row order. The page never offers the box once the host exists; a hand-made POST could.
+    existing = RemoteServer.query.filter_by(is_local=True).first()
+    if existing is not None:
+        return _form_err(i18n.tr("The panel's own machine is already a host ('{name}'); it can be "
+                                 "added only once.", name=existing.name), "manage_remotes", code=409)
     remote = RemoteServer(
         name=name, host="127.0.0.1", port=22,
         username="local", auth_method="local",

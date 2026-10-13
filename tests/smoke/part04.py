@@ -1829,6 +1829,24 @@ for _p, _b in (("/api/remote/%d/firewall/open" % _eh_rid, {"port": 27015}),
                                          (_resp.headers.get("Content-Type") or "")[:24]))
 check("errors: a mutating API route answers JSON when the host is unreachable",
       not _eh_html, "; ".join(_eh_html))
+# ...in the viewer's language. The pages write the message after "❌ ", which the page's translator
+# does not look past, so the English sent here stayed English for every es/fr viewer.
+from panel.core import i18n as _eh_i18n  # noqa: E402
+with app.app_context():
+    _eh_u = User.query.filter_by(username="smoke_admin").first()
+    _eh_lang_was, _eh_u.language = _eh_u.language, "fr"
+    db.session.commit()
+try:
+    _resp = _eh_c.post("/api/remote/%d/firewall/open" % _eh_rid, json={"port": 27015})
+finally:
+    with app.app_context():
+        User.query.filter_by(username="smoke_admin").first().language = _eh_lang_was
+        db.session.commit()
+with app.test_request_context("/"):
+    _eh_fr = _eh_i18n.catalog("fr").get("Something went wrong — see the panel log.")
+_eh_said = (_resp.get_json(silent=True) or {}).get("message")
+check("errors: ...and its generic message is in the viewer's language",
+      _resp.status_code == 500 and bool(_eh_fr) and _eh_said == _eh_fr, repr((_resp.status_code, _eh_said)))
 # An abort(404) on an API path is the same unparseable body, one status code over.
 _resp = _eh_c.get("/api/server/99999/history")
 check("errors: an abort() on an API path answers JSON too",
@@ -1841,10 +1859,13 @@ check("errors: a page render still gets the ordinary HTML error",
       "%s %s" % (_resp.status_code, _resp.headers.get("Content-Type")))
 # The one status the handler must not reshape: panel.js reads it and X-Auth-Required to
 # decide the session has expired.
+# Asked the way panel.js asks (a JSON fetch), so only the 401 passes: accepting a 302 as well
+# (review 1012c) let the check pass with the contract gone.
 _eh_anon = app.test_client()
-_resp = _eh_anon.get("/api/servers")
+_resp = _eh_anon.get("/api/servers", headers={"Accept": "application/json"})
 check("errors: an unauthenticated API call keeps its 401 contract",
-      _resp.status_code in (401, 302), "%s" % _resp.status_code)
+      _resp.status_code == 401 and _resp.headers.get("X-Auth-Required") == "1",
+      "%s %r" % (_resp.status_code, _resp.headers.get("X-Auth-Required")))
 _eh_c.get("/logout")
 # ...and a genuine same-site destination is still honoured, or the guard is just breaking things.
 import time as _rd_time  # pylint: disable=reimported

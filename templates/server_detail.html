@@ -11,7 +11,7 @@
     <span class="text-secondary small">
       <i class="bi bi-hdd-network-fill"></i> {{ remote.display_name }}
       &middot; <span>Port</span> {{ server.port }}
-      &middot; <span>Type:</span> {{ server.game_display or server.game_type }}
+      &middot; <span>Type:</span> <span data-no-i18n>{{ server.game_display or server.game_type }}</span>
     </span>
     {# Which build of the game is on disk. Filled by /api/server/<id>/version after the page has
        drawn — reading it costs an SSH round trip plus a game query, and this page's rule is that

@@ -23,12 +23,16 @@
       {% if remote.is_local %}<span class="badge bg-secondary ms-1" style="font-size:.6rem;vertical-align:middle;font-weight:600;">this panel</span>{% endif %}
     </h1>
     <span class="text-secondary small">
-      {% if remote.is_local %}{{ remote.display_host or t('this host') }}{% else %}{{ remote.username }}@{{ remote.host }}:{{ remote.port }} &middot; <span>Auth:</span> {{ remote.auth_method }}{% endif %}
+      {% if remote.is_local %}{{ remote.display_host or t('this host') }}{% else %}{{ remote.login_address }} &middot; <span>Auth:</span> {{ remote.auth_method }}{% endif %}
       {% if remote.games %}&middot; {{ remote.games|length }} {% if remote.games|length == 1 %}<span>game server</span>{% else %}<span>game servers</span>{% endif %}{% endif %}
     </span>
   </div>
-  <span class="badge {% if remote.is_online %}bg-success{% else %}bg-secondary{% endif %}" id="remote-status">
-    {{ 'Online' if remote.is_online else 'Unknown' }}
+  {# The same tri-state as the dashboard host card and the Remote Servers list: on a HOST this is
+     SSH reachability. It said "Unknown" for a host the panel had checked and could not reach. #}
+  {% set _probed = host_probed(remote.id) %}
+  <span class="badge {% if remote.is_online %}bg-success{% elif not _probed %}bg-secondary{% else %}bg-danger{% endif %}" id="remote-status"
+        title="{% if remote.is_online %}The panel can reach this host over SSH{% elif not _probed %}The panel has not checked this host yet{% else %}The panel cannot reach this host over SSH{% endif %}">
+    {% if remote.is_online %}Reachable{% elif not _probed %}Checking…{% else %}Unreachable{% endif %}
   </span>
 </div>
 
@@ -811,7 +815,7 @@
         {# The arrow, not the word "to": a bare " to " between two value elements is its own text
            node, and a two-letter preposition is not a phrase any catalog can translate usefully. #}
         <div class="small text-secondary mb-1">Panel connects via
-          <strong id="conn-method">{{ remote.auth_method }}</strong> → <code>{{ remote.username }}@{{ remote.host }}:{{ remote.port }}</code>
+          <strong id="conn-method">{{ remote.auth_method }}</strong> → <code>{{ remote.login_address }}</code>
         </div>
         {% if remote.auth_method != 'tailscale' %}
         {# Superadmin-only: the migrate route refuses anyone else (it moves the row onto the
@@ -889,17 +893,20 @@
         {% for gs in remote.games %}
         <tr>
           <td><strong data-no-i18n>{{ gs.name }}</strong></td>
-          <td>{{ gs.game_display or gs.game_type }}</td>
+          <td data-no-i18n>{{ gs.game_display or gs.game_type }}</td>
           <td>
             {% set addr = remote.connect_host %}
             {% if addr %}
+            {# connect_address brackets an IPv6 host, as the dashboard and the Join link do:
+               `2001:db8::5:27015` gives no way to tell where the address ends. #}
+            {% set shown = gs.connect_address(addr) %}
             <code class="text-info copy-addr" style="cursor:pointer;font-size:.8rem;" title="Click to copy"
-                  data-copy="{{ addr }}:{{ gs.port }}">{{ addr }}:{{ gs.port }}</code>
+                  data-copy="{{ shown }}">{{ shown }}</code>
             {% set join_url = gs.connect_uri(addr) %}
             {% if join_url %}
             <a class="btn btn-success btn-sm py-0 px-1 ms-1 join-link" style="font-size:.7rem;" rel="noopener"
                {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- connect_uri: a fixed steam://connect/ prefix, or empty #}
-               href="{{ join_url }}" data-addr="{{ addr }}:{{ gs.port }}"
+               href="{{ join_url }}" data-addr="{{ shown }}"
                title="Launch the game and join (on phones, taps to copy the address)"><i class="bi bi-box-arrow-in-right"></i> Join</a>
             {% endif %}
             {% else %}

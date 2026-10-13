@@ -1,4 +1,4 @@
-"""Part 16 of the unit suite: an IPv6 zone id is never an address. Imported for its side effects.
+"""Part 17 of the unit suite: an IPv6 zone id is never an address. Imported for its side effects.
 
 ipaddress accepts a zone id (the scope after '%') on any IPv6 literal and keeps its text verbatim:
 spaces, `$(...)`, ';', a newline, a second address. The panel took str(ipaddress.ip_address(x)),

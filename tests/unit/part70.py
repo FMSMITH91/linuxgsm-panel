@@ -26,7 +26,7 @@ import flask as _flask70
 
 import app as _app70
 from unit.part01 import check, skip
-from unit.part12 import P9_ADMIN, P9_GS, _P9_CFG_PATH, _p9, _p9_client, _p9_flashes
+from unit.part12 import P9_ADMIN, P9_GS, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_flashes
 from unit.part20 import _patch, _patched
 from unit.part47 import _SETTLE47, _cut47, _node47
 from panel.core import config as _cfg70
@@ -60,6 +60,14 @@ def _cat70(lang):
 
 
 _CAT70 = {lg: _cat70(lg) for lg in ("es", "fr")}
+# The account's language as this part found it, put back after each block that switches it (it was
+# reset to "en", so a later part reading the account saw this part's choice, not the earlier one's).
+with _p9.app_context():
+    _LANG70_WAS = _models70.db.session.get(_models70.User, P9_ADMIN).language
+# part12's transport tripwire, armed at the top of each block below that drives a route (review
+# 1012c: none was armed, so a route that gained a host call would run it for real with every check
+# green); the part ends by checking nothing it drove reached one.
+_TRIP70_START = len(_P9_TRIPPED)
 
 
 def _as70(lang):
@@ -108,10 +116,11 @@ def _opt70(result, lang):
     try:
         _as70(lang)
         with _patched():
+            _p9_arm(_patch, "part70")
             _patch(_models70, "_run_maintenance", lambda path: result)
             return _p9_client(P9_ADMIN).post("/api/panel/optimize-db", json={}).get_json() or {}
     finally:
-        _as70("en")
+        _as70(_LANG70_WAS)
 
 
 _opt_busy70 = _opt70((False, False), "es")
@@ -159,9 +168,11 @@ with _p9.test_request_context("/"):
     _ise70 = _http70._log_and_generic("p70: an expected test exception")
 try:
     _as70("es")
-    _tag70 = _p9_client(P9_ADMIN).post("/api/tags", json={"name": "-p70"}).get_json() or {}
+    with _patched():
+        _p9_arm(_patch, "part70")
+        _tag70 = _p9_client(P9_ADMIN).post("/api/tags", json={"name": "-p70"}).get_json() or {}
 finally:
-    _as70("en")
+    _as70(_LANG70_WAS)
 check("i18n: \"Internal server error\" (79 routes' generic failure) reads in the viewer's language",
       _ise70 == "Erreur interne du serveur", repr(_ise70))
 check("i18n: ...and so does the tag-name rule a bad tag name is refused with",
@@ -309,6 +320,7 @@ _sent70 = []
 try:
     _as70("es")
     with _patched():
+        _p9_arm(_patch, "part70")
         _patch(_sf70, "send_console_command", lambda *a, **k: _sent70.append(a) or ("", "", 0))
         _patch(_sd70, "send_console_command", lambda *a, **k: _sent70.append(a) or ("", "", 0))
         _c70 = _p9_client(P9_ADMIN)
@@ -316,7 +328,7 @@ try:
         _c70.post("/server/%d/command" % P9_GS, data={"command": "say a\x1aquit"})
         _form70 = _p9_flashes(_c70)
 finally:
-    _as70("en")
+    _as70(_LANG70_WAS)
 _CTRL_ES70 = _CAT70["es"].get("A console command can't contain control characters or line breaks.")
 check("console send: both senders refuse a control character up front, in the viewer's language, and send "
       "nothing (the send's refusal would have read as \"Console (tmux) not accessible\")",
@@ -408,3 +420,6 @@ else:
           "data-no-i18n, English in every language); a server's name stays untranslated",
           [b.get("panel") for b in _pb70] == [True]
           and _bl70 == [["the panel", False], ["p70-srv", True]], repr((_pb70, _bl70)))
+
+check("part70: nothing its routes drove reached a real transport (part12's tripwire, armed in each)",
+      len(_P9_TRIPPED) == _TRIP70_START, repr(_P9_TRIPPED[_TRIP70_START:][:6]))

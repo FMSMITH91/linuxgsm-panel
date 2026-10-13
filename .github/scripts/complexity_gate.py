@@ -135,6 +135,11 @@ def pylint_violations(path, code):
                             "--enable=" + ",".join(PYLINT_CODES), "--score=n", "--persistent=n",
                             "--msg-template={path}:{line}:{column}: {msg_id}: {msg} ({symbol})", f],
                            capture_output=True, text=True, check=False)
+    # Bit 1 is a fatal message (pylint could not analyse the file) and bit 32 a usage error: either
+    # prints no violation lines, so the file read as clean. Stop instead (review 1012c).
+    if r.returncode & (1 | 32):
+        raise RuntimeError("pylint could not analyse %s (exit %d): %s"
+                           % (path, r.returncode, (r.stderr or r.stdout).strip()[-300:]))
     out = []
     for ln in r.stdout.splitlines():
         m = _PYLINT_LINE.match(ln.strip())
@@ -436,6 +441,9 @@ def run(base, cwd=None):
     """Return (problems, files checked, files over 150 KB): each problem is (path, line, message)."""
     problems, files = [], changed_files(base, cwd)
     origins = split_origins(base, files, cwd)
+    # A renamed file is judged against its old self: read at its HEAD path, the base was "" and
+    # every violation it already had was new, so a pure `git mv` could not merge (review 1012c).
+    renamed = _renamed_from(base, cwd)
     splits = collections.defaultdict(list)
     for new, origin in sorted(origins.items()):
         splits[origin].append((new, _committed("HEAD", new, cwd)))
@@ -445,7 +453,8 @@ def run(base, cwd=None):
         if not head and not splits.get(path):
             continue
         problems += [(where, line, msg + _ON_MAIN) for where, line, msg in
-                     new_violations(path, _committed(base, path, cwd), head, splits.get(path, ()))]
+                     new_violations(path, _committed(base, renamed.get(path, path), cwd), head,
+                                    splits.get(path, ()))]
     big = oversized(base, files, cwd)
     return problems + prospector_violations(base, big, cwd, origins), files, big
 
@@ -491,6 +500,8 @@ def _size_cases():
         "long file fails": ({"m.py": "X0 = 0\n"},
                             {"m.py": "".join("X%d = %d\n" % (i, i) for i in range(1702))}, True),
         "unchanged complexity passes": ({"m.py": simple}, {"m.py": simple + "\nZ = 3\n"}, False),
+        # a renamed file is judged against its old self: its violations moved with it
+        "renamed violation passes": ({"m.py": old_bad}, {"m.py": None, "n.py": old_bad}, False),
         # a file split in two: the violation moved into the new file with the code around it
         "split violation passes": ({"m.py": simple + "\n\n" + old_bad},
                                    {"m.py": simple, "n.py": "\n" + old_bad}, False),

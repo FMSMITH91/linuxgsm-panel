@@ -26,6 +26,7 @@ from panel.ops import ssh_manager as _sm
 from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, UNINSTALL_SERVER,
     accessible_remote_ids, get_game, get_remote, log_action, permission_required,
     server_access_required)
+import json
 import shlex
 import threading
 import time
@@ -127,9 +128,17 @@ def record_install_failure(row, name, detail="", retryable=True, explained=False
     failure by pointing at the host, which is not the problem).
 
     Returns the reason written, so the caller can log it.
+
+    The reason is written twice: install_error is the English (logs, the audit trail and the debug
+    report read it), and install_error_i18n is how it was built, which the dashboard and Retry
+    translate for whoever is looking. The step name is a fixed English phrase, kept as a Sentence
+    so it is translated whole; a host's raw tail stays as it was written.
     """
-    reason = (name if (explained or not detail) else "%s: %s" % (name, detail))[:1000]
+    step = name if isinstance(name, (i18n.Sentence, i18n.Sentences)) else i18n.Sentence(str(name))
+    said = step if (explained or not detail) else i18n.Sentence("{step}: {detail}", step=step, detail=detail)
+    reason = str(said)[:1000]
     row.install_error = reason
+    row.install_error_i18n = json.dumps(i18n.sentence_record(said), ensure_ascii=False)
     row.install_retryable = bool(retryable)
     row.installed = False
     row.status = "failed"
@@ -494,7 +503,7 @@ def _register_install(app):
         if not gs.install_retryable:
             return _form_err(i18n.tr(
                 "Trying again won't change this one — {reason} Fix the cause first, or remove the "
-                "server.", reason=gs.install_error) if gs.install_error else i18n.tr(
+                "server.", reason=gs.install_error_sentence()) if gs.install_error else i18n.tr(
                 "Trying again won't change this one — see the reason on the row. Fix the cause first, "
                 "or remove the server."), "manage_servers")
         remote = gs.remote
@@ -510,7 +519,7 @@ def _register_install(app):
         if not _queue_install_job(gs, _retry_content):
             return _form_err("That server is being uninstalled.", "manage_servers")
         gs.status = "installing"
-        gs.install_error, gs.install_retryable = "", True
+        gs.install_error, gs.install_error_i18n, gs.install_retryable = "", None, True
         db.session.commit()
         _run_install_job(gs.id, remote.id, gs.short_name, gs.game_type, gs.lgsm_name, gs.port,
                          _retry_content)
@@ -861,7 +870,7 @@ def _install_job_runner(app):
                     # would turn `rm -rf /home/{short_name}` into `rm -rf /home/` (every home dir).
                     # It's always set upstream (server_name or lgsm_name), but never trust that here.
                     if not short_name:
-                        _fail("Preparing user account", "internal error: missing instance name")
+                        _fail("Preparing user account", i18n.Sentence("internal error: missing instance name"))
                         return
                     # The same test every command builder applies, BEFORE step 1 creates an
                     # account. A retry takes both names from the stored row, which @validates
@@ -870,7 +879,7 @@ def _install_job_runner(app):
                     # through the privileged verbs with a name nothing else accepts.
                     if not _sm.game_idents_ok(short_name, lgsm_name):
                         _fail("Preparing user account",
-                              "the instance or script name is not a plain account name",
+                              i18n.Sentence("the instance or script name is not a plain account name"),
                               retryable=False)
                         return
 
@@ -1042,7 +1051,7 @@ class _InstallRun:
         try:
             _row = self.row()
             if _row is not None and (_row.install_error or not _row.install_retryable):
-                _row.install_error, _row.install_retryable = "", True
+                _row.install_error, _row.install_error_i18n, _row.install_retryable = "", None, True
                 db.session.commit()
         except Exception:
             _log.debug("could not clear the install failure on the row", exc_info=True)

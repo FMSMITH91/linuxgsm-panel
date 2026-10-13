@@ -32,9 +32,8 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check
 from unit.part05 import _helper
-from unit.part12 import (_P9_TRIPPED, _P9Thread, _p9, _p9_client, _p9_core, _p9_drain, _p9_json,
-                         _p9_patch, _p9_restore_all, _p9_rv, _p9_sd, _p9_sf, _p9_sh, _p9_so,
-                         _p9_threading, _p9_trip)
+from unit.part12 import (_P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_client, _p9_core, _p9_drain, _p9_json,
+                         _p9_patch, _p9_restore_all, _p9_rv, _p9_sd, _p9_sf, _p9_sh, _p9_threading, _p9_trip)
 from panel.db.models import (_NO_UPDATE_GAMES, STEAM_CONNECT_GAMES, AuditLog, GameServer, RemoteServer,
                              User, db)
 from panel.ops.debug_report import logs as _logs65
@@ -65,14 +64,8 @@ def _bash65(server, user, sh, timeout=30, selfname=None, scope=False):
 
 
 def _arm65():
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part65's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _p9_arm(who="part65")
     _p9_patch(_p9_core, "run_command", _p9_trip("run_command"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
     _p9_patch(_p9_core, "shell_as_game_user", _bash65)
 
 

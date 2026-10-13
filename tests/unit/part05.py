@@ -512,12 +512,20 @@ check("no-sudo runner: it stubs the DEFINITION site of _run_local, not just the 
       _nsr_core._run_local.__qualname__.startswith("_install"),
       "_core._run_local is %s" % _nsr_core._run_local.__qualname__)
 check("no-sudo runner: system_ops._run is stubbed too", _nsr_so._run.__qualname__.startswith("_install"))
+# Held to the shim itself, not to "not a module" (review 1012c): the unit runner wraps
+# tailscale_integration's and _core's handles in its own tailscale guard before every part, and
+# that wrapper is not a module either, so an _install() that stopped shimming them passed while
+# their sudo calls went to the real sudo.
+_r18d_shim_cls = "_make_shim.<locals>._Shim"
+_nsr_shim = _nsr_core.subprocess
 _nsr_unshimmed = [m.__name__ for m in (_nsr_core, _nsr_cron, _nsr_files)
-                  if getattr(m, "subprocess", None).__class__.__name__ == "module"]
+                  if getattr(m, "subprocess", None) is not _nsr_shim]
 check("no-sudo runner: every ssh_manager submodule's subprocess is shimmed",
-      not _nsr_unshimmed, "still real in: %s" % _nsr_unshimmed)
+      type(_nsr_shim).__qualname__ == _r18d_shim_cls and not _nsr_unshimmed,
+      "%s; still unshimmed in: %s" % (type(_nsr_shim).__qualname__, _nsr_unshimmed))
 check("no-sudo runner: ...including _core's separate eventlet handle",
-      _nsr_core._real_subprocess.__class__.__name__ != "module")
+      type(_nsr_core._real_subprocess).__qualname__ == _r18d_shim_cls,
+      type(_nsr_core._real_subprocess).__qualname__)
 # ONE shim object across the modules, because the real `subprocess` is one object across them and
 # tests reach for it that way: part01 patches _sm_core.subprocess.Popen and then asserts what
 # files.py's Popen was handed. A shim PER MODULE made that assignment land on _core's instance
@@ -546,8 +554,7 @@ def _nsr_subprocess_importers():
 
 
 _nsr_importers = _nsr_subprocess_importers()
-_nsr_real = [m.__name__ for m in _nsr_importers
-             if getattr(m, "subprocess", None).__class__.__name__ == "module"]
+_nsr_real = [m.__name__ for m in _nsr_importers if getattr(m, "subprocess", None) is not _nsr_shim]
 check("no-sudo runner: every panel module that imports subprocess itself has it shimmed",
       len(_nsr_importers) >= 10 and not _nsr_real,
       "%d importers; still real in: %s" % (len(_nsr_importers), _nsr_real))
@@ -4092,7 +4099,35 @@ finally:
 
 # The helper can only ever run tools it names. bash is the whole point: if it resolved, the boundary
 # would be decorative.
-check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
+# Judged on whichever of the helper's own candidates this machine has, and SKIPPED, not passed, when
+# it has none (review 1012c: it read only /usr/sbin/ufw and passed as the literal True without it).
+if any(os.path.isfile(_c) and os.access(_c, os.X_OK) for _c in _helper.TOOLS["ufw"]):
+    check("helper: resolves ufw", _helper.resolve("ufw") in _helper.TOOLS["ufw"], _helper.resolve("ufw"))
+else:
+    skip("helper: resolves ufw", "no ufw at any of %s on this machine" % (_helper.TOOLS["ufw"],))
+# ...and resolve() itself, on planted candidates any machine has: the first that is an executable
+# file wins, a missing or non-executable one is passed over, and a name outside TOOLS never resolves.
+_r18d_rs_dir = _tempfile.mkdtemp(prefix="helper-resolve-")
+_r18d_rs_was = _helper.TOOLS.get("ufw")
+try:
+    for _r18d_rs_n, _r18d_rs_mode in (("noexec", 0o600), ("exec", 0o700)):
+        with open(os.path.join(_r18d_rs_dir, _r18d_rs_n), "w", encoding="utf-8") as _r18d_rs_fh:
+            _r18d_rs_fh.write("#!/bin/sh\n")
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in in a private temp dir
+        os.chmod(os.path.join(_r18d_rs_dir, _r18d_rs_n), _r18d_rs_mode)  # nosec B103 - a stand-in in a private temp dir
+    _helper.TOOLS["ufw"] = tuple(os.path.join(_r18d_rs_dir, _n) for _n in ("missing", "noexec", "exec"))
+    _r18d_rs_got = _helper.resolve("ufw")
+    try:
+        _helper.resolve("bash")
+        _r18d_rs_bash = "resolved"
+    except FileNotFoundError:
+        _r18d_rs_bash = "refused"
+finally:
+    _helper.TOOLS["ufw"] = _r18d_rs_was
+    _shutil.rmtree(_r18d_rs_dir, ignore_errors=True)
+check("helper: resolve() takes the first executable candidate and never a name outside TOOLS",
+      _r18d_rs_got == os.path.join(_r18d_rs_dir, "exec") and _r18d_rs_bash == "refused",
+      repr((_r18d_rs_got, _r18d_rs_bash)))
 check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "bash_installer", "busctl",
                                 "crontab",
@@ -5144,7 +5179,9 @@ def _r17d_root_names(tree, depth):
     for _n in _smg_ast.walk(tree):
         roots |= _r17d_repo_root_imports(_n)
     is_root = _functools05.partial(_r17d_is_root, roots=roots, depth=depth)
-    _assigns = [_n for _n in _smg_ast.walk(tree) if isinstance(_n, _smg_ast.Assign)]
+    # An annotated copy (`top: str = REPO_ROOT`) is a copy too (review 1012c).
+    _assigns = [_n for _n in _smg_ast.walk(tree)
+                if isinstance(_n, (_smg_ast.Assign, _smg_ast.AnnAssign)) and _n.value is not None]
     _new = True
     while _new:
         _new = {_t for _n in _assigns if is_root(_n.value) for _t in _r17d_target_names(_n)} - roots
@@ -5153,45 +5190,107 @@ def _r17d_root_names(tree, depth):
 
 
 def _r17d_repo_root_imports(node):
-    """The names `from unit import REPO_ROOT [as X]` binds, if `node` is that import."""
-    if not (isinstance(node, _smg_ast.ImportFrom) and node.module == "unit"):
+    """The names a root imported from the unit package binds, if `node` is such an import.
+
+    `from unit import REPO_ROOT [as X]`, and a part's own root by any conventional name
+    (`from unit.part01 import _root as R1`, review 1012c: only the first was followed).
+    """
+    if not (isinstance(node, _smg_ast.ImportFrom) and node.module
+            and (node.module == "unit" or node.module.startswith("unit."))):
         return set()
-    return {_a.asname or _a.name for _a in node.names if _a.name == "REPO_ROOT"}
+    return {_a.asname or _a.name for _a in node.names
+            if _a.name == "REPO_ROOT" or _re.fullmatch(_R18D_ROOT_NAMES, _a.name)}
+
+
+# The suites' conventional root names. `ROOT` is template_actions_test's (review 1012c).
+_R18D_ROOT_NAMES = r"ROOT|_root|_repo_root|REPO_ROOT|_UNIT_ROOT|_ROOT\w*"
 
 
 def _r17d_target_names(assign):
-    return {_t.id for _t in assign.targets if isinstance(_t, _smg_ast.Name)}
+    _targets = assign.targets if isinstance(assign, _smg_ast.Assign) else [assign.target]
+    return {_t.id for _t in _targets if isinstance(_t, _smg_ast.Name)}
 
 
 def _r17d_call_name(call):
     return getattr(call.func, "attr", getattr(call.func, "id", None))
 
 
+# Calls that hand back the path they are given: os.path's normalisers and the str/Path wrappers
+# (review 1012c: `os.walk(str(REPO_ROOT))` was not a root).
+_R18D_SAME_PATH = ("abspath", "realpath", "normpath", "str", "fspath", "Path", "PurePath")
+
+
 def _r17d_file_depth(e):
-    """How many dirname()s of __file__ `e` is (through abspath/realpath/normpath), or None."""
-    if isinstance(e, _smg_ast.Name) and e.id == "__file__":
-        return 0
-    if not (isinstance(e, _smg_ast.Call) and e.args):
+    """How many parents of __file__ `e` is, or None.
+
+    Through dirname() and the normalisers, and pathlib's `.parent` / `.parents[n]` after
+    `.resolve()` / `.absolute()` (review 1012c: template_actions_test's root is a .parent chain).
+    """
+    if isinstance(e, _smg_ast.Name):
+        return 0 if e.id == "__file__" else None
+    _up = _r18d_parents_step(e)
+    if _up is not None:
+        _in = _r17d_file_depth(_up[0])
+        return None if _in is None else _in + _up[1]
+    return _r18d_call_depth(e) if isinstance(e, _smg_ast.Call) else None
+
+
+def _r18d_parents_step(e):
+    """(the inner expression, how many parents up) for `.parent` and `.parents[n]`, else None."""
+    if isinstance(e, _smg_ast.Attribute) and e.attr == "parent":
+        return e.value, 1
+    if (isinstance(e, _smg_ast.Subscript) and getattr(e.value, "attr", None) == "parents"
+            and isinstance(getattr(e.slice, "value", None), int)):
+        return e.value.value, e.slice.value + 1
+    return None
+
+
+def _r18d_call_depth(e):
+    """_r17d_file_depth of a call: `.resolve()` / `.absolute()`, dirname(), or a normaliser."""
+    if not e.args and getattr(e.func, "attr", None) in ("resolve", "absolute"):
+        return _r17d_file_depth(e.func.value)
+    if len(e.args) != 1 or _r17d_call_name(e) not in _R18D_SAME_PATH + ("dirname",):
         return None
     _in = _r17d_file_depth(e.args[0])
-    if _in is None or _r17d_call_name(e) not in ("abspath", "realpath", "normpath", "dirname"):
-        return None
-    return _in + (_r17d_call_name(e) == "dirname")
+    return None if _in is None else _in + (_r17d_call_name(e) == "dirname")
 
 
 def _r17d_is_root(e, roots, depth):
     """Is expression `e` the checkout root, given the names `roots` bound to it?"""
     if isinstance(e, _smg_ast.Name):
-        return e.id in roots or bool(_re.fullmatch(r"_root|_repo_root|REPO_ROOT|_UNIT_ROOT|_ROOT\w*", e.id))
-    if isinstance(e, _smg_ast.Call) and e.args and _r17d_call_name(e) in ("abspath", "realpath", "normpath"):
+        return e.id in roots or bool(_re.fullmatch(_R18D_ROOT_NAMES, e.id))
+    if isinstance(e, _smg_ast.Call) and len(e.args) == 1 and _r17d_call_name(e) in _R18D_SAME_PATH:
         return _r17d_is_root(e.args[0], roots, depth)
+    if (isinstance(e, _smg_ast.Call) and not e.args and isinstance(e.func, _smg_ast.Attribute)
+            and e.func.attr in ("resolve", "absolute")):
+        return _r17d_is_root(e.func.value, roots, depth)
     return _r17d_file_depth(e) == depth
 
 
 def _r17d_walk_of_root(node, is_root):
-    """Is `node` an `os.walk(<root>, ...)` call?"""
-    return (isinstance(node, _smg_ast.Call) and getattr(node.func, "attr", None) == "walk"
-            and getattr(node.func.value, "id", None) == "os" and bool(node.args) and is_root(node.args[0]))
+    """Is `node` a recursive read of the whole checkout?
+
+    `os.walk(<root>)`, its root given by position or as top= (review 1012c), and the two other
+    readers that descend into dot-directories: `<root>.rglob(...)` and a `glob(...)` with
+    include_hidden=True over a pattern built from the root.
+    """
+    if not isinstance(node, _smg_ast.Call):
+        return False
+    _kw = {_k.arg: _k.value for _k in node.keywords if _k.arg}
+    _top = _r18d_walked(node, _kw)
+    if _top is not None:
+        return is_root(_top)
+    if (_r17d_call_name(node) in ("glob", "iglob") and node.args
+            and getattr(_kw.get("include_hidden"), "value", False) is True):
+        return any(is_root(_x) for _x in _smg_ast.walk(node.args[0]) if isinstance(_x, _smg_ast.expr))
+    return False
+
+
+def _r18d_walked(node, kw):
+    """The directory an `os.walk(...)` (by position or top=) or a `<dir>.rglob(...)` reads, or None."""
+    if getattr(node.func, "attr", None) == "walk" and getattr(node.func.value, "id", None) == "os":
+        return node.args[0] if node.args else kw.get("top")
+    return node.func.value if getattr(node.func, "attr", None) == "rglob" else None
 
 
 def _r16d_unpruned_walks(text, depth=3):
@@ -5229,12 +5328,29 @@ _r17d_walk_ctl = {
     "keyword arguments": "from unit import REPO_ROOT as _R\nfor d, s, f in os.walk(_R, topdown=True):\n    pass\n",
     "a comprehension": "from unit import REPO_ROOT\nx = [f for d, s, f in os.walk(REPO_ROOT)]\n",
     "a copy of a root": "from unit import REPO_ROOT\ntop = REPO_ROOT\nfor d, s, f in os.walk(top):\n    pass\n",
+    # review 1012c: each of these walked the whole checkout with the gate green.
+    "template_actions' ROOT (a .parent chain)": (
+        "ROOT = pathlib.Path(__file__).resolve().parent.parent.parent\nfor d, s, f in os.walk(ROOT):\n    pass\n"),
+    "str() of a root": "from unit import REPO_ROOT\nfor d, s, f in os.walk(str(REPO_ROOT)):\n    pass\n",
+    "top= by keyword": "from unit import REPO_ROOT\nfor d, s, f in os.walk(top=REPO_ROOT):\n    pass\n",
+    "a part's root imported under another name": (
+        "from unit.part01 import _root as R1\nfor d, s, f in os.walk(R1):\n    pass\n"),
+    "an annotated copy": "from unit import REPO_ROOT\ntop: str = REPO_ROOT\nfor d, s, f in os.walk(top):\n    pass\n",
+    "parents[2] of the file": "t = pathlib.Path(__file__).parents[2]\nx = list(t.rglob('*.py'))\n",
+    "an rglob of Path(root)": "from unit import REPO_ROOT\nx = list(pathlib.Path(REPO_ROOT).rglob('*'))\n",
+    "a glob that includes hidden dirs": (
+        "from unit import REPO_ROOT\nx = glob.glob(os.path.join(REPO_ROOT, '**'), recursive=True, "
+        "include_hidden=True)\n"),
 }
 _r17d_walk_ctl = {_k: _r16d_unpruned_walks(_v) != [] for _k, _v in _r17d_walk_ctl.items()}
 _r17d_walk_ctl["a subtree (not the root)"] = _r16d_unpruned_walks(
     "from unit import REPO_ROOT\nfor d, s, f in os.walk(os.path.join(REPO_ROOT, 'panel')):\n    pass\n") == []
 _r17d_walk_ctl["two dirnames from tests/unit (tests/, not the root)"] = _r16d_unpruned_walks(
     "t = os.path.dirname(os.path.dirname(__file__))\nfor d, s, f in os.walk(t):\n    pass\n") == []
+_r17d_walk_ctl["an rglob of a subtree, and a glob without hidden dirs (not one)"] = _r16d_unpruned_walks(
+    "from unit import REPO_ROOT\nx = list((pathlib.Path(REPO_ROOT) / 'panel').rglob('*'))\n"
+    "y = list(pathlib.Path(REPO_ROOT, 'panel').rglob('*'))\n"
+    "z = glob.glob(os.path.join(REPO_ROOT, '**'), recursive=True)\n") == []
 check("suites: every walk of the whole checkout leaves .claude (other worktrees) out",
       not _r16d_walks and _r17d_walks_read >= 8, "%d walks read; %r" % (_r17d_walks_read, _r16d_walks))
 check("suites: ...a walk is found by what its root name is bound to, with keywords, in a "
@@ -6419,7 +6535,7 @@ finally:
 
 _mon_src = open(os.path.join(_root, "panel", "services", "monitoring.py"), encoding="utf-8").read()
 check("restart flags: the consumer SKIPS an unknown answer instead of writing False",
-      "if _rf is not None:" in _mon_src and "_rf = probe.get(\"restart_flagged\")" in _mon_src)
+      "if _rf is not None and " in _mon_src and "_rf = probe.get(\"restart_flagged\")" in _mon_src)
 
 # ── server capacity: a cache pinned for the process lifetime is not "essentially static" ───────
 # _server_max_config cached a successful read forever. The panel's OWN settings form edits

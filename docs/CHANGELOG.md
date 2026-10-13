@@ -596,6 +596,25 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **An eighth full review on 2026-10-12: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Player moderation.** A ban by name on a Valve (Source/GoldSrc) server could reach a different
+    player: the colour-code name matching meant for Quake-engine games also ran there. Quake Live
+    still gets no kick or ban: no primary source documents its console commands.
+  - **OS updates.** A package installed for two architectures (the 32-bit libraries game servers
+    need) was listed twice with nothing to tell the rows apart; each row now names its
+    architecture.
+  - **Languages.** The dashboard's failed-install banner is shown in the viewer's language (older
+    banners stay as they were written), and so are the panel's generic error message, the host
+    page's header and about 20 more messages. Clicking the Connect address before it loads no
+    longer copies the placeholder word.
+  - **IPv6.** An IPv6 host is bracketed in the SSH login line, the host page's connect addresses,
+    the chat-bot's server line and the installer's first-login link.
+  - **Robustness.** Several checks no longer read a failed command as a clean answer (update
+    status, IP forwarding, automatic security updates, the whitelist reload), and a reboot rolled
+    back on a host that stays silent is now given up on like any other.
+  - **Tests.** Eighteen checks that could pass without testing what they named now can fail.
+
 - **A seventh full review on 2026-10-12: fixes.** Every item below has a check that fails without
   its fix.
   - **Garry's Mod content.** The Content card now shows how an install or uninstall ended: its

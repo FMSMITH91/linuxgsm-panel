@@ -159,7 +159,9 @@ def _ssh_ports(server):
     try:
         if getattr(server, "port", None):
             ports.add(int(server.port))
-    except (TypeError, ValueError):
+    # OverflowError too, as _panel_web_port catches: a port stored as REAL infinity (a hand-edited or
+    # restored database; on-load only flags it) made int() raise that, past this except.
+    except (TypeError, ValueError, OverflowError):
         _core._log.debug("a non-numeric stored port just means there's no extra SSH port to track", exc_info=True)
     return ports
 
@@ -185,7 +187,7 @@ def _fwssh_served_ports(server):
         return _ssh_ports(server)
     try:
         stored = {int(server.port)} if getattr(server, "port", None) else set()
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):   # as _ssh_ports
         stored = set()
     return live | stored
 

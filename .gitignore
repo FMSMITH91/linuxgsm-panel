@@ -1,6 +1,8 @@
 # ── Python ──
 venv/
 .venv/
+# A worktree's .venv is a symlink to the main checkout's, which `.venv/` does not match.
+.venv
 env/
 __pycache__/
 *.py[cod]

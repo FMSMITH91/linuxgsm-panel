@@ -630,8 +630,8 @@ for hp, web in sorted((sc.get("Web") or {}).items()):
 # The panel port's state in UFW: open, closed, inactive, or unknown when ufw would not answer.
 # Never prompts: a non-root run asks `sudo -n`, which fails rather than asking for a password.
 ufw_port_state() {
-    local port="$1" out="" line
-    local -a sudo_n=()
+    local port="$1" out="" line spec item
+    local -a sudo_n=() items=()
     command -v ufw >/dev/null 2>&1 || { echo inactive; return 0; }
     [[ "$(id -u)" -eq 0 ]] || sudo_n=(sudo -n)
     out="$(timeout 10 "${sudo_n[@]}" ufw status 2>/dev/null)" || true
@@ -646,6 +646,21 @@ ufw_port_state() {
     # The IPv4 rule decides (the address printed for it is IPv4), and the FIRST matching rule
     # wins in UFW: a DENY/REJECT from Anywhere listed before the ALLOW leaves the port closed.
     while IFS= read -r line; do
+        # A port RANGE or LIST covering the port (`5000:5010/tcp DENY Anywhere`) is a rule for it,
+        # read as the fresh install's check reads it: a range DENY above the ALLOW printed a public
+        # address the firewall drops, and a range ALLOW printed none.
+        spec="${line%%[[:space:]]*}"
+        if [[ "${spec}" =~ ^[0-9][0-9,:]*/tcp$ ]] && [[ "${spec}" == *[,:]* ]]; then
+            IFS=, read -r -a items <<< "${spec%/tcp}"
+            for item in "${items[@]}"; do
+                if { [[ "${item}" =~ ^([0-9]+):([0-9]+)$ ]] \
+                        && (( port >= BASH_REMATCH[1] && port <= BASH_REMATCH[2] )); } \
+                        || [[ "${item}" == "${port}" ]]; then
+                    line="${port}/tcp${line#"${spec}"}"
+                    break
+                fi
+            done
+        fi
         if [[ "${line}" =~ ^${port}(/tcp)?[[:space:]]+(DENY|REJECT)([[:space:]]+IN)?[[:space:]]+Anywhere ]]; then
             echo closed; return 0
         fi
@@ -654,6 +669,14 @@ ufw_port_state() {
         fi
     done <<< "${out}"
     echo closed
+}
+
+# This host's own address, for when no lookup service answered: its first IPv4 one, else its
+# first address of any kind. `hostname -I` lists IPv6 too and in no fixed order, and the firewall
+# verdict printed beside the address reads the IPv4 rule. The caller brackets an IPv6 answer.
+host_addr_fallback() {
+    hostname -I 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i !~ /:/) { print $i; f = 1; exit }
+        first = $1 } END { if (!f && first != "") print first }'
 }
 
 # After an update, say the panel serves HTTPS now — only when that is NEWS, and only with addresses
@@ -680,7 +703,7 @@ _post_update_scheme_hint() {
     [[ -z "${ts_url}" ]] || echo -e "  Through Tailscale Serve it is at ${CYAN}${ts_url}${NC} (a trusted certificate)."
     if [[ "${ufw}" != "closed" ]]; then
         ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
-            || hostname -I 2>/dev/null | awk '{print $1}')"
+            || host_addr_fallback)"
         # An IPv6-only host's address goes in brackets, or the printed URL opens nothing.
         [[ "${ip}" != *:* ]] || ip="[${ip}]"
         [[ "${ufw}" != "unknown" ]] || note="  ${YELLOW}(firewall state unknown — check 'sudo ufw status')${NC}"
@@ -3029,7 +3052,10 @@ SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO="sudo"
 # api.ipify.org only ever answers IPv4; ifconfig.me answers in whichever family curl connected over.
 PUBLIC_IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
     || curl -4 -fsS --max-time 5 https://ifconfig.me 2>/dev/null \
-    || hostname -I 2>/dev/null | awk '{print $1}')"
+    || host_addr_fallback)"
+# An IPv6-only host's address goes in brackets, or the printed URL (the one carrying the setup
+# token) reads the port as part of the address and opens nothing.
+[[ "${PUBLIC_IP}" != *:* ]] || PUBLIC_IP="[${PUBLIC_IP}]"
 
 # Tailscale address, only if it's installed AND logged in (MagicDNS name preferred).
 TS_ADDR=""

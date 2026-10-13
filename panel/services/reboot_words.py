@@ -55,6 +55,19 @@ def phase_words(phase):
     return _PHASE_WORDS.get(phase) or i18n.Sentence("in progress")
 
 
+def state_word(blockers, busy, unknown):
+    """The host's census state as its token: blocked, busy, unknown or idle (host_player_state).
+
+    Kept here, with the other words of a reboot, so host_reboot stays within the size the
+    code-quality gate allows.
+    """
+    if blockers:
+        return "blocked"
+    if busy:
+        return "busy"
+    return "unknown" if unknown else "idle"
+
+
 # A row whose account cannot be read (removed outside the panel, a name that fails game_idents_ok)
 # never resolves: every owner's step waits on a read that will not come, and nothing aged it out
 # while the host answered (STALE_PLAN is for a silent host). The plan never finished, and
@@ -75,8 +88,9 @@ def row_gave_up(d, now, rollback=False, after=ROW_GIVE_UP):
     if now - d["pending_since"] < after:
         return None
     if rollback:
+        # "Or did not happen": _same_boot rolls back a reboot that was sent and never took, too.
         return "failed", ("it could not be read or restored for an hour after the reboot was called "
-                          "off; check the server")
+                          "off or did not happen; check the server")
     return "failed", "it could not be read or restored for an hour after the reboot; check the server"
 
 
@@ -125,13 +139,29 @@ def hold_clock(recs, save, commit):
     return True
 
 
-def start_waits(d, detail):
-    """The row's step when its panel start must wait (`detail`, safe_start's reason): None, still pending.
+# An "inflight" wait pauses ROW_GIVE_UP, but not for ever: a LinuxGSM update stuck on a steamcmd
+# download that never ends (it has no timeout of its own), or a `debug` left running in the panel's
+# terminal, held the row pending for good. Then no summary was sent, and _pending_conflict refused
+# every later reboot of that host. A day is STALE_SENT's "not a reboot in progress".
+INFLIGHT_GIVE_UP = 86400
 
-    "inflight" is a LinuxGSM update or backup running for the server, and a start never goes over
+
+def start_waits(d, detail, now, rollback=False):
+    """The row's step when its panel start must wait (`detail`, safe_start's reason).
+
+    None while still pending, ("failed", why) once a LinuxGSM command has held it for
+    INFLIGHT_GIVE_UP. "inflight" is a LinuxGSM update or backup running for the server, and a start never goes over
     one: a known wait, however long the download takes, not a row that cannot resolve, so its
-    give-up clock starts again once nothing holds it.
+    give-up clock starts again once nothing holds it. `inflight_since` is that wait's own clock,
+    which the reset does not touch; any other wait ends it.
     """
-    if detail == "inflight":
-        d.pop("pending_since", None)
-    return None
+    if detail != "inflight":
+        d.pop("inflight_since", None)
+        return None
+    d.pop("pending_since", None)
+    if now - d.setdefault("inflight_since", now) < INFLIGHT_GIVE_UP:
+        return None
+    if rollback:
+        return "failed", ("a LinuxGSM command for it was still running a day after the reboot was "
+                          "called off or did not happen; check the server")
+    return "failed", "a LinuxGSM command for it was still running a day after the reboot; check the server"

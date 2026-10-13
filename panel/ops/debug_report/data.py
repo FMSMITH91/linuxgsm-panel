@@ -65,7 +65,15 @@ def _epoch(ts):
 
 
 def _sql_time(seconds_ago):
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time() - seconds_ago))
+    """The naive-UTC cutoff `seconds_ago` back, as SQLite compares it: text, so the year is 4 digits.
+
+    time.strftime's %Y does not zero-pad (glibc), so a cutoff in year 657 read '657-…', which sorts
+    AFTER every '2026-…' row: an audit_ip_retention_days of about 375,000 to 740,000 counted every
+    row as "not reduced" while the panel's own ageing, comparing '0657-…', correctly touched none.
+    Built the way that ageing builds its cutoff, so it also raises where that one does.
+    """
+    return (_dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
+            - _dt.timedelta(seconds=seconds_ago)).isoformat(" ", "seconds")
 
 
 def _db_path():

@@ -14,20 +14,17 @@ _p9_patch and undone in the finally. Scripts in node on this part's own fixtures
 import json as _json69
 import os
 import pathlib as _pl69
-import types as _types69
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_client, _p9_core, _p9_json, _p9_Over, _p9_patch,
-                         _p9_restore_all, _p9_so, _p9_trip)
+from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_patch,
+                         _p9_restore_all, _p9_trip)
 from unit.part47 import _cut47, _node47
 from panel.db.models import User as _User69, db as _db69
 from panel.ops import backup as _bk69, system_ops as _so69
 
 _JS69 = os.path.join(_root, "static", "js")
 
-
-from panel.ops import tailscale_integration as _ts69  # noqa: E402
 
 _TRIP69_START = len(_P9_TRIPPED)
 
@@ -40,22 +37,10 @@ def _arm69():
     CI's root leg) would have run for real with this part green (review 1012b; part68 does this).
     Undone by each block's _p9_restore_all().
     """
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part69's tripwire")))
-    for _n69, _w69 in (("_run_via_ssh_cli", "ssh-cli"), ("_exec_local_shell", "local-shell"),
-                       ("_exec_local_argv", "local-argv"), ("run_command", "run_command"),
-                       ("shell_as_game_user", "shell_as_game_user"), ("run_privileged", "run_privileged")):
-        _p9_patch(_p9_core, _n69, _p9_trip(_w69))
-    for _n69 in ("_run", "_run_verb", "_git"):
-        _p9_patch(_p9_so, _n69, _p9_trip("system_ops." + _n69))
-    _p9_patch(_ts69, "subprocess", _p9_Over(
-        _ts69.subprocess,
-        Popen=_p9_trip("tailscale.subprocess.Popen", exc=OSError("refused by part69's tripwire")),
-        run=_p9_trip("tailscale.subprocess.run", exc=OSError("refused by part69's tripwire"))))
-    # Page renders read Tailscale state for the nav: answered here, as part61's tripwire does.
-    _p9_patch(_ts69, "get_tailscale_info",
-              lambda force_refresh=False: _types69.SimpleNamespace(dns_name=None, serve_config={},
-                                                                   serve_unreadable=False))
+    _p9_arm(who="part69")
+    for _n69 in ("run_command", "shell_as_game_user", "run_privileged"):
+        _p9_patch(_p9_core, _n69, _p9_trip(_n69))
+
 
 
 def _read69(*parts):

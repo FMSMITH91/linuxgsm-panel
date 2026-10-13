@@ -155,7 +155,8 @@ def _update_summary(pkgs):
     """(package count, security-update count, up to five names to quote — security ones first)."""
     count = len(pkgs)
     sec = sum(1 for p in pkgs if _is_security_pkg(p))
-    names = [p.get("name", "?") for p in
+    # The label, not the bare name: an amd64 + i386 pair was quoted "libx11-6, libx11-6".
+    names = [p.get("label") or p.get("name", "?") for p in
              ([p for p in pkgs if _is_security_pkg(p)] or pkgs)][:5]
     return count, sec, names
 

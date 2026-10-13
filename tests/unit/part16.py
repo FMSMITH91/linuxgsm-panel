@@ -42,12 +42,10 @@ from unit import REPO_ROOT as _REPO16
 from unit import idreuse_support as _reuse16
 from unit.part01 import check, eq, skip  # noqa: F401
 from unit.part05 import _helper, _helper_path
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_HOST2, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED,
-                         _P9Thread, _p9, _p9_app, _p9_auth, _p9_banlist, _p9_bk, _p9_cfg,
-                         _p9_client,
-                         _p9_core, _p9_drain, _p9_fake_time, _p9_json, _p9_new_server, _p9_notif,
-                         _p9_patch, _p9_queue, _p9_restore_all, _p9_sm, _p9_so, _p9_state,
-                         _p9_threading, _p9_trip, _p9_ts)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_HOST2, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _P9Thread,
+                         _p9, _p9_arm, _p9_app, _p9_auth, _p9_banlist, _p9_bk, _p9_cfg, _p9_client, _p9_core,
+                         _p9_drain, _p9_fake_time, _p9_json, _p9_new_server, _p9_notif, _p9_patch, _p9_queue,
+                         _p9_restore_all, _p9_sm, _p9_so, _p9_state, _p9_threading, _p9_ts)
 from panel.db.models import AuditLog, GameServer, Group, RemoteServer, User, db
 from panel.routes import _shared as _sh16
 from panel.routes import manage_servers as _ms16
@@ -154,14 +152,7 @@ try:
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), setup_complete=True))
 
     # part12's tripwire, again: nothing below may reach a host or run a command on this machine.
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part16's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
-    _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
+    _p9_arm(who="part16")
     _p9_patch(_p9_ts, "get_tailscale_info",
               lambda force_refresh=False: NS(dns_name=None, installed=False))
     _N16 = []

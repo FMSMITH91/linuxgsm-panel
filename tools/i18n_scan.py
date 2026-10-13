@@ -503,9 +503,10 @@ def is_js_ui_text(text):
 # One capitalised word is too often a key name ('Escape'), a class or an identifier to claim on its
 # own, so is_js_ui_text leaves it out — and with it every one-word label: the UFW badge's
 # "Inactive", the confirm button "Unblock", the toasts "Deleted" and "Sent", the busy label
-# "Retrying…". Claimed here only where the code puts it in front of a person: a toast, a
+# "Retrying…". A closing full stop or "!" keeps it a label ("Installed.", "Connected!": they were
+# claimed by no rule). Claimed here only where the code puts it in front of a person: a toast, a
 # textContent or innerHTML write, a confirm or busy label, or nags.js's element builders.
-_JS_UI_WORD = re.compile(r"^[A-Z][a-z]+(?:…|\.\.\.)?$")
+_JS_UI_WORD = re.compile(r"^[A-Z][a-z]+(?:…|\.\.\.|[.!])?$")
 _JS_UI_SLOT = re.compile(r"(?:\btoast\([^;]*|\btextContent\s*=\s*[^;]*|\binnerHTML\s*=\s*[^;]*"
                          r"|\bconfirmLabel\s*:\s*|\bbusy[A-Za-z]*\s*[:=]\s*[^;]*"
                          r"|\b_rbButton\(\s*|\b_rbEl\([^;]*)$")
@@ -689,7 +690,8 @@ def _js_literal_runs(source):
     """
     spans, runs = _js_string_spans(source), []
     for span in spans:
-        if runs and re.fullmatch(r"\s*\+\s*", source[runs[-1][-1][3]:span[2]]):
+        # A comment between the `+` and the next literal (`… ' +  // nosemgrep`) still joins them.
+        if runs and _js_gap_is_plus(source[runs[-1][-1][3]:span[2]]):
             runs[-1].append(span)
         else:
             runs.append([span])
@@ -740,8 +742,18 @@ def _js_run_claims(run, standalone, source):
     if whole:
         return [whole]
     out = [text for text, bef in _js_claim_parts(run, standalone, source) if _js_claims(text, bef)]
-    out.extend(text for s in run for text in js_markup_texts(s[0]))
-    return out + _js_icon_tail(joined, standalone)
+    return (out + _r18c_markup_claims(run, joined) + _js_icon_tail(joined, standalone)
+            + _r18c_close_tails(joined, standalone))
+
+
+def _r18c_markup_claims(run, joined):
+    """The whole-element texts of each literal of a run, and of the run joined."""
+    out = [text for s in run for text in js_markup_texts(s[0])]
+    # An element whose text is split over two literals for line length (`'<span>Still waiting — press
+    # the button ' + 'again once you have approved the machine.</span>'`) is one node too.
+    if len(run) > 1:
+        out.extend(text for text in js_markup_texts(joined) if text not in out)
+    return out
 
 
 # An icon, then words to the END of a literal with nothing spliced on: `'<i class="bi …"></i> Updates
@@ -756,6 +768,29 @@ def _js_icon_tail(joined, standalone=True):
     m = _JS_ICON_TAIL.search(joined) if standalone else None
     seg = re.sub(r"\s+", " ", html.unescape(m.group(1))).strip() if m else ""
     return [seg] if seg and _js_markup_claims(seg, "") and not _js_guarded_before(joined[:m.start()]) else []
+
+
+# Words after a CLOSING tag, up to a <br> or the end of a standalone run: `<strong>1.</strong> Open
+# this link and approve the machine:<br>`, `<span class="spinner…"></span> Detecting…`. The text
+# node is whole (a tag on each side, or nothing spliced after it), but the markup rule wants an
+# opener before the words and the icon rule an icon: twelve such sentences were English with the
+# gate green. A colon may close one here (it introduces what follows the <br>), and it must open
+# with a capital: lower-case words after a tag are the rest of a sentence spliced around it.
+_R18C_CLOSE_TAIL = re.compile(r"</[a-zA-Z0-9]+>([^<>]+)(?=<br\s*/?>|\Z)")
+
+
+def _r18c_close_tails(joined, standalone):
+    """The words after a closing tag that end at a <br> (or, in a standalone run, at the end)."""
+    out = []
+    for m in _R18C_CLOSE_TAIL.finditer(joined):
+        if m.end() == len(joined) and not standalone:
+            continue
+        seg = re.sub(r"\s+", " ", html.unescape(m.group(1))).strip()
+        core = re.sub(r"^[^A-Za-z]+", "", seg)
+        if (core[:1].isupper() and (is_js_ui_text(core.rstrip(":")) or _JS_UI_WORD.match(core))
+                and not _js_guarded_before(joined[:m.start()])):
+            out.append(seg)
+    return out
 
 
 def scan_js(js_dir=JS_DIR):
@@ -1966,6 +2001,24 @@ def _r17c_local_literal_nodes(fn):
     return out
 
 
+def _r18c_shown_nodes(fn):
+    """_py_own_nodes(fn), and the nodes of each lambda and class body in it (no function owns them).
+
+    _py_own_nodes stops at a Lambda or ClassDef as it stops at a def. That keeps a local table to
+    one function, but nothing else reads those nodes: `register_error_handler(404, lambda e:
+    jsonify({"error": "…"}))` and a class-level sink were read by no walk, so their message was
+    never asked of the catalogs. A def inside them is still left to its own pass (_py_functions).
+    """
+    out = list(_py_own_nodes(fn))
+    stack = [n for n in out if isinstance(n, (ast.Lambda, ast.ClassDef))]
+    while stack:
+        for child in ast.iter_child_nodes(stack.pop()):
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.append(child)
+                stack.append(child)
+    return out
+
+
 def shown_literals_py(root=ROOT):
     """{text: "file:line"} for every fixed message a sink or a service's (ok, message) answer shows."""
     trees = _py_trees(root)
@@ -1979,7 +2032,7 @@ def shown_literals_py(root=ROOT):
         # assigned a literal is resolved where it was assigned and nowhere else.
         for fn in [tree] + _py_functions(tree):
             local_nodes = _r17c_local_literal_nodes(fn)
-            for lit in (lit for n in _py_own_nodes(fn)
+            for lit in (lit for n in _r18c_shown_nodes(fn)
                         for lit in _py_node_literals(n, wrappers, consts, local_nodes)):
                 if _py_shown_literal(lit.value) and not _py_ignored(lines, lit):
                     found.setdefault(lit.value, "%s:%d" % (rel, lit.lineno))

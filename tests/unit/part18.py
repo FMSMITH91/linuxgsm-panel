@@ -29,10 +29,10 @@ from flask import Flask as _Flask18
 
 from unit import idreuse_support as _reuse18
 from unit.part01 import check
-from unit.part12 import (P9_ADMIN, _P9_CFG_PATH, _P9_TRIPPED, _P9Thread, _p9, _p9_app, _p9_auth,
-                         _p9_banlist, _p9_cfg, _p9_client, _p9_core, _p9_drain, _p9_fake_time,
-                         _p9_json, _p9_notif, _p9_patch, _p9_queue, _p9_restore_all, _p9_sm,
-                         _p9_so, _p9_state, _p9_supervised, _p9_threading, _p9_trip, _p9_ts)
+from unit.part12 import (P9_ADMIN, _P9_CFG_PATH, _P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_app, _p9_auth,
+                         _p9_banlist, _p9_cfg, _p9_client, _p9_drain, _p9_fake_time, _p9_json, _p9_notif,
+                         _p9_patch, _p9_queue, _p9_restore_all, _p9_sm, _p9_state, _p9_supervised,
+                         _p9_threading, _p9_ts)
 import db_maintenance as _dbm18
 from panel.db import models as _m18
 from panel.db.models import (AuditLog, GameServer, GlobalBan, MetricSample, RemoteServer,
@@ -280,6 +280,9 @@ def _forget_sids18(sids):
             _ht._sid_owner.pop(sid, None)
 
 
+_r18d_cleanup18 = ["not run", "not run"]
+
+
 def _restore18():
     """Everything this part replaced, put back; its own rows deleted. The part's `finally`."""
     for m, t in _saved18_threading.items():
@@ -299,8 +302,10 @@ def _restore18():
     _p9_state._os_update_state["last_run"] = _saved18_osu_run
     if _p9_state._full_backup_lock.locked():
         _p9_state._full_backup_lock.release()
-    _raises18(_delete_mine18)
-    _raises18(_restore_config18)
+    # Kept and checked below, not swallowed (review 1012c): part19 and every later part drive
+    # part12's app, and would read rows or a config.json this failed to take back, with nothing
+    # naming why. part16 raises for the same step.
+    _r18d_cleanup18[:] = [_raises18(_delete_mine18), _raises18(_restore_config18)]
 
 
 def _delete_mine18():
@@ -653,14 +658,7 @@ try:
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), setup_complete=True))
 
     # part12's tripwire, again: nothing below may reach a host or run a command on this machine.
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part18's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
-    _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
-    _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
+    _p9_arm(who="part18")
     _p9_patch(_p9_ts, "get_tailscale_info",
               lambda force_refresh=False: NS(dns_name=None, installed=False))
     _N18 = []
@@ -1413,6 +1411,8 @@ try:
 finally:
     _restore18()
 
+check("part18: its rows were deleted and config.json restored",
+      _r18d_cleanup18 == [None, None], repr(_r18d_cleanup18))
 check("part18: no worker under test reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP18_START, repr(_P9_TRIPPED[_TRIP18_START:][:6]))
 check("part18: every deferred worker was run (none left to leak into a later check)",

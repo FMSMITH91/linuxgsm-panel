@@ -275,6 +275,22 @@ def update_config(mutator):
         return cfg
 
 
+def set_config_keys(cfg, **changes):
+    """Write `changes` to config.json under the write lock, and into the caller's `cfg` too.
+
+    For a route that read the config, then spent time on a subprocess or SSH (which yields to
+    other greenlets), then saved. save_config(cfg) wrote back the WHOLE dict it had read, so a key
+    a background writer committed in that window — a game backup's clock, the announced panel
+    update — was silently reverted. Only the keys this caller changed are written, onto the file
+    as it is now; `cfg` is updated as well because the caller goes on reading it.
+    """
+    cfg.update(changes)
+
+    def _apply(fresh):
+        fresh.update(changes)
+    return update_config(_apply)
+
+
 def _chmod600(path):
     try:
         os.chmod(path, 0o600)

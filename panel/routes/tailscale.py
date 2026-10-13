@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from flask import (current_app, jsonify, render_template, request)
 from flask_login import (current_user, login_required)
-from panel.core.config import (load_config, save_config)
+from panel.core.config import (load_config, set_config_keys)
 from panel.security import privileged as _priv
 from panel.ops import (tailscale_integration as ts)
 from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required,
@@ -146,11 +146,8 @@ def _serve_enable(port, mount, funnel, page):
                                             backend_scheme=_serve_scheme_now(cfg, current_app.config))
     if not success:
         return jsonify({"success": False, "message": i18n.tr(msg)}), 500
-    cfg = load_config()
-    cfg["tailscale_setup_done"] = True
-    cfg["tailscale_use_funnel"] = funnel
-    cfg["tailscale_mount"] = mount
-    save_config(cfg)
+    set_config_keys(load_config(), tailscale_setup_done=True, tailscale_use_funnel=funnel,
+                    tailscale_mount=mount)
     log_action(current_user, "tailscale_serve_enable", target=LOCAL_HOST_LABEL, detail=msg)
     left = _remove_serve_leftovers(port, mount, "Enable on the Tailscale page", _serve_audit)
     return _changed(with_leftover_note(msg, left), port, page)
@@ -168,11 +165,8 @@ def _serve_disable(port, mount):
     # tailscale_setup_done True — which six readers treat as ground truth: one permits a
     # 127.0.0.1-only bind (lockout risk) and the boot path RE-APPLIES Serve, quietly undoing the
     # disable on the next restart.
-    cfg = load_config()
-    cfg["tailscale_setup_done"] = False
-    cfg["tailscale_use_funnel"] = False
-    cfg["tailscale_mount"] = ""
-    save_config(cfg)
+    set_config_keys(load_config(), tailscale_setup_done=False, tailscale_use_funnel=False,
+                    tailscale_mount="")
     log_action(current_user, "tailscale_serve_disable", target=LOCAL_HOST_LABEL, detail=msg)
     return jsonify({"success": True, "message": i18n.tr(msg)})
 

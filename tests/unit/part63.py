@@ -25,8 +25,8 @@ from types import SimpleNamespace as _NS63
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_client,
-                         _p9_core, _p9_Over, _p9_patch, _p9_restore_all, _p9_so, _p9_trip)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_arm, _p9_client,
+                         _p9_patch, _p9_restore_all)
 from panel.db.models import db as _db63
 from unit.part47 import _SETTLE47 as _SETTLE63, _cut47, _node47
 import app as _app63
@@ -70,19 +70,7 @@ def _r15d_arm63():
     the panel host, as root on CI's root leg) with this part green. Renders read Tailscale state
     for the nav through the real `tailscale` CLI on a box that has it; answered and tripwired too.
     """
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part63's tripwire")))
-    for _n63, _w63 in (("_run_via_ssh_cli", "ssh-cli"), ("_exec_local_shell", "local-shell"),
-                       ("_exec_local_argv", "local-argv")):
-        _p9_patch(_p9_core, _n63, _p9_trip(_w63))
-    for _n63 in ("_run", "_run_verb", "_git"):
-        _p9_patch(_p9_so, _n63, _p9_trip("system_ops." + _n63))
-    _p9_patch(_r15d_tsi63, "subprocess", _p9_Over(
-        _r15d_tsi63.subprocess,
-        Popen=_p9_trip("tailscale.subprocess.Popen", exc=OSError("refused by part63's tripwire")),
-        run=_p9_trip("tailscale.subprocess.run", exc=OSError("refused by part63's tripwire"))))
-    _p9_patch(_r15d_tsi63, "get_tailscale_info",
-              lambda force_refresh=False: _NS63(dns_name=None, serve_config={}, serve_unreadable=False))
+    _p9_arm(who="part63")
 
 
 _TRIP63_START = len(_P9_TRIPPED)
