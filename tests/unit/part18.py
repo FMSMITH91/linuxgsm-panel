@@ -1234,6 +1234,9 @@ try:
     _nt18 = []
 
     _p9_patch(_p9_app, "ensure_node_tools_cron", _ensure18)
+    # The pass asks game_account_write_refusal before a crontab rewrite (review 1012d); the account
+    # check is a host round trip, stood in for here as a plain game account.
+    _p9_patch(_sh18, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_p9_sm, "upgrade_managed_cron_tracking", lambda *a, **k: None)
     _p9_app._node_tools_cron_pass(_p9)
     check("node-tools pass: a host whose id was taken during the pass is skipped, not acted on "

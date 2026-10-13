@@ -361,11 +361,24 @@ async function dialog(state, opts, postAnswer, planBody){
     return {text: box.textContent, buttons: buttons(box)};
   };
   const now = Date.now() / 1000;
-  out.clock = {near: _rbClock(now + 60), far: _rbClock(now + 86400 * 1.5)};
-  doc.documentElement = {lang: 'fr'};
-  out.clock.far_fr = _rbClock(now + 86400 * 1.5);
-  doc.documentElement = {lang: 'en'};
-  out.clock.far_en = _rbClock(now + 86400 * 1.5);
+  // The clock samples against a pinned "now", today's local noon (review 1012d): read against the
+  // real clock, a run at 23:59 put "now + 60 s" on tomorrow, so the near time carried its day too
+  // and the check failed across midnight. _rbClock's own `new Date()` reads the same pinned instant.
+  const RealDate41 = Date, noon41 = new RealDate41(); noon41.setHours(12, 0, 0, 0);
+  const pin41 = noon41.getTime();
+  global.Date = class extends RealDate41 {
+    constructor(...a) { if (a.length) super(...a); else super(pin41); }
+    static now() { return pin41; }
+  };
+  try {
+    out.clock = {near: _rbClock(pin41 / 1000 + 60), far: _rbClock(pin41 / 1000 + 86400 * 1.5)};
+    doc.documentElement = {lang: 'fr'};
+    out.clock.far_fr = _rbClock(pin41 / 1000 + 86400 * 1.5);
+    doc.documentElement = {lang: 'en'};
+    out.clock.far_en = _rbClock(pin41 / 1000 + 86400 * 1.5);
+  } finally {
+    global.Date = RealDate41;
+  }
   delete doc.documentElement;
   out.card_wait = await card({wait: {by: 'admin', since: now - 60, expires: now + 3600,
                                      waiting_on: {busy: [{name: 'gmod', players: 2}], unknown: []}}, job: null, rows: []});

@@ -142,5 +142,6 @@ finally:
         _m41.clear()
         _m41.update(_s41)
     _shutil41.rmtree(_TMP41, ignore_errors=True)
-check("part41: nothing reached a real transport (a new connection, a local shell, system_ops' runners)",
+check("part41: nothing reached a real transport (a new connection, a local shell, system_ops' runners, "
+      "a module's own subprocess)",
       not _TRIPPED41, repr(_TRIPPED41[:6]))

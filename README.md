@@ -300,17 +300,19 @@ only reach packages above it in this list:
 
 | Package | Holds | Imports from |
 |---|---|---|
-| `panel/core/` | `clock` `config` `i18n` `middleware` `panel_state` `terminal` | — |
-| `panel/db/` | `models` `prefs` | core |
-| `panel/security/` | `auth` `privileged` | core, db |
-| `panel/ops/` | `ssh_manager/` (8 modules) `system_ops` `tailscale_integration` `backup` | core, db, security |
-| `panel/services/` | `monitoring` `notifications` `certs` `lgsm_data` `bots/` | core, db, security, ops |
-| `panel/routes/` | the 26 route modules `register(app)` is assembled from | everything above |
+| `panel/core/` | `clock` `config` `http` `i18n` `middleware` `origins` `panel_state` `runtime_stats` `terminal` `validation` | — |
+| `panel/db/` | `models` `prefs` `id_sequence` | core |
+| `panel/security/` | `auth` `banlist` `privileged` | core, db |
+| `panel/ops/` | `ssh_manager/` (8 modules) `debug_report/` `system_ops` `tailscale_integration` `serve_upkeep` `terminal_session` `socket_hooks` `backup` | core, db, security |
+| `panel/services/` | `monitoring` `notifications` `certs` `lgsm_data` `game_ports` `host_reboot` `reboot_summary` `reboot_words` `bots/` | core, db, security, ops |
+| `panel/routes/` | the 26 route modules `register(app)` is assembled from, and `_shared` | everything above |
 
-Two *function-local* imports cross that grain on purpose, and only at call time —
-`security/auth.py` reaches `ops.ssh_manager` for `game_engine`, and `ops/ssh_manager/`
-reaches `services.lgsm_data` for the dependency list. Both are lazy precisely so the module
-graph stays acyclic at import; `tests/unit_test.py` enforces the rule and knows about these two.
+The rule is about **module-level** imports; an import inside a function body runs only at call
+time, so it cannot make a load-order cycle, and a few cross the grain on purpose that way — for
+example `security/auth.py` reaches `ops.ssh_manager` for `game_engine`, `ops/ssh_manager/`
+reaches `services.lgsm_data` for the dependency list, and `services/host_reboot.py` reaches the
+route modules' console helpers. `tests/unit/part01.py` enforces the module-level rule over every
+module under `panel/`.
 
 Three modules deliberately stay at the repo root, because something outside the checkout
 addresses them by path: **`app.py`** (the systemd unit's `ExecStart`, and the installer's

@@ -129,6 +129,7 @@ from panel.security import banlist as _banlist
 from panel.core.validation import (MAX_PORT, MIN_PORT, _valid_hex_color, canonical_ip,
                                    canonical_ip_or_network, ip_address_or_none)
 from panel.core.origins import _host_port, _origin_candidates, _origin_key
+from panel.core.http import http_error_page, http_error_sentence, unreachable_error
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _record_metric_samples, _refresh_player_counts)
@@ -682,10 +683,16 @@ def _node_tools_cron_pass(app):
             except Exception:
                 _log.debug("node-tools cron ensure failed for %s", row_label(r, "name"),
                            exc_info=True)
+        from panel.routes._shared import game_account_write_refusal
         for gs in GameServer.query.all():
             if not _still_in_db(gs) or gs.remote is None:
                 continue
             try:
+                # It rewrites the crontab, so it asks what every cron write asks, as the Scheduled
+                # Tasks page's own upgrade does: the account a legacy row names may be the host's
+                # sudo login, which no panel write touches.
+                if game_account_write_refusal(gs.remote, gs.short_name) is not None:
+                    continue
                 _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
                                                   game_type=gs.game_type, port=gs.port,
                                                   query_type=gs.query_type)
@@ -1166,6 +1173,11 @@ def _reconcile_checked_install(app, gs):
     if verdict is True:
         gs.installed = True
         gs.status = "offline"   # live metrics flip it to online if running
+        # The recorded failure goes too, as InstallJob.finish clears it: a failed install recovered
+        # by hand (an Update from the control bar) otherwise kept its old reason, the debug report
+        # described a working server as a failed install, and if the files later went missing the
+        # dashboard banner showed that stale reason as the new one.
+        gs.install_error, gs.install_error_i18n, gs.install_retryable = "", None, True
         db.session.commit()
         _notify_servers_changed(app)
         app.logger.info("reconciled stranded install '%s' -> installed", gs.short_name)
@@ -1727,17 +1739,17 @@ def create_app():
             # normal page, while a raised one propagates — and under TESTING that means
             # `GET /logout` (405) stops being a 405 and becomes a crash in the caller.
             if isinstance(e, HTTPException):
-                return e
+                return http_error_page(e)
             raise e             # a page render keeps whatever behaviour it has today
         if isinstance(e, HTTPException):
             # abort(404) from get_or_404, a 405, flask-wtf's CSRF 400 — all of them rendered
             # Werkzeug's HTML page, which is the same unparseable body as the 500 below. 401 is
             # the exception: panel.js's session-expired handling reads the status and the
             # X-Auth-Required header off it, and that contract is not ours to reshape here.
-            if e.code == 401:
+            # A routing redirect (308) is not an error and is returned as Werkzeug built it.
+            if e.code == 401 or (e.code or 500) < 400:
                 return e
-            return jsonify({"success": False,
-                            "message": e.description or e.name}), (e.code or 500)
+            return jsonify({"success": False, "message": i18n.tr(http_error_sentence(e))}), (e.code or 500)
         # The endpoint name taken from app.view_functions, not off the request. Werkzeug only ever
         # matches a request to one of the app's own rules, so the two are the same string — but
         # py/log-injection traces every value reached through `request`, and this repo's answer to
@@ -1747,6 +1759,14 @@ def create_app():
         _rule = request.url_rule
         _ep = next((n for n in app.view_functions
                     if _rule is not None and n == _rule.endpoint), "?")
+        if isinstance(e, ConnectionError):
+            # ssh_manager raises ConnectionError for a host that is switched off, unresolvable or
+            # refusing the panel's login — a normal state of a host, not a fault in the panel. A
+            # route with no handler of its own (the firewall writes: open, allow-from, limit,
+            # close, delete-rule) answered it with "Something went wrong — see the panel log" and
+            # a traceback; this says what happened, in the viewer's language, with the same
+            # answer http._unreachable gives the routes that catch it, as a 502.
+            return unreachable_error(_ep)
         _log.exception("unhandled error serving %s", _ep)
         # In the viewer's language (request_lang never raises). Pages write it after a mark
         # ("❌ " + message), which the page's translator does not look past, so English sent here
@@ -1795,12 +1815,13 @@ def create_app():
         if (request.endpoint or "") in _PW_GATE_OPEN:
             return None
         # An in-page fetch or an API client cannot be redirected — it would follow the redirect and
-        # try to read an HTML page as JSON. Same contract as the expired-session 401: a status the
-        # caller can act on, plus the header the page's fetch wrapper watches for.
+        # try to read an HTML page as JSON. A status the caller can act on, the stable `error` code
+        # and a header for an API client to branch on (no page script reads it: an account in this
+        # state is shown no chrome and runs no pollers), and the message in the viewer's language.
         from panel.security.auth import _denial_wants_json
         if _denial_wants_json():
             resp = jsonify({"success": False, "error": "password_change_required",
-                            "message": "Set your own password before using the panel."})
+                            "message": i18n.tr("Set your own password before using the panel.")})
             resp.status_code = 403
             resp.headers["X-Password-Change-Required"] = "1"
             return resp
@@ -2466,8 +2487,10 @@ def _custom_cmd_form(cmd=None):
     if template.count(CUSTOM_ARG_PLACEHOLDER) > 1:
         return None, "The template may contain at most one {} placeholder."
     # The template is sent to tmux as a console line — forbid control chars / newlines so it
-    # can't smuggle a second keystroke sequence. Normal console punctuation is allowed.
-    if any(ord(c) < 32 for c in template):
+    # can't smuggle a second keystroke sequence. Normal console punctuation is allowed. The run's
+    # own test, so the save refuses exactly what a press would: `ord(c) < 32` let DEL (0x7f)
+    # through, and a template holding one saved fine and then answered 400 on every press.
+    if _sm.console_has_control(template):
         return None, "The command template can't contain control characters or newlines."
     if scope_type not in ("all", "engine", "game"):
         scope_type = "all"

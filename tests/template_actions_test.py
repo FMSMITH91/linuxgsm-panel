@@ -1347,6 +1347,13 @@ def _sink_bound_names(src, helpers):
         names.add(m.group(1))
     for m in re.finditer(r"insertAdjacentHTML\s*\([^,]+,\s*([A-Za-z_$][\w$]*)\s*\)", src):
         names.add(m.group(1))
+    # ...and every bare name anywhere in a sink's expression, past its escapers and string literals
+    # (review 1012d): a buffer concatenated at the sink (`el.innerHTML = head + rows + '</table>'`,
+    # panel.js) or in a ternary's arm (`fg.innerHTML = n ? gh : '<i>none</i>'`) was not traced, and
+    # only the name next to `=` was. Only `+=` buffers matter to Case B, so a name that is not one
+    # (a condition, a one-shot local) costs nothing.
+    for m in re.finditer(r"\.(?:inner|outer)HTML\s*\+?=|insertAdjacentHTML\s*\([^,]+,", src):
+        names |= _r19d_bare_names(_strip_neutral(_js_expr_at(src, m.end()), helpers))
     for fn in helpers:
         for m in re.finditer(r"\b%s\s*\(\s*([A-Za-z_$][\w$]*)\s*\)" % re.escape(fn), src):
             names.add(m.group(1))
@@ -1359,6 +1366,12 @@ def _sink_bound_names(src, helpers):
     if re.search(r"[{,]\s*html\s*[,}]", src):
         names.add("html")
     return names
+
+
+def _r19d_bare_names(expr):
+    """The identifiers an expression reads by bare name: not a property (`.x`), outside its strings."""
+    _code = re.sub(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"|`(?:[^`\\]|\\.)*`", "''", expr)
+    return set(re.findall(r"(?<![\w$.])([A-Za-z_$][\w$]*)", _code))
 
 
 # Calls that neutralise their argument for the context they land in: the escapers, plus
@@ -1542,10 +1555,18 @@ _r15d_sink_ctl = {
     "innerHTML = buf || placeholder": _r15d_sink_sigs(
         "function zz(x, el) {\n  var buf = '';\n  buf += '<b>' + x.name + '</b>';\n"
         "  el.innerHTML = buf || '<i>none</i>';\n}\n"),
+    # Review 1012d: a buffer concatenated at the sink, and one in a ternary's arm.
+    "innerHTML = head + buf + markup": _r15d_sink_sigs(
+        "function zz(x, el) {\n  var buf = '';\n  buf += '<b>' + x.name + '</b>';\n"
+        "  var head = '<p>';\n  el.innerHTML = head + buf + '</b>';\n}\n"),
+    "innerHTML = cond ? buf : placeholder": _r15d_sink_sigs(
+        "function zz(x, el, n) {\n  var buf = '';\n  buf += '<b>' + x.name + '</b>';\n"
+        "  el.innerHTML = n ? buf : '<i>none</i>';\n}\n"),
 }
 check(all("x.name" in _v for _v in _r15d_sink_ctl.values()),
-      "static/js: ...a markup buffer handed to tfHtml's {html: …}, or assigned to innerHTML with no `;` "
-      "or behind a `||` fallback, is traced like one assigned to innerHTML (control)", repr(_r15d_sink_ctl))
+      "static/js: ...a markup buffer handed to tfHtml's {html: …}, or assigned to innerHTML with no `;`, "
+      "behind a `||` fallback, concatenated or in a ternary's arm, is traced like one assigned to "
+      "innerHTML (control)", repr(_r15d_sink_ctl))
 
 _baseline = json.loads((ROOT / "tests" / "html_sink_baseline.json").read_text(encoding="utf-8"))
 _new = sorted("%s: %s" % (f, sig) for f, sigs in _found.items()
@@ -5058,7 +5079,13 @@ class El {
   }
   _notify(rec){ (this.ownerDocument._observers || []).forEach(o => o.take(rec)); }
   get textContent(){ return this._text + this.children.map(c => c.textContent).join(''); }
-  set textContent(v){ this._clear(); this._text = String(v); }
+  // Under the translator (a load with a catalog), as a browser does: the text becomes ONE new text
+  // node, which the observer hears added. Page scripts write English and leave the language to it.
+  set textContent(v){
+    this._clear();
+    if (!this.ownerDocument._observers || this.tagName === '#TEXT' || v === '' || v == null) { this._text = String(v == null ? '' : v); return; }
+    const t = new El('#TEXT', this.ownerDocument); t._text = String(v); this.appendChild(t);
+  }
   get innerHTML(){ return this._html; }
   set innerHTML(v){ this._clear(); this._html = String(v); }
   _clear(){ this.children.forEach(c => { c.parentNode = null; }); this.children = []; this._text = ''; this._html = ''; }

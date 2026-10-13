@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ t('Groups & Permissions') }}{% endblock %}
 
-{% macro game_server_access(all_remotes, all_servers, selected_ids, idprefix, any_hosts=False) %}
+{% macro game_server_access(all_remotes, all_servers, selected_ids, idprefix, filtered=False) %}
 {# No `for`: this heads a LIST of per-server checkboxes, not one control. It used to point at
    manage-groups-name — the Group Name text box in a different card entirely — which gave that
    input the accessible name "Individual game servers". #}
@@ -21,12 +21,15 @@
     </div>
     {% endfor %}
     {% endif %}
-  {% else %}
-  {# "yet" is a claim about the INSTALL, and this list is already filtered to what the viewer may
-     grant — so a delegated admin who can grant nothing was told the panel had no game servers at
-     all. any_hosts says which of the two is true. #}
-  <p class="text-secondary small">{% if any_hosts %}No game servers you can grant.{% else %}No game servers yet.{% endif %}</p>
   {% endfor %}
+  {# On the SERVERS, not the hosts: this was the for-loop's else, which fires only with no host at
+     all — and the panel's own machine is always a host, so the box was left blank instead. "yet"
+     is a claim about the INSTALL, and this list is already filtered to what the viewer may grant —
+     so a delegated admin who can grant nothing must not be told the panel has none. `filtered`
+     says which of the two is true: a superadmin's list is every server there is. #}
+  {% if not all_servers %}
+  <p class="text-secondary small">{% if filtered %}No game servers you can grant.{% else %}No game servers yet.{% endif %}</p>
+  {% endif %}
 </div>
 {% endmacro %}
 
@@ -230,7 +233,7 @@
               <p class="text-secondary small">{% if any_remotes %}No hosts you can grant.{% else %}No hosts configured yet.{% endif %}</p>
               {% endfor %}
             </div>
-            {{ game_server_access(all_game_hosts, all_servers, group.game_servers|map(attribute='id')|list, 'g' ~ group.id, any_hosts=any_remotes) }}
+            {{ game_server_access(all_game_hosts, all_servers, group.game_servers|map(attribute='id')|list, 'g' ~ group.id, filtered=not current_user.is_superadmin) }}
           </div>
         </div>
         <button type="submit" class="btn btn-primary mt-2">
@@ -307,7 +310,7 @@
                 <p class="text-secondary small">{% if any_remotes %}No hosts you can grant.{% else %}No hosts yet{% endif %}</p>
                 {% endfor %}
               </div>
-              {{ game_server_access(all_game_hosts, all_servers, [], 'new', any_hosts=any_remotes) }}
+              {{ game_server_access(all_game_hosts, all_servers, [], 'new', filtered=not current_user.is_superadmin) }}
             </div>
           </div>
         </div>

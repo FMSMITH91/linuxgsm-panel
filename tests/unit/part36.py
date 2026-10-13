@@ -57,7 +57,7 @@ import sqlalchemy as _sa36
 from unit import REPO_ROOT as _ROOT36
 from unit.part01 import check, skip
 from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_app, _p9_audit, _p9_client, _p9_core,
-                         _p9_json, _p9_patch, _p9_restore_all, _p9_row, _p9_sm, _p9_so, _p9_trip)
+                         _p9_json, _p9_patch, _p9_restore_all, _p9_row, _p9_sm)
 from panel.db.models import GameServer, RemoteServer, db
 from panel.ops.ssh_manager import cron as _cron36
 from panel.ops.ssh_manager import files as _files36
@@ -1119,15 +1119,13 @@ def _gamedig_counts36():
 
 
 def _r14d_arm_net36():
-    """part12's tripwire on the transports that leave this machine, and on system_ops' root runner."""
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part36's tripwire")))
-    _p9_patch(_p9_core, "_run_via_ssh_cli", _p9_trip("ssh-cli"))
-    _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
-    # ...and the local transports, as this part's other armed blocks do (review 1011e): a guard or
-    # probe handed the panel host would otherwise run its command on this machine unseen.
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    """part12's whole tripwire, as the main block arms it.
+
+    The blocks after the main one each armed a hand-picked subset (review 1012d): system_ops'
+    _run and _git, _run_local, the modules' own subprocess and hosts.paramiko stayed live under
+    "nothing it drove reached a real transport".
+    """
+    _p9_arm(who="part36")
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1152,13 +1150,10 @@ try:
         _fn36(_H36)
     _p9_restore_all()
 
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part36's tripwire")))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _r14d_arm_net36()
     _f3_direct36()
     _p9_restore_all()
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part36's tripwire")))
+    _r14d_arm_net36()
     _p9_patch(_p9.socketio, "emit", lambda *a, **k: None)
     _f3_route36()
     _p9_restore_all()
@@ -1172,10 +1167,7 @@ try:
     _maintenance_probe36()
     _gamedig_types36()
     _p9_restore_all()
-    _p9_patch(_p9_core, "get_connection",
-              _p9_trip("paramiko", exc=ConnectionError("refused by part36's tripwire")))
-    _p9_patch(_p9_core, "_exec_local_shell", _p9_trip("local-shell"))
-    _p9_patch(_p9_core, "_exec_local_argv", _p9_trip("local-argv"))
+    _r14d_arm_net36()
     _p9_patch(_p9.socketio, "emit", lambda *a, **k: None)
     _gamedig_counts36()
     _restart_line_length36()

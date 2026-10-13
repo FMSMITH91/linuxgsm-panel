@@ -2261,29 +2261,32 @@ try:
     _p9_hooks._hooks.clear()
     _p9_hooks._hooks.update({k: f for k, f in _p9_hooks_saved.items()
                              if getattr(f, "__module__", "").startswith("panel.")})
-    _sio_anon = _p9.socketio.test_client(_p9, flask_test_client=_p9.test_client())
-    check("socket: an anonymous handshake is refused", not _sio_anon.is_connected())
-    _sio_v = _p9.socketio.test_client(_p9, flask_test_client=_V)
-    check("socket: a signed-in viewer's handshake is accepted", _sio_v.is_connected())
-    _sio_v.emit("join_console", {"server_id": "not-a-number"})
-    _sio_v.emit("join_console", {"server_id": 0})
-    _sio_v.emit("join_console", {"server_id": P9_GS})
-    with _p9_sf._viewers_lock:
-        _sio_watch = {k: dict(v) for k, v in _p9_sf._console_viewers.items()}
-    check("socket join: a malformed or non-positive id joins nothing; a real one registers the viewer",
-          list(_sio_watch) == [P9_GS] and list(_sio_watch[P9_GS].values()) == [P9_VIEWER],
-          repr(_sio_watch))
-    _sio_v.emit("leave_console", {"server_id": None})
-    with _p9_sf._viewers_lock:
-        check("socket leave: a malformed id leaves the registration alone",
-              P9_GS in _p9_sf._console_viewers)
-    _sio_v.disconnect()
-    with _p9_sf._viewers_lock:
-        check("socket disconnect: a socket that closed without leaving stops the poller for it",
-              P9_GS not in _p9_sf._console_viewers and not _p9_sf._viewer_creds,
-              repr((_p9_sf._console_viewers, _p9_sf._viewer_creds)))
-    _p9_hooks._hooks.clear()
-    _p9_hooks._hooks.update(_p9_hooks_saved)
+    # Put back in a finally (review 1012d): a raise between here and the end left the registry narrowed.
+    try:
+        _sio_anon = _p9.socketio.test_client(_p9, flask_test_client=_p9.test_client())
+        check("socket: an anonymous handshake is refused", not _sio_anon.is_connected())
+        _sio_v = _p9.socketio.test_client(_p9, flask_test_client=_V)
+        check("socket: a signed-in viewer's handshake is accepted", _sio_v.is_connected())
+        _sio_v.emit("join_console", {"server_id": "not-a-number"})
+        _sio_v.emit("join_console", {"server_id": 0})
+        _sio_v.emit("join_console", {"server_id": P9_GS})
+        with _p9_sf._viewers_lock:
+            _sio_watch = {k: dict(v) for k, v in _p9_sf._console_viewers.items()}
+        check("socket join: a malformed or non-positive id joins nothing; a real one registers the viewer",
+              list(_sio_watch) == [P9_GS] and list(_sio_watch[P9_GS].values()) == [P9_VIEWER],
+              repr(_sio_watch))
+        _sio_v.emit("leave_console", {"server_id": None})
+        with _p9_sf._viewers_lock:
+            check("socket leave: a malformed id leaves the registration alone",
+                  P9_GS in _p9_sf._console_viewers)
+        _sio_v.disconnect()
+        with _p9_sf._viewers_lock:
+            check("socket disconnect: a socket that closed without leaving stops the poller for it",
+                  P9_GS not in _p9_sf._console_viewers and not _p9_sf._viewer_creds,
+                  repr((_p9_sf._console_viewers, _p9_sf._viewer_creds)))
+    finally:
+        _p9_hooks._hooks.clear()
+        _p9_hooks._hooks.update(_p9_hooks_saved)
 
     _p9_drain()     # page renders queue background timezone reads; run them under the stubs
     # ── one pass of the console poller, taken out of its supervisor ─────────────────────────────

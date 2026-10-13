@@ -15,6 +15,7 @@ from flask import Flask as _Flask41
 from sqlalchemy import text as _sa_text41
 
 from unit.part01 import check
+from unit.part10 import _Over
 from unit.part20 import _patch
 from panel.core import panel_state as _ps41
 from panel.db.models import AuditLog, GameServer, RemoteServer, db
@@ -310,6 +311,10 @@ class _Host41:
     def execute(self, command, sudo):
         """One command over this host's transport."""
         cmd = command.strip()
+        # A privileged verb rendered as shell carries run_privileged's C.UTF-8 pin (review 1012d):
+        # the host runs what follows it, so that is what is matched below.
+        if cmd.startswith(_core41._R19A_C_LOCALE):
+            cmd = cmd[len(_core41._R19A_C_LOCALE):]
         if cmd.startswith("systemd-run "):
             self.scoped.append(cmd)
             cmd = cmd[cmd.index(" -- ") + 4:].strip()
@@ -546,6 +551,18 @@ def _std_patches41():
     _patch(_so41, "_run", _trip41("system_ops._run"))
     _patch(_so41, "_run_verb", _trip41("system_ops._run_verb"))
     _patch(_so41, "_debug_run", _trip41("system_ops._debug_run"))
+    # ...and the rest of what part12's _p9_arm trips (review 1012d): system_ops' _git, the modules'
+    # own subprocess (restart, installer and helper probes; the cron reader; tailscale; the web
+    # terminal) and the SSHClient ssh_test_connection builds. The transports this part stands in
+    # for (paramiko, the ssh CLI, _run_local, local argv) keep their stand-ins below.
+    _patch(_so41, "_git", _trip41("system_ops._git"))
+    from panel.ops import tailscale_integration as _tsi41, terminal_session as _term41
+    from panel.ops.ssh_manager import files as _files41, hosts as _hosts41
+    for _m41, _n41 in ((_so41, "system_ops"), (_cron41, "cron"), (_files41, "files"), (_tsi41, "tailscale"),
+                       (_term41, "terminal_session")):
+        _patch(_m41, "subprocess", _Over(_m41.subprocess, Popen=_trip41(_n41 + ".subprocess.Popen"),
+                                         run=_trip41(_n41 + ".subprocess.run")))
+    _patch(_hosts41, "paramiko", _Over(_hosts41.paramiko, SSHClient=_trip41("hosts.paramiko.SSHClient")))
     _patch(_core41, "_run_via_paramiko", _paramiko41)
     _patch(_core41, "_run_via_ssh_cli", _sshcli41)
     _patch(_core41, "_run_local", _runlocal41)

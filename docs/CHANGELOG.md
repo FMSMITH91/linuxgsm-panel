@@ -596,6 +596,25 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A ninth full review on 2026-10-13: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Hosts in other languages.** On a host whose system language is not English, the panel read
+    its memory as zero and showed "?" for it, the OS-update list lost each package's current
+    version, and an install's account switch did not retry. The commands the panel reads now run
+    with English output; proven on a real host set to German.
+  - **Firewall.** Changing the firewall on a host the panel cannot reach says the host is
+    unreachable instead of "Something went wrong".
+  - **Languages.** The panel's own error pages (an expired form, a file that is too large) are
+    shown in the viewer's language, and so are the validation messages that begin with "❌".
+    Text the page wrote itself (the console's connection state, Customise/Done, "all healthy",
+    the New file and New folder labels) follows a live language change.
+  - **Robustness.** A kick by name keeps the player's full name; the console box no longer blames
+    the game server for a panel-side failure; an expired certificate no longer reads "0 day(s)"; a
+    failed SSH command no longer leaves its channel open; and a hand-edited port that is not a
+    number no longer breaks a page.
+  - **Tests.** About twenty checks that could pass without testing what they named now can fail,
+    and the test runner no longer runs a real `tailscale` installed in a home directory.
+
 - **An eighth full review on 2026-10-12: fixes.** Every item below has a check that fails without
   its fix.
   - **Player moderation.** A ban by name on a Valve (Source/GoldSrc) server could reach a different

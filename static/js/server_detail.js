@@ -295,7 +295,10 @@ var _consolePaused = false;
 var _returnOwed = false;
 socket.on('connect', function() {
   if (wsStatus) {
-    wsStatus.textContent = t('(connected)');
+    // English, not t(): the page's translator says it in the viewer's language. Written already
+    // translated, "(conectado)" was stored as the node's English and stayed Spanish after a live
+    // switch to English until the socket next reconnected.
+    wsStatus.textContent = '(connected)';
     wsStatus.className = 'text-success small ms-2';
   }
   // A socket that comes back while the console is set aside for a hidden tab does not rejoin:
@@ -347,7 +350,7 @@ socket.on('disconnect', function() { _endResync(); });
 
 socket.on('disconnect', function() {
   if (!wsStatus) return;
-  wsStatus.textContent = t('(disconnected)');
+  wsStatus.textContent = '(disconnected)';   // English: see the connect handler
   wsStatus.className = 'text-danger small ms-2';
 });
 
@@ -1479,9 +1482,11 @@ var _gapFromDrop = false;
 function _showReturnGap() {
   var div = document.createElement('div');
   div.className = 'console-line console-gap text-warning';
+  // English, which the page's translator says in the viewer's language (and again on a live switch):
+  // a line written already translated stayed in the language it was written in until a reload.
   div.textContent = _gapFromDrop
-    ? t('Some output from while the connection was down is not shown. The server keeps it in its console log files.')
-    : t('Some output from while this tab was in the background is not shown. The server keeps it in its console log files.');
+    ? 'Some output from while the connection was down is not shown. The server keeps it in its console log files.'
+    : 'Some output from while this tab was in the background is not shown. The server keeps it in its console log files.';
   consoleEl.appendChild(div);
 }
 

@@ -17,8 +17,8 @@ Game files, the debug report, the privileged helper and routes:
   very large audit_ip_retention_days no longer loses the Database section; a long token around a
   DOTTED known name is redacted whole.
 
-* Helper: `restart-flags` exits non-zero when a home could not be looked in, instead of reading
-  it as "no flag".
+* Helper: `restart-flags` names a home it could not look in (`?<name>`) instead of reading it as
+  "no flag" (it exits 0 and says so; #427 replaced the non-zero exit this part first asserted).
 
 * Routes: four fixed messages server_detail shows are translated (and the i18n gates now follow a
   helper's answer through a call, and a job's progress text through a callback); the root-capable

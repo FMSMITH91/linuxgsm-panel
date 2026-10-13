@@ -984,11 +984,14 @@ check("files._stream_argv: a consumer that stops early (the size cap) is not a f
       _rv_o3 == ([b"ab"], None), repr(_rv_o3))
 
 _rv_kw = {}
+# cron's own handle's Popen is what is put back, not files': they are one shim object only because
+# nosudo_runner installs a shared one (review 1012d).
+_r19d_saved_cron_popen = _sm_cron.subprocess.Popen
 _sm_cron.subprocess.Popen = lambda argv, **k: _rv_kw.update(k) or _RvProc([b"zz"], 255)
 try:
     _rv_o4 = _rv_drain(_sm_cron._stream_backup_argv(["ssh"], 2))
 finally:
-    _sm_cron.subprocess.Popen = _rv_saved_popen
+    _sm_cron.subprocess.Popen = _r19d_saved_cron_popen
 check("cron._stream_backup_argv: stdin is DEVNULL and a failed read aborts the download",
       _rv_kw.get("stdin") == _rv_sp.DEVNULL and isinstance(_rv_o4[1], _sm_core.StreamFailed),
       repr((_rv_kw, _rv_o4)))

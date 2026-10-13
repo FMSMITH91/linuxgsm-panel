@@ -33,8 +33,8 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
                              _r13b_json_flag)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail,
-    _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip, _server_action_buttons,
-    game_account_write_refusal)
+    _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
+    _server_action_buttons, game_account_write_refusal)
 
 
 def _summarise_action_output(detail):
@@ -46,30 +46,6 @@ def _summarise_action_output(detail):
     """
     rows = [r.strip() for r in (detail or "").splitlines() if r.strip()]
     return rows[-1][:200] if rows else ""
-
-
-def _console_send_failure(rc, err):
-    """Why a console send failed, in the words of what actually happened.
-
-    send_console_command documents exactly ONE failure code — rc 3 with NO_SESSION, meaning there
-    is no tmux session to send to, i.e. that server isn't running. Every other non-zero rc means
-    something else: -1 for a tailscale/local transport error, 255 for `ssh: connect to host … No
-    route to host`, 1 for a refused `sudo -u`, 127 for a missing tmux. All of them reported "Is the
-    server running?", which sends the operator to look at their game server when the panel could
-    not reach the MACHINE — on a page that is happily showing that server's cached status beside
-    the message. Worse, the answer depended on the transport: the identical click against a
-    paramiko remote raised ConnectionError and produced a different sentence entirely.
-
-    `err` is the command's own stderr (never exception text — that stays in the log, per
-    _log_and_generic), surfaced the way _run_action surfaces a LinuxGSM failure line.
-    """
-    # tr() for all three, as the middle one always was: each is the route's answer as it stands.
-    if rc == 3:
-        return i18n.tr("That server isn't running, so there's no console session to send to.")
-    lines = [ln.strip() for ln in (err or "").splitlines() if ln.strip()]
-    if lines:
-        return i18n.tr("The panel could not run that on the host: {why}", why=lines[-1][:200])
-    return i18n.tr("The panel could not run that on the host, and it gave no reason.")
 
 
 def _fire_on_done(on_done, ok, detail, action, server_id):

@@ -153,10 +153,13 @@ def start_waits(d, detail, now, rollback=False):
     INFLIGHT_GIVE_UP. "inflight" is a LinuxGSM update or backup running for the server, and a start never goes over
     one: a known wait, however long the download takes, not a row that cannot resolve, so its
     give-up clock starts again once nothing holds it. `inflight_since` is that wait's own clock,
-    which the reset does not touch; any other wait ends it.
+    which the reset does not touch. No other WAIT ends it: "window" (outside seconds 5-40 of the
+    host's minute) is answered before the gate looks for a command in flight, and a host that did not
+    answer said nothing either, so neither tick read the inflight state. Clearing it on them meant a
+    tick in the out-of-window span — about one a minute at the restore worker's pace — restarted
+    the day, so it was never reached. _act_panel ends the clock on any outcome that is not a wait.
     """
     if detail != "inflight":
-        d.pop("inflight_since", None)
         return None
     d.pop("pending_since", None)
     if now - d.setdefault("inflight_since", now) < INFLIGHT_GIVE_UP:

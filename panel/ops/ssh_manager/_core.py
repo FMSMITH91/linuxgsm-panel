@@ -1008,6 +1008,18 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
     return _run_privileged(server, verb, args, timeout, merge_stderr, sudo)
 
 
+# The locale a privileged verb's tool runs in when it is rendered as shell: a remote, or the panel's
+# own host before the helper is installed. The helper already runs every verb's child in C.UTF-8
+# (_clean_env in tools/panel-helper), so on those paths ufw, apt and the rest printed whatever
+# language the HOST was set to — Ubuntu's sudo PAM stack loads /etc/default/locale, LANGUAGE
+# included — while the panel reads their output by its English words (ufw's `Status: active`,
+# which a German host prints as `Status: aktiv`). C.UTF-8 rather than C keeps UTF-8 file names
+# and comments intact, as the helper does; LANGUAGE is dropped because gettext honours it over
+# LC_ALL whenever the locale is anything but plain C. No verb rendered here starts a game server
+# (lgsm-command and cron-run-now are local-only, see privileged.LOCAL_ONLY_VERBS), so no game inherits it.
+_R19A_C_LOCALE = "export LC_ALL=C.UTF-8 LANG=C.UTF-8; unset LANGUAGE; "
+
+
 def _run_privileged(server, verb, args, timeout, merge_stderr, sudo):
     """run_privileged's body — every transport. See run_privileged."""
     # A verb with a SECRET argument (privileged.SECRET_STDIN) sends it on stdin on every path
@@ -1016,7 +1028,7 @@ def _run_privileged(server, verb, args, timeout, merge_stderr, sudo):
     _secret_in = _priv.remote_stdin(verb, args)
     _secret_kw = {"stdin_text": _secret_in} if _secret_in is not None else {}
     if not is_local_server(server):
-        return run_command(server, _priv.remote_command(verb, args, merge_stderr=merge_stderr),
+        return run_command(server, _R19A_C_LOCALE + _priv.remote_command(verb, args, merge_stderr=merge_stderr),
                            timeout=timeout, sudo=sudo, **_secret_kw)
 
     # sudo=None ESCALATES here: this is a privileged verb on the panel's own machine, and the row's
@@ -1044,7 +1056,7 @@ def _run_privileged(server, verb, args, timeout, merge_stderr, sudo):
         return out, err, rc
 
     # No helper on this host yet: the pre-helper path, byte-for-byte.
-    res = _run_local(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
+    res = _run_local(_R19A_C_LOCALE + _priv.remote_command(verb, args, merge_stderr=merge_stderr),
                      timeout=timeout, sudo=True, **_secret_kw)
     note_privileged(verb, "shell", res)
     return res
@@ -1979,6 +1991,7 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
     # How long the remote may stay silent while the command runs (_drain_exec).
     silence = max(timeout or 0, _DRAIN_IDLE_FLOOR)
 
+    stdout = None
     try:
         # full_cmd is assembled HERE from _quote()d components; there is no interpolation of
         # caller text into it that has not been through _quote first.
@@ -2010,6 +2023,7 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
                          _MAX_OUTPUT_BYTES)
         return out.strip(), err.strip(), exit_code
     except Exception as e:
+        _r19a_close_exec(stdout)
         failed = ConnectionError(f"Command failed: {e}")
         # Marked, not a subclass (callers and messages name the type): the connection was open and
         # the exec under way, so a reboot sent this way is one in progress, not a refusal — which
@@ -2019,6 +2033,22 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
         raise failed
 
 
+
+
+def _r19a_close_exec(stdout):
+    """Close a failed exec's channel.
+
+    Only _drain_exec's give-up closed it: a secret's stdin write that raised, or a read error inside
+    the drain, left the channel open on the pooled transport until that transport closed — one more
+    of sshd's MaxSessions held per failure.
+    """
+    chan = getattr(stdout, "channel", None)
+    if chan is None:
+        return
+    try:
+        chan.close()
+    except Exception:  # noqa: BLE001 - the command already failed; this is cleanup only
+        _log.debug("could not close a failed exec channel", exc_info=True)
 
 
 def _quote(s):
@@ -2842,6 +2872,9 @@ def host_live_metrics(server, force=False):
     return result
 
 
+# `free` is read by its "Mem:" label, which procps translates ("Speicher:" on a German host,
+# "Pamięć:" on a Polish one): no MEM line, ram_total 0, and every consumer reads that as "this host
+# was not read". LC_ALL=C on that one command, so nothing else here changes locale.
 def _host_sample_cmd():
     """host_live_metrics' one command: two CPU samples 0.25s apart, then every other figure."""
     parts = [
@@ -2850,7 +2883,7 @@ def _host_sample_cmd():
         "sleep 0.25",
         "grep '^cpu ' /proc/stat",
         _JIFFIES_BY_USER % "GJB",
-        "free -b | awk '/Mem:/{print \"MEM\",$2,$3}'",
+        "LC_ALL=C free -b | awk '/Mem:/{print \"MEM\",$2,$3}'",
         "awk '{print \"LOAD\",$1,$2,$3}' /proc/loadavg",
         "df -B1 / | tail -1 | awk '{print \"DISK\",$2,$3}'",
         "echo CORES $(nproc)",
@@ -3022,7 +3055,7 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
     if game_port:
         try:
             game_port = int(game_port)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):   # a REAL inf port row: int() overflows
             _log.warning("live metrics: refusing to interpolate game port %r", game_port)
             game_port = None
     # No sudo: every part of this reads world-readable state — /proc/stat, /proc/loadavg,
@@ -3061,7 +3094,7 @@ def _game_sample_cmd(short_name, game_port):
     if short_name:
         parts.append(_game_jiffies_cmd(short_name, "GJB"))
     parts += [
-        "free -b | awk '/Mem:/{print \"MEM\",$2,$3}'",
+        "LC_ALL=C free -b | awk '/Mem:/{print \"MEM\",$2,$3}'",
         "awk '{print \"LOAD\",$1,$2,$3}' /proc/loadavg",
         "df -B1 / | tail -1 | awk '{print \"DISK\",$2,$3}'",
         "echo CORES $(nproc)",

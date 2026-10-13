@@ -51,7 +51,7 @@ from types import SimpleNamespace as _NS43
 from unit import REPO_ROOT as _ROOT43
 from unit.part01 import check, skip
 from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_arm, _p9_app, _p9_client, _p9_core,
-                         _p9_json, _p9_patch, _p9_restore_all, _p9_sm, _p9_so)
+                         _p9_json, _p9_patch, _p9_restore_all, _p9_sh, _p9_sm, _p9_so)
 from panel.core.panel_state import forget_rows
 from panel.db.models import AuditLog, GameServer, RemoteServer, db
 from panel.routes import discover as _disc43
@@ -782,6 +782,9 @@ def _heal_run43(want, hosts):
                 db.session.get(GameServer, want["mcr43"]).port = 25590
                 db.session.commit()
         return orig_audit(remote_id, moves)
+    # The pass asks game_account_write_refusal before a crontab rewrite (review 1012d); the account
+    # check is a host round trip, stood in for here as a plain game account.
+    _p9_patch(_p9_sh, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_gp43, "read_reported_ports", _read_then_delete)
     _p9_patch(_p9_sm, "protected_host_ports", _protected)
     if orig_audit is not None:
@@ -1060,7 +1063,9 @@ class _Rv43Stop(BaseException):
 
 def _rv43_arm():
     _p9_arm(who="part43")
-    _p9_patch(_ts43, "get_tailscale_info", lambda force_refresh=False: _NS43(dns_name=None))
+    # The fields _p9_arm's stand-in has, which a render reads (review 1012d: dns_name alone).
+    _p9_patch(_ts43, "get_tailscale_info",
+              lambda force_refresh=False: _NS43(dns_name=None, serve_config={}, serve_unreadable=False))
     _p9_patch(_notif43, "notify", lambda key, title, body="": None)
     _p9_patch(_p9.socketio, "emit", lambda *a, **k: None)
     _p9_patch(_sd43, "threading", _p9_threading(_P9Thread))

@@ -2744,6 +2744,14 @@ try:
         eq("banlist: refresh_soon queues ONE more read for requests made while one runs",
            (len(_bl_runs), _bl._state["scheduled"]), (2, False))
     finally:
+        # The real refresh goes back only once no queued read is left to call it (review 1012d):
+        # on a run where the wait above timed out, the pending worker read this machine's real
+        # fail2ban and UFW through the restored function.
+        _bl_gate.set()
+        for _ in range(500):
+            if not _bl._state["scheduled"]:
+                break
+            _time.sleep(0.02)
         _bl.refresh = _bl_rf
     # refresh(): fail2ban's list and the whitelist always, the UFW denies only where proxied
     # traffic can arrive (it costs a firewall read), and a failed read changes nothing.

@@ -1082,6 +1082,34 @@ def _r16d_names_a_deprecation_base(cat):
     return _name in _R15D_DW_BASES or not _name.endswith("Warning")
 
 
+def _r19d_bound_classes(tree):
+    """{name: [the nodes it is bound to]} for every plain or annotated binding, and import alias."""
+    _bound = {}
+    for _a in _dw_ast.walk(tree):
+        for _name, _value in _r19d_assigned(_a) + _r19d_import_aliases(_a):
+            _bound.setdefault(_name, []).append(_value)
+    return _bound
+
+
+def _r19d_assigned(node):
+    """[(name, the class node)] a plain or annotated assignment binds to a name or attribute."""
+    _ts = (node.targets if isinstance(node, _dw_ast.Assign)
+           else [node.target] if isinstance(node, _dw_ast.AnnAssign) and node.value is not None else [])
+    if not isinstance(getattr(node, "value", None), (_dw_ast.Name, _dw_ast.Attribute)):
+        return []
+    return [(_t.id, node.value) for _t in _ts if isinstance(_t, _dw_ast.Name)]
+
+
+def _r19d_import_aliases(node):
+    """[(alias, Name(original))] for each `import … as` alias: an import binds a name too.
+
+    Review 1012d: `from builtins import Warning as BaseWarning` read as an unknown warning class.
+    """
+    if not isinstance(node, _dw_ast.ImportFrom):
+        return []
+    return [(_al.asname, _dw_ast.Name(id=_al.name, ctx=_dw_ast.Load())) for _al in node.names if _al.asname]
+
+
 def _r14d_blanket_filters(tree):
     """Lines of filterwarnings/simplefilter calls that ignore deprecations outside catch_warnings."""
     out = []
@@ -1089,14 +1117,7 @@ def _r14d_blanket_filters(tree):
     # `BaseWarning: type = Warning` read as an unknown class and passed (review 1012b). A name bound
     # more than once stands for ALL its values (a tuple of them), so a later rebinding cannot hide
     # the one in effect at the call.
-    _bound = {}
-    for _a in _dw_ast.walk(tree):
-        _ts = (_a.targets if isinstance(_a, _dw_ast.Assign)
-               else [_a.target] if isinstance(_a, _dw_ast.AnnAssign) and _a.value is not None else [])
-        if isinstance(getattr(_a, "value", None), (_dw_ast.Name, _dw_ast.Attribute)):
-            for _t in _ts:
-                if isinstance(_t, _dw_ast.Name):
-                    _bound.setdefault(_t.id, []).append(_a.value)
+    _bound = _r19d_bound_classes(tree)
     _aliases = {_k: _v[0] if len(_v) == 1 else _dw_ast.Tuple(elts=_v, ctx=_dw_ast.Load())
                 for _k, _v in _bound.items()}
 
@@ -1147,7 +1168,9 @@ _dw_ctl = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     # Review 1012b: an alias bound in a function, annotated, or rebound later.
     'import warnings\ndef f():\n    BaseWarning = Warning\n    warnings.simplefilter("ignore", BaseWarning)',
     'import warnings\nBaseWarning: type = Warning\nwarnings.simplefilter("ignore", BaseWarning)',
-    'import warnings\nBaseWarning = Warning\nwarnings.simplefilter("ignore", BaseWarning)\nBaseWarning = UserWarning')}
+    'import warnings\nBaseWarning = Warning\nwarnings.simplefilter("ignore", BaseWarning)\nBaseWarning = UserWarning',
+    # Review 1012d: an alias bound by an import.
+    'import warnings\nfrom builtins import Warning as BaseWarning\nwarnings.simplefilter("ignore", BaseWarning)')}
 _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", message="x", category=DeprecationWarning)',
     'import warnings\nwith warnings.catch_warnings():\n    warnings.simplefilter("ignore")',
@@ -1156,7 +1179,8 @@ _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.simplefilter("default", DeprecationWarning)',
     'import warnings\nwarnings.filterwarnings("ignore", "x", DeprecationWarning)',
     'import warnings\nwarnings.filterwarnings("ignore", module="eventlet", category=DeprecationWarning)',
-    'import warnings\nQuiet = UserWarning\nwarnings.simplefilter("ignore", Quiet)')}
+    'import warnings\nQuiet = UserWarning\nwarnings.simplefilter("ignore", Quiet)',
+    'import warnings\nfrom builtins import UserWarning as Quiet\nwarnings.simplefilter("ignore", Quiet)')}
 check("...the filter gate names each blanket spelling, and passes the scoped ones (controls)",
       all(_dw_ctl.values()) and not any(_dw_ok.values()), repr((_dw_ctl, _dw_ok)))
 
@@ -4101,8 +4125,16 @@ finally:
 # would be decorative.
 # Judged on whichever of the helper's own candidates this machine has, and SKIPPED, not passed, when
 # it has none (review 1012c: it read only /usr/sbin/ufw and passed as the literal True without it).
+# A raise is a failure BY NAME, not a traceback that ends the part (review 1012d).
+def _r19d_resolve(name):
+    try:
+        return _helper.resolve(name)
+    except FileNotFoundError as _e:
+        return "raised %r" % (_e,)
+
+
 if any(os.path.isfile(_c) and os.access(_c, os.X_OK) for _c in _helper.TOOLS["ufw"]):
-    check("helper: resolves ufw", _helper.resolve("ufw") in _helper.TOOLS["ufw"], _helper.resolve("ufw"))
+    check("helper: resolves ufw", _r19d_resolve("ufw") in _helper.TOOLS["ufw"], _r19d_resolve("ufw"))
 else:
     skip("helper: resolves ufw", "no ufw at any of %s on this machine" % (_helper.TOOLS["ufw"],))
 # ...and resolve() itself, on planted candidates any machine has: the first that is an executable
@@ -4116,7 +4148,7 @@ try:
         # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in in a private temp dir
         os.chmod(os.path.join(_r18d_rs_dir, _r18d_rs_n), _r18d_rs_mode)  # nosec B103 - a stand-in in a private temp dir
     _helper.TOOLS["ufw"] = tuple(os.path.join(_r18d_rs_dir, _n) for _n in ("missing", "noexec", "exec"))
-    _r18d_rs_got = _helper.resolve("ufw")
+    _r18d_rs_got = _r19d_resolve("ufw")
     try:
         _helper.resolve("bash")
         _r18d_rs_bash = "resolved"
@@ -5267,17 +5299,22 @@ def _r17d_is_root(e, roots, depth):
     return _r17d_file_depth(e) == depth
 
 
-def _r17d_walk_of_root(node, is_root):
+# A file that binds os only as `os`, and walk/fwalk to no bare name.
+_R19D_OS_ONLY = (frozenset(("os",)), frozenset())
+
+
+def _r17d_walk_of_root(node, is_root, os_names=_R19D_OS_ONLY):
     """Is `node` a recursive read of the whole checkout?
 
-    `os.walk(<root>)`, its root given by position or as top= (review 1012c), and the two other
-    readers that descend into dot-directories: `<root>.rglob(...)` and a `glob(...)` with
-    include_hidden=True over a pattern built from the root.
+    `os.walk(<root>)` / `os.fwalk`, its root given by position or as top= (review 1012c), and the
+    other readers that descend into dot-directories: `<root>.walk()` (pathlib, 3.12+),
+    `<root>.rglob(...)`, `<root>.glob('**…')`, and a `glob(...)` with include_hidden=True over a
+    pattern built from the root. `os_names`: what the file binds to os, and to walk/fwalk.
     """
     if not isinstance(node, _smg_ast.Call):
         return False
     _kw = {_k.arg: _k.value for _k in node.keywords if _k.arg}
-    _top = _r18d_walked(node, _kw)
+    _top = _r18d_walked(node, _kw, os_names)
     if _top is not None:
         return is_root(_top)
     if (_r17d_call_name(node) in ("glob", "iglob") and node.args
@@ -5286,11 +5323,48 @@ def _r17d_walk_of_root(node, is_root):
     return False
 
 
-def _r18d_walked(node, kw):
-    """The directory an `os.walk(...)` (by position or top=) or a `<dir>.rglob(...)` reads, or None."""
-    if getattr(node.func, "attr", None) == "walk" and getattr(node.func.value, "id", None) == "os":
+def _r18d_walked(node, kw, os_names=_R19D_OS_ONLY):
+    """The directory a recursive reader of a directory reads, or None.
+
+    `os.walk(...)` / `os.fwalk(...)` by position or top=, through any name the file binds to os or
+    to the function itself; and a Path's `.walk()`, `.rglob(...)` or `.glob('**…')`. Only os.walk
+    and rglob were read (review 1012d): `import os as _os64` is in the suites, and Path.walk,
+    os.fwalk and glob('**') all enter .claude.
+    """
+    if _r19d_os_walk(node, os_names):
         return node.args[0] if node.args else kw.get("top")
-    return node.func.value if getattr(node.func, "attr", None) == "rglob" else None
+    _attr = getattr(node.func, "attr", None)
+    if _attr == "walk" and not node.args:
+        return node.func.value
+    _pat = node.args[0] if node.args else kw.get("pattern")
+    if _attr == "rglob" or (_attr == "glob" and isinstance(getattr(_pat, "value", None), str)
+                            and "**" in _pat.value):
+        return node.func.value
+    return None
+
+
+def _r19d_os_walk(node, os_names):
+    """Is call `node` os.walk / os.fwalk, through any name the file binds to os or to the function?"""
+    _mods, _fns = os_names
+    if getattr(node.func, "attr", None) in ("walk", "fwalk"):
+        return getattr(node.func.value, "id", None) in _mods
+    return getattr(node.func, "id", None) in _fns
+
+
+def _r19d_os_names(tree):
+    """(names bound to the os module, names bound to os.walk / os.fwalk) in `tree`."""
+    _mods, _fns = {"os"}, set()
+    for _n in _smg_ast.walk(tree):
+        if isinstance(_n, _smg_ast.Import):
+            _mods |= _r19d_bound_as(_n, ("os",), asname_only=True)
+        elif isinstance(_n, _smg_ast.ImportFrom) and _n.module == "os":
+            _fns |= _r19d_bound_as(_n, ("walk", "fwalk"))
+    return _mods, _fns
+
+
+def _r19d_bound_as(imp, names, asname_only=False):
+    """The names an import statement binds for each of `names` it imports."""
+    return {_a.asname or _a.name for _a in imp.names if _a.name in names and (_a.asname or not asname_only)}
 
 
 def _r16d_unpruned_walks(text, depth=3):
@@ -5306,8 +5380,9 @@ def _r16d_unpruned_walks(text, depth=3):
     sets = {_m.group(1) for _m in _re.finditer(r"(?m)^(\w+)\s*=.*\.claude", text)}
     tree = _smg_ast.parse(text)
     is_root = _r17d_root_names(tree, depth)
+    _os_names = _r19d_os_names(tree)
     _wins = {_c.lineno: "\n".join(lines[_c.lineno - 1:_c.lineno + 6])
-             for _c in _smg_ast.walk(tree) if _r17d_walk_of_root(_c, is_root)}
+             for _c in _smg_ast.walk(tree) if _r17d_walk_of_root(_c, is_root, _os_names)}
     return sorted(_ln for _ln, _win in _wins.items()
                   if ".claude" not in _win and not any(_re.search(r"\b%s\b" % _n, _win) for _n in sets))
 
@@ -5337,6 +5412,15 @@ _r17d_walk_ctl = {
         "from unit.part01 import _root as R1\nfor d, s, f in os.walk(R1):\n    pass\n"),
     "an annotated copy": "from unit import REPO_ROOT\ntop: str = REPO_ROOT\nfor d, s, f in os.walk(top):\n    pass\n",
     "parents[2] of the file": "t = pathlib.Path(__file__).parents[2]\nx = list(t.rglob('*.py'))\n",
+    # review 1012d: the .parent chain was only ever bound to ROOT, which is a root by its name alone,
+    # and these readers (and os under another name) walked the checkout with the gate green.
+    "a .parent chain under any name": (
+        "here = pathlib.Path(__file__).resolve().parent.parent.parent\nfor d, s, f in os.walk(here):\n    pass\n"),
+    "a Path's walk()": "from unit import REPO_ROOT\nfor d, s, f in pathlib.Path(REPO_ROOT).walk():\n    pass\n",
+    "os.fwalk": "from unit import REPO_ROOT\nfor d, s, f, fd in os.fwalk(REPO_ROOT):\n    pass\n",
+    "a glob('**') of Path(root)": "from unit import REPO_ROOT\nx = list(pathlib.Path(REPO_ROOT).glob('**/*.py'))\n",
+    "os imported under another name": "import os as _o\nfrom unit import REPO_ROOT\nx = list(_o.walk(REPO_ROOT))\n",
+    "walk imported from os": "from os import walk as w\nfrom unit import REPO_ROOT\nx = list(w(REPO_ROOT))\n",
     "an rglob of Path(root)": "from unit import REPO_ROOT\nx = list(pathlib.Path(REPO_ROOT).rglob('*'))\n",
     "a glob that includes hidden dirs": (
         "from unit import REPO_ROOT\nx = glob.glob(os.path.join(REPO_ROOT, '**'), recursive=True, "
@@ -5350,7 +5434,8 @@ _r17d_walk_ctl["two dirnames from tests/unit (tests/, not the root)"] = _r16d_un
 _r17d_walk_ctl["an rglob of a subtree, and a glob without hidden dirs (not one)"] = _r16d_unpruned_walks(
     "from unit import REPO_ROOT\nx = list((pathlib.Path(REPO_ROOT) / 'panel').rglob('*'))\n"
     "y = list(pathlib.Path(REPO_ROOT, 'panel').rglob('*'))\n"
-    "z = glob.glob(os.path.join(REPO_ROOT, '**'), recursive=True)\n") == []
+    "z = glob.glob(os.path.join(REPO_ROOT, '**'), recursive=True)\n"
+    "w = list(pathlib.Path(REPO_ROOT).glob('*.py'))\nv = list(ast.walk(REPO_ROOT))\n") == []
 check("suites: every walk of the whole checkout leaves .claude (other worktrees) out",
       not _r16d_walks and _r17d_walks_read >= 8, "%d walks read; %r" % (_r17d_walks_read, _r16d_walks))
 check("suites: ...a walk is found by what its root name is bound to, with keywords, in a "

@@ -165,7 +165,7 @@ try:
     for _v, _a, _want in _T_SAMPLE:
         _sm_core.run_privileged(_T_LOCAL, _v, _a, timeout=5)
     check("transport: with no helper installed, the local path runs the pre-helper command",
-          [c for c, _s in _seen] == [w for _v, _a, w in _T_SAMPLE],
+          [c for c, _s in _seen] == [_sm_core._R19A_C_LOCALE + w for _v, _a, w in _T_SAMPLE],
           str([c for c, _s in _seen][:2]))
     check("transport: and it still escalates (sudo=True), or nothing privileged would work",
           all(_s is True for _c, _s in _seen))
@@ -199,7 +199,8 @@ try:
     for _v, _a, _w in _T_SAMPLE:
         _sm_core.run_privileged(_T_REMOTE, _v, _a, timeout=5)
     check("transport: a remote host gets the same command it always got",
-          [c for c, _s in _rem] == [w for _v, _a, w in _T_SAMPLE], str([c for c, _s in _rem][:2]))
+          [c for c, _s in _rem] == [_sm_core._R19A_C_LOCALE + w for _v, _a, w in _T_SAMPLE],
+          str([c for c, _s in _rem][:2]))
     check("transport: the local helper being present does not change what a remote receives",
           all(_s is True for _c, _s in _rem))
 finally:
@@ -318,7 +319,8 @@ try:
     _phf_argvs.clear()
     _sm_core.run_privileged(_PHF_LOCAL, "ufw-status", ["numbered"], timeout=5, sudo=None)
     check("panel-host firewall: with no helper, it is the escalated shell form, not ufw as the panel",
-          _phf_argvs == [] and _phf_shell[-1:] == [(_priv.remote_command("ufw-status", ["numbered"]),
+          _phf_argvs == [] and _phf_shell[-1:] == [(_sm_core._R19A_C_LOCALE
+                                                    + _priv.remote_command("ufw-status", ["numbered"]),
                                                     True)], repr((_phf_argvs, _phf_shell[-1:])))
     # A REMOTE still honours its row: off sends the bare command, on the `sudo bash -c` form.
     _sm_core._HELPER_STATE["present"] = True
@@ -327,7 +329,7 @@ try:
     eq("panel-host firewall: a remote's sudo_enabled still decides whether its ufw read escalates",
        [c.startswith("sudo bash -c ") for c in _phf_wire], [False, True])
     eq("panel-host firewall: ...and the unescalated one is the bare ufw read (the gate has a subject)",
-       _phf_wire[:1], [_priv.remote_command("ufw-status", ["numbered"])])
+       _phf_wire[:1], [_sm_core._R19A_C_LOCALE + _priv.remote_command("ufw-status", ["numbered"])])
     # ...and over Tailscale, whose transport (_run_via_ssh_cli) does its own defaulting from the
     # row rather than paramiko's. The remote command is the last word of the ssh argv it builds.
     _sm_core.subprocess = NS(Popen=lambda argv, **k: (_phf_ts_argvs.append(list(argv)),
@@ -338,7 +340,7 @@ try:
     _sm_core._ssh_mux_opts = lambda: []
     _sm_firewall.remote_ufw_status(_PHF_TS_OFF)
     _sm_firewall.remote_ufw_status(_PHF_TS_ON)
-    _phf_ts_cmd = _priv.remote_command("ufw-status", ["numbered"])
+    _phf_ts_cmd = _sm_core._R19A_C_LOCALE + _priv.remote_command("ufw-status", ["numbered"])
     eq("panel-host firewall: a Tailscale remote's sudo_enabled decides its ufw read the same way",
        [a[-1] for a in _phf_ts_argvs],
        [_phf_ts_cmd, "sudo bash -c " + _shlex_phf.quote(_phf_ts_cmd)])
@@ -1590,6 +1592,8 @@ def _r16d_loads_helper(call):
 # dirname chain of __file__, the suites' root names, and a loader's parameter at its call site.
 _R18D_PATH_KEY = "path:"
 _R18D_ROOT_NAME = re.compile(r"_root|_repo_root|REPO_ROOT|ROOT|_UNIT_ROOT|_ROOT\w*|_R\d+")
+# A load whose path the reader could not work out: kept, so it can be named rather than dropped.
+_R19D_UNREAD = "<unread>"
 
 
 def _r18d_eval_path(e, env, here):
@@ -1703,11 +1707,15 @@ def _r18d_assign_load(assign, specs, env, here, factories):
         specs.update(dict.fromkeys(_names, _r18d_spec_path(_v, env, here)))
         return _names, None
     if _fn == "module_from_spec" and _v.args and getattr(_v.args[0], "id", None) in specs:
-        return _names, specs[_v.args[0].id]
+        return _names, _r19d_or_unread(specs[_v.args[0].id])
     if _fn in factories and isinstance(_v.func, _ast_scan.Name):
         return _names, _r18d_factory_load(factories[_fn], _v, env, here, factories)
     env.update(dict.fromkeys(_names, _r18d_eval_path(_v, env, here)))
     return _names, None
+
+
+def _r19d_or_unread(rel):
+    return _R19D_UNREAD if rel is None else rel
 
 
 def _r18d_factory_load(fn, call, env, here, factories):
@@ -1724,14 +1732,41 @@ def _r18d_factory_load(fn, call, env, here, factories):
 
 def _r18d_path_aliases(tree, here):
     """{name: `path:<file>` (or the helper)} for each module loaded from a repository file by path."""
-    funcs = [_f for _f in _ast_scan.walk(tree) if isinstance(_f, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef))]
-    factories = {_f.name: _f for _f in funcs if _r18d_loads_a_spec(_f)}
-    env = {}
-    loads = _r18d_scope_loads(_r18d_scope_assigns(tree), env, here, factories)
-    for _f in funcs:
-        loads.update(_r18d_scope_loads(_r18d_scope_assigns(_f), dict(env), here, factories))
+    loads = {}
+    for _scope, _loads in _r19d_scoped_loads(tree, here):
+        loads.update(_loads)
     out = {_name: _r18d_path_alias_of((_rel or "").strip("/")) for _name, _rel in loads.items()}
     return {_k: _v for _k, _v in out.items() if _v}
+
+
+def _r19d_scoped_loads(tree, here):
+    """[(scope, {name: repo-relative file, or _R19D_UNREAD})] for the module, then each function.
+
+    A root imported under another name is a root (review 1012d: part75's
+    `from unit.part05 import _root as _root75` made its i18n_scan load no alias, silently).
+    """
+    funcs = [_f for _f in _ast_scan.walk(tree) if isinstance(_f, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef))]
+    factories = {_f.name: _f for _f in funcs if _r18d_loads_a_spec(_f)}
+    env = dict.fromkeys(_r19d_root_imports(tree), "")
+    out = [(tree, _r18d_scope_loads(_r18d_scope_assigns(tree), env, here, factories))]
+    return out + [(_f, _r18d_scope_loads(_r18d_scope_assigns(_f), dict(env), here, factories)) for _f in funcs]
+
+
+def _r19d_root_imports(tree):
+    """The names an import binds to a root by any name (`from unit.part05 import _root as R`)."""
+    return {_a.asname or _a.name for _n in _ast_scan.walk(tree) if isinstance(_n, _ast_scan.ImportFrom)
+            for _a in _n.names if _R18D_ROOT_NAME.fullmatch(_a.name)}
+
+
+def _r19d_unread_loads(tree, here):
+    """Names a module is loaded into by a path the reader could not work out.
+
+    In the module and in functions without parameters: a loader that takes its path as a parameter
+    is read at each call site instead, where an unread one is named.
+    """
+    return sorted(_name for _scope, _loads in _r19d_scoped_loads(tree, here)
+                  if not getattr(getattr(_scope, "args", None), "args", None)
+                  for _name, _rel in _loads.items() if _rel == _R19D_UNREAD)
 
 
 def _r18d_loads_a_spec(fn):
@@ -1966,6 +2001,27 @@ check("stub gate: a repository script loaded by its path is an alias, directly, 
       and "read_rows" in _r14d_stub_names("path:.github/scripts/code_scanning_analyses.py")
       and "read_rowsZZ" not in _r14d_stub_names("path:.github/scripts/code_scanning_analyses.py"),
       repr((_r18d_path_ctl_al, _r18d_path_ctl)))
+# Every load by path is READ (review 1012d): one the reader could not follow was dropped without a
+# word, so a misspelled stub through it went unchecked. Named here, so the next shape fails by name.
+# (A load another reader resolves, such as the helper's by _r16d_helper_aliases, is read.)
+_r19d_unread = ["%s: %s" % (os.path.relpath(_f, _root), _n) for _f, _t in _stub_trees.items()
+                for _n in _r19d_unread_loads(_t, os.path.relpath(_f, _root).replace(os.sep, "/"))
+                if _n not in _stub_alias_of[_f]]
+check("stub gate: every module a suite or tool loads by its path is read as an alias",
+      not _r19d_unread, "; ".join(_r19d_unread))
+_r19d_unread_ctl_t = _ast_scan.parse(
+    "from unit.part05 import _root as _root75\n"
+    "_s = _ilu.spec_from_file_location('i', os.path.join(_root75, 'tools', 'i18n_scan.py'))\n"
+    "_scan75 = _ilu.module_from_spec(_s)\n"
+    "_s2 = _ilu.spec_from_file_location('w', where())\n_what = _ilu.module_from_spec(_s2)\n"
+    "def _ld(rel):\n    _s3 = _ilu.spec_from_file_location('x', os.path.join(_R9, rel))\n"
+    "    _m3 = _ilu.module_from_spec(_s3)\n    return _m3\n_two = _ld(other())\n")
+check("stub gate: ...a root imported under another name is a root, and a load by a path it cannot "
+      "work out is named, at its call site for a loader given the path (control)",
+      _r14d_aliases(_r19d_unread_ctl_t, {}, os.path.join(_root, "tests", "unit", "part99.py"))
+      == {"_scan75": "path:tools/i18n_scan.py"}
+      and _r19d_unread_loads(_r19d_unread_ctl_t, "tests/unit/part99.py") == ["_two", "_what"],
+      repr((_r14d_aliases(_r19d_unread_ctl_t, {}), _r19d_unread_loads(_r19d_unread_ctl_t, "tests/unit/part99.py"))))
 _r15d_nest_ctl = [_r15d_stub_target(_n, _r15d_nest_ctl_al) for _n in _ast_scan.walk(_ast_scan.parse(
     "_m.so.ufw_deny_ipx = 1\nsetattr(_m.so, 'run_comandx', 1)\n_m.so.ufw_deny_ip = 1\n"))]
 _r15d_nest_ctl = [_t for _t in _r15d_nest_ctl if _t]
@@ -7992,18 +8048,28 @@ def _literal_names(fn):
             return all(not isinstance(v, _sh_ast.FormattedValue) for v in node.values)
         return False
 
+    # Every other way a name gets a value makes it non-literal (review 1012d: a parameter, a `+=`
+    # and a `:=` passed as literals): any Name stored outside the bindings below, the function's
+    # parameters, an `except … as` name and an import inside the function.
+    lit_targets = set()
     for n in _sh_ast.walk(fn):
-        if isinstance(n, _sh_ast.Assign):
-            for t in n.targets:
-                if isinstance(t, _sh_ast.Name):
-                    (good if _is_lit(n.value) else bad).add(t.id)
-        elif isinstance(n, _sh_ast.For) and isinstance(n.target, _sh_ast.Name):
-            seq = n.iter
-            if (isinstance(seq, (_sh_ast.List, _sh_ast.Tuple))
-                    and all(_is_lit(e) for e in seq.elts)):
-                good.add(n.target.id)
-            else:
-                bad.add(n.target.id)
+        if (isinstance(n, (_sh_ast.Assign, _sh_ast.AnnAssign)) and n.value is not None
+                and _is_lit(n.value)):
+            lit_targets |= {id(t) for t in getattr(n, "targets", [getattr(n, "target", None)])
+                            if isinstance(t, _sh_ast.Name)}
+        elif (isinstance(n, _sh_ast.For) and isinstance(n.target, _sh_ast.Name)
+              and isinstance(n.iter, (_sh_ast.List, _sh_ast.Tuple))
+              and all(_is_lit(e) for e in n.iter.elts)):
+            lit_targets.add(id(n.target))
+    for n in _sh_ast.walk(fn):
+        if isinstance(n, _sh_ast.Name) and isinstance(n.ctx, _sh_ast.Store):
+            (good if id(n) in lit_targets else bad).add(n.id)
+        elif isinstance(n, _sh_ast.arg):
+            bad.add(n.arg)
+        elif isinstance(n, _sh_ast.ExceptHandler) and n.name:
+            bad.add(n.name)
+        elif isinstance(n, (_sh_ast.Import, _sh_ast.ImportFrom)):
+            bad |= {(a.asname or a.name).split(".")[0] for a in n.names}
     return good - bad
 
 
@@ -8069,6 +8135,37 @@ check("shell: the _run() scan actually found the call sites", _shell_seen >= 27,
       % _shell_seen)
 check("shell: every _run() command is a literal or shlex.quote()d", not _shell_bad,
       "unquoted interpolation into a shell=True command at: " + "; ".join(_shell_bad[:5]))
+
+
+def _r19d_shell_ctl(src):
+    """Is the first _run() in `src`'s first function judged safe by the gate above?"""
+    _f = next(_n for _n in _sh_ast.walk(_sh_ast.parse(src)) if isinstance(_n, _sh_ast.FunctionDef))
+    _call = next(_c for _c in _sh_ast.walk(_f) if isinstance(_c, _sh_ast.Call)
+                 and getattr(_c.func, "id", None) == "_run")
+    return _shell_part_ok(_call.args[0], _literal_names(_f))
+
+
+# A name bound to a literal on one path and to anything else on another is not a literal: as a
+# parameter, through `+=`, `:=`, `with … as`, `except … as`, a comprehension or an unpacking
+# (review 1012d: the first three passed). The literal-only shapes still pass (control).
+_r19d_shell_refused = {_k: _r19d_shell_ctl(_v) for _k, _v in {
+    "plain": "def f(name):\n    _run('systemctl restart ' + name)\n",
+    "augassign": "def f(name):\n    cmd = 'systemctl restart '\n    cmd += name\n    _run(cmd)\n",
+    "parameter": "def f(name=''):\n    if not name:\n        name = 'ssh'\n    _run('systemctl restart ' + name)\n",
+    "walrus": "def f(x):\n    c = 'a'\n    if (c := x):\n        _run(c)\n",
+    "with-as": "def f():\n    c = 'a'\n    with open('p') as c:\n        _run(c)\n",
+    "except-as": "def f():\n    c = 'a'\n    try:\n        pass\n    except OSError as c:\n        _run(c)\n",
+    "unpacking": "def f(x):\n    c = 'a'\n    c, d = x\n    _run(c)\n",
+    "comprehension": "def f(xs):\n    c = 'a'\n    [_run(c) for c in xs]\n",
+    "import": "def f():\n    c = 'a'\n    from os import sep as c\n    _run(c)\n"}.items()}
+_r19d_shell_kept = {_k: _r19d_shell_ctl(_v) for _k, _v in {
+    "literal": "def f():\n    c = 'systemctl restart ssh'\n    _run(c)\n",
+    "annotated literal": "def f():\n    c: str = 'a'\n    _run(c)\n",
+    "loop over literals": "def f():\n    for c in ('a', 'b'):\n        _run(c)\n"}.items()}
+check("shell: ...a name rebound by a parameter, +=, :=, with/except as, unpacking, a comprehension or "
+      "an import is not a literal, and literal-only names still are (control)",
+      not any(_r19d_shell_refused.values()) and all(_r19d_shell_kept.values()),
+      repr((_r19d_shell_refused, _r19d_shell_kept)))
 
 # ── no remote verb can put a shell metacharacter where the shell will read it ─────────────────
 # remote_command() renders a verb as a shell string that runs AS ROOT on a remote host. Most of it
@@ -9056,6 +9153,32 @@ check("regex anchors: every validator refuses a trailing newline (\\Z, not $)", 
 _anc_known = set(_ANCHOR_LINE_PARSERS)
 for _p in _ANCHOR_VALIDATORS.values():
     _anc_known |= set(_p)
+
+
+def _r19d_re_names(tree):
+    """(names bound to the re module, {name: re function} for each `from re import f [as g]`)."""
+    _mods, _fns = {"re"}, {}
+    for _n in _anc_ast.walk(tree):
+        if isinstance(_n, _anc_ast.Import):
+            _mods |= {_a.asname for _a in _n.names if _a.name == "re" and _a.asname}
+        elif isinstance(_n, _anc_ast.ImportFrom) and _n.module == "re":
+            _fns.update({_a.asname or _a.name: _a.name for _a in _n.names})
+    return _mods, _fns
+
+
+def _r19d_re_call(call, re_names, any_receiver=False):
+    """The re function `call` makes (`re.match`, `_re.match`, `match` from re), else None.
+
+    Only a call on the name `re` was read (review 1012d): panel/core/clock.py imports `re as _re`
+    and validates with `_re.match`, so a `$` there would have passed the gate.
+    """
+    _mods, _fns = re_names
+    if isinstance(call.func, _anc_ast.Name):
+        return _fns.get(call.func.id)
+    _recv = getattr(getattr(call.func, "value", None), "id", None)
+    return getattr(call.func, "attr", None) if any_receiver or _recv in _mods else None
+
+
 _anc_unclassified, _anc_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
                  + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
@@ -9063,9 +9186,11 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
         _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
     except SyntaxError:
         continue
+    _r19d_rn = _r19d_re_names(_tree)
     for _n in _anc_ast.walk(_tree):
+        # Any `.compile(` as before, and a `compile` imported from re by any name.
         if not (isinstance(_n, _anc_ast.Assign) and isinstance(_n.value, _anc_ast.Call)
-                and getattr(_n.value.func, "attr", "") == "compile" and _n.value.args):
+                and _r19d_re_call(_n.value, _r19d_rn, any_receiver=True) == "compile" and _n.value.args):
             continue
         _parts = [a.value for a in _n.value.args[:1] + getattr(_n.value.args[0], "values", [])
                   if isinstance(a, _anc_ast.Constant) and isinstance(a.value, str)]
@@ -9113,10 +9238,10 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
         _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
     except SyntaxError:
         continue
+    _r19d_rn = _r19d_re_names(_tree)
     for _n in _anc_ast.walk(_tree):
         if not (isinstance(_n, _anc_ast.Call)
-                and getattr(_n.func, "attr", "") in ("match", "fullmatch", "search")
-                and getattr(getattr(_n.func, "value", None), "id", "") == "re"
+                and _r19d_re_call(_n, _r19d_rn) in ("match", "fullmatch", "search")
                 and _n.args and isinstance(_n.args[0], _anc_ast.Constant)
                 and isinstance(_n.args[0].value, str)):
             continue
@@ -9132,6 +9257,17 @@ check("regex anchors: no unclassified $-anchored inline re.match/search either",
       % _inline_bad[:5])
 # Every entry still matches an inline call. Two outlived theirs: the repo-URL pattern went to \Z,
 # and the syslog cron one was replaced outright (it was quadratic on a hostile line).
+# The calls the scan reads, by every spelling (control, review 1012d): re under another name and a
+# function imported from re are read; a match on some other object is not.
+_r19d_re_ctl_t = _anc_ast.parse("import re as _r\nfrom re import match as m, fullmatch\n"
+                                "_r.match(r'^x$', v)\nm(r'^y$', v)\nfullmatch(r'^z$', v)\n"
+                                "re.search(r'^w$', v)\nother.match(r'^q$', v)\nX = compile(r'^c$')\n")
+_r19d_re_ctl = [_r19d_re_call(_c, _r19d_re_names(_r19d_re_ctl_t)) for _c in _anc_ast.walk(_r19d_re_ctl_t)
+                if isinstance(_c, _anc_ast.Call)]
+check("regex anchors: ...an inline call is read through re under any name and a function imported "
+      "from re, and not on another object (control)",
+      sorted(_x for _x in _r19d_re_ctl if _x) == ["fullmatch", "match", "match", "search"]
+      and _r19d_re_ctl.count(None) == 2, repr(_r19d_re_ctl))
 _inline_dead = sorted(_INLINE_DOLLAR_OK - _inline_seen)
 check("regex anchors: every _INLINE_DOLLAR_OK entry still matches an inline call in the code",
       not _inline_dead, "matches nothing any more (delete them): %s" % [p[:44] for p in _inline_dead])

@@ -769,8 +769,11 @@ check("2FA: a valid TOTP code signs the user in (302)", r1.status_code == 302,
 t2 = app.test_client()
 t2.post("/login", data={"username": "smoke_2fa", "password": "Str0ng!passw0rd"})
 r2 = t2.post("/login", data={"totp_code": _code})
+# Refused AS a spent code, as the backup-code reuse above is (review 1012d): "not 302" alone
+# also holds for the throttle's page, so a replay let through would pass once a bucket filled.
 check("2FA: the SAME TOTP code cannot be replayed while still in its window",
-      r2.status_code != 302, "got %d" % r2.status_code)
+      r2.status_code != 302 and "That code has already been used" in r2.get_data(as_text=True),
+      "got %d" % r2.status_code)
 with app.app_context():
     _u2 = User.query.filter_by(username="smoke_2fa").first()
     check("2FA: the spent timestep is recorded", (_u2.last_totp_step or 0) > 0,

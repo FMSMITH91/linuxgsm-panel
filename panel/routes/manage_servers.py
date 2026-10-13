@@ -478,11 +478,12 @@ def _register_install(app):
         there, and rebuilds one whose isn't only when this process created it — see
         prepare_install_account), so this simply runs it again on the same row.
 
-        Refused for a cause a retry cannot fix. install_retryable is False when the failure was
-        classified — a game needing a Steam account that owns it, one LinuxGSM caps at an older
-        Ubuntu, one SteamCMD has no build of for this platform — and spending another half hour
-        arriving at the same line is not a service to anyone. Changing the config that caused it
-        (a steamuser, say) clears the flag, because that IS a change worth retrying on.
+        Refused for a cause a retry cannot fix. install_retryable is False only for a game
+        LinuxGSM caps at an older Ubuntu than the host runs (INSTALL_FAILURE_FINAL) and for an
+        instance or script name no account may have, and spending another half hour arriving at
+        the same line is not a service to anyone. Nothing clears the flag but a later install that
+        succeeds: a config change fixes neither cause. A cause the operator CAN fix (a Steam
+        account that owns the game, a steamuser) stays retryable — see _InstallRun.fail.
         """
         gs = get_game(server_id)
         # status ALONE, as it used to be `or gs.installed` too. Everything else keys on the
@@ -1101,7 +1102,11 @@ def _install_linuxgsm(job, remote):
     _p, _fail = job.p, job.fail
     # 3. Download & set up LinuxGSM (canonical script name), with wget and curl now on the host.
     _p(3, "Downloading LinuxGSM")
-    install_cmd = _sm.game_user_cmd(
+    # C.UTF-8 and no LANGUAGE for the sudo that switches account (_R19A_C_LOCALE, as a privileged
+    # verb runs): the retry below recognises sudo's "unknown user" by its words, which a German
+    # host's language pack translates, so the retry never fired there. sudo keeps the locale, so
+    # linuxgsm.sh runs in C.UTF-8 too: the locale the helper's _game_env already gives LinuxGSM.
+    install_cmd = _sm._R19A_C_LOCALE + _sm.game_user_cmd(
         short_name, f"cd /home/{short_name} && "
                     f"wget -q -O linuxgsm.sh https://linuxgsm.sh && chmod +x linuxgsm.sh && "
                     f"bash linuxgsm.sh {lgsm_name}", selfname=lgsm_name) + " 2>&1"

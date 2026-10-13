@@ -2023,6 +2023,8 @@ def _act_panel(remote, gs, d, now, rollback_):
     outcome, detail = safe_start(remote, gs)
     if outcome == "wait":
         return _rw.start_waits(d, detail, now, rollback_)
+    # The start went ahead, so nothing was in flight: a later "inflight" is a new command's wait.
+    d.pop("inflight_since", None)
     if outcome in ("started", "running"):
         _after_start(remote, gs)
         # "running": it was up before the panel's start (the user's own @reboot, a unit): the

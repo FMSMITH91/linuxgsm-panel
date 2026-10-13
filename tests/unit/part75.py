@@ -32,6 +32,12 @@ def _lang75(lang):
         _db75.session.commit()
 
 
+# The account's language as this part found it, put back after each block that switches it, as
+# part70 and part72 do (review 1012d).
+with _p9.app_context():
+    _LANG75_WAS = _db75.session.get(_U75, P9_ADMIN).language
+
+
 def _cat75(lang):
     with _p9.test_request_context("/"):
         return _i18n75.catalog(lang)
@@ -170,7 +176,7 @@ try:
           _again75.get("success") is True and _p9_row(_tail75).install_error == ""
           and _p9_row(_tail75).install_error_i18n is None, repr((_again75, _p9_row(_tail75).install_error_i18n)))
 finally:
-    _lang75("en")
+    _lang75(_LANG75_WAS)
     _p9_restore_all()
     for _s75 in _sids75:
         _p9_delete_server(_s75)
@@ -274,7 +280,7 @@ try:
               "{name}", _p9_host_row(_before75[0]).name),
           repr((_before75, _after75, _r75.status_code, _r75.get_data(as_text=True)[:200])))
 finally:
-    _lang75("en")
+    _lang75(_LANG75_WAS)
     _p9_restore_all()
     with _p9.app_context():
         for _x75 in _RS75.query.filter(_RS75.is_local.is_(True), ~_RS75.id.in_(_before75)).all():
@@ -528,7 +534,9 @@ from panel.core.panel_state import _monitor_state as _mon75  # noqa: E402
 from unit.part12 import _p9_set_host as _p9_set_host75  # noqa: E402
 
 _host_was75 = _p9_host_row(P9_HOST).is_online
-_probed_was75 = P9_HOST in _mon75["remotes"]
+# The host's own entry, put back exactly (review 1012d: one set before this part was replaced).
+_ABSENT75 = object()
+_probed_was75 = _mon75["remotes"].get(P9_HOST, _ABSENT75)
 _seen75 = {}
 try:
     _p9_arm(who="part75")
@@ -545,8 +553,10 @@ try:
 finally:
     _p9_restore_all()
     _p9_set_host75(P9_HOST, is_online=_host_was75)
-    if not _probed_was75:
+    if _probed_was75 is _ABSENT75:
         _mon75["remotes"].pop(P9_HOST, None)
+    else:
+        _mon75["remotes"][P9_HOST] = _probed_was75
 check("host page: the header badge says Unreachable (red) for a host the panel checked and cannot reach, "
       "Checking… before the first check, Reachable when it answers — it said \"Unknown\" for a dead host",
       _seen75 == {"down": ("bg-danger", "The panel cannot reach this host over SSH", "Unreachable"),

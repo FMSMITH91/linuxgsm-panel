@@ -149,6 +149,9 @@ def _restart_callers68(client, sid, host):
     calls = []
     _p9_patch(_p9_sd._sm, "upgrade_managed_cron_tracking",
               lambda *a, **k: (calls.append(k.get("query_type")), False)[1])
+    # The port move asks game_account_write_refusal before its rewrite (review 1012d), a host round
+    # trip stood in for here as a plain game account.
+    _p9_patch(_p9_sh, "game_account_write_refusal", lambda *a, **k: None)
     _gp68._cron_follows(host, _gp68._row(NS(id=1, remote_id=1, name="x", short_name=_USER68,
                                             lgsm_name=_USER68, game_type=_GAME68, port=1,
                                             installed=True, query_type=_QT68)), 16262)
@@ -159,6 +162,9 @@ def _restart_callers68(client, sid, host):
           calls == [_QT68, _QT68] and (_p9_json(resp) or {}).get("success") is True,
           repr((calls, _p9_json(resp))))
     seen = []
+    # The pass asks game_account_write_refusal before a crontab rewrite (review 1012d); the account
+    # check is a host round trip, stood in for here as a plain game account.
+    _p9_patch(_p9_sh, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_app68, "ensure_node_tools_cron", lambda r: None)
     _p9_patch(_p9_sd._sm, "upgrade_managed_cron_tracking",
               lambda remote, user, *a, **k: seen.append((user, k.get("query_type"))))

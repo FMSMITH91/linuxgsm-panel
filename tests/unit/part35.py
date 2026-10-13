@@ -669,7 +669,13 @@ def _p35_loops_record():
 _LOOP_FILES35 = ("app.py", "panel/services/monitoring.py", "panel/services/host_reboot.py",
                  "panel/routes/server_files.py",
                  "panel/routes/os_updates.py", "panel/routes/host_terminal.py",
-                 "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py")
+                 "panel/ops/terminal_session.py", "panel/ops/debug_report/process.py",
+                 "panel/routes/_shared.py")
+# The same files part23's beat gate reads (review 1012d: _shared.py was left out here, so a loop
+# there that slept before its first pass would have gone unread).
+from unit.part23 import _LOOP_FILES23  # noqa: E402
+check("loops: the first-pass gate reads every file part23's beat gate reads",
+      set(_LOOP_FILES35) == set(_LOOP_FILES23), repr(sorted(set(_LOOP_FILES23) ^ set(_LOOP_FILES35))))
 
 
 def _call_name35(node):

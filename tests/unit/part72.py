@@ -362,9 +362,10 @@ def _r18d_unscoped_wraps72(css):
     Only the first `.page-title {` rule was read (review 1012c): a `flex-wrap: wrap` put back into
     the phone block's own rule wrapped every heading at exactly the 375px width it was measured at.
     A selector list naming .page-title counts too; the `:has(> [data-no-i18n])` rule is the scoped one.
+    The `flex-flow` shorthand wraps too (review 1012d: `flex-flow: row wrap` passed).
     """
     return [_sel.strip() for _sel, _body in _re72.findall(r"([^{}]+)\{([^{}]*)\}", css)
-            if "flex-wrap" in _body
+            if _re72.search(r"flex-wrap|flex-flow\s*:[^;]*\bwrap", _body)
             and any(_re72.search(r"(?<![\w-])\.page-title$", _one.strip()) for _one in _sel.split(","))]
 
 
@@ -387,11 +388,13 @@ check("375px: a page heading wraps its flex row only when it carries a name (a l
 _ptctl72 = _CSS72.replace(_PHONE72 + " {", _PHONE72 + " {\n.page-title { flex-wrap: wrap; }", 1)
 _flctl72 = _re72.sub(r"(\.dash-srv-table\s+\.dash-col-name\s*\{[^}]*)min-width:\s*120px", r"\1min-width: 0",
                      _CSS72) + "\n.dash-srv-table .dash-col-name { min-width: 120px; }\n"
-check("375px: ...a flex-wrap in the phone block's .page-title rule or in a selector list naming it is "
-      "named, and a name floor outside the phone block is not counted (control)",
+check("375px: ...a flex-wrap (or a wrapping flex-flow) in the phone block's .page-title rule or in a "
+      "selector list naming it is named, and a name floor outside the phone block is not counted (control)",
       _r18d_unscoped_wraps72(_ptctl72) == [".page-title"]
       and _r18d_unscoped_wraps72(".x, .page-title { flex-wrap: wrap }") == [".x, .page-title"]
       and _r18d_unscoped_wraps72(".page-title:has(> [data-no-i18n]) { flex-wrap: wrap }") == []
+      and _r18d_unscoped_wraps72(".page-title { flex-flow: row wrap }") == [".page-title"]
+      and _r18d_unscoped_wraps72(".page-title { flex-flow: row nowrap }") == []
       and not _r18d_name_floor72(_flctl72),
       repr((_r18d_unscoped_wraps72(_ptctl72), _r18d_name_floor72(_flctl72))))
 _fw72 = _read72(_root, "templates", "remote_firewall.html")

@@ -50,7 +50,7 @@ from werkzeug.security import generate_password_hash as _hash38
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import _p9, _p9_client
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client
 from unit.part34 import _as_account34, _bash34
 from panel.core import panel_state as _ps38
 from panel.db.models import GameServer, RemoteServer, User, db
@@ -61,7 +61,7 @@ from panel.routes import server_files as _sf38
 _TMP38 = _tf38.mkdtemp(prefix="lgsm-unit-p38-")
 _ABSENT38 = object()
 _SAVED38 = {}
-_TRIP38 = []
+_TRIP38_FROM = [0]
 _SRC38 = os.path.join(_root, "static", "js", "server_detail.js")
 _PANEL38 = os.path.join(_root, "static", "js", "panel.js")
 
@@ -83,12 +83,18 @@ def _restore38():
 
 
 def _arm38():
-    """Every real transport raises; the console's reads are stubbed above them."""
-    for name in ("_run_via_ssh_cli", "get_connection", "_exec_local_shell", "_exec_local_argv"):
-        def _tripped(*_a, _n=name, **_k):
-            _TRIP38.append(_n)
-            raise ConnectionError("part38 tripwire: a test reached the real %s" % _n)
-        _set38(_core38, name, _tripped)
+    """Every real transport is tripped; the console's reads are stubbed above them.
+
+    part12's _p9_arm, the one set every part uses (review 1012d): this armed only _core's four
+    transports, so system_ops' runners, _run_local, a module's own subprocess and hosts.paramiko
+    ran for real under "nothing in this part reached a real transport". Undone by _restore38.
+    """
+    _TRIP38_FROM[0] = len(_P9_TRIPPED)
+    _p9_arm(patch=_set38, who="part38")
+
+
+def _tripped38():
+    return _P9_TRIPPED[_TRIP38_FROM[0]:]
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -3318,7 +3324,8 @@ def _run38():
                 if row is not None:
                     db.session.delete(row)
             db.session.commit()
-    check("console-idle: nothing in this part reached a real SSH or local transport", _TRIP38 == [], repr(_TRIP38))
+    check("console-idle: nothing in this part reached a real SSH or local transport", _tripped38() == [],
+          repr(_tripped38()))
 
 
 try:

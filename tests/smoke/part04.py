@@ -503,9 +503,14 @@ with app.app_context():
 with app.app_context():
     _lay_gs2 = GameServer(remote_id=remote2_id, name="smoke-tf2", short_name="tf2server",
                           game_type="tf2", port=27025, installed=True, status="offline")
-    db.session.add(_lay_gs2)
+    # A second row on that host (review 1012d): with one row its order could never change, so
+    # "another host's rows are NOT disturbed" passed whatever the saved order did to it.
+    _lay_gs3 = GameServer(remote_id=remote2_id, name="smoke-tf2b", short_name="tf2server",
+                          game_type="tf2", port=27026, installed=True, status="offline")
+    db.session.add_all([_lay_gs2, _lay_gs3])
     db.session.commit()
     _lay_gs2_id = _lay_gs2.id      # read it INSIDE the session; the instance detaches on exit
+    _lay_gs3_id = _lay_gs3.id
 
 
 def _card_order(html):
@@ -559,6 +564,8 @@ _rows_default = _row_order(c.get("/").get_data(as_text=True), remote_id)
 check("layout: server rows carry their id", len(_rows_default) >= 2, str(_rows_default))
 _rows_flip = list(reversed(_rows_default))
 _other_before = _row_order(c.get("/").get_data(as_text=True), remote2_id)
+check("layout: the other host has two rows, so a change to its order would show",
+      len(_other_before) >= 2, str(_other_before))
 _sv = c.post("/api/account/ui-order", json={"server_order": {str(remote_id): _rows_flip}})
 check("layout: saving a per-host server order succeeds", _sv.status_code == 200)
 _html_sv = c.get("/").get_data(as_text=True)
@@ -594,9 +601,10 @@ check("tiles: the saved order is rendered server-side",
 # Hiding: the panel must not be rendered at all, and a restore control must appear.
 c.post("/api/account/ui-order", json={"hidden": {"dash_tiles": ["offline", "host"]}})
 _hid_html = c.get("/").get_data(as_text=True)
+# The rest by name too (review 1012d): _tile_order reads [] when it cannot find the row, and
+# "not in []" held for any template change that broke the parser.
 check("tiles: hidden tiles are not rendered",
-      "offline" not in _tile_order(_hid_html) and "host" not in _tile_order(_hid_html),
-      str(_tile_order(_hid_html)))
+      _tile_order(_hid_html) == ["players", "total", "online"], str(_tile_order(_hid_html)))
 
 
 # Scoped to the restore BAR: counting over the whole page would also match the inline JS, which
@@ -750,7 +758,8 @@ check("detail: a stored key for a gated panel renders NOTHING",
 c.post("/api/account/ui-order", json={"panels": {"detail_console": ["controls", "console", "players"]},
                                       "hidden": {"detail_console": ["players"]}})
 _det_hid = c.get("/server/%d" % gs_id).get_data(as_text=True)
-check("detail: a hidden panel is not rendered", "players" not in _detail_panels(_det_hid))
+check("detail: a hidden panel is not rendered", _detail_panels(_det_hid) == ["controls", "console"],
+      str(_detail_panels(_det_hid)))
 check("detail: the restore bar is scoped to the console tab",
       bool(_re_d.search(r'id="detail-console-hidden"[^>]*data-mtab="console"', _det_hid)))
 # Hiding the Controls panel removes the stats canvas. initChart() must survive that: it used to
@@ -815,6 +824,7 @@ _lay_anon = app.test_client().post("/api/account/ui-order", json={"host_order": 
 check("layout: saving requires a login", _lay_anon.status_code != 200, "got %d" % _lay_anon.status_code)
 with app.app_context():
     db.session.delete(db.session.get(GameServer, _lay_gs2_id))
+    db.session.delete(db.session.get(GameServer, _lay_gs3_id))
     db.session.commit()
 
 # ── Light-migration coverage ──────────────────────────────────────────────────────────────────
@@ -1832,26 +1842,97 @@ check("errors: a mutating API route answers JSON when the host is unreachable",
 # ...in the viewer's language. The pages write the message after "❌ ", which the page's translator
 # does not look past, so the English sent here stayed English for every es/fr viewer.
 from panel.core import i18n as _eh_i18n  # noqa: E402
+from markupsafe import escape as _eh_i18n_escape  # noqa: E402
 with app.app_context():
     _eh_u = User.query.filter_by(username="smoke_admin").first()
     _eh_lang_was, _eh_u.language = _eh_u.language, "fr"
     db.session.commit()
+# A host that cannot be reached is said as that (review 1012d): it answered the generic 500. Any
+# other exception keeps the generic message, driven here by a stand-in for the firewall op.
+from panel.routes import remote_vps as _eh_rv  # noqa: E402
+
+
+def _eh_boom(*_a, **_k):
+    raise RuntimeError("smoke: a stand-in fault that is not the host's")
+
+
+_eh_open_was = _eh_rv.remote_ufw_open_port
+_eh_writes = {}
 try:
     _resp = _eh_c.post("/api/remote/%d/firewall/open" % _eh_rid, json={"port": 27015})
+    # Every firewall write on the host: none has a handler of its own.
+    for _p, _b in (("allow-from", {"source": "198.51.100.7", "port": 27015}),
+                   ("limit", {"port": 27015}), ("close", {"port": 27015}),
+                   ("delete-rule", {"num": 1})):
+        _r = _eh_c.post("/api/remote/%d/firewall/%s" % (_eh_rid, _p), json=_b)
+        _eh_writes[_p] = (_r.status_code, (_r.get_json(silent=True) or {}).get("unreachable"))
+    _eh_rv.remote_ufw_open_port = _eh_boom
+    _resp_gen = _eh_c.post("/api/remote/%d/firewall/open" % _eh_rid, json={"port": 27015})
 finally:
+    _eh_rv.remote_ufw_open_port = _eh_open_was
     with app.app_context():
         User.query.filter_by(username="smoke_admin").first().language = _eh_lang_was
         db.session.commit()
 with app.test_request_context("/"):
     _eh_fr = _eh_i18n.catalog("fr").get("Something went wrong — see the panel log.")
-_eh_said = (_resp.get_json(silent=True) or {}).get("message")
-check("errors: ...and its generic message is in the viewer's language",
-      _resp.status_code == 500 and bool(_eh_fr) and _eh_said == _eh_fr, repr((_resp.status_code, _eh_said)))
+    _eh_fr_down = _eh_i18n.catalog("fr").get("Host unreachable")
+_eh_body = _resp.get_json(silent=True) or {}
+check("errors: ...a host that cannot be reached is said to be unreachable (502), in the viewer's language",
+      _resp.status_code == 502 and bool(_eh_fr_down) and _eh_body.get("message") == _eh_fr_down
+      and _eh_body.get("unreachable") is True, repr((_resp.status_code, _eh_body)))
+# close and delete-rule read the firewall first (the lockout guard), and a read that fails is their
+# own refusal, answered 200; neither is the generic 500 any more.
+check("errors: ...and so are allow-from and limit on that host; close and delete-rule refuse as their "
+      "own guard says (no write answers the generic 500)",
+      {k: _eh_writes.get(k) for k in ("allow-from", "limit")} == {"allow-from": (502, True), "limit": (502, True)}
+      and all(_eh_writes.get(k, (500,))[0] != 500 for k in ("close", "delete-rule")), repr(_eh_writes))
+_eh_said = (_resp_gen.get_json(silent=True) or {}).get("message")
+check("errors: ...and any other fault's generic message is in the viewer's language",
+      _resp_gen.status_code == 500 and bool(_eh_fr) and _eh_said == _eh_fr,
+      repr((_resp_gen.status_code, _eh_said)))
 # An abort(404) on an API path is the same unparseable body, one status code over.
 _resp = _eh_c.get("/api/server/99999/history")
 check("errors: an abort() on an API path answers JSON too",
       "json" in (_resp.headers.get("Content-Type") or "") and _resp.status_code == 404,
       "%s %s" % (_resp.status_code, _resp.headers.get("Content-Type")))
+# ...and none of them carries Werkzeug's English to an es/fr viewer (review 1012d): the JSON reply
+# and the plain page both say the panel's own sentence for the status, in the viewer's language.
+# A 404, a CSRF 400 and a 413, each asked by a French viewer.
+with app.app_context():
+    _eh_u = User.query.filter_by(username="smoke_admin").first()
+    _eh_lang_was, _eh_u.language = _eh_u.language, "fr"
+    db.session.commit()
+_eh_max_was = app.config["MAX_CONTENT_LENGTH"]
+try:
+    _eh_404 = _eh_c.get("/api/server/99999/history")
+    _eh_page = _eh_c.get("/no-such-page-at-all")
+    app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        _eh_csrf = _eh_c.post("/api/server/99999/action", json={"action": "start"})
+    finally:
+        # nosemgrep: python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled -- the test client posts forms without a browser-issued token
+        app.config["WTF_CSRF_ENABLED"] = False
+    app.config["MAX_CONTENT_LENGTH"] = 16
+    _eh_413 = _eh_c.post("/api/server/99999/action", json={"action": "start", "pad": "x" * 64})
+finally:
+    app.config["MAX_CONTENT_LENGTH"] = _eh_max_was
+    with app.app_context():
+        User.query.filter_by(username="smoke_admin").first().language = _eh_lang_was
+        db.session.commit()
+with app.test_request_context("/"):
+    _eh_cat = _eh_i18n.catalog("fr")
+_eh_want = {404: _eh_cat.get("That page or item was not found — it may have been removed. Reload the page."),
+            400: _eh_cat.get("This page's security token has expired — reload the page and try again."),
+            413: _eh_cat.get("That upload is too large.")}
+_eh_got = {r.status_code: (r.get_json(silent=True) or {}).get("message") for r in (_eh_404, _eh_csrf, _eh_413)}
+check("errors: a 404, a CSRF 400 and a 413 on an API path answer the panel's own sentence in the "
+      "viewer's language, not Werkzeug's English",
+      all(_eh_want.values()) and _eh_got == _eh_want, repr(_eh_got))
+_eh_body = _eh_page.get_data(as_text=True)
+check("errors: ...and a plain page's 404 says it in the viewer's language, as HTML, status kept",
+      _eh_page.status_code == 404 and "html" in (_eh_page.headers.get("Content-Type") or "")
+      and bool(_eh_want[404]) and _eh_i18n_escape(_eh_want[404]) in _eh_body
+      and "requested URL" not in _eh_body, _eh_body[:300])
 # ...and a PAGE keeps the plain HTML error it has always had.
 _resp = _eh_c.get("/no-such-page-at-all")
 check("errors: a page render still gets the ordinary HTML error",

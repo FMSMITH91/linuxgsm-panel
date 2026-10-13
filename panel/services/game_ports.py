@@ -341,7 +341,11 @@ def _cron_follows(remote, row, port):
     node-tools pass) has usually rewritten it from the OLD port before this pass runs, and then
     not again for a day: the line asked the neighbour, and acted on its player count.
     """
+    from panel.routes._shared import game_account_write_refusal
     try:
+        # A cron write like any other: not as an account that can become root (see app.py's pass).
+        if game_account_write_refusal(remote, row.short_name) is not None:
+            return ""
         changed = _sm.upgrade_managed_cron_tracking(remote, row.short_name, row.lgsm_name,
                                                     game_type=row.game_type, port=port,
                                                     query_type=row.query_type)

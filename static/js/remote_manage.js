@@ -334,7 +334,9 @@ function pollLive(){
     // of a reading nobody took.
     var stale = document.getElementById('live-stale');
     if(d.error){
-      if(d.unreachable) _r18cPaintHostBadge(false);
+      // Not on the panel host's own page: a failed local read is not "cannot reach this host over
+      // SSH" about the machine that is serving this page (a good read still paints it Reachable).
+      if(d.unreachable && !window.IS_LOCAL) _r18cPaintHostBadge(false);
       if(stale){ stale.textContent = d.unreachable
         ? t('Live figures are paused — the host did not answer. The numbers below are the last reading.')
         : t('Live figures are paused — the last read failed.'); stale.style.display=''; }

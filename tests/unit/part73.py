@@ -68,6 +68,12 @@ def _as73(lang):
         _models73.db.session.commit()
 
 
+# The account's language as this part found it, put back after each block that switches it, as
+# part70 and part72 do (review 1012d: reset to "en", a later part would read this part's choice).
+with _p9.app_context():
+    _LANG73_WAS = _models73.db.session.get(_models73.User, P9_ADMIN).language
+
+
 # ── A01: an IPv6 host's connect address, wherever it is printed ──────────────────────────────────
 _V6_73 = "2001:db8::5"
 _RM73 = _read73("templates", "remote_manage.html")
@@ -144,6 +150,10 @@ if _jsv73 is None:
 _TRIP73_START = len(_P9_TRIPPED)
 # The route's own reply, not only the helper: driven through Change binding to "::".
 _cfg_before73 = _cfg73.load_config()
+# The audit rows counted from here (review 1012d): the newest row in the database was read, and
+# part53 had already written one with the same detail, so a request that audited nothing passed.
+with _p9.app_context():
+    _cpa_from73 = _models73.db.session.query(_models73.db.func.max(_models73.AuditLog.id)).scalar() or 0
 try:
     _as73("es")
     with _patched():
@@ -157,13 +167,13 @@ try:
         _cfg73.save_config(dict(_cfg_before73, port=5000, bind_host=_ANY4_73))
         _cp73 = _p9_client(P9_ADMIN).post("/api/panel/change-port", json={"port": 5000, "bind_host": "::"})
 finally:
-    _as73("en")
+    _as73(_LANG73_WAS)
     _cfg73.save_config(_cfg_before73)
 _cpm73 = (_cp73.get_json() or {}).get("message") or ""
 with _p9.app_context():
     _cpa73 = (_models73.AuditLog.query.filter_by(action="panel_change_binding")
-              .order_by(_models73.AuditLog.id.desc()).first())
-    _cpd73 = _cpa73.detail if _cpa73 is not None else ""
+              .filter(_models73.AuditLog.id > _cpa_from73).all())
+    _cpd73 = _cpa73[0].detail if len(_cpa73) == 1 else "%d rows" % len(_cpa73)
 check("panel bind: ...and Change binding's reply names an IPv6 bind bracketed, in the viewer's language, "
       "as its audit row does",
       _cp73.status_code == 200 and "[::]:5000" in _cpm73 and ":::5000" not in _cpm73
@@ -198,7 +208,11 @@ try:
         _ccr73 = _c73.post("/api/server/%d/custom-command/%d" % (P9_GS, _CC73), json={"value": "\x03"})
         _ccok73 = _c73.post("/api/server/%d/custom-command/%d" % (P9_GS, _CC73), json={"value": "hola"})
 finally:
-    _as73("en")
+    _as73(_LANG73_WAS)
+    # Removed as part53 and part74 remove theirs, so no later part inherits a command for every server.
+    with _p9.app_context():
+        _models73.db.session.delete(_models73.db.session.get(_models73.CustomCommand, _CC73))
+        _models73.db.session.commit()
 _CTRL_ES73 = _CAT73["es"].get("A console command can't contain control characters or line breaks.")
 check("custom command: a value holding a control character, through a permissive stored pattern, is "
       "refused up front (400) in the viewer's language, and nothing is sent (it was a 502 \"could not run "
@@ -239,7 +253,7 @@ try:
         _modr73 = _p9_client(P9_ADMIN).post("/api/server/%d/moderate" % P9_GS,
                                             json={"action": "kick", "target": "\x07Bob"})
 finally:
-    _as73("en")
+    _as73(_LANG73_WAS)
 check("moderation: ...through the Players panel's route, the refusal reaches a fr viewer in French",
       (_modr73.get_json() or {}).get("message") == _CAT73["fr"].get(_smg73.R18A_NAME_CONTROL)
       and (_modr73.get_json() or {}).get("success") is False and _mod_sent73 == [],
@@ -297,14 +311,16 @@ _DAY73 = _rw73.INFLIGHT_GIVE_UP
 _inf_held73 = _held73([(1000, "inflight"), (1000 + _DAY73 - 1, "inflight")])
 _inf_gone73 = _held73([(1000, "inflight"), (1000 + 3700, "inflight"), (1000 + _DAY73, "inflight")])
 _inf_rb73 = _held73([(1000, "inflight"), (1000 + _DAY73, "inflight")], rollback=True)
-_inf_reset73 = _held73([(1000, "inflight"), (2000, "window"), (2000 + _DAY73 - 1, "inflight")])
+# A "window" tick did not read the inflight state, so it keeps the day's clock (part76 holds the
+# realistic tick stream and the outcome that does restart it).
+_inf_reset73 = _held73([(1000, "inflight"), (2000, "window"), (1000 + _DAY73, "inflight")])
 check("reboot: a start held by a LinuxGSM command in flight stays pending past the hour, but not for "
       "ever: a day on, the row is failed with that reason and the plan finishes (the clock was reset on "
       "every tick, and the plan held every later reboot of the host)",
       _DAY73 == 86400 and _inf_held73[0]["restore"] == "pending" and _inf_held73[1] == []
       and _inf_gone73[0]["restore"] == "failed" and "LinuxGSM command" in _inf_gone73[0]["result"]
       and "called off" not in _inf_gone73[0]["result"] and _inf_gone73[1] == [1000 + _DAY73]
-      and "called off" in _inf_rb73[0]["result"] and _inf_reset73[0]["restore"] == "pending",
+      and "called off" in _inf_rb73[0]["result"] and _inf_reset73[0]["restore"] == "failed",
       repr((_inf_held73, _inf_gone73, _inf_rb73, _inf_reset73)))
 
 

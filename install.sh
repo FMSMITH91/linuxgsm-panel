@@ -671,12 +671,23 @@ ufw_port_state() {
     echo closed
 }
 
-# This host's own address, for when no lookup service answered: its first IPv4 one, else its
-# first address of any kind. `hostname -I` lists IPv6 too and in no fixed order, and the firewall
-# verdict printed beside the address reads the IPv4 rule. The caller brackets an IPv6 answer.
+# This host's own address, for when no lookup service answered: its first public IPv4 one, else
+# its first IPv6 one that is not link-local, else its first IPv4 one, else its first address of
+# any kind. `hostname -I`
+# lists IPv6 too and in no fixed order, and the firewall verdict printed beside the address reads
+# the IPv4 rule. But once the IPv4 lookups have failed, an IPv4 that is private (docker0's
+# 172.17.0.1, a LAN 192.168.x, the tailnet's 100.64/10) is not the way in from outside: an
+# IPv6-only VPS with docker printed http://172.17.0.1:5000/setup?token=… as its public address. A
+# host with no global IPv6 still gets its (LAN) IPv4 one. The caller brackets an IPv6 answer.
 host_addr_fallback() {
-    hostname -I 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i !~ /:/) { print $i; f = 1; exit }
-        first = $1 } END { if (!f && first != "") print first }'
+    hostname -I 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) { a = $i
+            if (first == "") first = a
+            if (a ~ /:/) { if (v6 == "" && a !~ /^[fF][eE]80:/) v6 = a; continue }
+            if (v4 == "") v4 = a
+            if (a ~ /^(10|127)\./ || a ~ /^169\.254\./ || a ~ /^192\.168\./ \
+                || a ~ /^172\.(1[6-9]|2[0-9]|3[01])\./ || a ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./) continue
+            print a; f = 1; exit } }
+        END { if (!f) { if (v6 != "") print v6; else if (v4 != "") print v4; else if (first != "") print first } }'
 }
 
 # After an update, say the panel serves HTTPS now — only when that is NEWS, and only with addresses

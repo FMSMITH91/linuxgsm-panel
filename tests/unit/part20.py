@@ -10,6 +10,7 @@ with canary rows in it; the section registry is cut to this builder's sections p
 summary section, so a section another builder adds cannot reach a real host from here.
 """
 import os
+import re as _re20
 import tempfile as _tf20
 import threading as _th20
 import time as _time20
@@ -722,6 +723,10 @@ def _p20_journal_source():
 
 
 # ── R2: the page uses the server's issue body ───────────────────────────────────────────────────
+# A server error (d.error) reaching innerHTML, however the assignment is spaced or built.
+_R19D_ERR_SINK20 = _re20.compile(r"\.innerHTML\s*\+?=[^;]*\bd\.error\b")
+
+
 def _p20_js():
     src = open(os.path.join(SO.PANEL_DIR, "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
     fn = src.split("function genDebugReport(){", 1)[-1].split("\nfunction ", 1)[0]
@@ -732,7 +737,13 @@ def _p20_js():
     check("debug report page: a 429 (a report is still being built) says so, in a fixed string, "
           "instead of 'Could not generate the report.'",
           "r.status===429" in fn and "still being built" in fn and "d.error" in fn
-          and "msg.innerHTML=d.error" not in fn, fn[:900])
+          and _R19D_ERR_SINK20.search(fn) is None, fn[:900])
+    # The sink is found however it is spaced or built (review 1012d: only the literal
+    # `msg.innerHTML=d.error` was refused, so `msg.innerHTML = d.error` passed).
+    check("debug report page: ...a server error reaching innerHTML is found in any spacing (control)",
+          all(_R19D_ERR_SINK20.search(_x) for _x in (
+              "msg.innerHTML=d.error;", "msg.innerHTML = d.error;", "el.innerHTML += '<b>' + d.error;"))
+          and _R19D_ERR_SINK20.search("msg.textContent = d.error;") is None)
 
 
 try:

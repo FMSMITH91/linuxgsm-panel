@@ -1662,7 +1662,10 @@ def remote_os_check_updates(server):
     next time the check succeeds. The filtering greps this pipeline used to end with are gone for
     the same reason — grep exits 1 when a clean host matches nothing, so its status masked apt's."""
     _core.run_privileged(server, "apt-update", [], timeout=60, merge_stderr=False)
-    out, _, rc = _core.run_command(server, "apt list --upgradable 2>/dev/null", timeout=30)
+    # C.UTF-8 and no LANGUAGE, as the verb above runs: apt translates "[upgradable from: …]", and
+    # parse_upgradable reads the English words (see system_ops.os_update_available).
+    out, _, rc = _core.run_command(server, _core._R19A_C_LOCALE + "apt list --upgradable 2>/dev/null",
+                                   timeout=30)
     pkgs = _parse_upgradable(out)
     return {"ok": rc == 0, "count": len(pkgs), "packages": pkgs}
 
@@ -1832,13 +1835,16 @@ def remote_uptime(server, force=False):
         hit = _uptime_cache.get(server.id)
         if hit and hit[0] > now:
             return hit[1]
+    # uptime, df and free in the C locale: their words ("up", "Mem:") and decimal commas are
+    # translated on a host set to another language, and the awk below reads them (see _core's
+    # _host_sample_cmd).
     # One composite command with tagged lines, parsed below — one round-trip, one process spawn.
     parts = [
-        "echo UPTIME $(uptime -p)",
+        "echo UPTIME $(LC_ALL=C uptime -p)",
         "awk '{print \"LOAD\",$1,$2,$3}' /proc/loadavg",
-        "df -h / | tail -1 | awk '{print \"DISK\",$3\"/\"$2}'",
-        "free -h | awk '/Mem:/{print \"MEM\",$3\"/\"$2}'",
-        "free | awk '/Mem:/{printf \"MEMPCT %.1f\\n\", $3/$2*100}'",
+        "LC_ALL=C df -h / | tail -1 | awk '{print \"DISK\",$3\"/\"$2}'",
+        "LC_ALL=C free -h | awk '/Mem:/{print \"MEM\",$3\"/\"$2}'",
+        "LC_ALL=C free | awk '/Mem:/{printf \"MEMPCT %.1f\\n\", $3/$2*100}'",
         "echo KERNEL $(uname -r)",
         "echo CORES $(nproc)",
         "grep '^cpu ' /proc/stat", "sleep 0.25", "grep '^cpu ' /proc/stat",
@@ -2563,13 +2569,32 @@ def remote_install_tailscale(server):
 _TS_LOGIN_URL_RE = _priv.TS_LOGIN_URL_RE
 
 
+# The one body of /etc/sysctl.d/99-tailscale.conf, for both ways of joining. The login-link flow
+# wrote IPv4 forwarding alone over the file the auth-key flow writes with both families, so an
+# IPv6 route it advertised carried nothing, and re-running it on a host joined by key dropped that
+# host's IPv6 forwarding at the next reboot.
+_R19A_TS_FORWARDING = "net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n"
+
+
+def _r19a_enable_forwarding(server):
+    """Write the forwarding drop-in and load it: the (out, err, rc) of the step that decided."""
+    res = _core.write_root_file(server, "sysctl-tailscale", _R19A_TS_FORWARDING, timeout=15)
+    if res[2] == 0:
+        res = _core.run_privileged(server, "sysctl-reload", ["tailscale"], timeout=15)
+    return res
+
+
 def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     """Run `tailscale up` (no auth key) in the background and return the browser
     login URL — the user just pastes it into their browser to authorize the node,
     exactly like `tailscale up` on the CLI. tailscale up keeps waiting for auth."""
     if advertise_routes:
-        _core.write_root_file(server, "sysctl-tailscale", "net.ipv4.ip_forward = 1\n", timeout=15)
-        _core.run_privileged(server, "sysctl-reload", ["tailscale"], timeout=15)
+        # Read, as the auth-key flow reads it: this answer carries only the login URL, so a failed
+        # write or reload goes to the log rather than passing unseen.
+        _fw = _r19a_enable_forwarding(server)
+        if _fw[2] != 0:
+            _core._log.warning("IP forwarding was NOT enabled on %s (%s): the advertised routes will "
+                               "not carry traffic", getattr(server, "name", "?"), _r11a_why(_fw))
     # Was a shell one-liner: rm, nohup, a redirect, a background job, a seq loop and a grep. The
     # verb starts `tailscale up` detached and polls its OWN log — whose path is fixed in the verb
     # table and lives in /run rather than /tmp, where any local user could have pre-created it.
@@ -2606,11 +2631,7 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
 
     # 1. Enable IP forwarding for subnet routing
     if advertise_routes:
-        _fw = _core.write_root_file(server, "sysctl-tailscale",
-                                    "net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n",
-                                    timeout=15)
-        if _fw[2] == 0:
-            _fw = _core.run_privileged(server, "sysctl-reload", ["tailscale"], timeout=15)
+        _fw = _r19a_enable_forwarding(server)
         # Read, not assumed: a write or reload that failed was logged "IP forwarding enabled", and
         # the advertised routes then carried nothing with no word of why.
         log.append("IP forwarding enabled" if _fw[2] == 0

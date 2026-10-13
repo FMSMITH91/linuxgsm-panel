@@ -233,6 +233,17 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
     return res
 
 
+def _r19b_root_runs_tool(verb):
+    """Whether _run_verb_once, with no helper, runs `verb`'s tool as root (not a _REMOTE_ACTIONS verb).
+
+    Those have no tool (the helper performs them itself), so their argv is empty: as root it was
+    handed to Popen as [], IndexError, and every one answered "command execution error" -- the
+    fail2ban top-addresses card and the auto-block among them. They take their shell form
+    instead, as _core.run_privileged does as root with no helper.
+    """
+    return hasattr(os, "geteuid") and os.geteuid() == 0 and verb not in _priv._REMOTE_ACTIONS
+
+
 def _run_verb_once(verb, args, timeout, merge_stderr):
     """_run_verb's body: (the path taken -- "helper" / "root" / "shell", or "" for a refused
     argument --, (stdout, stderr, rc))."""
@@ -242,8 +253,13 @@ def _run_verb_once(verb, args, timeout, merge_stderr):
     try:
         if _helper_present():
             path, argv = "helper", _priv.helper_argv(verb, args)
-        elif hasattr(os, "geteuid") and os.geteuid() == 0:
+        elif _r19b_root_runs_tool(verb):
             path, argv = "root", _priv.tool_argv(verb, args)
+            if not argv:
+                # A verb the helper performs that has no shell form either (LOCAL_ONLY_VERBS):
+                # its rendering is an empty command, which exits 0 and would report a success.
+                _log.warning("privileged verb %s needs the panel helper, which is not installed", verb)
+                return path, ("", "needs the panel's privileged helper (re-run install.sh as root)", -1)
         else:
             return "shell", _run_verb_shell(
                 _priv.remote_command(verb, args, merge_stderr=merge_stderr),
@@ -788,7 +804,13 @@ def os_update_available(refresh=True):
     # No filtering greps in the pipeline: their exit status would mask apt's own, and a clean host
     # (grep matches nothing → exit 1) would be indistinguishable from a failed check. parse_upgradable
     # drops the header and any non-package line itself, so `rc` here is apt's.
-    out, _, rc = _run("apt list --upgradable 2>/dev/null", timeout=30)
+    # In C.UTF-8 with LANGUAGE unset, as a privileged verb runs: this is not a verb, so nothing else
+    # pinned it, and on a German host apt writes "[aktualisierbar von: …]", which parse_upgradable
+    # does not know, so every package lost its "from" version. The prefix is _core._R19A_C_LOCALE
+    # spelled out, because _run takes only a literal (tests/unit/part06's shell gate); part76 holds
+    # the two equal.
+    out, _, rc = _run("export LC_ALL=C.UTF-8 LANG=C.UTF-8; unset LANGUAGE; "
+                      "apt list --upgradable 2>/dev/null", timeout=30)
     packages = parse_upgradable(out)
     return {"ok": rc == 0, "updates_available": len(packages) > 0,
             "count": len(packages), "packages": packages}
@@ -947,7 +969,9 @@ def _local_cpu_percent():
 
 def server_uptime():
     """Get server uptime."""
-    out, _, rc = _run("uptime -p", timeout=5)
+    # The C locale for every read parsed by its words, as remote_uptime does: `Mem` and "up " are
+    # translated on a host set to another language.
+    out, _, rc = _run("LC_ALL=C uptime -p", timeout=5)
     uptime_str = out.replace("up ", "") if out else "unknown"
 
     # Also get load average
@@ -955,11 +979,11 @@ def server_uptime():
     load_parts = load.split() if load else ["?", "?", "?"]
 
     # Get disk
-    disk, _, _ = _run("df -h / | tail -1 | awk '{print $3 \"/\" $2 \" (\" $5 \")\"}'", timeout=5)
+    disk, _, _ = _run("LC_ALL=C df -h / | tail -1 | awk '{print $3 \"/\" $2 \" (\" $5 \")\"}'", timeout=5)
 
     # Memory
-    mem, _, _ = _run("free -h | grep Mem | awk '{print $3 \"/\" $2}'", timeout=5)
-    mem_percent, _, _ = _run("free | grep Mem | awk '{printf \"%.1f\", $3/$2 * 100}'", timeout=5)
+    mem, _, _ = _run("LC_ALL=C free -h | grep Mem | awk '{print $3 \"/\" $2}'", timeout=5)
+    mem_percent, _, _ = _run("LC_ALL=C free | grep Mem | awk '{printf \"%.1f\", $3/$2 * 100}'", timeout=5)
 
     # Kernel
     kernel, _, _ = _run("uname -r", timeout=5)
@@ -3848,6 +3872,13 @@ def f2b_whitelist_dropin_body(ignore_ips):
     return "[DEFAULT]\nignoreip = %s\n" % _f2b_ignoreip_line(ignore_ips)
 
 
+# The drop-in body whose f2b-reload last FAILED in this process, or None. The file is written before
+# the reload, so the next call found it already saying the right thing and answered "already
+# applied to every jail" without reloading: the failure was reported once, then contradicted, and
+# fail2ban went on with the old ignoreip. With this, that next call reloads again.
+_R19A_F2B_UNLOADED = {"body": None}
+
+
 def ensure_panel_host_whitelist(ignore_ips):
     """Make EVERY fail2ban jail on the panel's own host ignore the whitelist, not only the panel
     login's. Returns (ok, msg); no-ops when fail2ban is absent or the file already says this.
@@ -3867,16 +3898,18 @@ def ensure_panel_host_whitelist(ignore_ips):
             have = f.read()
     except OSError:
         have = None
-    if have == want:
+    if have == want and _R19A_F2B_UNLOADED["body"] != want:
         return True, "fail2ban whitelist already applied to every jail"
     if have is None and not ignore_ips:
         return True, "no whitelist to apply"
-    if _write_root_file(_F2B_PANEL_WHITELIST, want)[2] != 0:
+    if have != want and _write_root_file(_F2B_PANEL_WHITELIST, want)[2] != 0:
         return False, "could not write the fail2ban whitelist"
     # Read, as the remote twin (hosts.remote_set_fail2ban_ignoreip) now reads its reload: a reload
     # that failed answered "applied to every jail" while fail2ban went on with the old ignoreip.
     if _run_verb("f2b-reload", [], timeout=45)[2] != 0:
+        _R19A_F2B_UNLOADED["body"] = want
         return False, "the whitelist was written but fail2ban did not reload"
+    _R19A_F2B_UNLOADED["body"] = None
     return True, "fail2ban whitelist applied to every jail"
 
 
