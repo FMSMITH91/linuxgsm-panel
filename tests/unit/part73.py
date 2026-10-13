@@ -230,7 +230,6 @@ check("moderation: a player name holding a control character is refused in words
       repr((_kick73, _mckick73, _say73, _plain73)))
 check("moderation: ...and the refusal is in the es and fr catalogs",
       all(_CAT73[lg].get(_smg73.R18A_NAME_CONTROL) for lg in ("es", "fr")))
-_said73 = []
 _mod_sent73 = []
 try:
     _as73("fr")
