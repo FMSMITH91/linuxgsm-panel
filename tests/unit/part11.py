@@ -27,7 +27,7 @@ from panel.security import privileged as _p8_priv  # noqa: E402
 # ── the tripwire: the real exec primitives must not run during this part ────────────────────────
 _p8_trips = []
 _p8_real = {n: getattr(_sm_core, n) for n in
-            ("get_connection", "_run_via_ssh_cli", "_run_local", "_exec_local_argv")}
+            ("get_connection", "_run_via_ssh_cli", "_run_local", "_exec_local_shell", "_exec_local_argv")}
 
 
 def _p8_tripwire(name):
@@ -45,9 +45,17 @@ for _n in _p8_real:
 # tailscale_integration runs `tailscale`/`ping` with subprocess.run. Installed BEFORE the sections
 # below save their originals, so a section's restore puts the tripwire back, not the real module.
 from unit.part10 import _Over as _p8_Over  # noqa: E402
+from panel.ops import terminal_session as _p8_term  # noqa: E402
 from panel.ops.ssh_manager import cron as _p8_cron  # noqa: E402
+# The same set as part12's _p9_arm, which runs after this part and so cannot be imported here
+# (review 1012d: system_ops' runners, its own subprocess and the terminal's stayed live, and
+# _exec_local_shell, under "no check reached a real transport").
 _p8_mods = {(_sm_hosts, "paramiko"): _sm_hosts.paramiko, (_sm_files, "subprocess"): _sm_files.subprocess,
-            (_p8_cron, "subprocess"): _p8_cron.subprocess, (_tsi, "subprocess"): _tsi.subprocess}
+            (_p8_cron, "subprocess"): _p8_cron.subprocess, (_tsi, "subprocess"): _tsi.subprocess,
+            (SO, "subprocess"): SO.subprocess, (_p8_term, "subprocess"): _p8_term.subprocess}
+_p8_so_real = {n: getattr(SO, n) for n in ("_run", "_run_verb", "_git")}
+for _n in _p8_so_real:
+    setattr(SO, _n, _p8_tripwire("system_ops." + _n))
 _sm_hosts.paramiko = _p8_Over(_sm_hosts.paramiko, SSHClient=_p8_tripwire("hosts.paramiko.SSHClient"))
 for (_p8_m, _p8_a), _p8_real_mod in list(_p8_mods.items())[1:]:
     setattr(_p8_m, _p8_a, _p8_Over(_p8_real_mod,
@@ -3742,5 +3750,8 @@ for _n, _fn in _p8_real.items():
     setattr(_sm_core, _n, _fn)
 for (_p8_m, _p8_a), _p8_real_mod in _p8_mods.items():
     setattr(_p8_m, _p8_a, _p8_real_mod)
-check("part11: no check reached a real transport (paramiko, the ssh CLI, a local subprocess)",
+for _n, _fn in _p8_so_real.items():
+    setattr(SO, _n, _fn)
+check("part11: no check reached a real transport (paramiko, the ssh CLI, a local subprocess, "
+      "system_ops' runners)",
       not _p8_trips, "reached: %r" % (_p8_trips,))

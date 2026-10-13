@@ -4440,13 +4440,30 @@ _ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
 _ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)
 _ax_host = ([_ax_like(p) for p in _axm.AUDIT_HOST_ACTION_LIKE],
             _axm.AUDIT_HOST_ACTIONS | _axm.AUDIT_HOST_ACTIONS_CALL_ONLY)
-for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROOT, "app.py")}):
-    _tree = ast.parse(_f.read_text(encoding="utf-8"))
-    _fn_of = {}
-    for _fd in ast.walk(_tree):
+
+
+def _r19d_fn_of(tree):
+    """{id(node): the name of the function it is IN}, the innermost one.
+
+    setdefault over a breadth-first walk kept the OUTERMOST (review 1012d): a helper nested in
+    register(app) was read as register, so listing it in _AX_ACTION_FROM_CALLER exempted nothing.
+    A function nested deeper is reached later in the walk, so plain assignment keeps the innermost.
+    """
+    out = {}
+    for _fd in ast.walk(tree):
         if isinstance(_fd, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for _n in ast.walk(_fd):
-                _fn_of.setdefault(id(_n), _fd.name)
+                out[id(_n)] = _fd.name
+    return out
+
+
+_r19d_fn_ctl = ast.parse("def register(app):\n    def _helper(a):\n        log_action(u, a)\n")
+check("audit ids: a log_action call is attributed to the function it is in, not an enclosing one (control)",
+      {_r19d_fn_of(_r19d_fn_ctl)[id(_c)] for _c in ast.walk(_r19d_fn_ctl) if isinstance(_c, ast.Call)}
+      == {"_helper"})
+for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROOT, "app.py")}):
+    _tree = ast.parse(_f.read_text(encoding="utf-8"))
+    _fn_of = _r19d_fn_of(_tree)
     for _n in ast.walk(_tree):
         if not (isinstance(_n, ast.Call)
                 and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "log_action"):

@@ -1,0 +1,9 @@
+{
+  "The request was not valid — reload the page and try again.": "La requête n'était pas valide : rechargez la page et réessayez.",
+  "You don't have permission to do that.": "Vous n'avez pas l'autorisation de faire cela.",
+  "That page or item was not found — it may have been removed. Reload the page.": "Cette page ou cet élément est introuvable ; il a peut-être été supprimé. Rechargez la page.",
+  "That action can't be done this way — reload the page and try again.": "Cette action ne peut pas être effectuée de cette façon : rechargez la page et réessayez.",
+  "That upload is too large.": "Ce fichier est trop volumineux pour être envoyé.",
+  "This page's security token has expired — reload the page and try again.": "Le jeton de sécurité de cette page a expiré : rechargez la page et réessayez.",
+  "The request could not be completed (HTTP {code}).": "La requête n'a pas pu aboutir (HTTP {code})."
+}

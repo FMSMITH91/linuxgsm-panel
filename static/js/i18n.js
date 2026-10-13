@@ -78,16 +78,53 @@ window.tfn = function(n, one, many, vals){
   // wrote is the new English. Without that, the first value ever seen was the English forever — a
   // tooltip a poll updated stayed in English, and the next setLang() re-walk wrote the translation
   // of the STALE value over it (a badge reading "Reachable" with a "not checked yet" tooltip).
+  // A status mark in front of a message ('✓ ' + d.message, at some thirty sites) made one text
+  // node whose whole text no key matched, so a message the catalog held stayed English. The mark
+  // is kept and the rest looked up, when the whole text is not a key of its own ("✓ Saved" is).
+  // ✅/❌ too: the firewall page writes its answers after them, and "❌ Port required" stayed
+  // English for every es/fr viewer.
+  var MARK = /^([✓✗✅❌] )(.+)$/;
+  // Text a script wrote ALREADY TRANSLATED — `el.textContent = t('(connected)')`, a template's
+  // {{ t('…') }} — is first seen here as the translation, and was stored as the node's English: no
+  // key, so a live switch had nothing to look up or go back to, and "(conectado)" stayed Spanish
+  // on an English page until the script next wrote it. The translation is mapped back to its key
+  // when exactly one key has it (two keys sharing one translation cannot say which was meant, so
+  // that text is kept as it is, as before); values with a {slot} are never whole texts.
+  var revOf = null, rev = null;
+  function i18nReverse(){
+    var c = window.I18N;
+    if (rev && revOf === c) return rev;
+    rev = new Map(); revOf = c;
+    var shared = new Set();
+    if (c) Object.keys(c).forEach(function(k){
+      if (typeof c[k] !== 'string') return;
+      var v = c[k].replace(/\s+/g, ' ').trim();
+      if (!v || v === k || v.indexOf('{') >= 0) return;
+      if (rev.has(v) && rev.get(v) !== k) shared.add(v); else rev.set(v, k);
+    });
+    shared.forEach(function(v){ rev.delete(v); });
+    return rev;
+  }
+  // The English a newly seen text stands for: itself when it is a key (or no translation of one),
+  // else the key it translates, with its mark and its surrounding blanks kept.
+  function i18nEnglish(text){
+    var key = text.replace(/\s+/g, ' ').trim();
+    if (!key || i18nLookup(key) !== undefined) return text;
+    var r = i18nReverse(), en = r.get(key);
+    if (en === undefined){
+      var m = MARK.exec(key);
+      if (m && r.has(m[2])) en = m[1] + r.get(m[2]);
+    }
+    if (en === undefined) return text;
+    return text.slice(0, text.length - text.trimStart().length) + en + text.slice(text.trimEnd().length);
+  }
   function tText(node){
     var en = node.__i18nEn, cur = node.nodeValue;
-    if (en === undefined || (cur !== en && cur !== node.__i18nW)){ en = node.__i18nEn = cur; }
+    if (en === undefined || (cur !== en && cur !== node.__i18nW)){ en = node.__i18nEn = i18nEnglish(cur); }
     var key = en.replace(/\s+/g, ' ').trim();
     if (!key) return;
     var v = i18nLookup(key);
-    // A status mark in front of a message ('✓ ' + d.message, at some thirty sites) made one text
-    // node whose whole text no key matched, so a message the catalog held stayed English. The mark
-    // is kept and the rest looked up, when the whole text is not a key of its own ("✓ Saved" is).
-    var mark = (v === undefined) ? /^([✓✗] )(.+)$/.exec(key) : null;
+    var mark = (v === undefined) ? MARK.exec(key) : null;
     if (mark && i18nLookup(mark[2]) !== undefined) v = mark[1] + i18nLookup(mark[2]);
     // keep leading/trailing whitespace (inline layout, e.g. the gap after an icon). Measured with
     // trim, not /\s*$/: as written, that unanchored search may start at every blank of a run and
@@ -103,7 +140,7 @@ window.tfn = function(n, one, many, vals){
   function tAttr(el, a){
     var cur = el.getAttribute(a); if (cur == null) return;
     var pk = '__i18nA_' + a, wk = '__i18nW_' + a, en = el[pk];
-    if (en === undefined || (cur !== en && cur !== el[wk])){ en = el[pk] = cur; }
+    if (en === undefined || (cur !== en && cur !== el[wk])){ en = el[pk] = i18nEnglish(cur); }
     var key = en.replace(/\s+/g, ' ').trim(); if (!key) return;
     var v = i18nLookup(key);
     var out = (v !== undefined) ? v : en;

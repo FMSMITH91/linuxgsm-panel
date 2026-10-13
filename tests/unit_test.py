@@ -172,14 +172,16 @@ for _attr, _fns in _WATCHED.items():
 # Imported here, before any part, so its handle is wrapped before anything can call it.
 importlib.import_module("panel.ops.tailscale_integration")
 
-# A user-level install counts as the machine's too (review 1012b): a tailscale CLI in ~/.local/bin or
-# Homebrew-on-Linux's prefix ran for real with the guard reading it as a part's own stand-in. Both
-# spellings of the home directory are listed, since a found path is judged before it is resolved
-# too (review 1012c), and Homebrew's per-user prefix with them.
-_R15D_SYSTEM_DIRS = ("/usr/", "/bin/", "/sbin/", "/opt/", "/snap/", "/nix/", "/home/linuxbrew/") + tuple(
-    sorted({os.path.join(_h, _d) + os.sep for _h in (os.path.expanduser("~"),
-                                                    os.path.realpath(os.path.expanduser("~")))
-            for _d in (os.path.join(".local", "bin"), ".linuxbrew")}))
+# What a part's own stand-in IS, rather than where the machine's might be (review 1012d): a list of
+# system directories had to grow by one home-relative path a round (~/.local/bin, ~/.linuxbrew), and
+# a CLI copied to ~/bin (first on Ubuntu's default PATH) or `go install`ed to ~/go/bin still ran for
+# real. Every stand-in a part writes is in this run's temp area (mkdtemp) or under tests/, so a
+# `tailscale` found AND resolved under one of those is a stand-in, and anything else is the
+# machine's. Both spellings of each root, since a found path is judged before it is resolved.
+_R19D_STAND_IN_ROOTS = tuple(sorted({_p + os.sep for _d in (tempfile.gettempdir(), _TESTS_DIR)
+                                     for _p in (os.path.abspath(_d), os.path.realpath(_d))}))
+# Where a command that clears or resets PATH (`env -i`, sudo's secure_path) looks for a program.
+_R19D_DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 _r15d_ts_refused = []
 # What would really start a process. A part that stands in for subprocess.run itself (part44's
 # TimeoutExpired raiser) is answered by its stand-in, not by this: it starts nothing. The green
@@ -217,7 +219,7 @@ def _r18d_dash_c(argv):
     -c was read only as argv[1] (review 1012c): `bash -e -c s`, `bash -o pipefail -c s` and
     `env bash -c s` ran their script with no guard. Options are read as the shell reads them: the
     script is the first word that is not an option, -o/-O and --rcfile/--init-file take a value,
-    and an `env` that only sets variables passes the environment (and so the functions) through.
+    and the shell may come after wrapper commands (_r19d_unwrap).
     """
     _i = _r18d_shell_word(argv)
     if _i is None:
@@ -229,15 +231,97 @@ def _r18d_dash_c(argv):
 
 
 def _r18d_shell_word(argv):
-    """Index of the shell word: argv[0], or the word after an `env` that only sets variables."""
-    _i = 0
-    if argv and os.path.basename(str(argv[0])) == "env":
-        _i = 1
-        while _i < len(argv) and isinstance(argv[_i], str) and re.fullmatch(r"[A-Za-z_]\w*=.*", argv[_i], re.S):
-            _i += 1
+    """Index of the shell word: argv[0], or the word after the wrapper commands in front of it."""
+    _i = _r19d_unwrap(argv, None)[0]
     if _i >= len(argv) or os.path.basename(str(argv[_i])) not in ("sh", "bash", "dash"):
         return None
     return _i
+
+
+# Commands that run the rest of their argv as a command: (short options taking a value, operands
+# before the command). Only `env VAR=x` was read (review 1012d): `env -i bash -c …`, `timeout 5
+# tailscale …`, `nice`, `setsid` and `sudo` hid the shell or the binary from the guard.
+_R19D_WRAPPERS = {"env": ("uCS", 0), "timeout": ("sk", 1), "nice": ("n", 0), "nohup": ("", 0),
+                  "setsid": ("", 0), "stdbuf": ("ioe", 0), "ionice": ("cnpPu", 0),
+                  "sudo": ("ugCDhprtTU", 0)}
+# Long options of those that take their value as the next word.
+_R19D_LONG_VALUE = {"--unset", "--chdir", "--split-string", "--signal", "--kill-after", "--adjustment",
+                    "--input", "--output", "--error", "--class", "--classdata", "--pid", "--pgid", "--uid",
+                    "--user", "--group", "--close-from", "--chroot", "--host", "--prompt", "--role",
+                    "--type", "--other-user", "--command-timeout"}
+
+
+def _r19d_unwrap(argv, path):
+    """(index of the word the wrapper commands in front leave to run, the PATH it is found on).
+
+    The PATH is None when a wrapper clears or resets it: `env -i`, `env -u PATH`, sudo.
+    """
+    _i = 0
+    while (_i < len(argv) and isinstance(argv[_i], str)
+           and os.path.basename(argv[_i]) in _R19D_WRAPPERS):
+        _w = os.path.basename(argv[_i])
+        _i, path = _r19d_wrapper_opts(_w, argv, _i + 1, None if _w == "sudo" else path)
+        _i += _R19D_WRAPPERS[_w][1]
+    return _i, path
+
+
+def _r19d_wrapper_opts(word, argv, _i, path):
+    """(index of the first operand after `word`'s options from argv[_i], the PATH its command sees)."""
+    while _i < len(argv) and isinstance(argv[_i], str) and argv[_i] != "--":
+        _step = _r19d_opt_word(word, argv, _i)
+        if _step is None:
+            return _i, path
+        path = _r19d_path_after(word, _step[1], path)
+        _i += _step[0]
+    return _i + (1 if argv[_i:_i + 1] == ["--"] else 0), path
+
+
+def _r19d_opt_word(word, argv, _i):
+    """(words used, [(option, value)]) for the option word argv[_i] of `word`, or None at its operand.
+
+    A variable set by env or sudo reads as ("=", "NAME=value"): any word holding "=" sets one,
+    the guard's own BASH_FUNC_x%%=… included.
+    """
+    _a = argv[_i]
+    if word in ("env", "sudo") and re.fullmatch(r"[^=-][^=]*=.*", _a, re.S):
+        return 1, [("=", _a)]
+    if _a == "-" and word == "env":
+        return 1, [("-i", "")]
+    if _a.startswith("--"):
+        _name, _eq, _val = _a.partition("=")
+        if not _eq and _name in _R19D_LONG_VALUE:
+            return 2, [(_name, _r19d_next(argv, _i))]
+        return 1, [(_name, _val)]
+    if re.fullmatch(r"-[A-Za-z0-9]+", _a):
+        return _r19d_short_opts(word, argv, _i)
+    return None
+
+
+def _r19d_next(argv, _i):
+    return argv[_i + 1] if _i + 1 < len(argv) else ""
+
+
+def _r19d_short_opts(word, argv, _i):
+    """(words used, [(option, value)]) for the short-option cluster argv[_i] of `word`."""
+    _a, _opts = argv[_i], []
+    for _k, _ch in enumerate(_a[1:], 1):
+        if _ch in _R19D_WRAPPERS[word][0]:
+            _rest = _a[_k + 1:]
+            _opts.append(("-" + _ch, _rest or _r19d_next(argv, _i)))
+            return (1 if _rest else 2), _opts
+        _opts.append(("-" + _ch, ""))
+    return 1, _opts
+
+
+def _r19d_path_after(word, opts, path):
+    """The PATH after options `opts`: set by PATH=, cleared by env -i and env -u PATH."""
+    for _name, _val in opts:
+        if _name == "=" and _val.startswith("PATH="):
+            path = _val[len("PATH="):]
+        elif word == "env" and (_name in ("-i", "--ignore-environment")
+                                or (_name in ("-u", "--unset") and _val == "PATH")):
+            path = None
+    return path
 
 
 def _r18d_shell_opts(argv, _j):
@@ -257,41 +341,90 @@ def _r18d_shell_opts(argv, _j):
     return _c, _j
 
 
-def _r16d_ts_shell_env(env):
-    """`env` plus bash functions `tailscale` and `which` that answer a system tailscale as missing.
+def _r19d_stand_in(path):
+    """Whether the `tailscale` at `path` is a part's own stand-in: found AND resolved under a root."""
+    return (os.path.abspath(path).startswith(_R19D_STAND_IN_ROOTS)
+            and os.path.realpath(path).startswith(_R19D_STAND_IN_ROOTS))
 
-    Each resolves `tailscale` on the shell's PATH as it is when called; one under a system
-    directory is "command not found" (127) and `which tailscale` finds nothing, anything else runs.
+
+def _r16d_ts_shell_funcs():
+    """Bash functions `tailscale` and `which` that answer the machine's tailscale as missing.
+
+    Each resolves `tailscale` on the shell's PATH as it is when called; one that is not a part's
+    stand-in (_r19d_stand_in) is "command not found" (127) and `which tailscale` finds nothing.
     """
-    _sys = "|".join('"%s"*' % _d for _d in _R15D_SYSTEM_DIRS)
-    # The found path is judged as found AND as resolved: a ~/.local/bin/tailscale linking to an
-    # unpacked build elsewhere in $HOME resolved outside every system dir and ran (review 1012c).
+    _roots = "|".join('"%s"*' % _d for _d in _R19D_STAND_IN_ROOTS)
+    # The found path is judged as found AND as resolved: a link in a stand-in's directory to the
+    # machine's binary is the machine's, and so is a link elsewhere to a stand-in (review 1012c/d).
     _is_sys = ('_r16d_p=$(type -P tailscale); _r16d_q=$(readlink -f "$_r16d_p" 2>/dev/null); '
-               'case "$_r16d_p" in "") false;; %s) true;; *) case "$_r16d_q" in %s) true;; '
-               '*) false;; esac;; esac' % (_sys, _sys))
-    return dict(env, **{
-        "BASH_FUNC_tailscale%%": "() { if %s; then echo 'tailscale: command not found' >&2; return 127; "
-                                 "fi; command tailscale \"$@\"; }" % _is_sys,
-        "BASH_FUNC_which%%": '() { if [ "$*" = tailscale ] && { %s; }; then return 1; fi; '
-                             'command which "$@"; }' % _is_sys})
+               'case "$_r16d_p" in "") false;; %s) case "$_r16d_q" in %s) false;; *) true;; esac;; '
+               '*) true;; esac' % (_roots, _roots))
+    return {"BASH_FUNC_tailscale%%": "() { if %s; then echo 'tailscale: command not found' >&2; "
+                                     "return 127; fi; command tailscale \"$@\"; }" % _is_sys,
+            "BASH_FUNC_which%%": '() { if [ "$*" = tailscale ] && { %s; }; then return 1; fi; '
+                                 'command which "$@"; }' % _is_sys}
+
+
+def _r16d_ts_shell_env(env):
+    """`env` plus _r16d_ts_shell_funcs' functions."""
+    return dict(env, **_r16d_ts_shell_funcs())
 
 
 def _r18d_ts_program(cmd, kw):
-    """The program word of a run that starts `tailscale` without a shell, else None.
+    """(program word, PATH it is found on or None) of a shell-less `tailscale` run, else (None, None).
 
     A bare string without a shell is a program name on POSIX, and an argv may name the binary by
-    its path: both ran unjudged (review 1012c).
+    its path: both ran unjudged (review 1012c), as did one behind `timeout`, `env -i` or `nice`.
     """
     if isinstance(cmd, str) and not kw.get("shell"):
         cmd = [cmd]
-    if (isinstance(cmd, (list, tuple)) and cmd and isinstance(cmd[0], str)
-            and os.path.basename(cmd[0]) == "tailscale"):
-        return cmd[0]
-    return None
+    if not isinstance(cmd, (list, tuple)) or kw.get("shell"):
+        return None, None
+    _i, _path = _r19d_unwrap(cmd, (kw.get("env") or os.environ).get("PATH", os.defpath))
+    if _i < len(cmd) and isinstance(cmd[_i], str) and os.path.basename(cmd[_i]) == "tailscale":
+        return cmd[_i], _path
+    return None, None
+
+
+# A script that reaches tailscale past the shell's function, through a command that execs it from
+# PATH itself (`timeout 5 tailscale`, `command tailscale`, `xargs tailscale`), is judged on the PATH
+# it starts with, and on the default PATH too when it may clear or reset PATH first.
+_R19D_SCRIPT_WRAPPED = re.compile(
+    r"(?:^|[\s;&|(`])(?:command|exec|builtin|timeout|env|nice|nohup|setsid|xargs|stdbuf|ionice|chrt"
+    r"|taskset|sudo|doas|runuser|su|time|watch|flock)\s[^;&|\n]*?\btailscale\b")
+_R19D_SCRIPT_RESETS = re.compile(r"\benv\s+(?:-\w*i|-\s|--ignore)|\bsudo\b|\bPATH=")
+# ...and one that names the binary by a path is judged by that path: ~, $VAR and a relative path
+# are read against the run's environment and directory.
+_R19D_SCRIPT_PATH = re.compile(r"(?<![\w.~$/:-])((?:~|\$\{?\w+\}?|\.{1,2})?[\w./~-]*/tailscale)(?![\w.-])")
+
+
+def _r19d_script_candidates(script, kw):
+    """The tailscale binaries a script could run past the shell's `tailscale` function."""
+    _env = kw.get("env") or os.environ
+    _found = _r19d_wrapped_candidates(script, _env) + _r19d_path_candidates(script, _env, kw.get("cwd"))
+    return [_f for _f in _found if _f is not None]
+
+
+def _r19d_wrapped_candidates(script, env):
+    """The tailscale a wrapper in `script` could exec from PATH: the starting one, and the default."""
+    if not _R19D_SCRIPT_WRAPPED.search(script):
+        return []
+    _paths = [env.get("PATH", os.defpath)] + ([_R19D_DEFAULT_PATH] if _R19D_SCRIPT_RESETS.search(script) else [])
+    return [shutil.which("tailscale", path=_p) for _p in _paths]
+
+
+def _r19d_path_candidates(script, env, cwd):
+    """Each tailscale `script` names by a path that exists, read against `env` and `cwd`."""
+    _out = []
+    for _lit in _R19D_SCRIPT_PATH.findall(script):
+        _lit = re.sub(r"\$\{?(\w+)\}?", lambda _m: env.get(_m.group(1), _m.group(0)), os.path.expanduser(_lit))
+        _lit = os.path.join(cwd or os.getcwd(), _lit)
+        _out.append(_lit if os.path.exists(_lit) else None)
+    return _out
 
 
 class _R15dNoSystemTailscale:
-    """A module's subprocess handle, refusing a `tailscale` that resolves to the system's."""
+    """A module's subprocess handle, refusing a `tailscale` that is not a part's own stand-in."""
 
     def __init__(self, real, src="subprocess"):
         self._real = real
@@ -304,15 +437,18 @@ class _R15dNoSystemTailscale:
         return getattr(self._real, name)
 
     def _system_tailscale(self, cmd, kw, how="run"):
-        _prog = _r18d_ts_program(cmd, kw)
-        if _prog is None or getattr(sys.modules.get(self._src), how, None) not in _r16d_real_spawners(how):
+        if getattr(sys.modules.get(self._src), how, None) not in _r16d_real_spawners(how):
             return False
-        _path = (kw.get("env") or os.environ).get("PATH", os.defpath)
-        _hit = _prog if os.sep in _prog else shutil.which("tailscale", path=_path)
-        # Judged as found and as resolved: a user-level link into $HOME resolved outside every
-        # system dir and read as a part's own stand-in (review 1012c).
-        return _hit is not None and (os.path.abspath(_hit).startswith(_R15D_SYSTEM_DIRS)
-                                     or os.path.realpath(_hit).startswith(_R15D_SYSTEM_DIRS))
+        _sh = _r16d_shell_text(cmd, kw)
+        if _sh is not None:
+            _hits = _r19d_script_candidates(_sh, kw)
+            return any(not _r19d_stand_in(_h) for _h in _hits)
+        _prog, _path = _r18d_ts_program(cmd, kw)
+        if _prog is None:
+            return False
+        _hit = _prog if os.sep in _prog else shutil.which("tailscale", path=(
+            _R19D_DEFAULT_PATH if _path is None else _path))
+        return _hit is not None and not _r19d_stand_in(_hit)
 
     def _guard_shell(self, cmd, kw, how):
         """(cmd, kw) for a shell that names tailscale: under bash, with _r16d_ts_shell_env's functions."""
@@ -324,9 +460,12 @@ class _R15dNoSystemTailscale:
         if kw.get("shell"):
             kw["executable"] = "/bin/bash"      # only bash reads exported functions; dash does not
         else:
-            _i = _r18d_dash_c(cmd)[0]           # the shell word, after an `env VAR=x` prefix
-            if os.path.basename(str(cmd[_i])) != "bash":
-                cmd = list(cmd[:_i]) + ["/bin/bash"] + list(cmd[_i + 1:])
+            # The shell word, after any wrappers; the functions go on its own `env`, so a wrapper
+            # that clears the environment (`env -i`, sudo) in front of it cannot drop them.
+            _i = _r18d_dash_c(cmd)[0]
+            cmd = (list(cmd[:_i]) + ["/usr/bin/env"]
+                   + ["%s=%s" % _f for _f in _r16d_ts_shell_funcs().items()] + ["/bin/bash"]
+                   + list(cmd[_i + 1:]))
         return cmd, kw
 
     def run(self, cmd, *a, **kw):
@@ -463,6 +602,12 @@ _r16d_wrap_ts_handles()
 # with stand-ins, and the remote restart-flags form in a real bash; imports part01, 05 and 12.
 # part75 (the eighth review's routes, tools, page and i18n fixes, builder C) drives part12's app
 # and runs node on its own fixtures; imports part01, 05, 12, 16 and 47.
+# part76 (review 1012d: core, ssh-core, system and reboot fixes, builder A) drives part12's app and
+# database with stand-ins, and a real bash over its own stand-in programs; imports part01, 12, 20.
+# part77 (review 1012d: moderation, console sends, system_ops, debug report and routes, builder B)
+# drives part12's app with stand-ins; imports part01 and 12.
+# part78 (the ninth review's routes, tools, page and i18n fixes, builder C) drives part12's app
+# and runs node and bash on its own fixtures; imports part01, 05, 12, 47 and 72 (part72's DOM).
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part16", "part17", "part18", "part19",
           "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27",
@@ -471,7 +616,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part50", "part51", "part52", "part53", "part54", "part55", "part56", "part57", "part58",
           "part59", "part60", "part61", "part62", "part63", "part64", "part65", "part66",
           "part67", "part68", "part69", "part70", "part71", "part72", "part73", "part74",
-          "part75", "part15")
+          "part75", "part76", "part77", "part78", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -712,65 +857,83 @@ check("unit suite: no check leaves the eventlet hub a listener or IOClosed for a
       "no check() found an eventlet hub to sweep" if not hub_swept[0]
       else "%d found, first at: %s" % (len(hub_leaks), "; ".join(hub_leaks[:5])))
 
-# The answer above, against a system path and a part's stand-in (control): a wrapper that refused
-# nothing, or everything, would read the same as one that works. The "system" side is planted, not
-# read off the machine: CI has no tailscale, so a control that asked the host compared False with
-# False there and passed whatever the wrapper did. For one look, the stand-in's own directory
-# counts as a system directory, and every shape each handle sees must be refused without the
-# stand-in having run (it leaves a mark when it does).
+# The answer above, against the machine's binary and a part's stand-in (control): a wrapper that
+# refused nothing, or everything, would read the same as one that works. The machine's side is
+# planted, not read off the machine: CI has no tailscale, so a control that asked the host compared
+# False with False there and passed whatever the wrapper did. For one look, the stand-in roots are
+# planted directories, and every shape each handle sees must be refused without the planted
+# "machine's" binary having run (it leaves a mark when it does).
 _r15d_ts_ctl_dir = tempfile.mkdtemp(prefix="lgsm-unit-ts-ctl-")
 _r16d_ts_mark = os.path.join(_r15d_ts_ctl_dir, "ran")
-# The planted "system" directory is a subdirectory, so the part's own stand-in (own/, beside it) is
-# outside it while it counts as the system's.
+# The machine's binary, in a directory that is on no list at all (review 1012d: ~/bin and ~/go/bin
+# were not on the old one, and the planted "system" dirs could not show a location it omitted).
 _r17d_ts_sys = os.path.join(_r15d_ts_ctl_dir, "sys")
 os.makedirs(_r17d_ts_sys)
 with open(os.path.join(_r17d_ts_sys, "tailscale"), "w", encoding="utf-8") as _fh_ts:
     _fh_ts.write("#!/bin/sh\necho stand-in\n: > '%s'\n" % _r16d_ts_mark)
 # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this runner runs itself
 os.chmod(os.path.join(_r17d_ts_sys, "tailscale"), 0o700)  # nosec B103 - a stand-in in a private temp dir
-_r16d_ts_env = dict(os.environ, PATH=_r17d_ts_sys + os.pathsep + os.environ.get("PATH", ""))
-# A second planted "system" directory whose tailscale is a LINK to a copy of the script in tgt/,
-# outside both: the user-level install that resolves out of every system dir (review 1012c).
+# Each half of "found AND resolved" with a shape only it refuses (review 1012d: a found-only or a
+# resolved-only judge passed the old control). sysl/tailscale is found outside the roots and
+# resolves into one (tgt/, a copy of the script); lnk/tailscale is found in a root (lnk/) and
+# resolves out of every root, to sys/.
 _r18d_ts_sysl = os.path.join(_r15d_ts_ctl_dir, "sysl")
-os.makedirs(_r18d_ts_sysl)
-os.makedirs(os.path.join(_r15d_ts_ctl_dir, "tgt"))
+_r19d_ts_lnk = os.path.join(_r15d_ts_ctl_dir, "lnk")
+for _r19d_d in (_r18d_ts_sysl, _r19d_ts_lnk, os.path.join(_r15d_ts_ctl_dir, "tgt")):
+    os.makedirs(_r19d_d)
 shutil.copy(os.path.join(_r17d_ts_sys, "tailscale"), os.path.join(_r15d_ts_ctl_dir, "tgt", "tailscale"))
 os.symlink(os.path.join(_r15d_ts_ctl_dir, "tgt", "tailscale"), os.path.join(_r18d_ts_sysl, "tailscale"))
-_r18d_ts_envl = dict(os.environ, PATH=_r18d_ts_sysl + os.pathsep + os.environ.get("PATH", ""))
+os.symlink(os.path.join(_r17d_ts_sys, "tailscale"), os.path.join(_r19d_ts_lnk, "tailscale"))
+_r16d_ts_env = dict(os.environ, PATH=_r17d_ts_sys + os.pathsep + os.environ.get("PATH", ""))
 os.makedirs(os.path.join(_r15d_ts_ctl_dir, "own"))
 with open(os.path.join(_r15d_ts_ctl_dir, "own", "tailscale"), "w", encoding="utf-8") as _fh_ts:
     _fh_ts.write("#!/bin/sh\necho own stand-in\n")
 # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in this runner runs itself
 os.chmod(os.path.join(_r15d_ts_ctl_dir, "own", "tailscale"), 0o700)  # nosec B103 - a stand-in in a private temp dir
 _r16d_ts_wraps = [getattr(sys.modules.get(_m), _a, None) for _m, _a, _s in _R16D_TS_HANDLES]
-_r16d_ts_shapes = (("run", (["tailscale", "version"],), {}),
-                   ("Popen", (["tailscale", "status"],), {}),
-                   ("run", ("tailscale status --json 2>/dev/null || echo '{}'",), {"shell": True}),
-                   ("run", ("tailscale set --ssh 2>&1",), {"shell": True}),
-                   # WHICH-FOUND: `which` letting the stand-in's path through is a let-through
-                   # too (the stand-in's path has no "stand-in" in it, review 1012b).
-                   ("Popen", (["/bin/bash", "-c", "which tailscale && echo WHICH-FOUND; tailscale version"],),
-                    {}),
-                   # An option before -c, an `env` prefix, a bare string with no shell and the
-                   # binary named by its path ran unjudged (review 1012c).
-                   ("run", (["/bin/bash", "-e", "-c", "tailscale version"],), {}),
-                   ("run", (["/usr/bin/env", "X=1", "sh", "-o", "errexit", "-c", "tailscale version"],), {}),
-                   ("run", ("tailscale",), {}),
-                   ("run", ([os.path.join(_r18d_ts_sysl, "tailscale"), "version"],), {}))
-_r16d_ts_let = []      # the shapes that ran the stand-in while it counted as the system's
-_r16d_ts_saved_dirs = _R15D_SYSTEM_DIRS
-# The link's own directory counts as a system one; the script it points at (in tgt/) is outside it.
-_R15D_SYSTEM_DIRS = (os.path.realpath(_r17d_ts_sys) + os.sep, _r18d_ts_sysl + os.sep)
+
+
+def _r19d_ts_shapes(d):
+    """Every shape a handle sees, with the binary found in directory `d`."""
+    _ts, _p = os.path.join(d, "tailscale"), "PATH=%s:/usr/bin:/bin" % d
+    return (("run", (["tailscale", "version"],), {}),
+            ("Popen", (["tailscale", "status"],), {}),
+            ("run", ("tailscale status --json 2>/dev/null || echo '{}'",), {"shell": True}),
+            ("run", ("tailscale set --ssh 2>&1",), {"shell": True}),
+            # WHICH-FOUND: `which` letting the binary's path through is a let-through too (the
+            # path has no "stand-in" in it, review 1012b).
+            ("Popen", (["/bin/bash", "-c", "which tailscale && echo WHICH-FOUND; tailscale version"],), {}),
+            # An option before -c, an `env` prefix, a bare string with no shell and the binary
+            # named by its path ran unjudged (review 1012c).
+            ("run", (["/bin/bash", "-e", "-c", "tailscale version"],), {}),
+            ("run", (["/usr/bin/env", "X=1", "sh", "-o", "errexit", "-c", "tailscale version"],), {}),
+            ("run", ("tailscale",), {}),
+            ("run", ([_ts, "version"],), {}),
+            # Behind wrapper commands, and past the shell's function by a wrapper or a path, it
+            # ran unjudged too (review 1012d); `env -i` drops the exported functions.
+            ("run", (["timeout", "5", "tailscale", "version"],), {}),
+            ("run", (["nice", "-n", "5", "/usr/bin/env", "-i", _p, "tailscale"],), {}),
+            ("run", (["env", "-i", _p, "bash", "-c", "tailscale version"],), {}),
+            ("run", (["setsid", "env", "-u", "X", "sh", "-c", "tailscale version"],), {}),
+            ("run", ("timeout 5 tailscale version",), {"shell": True}),
+            ("run", ("command tailscale version",), {"shell": True}),
+            ("run", (["/bin/bash", "-c", "%s version" % _ts],), {}))
+
+
+_r16d_ts_let = []      # the shapes that ran the planted machine's binary
+_r19d_ts_saved_roots = _R19D_STAND_IN_ROOTS
+_R19D_STAND_IN_ROOTS = tuple(os.path.join(_r15d_ts_ctl_dir, _d) + os.sep for _d in ("own", "tgt", "lnk"))
 try:
     for _w in _r16d_ts_wraps:
-        for _how, _args, _kw in _r16d_ts_shapes:
-            for _r18d_env in (_r16d_ts_env, _r18d_ts_envl):
+        for _r19d_d in (_r17d_ts_sys, _r18d_ts_sysl, _r19d_ts_lnk):
+            for _how, _args, _kw in _r19d_ts_shapes(_r19d_d):
                 try:
-                    _p = getattr(_w, _how)(*_args, env=_r18d_env, stdout=-1, stderr=-1, **_kw)
+                    _p = getattr(_w, _how)(*_args, env=dict(os.environ, PATH=_r19d_d + os.pathsep + os.environ.get(
+                        "PATH", "")), stdout=-1, stderr=-1, **_kw)
                     _out = (_p.communicate(timeout=10) if _how == "Popen" else (_p.stdout, _p.stderr))[0]
                     if b"stand-in" in (_out or b"") or b"WHICH-FOUND" in (_out or b""):
                         _r16d_ts_let.append("%s.%s %r %s" % (type(_w).__name__, _how, _args[0],
-                                                             "link" if _r18d_env is _r18d_ts_envl else ""))
+                                                             os.path.basename(_r19d_d)))
                 except FileNotFoundError:
                     pass    # no such program on this machine: nothing ran, so nothing got through
     # Not a tailscale command: the grep's pattern and an echo's word are text, and run.
@@ -779,26 +942,37 @@ try:
         text=True).stdout
     # A shell that puts its own stand-in first on PATH still runs it (part05's secret rendering):
     # the shell is judged by the PATH it calls tailscale with, not the one it was started with.
-    # Started inside the planted window, on a PATH whose first tailscale is the planted "system"
-    # one, so a judge of the starting PATH refuses it here on any machine (outside, CI's PATH
-    # resolved no tailscale at all and such a judge passed, review 1012b).
+    # Started inside the planted window, on a PATH whose first tailscale is the planted machine's,
+    # so a judge of the starting PATH refuses it here on any machine (outside, CI's PATH resolved
+    # no tailscale at all and such a judge passed, review 1012b).
     _r16d_ts_own = _r16d_ts_wraps[2].run(["/bin/bash", "-c", "export PATH=%s:\"$PATH\"; tailscale" % (
         os.path.join(_r15d_ts_ctl_dir, "own"))], env=_r16d_ts_env, capture_output=True, text=True).stdout
+    # A stand-in behind a wrapper, or named by its path in a script, still runs (review 1012d).
+    _r19d_ts_own_env = dict(os.environ, PATH=os.path.join(_r15d_ts_ctl_dir, "own") + os.pathsep
+                            + os.environ.get("PATH", ""))
+    _r19d_ts_own_wrapped = (
+        _r16d_ts_wraps[0].run(["timeout", "5", "tailscale"], env=_r19d_ts_own_env, capture_output=True,
+                              text=True).stdout,
+        _r16d_ts_wraps[1].run(  # nosec B604 - a fixed command, through the wrapper under test
+            os.path.join(_r15d_ts_ctl_dir, "own", "tailscale"), shell=True, env=_r16d_ts_env,
+            capture_output=True, text=True).stdout)
 finally:
-    _R15D_SYSTEM_DIRS = _r16d_ts_saved_dirs
+    _R19D_STAND_IN_ROOTS = _r19d_ts_saved_roots
 _r16d_ts_ran_refused = os.path.exists(_r16d_ts_mark)
 # The green Popen counts as a real spawner: compared with the pre-patch class alone, every Popen
 # passed from part01 on in CI's bare run (here, under smoke-local, eventlet was patched first and
 # the runner captured the green one, so the planted shapes above cannot show it).
 _r16d_green = sys.modules.get("eventlet.green.subprocess")
 _r16d_ts_green = _r16d_green is None or _r16d_green.Popen in _r16d_real_spawners("Popen")
-_r15d_ts_ctl = (_r16d_ts_let, _r16d_ts_ran_refused, _r16d_ts_text, _r16d_ts_own, _r16d_ts_green,
-                _r16d_ts_wraps[0].run(["tailscale"], capture_output=True, text=True,
-                                      env=_r16d_ts_env).stdout)
+# Outside the planted window the control directory is in the run's temp area, a real stand-in root.
+_r15d_ts_ctl = (_r16d_ts_let, _r16d_ts_ran_refused, _r16d_ts_text, _r16d_ts_own, _r19d_ts_own_wrapped,
+                _r16d_ts_green, _r16d_ts_wraps[0].run(["tailscale"], capture_output=True, text=True,
+                                                      env=_r16d_ts_env).stdout)
 check("unit suite: the machine's own tailscale is answered 'not installed' through every handle that "
       "runs it, and a part's stand-in on its own PATH still runs (control)",
       all(isinstance(_w, _R15dNoSystemTailscale) for _w in _r16d_ts_wraps)
-      and _r15d_ts_ctl == ([], False, "1\n", "own stand-in\n", True, "stand-in\n"),
+      and _r15d_ts_ctl == ([], False, "1\n", "own stand-in\n", ("own stand-in\n", "own stand-in\n"),
+                           True, "stand-in\n"),
       repr(([type(_w).__name__ for _w in _r16d_ts_wraps], _r15d_ts_ctl, _r15d_ts_refused[:3])))
 
 # The shapes a shell comes in (control, review 1012b): a grouped `-lc` and a list run with
@@ -808,15 +982,31 @@ _r16d_sh_read = [_r16d_shell_text(*_c) for _c in (
     (["tailscale status --json"], {"shell": True}), (["bash", "--login", "x"], {}),
     (["tailscale", "-c", "x"], {}),
     # Options before -c, and an `env` that only sets variables (review 1012c); -o's value is not
-    # a -c, and an `env` with options of its own is not read.
+    # a -c.
     (["bash", "-o", "pipefail", "-c", "a"], {}), (["sh", "--norc", "-e", "-c", "b"], {}),
     (["/usr/bin/env", "X=1", "bash", "-c", "c"], {}), (["bash", "-o", "c", "x"], {}),
-    (["bash", "--rcfile", "-c", "x"], {}))]
-check("unit suite: ...a grouped -lc, a list with shell=True and options before -c are read as shells "
-      "(control)",
+    (["bash", "--rcfile", "-c", "x"], {}),
+    # Wrapper commands with options and values of their own (review 1012d); a wrapper's option
+    # value is not the command, and `timeout`'s duration is not either.
+    (["env", "-i", "-u", "bash", "dash", "-c", "d"], {}), (["timeout", "-s", "KILL", "5", "sh", "-c", "e"], {}),
+    (["nice", "-n5", "setsid", "-w", "nohup", "bash", "-c", "f"], {}), (["env", "-C", "bash", "x"], {}),
+    (["sudo", "-u", "bash", "X=1", "--", "bash", "-c", "g"], {}), (["timeout", "bash", "-c", "x"], {}),
+    (["env", "--unset", "sh", "--chdir=/", "-", "sh", "-c", "h"], {}))]
+check("unit suite: ...a grouped -lc, a list with shell=True, options before -c and wrapper commands "
+      "in front are read as shells (control)",
       _r16d_sh_read == ["tailscale status", "tailscale up", "tailscale status --json", None, None,
-                        "a", "b", "c", None, None],
+                        "a", "b", "c", None, None, "d", "e", "f", None, "g", None, "h"],
       repr(_r16d_sh_read))
+# ...and the PATH a wrapped program is found on: a clearing `env` or sudo resets it (None).
+_r19d_unwrapped = [_r19d_unwrap(*_c) for _c in (
+    (["env", "-i", "tailscale"], "/p"), (["env", "-iv", "PATH=/q", "tailscale"], "/p"),
+    (["env", "-uPATH", "tailscale"], "/p"), (["env", "--unset=PATH", "x"], "/p"),
+    (["env", "-u", "X", "tailscale"], "/p"), (["sudo", "-E", "tailscale"], "/p"),
+    (["timeout", "--signal", "TERM", "1", "x"], "/p"), (["tailscale"], "/p"))]
+check("unit suite: ...a wrapped program is found on the PATH its wrappers leave it (control)",
+      _r19d_unwrapped == [(2, None), (3, "/q"), (2, None), (2, None), (3, "/p"), (2, None), (4, "/p"),
+                          (0, "/p")],
+      repr(_r19d_unwrapped))
 
 # The cleanup, against unlistable directories, in BOTH of shutil.rmtree's modes. Which one a run gets
 # depends on import order: eventlet.monkey_patch() replaces os.open with a function not in

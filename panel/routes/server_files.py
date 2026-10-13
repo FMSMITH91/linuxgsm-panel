@@ -40,8 +40,9 @@ from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_
     load_game_list)
 from panel.core.panel_state import (_console_backlog, _console_offsets, _console_partial,
     register_server_state)
-from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _drain_action_output,
-    _host_timezone_cached, _json_int, _server_action_buttons, game_account_write_refusal)
+from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
+    _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
+    game_account_write_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -1642,7 +1643,11 @@ def _register_files_page(app):
         failed = (gs.status == "failed")
         if not gs.installed and not failed:
             flash("That server is still installing — its files aren't available until it's done.", "info")
-            return redirect(url_for("manage_servers"))
+            # `index`, not `manage_servers`, as server_detail's same branch: that route needs
+            # MANAGE_SERVERS or INSTALL_SERVER and only redirects to `index` itself, so a member
+            # with access to this server but neither permission got a red "You do not have
+            # permission to do that." beside the notice, on the way to the same page.
+            return redirect(url_for("index"))
         if not _can_manage_files():
             flash("You don't have permission to manage server files.", "danger")
             # The console is the right place to land — but only when there IS one. For a failed
@@ -2604,11 +2609,13 @@ def _register_send_command(app):
             return jsonify({"error": i18n.tr(CONSOLE_CONTROL_MSG)}), 400
 
         try:
-            _, _, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10, selfname=gs.lgsm_name)
+            _, err, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10,
+                                              selfname=gs.lgsm_name)
             log_action(current_user, "send_command", target=gs.name, detail=cmd_text, success=(rc == 0),
                        server=gs)
             if rc != 0:
-                return jsonify({"error": "Console (tmux) not accessible. Is the server running?"}), 502
+                # What failed, not "Is the server running?" for every rc (_console_send_failure).
+                return jsonify({"error": _console_send_failure(rc, err)}), 502
             return jsonify({"success": True, "command": cmd_text})
         # A host that is switched off is a normal condition, not a fault in the panel — the same
         # distinction api_remote_live_stats draws. Anything that is NOT a ConnectionError stays a

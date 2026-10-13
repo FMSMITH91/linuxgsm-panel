@@ -167,12 +167,17 @@ try:
         # host, where a route that reached one more host call would run a real local shell (as
         # root on CI's root leg) with this part still green. Armed for them (undone with the rest
         # of _patched), and closed with a check below. tailscale itself is the fake on PATH.
-        from unit.part12 import _P9_TRIPPED as _TRIPPED54, _p9_core as _core54, _p9_trip as _trip54
+        # part12's whole set (review 1012d): this armed six names, so _run_local (a privileged
+        # panel-host call, which part05's shim refused naming no part), the modules' own subprocess
+        # and hosts.paramiko stayed live. Then the Tailscale handles under test are put back (the
+        # fake CLI on PATH is what these renders read), and the root fallback's recorder.
+        from unit.part12 import _P9_TRIPPED as _TRIPPED54, _p9_arm as _arm54
         _trip54_start = len(_TRIPPED54)
-        _patch(_core54, "get_connection", _trip54("paramiko", exc=ConnectionError("part54 tripwire")))
-        for _tw54, _tn54w in ((_core54, "_run_via_ssh_cli"), (_core54, "_exec_local_shell"),
-                              (_core54, "_exec_local_argv"), (_so54, "_run"), (_so54, "_git")):
-            _patch(_tw54, _tn54w, _trip54(_tn54w))
+        _ts_sp54, _ts_info54, _verb_rec54 = _ts54.subprocess, _ts54.get_tailscale_info, _ts54._so._run_verb
+        _arm54(_patch, "part54")
+        _patch(_ts54, "subprocess", _ts_sp54)
+        _patch(_ts54, "get_tailscale_info", _ts_info54)
+        _patch(_ts54._so, "_run_verb", _verb_rec54)
         _snap54 = _CFGP54.read_bytes() if _CFGP54.exists() else None
         _pages54 = {}
         try:

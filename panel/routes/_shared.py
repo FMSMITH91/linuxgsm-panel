@@ -1651,6 +1651,16 @@ REAUTH_BLOCKED_MSG = ("Too many wrong passwords or codes for this account. Wait 
                       "try again.")
 
 
+def _console_send_failure(rc, err):
+    """Why a console send failed (ssh_manager.game._r19b_send_failure), in the viewer's language.
+
+    Both senders: the command form and custom commands (server_detail) and the live console's send
+    box (server_files), which alone still answered every failure "Console (tmux) not accessible.
+    Is the server running?" — for a timeout, a refused `sudo -u` or a missing tmux too.
+    """
+    return i18n.tr(_sm.game._r19b_send_failure(rc, err))
+
+
 def _reauth_key(user):
     """The throttle's key for `user`: its id, or — for an object with none yet — the object."""
     uid = getattr(user, "id", None)

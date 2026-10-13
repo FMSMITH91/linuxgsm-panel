@@ -1663,28 +1663,39 @@ def _restore_pstate10():
 # the check it belonged to could still pass. Whatever reaches one of these is recorded, and each
 # section ends by asserting nothing did. (Found the hard way: a package-level stub restored in
 # part02 shadowed ssh_manager's __getattr__, and app._live_run_state went past a _core stub.)
-_trip10 = []
-_TRIP_NAMES10 = ("_run_via_ssh_cli", "get_connection", "_exec_local_shell", "_exec_local_argv")
+#
+# Armed with part12's _p9_arm, the one set every later part uses (review 1012d): this armed only
+# _core's four transports, so system_ops' runners, _run_local, a module's own subprocess and
+# hosts.paramiko ran for real under sections that end "nothing reached a real transport".
+from unit.part12 import _P9_TRIPPED, _p9_arm  # noqa: E402
+
+_ABSENT10 = object()
 
 
 def _arm10():
-    saved = {n: getattr(_sm_core, n) for n in _TRIP_NAMES10}
+    """Arm the tripwire; returns what _disarm10 needs (every original, and where the record starts)."""
+    saved = []
 
-    def _wire(name):
-        def _t(*a, **k):
-            _trip10.append(name)
-            raise ConnectionError("part13 tripwire: a test reached the real %s" % name)
-        return _t
+    def _set(owner, name, value):
+        saved.append((owner, name, owner.__dict__.get(name, _ABSENT10) if isinstance(owner, type(os))
+                      else getattr(owner, name)))
+        setattr(owner, name, value)
 
-    for n in _TRIP_NAMES10:
-        setattr(_sm_core, n, _wire(n))
-    return saved
+    _p9_arm(patch=_set, who="part13")
+    return saved, len(_P9_TRIPPED)
 
 
-def _disarm10(saved):
-    for n, v in saved.items():
-        setattr(_sm_core, n, v)
-    del _trip10[:]
+def _tripped10(armed):
+    """What reached a transport since `armed` (an _arm10() result)."""
+    return _P9_TRIPPED[armed[1]:]
+
+
+def _disarm10(armed):
+    for _owner, _name, _was in reversed(armed[0]):
+        if _was is _ABSENT10:
+            delattr(_owner, _name)
+        else:
+            setattr(_owner, _name, _was)
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -2332,7 +2343,7 @@ try:
               _empty_poll10 is None and _empty_rec10 is None, repr((_empty_poll10, _empty_rec10)))
         _db10.session.remove()
     check("monitor: nothing in this section reached a real SSH or local transport",
-          _trip10 == [], repr(_trip10))
+          _tripped10(_mon_trip_saved10) == [], repr(_tripped10(_mon_trip_saved10)))
 finally:
     _disarm10(_mon_trip_saved10)
     _mon_restore10()
@@ -4159,9 +4170,15 @@ try:
             query_type=None: (
             _nt10.append(("cron", short, game_type, port)),
             (_ for _ in ()).throw(RuntimeError("x")) if short == "css1" else None)
+        # The pass asks game_account_write_refusal before a crontab rewrite (review 1012d); the
+        # account check is a host round trip, stood in for here as a plain game account.
+        from panel.routes import _shared as _sh_nt10
+        _gawr_was10 = _sh_nt10.game_account_write_refusal
+        _sh_nt10.game_account_write_refusal = lambda *a, **k: None
         try:
             _ntr10 = _try10(_app10mod._node_tools_cron_pass, _dbapp10)
         finally:
+            _sh_nt10.game_account_write_refusal = _gawr_was10
             _smcron10.upgrade_managed_cron_tracking = _app_cron_up10
             _app_restore10("ensure_node_tools_cron")
         check("app node-tools pass: every host gets the cron and every server its upgrade, past "
@@ -4508,7 +4525,7 @@ try:
     check("app auth log: a log that cannot be opened is skipped, never a failed login",
           _alog_bad10 is None and _bad_handlers10 == [], repr(_alog_bad10))
     check("app: nothing in this section reached a real SSH or local transport",
-          _trip10 == [], repr(_trip10))
+          _tripped10(_app_trip_saved10) == [], repr(_tripped10(_app_trip_saved10)))
 finally:
     _disarm10(_app_trip_saved10)
     _app_restore10()
@@ -5319,7 +5336,7 @@ try:
     _tk13_check_tick_failures(_ca13_loops, _ca13_app)
     _ca13_apps.append(_ca13_check_failing_boot())
     check("app boot: nothing in this section reached a real SSH or local transport",
-          _trip10 == [], repr(_trip10))
+          _tripped10(_ca13_trip) == [], repr(_tripped10(_ca13_trip)))
 except Exception as _e13:  # noqa: BLE001 - a harness failure must fail by name, not end the suite
     check("app boot: the create_app harness ran to the end", False,
           "raised %s: %s" % (type(_e13).__name__, _e13))

@@ -42,8 +42,11 @@ def _maybe_alert_cert_expiring():
         days = (not_after - datetime.now(timezone.utc)).days
         if days <= 14 and (time.time() - _CERT_ALERTED["at"]) > 7 * 86400:
             _CERT_ALERTED["at"] = time.time()
+            # A certificate already past its date said "expires in 0 day(s)" (max(days, 0)): one
+            # that has stopped working read as one with a day left.
             notifications.notify("cert_expiring", "TLS certificate expiring",
-                                 "The panel's TLS certificate expires in %d day(s) — renew it." % max(days, 0))
+                                 "The panel's TLS certificate has expired — renew it." if days < 0
+                                 else "The panel's TLS certificate expires in %d day(s) — renew it." % days)
     except Exception:
         _log.debug("cert-expiry check failed", exc_info=True)
 

@@ -1501,7 +1501,7 @@ def _py_function_splices(rel, lines, fn, tables, wrappers):
     payload = rel.replace(os.sep, "/").startswith(_PY_PAYLOAD_DIRS)
     plain_assigned = _py_assigned(fn, lines, plain) if payload else {}
     found = []
-    for n in _py_own_nodes(fn):
+    for n in _r18c_shown_nodes(fn):     # a lambda's sink too (see there); locals stay per function
         for value in _py_sink_values(n, wrappers):
             if _py_ignored(lines, value) or (payload and _py_fed_built(value, plain_assigned, plain) is None):
                 continue
@@ -1514,7 +1514,7 @@ def _py_function_splices(rel, lines, fn, tables, wrappers):
 def _py_tr_fed(rel, lines, fn, plain_builders):
     """[(file, line, where built)]: an i18n.tr() handed English built before it (never a key)."""
     assigned = _py_assigned(fn, lines, plain_builders)
-    return [(rel, n.lineno, where) for n in _py_own_nodes(fn)
+    return [(rel, n.lineno, where) for n in _r18c_shown_nodes(fn)
             if _py_call_name(n) == "tr" and n.args and not _py_ignored(lines, n.args[0])
             for where in [_py_fed_built(n.args[0], assigned, plain_builders)] if where is not None]
 
@@ -1802,7 +1802,7 @@ def route_answer_keys(root=ROOT):
         consts = _py_module_consts(tree)
         for fn in [tree] + _py_functions(tree):
             scope = (consts, dict(_r16c_binds(fn), **{_R17C_LOCAL_TEXTS: _r17c_local_texts(fn, consts)}))
-            for v in (v for n in _py_own_nodes(fn) for v in _r16c_answer_values(n, lines, wrappers)):
+            for v in (v for n in _r18c_shown_nodes(fn) for v in _r16c_answer_values(n, lines, wrappers)):
                 for t, f, line in _r16c_found(v, rel, scope, table):
                     if _r16c_prose(t):
                         keys.setdefault(t, "%s:%d" % (f, line))
@@ -1866,7 +1866,7 @@ def _r16c_step_walk(root):
         consts = _py_module_consts(tree)
         for fn in [tree] + _py_functions(tree):
             binds = _r16c_binds(fn)
-            out += [(rel, v.lineno, v, consts, binds, lines) for n in _py_own_nodes(fn)
+            out += [(rel, v.lineno, v, consts, binds, lines) for n in _r18c_shown_nodes(fn)
                     for v in _r16c_step_values(n) if not _py_ignored(lines, v)]
     return out + _r17b_forwarded(trees)[0]
 
@@ -2008,6 +2008,10 @@ def _r18c_shown_nodes(fn):
     one function, but nothing else reads those nodes: `register_error_handler(404, lambda e:
     jsonify({"error": "…"}))` and a class-level sink were read by no walk, so their message was
     never asked of the catalogs. A def inside them is still left to its own pass (_py_functions).
+    Every SINK walk reads these (shown_literals_py, the spliced_py pair, route_answer_keys, the job
+    step walk): review 1012d found the other three still on _py_own_nodes, so an f-string message
+    in a lambda passed every gate. The LOCAL tables (_py_assigned, _r16c_binds, …) stay on
+    _py_own_nodes, so a local is still resolved only in the function that assigned it.
     """
     out = list(_py_own_nodes(fn))
     stack = [n for n in out if isinstance(n, (ast.Lambda, ast.ClassDef))]

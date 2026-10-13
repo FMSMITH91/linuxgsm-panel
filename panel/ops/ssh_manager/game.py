@@ -458,6 +458,30 @@ def _send_rc(result):
     return result[2] if isinstance(result, tuple) and len(result) >= 3 else 1
 
 
+def _r19b_send_failure(rc, err):
+    """Why a console send failed, as an i18n.Sentence in the words of what actually happened.
+
+    send_console_command documents ONE failure code: rc 3 with NO_SESSION, no tmux session, i.e.
+    the server isn't running. Every other non-zero rc is the panel not reaching the MACHINE: -1 for
+    a tailscale/local transport error, 255 for ssh, 1 for a refused `sudo -u`, 127 for no tmux.
+    Each was answered "is the server running?" (moderation, the live console's send box), beside a
+    page showing that server online. `err` is the command's own stderr, never exception text.
+    The routes' _console_send_failure is this, translated for the viewer.
+    """
+    if rc == 3:
+        return i18n.Sentence("That server isn't running, so there's no console session to send to.")
+    lines = [ln.strip() for ln in (err or "").splitlines() if ln.strip()]
+    if lines:
+        return i18n.Sentence("The panel could not run that on the host: {why}", why=lines[-1][:200])
+    return i18n.Sentence("The panel could not run that on the host, and it gave no reason.")
+
+
+def _r19b_send_answer(result):
+    """_r19b_send_failure for a send_console_command result that is not an (out, err, rc) tuple too."""
+    err = result[1] if isinstance(result, tuple) and len(result) >= 3 else ""
+    return _r19b_send_failure(_send_rc(result), err)
+
+
 # What send_console_command(mark=True) prints before it types: the pane's history_size, cursor_y
 # and pane_width.
 _R13B_PANE_MARK_RE = re.compile(r"^PANE_MARK (\d{1,9}) (\d{1,6}) (\d{1,6})(?:\n|\Z)", re.M)
@@ -760,7 +784,7 @@ def _gamedig_player_list_shared(server, user, game_type, port, query_type):
         return _gamedig_player_list(server, user, game_type, port, query_type)
     try:
         key = (getattr(server, "id", None), int(port), gdtype)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):   # a REAL inf port row: int() overflows
         return _gamedig_player_list(server, user, game_type, port, query_type)
     hit = _playerlist_hit(key)
     if hit is not None:
@@ -883,9 +907,27 @@ R18A_NAME_CONTROL = ("That player's name contains a control character, which can
                      "console — kick or ban them from the server console directly.")
 
 
-def _r18a_name_refusal(name):
-    """R18A_NAME_CONTROL when `name` holds a character send_console_command refuses, else None."""
-    return R18A_NAME_CONTROL if _core.console_has_control(name) else None
+# What a kick or ban BY NAME answers for a name holding one of _MOD_BAD_CHARS' printable
+# characters (`;`, `"` or a backtick; Steam persona names allow all three). Refused for the reason
+# R18A_NAME_CONTROL is: stripped, "Bob;" is "Bob", and kick "Bob" kicks the innocent "Bob" while the
+# griefer stays — or kicks no one and still answers "Done.".
+R19B_NAME_UNTYPABLE = ("That player's name contains a character that can't be typed into the console "
+                       "safely — kick or ban them from the server console directly.")
+
+
+def _r19b_name_refusal(target):
+    r"""Why a kick/ban by the name `target` is refused, or None when the name goes in as it is.
+
+    Read on the name as the player list gave it, BEFORE _mod_sanitize: that strips the tab, CR, LF
+    and NUL too, so a refusal read on its output never saw them and "Bo\tb" was kicked as "Bob". The
+    ends are trimmed first: both player lists already trim every name they show.
+    """
+    raw = str(target or "").strip()[:64]
+    if _core.console_has_control(raw):
+        return R18A_NAME_CONTROL
+    if raw != raw.translate(_MOD_BAD_CHARS):
+        return R19B_NAME_UNTYPABLE
+    return None
 
 
 def _resolve_from_console(server, user, game_type, name, selfname):
@@ -984,8 +1026,9 @@ def _mod_valve_cmd(action, target, steamid, resolve):
         nm = _mod_sanitize(target, 64)
         if not nm:
             return None, "No player selected."
-        if _r18a_name_refusal(nm):
-            return None, R18A_NAME_CONTROL
+        why = _r19b_name_refusal(target)
+        if why:
+            return None, why
         return 'kick "%s"' % nm, None
     sid = _sanitize_steamid(steamid)
     if not sid:      # list came from gamedig (no SteamID) — resolve it on the console now
@@ -1022,8 +1065,9 @@ def _mod_minecraft_cmd(action, target):
     nm = _mod_sanitize(target, 64)
     if not nm:
         return None, "No player selected."
-    if _r18a_name_refusal(nm):
-        return None, R18A_NAME_CONTROL
+    why = _r19b_name_refusal(target)
+    if why:
+        return None, why
     # `kick <player> [reason]` — the name and the reason are separated by a SPACE, and
     # _MOD_BAD_CHARS does not strip one. That is right for Source and idTech3, whose consoles
     # separate on ';' and newline only, and wrong here: _ENG_MINECRAFT covers mcb (Bedrock),
@@ -1083,16 +1127,16 @@ def _r16b_send_moderation(server, user, cmd, selfname, game_type, action):
     """
     # _mod_sanitize drops only the characters that split a console line, so an ESC in an
     # announcement or a control byte in a player's name reached send_console_command, which refuses
-    # the line, and its rc read here as "Console not reachable — is the server running?". The
-    # builders now drop (_mod_say_cmd) or refuse (_r18a_name_refusal) them; this is the backstop
-    # for a line a builder added later lets one through.
+    # the line, and its rc read here as a send that failed for another reason. The builders now
+    # drop (_mod_say_cmd) or refuse (_r19b_name_refusal) them; this is the backstop for a line a
+    # builder added later lets one through.
     if _core.console_has_control(cmd):
         return False, i18n.Sentence("A console command can't contain control characters or line breaks.")
     if action == "ban" and (game_type or "").lower() in _R16B_BAN_REFUSED:
         return _r16b_ban_checked(server, user, cmd, selfname, game_type)
     out = _core.send_console_command(server, user, cmd, timeout=15, selfname=selfname)
     rc = _send_rc(out)
-    return (rc == 0), ("Done." if rc == 0 else "Console not reachable — is the server running?")
+    return (rc == 0), ("Done." if rc == 0 else _r19b_send_answer(out))
 
 
 # What a ban command prints when it banned nothing, for the games whose ban is a command pair
@@ -1135,7 +1179,7 @@ def _r16b_ban_checked(server, user, cmd, selfname, game_type):
     """
     sent = _core.send_console_command(server, user, cmd, timeout=15, selfname=selfname, mark=True)
     if _send_rc(sent) != 0:
-        return False, "Console not reachable — is the server running?"
+        return False, _r19b_send_answer(sent)
     mark = _R13B_PANE_MARK_RE.search(sent[0] or "")
     if mark is not None:
         time.sleep(0.8)   # let the server print its reply into the pane, as _send_and_capture

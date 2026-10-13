@@ -2981,6 +2981,18 @@ with app.app_context():
     check("password change: ...and the step it used is recorded",
           (_t.last_totp_step or 0) > 0, "last_totp_step=%s" % _t.last_totp_step)
 _tc2 = client_as(admin2_id)   # the change revoked the old session
+
+
+# The refusal's own audit row, counted from here (review 1012d): "the password did not change"
+# also holds for a request refused for any other reason, so it alone could not show the replay
+# was refused BECAUSE the code was spent.
+def _r19d_refusals():
+    return _fre_AL.query.filter_by(action="password_changed", success=False,
+                                   detail="refused: authenticator code not accepted").count()
+
+
+with app.app_context():
+    _r19d_refused_before = _r19d_refusals()
 _tc2.post("/account/password", data={"current_password": "Str0ng!passw0rd-2",
                                      "new_password": "Str0ng!passw0rd-3",
                                      "confirm_password": "Str0ng!passw0rd-3",
@@ -2990,6 +3002,9 @@ with app.app_context():
     check("password change: REPLAYING that same code is refused",
           auth.check_password("Str0ng!passw0rd-2", _t.password_hash),
           "the replayed code changed the password again")
+    check("password change: ...refused at the authenticator step, by its own audit row",
+          _r19d_refusals() == _r19d_refused_before + 1,
+          "%d refusal rows before, %d after" % (_r19d_refused_before, _r19d_refusals()))
 
 # ── The API-token card is reachable, and the mint actually shows the token ────────────
 # The Bearer path authenticates as its owner on every route (see the token checks above), but

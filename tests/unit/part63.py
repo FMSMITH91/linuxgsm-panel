@@ -629,7 +629,7 @@ _out63 = _node63(_name63, (
     "window.I18N = " + _json63.dumps({_k: _ES63.get(_k, "?") for _k in (
         "{n} uploaded to {dir}", "{n} already existed — re-drop to replace", "{n} failed")})
     + ";\nwindow.LANG = 'es';\n" + _read63(_JS63, "i18n.js") + "\n"
-    "var st = {}, total = 5, failed = 1, clashed = 1, base = 'cfg', curDir = 'cfg', _uploadChecked = true;\n"
+    "var st = {}, total = 5, failed = 1, clashed = 1, base = 'cfg', curDir = 'cfg', checked = true;\n"
     "function browse(){}\nglobal.setTimeout = function(){};\n" + _rep63 + "\nreport();\n"
     "console.log(JSON.stringify(st.textContent));\n"))
 if _out63 is not None:

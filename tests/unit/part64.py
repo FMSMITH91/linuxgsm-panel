@@ -32,6 +32,7 @@ import app as _app64  # noqa: E402
 from panel.db.models import GameServer, RemoteServer, User, UserSession, db  # noqa: E402
 from panel.security import auth as _auth64  # noqa: E402
 from panel.services import game_ports as _gp64  # noqa: E402
+from panel.routes import _shared as _sh64  # noqa: E402
 
 NS = _types64.SimpleNamespace
 # A documentation address (TEST-NET-1), built from its parts so no address literal is added.
@@ -124,6 +125,9 @@ try:
     with _patched():
         _patch(_app64, "ensure_node_tools_cron", _ntc64)
         _patch(_app64._sm, "upgrade_managed_cron_tracking", _upg64)
+        # The pass asks game_account_write_refusal before each rewrite (review 1012d), a host round
+        # trip stood in for here as a plain game account.
+        _patch(_sh64, "game_account_write_refusal", lambda *a, **k: None)
         _ntr64 = _try64(_app64._node_tools_cron_pass, _p9)
     check("node-tools pass: a host deleted during its own install is logged and the hosts after it, "
           "and every game server's cron upgrade, still run (`r.name` in the except ended the pass)",

@@ -594,9 +594,11 @@ _orig_scc = _sm_core.send_console_command
 _orig_cpl_m = _sm_game.console_player_list
 try:
     _sm_core.send_console_command = lambda *a, **k: (_msent.__setitem__("cmd", a[2]), ("", "", 0))[1]
-    _sm_game.moderate(None, "u", "gmod", "kick", target='Bad;Guy"x')
-    check("moderation: valve kick quotes the sanitized name (injection neutralised)",
-          _msent.get("cmd") == 'kick "BadGuyx"')
+    _bad_kick = _sm_game.moderate(None, "u", "gmod", "kick", target='Bad;Guy"x')
+    # Refused, not stripped (review 1012d): 'kick "BadGuyx"' kicked whoever else bore that name.
+    check("moderation: a valve kick by a name holding console metacharacters is refused, and nothing "
+          "is typed (injection neutralised)",
+          _bad_kick == (False, _sm_game.R19B_NAME_UNTYPABLE) and "cmd" not in _msent)
     _sm_game.moderate(None, "u", "gmod", "ban", steamid="STEAM_0:1:5; rcon x")
     check("moderation: valve ban bans + kicks the re-validated SteamID only (injection stripped)",
           _msent.get("cmd") == "banid 0 STEAM_0:1:5 kick; writeid")

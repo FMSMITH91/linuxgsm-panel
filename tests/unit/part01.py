@@ -301,7 +301,10 @@ _F2B_JAIL = ("Status for the jail: sshd\n   |- Currently banned: 1\n   |- Total 
 
 def _f2b_fake_run(server, cmd, **kw):
     # These are the commands privileged.py renders for the SSH transport, so match on the argv
-    # shape rather than on a `2>` suffix that the verb rendering no longer always adds.
+    # shape rather than on a `2>` suffix that the verb rendering no longer always adds. The C.UTF-8
+    # pin run_privileged puts ahead of every rendered verb is not part of the shape.
+    if cmd.startswith(_sm_core._R19A_C_LOCALE):
+        cmd = cmd[len(_sm_core._R19A_C_LOCALE):]
     parts = cmd.split()
     if parts[:2] == ["fail2ban-client", "status"]:
         return ((_F2B_JAIL if len(parts) > 2 and not parts[2].startswith("2>") else _F2B_STATUS),

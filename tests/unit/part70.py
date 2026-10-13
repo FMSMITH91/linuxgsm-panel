@@ -385,8 +385,8 @@ def _held70(detail, times):
 _inflight70 = _held70("inflight", [1000, 1000 + 3700, 1000 + 7400])
 _noanswer70 = _held70("the host did not answer", [1000, 1000 + 3700])
 check("reboot: a start held because a LinuxGSM update or backup is running for the server stays pending "
-      "however long it runs (it was reported failed after an hour, and never started); one whose host "
-      "does not answer still gives up after an hour",
+      "past the hour (it was reported failed after an hour, and never started) until the day's give-up "
+      "(part73); one whose host does not answer still gives up after an hour",
       _inflight70["restore"] == "pending" and _noanswer70["restore"] == "failed"
       and "called off" not in _noanswer70["result"], repr((_inflight70, _noanswer70)))
 _rw_es70 = _rw70.row_gave_up({"pending_since": 0}, 3600, True)

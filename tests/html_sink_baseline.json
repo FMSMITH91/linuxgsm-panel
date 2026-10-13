@@ -37,6 +37,7 @@
   ],
   "remote_manage_backups.js": [
     "_da,rows",
+    "dkHtml,g,gameSchedule,st,stHtml,table",
     "n"
   ],
   "remote_manage_host.js": [

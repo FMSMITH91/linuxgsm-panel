@@ -805,7 +805,9 @@ def _priv16(argv_for):
     return NS(helper_argv=lambda v, a: list(argv_for(v)), tool_argv=lambda v, a: list(argv_for(v)),
               remote_command=lambda v, a, merge_stderr=True: " ".join(
                   __import__("shlex").quote(x) for x in argv_for(v)),
-              stdin_for=lambda v: None, VerbError=ValueError)
+              stdin_for=lambda v: None, VerbError=ValueError,
+              # Every verb here has a tool to run, so the root branch runs it (review 1012d).
+              _REMOTE_ACTIONS=frozenset())
 
 
 try:

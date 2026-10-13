@@ -541,12 +541,14 @@ function startCreate(kind, opener){
   line.appendChild(_icon(kind==='folder' ? 'bi-folder2 text-warning' : 'bi-file-earmark-plus'));
   var input=document.createElement('input'); input.type='text'; input.className='form-control form-control-sm';
   input.spellcheck=false; input.autocomplete='off'; input.setAttribute('autocapitalize','off');
-  input.setAttribute('aria-label', _tr(kind==='folder' ? 'New folder name' : 'New file name'));
+  // English labels, as the save lines are written: the page's translator says them in the viewer's
+  // language, and again after a live switch (written translated, they were frozen in the old one).
+  input.setAttribute('aria-label', kind==='folder' ? 'New folder name' : 'New file name');
   input.dataset.action='createKey'; input.dataset.on='keydown'; input.dataset.args='["@event"]';
   var ok=document.createElement('button'); ok.type='button'; ok.className='btn btn-sm btn-primary';
-  ok.dataset.action='submitCreate'; ok.textContent=_tr('Create');
+  ok.dataset.action='submitCreate'; ok.textContent='Create';
   var no=document.createElement('button'); no.type='button'; no.className='btn btn-sm btn-outline-secondary';
-  no.dataset.action='cancelCreate'; no.textContent=_tr('Cancel');
+  no.dataset.action='cancelCreate'; no.textContent='Cancel';
   var err=document.createElement('div'); err.className='small text-danger mt-1 fb-create-err';
   err.setAttribute('role','alert'); err.style.display='none';
   line.appendChild(input); line.appendChild(ok); line.appendChild(no);
@@ -807,8 +809,8 @@ function uploadEntries(list, base){
       // BEFORE it calls onConfirm, so by this point the checkbox is detached and
       // document.getElementById() returns null — which read as "not ticked" and silently made
       // Replace do nothing. A detached node keeps its .checked, so the reference still answers.
-      _uploadChecked = true;   // the folder path asks once instead of pre-checking each directory
-      _doUpload(list, cb.checked ? true : Object.create(null), base);
+      // checked: the folder path asks once instead of pre-checking each directory
+      _doUpload(list, cb.checked ? true : Object.create(null), base, true);
     }
   });
 }
@@ -836,20 +838,24 @@ function uploadFiles(files, base){
   if(base === undefined) base = curDir;   // captured now: see uploadEntries
   var st=document.getElementById('upload-status');
   var arr=Array.prototype.slice.call(files);
+  // Whether THIS batch's pre-flight reached the host. One page-wide flag, it was overwritten by a
+  // second batch started before the first finished, and the first's summary then said (or failed
+  // to say) "the host could not be checked first" about the other batch's check.
+  var checked=true;
   st.textContent=tf('Checking {n} file(s)\u2026', {n: arr.length}); st.className='small mt-2 text-secondary';
   fetch(MOUNT+'/api/server/'+serverId+'/upload-check',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({path:base, names:arr.map(function(f){ return f.name; })})
     })
-    .then(r=>r.json()).then(function(d){ _uploadChecked = d.checked !== false; return d.existing||[]; })
+    .then(r=>r.json()).then(function(d){ checked = d.checked !== false; return d.existing||[]; })
     // A failed check must not become a silent overwrite: fall through with no known conflicts and
     // let the server refuse (409), which surfaces as "already exists" rather than a clobbered file.
-    .catch(function(){ _uploadChecked = false; return []; })
+    .catch(function(){ checked = false; return []; })
     .then(function(existing){
       var byName=Object.create(null); existing.forEach(function(e){ byName[e.name]=e; });
       var conflicts=[];
       arr.forEach(function(f){ if(byName[f.name]) conflicts.push({file:f, entry:byName[f.name]}); });
-      if(!conflicts.length){ _doUpload(arr.map(_flat), {}, base); return; }
+      if(!conflicts.length){ _doUpload(arr.map(_flat), {}, base, checked); return; }
       st.textContent=''; 
       // Held in a variable so onConfirm can query THIS node rather than the document: the overlay
       // is gone by the time it runs (see the folder dialog above), so a document-wide query found
@@ -868,7 +874,7 @@ function uploadFiles(files, base){
           // user's answer, not a failure to report back at them.
           var send=arr.filter(function(f){ return !byName[f.name] || ovw[f.name]; });
           if(!send.length){ st.textContent='Nothing uploaded \u2014 all files skipped.'; st.className='small mt-2 text-secondary'; setTimeout(function(){ st.textContent=''; },4000); return; }
-          _doUpload(send.map(_flat), ovw, base);
+          _doUpload(send.map(_flat), ovw, base, checked);
         }
       });
     })
@@ -876,7 +882,6 @@ function uploadFiles(files, base){
     // rather than leaving "Checking N file(s)…" on screen for an upload that never started.
     .catch(function(){ _uploadStatus('Request failed','text-danger'); });
 }
-var _uploadChecked = true;   // did the pre-flight actually reach the host?
 // `entries` are {file, dir} — dir is the file's subdirectory RELATIVE to `base`, "" for a loose
 // file. `base` is the folder the upload started in; never read curDir in here, because the user
 // can browse elsewhere while a batch is still going. The server creates missing parents itself
@@ -896,7 +901,8 @@ var UPLOAD_CONCURRENCY = 4;
 // a bogus clash and was sent with overwrite=1 even with its box unticked.
 function _ownKey(map, name){ return !!map && Object.prototype.hasOwnProperty.call(map, name) && !!map[name]; }
 
-function _doUpload(entries, ovw, base){
+// `checked`: whether the batch's pre-flight reached the host (the clash summary says so if not).
+function _doUpload(entries, ovw, base, checked){
   var st=document.getElementById('upload-status');
   var failed=0, clashed=0, done=0, all=ovw===true;
   var total=entries.length, many=total>1, next=0, active=0, finished=false;
@@ -906,7 +912,7 @@ function _doUpload(entries, ovw, base){
     var okCount=total-failed-clashed;
     var bits=[];
     if(okCount) bits.push('\u2713 '+tf('{n} uploaded to {dir}', {n: okCount, dir: base||'home'}));
-    if(clashed) bits.push(tf(_uploadChecked ? '{n} already existed \u2014 re-drop to replace'
+    if(clashed) bits.push(tf(checked ? '{n} already existed \u2014 re-drop to replace'
                                             : '{n} already existed (the host could not be checked first) \u2014 re-drop to replace',
                              {n: clashed}));
     if(failed) bits.push(tf('{n} failed', {n: failed}));

@@ -12,6 +12,8 @@ They depend on Flask's request/response machinery and nothing else — no models
 app factory — so there is nothing here for app.py to own.
 """
 from flask import abort, current_app, flash, jsonify, make_response, redirect, request, url_for
+from flask_wtf.csrf import CSRFError
+from markupsafe import escape
 
 from panel.core import i18n
 
@@ -139,8 +141,8 @@ def _log_and_generic(context):
     return i18n.tr("Internal server error")
 
 
-def _unreachable(context):
-    """Answer 200 with an error field when a remote host cannot be reached.
+def _unreachable(context, status=200):
+    """Answer 200 (or `status`) with an error field when a remote host cannot be reached.
 
     A remote host that cannot be reached is a NORMAL condition for this panel, not a fault
     in it — hosts go down, networks blip, a VPS reboots. The 200 lets the UI say "host
@@ -155,5 +157,56 @@ def _unreachable(context):
     did not, and every one of them 500s on a host that is simply switched off.
     """
     current_app.logger.warning("%s: host unreachable", context)
+    # In the viewer's language, and as `message` too: pages write a route's `message` (close port
+    # 22's dialog read it and showed nothing at all), and they write it after a mark, which the
+    # page's translator only learned to look past later.
+    said = i18n.tr("Host unreachable")
     return jsonify({"success": False, "unreachable": True,
-                    "error": "Host unreachable"}), 200
+                    "message": said, "error": said}), status
+
+
+def unreachable_error(context):
+    """The app error handler's answer to a ConnectionError no route caught: _unreachable's, as 502.
+
+    502 because the host behind the panel did not answer, which is not the panel's own error.
+    """
+    return _unreachable(context, 502)
+
+
+# What a 4xx/5xx the panel did not word itself tells the viewer. Werkzeug's own text is English
+# ("The CSRF token has expired.", "The requested URL was not found on the server. If you entered
+# the URL manually…"), and both the JSON reply (which pages print after "❌ ", where the page
+# translator does not look) and the plain page reached every es/fr viewer that way. The log keeps
+# nothing of it either way, so only what is shown changes.
+_R19A_HTTP_SENTENCES = {
+    400: i18n.Sentence("The request was not valid — reload the page and try again."),
+    403: i18n.Sentence("You don't have permission to do that."),
+    404: i18n.Sentence("That page or item was not found — it may have been removed. Reload the page."),
+    405: i18n.Sentence("That action can't be done this way — reload the page and try again."),
+    413: i18n.Sentence("That upload is too large."),
+}
+_R19A_CSRF_SENTENCE = i18n.Sentence("This page's security token has expired — reload the page and try again.")
+
+
+def http_error_sentence(e):
+    """The panel's own sentence for HTTPException `e`, untranslated (the caller tr()s it)."""
+    if isinstance(e, CSRFError):
+        return _R19A_CSRF_SENTENCE
+    return _R19A_HTTP_SENTENCES.get(e.code) or i18n.Sentence(
+        "The request could not be completed (HTTP {code}).", code=e.code or 500)
+
+
+def http_error_page(e):
+    """A plain page's answer to HTTPException `e`, in the viewer's language.
+
+    Werkzeug's own response — its status and headers (a 405's Allow) — with the body replaced. A
+    routing redirect (308) and any other non-error status is returned untouched, as before.
+    """
+    if not e.code or e.code < 400:
+        return e
+    resp = e.get_response()
+    said = escape(i18n.tr(http_error_sentence(e)))
+    resp.set_data('<!doctype html>\n<html lang="%s">\n<title>%d</title>\n<h1>%d</h1>\n<p>%s</p>\n'
+                  % (i18n.request_lang(), e.code, e.code, said))
+    resp.content_type = "text/html; charset=utf-8"
+    return resp

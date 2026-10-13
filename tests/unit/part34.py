@@ -55,7 +55,7 @@ from flask import Flask as _Flask34
 
 from unit.part01 import check, skip
 from unit.part05 import _helper, _root
-from unit.part12 import _p9, _p9_app, _p9_supervised
+from unit.part12 import _P9_TRIPPED, _p9, _p9_app, _p9_arm, _p9_supervised
 from unit.part20 import _env, _patch, _patched
 import app as _app34mod
 from panel.core import panel_state as _ps34
@@ -98,15 +98,19 @@ def _restore34():
 
 
 # ── the tripwire: nothing here may reach a real transport ───────────────────────────────────────
-_TRIP34 = []
+# part12's _p9_arm, the one set every part uses (review 1012d): this armed only _core's four
+# transports, so system_ops' runners, _run_local, a module's own subprocess and hosts.paramiko ran
+# for real under "nothing in this part reached a real transport". Undone by _restore34.
+_TRIP34_FROM = [0]
 
 
 def _arm34():
-    for name in ("_run_via_ssh_cli", "get_connection", "_exec_local_shell", "_exec_local_argv"):
-        def _tripped(*a, _n=name, **k):
-            _TRIP34.append(_n)
-            raise ConnectionError("part34 tripwire: a test reached the real %s" % _n)
-        _set34(_core34, name, _tripped)
+    _TRIP34_FROM[0] = len(_P9_TRIPPED)
+    _p9_arm(patch=_set34, who="part34")
+
+
+def _tripped34():
+    return _P9_TRIPPED[_TRIP34_FROM[0]:]
 
 
 def _as_account34(user, sh, selfname=None):
@@ -1685,8 +1689,8 @@ def _run_sections34():
     _section_report_process_account34()
     _section_report_reads34()
     _section_report_once34()
-    check("ws4: nothing in this part reached a real SSH or local transport", _TRIP34 == [],
-          repr(_TRIP34))
+    check("ws4: nothing in this part reached a real SSH or local transport", _tripped34() == [],
+          repr(_tripped34()))
 
 
 def _cleanup34():

@@ -579,7 +579,9 @@ function runDiagnostics(){
     if(badge){
       var s=d.summary||'fail';
       badge.className='badge '+(DIAG_BADGE[s]||DIAG_BADGE.fail);
-      badge.textContent = s==='ok' ? t('all healthy') : (s==='warn' ? tf('{n} warning(s)', {n: d.warn}) : tf('{n} problem(s)', {n: d.fail}));
+      // 'all healthy' in English, for the page's translator: written already translated, it stayed
+      // in that language after a live switch until diagnostics ran again.
+      badge.textContent = s==='ok' ? 'all healthy' : (s==='warn' ? tf('{n} warning(s)', {n: d.warn}) : tf('{n} problem(s)', {n: d.fail}));
     }
     if(msg) msg.textContent='';
     loadIntegrity();  // refresh the file list + repair button

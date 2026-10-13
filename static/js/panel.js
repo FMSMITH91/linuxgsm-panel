@@ -634,8 +634,10 @@ window.applyLayoutEdit = function(){
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     btn.classList.toggle('active', on);
     var label = btn.querySelector('[data-edit-label]');
-    if (label) label.textContent = on ? (window.t ? t('Done') : 'Done')
-                                      : (window.t ? t('Customise') : 'Customise');
+    // English: the page's translator says it in the viewer's language. Written already translated
+    // it was stored as the label's English, so a live switch left "Personalizar" on an English page
+    // (and "Done" shares its French with "Complete", so it could not even be looked back up).
+    if (label) label.textContent = on ? 'Done' : 'Customise';
   });
 };
 window.toggleLayoutEdit = function(){

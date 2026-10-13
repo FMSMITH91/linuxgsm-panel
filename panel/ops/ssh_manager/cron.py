@@ -1431,7 +1431,7 @@ def _remember_map(server, port, raw):
         return
     try:
         key = (getattr(server, "id", None), int(port))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):   # a REAL inf port row: int() overflows
         return
     _game_map_cache[key] = (time.time() + _GAME_MAP_FILL_TTL, val)
 
@@ -1550,7 +1550,7 @@ def _batch_queries(targets):
         gdtype = _gamedig_type(game_type, query_type)
         try:
             port, key = int(port), int(key)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):   # a REAL inf port row: int() overflows
             continue
         if gdtype and port:
             out.append((key, gdtype, port))
