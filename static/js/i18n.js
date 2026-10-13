@@ -110,8 +110,11 @@ window.tfn = function(n, one, many, vals){
   function i18nEnglish(text){
     var key = text.replace(/\s+/g, ' ').trim();
     if (!key || i18nLookup(key) !== undefined) return text;
-    var r = i18nReverse(), en = r.get(key), m;
-    if (en === undefined && (m = MARK.exec(key)) && r.has(m[2])) en = m[1] + r.get(m[2]);
+    var r = i18nReverse(), en = r.get(key);
+    if (en === undefined){
+      var m = MARK.exec(key);
+      if (m && r.has(m[2])) en = m[1] + r.get(m[2]);
+    }
     if (en === undefined) return text;
     return text.slice(0, text.length - text.trimStart().length) + en + text.slice(text.trimEnd().length);
   }
