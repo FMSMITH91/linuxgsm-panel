@@ -386,7 +386,7 @@ with _patched():
     _patch(_smc76, "run_command", lambda server, cmd, **k: _inf_seen76.append(cmd) or ("", "", 0))
     _patch(_smg76, "_gamedig_player_list", lambda *a: "p76-fallback")
     try:
-        _inf_metrics76 = _smc76.server_live_metrics(NS(id=-76), "p76", _INF76, force=True)
+        _smc76.server_live_metrics(NS(id=-76), "p76", _INF76, force=True)
         _smcron76._remember_map(NS(id=-76), _INF76, "de_dust2")
         _inf_batch76 = _smcron76._batch_queries([(1, "csgo", _INF76, None)])
         _inf_list76 = _smg76._gamedig_player_list_shared(NS(id=-76), "p76", "csgo", _INF76, "p76type")
