@@ -3138,6 +3138,11 @@ _ROOT_EXEC = [
     ("sysctl-tailscale", "kernel.core_pattern=|/home/panel/x.sh"),
     ("sshd-port-dropin", "AuthorizedKeysCommand /tmp/x\nAuthorizedKeysCommandUser root"),
     ("sshd-port-dropin", "PermitRootLogin yes"),
+    # apt reads `#include` as a directive, not a comment: the included file can carry the
+    # Pre-Invoke hook above. Both spellings apt accepts (measured with apt-config on Ubuntu).
+    ("apt-auto-upgrades", 'APT::Periodic::Update-Package-Lists "1";\n#include /home/panel/x.conf'),
+    ("apt-auto-upgrades", 'APT::Periodic::Update-Package-Lists "1";\n#include "/home/panel/x.conf";'),
+    ("apt-auto-upgrades", '  #include /home/panel/x.conf;'),
 ]
 
 
@@ -3183,6 +3188,8 @@ _WEAKENING = [
     ("sysctl-tailscale", "kernel.randomize_va_space = 0"),
     ("apt-auto-upgrades", 'APT::Get::AllowUnauthenticated "1";'),
     ("apt-auto-upgrades", 'APT::Periodic::Unattended-Upgrade "1";\nAPT::Sandbox::Verify "0";'),
+    # `#clear` is apt's other magic comment: it empties a key set by an earlier file.
+    ("apt-auto-upgrades", 'APT::Periodic::Unattended-Upgrade "1";\n#clear APT::Update'),
 ]
 _accepted_weak = []
 for _k, _v in _WEAKENING:

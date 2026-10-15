@@ -565,6 +565,20 @@ _F2B_SSHD_PORT_RULE = _WholeFile(
     lambda c: _fail2ban_config_ok(c, re.compile(r"sshd"), {"port": _F2B_JAIL_KEYS["port"]}))
 
 
+def _apt_conf_ok(content):
+    """Every non-blank line is one of the four APT::Periodic settings, with NO comment exemption.
+
+    _lines_match skips `#` lines, and apt does not: its ReadConfigFile treats `#include <file>` and
+    `#clear <key>` as directives, so a skipped `#include ~/x.conf` pulled in an
+    APT::Update::Pre-Invoke hook that apt then ran as root. The panel sends no comments here.
+    """
+    return all(_RE_APT_CONF.fullmatch(_ln.strip())
+               for _ln in (content or "").splitlines() if _ln.strip())
+
+
+_APT_CONF_RULE = _WholeFile(_apt_conf_ok)
+
+
 def _lines_match(content, pattern):
     """Every non-blank, non-comment line is accepted by `pattern`.
 
@@ -592,7 +606,7 @@ WRITE_CONTENT = {
     # still sends the same bytes; they are ignored rather than trusted, which also means a future
     # change to the schedule is a one-sided edit here instead of a lockstep one.
     "node-tools-cron": None,
-    "apt-auto-upgrades": _RE_APT_CONF,
+    "apt-auto-upgrades": _APT_CONF_RULE,
     "sysctl-tailscale": _RE_SYSCTL,
     "sshd-port-dropin": _RE_SSHD_PORT,
     "sshd-socket-dropin": _RE_SSHD_SOCKET,
