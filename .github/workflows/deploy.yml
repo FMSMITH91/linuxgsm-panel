@@ -375,7 +375,10 @@ jobs:
               # older installer written over the checkout's own is then put back from HEAD.
               printf '%s' "${INSTALLER_B64}" | base64 -d > install.sh
               rc=0
-              PANEL_NO_UPGRADE=1 PANEL_UPDATE_REF="${PANEL_UPDATE_REF}" bash install.sh || rc=$?
+              # stdin closed, as on the system branch: it is the rest of this `bash -s` script, so
+              # anything in the installer that read it (apt's debconf with no tty) ate the lines
+              # below, and the session hit EOF and exited 0 on a failed install.
+              PANEL_NO_UPGRADE=1 PANEL_UPDATE_REF="${PANEL_UPDATE_REF}" bash install.sh </dev/null || rc=$?
               git checkout -q HEAD -- install.sh 2>/dev/null || true
               exit "${rc}"
           else

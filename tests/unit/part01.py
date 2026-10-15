@@ -1074,9 +1074,27 @@ def _fake_ssh_popen(argv, **kw):
     return _real_popen_ssh(["/bin/bash", "-c", _ssh_script["v"]], **kw)
 
 
+class _R20dOver(object):
+    """A module's handle on `real` with the named attributes replaced, for that module only.
+
+    Setting `_helper.os.lstat` replaced os.lstat for the whole process (review 1013a): every other
+    thread's lstat, and the runner's own cleanup, read this block's stand-in while it ran.
+    """
+
+    def __init__(self, real, **over):
+        self._real = real
+        self.__dict__.update(over)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 _real_ts_host = _sm_core._resolve_ts_host
+_r20d_core_sp = _sm_core.subprocess
 try:
-    _sm_core.subprocess.Popen = _fake_ssh_popen
+    # _core's own handle, never the subprocess module itself (review 1013a): setting its Popen ran
+    # every other module's subprocess.run through this fake ssh for as long as the block ran.
+    _sm_core.subprocess = _R20dOver(_r20d_core_sp, Popen=_fake_ssh_popen)
     # Loopback, so a regression that stops going through Popen dials nothing off this machine.
     _sm_core._resolve_ts_host = lambda srv: "127.0.0.1"
     _ssh_script["v"] = r"printf 'caf\351: cannot start\n'"
@@ -1207,7 +1225,7 @@ try:
     finally:
         _sm_core._READER_GRACE = _rg_saved
 finally:
-    _sm_core.subprocess.Popen = _real_popen_ssh
+    _sm_core.subprocess = _r20d_core_sp
     _sm_core._resolve_ts_host = _real_ts_host
 
 # ── the control-socket directory must be ours before a socket is trusted in it ──────────────────
@@ -1234,12 +1252,13 @@ try:
     os.symlink(os.path.join(_cm_root, "target"), _sm_core._SSH_CM_DIR)
     _cm_res["symlink"] = _sm_core._ssh_mux_opts()
     _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "fresh")
-    _cm_real_getuid = _sm_core.os.getuid
-    _sm_core.os.getuid = lambda: _cm_real_getuid() + 1      # someone else's directory
+    _cm_real_os = _sm_core.os
+    # _core's own handle on os, never os.getuid itself (review 1013a: that was process-wide).
+    _sm_core.os = _R20dOver(_cm_real_os, getuid=lambda: _cm_real_os.getuid() + 1)   # someone else's directory
     try:
         _cm_res["foreign"] = _sm_core._ssh_mux_opts()
     finally:
-        _sm_core.os.getuid = _cm_real_getuid
+        _sm_core.os = _cm_real_os
 finally:
     _sm_core._SSH_CM_DIR = _cm_saved
     _cm_shutil.rmtree(_cm_root, ignore_errors=True)
@@ -1856,9 +1875,18 @@ try:
     _sm_core.run_command = lambda s, c, **k: ("ok", "", 0)
     _sm_core.run_privileged = lambda s, v, a=(), **k: (_ts_calls.append((v, list(a))),
                                                  ("Status: inactive", "", 0))[1]
+    # The route list is checked before anything runs (review 1013a: it switched IP forwarding on
+    # first), so an injected one never reaches a verb at all; the key and tags reach the verb's
+    # own validators, with a well-formed route beside them.
+    _ts_badroute = _sm_hosts.remote_bootstrap_tailscale(None, auth_key="tskey-auth-abc123def",
+                                                        advertise_routes="1.2.3.0/24; reboot")
+    check("tailscale: an injected route list runs nothing at all", _ts_badroute[0] is False
+          and not _ts_calls, str(_ts_calls))
     _sm_hosts.remote_bootstrap_tailscale(None, auth_key="tskey; touch /tmp/x",
-                                  advertise_routes="1.2.3.0/24; reboot", tags="tag:x; rm -rf /")
+                                  advertise_routes="1.2.3.0/24", tags="tag:x; rm -rf /")
     _ts_up = [a for v, a in _ts_calls if v == "tailscale-up-key"]
+    if _ts_up:
+        _ts_up[0][2] = "1.2.3.0/24; reboot"    # the routes position, for its validator below
     check("tailscale: the join goes through the verb, not a composed command", _ts_up, str(_ts_calls))
     # One bad argument per check, the rest the known-good values below: with all three injected
     # at once, check_args refused on the auth key first, so "routes" and "tags" passed with their
@@ -2342,9 +2370,17 @@ try:
         _argvs.append(argv)
         return _FakeProc([b"abc", b"def"])
 
-    _orig_popen, _orig_helper = _sm_core.subprocess.Popen, _sm_core.helper_present
+    # files' and cron's own handles are what the two downloads spawn through (_stream_argv,
+    # _stream_backup_argv); the subprocess module itself is left alone, as at the ssh-transport
+    # block above (review 1013a).
+    _orig_popen, _orig_helper = (_sm_files.subprocess, _sm_cron.subprocess), _sm_core.helper_present
+
+    def _r20d_popen(fn):
+        _sm_files.subprocess = _R20dOver(_orig_popen[0], Popen=fn)
+        _sm_cron.subprocess = _R20dOver(_orig_popen[1], Popen=fn)
+
     try:
-        _sm_core.subprocess.Popen = _fake_popen
+        _r20d_popen(_fake_popen)
         _sm_core.helper_present = lambda: True
         # A refusal has to mean NOTHING RAN, not just "no bytes came back": with the byte source
         # faked, an empty result would otherwise be indistinguishable from a command that ran and
@@ -2441,7 +2477,7 @@ try:
         _orig_ts_host = _sm_core._resolve_ts_host
         try:
             _sm_core._resolve_ts_host = lambda s: "ts-host"
-            _sm_core.subprocess.Popen = _fake_ts_popen
+            _r20d_popen(_fake_ts_popen)
             _fed.clear(); _cmds2.clear()
             _HOSTILE = "addons/'; id; echo $(whoami) \"x\".cfg"
             eq("stream_path (ssh): the bytes still come through",
@@ -2464,15 +2500,15 @@ try:
                   "realpath -m" in _cmds2[0] and "__OUTSIDE_HOME__" in _cmds2[0], _cmds2[0][:90])
         finally:
             _sm_core._resolve_ts_host = _orig_ts_host
-            _sm_core.subprocess.Popen = _fake_popen
+            _r20d_popen(_fake_popen)
 
         # The SSH transports DO use a shell, so the guard rides along there — and its sentinel must
         # not be handed to the browser as if it were the file.
-        _sm_core.subprocess.Popen = lambda argv, **_kw: _FakeProc([b"__OUTSIDE_HOME__\n"])
+        _r20d_popen(lambda argv, **_kw: _FakeProc([b"__OUTSIDE_HOME__\n"]))
         eq("stream_path: a stream carrying the guard's sentinel yields nothing",
            list(_sm_files.stream_path(_FakeSrv(), "csgoserver", "link")), [])
     finally:
-        _sm_core.subprocess.Popen, _sm_core.helper_present = _orig_popen, _orig_helper
+        (_sm_files.subprocess, _sm_cron.subprocess), _sm_core.helper_present = _orig_popen, _orig_helper
 finally:
     _sm_core.run_command = _orig_dl_rc
 

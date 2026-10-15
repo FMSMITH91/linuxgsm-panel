@@ -471,7 +471,7 @@ def _run_local(cmd, timeout=30, sudo=False, stdin_text=None):
         # redirects run under root too. `sudo {cmd}` would only elevate the first command
         # in a pipe — e.g. `sudo yes | ufw delete N` runs ufw as the panel user ("need to
         # be root").
-        full_cmd = f"sudo bash -c {_quote(cmd)}"
+        full_cmd = f"{_R20A_SUDO_C}sudo bash -c {_quote(cmd)}"
 
     return _exec_local_shell(full_cmd, timeout=timeout, stdin_text=stdin_text)
 
@@ -791,11 +791,18 @@ def _exec_local_argv(argv, timeout=30, stdin_text=None):
 
     Only privileged.py builds the vectors that reach here, from its fixed verb table, so every
     element is either a literal or a value that passed a validator.
+
+    In C.UTF-8 with no LANGUAGE (_r20a_c_env): these are `sudo -n <helper> …` and privileged
+    tools, read by their English words — sudo's own refusal included, which sudo words in the
+    language of the environment it was started in. The helper rebuilds its children's environment
+    itself (a game started through it never saw this one), so only what sudo and a directly-run
+    tool say changes.
     """
     def _do():
         p = None
         try:
             kw = dict(_POPEN_KW)
+            kw["env"] = _r20a_c_env()
             if stdin_text is not None:
                 kw["stdin"] = _real_subprocess.PIPE
             p = _real_subprocess.Popen(argv, **kw)
@@ -1012,12 +1019,42 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
 # own host before the helper is installed. The helper already runs every verb's child in C.UTF-8
 # (_clean_env in tools/panel-helper), so on those paths ufw, apt and the rest printed whatever
 # language the HOST was set to — Ubuntu's sudo PAM stack loads /etc/default/locale, LANGUAGE
-# included — while the panel reads their output by its English words (ufw's `Status: active`,
-# which a German host prints as `Status: aktiv`). C.UTF-8 rather than C keeps UTF-8 file names
+# included — while the panel reads their output by its English words (ufw's `Default: deny
+# (incoming)`, which a German host prints as `Voreinstellung: … (eingehend)`; its `Status:` line
+# is left untranslated). C.UTF-8 rather than C keeps UTF-8 file names
 # and comments intact, as the helper does; LANGUAGE is dropped because gettext honours it over
 # LC_ALL whenever the locale is anything but plain C. No verb rendered here starts a game server
 # (lgsm-command and cron-run-now are local-only, see privileged.LOCAL_ONLY_VERBS), so no game inherits it.
 _R19A_C_LOCALE = "export LC_ALL=C.UTF-8 LANG=C.UTF-8; unset LANGUAGE; "
+
+# The same for sudo's OWN words. _R19A_C_LOCALE runs inside the `sudo bash -c`, after sudo has
+# already spoken: sudo picks its message language from the environment it was STARTED in, so on a
+# German host a refusal read `sudo: Ein Passwort ist notwendig`, which no refusal matcher here
+# (firewall._SUDO_REFUSED_RE, monitoring._SUDO_PROMPT_RE) knows, and a refused read was reported
+# "unreadable", or "the host did not answer", rather than "sudo refused". Assignments before the
+# command set sudo's own environment; LANGUAGE is emptied because gettext honours it over LC_ALL
+# for any locale but plain C. sudo then passes LC_ALL and LANGUAGE on to the command (classic
+# sudo's env_keep lists them, and a kept variable wins over PAM's /etc/default/locale), so every
+# root command wrapped this way runs in C.UTF-8 too. That is the locale every parser of their
+# output wants; none of them starts a game server (game commands build their own `sudo -u` and
+# pass sudo=False, so they never reach this wrap). sudo-rs prints English and ignores it.
+_R20A_SUDO_C = "LC_ALL=C.UTF-8 LANGUAGE= "
+
+
+def _r20a_c_env():
+    """Return this process's environment in C.UTF-8 with an EMPTY LANGUAGE.
+
+    For a privileged argv or shell (`sudo -n <helper>`, `sudo <verb>`, a tool run as root), whose
+    words the caller matches. Empty rather than removed, as _R20A_SUDO_C has it: sudo keeps a
+    LANGUAGE the caller set, and fills in an unset one from /etc/default/locale through PAM, which
+    gettext then honours over LC_ALL. The helper rebuilds its own children's environment
+    (_clean_env), so on that path only what sudo and the helper say changes.
+    """
+    env = dict(os.environ)
+    env["LC_ALL"] = "C.UTF-8"
+    env["LANG"] = "C.UTF-8"
+    env["LANGUAGE"] = ""
+    return env
 
 
 def _run_privileged(server, verb, args, timeout, merge_stderr, sudo):
@@ -1294,17 +1331,31 @@ def key_login_kwargs(cred):
             "look_for_keys": True}
 
 
+def _r20a_magicdns_host(host):
+    """`host` qualified with this panel's tailnet MagicDNS suffix when it is a bare node name.
+
+    A bare name is one with no "." AND no ":". The old test was `"." not in host and not
+    host.startswith("100.")`: every IPv4 literal already holds a ".", so the "100." half never
+    mattered, and the one address class it was meant to skip, an IPv6 literal (a node's
+    fd7a:115c:a1e0:: tailnet address, as the admin console lists it), has no "." and got the
+    suffix glued on: `fd7a:115c:a1e0::1.tail1234.ts.net`, which no resolver answers, so every
+    command, the Test button and the web terminal failed. A hostname never contains ":", so that
+    one character covers bracketed and zone-id forms too. One helper for both transports, so the
+    paramiko and ssh-CLI paths cannot drift apart again. May raise (the tailscale CLI read).
+    """
+    if "." in host or ":" in host:
+        return host
+    from panel.ops import tailscale_integration as ts
+    info = ts.get_tailscale_info()
+    if info.dns_name:
+        domain = info.dns_name.split(".", 1)[1] if "." in info.dns_name else "ts.net"
+        return f"{host}.{domain}"
+    return host
+
+
 def _tailscale_connect_host(server):
     """The host paramiko dials for a Tailscale remote: its name, qualified via MagicDNS if plain."""
-    resolved_host = server.host
-    # If the host is a plain name, try resolving via MagicDNS
-    if "." not in server.host and not server.host.startswith("100."):
-        from panel.ops import tailscale_integration as ts
-        ts_info = ts.get_tailscale_info()
-        if ts_info.dns_name:
-            domain = ts_info.dns_name.split(".", 1)[1] if "." in ts_info.dns_name else "ts.net"
-            resolved_host = f"{server.host}.{domain}"
-    return resolved_host
+    return _r20a_magicdns_host(server.host)
 
 
 def _keep_warm(client):
@@ -1545,17 +1596,11 @@ def close_connection(server):
 
 def _resolve_ts_host(server):
     """Resolve a Tailscale remote's hostname (MagicDNS if a bare name)."""
-    host = server.host
-    if "." not in host and not host.startswith("100."):
-        try:
-            from panel.ops import tailscale_integration as ts
-            info = ts.get_tailscale_info()
-            if info.dns_name:
-                domain = info.dns_name.split(".", 1)[1] if "." in info.dns_name else "ts.net"
-                host = f"{host}.{domain}"
-        except Exception:
-            _log.debug("_resolve_ts_host: ignored non-fatal error", exc_info=True)
-    return host
+    try:
+        return _r20a_magicdns_host(server.host)
+    except Exception:
+        _log.debug("_resolve_ts_host: ignored non-fatal error", exc_info=True)
+    return server.host
 
 
 # Connection-multiplexing socket dir for the ssh-CLI path (Tailscale remotes). Per-uid so the
@@ -1669,7 +1714,7 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
     """
     use_sudo = sudo if sudo is not None else server.sudo_enabled
     # ROOT, not the remote's optional linuxgsm_user — see run_command for what that demotion did.
-    remote_cmd = f"sudo bash -c {_quote(command)}" if use_sudo else command
+    remote_cmd = f"{_R20A_SUDO_C}sudo bash -c {_quote(command)}" if use_sudo else command
     host = _resolve_ts_host(server)
     try:
         ssh_cmd = [
@@ -1987,7 +2032,7 @@ def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
     # codebase reads that field: game operations build their own `sudo -u <GameServer.username>`
     # and pass sudo=False, so the demotion was its only surviving effect, on a form the Add Remote
     # page invited the operator to fill in.
-    full_cmd = f"sudo bash -c {_quote(command)}" if use_sudo else command
+    full_cmd = f"{_R20A_SUDO_C}sudo bash -c {_quote(command)}" if use_sudo else command
     # How long the remote may stay silent while the command runs (_drain_exec).
     silence = max(timeout or 0, _DRAIN_IDLE_FLOOR)
 
@@ -3642,6 +3687,22 @@ def cron_port(port):
         return int(port)
     except (TypeError, ValueError):
         raise ValueError("not a port number") from None
+
+
+def _r20b_query_port(port):
+    """`port` as the int a gamedig read may query, or None when there is none to query.
+
+    cron_port's rules (a bool, a fractional float, text that is not a number: refused), with the
+    refusal read as "no port" instead of raised. Every gamedig reader is documented "never raises"
+    or best-effort, and each built its command with a bare `int(port)`: a GameServer row whose port
+    column holds REAL infinity (a hand-edited or restored database) raised OverflowError out of
+    player_count — and through it out of a scheduled backup, every hour — instead of answering
+    "unknown". The caller validates once, here, before it builds anything.
+    """
+    try:
+        return cron_port(port)
+    except ValueError:
+        return None
 
 
 def daily_restart_check_cmd(user, selfname, gdtype, host, port):

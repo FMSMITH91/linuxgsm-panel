@@ -479,10 +479,12 @@ def _register_install(app):
         prepare_install_account), so this simply runs it again on the same row.
 
         Refused for a cause a retry cannot fix. install_retryable is False only for a game
-        LinuxGSM caps at an older Ubuntu than the host runs (INSTALL_FAILURE_FINAL) and for an
-        instance or script name no account may have, and spending another half hour arriving at
-        the same line is not a service to anyone. Nothing clears the flag but a later install that
-        succeeds: a config change fixes neither cause. A cause the operator CAN fix (a Steam
+        LinuxGSM caps at an older Ubuntu than the host runs (INSTALL_FAILURE_FINAL), for an
+        instance or script name no account may have, and for a first install whose account name
+        was taken on the host before step 1 ran (_existing_account_verdict: the panel installs only
+        into an account it creates). Spending another half hour arriving at the same line is not a
+        service to anyone. Nothing clears the flag but a later install that succeeds: a config
+        change fixes none of these causes. A cause the operator CAN fix (a Steam
         account that owns the game, a steamuser) stays retryable — see _InstallRun.fail.
         """
         gs = get_game(server_id)
@@ -1000,8 +1002,9 @@ class _InstallRun:
         act on. Persisting it is what lets the row say why and offer the right next step.
 
         `retryable` is False only for a cause nothing about trying again changes — today
-        that is a game LinuxGSM caps at an older Ubuntu than the host runs. The row then
-        offers Remove instead of Retry. A cause the operator can act on (free a dump slot,
+        that is a game LinuxGSM caps at an older Ubuntu than the host runs, an instance or
+        script name no account may have, and a first install whose account name was taken on
+        the host before step 1 (see retry_install). The row then offers Remove instead of Retry. A cause the operator can act on (free a dump slot,
         add a Steam account, let the Windows-prime workaround run) stays retryable: its
         message tells them what to do, and Retry is how they do it. See
         INSTALL_FAILURE_FINAL.
@@ -1104,8 +1107,10 @@ def _install_linuxgsm(job, remote):
     _p(3, "Downloading LinuxGSM")
     # C.UTF-8 and no LANGUAGE for the sudo that switches account (_R19A_C_LOCALE, as a privileged
     # verb runs): the retry below recognises sudo's "unknown user" by its words, which a German
-    # host's language pack translates, so the retry never fired there. sudo keeps the locale, so
-    # linuxgsm.sh runs in C.UTF-8 too: the locale the helper's _game_env already gives LinuxGSM.
+    # host's language pack translates, so the retry never fired there. sudo keeps LC_ALL and LANG,
+    # so linuxgsm.sh runs in C.UTF-8 too: the locale the helper's _game_env already gives LinuxGSM.
+    # (A LANGUAGE in /etc/default/locale can come back through sudo's PAM stack; nothing in this
+    # step reads a gettext-translated word from the child, only LinuxGSM's own English.)
     install_cmd = _sm._R19A_C_LOCALE + _sm.game_user_cmd(
         short_name, f"cd /home/{short_name} && "
                     f"wget -q -O linuxgsm.sh https://linuxgsm.sh && chmod +x linuxgsm.sh && "

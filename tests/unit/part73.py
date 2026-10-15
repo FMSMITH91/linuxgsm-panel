@@ -135,14 +135,19 @@ _jsv73 = _node47(
     + "const tf = (s, o) => o.bind;\nconst confirmDialog = (o) => out.push(o.bodyText);\n" + _cpb73
     + "for (const b of ['2001:db8::5', '203.0.113.5']) { _els['panel-bind-custom'].value = b; "
     + "changePanelBinding(); }\nconsole.log(JSON.stringify(out));")
-check("panel bind: an IPv6 bind is bracketed before its port on the setup page, in the binding reply, "
-      "in the page's confirm dialog and in its restart toast (`:::5000` names no address); an IPv4 bind is as it was",
+check("panel bind: an IPv6 bind is bracketed before its port on the setup page and in the binding "
+      "reply (`:::5000` names no address); an IPv4 bind is as it was",
       _rbv73 == ["<code>[::]:5000</code>", "<code>0.0.0.0:5000</code>"]
-      and _rs73._r18a_bracketed("::") == "[::]" and _rs73._r18a_bracketed(_ANY4_73) == _ANY4_73
-      and _jsv73 in (None, ['<span class="text-success">[::]:5000</span>',
-                            '<span class="text-success">0.0.0.0:5000</span>',
-                            '[2001:db8::5]:5000', '203.0.113.5:5000']), repr((_rbv73, _jsv73)))
-if _jsv73 is None:
+      and _rs73._r18a_bracketed("::") == "[::]" and _rs73._r18a_bracketed(_ANY4_73) == _ANY4_73,
+      repr(_rbv73))
+# Only when node ran (review 1013a): `_jsv73 in (None, …)` recorded a PASS beside the SKIP for a
+# page script that never ran, the shape part66 removed in review 1012a.
+if _jsv73 is not None:
+    check("panel bind: ...and in the page's confirm dialog and its restart toast",
+          _jsv73 == ['<span class="text-success">[::]:5000</span>',
+                     '<span class="text-success">0.0.0.0:5000</span>',
+                     '[2001:db8::5]:5000', '203.0.113.5:5000'], repr(_jsv73))
+else:
     skip("panel bind: the restart toast's bracketing", "no node")
 
 # part12's transport tripwire is armed inside each block below that drives a route (with part20's
@@ -496,12 +501,13 @@ _ruv73 = _node47(
     "const escapeHtml = (s) => String(s);\nconst setInstallUpdatesState = () => {};\n" + _ru73
     + "renderUpdates({count: 5, packages: " + _json73.dumps(_up73) + "}, '');\n"
     + "console.log(JSON.stringify(el.innerHTML));")
-check("os updates: ...and the card shows each row's label, with its count and security count as before",
-      _ruv73 is None or (isinstance(_ruv73, str) and "libx11-6 (i386)</span>" in _ruv73
-                         and "libx11-6 (amd64)</span>" in _ruv73 and "libx11-data</span>" in _ruv73
-                         and " 5 <span>updates available" in _ruv73 and ">3 <span>security" in _ruv73),
-      repr(_ruv73))
-if _ruv73 is None:
+if _ruv73 is not None:
+    check("os updates: ...and the card shows each row's label, with its count and security count as before",
+          isinstance(_ruv73, str) and "libx11-6 (i386)</span>" in _ruv73
+          and "libx11-6 (amd64)</span>" in _ruv73 and "libx11-data</span>" in _ruv73
+          and " 5 <span>updates available" in _ruv73 and ">3 <span>security" in _ruv73,
+          repr(_ruv73))
+else:
     skip("os updates: the card's rendering", "no node")
 
 check("part73: nothing its routes drove reached a real transport (every host call was stubbed)",

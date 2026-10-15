@@ -241,8 +241,9 @@ function openPort() {
   // host or an expired session (a non-JSON body makes r.json() reject) left "⟳ Opening..." on
   // screen forever with no way to tell whether the rule had been created.
   .catch(function () {
-    // The words in their own span: the page's translator looks up a whole text node, and its
-    // mark handling covers ✓/✗ only, so "❌ The request…" as one node matched no key.
+    // The words in their own span: the page's translator looks up a whole text node. Its mark
+    // handling covers ✅/❌ too since #428, so the span is no longer needed for that; it is kept so
+    // the mark and the sentence stay separate nodes, as on this file's other result lines.
     resultEl.innerHTML = '<span class="text-danger">❌ <span>The request failed — the host may be '
       + 'unreachable, or your session may have expired. Refresh and check the rules.</span></span>';
   });

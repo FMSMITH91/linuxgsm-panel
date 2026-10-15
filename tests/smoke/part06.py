@@ -2011,7 +2011,7 @@ try:  # noqa: MC0001
               "message %r — 'not found' is a claim about a directory nobody reached"
               % (_bk_delj.get("message"),))
         check("backup row: downloading one is not a 500 either",
-              _bk_dlr.status_code == 502,
+              _bk_dlr.status_code == 503,
               "status %d — a Werkzeug HTML error page where a file should be"
               % _bk_dlr.status_code)
         # Positive control: a listing that WAS read still answers 404 for a name not in it.
@@ -2711,7 +2711,7 @@ with app.app_context():
 _tsmod.open_session = _lt_open
 _tsmod.get = lambda sid: _lt_sessions.get(sid)
 _tsmod.close_for_sid = lambda sid, reason="": _lt_sessions.pop(sid, None)
-_lt_c = _lt_c2 = None
+_lt_c = _lt_c2 = _lt_c3 = _lt_c4 = None
 try:
     _lt_http = client_as(_lt_uid)
     _lt_pg = _lt_http.get("/terminal/%d" % _lt_lid, headers={"Accept": "application/json"})
@@ -2878,20 +2878,16 @@ try:
           % ([k for k in _lt_open4 if k in _lt_sessions], _lt_err4))
     check("terminal: ...and the closing row names the user whose access went",
           _lt_aud4 >= 1, "no new terminal_close row for smoke-term-deleg with that reason")
-    for _cl in (_lt_c3, _lt_c4):
-        try:
-            if _cl.is_connected():
-                _cl.disconnect()
-        except Exception:
-            pass  # a client the server already dropped has nothing left to close
 finally:
-    (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
-    for _cl in (_lt_c, _lt_c2):
+    # All four, on every path, before the stand-ins go: the last two were closed only at the end
+    # of the try, so a check that raised before it left two socket clients connected (review 1013a).
+    for _cl in (_lt_c, _lt_c2, _lt_c3, _lt_c4):
         try:
             if _cl is not None and _cl.is_connected():
                 _cl.disconnect()
         except Exception:
             pass  # a client the server already dropped has nothing left to close
+    (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
     with app.app_context():
         _u = db.session.get(User, _lt_uid)
         if _u is not None:

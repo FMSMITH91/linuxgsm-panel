@@ -116,10 +116,14 @@ def sudo_n_verb(verb, args, timeout):
     from panel.security import privileged as _priv
     try:
         argv = ["sudo", "-n"] + _priv.tool_argv(verb, args)
+        from panel.ops.ssh_manager import _core as _smc
+        # env: C.UTF-8 for sudo and the tool it runs (_core._r20a_c_env): the report reads
+        # ufw's "Default:" line by its words, and ufw_classify reads sudo's refusal by its words.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         p = subprocess.Popen(argv, shell=False,  # nosec B603 - sudo -n plus privileged.py's argv
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, start_new_session=True)
+                             stderr=subprocess.PIPE, start_new_session=True,
+                             env=_smc._r20a_c_env())
         out, err, rc = so._collect_verb_output(p, argv, timeout)
     except subprocess.TimeoutExpired:
         return "", "Command timed out", -1

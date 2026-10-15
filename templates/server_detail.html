@@ -527,7 +527,7 @@
                page and the live address above do: spliced as host ~ ':' ~ port, an IPv6-only host's
                row read "2001:db8::5:27015", and click-to-copy put that on the clipboard. #}
             <td class="text-end">{% set caddr = server.connect_address(public_host) if public_host else (':' ~ server.port) %}
-              <code class="text-info{% if public_host %} copy-addr{% endif %}"{% if public_host %} style="cursor:pointer;" title="Click to copy" data-copy="{{ caddr }}"{% endif %}>{{ caddr }}</code></td>
+              <code class="text-info{% if public_host %} copy-addr{% endif %}"{% if public_host %} style="cursor:pointer;" title="{{ t('Click to copy') }}" data-i18n-title="Click to copy" data-copy="{{ caddr }}"{% endif %}>{{ caddr }}</code></td>
           </tr>
         </table>
       </div>

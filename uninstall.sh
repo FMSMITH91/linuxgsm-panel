@@ -6,6 +6,9 @@
 # the panel directory a few lines later then deletes the files out from under a running process.
 # Same line, same reason, as install.sh.
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+# C.UTF-8 and an EMPTY exported LANGUAGE for everything below, as install.sh says why: the ufw
+# rule match further down reads ufw's output by its words.
+export LC_ALL=C.UTF-8 LANG=C.UTF-8 LANGUAGE=
 # LinuxGSM Panel — uninstaller.
 #
 # Removes the panel and everything its installer created: the systemd service and its

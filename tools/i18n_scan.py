@@ -35,6 +35,7 @@ Usage:
     python tools/i18n_scan.py --all      # also list the strings that ARE covered
 """
 import ast
+import copy
 import glob
 import html
 import json
@@ -173,6 +174,12 @@ def is_translatable(text):
     return bool(text) and len(text) > 1 and bool(_HAS_LETTER.search(text))
 
 
+def _r20c_attr_pairs(attrs):
+    """`attrs` with the Jinja marks _resolve_jinja leaves in a name taken out (see _Walker)."""
+    marks = "[%s%s%s]" % (_R15C_BRANCH_MARKS, _SPLIT, _DYNAMIC)
+    return [(re.sub(marks, "", k), v) for k, v in attrs if re.sub(marks, "", k)]
+
+
 class _Walker(HTMLParser):
     """Collects the strings the runtime translator would try to look up, plus the unreachable ones.
 
@@ -204,6 +211,10 @@ class _Walker(HTMLParser):
              "link", "meta", "param", "source", "track", "wbr"}
 
     def handle_starttag(self, tag, attrs):
+        # A {% if %}/{% else %} glued to an attribute (`{% else %}title="…"`) leaves its mark in the
+        # attribute's NAME, so "\x04title" was no title and its text was read by no gate; and the
+        # two branches of one attribute are two pairs, which a dict kept only the last of.
+        attrs = _r20c_attr_pairs(attrs)
         attr_map = dict(attrs)
         skips = tag in SKIP_TAGS or "data-no-i18n" in attr_map
         # `skips`, not just the enclosing depth: base.html's walker returns on a skipped element
@@ -211,9 +222,9 @@ class _Walker(HTMLParser):
         # title/placeholder too. Testing only the outer depth reported placeholders as gaps that
         # the runtime never even looks at.
         if self._skip_at is None and not skips:
-            self._collect_attrs(attr_map)
+            self._collect_attrs(attrs)
         # Read in a guarded region too: the dialog is built elsewhere, outside the guard.
-        self._collect_attrs(attr_map, CONFIRM_ATTRS)
+        self._collect_attrs(attrs, CONFIRM_ATTRS)
         if tag in self._VOID:
             return                # never closes, so it opens no region
         self._open.append(tag)
@@ -221,11 +232,10 @@ class _Walker(HTMLParser):
             self._skip_at = len(self._open)   # the depth this skip region starts at
             self._skip_tag = tag if tag in SKIP_TAGS else "data-no-i18n"
 
-    def _collect_attrs(self, attr_map, names=I18N_ATTRS):
+    def _collect_attrs(self, attrs, names=I18N_ATTRS):
         """Record the element's translatable attributes (title, placeholder...) as "@name"."""
-        for name in names:
-            value = attr_map.get(name)
-            if value is None:
+        for name, value in attrs:
+            if name not in names or value is None:
                 continue
             # A {% if %} splits the value into branches, each a whole value, as it splits a text
             # run. A branch holding a {{ }} is per-request text: an attribute made of the
@@ -831,6 +841,51 @@ class _GuardedIds(HTMLParser):
                 v = a.get(key) or ""
                 if v and _DYNAMIC not in v and _SPLIT not in v:
                     into.add(v)
+
+
+class _R20cGuardedAttrs(_Walker):
+    """_Walker, also recording the translatable attributes it SKIPS.
+
+    On a data-no-i18n element, one inside it, or on or inside a <code>/<pre>: the runtime walker
+    returns there before its attribute loop, so a tooltip written there is English for every
+    viewer — and scan_template, mirroring the runtime, simply did not collect it, so a catalog key
+    in that place passed every gate (review 1013a: a dashboard row's in-game name, a muted tag
+    chip, the group page's Whole host / Single game server badges, three <code> tooltips).
+    """
+
+    def __init__(self):
+        _Walker.__init__(self)
+        self.guarded = set()
+
+    def handle_starttag(self, tag, attrs):
+        pairs = _r20c_attr_pairs(attrs)
+        if self._skip_at is not None or tag in SKIP_TAGS or "data-no-i18n" in dict(pairs):
+            for name, value in pairs:
+                if name not in I18N_ATTRS or value is None:
+                    continue
+                for v in _r15c_as_splits(html.unescape(value)).split(_SPLIT):
+                    v = re.sub(r"\s+", " ", v).strip()
+                    if v and _DYNAMIC not in v:
+                        self.guarded.add(v)
+        _Walker.handle_starttag(self, tag, attrs)
+
+
+def guarded_attrs(template_dir=TEMPLATE_DIR, catalog=None):
+    """[(template, text)]: a catalog-key title/placeholder/aria-label the translator never reads.
+
+    See _R20cGuardedAttrs. A literal that is no key (a path, a URL) is rightly left alone. Fix:
+    move data-no-i18n onto an inner element around the user's text, or render the attribute with
+    {{ t('…') }} (and data-i18n-title, so a live language switch renders it again).
+    """
+    keys = load_catalog("es") if catalog is None else catalog
+    out = []
+    for path in sorted(glob.glob(os.path.join(template_dir, "*.html"))):
+        with open(path, encoding="utf-8") as fh:
+            walker = _R20cGuardedAttrs()
+            walker.feed(_resolve_jinja(fh.read()))
+            walker.close()
+        out += [(os.path.basename(path), text) for text in sorted(walker.guarded) if text in keys]
+    return out
 
 
 _JS_WRITE = r"\.(?:textContent|innerText|placeholder|title)\s*=(?!=)"
@@ -1449,7 +1504,7 @@ def _py_own_nodes(fn):
 def _py_wrapped_params(fn, lines, wrappers):
     """{(position, parameter)} of `fn`'s parameters that it hands to a sink as they are."""
     where = _r16c_param_positions(fn)
-    return {(where[v.id], v.id) for n in _py_own_nodes(fn) for v in _py_sink_values(n, wrappers)
+    return {(where[v.id], v.id) for n in _r18c_shown_nodes(fn) for v in _py_sink_values(n, wrappers)
             if isinstance(v, ast.Name) and v.id in where and not _py_ignored(lines, v)}
 
 
@@ -1909,7 +1964,7 @@ def _r17b_fed_calls(rel, lines, tree, wanted):
     consts = _py_module_consts(tree)
     out, names = [], set()
     for fn in [tree] + _py_functions(tree):
-        calls = [n for n in _py_own_nodes(fn) if _py_call_name(n) in wanted and not _py_ignored(lines, n)]
+        calls = [n for n in _r18c_shown_nodes(fn) if _py_call_name(n) in wanted and not _py_ignored(lines, n)]
         binds = _r16c_binds(fn) if calls else {}
         names |= {_py_call_name(n) for n in calls}
         out += [(rel, a.lineno, a, consts, binds, lines) for n in calls for a in n.args]
@@ -2009,18 +2064,42 @@ def _r18c_shown_nodes(fn):
     jsonify({"error": "…"}))` and a class-level sink were read by no walk, so their message was
     never asked of the catalogs. A def inside them is still left to its own pass (_py_functions).
     Every SINK walk reads these (shown_literals_py, the spliced_py pair, route_answer_keys, the job
-    step walk): review 1012d found the other three still on _py_own_nodes, so an f-string message
-    in a lambda passed every gate. The LOCAL tables (_py_assigned, _r16c_binds, …) stay on
-    _py_own_nodes, so a local is still resolved only in the function that assigned it.
+    step walk, the wrapper table and the callback-fed calls): review 1012d found three still on
+    _py_own_nodes, so an f-string message in a lambda passed every gate, and review 1013a two more —
+    `def _reply(text): return later(lambda: jsonify({"message": text}))` was not a wrapper, so every
+    message handed to it was read by no gate. The LOCAL tables (_py_assigned, _r16c_binds, …) stay on
+    _py_own_nodes, so a local is still resolved only in the function that assigned it — and a
+    lambda's own parameter is not one (_r20c_lambda_view).
     """
     out = list(_py_own_nodes(fn))
     stack = [n for n in out if isinstance(n, (ast.Lambda, ast.ClassDef))]
     while stack:
-        for child in ast.iter_child_nodes(stack.pop()):
+        node = stack.pop()
+        for child in ast.iter_child_nodes(_r20c_lambda_view(node) if isinstance(node, ast.Lambda) else node):
             if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 out.append(child)
                 stack.append(child)
     return out
+
+
+def _r20c_lambda_view(lam):
+    """`lam` with each use of its own parameters in its body renamed so no local table holds it.
+
+    The walks resolve a Name against the ENCLOSING function's locals, and inside a lambda a name
+    that is the lambda's parameter is not that local: `msg = f"…"; cb = lambda msg: flash(msg)`
+    was reported as a built message flashed, and `def f(text): … lambda text: jsonify(text)` made
+    f a wrapper of a parameter it never hands on. A copy, so the tree the other walks read is
+    untouched; line numbers (which # i18n-ok reads) are kept. Defaults stay as they are: they are
+    evaluated in the enclosing scope.
+    """
+    params = {a.arg for a in lam.args.posonlyargs + lam.args.args + lam.args.kwonlyargs}
+    params |= {a.arg for a in (lam.args.vararg, lam.args.kwarg) if a is not None}
+    view = ast.Lambda(args=lam.args, body=copy.deepcopy(lam.body))
+    ast.copy_location(view, lam)
+    for n in ast.walk(view.body):
+        if isinstance(n, ast.Name) and n.id in params:
+            n.id = "<lambda param> " + n.id
+    return view
 
 
 def shown_literals_py(root=ROOT):

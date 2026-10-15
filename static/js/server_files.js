@@ -217,6 +217,7 @@ function browse(path){
   fetch(MOUNT+'/api/server/'+serverId+'/browse?path='+encodeURIComponent(want)).then(r=>r.json()).then(d=>{
     if(seq !== _browseSeq) return;   // a later browse() owns the list now
     var keep = _r14c_openEditors(want);
+    if(_r20cKeptOnError(d, keep)) return;
     _renaming = null;                // the row being renamed is about to be rebuilt
     _creating = null;                // ...and so is the create field at the top of it
     var l=document.getElementById('file-list'); l.innerHTML='';
@@ -234,18 +235,30 @@ function browse(path){
         icon: e.is_dir?'<i class="bi bi-folder-fill text-warning"></i>':'<i class="bi '+fileIcon(e.name)+'"></i>'
       }));
     });
-    // "(empty folder)" is a statement about the folder. Say it only when the host actually
-    // answered: a read that failed returns no entries either, and the browser used to announce
-    // that as an empty directory — about a folder full of somebody's game files.
-    if(!(d.entries||[]).length){
-      l.insertAdjacentHTML('beforeend', d.unreadable  // nosemgrep
-        ? '<div class="text-warning small p-3 text-center">Could not read this folder — the host did not answer. This is not the same as it being empty.</div>'
-        : '<div class="text-secondary small p-3 text-center">(empty folder)</div>');
-    }
+    _r20cEmptyNote(l, d);
     // Re-highlight the open file if it's in this directory.
     if(curFile){ var open=l.querySelector('[data-path="'+CSS.escape(curFile)+'"]'); if(open) open.classList.add('active'); }
     _r14c_restoreEditors(keep, l);
   }).catch(()=>{});
+}
+// A refresh of the SAME folder that failed (an upload's refresh during a host blip) while a create or
+// rename field is open leaves the list, the field and what was typed in it where they are, and says
+// why: the list was wiped before the error was read, so the half-typed name went with it. As a
+// refresh whose fetch failed outright already does. Otherwise (no field open, another folder, the
+// first load) the error replaces the list as before. True when it kept them.
+function _r20cKeptOnError(d, keep){
+  if(!(d.error && keep && (keep.create || keep.rename))) return false;
+  if(window.toast) toast(d.error, 'danger');
+  return true;
+}
+// "(empty folder)" is a statement about the folder. Say it only when the host actually answered: a
+// read that failed returns no entries either, and the browser used to announce that as an empty
+// directory — about a folder full of somebody's game files.
+function _r20cEmptyNote(l, d){
+  if((d.entries||[]).length) return;
+  l.insertAdjacentHTML('beforeend', d.unreadable  // nosemgrep
+    ? '<div class="text-warning small p-3 text-center">Could not read this folder — the host did not answer. This is not the same as it being empty.</div>'
+    : '<div class="text-secondary small p-3 text-center">(empty folder)</div>');
 }
 // A refresh of the SAME folder (an upload finishing, a delete) keeps an open create or rename field
 // and what was typed in it. Rebuilding the list dropped both with no message, half-typed name and

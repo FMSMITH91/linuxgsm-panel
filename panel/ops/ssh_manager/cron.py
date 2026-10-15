@@ -1334,6 +1334,7 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     if not _core.game_idents_ok(user):
         return None      # refused: unknown, which no caller reads as "nobody is on"
     gdtype = _gamedig_type(game_type, query_type)
+    port = _core._r20b_query_port(port)   # a REAL inf port row is "no port", not an OverflowError
     if not gdtype or not port:
         return None
     # `{c, ok}`, not a bare `.players|length` — and `ok` is the whole point. gamedig writes its
@@ -1366,6 +1367,7 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
     if not _core.game_idents_ok(user):
         return None, None, None
     gdtype = _gamedig_type(game_type, query_type)
+    port = _core._r20b_query_port(port)   # as player_count
     if not gdtype or not port:
         return None, None, None
     # One query -> compact JSON {c:count, m:maxplayers, n:name, ok:<did it actually respond?>}. `ok`
@@ -1462,9 +1464,10 @@ def game_map(server, user, game_type=None, port=None, query_type=None):
     if not _core.game_idents_ok(user):
         return ""
     gdtype = _gamedig_type(game_type, query_type)
+    port = _core._r20b_query_port(port)   # as player_count
     if not gdtype or not port:
         return ""
-    key = (getattr(server, "id", None), int(port))
+    key = (getattr(server, "id", None), port)
     hit = _cached_map(key)
     if hit is not None:
         return hit

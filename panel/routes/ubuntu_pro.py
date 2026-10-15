@@ -10,6 +10,7 @@ from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, lo
 from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_pro_status_cached)
+from panel.routes._shared import (_r20b_audit_on_raise)
 
 
 def register(app):
@@ -45,7 +46,8 @@ def _register_pro_changes(app):
         # handler at all, so a reboot mid-session produced an unhandled traceback and 5xx alerting
         # fired on nothing being wrong.
         try:
-            ok, msg = pro_attach(remote, token)
+            with _r20b_audit_on_raise("pro_attach", target=remote.name, remote=remote):
+                ok, msg = pro_attach(remote, token)
         except ConnectionError:
             return _unreachable("pro attach")
         # NOTE: the token is deliberately never logged.
@@ -70,7 +72,8 @@ def _register_pro_changes(app):
         if service not in _PRO_SERVICES or action not in ("enable", "disable"):
             return jsonify({"success": False, "message": "Unknown service or action"}), 400
         try:
-            ok, msg = pro_service(remote, service, action)
+            with _r20b_audit_on_raise(f"pro_{action}", detail=service, target=remote.name, remote=remote):
+                ok, msg = pro_service(remote, service, action)
         except ConnectionError:
             return _unreachable("pro service")
         if ok:
@@ -85,7 +88,8 @@ def _register_pro_changes(app):
     def api_remote_pro_detach(remote_id):
         remote = get_host_remote(remote_id)
         try:
-            ok, msg = pro_detach(remote)
+            with _r20b_audit_on_raise("pro_detach", target=remote.name, remote=remote):
+                ok, msg = pro_detach(remote)
         except ConnectionError:
             return _unreachable("pro detach")
         if ok:

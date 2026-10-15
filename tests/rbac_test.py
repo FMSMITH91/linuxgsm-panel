@@ -4310,6 +4310,14 @@ _AUD_FIXTURE_SCOPES = dict(_AUD_FIXTURE, **{
             except Exception as logs:
                 logs._run()
 
+        def by_shadowing_comprehension():
+            got = [logs._run() for logs in ()]
+            return got
+
+        def by_shadowing_comprehension_arg():
+            got = sorted(logs._run() for logs in ())
+            return got
+
         def by_unused_nested():
             def _w():
                 logs._run()
@@ -4358,13 +4366,15 @@ _AUD_FIXTURE_SCOPES = dict(_AUD_FIXTURE, **{
 _aud_fx2 = _aud_cg.CallGraph(_AUD_FIXTURE_SCOPES)
 _aud_fx2_logs = {q: _aud_fx2.logs(_aud_fx2.function_key("fx.scopes", q)) for q in (
     "by_shadowing_local", "by_shadowing_with", "by_shadowing_for", "by_shadowing_except",
-    "by_unused_nested", "by_star_private", "by_star_unlisted", "K.m", "by_class_init",
+    "by_shadowing_comprehension", "by_shadowing_comprehension_arg", "by_unused_nested", "by_star_private", "by_star_unlisted", "K.m", "by_class_init",
     "by_module_alias", "by_local_alias", "by_submodule_attr", "by_relative_import",
     "by_star_import", "by_star_all")}
-check("audit gate: a local, loop, with or except name that shadows a logging module is not an "
-      "audit row",
+check("audit gate: a local, loop, with, except or comprehension name that shadows a logging "
+      "module is not an audit row",
       not any(_aud_fx2_logs[q] for q in ("by_shadowing_local", "by_shadowing_with",
-                                          "by_shadowing_for", "by_shadowing_except")),
+                                          "by_shadowing_for", "by_shadowing_except",
+                                          "by_shadowing_comprehension",
+                                          "by_shadowing_comprehension_arg")),
       repr(_aud_fx2_logs))
 check("audit gate: ...nor a nested def nothing calls, nor a name a star import does not bind",
       not any(_aud_fx2_logs[q] for q in ("by_unused_nested", "by_star_private",

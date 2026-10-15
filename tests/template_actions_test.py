@@ -1259,13 +1259,27 @@ def _escapers_in(src):
     return tuple(sorted(names))
 
 
+# A string literal (kept) or a comment (dropped), whichever starts first.
+_R20D_STR_OR_COMMENT = re.compile(r"""('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)|//[^\n]*|/\*.*?\*/""",
+                                  re.S)
+
+
+def _r20d_drop_comments(expr):
+    """`expr` with its comments dropped, never a `//` inside a string literal.
+
+    A plain `//…` strip cut every `'<a href="https://…' + x.name` at the URL's `//`, and the value
+    after it left the gate (review 1013a).
+    """
+    return _R20D_STR_OR_COMMENT.sub(lambda m: m.group(1) or "", expr)
+
+
 def _r16d_direct_sigs(_src):
     """The unescaped-value signatures of the expressions sitting directly at one script's sinks."""
     _sigs = set()
     for _m in _SINK.finditer(_src):
         _expr = _js_expr_at(_src, _m.end())
         # Drop comments first: a trailing "// nosemgrep" would otherwise read as an interpolation.
-        _expr_nc = re.sub(r"//[^\n]*|/\*.*?\*/", "", _expr, flags=re.S)
+        _expr_nc = _r20d_drop_comments(_expr)
         _bare = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`(?:[^`\\]|\\.)*`", "", _expr_nc)
         for _fn in _escapers_in(_src):
             _bare = re.sub(r"\b%s\s*\((?:[^()]|\([^()]*\))*\)" % _fn, "", _bare)
@@ -1391,7 +1405,7 @@ _PANEL_GLOBALS = {"MOUNT", "CSRF", "LANG", "I18N", "LOCAL_HOST_ID", "REMOTE_ID",
 
 def _strip_neutral(expr, extra=()):
     """`expr` with every neutralising call replaced by a blank literal."""
-    out = re.sub(r"//[^\n]*", "", expr)
+    out = _r20d_drop_comments(expr)
     for fn in tuple(_NEUTRAL) + tuple(extra):
         out = re.sub(r"\b%s\s*\((?:[^()]|\([^()]*\))*\)" % fn, "''", out)
     return out
@@ -1436,13 +1450,17 @@ def _safe_markup_helpers(src):
     `'<i class="bi '+fileIcon(e.name)+'">'` reading as an unescaped e.name."""
     out = set()
     for name, _params, body in _fn_bodies(src):
-        rets = re.findall(r"\breturn\s+([^\n;]+)", body)
-        if not rets or not any("'" in r or '"' in r for r in rets):
-            continue
-        if all(not {d for pat in _ADJACENT for d in re.findall(pat, _strip_neutral(r))}
-               for r in rets):
+        # Each whole return expression, read as the sinks are: `[^\n;]+` stopped at a `;` inside a
+        # string literal (review 1013a).
+        rets = [_js_expr_at(body, m.end()) for m in re.finditer(r"\breturn\s+", body)]
+        if any("'" in r or '"' in r for r in rets) and not any(_r20d_adjacent(r) for r in rets):
             out.add(name)
     return out
+
+
+def _r20d_adjacent(expr):
+    """The dynamic values `expr` puts beside markup (_ADJACENT), comments and escaped values aside."""
+    return {d for pat in _ADJACENT for d in re.findall(pat, _strip_neutral(expr))}
 
 
 def _safe_locals(src):
@@ -1562,11 +1580,49 @@ _r15d_sink_ctl = {
     "innerHTML = cond ? buf : placeholder": _r15d_sink_sigs(
         "function zz(x, el, n) {\n  var buf = '';\n  buf += '<b>' + x.name + '</b>';\n"
         "  el.innerHTML = n ? buf : '<i>none</i>';\n}\n"),
+    # Review 1013a: a `//` inside a string literal (any URL) is not a comment, at a sink, in a
+    # buffer, or in a local that would otherwise read as safe markup.
+    "innerHTML = URL + raw": _r16d_direct_sigs(
+        "function zz(x, el) {\n  el.innerHTML = '<a href=\"https://h/' + x.name + '\">';\n}\n"),
+    "buf += URL + raw": _r15d_sink_sigs(
+        "function zz(x, el) {\n  var buf = '';\n  buf += '<a href=\"https://h/' + x.name + '\">';\n"
+        "  el.innerHTML = buf;\n}\n"),
+    "a URL local in a buffer": _r15d_sink_sigs(
+        "function zz(x, el) {\n  var buf = '';\n  var link = '<a href=\"https://h/' + x.name + '\">';\n"
+        "  buf += '<p>' + link;\n  el.innerHTML = buf;\n}\n"),
+    # ...and a helper's return read whole: a `;` inside its string made it read as safe markup.
+    "a helper returning raw after a ';' in a string": _r15d_sink_sigs(
+        "function lk(x) {\n  return '<a title=\"a;b\">' + x.name;\n}\n"
+        "function zz(x, el) {\n  var buf = '';\n  buf += '<p>' + lk(x);\n  el.innerHTML = buf;\n}\n"),
 }
-check(all("x.name" in _v for _v in _r15d_sink_ctl.values()),
+# (the URL local is named by the local that holds the raw value, as any unsafe local is)
+_r20d_ctl_names = {"a URL local in a buffer": "link", "a helper returning raw after a ';' in a string": "lk"}
+check(all(_r20d_ctl_names.get(_k, "x.name") in _v for _k, _v in _r15d_sink_ctl.items()),
       "static/js: ...a markup buffer handed to tfHtml's {html: …}, or assigned to innerHTML with no `;`, "
       "behind a `||` fallback, concatenated or in a ternary's arm, is traced like one assigned to "
       "innerHTML (control)", repr(_r15d_sink_ctl))
+
+# Every scanner in this file reads a value as interpolated only through `+` (review 1013a): a
+# template literal's `${x.name}` was deleted with its backticks, so `el.innerHTML = `<b>${x.name}</b>``
+# and a `${}` confirmDialog body passed every XSS gate here. None exists in the tree, so the
+# scanners' assumption is enforced instead of taught a second syntax: no `${…}` in a template
+# literal, in any page script or template.
+def _r20d_template_interps(src):
+    """Line numbers of each template literal holding a `${…}`, outside comments and other strings."""
+    out = []
+    for m in _R20D_STR_OR_COMMENT.finditer(src):
+        if m.group(1) and m.group(1).startswith("`") and "${" in m.group(1):
+            out.append(src[:m.start()].count("\n") + 1)
+    return out
+
+
+_r20d_tl = ["%s:%d" % (_n, _ln) for _n, _s in srcs.items() for _ln in _r20d_template_interps(_s)]
+_r20d_tl_ctl = [_r20d_template_interps(_c) for _c in (
+    "el.innerHTML = `<b>${x.name}</b>`;", "confirmDialog({body: `<b>${name}</b>`});",
+    "// `${not code}`\nvar a = '`${x}`', b = `plain`;")]
+check(not _r20d_tl and _r20d_tl_ctl == [[1], [1], []],
+      "static/js and templates: no template literal interpolates a value (`${…}`), which no XSS gate "
+      "here reads (with its control)", "; ".join(_r20d_tl[:4]) or repr(_r20d_tl_ctl))
 
 _baseline = json.loads((ROOT / "tests" / "html_sink_baseline.json").read_text(encoding="utf-8"))
 _new = sorted("%s: %s" % (f, sig) for f, sigs in _found.items()

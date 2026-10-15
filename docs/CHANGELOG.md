@@ -596,6 +596,23 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **A tenth full review on 2026-10-15: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Hosts in other languages.** On a German or Dutch host with UFW on, a fresh install read the
+    firewall as off and did not open the panel's port. The installer, and the panel host's own
+    commands when the helper is not installed, now read command output in English, and a sudo
+    refusal is recognised as one in any language. Proven on a real host set to German.
+  - **Tailscale over IPv6.** A remote stored by its tailnet IPv6 address had the MagicDNS name glued
+    on, so every command, the Test button and the terminal failed to reach it.
+  - **Installer and sudo-rs.** On a host whose sudoers checker is sudo-rs 0.2.2, the installer
+    deleted the panel's whole sudo grant and stopped. It now keeps the grant without the one line
+    that version does not understand, and says so. Ubuntu 26.04's sudo-rs accepts the full file.
+  - **Robustness.** A host key that changed and a command that was cut off are named for what they
+    are, a route list is checked before IP forwarding is turned on, and an awk reading with a
+    decimal comma no longer breaks a reading.
+  - **Tests.** About thirty checks that could pass without testing what they named now can fail,
+    including one smoke check that passed on a server that never had the id it was testing.
+
 - **A ninth full review on 2026-10-13: fixes.** Every item below has a check that fails without
   its fix.
   - **Hosts in other languages.** On a host whose system language is not English, the panel read

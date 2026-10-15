@@ -624,7 +624,7 @@ try:
     _r = _D16.post("/api/command/%d" % P9_GS, json={"command": "say " + "z" * 1000000})
     _sc16 = (_audits("send_command") or [NS(detail="")])[-1]
     check("audit log: a megabyte console command that failed to send is stored capped",
-          _r.status_code == 502 and 0 < len(_sc16.detail) <= _DETAIL_MAX16 + 32,
+          _r.status_code == 200 and 0 < len(_sc16.detail) <= _DETAIL_MAX16 + 32,
           "%d, %d chars" % (_r.status_code, len(_sc16.detail)))
 
     # ════════════════════════════════════════════════════════════════════════════════════════
@@ -806,10 +806,13 @@ def _priv16(argv_for):
               remote_command=lambda v, a, merge_stderr=True: " ".join(
                   __import__("shlex").quote(x) for x in argv_for(v)),
               stdin_for=lambda v: None, VerbError=ValueError,
-              # Every verb here has a tool to run, so the root branch runs it (review 1012d).
-              _REMOTE_ACTIONS=frozenset())
+              # The real set (review 1013a): f2b-log-lines is a _REMOTE_ACTIONS verb, so as root with
+              # no helper it takes the shell form with no sudo prefix, as production does. An empty
+              # set sent "root" down the tool branch, a combination production never runs for it.
+              _REMOTE_ACTIONS=_rv16_saved[2]._REMOTE_ACTIONS)
 
 
+_rv16_root_tool = None
 try:
     _p9_so._priv = _priv16(lambda v: _BIG16)
     _p9_so._helper_present = lambda: True
@@ -818,6 +821,7 @@ try:
     _p9_so._helper_present = lambda: False
     _p9_so.os = _Os16(0)
     _rv16["root"] = _p9_so._run_verb("f2b-log-lines", ["2026-09-01"], merge_stderr=False)
+    _rv16_root_tool = _p9_so._r19b_root_runs_tool("f2b-log-lines")
     _p9_so.os = _Os16(None)            # no geteuid: the shell fallback, with no sudo prefix
     _rv16["shell"] = _p9_so._run_verb("f2b-log-lines", ["2026-09-01"], merge_stderr=False)
 finally:
@@ -827,6 +831,8 @@ check("f2b _run_verb: every branch keeps at most the ceiling, and answers a cut 
       all(_rv16.get(k, ("", "", 0))[2] == 3 and "treated as unread" in _rv16[k][1]
           and 0 < len(_rv16[k][0]) <= _core16._MAX_OUTPUT_BYTES
           for k in ("helper", "root", "shell")), repr(_rv16_seen))
+check("f2b _run_verb: ...as root with no helper it takes the path production takes for it (the shell "
+      "form, not the tool branch)", _rv16_root_tool is False, repr(_rv16_root_tool))
 check("f2b _run_verb: ...while a verb that is not all-or-nothing keeps what fits, rc 0 (control)",
       _rv16.get("journal", ("", "", -1))[2] == 0
       and len(_rv16["journal"][0]) == _core16._MAX_OUTPUT_BYTES, repr(_rv16_seen.get("journal")))

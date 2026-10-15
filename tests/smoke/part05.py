@@ -1185,19 +1185,27 @@ _dr_stale = [n for n, _m in (("host specs", _dr_fw._specs_cache),
              if _dr_rid in _m]
 check("delete host: the per-remote SSH caches forgot it",
       not _dr_stale, "still cached by: %s" % ", ".join(_dr_stale))
-# The row id is now free. Re-create a server — SQLite hands it straight back — and ask the
-# endpoint about the NEW one. Anything but "none" is the deleted server's job answering.
+# The row id is now free. Re-create a server ON it and ask the endpoint about the NEW one.
+# Anything but "none" is the deleted server's job answering. The id is given, not left to SQLite:
+# game_servers is AUTOINCREMENT now (panel/db/id_sequence.py), so a plain insert never gets a
+# freed id, and the premise check below read new id 107, freed 106 — the inheritance check was
+# passing on a server that never had the deleted one's id (review 1013a).
 with app.app_context():
     _dr_r2 = RemoteServer(name="smoke-freshhost", host="127.0.0.1", port=22, username="root",
                           auth_method="key", auth_credential="")
     db.session.add(_dr_r2)
     db.session.flush()
     _dr_gs2 = GameServer(remote_id=_dr_r2.id, name="smoke-brandnew", short_name="newgameserver",
-                         game_type="gmod", port=27098, installed=True, status="offline")
+                         game_type="gmod", port=27098, installed=True, status="offline",
+                         **({"id": _dr_gid} if db.session.get(GameServer, _dr_gid) is None else {}))
     db.session.add(_dr_gs2)
     db.session.commit()
     _dr_gid2, _dr_rid2 = _dr_gs2.id, _dr_r2.id
 _dr_is = c.get("/api/server/%d/install-status" % _dr_gid2).get_json() or {}
+# The setup the next check rests on (review 1013a): with a different id, "none" holds whatever the
+# install-status code does, so the reuse is required, not only printed.
+check("delete host: ...the new server really did get the freed id", _dr_gid2 == _dr_gid,
+      "new id %s, freed id %s" % (_dr_gid2, _dr_gid))
 check("delete host: a server reusing the freed id does NOT inherit its install outcome",
       _dr_is.get("status") == "none",
       "id reused=%s, install-status=%r" % (_dr_gid2 == _dr_gid, _dr_is))

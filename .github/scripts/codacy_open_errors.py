@@ -105,6 +105,11 @@ def fetch_errors():
         out.extend(data or [])
         if not cursor:
             break
+    else:
+        # Pages still left after the bound: the list was not all read, so it is no answer, never
+        # "clean" on the part that was (review 1013a).
+        if cursor:
+            return out, False
     return out, answered
 
 

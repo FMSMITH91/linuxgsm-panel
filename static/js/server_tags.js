@@ -34,6 +34,7 @@
     el.textContent = tag.name;
     if (tagMuted(tag)){
       el.title = window.t ? window.t('Alerts are muted for this tag') : 'Alerts are muted for this tag';
+      el.setAttribute('data-i18n-title', 'Alerts are muted for this tag');   // a live switch re-renders it
       var bell = document.createElement('i');
       bell.className = 'bi bi-bell-slash';
       el.appendChild(document.createTextNode(' '));

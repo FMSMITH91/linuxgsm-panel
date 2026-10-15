@@ -338,8 +338,10 @@ def _localized_continued58():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+    # LANGUAGE is EMPTY, not unset (review 1013a): gettext ignores an empty one, and sudo's PAM
+    # stack can add back one that is absent (ssh_manager._core._r20a_c_env).
     check("debug report: its reads (journalctl among them) run in the C locale, whatever the "
-          "service inherited", out.strip() == "C.UTF-8 C.UTF-8 unset", repr(out))
+          "service inherited", out.strip() == "C.UTF-8 C.UTF-8", repr(out))
 
 
 def _funnel_port58():

@@ -34,7 +34,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
-    _server_action_buttons, game_account_write_refusal)
+    _server_action_buttons, _r20b_audit_on_raise, game_account_write_refusal)
 
 
 def _summarise_action_output(detail):
@@ -142,7 +142,9 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
     # Read before the SSH, which can take a minute: the row can be deleted and its id taken by
     # then, and a read after a commit would be of that row (models.RowReplaced refuses it).
     name, short_name = gs.name, gs.short_name
-    out, err, rc = _sm.run_as_game_user(remote, short_name, action, timeout=timeout, selfname=gs.lgsm_name)
+    with _r20b_audit_on_raise(f"{action}_server", who=actor, actor=origin, target=name, server=gs):
+        out, err, rc = _sm.run_as_game_user(remote, short_name, action, timeout=timeout,
+                                            selfname=gs.lgsm_name)
     log_action(actor, f"{action}_server", target=name, success=(rc == 0),
                detail=_clean_action_output(out)[-400:], actor=origin, server=gs)
     clean = _clean_action_output((out or "") + "\n" + (err or "")).strip()
@@ -336,9 +338,13 @@ def _moderate_here(gs, action, target, message, steamid, num):
     # the map changed. Idempotent and cheap: a grep, then an append only when absent.
     if action == "ban":
         _ensure_bans_persist(gs)
-    ok, msg = _sm.moderate(gs.remote, gs.short_name, gs.game_type, action,
-                           target=target, message=message,
-                           selfname=gs.lgsm_name, steamid=steamid, num=num)
+    # Audited when the console send RAISES too (_r20b_audit_on_raise): a direct-SSH host that is
+    # down raises, and api_server_moderate's except answered it with no row at all.
+    with _r20b_audit_on_raise("moderate_%s" % action, detail=(target or steamid or message)[:120],
+                              target=gs.name, server=gs):
+        ok, msg = _sm.moderate(gs.remote, gs.short_name, gs.game_type, action,
+                               target=target, message=message,
+                               selfname=gs.lgsm_name, steamid=steamid, num=num)
     log_action(current_user, "moderate_%s" % action, target=gs.name,
                detail=(target or steamid or message)[:120], success=ok, server=gs)
     return ok, msg
@@ -1026,13 +1032,18 @@ def _register_custom_commands(app):
         if refused:
             return jsonify({"success": False, "message": refused}), 400
         try:
-            _, err, rc = send_console_command(gs.remote, gs.short_name, final,
-                                              timeout=10, selfname=gs.lgsm_name)
+            # Audited when the send RAISES too, as the command form is (_r20b_audit_on_raise).
+            with _r20b_audit_on_raise("custom_command", detail=("%s: %s" % (cmd.name, final))[:200],
+                                      target=gs.name, server=gs):
+                _, err, rc = send_console_command(gs.remote, gs.short_name, final,
+                                                  timeout=10, selfname=gs.lgsm_name)
             log_action(current_user, "custom_command", target=gs.name,
                        detail=("%s: %s" % (cmd.name, final))[:200], success=(rc == 0), server=gs)
             if rc != 0:
+                # 200, not 502: Cloudflare (Tunnel, docs/https.md) swaps an origin 502 for its own
+                # page, so the reason never reached the toast. The page reads `success`.
                 return jsonify({"success": False,
-                                "message": _console_send_failure(rc, err)}), 502
+                                "message": _console_send_failure(rc, err)})
             return jsonify({"success": True, "message": i18n.tr("Ran '{name}'.", name=cmd.name)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("custom command failed")}), 500
@@ -1298,9 +1309,10 @@ def _register_commands(app):
         try:
             # LinuxGSM runs each instance in a tmux session owned by its own user.
             _, err, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10, selfname=gs.lgsm_name)
-            # Logged whatever happened, with success=(rc == 0) — the JSON sibling
-            # (server_files.api_send_command) has always done that, while this branch logged only
-            # on success, so an attempt that failed left no audit row at all.
+            # Logged whatever happened, with success=(rc == 0), as the JSON sibling
+            # (server_files.api_send_command) does; this branch logged only on success, so an
+            # attempt that failed left no audit row at all. A send that RAISES is audited by the
+            # except below here, and by _r20b_audit_on_raise there.
             log_action(current_user, "send_command", target=gs.name, detail=cmd_text,
                        success=(rc == 0), server=gs)
             if rc != 0:

@@ -23,7 +23,7 @@ from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _r13b_json_flag)
 from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _json_int, _marked_backup, _record_full_clock,
-    _record_game_clock)
+    _r20b_audit_on_raise, _record_game_clock)
 
 
 class _FullBackupTally:
@@ -604,7 +604,9 @@ def _register_game_backup_files(app):
         if not match:
             return jsonify({"success": False, "message": i18n.tr("Backup not found.")}), 404
         try:
-            ok = delete_game_backup(gs.remote, gs.short_name, match["name"])
+            with _r20b_audit_on_raise("game_backup_delete", detail=match["name"], target=gs.name,
+                                      server=gs):
+                ok = delete_game_backup(gs.remote, gs.short_name, match["name"])
             log_action(current_user, "game_backup_delete", target=gs.name,
                        detail=match["name"], success=ok, server=gs)
             return jsonify({"success": ok, "message": i18n.tr("Deleted." if ok else "Delete failed.")})
@@ -623,11 +625,12 @@ def _register_game_backup_files(app):
         gs = get_game(server_id)
         match, unreadable = _find_game_backup(gs, request.args.get("name") or "")
         if unreadable:
-            # 502, not 404: "no such backup" is a claim about the host's backup directory, and we
+            # 503, not 404: "no such backup" is a claim about the host's backup directory, and we
             # never read it. It used to be a TypeError — Werkzeug's HTML 500 page where a file
             # should have been, and a traceback in the panel log for a host that simply did not
-            # answer.
-            return Response(_BK_UNREADABLE + "\n", status=502, mimetype="text/plain")
+            # answer. Not 502: Cloudflare (Tunnel, docs/https.md) swaps an origin 502 for its own
+            # "Bad gateway" page, and this sentence never reached the browser.
+            return Response(_BK_UNREADABLE + "\n", status=503, mimetype="text/plain")
         if not match:
             abort(404)
         log_action(current_user, "game_backup_download", target=gs.name, detail=match["name"],

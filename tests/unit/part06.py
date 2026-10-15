@@ -1,5 +1,5 @@
 """Part 6 of the unit suite. Imported for its side effects."""
-from unit.part01 import (N, NS, SO, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, _r13d_window, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
+from unit.part01 import (N, NS, SO, _R20dOver, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, _r13d_window, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
 
 from unit.part05 import (_SMOKE_SUITE_FILES, _ast_scan, _helper, _helper_path, _ilu, _machinery, _priv, _re, _root, _shutil, _sp, _t, _tempfile, _time)  # noqa: F401,E402
 check("ufw: _ufw_is_active is false for empty output", _sm_firewall._ufw_is_active("") is False)
@@ -327,7 +327,7 @@ try:
     _sm_firewall.remote_ufw_status(_PHF_REMOTE_OFF)
     _sm_firewall.remote_ufw_status(_PHF_REMOTE_ON)
     eq("panel-host firewall: a remote's sudo_enabled still decides whether its ufw read escalates",
-       [c.startswith("sudo bash -c ") for c in _phf_wire], [False, True])
+       [c.startswith(_sm_core._R20A_SUDO_C + "sudo bash -c ") for c in _phf_wire], [False, True])
     eq("panel-host firewall: ...and the unescalated one is the bare ufw read (the gate has a subject)",
        _phf_wire[:1], [_sm_core._R19A_C_LOCALE + _priv.remote_command("ufw-status", ["numbered"])])
     # ...and over Tailscale, whose transport (_run_via_ssh_cli) does its own defaulting from the
@@ -343,7 +343,7 @@ try:
     _phf_ts_cmd = _sm_core._R19A_C_LOCALE + _priv.remote_command("ufw-status", ["numbered"])
     eq("panel-host firewall: a Tailscale remote's sudo_enabled decides its ufw read the same way",
        [a[-1] for a in _phf_ts_argvs],
-       [_phf_ts_cmd, "sudo bash -c " + _shlex_phf.quote(_phf_ts_cmd)])
+       [_phf_ts_cmd, _sm_core._R20A_SUDO_C + "sudo bash -c " + _shlex_phf.quote(_phf_ts_cmd)])
 finally:
     (_sm_core._run_local, _sm_core._exec_local_argv, _sm_core.get_connection,
      _sm_firewall._annotate_firewall_protection) = _phf_saved[:4]
@@ -1594,6 +1594,8 @@ _R18D_PATH_KEY = "path:"
 _R18D_ROOT_NAME = re.compile(r"_root|_repo_root|REPO_ROOT|ROOT|_UNIT_ROOT|_ROOT\w*|_R\d+")
 # A load whose path the reader could not work out: kept, so it can be named rather than dropped.
 _R19D_UNREAD = "<unread>"
+# A path built from a function's own parameter: worked out at each call site, never in the function.
+_R20D_PARAM = "<param>"
 
 
 def _r18d_eval_path(e, env, here):
@@ -1636,6 +1638,8 @@ def _r18d_path_join(parts):
 def _r18d_path_dirname(parts):
     if len(parts) != 1:
         return None
+    if _R20D_PARAM in parts[0]:
+        return parts[0]                  # still built from a parameter, whatever is cut off it
     return parts[0].rsplit("/", 1)[0] if "/" in parts[0] else ""
 
 
@@ -1749,7 +1753,15 @@ def _r19d_scoped_loads(tree, here):
     factories = {_f.name: _f for _f in funcs if _r18d_loads_a_spec(_f)}
     env = dict.fromkeys(_r19d_root_imports(tree), "")
     out = [(tree, _r18d_scope_loads(_r18d_scope_assigns(tree), env, here, factories))]
-    return out + [(_f, _r18d_scope_loads(_r18d_scope_assigns(_f), dict(env), here, factories)) for _f in funcs]
+    return out + [(_f, _r18d_scope_loads(_r18d_scope_assigns(_f), dict(env, **_r20d_param_env(_f)), here,
+                                         factories)) for _f in funcs]
+
+
+def _r20d_param_env(fn):
+    """{parameter: _R20D_PARAM} for every parameter of function `fn`."""
+    _a = fn.args
+    _all = _a.posonlyargs + _a.args + _a.kwonlyargs + [_x for _x in (_a.vararg, _a.kwarg) if _x]
+    return {_x.arg: _R20D_PARAM for _x in _all}
 
 
 def _r19d_root_imports(tree):
@@ -1759,13 +1771,14 @@ def _r19d_root_imports(tree):
 
 
 def _r19d_unread_loads(tree, here):
-    """Names a module is loaded into by a path the reader could not work out.
+    """Names a module is loaded into by a path the reader could not work out, in every scope.
 
-    In the module and in functions without parameters: a loader that takes its path as a parameter
-    is read at each call site instead, where an unread one is named.
+    A load whose path is built from its function's own parameter is a loader's, read at each call
+    site instead, where an unread one is named. Every function with a parameter was skipped whole
+    (review 1013a), so an unreadable load in a test helper taking `case`, or a loader's call site
+    inside one, was dropped without a word.
     """
     return sorted(_name for _scope, _loads in _r19d_scoped_loads(tree, here)
-                  if not getattr(getattr(_scope, "args", None), "args", None)
                   for _name, _rel in _loads.items() if _rel == _R19D_UNREAD)
 
 
@@ -2015,12 +2028,18 @@ _r19d_unread_ctl_t = _ast_scan.parse(
     "_scan75 = _ilu.module_from_spec(_s)\n"
     "_s2 = _ilu.spec_from_file_location('w', where())\n_what = _ilu.module_from_spec(_s2)\n"
     "def _ld(rel):\n    _s3 = _ilu.spec_from_file_location('x', os.path.join(_R9, rel))\n"
-    "    _m3 = _ilu.module_from_spec(_s3)\n    return _m3\n_two = _ld(other())\n")
+    "    _m3 = _ilu.module_from_spec(_s3)\n    return _m3\n_two = _ld(other())\n"
+    # review 1013a: inside a function that has parameters, an unreadable load and a loader's call
+    # site are named too; a load built from the parameter (_ld's own, _ok's) is not.
+    "def t(case):\n    s = _ilu.spec_from_file_location('x', where())\n    m = _ilu.module_from_spec(s)\n"
+    "    three = _ld(other())\n    fine = _ld('tools/i18n_scan.py')\n"
+    "def _ok(rel, *a):\n    s = _ilu.spec_from_file_location('y', os.path.dirname(os.path.join(_R9, rel)))\n"
+    "    ok = _ilu.module_from_spec(s)\n    return ok\n")
 check("stub gate: ...a root imported under another name is a root, and a load by a path it cannot "
       "work out is named, at its call site for a loader given the path (control)",
       _r14d_aliases(_r19d_unread_ctl_t, {}, os.path.join(_root, "tests", "unit", "part99.py"))
-      == {"_scan75": "path:tools/i18n_scan.py"}
-      and _r19d_unread_loads(_r19d_unread_ctl_t, "tests/unit/part99.py") == ["_two", "_what"],
+      == {"_scan75": "path:tools/i18n_scan.py", "fine": "path:tools/i18n_scan.py"}
+      and _r19d_unread_loads(_r19d_unread_ctl_t, "tests/unit/part99.py") == ["_two", "_what", "m", "three"],
       repr((_r14d_aliases(_r19d_unread_ctl_t, {}), _r19d_unread_loads(_r19d_unread_ctl_t, "tests/unit/part99.py"))))
 _r15d_nest_ctl = [_r15d_stub_target(_n, _r15d_nest_ctl_al) for _n in _ast_scan.walk(_ast_scan.parse(
     "_m.so.ufw_deny_ipx = 1\nsetattr(_m.so, 'run_comandx', 1)\n_m.so.ufw_deny_ip = 1\n"))]
@@ -6952,6 +6971,13 @@ from panel.security import auth as _authmod
 check("docs: README does not offer super_admin as a grantable permission",
       "| `super_admin` |" not in _readme)
 check("docs: ...and it really is not one", "super_admin" not in _authmod.ALL_PERMISSIONS)
+# ...and it names every permission that IS one (review 1013a): use_terminal, a shell on a host as
+# the panel's own account, was the one missing, and the most powerful of them.
+_r20d_perm_table = (_readme.split("| Permission | Grants |", 1)[1].split("\n\n", 1)[0]
+                    if "| Permission | Grants |" in _readme else "")
+check("docs: README's Permissions table names every grantable permission",
+      _r20d_perm_table != "" and all("`%s`" % _p in _r20d_perm_table for _p in _authmod.ALL_PERMISSIONS),
+      "missing: %s" % sorted(_p for _p in _authmod.ALL_PERMISSIONS if "`%s`" % _p not in _r20d_perm_table))
 
 # Every fuzz harness must be listed in its README and run by the workflow matrix. The README
 # documented 4 of 6 (console and cron were missing), which is how a target quietly stops being
@@ -8070,7 +8096,22 @@ def _literal_names(fn):
             bad.add(n.name)
         elif isinstance(n, (_sh_ast.Import, _sh_ast.ImportFrom)):
             bad |= {(a.asname or a.name).split(".")[0] for a in n.names}
+        else:
+            bad |= _r20d_other_bindings(n)
     return good - bad
+
+
+def _r20d_other_bindings(n):
+    """Names node `n` binds without a Name node.
+
+    A match capture binds a string, and a `global`/`nonlocal` name can be rebound to anything by
+    another function (review 1013a).
+    """
+    if isinstance(n, (_sh_ast.Global, _sh_ast.Nonlocal)):
+        return set(n.names)
+    _caps = (getattr(n, "name", None) if isinstance(n, (_sh_ast.MatchAs, _sh_ast.MatchStar))
+             else getattr(n, "rest", None) if isinstance(n, _sh_ast.MatchMapping) else None)
+    return {_caps} if _caps else set()
 
 
 def _shell_part_ok(node, lits):
@@ -8157,13 +8198,18 @@ _r19d_shell_refused = {_k: _r19d_shell_ctl(_v) for _k, _v in {
     "except-as": "def f():\n    c = 'a'\n    try:\n        pass\n    except OSError as c:\n        _run(c)\n",
     "unpacking": "def f(x):\n    c = 'a'\n    c, d = x\n    _run(c)\n",
     "comprehension": "def f(xs):\n    c = 'a'\n    [_run(c) for c in xs]\n",
-    "import": "def f():\n    c = 'a'\n    from os import sep as c\n    _run(c)\n"}.items()}
+    "import": "def f():\n    c = 'a'\n    from os import sep as c\n    _run(c)\n",
+    # review 1013a: a match capture, and a global another function can rebind.
+    "match capture": "def f(x):\n    c = 'a'\n    match x:\n        case [c]:\n            _run(c)\n",
+    "match star": "def f(x):\n    c = 'a'\n    match x:\n        case [*c]:\n            _run(c)\n",
+    "match rest": "def f(x):\n    c = 'a'\n    match x:\n        case {**c}:\n            _run(c)\n",
+    "global": "def f():\n    global c\n    c = 'a'\n    _run(c)\n"}.items()}
 _r19d_shell_kept = {_k: _r19d_shell_ctl(_v) for _k, _v in {
     "literal": "def f():\n    c = 'systemctl restart ssh'\n    _run(c)\n",
     "annotated literal": "def f():\n    c: str = 'a'\n    _run(c)\n",
     "loop over literals": "def f():\n    for c in ('a', 'b'):\n        _run(c)\n"}.items()}
-check("shell: ...a name rebound by a parameter, +=, :=, with/except as, unpacking, a comprehension or "
-      "an import is not a literal, and literal-only names still are (control)",
+check("shell: ...a name rebound by a parameter, +=, :=, with/except as, unpacking, a comprehension, "
+      "an import, a match capture or a global is not a literal, and literal-only names still are (control)",
       not any(_r19d_shell_refused.values()) and all(_r19d_shell_kept.values()),
       repr((_r19d_shell_refused, _r19d_shell_kept)))
 
@@ -9162,8 +9208,33 @@ def _r19d_re_names(tree):
         if isinstance(_n, _anc_ast.Import):
             _mods |= {_a.asname for _a in _n.names if _a.name == "re" and _a.asname}
         elif isinstance(_n, _anc_ast.ImportFrom) and _n.module == "re":
-            _fns.update({_a.asname or _a.name: _a.name for _a in _n.names})
+            _fns.update(_r20d_from_re(_n))
+    # ...and a name assigned one (`rc = re.search`, review 1013a), once the module names are known.
+    for _n in _anc_ast.walk(tree):
+        _fns.update(_r20d_re_alias(_n, _mods))
     return _mods, _fns
+
+
+def _r20d_from_re(imp):
+    """{name: re function} a `from re import ...` binds.
+
+    `*` binds every function by its own name (review 1013a).
+    """
+    _out = {_a.asname or _a.name: _a.name for _a in imp.names}
+    if any(_a.name == "*" for _a in imp.names):
+        _out.update({_f: _f for _f in _R20D_RE_FNS})
+    return _out
+
+
+def _r20d_re_alias(node, mods):
+    """{name: re function} for an assignment `name = <re module>.<function>`, else {}."""
+    if not (isinstance(node, _anc_ast.Assign) and isinstance(node.value, _anc_ast.Attribute)
+            and getattr(node.value.value, "id", None) in mods and node.value.attr in _R20D_RE_FNS):
+        return {}
+    return {_t.id: node.value.attr for _t in node.targets if isinstance(_t, _anc_ast.Name)}
+
+
+_R20D_RE_FNS = ("match", "fullmatch", "search", "compile", "sub", "subn", "split", "findall", "finditer")
 
 
 def _r19d_re_call(call, re_names, any_receiver=False):
@@ -9268,6 +9339,12 @@ check("regex anchors: ...an inline call is read through re under any name and a 
       "from re, and not on another object (control)",
       sorted(_x for _x in _r19d_re_ctl if _x) == ["fullmatch", "match", "match", "search"]
       and _r19d_re_ctl.count(None) == 2, repr(_r19d_re_ctl))
+_r20d_re_ctl_t = _anc_ast.parse("from re import *\nmatch(r'^a$', v)\nimport re as _q\nrc = _q.search\nrc(r'^b$', v)\n"
+                                "nope = other.search\nnope(r'^c$', v)\n")
+_r20d_re_ctl = [_r19d_re_call(_c, _r19d_re_names(_r20d_re_ctl_t)) for _c in _anc_ast.walk(_r20d_re_ctl_t)
+                if isinstance(_c, _anc_ast.Call)]
+check("regex anchors: ...and through `from re import *` and a name assigned an re function, not one "
+      "assigned another object's (control)", _r20d_re_ctl == ["match", "search", None], repr(_r20d_re_ctl))
 _inline_dead = sorted(_INLINE_DOLLAR_OK - _inline_seen)
 check("regex anchors: every _INLINE_DOLLAR_OK entry still matches an inline call in the code",
       not _inline_dead, "matches nothing any more (delete them): %s" % [p[:44] for p in _inline_dead])
@@ -12272,8 +12349,9 @@ def _open_fds7():
         return None
 
 
-_saved_popen7 = _tsmod7.subprocess.Popen
-_tsmod7.subprocess.Popen = lambda *a, **k: (_ for _ in ()).throw(BlockingIOError(11, "EAGAIN"))
+# terminal_session's own handle, never the module (or shim) it holds (review 1013a).
+_saved_popen7 = _tsmod7.subprocess
+_tsmod7.subprocess = _R20dOver(_saved_popen7, Popen=lambda *a, **k: (_ for _ in ()).throw(BlockingIOError(11, "EAGAIN")))
 try:
     _before7 = _open_fds7()
     for _i7 in range(5):
@@ -12284,7 +12362,7 @@ try:
             pass  # a failed start raises; the descriptors are what is measured
     _after7 = _open_fds7()
 finally:
-    _tsmod7.subprocess.Popen = _saved_popen7
+    _tsmod7.subprocess = _saved_popen7
 if _before7 is None or _after7 is None:      # no /proc/self/fd here: a SKIP, never a pass
     skip("terminal: a shell that fails to start leaks no descriptors",
          "cannot list this process's descriptors (/proc/self/fd)")

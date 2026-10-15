@@ -178,6 +178,9 @@ def live_metrics():
 from panel.security import privileged as _priv
 
 _HELPER_STATE = {"present": None}
+# ssh_manager._core._R20A_SUDO_C, here as a literal: _core imports this module, so it cannot be
+# read at import time. part79 holds the two equal.
+_R20A_SUDO_C = "LC_ALL=C.UTF-8 LANGUAGE= "
 
 # Verbs whose output is all or nothing: every caller discards a partial answer rather than act on
 # it. The helper's f2b-log-lines stops past its own ceiling and exits 3 (F2B_LOG_MAX_BYTES, one
@@ -244,12 +247,35 @@ def _r19b_root_runs_tool(verb):
     return hasattr(os, "geteuid") and os.geteuid() == 0 and verb not in _priv._REMOTE_ACTIONS
 
 
+def _r20a_needs_helper(verb):
+    """_run_verb's answer for a verb only the helper can perform, on a host without it."""
+    _log.warning("privileged verb %s needs the panel helper, which is not installed", verb)
+    return "", "needs the panel's privileged helper (re-run install.sh as root)", -1
+
+
+def _r20a_verb_shell(verb, args, timeout, merge_stderr):
+    """_run_verb's no-helper, non-root branch: `sudo <the verb's shell form>`. May raise VerbError.
+
+    A verb only the helper performs is refused here as on the root branch: its rendering is no
+    command at all (` 2>&1`), and it went out behind `sudo `, so Install Tailscale on a non-root
+    panel host with no helper ran a bare `sudo` and showed sudo's usage text as the install log.
+    """
+    if not _priv.tool_argv(verb, args) and verb not in _priv._REMOTE_ACTIONS:
+        return _r20a_needs_helper(verb)
+    return _run_verb_shell(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
+                           timeout=timeout, sudo=True, whole=verb in _WHOLE_OUTPUT_VERBS)
+
+
 def _run_verb_once(verb, args, timeout, merge_stderr):
     """_run_verb's body: (the path taken -- "helper" / "root" / "shell", or "" for a refused
     argument --, (stdout, stderr, rc))."""
     # NEVER RAISES, which its callers are written on (see os_run_update, server_reboot):
     # the argv builders validate the arguments and raise VerbError on a refusal, and that used to
     # escape from here into callers with no handler for it — a 500, with no audit row.
+    # The C locale on every path (_core._r20a_c_env, here and in _run_verb_shell): the callers
+    # read ufw, fail2ban and sudo by their English words, and the two no-helper paths ran in the
+    # service's own LANG (a German host printed `Status: aktiv`).
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
     try:
         if _helper_present():
             path, argv = "helper", _priv.helper_argv(verb, args)
@@ -258,12 +284,9 @@ def _run_verb_once(verb, args, timeout, merge_stderr):
             if not argv:
                 # A verb the helper performs that has no shell form either (LOCAL_ONLY_VERBS):
                 # its rendering is an empty command, which exits 0 and would report a success.
-                _log.warning("privileged verb %s needs the panel helper, which is not installed", verb)
-                return path, ("", "needs the panel's privileged helper (re-run install.sh as root)", -1)
+                return path, _r20a_needs_helper(verb)
         else:
-            return "shell", _run_verb_shell(
-                _priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                timeout=timeout, sudo=True, whole=verb in _WHOLE_OUTPUT_VERBS)
+            return "shell", _r20a_verb_shell(verb, args, timeout, merge_stderr)
     except _priv.VerbError:
         _log.warning("privileged verb %s refused its arguments", verb)
         return "", ("", "invalid argument", -1)
@@ -284,11 +307,13 @@ def _run_verb_once(verb, args, timeout, merge_stderr):
         # stdin: the verb's own text when it has one, else DEVNULL. NOT the default of
         # inheriting -- see _POPEN_KW in ssh_manager/_core.py for what that cost.
         _in = _priv.stdin_for(verb)
+        # env: the C.UTF-8 locale (_core._r20a_c_env). The "root" path runs the tool
+        # itself, and both print words the callers parse; _core pins its own twin of this path.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         p = subprocess.Popen(argv, shell=False,  # nosec B603 - argv from privileged.py's fixed table
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              stdin=(subprocess.PIPE if _in is not None else subprocess.DEVNULL),
-                             start_new_session=True)
+                             start_new_session=True, env=_smc._r20a_c_env())
         out, err, rc = _collect_verb_output(p, argv, timeout, _in,
                                             whole=verb in _WHOLE_OUTPUT_VERBS)
     except subprocess.TimeoutExpired:
@@ -358,11 +383,21 @@ def _run_verb_shell(cmd, timeout=30, sudo=False, whole=False):
     # os.geteuid() is Unix-only; guard it so callers don't crash off-Linux (tests).
     if sudo and hasattr(os, "geteuid") and os.geteuid() != 0:
         cmd = f"sudo {cmd}"
+    # The whole shell in C.UTF-8 with an EMPTY LANGUAGE (_core._r20a_c_env): the verb's callers
+    # read ufw, fail2ban and sudo's own refusal by their English words, and this ran in the
+    # service's LANG. Empty, not unset, so sudo keeps it rather than PAM filling it in from
+    # /etc/default/locale. An environment rather than an `export` prefix: `sudo export …` is not
+    # a command, and a prefixed list would make the shell fork rather than exec what it runs.
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
     try:
+        # In C.UTF-8 by its environment, not by a prefix: `sudo {cmd}` elevates the first word, and
+        # sudo keeps the locale for it (_core._r20a_c_env); the rest of a pipe gets it
+        # from the shell.
         # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true -- the pre-helper verb form, built by privileged.py from its fixed table
         p = subprocess.Popen(cmd, shell=True,  # nosec B602 - privileged.py's own shell form
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             stdin=subprocess.DEVNULL, start_new_session=True)
+                             stdin=subprocess.DEVNULL, start_new_session=True,
+                             env=_smc._r20a_c_env())
         out, err, rc = _collect_verb_output(p, cmd, timeout, whole=whole)
         return out.strip(), err.strip(), rc
     except subprocess.TimeoutExpired:
@@ -378,7 +413,7 @@ def _run(cmd, timeout=30, sudo=False, text=True):
     """Run a shell command. Returns (stdout, stderr, exit_code)."""
     # os.geteuid() is Unix-only; guard it so callers don't crash off-Linux (tests).
     if sudo and hasattr(os, "geteuid") and os.geteuid() != 0:
-        cmd = f"sudo {cmd}"
+        cmd = f"{_R20A_SUDO_C}sudo {cmd}"     # sudo's own refusal in C, see _core._R20A_SUDO_C
     try:
         r = subprocess.run(
             # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true -- the panel's shell runner by design; every caller quotes what it interpolates
@@ -981,9 +1016,9 @@ def server_uptime():
     # Get disk
     disk, _, _ = _run("LC_ALL=C df -h / | tail -1 | awk '{print $3 \"/\" $2 \" (\" $5 \")\"}'", timeout=5)
 
-    # Memory
+    # Memory. The percent's awk in C too: mawk printf's the locale's decimal comma ("30,2").
     mem, _, _ = _run("LC_ALL=C free -h | grep Mem | awk '{print $3 \"/\" $2}'", timeout=5)
-    mem_percent, _, _ = _run("LC_ALL=C free | grep Mem | awk '{printf \"%.1f\", $3/$2 * 100}'", timeout=5)
+    mem_percent, _, _ = _run("LC_ALL=C free | grep Mem | LC_ALL=C awk '{printf \"%.1f\", $3/$2 * 100}'", timeout=5)
 
     # Kernel
     kernel, _, _ = _run("uname -r", timeout=5)
@@ -3119,10 +3154,12 @@ def _write_root_file(path, content):
                 # Same audit rule, same answer as _run_verb above: the first argument is not a
                 # literal string because it comes from privileged.py's fixed verb table, which is
                 # the point. shell=False, and `content` is stdin rather than argv.
+                from panel.ops.ssh_manager import _core as _smc  # lazy: ssh_manager imports this module
                 # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
                 r = subprocess.run(  # nosec B603 - argv from privileged.py's fixed table
                     _priv.helper_argv("write-file", [target]), shell=False, input=content,
-                    capture_output=True, text=True, timeout=15)
+                    capture_output=True, text=True, timeout=15,
+                    env=_smc._r20a_c_env())   # sudo's refusal in English, as _run_verb
                 return (r.stdout or "").strip(), (r.stderr or "").strip(), r.returncode
             except Exception:
                 _log.debug("helper write failed; falling back", exc_info=True)
@@ -4188,10 +4225,12 @@ def _helper_probe_run():
         # Both elements past sudo's are module constants (privileged.HELPER_PATH and the literal
         # "--list-verbs"); shell=False, so nothing is interpreted. See _run_verb for why the
         # scanners' "not a literal string" finding is suppressed rather than "fixed".
+        from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         r = subprocess.run(_helper_probe_argv(), shell=False,  # nosec B603
                            capture_output=True, text=True, timeout=10,
-                           stdin=subprocess.DEVNULL, start_new_session=True)
+                           stdin=subprocess.DEVNULL, start_new_session=True,
+                           env=_smc._r20a_c_env())    # sudo's refusal is classed by its words
     except _SOPS_TIMEOUTS:
         return {"outcome": "timeout", "verbs": set(), "refusal": None}
     except Exception as exc:  # noqa: BLE001 - reported by class
@@ -4853,8 +4892,7 @@ def _debug_run(argv, timeout=5, cap=2 * 1024 * 1024):
     # The service inherits the system's: under fr_FR or de_DE journalctl dates its lines "oct. 11"
     # or "Mär 11", the report's parsers (logs._PREFIX_RE) did not know that prefix, and sudo's
     # "(command continued)" lines — a long argv's tail, passwords included — were printed whole.
-    env = {k: v for k, v in os.environ.items() if k != "LANGUAGE"}
-    env.update(LC_ALL="C.UTF-8", LANG="C.UTF-8")
+    env = _smc._r20a_c_env()
     try:
         # Both rule ids on ONE line (see _run_verb): the argv is a literal list in
         # panel/ops/debug_report (journalctl, timedatectl), never text from a request.

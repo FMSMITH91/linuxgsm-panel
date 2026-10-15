@@ -489,11 +489,22 @@ def _host_refusal_audits60(a_client, sid):
           "and none of the host's own output", not bad, "; ".join(bad[:3]))
 
 
-def _row60(action):
-    """The newest audit row of `action`, as (success, detail); (None, None) when there is none."""
+def _max_id60():
+    """The newest audit row's id, 0 when there is none: the point a request's own rows start after."""
     with _p9.app_context():
-        a = AuditLog.query.filter_by(action=action).order_by(AuditLog.id.desc()).first()
-        return (a.success, a.detail) if a is not None else (None, None)
+        a = AuditLog.query.order_by(AuditLog.id.desc()).first()
+        return a.id if a is not None else 0
+
+
+def _row60(action, after):
+    """(success, detail) of the ONE `action` row written after id `after`; ("rows", n) otherwise.
+
+    The newest row of the action in the whole database was read (review 1013a): part49 writes an
+    identical edit_config refusal, so a request that wrote no row passed on that one.
+    """
+    with _p9.app_context():
+        rows = AuditLog.query.filter(AuditLog.action == action, AuditLog.id > after).all()
+        return (rows[0].success, rows[0].detail) if len(rows) == 1 else ("rows", len(rows))
 
 
 def _send60(client, method_url, **kw):
@@ -564,8 +575,9 @@ def _write_audits60(a_client, sid):
     """
     for name, prelude, (url, kw), action, want, detail in _write_audit_cases60(sid):
         _reset60(prelude)
+        n0 = _max_id60()
         _code, body = _send60(a_client, url, **kw)
-        row = _row60(action)
+        row = _row60(action, n0)
         raw = "%s" not in detail
         check("%s audit: %s is audited as %s" % (action, name, "the bare path, with none of the "
               "host's own output" if raw else "'refused: <path>: <reason>', the reason the user saw"),
@@ -574,12 +586,13 @@ def _write_audits60(a_client, sid):
     _PRELUDE60["text"] = ""
     _reset60()
     _write60("cfg/up.txt", "OLD")
+    n0 = _max_id60()
     code, body = _send60(a_client, "/api/server/%d/upload" % sid, content_type="multipart/form-data",
                          data={"path": "cfg", "file": (_io60.BytesIO(b"NEW"), "up.txt")})
     check("upload route: an upload onto a name that is there (no overwrite) is refused (409), "
           "replaces nothing, and is audited as a failure, name taken — as create's and rename's are",
-          (code, _read60("cfg/up.txt"), _row60("upload_file")) == (409, "OLD", (False, "cfg/up.txt (name taken)")),
-          repr((code, body, _row60("upload_file"))))
+          (code, _read60("cfg/up.txt"), _row60("upload_file", n0)) == (409, "OLD", (False, "cfg/up.txt (name taken)")),
+          repr((code, body, _row60("upload_file", n0))))
 
 
 def _gone60(a_client, sid):

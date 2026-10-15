@@ -124,8 +124,23 @@ function bkRenderFullSchedule(f){
   var autoOn=(f.interval_days||0)>0;
   var fen=document.getElementById('fb-auto-enabled'); if(fen) fen.checked=autoOn;
   var fi=document.getElementById('fb-interval');
-  if(fi){ fi.value=String(autoOn?f.interval_days:7); fi.disabled=!autoOn; }
+  if(fi){ _r20cIntervalOption(fi, autoOn?f.interval_days:7); fi.disabled=!autoOn; }
   var fk=document.getElementById('fb-keep'); if(fk) fk.value=String(f.keep||2);
+}
+// Select a stored interval, adding an <option> for it when the list has none (the API takes 0-365;
+// the list offers 1, 7, 14 and 30). Assigned a value no <option> carries, the select had NO
+// selection and read '' — so the next save of anything on the card (Keep per server) posted
+// parseInt('')||7 and silently moved a 3-day schedule to weekly. As _bkShow does in Files & Config.
+function _r20cIntervalOption(sel, days){
+  var v=String(days), has=false;
+  for(var i=0;i<sel.options.length;i++){ if(sel.options[i].value===v){ has=true; break; } }
+  if(!has){
+    var o=document.createElement('option'); o.value=v; o.textContent=tf('{n} days', {n: Number(days)});
+    // A filled template matches no catalog key, so the walk cannot redo it: setLang fills it again.
+    o.setAttribute('data-i18n-text', '{n} days'); o.setAttribute('data-i18n-vars', JSON.stringify({n: Number(days)}));
+    sel.appendChild(o);
+  }
+  sel.value=v;
 }
 // The free-disk line over the game backups, from window._bkDisk / window._bkMultiHost.
 function bkRenderDisk(){
@@ -268,9 +283,11 @@ function fbSummary(){
   }
 
   var days=Number.parseInt(document.getElementById('fb-interval').value,10)||7;
+  // Any other stored interval says its number: it read "once a month" for every 3 days.
   var every=(days===1?'By default, each server is backed up every day.':(days===7?'By default, each server is backed up once a week.'
-            :(days===14?'By default, each server is backed up once every 2 weeks.':'By default, each server is backed up once a month.')));
-  var s='<i class="bi bi-info-circle"></i> '+tfHtml(every)+' '
+            :(days===14?'By default, each server is backed up once every 2 weeks.':(days===30?'By default, each server is backed up once a month.'
+            :'By default, each server is backed up every {n} days.'))));
+  var s='<i class="bi bi-info-circle"></i> '+tfHtml(every, {n: days})+' '
     +(keep===1 ? tfHtml('The newest backup is kept per server; older ones are deleted automatically.')
                : tfHtml('The {n} newest backups are kept per server; older ones are deleted automatically.', {n: {html: '<strong>'+escapeHtml(String(keep))+'</strong>'}}))
     +' '+tfHtml('(Override per server below.)');

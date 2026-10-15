@@ -9,7 +9,7 @@ import io as _gh_io
 import shlex as _gh_shlex
 
 from eventlet.timeout import Timeout as _EvTimeout08  # noqa: E402 - a timed-out green join raises it
-from unit.part01 import NS, _sm_core, _sm_cron, _sm_files, _sm_game, _sm_gmod, check, os  # noqa: E402
+from unit.part01 import NS, _R20dOver, _sm_core, _sm_cron, _sm_files, _sm_game, _sm_gmod, check, os  # noqa: E402
 
 from panel.security import privileged as _gh_priv  # noqa: E402
 
@@ -78,9 +78,13 @@ from panel.core import panel_state as _gh_ps  # noqa: E402
 _GH_SAVED = [(_sm_core, n, getattr(_sm_core, n)) for n in (
     "run_command", "run_privileged", "_exec_local_argv", "helper_present",
     "get_connection", "_resolve_ts_host")]
+# game's own handle on time is replaced, never the stdlib module (review 1013a): setting
+# `_sm_game.time.sleep` replaced time.sleep for the whole process while the table ran, so a green
+# thread polling with sleep spun without yielding.
 _GH_SAVED += [(_sm_cron.subprocess, "Popen", _sm_cron.subprocess.Popen),
               (_sm_files.subprocess, "Popen", _sm_files.subprocess.Popen),
-              (_sm_game.time, "sleep", _sm_game.time.sleep)]
+              (_sm_game, "time", _sm_game.time)]
+
 _GH_SRV = NS(id=9101, is_local=False, auth_method="key", host="h", port=22, username="admin",
              sudo_enabled=True, name="h")
 _GH_TS = NS(id=9102, is_local=False, auth_method="tailscale", host="h", port=22, username="admin",
@@ -263,9 +267,11 @@ def _gh_stub_transports():
     _sm_core.helper_present = lambda recheck=False: False
     _sm_core.get_connection = lambda s, **k: _GhClient()
     _sm_core._resolve_ts_host = lambda s: "ts-host"
+    # The shared subprocess shim is stubbed itself, on purpose: every module holding it is a transport
+    # the table's functions may use. game's `time` is the stdlib module, so only its handle is swapped.
     _sm_cron.subprocess.Popen = _GhPopen
     _sm_files.subprocess.Popen = _GhPopen
-    _sm_game.time.sleep = lambda s: None
+    _sm_game.time = _R20dOver(_sm_game.time, sleep=lambda s: None)
 
 
 def _gh_attempt(call, *args):
@@ -968,14 +974,14 @@ def _rv_drain(gen, take=None):
 
 
 _rv_kw = {}
-_rv_saved_popen = _sm_files.subprocess.Popen
-_sm_files.subprocess.Popen = lambda argv, **k: _rv_kw.update(k) or _RvProc([b"ab", b"cd"], 1)
+_rv_saved_popen = _sm_files.subprocess      # the module's handle, not the shared shim's Popen
+_sm_files.subprocess = _R20dOver(_rv_saved_popen, Popen=lambda argv, **k: _rv_kw.update(k) or _RvProc([b"ab", b"cd"], 1))
 try:
     _rv_o1 = _rv_drain(_sm_files._stream_argv(["x"], "f", 2))
     _rv_o2 = _rv_drain(_sm_files._stream_argv(["x"], "f", 2, ok=(0, 1)))
     _rv_o3 = _rv_drain(_sm_files._stream_argv(["x"], "f", 2), take=1)
 finally:
-    _sm_files.subprocess.Popen = _rv_saved_popen
+    _sm_files.subprocess = _rv_saved_popen
 check("files._stream_argv: a reader exiting non-zero at EOF raises StreamFailed (download aborts)",
       _rv_o1[0] == [b"ab", b"cd"] and isinstance(_rv_o1[1], _sm_core.StreamFailed), repr(_rv_o1))
 check("files._stream_argv: tar's exit 1 (a file changed while read) is a whole archive",
@@ -984,14 +990,14 @@ check("files._stream_argv: a consumer that stops early (the size cap) is not a f
       _rv_o3 == ([b"ab"], None), repr(_rv_o3))
 
 _rv_kw = {}
-# cron's own handle's Popen is what is put back, not files': they are one shim object only because
+# cron's own handle is what is put back, not files': they are one shim object only because
 # nosudo_runner installs a shared one (review 1012d).
-_r19d_saved_cron_popen = _sm_cron.subprocess.Popen
-_sm_cron.subprocess.Popen = lambda argv, **k: _rv_kw.update(k) or _RvProc([b"zz"], 255)
+_r19d_saved_cron_popen = _sm_cron.subprocess
+_sm_cron.subprocess = _R20dOver(_r19d_saved_cron_popen, Popen=lambda argv, **k: _rv_kw.update(k) or _RvProc([b"zz"], 255))
 try:
     _rv_o4 = _rv_drain(_sm_cron._stream_backup_argv(["ssh"], 2))
 finally:
-    _sm_cron.subprocess.Popen = _r19d_saved_cron_popen
+    _sm_cron.subprocess = _r19d_saved_cron_popen
 check("cron._stream_backup_argv: stdin is DEVNULL and a failed read aborts the download",
       _rv_kw.get("stdin") == _rv_sp.DEVNULL and isinstance(_rv_o4[1], _sm_core.StreamFailed),
       repr((_rv_kw, _rv_o4)))

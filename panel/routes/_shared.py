@@ -10,6 +10,7 @@ inside handler BODIES, which do not run at registration — so the app still bui
 still matched, and the routes would have failed only when someone used them. A green build over a
 broken route is the exact failure this repo keeps finding; here the F821 gate was the net.
 """
+import contextlib
 from flask import (jsonify)
 from flask_login import (current_user)
 from panel.core.clock import (utcnow)
@@ -821,8 +822,11 @@ def _run_queued_action(app, gs):
     # "went offline unexpectedly" two sweeps after it. A queued restart is marked as a restart: it
     # runs unattended, so if the game does not come back, that page is the only notice there is.
     _mark_expected_offline(gs.id, act)
-    _out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, act,
-                                         timeout=90, selfname=gs.lgsm_name)
+    # A run that RAISES is audited too: "every attempt is audited" (above) held only for a host
+    # whose transport answers a failure instead of raising it.
+    with _r20b_audit_on_raise("%s_server" % act, who=None, target=gs.name, server=gs):
+        _out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, act,
+                                             timeout=90, selfname=gs.lgsm_name)
     ok = (rc == 0)
     retry = _queued_action_retries(act, rc)
     if act == "restart" and not retry:
@@ -1017,14 +1021,22 @@ class _BootstrapRun:
         db.session.expunge(remote)
         if online:
             opts = dict(opts, do_reboot=False)   # it then only reports a pending reboot
-        success = False
+        success, raised = False, None
         try:
             success, msg, _ = remote_bootstrap_vps(remote, progress=self.progress, **opts)
+        except Exception as exc:
+            raised = exc
+            raise
         finally:
             # However the run ended: a pin first contact learned was kept even when a later step
             # raised, back when first contact committed it itself.
             same = _settle_bootstrapped_row(self.remote_id, self.created, self.pinned,
                                             remote.host_key, success)
+            # A run that RAISED (a direct-SSH host that stopped answering) is audited as failed
+            # too, after the settle has said whose row this is: it left no row at all.
+            if raised is not None:
+                _r20b_audit_raised("remote_vps_bootstrap", raised, who=None, target=name,
+                                   remote=remote if same else None)
         # The row is filed under the host only while that id is still this host: _audit_ref
         # resolves an id, and one a new host took would show this run to that host's viewers.
         log_action(None, "remote_vps_bootstrap", target=name, detail=msg, success=success,
@@ -1659,6 +1671,51 @@ def _console_send_failure(rc, err):
     Is the server running?" — for a timeout, a refused `sudo -u` or a missing tmux too.
     """
     return i18n.tr(_sm.game._r19b_send_failure(rc, err))
+
+
+# _r20b_audit_raised's default `who`: the signed-in viewer. None is a real value there (the system).
+_R20B_VIEWER = "viewer"
+
+
+def _r20b_audit_raised(action, exc, target, detail="", who=_R20B_VIEWER, **kw):
+    """Audit, as failed, an attempt whose host call RAISED. Never raises.
+
+    A route audits what the host answered — success=(rc == 0), success=ok — but a call that
+    raises never reaches that line. Which one a failure takes depends on the TRANSPORT: a direct
+    (paramiko) host that is down raises ConnectionError, while a tailscale or local one answers
+    ("", "…timed out", -1). So the same click against a host that is down left an audit row on
+    one host and none on another. `detail` is followed by why: a ConnectionError's own text (the
+    transport's fixed "timed out" / "authentication failed" sentences), and for anything else only
+    its type — its text is for the panel log, as _rename_answer keeps it.
+
+    The session is rolled back first: nothing the route had pending was going to be committed
+    once its call raised, and the audit's own commit must not be what commits it. `who` is the
+    user the row is by (log_action's first argument): the viewer unless the caller says otherwise.
+    """
+    why = ((str(exc) if isinstance(exc, ConnectionError) else "")
+           or "raised %s (see the panel log)" % type(exc).__name__)
+    try:
+        db.session.rollback()
+        log_action(current_user if who is _R20B_VIEWER else who, action, target=target,
+                   detail=("%s - %s" % (detail, why)) if detail else why, success=False, **kw)
+    except Exception:  # noqa: BLE001 - the route's own answer to the raise still goes out
+        db.session.rollback()
+        # CR/LF replaced: the action name can carry request text, and must not forge a log line.
+        _log.warning("could not audit the failed %s",
+                     str(action).replace("\r", "\\r").replace("\n", "\\n"), exc_info=True)
+
+
+@contextlib.contextmanager
+def _r20b_audit_on_raise(action, target, detail="", who=_R20B_VIEWER, **kw):
+    """Around one host call: audit it as failed when it raises (_r20b_audit_raised), then re-raise.
+
+    The route's own except, or the app's error handler, answers exactly as before.
+    """
+    try:
+        yield
+    except Exception as exc:
+        _r20b_audit_raised(action, exc, target, detail, who, **kw)
+        raise
 
 
 def _reauth_key(user):

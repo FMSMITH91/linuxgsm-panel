@@ -31,7 +31,7 @@ import collections
 import threading
 from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
-from panel.routes._shared import (_json_int)
+from panel.routes._shared import (_json_int, _r20b_audit_on_raise)
 from panel.core.validation import (NOT_AN_IP)
 from panel.security import privileged as _priv
 from panel.services import host_reboot as _hr
@@ -286,8 +286,11 @@ def _register_firewall_rules(app):
             return jsonify({"success": False, "message": "Port required"}), 400
         # _json_str: a number or a list here raised TypeError in the comment's filter — a 500,
         # and no audit row.
-        success, msg = remote_ufw_open_port(remote, port, proto, _json_str(data, "comment"))
         a_port, a_proto = _fw_audit_rule(port, proto)
+        # A call that RAISES (a direct-SSH host that is down) is audited too: _r20b_audit_on_raise.
+        with _r20b_audit_on_raise("remote_port_open", target=f"{remote.name}:{a_port}/{a_proto}",
+                                  remote=remote):
+            success, msg = remote_ufw_open_port(remote, port, proto, _json_str(data, "comment"))
         log_action(current_user, "remote_port_open", target=f"{remote.name}:{a_port}/{a_proto}",
                    success=success, remote=remote)
         return jsonify({"success": success, "message": i18n.tr(msg)})
@@ -313,10 +316,13 @@ def _register_firewall_rules(app):
             return jsonify({"success": False, "message": "allow must be true or false."}), 400
         if not source or not port:
             return jsonify({"success": False, "message": "Source and port required"}), 400
-        success, msg = remote_ufw_allow_from(remote, source, port, proto,
-                                             _json_str(data, "comment"), allow=on)
         # The rule as it was sent, never the request's text (an IPv6 zone id parsed).
         a_port, a_proto = _fw_audit_rule(port, proto, ranges=True)
+        with _r20b_audit_on_raise("remote_port_allow_from" if on else "remote_port_allow_from_remove",
+                                  detail="from %s" % _fw_audit_source(source),
+                                  target=f"{remote.name}:{a_port}/{a_proto}", remote=remote):
+            success, msg = remote_ufw_allow_from(remote, source, port, proto,
+                                                 _json_str(data, "comment"), allow=on)
         log_action(current_user, "remote_port_allow_from" if on else "remote_port_allow_from_remove",
                    target=f"{remote.name}:{a_port}/{a_proto}",
                    detail="from %s" % _fw_audit_source(source),
@@ -343,8 +349,10 @@ def _register_firewall_rules(app):
             return jsonify({"success": False, "message": "limit must be true or false."}), 400
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
-        success, msg = remote_ufw_limit_port(remote, port, proto, limit=on)
         a_port, a_proto = _fw_audit_rule(port, proto)
+        with _r20b_audit_on_raise("remote_port_limit" if on else "remote_port_unlimit",
+                                  target=f"{remote.name}:{a_port}/{a_proto}", remote=remote):
+            success, msg = remote_ufw_limit_port(remote, port, proto, limit=on)
         log_action(current_user, "remote_port_limit" if on else "remote_port_unlimit",
                    target=f"{remote.name}:{a_port}/{a_proto}", success=success, remote=remote)
         return jsonify({"success": success, "message": i18n.tr(msg)})
@@ -359,8 +367,10 @@ def _register_firewall_rules(app):
         proto = _fw_proto_arg(data.get("protocol", "tcp"))
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
-        success, msg = remote_ufw_close_port(remote, port, proto)
         a_port, a_proto = _fw_audit_rule(port, proto)
+        with _r20b_audit_on_raise("remote_port_close", target=f"{remote.name}:{a_port}/{a_proto}",
+                                  remote=remote):
+            success, msg = remote_ufw_close_port(remote, port, proto)
         log_action(current_user, "remote_port_close", target=f"{remote.name}:{a_port}/{a_proto}",
                    success=success, remote=remote)
         return jsonify({"success": success, "message": i18n.tr(msg)})
@@ -376,8 +386,10 @@ def _register_firewall_rules(app):
         # inserted since the page re-read the firewall (the auto-block inserts at 1) moves it onto
         # another rule. The delete then happens only if `num` is still that rule.
         key = _json_body().get("key")
-        success, msg = remote_ufw_delete_rule(remote, num,
-                                              expect_key=key if isinstance(key, str) and key else None)
+        with _r20b_audit_on_raise("remote_ufw_delete_rule",
+                                  target=f"{remote.name}:#{_fw_audit_rule_number(num)}", remote=remote):
+            success, msg = remote_ufw_delete_rule(remote, num,
+                                                  expect_key=key if isinstance(key, str) and key else None)
         log_action(current_user, "remote_ufw_delete_rule",
                    target=f"{remote.name}:#{_fw_audit_rule_number(num)}", success=success,
                    remote=remote)
@@ -415,7 +427,8 @@ def _register_ssh_settings(app):
         mode = _json_str(_json_body(), "mode").lower()
         if mode not in ("allow", "limit", "off"):
             return jsonify({"success": False, "message": "Invalid mode"}), 400
-        success, msg = remote_set_public_ssh(remote, mode)
+        with _r20b_audit_on_raise("remote_ssh_mode", target=f"{remote.name}:{mode}", remote=remote):
+            success, msg = remote_set_public_ssh(remote, mode)
         log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success,
                    remote=remote)
         return jsonify({"success": success, "message": i18n.tr(msg)})
@@ -453,7 +466,9 @@ def _register_ssh_port(app):
                             "message": "An SSH port change is already running for this host."}), 409
         try:
             try:
-                ok, msg = change_ssh_port(remote, new_port, bind)
+                with _r20b_audit_on_raise("change_ssh_port", detail=f"{old} -> {new_port}",
+                                          target=remote.name, remote=remote):
+                    ok, msg = change_ssh_port(remote, new_port, bind)
             except Exception:
                 return jsonify({"success": False,
                                 "message": _log_and_generic("SSH port change failed")}), 500
@@ -506,9 +521,10 @@ def _register_panel_port(app):
         # own deletes, and the auto-block reconcile inserts its denies at 1 from another thread —
         # one insert mid-loop and a forced delete by number took the rule above the panel port's
         # (an attacker's deny, a game port). A moved number is refused; the verify read reports it.
-        for n, key in nums:
-            remote_ufw_delete_rule(remote, n, force=True, expect_key=key)
-        _left, _left_shared, _verify = _r14a_panel_port_rules(remote, port)
+        with _r20b_audit_on_raise("close_panel_port", target=str(port), remote=remote):
+            for n, key in nums:
+                remote_ufw_delete_rule(remote, n, force=True, expect_key=key)
+            _left, _left_shared, _verify = _r14a_panel_port_rules(remote, port)
         # A verify read that FAILED cannot say the port is closed either.
         ok = _verify == _R15C_READ and not _left and not _left_shared
         log_action(current_user, "close_panel_port", target=str(port), success=ok, remote=remote)
@@ -637,14 +653,16 @@ def _rv_on_panel_host(gs):
 
 def _rv_sync_ports_run(gs):
     """Detect the server's ports, open what may be opened, audit it, and report what landed."""
-    info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
-    gp, to_open, refused = _ports_to_sync(gs, info)
+    with _r20b_audit_on_raise("sync_ports", target=gs.name, server=gs):
+        info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
+        gp, to_open, refused = _ports_to_sync(gs, info)
     # Report what the firewall ACTUALLY took, not what was asked for. The return value
     # used to be discarded on the reasoning that "the firewall page reports a partially
     # applied rule set" — but this said "Ports 27015, 27016 opened." and wrote an audit
     # row with success=True whether or not a single rule landed. An audit row that
     # records an action which did not happen is worse than no row.
-    opened, _ = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
+    with _r20b_audit_on_raise("sync_ports", target=gs.name, server=gs):
+        opened, _ = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
     opened = sorted(set(opened or []))
     missed = [p for p in to_open if p not in set(opened)]
     # The verdict lives in the reply itself rather than a local: CodeQL reported `success=ok`
@@ -688,7 +706,8 @@ def _register_game_ports(app):
             return jsonify({"success": False,
                             "message": i18n.tr("No game server on this host uses port {port} — "
                                                "refusing to open it.", port=port)}), 400
-        count, msg = remote_ufw_allow_game_port(remote, port, gs.short_name)
+        with _r20b_audit_on_raise("game_port_open", target=f"{remote.name}:{port}", remote=remote):
+            count, msg = remote_ufw_allow_game_port(remote, port, gs.short_name)
         success = count >= 1
         log_action(current_user, "game_port_open", target=f"{remote.name}:{port}", success=success,
                    remote=remote)
@@ -885,7 +904,8 @@ def _register_os_update_checks(app):
         if _hr.reboot_busy(remote.id):
             return jsonify({"success": False,
                             "message": i18n.tr(_hr.busy_message(remote.display_name))}), 409
-        success, msg = remote_os_run_updates(remote)
+        with _r20b_audit_on_raise("remote_os_update", target=remote.name, remote=remote):
+            success, msg = remote_os_run_updates(remote)
         log_action(current_user, "remote_os_update", target=remote.name, success=success,
                    remote=remote)
         return jsonify({"success": success, "message": msg})

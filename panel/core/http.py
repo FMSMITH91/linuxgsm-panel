@@ -11,6 +11,8 @@ not a cycle at runtime but is one to every static analyser that reads the tree. 
 They depend on Flask's request/response machinery and nothing else — no models, no panel state, no
 app factory — so there is nothing here for app.py to own.
 """
+import sys
+
 from flask import abort, current_app, flash, jsonify, make_response, redirect, request, url_for
 from flask_wtf.csrf import CSRFError
 from markupsafe import escape
@@ -141,7 +143,28 @@ def _log_and_generic(context):
     return i18n.tr("Internal server error")
 
 
-def _unreachable(context, status=200):
+# What the viewer is told for the two ConnectionErrors that are NOT "the host did not answer".
+# Both were answered "Host unreachable", and their cause was logged nowhere: a changed host key
+# (HostKeyMismatch, matched by name: panel.core does not import the ops layer, and
+# monitoring._probe_exc_token reads it the same way) is the panel REFUSING to connect, and the
+# operator has a button for it; a command the connection dropped under may already have run, which
+# "unreachable" says it did not.
+_R20A_HOSTKEY = ("The panel refused to connect: this host's SSH key is not the one it trusts. If "
+                 "you reinstalled the host, use Re-trust host key on its page.")
+_R20A_STARTED = ("The connection to the host was lost while the command was running, so it may "
+                 "have run. Check the host before trying again.")
+
+
+def _r20a_unreachable_said(exc):
+    """(what the viewer is told, whether it is "unreachable") for the ConnectionError `exc`."""
+    if type(exc).__name__ == "HostKeyMismatch":
+        return i18n.tr(_R20A_HOSTKEY), False
+    if getattr(exc, "command_started", False):
+        return i18n.tr(_R20A_STARTED), False
+    return i18n.tr("Host unreachable"), True
+
+
+def _unreachable(context, status=200, exc=None):
     """Answer 200 (or `status`) with an error field when a remote host cannot be reached.
 
     A remote host that cannot be reached is a NORMAL condition for this panel, not a fault
@@ -155,22 +178,36 @@ def _unreachable(context, status=200):
 
     api_remote_live_stats already did this and said why in a comment; six sibling endpoints
     did not, and every one of them 500s on a host that is simply switched off.
+
+    `exc` is the ConnectionError; by default the one being handled (every caller calls this from
+    its `except ConnectionError:`). Its class and text are logged — the panel's own fixed
+    sentences, naming the host the log already names — where only "host unreachable" was, so a
+    changed host key, a failed login or a command cut off part-way was recorded nowhere.
     """
-    current_app.logger.warning("%s: host unreachable", context)
+    if exc is None:
+        exc = sys.exc_info()[1]
+    if exc is None:
+        current_app.logger.warning("%s: host unreachable", context)
+        said, down = i18n.tr("Host unreachable"), True
+    else:
+        current_app.logger.warning("%s: %s: %r", context, type(exc).__name__, str(exc))
+        said, down = _r20a_unreachable_said(exc)
     # In the viewer's language, and as `message` too: pages write a route's `message` (close port
     # 22's dialog read it and showed nothing at all), and they write it after a mark, which the
     # page's translator only learned to look past later.
-    said = i18n.tr("Host unreachable")
-    return jsonify({"success": False, "unreachable": True,
+    return jsonify({"success": False, "unreachable": down,
                     "message": said, "error": said}), status
 
 
-def unreachable_error(context):
-    """The app error handler's answer to a ConnectionError no route caught: _unreachable's, as 502.
+def unreachable_error(context, exc=None):
+    """The app error handler's answer to a ConnectionError no route caught: _unreachable's.
 
-    502 because the host behind the panel did not answer, which is not the panel's own error.
+    200, as every route that catches one answers. It was a 502, and Cloudflare (Tunnel, the
+    deployment docs/https.md recommends) swaps an origin 502 for its own HTML page, so the JSON
+    `message` never reached the page — the unparseable body this handler exists to prevent — and
+    the page read "the panel is down" when only a remote host was.
     """
-    return _unreachable(context, 502)
+    return _unreachable(context, exc=exc)
 
 
 # What a 4xx/5xx the panel did not word itself tells the viewer. Werkzeug's own text is English

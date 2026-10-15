@@ -344,8 +344,14 @@ def _cron_follows(remote, row, port):
     from panel.routes._shared import game_account_write_refusal
     try:
         # A cron write like any other: not as an account that can become root (see app.py's pass).
-        if game_account_write_refusal(remote, row.short_name) is not None:
-            return ""
+        # Said in the audit, as the failure below is: the daily pass skips the same account, so
+        # nothing repoints the check, and it keeps acting on the OLD port's player count — the
+        # neighbour's. A silent "" left the audit row reading as if only the firewall was left.
+        refused = game_account_write_refusal(remote, row.short_name)
+        if refused is not None:
+            # "if it has one": the account was not read, so whether a check exists is not known.
+            return ("its restart-when-empty check, if it has one, was not pointed at port %s (%s)"
+                    % (port, refused))
         changed = _sm.upgrade_managed_cron_tracking(remote, row.short_name, row.lgsm_name,
                                                     game_type=row.game_type, port=port,
                                                     query_type=row.query_type)

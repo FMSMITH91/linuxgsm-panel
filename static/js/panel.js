@@ -163,28 +163,39 @@ window.addEventListener('pageshow', function(ev){
 // in a data-attribute so no Jinja sits in a JS-parsed context, then LANGCODE is swapped for
 // the chosen value. Sets the language server-side, then re-renders the sidebar + main content in
 // place in the new language (both are plain links / delegated handlers) — no full-page reload.
+// Two quick picks (fr, then es, on a slow link) sent two catalog fetches and two saves with nothing
+// saying which was newest: the fr catalog arriving last put the page, and every picker, back in
+// French, and the saves raced the same way on the server. Each pick takes a number; only the newest
+// pick's catalog is applied or warns, and each save is sent once the one before it has answered,
+// so the server's last write is the last pick.
+var _r20cLangSeq = 0, _r20cLangSaved = Promise.resolve();
 document.addEventListener('change', function(e){
   var el = e.target;
   if (!el || !el.matches || !el.matches('select[data-lang-select]') || !el.value) return;
   var lang = el.value, tmpl = el.getAttribute('data-lang-url') || '';
+  _r20cLangSeq += 1;
+  var mine = _r20cLangSeq;
   // Save the choice (session + profile) for next load. NOT fire-and-forget: if the profile write
   // fails the language still changes here and now, but it will not follow you to another device —
   // and silently pretending otherwise is how a preference appears to "not stick".
   // POST, because set-language only writes the PROFILE on POST: as a GET it was a state change
   // CSRF could not cover. The wrapper above adds the token; pre-login there is no user row to
   // write, and the session half of the switch works on either method.
-  if (tmpl) fetch(tmpl.replace('LANGCODE', encodeURIComponent(lang)) + '?ajax=1',
-                  {method: 'POST', cache: 'no-store'})
-    .then(function(r){ return r.ok ? r.json() : null; })
-    .then(function(d){
-      if (d && d.success === false && window.toast) toast(d.message || 'Saved for this session only.', 'warning');
-    })
-    .catch(function(){});
+  if (tmpl) _r20cLangSaved = _r20cLangSaved.then(function(){
+    return fetch(tmpl.replace('LANGCODE', encodeURIComponent(lang)) + '?ajax=1',
+                 {method: 'POST', cache: 'no-store'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){
+        if (mine === _r20cLangSeq && d && d.success === false && window.toast) toast(d.message || 'Saved for this session only.', 'warning');
+      })
+      .catch(function(){});
+  });
   // …and flip the UI right now: fetch the new language's catalog and re-translate the page in place,
   // no reload (window.setLang reverts every node to its stored English, then applies the new catalog).
   fetch(MOUNT + '/api/i18n/' + encodeURIComponent(lang), {cache: 'no-store'})
     .then(function(r){ return r.json(); })
     .then(function(catalog){
+      if (mine !== _r20cLangSeq) return;   // a later pick is on its way; it decides the language
       if (window.setLang) window.setLang(lang, catalog || {});
       document.querySelectorAll('select[data-lang-select]').forEach(function(s){ if (s.value !== lang) s.value = lang; });
     })

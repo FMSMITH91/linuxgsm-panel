@@ -301,9 +301,51 @@ def _live_threads15(match, grace=5.0):
             mod, qual = getattr(fn, "__module__", None) or "", getattr(fn, "__qualname__", "")
             if fn is not None and match(mod, qual):
                 found.append("%s -> %s.%s" % (th.name, mod, qual))
+        found += _r20d_live_greenlets15(match) + _r20d_open_pools15()
         if not found or _time15.monotonic() >= end:
             return found
         _time15.sleep(0.1)
+
+
+def _r20d_live_greenlets15(match):
+    """Live green threads whose function `match` accepts (review 1013a).
+
+    eventlet.spawn / spawn_n start greenlets that threading.enumerate() never lists, so a panel
+    worker started that way outlived the run unseen.
+    """
+    import gc as _gc15
+    import greenlet as _gl15
+    out = []
+    for g in _gc15.get_objects():
+        if not isinstance(g, _gl15.greenlet) or g.dead or g.gr_frame is None:
+            continue
+        f = g.gr_frame
+        while f.f_back is not None:
+            f = f.f_back
+        fn = f.f_locals.get("function")            # a GreenThread's main(), holding what it runs
+        mod = getattr(fn, "__module__", None) or f.f_globals.get("__name__", "")
+        qual = getattr(fn, "__qualname__", None) or f.f_code.co_name
+        if match(mod or "", qual):
+            out.append("greenlet -> %s.%s" % (mod, qual))
+    return out
+
+
+def _r20d_open_pools15():
+    """Worker threads of a ThreadPoolExecutor never shut down.
+
+    A pool worker's target is concurrent.futures' own _worker, so the target match above never
+    named one (review 1013a).
+    """
+    out = []
+    for th in _thr15.enumerate():
+        fn = getattr(th, "_target", None)
+        if getattr(fn, "__module__", "") != "concurrent.futures.thread":
+            continue
+        ex = (getattr(th, "_args", None) or (None,))[0]
+        ex = ex() if callable(ex) else None
+        if ex is not None and not getattr(ex, "_shutdown", True):
+            out.append("%s -> an open ThreadPoolExecutor" % th.name)
+    return out
 
 
 def _reaches_host15(mod, _qual):
@@ -339,6 +381,31 @@ except _EvTimeout15:   # a timed-out green join raises it (a BaseException), not
     pass
 check("threads: the end-of-run lookup finds a live thread by its target (a probe started here)",
       len(_thr15_seen) == 1, repr(_thr15_seen))
+# ...and a green thread, and an open pool's worker (review 1013a): neither is a threading target.
+import concurrent.futures as _cf15  # noqa: E402
+import eventlet as _ev15  # noqa: E402
+_THR15_GREEN = _ev15.event.Event()
+
+
+def _thr15_green_probe():
+    """Block until released: the live green thread the control must find."""
+    _THR15_GREEN.wait()
+
+
+_thr15_g = _ev15.spawn(_thr15_green_probe)
+_ev15.sleep(0)
+_thr15_pool = _cf15.ThreadPoolExecutor(max_workers=1)
+_thr15_pool.submit(int).result(5)
+_thr15_more = (_live_threads15(lambda mod, qual: qual == "_thr15_green_probe", grace=0),
+               _r20d_open_pools15())
+_THR15_GREEN.send(True)
+_thr15_g.wait()
+_thr15_pool.shutdown(wait=True)
+check("threads: ...and a live green thread by its function, and an open pool's worker (controls)",
+      sorted(_e.split(" -> ", 1)[1] for _e in _thr15_more[0])
+      == ["an open ThreadPoolExecutor", "unit.part15._thr15_green_probe"]
+      and len(_thr15_more[1]) == 1 and not _r20d_open_pools15(),
+      repr((_thr15_more, _r20d_open_pools15())))
 # ...and the filter takes the modules the panel's workers live in: a lookup that works is no
 # use with a filter that never matches the host-reboot job.
 check("threads: the end-of-run filter covers app.py and every panel package's workers (the "

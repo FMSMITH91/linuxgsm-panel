@@ -8,6 +8,7 @@ from panel.ops.ssh_manager import (_tailnet_ssh_state, remote_ufw_close_port_22)
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, log_action, permission_required)
 from panel.core import i18n
 from panel.core.http import (_log_and_generic, _unreachable)
+from panel.routes._shared import (_r20b_audit_on_raise)
 
 # Word-for-word the refusal remote_set_public_ssh(..., "off") gives, because it is the same
 # change asked for from a different button and a user who sees one and then the other should not
@@ -37,7 +38,8 @@ def register(app):
                 log_action(current_user, "remote_close_port_22", target=remote.name,
                            detail=_NO_WAY_BACK, success=False, remote=remote)
                 return jsonify({"success": False, "message": i18n.tr(_NO_WAY_BACK)})
-            success, msg = remote_ufw_close_port_22(remote)
+            with _r20b_audit_on_raise("remote_close_port_22", target=remote.name, remote=remote):
+                success, msg = remote_ufw_close_port_22(remote)
             log_action(current_user, "remote_close_port_22", target=remote.name, detail=msg, success=success,
                        remote=remote)
             # The audit row keeps the English; the viewer reads it in their language.

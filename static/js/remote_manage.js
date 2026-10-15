@@ -234,6 +234,7 @@ function loadSecurityLog(which, jail){
   var el=document.getElementById('sec-log'); if(!el) return;
   var hdr=document.getElementById('sec-log-title');
   if(hdr) hdr.textContent = (which==='fail2ban' && jail) ? tf('fail2ban activity — {jail}', {jail: jail}) : '';
+  el.removeAttribute('data-i18n-text');   // a log, not the placeholder, from here on (see setLang)
   el.textContent=t('Loading…');   // t(): the translator skips this <pre>
   var url=secBase()+'/log?which='+encodeURIComponent(which);
   if(jail) url += '&jail='+encodeURIComponent(jail);
@@ -357,7 +358,9 @@ function _r18cPaintHostBadge(up){
   if(!b) return;
   b.className = 'badge ' + (up ? 'bg-success' : 'bg-danger');
   b.textContent = up ? 'Reachable' : 'Unreachable';
-  b.setAttribute('title', up ? 'The panel can reach this host over SSH' : 'The panel cannot reach this host over SSH');
+  // The panel's own machine is read through the local transport, not SSH (never painted down here).
+  b.setAttribute('title', up ? (window.IS_LOCAL ? 'The panel is running on this host' : 'The panel can reach this host over SSH')
+                             : 'The panel cannot reach this host over SSH');
 }
 // One /live reading onto the card, for pollLive: the CPU and its cores, RAM and swap, the disk.
 function _livePaintCpu(d){

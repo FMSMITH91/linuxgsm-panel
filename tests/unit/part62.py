@@ -435,7 +435,7 @@ def _cfg_writes_audited62(client, sid):
     got = {a: _rows62(sid, a)[-1:] for a in ("server_alerts_save", "set_log_timestamps")}
     check("routes: the Alerts card's and the log-timestamps switch's failed cfg writes are "
           "audited with the writer's reason",
-          r.status_code == 502 and all(rows and rows[0][1] is False and unread in rows[0][0]
+          r.status_code == 200 and all(rows and rows[0][1] is False and unread in rows[0][0]
                                        for rows in got.values()), repr((r.status_code, got)))
 
 

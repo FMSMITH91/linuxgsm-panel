@@ -844,9 +844,12 @@ try:
     _en_t = app.test_client()
     _en_t.post("/login", data={"username": _en_name, "password": "Str0ng!passw0rd"})
     _en_login = _en_t.post("/login", data={"totp_code": _en_code})
+    # Refused AS a spent code, as the two replay checks above are (review 1013a): "not 302" also
+    # holds for the throttle's page, so a filled bucket would pass a replay let through.
     check("2FA enrol: the enrolling code cannot then be REPLAYED at login",
-          _en_login.status_code != 302,
-          "the code that turned 2FA on also signed in (status %s)" % _en_login.status_code)
+          _en_login.status_code != 302
+          and "That code has already been used" in _en_login.get_data(as_text=True),
+          "the code that turned 2FA on was not refused as spent (status %s)" % _en_login.status_code)
     # ...and a fresh code still works, so the refusal above is single-use and not a break.
     _en_t2 = app.test_client()
     _en_t2.post("/login", data={"username": _en_name, "password": "Str0ng!passw0rd"})
@@ -2396,9 +2399,10 @@ with app.app_context():
 _ms = c.get("/servers/manage", follow_redirects=False)
 check("one-table: /servers/manage redirects rather than 404s",
       _ms.status_code in (301, 302, 303), "status=%d" % _ms.status_code)
+# The Location must be there AND be the dashboard: the old first term was always true, and the
+# `or "/"` default passed a redirect with no Location at all (review 1013a).
 check("one-table: ...to the dashboard",
-      (_ms.headers.get("Location") or "").rstrip("/").endswith("") and
-      (_ms.headers.get("Location") or "/") in ("/", "http://localhost/"),
+      _ms.headers.get("Location") in ("/", "http://localhost/"),
       "Location=%s" % _ms.headers.get("Location"))
 # Everything that lived only on the old page has to be on the dashboard now.
 _dash = c.get("/").get_data(as_text=True)

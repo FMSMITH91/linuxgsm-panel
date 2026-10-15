@@ -1837,14 +1837,15 @@ def remote_uptime(server, force=False):
             return hit[1]
     # uptime, df and free in the C locale: their words ("up", "Mem:") and decimal commas are
     # translated on a host set to another language, and the awk below reads them (see _core's
-    # _host_sample_cmd).
+    # _host_sample_cmd). The MEMPCT awk too: mawk, Ubuntu's default awk, printf's a decimal comma
+    # in the caller's locale ("30,2" on a German host, measured), and LC_ALL on `free` is not its.
     # One composite command with tagged lines, parsed below — one round-trip, one process spawn.
     parts = [
         "echo UPTIME $(LC_ALL=C uptime -p)",
         "awk '{print \"LOAD\",$1,$2,$3}' /proc/loadavg",
         "LC_ALL=C df -h / | tail -1 | awk '{print \"DISK\",$3\"/\"$2}'",
         "LC_ALL=C free -h | awk '/Mem:/{print \"MEM\",$3\"/\"$2}'",
-        "LC_ALL=C free | awk '/Mem:/{printf \"MEMPCT %.1f\\n\", $3/$2*100}'",
+        "LC_ALL=C free | LC_ALL=C awk '/Mem:/{printf \"MEMPCT %.1f\\n\", $3/$2*100}'",
         "echo KERNEL $(uname -r)",
         "echo CORES $(nproc)",
         "grep '^cpu ' /proc/stat", "sleep 0.25", "grep '^cpu ' /proc/stat",
@@ -2584,10 +2585,35 @@ def _r19a_enable_forwarding(server):
     return res
 
 
+# Said instead of joining when the route list is not one: before any root write on the host.
+_R20A_BAD_ROUTES = "Routes must be comma-separated networks, e.g. 192.168.1.0/24,10.0.0.0/24"
+
+
+def _r20a_routes_or_none(advertise_routes):
+    """The route list as the verb will take it ("" for none), or None when it is not one.
+
+    Checked BEFORE IP forwarding is switched on. Both joins wrote and loaded the forwarding drop-in
+    first and only then handed the list to the verb, whose validator refused `a, b` (the space)
+    with a VerbError: the host was left forwarding IPv4 and IPv6 with nothing joined, and the
+    key flow told the operator their auth key was bad. Spaces around the commas are dropped, as a
+    person types a list; anything else the verb's own validator refuses is refused here first.
+    """
+    text = ",".join(p.strip() for p in (advertise_routes or "").split(","))
+    if text in ("", "-"):     # "-" is the verb's own "no routes"; it switched forwarding on
+        return ""
+    try:
+        return _priv._routes(text)
+    except _priv.VerbError:
+        return None
+
+
 def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     """Run `tailscale up` (no auth key) in the background and return the browser
     login URL — the user just pastes it into their browser to authorize the node,
     exactly like `tailscale up` on the CLI. tailscale up keeps waiting for auth."""
+    advertise_routes = _r20a_routes_or_none(advertise_routes)
+    if advertise_routes is None:
+        return False, i18n.Sentence(_R20A_BAD_ROUTES)
     if advertise_routes:
         # Read, as the auth-key flow reads it: this answer carries only the login URL, so a failed
         # write or reload goes to the log rather than passing unseen.
@@ -2628,6 +2654,9 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
 
     if not auth_key:
         return False, "Auth key is required. Generate one at https://login.tailscale.com/admin/keys", "\n".join(log)
+    advertise_routes = _r20a_routes_or_none(advertise_routes)
+    if advertise_routes is None:
+        return False, i18n.Sentence(_R20A_BAD_ROUTES), "\n".join(log)
 
     # 1. Enable IP forwarding for subnet routing
     if advertise_routes:

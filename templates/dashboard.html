@@ -219,9 +219,11 @@
       {# id, because the 10s metrics poll repaints this: it was rendered once and never touched
          again, so a host that died while the dashboard was open went on reading "Reachable" —
          on a page whose header says "Auto-refreshing" — until someone pressed F5. #}
-      <span id="host-reach-{{ remote.id }}"
+      {# The panel's own machine is not reached over SSH (the local transport): data-local gives it
+         tooltips that name no transport, here and in dashboard.js's repaint. #}
+      <span id="host-reach-{{ remote.id }}"{% if remote.is_local %} data-local="1"{% endif %}
             class="badge {% if remote.is_online %}bg-success{% elif not _probed %}bg-secondary{% else %}bg-danger{% endif %}"
-            title="{% if remote.is_online %}The panel can reach this host over SSH{% elif not _probed %}The panel has not checked this host yet — the first check runs shortly after startup{% else %}The panel cannot reach this host over SSH — the servers below show their last known state{% endif %}">
+            title="{% if not remote.is_online and not _probed %}The panel has not checked this host yet — the first check runs shortly after startup{% elif remote.is_local %}{% if remote.is_online %}The panel is running on this host{% else %}The panel's last check of this host failed — the servers below show their last known state{% endif %}{% elif remote.is_online %}The panel can reach this host over SSH{% else %}The panel cannot reach this host over SSH — the servers below show their last known state{% endif %}">
         {% if remote.is_online %}Reachable{% elif not _probed %}Checking…{% else %}Unreachable{% endif %}
       </span>
     </span>
@@ -316,8 +318,10 @@
                  the in-game name dashboard.js writes into #game-name-<id> with textContent went
                  from "Online" to "En línea". #}
               <strong data-no-i18n>{{ srv.name }}</strong>
-              <span class="game-name text-info d-block text-truncate" id="game-name-{{ srv.id }}"
-                    style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)" data-no-i18n>{{ server_names.get(srv.id) or '' }}</span>
+              {# The guard on the NAME only: on the outer span it kept the tooltip English for es/fr
+                 viewers too (the walker returns at a guarded element before its attributes). #}
+              <span class="game-name text-info d-block text-truncate"
+                    style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)"><span id="game-name-{{ srv.id }}" data-no-i18n>{{ server_names.get(srv.id) or '' }}</span></span>
               <span class="text-secondary d-block" style="font-size: .75rem;" data-no-i18n>{{ srv.short_name }}</span>
               {# data-no-i18n: tag names are user-authored, and the translation walker would happily
                  "translate" one that collides with a catalog key ("Online", "Status", …). The colour
@@ -332,7 +336,7 @@
                 {% for tag in srv.tags|sort(attribute='name') %}
                 <span class="badge tag-chip" data-tag-id="{{ tag.id }}" data-no-i18n
                       {% if tag.color %}style="background-color: {{ tag.color }};"{% endif %}
-                      {% if not tag.notify %}title="Alerts are muted for this tag"{% endif %}>{{ tag.name }}{% if not tag.notify %} <i class="bi bi-bell-slash"></i>{% endif %}</span>
+                      {% if not tag.notify %}title="{{ t('Alerts are muted for this tag') }}" data-i18n-title="Alerts are muted for this tag"{% endif %}>{{ tag.name }}{% if not tag.notify %} <i class="bi bi-bell-slash"></i>{% endif %}</span>
                 {% endfor %}
               </span>
               <span class="text-secondary d-none" id="map-{{ srv.id }}" style="font-size:.72rem;" title="Current map"></span>

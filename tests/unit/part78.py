@@ -64,6 +64,13 @@ def _lang78(lang):
         _db78.session.commit()
 
 
+# The account's language as this part found it, put back after each block that switches it, as
+# part73 does (review 1013a: reset to "en", a later part would read this part's choice).
+with _p9.app_context():
+    _LANG78_WAS = _db78.session.get(_U78, P9_ADMIN).language
+
+
+
 _spec78 = _ilu78.spec_from_file_location("i18n_scan_p78", os.path.join(_root, "tools", "i18n_scan.py"))
 _scan78 = _ilu78.module_from_spec(_spec78)
 _spec78.loader.exec_module(_scan78)
@@ -88,7 +95,7 @@ try:
     _r78 = _p9_client(P9_ADMIN).post("/api/remote/%d/close-port-22" % P9_HOST, headers=_XHR78)
     _cp_body78 = _p9_json(_r78)
 finally:
-    _lang78("en")
+    _lang78(_LANG78_WAS)
     _p9_restore_all()
 check("unreachable: close port 22 on a host that is down answers \"Host unreachable\" as its message, "
       "in the viewer's language (the dialog read a message the answer did not have)",
@@ -145,9 +152,13 @@ if _out78 is not None:
                                                        "✗ " + _FR78["Host unreachable"]]
           and (_out78.get("esLabel"), _out78.get("enLabel"), _out78.get("frLabel"))
           == (_ES78["New file name"], "New file name", _FR78["New file name"]), repr(_out78))
+    # The fixture's premise, as its own check (review 1013a): a translator giving the two keys
+    # different words then fails here, by name, not as "i18n.js guessed".
+    check("i18n.js: (fixture) fr gives \"Done\" and \"Complete\" one translation, the shared pair the "
+          "next check drives", _FR78["Done"] == _FR78["Complete"], repr((_FR78["Done"], _FR78["Complete"])))
     check("i18n.js: ...and a translation two keys share (fr \"Done\" and \"Complete\") is left as it was, "
           "not guessed back to one of them",
-          _FR78["Done"] == _FR78["Complete"] and _out78.get("shared") == _FR78["Done"], repr(_out78))
+          _out78.get("shared") == _FR78["Done"], repr(_out78))
 
 # The five persistent nodes the review named write English, so they never depend on the lookup
 # back (and "Done" could not use it at all).

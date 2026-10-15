@@ -37,7 +37,7 @@ import tempfile as _tf71
 import time as _time71
 from types import SimpleNamespace as NS
 
-from unit.part01 import check, skip
+from unit.part01 import _R20dOver, check, skip
 from unit.part05 import _helper, _root
 from unit.part12 import (_P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_client, _p9_core, _p9_drain, _p9_json,
                          _p9_patch, _p9_restore_all, _p9_sd, _p9_sf, _p9_sh, _p9_threading, _p9_trip)
@@ -405,11 +405,13 @@ def _restart_flags71():
             raise PermissionError(13, "Permission denied", path)
         return real_lstat(path, *a, **k)
     _p9_patch(_helper, "HOME_ROOT", root)
-    _p9_patch(_helper.os, "lstat", _lstat)
+    # The helper's own handle on os, never os.lstat itself (review 1013a: that was process-wide).
+    os_saved = _helper.os
+    _p9_patch(_helper, "os", _R20dOver(os_saved, lstat=_lstat))
     out, err = _io71.StringIO(), _io71.StringIO()
     with _ctx71.redirect_stdout(out), _ctx71.redirect_stderr(err):
         rc = _helper.do_restart_flags([], None)
-    _helper.os.lstat = real_lstat
+    _helper.os = os_saved
     # Since review 1012c the unread home is named on stdout (`?locked`) with exit 0, so the panel
     # keeps only that account's banner (part74); it is still never a confident "no flag".
     check("helper restart-flags: a home it could not look in is reported as unread, not a confident "
