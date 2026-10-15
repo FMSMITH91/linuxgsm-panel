@@ -4,9 +4,10 @@ import logging
 import re
 import time
 import bcrypt
+from markupsafe import Markup
 from panel.core import i18n
 from panel.core.clock import utcnow
-from panel.core.validation import unzoned_ip_address_or_none, unzoned_ip_or_network
+from panel.core.validation import canonical_host, unzoned_ip_address_or_none, unzoned_ip_or_network
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -496,6 +497,28 @@ class Group(db.Model):
 LOCAL_HOST_LABEL = "Panel Server"
 
 
+# A host's name on a page. The panel host's is the fixed label "Panel Server", an es/fr key; a
+# remote's is the user's own words. Every page wrapped both in data-no-i18n — right for a remote's
+# name ("Server" must not read "Servidor"), but the page's translator then skipped the panel host's
+# label too, so the H1, the dashboard card, the host picker and the Groups page said "Panel Server"
+# under a nav reading "Servidor del panel". The label is left to the translator (so a live language
+# switch follows it too) and only a remote's name is guarded.
+def _r21c_host_label(remote):
+    """Markup for a host's name in page text: the panel host's label translatable, a remote's guarded."""
+    # data-host-name on both: a page heading wraps where it carries a name (panel.css .page-title).
+    if getattr(remote, "is_local", False):
+        return Markup("<span data-host-name>%s</span>") % LOCAL_HOST_LABEL
+    return Markup("<span data-host-name data-no-i18n>%s</span>") % (getattr(remote, "display_name", "")
+                                                                    or "")
+
+
+def _r21c_host_text(remote, lang):
+    """A host's name as plain text (a title, an aria-label, an <option>): the label in `lang`."""
+    if getattr(remote, "is_local", False):
+        return i18n.translate(lang, LOCAL_HOST_LABEL)
+    return getattr(remote, "display_name", "") or ""
+
+
 class RemoteServer(db.Model):
     """A remote VPS running LinuxGSM servers."""
 
@@ -527,6 +550,13 @@ class RemoteServer(db.Model):
     @validates("port")
     def _validate_ssh_port(self, key, value):
         return _validate_port(key, value)
+
+    @validates("host")
+    def _canonical_host(self, key, value):
+        # `[2001:db8::5]` is stored as `2001:db8::5`, every spelling of an address as one text:
+        # ssh and paramiko resolve neither bracket, and the debug report matches Tailscale peers by
+        # the canonical text. Every writer, not only the add and edit forms (validation.canonical_host).
+        return canonical_host(value)
     is_online = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime, nullable=True)
     host_key = db.Column(EncryptedString, default="")   # pinned SSH host key ("keytype base64"); TOFU
@@ -542,9 +572,13 @@ class RemoteServer(db.Model):
 
         The local host is always shown as 'Panel Server' so the label is consistent with the nav
         and the Panel Server management page, regardless of whatever name was typed when it was
-        added.
+        added. As an i18n.Sentence: it is still the English text for every recorder (an audit
+        row, a log line, a stored message), and i18n.tr() translates it when it is a slot in a
+        sentence shown to a viewer ("{host} is being rebooted…") — a plain str read "Panel Server"
+        on an es or fr page while the nav said "Servidor del panel". A remote's name is the
+        user's own words and stays a plain str, never translated.
         """
-        return LOCAL_HOST_LABEL if self.is_local else self.name
+        return i18n.Sentence(LOCAL_HOST_LABEL) if self.is_local else self.name
 
     @property
     def display_host(self):
@@ -978,8 +1012,9 @@ class AuditLog(db.Model):
     # delegated viewer by these and never by `target`, which is free text and not unique — two
     # hosts' copies of one game share a name by default, and a server can be renamed onto any
     # other target. No FK, like MetricSample: the listeners at the bottom of this module null
-    # them when the row they point at is deleted, because SQLite hands a freed id to the next
-    # row created, and a recycled id would show one tenant's history to another.
+    # them when the row they point at is deleted, because a table without AUTOINCREMENT (one
+    # panel/db/id_sequence.py could not rebuild) hands a freed id to the next row created, and a
+    # recycled id would show one tenant's history to another.
     game_server_id = db.Column(db.Integer, nullable=True, index=True)
     remote_id = db.Column(db.Integer, nullable=True, index=True)
 
@@ -1153,8 +1188,9 @@ class MetricSample(db.Model):
     (~1/min) and pruned after ~14 days.
 
     No FK, so the write stays cheap — but the orphans do NOT "just age out" harmlessly, which is
-    what this used to say. SQLite hands a deleted row's id straight to the next INSERT (plain
-    INTEGER PRIMARY KEY = rowid, no AUTOINCREMENT), so for up to 14 days a freshly-installed
+    what this used to say. A game_server table without AUTOINCREMENT (one panel/db/id_sequence.py
+    could not rebuild) hands a deleted row's id straight to the next INSERT, so for up to 14 days
+    a freshly-installed
     server whose id was recycled shows the DELETED server's CPU, RAM and player counts on its
     history chart — silently wrong data on the page an operator uses to decide whether a box is
     overloaded. The after_delete listener at the bottom of this module clears them with the row,
@@ -1574,6 +1610,21 @@ def _autostart_off_for_unfinished_installs():
                        .values(autostart=False))
 
 
+def _r21b_canonical_remote_hosts():
+    """Data migration 2: every stored host in validation.canonical_host's form.
+
+    The form accepted `[2001:db8::5]` (the bracketed login the panel prints) and stored it as
+    typed; ssh and paramiko resolve neither bracket, so every command to that host failed, and a
+    non-canonical IPv6 spelling never matched its Tailscale peer in the debug report. The model now
+    canonicalises on assignment; this brings rows written before it into line. Through the ORM, as
+    the column is encrypted; an unreadable value is "" and left as it is. Safe to repeat.
+    """
+    for remote in RemoteServer.query.all():
+        host = remote.host
+        if canonical_host(host) != host:
+            remote.host = canonical_host(host)
+
+
 # The data migrations, in order. PRAGMA user_version in the database file records how many have
 # run, so each runs ONCE per database, on the start that first finds it missing: a fresh database
 # (on its empty tables), an upgraded one, and a backup taken before it and restored later, which
@@ -1582,6 +1633,7 @@ def _autostart_off_for_unfinished_installs():
 # 0 again and runs them again, so each must be safe to repeat.
 _DATA_MIGRATIONS = (
     (_autostart_off_for_unfinished_installs, "PRAGMA user_version = 1"),
+    (_r21b_canonical_remote_hosts, "PRAGMA user_version = 2"),
 )
 
 
@@ -2063,8 +2115,9 @@ def _register_invite_revocation():
     from sqlalchemy import event
 
     # An invite must die with the account that minted it. authority_intact() resolves the creator
-    # with db.session.get(User, created_by_id) and fails closed when it is gone — but user.id is a
-    # bare INTEGER PRIMARY KEY, so SQLite hands the freed rowid to the very NEXT account created.
+    # with db.session.get(User, created_by_id) and fails closed when it is gone — but user.id was a
+    # bare INTEGER PRIMARY KEY, so SQLite handed the freed rowid to the very NEXT account created
+    # (AUTOINCREMENT since, panel/db/id_sequence.py; a table it could not rebuild still does).
     # The creator is then not missing; it is a different person, and the check says yes. Offboard
     # an admin and create their replacement and the dead invite is live again, for an ordinary
     # account as soon as the new one is active — and for a SUPERADMIN invite as soon as the
@@ -2083,8 +2136,9 @@ def _register_invite_revocation():
 
     # ...and with the GROUP it delegates, for the same reason and the same rowid. Invite.group_ids
     # is a JSON list of bare Group.id integers frozen at mint time and resolved at redemption
-    # purely by id, and Group.id is the same bare INTEGER PRIMARY KEY — so delete a group and
-    # create another, and the new one takes the freed rowid. Nothing downstream catches it:
+    # purely by id, and Group.id was the same bare INTEGER PRIMARY KEY — so delete a group and
+    # create another, and the new one took the freed rowid (still so where id_sequence.py could
+    # not add AUTOINCREMENT). Nothing downstream catches it:
     # redeem_invite's group re-check is guarded by `if _creator is not None and not
     # _creator.is_superadmin`, and minting is @superadmin_required, so for a creator who is still a
     # superadmin the check is skipped entirely and user.groups is assigned from whatever rows hold
@@ -2122,7 +2176,8 @@ def _register_audit_detach():
     from sqlalchemy import event
 
     # AuditLog.user_id is a FK with no cascade, this app never sets PRAGMA foreign_keys, and the
-    # rowid is recycled — so after a delete the column pointed at whoever took the freed id.
+    # rowid was recycled (still is on a user table id_sequence.py could not rebuild) — so after a
+    # delete the column pointed at whoever took the freed id.
     # Verified: alice's rows read back as bob's. No render path joins on it today (they all use
     # the denormalised `username`, which is the auditable fact and is MEANT to outlive the
     # account), so this is a foot-gun rather than a live defect — for the next feature that does
@@ -2197,7 +2252,8 @@ def _register_new_row_forgetting():
     # The delete routes forget a row's state (panel_state.forget_rows), and the monitor sweeps the
     # rest a minute later — but state can be written AFTER the delete by something the delete could
     # not see: a long action's drain, an update check or the daily sweep still holding the old row.
-    # SQLite then hands the freed id to the next INSERT, and whoever can see the new row reads the
+    # A table without AUTOINCREMENT (one panel/db/id_sequence.py could not rebuild) then hands the
+    # freed id to the next INSERT, and whoever can see the new row reads the
     # old one's console backlog or pending packages. The INSERT is the one point every creation
     # path shares (install, import, add a host, the panel host's own row, the setup wizard), and it
     # comes before anything seeds state for the new id: a job is queued only after the commit that

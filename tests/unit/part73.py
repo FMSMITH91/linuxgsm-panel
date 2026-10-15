@@ -284,6 +284,7 @@ check("fail2ban whitelist: a remote whose drop-in write timed out, or whose fail
 _warned73 = []
 for _ans73 in ((False, "fail2ban did not reload"), (False, _smh73.F2B_NOT_INSTALLED), (True, "ok")):
     with _patched():
+        _p9_arm(patch=_patch, who="part73")     # a host loop over the shared database (review 1015a)
         _patch(_app73, "remote_set_fail2ban_ignoreip", lambda *a, _r=_ans73, **k: _r)
         _patch(_app73, "_log", NS(warning=lambda msg, *a: _warned73.append((_ans73[1], msg % a)),
                                   debug=lambda *a, **k: None))
@@ -444,7 +445,8 @@ def _tsboot73(write_rc):
         _patch(_smc73, "run_privileged", lambda *a, **k: ("", "", 0))
         _patch(_smh73, "remote_check_tailscale",
                lambda s: {"running": True, "tailscale_ip": "203.0.113.5", "dns_name": "p73"})
-        return _smh73.remote_bootstrap_tailscale(NS(name="p73"), auth_key="p73" + "key",
+        # 10+ characters: a shorter one is refused by the verb's validator before the forwarding.
+        return _smh73.remote_bootstrap_tailscale(NS(name="p73"), auth_key="p73" + "key" * 4,
                                                  advertise_routes="192.0.2.0/24")
 
 

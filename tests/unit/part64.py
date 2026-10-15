@@ -96,6 +96,7 @@ try:
             raise RuntimeError("stand-in: the SSH call failed")
 
     with _patched():
+        _r15d_arm61()       # a host loop over the shared database: tripwired too (review 1015a)
         _patch(_app64, "remote_set_fail2ban_ignoreip", _wl64)
         _wlr64 = _try64(_app64._apply_whitelist_to_remotes, _p9)
     check("whitelist push: a remote deleted mid-pass is logged and the next remote still gets the "
@@ -123,6 +124,7 @@ try:
     with _p9.app_context():
         _gsa64 = GameServer.query.filter_by(short_name="p64gsa").first().id
     with _patched():
+        _r15d_arm61()
         _patch(_app64, "ensure_node_tools_cron", _ntc64)
         _patch(_app64._sm, "upgrade_managed_cron_tracking", _upg64)
         # The pass asks game_account_write_refusal before each rewrite (review 1012d), a host round
@@ -539,5 +541,6 @@ _uc64 = _ssh22_64(["%s ALLOW IN Anywhere" % _PEER64])
 check("firewall: an allow to a multicast group or the limited broadcast (TCP never arrives there) is no "
       "way in, so the only public 22/tcp stays protected; one to a unicast address is (control)",
       set(_mc64.values()) == {(False, True, False)} and _uc64 == (True, False, True), repr((_mc64, _uc64)))
-check("part64: nothing its routes drove reached a real transport (every host call was stubbed)",
+check("part64: nothing its routes and host loops drove reached a real transport (every host call was "
+      "stubbed)",
       len(_P9_TRIPPED) == _TRIP64_START, repr(_P9_TRIPPED[_TRIP64_START:][:6]))

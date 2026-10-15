@@ -2169,7 +2169,7 @@ try:
     _sf_lt = [(False, "")]
     _p9_patch(_p9_sf, "lgsm_write_config", lambda *a, **k: _sf_lt[0])
     _r = _A.post(_sf_url + "/log-timestamps", json={"enabled": False})
-    check("log timestamps: a config write that failed is a 502 saying so",
+    check("log timestamps: a config write that failed answers 200 with an error saying so",
           _r.status_code == 200 and _p9_json(_r).get("error") == "Could not write the LinuxGSM config")
     _p9_patch(_p9_sf, "lgsm_get_values", lambda *a, **k: {"logtimestamp": '"on"'})
     eq("log timestamps: GET reads the (quoted) LinuxGSM value",
@@ -2189,8 +2189,13 @@ try:
           and _p9_audit("send_command").success is True, repr(_d))
     _sd_send[0] = ("", "no server running", 1)
     _r = _A.post("/api/command/%d" % P9_GS, json={"command": "status"})
-    check("console command API: a failed send is a 502 and audited as failed",
-          _r.status_code == 200 and _p9_audit("send_command").success is False)
+    # 200, not 502 (Cloudflare swaps a 502 for its own page), so the body is the only failure
+    # signal the console gets: it is read (review 1015a: the name still said 502, and a route
+    # answering a failed send with success at 200 passed).
+    check("console command API: a failed send answers 200 with an error, not success, and is audited "
+          "as failed",
+          _r.status_code == 200 and bool(_p9_json(_r).get("error")) and _p9_json(_r).get("success") is not True
+          and _p9_audit("send_command").success is False, repr((_r.status_code, _p9_json(_r))))
     _sd_send[0] = ValueError("not a transport problem")
     _r = _A.post("/api/command/%d" % P9_GS, json={"command": "status"})
     check("console command API: an error that is NOT a lost host stays a 500 (it is ours)",

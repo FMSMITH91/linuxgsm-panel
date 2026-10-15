@@ -659,8 +659,11 @@ try:
 
     # part12's tripwire, again: nothing below may reach a host or run a command on this machine.
     _p9_arm(who="part18")
+    # Every field a render or route reads (review 1015a: without serve_config/serve_unreadable a
+    # check reaching the Funnel/Serve helpers raised AttributeError, a 500 a failure check could take).
     _p9_patch(_p9_ts, "get_tailscale_info",
-              lambda force_refresh=False: NS(dns_name=None, installed=False))
+              lambda force_refresh=False: NS(dns_name=None, installed=False, serve_config={},
+                                             serve_unreadable=False))
     _N18 = []
     _p9_patch(_p9_notif, "notify", lambda key, title, body="": _N18.append((key, title, body)))
     _p9_patch(_p9.socketio, "emit", lambda event, data=None, **k: None)
@@ -1617,9 +1620,9 @@ def _data_migration18():
           "server's On", err is None and got == {10: 0, 11: 1, 12: 0}, repr((err, got)))
     check("data migration: ...committed before the rebuild and the index build, which take the "
           "write lock on connections of their own (nothing locked, game_server rebuilt), and "
-          "counted: user_version 1",
+          "counted: user_version 2 (data migration 2, the canonical hosts, runs on the same start)",
           err is None and not _plain18(path, "game_server")
-          and _one18(path, "PRAGMA user_version") == [(1,)],
+          and _one18(path, "PRAGMA user_version") == [(2,)],
           repr((err, _plain18(path, "game_server"), _one18(path, "PRAGMA user_version"))))
     # A retry of that install, on this version, wrote the monitor line and recorded On: evidence.
     _write18(path, "UPDATE game_server SET autostart = 1 WHERE id = 10")

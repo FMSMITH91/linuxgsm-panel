@@ -11,7 +11,7 @@
   {% for r in all_remotes %}
     {% set host_games = all_servers|selectattr('remote_id','equalto',r.id)|list %}
     {% if host_games %}
-    <div class="small text-secondary mt-1 fw-bold" data-no-i18n>{{ r.display_name }}</div>
+    <div class="small text-secondary mt-1 fw-bold">{{ host_label(r) }}</div>
     {% for g in host_games %}
     <div class="form-check ms-2">
       <input type="checkbox" name="game_servers" value="{{ g.id }}" class="form-check-input"
@@ -148,7 +148,7 @@
                           + (group.game_servers|length - seen_servers|length) %}
           {% for s in seen_hosts %}
             {# The guard on the name, not the badge: there it kept the tooltip English. #}
-            <span class="badge bg-secondary" title="Whole host"><span data-no-i18n>{{ s.display_name }}</span></span>
+            <span class="badge bg-secondary" title="Whole host">{{ host_label(s) }}</span>
           {% endfor %}
           {% for g in seen_servers %}
             <span class="badge bg-dark border" title="Single game server"><span data-no-i18n>{{ g.name }}</span></span>
@@ -225,7 +225,7 @@
                        class="form-check-input" id="srv-{{ group.id }}-{{ r.id }}"
                        {% if r in group.servers %}checked{% endif %}>
                 <label class="form-check-label" for="srv-{{ group.id }}-{{ r.id }}">
-                  <span class="small" data-no-i18n>{{ r.display_name }}</span>
+                  <span class="small">{{ host_label(r) }}</span>
                 </label>
               </div>
               {% else %}
@@ -303,7 +303,7 @@
                   <input type="checkbox" name="servers" value="{{ r.id }}"
                          class="form-check-input" id="new-srv-{{ r.id }}">
                   <label class="form-check-label small" for="new-srv-{{ r.id }}">
-                    <span data-no-i18n>{{ r.display_name }}</span>
+                    {{ host_label(r) }}
                   </label>
                 </div>
                 {% else %}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ t('Firewall - %s')|format(remote.display_name) }}{% endblock %}
+{% block title %}{{ t('Firewall - %s')|format(host_text(remote)) }}{% endblock %}
 {% block content %}
 {% set block_groups = status.groups|selectattr('is_block')|list %}
 {% set open_groups = status.groups|rejectattr('is_block')|list %}
@@ -22,9 +22,11 @@
     </a>
     {% endif %}
     <h1 class="page-title mb-0 mt-1">
-      <i class="bi bi-shield-fill-check"></i> <span>Firewall:</span> <span data-no-i18n>{{ remote.display_name }}</span>
+      <i class="bi bi-shield-fill-check"></i> <span>Firewall:</span> {{ host_label(remote) }}
     </h1>
-    <span class="text-secondary small"><code>{{ remote.display_host or t('this host') }}</code></span>
+    {# The fallback outside the <code>: the translator skips a <code>, so t() there stayed in the
+       page's first language after a live switch. #}
+    <span class="text-secondary small">{% if remote.display_host %}<code>{{ remote.display_host }}</code>{% else %}<span>this host</span>{% endif %}</span>
   </div>
   <button class="btn btn-outline-secondary btn-sm" data-action="refreshFirewall">
     <i class="bi bi-arrow-repeat"></i> Refresh

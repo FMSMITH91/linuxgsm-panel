@@ -148,7 +148,7 @@ def _creds47():
     prog = ("const els = {'credential-group': {style: {}}, 'cred-label': {}};\n"
             "global.document = {getElementById: id => els[id] || null};\n"
             "global.t = s => s;   // i18n.js's, which base.html loads before every page script\n"
-            "const input = {type: 'text', value: '~/.ssh/id_rsa'};\n"
+            "const input = {type: 'text', value: '~/.ssh/id_rsa', setAttribute(){}, removeAttribute(){}};\n"
             "const form = {querySelector: () => input};\n"
             + _cut47(src, "function toggleCreds(") + "\n"
             "const out = {};\n"

@@ -1,5 +1,5 @@
 {
   "Routes must be comma-separated networks, e.g. 192.168.1.0/24,10.0.0.0/24": "Les routes doivent être des réseaux séparés par des virgules, p. ex. 192.168.1.0/24,10.0.0.0/24",
   "The panel refused to connect: this host's SSH key is not the one it trusts. If you reinstalled the host, use Re-trust host key on its page.": "Le panneau a refusé de se connecter : la clé SSH de cet hôte n'est pas celle qu'il considère comme fiable. Si vous avez réinstallé l'hôte, utilisez Refaire confiance à la clé de l'hôte sur sa page.",
-  "The connection to the host was lost while the command was running, so it may have run. Check the host before trying again.": "La connexion à l'hôte a été perdue pendant l'exécution de la commande, elle a donc peut-être été exécutée. Vérifiez l'hôte avant de réessayer."
+  "The host stopped answering while the command was running, so it may have run. Check the host before trying again.": "L'hôte a cessé de répondre pendant l'exécution de la commande, elle a donc peut-être été exécutée. Vérifiez l'hôte avant de réessayer."
 }

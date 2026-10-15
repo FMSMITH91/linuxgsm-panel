@@ -953,8 +953,9 @@ check("typed body: ...and the sweep did not leave a full backup running behind i
 # ── Deleting a user kills the invites they minted ──────────────────────────────────────────
 # authority_intact() resolves the creator with db.session.get(User, created_by_id) and fails
 # closed when it is gone — "a missing creator fails closed: the row is deleted or the id
-# dangles". But user.id is a bare INTEGER PRIMARY KEY, so SQLite hands the freed rowid to the
-# very next account created: the creator is then not missing, it is a DIFFERENT PERSON, and
+# dangles". But user.id was a bare INTEGER PRIMARY KEY (AUTOINCREMENT since, panel/db/id_sequence.py,
+# except on a table it could not rebuild), so SQLite handed the freed rowid to the very next
+# account created: the creator is then not missing, it is a DIFFERENT PERSON, and
 # the check says yes. Offboard an admin, create their replacement, and the dead invite is live
 # again — for a superadmin invite as soon as that replacement is promoted, which is exactly
 # what happens in that scenario. manage_users lists it as "Active" throughout.
@@ -1075,7 +1076,8 @@ with app.app_context():
     db.session.commit()
 
 # ── Deleting a host forgets everything keyed on its id ─────────────────────────────────────
-# SQLite hands a deleted row's id straight to the next INSERT, and delete_remote is the one
+# A table without AUTOINCREMENT (one panel/db/id_sequence.py could not rebuild) hands a deleted
+# row's id straight to the next INSERT, and delete_remote is the one
 # route that removes a host — taking its game servers with it, without uninstall_server ever
 # running. Three kinds of state were left behind:
 #
@@ -2529,9 +2531,21 @@ with app.app_context():
     check("update button: the model says a cod server has no update command",
           db.session.get(GameServer, _su_cod_id).supports_update is False,
           "the model thinks it does")
+    # A SteamCMD row of its own with no list (review 1015a: gs_id may have one cached by an earlier
+    # block, and then this tested the cached path, not the one its name describes). Removed again
+    # at once, so no later count sees it.
+    _su_steam = GameServer(remote_id=_su_remote_id, name="smoke-steam-nolist", short_name="csgoserver",
+                           game_type="csgo", port=27099, installed=True, status="offline")
+    db.session.add(_su_steam)
+    db.session.commit()
+    _su_steam_cached = db.session.get(GameServer, _su_steam.id).get_commands()
+    _su_steam_upd = db.session.get(GameServer, _su_steam.id).supports_update
+    db.session.delete(_su_steam)
+    db.session.commit()
     check("update button: ...and a SteamCMD game with no cached list still fails open",
-          db.session.get(GameServer, gs_id).supports_update is True,
-          "hiding Update for a game that has one is the worse failure")
+          not _su_steam_cached and _su_steam_upd is True,
+          "cached=%r supports_update=%r: hiding Update for a game that has one is the worse failure"
+          % (_su_steam_cached, _su_steam_upd))
 _su_html = c.get("/server/%d" % _su_cod_id).get_data(as_text=True)
 check("update button: the cod server's control bar does NOT offer Update",
       'data-args=\'["update", "@self", false]\'' not in _su_html,
@@ -2724,8 +2738,9 @@ try:
     finally:
         _sm_core.run_as_game_user = _gv_rag_saved
 
-    # Deleting the host must forget its versions. SQLite hands a deleted row's id to the next
-    # INSERT, so a new host can arrive with the same id — and a cache keyed by host id would
+    # Deleting the host must forget its versions. A table without AUTOINCREMENT (one
+    # panel/db/id_sequence.py could not rebuild) hands a deleted row's id to the next INSERT, so
+    # a new host can arrive with the same id — and a cache keyed by host id would
     # then show ITS game the deleted one's build. An event on the row's deletion, so it holds
     # however the host is removed rather than only through the route that was remembered.
     _sm_core.run_command = _gv_with_query

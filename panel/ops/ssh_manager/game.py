@@ -1927,7 +1927,10 @@ def _really_serving(server, game_server):
     tested. Returns True for "we could not tell" as well as for "yes", because the caller
     uses it to DOWNGRADE LinuxGSM's answer and an unreadable host must never do that.
     """
-    port = getattr(game_server, "port", None)
+    # The port as a number, or "no port": a row holding REAL infinity (a hand-edited or restored
+    # database) passed `if not port`, was never in the scanned set, and a STARTED server read
+    # offline — where a server with no port on record keeps LinuxGSM's answer.
+    port = _core._r20b_query_port(getattr(game_server, "port", None))
     if not port:
         return True
     try:
@@ -2093,9 +2096,10 @@ def game_version(server, user, game_type=None, port=None, query_type=None, selfn
 def _register_version_invalidation():
     """Forget a host's cached versions when its row is DELETED.
 
-    SQLite hands a deleted row's id straight to the next INSERT — plain INTEGER PRIMARY KEY is the
-    rowid, no AUTOINCREMENT — so a newly added host inherits whatever the deleted one left in any
-    map keyed by host id. panel_state's note on that says it has already bitten this codebase
+    A table without AUTOINCREMENT (one panel/db/id_sequence.py could not rebuild) hands a deleted
+    row's id straight to the next INSERT, so there a newly added host inherits whatever the
+    deleted one left in any map keyed by host id. panel_state's note on that says it has already
+    bitten this codebase
     twice, both times showing a new server the previous one's state. Here it would take a recycled
     host id AND a game user of the same name to surface, but the whole point of a version readout
     is that the number is right, so it gets closed rather than reasoned about.

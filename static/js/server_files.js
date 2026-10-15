@@ -245,10 +245,13 @@ function browse(path){
 // rename field is open leaves the list, the field and what was typed in it where they are, and says
 // why: the list was wiped before the error was read, so the half-typed name went with it. As a
 // refresh whose fetch failed outright already does. Otherwise (no field open, another folder, the
-// first load) the error replaces the list as before. True when it kept them.
+// first load) the error replaces the list as before. True when it kept them. A host that did not
+// answer over Tailscale or on the panel host comes back as {entries: [], unreadable: true} with no
+// error (only paramiko raises), and is the same failed refresh.
 function _r20cKeptOnError(d, keep){
-  if(!(d.error && keep && (keep.create || keep.rename))) return false;
-  if(window.toast) toast(d.error, 'danger');
+  var failed = d.error || (d.unreadable && !(d.entries||[]).length);
+  if(!(failed && keep && (keep.create || keep.rename))) return false;
+  if(window.toast) toast(d.error || t('Could not read this folder — the host did not answer. This is not the same as it being empty.'), 'danger');
   return true;
 }
 // "(empty folder)" is a statement about the folder. Say it only when the host actually answered: a

@@ -281,7 +281,7 @@ try:
     _dash_a53 = _A53.get("/").get_data(as_text=True)
     _dash_d53 = _D53.get("/").get_data(as_text=True)
     check("base.html: the panel host's reboot controls are a superadmin's (LOCAL_HOST_CTL), while a "
-          "delegated host admin still gets its banner (LOCAL_HOST_ID)",
+          "delegated host admin keeps LOCAL_HOST_ID (the OS-updates banner's audience)",
           "window.LOCAL_HOST_CTL = true;" in _dash_a53 and "window.LOCAL_HOST_CTL = false;" in _dash_d53
           and ("window.LOCAL_HOST_ID = %d;" % P9_LOCAL) in _dash_d53,
           repr([_l.strip() for _l in _dash_d53.splitlines() if "LOCAL_HOST" in _l]))

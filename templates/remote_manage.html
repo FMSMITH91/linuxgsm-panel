@@ -19,7 +19,7 @@
     </a>
     {% endif %}
     <h1 class="page-title mb-0 mt-1">
-      <i class="bi {% if remote.is_local %}bi-gear-wide-connected{% else %}bi-hdd-network-fill{% endif %}"></i> <span data-no-i18n>{{ remote.display_name }}</span>
+      <i class="bi {% if remote.is_local %}bi-gear-wide-connected{% else %}bi-hdd-network-fill{% endif %}"></i> {{ host_label(remote) }}
       {% if remote.is_local %}<span class="badge bg-secondary ms-1" style="font-size:.6rem;vertical-align:middle;font-weight:600;">this panel</span>{% endif %}
     </h1>
     <span class="text-secondary small">

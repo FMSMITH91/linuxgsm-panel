@@ -11,11 +11,11 @@ HOW IT RUNS. Each runner is handed the exception class the green subprocess real
 stand-in `run`), so no process sleeps. Nothing touches the network, sudo or the checkout's data/.
 """
 import os
-import subprocess as _sp44  # nosec B404 - only its run attribute is stood in for, never called
+import subprocess as _sp44  # nosec B404 - only its TimeoutExpired class is read, never called
 import tempfile as _tf44
 import time as _time44
 
-from unit.part01 import SO, check, config
+from unit.part01 import SO, _R20dOver, check, config
 from unit.part02 import _orig_so_run as _so_run_before_leaks44
 from unit.part10 import _p7_defined
 from unit.part20 import _patch, _patched
@@ -61,7 +61,10 @@ def _timeout_answers44():
     run_def = _so_defined44("_run", _so_run_before_leaks44, SO._run)
     git_def, probe_def = _so_defined44("_git"), _so_defined44("_helper_probe_run")
     with _patched():
-        _patch(_sp44, "run", _raise_te44)
+        # The modules' own handles, never subprocess.run itself (review 1015a: every module's run
+        # raised TimeoutExpired while this block ran).
+        _patch(SO, "subprocess", _R20dOver(SO.subprocess, run=_raise_te44))
+        _patch(_ts44, "subprocess", _R20dOver(_ts44.subprocess, run=_raise_te44))
         # Not a sudo argv: the suite's sudo shim (tools/nosudo_runner.py) answers one itself.
         _patch(SO, "_helper_probe_argv", lambda: ["true"])
         _patch(_sd44, "scope", lambda: "user")

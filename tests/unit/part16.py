@@ -40,7 +40,7 @@ from eventlet.timeout import Timeout as _EvTimeout16  # noqa: E402 - a timed-out
 
 from unit import REPO_ROOT as _REPO16
 from unit import idreuse_support as _reuse16
-from unit.part01 import check, eq, skip  # noqa: F401
+from unit.part01 import _r21d_urlopen_of, check, eq, skip  # noqa: F401
 from unit.part05 import _helper, _helper_path
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_HOST2, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED, _P9Thread,
                          _p9, _p9_arm, _p9_app, _p9_auth, _p9_banlist, _p9_bk, _p9_cfg, _p9_client, _p9_core,
@@ -153,8 +153,11 @@ try:
 
     # part12's tripwire, again: nothing below may reach a host or run a command on this machine.
     _p9_arm(who="part16")
+    # Every field a render or route reads (review 1015a: without serve_config/serve_unreadable a
+    # check reaching the Funnel/Serve helpers raised AttributeError, a 500 a failure check could take).
     _p9_patch(_p9_ts, "get_tailscale_info",
-              lambda force_refresh=False: NS(dns_name=None, installed=False))
+              lambda force_refresh=False: NS(dns_name=None, installed=False, serve_config={},
+                                             serve_unreadable=False))
     _N16 = []
     _p9_patch(_p9_notif, "notify", lambda key, title, body="": _N16.append((key, title, body)))
     _E16 = []
@@ -1260,14 +1263,23 @@ def _rv16_stub(so, branch, argv, popen):
                 raise AttributeError(name)
             return getattr(os, name)
 
-    saved = (so._priv, so._helper_present, so.os, so.subprocess.Popen)
+    class _OwnSubprocess(object):
+        """so's own subprocess handle with Popen replaced, never the module (review 1015a)."""
+
+        def __init__(self, real):
+            self._real, self.Popen = real, popen
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    saved = (so._priv, so._helper_present, so.os, so.subprocess)
     so._priv = NS(helper_argv=lambda v, a: list(argv), tool_argv=lambda v, a: list(argv),
                   remote_command=lambda v, a, merge_stderr=True: " ".join(
                       _shlex16.quote(x) for x in argv),
                   stdin_for=lambda v: None, VerbError=ValueError)
     so._helper_present = lambda: branch == "helper"
     so.os = os if branch == "helper" else _NoEuid()
-    so.subprocess.Popen = popen
+    so.subprocess = _OwnSubprocess(so.subprocess)
     return saved
 
 
@@ -1351,7 +1363,7 @@ def _rv16_case(so, core, case):
         got = so._run_verb("journal", ["panel", "20000"], timeout=timeout, merge_stderr=False)
     finally:
         took = _time16.monotonic() - t0
-        so._priv, so._helper_present, so.os, so.subprocess.Popen = saved
+        so._priv, so._helper_present, so.os, so.subprocess = saved
         core._READER_GRACE = saved_grace
     return {"got": [got[0][:40], len(got[0]), got[1][:40], len(got[1]), got[2]],
             "took": round(took, 2), "span": [t0, t0 + took], "open": _rv16_open_pipes(pipes),
@@ -1624,19 +1636,19 @@ def _ci16(runs):
     return lambda req, timeout=8: _io16.BytesIO(body)
 
 
-_ci16_saved = (_p9_so._repo_slug, _p9_so.urllib.request.urlopen)
+_ci16_saved = (_p9_so._repo_slug, _r21d_urlopen_of(_p9_so).urlopen)
 try:
     _p9_so._repo_slug = lambda: "o/r"
-    _p9_so.urllib.request.urlopen = _ci16(_CI16)
+    _r21d_urlopen_of(_p9_so).urlopen = _ci16(_CI16)
     _ci16_ok = _p9_so._remote_ci_state("a" * 40)
     # A skipped run added beside a FAILING one (a fork PR's workflow_run) masks nothing: every
     # suite's run is listed, and any failing conclusion fails the gate.
-    _p9_so.urllib.request.urlopen = _ci16([(n, "failure" if (n, c) == ("Open code-scanning alerts",
+    _r21d_urlopen_of(_p9_so).urlopen = _ci16([(n, "failure" if (n, c) == ("Open code-scanning alerts",
                                                                        "success") else c)
                                            for n, c in _CI16])
     _ci16_bad = _p9_so._remote_ci_state("a" * 40)
 finally:
-    _p9_so._repo_slug, _p9_so.urllib.request.urlopen = _ci16_saved
+    _p9_so._repo_slug, _r21d_urlopen_of(_p9_so).urlopen = _ci16_saved
 eq("ci-gate (by design): main's real mix of success, skipped and neutral runs is 'passing'",
    _ci16_ok, "passing")
 eq("ci-gate (by design): ...and a skipped run of a check beside its failing run still fails",

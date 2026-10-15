@@ -64,7 +64,8 @@ _CONSOLE_LINES = 250
 _CONSOLE_LINES_MAX = 2000
 
 # Registered, not a bare dict: it is keyed by GameServer.id and read to render the server's page,
-# so a deleted server's id — which SQLite hands straight to the next INSERT — would show the NEW
+# so a deleted server's id — which SQLite handed straight to the next INSERT, and still does on a
+# table panel/db/id_sequence.py could not give AUTOINCREMENT — would show the NEW
 # server a content install frozen at "running". See panel_state.register_server_state.
 _gmod_content_apply_state = register_server_state({})   # server_id -> {"status", "msg", "ts"}
 # How long a FINISHED content job stays visible to the status poll. Same 900s remote_bootstrap's
@@ -2285,11 +2286,11 @@ def _register_cron_jobs(app):
         try:
             with _r20b_audit_on_raise("cron_add", detail=schedule[:120], target=gs.name, server=gs):
                 ok, msg = add_cron_job(gs.remote, gs.short_name, schedule, command, gs.lgsm_name)
-            if ok:
-                _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
             log_action(current_user, "cron_add", target=gs.name, success=ok,
                        detail=schedule[:120], server=gs)
-            return jsonify({"success": ok, "message": msg or ("Added" if ok else "Failed")})
+            if ok:
+                _r21b_sync_after_cron_write(gs)
+            return jsonify({"success": ok, "message": i18n.tr(msg) if msg else ("Added" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("add_cron_job failed")}), 500
 
@@ -2317,6 +2318,21 @@ def _register_cron_jobs(app):
             return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
 
 
+def _r21b_sync_after_cron_write(gs):
+    """Re-read the crontab after a write that WORKED, and sync the toggles from it; never raises.
+
+    The write is done and audited before this runs. The read-back used to sit between them, so on
+    a direct-SSH host that dropped after the write it raised: the crontab had changed, /logs had no
+    row for it, and the operator was answered "request failed". Its failure now only skips the
+    toggle sync, which the next listing of the card makes anyway (_cron_listing).
+    """
+    try:
+        _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
+    except Exception:  # noqa: BLE001 - best-effort, after the write and its audit row
+        db.session.rollback()
+        _log.warning("could not re-read the crontab after a change to server %s", gs.id, exc_info=True)
+
+
 def _register_cron_actions(app):
     """Deleting a scheduled task, and running one now."""
     @app.route("/api/server/<int:server_id>/cron/delete", methods=["POST"])
@@ -2334,10 +2350,10 @@ def _register_cron_actions(app):
             with _r20b_audit_on_raise("cron_delete", target=gs.name, server=gs):
                 ok, msg = _sm.delete_cron_job(gs.remote, gs.short_name, _json_str(data, "raw"),
                                               gs.lgsm_name)
+            log_action(current_user, "cron_delete", target=gs.name, success=ok, server=gs)
             if ok:
                 # The card's own help text promises that deleting `monitor` turns Autostart off.
-                _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
-            log_action(current_user, "cron_delete", target=gs.name, success=ok, server=gs)
+                _r21b_sync_after_cron_write(gs)
             return jsonify({"success": ok,
                             "message": i18n.tr(msg) if msg else ("Deleted" if ok else "Failed")})
         except Exception:

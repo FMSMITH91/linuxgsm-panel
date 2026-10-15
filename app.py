@@ -138,7 +138,7 @@ from panel.core.panel_state import (_install_jobs, _install_lock,
     _last_sample_prune, _monitor_state, _os_update_seen, _player_counts)
 from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupState, User, db,
     init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, RowReplaced, claim_row,
-    row_birth, row_label, still_held)
+    row_birth, row_label, still_held, _r21c_host_label, _r21c_host_text)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, game_engine as
     sm_game_engine, set_game_priority_bulk, game_users_off_priority, lgsm_get_values,
@@ -1769,7 +1769,8 @@ def create_app():
             # a traceback; this says what happened, in the viewer's language, with the same
             # answer http._unreachable gives the routes that catch it (a 200: a 502 is swapped
             # for Cloudflare's own page). A changed host key, or a command cut off part-way, is
-            # said as that, not as "unreachable" (http._r20a_unreachable_said).
+            # said as that, not as "Host unreachable" (http._r20a_unreachable_said), with a `code`
+            # saying which; `unreachable` stays true, since no reading was taken.
             return unreachable_error(_ep, e)
         _log.exception("unhandled error serving %s", _ep)
         # In the viewer's language (request_lang never raises). Pages write it after a mark
@@ -2105,6 +2106,8 @@ def _asset_url(app, filename):
 
 
 def register_context_processors(app):
+    # A host's name on a page: the panel host's label translatable, a remote's own guarded.
+    app.jinja_env.globals["host_label"] = _r21c_host_label
     app.jinja_env.globals["asset_url"] = lambda filename: _asset_url(app, filename)
     # RemoteServer.is_online defaults to False, so between a fresh install (or a panel restart)
     # and the first monitor pass, EVERY host reads as unreachable although nothing has been asked
@@ -2187,6 +2190,7 @@ def register_context_processors(app):
             # i18n: `t()` translates a string for the active language (falls back to English);
             # the catalog is also handed to the browser so client JS can translate too.
             "t": lambda s: i18n.translate(lang, s),
+            "host_text": lambda remote: _r21c_host_text(remote, lang),
             "current_lang": lang,
             "languages": i18n.LANGUAGES,
             "i18n_catalog": i18n.catalog(lang),

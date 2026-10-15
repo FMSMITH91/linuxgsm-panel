@@ -998,6 +998,9 @@
        line and left its icon alone on the first; without the wrap it breaks beside the icon. */
     .page-title:has(> [data-no-i18n]) { flex-wrap: wrap; }
 
+    /* The panel host's label is a name there too, but not guarded (app.py host_label). */
+    .page-title:has(> [data-host-name]) { flex-wrap: wrap; }
+
     code {
       font-size: .85rem;
       color: var(--text);

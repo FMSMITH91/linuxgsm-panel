@@ -2668,8 +2668,10 @@ try:
 
         The one that actually broke CI: a worker that outlives the block that started it.
         The content-capture POST below starts a job, then deletes its row and pops its job
-        dict — but the THREAD keeps running. SQLite hands the next INSERT the id it just
-        freed, so the install-job block's own row is created with the SAME id, and the
+        dict — but the THREAD keeps running. SQLite then handed the next INSERT the id it had
+        just freed (the tables have AUTOINCREMENT since, panel/db/id_sequence.py; the seam still
+        guards a leaked worker reaching the next block's stubs), so the install-job block's own
+        row was created with the SAME id, and the
         abandoned worker's _fail() writes "Install failed unexpectedly: SSH connection
         failed: ... id_rsa" into that row and that job dict. Four install-job checks then
         failed on a job that was walking through its steps perfectly well. It passed locally
@@ -3333,8 +3335,9 @@ try:
               "autostart=%r crontab=%r" % (_ij_auto, sorted(_ij_cron.lines.get("jobwalk", ()))))
         check("install job: ...and a Source game's bans were made to persist",
               _ij_bans == ["jobwalk"], "ensure_persistent_bans calls: %r" % (_ij_bans,))
-        # Only a settled worker's row and job go (as _lv_install does): SQLite hands a deleted
-        # row's id to the next INSERT, which a still-running worker's _fail() then writes onto.
+        # Only a settled worker's row and job go (as _lv_install does): a still-running worker's
+        # _fail() writes onto whatever row and job dict it holds, and a table without AUTOINCREMENT
+        # (one panel/db/id_sequence.py could not rebuild) hands a deleted row's id to the next INSERT.
         if _ij_settled:
             with app.app_context():
                 _d = db.session.get(GameServer, _ij_id)

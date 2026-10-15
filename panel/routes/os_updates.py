@@ -193,7 +193,7 @@ def _forget_gone_hosts():
     for gone in [i for i in _os_update_state["hosts"] if i not in ids]:
         del _os_update_state["hosts"][gone]
     for gone in [i for i in _os_update_seen.copy() if i not in ids]:
-        _os_update_seen.pop(gone, None)   # same reason: a freed row id gets reused
+        _os_update_seen.pop(gone, None)   # same reason: a freed row id can be reused
 
 
 # config.json key: the commit the last "Panel update available" notification named ("" for none).

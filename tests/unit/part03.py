@@ -1,5 +1,5 @@
 """Part 3 of the unit suite. Imported for its side effects."""
-from unit.part01 import (NS, SO, _root, _sm_core, _sm_cron, _sm_files, _sm_firewall, _sm_hosts, _sm_portscan, check, config, eq, os, skip, sys)  # noqa: F401,E402
+from unit.part01 import (NS, SO, _R20dOver, _r21d_urlopen_of, _root, _sm_core, _sm_cron, _sm_files, _sm_firewall, _sm_hosts, _sm_portscan, check, config, eq, os, skip, sys)  # noqa: F401,E402
 from unit.part02 import (_User, _codes, _u)  # noqa: F401,E402
 check("backup: a different code still works", _u.use_backup_code(_codes[1]))
 check("backup: no codes set is handled", not _User().use_backup_code("whatever"))
@@ -661,7 +661,7 @@ finally:
 # only ever covered it. On the test VPS, where the panel really is a system service, the stub
 # caught nothing — and on a host whose sudoers permits the verb, running this suite could have
 # scheduled a REAL panel restart. _run_verb is stubbed as the backstop.
-_orig_popen = (_so.subprocess.Popen, _so.subprocess.run)
+_orig_popen = _so.subprocess
 _orig_rp_verb, _orig_rp_sys = _so._run_verb, _so._is_system_service
 _cap = {}
 try:
@@ -673,10 +673,11 @@ try:
     # with a real status, so a refusal (no user D-Bus session, the unit name still held) answered
     # "Panel restart scheduled." to a user whose port change then silently never took effect.
     # Popen is stubbed too, so a regression back to it cannot reach the real systemd-run.
-    _so.subprocess.Popen = lambda a, **k: (_cap.update(args=a), type("P", (), {})())[1]
-    _so.subprocess.run = lambda a, **k: (_cap.update(args=a),
-                                         type("R", (), {"returncode": _cap.get("rc", 0),
-                                                        "stderr": ""})())[1]
+    # On system_ops' own handle, never subprocess itself (review 1015a).
+    _so.subprocess = _R20dOver(_orig_popen, Popen=lambda a, **k: (_cap.update(args=a), type("P", (), {})())[1],
+                               run=lambda a, **k: (_cap.update(args=a),
+                                                   type("R", (), {"returncode": _cap.get("rc", 0),
+                                                                  "stderr": ""})())[1])
     _ok, _ = _so.restart_panel()
     check("restart_panel: dispatches successfully", _ok is True)
     check("restart_panel: targets the panel service via systemd-run restart",
@@ -709,7 +710,7 @@ try:
     check("restart_panel: ...with the delay clamped to the documented 1..300",
           _cap.get("verb_args") == ["300"], str(_cap.get("verb_args")))
 finally:
-    _so.subprocess.Popen, _so.subprocess.run = _orig_popen
+    _so.subprocess = _orig_popen
     _so._run_verb, _so._is_system_service = _orig_rp_verb, _orig_rp_sys
 check("integrity: parses modified status",
       {"path": "app.py", "status": "modified"} in _intg["modified"])
@@ -2158,7 +2159,7 @@ finally:
 import io as _io
 import json
 _orig_ci_slug = _so._repo_slug
-_orig_urlopen = _so.urllib.request.urlopen
+_orig_urlopen = _r21d_urlopen_of(_so).urlopen
 _orig_ci_expected = _so._ci_suite_expected
 try:
     _so._ci_suite_expected = lambda sha, runs: False
@@ -2173,32 +2174,32 @@ try:
     _all_ok = ('{"check_runs":[{"name":"checks","status":"completed","conclusion":"success"},'
                '{"name":"Analyze (python)","status":"completed","conclusion":"success"},'
                '{"name":"lighthouse","status":"completed","conclusion":"success"}]}')
-    _so.urllib.request.urlopen = _fake_open(_all_ok)
+    _r21d_urlopen_of(_so).urlopen = _fake_open(_all_ok)
     eq("ci-gate: all checks passed -> passing", _so._remote_ci_state("a"*40), "passing")
     # CI passed but Lighthouse still running -> pending (the exact case the user hit).
     _lh_running = ('{"check_runs":[{"name":"checks","status":"completed","conclusion":"success"},'
                    '{"name":"lighthouse","status":"in_progress","conclusion":null}]}')
-    _so.urllib.request.urlopen = _fake_open(_lh_running)
+    _r21d_urlopen_of(_so).urlopen = _fake_open(_lh_running)
     eq("ci-gate: one check still running -> pending", _so._remote_ci_state("a"*40), "pending")
     # One check failed (even if the rest passed) -> failing.
     _one_fail = ('{"check_runs":[{"name":"checks","status":"completed","conclusion":"success"},'
                  '{"name":"lighthouse","status":"completed","conclusion":"failure"}]}')
-    _so.urllib.request.urlopen = _fake_open(_one_fail)
+    _r21d_urlopen_of(_so).urlopen = _fake_open(_one_fail)
     eq("ci-gate: any check failed -> failing", _so._remote_ci_state("a"*40), "failing")
     # 'deploy' is ignored: a pending deploy alongside all-passing checks is still passing.
     _deploy_pending = ('{"check_runs":[{"name":"checks","status":"completed","conclusion":"success"},'
                        '{"name":"deploy","status":"in_progress","conclusion":null}]}')
-    _so.urllib.request.urlopen = _fake_open(_deploy_pending)
+    _r21d_urlopen_of(_so).urlopen = _fake_open(_deploy_pending)
     eq("ci-gate: pending 'deploy' is ignored -> passing", _so._remote_ci_state("a"*40), "passing")
     # The Codacy upload is a workflow_run job too, and its check run lands on main's newest commit
     # for a pull request's run as well: one PR's failed upload must not hold main's tip back.
     _cc_runs = ('{"check_runs":[{"name":"checks","status":"completed","conclusion":"success"},'
                 '{"name":"Upload coverage to Codacy","status":"completed","conclusion":"failure"},'
                 '{"name":"Upload coverage to Codacy","status":"in_progress","conclusion":null}]}')
-    _so.urllib.request.urlopen = _fake_open(_cc_runs)
+    _r21d_urlopen_of(_so).urlopen = _fake_open(_cc_runs)
     eq("ci-gate: a failed or running Codacy coverage upload is ignored -> passing",
        _so._remote_ci_state("a"*40), "passing")
-    _so.urllib.request.urlopen = _fake_open(_cc_runs.replace('"name":"checks","status":"completed",'
+    _r21d_urlopen_of(_so).urlopen = _fake_open(_cc_runs.replace('"name":"checks","status":"completed",'
                                                              '"conclusion":"success"',
                                                              '"name":"checks","status":"completed",'
                                                              '"conclusion":"failure"'))
@@ -2213,12 +2214,12 @@ try:
     check("ci-gate: the name it ignores is codacy-coverage.yml's upload job's",
           _cc_jobname is not None and _cc_jobname.group(1).strip() in _so._CI_IGNORE,
           repr((_cc_jobname and _cc_jobname.group(1), sorted(_so._CI_IGNORE))))
-    _so.urllib.request.urlopen = _fake_open('{"check_runs":[]}')
+    _r21d_urlopen_of(_so).urlopen = _fake_open('{"check_runs":[]}')
     eq("ci-gate: no checks yet -> pending", _so._remote_ci_state("a"*40), "pending")
 
     def _boom(req, timeout=8):
         raise _so.urllib.error.URLError("offline")
-    _so.urllib.request.urlopen = _boom
+    _r21d_urlopen_of(_so).urlopen = _boom
     eq("ci-gate: network error -> unknown (never raises)", _so._remote_ci_state("a"*40), "unknown")
 
     # GitHub's anonymous rate limit (403/429) is an ANSWER, not an outage, and this gate's own
@@ -2228,18 +2229,18 @@ try:
         def _op(req, timeout=8):
             raise _so.urllib.error.HTTPError(req.full_url, code, "limit", {}, None)
         return _op
-    _so.urllib.request.urlopen = _http_err(403)
+    _r21d_urlopen_of(_so).urlopen = _http_err(403)
     eq("ci-gate: GitHub's 403 rate limit is 'pending', not the installable 'unknown'",
        _so._remote_ci_state("a" * 40), "pending")
-    _so.urllib.request.urlopen = _http_err(429)
+    _r21d_urlopen_of(_so).urlopen = _http_err(429)
     eq("ci-gate: ...and so is a 429", _so._remote_ci_state("a" * 40), "pending")
-    _so.urllib.request.urlopen = _http_err(502)
+    _r21d_urlopen_of(_so).urlopen = _http_err(502)
     eq("ci-gate: ...while a GitHub outage (5xx) stays 'unknown' (control)",
        _so._remote_ci_state("a" * 40), "unknown")
 
     def _truncated(req, timeout=8):
         raise _so.http.client.IncompleteRead(b'{"check_runs":[', 400)
-    _so.urllib.request.urlopen = _truncated
+    _r21d_urlopen_of(_so).urlopen = _truncated
     try:
         _ir_state = _so._remote_ci_state("a" * 40)
     except Exception as _ir_e:   # noqa: BLE001 - the regression IS the raise
@@ -2265,7 +2266,7 @@ try:
         return _io.BytesIO(json.dumps({"check_runs": [
             {"name": "the-one-that-failed", "status": "completed", "conclusion": "failure"}]}).encode())
 
-    _so.urllib.request.urlopen = _paged
+    _r21d_urlopen_of(_so).urlopen = _paged
     _paged_state = _so._remote_ci_state("a" * 40)
     eq("ci-gate: a failure on page 2 is seen, not truncated away", _paged_state, "failing")
     check("ci-gate: a full first page is followed by a second request", len(_pages_fetched) >= 2,
@@ -2278,20 +2279,27 @@ try:
         return _io.BytesIO(json.dumps({"check_runs": [
             {"name": "checks", "status": "completed", "conclusion": "success"}]}).encode())
 
-    _so.urllib.request.urlopen = _short
+    _r21d_urlopen_of(_so).urlopen = _short
     eq("ci-gate: a short page still means 'passing'", _so._remote_ci_state("a" * 40), "passing")
     check("ci-gate: ...and a short page stops the paging (one request, not five)",
           len(_pages_fetched) == 1, "fetched %d page(s)" % len(_pages_fetched))
 finally:
     _so._repo_slug = _orig_ci_slug
-    _so.urllib.request.urlopen = _orig_urlopen
+    _r21d_urlopen_of(_so).urlopen = _orig_urlopen
     _so._ci_suite_expected = _orig_ci_expected
 
 # panel_self_update ENFORCES the CI gate server-side (not just by hiding the button), and
 # re-checks fresh so it also catches a bad commit that landed between page-load and click.
 _orig_isgit = _so._is_git_checkout
 _orig_pus = _so.panel_update_status
-_orig_isfile = _so.os.path.isfile
+_orig_isfile = _so.os          # system_ops' own os handle, swapped whole, never os.path itself (review 1015a)
+
+
+def _r21d_isfile(fn):
+    """system_ops' os, with os.path.isfile answering `fn`: for that module only."""
+    return _R20dOver(_orig_isfile, path=_R20dOver(_orig_isfile.path, isfile=fn))
+
+
 try:
     _so._is_git_checkout = lambda: True
     _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "failing"}
@@ -2302,7 +2310,7 @@ try:
     check("self-update: refuses while CI is still running", _ok is False and "being verified" in _m)
     # A CI-passing commit must get PAST the gate. Make install.sh look missing so it stops
     # there (proving the gate let it through) instead of actually launching an update.
-    _so.os.path.isfile = lambda p: False
+    _so.os = _r21d_isfile(lambda p: False)
     _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "passing",
                                                    "update_available": True, "target_sha": "b" * 40}
     _ok, _m = _so.panel_self_update()
@@ -2311,17 +2319,17 @@ try:
 finally:
     _so._is_git_checkout = _orig_isgit
     _so.panel_update_status = _orig_pus
-    _so.os.path.isfile = _orig_isfile
+    _so.os = _orig_isfile
 
 # ...and a gate that could not be EVALUATED does not open. A status computation that raised (a
 # truncated GitHub reply, a git read that would not decode) set st = {}, which skipped the gate and
 # left no target, so install.sh reset onto the origin tip — fetched after the check, verified by
 # nobody. Any status without a verified target fell back to that same tip.
-_sug_saved = (_so._is_git_checkout, _so.panel_update_status, _so._launch_installer, _so.os.path.isfile)
+_sug_saved = (_so._is_git_checkout, _so.panel_update_status, _so._launch_installer, _so.os)
 _sug_launched = []
 try:
     _so._is_git_checkout = lambda: True
-    _so.os.path.isfile = lambda p: True
+    _so.os = _r21d_isfile(lambda p: True)
     _so._launch_installer = lambda **k: (_sug_launched.append(k), (True, "Update started"))[1]
 
     def _sug_raise(force=False):
@@ -2351,7 +2359,7 @@ try:
           and _sug_launched[0].get("target_ref") == "c" * 40, repr((_sug_r, _sug_launched)))
 finally:
     (_so._is_git_checkout, _so.panel_update_status, _so._launch_installer,
-     _so.os.path.isfile) = _sug_saved
+     _so.os) = _sug_saved
 
 # ── _compute_update_status targets the newest VERIFIED commit ──
 # When the tip is still verifying but an earlier commit already passed CI, the panel must
@@ -2542,20 +2550,20 @@ try:
     # The caller, over the REAL _remote_ci_state: once GitHub rate-limits the panel, nothing in
     # range is verified, so nothing is offered. It used to read every commit as 'unknown' and
     # offer the tip — failing CI or not.
-    _rl_saved = (_so._repo_slug, _so.urllib.request.urlopen)
+    _rl_saved = (_so._repo_slug, _r21d_urlopen_of(_so).urlopen)
     try:
         _so._remote_ci_state = _cus_ci
         _so._repo_slug = lambda: "o/r"
 
         def _rl_open(req, timeout=8):
             raise _so.urllib.error.HTTPError(req.full_url, 403, "rate limit exceeded", {}, None)
-        _so.urllib.request.urlopen = _rl_open
+        _r21d_urlopen_of(_so).urlopen = _rl_open
         _r_rl = _so._compute_update_status()
         check("update-target: a rate-limited CI read offers NO update (was: the unverified tip)",
               _r_rl["update_available"] is False and _r_rl.get("ci_state") == "pending",
               "available=%s ci=%s" % (_r_rl.get("update_available"), _r_rl.get("ci_state")))
     finally:
-        _so._repo_slug, _so.urllib.request.urlopen = _rl_saved
+        _so._repo_slug, _r21d_urlopen_of(_so).urlopen = _rl_saved
 finally:
     _so._git = _cus_git
     _so._is_git_checkout = _cus_isco
@@ -3199,12 +3207,12 @@ Upgrade: libssl3:amd64 (3.0.2-0ubuntu1, 3.0.2-0ubuntu1.1), zlib1g:amd64 (1:1.2.1
 End-Date: 2026-09-08  04:10:30
 """
 with _so_stub(_run=lambda c, **k: (_APT_HIST, "", 0)):
-    _o_exists = SO.os.path.exists
-    SO.os.path.exists = lambda p: True
+    _o_exists = SO.os         # its own handle, never os.path.exists for the process (review 1015a)
+    SO.os = _R20dOver(_o_exists, path=_R20dOver(_o_exists.path, exists=lambda p: True))
     try:
         _apt_entries = SO.os_update_log()
     finally:
-        SO.os.path.exists = _o_exists
+        SO.os = _o_exists
 check("system_ops: os_update_log reports the packages apt actually names",
       len(_apt_entries) == 1 and _apt_entries[0]["packages"] == ["libssl3", "zlib1g"],
       str(_apt_entries))
@@ -3258,7 +3266,8 @@ finally:
     _sm_hosts._core.run_privileged = _o_rp_h
 
 # 3. _OS_SLUG_CACHE had NO expiry and was keyed ("srv", id), which forget_remote_caches could not
-#    have popped even if it had been registered. SQLite reuses rowids, so the next host to take a
+#    have popped even if it had been registered. SQLite reused rowids (a table without
+#    AUTOINCREMENT still does, panel/db/id_sequence.py), so the next host to take a
 #    deleted one inherited its distro — and deps_for_game then loads ubuntu-22.04.csv for a Debian
 #    12 box, where apt-get install (atomic) aborts on the first nonexistent package.
 _o_rc_h = _sm_hosts._core.run_command

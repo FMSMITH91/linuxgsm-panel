@@ -9,7 +9,7 @@
     </a>
     <h1 class="page-title mb-0 mt-1" data-no-i18n>{{ server.name }}</h1>
     <span class="text-secondary small">
-      <i class="bi bi-hdd-network-fill"></i> {{ remote.display_name }}
+      <i class="bi bi-hdd-network-fill"></i> {{ host_label(remote) }}
       &middot; <span>Port</span> {{ server.port }}
       &middot; <span>Type:</span> <span data-no-i18n>{{ server.game_display or server.game_type }}</span>
     </span>
@@ -296,9 +296,10 @@
         <div class="input-group input-group-sm" style="width:auto;">
           <span class="input-group-text" data-no-i18n>{{ c.name }}</span>
           {# data-no-i18n: the label and name are the command author's text (one labelled "Map"
-             read "Mapa"); the panel's own fallback is translated here instead. #}
+             read "Mapa"); the panel's own fallback is translated here instead, and named in
+             data-i18n-placeholder so a live language switch renders it again. #}
           <input type="text" class="form-control cc-arg" style="max-width:180px;" maxlength="64" data-no-i18n
-                 placeholder="{{ c.argument_label or t('value') }}" aria-label="{{ c.argument_label or c.name }}">
+                 placeholder="{{ c.argument_label or t('value') }}" aria-label="{{ c.argument_label or c.name }}"{% if not c.argument_label %} data-i18n-placeholder="value"{% endif %}>
           <button class="btn btn-outline-primary cc-run" type="button">Run</button>
         </div>
         {% else %}
@@ -511,7 +512,7 @@
         <table class="table table-borderless table-sm mb-0">
           <tr>
             <th scope="row" class="text-secondary fw-normal">Machine</th>
-            <td class="text-end"><span data-no-i18n>{{ remote.display_name }}</span>{% if remote.is_local %} <span class="badge bg-secondary" style="font-size:.6rem;">this panel</span>{% endif %}</td>
+            <td class="text-end">{{ host_label(remote) }}{% if remote.is_local %} <span class="badge bg-secondary" style="font-size:.6rem;">this panel</span>{% endif %}</td>
           </tr>
           {# Only while there is nothing to connect to yet. Once resolved, the Connect row below is
              the same address plus the port — and it is the one you can click to copy. #}

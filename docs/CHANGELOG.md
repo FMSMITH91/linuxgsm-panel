@@ -596,6 +596,30 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **An eleventh full review on 2026-10-15: fixes.** Every item below has a check that fails without
+  its fix.
+  - **Firewall page after a host key change.** When a remote's SSH key had changed, refreshing its
+    Firewall page showed "Inactive, no open ports, no IPs blocked" instead of "Unknown". It says
+    "Unknown" again, with the reason.
+  - **Rate limiting SSH.** "Rate limit" on a port said it worked when the port was already open
+    through the OpenSSH profile, a port list or a one-address rule listed above it, so nothing was
+    limited. It now checks which rule really matches first. Proven against a real UFW rule list.
+  - **IPv6 hosts in brackets.** A host saved as `[fd7a:…]` failed to connect and was reported as
+    "no tailnet peer" in the debug report. Brackets and other spellings of the same address are
+    now read as one address everywhere.
+  - **A symlinked /home.** On a host whose /home is a link, the file browser refused the game
+    user's own files and the game's config was not found. Proven on a real host.
+  - **Delegated admins.** They no longer see the panel host's own update count, reboot state or
+    pending packages through the banners, and two remote read pages now check the host permission
+    like the rest.
+  - **Smaller fixes.** "Panel Server" is translated; a mistyped Ubuntu Pro token is refused with a
+    message instead of an error; a file name ending in a newline reads the right file; a stalled
+    language save no longer holds back later ones; an unreadable folder keeps a half-typed rename;
+    a server action no longer writes two audit rows; ping latency is read in English.
+  - **Tests.** About seventy checks replaced a piece of Python itself for the whole run instead of
+    the module under test, and a new gate refuses that. Eight stale permission exemptions are gone
+    and the list now fails on a stale entry, several checks that passed without testing anything
+    now can fail, and the fuzzers run on very large pull requests.
 - **A tenth full review on 2026-10-15: fixes.** Every item below has a check that fails without
   its fix.
   - **Hosts in other languages.** On a German or Dutch host with UFW on, a fresh install read the

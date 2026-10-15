@@ -894,8 +894,9 @@ with app.app_context():
 
 # ── A deleted row must not leave its history for the next row to inherit ──────────────────────
 # MetricSample and HostSample carry no FK — deliberately, so the ~1/min write stays cheap — and
-# the docstring called the orphans harmless ("just age out"). They are not: SQLite hands a deleted
-# row's id to the next INSERT, so for up to 14 days a freshly-installed server whose id was
+# the docstring called the orphans harmless ("just age out"). They were not: SQLite handed a
+# deleted row's id to the next INSERT (before AUTOINCREMENT, panel/db/id_sequence.py, and still on a
+# table it could not rebuild), so for up to 14 days a freshly-installed server whose id was
 # recycled showed the DELETED server's CPU, RAM and player counts on its history chart. Measured
 # before the fix: 3 rows survived the delete and the new server's chart returned all three.
 from panel.db.models import (db as _hs_db, GameServer as _HSGame,                  # noqa: E402  # pylint: disable=reimported
@@ -1079,7 +1080,7 @@ with app.app_context():
                   and (_rw_resp.get_json() or {}).get("error") in ("unreachable", "preflight", "blocked")
                   and _mon_id not in _ps._expected_offline,
                   "%s %r" % (_rw_resp.status_code, _rw_resp.get_json()))
-            _rw_c.get("/logout")
+            _rw_c.post("/logout")
         finally:
             _monmod.time = _rw_real_time
             _monmod._remote_listening_ports = _rw_saved_ports
@@ -1810,7 +1811,7 @@ for _nx in ("//evil.example", "https://evil.example", "http://evil.example",
           _lr.status_code != 302 or (_loc.startswith("/") and not _loc.startswith("//")
                                      and "\\" not in _loc and "://" not in _loc),
           "Location: %r" % _loc)
-    _lc.get("/logout")
+    _lc.post("/logout")
 
 # ── A JSON endpoint must answer JSON, whatever went wrong ─────────────────────────────────
 # There was no errorhandler anywhere in this project, so an exception in a route came back as
@@ -1892,20 +1893,24 @@ check("errors: ...a host that cannot be reached is said to be unreachable (200),
       _resp.status_code == 200 and bool(_eh_fr_down) and _eh_body.get("message") == _eh_fr_down
       and _eh_body.get("unreachable") is True, repr((_resp.status_code, _eh_body)))
 # close and delete-rule read the firewall first (the lockout guard), and a read that fails is their
-# own refusal, answered 200; neither is the generic 500 any more.
+# own refusal, answered 200; neither is the generic 500 any more. Exactly 200 (review 1015a: "not
+# 500" also passed a 404 from a renamed route, a 400 and the old 502).
 check("errors: ...and so are allow-from and limit on that host; close and delete-rule refuse as their "
       "own guard says (no write answers the generic 500)",
       {k: _eh_writes.get(k) for k in ("allow-from", "limit")} == {"allow-from": (200, True), "limit": (200, True)}
-      and all(_eh_writes.get(k, (500,))[0] != 500 for k in ("close", "delete-rule")), repr(_eh_writes))
+      and all(_eh_writes.get(k, (None,))[0] == 200 for k in ("close", "delete-rule")), repr(_eh_writes))
 with app.test_request_context("/"):
     _eh_fr_key = _eh_i18n.catalog("fr").get(
         "The panel refused to connect: this host's SSH key is not the one it trusts. If you "
         "reinstalled the host, use Re-trust host key on its page.")
 _eh_kb = _resp_key.get_json(silent=True) or {}
-check("errors: ...a changed host key is said as that (Re-trust host key), not as unreachable, in "
-      "the viewer's language",
+# Flagged unreachable still (no reading was taken, and pages key their "Unknown" on it); the
+# `code` says which case it is (review 1015a).
+check("errors: ...a changed host key is said as that (Re-trust host key), not as 'Host "
+      "unreachable', in the viewer's language",
       _resp_key.status_code == 200 and bool(_eh_fr_key) and _eh_kb.get("message") == _eh_fr_key
-      and _eh_kb.get("unreachable") is False, repr((_resp_key.status_code, _eh_kb)))
+      and _eh_kb.get("unreachable") is True and _eh_kb.get("code") == "host_key_mismatch",
+      repr((_resp_key.status_code, _eh_kb)))
 _eh_said = (_resp_gen.get_json(silent=True) or {}).get("message")
 check("errors: ...and any other fault's generic message is in the viewer's language",
       _resp_gen.status_code == 500 and bool(_eh_fr) and _eh_said == _eh_fr,
@@ -1973,7 +1978,7 @@ _resp = _eh_anon.get("/api/servers", headers={"Accept": "application/json"})
 check("errors: an unauthenticated API call keeps its 401 contract",
       _resp.status_code == 401 and _resp.headers.get("X-Auth-Required") == "1",
       "%s %r" % (_resp.status_code, _resp.headers.get("X-Auth-Required")))
-_eh_c.get("/logout")
+_eh_c.post("/logout")
 # ...and a genuine same-site destination is still honoured, or the guard is just breaking things.
 import time as _rd_time  # pylint: disable=reimported
 _okc = app.test_client()
@@ -1984,7 +1989,7 @@ _ok_dt = _rd_time.monotonic() - _ok_t0      # the same login with a benign next:
 check("login redirect: a same-site path is still followed",
       _okr.status_code == 302 and _okr.headers.get("Location", "").endswith("/settings"),
       "%d %r" % (_okr.status_code, _okr.headers.get("Location")))
-_okc.get("/logout")
+_okc.post("/logout")
 # ...and the guard answers in linear time. Its path group was `(?:[seg]+/?)*`, which split a
 # run of segment characters 2^n ways before failing: "/"+"a"*30+"!" held the one eventlet hub
 # for ~50s, freezing every other user, console and poller. 26 characters is ~3s with the old
@@ -2001,7 +2006,7 @@ check("login redirect: a pathological ?next= is refused without backtracking",
       and _rd_r.headers.get("Location", "").split("localhost", 1)[-1] == "/",
       "%.2fs (benign login %.2fs) %s %r" % (_rd_dt, _ok_dt, _rd_r.status_code,
                                             _rd_r.headers.get("Location")))
-_rd_c.get("/logout")
+_rd_c.post("/logout")
 # The unauthenticated twin: the login redirect's ?next= is built from the requested path by
 # the same kind of pattern, and an <int:> converter takes any number of digits.
 _rd_t0 = _rd_time.monotonic()
@@ -2018,7 +2023,7 @@ _rd_r = _rd_c.post("/login?next=/server/1/files?tab=config",
 check("login redirect: a nested path with a query is still followed intact",
       _rd_r.headers.get("Location", "").endswith("/server/1/files?tab=config"),
       _rd_r.headers.get("Location"))
-_rd_c.get("/logout")
+_rd_c.post("/logout")
 _rd_r = app.test_client().get("/server/5?tab=files")
 check("auth redirect: ...and the anonymous redirect still carries it back",
       "next=%2Fserver%2F5%3Ftab%3Dfiles" in (_rd_r.headers.get("Location") or ""),
@@ -2608,8 +2613,9 @@ try:
     _osu(force=True)                     # and force still works, proving the setup was live
     check("os updates: ...but a forced check still sees them", "os_updates" in _rec, str(_rec))
 
-    # A remote that is deleted must not leave its count behind: SQLite hands the freed row id to
-    # the next host added, which would inherit "already told you about 1 package" and go silent
+    # A remote that is deleted must not leave its count behind: a table without AUTOINCREMENT (one
+    # panel/db/id_sequence.py could not rebuild) hands the freed row id to the next host added,
+    # which would inherit "already told you about 1 package" and go silent
     # on its own first batch. Nothing outward can see that leak, so plant a dead host's id in
     # the sweep's own state. (This used to have to reach through
     # _osu.__code__.co_freevars/__closure__ because the state was a closure cell inside

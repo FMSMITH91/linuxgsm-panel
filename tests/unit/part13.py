@@ -39,7 +39,7 @@ import urllib.parse
 from types import SimpleNamespace as NS
 
 from eventlet.timeout import Timeout as _EvTimeout13  # noqa: E402 - a timed-out green join raises it
-from unit.part01 import (_sm_core, check, eq)  # noqa: F401,E402
+from unit.part01 import (_r21d_urlopen_of, _sm_core, check, eq)  # noqa: F401,E402
 
 
 def _join13(t, secs=5):
@@ -113,7 +113,7 @@ from panel.services import notifications as _n10  # noqa: E402
 # section so nothing here reads or writes the run's config.json.
 _n10_store = {}
 _n10_saved = {k: getattr(_n10, k) for k in ("load_config", "update_config", "_OPENER", "threading")}
-_n10_urlopen_saved = _n10.urllib.request.urlopen
+_n10_urlopen_saved = _r21d_urlopen_of(_n10).urlopen
 
 
 def _n10_update(fn):
@@ -775,7 +775,7 @@ try:
 finally:
     for _k10, _v10 in _n10_saved.items():
         setattr(_n10, _k10, _v10)
-    _n10.urllib.request.urlopen = _n10_urlopen_saved
+    _r21d_urlopen_of(_n10).urlopen = _n10_urlopen_saved
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -3333,7 +3333,8 @@ try:
           _pinned10 == "ssh-ed25519 ROWKEY", repr(_pinned10))
 
     # ...and only on the row for the endpoint that connection met (_pin_row_matches). The row is
-    # loaded by id, and SQLite hands a deleted host's id to the next host created, so a handshake
+    # loaded by id, and a table without AUTOINCREMENT (one panel/db/id_sequence.py could not rebuild)
+    # hands a deleted host's id to the next host created, so a handshake
     # held across a delete — the far side holds it, so the far side chooses — pinned the OLD box's
     # key on the host that took the id, and the panel then trusted that box at the new address.
     # Each "caller" below is the copy the connection was made with: loaded, then detached.

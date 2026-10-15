@@ -26,8 +26,9 @@ from panel.security.auth import (USE_TERMINAL, _deny, _r17c_row_id, get_remote, 
     permission_required)
 
 # sid -> (remote_id, models.row_birth of that host). Labels audit rows, tears down on disconnect,
-# and is what every access re-check asks about. The row's identity, not just its id: SQLite hands a
-# deleted host's id to the next host added, and the re-check then asked about THAT host — a shell
+# and is what every access re-check asks about. The row's identity, not just its id: SQLite handed a
+# deleted host's id to the next host added (and still does on a table id_sequence.py could not
+# rebuild), and the re-check then asked about THAT host — a shell
 # on the deleted machine stayed open for anyone who could use the one that took its id.
 _sid_host = {}
 _sid_lock = threading.Lock()

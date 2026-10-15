@@ -36,9 +36,7 @@ function refreshFirewall() {
         // went on showing the last good read, "3 blocked" with live Unblock buttons, as the
         // current state of a firewall this refresh could not read. A sudo refusal is flagged
         // unreachable as well, and says so rather than blaming the network.
-        _fwUnlisted(data.permission_denied
-          ? "Rules can't be read: sudo refused the firewall read on this host."
-          : "Rules can't be read while this host is unreachable.");
+        _fwUnlisted(_fwUnreadWhy(data));
         return;
       }
       badge.textContent = data.enabled ? 'Active' : 'Inactive';
@@ -66,6 +64,16 @@ function refreshFirewall() {
       if (window.toast) toast('Could not refresh the firewall rules — the host may be unreachable.',
                               'danger');
     });
+}
+
+// Why a refresh could not list the rules. A changed host key (the panel refused to connect) and a
+// read cut off part-way are flagged unreachable too: `code` says which, and the route's own
+// sentence, already in the viewer's language, names the way out ("Re-trust host key").
+function _fwUnreadWhy(data) {
+  if (data.permission_denied) return "Rules can't be read: sudo refused the firewall read on this host.";
+  var why = data.code;
+  if (why && why !== 'host_unreachable' && data.message) return data.message;
+  return "Rules can't be read while this host is unreachable.";
 }
 
 // The open-ports table, or its empty state, and the rule count beside the card title.

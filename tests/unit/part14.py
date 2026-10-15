@@ -17,7 +17,7 @@ import time as _time14
 
 from eventlet.timeout import Timeout as _EvTimeout14  # noqa: E402 - a timed-out green join raises it
 
-from unit.part01 import check, os, re, sys  # noqa: F401,E402
+from unit.part01 import _r21d_urlopen_of, check, os, re, sys  # noqa: F401,E402
 from unit.part05 import _root  # noqa: E402
 
 _JC_DIR = os.path.join(_root, "tools", "js_coverage")
@@ -672,7 +672,7 @@ def _ci14(payload_or_exc, sha="a" * 40, diff=None):
 
     Returns (state, the unknown-reason it left).
     """
-    saved = (_so14._repo_slug, _so14.urllib.request.urlopen, _so14._git)
+    saved = (_so14._repo_slug, _r21d_urlopen_of(_so14).urlopen, _so14._git)
     try:
         _so14._repo_slug = lambda: "o/r"
 
@@ -680,12 +680,12 @@ def _ci14(payload_or_exc, sha="a" * 40, diff=None):
             if isinstance(payload_or_exc, BaseException):
                 raise payload_or_exc
             return _Resp14(payload_or_exc)
-        _so14.urllib.request.urlopen = _open
+        _r21d_urlopen_of(_so14).urlopen = _open
         if diff is not None:
             _so14._git = lambda args, timeout=45: diff if args[:1] == ["diff"] else ("", "", 1)
         return _so14._remote_ci_state(sha), _so14._ci_unknown_why["reason"]
     finally:
-        _so14._repo_slug, _so14.urllib.request.urlopen, _so14._git = saved
+        _so14._repo_slug, _r21d_urlopen_of(_so14).urlopen, _so14._git = saved
 
 
 # ── 1. _repo_slug recognises GitHub's SSH-over-443 origin ──────────────────────────────────────
@@ -1280,8 +1280,8 @@ def _dt14_urlopen(url, timeout=None):
     return _DtAnswer14()
 
 
-_dt14_real = _dt14_run.urllib.request.urlopen
-_dt14_run.urllib.request.urlopen = _dt14_urlopen
+_dt14_real = _r21d_urlopen_of(_dt14_run).urlopen
+_r21d_urlopen_of(_dt14_run).urlopen = _dt14_urlopen
 try:
     try:
         _dt14_got = _dt14_run.devtools_json(1, "/json/version")
@@ -1296,7 +1296,7 @@ try:
     except Exception:  # noqa: BLE001 - anything else is the failure this check names
         _dt14_late = None
 finally:
-    _dt14_run.urllib.request.urlopen = _dt14_real
+    _r21d_urlopen_of(_dt14_run).urlopen = _dt14_real
 check("js coverage: a DevTools read that times out is tried again until the browser answers "
       "(one slow /json/version failed main's run)",
       _dt14_got == {"Browser": "Chrome/1"}, repr(_dt14_got))

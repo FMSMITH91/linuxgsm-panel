@@ -13,7 +13,7 @@ from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, can_acce
     get_host_remote, get_remote, log_action, permission_required)
 from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
-from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, LINUX_USER_RE, MAX_PORT,
+from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, canonical_host, LINUX_USER_RE, MAX_PORT,
     MIN_PORT, SAFE_LABEL_RE, _port_or)
 from panel.core.panel_state import (forget_rows)
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _begin_bootstrap, reauth_password)
@@ -49,7 +49,8 @@ def _forget_deleted_remote_config(remote_id, game_server_ids):
     That is its auto-block opt-in, and a backup schedule for each game server that went with it.
 
     These are the PERSISTED half of the same problem panel_state solves for in-memory maps: a
-    deleted row's id is handed straight to the next INSERT, and unlike a cache these survive a
+    deleted row's id can be handed straight to the next INSERT (a table panel/db/id_sequence.py
+    could not rebuild), and unlike a cache these survive a
     restart. uninstall_server already calls remove_game_schedule for exactly this reason ("can't
     be inherited if SQLite later reuses the row id") — but deleting a HOST bulk-deletes its game
     servers without that route ever running, so their schedules were left behind.
@@ -214,7 +215,7 @@ def _register_remote_list(app):
     @permission_required(MANAGE_REMOTES)
     def add_remote():
         name = request.form.get("name", "").strip()
-        host = request.form.get("host", "").strip()
+        host = canonical_host(request.form.get("host", "").strip())
         ssh_user = request.form.get("ssh_user", "root").strip()
         ssh_port = _port_or(request.form.get("ssh_port"), None)
         auth_method = request.form.get("auth_method", "key")
@@ -306,7 +307,9 @@ def _register_remote_edit(app):
         if not SAFE_LABEL_RE.match(new_name):
             return _form_err("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
         remote.name = new_name
-        new_host = _edited("host", remote.host)
+        # Canonical before it is judged or compared: `[2001:db8::5]` is that address, and the
+        # stored host is in this form (models.RemoteServer._canonical_host).
+        new_host = canonical_host(_edited("host", remote.host))
         if not remote.is_local and not HOST_RE.match(new_host):
             return _form_err("Host must be a valid hostname or IP address.", "manage_remotes")
         new_port = _port_or(request.form.get("ssh_port"), None)
@@ -375,8 +378,9 @@ def _register_remote_delete_and_test(app):
             return redirect(url_for("manage_remotes"))
         # Delete associated game servers. This is a BULK delete, which bypasses the ORM entirely —
         # so every association row keyed on those game_server ids has to go by hand. This app never
-        # sets PRAGMA foreign_keys, so nothing removes them for us, and SQLite reuses rowids: an
-        # orphan here is later inherited by a completely unrelated server.
+        # sets PRAGMA foreign_keys, so nothing removes them for us, and SQLite reused rowids (still
+        # does on a table id_sequence.py could not rebuild): an orphan here was later inherited by a
+        # completely unrelated server.
         _doomed_ids = [gid for (gid,) in db.session.query(GameServer.id)
                        .filter_by(remote_id=remote_id).all()]
         GameServer.query.filter_by(remote_id=remote_id).delete()

@@ -9,11 +9,15 @@ document.getElementById('auth-method').addEventListener('change', function() {
   if (this.value === 'password') {
     field.style.display = '';
     label.textContent = 'SSH Password';
-    input.placeholder = t('Enter SSH password');   // t(): a placeholder a script writes is not re-read
+    // t(), and its key named for setLang: the add form's twin of this field is data-no-i18n, and the
+    // gate (i18n_scan.guarded_tcall_writes) knows the field by its name only.
+    input.setAttribute('data-i18n-placeholder', 'Enter SSH password');
+    input.placeholder = t('Enter SSH password');
     input.value = '';
     input.type = 'password';
     input.autocomplete = 'new-password';
   } else if (this.value === 'tailscale') {
+    input.removeAttribute('data-i18n-placeholder');
     field.style.display = 'none';
     input.value = '';
     input.type = 'text';
@@ -23,6 +27,7 @@ document.getElementById('auth-method').addEventListener('change', function() {
     input.type = 'text';
     input.autocomplete = 'off';
     label.textContent = 'SSH Key Path';
+    input.removeAttribute('data-i18n-placeholder');   // a path, not a key: a switch leaves it alone
     input.placeholder = '~/.ssh/id_rsa';
     input.value = '~/.ssh/id_rsa';
   }

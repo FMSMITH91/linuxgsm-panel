@@ -17,7 +17,8 @@ Held here, each against the code path the finding named:
 * A number awk formats (RAM percent, the specs card's RAM) and df's sizes are read in C: mawk,
   Ubuntu's default awk, printed a German decimal comma.
 
-HOW IT RUNS. Stubs through part12's _p9_patch, undone in the finally; nothing reaches a transport.
+HOW IT RUNS. Stubs through part12's _p9_patch, undone in the finally, with part12's tripwire armed
+under them; nothing reaches a transport.
 The locale checks run bash on stand-in `sudo` and `ufw` programs in this part's own temp dir that
 answer in German unless started the way the fix starts them (classic sudo keeps an exported
 LANGUAGE, and fills an unset one in from /etc/default/locale through PAM).
@@ -32,7 +33,7 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check
 from unit.part05 import _root
-from unit.part12 import _p9, _p9_patch, _p9_restore_all
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_patch, _p9_restore_all
 from panel.core import http as _http79
 from panel.ops import system_ops as _so79, tailscale_integration as _ts79
 from panel.ops.ssh_manager import _core as _core79, hosts as _hosts79
@@ -96,19 +97,28 @@ def _bash79(script, env=None):
     return r.stdout.strip(), r.stderr.strip(), r.returncode
 
 
+# part12's transport tripwire, armed for the whole part (review 1015a: there was none, so a host call
+# past the leaves each section stubs would have run for real). A section that drives one of the
+# tripwired internals on purpose puts that one back, by name; the part ends by reading the record.
+_TRIP79_START = len(_P9_TRIPPED)
+_REAL79 = {"_run": _so79._run, "_run_verb": _so79._run_verb, "_exec_local_argv": _core79._exec_local_argv}
 try:
+    _p9_arm(who="part79")
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # 1. Tailscale: an IPv6 tailnet address is not a bare node name
     # ════════════════════════════════════════════════════════════════════════════════════════════
-    _p9_patch(_ts79, "get_tailscale_info", lambda *a, **k: NS(dns_name="panel.tail1234.ts.net."))
+    _p9_patch(_ts79, "get_tailscale_info", lambda *a, **k: NS(dns_name="panel.tail1234.ts.net.",
+                                                              serve_config={}, serve_unreadable=False))
     _hosts_in79 = ("fd7a:115c:a1e0::1234", "[fd7a:115c:a1e0::1234]", "fe80::1%eth0", "100.101.1.2",
                    "vps-one", "vps-one.tail1234.ts.net")
-    _want79 = ["fd7a:115c:a1e0::1234", "[fd7a:115c:a1e0::1234]", "fe80::1%eth0", "100.101.1.2",
+    # The bracketed form is dialled WITHOUT its brackets: ssh and paramiko resolve neither (`ssh
+    # x@[::1]` answers "Could not resolve hostname [::1]"), so dialling it as typed never connected.
+    _want79 = ["fd7a:115c:a1e0::1234", "fd7a:115c:a1e0::1234", "fe80::1%eth0", "100.101.1.2",
                "vps-one.tail1234.ts.net.", "vps-one.tail1234.ts.net"]
     _cli79 = [_core79._resolve_ts_host(NS(host=h)) for h in _hosts_in79]
     _pmk79 = [_core79._tailscale_connect_host(NS(host=h)) for h in _hosts_in79]
-    check("tailscale host: an IPv6 tailnet address is dialled as itself on the ssh-CLI path (it got "
-          "the MagicDNS suffix glued on), and a bare node name still gets it",
+    check("tailscale host: an IPv6 tailnet address is dialled as itself, brackets dropped, on the "
+          "ssh-CLI path (it got the MagicDNS suffix glued on), and a bare node name still gets it",
           _cli79 == _want79, repr(_cli79))
     check("tailscale host: ...and the same on the paramiko path (one helper for both twins)",
           _pmk79 == _want79, repr(_pmk79))
@@ -193,13 +203,17 @@ try:
           "page, so the JSON never reached the page), still saying the host is unreachable",
           _ans79["down"][0] == 200 and _ans79["down"][1].get("unreachable") is True
           and _ans79["down"][1].get("message") == "Host unreachable", repr(_ans79["down"]))
+    # Still flagged unreachable (no reading was taken: review 1015a, the Firewall page's refresh
+    # read a false flag as an inactive UFW); `code` is what tells the three apart.
     check("unreachable: a changed host key is said as that and points at Re-trust host key, on the "
           "app handler and on a route's own catch; a command cut off part-way says it may have run",
           _ans79["key"][1].get("message") == _http79._R20A_HOSTKEY
-          and _ans79["key"][1].get("unreachable") is False
+          and _ans79["key"][1].get("code") == "host_key_mismatch"
           and _ans79["route"][1].get("message") == _http79._R20A_HOSTKEY
           and _ans79["cut"][1].get("message") == _http79._R20A_STARTED
-          and _ans79["cut"][1].get("unreachable") is False, repr(_ans79))
+          and _ans79["cut"][1].get("code") == "command_started"
+          and _ans79["down"][1].get("code") == "host_unreachable"
+          and all(_a[1].get("unreachable") is True for _a in _ans79.values()), repr(_ans79))
     check("unreachable: the cause is logged (class and text), where only 'host unreachable' was",
           any("HostKeyMismatch" in m and "key CHANGED" in m for m in _logged79)
           and any("timed out" in m for m in _logged79), repr(_logged79))
@@ -239,6 +253,8 @@ try:
             return getattr(os, name)
 
     _p9_patch(_so79, "subprocess", _Sub79)
+    _p9_patch(_so79, "_run", _REAL79["_run"])               # driven here, onto _Sub79
+    _p9_patch(_so79, "_run_verb", _REAL79["_run_verb"])
     _p9_patch(_so79, "_collect_verb_output", lambda p, argv, timeout, *a, **k: ("ok", "", 0))
     _p9_patch(_so79, "_helper_present", lambda: False)
     _p9_patch(_so79, "os", _euid79(1000))
@@ -295,6 +311,7 @@ try:
     _p9_patch(_core79, "_real_subprocess",
               NS(Popen=lambda argv, **k: (_argv79.append((argv, k.get("env"))), NS(pid=0))[1]))
     _p9_patch(_core79, "_finish", lambda p, timeout, stdin_text=None: ("", "", 0))
+    _p9_patch(_core79, "_exec_local_argv", _REAL79["_exec_local_argv"])     # onto the Popen above
     _core79._run_privileged(NS(is_local=True, auth_method="local", host="localhost"), "ufw-status",
                             ["numbered"], 10, True, None)
     check("ssh_manager: the local helper call (`sudo -n <helper>`) runs in C",
@@ -367,3 +384,5 @@ try:
 finally:
     _p9_restore_all()
     _shutil79.rmtree(_TMP79, ignore_errors=True)
+check("part79: nothing it drove reached a real transport (every host call was stubbed)",
+      len(_P9_TRIPPED) == _TRIP79_START, repr(_P9_TRIPPED[_TRIP79_START:][:6]))

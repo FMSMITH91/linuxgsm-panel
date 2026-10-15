@@ -30,7 +30,7 @@ from panel.routes import remote_security as _zrs
 from panel.security import auth as _zauth
 from panel.security import banlist as _zbl
 from panel.services import monitoring as _zmon
-from unit.part01 import NS, SO, _privmod, _sm_core, _sm_hosts, check, eq
+from unit.part01 import NS, SO, _R20dOver, _privmod, _sm_core, _sm_hosts, check, eq
 from unit.part05 import _helper as _zhelper
 
 # Each is a zone id ipaddress ACCEPTS, so each is a test of the refusal and not of the parser.
@@ -738,7 +738,6 @@ finally:
 import time as _ck17time                                                            # noqa: E402
 
 _ck17_dir = _rv2tmp.mkdtemp()
-_ck17_link = _rv2os.link
 
 
 def _ck17_no_link(*_a, **_k):
@@ -747,12 +746,13 @@ def _ck17_no_link(*_a, **_k):
 
 try:
     _ck17_kp = _rv2os.path.join(_ck17_dir, "k")
-    _rv2os.link = _ck17_no_link
+    # config's own os handle, never os.link for the process (review 1015a).
+    _zcfgmod.os = _R20dOver(_rv2os, link=_ck17_no_link)
     try:
         _zcfgmod._create_key_once(_ck17_kp, lambda: b"FIRST")
         _zcfgmod._create_key_once(_ck17_kp, lambda: b"SECOND")
     finally:
-        _rv2os.link = _ck17_link
+        _zcfgmod.os = _rv2os
     with open(_ck17_kp, "rb") as _ck17f:
         eq("key file, no hard links: created once with its bytes, never overwritten",
            _ck17f.read(), b"FIRST")
@@ -789,7 +789,7 @@ try:
                   for _s in range(_ck17_now, _ck17_now + 6)),
           repr((_ck17_moved, _ck17_got, sorted(_rv2os.listdir(_ck17_dir)))))
 finally:
-    _rv2os.link = _ck17_link
+    _zcfgmod.os = _rv2os
     __import__("shutil").rmtree(_ck17_dir, ignore_errors=True)
 
 

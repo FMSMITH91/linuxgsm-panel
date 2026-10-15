@@ -54,9 +54,10 @@ __all__ = [
 
 
 # ── Row-keyed state, registered where it is declared ──────────────────────────────────────────
-# Every map registered here is keyed by a database row id, and SQLite hands a deleted row's id
-# straight to the next INSERT (plain INTEGER PRIMARY KEY = rowid, no AUTOINCREMENT) — so a newly
-# added server or host inherits whatever the deleted one left behind unless the id is forgotten.
+# Every map registered here is keyed by a database row id. Those tables have AUTOINCREMENT now
+# (panel/db/id_sequence.py), but one it could not rebuild still hands a deleted row's id straight
+# to the next INSERT (plain INTEGER PRIMARY KEY = rowid) — so there a newly added server or host
+# inherits whatever the deleted one left behind unless the id is forgotten.
 # monitoring._forget_deleted_rows is what forgets it.
 #
 # THE LIST USED TO BE WRITTEN OUT BY HAND in that function, which made every new map an edit
@@ -274,8 +275,9 @@ _console_offsets = register_server_state({})   # server_id -> {"ino": int, "pos"
 # is fine). Written by the install job runner, read by /api/server/<id>/install-status.
 #
 # REGISTERED, like every other row-keyed map. It was not, and it is keyed by a GameServer id that
-# SQLite reuses: deleting a remote takes its game servers with it (delete_remote bulk-deletes them
-# with no check for an install in flight), so a finished — or still "running" — job outlives the
+# SQLite reused (and still does where id_sequence.py could not add AUTOINCREMENT): deleting a
+# remote takes its game servers with it (delete_remote bulk-deletes them with no check for an
+# install in flight), so a finished — or still "running" — job outlives the
 # row it describes. The next server to take that id then answers /install-status with the dead
 # one's outcome, and a "running" leftover makes uninstall_server refuse it as "still installing".
 # _prune_jobs bounds this by AGE, which is a different guarantee: it only runs when a new install

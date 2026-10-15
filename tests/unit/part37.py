@@ -311,6 +311,12 @@ _DOUBLE_SHELL37 = {
     (_CORE37, "_run_via_paramiko"): "run_command",
     (_CORE37, "game_user_cmd"): "game_user_cmd",
     ("panel/security/privileged.py", "<module>[os-update-run]"): None,
+    # privileged.remote_command's text for a _REMOTE_ACTIONS verb on a non-root panel host with no
+    # helper (review 1015a: a bare `sudo ` elevated only its first command). Not a constant, but
+    # no caller's text either: the verb table's own rendering, every argument full-match validated
+    # by check_args, and part06's injection sweep drives every verb with shell metacharacters — the
+    # same reason part06's shell gate accepts remote_command().
+    ("panel/ops/system_ops.py", "_r20a_verb_shell"): None,
 }
 # The helpers that wrap run_command's text for a second shell. A caller outside _core.py would reach
 # one past every entry-point row, so outside it they may only be handed a constant command.

@@ -195,7 +195,7 @@
 <div class="card mb-3 server-remote-card" data-remote-id="{{ remote.id }}">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>
-      <i class="bi bi-hdd-network-fill"></i> <span data-no-i18n>{{ remote.display_name }}</span>
+      <i class="bi bi-hdd-network-fill"></i> {{ host_label(remote) }}
       {% if remote.is_local %}<span class="badge bg-secondary ms-2" style="font-weight:600;">this panel</span>{% endif %}
       <span class="text-secondary small ms-2">{{ remote.display_host }}</span>
     </span>
@@ -206,9 +206,9 @@
         <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
               title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
         <button type="button" class="btn btn-outline-secondary" data-action="moveHostCard" data-args='[-1,"@self"]'
-                title="Move this host up" aria-label="{{ t('Move %s up')|format(remote.display_name) }}"><i class="bi bi-arrow-up"></i></button>
+                title="Move this host up" aria-label="{{ t('Move %s up')|format(host_text(remote)) }}"><i class="bi bi-arrow-up"></i></button>
         <button type="button" class="btn btn-outline-secondary" data-action="moveHostCard" data-args='[1,"@self"]'
-                title="Move this host down" aria-label="{{ t('Move %s down')|format(remote.display_name) }}"><i class="bi bi-arrow-down"></i></button>
+                title="Move this host down" aria-label="{{ t('Move %s down')|format(host_text(remote)) }}"><i class="bi bi-arrow-down"></i></button>
       </span>
       <span class="text-secondary small d-none d-md-inline" id="host-metrics-{{ remote.id }}"></span>
       {# "Offline" already means "this game server is stopped" three columns to the right, in the

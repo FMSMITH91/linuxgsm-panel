@@ -212,9 +212,14 @@ window.tfn = function(n, one, many, vals){
     // data-i18n-title / data-i18n-text, and is rendered again here: it stayed in the old language
     // after a live switch until the page was reloaded. A script that writes other text there
     // removes the attribute (loadSecurityLog does), so a later switch never overwrites it.
+    // data-i18n-placeholder does the same for a guarded field's placeholder (a custom command's
+    // "value", the credential field's "Enter SSH password").
     try {
       document.querySelectorAll('[data-i18n-title]').forEach(function(el){
         el.setAttribute('title', window.t(el.getAttribute('data-i18n-title')));
+      });
+      document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el){
+        el.setAttribute('placeholder', window.t(el.getAttribute('data-i18n-placeholder')));
       });
       // data-i18n-vars: the {name} values, as JSON, for a template filled with tf.
       document.querySelectorAll('[data-i18n-text]').forEach(function(el){

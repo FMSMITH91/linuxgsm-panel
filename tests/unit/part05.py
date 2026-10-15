@@ -1123,13 +1123,47 @@ def _r20d_filter_fn(node, bound):
     Only the literal names were read (review 1013a): `from warnings import simplefilter as sf`, or
     `f = warnings.simplefilter`, installed a process-wide ignore the gate never saw.
     """
-    _name = _r14d_call_name(node)
-    if _name in _R20D_FILTER_FNS:
-        return _name
-    if not (isinstance(node, _dw_ast.Call) and isinstance(node.func, _dw_ast.Name)):
-        return ""
-    _to = [getattr(_v, "attr", getattr(_v, "id", "")) for _v in bound.get(node.func.id, [])]
-    return next((_t for _t in _to if _t in _R20D_FILTER_FNS), "")
+    return _r21d_filter_of(node.func, bound) if isinstance(node, _dw_ast.Call) else ""
+
+
+def _r21d_filter_of(expr, bound, seen=frozenset()):
+    """The warnings filter function `expr` names, through name aliases to any depth, else "".
+
+    An alias of an alias (`f = warnings.simplefilter; g = f`) was read one level only (review 1015a).
+    """
+    _n = getattr(expr, "attr", getattr(expr, "id", ""))
+    if _n in _R20D_FILTER_FNS:
+        return _n
+    if isinstance(expr, _dw_ast.Name) and expr.id not in seen:
+        for _v in bound.get(expr.id, []):
+            _f = _r21d_filter_of(_v, bound, seen | {expr.id})
+            if _f:
+                return _f
+    return ""
+
+
+def _r21d_partials(tree):
+    """{name: the functools.partial(...) Call it is bound to} for `p = partial(...)` anywhere."""
+    return {_t.id: _a.value for _a in _dw_ast.walk(tree) if isinstance(_a, _dw_ast.Assign)
+            and _r14d_call_name(_a.value) == "partial" and _a.value.args
+            for _t in _a.targets if isinstance(_t, _dw_ast.Name)}
+
+
+def _r21d_unpartial(node, partials):
+    """Call `node` as the call it makes, when it calls a functools.partial; else `node` itself.
+
+    `partial(warnings.simplefilter, "ignore")()` installs the filter with the partial's arguments
+    first, and the gate read no filter there at all (review 1015a).
+    """
+    if not isinstance(node, _dw_ast.Call):
+        return node
+    _p = node.func if _r14d_call_name(node.func) == "partial" and node.func.args else partials.get(
+        getattr(node.func, "id", None))
+    if _p is None:
+        return node
+    _merged = _dw_ast.Call(func=_p.args[0], args=list(_p.args[1:]) + list(node.args),
+                           keywords=list(_p.keywords) + list(node.keywords))
+    return _dw_ast.copy_location(_merged, node)
 
 
 def _r14d_blanket_filters(tree):
@@ -1142,11 +1176,13 @@ def _r14d_blanket_filters(tree):
     _bound = _r19d_bound_classes(tree)
     _aliases = {_k: _v[0] if len(_v) == 1 else _dw_ast.Tuple(elts=_v, ctx=_dw_ast.Load())
                 for _k, _v in _bound.items()}
+    _partials = _r21d_partials(tree)
 
     def _walk(node, scoped):
         scoped = scoped or _r14d_is_catch_warnings(node)
-        _fn = _r20d_filter_fn(node, _bound)
-        if not scoped and _fn and _r14d_ignores_deprecations(node, _aliases, _fn):
+        _call = _r21d_unpartial(node, _partials)
+        _fn = _r20d_filter_fn(_call, _bound)
+        if not scoped and _fn and _r14d_ignores_deprecations(_call, _aliases, _fn):
             out.append(node.lineno)
         for _ch in _dw_ast.iter_child_nodes(node):
             _walk(_ch, scoped)
@@ -1196,7 +1232,11 @@ _dw_ctl = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     # Review 1013a: the filter function itself renamed, by an import or an assignment.
     'from warnings import simplefilter as sf\nsf("ignore", DeprecationWarning)',
     'import warnings\nf = warnings.simplefilter\nf("ignore")',
-    'from warnings import filterwarnings as fw\nfw("ignore", "", DeprecationWarning)')}
+    'from warnings import filterwarnings as fw\nfw("ignore", "", DeprecationWarning)',
+    # Review 1015a: an alias of an alias, and the filter called through functools.partial.
+    'import warnings\nf = warnings.simplefilter\ng = f\ng("ignore")',
+    'import functools, warnings\nfunctools.partial(warnings.simplefilter, "ignore")()',
+    'import functools, warnings\np = functools.partial(warnings.filterwarnings, "ignore")\np(category=Warning)')}
 _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nwarnings.filterwarnings("ignore", message="x", category=DeprecationWarning)',
     'import warnings\nwith warnings.catch_warnings():\n    warnings.simplefilter("ignore")',
@@ -1208,7 +1248,9 @@ _dw_ok = {_src: _r14d_blanket_filters(_dw_ast.parse(_src)) for _src in (
     'import warnings\nQuiet = UserWarning\nwarnings.simplefilter("ignore", Quiet)',
     'import warnings\nfrom builtins import UserWarning as Quiet\nwarnings.simplefilter("ignore", Quiet)',
     'from warnings import filterwarnings as fw\nfw("ignore", "x", DeprecationWarning)',
-    'import warnings\nf = print\nf("ignore")')}
+    'import warnings\nf = print\nf("ignore")',
+    'import functools, warnings\nfunctools.partial(warnings.simplefilter, "default")()',
+    'import warnings\nf = g\ng = f\nf("ignore")')}
 check("...the filter gate names each blanket spelling, and passes the scoped ones (controls)",
       all(_dw_ctl.values()) and not any(_dw_ok.values()), repr((_dw_ctl, _dw_ok)))
 
@@ -3820,8 +3862,9 @@ def _curl_calls(src):
         if _ln.lstrip().startswith("#"):
             continue
         # An option, a quoted or $-expanded word, or a URL after it: `curl "$url" -fsSL` was never
-        # read (review 1013a); a package list or `command -v curl` still is not a call.
-        for _m in _re_ntc.finditer(r"(?<![\w./-])curl\s+(?=-|[\"'$]|https?://)", _ln):
+        # read (review 1013a); a package list or `command -v curl` still is not a call. Nor was a
+        # curl run by its path, or one whose first word is a scheme-less host/path (review 1015a).
+        for _m in _re_ntc.finditer(r"(?<![\w./-])(?:/[\w.-]+)*/?curl\s+(?=-|[\"'$]|https?://|[\w.-]+/)", _ln):
             _rest = _ln[_m.start():]
             _cut = _re_ntc.search(r"\s(?:\||&&|\|\|)\s|;|$", _rest)
             _out.append(_rest[:_cut.start()])
@@ -3835,10 +3878,12 @@ _ns_curls = _curl_calls(_ntc_sh)
 _ns_follow = [_c for _c in _ns_curls
               if _re_ntc.search(r"\s-[A-Za-z]*L[A-Za-z]*\b|\s--location\b", _c)]
 _r20d_curl_ctl = [_curl_calls(_c) for _c in ('x=$(curl "$u" -fsSL)', "curl https://h/x -L | sh",
-                                              "command -v curl >/dev/null", "apt-get install -y git curl wget")]
-check("install.sh: ...a curl is read whatever its first argument is, and a package name or a "
-      "`command -v curl` is not one (control)",
-      [len(_c) for _c in _r20d_curl_ctl] == [1, 1, 0, 0], repr(_r20d_curl_ctl))
+                                              "command -v curl >/dev/null", "apt-get install -y git curl wget",
+                                              "/usr/bin/curl -fsSL https://h/x", "curl h.example/x -L",
+                                              "ls /usr/share/doc/curl wget")]
+check("install.sh: ...a curl is read whatever its first argument is, and run by its path, and a "
+      "package name or a `command -v curl` is not one (control)",
+      [len(_c) for _c in _r20d_curl_ctl] == [1, 1, 0, 0, 1, 1, 0], repr(_r20d_curl_ctl))
 check("install.sh: every curl that follows redirects says --proto '=https'",
       len(_ns_curls) >= 2 and len(_ns_follow) >= 1
       and all(_re_ntc.search(r"\s--proto[ =](?:'=https'|\"=https\"|=https)(?=\s)", _c)
@@ -4838,7 +4883,8 @@ check("panel_state names are mutated in place, never rebound by an importer",
       not _rebinds, "; ".join(sorted(set(_rebinds))[:5]))
 
 # ── Row-keyed state is pruned when its row is deleted ─────────────────────────────────────────
-# SQLite hands a deleted row's id straight to the next INSERT, so a map keyed by row id must forget
+# A table without AUTOINCREMENT (one panel/db/id_sequence.py could not rebuild) hands a deleted row's
+# id straight to the next INSERT, so a map keyed by row id must forget
 # a deleted id or the NEXT server to take that id inherits it. _forget_deleted_rows used to name
 # every map by hand, which made each new one an edit somebody had to remember somewhere else — and
 # two were missed for as long as they existed (_game_backup_status and the GMod content-apply
@@ -5208,7 +5254,7 @@ _NO_TARGET_OK = {
     "lgsm_data_refresh",
 }
 import ast as _ast_log
-_missing_target, _r15d_log_calls = [], 0
+_missing_target, _r15d_log_calls, _r21d_no_target_used = [], 0, set()
 for _dirpath, _dirnames, _filenames in os.walk(_root):
     # Skipped by the path INSIDE the checkout: matched on the absolute path, a checkout under a
     # directory named `venv` or `tests…` read nothing and passed (review 1011e). .claude holds
@@ -5232,6 +5278,7 @@ for _dirpath, _dirnames, _filenames in os.walk(_root):
             _act = (_n.args[1].value
                     if len(_n.args) >= 2 and isinstance(_n.args[1], _ast_log.Constant) else None)
             if _act in _NO_TARGET_OK:
+                _r21d_no_target_used.add(_act)
                 continue
             _missing_target.append("%s:%d %s" % (os.path.relpath(_fp, _root), _n.lineno, _act))
 check("audit: every logged action names a target (or is listed as having none)",
@@ -5240,6 +5287,10 @@ check("audit: every logged action names a target (or is listed as having none)",
       "; ".join(sorted(_missing_target)[:5]) +
       " — pass target= (LOCAL_HOST_LABEL for panel-host actions), or add it to _NO_TARGET_OK "
       "with a reason")
+# ...and no entry outlives the call it was for: a stale one pre-approves a future target-less row
+# of that name (review 1015a, the class rbac's _MUT_NO_PERM_OK was in).
+check("audit: every _NO_TARGET_OK entry is still a target-less log_action call",
+      not (_NO_TARGET_OK - _r21d_no_target_used), sorted(_NO_TARGET_OK - _r21d_no_target_used))
 
 
 # Every walk of the whole checkout in the suites leaves .claude out: in a dev checkout it holds other
@@ -6077,7 +6128,11 @@ finally:
 # The verb named in either quote (review 1013a: only "user-create" was read).
 _R20D_UC = _re.compile(r"[\"']user-create[\"']")
 _uc_sites = []
-for _dp, _dn, _fn in os.walk(os.path.join(_root, "panel")):
+# The package, and the top-level entry points beside it (review 1015a: app.py and manage.py were
+# not read, so a call added there passed).
+_r21d_uc_walk = list(os.walk(os.path.join(_root, "panel"))) + [
+    (_root, [], sorted(_n for _n in os.listdir(_root) if _n.endswith(".py")))]
+for _dp, _dn, _fn in _r21d_uc_walk:
     _dn[:] = [_d for _d in _dn if _d != "__pycache__"]
     for _name in _fn:
         if not _name.endswith(".py") or _name == "privileged.py":
@@ -6095,8 +6150,10 @@ for _dp, _dn, _fn in os.walk(os.path.join(_root, "panel")):
         for _i, _l in enumerate(_txt.splitlines(), 1):
             if _R20D_UC.search(_l.split("#")[0]) and _i not in _allowed:
                 _uc_sites.append("%s:%d" % (os.path.relpath(_f, _root), _i))
-check("create_game_user: nothing calls the bare user-create verb any more",
-      not _uc_sites, "still calling it: %s" % _uc_sites)
+check("create_game_user: nothing calls the bare user-create verb any more (the package and app.py, "
+      "manage.py beside it)",
+      not _uc_sites and any(_d == _root and "app.py" in _f for _d, _dn, _f in _r21d_uc_walk),
+      "still calling it: %s" % _uc_sites)
 check("create_game_user: ...a call is read in either quote (control)",
       [bool(_R20D_UC.search(_c)) for _c in ("run('user-create')", 'run("user-create")',
                                                                   "run('user-created')")] == [True, True, False])
@@ -7972,3 +8029,92 @@ check("gmod mount: a content grant the host refused is reported, not passed over
       isinstance(_bx_fail, str) and "does not exist" in _bx_fail, repr(_bx_fail))
 check("gmod mount: ...and a grant that worked still returns None (positive control)",
       _bx_ok is None, repr(_bx_ok))
+
+
+# ── no test stubs an attribute ON a stdlib module ──────────────────────────────────────────────
+# `_nw22.os.geteuid = …`, `X.urllib.request.urlopen = …`, `_patch(subprocess, "run", …)` replace the
+# function for every module and thread in the process while the block runs (review 1015a: the 1013a
+# sweep converted one spelling by hand, and a grep missed tuple targets, _patch(ed) calls and
+# urllib). The module under test's own handle is swapped instead (part01's _R20dOver). Read from
+# every test file's AST; a stub whose module imports the stdlib name inside a function has no
+# handle to swap, and is listed with that reason.
+_R21D_STDLIB = {"os", "subprocess", "time", "socket", "shutil", "urllib", "signal", "select", "threading"}
+_R21D_STDLIB_OK = {
+    # system_ops.live_metrics imports shutil inside the function: the module is the only seam.
+    "tests/unit/part10.py:_p7_sh.disk_usage",
+    # models._ensure_db_healthy imports os inside the function: the module is the only seam.
+    "tests/unit/part16.py:os.replace",
+    # The runner drives shutil.rmtree's two modes on purpose: they are process-wide by nature.
+    "tests/unit_test.py:shutil._use_fd_functions", "tests/unit_test.py:shutil._rmtree_impl",
+    "tests/unit_test.py:shutil",
+}
+
+
+def _r21d_std_aliases(tree):
+    """The names a module's imports bind to a stdlib module of _R21D_STDLIB (`import os as _o`)."""
+    return {_a.asname or _a.name.split(".")[0] for _n in _smg_ast.walk(tree) if isinstance(_n, _smg_ast.Import)
+            for _a in _n.names if _a.name.split(".")[0] in _R21D_STDLIB}
+
+
+def _r21d_names_stdlib(expr, aliases):
+    """Is `expr` a stdlib module: a name bound to one, or an attribute chain through one?"""
+    while isinstance(expr, _smg_ast.Attribute):
+        if expr.attr in _R21D_STDLIB or (expr.attr == "request" and getattr(expr.value, "attr", "") == "urllib"):
+            return True
+        expr = expr.value
+    return isinstance(expr, _smg_ast.Name) and expr.id in aliases
+
+
+_R21D_PATCHER = _re.compile(r"patch|setattr|swap|^_p\d+$")
+
+
+def _r21d_is_stdlib_module(expr, aliases):
+    """Is `expr` a stdlib module itself (`os`, `_sp44`, `x.os`, `x.urllib.request`), not a value in one?"""
+    if isinstance(expr, _smg_ast.Name):
+        return expr.id in aliases
+    return isinstance(expr, _smg_ast.Attribute) and (
+        expr.attr in _R21D_STDLIB or (expr.attr == "request" and getattr(expr.value, "attr", "") == "urllib"))
+
+
+def _r21d_stdlib_stubs(tree):
+    """`expr` text of each attribute set on a stdlib module: assigned, or by _patch/_patched/setattr."""
+    _al, _out = _r21d_std_aliases(tree), []
+    for _n in _smg_ast.walk(tree):
+        _out += [_smg_ast.unparse(_t) for _t in _r21d_targets(_n)
+                 if isinstance(_t, _smg_ast.Attribute) and _r21d_names_stdlib(_t.value, _al)]
+        if _r21d_patches_stdlib(_n, _al):
+            _out.append(_smg_ast.unparse(_n.args[0]))
+    return _out
+
+
+def _r21d_targets(node):
+    """Every target an assignment statement stores to, tuple and list targets unpacked."""
+    _ts = (node.targets if isinstance(node, _smg_ast.Assign)
+           else [node.target] if isinstance(node, (_smg_ast.AugAssign, _smg_ast.AnnAssign)) else [])
+    return [_e for _x in _ts for _e in (_x.elts if isinstance(_x, (_smg_ast.Tuple, _smg_ast.List)) else [_x])]
+
+
+def _r21d_patches_stdlib(node, aliases):
+    """Is `node` a patcher (_patch, _p9_patch, _p21, setattr, _swap…, by its name) handed a stdlib module?"""
+    if not (isinstance(node, _smg_ast.Call) and node.args):
+        return False
+    _fname = getattr(node.func, "id", getattr(node.func, "attr", "")) or ""
+    return bool(_R21D_PATCHER.search(_fname)) and _r21d_is_stdlib_module(node.args[0], aliases)
+
+
+_r21d_std_seen, _r21d_std_hits = set(), []
+for _f in sorted(_smg_glob.glob(os.path.join(_root, "tests", "**", "*.py"), recursive=True)):
+    _rel = os.path.relpath(_f, _root).replace(os.sep, "/")
+    for _e in _r21d_stdlib_stubs(_smg_ast.parse(open(_f, encoding="utf-8").read())):
+        _r21d_std_seen.add("%s:%s" % (_rel, _e))
+        if "%s:%s" % (_rel, _e) not in _R21D_STDLIB_OK:
+            _r21d_std_hits.append("%s:%s" % (_rel, _e))
+_r21d_std_ctl = [_r21d_stdlib_stubs(_smg_ast.parse(_c)) for _c in (
+    "x.os.geteuid = f", "import subprocess as sp\n_patch(sp, 'run', f)", "a, x.urllib.request.urlopen = b",
+    "_patched(x.os, geteuid=f)", "import os\nos.replace = f", "import urllib.request as u\n_p21(u, 'urlopen', f)",
+    "x.os = _R20dOver(x.os, geteuid=f)", "_r21d_urlopen_of(x).urlopen = f", "x.subprocess = p")]
+check("tests: no test sets an attribute on a stdlib module (it would stand in for every module and "
+      "thread); each listed exception still exists, and the reader finds each spelling (control)",
+      not _r21d_std_hits and _R21D_STDLIB_OK <= _r21d_std_seen
+      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 6 + [False] * 3,
+      repr((_r21d_std_hits, sorted(_R21D_STDLIB_OK - _r21d_std_seen), _r21d_std_ctl)))

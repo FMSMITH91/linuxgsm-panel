@@ -1,5 +1,5 @@
 """Part 2 of the unit suite. Imported for its side effects."""
-from unit.part01 import (NS, SO, _privmod, _sm_core, _sm_cron, _sm_files, _sm_firewall, _sm_game, _sm_gmod, _sm_hosts, can_access_remote, check, client_ip, config, eq, os)  # noqa: F401,E402
+from unit.part01 import (NS, SO, _R20dOver, _privmod, _sm_core, _sm_cron, _sm_files, _sm_firewall, _sm_game, _sm_gmod, _sm_hosts, can_access_remote, check, client_ip, config, eq, os)  # noqa: F401,E402
 
 
 # ── local-host injection defenses: system_ops runs commands on THIS machine (shell=True), so its
@@ -2882,8 +2882,7 @@ import tempfile as _li_tmp, shutil as _li_sh   # noqa: E402
 _li_dir = _li_tmp.mkdtemp(prefix="panel-launch-")
 with open(os.path.join(_li_dir, "install.sh"), "w") as _li_fh:
     _li_fh.write("#!/bin/bash\n")
-_li_saved = (SO.PANEL_DIR, SO._is_system_service, SO._helper_present,
-             SO.subprocess.Popen, SO.subprocess.run)
+_li_saved = (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess)
 _li_rc, _li_popen = {"rc": 1}, []
 try:
     SO.PANEL_DIR = _li_dir
@@ -2891,10 +2890,12 @@ try:
     SO._helper_present = lambda: False
     # Recorded, not raising: a regression back to Popen would otherwise land in the function's own
     # `except Exception` and answer False, which is what the first check is looking for.
-    SO.subprocess.Popen = lambda *a, **k: (_li_popen.append(a), type("P", (), {})())[1]
-    SO.subprocess.run = lambda *a, **k: type(
-        "R", (), {"returncode": _li_rc["rc"],
-                  "stderr": "Unit panel-selfupdate.service already exists."})()
+    # On system_ops' own handle, never subprocess itself (review 1015a): outside the unit runner's
+    # wrapper, setting SO.subprocess.Popen replaced Popen for the whole process.
+    SO.subprocess = _R20dOver(_li_saved[3], Popen=lambda *a, **k: (_li_popen.append(a), type("P", (), {})())[1],
+                              run=lambda *a, **k: type(
+                                  "R", (), {"returncode": _li_rc["rc"],
+                                            "stderr": "Unit panel-selfupdate.service already exists."})())
     _li_ok, _li_msg = SO._launch_installer()
     check("self-update: a launcher that REFUSED is not reported as an update that started",
           _li_ok is False and "Could not start the updater" in _li_msg, str((_li_ok, _li_msg)))
@@ -2921,8 +2922,7 @@ try:
     check("db-repair: ...while one that did start still reports it (control)",
           SO.panel_repair_database()[0] is True, str(SO.panel_repair_database()))
 finally:
-    (SO.PANEL_DIR, SO._is_system_service, SO._helper_present,
-     SO.subprocess.Popen, SO.subprocess.run) = _li_saved
+    (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess) = _li_saved
     _li_sh.rmtree(_li_dir, ignore_errors=True)
 
 # ── remote_uptime says whether the host actually ANSWERED ────────────────────────────────────

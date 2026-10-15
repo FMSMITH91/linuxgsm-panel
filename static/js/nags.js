@@ -329,6 +329,7 @@ window.rebootCancel = function(hostId){
 // was otherwise invisible after its toast, and its Cancel unreachable.
 // Generic over a host id — base.html uses it for the panel host; remote_manage for a remote.
 // The banner's line with no controls: what state the panel host is in, for someone who may not act on it.
+// A fallback now: /reboot-required refuses a delegate on the panel host, and neither caller asks for it.
 function _r11c_rbStateOnly(text, label, d){
   if (d.job) text.appendChild(_rbEl('span', null, _RB_PHASE[d.job.phase] || 'Rebooting…'));
   else if (d.pending_empty) text.appendChild(_rbEl('span', null, 'Auto-reboot scheduled once empty'));
@@ -345,8 +346,8 @@ window.rebootNagRender = function(el, hostId, label, d){
   el.appendChild(_rbEl('i', 'bi bi-arrow-clockwise fs-5'));
   var text = _rbEl('div', 'flex-grow-1'); text.style.minWidth = '220px';
   var acts = _rbEl('div', 'd-flex gap-2 flex-wrap');
-  // The panel host's reboot, wait and cancel are a super admin's (get_host_remote): a delegated host
-  // admin is shown the state, without buttons that could only fail.
+  // The panel host's reboot, wait and cancel are a super admin's (get_host_remote): were a delegated
+  // host admin ever handed its state, it is shown without buttons that could only fail.
   if (isLocal && !window.LOCAL_HOST_CTL) {
     _r11c_rbStateOnly(text, label, d);
   } else if (d.job) {
@@ -387,7 +388,8 @@ window.rebootNagCheck = function(hostId, label){
     }).catch(function(){});
 };
 (function(){
-  if (window.LOCAL_HOST_ID == null) return;   // only for users who can manage/reboot the host
+  // The panel host's reboot state is a superadmin's (/reboot-required is get_host_remote there).
+  if (window.LOCAL_HOST_ID == null || !window.LOCAL_HOST_CTL) return;
   function chk(){ window.rebootNagCheck(window.LOCAL_HOST_ID, 'the panel host'); }
   chk();
   if (window.pollWhenVisible) window.pollWhenVisible(chk, 10*60*1000);
