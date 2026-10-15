@@ -4,10 +4,25 @@
 # `--require-hashes`. Dependabot keeps it current by re-running pip-compile on the Python its
 # header names (3.11), so a bump never pins a set that cannot be installed together. Edit
 # THIS file, then regenerate (run in python:3.11-slim):
-#   pip-compile --generate-hashes --no-annotate --strip-extras --output-file=semgrep.txt semgrep.in
+#   pip-compile --generate-hashes --no-annotate --strip-extras --unsafe-package=mcp \
+#     --output-file=semgrep.txt semgrep.in
+# then semgrep-mcp.txt from semgrep-mcp.in (its header says how).
 #
-# semgrep.txt is the whole closure, PyJWT included, and the job installs it alone with pip's
-# dependency check on. semgrep 1.178.0 pinned pyjwt~=2.13.0, every release of which is vulnerable,
-# so PyJWT was compiled out (--unsafe-package) and pinned in a second file installed with
-# --no-deps. semgrep 1.179.0 requires pyjwt>=2.15.0,<3, which is safe, so that split is gone.
+# mcp is left out of semgrep.txt (--unsafe-package) and pinned on its own in semgrep-mcp.txt.
+# semgrep 1.179.0, and 1.181.0 as well, declares mcp==1.29.0 exactly, and 1.29.0 has
+# GHSA-84m7-p3x7-pcfv (StreamableHTTP sessions without a bound; fixed in 1.30.0), so no set that
+# honours semgrep's pin is safe. mcp 1.30.0 declares the same dependencies as 1.29.0, all of them
+# in semgrep.txt; semgrep-mcp.txt repeats them at semgrep.txt's versions (its -c line holds them
+# there), so the two files together are the whole closure. The job installs both with --no-deps,
+# hash-checked, and then runs pip check, which may report only semgrep's own mcp pin against the
+# version semgrep-mcp.txt installs; a package either file lacks still fails the job, by name.
+# semgrep scan runs on mcp 1.30.0: it imports mcp at startup for its MCP server, which a scan never
+# serves. Dependabot keeps --unsafe-package (it reads it back from the header) and updates
+# semgrep-mcp.txt on its own.
+#
+# UNDO when a semgrep release allows mcp>=1.30.0: drop --unsafe-package and semgrep-mcp.in/.txt,
+# install semgrep.txt alone without --no-deps, and remove the job's pip-check step.
+#
+# The same split was made once before, for PyJWT (semgrep 1.178.0 pinned a vulnerable ~=2.13.0),
+# and undone when semgrep 1.179.0 allowed pyjwt>=2.15.0.
 semgrep

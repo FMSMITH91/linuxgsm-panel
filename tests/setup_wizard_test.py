@@ -468,11 +468,11 @@ def _check_admin_race():
         _lock["finish"]()
     check("race: (control) the operator's POST really ran inside the racer's password hash",
           _race_fired == [1], repr(_race_fired))
+    # Also the check that a valid step=admin_user creates the first superadmin: a separate one
+    # asserted the same expression on the same state just after it (removed, tests1015b).
     check("race: two admin_user POSTs interleaved create exactly ONE superadmin",
           superadmins() == ["firstadmin"], str(superadmins()))
     _check_lock_held(_lock)
-    check("open: a valid step=admin_user creates the first superadmin",
-          superadmins() == ["firstadmin"], str(superadmins()))
     check("token: the token file is deleted once the first admin exists",
           not _TOKEN_FILE.exists(), "still on disk")
     r = app.test_client().get("/setup?token=" + _TOKEN, follow_redirects=False)

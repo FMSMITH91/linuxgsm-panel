@@ -12053,6 +12053,47 @@ for _rs6_text, _rs6_want, _rs6_what in (
          "a passing check whose NAME says 'skip'")):
     check("run-tests: run_suite reads %s as %s" % (_rs6_what, "a skip" if _rs6_want else "a pass"),
           _rs6_verdict(_rs6_text) == _rs6_want, "rc=%r for %r" % (_rs6_verdict(_rs6_text), _rs6_text[:60]))
+# ...and a suite that exits 0 must have counted to the end (tests1015b): no tally, or a tally of
+# two different numbers, is a suite that stopped early or failed without saying so.
+for _rs6_text, _rs6_what in (("PASS  a", "no tally at all"),
+                             ("PASS  a\n\n3 / 4 checks passed", "a tally that is not N / N"),
+                             ("\n0 / 0 checks passed", "a tally of nothing")):
+    check("run-tests: run_suite fails a suite that exits 0 with %s" % _rs6_what,
+          _rs6_verdict(_rs6_text) == 1, "rc=%r for %r" % (_rs6_verdict(_rs6_text), _rs6_text))
+
+
+# ── RUN_TESTS_PARALLEL's lanes can never turn a red or unfinished suite green (tests1015b) ──
+# run_lanes runs three lanes of suites side by side and judges each by its exit status. The real
+# function, under bash, over stand-in suites: a lane whose FIRST suite fails while its second
+# passes (set -e must stop it, not let the last word win), a lane killed before it finished, and
+# the control, every lane passing.
+def _rl6_rc(lanes):
+    """Exit status of run_lanes when its suite functions (and lane_tree) are the bodies in `lanes`."""
+    _i = _rs6_src.index("lane_tree() {")
+    _fns = _rs6_src[_i:_rs6_src.index("\n}\n", _rs6_src.index("run_lanes() {")) + 3]
+    _stubs = "".join("%s() {\n%s\n}\n" % (_n, _b) for _n, _b in lanes.items())
+    _sh = ("set -euo pipefail; RT_TMP=$(mktemp -d %s/rl-XXXXXX); %s%s run_lanes"
+           % (_rs6_dir, _fns, _stubs))
+    return _rs6_sp.run(["bash", "-c", _sh], cwd=_rs6_dir, capture_output=True, text=True,
+                       timeout=60).returncode
+
+
+# lane_tree copies a git checkout; the stand-in lanes need only a directory of their own.
+_rl6_ok = {"lane_tree": 'mktemp -d "$RT_TMP/lane-XXXXXX"',
+           "unit_suite": "echo '1 / 1 checks passed'", "other_suites": "echo '1 / 1 checks passed'",
+           "rbac_suite": "echo '1 / 1 checks passed'", "smoke_suite": "echo '1 / 1 checks passed'"}
+_rl6_got = {
+    "control": _rl6_rc(_rl6_ok),
+    "first fails": _rl6_rc(dict(_rl6_ok, other_suites="false\necho '1 / 1 checks passed'")),
+    "killed": _rl6_rc(dict(_rl6_ok, smoke_suite="kill -9 $BASHPID")),
+    "unit fails": _rl6_rc(dict(_rl6_ok, unit_suite="echo '1 / 2 checks passed'; return 1")),
+}
+check("run-tests: run_lanes passes when every lane passes (control)", _rl6_got["control"] == 0,
+      repr(_rl6_got))
+check("run-tests: run_lanes fails a lane whose first suite failed and whose last passed, a lane "
+      "killed before it finished, and a failed unit lane",
+      _rl6_got["first fails"] != 0 and _rl6_got["killed"] != 0 and _rl6_got["unit fails"] != 0,
+      repr(_rl6_got))
 check("route_coverage: data/ is cleared before each suite runs",
       "rmtree" in _rc_loop6 and '"data"' in _rc_loop6,
       "nothing removes data/ inside the suite loop, so the suites that refuse to run against an "

@@ -4,9 +4,23 @@
 #
 #   ./tools/run-tests.sh              # uses python3
 #   PYTHON=./venv/bin/python ./tools/run-tests.sh
+#   RUN_TESTS_PARALLEL=1 ./tools/run-tests.sh     # the suites in three lanes at once (CI does)
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root (this script lives in tools/)
 PY="${PYTHON:-python3}"
+# Absolute when it names a path, so a lane that runs in a copy of the tree (below) finds the same
+# interpreter: ./venv/bin/python is not in the copy. Not resolved through its link, which would
+# leave the venv.
+if [[ "$PY" == */* ]]; then
+    PY="$(cd "$(dirname "$PY")" && pwd)/$(basename "$PY")"
+fi
+# Scratch for this run: the unit output when UNIT_LOG is not given, and the lanes' copies and logs.
+if [[ -n "${RUNNER_TEMP:-}" ]]; then
+    RT_TMP="$(mktemp -d "${RUNNER_TEMP}/lgsm-tests-XXXXXX")"
+else
+    RT_TMP="$(mktemp -d -t lgsm-tests-XXXXXX)"
+fi
+trap 'rm -rf "$RT_TMP"' EXIT
 
 # ORDER IS CHEAPEST-FIRST, and deliberately so. Every step aborts the run (set -e), so whatever
 # runs first decides how long a BROKEN tree takes to tell you. The static checks and the sub-second
@@ -57,6 +71,15 @@ run_suite() {
         echo "  !! ${path} SKIPPED — that is a gap, not a pass. See the note in $0." >&2
         return 1
     fi
+    # ...and it must have counted to the end: exit 0 with no "N / N checks passed", or with two
+    # different numbers in it, is a suite that stopped early or failed without saying so.
+    local tally
+    tally="$(printf '%s\n' "$out" | grep -E '^[0-9]+ / [0-9]+ checks passed$' | tail -n 1 || true)"
+    if ! [[ "$tally" =~ ^([0-9]+)\ /\ ([0-9]+)\ checks\ passed$ ]] \
+            || [[ "${BASH_REMATCH[1]}" != "${BASH_REMATCH[2]}" || "${BASH_REMATCH[1]}" -eq 0 ]]; then
+        echo "  !! ${path} exited 0 without a full 'N / N checks passed' tally (${tally:-none})" >&2
+        return 1
+    fi
 }
 
 echo "== byte-compile (syntax errors) =="
@@ -103,56 +126,139 @@ else
     echo "== shellcheck (not installed — skipping) =="
 fi
 
-echo "== unit tests (pure logic; no network) =="
-# UNIT_LOG=<file> keeps a copy of this run's output. ci.yml sets it: its next step runs the suite
-# again as root, and judges the checks that ran only there against this run.
-if [[ -n "${UNIT_LOG:-}" ]]; then
+unit_suite() {
+    echo "== unit tests (pure logic; no network) =="
+    # UNIT_LOG=<file> keeps a copy of this run's output. ci.yml sets it: its next step judges the
+    # suite's root run against this one. Kept in this run's scratch otherwise, to read the tally.
+    local UNIT_LOG="${UNIT_LOG:-$RT_TMP/unit.log}"
     "$PY" tests/unit_test.py | tee "${UNIT_LOG}"
+    # Its exit code fails a FAIL; this fails a run that ended without counting to the end.
+    if ! grep -qE '^[0-9]+ / [0-9]+ checks passed$' "${UNIT_LOG}"; then
+        echo "  !! tests/unit_test.py printed no 'N / N checks passed' tally" >&2
+        return 1
+    fi
+}
+
+# Everything after unit up to smoke, in the order below. Each function is one lane when the suites
+# run in parallel (run_lanes), and they run one after another, in this same order, when they do not.
+other_suites() {
+    # Through run_suite, not bare: this suite can SKIP (esprima is optional locally), and a skip here
+    # silently removes the JS parse gate and four CSRF gates from the run. Bare, its exit code was the
+    # only signal and nothing looked at its output.
+    run_suite "template actions (JS parses; every data-action button is wired)" \
+              tests/template_actions_test.py
+
+    echo "== url map (every rule, endpoint, method and guard, vs the committed baseline) =="
+    # The safety net for splitting register_routes() up. A route that silently loses a method, an
+    # endpoint that gets renamed out from under url_for(), a decorator dropped during a copy-paste —
+    # none of those raise at import. Regenerate deliberately with --update and read the diff.
+    "$PY" tests/url_map_test.py
+
+    run_suite "manage.py (the offline recovery CLI: lock-out guard, session revocation)" tests/manage_test.py
+
+    # Ordered beside manage_test because it is the other sub-second, DB-owning suite. It is the one
+    # suite that must NOT pre-complete setup — every other one does, which is exactly why the wizard
+    # (the only unauthenticated flow in the panel) sat at 21% coverage with its POST path never run.
+    run_suite "setup wizard (the unauthenticated first-run flow, and the lock that closes it)" \
+        tests/setup_wizard_test.py
+
+    # Renders every GET page twice — same hosts, 5x the game servers — and fails if any page's query
+    # count grows with the servers. smoke_test budgets two endpoints by number; this one asserts the
+    # SHAPE, so a new page is covered the day it is added and nobody maintains a per-endpoint budget.
+    run_suite "perf budget (no page's query count scales with the number of game servers)" \
+        tests/perf_budget_test.py
+
+    # Drives the numeric form fields with the values a browser never sends (0, 65536, "abc", a
+    # newline, Arabic-Indic digits) and asserts a refusal with NO row written — plus a positive control
+    # per field, so it cannot pass against a route that refuses everything. Ordered here because it
+    # boots the app like smoke but exercises far fewer pages. Same developer-machine caveat as smoke:
+    # use ./tools/smoke-local.sh tests/input_validation_test.py.
+    run_suite "input validation (numeric fields refuse hostile values, and still accept good ones)" \
+        tests/input_validation_test.py
+}
+
+smoke_suite() {
+    # CI runs this bare, which is right there. On a DEVELOPER machine use ./tools/smoke-local.sh
+    # instead of this script: booting the app fires real `sudo -n` probes (pam_faillock counts each
+    # one and will lock you out of your own sudo) and real outbound SSH to the fixture hosts. That
+    # wrapper runs the same suite with both refused. See its header.
+    run_suite "smoke test (boots the app; routes must not 5xx)" tests/smoke_test.py
+}
+
+rbac_suite() {
+    run_suite "rbac test (permissions/IDOR enforced server-side; self-seeds on an empty DB)" tests/rbac_test.py
+}
+
+# ── RUN_TESTS_PARALLEL=1: three lanes at once ─────────────────────────────────────────────────
+# One after another the suites took ~22 minutes on a CI runner: unit ~10, smoke ~10, the rest ~1.5.
+# Each lane runs its suites in order, under set -e, exactly as below; the lanes run side by side.
+#
+# What they must not share is data/: smoke, rbac, manage, setup_wizard, perf_budget and
+# input_validation each create data/panel.db (DATA_DIR is a fixed path in the tree, with no
+# override) and refuse to run over one. So every lane but unit's runs in its OWN copy of the tree,
+# made before any lane starts: the tracked and untracked-but-not-ignored files (what
+# tools/smoke-local.sh copies), plus .git when it is a directory, as in CI's checkout, so a copy is
+# the checkout a suite would have seen. Unit runs in the tree itself, where it always has; it writes
+# nothing in data/.
+#
+# Each lane's output goes to its own log, printed whole when the lane ends, in lane order. A lane's
+# result is its exit status (wait), and every suite in it has already failed that status on a FAIL,
+# a SKIP, a crash or a missing tally. A lane that did not finish is not a pass: wait answers its
+# signal, and nothing is reported as passed that has no status.
+lane_tree() {
+    local dest
+    dest="$(mktemp -d "$RT_TMP/lane-XXXXXX")"
+    # The checkout's own mode, not mktemp's 0700: a check that runs a tool as another account
+    # reads the tree through this directory as it would the checkout.
+    chmod --reference=. "$dest"
+    git ls-files -z --cached --others --exclude-standard | tar --null -T - -cf - | tar -xf - -C "$dest"
+    if [[ -d .git ]]; then
+        cp -a .git "$dest/.git"
+    fi
+    printf '%s\n' "$dest"
+}
+
+run_lanes() {
+    local -a lanes=("unit_suite" "other_suites rbac_suite" "smoke_suite")
+    local -a pids
+    local i rc bad=0 other smoke
+    chmod --reference=. "$RT_TMP"
+    # Plain assignments, so a copy that failed stops the run (set -e) before any lane starts.
+    other="$(lane_tree)"
+    smoke="$(lane_tree)"
+    local -a dirs=("$PWD" "$other" "$smoke")
+    for i in "${!lanes[@]}"; do
+        # shellcheck disable=SC2086  # a lane is a list of function names, split on purpose
+        ( set -e; cd "${dirs[$i]}"; for fn in ${lanes[$i]}; do "$fn"; done ) >"$RT_TMP/lane$i.log" 2>&1 &
+        pids+=("$!")
+        echo "== lane $i started: ${lanes[$i]} =="
+    done
+    for i in "${!lanes[@]}"; do
+        set +e
+        wait "${pids[$i]}"; rc=$?
+        set -e
+        echo "== lane $i (${lanes[$i]}) =="
+        cat "$RT_TMP/lane$i.log"
+        if [[ "$rc" -ne 0 ]]; then
+            echo "  !! lane $i (${lanes[$i]}) exited ${rc}" >&2
+            bad=1
+        fi
+    done
+    echo "== lanes =="
+    for i in "${!lanes[@]}"; do
+        printf '  lane %s: %s\n' "$i" "$(grep -E '^[0-9]+ / [0-9]+ checks passed$' "$RT_TMP/lane$i.log" | tr '\n' ',' || true)"
+    done
+    return "$bad"
+}
+
+if [[ "${RUN_TESTS_PARALLEL:-0}" = "1" ]]; then
+    run_lanes
 else
-    "$PY" tests/unit_test.py
+    unit_suite
+    other_suites
+    smoke_suite
+    rbac_suite
 fi
-
-# Through run_suite, not bare: this suite can SKIP (esprima is optional locally), and a skip here
-# silently removes the JS parse gate and four CSRF gates from the run. Bare, its exit code was the
-# only signal and nothing looked at its output.
-run_suite "template actions (JS parses; every data-action button is wired)" \
-          tests/template_actions_test.py
-
-echo "== url map (every rule, endpoint, method and guard, vs the committed baseline) =="
-# The safety net for splitting register_routes() up. A route that silently loses a method, an
-# endpoint that gets renamed out from under url_for(), a decorator dropped during a copy-paste —
-# none of those raise at import. Regenerate deliberately with --update and read the diff.
-"$PY" tests/url_map_test.py
-
-run_suite "manage.py (the offline recovery CLI: lock-out guard, session revocation)" tests/manage_test.py
-
-# Ordered beside manage_test because it is the other sub-second, DB-owning suite. It is the one
-# suite that must NOT pre-complete setup — every other one does, which is exactly why the wizard
-# (the only unauthenticated flow in the panel) sat at 21% coverage with its POST path never run.
-run_suite "setup wizard (the unauthenticated first-run flow, and the lock that closes it)" \
-    tests/setup_wizard_test.py
-
-# Renders every GET page twice — same hosts, 5x the game servers — and fails if any page's query
-# count grows with the servers. smoke_test budgets two endpoints by number; this one asserts the
-# SHAPE, so a new page is covered the day it is added and nobody maintains a per-endpoint budget.
-run_suite "perf budget (no page's query count scales with the number of game servers)" \
-    tests/perf_budget_test.py
-
-# Drives the numeric form fields with the values a browser never sends (0, 65536, "abc", a
-# newline, Arabic-Indic digits) and asserts a refusal with NO row written — plus a positive control
-# per field, so it cannot pass against a route that refuses everything. Ordered here because it
-# boots the app like smoke but exercises far fewer pages. Same developer-machine caveat as smoke:
-# use ./tools/smoke-local.sh tests/input_validation_test.py.
-run_suite "input validation (numeric fields refuse hostile values, and still accept good ones)" \
-    tests/input_validation_test.py
-
-# CI runs this bare, which is right there. On a DEVELOPER machine use ./tools/smoke-local.sh
-# instead of this script: booting the app fires real `sudo -n` probes (pam_faillock counts each
-# one and will lock you out of your own sudo) and real outbound SSH to the fixture hosts. That
-# wrapper runs the same suite with both refused. See its header.
-run_suite "smoke test (boots the app; routes must not 5xx)" tests/smoke_test.py
-
-run_suite "rbac test (permissions/IDOR enforced server-side; self-seeds on an empty DB)" tests/rbac_test.py
 
 echo ""
 echo "All checks passed."

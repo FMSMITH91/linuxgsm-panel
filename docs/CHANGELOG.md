@@ -216,6 +216,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Changed
 
+- **Faster test runs.** The smoke suite no longer waits on itself (about 9 minutes down to under
+  2), `tools/run-tests.sh` can run the suites in parallel lanes (`RUN_TESTS_PARALLEL=1`), and CI
+  runs them that way, with the root unit run beside them. A lane that fails, is killed or prints
+  no full tally fails the run. Two checks that repeated another check exactly were removed.
+
 - **A documentation-only pull request no longer runs the whole CI.** CI only. When every file it
   changes is `*.md`, `docs/`, `LICENSE` or a git/editor dotfile, the heavy checks pass at once under
   their required names; secret scanning, Dependency Review and the unit suite (it reads the docs)
@@ -2133,6 +2138,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+
+- **CI's Semgrep job runs on an MCP SDK with no known advisory.** semgrep pins `mcp==1.29.0`,
+  which has GHSA-84m7-p3x7-pcfv (unbounded sessions in its HTTP server mode). Semgrep's lock now
+  leaves mcp out and a second hash lockfile pins 1.30.0, installed with `--no-deps`; a `pip check`
+  step allows only that one known mismatch. Proven: the scan writes the same SARIF. CI only.
 
 - **A seventh full review on 2026-10-12: security.** Every item below has a check that fails
   without its fix.

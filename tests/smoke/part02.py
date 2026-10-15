@@ -2684,9 +2684,15 @@ try:
         """
         _gate = _rt_thr.Event()
         _saved_rc, _saved_gc = _sm_core.run_command, _sm_core.get_connection
+        # Only a WORKER is held. The request itself runs on this thread, and its own SSH reads
+        # (the install's port pick reads each valve sibling's config) waited out the full 30s
+        # each, for the gate this thread opens only after the request returns: 450 of the
+        # suite's 540 seconds, every call then failing exactly as it does at once.
+        _owner = _rt_thr.get_ident()
 
         def _blocked(*a, **k):
-            _gate.wait(30)
+            if _rt_thr.get_ident() != _owner:
+                _gate.wait(30)
             raise ConnectionError("no SSH host in this suite")
         _sm_core.run_command = _blocked
         _sm_core.get_connection = _blocked

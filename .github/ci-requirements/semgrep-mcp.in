@@ -1,0 +1,9 @@
+# mcp for the Semgrep job, pinned apart from semgrep.txt: see semgrep.in for why. The constraint
+# holds every other package at semgrep.txt's version, so the two files install together and never
+# disagree. Regenerate after semgrep.txt (run in python:3.11-slim):
+#   pip-compile --generate-hashes --no-annotate --strip-extras \
+#     --output-file=semgrep-mcp.txt semgrep-mcp.in
+-c semgrep.txt
+# 1.30.0 is the first release with GHSA-84m7-p3x7-pcfv fixed; below 2 because semgrep is written
+# against mcp 1.x (2.0 is a new major whose dependencies differ: mcp-types and httpx2, for two).
+mcp>=1.30.0,<2

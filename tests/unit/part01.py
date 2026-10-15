@@ -718,7 +718,8 @@ eq("console: ...and the words alone are unchanged by keeping it",
 # silently, and only on the download-progress spool this was added to show.
 eq("console: \\r overwrites by COLUMN, not by byte, when colour is present",
    _clean_console_text("\x1b[32m123456\x1b[0m\rabc"), "abc\x1b[32m456\x1b[0m")
-# A code nothing renders (256-colour/truecolor) is dropped rather than passed to the page.
+# A code nothing renders (256-colour/truecolor) is dropped rather than passed to the page. This is
+# also the 256-colour case of the 38/48 section below, which asserted the same call again.
 eq("console: an unrenderable SGR code is dropped, its text kept",
    _clean_console_text("\x1b[38;5;208morange"), "orange")
 # ── 38/48 CONSUME their parameters; reading those as attributes invents formatting ────────────
@@ -729,8 +730,6 @@ eq("console: an unrenderable SGR code is dropped, its text kept",
 # drew a line through an Essentials warning and the URL beneath it. Reported from a real console.
 eq("console: an extended-colour sequence applies NO attributes of its own",
    _clean_console_text("\x1b[48;2;1;9;3mtext"), "text")
-eq("console: ...nor does a 256-colour one",
-   _clean_console_text("\x1b[38;5;208morange"), "orange")
 eq("console: ...and a malformed introducer drops only itself",
    _clean_console_text("\x1b[38mtext"), "text")
 # The sub-parameters must be CONSUMED, not merely filtered: a real code after them still applies.
